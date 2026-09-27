@@ -794,3 +794,243 @@ exit 1
     assert note and note["status"] == "rollback_failed" and note["needs_hands"] == ["kea-a"], (
         f"INVARIANT: the outcome is persisted for the Servers banner: {note}"
     )
+
+
+# ── 13. Presence against a real MQTT broker (v5.65.12, Q101 c) ───────────────
+
+S13_MAC = "de:ad:be:ef:13:01"
+S13_STATE_TOPIC = f"jen/presence/{S13_MAC.replace(':', '-')}"
+S13_ATTRS_TOPIC = f"{S13_STATE_TOPIC}/attributes"
+S13_DISCOVERY_TOPIC = f"homeassistant/device_tracker/jen_{S13_MAC.replace(':', '')}/config"
+S13_LEASE_IP = "10.99.0.150"
+
+
+def _mosq_capture(port, seconds=100):
+    """A background `mosquitto_sub -v -t '#'` against one listener, self-terminating via the
+    container's own `timeout` so the `docker exec` process exits on its own; `communicate()`
+    then returns everything it saw. Started BEFORE the action that should publish - a non-retained
+    message received before a subscriber connects is gone forever, so this cannot be a
+    look-back-afterward check the way the retained-discovery one below is."""
+    return st.dexec_bg(st.MOSQUITTO, "sh", "-c", f"timeout {seconds} mosquitto_sub -h localhost -p {port} -v -t '#'")
+
+
+def _mosq_once(port, topic, timeout=15):
+    """One retained (or imminent) message on `topic`, read by a FRESH subscription - proves a
+    retained flag actually stuck, since a fresh client gets a retained message immediately with
+    no publish needed. Returncode 0 with output means a message arrived; mosquitto_sub itself
+    exits 0 after -C 1 delivers."""
+    return st.dexec(
+        st.MOSQUITTO,
+        "mosquitto_sub",
+        "-h",
+        "localhost",
+        "-p",
+        str(port),
+        "-v",
+        "-t",
+        topic,
+        "-C",
+        "1",
+        "-W",
+        str(timeout),
+        check=False,
+        timeout=timeout + 10,
+    )
+
+
+def _setup_scenario13(web):
+    """Track S13_MAC and configure the two sinks through Presence's own real routes (never raw
+    SQL for the sinks: add_sink() is what encrypts the TLS/password credential)."""
+    web.post(
+        "/management/presence/track",
+        data={"mac": S13_MAC, "label": "Scenario13 Phone"},
+        page="/management/presence/",
+    )
+    # the password-file listener (1884): exercises add_sink's username+password path
+    web.post(
+        "/management/presence/sinks/add",
+        data={
+            "name": "s13-plain",
+            "kind": "mqtt",
+            "url": f"mqtt://{st.MOSQ_USER}@mosquitto:{st.MOSQ_AUTH_PORT}",
+            "credential": st.MOSQ_PASS,
+            "topic_prefix": "jen/presence",
+        },
+        page="/management/presence/",
+    )
+    # the TLS listener (8883, the stack's own throwaway CA - SSL_CERT_FILE on the jen container
+    # trusts it): retain on, HA discovery on
+    web.post(
+        "/management/presence/sinks/add",
+        data={
+            "name": "s13-tls",
+            "kind": "mqtt",
+            "url": f"mqtts://mosquitto:{st.MOSQ_TLS_PORT}",
+            "topic_prefix": "jen/presence",
+            "retain": "1",
+            "discovery": "1",
+        },
+        page="/management/presence/",
+    )
+
+
+def _lease_up(kea_db_insert_sql=None):
+    out, _p = st.jen_py(f"""
+import jen.models.db as db_mod
+with db_mod.kea_db() as kdb, kdb.cursor() as cur:
+    cur.execute("DELETE FROM lease4 WHERE HEX(hwaddr)=%s", ("{S13_MAC.replace(":", "").upper()}",))
+    cur.execute(
+        "INSERT INTO lease4 (address, hwaddr, valid_lifetime, expire, subnet_id, state, hostname) "
+        "VALUES (INET_ATON(%s), UNHEX(%s), 3600, DATE_ADD(NOW(), INTERVAL 1 HOUR), 1, 0, %s)",
+        ("{S13_LEASE_IP}", "{S13_MAC.replace(":", "").upper()}", "scenario13-phone"),
+    )
+    kdb.commit()
+emit({{"ok": True}})
+""")
+    assert emitted(out) and emitted(out)["ok"]
+
+
+def _lease_down():
+    out, _p = st.jen_py(f"""
+import jen.models.db as db_mod
+with db_mod.kea_db() as kdb, kdb.cursor() as cur:
+    cur.execute("DELETE FROM lease4 WHERE HEX(hwaddr)=%s", ("{S13_MAC.replace(":", "").upper()}",))
+    kdb.commit()
+emit({{"ok": True}})
+""")
+    assert emitted(out) and emitted(out)["ok"]
+
+
+def _wait_pr_state(online, timeout=90):
+    """Poll pr_state directly - proves the transition was RECORDED (the alert loop's ~30 s cycle
+    noticed the lease change and Presence's subscriber ran), independent of whether the MQTT send
+    itself succeeded, which is what the sink checks are for."""
+
+    def _check():
+        out, _p = st.jen_py(f"""
+import jen.models.db as db_mod
+with db_mod.jen_db() as jdb, jdb.cursor() as cur:
+    cur.execute("SELECT online FROM pr_state WHERE mac=%s", ("{S13_MAC}",))
+    row = cur.fetchone()
+emit({{"online": bool(row["online"]) if row else None}})
+""")
+        row = emitted(out)
+        return row is not None and row["online"] == online
+
+    st.wait_for(_check, timeout=timeout, interval=3, what=f"pr_state.online == {online} for {S13_MAC}")
+
+
+def test_13_presence_against_a_real_mqtt_broker(stack):
+    """Presence's hand-rolled MQTT 3.1.1 client has never met a real broker before this scenario.
+    INVARIANT: a tracked device's online/offline transitions reach a real eclipse-mosquitto over
+    plain (password-authenticated) and TLS listeners, with the state/attributes/discovery topics,
+    retained flag and HA device_tracker discovery schema all as documented; a paused broker sets
+    the sink's last_error without an unhandled exception, and a transition after it recovers both
+    publishes again and clears last_error."""
+    web = st.Web().login()
+    _setup_scenario13(web)
+
+    # ── online: both sinks publish; the plain one is non-retained (must be caught live) ──
+    capture = _mosq_capture(st.MOSQ_AUTH_PORT)
+    try:
+        _lease_up()
+        _wait_pr_state(True)
+        stdout, stderr = capture.communicate(timeout=110)
+    finally:
+        if capture.poll() is None:
+            capture.kill()
+    assert f"{S13_STATE_TOPIC} online" in stdout, (
+        f"INVARIANT: the plain (password-auth) sink publishes the state topic with payload 'online' "
+        f"(mosquitto_sub -v saw:\n{stdout[-2000:]})"
+    )
+    assert S13_ATTRS_TOPIC in stdout, f"INVARIANT: the attributes topic is published too (saw:\n{stdout[-2000:]})"
+
+    # ── the TLS sink: retained discovery message, schema verified against HA's own docs ──
+    disc = _mosq_once(st.MOSQ_TLS_PORT, S13_DISCOVERY_TOPIC)
+    assert disc.returncode == 0 and S13_DISCOVERY_TOPIC in disc.stdout, (
+        f"INVARIANT: a FRESH subscriber gets the retained HA discovery message with no new publish "
+        f"needed - the retain flag stuck (got rc={disc.returncode}, stdout={disc.stdout[-500:]!r})"
+    )
+    payload = json.loads(disc.stdout.split(" ", 1)[1])
+    # Home Assistant's documented MQTT device_tracker discovery schema (home-assistant.io/integrations/
+    # device_tracker.mqtt/, read 2026-09-27): state_topic, payload_home/payload_not_home (default
+    # "home"/"not_home" - Presence deliberately overrides both to match what it actually PUBLISHES on
+    # state_topic, "online"/"offline", not HA's defaults), json_attributes_topic.
+    assert payload["state_topic"] == S13_STATE_TOPIC
+    assert payload["payload_home"] == "online" and payload["payload_not_home"] == "offline"
+    assert payload["json_attributes_topic"] == S13_ATTRS_TOPIC
+
+    state_once = _mosq_once(st.MOSQ_TLS_PORT, S13_STATE_TOPIC)
+    assert state_once.returncode == 0 and "online" in state_once.stdout, (
+        f"INVARIANT: the TLS sink's own state topic is retained too (retain=1 on this sink): {state_once.stdout!r}"
+    )
+
+    # ── offline: the lease goes away, no OTHER active lease remains ──
+    capture = _mosq_capture(st.MOSQ_AUTH_PORT)
+    try:
+        _lease_down()
+        _wait_pr_state(False)
+        stdout, stderr = capture.communicate(timeout=110)
+    finally:
+        if capture.poll() is None:
+            capture.kill()
+    assert f"{S13_STATE_TOPIC} offline" in stdout, (
+        f"INVARIANT: losing its only lease publishes 'offline' (saw:\n{stdout[-2000:]})"
+    )
+
+    # ── a paused broker: last_error is set, no unhandled exception, the worker survives ──
+    logs_before = st.compose("logs", "--no-color", "sys-jen", check=False).stdout
+    st.run(["docker", "pause", st.MOSQUITTO])
+    try:
+        _lease_up()
+        st.wait_for(
+            lambda: (
+                emitted(
+                    st.jen_py(
+                        "import jen.models.db as db_mod\n"
+                        "with db_mod.jen_db() as jdb, jdb.cursor() as cur:\n"
+                        '    cur.execute("SELECT last_error FROM pr_sinks WHERE name=%s", ("s13-plain",))\n'
+                        "    row = cur.fetchone()\n"
+                        'emit({"last_error": row["last_error"] if row else None})\n'
+                    )[0]
+                )
+                or {}
+            ).get("last_error"),
+            timeout=90,
+            interval=3,
+            what="s13-plain.last_error set while the broker is paused",
+        )
+    finally:
+        st.run(["docker", "unpause", st.MOSQUITTO])
+    logs_after = st.compose("logs", "--no-color", "sys-jen", check=False).stdout
+    new_log = logs_after[len(logs_before) :] if logs_after.startswith(logs_before) else logs_after
+    assert "Traceback (most recent call last)" not in new_log, (
+        f"INVARIANT: a paused broker is a caught, logged failure, never an unhandled exception in "
+        f"Jen's own log:\n{new_log[-3000:]}"
+    )
+
+    # ── recovery: the next transition publishes again and clears last_error ──
+    _lease_down()
+    _wait_pr_state(False, timeout=90)  # the paused-broker attempt above still recorded 'online'
+    capture = _mosq_capture(st.MOSQ_AUTH_PORT)
+    try:
+        _lease_up()
+        _wait_pr_state(True)
+        stdout, stderr = capture.communicate(timeout=110)
+    finally:
+        if capture.poll() is None:
+            capture.kill()
+    assert f"{S13_STATE_TOPIC} online" in stdout, (
+        f"INVARIANT: the worker thread is still alive and sending after the broker comes back (saw:\n{stdout[-2000:]})"
+    )
+    out, _p = st.jen_py(
+        "import jen.models.db as db_mod\n"
+        "with db_mod.jen_db() as jdb, jdb.cursor() as cur:\n"
+        '    cur.execute("SELECT last_error FROM pr_sinks WHERE name=%s", ("s13-plain",))\n'
+        "    row = cur.fetchone()\n"
+        'emit({"last_error": row["last_error"] if row else "MISSING"})\n'
+    )
+    assert emitted(out) == {"last_error": None}, (
+        f"INVARIANT: a successful send clears the sink's last_error (v1.0.4, Q101 c - it used to stay "
+        f"stuck once set): {emitted(out)}"
+    )

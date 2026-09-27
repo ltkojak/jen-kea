@@ -244,7 +244,13 @@ def kea_command(
     except http.exceptions.Timeout:
         return {"result": 1, "text": "Kea API request timed out."}
     except Exception as e:
-        return {"result": 1, "text": str(e)}
+        # v5.65.12 (Q101 b): the connect/timeout cases above are canned deliberately (the connect
+        # message names the URL - admin-facing and useful, kept). Anything else - a TLS handshake
+        # failure, a malformed response, any other transport exception - used to render the raw
+        # exception text on the dashboard's config-error banner and the Doctor page. Canned here too;
+        # the real text is logged, with the URL and command, for whoever reads Jen's log.
+        logger.error(f"kea_command({command!r}) against {url} raised {type(e).__name__}: {e}")
+        return {"result": 1, "text": "Kea API call failed — the details are in Jen's log."}
 
 
 def kea_command_all(command: str, service: str = "dhcp4", arguments: dict = None) -> list:

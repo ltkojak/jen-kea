@@ -29,6 +29,7 @@ KEA_A = "sys-kea-a"
 KEA_B = "sys-kea-b"
 DNS = "sys-dns"
 UPDATER = "sys-updater"
+MOSQUITTO = "sys-mosquitto"
 
 JEN_URL = "http://127.0.0.1:5050"
 ADMIN_USER = "admin"
@@ -250,7 +251,18 @@ def prepare_workdir():
     root in the Kea hosts) and this is a throwaway CI directory."""
     if WORK.exists():
         shutil.rmtree(WORK, ignore_errors=True)
-    for sub in ("keys", "jen-etc", "jen-etc/ssh", "jen-etc/ssl", "jen-etc/backups", "kea-a", "kea-b", "results"):
+    for sub in (
+        "keys",
+        "jen-etc",
+        "jen-etc/ssh",
+        "jen-etc/ssl",
+        "jen-etc/backups",
+        "kea-a",
+        "kea-b",
+        "results",
+        "mosquitto",
+        "mosquitto/certs",
+    ):
         _open(WORK / sub, 0o777)
 
     key = WORK / "keys" / "jen_rsa"
@@ -270,6 +282,145 @@ def prepare_workdir():
         (d / "jen-api.pw").write_text("jen_api_pw", encoding="utf-8")
         for f in d.iterdir():
             os.chmod(f, 0o644)
+
+    _prepare_mosquitto()
+
+
+# ── mosquitto (scenario 13, Q101) ──────────────────────────────────────────────
+
+MOSQ_USER = "jenuser"
+MOSQ_PASS = "jen_mqtt_pw"
+MOSQ_ANON_PORT = 1883
+MOSQ_AUTH_PORT = 1884
+MOSQ_TLS_PORT = 8883
+
+
+def _prepare_mosquitto():
+    """Three listeners on the one broker (mosquitto.conf's `per_listener_settings true`
+    isolates AUTH per listener, not the topic namespace - a subscriber on the anonymous
+    listener still sees what is published via the password or TLS listener): anonymous
+    (1883), username/password (1884, the passwd file mosquitto_passwd itself must hash - run
+    via a throwaway `docker run` of the same broker image, since there is no mosquitto_passwd
+    binary on the host), and TLS (8883) against a throwaway self-signed CA (openssl, the same
+    tool ssh-keygen above stands in for - both are "verified once, thrown away every run")."""
+    mosq = WORK / "mosquitto"
+    certs = mosq / "certs"
+
+    run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "-v",
+            f"{mosq}:/out",
+            "eclipse-mosquitto:2",
+            "mosquitto_passwd",
+            "-b",
+            "-c",
+            "/out/passwd",
+            MOSQ_USER,
+            MOSQ_PASS,
+        ]
+    )
+    os.chmod(mosq / "passwd", 0o644)
+
+    run(
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-nodes",
+            "-newkey",
+            "rsa:2048",
+            "-days",
+            "2",
+            "-keyout",
+            str(certs / "ca.key"),
+            "-out",
+            str(certs / "ca.pem"),
+            "-subj",
+            "/CN=jen-system-tests-mosquitto-ca",
+        ]
+    )
+    run(
+        [
+            "openssl",
+            "req",
+            "-nodes",
+            "-newkey",
+            "rsa:2048",
+            "-keyout",
+            str(certs / "server.key"),
+            "-out",
+            str(certs / "server.csr"),
+            "-subj",
+            "/CN=mosquitto",
+        ]
+    )
+    run(
+        [
+            "openssl",
+            "x509",
+            "-req",
+            "-in",
+            str(certs / "server.csr"),
+            "-CA",
+            str(certs / "ca.pem"),
+            "-CAkey",
+            str(certs / "ca.key"),
+            "-CAcreateserial",
+            "-out",
+            str(certs / "server.pem"),
+            "-days",
+            "2",
+        ]
+    )
+    for f in certs.iterdir():
+        os.chmod(f, 0o644)
+
+    (mosq / "mosquitto.conf").write_text(
+        f"""per_listener_settings true
+
+listener {MOSQ_ANON_PORT}
+allow_anonymous true
+
+listener {MOSQ_AUTH_PORT}
+allow_anonymous false
+password_file /mosquitto/config/passwd
+
+listener {MOSQ_TLS_PORT}
+allow_anonymous true
+cafile /mosquitto/certs/ca.pem
+certfile /mosquitto/certs/server.pem
+keyfile /mosquitto/certs/server.key
+
+persistence false
+log_dest stdout
+""",
+        encoding="utf-8",
+    )
+    os.chmod(mosq / "mosquitto.conf", 0o644)
+
+
+def mosquitto_up() -> bool:
+    """The broker answers on its plain anonymous listener - `docker exec`'s own mosquitto_sub,
+    one message with a short timeout, no error means it connected."""
+    r = dexec(
+        MOSQUITTO,
+        "mosquitto_sub",
+        "-h",
+        "localhost",
+        "-p",
+        str(MOSQ_ANON_PORT),
+        "-t",
+        "$SYS/broker/version",
+        "-C",
+        "1",
+        "-W",
+        "5",
+        check=False,
+    )
+    return r.returncode == 0
 
 
 # ── the Jen web UI (real HTTP to gunicorn) ─────────────────────────────────

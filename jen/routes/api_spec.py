@@ -56,13 +56,11 @@ def build_spec(version: str, base_url: str = "") -> dict:
                 "Error": {"type": "object", "properties": {"error": {"type": "string"}}, "required": ["error"]},
                 "Health": {
                     "type": "object",
-                    "properties": {
-                        "jen_version": {"type": "string"},
-                        "kea_up": {"type": "boolean", "nullable": True},
-                        "kea_version": {"type": "string", "nullable": True},
-                        "kea_checked_at": {"type": "string", "nullable": True},
-                        "subnets": {"type": "integer"},
-                    },
+                    "description": "Unauthenticated. jen_version only (v5.65.12, Q101) - Kea's state and the "
+                    "subnet count moved to the key-gated HealthKea, reconnaissance for no benefit to a caller "
+                    "with no key.",
+                    "properties": {"jen_version": {"type": "string"}},
+                    "required": ["jen_version"],
                 },
                 "HealthKea": {
                     "type": "object",
@@ -84,6 +82,7 @@ def build_spec(version: str, base_url: str = "") -> dict:
                                 },
                             },
                         },
+                        "subnets": {"type": "integer", "description": "Moved from the public Health body, v5.65.12."},
                     },
                 },
                 "Subnet": {

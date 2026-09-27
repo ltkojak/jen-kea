@@ -456,3 +456,65 @@ class TestTlsVerify:
         monkeypatch.setattr(extensions, "KEA_API_TLS_VERIFY", False)
         kea_svc.kea_command("version-get")
         assert fake_http.calls[0]["verify"] == "/ca.pem"
+
+
+class _RaisingRequests(_FakeRequests):
+    """A .post() that raises instead of answering — the three except-branches this class covers."""
+
+    def __init__(self, exc):
+        super().__init__()
+        self._exc = exc
+
+    def post(self, url, json=None, auth=None, timeout=None, verify=None, cert=None):
+        self.calls.append({"url": url})
+        raise self._exc
+
+
+class TestExceptionHandling:
+    """v5.65.12 (Q101 b). ConnectionError and Timeout are canned deliberately (the ConnectionError
+    line names the API URL — admin-facing and useful); anything else used to return the raw
+    exception's own str(e), which reached the dashboard's config-error banner and the Doctor page
+    verbatim — a TLS handshake failure, a malformed response, whatever the transport happened to
+    raise. Canned now too, with the real text logged instead."""
+
+    def test_connection_error_names_the_url(self, monkeypatch):
+        import requests
+
+        fake = _RaisingRequests(requests.exceptions.ConnectionError("refused"))
+        monkeypatch.setattr(kea_svc, "http", fake)
+        result = kea_svc.kea_command("version-get")
+        assert result["result"] == 1
+        assert "http://kea4:8000" in result["text"]
+        assert "refused" not in result["text"]
+
+    def test_timeout_is_canned(self, monkeypatch):
+        import requests
+
+        fake = _RaisingRequests(requests.exceptions.Timeout("took too long"))
+        monkeypatch.setattr(kea_svc, "http", fake)
+        result = kea_svc.kea_command("version-get")
+        assert result["result"] == 1
+        assert result["text"] == "Kea API request timed out."
+
+    def test_any_other_transport_exception_is_canned_not_raw(self, monkeypatch, caplog):
+        """A non-HTTP exception (e.g. ssl.SSLError) used to reach the caller as str(e) - the
+        message must carry no exception class name and no URL, and the real detail is logged."""
+        import logging
+        import ssl
+
+        fake = _RaisingRequests(ssl.SSLError("certificate verify failed: self-signed certificate"))
+        monkeypatch.setattr(kea_svc, "http", fake)
+        with caplog.at_level(logging.ERROR, logger="jen.services.kea"):
+            result = kea_svc.kea_command("version-get")
+        assert result["result"] == 1
+        assert result["text"] == "Kea API call failed — the details are in Jen's log."
+        assert "SSLError" not in result["text"] and "http://kea4:8000" not in result["text"]
+        assert "certificate verify failed" not in result["text"]
+        logged = "\n".join(r.message for r in caplog.records)
+        assert "SSLError" in logged and "http://kea4:8000" in logged and "version-get" in logged
+
+    def test_a_generic_exception_is_canned_the_same_way(self, monkeypatch):
+        fake = _RaisingRequests(ValueError("unexpected token at position 4"))
+        monkeypatch.setattr(kea_svc, "http", fake)
+        result = kea_svc.kea_command("config-get")
+        assert result == {"result": 1, "text": "Kea API call failed — the details are in Jen's log."}

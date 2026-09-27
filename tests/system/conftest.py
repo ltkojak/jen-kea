@@ -81,6 +81,7 @@ def stack():
         st.wait_for(
             lambda: st.kea_answers("kea-a") and st.kea_answers("kea-b"), timeout=60, what="both Kea control sockets"
         )
+        st.wait_for(st.mosquitto_up, timeout=60, what="mosquitto answering on its anonymous listener")
 
         emitted, _p = st.jen_py(
             """
@@ -112,7 +113,7 @@ emit(out)
         yield st
     finally:
         try:
-            for name in ("jen", "kea-a", "kea-b", "mariadb", "dns", "updater"):
+            for name in ("jen", "kea-a", "kea-b", "mariadb", "dns", "updater", "mosquitto"):
                 p = st.compose("logs", "--no-color", "--tail", "400", name, check=False)
                 (_artifact_dir() / f"{name}.log").write_text(p.stdout + p.stderr, encoding="utf-8", errors="replace")
         finally:
@@ -159,6 +160,7 @@ def _heal(st):
     )
     st.sh(st.JEN, "rm -f /tmp/s[0-9]*-*", check=False)
     st.sh(st.DNS, "rm -f /ctl/limit; touch /ctl/reset", check=False)
+    st.run(["docker", "unpause", st.MOSQUITTO], check=False)
     try:
         st.wait_for(
             lambda: st.kea_answers("kea-a") and st.kea_answers("kea-b"),

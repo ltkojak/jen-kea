@@ -1340,25 +1340,36 @@ As of the process work following the v4.4.10 audit series:
     the baseline fail CI; the existing, reviewed backlog doesn't block
     anything.
   - `pip-audit` against the actual installed dependency set.
-- **`/api/v1/health` answers from Jen alone (v5.65.6, Q95).** The self-updater
+- **`/api/v1/health` answers from Jen alone and carries only `jen_version`
+  (v5.65.6, Q95; trimmed to this in v5.65.12, Q101 a).** The self-updater
   confirms the running version by polling it with a 5 s timeout, and the restore's
   health poll does the same; it used to call Kea live, twice, so with Kea unreachable
   (a condition Jen is meant to survive) it took ~20 s and a HEALTHY update or restore
-  was rolled back. It now reports `kea_up` / `kea_version` from the last probe
-  `kea_is_up()` recorded (the background alert loop asks every server every ~5 s;
-  `null` until one has, or once it is older than two minutes), plus `kea_checked_at`,
-  and never calls Kea; its fields describe the server Jen is serving from, not
-  `[kea] api_url`'s primary. Its whole body is `jen_version`, `kea_up`, `kea_version`,
-  `kea_checked_at` and `subnets`: v5.65.8 added a per-server list to this public
-  page and v5.65.10 moved it (as `servers`, cached, no extra probe) to the key-gated
-  `GET /api/v1/health/kea`, since it named every Kea server to anyone who could
-  reach the page and nothing reads it. That endpoint probes the active server
+  was rolled back — it still never calls Kea. Its body used to also carry `kea_up`,
+  `kea_version`, `kea_checked_at` and `subnets`: v5.65.8 added a per-server list to
+  this public page, v5.65.10 moved that (as `servers`, cached, no extra probe) to the
+  key-gated `GET /api/v1/health/kea` but kept the single-server summary and the
+  subnet count here, and v5.65.12 established that every real consumer of this route
+  (the self-updater's version confirmation, the restore poll, the system suite) reads
+  `jen_version` only — the rest was reconnaissance for no benefit to a caller with no
+  key, so it moved there too. `GET /api/v1/health/kea` probes the active server
   once: `probe_kea_health(server)` is the one Kea probe (a single `version-get`
   that also writes the cache entry), used by `kea_is_up`, the status page and the
   API alike, and the active server is chosen from the cache (`cached_active_server`),
   not by re-running the HA election. It used to make two to six calls, so a dead
   server cost two timeouts.
   `tests/test_health_endpoint.py` and system scenario 11 pin it.
+- **`kea_command()`'s transport exceptions are canned (v5.65.12, Q101 b).**
+  A `ConnectionError` and a `Timeout` were already canned (the connect message
+  names the API URL — admin-facing and useful, kept); the catch-all
+  `except Exception` below them used to return the exception's own `str(e)`,
+  rendered verbatim on the dashboard's config-error banner and the Doctor page —
+  a TLS handshake failure, a malformed response, anything else the transport
+  raised. It returns a generic sentence now and logs the exception with the URL
+  and command name. `tests/test_no_raw_exception_leaks.py`'s scanner gained a
+  pattern for this exact shape (a plain `{"text": str(e)}` result dict, which
+  none of its `flash()`/`jsonify()`/`api_error()` patterns ever matched) so a
+  regression here is caught the same way a route-level leak is.
 - **Dependabot** watches the GitHub Actions used in these workflows and
   opens PRs to bump pinned commit SHAs forward when new releases exist.
 - **`system-tests.yml`** (v5.64.x, Q84) sits beside `kea-compat.yml`: weekly, on
@@ -1627,9 +1638,9 @@ success removes the flat `jen/ run.py templates/ static/ plugins/ venv/`.
 `sudo ./install.sh` does the same migration immediately.
 
 Two small deliberate choices worth stating: `/api/v1/health` is
-**unauthenticated** (it returns Jen's version, whether Kea is up, Kea's
-version string and the subnet count — no leases, MACs or hostnames) and
-the updater's post-restart version confirmation depends on it; and the
+**unauthenticated** (its body is Jen's version alone, since v5.65.12 —
+Kea's state and the subnet count moved to the key-gated `/api/v1/health/kea`)
+and the updater's post-restart version confirmation depends on it; and the
 snapshot copies symlinks *as* symlinks (`copytree(symlinks=True)`) —
 v5.8.4, after a stray dangling `templates/templates` link from an old
 install made every snapshot raise before the swap.

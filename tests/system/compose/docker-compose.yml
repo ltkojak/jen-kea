@@ -65,6 +65,19 @@ services:
     container_name: sys-broken-ca
     command: ["python3", "/faults.py", "http", "8500"]
 
+  # A real MQTT broker for the Presence plugin (system scenario 13, Q101): three listeners
+  # (anonymous, password-file, TLS with the stack's own throwaway CA) on the one broker instance
+  # - all three share the same topic namespace, so a subscriber on any one sees what is published
+  # on any other. mosquitto.conf and the password/cert files are written by prepare_workdir().
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: sys-mosquitto
+    hostname: mosquitto
+    volumes:
+      - ${SYS_WORK}/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ${SYS_WORK}/mosquitto/passwd:/mosquitto/config/passwd:ro
+      - ${SYS_WORK}/mosquitto/certs:/mosquitto/certs:ro
+
   jen:
     build:
       context: ../../..
@@ -76,10 +89,17 @@ services:
         condition: service_healthy
     environment:
       JEN_INITIAL_ADMIN_PASSWORD: ${SYS_ADMIN_PASSWORD:-sys-Adm1n-Pass!}
+      # v5.65.12 (Q101 c) - Python's ssl module reads this (an OpenSSL convention) as the sole
+      # extra trust anchor for ssl.create_default_context(): trusts the mosquitto stack's own
+      # throwaway CA for scenario 13's TLS listener, without touching Presence's own code (it has
+      # no custom-CA option, and does not need one - a real deployment's broker would carry a
+      # cert the host's system trust store already trusts).
+      SSL_CERT_FILE: /mosquitto-ca/ca.pem
     ports:
       - "127.0.0.1:5050:5050"
     volumes:
       - ${SYS_WORK}/jen-etc:/etc/jen
+      - ${SYS_WORK}/mosquitto/certs/ca.pem:/mosquitto-ca/ca.pem:ro
     # The recovery-bundle scenario runs against a small /tmp; the Jen
     # process must not depend on it having room.
     tmpfs:

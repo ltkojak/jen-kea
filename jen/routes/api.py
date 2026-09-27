@@ -65,39 +65,32 @@ def _ip_to_int(ip):
 
 @bp.route("/api/v1/health")
 def api_v1_health():
-    """Jen's own liveness, answered from Jen alone (v5.65.6, Q95). `kea_up` / `kea_version` come from
-    the last probe the background poller made (null until one has, or when it has gone stale) and this
-    route never calls Kea. It used to probe live, twice, each up to the Kea API timeout: with Kea down
-    - a condition Jen is meant to survive - it took ~20 s, and the self-updater's version confirmation
-    (5 s timeout) and the restore's health poll read that as "Jen is not up" and ROLLED BACK a healthy
-    update or restore. Callers that want a live probe use /api/v1/health/kea."""
+    """Jen's own liveness, unauthenticated, answered from Jen alone: `jen_version` and NOTHING else
+    (v5.65.12, Q101). Every real consumer of this route (the self-updater's version confirmation,
+    the restore poll, the system suite) reads `jen_version` only - Kea's up/version/checked-at state
+    and the subnet count were reconnaissance for no benefit to anyone who could merely reach the
+    page. They moved to the key-gated /api/v1/health/kea (already cached there - no new probe) in
+    two steps: 5.65.8 added a per-server list here by mistake, 5.65.10 moved THAT to /health/kea but
+    kept the single-server summary here; this drops the summary too. This route also never calls
+    Kea, for the same reason it never did: it used to probe live, twice, each up to the Kea API
+    timeout, so with Kea down - a condition Jen is meant to survive - it took ~20 s, and the
+    self-updater's version confirmation (5 s timeout) and the restore's health poll read that as
+    "Jen is not up" and ROLLED BACK a healthy update or restore."""
     from jen import JEN_VERSION as _ver
-    from jen.services.kea import cached_kea_health
 
-    # v5.65.10 (Q99): version, the active server's cached status and the subnet count, and nothing else.
-    # The per-server list that 5.65.8 added here named every Kea server to anyone who could reach the
-    # page; it lives on the key-gated /api/v1/health/kea now. Every consumer of this route (the updater's
-    # version confirmation, the restore poll, the system suite) reads `jen_version` only.
-    cached = cached_kea_health()  # the server Jen is serving from (cached_active_server)
-    return api_ok(
-        {
-            "jen_version": _ver,
-            "kea_up": cached["up"],
-            "kea_version": cached["version"],
-            "kea_checked_at": cached["checked_at"],
-            "subnets": len(extensions.SUBNET_MAP),
-        }
-    )
+    return api_ok({"jen_version": _ver})
 
 
 @bp.route("/api/v1/health/kea")
 def api_v1_health_kea():
     """The live probe (v5.65.6): asks the active Kea server now, so it can take as long as the Kea
     API timeout when Kea is unreachable. Needs an API key - unlike /api/v1/health, which anyone can
-    poll, this one makes Jen wait on a network call per request."""
+    poll, this one makes Jen wait on a network call per request. Also carries the subnet count
+    (v5.65.12, Q101 a) - it used to sit on the public /health; no extra work to compute it here."""
     key = _api_auth()
     if not key:
         return api_error("Invalid or missing API key.", 401)
+    subnets = len(extensions.SUBNET_MAP)
     # the ACTIVE server (the one Jen serves from), not `[kea] api_url`'s primary: in an HA pair with
     # server 1 down this said kea_up false while Jen was serving from server 2. It is chosen WITHOUT a
     # probe (cached_active_server) and probed ONCE (probe_kea_health): this route used to run the
@@ -106,7 +99,16 @@ def api_v1_health_kea():
     # last one failed.
     server = cached_active_server()
     if server is None:  # no Kea server configured at all
-        return api_ok({"kea_up": False, "kea_version": "", "kea_checked_at": None, "server": None, "servers": []})
+        return api_ok(
+            {
+                "kea_up": False,
+                "kea_version": "",
+                "kea_checked_at": None,
+                "server": None,
+                "servers": [],
+                "subnets": subnets,
+            }
+        )
     entry = probe_kea_health(server)
     from datetime import datetime, timezone
 
@@ -118,6 +120,7 @@ def api_v1_health_kea():
             "server": server.get("name"),
             # every server's last known state (the probe above just refreshed this one's); no extra probe
             "servers": all_cached_kea_health(),
+            "subnets": subnets,
         }
     )
 

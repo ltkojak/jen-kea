@@ -546,8 +546,8 @@ Go to **Settings → Access & Security → API Keys** to generate, view, and rev
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/v1/health` | Jen version and the last known Kea status — no auth; answers from Jen's own state and never calls Kea, so `kea_up` / `kea_version` are `null` until the first probe (and `kea_checked_at` says when it was); the body is only `jen_version`, `kea_up`, `kea_version`, `kea_checked_at` and `subnets` (v5.65.6; the per-server list that 5.65.8 added here is on `/api/v1/health/kea` from 5.65.10) |
-| GET | `/api/v1/health/kea` | A live probe of the server Jen is serving from (in an HA pair, the active one) — needs an API key; one Kea call, so it can take as long as the Kea API timeout when it is unreachable (v5.65.6); returns `kea_up`, `kea_version`, `kea_checked_at`, `server` and, since 5.65.10, `servers` (every server's last known state, cached) |
+| GET | `/api/v1/health` | Jen's liveness — no auth, no Kea call, and the body is `jen_version` alone (v5.65.12; it carried Kea's cached state and the subnet count from 5.65.6, narrowed to a per-server list in 5.65.8, moved to `/api/v1/health/kea` in 5.65.10, and dropped entirely here since every real consumer reads `jen_version` only) |
+| GET | `/api/v1/health/kea` | A live probe of the server Jen is serving from (in an HA pair, the active one) — needs an API key; one Kea call, so it can take as long as the Kea API timeout when it is unreachable (v5.65.6); returns `kea_up`, `kea_version`, `kea_checked_at`, `server`, `servers` (every server's last known state, cached, since 5.65.10) and `subnets` (since 5.65.12) |
 | GET | `/api/v1/subnets` | Subnet utilization with pool sizes; since v5.36.0 also `peak_30d`, `trend_per_day`, `days_to_90pct` and `forecast` (rising / flat / falling / insufficient) |
 | GET | `/api/v1/servers` | Kea servers, HA state, and `packet_health` — `{status, window_minutes, rates}`, null until two snapshots exist (v5.41.0) |
 | GET | `/api/v1/events` | Raw event stream rows — params: mac, ip, kind, since (ISO 8601), limit (v5.42.0) |

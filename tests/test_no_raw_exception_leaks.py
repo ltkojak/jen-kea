@@ -206,7 +206,14 @@ def _scan_route_file_for_raw_exception_leaks(path):
         # — see the widened glob in the test below — and because the
         # regex itself had no case for a bare `message=f"...{e}"`
         # keyword argument, only specific call-shapes like flash().
-        r'message\s*=\s*f".*\{e\}|message\s*=\s*f".*\{str\(e\)\})'
+        r'message\s*=\s*f".*\{e\}|message\s*=\s*f".*\{str\(e\)\}|'
+        # v5.65.12 (Q101 b) addition — jen/services/kea.py's kea_command() returns a plain result
+        # dict, never flash()/jsonify()/api_error(), so none of the shapes above ever saw it: the
+        # catch-all `except Exception as e: return {"result": 1, "text": str(e)}` leaked straight
+        # into the dashboard's config-error banner and the Doctor page. `\{e\}` (not `\{url\}` or
+        # any other name) keeps this from flagging the deliberately-kept ConnectionError/Timeout
+        # lines, which name the URL, not the exception.
+        r'"text":\s*str\(e\)|"text":\s*f".*\{e\})'
     )
     for lineno, line in enumerate(text.splitlines(), start=1):
         if not leak_pattern.search(line):

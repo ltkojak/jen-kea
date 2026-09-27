@@ -6,9 +6,13 @@ v5.65.6 (Q95) — /api/v1/health answers from Jen alone.
 The self-updater confirms the running version by polling this endpoint with a 5-second
 timeout, and the restore's health poll does the same. It used to call Kea live, twice, each up
 to the Kea API timeout, so with Kea unreachable (a condition Jen is meant to survive) it took
-~20 s, read as "Jen is not up", and rolled a HEALTHY update or restore back. Now it reads the
-last probe the background poller made and never calls Kea; /api/v1/health/kea keeps the live
-probe, behind an API key.
+~20 s, read as "Jen is not up", and rolled a HEALTHY update or restore back. Now it never calls
+Kea; /api/v1/health/kea keeps the live probe, behind an API key.
+
+v5.65.12 (Q101 a) — the public body was trimmed to `jen_version` alone. Kea's up/version/
+checked-at state and the subnet count (added 5.65.6, narrowed from a per-server list in 5.65.10)
+were reconnaissance for no benefit: every real consumer of this route reads `jen_version` only.
+Both moved to the key-gated /api/v1/health/kea, already cached there.
 """
 
 import hashlib
@@ -47,32 +51,6 @@ class TestHealthNeverWaitsOnKea:
         assert r.status_code == 200
         assert elapsed < 1.0, f"/api/v1/health took {elapsed:.1f}s - it must not call Kea"
 
-    def test_kea_is_unknown_until_something_has_probed(self, client):
-        data = client.get("/api/v1/health").get_json()
-        assert data["kea_up"] is None and data["kea_version"] is None and data["kea_checked_at"] is None
-        assert data["jen_version"] and isinstance(data["subnets"], int)
-
-    def test_it_reports_what_the_last_probe_learned(self, client):
-        with patch(
-            "jen.services.kea.kea_command",
-            return_value={"result": 0, "arguments": {"extended": "3.0.1\nlong text"}},
-        ):
-            assert kea_service.kea_is_up() is True
-        data = client.get("/api/v1/health").get_json()
-        assert data["kea_up"] is True and data["kea_version"] == "3.0.1" and data["kea_checked_at"]
-        with patch("jen.services.kea.kea_command", return_value={"result": 1, "text": "Cannot connect"}):
-            assert kea_service.kea_is_up() is False
-        data = client.get("/api/v1/health").get_json()
-        assert data["kea_up"] is False and data["kea_version"] is None
-
-    def test_a_stale_probe_is_unknown_not_a_guess(self, client):
-        with patch("jen.services.kea.kea_command", return_value={"result": 0, "arguments": {"extended": "3.0.1"}}):
-            kea_service.kea_is_up()
-        for entry in kea_service._HEALTH_CACHE.values():
-            entry["at"] -= 10_000
-        data = client.get("/api/v1/health").get_json()
-        assert data["kea_up"] is None
-
     def test_the_route_never_imports_a_live_probe_into_its_path(self):
         import inspect
 
@@ -81,11 +59,21 @@ class TestHealthNeverWaitsOnKea:
         src = inspect.getsource(api.api_v1_health)
         assert "kea_is_up" not in src and "kea_command" not in src and "probe_kea_health" not in src
 
-    def test_the_public_body_is_only_version_status_and_a_subnet_count(self, client):
-        """v5.65.10 (Q99 c): the per-server list is not for anyone who can reach the page."""
+    def test_the_public_body_is_jen_version_and_nothing_else(self, client):
+        """v5.65.12 (Q101 a): Kea's up/version/checked-at state and the subnet count moved to the
+        key-gated /api/v1/health/kea - reconnaissance for no benefit to a caller with no key, and
+        every real consumer (the updater, the restore poll, the system suite) reads jen_version
+        only. This is unconditional: a probe having run makes no difference to this route."""
         data = client.get("/api/v1/health").get_json()
-        assert set(data) == {"jen_version", "kea_up", "kea_version", "kea_checked_at", "subnets"}
-        assert "kea_servers" not in data and "servers" not in data
+        assert set(data) == {"jen_version"}
+        assert data["jen_version"]
+        with patch(
+            "jen.services.kea.kea_command",
+            return_value={"result": 0, "arguments": {"extended": "3.0.1\nlong text"}},
+        ):
+            assert kea_service.kea_is_up() is True
+        data = client.get("/api/v1/health").get_json()
+        assert set(data) == {"jen_version"}, "a Kea probe having run must not add fields to the public body"
 
 
 class TestLiveProbeIsSeparateAndKeyed:
@@ -166,6 +154,15 @@ class TestLiveProbeIsSeparateAndKeyed:
         assert body["servers"] and all({"name", "up", "version", "checked_at"} <= set(s) for s in body["servers"])
         assert client.get("/api/v1/health/kea").status_code == 401
 
+    def test_the_subnet_count_lives_here_now(self, client, db):
+        """v5.65.12 (Q101 a): moved off the public /api/v1/health body."""
+        raw = self._key(db)
+        with patch("jen.services.kea.kea_command", return_value={"result": 0, "arguments": {"extended": "3.0.1"}}):
+            body = client.get("/api/v1/health/kea", headers={"Authorization": f"Bearer {raw}"}).get_json()
+        from jen import extensions
+
+        assert body["subnets"] == len(extensions.SUBNET_MAP)
+
     def test_no_kea_server_configured_is_an_answer_not_an_error(self, client, db, monkeypatch):
         from jen import extensions
 
@@ -174,7 +171,8 @@ class TestLiveProbeIsSeparateAndKeyed:
         monkeypatch.setitem(extensions._active_server_cache, "server", None)
         r = client.get("/api/v1/health/kea", headers={"Authorization": f"Bearer {raw}"})
         assert r.status_code == 200
-        assert r.get_json()["kea_up"] is False and r.get_json()["servers"] == []
+        data = r.get_json()
+        assert data["kea_up"] is False and data["servers"] == [] and isinstance(data["subnets"], int)
 
 
 class TestOneProbeEverywhere:
