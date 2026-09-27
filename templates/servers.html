@@ -10,7 +10,8 @@
 {# v5.65.10 (Q99): every unresolved incident is listed; a later rolled-back never replaces a failed rollback #}
 <div class="alert alert-warning u-3bceda">
     {% for ca in changeset_attention.incidents %}
-    <div{% if not loop.first %} style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.15);"{% endif %}>
+    {% if not loop.first %}<hr>{% endif %}
+    <div>
     {{ icon("siren") }}
     {% if ca.status == "rollback_failed" %}
     <strong>A configuration change could not be rolled back cleanly.</strong>

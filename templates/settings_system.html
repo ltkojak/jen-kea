@@ -56,11 +56,9 @@
                 {{ icon("upload") }} Update Now
             </button>
         </form>
-        {% elif not is_systemd_host %}
-        {# v5.65.10 (Q99 i): the updater is a systemd service; in the image it ran `sudo systemctl start ...` and flashed an error #}
-        <span id="update-form" style="display:none;font-size:12px;color:var(--text-muted);">Updates are the container image's job: build or pull the new image and recreate the container (see the Docker guide).</span>
         {% else %}
-        <span id="update-form" style="display:none;font-size:12px;color:var(--text-muted);">A superadmin can install it from here.</span>
+        {# v5.65.10 (Q99 i): the updater is a systemd service; in the image it ran `sudo systemctl start ...` and flashed an error #}
+        <span id="update-form" style="display:none;font-size:12px;color:var(--text-muted);">{% if not is_systemd_host %}Updates are the container image's job: build or pull the new image and recreate the container (see the Docker guide).{% else %}A superadmin can install it from here.{% endif %}</span>
         {% endif %}
         <a id="release-notes-link" href="#" target="_blank"
            style="display:none;font-size:12px;color:var(--primary);">

@@ -141,7 +141,11 @@ class TestPages:
         from jen.services.alerts import ALERT_TYPE_LABELS
 
         html = logged_in_client.get("/settings/alerts").data.decode()
-        assert html.count('<details class="al-tpl"') == len(ALERT_TYPE_LABELS)
+        # v5.65.10 (Q99 k): the legacy core rogue-device row is hidden while Network Discovery's own type is registered
+        hidden = (
+            1 if "network-discovery_rogue_device" in ALERT_TYPE_LABELS and "rogue_device" in ALERT_TYPE_LABELS else 0
+        )
+        assert html.count('<details class="al-tpl"') == len(ALERT_TYPE_LABELS) - hidden
         assert 'action="/settings/alerts/reset-template"' in html
         p = Forms()
         p.feed(html[html.index('id="al-templates"') : html.index("Add/Edit Channel Modal")])

@@ -1010,7 +1010,7 @@ document.addEventListener('DOMContentLoaded', function() {
     document.body.addEventListener('htmx:beforeRequest', start);
     // htmx (1.9.x) fires htmx:afterRequest after EVERY terminal path, an error response included, so
     // this one listener is the stop. A second one on htmx:responseError (v5.56.4 to v5.65.9) decremented
-    // twice for a 4xx/5xx and hid the bar while another request was still in flight (v5.65.10, Q99 f).
+    // twice for a 4xx/5xx and hid the bar while a second request was still in flight (v5.65.10, Q99 f).
     document.body.addEventListener('htmx:afterRequest', stop);
     window.jenFetch = function(url, opts) {
         start();

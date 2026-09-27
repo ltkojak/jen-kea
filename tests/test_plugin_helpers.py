@@ -181,7 +181,7 @@ class TestCoreAndMfaRoutesRefuseANonObjectBody:
 
 class TestAssertSubnetAccessCanBeQuiet:
     def test_notify_false_queues_no_flash(self, app):
-        from flask import get_flashed_messages, session
+        from flask import session
 
         from jen.services import access
 
@@ -197,9 +197,9 @@ class TestAssertSubnetAccessCanBeQuiet:
             access.current_user = _Nope()
             try:
                 assert access.assert_subnet_access(1, notify=False) is False
-                assert get_flashed_messages() == []
+                assert not session.get("_flashes"), "notify=False must queue no flash"
                 assert access.assert_subnet_access(1) is False
-                assert get_flashed_messages() == ["You do not have access to that subnet."]
+                assert [m for _c, m in session["_flashes"]] == ["You do not have access to that subnet."]
             finally:
                 access.current_user = orig
 
