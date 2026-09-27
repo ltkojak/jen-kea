@@ -857,6 +857,12 @@ emit({"already": already})
         return
     st.run(["docker", "restart", st.JEN])
     st.wait_jen_healthy(timeout=150)
+    # check_alerts()'s own loop checks Kea up/down 6x (~30s) before it EVER reaches the lease-diff
+    # section, even on its first iteration - /api/v1/health answering healthy says nothing about
+    # that loop's own progress. Without this wait, a lease written right after the restart can
+    # land INSIDE that first, `first_run=True` pass, which seeds it into the baseline with no
+    # diff and no event at all (lease.new never fires for something that was "always there").
+    time.sleep(40)
 
 
 def _setup_scenario13(web):
