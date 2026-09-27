@@ -43,6 +43,7 @@ EXPECTED_ENDPOINTS = {
     "settings.check_config_drift_route",
     "settings.install_kea_binary",
     "settings.check_kea_helper",
+    "settings.test_legacy_grant",
     "settings.install_kea_helper",
     "settings.remove_legacy_grant",
     "settings.save_infra_jen_db",
