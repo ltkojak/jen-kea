@@ -805,27 +805,41 @@ S13_DISCOVERY_TOPIC = f"homeassistant/device_tracker/jen_{S13_MAC.replace(':', '
 S13_LEASE_IP = "10.99.0.150"
 
 
-def _mosq_capture(port, seconds=100):
+def _mosq_capture(port, seconds=100, auth=False):
     """A background `mosquitto_sub -v -t '#'` against one listener, self-terminating via the
     container's own `timeout` so the `docker exec` process exits on its own; `communicate()`
     then returns everything it saw. Started BEFORE the action that should publish - a non-retained
     message received before a subscriber connects is gone forever, so this cannot be a
-    look-back-afterward check the way the retained-discovery one below is."""
-    return st.dexec_bg(st.MOSQUITTO, "sh", "-c", f"timeout {seconds} mosquitto_sub -h localhost -p {port} -v -t '#'")
+    look-back-afterward check the way the retained-discovery one below is. `auth=True` is the
+    password-file listener (1884): it refuses an anonymous connection outright, so a subscriber
+    with no credentials never even connects - and produces exactly the empty-output failure this
+    once did, credentials or not, so its own real connection error only shows up in stderr, never
+    asserted on until this comment was added."""
+    cred = f"-u {st.MOSQ_USER} -P {st.MOSQ_PASS} " if auth else ""
+    return st.dexec_bg(
+        st.MOSQUITTO, "sh", "-c", f"timeout {seconds} mosquitto_sub -h localhost -p {port} {cred}-v -t '#'"
+    )
 
 
-def _mosq_once(port, topic, timeout=15):
+def _mosq_once(port, topic, timeout=15, tls=False):
     """One retained (or imminent) message on `topic`, read by a FRESH subscription - proves a
     retained flag actually stuck, since a fresh client gets a retained message immediately with
     no publish needed. Returncode 0 with output means a message arrived; mosquitto_sub itself
-    exits 0 after -C 1 delivers."""
+    exits 0 after -C 1 delivers. `tls=True` is the 8883 listener: mosquitto_sub does not infer
+    TLS from the port number, it needs --cafile telling it to negotiate TLS at all - without it,
+    a plain CONNECT sent straight to a TLS-only listener just hangs until this call's own timeout.
+    The server cert's CN is 'mosquitto' (the container's own hostname, matching its docker-compose
+    `hostname:`), so a TLS connection verifies against that name specifically, not 'localhost' -
+    self-CN-mismatch would otherwise fail verification even though it is the same broker."""
+    extra = ["--cafile", "/mosquitto/certs/ca.pem"] if tls else []
     return st.dexec(
         st.MOSQUITTO,
         "mosquitto_sub",
         "-h",
-        "localhost",
+        "mosquitto" if tls else "localhost",
         "-p",
         str(port),
+        *extra,
         "-v",
         "-t",
         topic,
@@ -963,7 +977,7 @@ def test_13_presence_against_a_real_mqtt_broker(stack):
     # own process just started, so this is its first_run SEED cycle (no diff at all, since
     # nothing was tracked before the restart) followed by the first REAL diff cycle that actually
     # notices the lease - up to two ~30s cycles, not one. ──
-    capture = _mosq_capture(st.MOSQ_AUTH_PORT, seconds=160)
+    capture = _mosq_capture(st.MOSQ_AUTH_PORT, seconds=160, auth=True)
     try:
         _lease_up()
         _wait_pr_state(True, timeout=150)
@@ -973,15 +987,16 @@ def test_13_presence_against_a_real_mqtt_broker(stack):
             capture.kill()
     assert f"{S13_STATE_TOPIC} online" in stdout, (
         f"INVARIANT: the plain (password-auth) sink publishes the state topic with payload 'online' "
-        f"(mosquitto_sub -v saw:\n{stdout[-2000:]})"
+        f"(mosquitto_sub -v saw stdout:\n{stdout[-2000:]}\nstderr:\n{stderr[-1000:]})"
     )
     assert S13_ATTRS_TOPIC in stdout, f"INVARIANT: the attributes topic is published too (saw:\n{stdout[-2000:]})"
 
     # ── the TLS sink: retained discovery message, schema verified against HA's own docs ──
-    disc = _mosq_once(st.MOSQ_TLS_PORT, S13_DISCOVERY_TOPIC)
+    disc = _mosq_once(st.MOSQ_TLS_PORT, S13_DISCOVERY_TOPIC, tls=True)
     assert disc.returncode == 0 and S13_DISCOVERY_TOPIC in disc.stdout, (
         f"INVARIANT: a FRESH subscriber gets the retained HA discovery message with no new publish "
-        f"needed - the retain flag stuck (got rc={disc.returncode}, stdout={disc.stdout[-500:]!r})"
+        f"needed - the retain flag stuck (got rc={disc.returncode}, stdout={disc.stdout[-500:]!r}, "
+        f"stderr={disc.stderr[-500:]!r})"
     )
     payload = json.loads(disc.stdout.split(" ", 1)[1])
     # Home Assistant's documented MQTT device_tracker discovery schema (home-assistant.io/integrations/
@@ -992,13 +1007,14 @@ def test_13_presence_against_a_real_mqtt_broker(stack):
     assert payload["payload_home"] == "online" and payload["payload_not_home"] == "offline"
     assert payload["json_attributes_topic"] == S13_ATTRS_TOPIC
 
-    state_once = _mosq_once(st.MOSQ_TLS_PORT, S13_STATE_TOPIC)
+    state_once = _mosq_once(st.MOSQ_TLS_PORT, S13_STATE_TOPIC, tls=True)
     assert state_once.returncode == 0 and "online" in state_once.stdout, (
-        f"INVARIANT: the TLS sink's own state topic is retained too (retain=1 on this sink): {state_once.stdout!r}"
+        f"INVARIANT: the TLS sink's own state topic is retained too (retain=1 on this sink): "
+        f"stdout={state_once.stdout!r}, stderr={state_once.stderr!r}"
     )
 
     # ── offline: the lease goes away, no OTHER active lease remains ──
-    capture = _mosq_capture(st.MOSQ_AUTH_PORT)
+    capture = _mosq_capture(st.MOSQ_AUTH_PORT, auth=True)
     try:
         _lease_down()
         _wait_pr_state(False)
@@ -1007,7 +1023,7 @@ def test_13_presence_against_a_real_mqtt_broker(stack):
         if capture.poll() is None:
             capture.kill()
     assert f"{S13_STATE_TOPIC} offline" in stdout, (
-        f"INVARIANT: losing its only lease publishes 'offline' (saw:\n{stdout[-2000:]})"
+        f"INVARIANT: losing its only lease publishes 'offline' (saw stdout:\n{stdout[-2000:]}\nstderr:\n{stderr[-1000:]})"
     )
 
     # ── a paused broker: last_error is set, no unhandled exception, the worker survives ──
@@ -1044,7 +1060,7 @@ def test_13_presence_against_a_real_mqtt_broker(stack):
     # ── recovery: the next transition publishes again and clears last_error ──
     _lease_down()
     _wait_pr_state(False, timeout=90)  # the paused-broker attempt above still recorded 'online'
-    capture = _mosq_capture(st.MOSQ_AUTH_PORT)
+    capture = _mosq_capture(st.MOSQ_AUTH_PORT, auth=True)
     try:
         _lease_up()
         _wait_pr_state(True)
@@ -1053,7 +1069,8 @@ def test_13_presence_against_a_real_mqtt_broker(stack):
         if capture.poll() is None:
             capture.kill()
     assert f"{S13_STATE_TOPIC} online" in stdout, (
-        f"INVARIANT: the worker thread is still alive and sending after the broker comes back (saw:\n{stdout[-2000:]})"
+        f"INVARIANT: the worker thread is still alive and sending after the broker comes back "
+        f"(saw stdout:\n{stdout[-2000:]}\nstderr:\n{stderr[-1000:]})"
     )
     out, _p = st.jen_py(
         "import jen.models.db as db_mod\n"
