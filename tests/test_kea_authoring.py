@@ -1334,6 +1334,89 @@ class TestKeaHelperRoutes:
         assert b"not found" in r.data.lower()
 
 
+class TestTestLegacyGrantRoute:
+    """v5.65.13 (Q102) — POST /settings/infrastructure/test-legacy-grant/<id>: a read-only probe,
+    admin-gated (not superadmin, unlike remove-legacy-grant — nothing is changed on the host)."""
+
+    def _one_ssh_server(self, monkeypatch):
+        monkeypatch.setattr(
+            extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-a", "ssh_host": "1.2.3.4", "ssh_user": "kea"}]
+        )
+
+    def test_admin_is_allowed(self, client, db, monkeypatch):
+        from jen.services import kea_host
+        from tests.conftest import restricted_client
+
+        self._one_ssh_server(monkeypatch)
+        monkeypatch.setattr(
+            kea_host,
+            "legacy_grant_status",
+            lambda s: {"ok": True, "rc": 0, "reason": "", "user_at_host": "kea@1.2.3.4", "summary": ""},
+        )
+        c, _ = restricted_client(client, db, allowed_subnets=[], role="admin", username="tlg_admin1")
+        r = c.post("/settings/infrastructure/test-legacy-grant/1", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"the legacy grant is present" in r.data
+
+    def test_success_names_the_probed_user_at_host(self, logged_in_client, monkeypatch):
+        from jen.services import kea_host
+
+        self._one_ssh_server(monkeypatch)
+        monkeypatch.setattr(
+            kea_host,
+            "legacy_grant_status",
+            lambda s: {"ok": True, "rc": 0, "reason": "", "user_at_host": "kea@1.2.3.4", "summary": ""},
+        )
+        r = logged_in_client.post("/settings/infrastructure/test-legacy-grant/1", follow_redirects=True)
+        assert b"the legacy grant is present" in r.data
+        assert b"kea@1.2.3.4" in r.data
+
+    def test_failure_shows_sudos_reason_and_the_summary(self, logged_in_client, monkeypatch):
+        from jen.services import kea_host
+
+        self._one_ssh_server(monkeypatch)
+        monkeypatch.setattr(
+            kea_host,
+            "legacy_grant_status",
+            lambda s: {
+                "ok": False,
+                "rc": 1,
+                "reason": "sudo: a password is required",
+                "user_at_host": "kea@1.2.3.4",
+                "summary": "python3 rule(s) on this host: (root) NOPASSWD: /usr/bin/python3 "
+                "— a LATER rule may override it: (root) ALL",
+            },
+        )
+        r = logged_in_client.post("/settings/infrastructure/test-legacy-grant/1", follow_redirects=True)
+        assert b"legacy grant probe failed" in r.data
+        assert b"kea@1.2.3.4" in r.data
+        assert b"a password is required" in r.data
+        assert b"LATER rule may override it" in r.data
+
+    def test_failure_with_no_summary_still_shows_the_reason(self, logged_in_client, monkeypatch):
+        from jen.services import kea_host
+
+        self._one_ssh_server(monkeypatch)
+        monkeypatch.setattr(
+            kea_host,
+            "legacy_grant_status",
+            lambda s: {
+                "ok": False,
+                "rc": -1,
+                "reason": "OSError: Unable to connect to port 22",
+                "user_at_host": "kea@1.2.3.4",
+                "summary": "",
+            },
+        )
+        r = logged_in_client.post("/settings/infrastructure/test-legacy-grant/1", follow_redirects=True)
+        assert b"Unable to connect to port 22" in r.data
+
+    def test_unknown_server(self, logged_in_client, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [])
+        r = logged_in_client.post("/settings/infrastructure/test-legacy-grant/9", follow_redirects=True)
+        assert b"not found" in r.data.lower()
+
+
 class TestKeaHelperTableUpgradeHint:
     """v5.19.1 — the Settings -> Kea -> SSH helper table compares each
     host's recorded version against JEN_HELPER_WANT_VERSION, not just

@@ -676,6 +676,32 @@ def check_kea_helper(server_id):
     return redirect(url_for("settings.settings_kea") + "#kea-ssh")
 
 
+@bp.route("/settings/infrastructure/test-legacy-grant/<int:server_id>", methods=["POST"])
+@login_required
+@_admin_required
+def test_legacy_grant(server_id):
+    """v5.65.13 (Q102) — probe the legacy sudo grant and show exactly what sudo said, without
+    attempting an install. A maintainer report found "no legacy grant" was the only answer
+    Update helper ever gave, even when the grant genuinely existed and sudo refused it for an
+    unrelated reason (a later sudoers rule, no PTY, a wrong host) — this button exists so an
+    operator can see that BEFORE pressing Update helper, or diagnose an install-helper refusal
+    without changing anything."""
+    server = _find_server(server_id)
+    if not server or not server.get("ssh_host"):
+        flash("Server not found or SSH not configured.", "error")
+        return redirect(url_for("settings.settings_kea") + "#kea-ssh")
+    name = server.get("name", server_id)
+    status = __host.legacy_grant_status(server)
+    if status["ok"]:
+        flash(f"{name}: the legacy grant is present (probed as {status['user_at_host']}).", "success")
+    else:
+        detail = f'sudo said: "{status["reason"]}"'
+        if status["summary"]:
+            detail += f" — {status['summary']}"
+        flash(f"{name}: legacy grant probe failed (probed as {status['user_at_host']}): {detail}", "warning")
+    return redirect(url_for("settings.settings_kea") + "#kea-ssh")
+
+
 @bp.route("/settings/infrastructure/install-kea-helper/<int:server_id>", methods=["POST"])
 @login_required
 @_superadmin_required
@@ -700,7 +726,10 @@ def install_kea_helper(server_id):
         __user.audit("INSTALL_KEA_HELPER", str(name), f"helper v{res['version']}")
         flash(
             f"{name}: jen-kea-helper v{res['version']} installed. Once every host shows the helper "
-            "you can remove the legacy /etc/sudoers.d/jen (the python3 = root grant).",
+            # v5.65.13 (Q102) — a maintainer report caught this: /etc/sudoers.d/jen is Jen's OWN
+            # self-update grant, on the Jen box (install.sh's SUDOERS_FILE); removing it breaks
+            # self-update. The legacy Kea-host grant this flash means is /etc/sudoers.d/jen-kea.
+            "you can remove the legacy /etc/sudoers.d/jen-kea (the python3 = root grant).",
             "success",
         )
     elif res["code"] in ("no-path", "stale"):

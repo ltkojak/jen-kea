@@ -101,7 +101,9 @@ def _kea_servers_with_helper_status():
                 "id": s.get("id"),
                 "name": s.get("name", f"Kea Server {s.get('id')}"),
                 "ssh_host": s.get("ssh_host", ""),
-                "ssh_user": s.get("ssh_user") or extensions.KEA_SSH_USER,
+                # v5.65.13 (Q102) — kea_host.effective_ssh_user(), the one derivation, used
+                # everywhere the SSH user is needed (this row, _connect_ssh, install_helper).
+                "ssh_user": kea_host.effective_ssh_user(s),
                 "helper_version": st.get("version"),  # int, None, or missing key
                 "helper_label": kea_host.helper_version_label(st.get("version"), kea_host.JEN_HELPER_SHIPPED_VERSION),
                 "helper_want": kea_host.JEN_HELPER_WANT_VERSION,

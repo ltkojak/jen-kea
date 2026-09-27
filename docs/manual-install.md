@@ -113,8 +113,8 @@ sudo visudo -c -f /etc/sudoers.d/jen-kea-helper
 ```
 
 Or click **Install helper** in Settings → Kea → SSH (needs the legacy
-`/etc/sudoers.d/jen` grant present once). See the Admin Guide → Kea host
-helper for the legacy fallback grant.
+`/etc/sudoers.d/jen-kea` grant present once). See the Admin Guide → Kea
+host helper for the legacy fallback grant.
 
 ## 6. Start
 

@@ -98,13 +98,21 @@ def _connect_ssh(server: dict):
     import paramiko
 
     from jen.services import auth as __auth
+    from jen.services import kea_host as __kea_host
 
+    # v5.65.13 (Q102) — `server.get("ssh_user", extensions.KEA_SSH_USER)` is a dict DEFAULT that
+    # never actually fires: config.py always sets the key (to "" when unset), so an extra server
+    # with no explicit SSH user silently connected as the empty string here, while
+    # kea_host.py's install_helper/remove_legacy_grant already used the correct `or` form for the
+    # very same server. effective_ssh_user() is that one correct derivation, used everywhere now.
+    # (Deferred import: kea_host.py imports this module at load time, so importing it back here
+    # at module level would be circular.)
     ssh = paramiko.SSHClient()
     __auth.paramiko_load_known_hosts(ssh)
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     ssh.connect(
         server["ssh_host"],
-        username=server.get("ssh_user", extensions.KEA_SSH_USER),
+        username=__kea_host.effective_ssh_user(server),
         key_filename=extensions.SSH_KEY_PATH,
         timeout=10,
     )

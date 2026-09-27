@@ -961,23 +961,22 @@ That means **one** sudoers line, and it is not root-equivalent the way
 the old one was — the helper's own op allowlist and path walls are the
 control:
 
+One line — a multi-line heredoc pastes badly into some terminals and web
+consoles:
+
 ```bash
-sudo tee /etc/sudoers.d/jen-kea-helper >/dev/null <<'EOF'
-# Jen (DHCP console) — SSH user "youruser". The helper's op allowlist is the control; see docs/ARCHITECTURE.md §3.3
-youruser ALL=(root) NOPASSWD: /usr/local/sbin/jen-kea-helper
-EOF
-sudo chmod 440 /etc/sudoers.d/jen-kea-helper
-sudo visudo -c -f /etc/sudoers.d/jen-kea-helper
+printf '%s\n' '# Jen (DHCP console) — SSH user "youruser". The helper op allowlist is the control; see docs/ARCHITECTURE.md §3.3' 'youruser ALL=(root) NOPASSWD: /usr/local/sbin/jen-kea-helper' | sudo tee /etc/sudoers.d/jen-kea-helper >/dev/null && sudo chmod 440 /etc/sudoers.d/jen-kea-helper && sudo visudo -c -f /etc/sudoers.d/jen-kea-helper
 ```
 
 **Installing the helper.** From Jen: **Settings → Kea → SSH**, then
 **Install helper** next to the server (this uses the legacy path once —
 see below — so the old grant must still be present for the button to
-work). By hand, copy `jen-kea-helper` from your Jen host to the Kea
-host and:
+work). By hand, on the Kea host — download the exact file this Jen
+release ships, then install it (`vX.Y.Z` is your installed Jen version,
+shown on the About page):
 
 ```bash
-sudo install -o root -g root -m 0755 ./jen-kea-helper /usr/local/sbin/jen-kea-helper
+curl -fsSL https://raw.githubusercontent.com/ltkojak/jen-kea/vX.Y.Z/jen-kea-helper -o /tmp/jen-kea-helper && sudo install -o root -g root -m 0755 /tmp/jen-kea-helper /usr/local/sbin/jen-kea-helper
 ```
 
 then add the sudoers line above. **Settings → Kea → SSH** shows the
@@ -1119,21 +1118,58 @@ this path at all, whatever the host has: D2 (kea-dhcp-ddns) operations
 `install-tls`) and Trace (v5.49.0's client trace reads up to 1000 log lines
 through the helper) — they need the helper, at v3, v4 and any version respectively.
 
+One line — a multi-line heredoc pastes badly into some terminals and web
+consoles:
+
 ```bash
-sudo tee /etc/sudoers.d/jen-kea >/dev/null <<'EOF'
-# Jen (DHCP console) — LEGACY fallback. SSH user "youruser". python3 = root; see docs/ARCHITECTURE.md §3.3
-youruser ALL=(root) NOPASSWD: /usr/bin/python3
-youruser ALL=(root) NOPASSWD: /usr/bin/systemctl restart kea-dhcp4-server, /usr/bin/systemctl restart isc-kea-dhcp4-server
-youruser ALL=(root) NOPASSWD: /usr/bin/systemctl * kea-dhcp6-server, /usr/bin/systemctl * isc-kea-dhcp6-server
-youruser ALL=(root) NOPASSWD: /usr/bin/tail -200 /var/log/kea/*
-youruser ALL=(root) NOPASSWD: SETENV: /usr/bin/apt-get update -qq, /usr/bin/apt-get install -y kea-dhcp4-server, /usr/bin/apt-get install -y kea-dhcp6-server
-EOF
-sudo chmod 440 /etc/sudoers.d/jen-kea
-sudo visudo -c -f /etc/sudoers.d/jen-kea
+printf '%s\n' '# Jen (DHCP console) — LEGACY fallback. SSH user "youruser". python3 = root; see docs/ARCHITECTURE.md §3.3' 'youruser ALL=(root) NOPASSWD: /usr/bin/python3' 'youruser ALL=(root) NOPASSWD: /usr/bin/systemctl restart kea-dhcp4-server, /usr/bin/systemctl restart isc-kea-dhcp4-server' 'youruser ALL=(root) NOPASSWD: /usr/bin/systemctl * kea-dhcp6-server, /usr/bin/systemctl * isc-kea-dhcp6-server' 'youruser ALL=(root) NOPASSWD: /usr/bin/tail -200 /var/log/kea/*' 'youruser ALL=(root) NOPASSWD: SETENV: /usr/bin/apt-get update -qq, /usr/bin/apt-get install -y kea-dhcp4-server, /usr/bin/apt-get install -y kea-dhcp6-server' | sudo tee /etc/sudoers.d/jen-kea >/dev/null && sudo chmod 440 /etc/sudoers.d/jen-kea && sudo visudo -c -f /etc/sudoers.d/jen-kea
 ```
 
 `SETENV` on the `apt-get` line is needed because Jen runs it as
 `sudo DEBIAN_FRONTEND=noninteractive apt-get install …`.
+
+**"No legacy python3 grant" even though the line above is definitely
+there (v5.65.13).** A one-shot `sudo -n /usr/bin/python3 …` probe can't
+tell "the line is missing" apart from sudo refusing a CORRECT line for
+an unrelated reason — the fix is to surface what sudo actually said,
+not just yes/no:
+
+- **A later rule wins.** `/etc/sudoers.d` is read in lexical filename
+  order, and for any given command the LAST matching rule decides — a
+  file sorting after `jen-kea` (a per-user file named after the login,
+  cloud-init's `90-cloud-init-users`, anything from `k`–`z`) that grants
+  the SSH user `ALL` WITH a password makes `sudo -n /usr/bin/python3`
+  need one too, even though `jen-kea`'s own line is untouched. Sudo
+  says *"a password is required"*.
+- **`Defaults requiretty` / `use_pty`** on a hardened box — Jen's SSH
+  session runs without a terminal, and sudo without a PTY under that
+  setting says *"sorry, you must have a tty to run sudo"*. Since the
+  helper (once installed) is granted `NOPASSWD` too and answers fine
+  over the very same connection, a host where the helper works but this
+  probe doesn't is a symptom of a rule affecting `python3` specifically,
+  not requiretty.
+- **The grant was pasted on the wrong box.** If Jen and the Kea daemon
+  aren't the same host, the SSH card's own **user@host** — the exact
+  target Jen probes — tells you which one to paste on.
+
+Settings → Kea → SSH's **Test legacy grant** button (next to Check)
+probes the grant without attempting an install and shows sudo's own
+first line of output, plus (when it fails) the `python3` rule(s) from a
+full `sudo -n -l` and any later rule that grants `ALL` without
+`NOPASSWD` — the pair that tells "a later rule overrides it" apart from
+"the line is genuinely missing". Diagnose by hand the same way, reading
+the rules in the order they print (last match wins):
+
+```bash
+sudo -n -l
+```
+
+Never `sudo -n -l /usr/bin/python3` (or any other `-l <command>` form)
+to answer this question — sudo's `listpw` default is `any`, so it asks
+for no password, and prints the command as runnable, as long as ANY of
+the user's rules carries `NOPASSWD` (the helper's own rule always
+does), whether or not THIS command specifically would actually need
+one.
 
 ---
 

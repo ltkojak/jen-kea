@@ -19,6 +19,17 @@ _JEN = pathlib.Path(__file__).resolve().parent.parent / "jen"
 
 SERVER = {"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5", "ssh_user": "kea", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
 
+# v5.65.13 (Q102) — canned legacy_grant_status() results for install_helper tests that only care
+# whether the grant is usable, not the probe mechanics (those are TestLegacyGrantStatus below).
+_OK_GRANT = {"ok": True, "rc": 0, "reason": "", "user_at_host": "kea@10.0.0.5", "summary": ""}
+_FAILED_GRANT = {
+    "ok": False,
+    "rc": 1,
+    "reason": "a password is required",
+    "user_at_host": "kea@10.0.0.5",
+    "summary": "",
+}
+
 # the real status functions, captured before any test monkeypatches them
 _REAL_HELPER_STATUS = kea_host.helper_status
 _REAL_RECORD = kea_host.record_helper_status
@@ -343,7 +354,7 @@ class TestHelperDeployment:
         monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 2\n")
         calls = iter([{"ok": False, "version": None}, {"ok": True, "version": kea_host.JEN_HELPER_WANT_VERSION}])
         monkeypatch.setattr(kea_host, "check_helper", lambda s: next(calls))
-        monkeypatch.setattr(kea_host, "legacy_grant_present", lambda s: True)
+        monkeypatch.setattr(kea_host, "legacy_grant_status", lambda s: _OK_GRANT)
         monkeypatch.setattr(kea_host, "_legacy_python3", lambda s, script, timeout=60: ("ok:2", "", 0))
         res = kea_host.install_helper(SERVER)
         assert res == {"ok": True, "version": kea_host.JEN_HELPER_WANT_VERSION, "code": "installed", "detail": ""}
@@ -352,7 +363,7 @@ class TestHelperDeployment:
         monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 2\n")
         calls = iter([{"ok": True, "version": 1}, {"ok": True, "version": 2}])
         monkeypatch.setattr(kea_host, "check_helper", lambda s: next(calls))
-        monkeypatch.setattr(kea_host, "legacy_grant_present", lambda s: True)
+        monkeypatch.setattr(kea_host, "legacy_grant_status", lambda s: _OK_GRANT)
         monkeypatch.setattr(kea_host, "_legacy_python3", lambda s, script, timeout=60: ("ok:2", "", 0))
         res = kea_host.install_helper(SERVER)
         assert res == {"ok": True, "version": 2, "code": "upgraded", "detail": ""}
@@ -363,7 +374,7 @@ class TestHelperDeployment:
         monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 2\n")
         calls = iter([{"ok": True, "version": 1}, {"ok": True, "version": 1}])
         monkeypatch.setattr(kea_host, "check_helper", lambda s: next(calls))
-        monkeypatch.setattr(kea_host, "legacy_grant_present", lambda s: True)
+        monkeypatch.setattr(kea_host, "legacy_grant_status", lambda s: _OK_GRANT)
         monkeypatch.setattr(kea_host, "_legacy_python3", lambda s, script, timeout=60: ("ok:2", "", 0))
         res = kea_host.install_helper(SERVER)
         assert res["ok"] is False
@@ -372,23 +383,30 @@ class TestHelperDeployment:
         assert "v1" in res["detail"] and "v2" in res["detail"]
 
     def test_install_helper_needs_a_path_in(self, monkeypatch, quiet_status):
+        # v5.65.13 (Q102) — install_helper now consults legacy_grant_status(), not the boolean
+        # legacy_grant_present(), so it can say WHY (sudo's own reason), not just "no".
         monkeypatch.setattr(kea_host, "_helper_source", lambda: "x")
         monkeypatch.setattr(kea_host, "check_helper", lambda s: {"ok": False, "version": None})
-        monkeypatch.setattr(kea_host, "legacy_grant_present", lambda s: False)
+        monkeypatch.setattr(kea_host, "legacy_grant_status", lambda s: _FAILED_GRANT)
         res = kea_host.install_helper(SERVER)
         assert res["ok"] is False and res["code"] == "no-path"
-        assert res["detail"] == "no legacy python3 grant to install through"
+        assert "no legacy python3 grant to install through" in res["detail"]
+        assert "kea@10.0.0.5" in res["detail"] and "a password is required" in res["detail"]
 
     def test_install_helper_old_version_needs_a_path_in_shows_the_manual_command(self, monkeypatch, quiet_status):
         # A helper is already there (v1), just below WANT — the message
         # must give the manual copy command, not just "nothing installed".
         monkeypatch.setattr(kea_host, "_helper_source", lambda: "x")
         monkeypatch.setattr(kea_host, "check_helper", lambda s: {"ok": True, "version": 1})
-        monkeypatch.setattr(kea_host, "legacy_grant_present", lambda s: False)
+        monkeypatch.setattr(kea_host, "legacy_grant_status", lambda s: _FAILED_GRANT)
         res = kea_host.install_helper(SERVER)
         assert res["ok"] is False and res["code"] == "no-path" and res["version"] == 1
         assert "sudo install -o root -g root -m 0755" in res["detail"]
         assert "/usr/local/sbin/jen-kea-helper" in res["detail"]
+        # v5.65.13 (Q102) — says what sudo actually said, names the server, and points at the
+        # ordering diagnostic instead of just handing back the manual command silently.
+        assert "kea-a" in res["detail"] and "a password is required" in res["detail"]
+        assert "sudo -l" in res["detail"]
 
     def test_install_helper_already_installed_short_circuits(self, monkeypatch, quiet_status):
         # v5.19.1 — "already" means "at or above the version being
@@ -408,7 +426,7 @@ class TestHelperDeployment:
         monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 4\n# body\n")
         calls = iter([{"ok": True, "version": 3}, {"ok": True, "version": 4}])
         monkeypatch.setattr(kea_host, "check_helper", lambda s: next(calls))
-        monkeypatch.setattr(kea_host, "legacy_grant_present", lambda s: True)
+        monkeypatch.setattr(kea_host, "legacy_grant_status", lambda s: _OK_GRANT)
         scripts = []
         monkeypatch.setattr(
             kea_host, "_legacy_python3", lambda s, script, timeout=60: (scripts.append(script), ("ok:4", "", 0))[1]
@@ -425,7 +443,7 @@ class TestHelperDeployment:
     def test_install_helper_sudoerror(self, monkeypatch, quiet_status):
         monkeypatch.setattr(kea_host, "_helper_source", lambda: "x")
         monkeypatch.setattr(kea_host, "check_helper", lambda s: {"ok": False, "version": None})
-        monkeypatch.setattr(kea_host, "legacy_grant_present", lambda s: True)
+        monkeypatch.setattr(kea_host, "legacy_grant_status", lambda s: _OK_GRANT)
         monkeypatch.setattr(kea_host, "_legacy_python3", lambda s, script, timeout=60: ("sudoerror:bad line 2", "", 0))
         res = kea_host.install_helper(SERVER)
         assert res["code"] == "sudoerror" and res["detail"] == "bad line 2"
@@ -981,6 +999,154 @@ class TestRemoveLegacyGrant:
         res = kea_host.remove_legacy_grant(SERVER)
         assert res["ok"] is False and res["code"] == "no-helper"
         assert calls["ssh"] == 0
+
+
+class TestEffectiveSshUser:
+    """v5.65.13 (Q102) - one derivation, used everywhere the SSH user is needed."""
+
+    def test_explicit_user_wins(self, monkeypatch):
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "KEA_SSH_USER", "global-default")
+        assert kea_host.effective_ssh_user({"ssh_user": "kea"}) == "kea"
+
+    def test_empty_string_falls_through_to_the_global_default(self, monkeypatch):
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "KEA_SSH_USER", "global-default")
+        # config.py always sets the key, defaulting it to "" when unset - the bug this fixed.
+        assert kea_host.effective_ssh_user({"ssh_user": ""}) == "global-default"
+
+    def test_missing_key_falls_through_too(self, monkeypatch):
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "KEA_SSH_USER", "global-default")
+        assert kea_host.effective_ssh_user({}) == "global-default"
+
+
+class TestSudoLSummary:
+    """v5.65.13 (Q102) - pure text-munging over a full `sudo -n -l` listing."""
+
+    def test_no_python3_rule_at_all(self):
+        assert kea_host._sudo_l_summary("User kea may run the following commands:\n    (root) ALL") == ""
+
+    def test_empty_listing(self):
+        assert kea_host._sudo_l_summary("") == ""
+
+    def test_python3_rule_with_no_later_blanket(self):
+        listing = (
+            "Matching Defaults entries for kea on kea-a:\n"
+            "    requiretty\n"
+            "User kea may run the following commands on kea-a:\n"
+            "    (root) NOPASSWD: /usr/bin/python3\n"
+        )
+        summary = kea_host._sudo_l_summary(listing)
+        assert "python3 rule(s) on this host" in summary
+        assert "NOPASSWD: /usr/bin/python3" in summary
+        assert "LATER rule" not in summary
+
+    def test_python3_rule_with_a_later_blanket_that_may_override_it(self):
+        listing = (
+            "User kea may run the following commands on kea-a:\n    (root) NOPASSWD: /usr/bin/python3\n    (root) ALL\n"
+        )
+        summary = kea_host._sudo_l_summary(listing)
+        assert "NOPASSWD: /usr/bin/python3" in summary
+        assert "LATER rule may override it" in summary
+        assert "(root) ALL" in summary
+
+    def test_a_later_nopasswd_all_is_not_treated_as_the_overriding_blanket(self):
+        # NOPASSWD ALL doesn't take the python3 grant's usability away - only a later
+        # rule that would demand a password is the "may override it" case.
+        listing = (
+            "User kea may run the following commands on kea-a:\n"
+            "    (root) NOPASSWD: /usr/bin/python3\n"
+            "    (root) NOPASSWD: ALL\n"
+        )
+        summary = kea_host._sudo_l_summary(listing)
+        assert "LATER rule" not in summary
+
+
+class TestLegacyGrantStatus:
+    """v5.65.13 (Q102) - sudo's own first stderr line, not just a boolean; plus a second
+    `sudo -n -l` probe (never `-l <cmd>` - see the function's own docstring for why) on failure."""
+
+    def test_ok_grant_is_a_single_probe(self, monkeypatch):
+        made = _connect_seq(monkeypatch, [("1", "", 0)])
+        res = kea_host.legacy_grant_status(SERVER)
+        assert res == {"ok": True, "rc": 0, "reason": "", "user_at_host": "kea@10.0.0.5", "summary": ""}
+        assert len(made) == 1  # no follow-up `sudo -n -l` when the grant already works
+        assert made[0].calls == ["sudo -n /usr/bin/python3 -c 'print(1)'"]
+
+    def test_password_required_surfaces_sudos_reason_and_a_summary(self, monkeypatch, caplog):
+        listing = (
+            "User kea may run the following commands on kea-a:\n    (root) NOPASSWD: /usr/bin/python3\n    (root) ALL\n"
+        )
+        _connect_seq(
+            monkeypatch,
+            [("", "sudo: a password is required", 1)],
+            [(listing, "", 0)],
+        )
+        with caplog.at_level("WARNING"):
+            res = kea_host.legacy_grant_status(SERVER)
+        assert res["ok"] is False
+        assert res["rc"] == 1
+        assert res["reason"] == "sudo: a password is required"
+        assert res["user_at_host"] == "kea@10.0.0.5"
+        assert "may override it" in res["summary"]
+        assert "kea@10.0.0.5" in caplog.text
+
+    def test_tty_refusal_is_surfaced_verbatim(self, monkeypatch):
+        _connect_seq(
+            monkeypatch,
+            [("", "sudo: sorry, you must have a tty to run sudo", 1)],
+            [("", "", 0)],
+        )
+        res = kea_host.legacy_grant_status(SERVER)
+        assert res["ok"] is False
+        assert res["reason"] == "sudo: sorry, you must have a tty to run sudo"
+
+    def test_no_python3_rule_gives_an_empty_summary(self, monkeypatch):
+        _connect_seq(
+            monkeypatch,
+            [("", "sudo: a password is required", 1)],
+            [("User kea may run the following commands on kea-a:\n    (root) NOPASSWD: ALL\n", "", 0)],
+        )
+        res = kea_host.legacy_grant_status(SERVER)
+        assert res["summary"] == ""
+
+    def test_the_follow_up_listing_failing_does_not_hide_the_original_reason(self, monkeypatch):
+        calls = {"n": 0}
+
+        def connect(_server):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return FakeSSHClient([("", "sudo: a password is required", 1)])
+            raise OSError("connection reset")
+
+        monkeypatch.setattr(getattr(kea_host, "__kea6"), "_connect_ssh", connect)
+        res = kea_host.legacy_grant_status(SERVER)
+        assert res["ok"] is False
+        assert res["reason"] == "sudo: a password is required"
+        assert res["summary"] == ""
+
+    def test_transport_exception_is_surfaced_as_the_reason(self, monkeypatch):
+        def raise_connect(_server):
+            raise OSError("Unable to connect to port 22")
+
+        monkeypatch.setattr(getattr(kea_host, "__kea6"), "_connect_ssh", raise_connect)
+        res = kea_host.legacy_grant_status(SERVER)
+        assert res["ok"] is False
+        assert res["rc"] == -1
+        assert "Unable to connect to port 22" in res["reason"]
+        assert res["user_at_host"] == "kea@10.0.0.5"
+        assert res["summary"] == ""
+
+    def test_names_the_actual_effective_user_not_just_the_configured_one(self, monkeypatch):
+        _connect_seq(monkeypatch, [("1", "", 0)])
+        server = dict(SERVER, ssh_user="")
+        monkeypatch.setattr("jen.extensions.KEA_SSH_USER", "global-default")
+        res = kea_host.legacy_grant_status(server)
+        assert res["user_at_host"] == "global-default@10.0.0.5"
 
 
 class TestTailLogHelperOnly:

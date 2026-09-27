@@ -35,6 +35,10 @@ import jen.services.kea_authoring as __authoring
 
 logger = logging.getLogger(__name__)
 
+# Mirrors jen-update-root.py's own GITHUB_REPO — used only to build the by-hand helper-download
+# one-liner below (v5.65.13, Q102), never for anything that reaches over the network itself.
+_GITHUB_REPO = "ltkojak/jen-kea"
+
 HELPER_PATH = "/usr/local/sbin/jen-kea-helper"
 JEN_HELPER_MIN_VERSION = 1
 # v5.16.0 — the version Jen wants for atomic-guarded writes + external
@@ -909,18 +913,89 @@ def check_helper(server: dict) -> dict:
         return {"ok": False, "version": None, "code": "error", "detail": str(e)}
 
 
+def effective_ssh_user(server: dict) -> str:
+    """The SSH user Jen actually connects to `server` as. v5.65.13 (Q102) — a maintainer report
+    traced to two derivations of this disagreeing: `kea6.py::_connect_ssh` used to read
+    `server.get("ssh_user", extensions.KEA_SSH_USER)`, a dict DEFAULT that never fires because
+    `config.py` always sets the key (to `""` when unset), while `install_helper`/
+    `remove_legacy_grant` here already used the correct `server.get("ssh_user") or
+    extensions.KEA_SSH_USER`. Server 1 is unaffected (both read `[kea_ssh] user`); an EXTRA server
+    with no explicit SSH user connected as the empty string while its sudoers script and status
+    line named the intended global default — one function now, used everywhere the SSH user is
+    needed."""
+    from jen import extensions
+
+    return server.get("ssh_user") or extensions.KEA_SSH_USER
+
+
+def _sudo_l_summary(listing: str) -> str:
+    """Pure: given the raw text of a full `sudo -n -l` (never `-l <cmd>` — see legacy_grant_status's
+    docstring for why that specific form is uninformative here), pull out the python3 rule(s) with
+    their tags and the first LATER line granting ALL without NOPASSWD - the pair that distinguishes
+    "a rule after jen-kea overrides it" from "the line is genuinely missing". Returns "" when no
+    python3 rule is findable at all (an unrecognised sudo -l format, or the probe produced
+    nothing) - the caller falls back to sudo's own refusal reason alone."""
+    lines = [line.strip() for line in (listing or "").splitlines() if line.strip()]
+    python3_indices = [i for i, line in enumerate(lines) if "python3" in line]
+    if not python3_indices:
+        return ""
+    python3_lines = [lines[i] for i in python3_indices]
+    later_blanket = next(
+        (line for line in lines[max(python3_indices) + 1 :] if "ALL" in line and "NOPASSWD" not in line),
+        None,
+    )
+    summary = "python3 rule(s) on this host: " + "; ".join(python3_lines)
+    if later_blanket:
+        summary += f" — a LATER rule may override it: {later_blanket}"
+    return summary
+
+
+def legacy_grant_status(server: dict) -> dict:
+    """Is the old `NOPASSWD: /usr/bin/python3` grant usable right now, and if not, WHY — sudo's
+    own first stderr line, not just a boolean. v5.65.13 (Q102, a maintainer report): a bare `rc !=
+    0` used to mean only "no", with no way to tell a genuinely missing grant from sudo refusing a
+    CORRECT one for an unrelated reason — a later rule in /etc/sudoers.d overriding it (matched in
+    file-read order, last match wins), `Defaults requiretty`/`use_pty` on a hardened box (Jen's SSH
+    session has no PTY), or a plain transport failure (wrong host, key rejected). The operator was
+    told to add a line they already had.
+
+    Returns `{"ok": bool, "rc": int, "reason": str, "user_at_host": str, "summary": str}`:
+    `reason` is sudo's own first stderr line (or the transport exception's own message);
+    `user_at_host` names exactly who Jen probed as, so a wrong-box paste is visible at once;
+    `summary` (only populated when the probe failed) is `_sudo_l_summary()` of a FULL `sudo -n -l`
+    — correction from this Q's own first draft: `sudo -n -l /usr/bin/python3` is NOT the right
+    probe, because `-l <cmd>`'s `listpw` default is `any` — it asks for no password, and so prints
+    the command as runnable, as long as ANY of the user's rules carries NOPASSWD (the helper's own
+    rule always does), even when THIS command specifically would need one."""
+    user = effective_ssh_user(server)
+    user_at_host = f"{user}@{server.get('ssh_host', '')}"
+    try:
+        out, err, rc = _legacy_ssh(server, "sudo -n /usr/bin/python3 -c 'print(1)'", timeout=15)
+    except Exception as e:
+        reason = f"{type(e).__name__}: {e}"
+        logger.warning(f"legacy_grant_status: {user_at_host}: {reason}")
+        return {"ok": False, "rc": -1, "reason": reason, "user_at_host": user_at_host, "summary": ""}
+    if rc == 0:
+        return {"ok": True, "rc": 0, "reason": "", "user_at_host": user_at_host, "summary": ""}
+    reason_source = err or out
+    reason = reason_source.splitlines()[0] if reason_source else f"sudo exited {rc}"
+    summary = ""
+    try:
+        list_out, list_err, _list_rc = _legacy_ssh(server, "sudo -n -l", timeout=15)
+        summary = _sudo_l_summary(list_out or list_err or "")
+    except Exception:
+        pass  # the reason above already carries the useful part; the listing is a bonus
+    logger.warning(f"legacy_grant_status: {user_at_host}: sudo refused ({reason!r}); rc={rc}")
+    return {"ok": False, "rc": rc, "reason": reason, "user_at_host": user_at_host, "summary": summary}
+
+
 def legacy_grant_present(server: dict) -> bool:
     """Is the old `NOPASSWD: /usr/bin/python3` grant still there? Used to
     decide whether the in-app 'Install helper' button can work.
 
-    v5.28.0 (Q24, B1) — rc replaces the old `out.strip() == "1"` text
-    check (the command's `2>&1` means a sudo failure's error text lands
-    in `out` too, but its exit status is still the real signal)."""
-    try:
-        _out, _err, rc = _legacy_ssh(server, "sudo -n /usr/bin/python3 -c 'print(1)' 2>&1", timeout=15)
-        return rc == 0
-    except Exception:
-        return False
+    v5.65.13 (Q102) — thin boolean wrapper over legacy_grant_status(), kept for callers (helper
+    status recording, the Health row) that only ever needed the yes/no."""
+    return legacy_grant_status(server)["ok"]
 
 
 def remove_legacy_grant(server: dict) -> dict:
@@ -936,8 +1011,6 @@ def remove_legacy_grant(server: dict) -> dict:
 
     Like every legacy-engine caller (v5.28.0), an `ok:` token only counts
     when the remote exit status was 0."""
-    from jen import extensions
-
     chk = check_helper(server)
     v = chk.get("version")
     if not isinstance(v, int) or v < JEN_HELPER_MIN_VERSION:
@@ -947,8 +1020,7 @@ def remove_legacy_grant(server: dict) -> dict:
             "detail": "the helper is not answering on this host — install it first; "
             "removing the legacy grant now would leave Jen with no root path",
         }
-    ssh_user = server.get("ssh_user") or extensions.KEA_SSH_USER
-    script = __authoring.render_remove_legacy_grant_script(ssh_user)
+    script = __authoring.render_remove_legacy_grant_script(effective_ssh_user(server))
     try:
         out, err, rc = _legacy_python3(server, script, timeout=30)
     except Exception as e:
@@ -979,6 +1051,21 @@ def _source_version(source: str) -> int:
     return int(m.group(1)) if m else JEN_HELPER_SHIPPED_VERSION
 
 
+def _helper_download_command() -> str:
+    """The by-hand copy command, chained with a download step. v5.65.13 (Q102) — the old wording
+    (`sudo install -o root -g root -m 0755 ./jen-kea-helper ...`) assumed the file was already
+    sitting in the operator's current directory ON THE KEA HOST, which it usually isn't — the file
+    lives on the JEN host's own install tree. Fetches the exact file shipped with the running
+    Jen's own release tag, which is versioned right alongside HELPER_VERSION."""
+    from jen import JEN_VERSION
+
+    url = f"https://raw.githubusercontent.com/{_GITHUB_REPO}/v{JEN_VERSION}/jen-kea-helper"
+    return (
+        f"curl -fsSL {url} -o /tmp/jen-kea-helper && "
+        "sudo install -o root -g root -m 0755 /tmp/jen-kea-helper /usr/local/sbin/jen-kea-helper"
+    )
+
+
 def install_helper(server: dict) -> dict:
     """Deploy (or upgrade) jen-kea-helper onto `server` — the one place
     the legacy `sudo python3` path is still used deliberately. Returns
@@ -993,8 +1080,6 @@ def install_helper(server: dict) -> dict:
     says, because a copy that silently didn't take (wrong path, stale
     cache, a second file shadowing it) should never be recorded as a
     successful upgrade."""
-    from jen import extensions
-
     try:
         source = _helper_source()
     except OSError as e:
@@ -1010,20 +1095,34 @@ def install_helper(server: dict) -> dict:
     if isinstance(current, int) and current >= target:
         return {"ok": True, "version": current, "code": "already", "detail": ""}
 
-    if not legacy_grant_present(server):
+    status = legacy_grant_status(server)
+    if not status["ok"]:
+        # v5.65.13 (Q102) — a maintainer report traced to this exact spot: a plain "no legacy
+        # grant" was the ONLY answer this route ever gave, even when the grant genuinely existed
+        # and sudo refused it for an unrelated reason. The wording now says what sudo actually
+        # said, and steers by which reason it was.
+        name = server.get("name", "this host")
+        by_hand = _helper_download_command()
+        reason_lower = status["reason"].lower()
         if current is None:
-            detail = "no legacy python3 grant to install through"
-        else:
+            detail = f'no legacy python3 grant to install through (probed as {status["user_at_host"]}: sudo said "{status["reason"]}")'
+        elif "tty" in reason_lower or "terminal" in reason_lower:
             detail = (
-                f"helper v{current} is installed but v{target} needs the legacy python3 grant "
-                "to be re-added for one run, or copy it by hand: sudo install -o root -g root -m 0755 "
-                "./jen-kea-helper /usr/local/sbin/jen-kea-helper — or open 'Grant or revoke the legacy "
-                "root path by hand' on Settings → Kea → SSH"
+                f"helper v{current} is installed but v{target} needs the legacy python3 grant for one "
+                f'run, and Jen runs sudo without a terminal on {name}: sudo said "{status["reason"]}" — '
+                f"remove requiretty/use_pty for this SSH user, or copy the helper by hand: {by_hand}"
+            )
+        else:
+            override_note = f" ({status['summary']})" if status["summary"] else ""
+            detail = (
+                f"helper v{current} is installed but v{target} needs the legacy python3 grant for one "
+                f'run, and sudo refused it on {name}: "{status["reason"]}" — a rule later in '
+                f"/etc/sudoers.d may be overriding the jen-kea line; check with `sudo -l`{override_note}, "
+                f"or copy the helper by hand: {by_hand}"
             )
         return {"ok": False, "version": current, "code": "no-path", "detail": detail}
 
-    ssh_user = server.get("ssh_user") or extensions.KEA_SSH_USER
-    script = __authoring.render_install_helper_script(source, ssh_user, target)
+    script = __authoring.render_install_helper_script(source, effective_ssh_user(server), target)
     # v5.28.0 (Q24, B1) — _legacy_python3 now returns a 3-tuple; this
     # function's own success signal is unaffected (it already
     # independently re-verifies via a fresh check_helper() call below

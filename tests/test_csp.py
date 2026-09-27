@@ -164,6 +164,22 @@ class TestNoJavascriptHrefs:
         assert not findings, f"javascript: href(s) found: {findings}"
 
 
+class TestNoHeredocsInTemplates:
+    def test_no_heredoc_operator_cookbook_command_in_templates(self):
+        """v5.65.13 (Q102) — a multi-line heredoc (`sudo tee <<'EOF' ... EOF`) pastes badly into
+        some terminals/web consoles; every operator copy box in templates/ is now a single
+        `printf '%s\\n' ... | sudo tee ... && ...` line. Docs (docs/*.md) may still show a heredoc
+        INSIDE a fenced block that documents a file's contents rather than a command to paste, so
+        this guard is templates-only."""
+        findings = []
+        for path in TEMPLATE_HTML_FILES:
+            content = path.read_text(encoding="utf-8")
+            for lineno, line in enumerate(content.splitlines(), 1):
+                if "<<'EOF'" in line or "<<EOF" in line or "&lt;&lt;'EOF'" in line or "&lt;&lt;EOF" in line:
+                    findings.append((str(path), lineno, line.strip()))
+        assert not findings, f"heredoc-shaped operator command found in a template: {findings}"
+
+
 class TestNoMermaidOrEval:
     def test_no_mermaid_or_eval_usage(self):
         """Never used in this app — asserted so a future addition can't

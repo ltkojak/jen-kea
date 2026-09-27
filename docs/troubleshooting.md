@@ -215,8 +215,8 @@ Two failure signatures, both meaning "Jen fell back to the legacy root
   `/etc/sudoers.d/jen-kea-helper` (`sudo visudo -c -f` it).
 - `jen-kea-helper: command not found` / `No such file or directory` —
   the **helper isn't installed**. Use **Install helper** in Settings →
-  Kea → SSH (needs the legacy `/etc/sudoers.d/jen` grant present once),
-  or copy it by hand:
+  Kea → SSH (needs the legacy `/etc/sudoers.d/jen-kea` grant present
+  once), or copy it by hand:
   `sudo install -o root -g root -m 0755 /opt/jen/current/app/jen-kea-helper /usr/local/sbin/jen-kea-helper`
   (`/opt/jen/jen-kea-helper` on a pre-5.14 flat install).
 
@@ -227,7 +227,25 @@ Kea → SSH (it refuses unless the helper's own sudoers file is valid), or run
 `sudo rm -f /etc/sudoers.d/jen-kea`. To add it back for an update, use the
 collapsed **Grant or revoke the legacy root path by hand** box on the same
 card — Jen never grants itself root. Full details: **Admin Guide → Kea host
-helper**.
+helper**. (`/etc/sudoers.d/jen`, no `-kea`, is a DIFFERENT file — Jen's own
+self-update grant on the Jen box; removing it breaks self-update, not
+anything Kea-side.)
+
+**"No legacy python3 grant" even though the grant is definitely there
+(v5.65.13).** The old one-shot probe couldn't tell a missing line apart
+from sudo refusing a correct one for an unrelated reason. Press **Test
+legacy grant** (next to Check) to see exactly what sudo said without
+attempting an install. Three causes, in order of likelihood:
+1. **A later `/etc/sudoers.d` file overrides it** — files are read in
+   filename order, last match wins per command; sudo says *"a password
+   is required"*. Diagnose with `sudo -n -l` (never `-n -l
+   /usr/bin/python3` — see the Admin Guide's *Legacy grant* section for
+   why that specific form lies).
+2. **`Defaults requiretty`/`use_pty`** on a hardened box — sudo without
+   a PTY says *"sorry, you must have a tty to run sudo"*.
+3. **Wrong host** — the grant was pasted on the Jen box instead of the
+   Kea box, or vice versa. The SSH card's own **user@host** names
+   exactly who Jen probed as.
 
 ### Permission denied on kea-dhcp4.conf
 
@@ -239,7 +257,7 @@ The SSH user needs the helper's sudoers line (or, on the legacy path,
 the `/usr/bin/python3` grant). On your Kea server:
 ```bash
 sudo cat /etc/sudoers.d/jen-kea-helper   # the one-line helper grant
-sudo cat /etc/sudoers.d/jen              # the legacy fallback, if still present
+sudo cat /etc/sudoers.d/jen-kea          # the legacy fallback, if still present
 ```
 
 The complete line sets are in the **Admin Guide → Kea host helper**.
