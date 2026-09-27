@@ -2,6 +2,44 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.65.12-beta.1] - 2026-09-27
+
+### The public health endpoint carries one field
+
+`/api/v1/health`'s body is `jen_version` alone now. It used to also carry Kea's cached up/
+version/checked-at state and the subnet count — reconnaissance for no benefit, since every real
+consumer of this unauthenticated route (the self-updater's version confirmation, the restore
+poll, the system suite) reads `jen_version` only. Those fields join the key-gated
+`/api/v1/health/kea`, which already caches them from its own live probe — nothing new is asked
+of Kea to move them.
+
+### A Kea transport failure never leaks its own exception text again
+
+`kea_command()`'s connect and timeout failures were already canned with a clear, admin-facing
+message (the connect failure names the API URL, which stays). Everything else the transport could
+raise — a TLS handshake failure, a malformed response, anything not specifically anticipated —
+fell through a catch-all that returned the exception's own text verbatim, rendered on the
+dashboard's config-error banner and the Doctor page. It gets the same generic sentence now, with
+the real exception logged. The raw-exception scanner that exists specifically to catch this class
+of mistake had never seen this particular shape (a plain result dict, not a `flash()` or
+`jsonify()` call) — it does now.
+
+### Presence's MQTT client meets a real broker for the first time
+
+Every check of Presence's hand-rolled MQTT 3.1.1 implementation until now was structural: byte-
+range assertions against the OASIS spec, never a live connection. The system-boundary suite
+gained a scenario that runs it against a real `eclipse-mosquitto` broker over three listeners —
+anonymous, username/password, and TLS against a throwaway self-signed CA — tracking a device,
+configuring one plain and one TLS+retained+discovery sink through Presence's own real routes, and
+driving a lease up and down to trigger real transitions. The state, attributes and discovery
+topics, the retained flag, and the HA `device_tracker` discovery message's schema all matched
+Home Assistant's own documentation exactly as designed. It found one real gap: nothing ever
+cleared a sink's `last_error` once set, so a broker that had gone down and come back kept showing
+its old failure indefinitely. Fixed as Presence 1.0.4 (bundled) — every send that does not raise
+now clears it. A paused broker mid-transition sets `last_error` with no unhandled exception
+anywhere in Jen's log, and the worker keeps sending once the broker recovers. This scenario runs
+weekly and on demand; it is deliberately not part of the smaller set every beta tag runs.
+
 ## [5.65.11-beta.1] - 2026-09-27
 
 Every bundled plugin moved onto the shared helpers 5.65.10 introduced for them (Q99), plus
