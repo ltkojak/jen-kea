@@ -84,7 +84,6 @@ _RUN_BUDGET_S = 30
 _KEEP_CHECKS_DAYS = 7
 _HISTORY_LIMIT = 50
 
-_MAC_RE = re.compile(r"^([0-9a-f]{2}:){5}[0-9a-f]{2}$")
 _PING_RTT_RE = re.compile(r"time=([\d.]+)\s*ms")
 _TCP_PROBE_RE = re.compile(r"^tcp:(\d{1,5}(?:,\d{1,5})*)$")
 
@@ -252,13 +251,20 @@ def _visible_rows(rows):
 def _load_target(target_id):
     """(row, refusal): the wd_targets row the caller may act on, else (None, why).
     A target in a subnet the caller cannot see is reported exactly as one that does
-    not exist — the by-id routes must not confirm what is out of the caller's sight."""
+    not exist — the by-id routes must not confirm what is out of the caller's sight.
+
+    v1.0.4 — a DB failure here used to propagate uncaught (only the `finally` closed the
+    connection): toggle, delete and history all turned it into a 500 page instead of the same
+    generic refusal every other write route already gives a database error."""
     db = None
     try:
         db = _get_db()
         with db.cursor() as cur:
             cur.execute("SELECT id, subnet_id, enabled FROM wd_targets WHERE id=%s", (target_id,))
             row = cur.fetchone()
+    except Exception as e:
+        logger.error(f"Watchdog: could not load target {target_id}: {e}")
+        return None, "Could not load the target; the details are in Jen's log."
     finally:
         if db:
             db.close()
@@ -268,13 +274,14 @@ def _load_target(target_id):
 
 
 def _normalize_mac(raw):
+    """'' for no MAC given, the lowercase MAC for a valid one, '' for garbled input too (Watchdog's own
+    convention: unlike IPAM, a bad MAC here has never been treated as a hard error — see add_target/
+    watch_from_row, which just drop it). Delegates the actual parsing to plugin_api's normalize_mac()."""
     if not raw:
         return ""
-    cleaned = re.sub(r"[^0-9a-fA-F]", "", raw).lower()
-    if len(cleaned) != 12:
-        return ""
-    mac = ":".join(cleaned[i : i + 2] for i in range(0, 12, 2))
-    return mac if _MAC_RE.match(mac) else ""
+    from jen.plugin_api import normalize_mac
+
+    return normalize_mac(raw) or ""
 
 
 def _audit(action, target, detail):
@@ -438,6 +445,7 @@ def _record_results(by_id, results):
     if not results:
         return
     db = None
+    to_alert = []  # v1.0.4 — collected here, sent after commit/close: see below
     try:
         db = _get_db()
         with db.cursor() as cur:
@@ -472,7 +480,7 @@ def _record_results(by_id, results):
                         (target_id, new_state, new_fails, ok, ok, (error or "")[:200]),
                     )
                 if should_alert(state, new_state, transitioned):
-                    _alert_transition(target, new_state)
+                    to_alert.append((target, new_state))
             cur.execute(
                 "DELETE FROM wd_checks WHERE checked_at < UTC_TIMESTAMP() - INTERVAL %s DAY", (_KEEP_CHECKS_DAYS,)
             )
@@ -482,6 +490,11 @@ def _record_results(by_id, results):
     finally:
         if db:
             db.close()
+    # v1.0.4 — sending an alert (send_alert/emit) is network/DB I/O of its own; doing it INSIDE the open
+    # cursor loop above held the whole tick's transaction/connection open for as long as every alert took
+    # to send. Collected during the loop, sent only after the connection that recorded them is closed.
+    for target, new_state in to_alert:
+        _alert_transition(target, new_state)
 
 
 def _alert_transition(target, new_state):
@@ -521,17 +534,26 @@ def _watchdog_search(query, accessible_subnet_ids, all_subnets):
     q = (query or "").strip()
     if not q:
         return []
-    like = f"%{q}%"
+    from jen.plugin_api import like_pattern, search_scope
+
+    # v1.0.4 — the caller's own subnet scope is now IN the query, before its own LIMIT 20; a NULL
+    # t.subnet_id (a target in no Kea subnet) is excluded for a restricted caller by ordinary SQL NULL
+    # semantics (`NULL IN (...)` is never true), matching the unrestricted-only rule everywhere else.
+    scope = search_scope(accessible_subnet_ids, all_subnets, "t.subnet_id")
+    if scope is None:
+        return []
+    scope_clause, scope_params = scope
+    like = like_pattern(q)
     out = []
     db = None
     try:
         db = _get_db()
         with db.cursor() as cur:
             cur.execute(
-                "SELECT t.id, t.ip, t.label, t.subnet_id, s.state FROM wd_targets t "
-                "LEFT JOIN wd_state s ON s.target_id = t.id "
-                "WHERE t.label LIKE %s OR t.ip LIKE %s ORDER BY t.created_at DESC LIMIT 20",
-                (like, like),
+                f"SELECT t.id, t.ip, t.label, t.subnet_id, s.state FROM wd_targets t "
+                f"LEFT JOIN wd_state s ON s.target_id = t.id "
+                f"WHERE {scope_clause} AND (t.label LIKE %s OR t.ip LIKE %s) ORDER BY t.created_at DESC LIMIT 20",  # nosec B608 - scope_clause is search_scope()'s own %s placeholders, values bound below
+                (*scope_params, like, like),
             )
             for row in cur.fetchall():
                 out.append(
@@ -554,6 +576,9 @@ def _watchdog_search(query, accessible_subnet_ids, all_subnets):
 
 
 def _target_rows():
+    """v1.0.4 — the 7-day uptime used to be one `wd_checks` query PER TARGET (N+1: an index page with
+    thirty targets ran thirty-one queries). One query for every target's checks, grouped in Python —
+    `wd_checks` is already indexed on (target_id, checked_at) for exactly this window."""
     db = None
     try:
         db = _get_db()
@@ -564,12 +589,12 @@ def _target_rows():
                 "FROM wd_targets t LEFT JOIN wd_state s ON s.target_id = t.id ORDER BY t.label, t.ip"
             )
             rows = cur.fetchall()
+            cur.execute("SELECT target_id, ok FROM wd_checks WHERE checked_at >= UTC_TIMESTAMP() - INTERVAL 7 DAY")
+            by_target = {}
+            for c in cur.fetchall():
+                by_target.setdefault(c["target_id"], []).append({"ok": bool(c["ok"])})
             for r in rows:
-                cur.execute(
-                    "SELECT ok FROM wd_checks WHERE target_id=%s AND checked_at >= UTC_TIMESTAMP() - INTERVAL 7 DAY",
-                    (r["id"],),
-                )
-                r["uptime_pct"] = uptime_pct([{"ok": bool(c["ok"])} for c in cur.fetchall()])
+                r["uptime_pct"] = uptime_pct(by_target.get(r["id"], []))
     except Exception as e:
         logger.error(f"Watchdog: index error: {e}")
         rows = []
@@ -644,6 +669,13 @@ def add_target():
     try:
         db = _get_db()
         with db.cursor() as cur:
+            # v1.0.4 — watch_from_row already refused a second target for one IP; add_target (the
+            # page's own "Add Target" form) did not, so two identical targets could both probe and
+            # alert for the same host.
+            cur.execute("SELECT id FROM wd_targets WHERE ip=%s", (ip,))
+            if cur.fetchone():
+                flash(f"{label or ip} is already being watched.", "warning")
+                return redirect(url_for("watchdog.index"))
             cur.execute(
                 "INSERT INTO wd_targets (ip, mac, subnet_id, label, source, probe, interval_min, "
                 "fails_to_down, created_by) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
@@ -834,23 +866,28 @@ def _api_list_targets():
 def _api_add_target():
     from flask import g
 
-    from jen.plugin_api import api_key_can_access_subnet
+    from jen.plugin_api import api_key_can_access_subnet, json_object_body, str_field
 
-    body = request.get_json(silent=True) or {}
-    ip = str(body.get("ip", "")).strip()
+    body, bad_body = json_object_body()
+    if bad_body:
+        return bad_body
+    ip = str_field(body, "ip")
     try:
         ipaddress.IPv4Address(ip)
     except ValueError:
         return jsonify({"error": "invalid ip"}), 400
-    probe = str(body.get("probe", "ping"))
+    raw_mac = body.get("mac", "")
+    if raw_mac and not isinstance(raw_mac, str):
+        return jsonify({"error": "mac must be a string"}), 400
+    probe = str_field(body, "probe") or "ping"
     kind, err = parse_probe(probe)
     if kind is None:
         return jsonify({"error": err}), 400
     subnet_id = derive_subnet_id(ip, _subnet_map())
     if not api_key_can_access_subnet(g.api_key, subnet_id):
         return jsonify({"error": "subnet not accessible to this key"}), 403
-    label = str(body.get("label", "") or "")[:100]
-    mac = _normalize_mac(body.get("mac", ""))
+    label = str_field(body, "label", 100)
+    mac = _normalize_mac(raw_mac)
     interval_min = body.get("interval_min", 5)
     fails_to_down = body.get("fails_to_down", 3)
     if interval_min not in _INTERVAL_CHOICES or fails_to_down not in _FAILS_CHOICES:
@@ -860,6 +897,11 @@ def _api_add_target():
     try:
         db = _get_db()
         with db.cursor() as cur:
+            # v1.0.4 — the page's own Add Target form already refuses a second target for one IP; the
+            # API did not.
+            cur.execute("SELECT id FROM wd_targets WHERE ip=%s", (ip,))
+            if cur.fetchone():
+                return jsonify({"error": f"{ip} is already being watched"}), 409
             cur.execute(
                 "INSERT INTO wd_targets (ip, mac, subnet_id, label, source, probe, interval_min, "
                 "fails_to_down, created_by) VALUES (%s, %s, %s, %s, 'manual', %s, %s, %s, %s)",

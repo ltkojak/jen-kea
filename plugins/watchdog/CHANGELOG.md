@@ -1,5 +1,34 @@
 # Host Watchdog Plugin — Changelog
 
+## [1.0.4] - 2026-09-27
+
+Jen's Q100 sweep: onto Jen 5.65.10's shared helpers, plus four smaller findings from the same audit.
+
+### Fixed
+
+- A database failure loading one target (`_load_target`, behind toggle, delete and history) used to
+  propagate uncaught into a 500 page; it is now the same generic refusal every other write route already
+  gives a database error.
+- Adding a target had no check for a second target on an address already being watched — "Watch this
+  host" from a Reservation row already refused a duplicate; the Add Target form and the JSON API did not,
+  so two identical targets could both probe and alert for the same host. Both now refuse it (a flash for
+  the form, `409` for the API).
+- The index page ran one `wd_checks` query PER TARGET to compute its 7-day uptime — thirty targets, thirty-
+  one queries. It is one query for every target's checks now, grouped in Python.
+- Sending a state-change alert (`send_alert`/`emit`) is I/O of its own; doing it INSIDE the open database
+  cursor that records the check results held that connection open for as long as every alert took to
+  send. Alerts are now collected while recording and sent only after that connection is closed.
+
+### Changed
+
+- The search provider puts the caller's own subnet scope in its SQL, before its own `LIMIT 20`, using
+  Jen's shared `search_scope()`/`like_pattern()`.
+- The MAC check delegates to Jen's shared `normalize_mac()`; the JSON API's body is read with
+  `json_object_body()`/`str_field()`, so a non-object body or a non-string `mac` is a 400 instead of
+  raising.
+- `tools/test_plugin.py` checks each of the above directly, including that the alert genuinely fires
+  after the recording connection's own `close()`.
+
 ## [1.0.3] - 2026-09-26
 
 Requires Jen 5.65.2 or later, like 1.0.2.

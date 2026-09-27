@@ -39,6 +39,7 @@ from jen import extensions
 from jen.services import access
 from tests.test_authz_matrix import (  # noqa: F401 - fixtures are used by name
     A_MAC,
+    B2_MAC,
     B_HOST,
     B_LEASE_IP,
     B_MAC,
@@ -66,6 +67,7 @@ N_MAC = "de:ad:be:ef:00:cd"  # a MAC Jen has never leased or reserved: no attrib
 NULL_LABEL = B_NAME + "-nullsubnet"  # contains the B marker
 WD_B, WD_NULL = 9101, 9102
 WOL_B, WOL_NULL = 9301, 9302
+WOL_MOVED = 9303  # stored subnet A (1), but the MAC (B_MAC) now resolves to subnet B (2)
 DS_B = 9201
 SP_B = 9401
 PR_SINK = 9501
@@ -156,7 +158,7 @@ def plugin_data(plugin_app, db):
         cur.execute("DELETE FROM wd_checks WHERE target_id IN (%s, %s)", (WD_B, WD_NULL))
         cur.execute("DELETE FROM wd_state WHERE target_id IN (%s, %s)", (WD_B, WD_NULL))
         cur.execute("DELETE FROM wd_targets WHERE id IN (%s, %s)", (WD_B, WD_NULL))
-        cur.execute("DELETE FROM wol_hosts WHERE id IN (%s, %s)", (WOL_B, WOL_NULL))
+        cur.execute("DELETE FROM wol_hosts WHERE id IN (%s, %s, %s)", (WOL_B, WOL_NULL, WOL_MOVED))
         cur.execute("DELETE FROM pr_state WHERE mac IN (%s, %s)", (B_MAC, N_MAC))
         cur.execute("DELETE FROM pr_tracked WHERE mac IN (%s, %s)", (B_MAC, N_MAC))
         cur.execute("DELETE FROM ds_records WHERE target_id=%s", (DS_B,))
@@ -180,6 +182,12 @@ def plugin_data(plugin_app, db):
             "INSERT INTO wol_hosts (id, mac, ip, subnet_id, label) VALUES (%s, %s, '10.77.0.60', 2, %s), "
             "(%s, %s, NULL, NULL, %s)",
             (WOL_B, B_MAC, B_NAME, WOL_NULL, N_MAC, NULL_LABEL),
+        )
+        # WOL_MOVED: stored subnet 1 (A) from when it was added, but B2_MAC's CURRENT subnet
+        # (via the devices fallback, Jen's ONE precedence) is 2 (B) — a favourite that moved out.
+        cur.execute(
+            "INSERT INTO wol_hosts (id, mac, ip, subnet_id, label) VALUES (%s, %s, NULL, 1, %s)",
+            (WOL_MOVED, B2_MAC, B_NAME + "-moved"),
         )
         cur.execute(
             "INSERT INTO pr_tracked (mac, label, subnet_id, added_by) VALUES (%s, %s, 2, 'seed')", (B_MAC, B_NAME)
@@ -211,7 +219,7 @@ def plugin_data(plugin_app, db):
         cur.execute("DELETE FROM wd_checks WHERE target_id IN (%s, %s)", (WD_B, WD_NULL))
         cur.execute("DELETE FROM wd_state WHERE target_id IN (%s, %s)", (WD_B, WD_NULL))
         cur.execute("DELETE FROM wd_targets WHERE id IN (%s, %s) OR label=%s", (WD_B, WD_NULL, "created-by-matrix"))
-        cur.execute("DELETE FROM wol_hosts WHERE id IN (%s, %s)", (WOL_B, WOL_NULL))
+        cur.execute("DELETE FROM wol_hosts WHERE id IN (%s, %s, %s)", (WOL_B, WOL_NULL, WOL_MOVED))
         cur.execute("DELETE FROM pr_state WHERE mac IN (%s, %s)", (B_MAC, N_MAC))
         cur.execute("DELETE FROM pr_tracked WHERE mac IN (%s, %s)", (B_MAC, N_MAC))
         cur.execute("DELETE FROM ds_records WHERE target_id=%s", (DS_B,))
@@ -445,6 +453,20 @@ ROWS = [
         "wol wake B's favourite",
         "POST",
         f"/management/wol/favourites/{WOL_B}/wake",
+        None,
+        UI,
+        _DENY,
+        (),
+        _no_wake_sent,
+        {},
+    ),
+    (
+        # v1.0.3 (Q100): a favourite stored under subnet A but whose MAC has since moved to B — an
+        # A-scoped admin used to still see and wake it (the stored value, never refreshed); it is
+        # judged on the CURRENT subnet now, the same rule Presence already applied to tracked devices.
+        "wol wake a favourite that moved out of the caller's subnet (stored A, current B)",
+        "POST",
+        f"/management/wol/favourites/{WOL_MOVED}/wake",
         None,
         UI,
         _DENY,
@@ -905,6 +927,202 @@ class TestPluginFixtureIsReal:
     def test_an_unrestricted_caller_can_export_the_ledger(self, pclient, db, plugin_data):
         _caller(pclient, db, "superadmin")
         assert B_HOST in pclient.get(f"/network/dns-sync/targets/{DS_B}/export-unbound").data.decode()
+
+
+class TestSearchProviderScopeIsAppliedBeforeTheLimit:
+    """v5.65.11 (Q100). Each plugin's own SQL query used to take the newest 20 matches across every
+    subnet and rely on search_providers.py's own re-filter (Q97 j) to drop the ones the caller
+    cannot see AFTERWARD — so a restricted caller whose only match sorted behind 20 matches from a
+    subnet they cannot see got nothing, even with one of their own. IPAM/Discovery/Watchdog now put
+    the caller's subnet scope IN the SQL, before their own LIMIT 20; Switch Port (whose MAC has no
+    subnet column to filter by in SQL) raised its own candidate LIMIT from 20 to 200 instead. Each
+    case here seeds twenty subnet-B (or unattributable) matches, sorted ahead of the caller's own
+    single subnet-A match under a naive unscoped ORDER BY — row 21 — and drives it through a REAL
+    admin_A session hitting /search, so can_access_subnet() reads a real logged-in caller exactly
+    as production does (calling run_search_providers() bare has no request context for it to read)."""
+
+    def _search(self, pclient, db, marker):
+        _caller(pclient, db, "admin_A")
+        return pclient.get(f"/search?q={marker}").data.decode("utf-8", "replace")
+
+    def test_ipam(self, plugin_app, pclient, db):
+        marker = "zzrow21ipam"
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO ipam_static_entries (ip, subnet_id, subnet_kind, label, updated_at) "
+                "VALUES ('10.253.0.1', 1, 'kea', %s, NOW() - INTERVAL 1 HOUR)",
+                (marker,),
+            )
+            mine_id = cur.lastrowid
+            elsewhere_ids = []
+            for i in range(20):
+                cur.execute(
+                    "INSERT INTO ipam_static_entries (ip, subnet_id, subnet_kind, label, updated_at) "
+                    "VALUES (%s, 500000, 'kea', %s, NOW())",
+                    (f"10.253.1.{i}", marker),
+                )
+                elsewhere_ids.append(cur.lastrowid)
+        db.commit()
+        try:
+            body = self._search(pclient, db, marker)
+            assert marker in body, "ipam search: the caller's own match, seeded behind 20 B-subnet rows, was not found"
+        finally:
+            ids = [mine_id, *elsewhere_ids]
+            with db.cursor() as cur:
+                cur.execute(f"DELETE FROM ipam_static_entries WHERE id IN ({','.join(['%s'] * len(ids))})", tuple(ids))
+            db.commit()
+
+    def test_network_discovery(self, plugin_app, pclient, db):
+        marker = "zzrow21disc"
+        job_ids = []
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO nd_scan_jobs (subnet_id, status, finished_at) VALUES (1, 'done', NOW() - INTERVAL 1 HOUR)"
+            )
+            mine_job = cur.lastrowid
+            job_ids.append(mine_job)
+            cur.execute(
+                "INSERT INTO nd_scan_results (job_id, ip, hostname) VALUES (%s, '10.253.0.1', %s)", (mine_job, marker)
+            )
+            cur.execute("INSERT INTO nd_scan_jobs (subnet_id, status, finished_at) VALUES (500000, 'done', NOW())")
+            elsewhere_job = cur.lastrowid
+            job_ids.append(elsewhere_job)
+            cur.executemany(
+                "INSERT INTO nd_scan_results (job_id, ip, hostname) VALUES (%s, %s, %s)",
+                [(elsewhere_job, f"10.253.1.{i}", marker) for i in range(20)],
+            )
+        db.commit()
+        try:
+            body = self._search(pclient, db, marker)
+            assert marker in body, "discovery search: the caller's own match was not found"
+        finally:
+            with db.cursor() as cur:
+                cur.execute(
+                    f"DELETE FROM nd_scan_results WHERE job_id IN ({','.join(['%s'] * len(job_ids))})", tuple(job_ids)
+                )
+                cur.execute(f"DELETE FROM nd_scan_jobs WHERE id IN ({','.join(['%s'] * len(job_ids))})", tuple(job_ids))
+            db.commit()
+
+    def test_watchdog(self, plugin_app, pclient, db):
+        marker = "zzrow21wd"
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO wd_targets (ip, subnet_id, label, source, probe, created_at) "
+                "VALUES ('10.253.0.1', 1, %s, 'manual', 'ping', NOW() - INTERVAL 1 HOUR)",
+                (marker,),
+            )
+            mine_id = cur.lastrowid
+            elsewhere_ids = []
+            for i in range(20):
+                cur.execute(
+                    "INSERT INTO wd_targets (ip, subnet_id, label, source, probe, created_at) "
+                    "VALUES (%s, 500000, %s, 'manual', 'ping', NOW())",
+                    (f"10.253.1.{i}", marker),
+                )
+                elsewhere_ids.append(cur.lastrowid)
+        db.commit()
+        try:
+            body = self._search(pclient, db, marker)
+            assert marker in body, "watchdog search: the caller's own match was not found"
+        finally:
+            ids = [mine_id, *elsewhere_ids]
+            with db.cursor() as cur:
+                cur.execute(f"DELETE FROM wd_targets WHERE id IN ({','.join(['%s'] * len(ids))})", tuple(ids))
+            db.commit()
+
+    def test_switchport(self, plugin_app, pclient, db):
+        """No subnet_id column to scope in SQL: the fix raised the candidate LIMIT from 20 to 200
+        instead, and still stops early once 20 candidates have PASSED the per-row subnet check —
+        so this needs the caller's own row to be genuinely absent from the naive top-20 window, not
+        merely present among the (unbounded-by-subnet) candidates."""
+        marker = "zzrow21sp"
+        switch_id = None
+        with db.cursor() as cur:
+            cur.execute("INSERT INTO sp_switches (name, host, community) VALUES ('zzrow21-switch', '10.253.9.9', 'x')")
+            switch_id = cur.lastrowid
+            cur.execute("INSERT INTO sp_ports (switch_id, ifindex, ifname) VALUES (%s, 1, %s)", (switch_id, marker))
+            # A_MAC has a real lease in subnet 1 (the caller's own) — ranked oldest (last) of 21 rows.
+            cur.execute(
+                "INSERT INTO sp_mac_ports (mac, switch_id, ifindex, last_seen) VALUES (%s, %s, 1, NOW() - INTERVAL 1 HOUR)",
+                (A_MAC, switch_id),
+            )
+            # 20 never-seen MACs, unattributable to any subnet, all more recent: under the old
+            # unscoped LIMIT 20 these alone would fill the fetched window.
+            cur.executemany(
+                "INSERT INTO sp_mac_ports (mac, switch_id, ifindex, last_seen) VALUES (%s, %s, 1, NOW())",
+                [(f"de:ad:be:ef:21:{i:02x}", switch_id) for i in range(20)],
+            )
+        db.commit()
+        try:
+            body = self._search(pclient, db, marker)
+            assert A_MAC in body, "switchport search: A_MAC (rank 21 of 21) was not found"
+        finally:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM sp_mac_ports WHERE switch_id=%s", (switch_id,))
+                cur.execute("DELETE FROM sp_ports WHERE switch_id=%s", (switch_id,))
+                cur.execute("DELETE FROM sp_switches WHERE id=%s", (switch_id,))
+            db.commit()
+
+
+class TestPluginApiRoutesRefuseMalformedRequests:
+    """v5.65.11 (Q100). Every plugin API route that reads a JSON body now goes through Jen's shared
+    json_object_body()/str_field() (added Q99 d) instead of `request.get_json(silent=True) or {}`,
+    which let a JSON array or other non-object body reach `body.get(...)` directly and raise —
+    an unhandled 500 instead of a caller-visible 400. This is the "allowed caller, bad body" half
+    of the invariant TestAnAllowedCallerGetsAnAnswer proves for a GOOD body."""
+
+    ROUTES = (
+        "/api/v1/plugins/watchdog/targets",
+        "/api/v1/plugins/ipam/entries",
+        "/api/v1/plugins/wol/wake",
+    )
+
+    @pytest.mark.parametrize("path", ROUTES)
+    def test_a_json_array_body_is_refused_with_400(self, pclient, db, plugin_data, wol_sends, path):
+        headers = _unrestricted_key(db)
+        r = pclient.post(path, data=json.dumps([1, 2, 3]), headers=headers, follow_redirects=False)
+        assert r.status_code == 400, f"{path}: a JSON array body got HTTP {r.status_code}, not 400 ({r.data[:200]!r})"
+        payload = r.get_json()
+        assert isinstance(payload, dict) and "error" in payload, f"{path}: {payload}"
+
+    def test_ipam_a_non_string_mac_is_refused_with_400(self, pclient, db, plugin_data):
+        headers = _unrestricted_key(db)
+        r = pclient.post(
+            "/api/v1/plugins/ipam/entries",
+            data=json.dumps({"subnet_id": 1, "ip": "10.98.1.203", "mac": 5}),
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert r.status_code == 400, f"HTTP {r.status_code}, {r.data[:200]!r}"
+        assert "mac" in (r.get_json() or {}).get("error", "")
+
+    def test_ipam_an_invalid_status_is_refused_with_400(self, pclient, db, plugin_data):
+        headers = _unrestricted_key(db)
+        r = pclient.post(
+            "/api/v1/plugins/ipam/entries",
+            data=json.dumps({"subnet_id": 1, "ip": "10.98.1.204", "status": "bogus-status"}),
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert r.status_code == 400, f"HTTP {r.status_code}, {r.data[:200]!r}"
+        assert "status" in (r.get_json() or {}).get("error", "")
+
+    def test_watchdog_a_non_string_mac_is_refused_with_400(self, pclient, db, plugin_data):
+        headers = _unrestricted_key(db)
+        r = pclient.post(
+            "/api/v1/plugins/watchdog/targets",
+            data=json.dumps({"ip": "10.98.1.205", "label": "x", "probe": "ping", "mac": 5}),
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert r.status_code == 400, f"HTTP {r.status_code}, {r.data[:200]!r}"
+
+    def test_wol_a_non_string_mac_is_refused_with_400(self, pclient, db, plugin_data):
+        headers = _unrestricted_key(db)
+        r = pclient.post(
+            "/api/v1/plugins/wol/wake", data=json.dumps({"mac": 5}), headers=headers, follow_redirects=False
+        )
+        assert r.status_code == 400, f"HTTP {r.status_code}, {r.data[:200]!r}"
 
 
 class TestPresenceSinksAreSuperadminOnly:

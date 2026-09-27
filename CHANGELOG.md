@@ -2,6 +2,124 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.65.11-beta.1] - 2026-09-27
+
+Every bundled plugin moved onto the shared helpers 5.65.10 introduced for them (Q99), plus
+plugin-specific fixes found while doing it — the fourth pass over these seven plugins, and the
+one that finally deletes each plugin's own private copy of `normalize_mac`/`like_pattern`/
+`search_scope`/`json_object_body`/`str_field`/`assert_subnet_access` in favour of Jen's own.
+
+### The shared bug this round names: a search provider's own LIMIT ran before its subnet filter
+
+IPAM, Network Discovery and Host Watchdog's own search providers took the newest 20 matches
+across EVERY subnet, then relied on `search_providers.py`'s own re-filter (added Q97 j) to drop
+the ones the caller cannot see — so a restricted caller whose only match sorted behind 20 matches
+from a subnet they cannot see got nothing back, even with one of their own. Each one now puts the
+caller's subnet scope IN the query, before its own `LIMIT 20`, using the new shared
+`search_scope()`/`like_pattern()` helpers. Switch Port has no subnet column to filter by in SQL (a
+MAC's subnet is derived per row); its own candidate limit went from 20 to 200 instead, still
+stopping once 20 candidates have actually passed the per-row check. `tests/test_authz_matrix_plugins.py`
+gained `TestSearchProviderScopeIsAppliedBeforeTheLimit`, which drives all four straight through
+`/search` as a real subnet-restricted admin — twenty seeded matches in a subnet the caller cannot
+see, one in their own, row 21.
+
+### IPAM 1.6.4
+
+Its subnet detail page and CSV export used to materialize the WHOLE address space of every
+managed subnet before showing or streaming it — for a large subnet (a `/16` is 65,536 addresses)
+that meant building and holding rows nobody asked to see, almost all of them never rendered. The
+default (collapsed) view is now built lazily from just the occupied addresses
+(leases, reservations, IPAM entries) plus the runs between them, and CSV export streams row by
+row instead of collecting the whole file in memory first; `?all=1` (every individual address) is
+refused above a `/22` rather than silently building it anyway, falling back to the collapsed view
+with a flash. A Kea-managed subnet already larger than the existing detail-page prefix cap is
+refused outright on both routes. Its JSON API answers a non-object body, a non-string or invalid
+MAC, and now an explicit invalid `status` with a real 400 instead of silently coercing it to
+`static` (the most consequential value) with a 200. `subnet_or_404()` replaces a private lookup on
+the per-address history route, and CSV/manual import applies the same designation blocker
+per-row commit already applies, so an import can no longer create the conflict a single add
+already refuses.
+
+### Network Discovery 1.2.3
+
+A device's "known" status was written into each scan job's stored results at mark-known time, so
+marking a host known (or forgetting one) never touched jobs already on disk — the results page,
+export and the dashboard's rogue count all kept showing the STALE status until the subnet's next
+scan. Known/unknown is now derived at READ time from the current known-hosts list, every time
+results are shown. Starting a scan is now one atomic `INSERT ... WHERE NOT EXISTS` under a lock
+(`_reserve_scan`), shared by the manual button and the scheduler, instead of two separate
+queue-then-look-again steps that could both queue the same subnet at once. The scan-status poll
+route uses `subnet_or_404()`.
+
+### Host Watchdog 1.0.4, Local DNS Sync 1.0.4
+
+Watchdog: a DB failure loading a target degraded to a generic refusal instead of propagating
+uncaught; its uptime column ran one query PER target instead of one for all of them; adding a
+duplicate IP (by row or by API) is now refused instead of creating a second watch on the same
+host; its JSON API validates a non-string MAC. DNS Sync: two call sites parsed `subnet_ids` with a
+bare `json.loads()` instead of the plugin's own tolerant `_target_subnets()` helper, so a
+malformed value raised where the rest of the plugin already degraded gracefully; its index page
+ran one query per visible target for its record count, now one for all of them.
+
+### Switch Port Locator 1.0.4
+
+Community-indexed polling with an empty or entirely non-numeric `vlans` field read zero VLANs,
+returned no MACs at all — indistinguishable from a switch with nothing plugged in — and the poll
+then read "every MAC this switch had is gone" and deleted its whole port map. Polling now refuses
+outright when community indexing has no VLANs configured. A poll's own database failure used to
+put the raw exception text into the switch's stored `last_error`, which the index page renders —
+outside where the raw-exception scanner (5.65.7) looks (flash messages and JSON responses only);
+it gets a generic sentence now. Setting a port's uplink override validates the value against the
+three it actually offers and checks that the port was found at all, instead of silently mapping
+an unrecognised value to "auto" and flashing success when nothing changed.
+
+### Wake & Actions 1.0.3, then 1.0.4
+
+The favourites list, adding one, deleting one and waking one all judged access on the SUBNET
+STORED when a favourite was created, which nothing ever refreshed — the same bug Presence 1.0.2
+already fixed for tracked devices. An administrator scoped to a subnet who had favourited a
+device still saw it, and could wake it, after the device moved to a subnet they can no longer
+see; an administrator newly responsible for that subnet wouldn't see it at all. All three now
+judge the MAC's CURRENT subnet first (Jen's one precedence), the stored value only as a fallback.
+Re-adding an existing favourite used to authorise on the MAC's current subnet and then silently
+overwrite the existing row's subnet — an administrator who can see where a device is NOW could
+take over, and relocate, a favourite another administrator had created; the existing row is now
+authorised on ITS OWN subject first, and this route never moves a favourite's subnet. The JSON API
+mapped an undecryptable stored SecureOn password (a clear, caller-visible refusal) to a 500, the
+same as a genuine server fault; it is 409 now. A 1.0.4 follow-up, found while adding a matrix row
+for a malformed API body on every plugin route: the wake API read its body as
+`request.get_json(silent=True) or {}`, which only rescues a falsy body — a JSON array reached
+`body.get(...)` directly and raised, an unhandled 500. It goes through the shared
+`json_object_body()`/`str_field()` now, like every other plugin API route.
+
+### Presence 1.0.3
+
+`_apply_transition` sent to every enabled sink synchronously, on Jen's own shared
+event-dispatcher thread: up to 10 seconds of HTTP, or 10 seconds plus a TLS handshake and a
+CONNACK round trip for MQTT, per transition. One unreachable broker stalled every other plugin's
+event handling behind it, and a lease storm risked overflowing the dispatcher's 1000-event queue.
+Publishing now goes to the plugin's own single worker thread, started lazily on the first
+transition (never at `register()`), with a bounded queue that drops and logs rather than
+blocking. The Send-test button's exception handling is narrowed from any `Exception` to
+`_PresenceError` specifically, so a real bug elsewhere in the plugin is no longer indistinguishable
+from a broker connectivity failure (`_mqtt_publish`'s own connect call is now inside its `try`,
+so a refused connection is wrapped the same as every other MQTT failure). Its lease lookup gained
+the same expiry check and ordering `_has_active_lease` already applies, and the neighbour pass's
+per-render lease lookup — one query per tracked device — is now one query for all of them. A new
+sink's `topic_prefix` is validated against the MQTT wildcard characters that can disconnect a
+broker.
+
+### Jen: the registry, the matrix, and the JSON-body invariant
+
+All seven plugins are re-pinned in `plugins/registry.json` to their new tags and sha256, all now
+requiring 5.65.10 for the shared helpers. `tests/test_authz_matrix_plugins.py` gained the
+search-provider scoping tests above, `TestPluginApiRoutesRefuseMalformedRequests` (a JSON array
+body gets 400 on every plugin write route that reads one, not an unhandled 500; IPAM's non-string
+MAC and invalid `status` and Watchdog/WoL's non-string MAC each get their own 400), and a matrix
+row for a Wake & Actions favourite that moved out of the caller's subnet.
+
+**Beta channel — never promoted without the maintainer's word.**
+
 ## [5.65.10-beta.1] - 2026-09-26
 
 Beta channel. Stacked on the unpromoted 5.56.4-beta.1 ... 5.65.9-beta.1

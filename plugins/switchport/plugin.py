@@ -126,7 +126,6 @@ _VLAN_INDEXING_CHOICES = ("none", "community")
 _UPLINK_THRESHOLD = 8
 _SNMP_TIMEOUT_S = 20
 
-_MAC_RE = re.compile(r"^([0-9a-f]{2}:){5}[0-9a-f]{2}$")
 _WALK_LINE_RE = re.compile(r"^\.?([\d.]+)\s*=\s*[A-Za-z][\w-]*\s*:\s*(.*)$")
 
 
@@ -362,13 +361,14 @@ def _in_placeholders(values):
 
 
 def _normalize_mac(raw):
+    """'' for no MAC given or garbled input, the lowercase MAC for a valid one. Delegates to
+    plugin_api's normalize_mac() (which returns None for both cases); this wrapper keeps this
+    plugin's own '' convention so every existing call site is unchanged."""
     if not raw:
         return ""
-    cleaned = re.sub(r"[^0-9a-fA-F]", "", raw).lower()
-    if len(cleaned) != 12:
-        return ""
-    mac = ":".join(cleaned[i : i + 2] for i in range(0, 12, 2))
-    return mac if _MAC_RE.match(mac) else ""
+    from jen.plugin_api import normalize_mac
+
+    return normalize_mac(raw) or ""
 
 
 # ── DB helpers (same shape as every other bundled plugin) ──────────────────────
@@ -490,8 +490,14 @@ def _run_snmpbulkwalk(host, community, oid, timeout=_SNMP_TIMEOUT_S):
 def _fdb_positions(switch, community, port_to_ifindex):
     """Impure: the switch's chosen FDB-reading strategy -> {mac: (ifindex, vlan)}."""
     if switch["vlan_indexing"] == "community":
+        vlans = parse_vlan_list(switch.get("vlans"))
+        if not vlans:
+            # v1.0.4 — an empty/invalid vlans list made this return {} (no MACs found anywhere), and
+            # _poll_switch read that as "every MAC this switch used to have is now gone" and deleted
+            # every sp_mac_ports row for it. A configuration mistake must not look like an empty switch.
+            raise _PollError("no VLANs configured for community-indexed polling — set them in Settings")
         combined = {}
-        for vlan in parse_vlan_list(switch.get("vlans")):
+        for vlan in vlans:
             text = _run_snmpbulkwalk(switch["host"], f"{community}@{vlan}", OID_DOT1D_TP_FDB_PORT)
             fdb = parse_bridge_fdb(text)
             combined.update(resolve_bridge_ports(fdb, port_to_ifindex, vlan))
@@ -564,7 +570,10 @@ def _poll_switch(switch):
         db.commit()
     except Exception as e:
         logger.error(f"Switch Port Locator: recording poll results for {switch['name']!r} failed: {e}")
-        _record_poll_result(switch["id"], str(e)[:300])
+        # v1.0.4 — the exception's own text used to be stored in sp_switches.last_error, which
+        # index.html renders: the raw-exception scanner (Q96) only looks at flash/JSON sites, so this
+        # one reached the page unnoticed. Logged above; the column gets a generic sentence instead.
+        _record_poll_result(switch["id"], "Could not record poll results; the details are in Jen's log.")
         return
     finally:
         if db:
@@ -690,8 +699,10 @@ def _switchport_search(query, accessible_subnet_ids, all_subnets):
     q = (query or "").strip()
     if not q:
         return []
+    from jen.plugin_api import like_pattern
+
     mac = _normalize_mac(q)
-    like = f"%{q}%"
+    like = like_pattern(q)
     db = None
     out = []
     try:
@@ -706,11 +717,16 @@ def _switchport_search(query, accessible_subnet_ids, all_subnets):
                     (mac,),
                 )
             else:
+                # v1.0.4 — a MAC's subnet isn't a column here (it's derived per row, below), so it
+                # can't be filtered in this query the way IPAM/Discovery/Watchdog's own subnet_id can;
+                # 200 candidates instead of 20, stopping once 20 have actually PASSED the per-row
+                # check, gives a restricted caller a real chance at a full page instead of whatever the
+                # newest 20 matches happened to be, most of them possibly in subnets they cannot see.
                 cur.execute(
                     "SELECT mp.mac, s.name AS switch_name, p.ifname FROM sp_mac_ports mp "
                     "JOIN sp_switches s ON s.id = mp.switch_id "
                     "LEFT JOIN sp_ports p ON p.switch_id = mp.switch_id AND p.ifindex = mp.ifindex "
-                    "WHERE p.ifname LIKE %s OR p.ifalias LIKE %s ORDER BY mp.last_seen DESC LIMIT 20",
+                    "WHERE p.ifname LIKE %s OR p.ifalias LIKE %s ORDER BY mp.last_seen DESC LIMIT 200",
                     (like, like),
                 )
             for row in cur.fetchall():
@@ -727,6 +743,8 @@ def _switchport_search(query, accessible_subnet_ids, all_subnets):
                         "subnet_id": sid,
                     }
                 )
+                if len(out) >= 20:
+                    break
     except Exception as e:
         logger.error(f"Switch Port Locator: search provider failed: {e}")
     finally:
@@ -903,7 +921,11 @@ def set_uplink(switch_id, ifindex):
         flash(refusal, "error")
         return redirect(url_for("switchport.index"))
     value = request.form.get("value", "auto")
-    is_uplink = {"auto": None, "up": 1, "down": 0}.get(value)
+    choices = {"auto": None, "up": 1, "down": 0}
+    if value not in choices:
+        flash("Pick one of the offered uplink settings.", "error")
+        return redirect(url_for("switchport.index"))
+    is_uplink = choices[value]
     db = None
     try:
         db = _get_db()
@@ -912,8 +934,13 @@ def set_uplink(switch_id, ifindex):
                 "UPDATE sp_ports SET is_uplink=%s WHERE switch_id=%s AND ifindex=%s",
                 (is_uplink, switch_id, ifindex),
             )
+            updated = cur.rowcount
         db.commit()
-        flash("Port updated.", "success")
+        if updated:
+            flash("Port updated.", "success")
+        else:
+            # v1.0.4 — a stale or garbled ifindex used to flash "Port updated." on zero rows changed.
+            flash("That port was not found on this switch.", "error")
     except Exception as e:
         logger.error(f"Switch Port Locator: could not update port: {e}")
         flash("Could not update port; the details are in Jen's log.", "error")

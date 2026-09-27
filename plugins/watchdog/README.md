@@ -6,7 +6,7 @@ Probes chosen hosts on a schedule and alerts when one stops answering, and again
 
 ## Requirements
 
-- [Jen](https://github.com/ltkojak/jen-kea) v5.65.2 or later
+- [Jen](https://github.com/ltkojak/jen-kea) v5.65.10 or later
 - `ping` on the Jen host for ICMP targets — Ubuntu's `/usr/bin/ping` (package `iputils-ping`) carries `cap_net_raw`, so a single unprivileged `ping -c 1` works the same way Network Discovery's neighbour-table read does; Settings → Plugins offers an **Install** button on a systemd host (through Jen's root-run plugin service)
 
 ## Why ping works unprivileged

@@ -1,5 +1,41 @@
 # Switch Port Locator Plugin — Changelog
 
+## [1.0.4] - 2026-09-27
+
+Jen's Q100 sweep: onto Jen 5.65.10's shared helpers, plus three findings from the same audit.
+
+### Fixed: a configuration mistake could erase a switch's whole port map
+
+Community-indexed polling reads the FDB once per configured VLAN; with the `vlans` field empty or
+entirely non-numeric, the loop ran zero times and returned no MACs at all — indistinguishable from a
+switch that genuinely has nothing plugged in. The poll then read "every MAC this switch had is gone" and
+deleted every `sp_mac_ports` row for it. Polling now refuses outright when community indexing has no
+VLANs configured, the same way an unreachable switch already does, instead of quietly wiping its data.
+
+### Fixed: a poll's own database error could reach the page
+
+A failure recording poll results put the exception's own text into `sp_switches.last_error`, which the
+index page renders — the raw-exception scanner Jen added in 5.65.7 only looks at flash messages and JSON
+responses, so this site went unnoticed. Logged as before; the stored column gets a generic sentence.
+
+### Fixed: setting a port's uplink override
+
+An unrecognised `value` silently mapped to "auto" instead of being refused, and the route flashed "Port
+updated." even when the `ifindex` given did not match any port on the switch (zero rows changed). Both
+are refused now, the second naming the port that could not be found.
+
+### Changed
+
+- The MAC check delegates to Jen's shared `normalize_mac()`, and the search provider's `LIKE` escaping to
+  `like_pattern()`.
+- The search provider's free-text query reads 200 candidates instead of 20 before its own per-row subnet
+  check (a MAC's subnet is not a column here, so `search_scope()` cannot filter it in SQL the way
+  IPAM/Discovery/Watchdog's own subnet_id can); it still stops once 20 have passed that check, so a
+  restricted caller gets a real chance at a full page instead of whatever the newest 20 matches happened
+  to be.
+- `tools/test_plugin.py` checks all three fixes directly, including that the no-VLANs case raises before
+  touching the database at all.
+
 ## [1.0.3] - 2026-09-26
 
 Requires Jen 5.65.6 or later (`client_subnet_for_mac` in the plugin API); 1.0.2 required 5.65.2.
