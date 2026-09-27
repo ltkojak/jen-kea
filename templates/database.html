@@ -86,7 +86,7 @@
         <p class="u-c0a2eb">
             Exports data from <strong>{{ jen_db_host }} / {{ jen_db_name }}</strong> to a compressed JSON file you can download, restore, or archive.
         </p>
-        <form method="POST" action="/database/export/jen"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <form method="POST" action="/database/export/jen" data-download><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="u-da12f2">
                 <label style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;">Select Tables</label>
                 <div style="margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;">
@@ -113,7 +113,7 @@
         <p class="u-c0a2eb">
             Exports data from <strong>{{ kea_db_host }} / {{ kea_db_name }}</strong>. Choose what to export — reservations and leases are different things.
         </p>
-        <form method="POST" action="/database/export/kea"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <form method="POST" action="/database/export/kea" data-download><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             {% for grp_id, grp in kea_groups.items() %}
             <div class="card kea-group-card" style="margin-bottom:12px;background:var(--surface2);cursor:pointer;" data-kea-group="{{ grp_id }}" id="kea-card-{{ grp_id }}">
                 <label style="cursor:pointer;display:flex;align-items:flex-start;gap:10px;">
@@ -305,7 +305,7 @@
     <div class="alert alert-warning u-905d8b">
         {{ icon("triangle-alert") }} <strong>This bundle is NOT redacted</strong> — unlike the support bundle, it contains real secrets (database credentials, the MFA key, private keys) so the restore actually works. It is only as secret as the passphrase you choose below; anyone with both the file and the passphrase can decrypt everything in it. Store it somewhere only you control, and never send the passphrase alongside the file. For a file to attach to a bug report, use the redacted <em>support bundle</em> (Settings → System) instead.
     </div>
-    <form method="POST" action="/settings/databases/recovery-bundle" autocomplete="off">
+    <form method="POST" action="/settings/databases/recovery-bundle" autocomplete="off" data-download>
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">

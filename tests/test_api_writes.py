@@ -277,3 +277,20 @@ class TestKeysPage:
         with db.cursor() as cur:
             cur.execute("SELECT can_write FROM api_keys WHERE name='_probe_created_ro'")
             assert cur.fetchone()["can_write"] == 0
+
+
+class TestANonObjectBodyIsA400:
+    """v5.65.10 (Q99 d): a JSON array or string used to be turned into `{}` and answered with a misleading
+    "field is required" (or, in a plugin route, raised)."""
+
+    @pytest.mark.parametrize("payload", [[1, 2], "text", 5])
+    def test_a_core_write_names_the_real_problem(self, client, keys, mock_kea, payload):
+        r = _post(client, "/api/v1/reservations", RAW_RW, payload)
+        assert r.status_code == 400 and r.get_json()["error"] == "expected a JSON object"
+
+    def test_a_note_write_too(self, client, keys, mock_kea):
+        r = _post(client, "/api/v1/subnets/1/notes", RAW_RW, ["x"])
+        assert r.status_code == 400 and r.get_json()["error"] == "expected a JSON object"
+
+    def test_an_object_still_works(self, client, keys, mock_kea):
+        assert _post(client, "/api/v1/subnets/1/notes", RAW_RW, {"text": "x"}).status_code == 200

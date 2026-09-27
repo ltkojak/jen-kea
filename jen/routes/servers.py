@@ -270,7 +270,12 @@ def dismiss_changeset_attention():
     note = __changeset.attention()
     __changeset.clear_attention()
     if note:
-        __user.audit("DISMISS_CHANGESET_NOTICE", note.get("status", ""), note.get("summary", ""))
+        incidents = note["incidents"]
+        __user.audit(
+            "DISMISS_CHANGESET_NOTICE",
+            ", ".join(sorted({i.get("status", "") for i in incidents})),
+            "; ".join(i.get("summary", "") for i in incidents)[:500],
+        )
     return redirect(url_for("servers.servers"))
 
 

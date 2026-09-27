@@ -20,11 +20,17 @@ from jen.models.db import jen_db, kea_db
 from jen.models.user import audit
 from jen.services import client_subject as __subject
 from jen.services.access import diagnostic_surface
-from jen.services.api_auth import RATE_LIMIT_MESSAGE, write_rate_limited
+from jen.services.api_auth import RATE_LIMIT_MESSAGE, json_object_body, write_rate_limited
 from jen.services.api_auth import api_auth as _api_auth
 from jen.services.api_auth import key_subnet_ids as _api_key_subnet_ids
 from jen.services.fingerprint import get_device_info_map
-from jen.services.kea import get_active_kea_server, kea_command, kea_is_up
+from jen.services.kea import (
+    all_cached_kea_health,
+    cached_active_server,
+    get_active_kea_server,
+    kea_command,
+    probe_kea_health,
+)
 
 bp = Blueprint("api", __name__)
 
@@ -66,8 +72,12 @@ def api_v1_health():
     (5 s timeout) and the restore's health poll read that as "Jen is not up" and ROLLED BACK a healthy
     update or restore. Callers that want a live probe use /api/v1/health/kea."""
     from jen import JEN_VERSION as _ver
-    from jen.services.kea import all_cached_kea_health, cached_kea_health
+    from jen.services.kea import cached_kea_health
 
+    # v5.65.10 (Q99): version, the active server's cached status and the subnet count, and nothing else.
+    # The per-server list that 5.65.8 added here named every Kea server to anyone who could reach the
+    # page; it lives on the key-gated /api/v1/health/kea now. Every consumer of this route (the updater's
+    # version confirmation, the restore poll, the system suite) reads `jen_version` only.
     cached = cached_kea_health()  # the server Jen is serving from (cached_active_server)
     return api_ok(
         {
@@ -75,7 +85,6 @@ def api_v1_health():
             "kea_up": cached["up"],
             "kea_version": cached["version"],
             "kea_checked_at": cached["checked_at"],
-            "kea_servers": all_cached_kea_health(),
             "subnets": len(extensions.SUBNET_MAP),
         }
     )
@@ -90,18 +99,27 @@ def api_v1_health_kea():
     if not key:
         return api_error("Invalid or missing API key.", 401)
     # the ACTIVE server (the one Jen serves from), not `[kea] api_url`'s primary: in an HA pair with
-    # server 1 down this said kea_up false while Jen was serving from server 2
-    server = get_active_kea_server()
-    up = kea_is_up(server=server)
-    version = ""
-    try:
-        ver = kea_command("version-get", server=server)
-        if ver.get("result") == 0:
-            version = ver.get("arguments", {}).get("extended", ver.get("text", ""))
-            version = version.splitlines()[0] if version else ""
-    except Exception:
-        pass
-    return api_ok({"kea_up": up, "kea_version": version, "server": (server or {}).get("name")})
+    # server 1 down this said kea_up false while Jen was serving from server 2. It is chosen WITHOUT a
+    # probe (cached_active_server) and probed ONCE (probe_kea_health): this route used to run the
+    # HA election (a version-get and a heartbeat per server), then kea_is_up, then a second version-get -
+    # two to six calls at the 10 s timeout, and `kea_up` true with an empty version when only the
+    # last one failed.
+    server = cached_active_server()
+    if server is None:  # no Kea server configured at all
+        return api_ok({"kea_up": False, "kea_version": "", "kea_checked_at": None, "server": None, "servers": []})
+    entry = probe_kea_health(server)
+    from datetime import datetime, timezone
+
+    return api_ok(
+        {
+            "kea_up": entry["up"],
+            "kea_version": entry["version"] or "",
+            "kea_checked_at": datetime.fromtimestamp(entry["at"], timezone.utc).isoformat(timespec="seconds"),
+            "server": server.get("name"),
+            # every server's last known state (the probe above just refreshed this one's); no extra probe
+            "servers": all_cached_kea_health(),
+        }
+    )
 
 
 @bp.route("/api/v1/subnets")
@@ -587,9 +605,9 @@ def _api_audit(key, action, entity, details=""):
     audit(action, entity, f"[api-key:{key.get('name')}] {details}".strip())
 
 
-def _json_body() -> dict:
-    body = request.get_json(silent=True)
-    return body if isinstance(body, dict) else {}
+def _json_body():
+    """`(dict, None)` or `(None, error_response)` - a body that is not a JSON object is a 400 (v5.65.10)."""
+    return json_object_body()
 
 
 @bp.route("/api/v1/reservations", methods=["POST"])
@@ -597,7 +615,9 @@ def api_v1_reservation_create():
     key, err = _api_write_gate()
     if err:
         return err
-    body = _json_body()
+    body, err = _json_body()
+    if err:
+        return err
     try:
         subnet_id = int(body.get("subnet_id"))
     except (TypeError, ValueError):
@@ -700,7 +720,9 @@ def api_v1_device_patch(mac):
     mac = (mac or "").strip().lower()
     if not __auth.valid_mac(mac):
         return api_error("Invalid MAC address.", 400)
-    body = _json_body()
+    body, err = _json_body()
+    if err:
+        return err
     fields = {}
     for name, column, limit in (("name", "device_name", 200), ("owner", "owner", 200), ("notes", "notes", 1000)):
         if name in body:
@@ -769,7 +791,9 @@ def api_v1_subnet_notes(subnet_id):
         return api_error(f"Unknown subnet_id {subnet_id}.", 404)
     if not _api_scope_allows(key, subnet_id):
         return api_error("This key has no access to that subnet.", 403)
-    body = _json_body()
+    body, err = _json_body()
+    if err:
+        return err
     text = body.get("text")
     if text is not None and not isinstance(text, str):
         return api_error("text must be a string (empty string clears the note).", 400)

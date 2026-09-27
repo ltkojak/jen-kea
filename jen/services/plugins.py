@@ -891,6 +891,19 @@ def install_plugin(plugin_id: str, registry_entry: dict) -> tuple[bool, str]:
     if not valid_plugin_id(plugin_id):
         return False, "Invalid plugin ID."
 
+    # v5.65.10 (Q99 e): refuse a plugin this Jen is too old for BEFORE anything is requested or downloaded.
+    # The check used to run only after the zip had been fetched, verified and extracted (and, on a systemd
+    # host, only in the root service after a marker and a service start), so a stable box that was offered
+    # an update it could not take spent a download and a root run on a refusal.
+    required = (registry_entry or {}).get("requires_jen", "0.0.0")
+    if not jen_version_meets(required):
+        from jen import JEN_VERSION
+
+        return False, (
+            f"{(registry_entry or {}).get('name') or plugin_id} needs Jen {required} or later "
+            f"(this is {JEN_VERSION}): upgrade Jen first."
+        )
+
     if is_systemd_host():
         _write_plugin_request(plugin_id, "install")
         if not _start_plugin_install_unit():

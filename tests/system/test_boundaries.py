@@ -788,6 +788,7 @@ exit 1
 
     out, _p = st.jen_py("from jen.services import kea_changeset as cs\nemit(cs.attention())\ncs.clear_attention()\n")
     note = emitted(out)
+    note = note["incidents"][0] if note and note.get("incidents") else None
     assert note and note["status"] == "rollback_failed" and note["needs_hands"] == ["kea-a"], (
         f"INVARIANT: the outcome is persisted for the Servers banner: {note}"
     )

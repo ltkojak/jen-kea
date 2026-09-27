@@ -61,8 +61,19 @@ def build_spec(version: str, base_url: str = "") -> dict:
                         "kea_up": {"type": "boolean", "nullable": True},
                         "kea_version": {"type": "string", "nullable": True},
                         "kea_checked_at": {"type": "string", "nullable": True},
-                        "kea_servers": {
+                        "subnets": {"type": "integer"},
+                    },
+                },
+                "HealthKea": {
+                    "type": "object",
+                    "properties": {
+                        "kea_up": {"type": "boolean"},
+                        "kea_version": {"type": "string"},
+                        "kea_checked_at": {"type": "string", "nullable": True},
+                        "server": {"type": "string", "nullable": True},
+                        "servers": {
                             "type": "array",
+                            "description": "Every configured server's last known state (cached; no extra probe), v5.65.10.",
                             "items": {
                                 "type": "object",
                                 "properties": {
@@ -73,15 +84,6 @@ def build_spec(version: str, base_url: str = "") -> dict:
                                 },
                             },
                         },
-                        "subnets": {"type": "integer"},
-                    },
-                },
-                "HealthKea": {
-                    "type": "object",
-                    "properties": {
-                        "kea_up": {"type": "boolean"},
-                        "kea_version": {"type": "string"},
-                        "server": {"type": "string", "nullable": True},
                     },
                 },
                 "Subnet": {

@@ -41,7 +41,10 @@ document.addEventListener('DOMContentLoaded', function() {
         if (anchor !== openId) card.classList.add('collapsed');
         var header = card.querySelector(':scope > .card-header');
         if (header) {
-            header.addEventListener('click', function() {
+            header.addEventListener('click', function(e) {
+                // a control inside the header (Alerts' "Expand all", a link, a field) is not a request to
+                // fold the card (v5.65.10, Q99 m)
+                if (e.target.closest('button, a, input, select')) return;
                 card.classList.toggle('collapsed');
             });
         }

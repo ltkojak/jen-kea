@@ -83,14 +83,14 @@ class TestHelper:
             (3, True, True, False, False),
             (4, True, True, True, False),
             (5, True, True, True, True),
-            (5, False, True, True, False),  # Trace needs SSH as well
+            (5, False, False, False, False),  # the helper, TLS setup and Trace are all reached over SSH (v5.65.10)
             (9, True, True, True, True),
         ],
     )
     def test_helper_table(self, helper, ssh, helper_on, tls, trace):
         c = _derive(V30, helper=helper, ssh=ssh)
         assert (c.helper, c.tls, c.trace) == (helper_on, tls, trace)
-        assert c.helper_version == helper
+        assert c.helper_version == (helper if ssh else None)  # no SSH host: no reachable helper, no version
 
     def test_thresholds_are_the_kea_host_constants(self):
         assert kea_host.TLS_HELPER_MIN_VERSION == 4
@@ -179,6 +179,17 @@ class TestWhy:
         )
         assert "v4" in _derive(V30, helper=4).why("trace")
         assert "SSH" in _derive(V30, helper=5, ssh=False).why("trace")
+
+    def test_a_recorded_helper_version_with_no_ssh_host_is_not_a_helper(self):
+        """v5.65.10 (Q99 h): the CI capture read 'Kea host helper: on' beside 'no Kea host has SSH configured'."""
+        c = _derive(V30, helper=5, ssh=False, known=True)
+        assert not c.helper and not c.tls and not c.trace and c.helper_version is None
+        assert "no SSH host is configured" in c.why("helper")
+        assert "SSH" in c.why("tls")
+
+    def test_the_ssh_card_still_reads_a_per_host_helper_version(self):
+        assert caps.helper_caps(5) == {"helper": True, "tls": True, "trace": True}
+        assert caps.helper_caps(5, ssh=False) == {"helper": False, "tls": False, "trace": False}
 
     def test_unknown_name_is_an_error_not_a_blank(self):
         with pytest.raises(ValueError):

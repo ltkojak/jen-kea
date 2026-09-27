@@ -388,3 +388,46 @@ class TestApiKeyCanAccessSubnet:
         from jen import plugin_api
 
         assert "can_access_subnet" in plugin_api.__all__ and "api_key_can_access_subnet" in plugin_api.__all__
+
+
+class TestTheLegacyRogueDeviceTemplateStepsAsideForDiscoverys:
+    """v5.65.10 (Q99 k): Network Discovery 1.2.0 moved its alert to its own type, and the Message Templates
+    card kept listing the core "legacy - superseded" one beside it."""
+
+    TYPE = "network-discovery_rogue_device"
+
+    @pytest.fixture
+    def registry(self):
+        """The four alert-type tables, restored to exactly what they were (a module-scoped app elsewhere in
+        the session may already have registered this type)."""
+        from jen.services import alerts as alerts_svc
+
+        tables = (
+            alerts_svc.ALERT_TYPE_LABELS,
+            alerts_svc.ALERT_TYPE_ICONS,
+            alerts_svc.DEFAULT_TEMPLATES,
+            alerts_svc.PLUGIN_ALERT_TYPES,
+        )
+        saved = [(t, t.get(self.TYPE, None), self.TYPE in t) for t in tables]
+        yield tables
+        for table, value, present in saved:
+            if present:
+                table[self.TYPE] = value
+            else:
+                table.pop(self.TYPE, None)
+
+    def test_the_legacy_row_is_shown_while_the_plugin_type_is_not_registered(self, logged_in_client, registry):
+        for table in registry:
+            table.pop(self.TYPE, None)
+        html = logged_in_client.get("/settings/alerts").data.decode()
+        assert 'id="al-tpl-rogue_device"' in html
+
+    def test_the_legacy_row_is_hidden_once_it_is(self, logged_in_client, registry):
+        from jen.services.alerts import register_alert_type
+
+        register_alert_type(
+            "network-discovery", self.TYPE, label="Rogue Device", icon="siren", default_template="🚨 <b>{subject}</b>"
+        )
+        html = logged_in_client.get("/settings/alerts").data.decode()
+        assert 'id="al-tpl-rogue_device"' not in html
+        assert f'id="al-tpl-{self.TYPE}"' in html

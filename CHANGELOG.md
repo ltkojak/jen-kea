@@ -114,6 +114,10 @@ tested and not only "the refused caller gets nothing". IPAM's three API routes
 answer those rows with a 500 today and are marked as expected failures for the
 next release, which fixes them.
 
+*Note added 2026-09-26 (5.65.10): the `kea_servers` list this entry says `/api/v1/health` gained
+moved to the key-gated `/api/v1/health/kea`, as `servers`; the public page is `jen_version`, `kea_up`,
+`kea_version`, `kea_checked_at` and `subnets` again.*
+
 ## [5.65.7-beta.1] - 2026-09-26
 
 Beta channel. Stacked on the unpromoted 5.56.4-beta.1 ... 5.65.6-beta.1

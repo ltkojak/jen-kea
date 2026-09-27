@@ -51,9 +51,13 @@ def plugins_page():
     for p in installed:
         reg = registry_map.get(p["id"], {})
         p["registry_version"] = reg.get("version", "")
-        p["update_available"] = bool(
-            p["registry_version"] and _parse_version(p["registry_version"]) > _parse_version(p["version"])
-        )
+        newer = bool(p["registry_version"] and _parse_version(p["registry_version"]) > _parse_version(p["version"]))
+        # v5.65.10 (Q99 e): an update the running Jen is too old for is not offered - the page says what it
+        # needs instead of a badge and a button that could only fail after downloading the plugin.
+        reg_ok = __plugins.jen_version_meets(reg.get("requires_jen", "0.0.0"))
+        p["update_available"] = newer and reg_ok
+        p["update_blocked"] = newer and not reg_ok
+        p["update_needs"] = reg.get("requires_jen", "")
         p["changelog_url"] = reg.get("changelog_url", "")
         # v5.28.1 (Q26, C3) — set by _apply_plugin_result()/load_plugins()
         # when this plugin's own manifest migration failed and it was
@@ -68,10 +72,10 @@ def plugins_page():
     for entry in registry:
         inst = installed_map.get(entry["id"])
         entry["installed"] = inst is not None
-        entry["update_available"] = bool(
-            inst and _parse_version(entry.get("version", "")) > _parse_version(inst.get("version", ""))
-        )
         entry["version_ok"] = __plugins.jen_version_meets(entry.get("requires_jen", "0.0.0"))
+        newer = bool(inst and _parse_version(entry.get("version", "")) > _parse_version(inst.get("version", "")))
+        entry["update_available"] = newer and entry["version_ok"]
+        entry["update_blocked"] = newer and not entry["version_ok"]
 
     return render_template(
         "plugins.html",

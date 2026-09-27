@@ -132,6 +132,7 @@ nothing new lives behind it, and importing it does no work:
 | Search (v5.57.0) | `register_search_provider(plugin_id, *, title, fn)` |
 | Plugin API routes (v5.57.0) | `api_key_required(write=False)`, `filter_subnet_ids(key_row, subnet_ids)` |
 | Secrets (v5.57.0) | `encrypt_secret(plaintext)`, `decrypt_secret(stored)` |
+| Helpers (v5.65.10) | `json_object_body()`, `str_field(body, name, max_len)`, `normalize_mac(raw)`, `like_pattern(text)`, `in_placeholders(values)`, `subnet_for_ip(ip)`, `search_scope(ids, all_subnets, column)`, `require_write()`, `subnet_or_404(subnet_id)`; `assert_subnet_access(subnet_id, *, notify=True)` — see "Helpers every plugin used to copy" below |
 
 ```python
 from jen.plugin_api import assert_subnet_access, audit, jen_db, subnet_context
@@ -278,11 +279,15 @@ sometimes (a raising `when()` just hides it for that row).
 ### Adding a search result — `register_search_provider(...)` (v5.57.0)
 
 Adds a card of results to `/search`, after Jen's own sections. `fn`
-gets the query text and the CALLER's own subnet scope — return rows
-outside it if you like, Jen drops them anyway (the same defence-in-depth
-rule as every other subnet-scoped surface), so there's no harm in a
-simple query that doesn't pre-filter. At most 20 rows are shown; a
-provider that raises shows "unavailable" instead of breaking the page.
+gets the query text and the CALLER's own subnet scope. Jen re-filters
+every returned row against that scope (the same defence-in-depth rule as
+every other subnet-scoped surface), but it does so AFTER your query has
+run, so **your own `LIMIT` must come after your own subnet filter**: a
+provider that limits to 20 rows and lets Jen filter them can spend all 20
+on matches in subnets the caller cannot see and hand a restricted caller
+nothing. Put the scope in the query with `search_scope()` (below) and match
+the text with `like_pattern()`. At most 20 rows are shown; a provider that
+raises shows "unavailable" instead of breaking the page.
 
 ```python
 from jen.plugin_api import register_search_provider
@@ -358,9 +363,57 @@ def watchdog_hosts():
 def watchdog_silence(host_id): ...
 ```
 
+`write=True` also applies Jen's per-key write limit: at most 60 write requests a minute per key, shared
+with Jen's own write endpoints (a call over the budget is a 429), and a malformed write counts (the budget
+is on calls). Read the request body with `json_object_body()` (below), so a JSON array is a 400 and not a
+500.
+
 Document your own plugin's endpoints in its README — Jen's
 `/api/v1/openapi.json` deliberately doesn't list them (see its own
 `description` field).
+
+### Helpers every plugin used to copy (v5.65.10)
+
+Seven plugins each carried their own copy of these, and the copies had drifted (two conventions for "not a
+MAC", a `LIKE` that took a typed `%` literally in two plugins and as a wildcard in two others). They are one
+import now, additive (`PLUGIN_API_VERSION` stays 3; a plugin using them sets `requires_jen` to `5.65.10`):
+
+| Helper | What it does | The copied code it replaces |
+|---|---|---|
+| `json_object_body()` | `(dict, None)` for the request's JSON body, or `(None, (response, 400))` when it is an array, a string, a number or not JSON; no body is `{}` | `request.get_json(silent=True) or {}` followed by `.get`, which 500s on an array |
+| `str_field(body, name, max_len=None)` | the field as a stripped, cut string; `""` when missing, null or not a string | `str(body.get("mac", ""))` and a bare `re.sub` on whatever arrived |
+| `normalize_mac(raw)` | `aa:bb:cc:dd:ee:ff`, or `None` for anything that is not a MAC (blank and non-strings included) | `_normalize_mac` in six plugins, half returning `""` and half `None` |
+| `like_pattern(text)` | `%text%` with `%`, `_` and backslash literal | IPAM's `_like_pattern`, Discovery's inline copy; Watchdog and Switch Port had none |
+| `in_placeholders(values)` | `%s,%s,%s` for a dynamic `IN (...)`; an empty list gives `NULL` | `_in_placeholders` in three plugins |
+| `subnet_for_ip(ip)` | the Kea subnet id whose CIDR holds the address, or `None` | `derive_subnet_id` / `_derive_subnet_id` in Watchdog, DNS Sync, Switch Port and Wake |
+| `search_scope(ids, all_subnets, column)` | `(sql, params)` limiting a search provider's own query to the caller's subnets, or `None` when they may see nothing | a `LIMIT` before the filter, in four providers |
+| `require_write(message=..., redirect_endpoint=...)` | route decorator, under `@login_required`: admins only, checked before the route reads the request; a JSON or `/api/` request gets a 403 body, a page a flash and a redirect | `_is_admin` + `_require_write` in seven plugins |
+| `subnet_or_404(subnet_id)` | `(subnet, None)` or `(None, (json 404, 404))` for a JSON or poll route: no flash, one answer for "not there" and "not yours" | IPAM's history route and Discovery's status poll left a flash for the next page |
+| `assert_subnet_access(subnet_id, notify=True)` | as before; `notify=False` queues no flash | the same |
+
+```python
+from jen.plugin_api import like_pattern, search_scope
+
+
+def _search(query, accessible_subnet_ids, all_subnets):
+    scope = search_scope(accessible_subnet_ids, all_subnets, "e.subnet_id")
+    if scope is None:  # the caller may see no subnet at all
+        return []
+    clause, params = scope
+    with jen_db() as db, db.cursor() as cur:
+        cur.execute(
+            f"SELECT ... FROM my_entries e WHERE e.label LIKE %s AND {clause} ORDER BY e.updated_at DESC LIMIT 20",  # nosec B608 - `clause` is `%s` placeholders only
+            (like_pattern(query), *params),
+        )
+        return [...]
+```
+
+**A per-MAC row's stored `subnet_id` is a cache, not the truth.** A plugin that keeps a row per client (a
+tracked device, a favourite, a switch-port sighting) stores the subnet it was in when the row was written,
+and a client moves. To decide who may act on the row, judge `client_subnet_for_mac(mac)` first (Jen's one
+precedence: current lease, then reservation, then the device's last known subnet) and use the stored value
+only when that returns `None`. Presence judges it this way; a plugin that judged the stored value alone left
+a client that had moved actionable by whoever could see its old subnet, and the rest are being moved onto the rule.
 
 ### Error text — log it, show a generic message (v5.65.7)
 

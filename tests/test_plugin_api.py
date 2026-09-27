@@ -35,6 +35,7 @@ class TestSurface:
             csv_safe,
             events,
             fingerprint,
+            plugin_helpers,
             plugins,
             row_actions,
             search_providers,
@@ -81,6 +82,15 @@ class TestSurface:
             "register_search_provider": search_providers.register_search_provider,
             "encrypt_secret": crypto.encrypt_secret,
             "decrypt_secret": crypto.decrypt_secret,
+            "json_object_body": api_auth.json_object_body,
+            "str_field": api_auth.str_field,
+            "normalize_mac": plugin_helpers.normalize_mac,
+            "like_pattern": plugin_helpers.like_pattern,
+            "in_placeholders": plugin_helpers.in_placeholders,
+            "subnet_for_ip": plugin_helpers.subnet_for_ip,
+            "search_scope": plugin_helpers.search_scope,
+            "require_write": plugin_helpers.require_write,
+            "subnet_or_404": plugin_helpers.subnet_or_404,
         }
         for name in plugin_api.__all__:
             assert hasattr(plugin_api, name), name

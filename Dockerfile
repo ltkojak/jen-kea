@@ -11,7 +11,9 @@ LABEL version="5.65.9-beta.1"
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
-# Install system dependencies
+# Install system dependencies. nmap, iputils-ping and snmp are what the Network Discovery, Host Watchdog
+# and Switch Port Locator plugins shell out to (the same three packages the plugin installer allow-lists);
+# without them those plugins load but cannot work in this image (v5.65.10).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
@@ -19,6 +21,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client \
     openssl \
     curl \
+    nmap \
+    iputils-ping \
+    snmp \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

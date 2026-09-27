@@ -124,7 +124,7 @@ volumes:
 |---|---|
 | `jen-config` | `/etc/jen` — SSL certs, SSH keys, secret key, `jen.config` snapshots |
 | `jen-content` | `/var/lib/jen` — uploaded icons, favicon and nav logo, database backups, registry-installed plugins (v5.13.0) |
-| `jen-icons` | `/opt/jen/static/icons/custom` — old brand-icon location, kept mounted for one release so the app migrates it into `jen-content` on first start |
+| `jen-icons` | `/opt/jen/static/icons/custom` — the pre-5.13 brand-icon location; on start the app copies anything left in it into `jen-content`, and the volume can be dropped once that has happened (below) |
 | `jen-mysql-data` | MariaDB data (Bundled mode only) |
 
 **Upgrading to 5.13.0:** user content moved out of the application tree
@@ -146,6 +146,12 @@ systemd unit to trigger that with, so Jen keeps installing plugins the
 same way it always has in Docker: in-process, into `jen-content`. The
 Plugins page never shows the "reinstall to harden" prompt here, since
 there's nothing to harden into.
+
+**Plugin programs are in the image (v5.65.10).** Network Discovery needs `nmap`, Host Watchdog `ping` and
+Switch Port Locator `snmpbulkwalk`; the image installs `nmap`, `iputils-ping` and `snmp`, the three packages
+the plugin installer allow-lists on a real host. The Plugins page's `apt install` hint does not apply inside a
+container; rebuild the image instead. **Updates and restarts are the container's job:** the Update and Restart
+buttons are hidden here, because they drive the `jen` systemd service that a container does not have.
 
 `/etc/jen/jen.config` lives in the `jen-config` volume. To change
 configuration, edit `.env` and re-run `docker compose ... up -d` — on the

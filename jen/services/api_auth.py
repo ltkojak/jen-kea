@@ -11,6 +11,7 @@ import `api_auth`/`key_subnet_ids` from here unchanged.
 import hashlib
 import json
 import logging
+import threading
 from functools import wraps
 
 from flask import g, jsonify, request
@@ -88,21 +89,50 @@ def filter_subnet_ids(key_row, subnet_ids):
 # `api_key_required(write=True)` applies it, so every write - core or plugin - shares one budget per key.
 WRITE_RATE_PER_MINUTE = 60
 _write_hits: dict = {}
+# Jen runs gunicorn with `--threads N`, so two requests of one key can be in this function at once: the
+# read-filter-append below is not atomic without a lock and undercounts (v5.65.10, Q99 j).
+_write_lock = threading.Lock()
 
 
 def write_rate_limited(key_id) -> bool:
     """In-memory per-key limiter for the write endpoints: at most WRITE_RATE_PER_MINUTE calls in
-    any rolling 60 s window."""
+    any rolling 60 s window. A write that turns out to be malformed still counts, by design: the budget
+    is on calls, so a script cannot use bad requests to get around it."""
     import time as _time
 
-    now = _time.monotonic()
-    hits = [t for t in _write_hits.get(key_id, []) if now - t < 60]
-    if len(hits) >= WRITE_RATE_PER_MINUTE:
+    with _write_lock:
+        now = _time.monotonic()
+        hits = [t for t in _write_hits.get(key_id, []) if now - t < 60]
+        if len(hits) >= WRITE_RATE_PER_MINUTE:
+            _write_hits[key_id] = hits
+            return True
+        hits.append(now)
         _write_hits[key_id] = hits
-        return True
-    hits.append(now)
-    _write_hits[key_id] = hits
-    return False
+        return False
+
+
+def json_object_body():
+    """The request's JSON body as a dict: `(dict, None)`, or `(None, (response, 400))` when the body is
+    not a JSON object (an array, a string, a number, or bytes that are not JSON). No body at all is `{}`.
+    v5.65.10 (Q99 d): a JSON array reached `body.get(...)` in several routes and raised (a 500), and core
+    `/api/v1` writes turned a non-object into `{}` and answered a misleading "field is required"."""
+    body = request.get_json(silent=True)
+    if isinstance(body, dict):
+        return body, None
+    if body is None and not request.get_data():
+        return {}, None
+    return None, (jsonify({"error": "expected a JSON object"}), 400)
+
+
+def str_field(body, name, max_len=None) -> str:
+    """`body[name]` as a stripped string cut to `max_len`, `""` when it is missing, null or NOT A STRING.
+    A non-string value (`{"mac": 5}`) is treated as absent rather than raising in the `re.sub` or
+    `.strip()` that follows; the caller's own "is this valid" check then answers it."""
+    value = body.get(name) if isinstance(body, dict) else None
+    if not isinstance(value, str):
+        return ""
+    value = value.strip()
+    return value[:max_len] if max_len is not None else value
 
 
 RATE_LIMIT_MESSAGE = "Rate limit: at most 60 write requests per minute per key."

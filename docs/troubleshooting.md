@@ -480,7 +480,10 @@ Kea's validator accepts but cannot start from, a broken unit, a missing
 file) and repeat the change. If the rollback itself could not finish you get
 "🛑 ROLLBACK FAILED" naming the servers, and a red banner on the Servers
 page until you dismiss it: check the config on those hosts, restore the last
-good one from Config history, and restart Kea there by hand. (Before
+good one from Config history, and restart Kea there by hand. The banner lists
+every unresolved incident (since 5.65.10 a later, clean rollback on another
+server no longer replaces it): a clean change that restarts the server it names
+clears its incident, and an administrator can dismiss them all. (Before
 v5.65.1 this was a warning, `restart_failed`, that left the new config on
 disk and the daemon stopped.)
 

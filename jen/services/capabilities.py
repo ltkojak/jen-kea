@@ -172,6 +172,7 @@ _LABELS = {
 }
 
 _HELPER_FIX = "Settings → Kea → SSH → Install helper"
+_NO_SSH_FIX = "no SSH host is configured for this server (Settings → Kea → SSH)"
 
 
 def _vstr(v) -> str:
@@ -180,6 +181,8 @@ def _vstr(v) -> str:
 
 def _needs_helper(what: str, minimum: int):
     def _why(c: ServerCapabilities) -> str:
+        if not c.ssh:
+            return f"{what} needs the Kea host helper, which is reached over SSH — {_NO_SSH_FIX}."
         if not c.helper_known or c.helper_version is None:
             return f"{what} needs the Kea host helper v{minimum} — {_HELPER_FIX}."
         return f"{what} needs the Kea host helper v{minimum}; this host has v{c.helper_version} — update it from {_HELPER_FIX}."
@@ -235,7 +238,11 @@ _WHY = {
     "direct_control": _direct_control_why,
     "direct_socket": _direct_socket_why,
     "tls": _needs_helper("https control-socket setup", 4),
-    "helper": lambda c: f"The Kea host helper isn't installed on this host — {_HELPER_FIX}.",
+    "helper": lambda c: (
+        f"The Kea host helper is reached over SSH and {_NO_SSH_FIX}."
+        if not c.ssh
+        else f"The Kea host helper isn't installed on this host — {_HELPER_FIX}."
+    ),
     "trace": lambda c: (
         "Trace needs SSH to this server — set it up in Settings → Kea → SSH."
         if not c.ssh
@@ -277,9 +284,12 @@ def helper_caps(helper_version, *, ssh: bool = True) -> dict:
     from jen.services import kea_host
 
     v = helper_version if isinstance(helper_version, int) and not isinstance(helper_version, bool) else None
+    # v5.65.10 (Q99 h): a helper is reached over SSH, so every helper-derived capability needs an SSH host.
+    # A recorded helper version for a server that has none (a host that had SSH once, or a stale entry) used
+    # to read "Kea host helper: on" beside "no Kea host has SSH configured".
     return {
-        "helper": v is not None,
-        "tls": v is not None and v >= kea_host.TLS_HELPER_MIN_VERSION,
+        "helper": v is not None and ssh,
+        "tls": v is not None and v >= kea_host.TLS_HELPER_MIN_VERSION and ssh,
         "trace": v is not None and v >= kea_host.TRACE_HELPER_MIN_VERSION and ssh,
     }
 

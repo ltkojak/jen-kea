@@ -168,7 +168,7 @@ def settings():
 @login_required
 @_admin_required
 def settings_system():
-    from jen.services.plugins import discover_plugins
+    from jen.services.plugins import discover_plugins, is_systemd_host
 
     audit_retention_days = __user.get_global_setting("audit_retention_days", "90")
     audit_log_count = _count("SELECT COUNT(*) AS cnt FROM audit_log")
@@ -176,6 +176,7 @@ def settings_system():
         "settings_system.html",
         jen_version=_JEN_VERSION(),
         plugins=discover_plugins(),
+        is_systemd_host=is_systemd_host(),
         ssl_configured=__config.ssl_configured(),
         http_port=extensions.HTTP_PORT,
         https_port=extensions.HTTPS_PORT,

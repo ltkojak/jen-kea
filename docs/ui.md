@@ -216,6 +216,14 @@ gh run download <id> -n docs-screenshots -D docs/images
 git add docs/images && git commit
 ```
 
+The capture job also checks every screenshot's text against a list of markers that must never appear
+(`demo_data.FORBIDDEN`). The committed part of that list is only the generic address range; the personal
+names (family first names, surname, domain) live in the repository secret `JEN_DOCS_FORBIDDEN`, a
+comma-separated list, so they are not published in the repository the guard protects. Create it once
+with `gh secret set JEN_DOCS_FORBIDDEN --body "name1,name2,..."`; the reusable workflow receives it from
+`ci.yml` and `release.yml` by name, and the docs job fails if it arrives empty (a Dependabot run or a
+pull request from a fork gets no secrets, so the check is skipped there). The old list is still in `git log`.
+
 `tests/test_readme_images.py` fails the build if a downloaded image is
 missing, over 500 KB, a `.jpg` (the old, hand-captured format — never bring
 one back), or left uncommitted while the README stops referencing it.

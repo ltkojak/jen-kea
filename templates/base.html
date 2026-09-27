@@ -1008,8 +1008,10 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     window.jenProgress = { start: start, stop: stop, reset: reset };
     document.body.addEventListener('htmx:beforeRequest', start);
+    // htmx (1.9.x) fires htmx:afterRequest after EVERY terminal path, an error response included, so
+    // this one listener is the stop. A second one on htmx:responseError (v5.56.4 to v5.65.9) decremented
+    // twice for a 4xx/5xx and hid the bar while another request was still in flight (v5.65.10, Q99 f).
     document.body.addEventListener('htmx:afterRequest', stop);
-    document.body.addEventListener('htmx:responseError', stop);
     window.jenFetch = function(url, opts) {
         start();
         return fetch(url, opts).finally(stop);
@@ -1659,6 +1661,14 @@ function sortTable(table, col, th) {
     }
     function jenBeginFullPageSubmit(form, submitter) {
         if (!form || jenFormIsHtmx(form, submitter)) return;
+        // v5.65.10 (Q99 f): a form whose response is a DOWNLOAD never navigates, so pageshow never fires
+        // to undo the disabled button and the sweeping bar - they stayed until the page was left and a second
+        // export needed a reload. data-download leaves the button alone and stops the bar on a timer.
+        if (form.hasAttribute('data-download')) {
+            jenProgress.start();
+            setTimeout(jenProgress.stop, 2000);
+            return;
+        }
         var btn = submitter || form.querySelector('[type=submit], button:not([type=button])');
         if (btn) { btn.disabled = true; btn.setAttribute('aria-busy', 'true'); }
         jenProgress.start();
@@ -1676,6 +1686,10 @@ function sortTable(table, col, th) {
     // own .submit() method (used below, and by data-submit) does NOT fire
     // this event, so those two paths call jenBeginFullPageSubmit themselves.
     document.addEventListener('submit', function(e) {
+        // a form's own handler that refused the submission (preventDefault: a validation message, or Enter
+        // in a field of a form that submits through script) means nothing is loading: do not disable the
+        // button or start a bar that nothing will stop (v5.65.10, Q99 f)
+        if (e.defaultPrevented) return;
         if (e.target && e.target.tagName === 'FORM') jenBeginFullPageSubmit(e.target, e.submitter);
     });
     // bfcache restore (back/forward): any button this page itself disabled

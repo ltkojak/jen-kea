@@ -54,7 +54,12 @@ from jen.services.access import (  # noqa: E402
 from jen.services.alerts import register_alert_type, send_alert  # noqa: E402
 
 # ── API-key auth for plugin routes (v5.57.0, Q73) ────────────────────────────
-from jen.services.api_auth import api_key_required, filter_subnet_ids  # noqa: E402
+from jen.services.api_auth import (  # noqa: E402
+    api_key_required,
+    filter_subnet_ids,
+    json_object_body,  # v5.65.10 (Q99 d)
+    str_field,
+)
 from jen.services.api_auth import key_subnet_ids as _key_subnet_ids  # noqa: E402
 
 # ── Background work ──────────────────────────────────────────────────────────
@@ -83,6 +88,17 @@ from jen.services.events import emit, subscribe, unsubscribe  # noqa: E402
 
 # ── Device fingerprinting ────────────────────────────────────────────────────
 from jen.services.fingerprint import classify_device  # noqa: E402
+
+# ── Small helpers every plugin copied by hand (v5.65.10, Q99 l) ──────────────────
+from jen.services.plugin_helpers import (  # noqa: E402
+    in_placeholders,
+    like_pattern,
+    normalize_mac,
+    require_write,
+    search_scope,
+    subnet_for_ip,
+    subnet_or_404,
+)
 
 # ── Plugin system introspection ──────────────────────────────────────────────
 from jen.services.plugins import discover_plugins as installed_plugins  # noqa: E402
@@ -175,6 +191,7 @@ __all__ = [
     "get_global_setting",
     "get_jen_db",
     "get_kea_db",
+    "in_placeholders",
     "in_pool",
     "installed_plugins",
     "is_admin_or_above",
@@ -182,19 +199,27 @@ __all__ = [
     "is_systemd_host",
     "jen_db",
     "jen_version",
+    "json_object_body",
     "kea6_db",
     "kea_db",
+    "like_pattern",
+    "normalize_mac",
     "periodic_jobs",
     "register_alert_type",
     "register_periodic",
     "register_row_action",
     "register_search_provider",
+    "require_write",
     "safe_cell",
     "safe_row",
+    "search_scope",
     "send_alert",
     "set_global_setting",
+    "str_field",
     "subnet_context",
+    "subnet_for_ip",
     "subnet_map",
+    "subnet_or_404",
     "subscribe",
     "superadmin_required",
     "unregister_periodic",

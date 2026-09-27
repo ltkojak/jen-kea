@@ -15,6 +15,8 @@ test_small_hardening_fixes.py regex-parses the healthcheck).
 import re
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parent.parent
 COMPOSE = ["docker-compose.yml", "docker-compose.mysql.yml"]
 
@@ -294,3 +296,57 @@ class TestImageCanImportJen:
     def test_harness_compose_does_not_paper_over_it(self):
         # tests/system runs the image as shipped: no working_dir pin of its own
         assert "working_dir" not in _text("tests/system/compose/docker-compose.yml")
+
+
+class TestThePluginProgramsAreInTheImage:
+    """v5.65.10 (Q99 i): Network Discovery (nmap), Host Watchdog (ping) and Switch Port Locator (snmpbulkwalk)
+    load in the image but could not work: it installed none of them, and the Plugins page's `apt` hint means
+    nothing inside a container."""
+
+    def test_the_three_allow_listed_packages_are_installed(self):
+        apt_block = re.search(r"apt-get install.*?apt-get clean", _text("Dockerfile"), re.S).group(0)
+        for package in ("nmap", "iputils-ping", "snmp"):
+            assert re.search(rf"^\s*{re.escape(package)}\b", apt_block, re.M), (
+                f"{package} is not installed in the image"
+            )
+
+    def test_they_are_the_same_three_the_plugin_installer_allow_lists(self):
+        root = _text("jen-update-root.py")
+        allowed = re.search(r"_DEPS_ALLOWED_PACKAGES\s*=\s*frozenset\(\{([^}]*)\}\)", root).group(1)
+        assert set(re.findall(r'"([^"]+)"', allowed)) == {"nmap", "iputils-ping", "snmp"}
+
+    def test_the_docker_guide_says_so(self):
+        assert "nmap" in _text("docs/docker.md") and "iputils-ping" in _text("docs/docker.md")
+
+
+class TestNoStaleTransitionComment:
+    """The v5.13 'keep the old volume for ONE release' comment outlived its release by fifty."""
+
+    @pytest.mark.parametrize("name", COMPOSE)
+    def test_the_comment_is_gone_and_the_volume_stays(self, name):
+        text = _text(name)
+        assert "ONE release" not in text and "Transition" not in text and "transition" not in text
+        assert "jen-icons:/opt/jen/static/icons/custom" in text
+
+
+class TestSelfUpdateAndRestartAreHiddenOffSystemd:
+    """The updater and the Restart button drive systemd units a container does not have."""
+
+    def _page(self, logged_in_client, systemd):
+        from unittest.mock import patch
+
+        with patch("jen.services.plugins.is_systemd_host", return_value=systemd):
+            return logged_in_client.get("/settings/system").get_data(as_text=True)
+
+    def test_a_container_gets_a_sentence_and_no_forms(self, logged_in_client):
+        body = self._page(logged_in_client, False)
+        assert "container image's job" in body
+        assert 'action="/settings/infrastructure/self-update"' not in body
+        assert 'action="/settings/infrastructure/restart"' not in body
+        assert "docker compose restart jen" in body
+
+    def test_a_systemd_host_keeps_both_forms(self, logged_in_client):
+        body = self._page(logged_in_client, True)
+        assert 'action="/settings/infrastructure/self-update"' in body
+        assert 'action="/settings/infrastructure/restart"' in body
+        assert "container image's job" not in body

@@ -142,7 +142,8 @@ var JEN_CHANNELS = {
         <button type="button" class="btn btn-sm btn-secondary" data-al-fold="close">Collapse all</button>
     </div>
     <div class="al-tpl-list">
-    {% for atype, label in alert_type_labels.items() if atype not in plugin_alert_types %}
+    {# the legacy core rogue-device template is hidden while Network Discovery's own type is registered (v5.65.10, Q99 k) #}
+    {% for atype, label in alert_type_labels.items() if atype not in plugin_alert_types and not (atype == 'rogue_device' and 'network-discovery_rogue_device' in plugin_alert_types) %}
     {% set tpl = templates.get(atype, default_templates.get(atype, '')) %}
     <details class="al-tpl" id="al-tpl-{{ atype }}">
         <summary>

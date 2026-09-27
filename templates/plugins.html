@@ -53,6 +53,8 @@
                 {% if p.registry_version %}
                     {% if p.update_available %}
                     <span class="u-52df2b">v{{ p.registry_version }} {{ icon("arrow-up") }}</span>
+                    {% elif p.update_blocked %}
+                    <span class="u-5872de">v{{ p.registry_version }} needs Jen {{ p.update_needs }}</span>
                     {% else %}
                     <span class="u-5a4529">v{{ p.registry_version }} ✓</span>
                     {% endif %}
@@ -91,6 +93,8 @@
                     <form method="POST" action="/settings/plugins/update/{{ p.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit" class="btn btn-sm btn-primary">{{ icon("upload") }} Update</button>
                     </form>
+                    {% elif p.update_blocked %}
+                    <span class="u-865c33">Update needs Jen v{{ p.update_needs }} &mdash; upgrade Jen first</span>
                     {% endif %}
                     {% if p.missing_os_packages %}
                     {% if is_systemd_host %}
@@ -198,7 +202,9 @@
             {% endif %}
         </div>
 
-        {% if entry.installed and not entry.update_available %}
+        {% if entry.installed and entry.update_blocked %}
+        <span class="u-865c33">Update needs Jen v{{ entry.requires_jen }} &mdash; upgrade Jen first</span>
+        {% elif entry.installed and not entry.update_available %}
         <span class="u-d92d40">✓ Installed &amp; up to date</span>
         {% elif entry.installed and entry.update_available %}
         <form method="POST" action="/settings/plugins/update/{{ entry.id }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

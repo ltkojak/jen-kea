@@ -30,7 +30,6 @@ services:
       - jen-config:/etc/jen
       # v5.13.0 — user content (uploads, DB backups, registry plugins)
       - jen-content:/var/lib/jen
-      # Transition: keep for ONE release so pre-5.13 icons migrate. See docs/docker.md.
       - jen-icons:/opt/jen/static/icons/custom
       # Escape hatch: mount a hand-written jen.config instead of using env vars.
       # - ./jen.config:/etc/jen/jen.config:ro

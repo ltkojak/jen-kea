@@ -36,10 +36,10 @@ def _slow(*_a, **_k):
 class TestHealthNeverWaitsOnKea:
     def test_returns_in_under_a_second_when_every_kea_call_would_take_five(self, client):
         with (
-            patch("jen.routes.api.kea_is_up", side_effect=_slow),
+            patch("jen.routes.api.probe_kea_health", side_effect=_slow),
             patch("jen.routes.api.kea_command", side_effect=_slow),
             patch("jen.services.kea.kea_command", side_effect=_slow),
-            patch("jen.services.kea.kea_is_up", side_effect=_slow),
+            patch("jen.services.kea.probe_kea_health", side_effect=_slow),
         ):
             started = time.monotonic()
             r = client.get("/api/v1/health")
@@ -79,7 +79,13 @@ class TestHealthNeverWaitsOnKea:
         from jen.routes import api
 
         src = inspect.getsource(api.api_v1_health)
-        assert "kea_is_up" not in src and "kea_command" not in src
+        assert "kea_is_up" not in src and "kea_command" not in src and "probe_kea_health" not in src
+
+    def test_the_public_body_is_only_version_status_and_a_subnet_count(self, client):
+        """v5.65.10 (Q99 c): the per-server list is not for anyone who can reach the page."""
+        data = client.get("/api/v1/health").get_json()
+        assert set(data) == {"jen_version", "kea_up", "kea_version", "kea_checked_at", "subnets"}
+        assert "kea_servers" not in data and "servers" not in data
 
 
 class TestLiveProbeIsSeparateAndKeyed:
@@ -97,45 +103,134 @@ class TestLiveProbeIsSeparateAndKeyed:
     def test_it_needs_an_api_key(self, client):
         assert client.get("/api/v1/health/kea").status_code == 401
 
-    def test_it_probes_kea_live(self, client, db):
+    def test_it_probes_kea_live_once(self, client, db):
         raw = self._key(db)
-        with (
-            patch("jen.routes.api.kea_is_up", return_value=True),
-            patch("jen.routes.api.kea_command", return_value={"result": 0, "arguments": {"extended": "3.2.0\nx"}}),
-        ):
+        entry = {"up": True, "version": "3.2.0", "at": time.time()}
+        with patch("jen.routes.api.probe_kea_health", return_value=entry) as probe:
             r = client.get("/api/v1/health/kea", headers={"Authorization": f"Bearer {raw}"})
         assert r.status_code == 200
         body = r.get_json()
-        assert body["kea_up"] is True and body["kea_version"] == "3.2.0" and "server" in body
+        assert body["kea_up"] is True and body["kea_version"] == "3.2.0" and body["kea_checked_at"]
+        assert "server" in body and isinstance(body["servers"], list)
+        assert probe.call_count == 1
 
-    def test_it_probes_the_active_server_not_the_primary(self, client, db):
+    def test_the_probe_is_exactly_one_kea_call(self, client, db):
+        """v5.65.10 (Q99 b): it was kea_is_up (a version-get) and then a second version-get."""
+        raw = self._key(db)
+        calls = []
+
+        def fake_command(cmd, service="dhcp4", arguments=None, server=None, timeout=10):
+            calls.append((cmd, server))
+            return {"result": 0, "arguments": {"extended": "3.0.9"}}
+
+        with patch("jen.services.kea.kea_command", side_effect=fake_command):
+            r = client.get("/api/v1/health/kea", headers={"Authorization": f"Bearer {raw}"})
+        assert r.get_json()["kea_version"] == "3.0.9"
+        assert len(calls) == 1 and calls[0][0] == "version-get", calls
+
+    def test_it_probes_the_active_server_not_the_primary_and_runs_no_election(self, client, db):
         raw = self._key(db)
         second = {"id": 2, "name": "kea-b", "api_url": "http://kea-b:8000/"}
         calls = []
 
         def fake_command(cmd, service="dhcp4", arguments=None, server=None, timeout=10):
-            calls.append(server)
+            calls.append((cmd, server))
             return {"result": 0, "arguments": {"extended": "3.0.9"}}
 
         with (
-            patch("jen.routes.api.get_active_kea_server", return_value=second),
-            patch("jen.routes.api.kea_command", side_effect=fake_command),
-            patch("jen.routes.api.kea_is_up", return_value=True) as up,
+            patch("jen.routes.api.cached_active_server", return_value=second),
+            patch("jen.services.kea.kea_command", side_effect=fake_command),
+            patch("jen.routes.api.get_active_kea_server") as election,
         ):
             r = client.get("/api/v1/health/kea", headers={"Authorization": f"Bearer {raw}"})
         assert r.get_json()["server"] == "kea-b"
-        assert up.call_args.kwargs["server"] == second and calls == [second]
+        assert calls == [("version-get", second)]
+        election.assert_not_called()  # the HA election probes every server; this route must not
+
+    def test_a_dead_server_costs_one_timeout_not_two(self, client, db):
+        raw = self._key(db)
+        calls = []
+
+        def dead(cmd, service="dhcp4", arguments=None, server=None, timeout=10):
+            calls.append(cmd)
+            return {"result": 1, "text": "Cannot connect"}
+
+        with patch("jen.services.kea.kea_command", side_effect=dead):
+            body = client.get("/api/v1/health/kea", headers={"Authorization": f"Bearer {raw}"}).get_json()
+        assert body["kea_up"] is False and body["kea_version"] == "" and len(calls) == 1
+
+    def test_the_per_server_list_lives_here_and_needs_the_key(self, client, db):
+        raw = self._key(db)
+        with patch("jen.services.kea.kea_command", return_value={"result": 0, "arguments": {"extended": "3.0.1"}}):
+            body = client.get("/api/v1/health/kea", headers={"Authorization": f"Bearer {raw}"}).get_json()
+        assert body["servers"] and all({"name", "up", "version", "checked_at"} <= set(s) for s in body["servers"])
+        assert client.get("/api/v1/health/kea").status_code == 401
+
+    def test_no_kea_server_configured_is_an_answer_not_an_error(self, client, db, monkeypatch):
+        from jen import extensions
+
+        raw = self._key(db)
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [])
+        monkeypatch.setitem(extensions._active_server_cache, "server", None)
+        r = client.get("/api/v1/health/kea", headers={"Authorization": f"Bearer {raw}"})
+        assert r.status_code == 200
+        assert r.get_json()["kea_up"] is False and r.get_json()["servers"] == []
+
+
+class TestOneProbeEverywhere:
+    """v5.65.10 (Q99 b): kea_is_up, the status page and the API share ONE probe."""
+
+    def test_kea_is_up_is_the_probes_up(self):
+        with patch("jen.services.kea.kea_command", return_value={"result": 0, "arguments": {"extended": "3.0.1"}}):
+            assert kea_service.kea_is_up() is True
+            entry = kea_service.probe_kea_health()
+        assert entry["up"] is True and entry["version"] == "3.0.1" and entry["at"]
+
+    def test_get_all_server_status_asks_each_server_for_its_version_once(self, monkeypatch):
+        from jen import extensions
+
+        servers = [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}]
+        monkeypatch.setattr(extensions, "KEA_SERVERS", servers)
+        seen = []
+
+        def fake(cmd, service="dhcp4", arguments=None, server=None, timeout=10):
+            seen.append((cmd, server["name"]))
+            if cmd == "ha-heartbeat":
+                return {"result": 0, "arguments": {"state": "hot-standby", "partner-state": "hot-standby"}}
+            return {"result": 0, "arguments": {"extended": "3.0.1\nx"}}
+
+        with patch("jen.services.kea.kea_command", side_effect=fake):
+            rows = kea_service.get_all_server_status()
+        assert [r["version"] for r in rows] == ["3.0.1", "3.0.1"]
+        assert sorted(seen) == [
+            ("ha-heartbeat", "a"),
+            ("ha-heartbeat", "b"),
+            ("version-get", "a"),
+            ("version-get", "b"),
+        ]
+
+    def test_a_down_server_has_an_empty_version_and_no_heartbeat(self, monkeypatch):
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "a"}])
+        with patch("jen.services.kea.kea_command", return_value={"result": 1, "text": "down"}):
+            rows = kea_service.get_all_server_status()
+        assert rows[0]["up"] is False and rows[0]["version"] == ""
+
+    def test_no_configured_server_is_none_not_an_indexerror(self, monkeypatch):
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [])
+        assert kea_service.get_active_kea_server() is None
 
 
 class TestCacheIsPerServer:
-    def test_the_health_body_lists_every_server_and_never_probes(self, client):
+    def test_the_cached_list_never_probes(self):
         with patch("jen.services.kea.kea_command", side_effect=_slow):
             started = time.monotonic()
-            data = client.get("/api/v1/health").get_json()
+            rows = kea_service.all_cached_kea_health()
         assert time.monotonic() - started < 1.0
-        assert isinstance(data["kea_servers"], list) and all(
-            {"name", "up", "checked_at"} <= set(s) for s in data["kea_servers"]
-        )
+        assert isinstance(rows, list) and all({"name", "up", "checked_at"} <= set(s) for s in rows)
 
     def test_a_probe_of_one_server_does_not_answer_for_another(self):
         one, two = {"id": 1, "name": "a"}, {"id": 2, "name": "b"}

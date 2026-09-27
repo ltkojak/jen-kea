@@ -446,3 +446,69 @@ class TestBannerDetailLinesAreAdminOnly:
     def test_an_admin_sees_the_lines(self, logged_in_client, mock_kea, db):
         self._set(db)
         assert "NoValidConnectionsError" in logged_in_client.get("/servers").data.decode()
+
+
+class TestTheBannerListsEveryIncidentAndOffersDismissOnlyToAdmins:
+    """v5.65.10 (Q99 a, g): the note is a list of unresolved incidents, all shown; the Dismiss button is
+    the admin-only route's own button, so a viewer is not offered one that answers with a refusal."""
+
+    NOTE = {
+        "incidents": [
+            {
+                "status": "rollback_failed",
+                "service": "dhcp4",
+                "summary": "add a pool",
+                "at": "2026-09-25T10:00:00+00:00",
+                "needs_hands": ["kea-a"],
+                "failed_restart": ["kea-a"],
+                "lines": ["boom on kea-a"],
+            },
+            {
+                "status": "rolled_back",
+                "service": "dhcp4",
+                "summary": "edit b",
+                "at": "2026-09-25T11:00:00+00:00",
+                "needs_hands": [],
+                "failed_restart": ["kea-b"],
+                "lines": [],
+            },
+        ]
+    }
+
+    def _set(self, db):
+        from jen.models.user import set_global_setting
+
+        set_global_setting("changeset_attention", json.dumps(self.NOTE))
+
+    def test_both_incidents_are_on_the_page(self, logged_in_client, mock_kea, db):
+        self._set(db)
+        body = logged_in_client.get("/servers").data.decode()
+        assert "could not be rolled back cleanly" in body and "kea-a may be on the wrong config" in body
+        assert "A configuration change was rolled back" in body
+        assert "add a pool" in body and "edit b" in body
+
+    def test_an_admin_is_offered_dismiss(self, logged_in_client, mock_kea, db):
+        self._set(db)
+        assert "/servers/changeset-attention/dismiss" in logged_in_client.get("/servers").data.decode()
+
+    def test_a_viewer_is_not(self, client, mock_kea, db):
+        from tests.conftest import restricted_client
+
+        self._set(db)
+        restricted_client(client, db, allowed_subnets=[1], role="viewer", username="_banner_viewer2")
+        body = client.get("/servers").data.decode()
+        assert "could not be rolled back cleanly" in body
+        assert "/servers/changeset-attention/dismiss" not in body
+
+    def test_dismissing_clears_every_incident_and_audits_them(self, logged_in_client, mock_kea, db):
+        self._set(db)
+        logged_in_client.post("/servers/changeset-attention/dismiss", follow_redirects=True)
+        assert b"could not be rolled back cleanly" not in logged_in_client.get("/servers").data
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT entity, details FROM audit_log WHERE action='DISMISS_CHANGESET_NOTICE' ORDER BY id DESC LIMIT 1"
+            )
+            row = cur.fetchone()
+        assert (
+            row and "rollback_failed" in row["entity"] and "add a pool" in row["details"] and "edit b" in row["details"]
+        )

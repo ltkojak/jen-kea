@@ -168,14 +168,16 @@ def get_accessible_subnet_map():
     return current_user.filter_subnet_map(extensions.SUBNET_MAP)
 
 
-def assert_subnet_access(subnet_id):
+def assert_subnet_access(subnet_id, *, notify=True):
     """
     Return True if current user can access subnet_id.
-    Flashes an error and returns False if not.
+    Flashes an error and returns False if not. `notify=False` for a JSON or poll route (v5.65.10):
+    a flash queued on an answer that is not a page shows up on the NEXT page the person opens.
     """
     if current_user.can_access_subnet(subnet_id):
         return True
-    flash("You do not have access to that subnet.", "error")
+    if notify:
+        flash("You do not have access to that subnet.", "error")
     return False
 
 

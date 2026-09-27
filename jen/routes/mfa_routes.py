@@ -13,6 +13,7 @@ from flask_login import current_user, login_required, login_user
 import jen.config as __config
 import jen.models.db as __db
 import jen.models.user as __user
+import jen.services.api_auth as __api_auth
 import jen.services.auth as __auth
 import jen.services.crypto as __crypto
 import jen.services.fingerprint as __fp
@@ -433,7 +434,9 @@ def passkey_register_finish():
         return _json_error("not signed in", 401)
     if __oidc.is_oidc_user(enrolling.id):
         return _json_error("MFA for this account is managed by your identity provider", 403)
-    body = request.get_json(silent=True) or {}
+    body, bad = __api_auth.json_object_body()  # a JSON array used to reach body.get and 500 (v5.65.10)
+    if bad:
+        return _json_error("expected a JSON object", 400)
     # Single-use: the challenge leaves the session before verification.
     state = session.pop("passkey_reg", None)
     try:
@@ -521,7 +524,9 @@ def passkey_login_finish():
     locked, remaining = __auth.is_mfa_locked_out(pending_id)
     if locked:
         return _json_error(f"Too many failed codes. Try again in {remaining} minute(s).", 429)
-    body = request.get_json(silent=True) or {}
+    body, bad = __api_auth.json_object_body()  # a JSON array used to reach body.get and 500 (v5.65.10)
+    if bad:
+        return _json_error("expected a JSON object", 400)
     state = session.pop("passkey_auth", None)
     if not __passkeys.finish_authentication(pending_id, body.get("response"), state, request):
         __auth.record_mfa_attempt(pending_id)
@@ -566,7 +571,9 @@ def passkey_reauth_begin():
 @bp.route("/mfa/passkey/reauth/finish", methods=["POST"])
 @login_required
 def passkey_reauth_finish():
-    body = request.get_json(silent=True) or {}
+    body, bad = __api_auth.json_object_body()  # a JSON array used to reach body.get and 500 (v5.65.10)
+    if bad:
+        return _json_error("expected a JSON object", 400)
     state = session.pop("passkey_reauth", None)
     if not __passkeys.finish_authentication(current_user.id, body.get("response"), state, request):
         __auth.record_login_attempt(request.remote_addr, current_user.username)

@@ -520,3 +520,11 @@ Add a sink under **Sinks** to actually receive the updates:
 - **Generic HTTP** — a plain JSON POST to any endpoint of your choosing
 
 Each sink has a **Send test** button to confirm it's reachable before relying on it. Passwords and tokens are stored encrypted and never shown again once saved.
+
+Every sink receives the state of every tracked device, whichever subnet it is in, so adding, pausing, testing and removing a sink is a **superadmin** action (since 5.65.5); an administrator scoped to some subnets can track devices in their own subnets but cannot configure where the updates go.
+
+### Network Discovery (v5.30.0)
+
+Scans a subnet with `nmap` and accounts for every live host: a Kea lease or reservation, the subnet's own infrastructure addresses, an IPAM Lite entry, a device Jen has seen, or one you marked *known*. Only a host that is none of those is *unknown*, and only an unknown host the previous scan had not seen sends a Rogue Device alert. Scans run from **Network → Discovery** or on a schedule; the results page shows the latest completed scan and says so when a newer one failed or is still running.
+
+**Known** and **Forget** on a result row are for an administrator who can see every subnet (since 5.65.9). The known list has no subnet, so marking a host known silences its alert on every subnet; an administrator scoped to some subnets does not see the buttons and is refused if the request is made anyway. Starting a scan still needs only an administrator with access to that subnet.

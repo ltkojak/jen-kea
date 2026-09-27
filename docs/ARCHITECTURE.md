@@ -1130,6 +1130,18 @@ place; a concurrency conflict on B did too. `jen/services/kea_changeset.py`'s
    failing lines until an admin dismisses it or a later change set
    succeeds.
 
+   **A list of incidents, not one slot (v5.65.10).** The setting holds
+   `{"incidents": [{status, service, summary, at, needs_hands, failed_restart,
+   lines}]}`. Every rolled-back / failed-rollback outcome is appended (the same
+   trouble again refreshes its incident; the list is bounded and drops clean
+   rollbacks first), so a `rolled_back` on one server can never replace an
+   unresolved `rollback_failed` on another, and two failed rollbacks show both
+   servers. A clean run resolves each incident it covers: a `rolled_back` one
+   always, a `rollback_failed` one only when the run was for the same service and
+   covered every server in its `needs_hands`; the key is cleared when none is
+   left. The pre-5.65.10 single-note shape is read as a list of one. Dismissing
+   is an admin action and clears all of them.
+
 **What this does NOT cover.** `jen/services/settings/authoring.py`'s
 author-from-blank loops (a different flow: generating a brand-new
 config per server, not editing an existing one), `install_kea_binary`/
@@ -1335,10 +1347,17 @@ As of the process work following the v4.4.10 audit series:
   was rolled back. It now reports `kea_up` / `kea_version` from the last probe
   `kea_is_up()` recorded (the background alert loop asks every server every ~5 s;
   `null` until one has, or once it is older than two minutes), plus `kea_checked_at`,
-  and never calls Kea; since v5.65.8 it also lists `kea_servers` (each server's last
-  probe) and its top-level fields describe the server Jen is serving from, not
-  `[kea] api_url`'s primary. `GET /api/v1/health/kea` (API key) keeps the live probe,
-  now of that active server.
+  and never calls Kea; its fields describe the server Jen is serving from, not
+  `[kea] api_url`'s primary. Its whole body is `jen_version`, `kea_up`, `kea_version`,
+  `kea_checked_at` and `subnets`: v5.65.8 added a per-server list to this public
+  page and v5.65.10 moved it (as `servers`, cached, no extra probe) to the key-gated
+  `GET /api/v1/health/kea`, since it named every Kea server to anyone who could
+  reach the page and nothing reads it. That endpoint probes the active server
+  once: `probe_kea_health(server)` is the one Kea probe (a single `version-get`
+  that also writes the cache entry), used by `kea_is_up`, the status page and the
+  API alike, and the active server is chosen from the cache (`cached_active_server`),
+  not by re-running the HA election. It used to make two to six calls, so a dead
+  server cost two timeouts.
   `tests/test_health_endpoint.py` and system scenario 11 pin it.
 - **Dependabot** watches the GitHub Actions used in these workflows and
   opens PRs to bump pinned commit SHAs forward when new releases exist.

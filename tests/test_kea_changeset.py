@@ -506,7 +506,7 @@ class TestOutcomeReachesTheServersPage:
         fake.responses["apply-config"] = {"ok": True, "sha256": "n", "helper_version": 2}
         fake.responses["service"] = {"ok": False, "error": "x", "detail": "boom"}
         cs.apply_change("dhcp4", _mutate_add_pool, "add a pool", servers=[SERVER_A])
-        note = cs.attention()
+        note = cs.attention()["incidents"][0]
         assert note["status"] == "rollback_failed" and note["summary"] == "add a pool"
         assert note["needs_hands"] == ["kea-a"]
 
@@ -515,8 +515,10 @@ class TestOutcomeReachesTheServersPage:
         assert cs.attention() is None
 
     def test_dismiss_clears_it(self, store):
-        store[cs.ATTENTION_KEY] = '{"status": "rolled_back"}'
-        assert cs.attention() == {"status": "rolled_back"}
+        store[cs.ATTENTION_KEY] = (
+            '{"status": "rolled_back"}'  # the pre-5.65.10 single-note shape reads as a list of one
+        )
+        assert cs.attention() == {"incidents": [{"status": "rolled_back"}]}
         cs.clear_attention()
         assert cs.attention() is None
 
@@ -552,13 +554,13 @@ class TestARollbackFailedBannerIsClearedOnlyByARunThatCoveredTheServer:
         fake.responses["apply-config"] = {"ok": True, "sha256": "n", "helper_version": 2}
         fake.responses["service"] = {"ok": False, "error": "x", "detail": "boom"}
         cs.apply_change("dhcp4", _mutate_add_pool, "add a pool", servers=[SERVER_A])
-        assert cs.attention()["needs_hands"] == ["kea-a"]
+        assert cs.attention()["incidents"][-1]["needs_hands"] == ["kea-a"]
         fake.responses["service"] = {"ok": True, "unit": "u", "state": "active"}
 
     def test_an_ok_run_that_never_touched_the_server_leaves_it(self, fake, store):
         self._fail_a(fake)
         cs.apply_change("dhcp4", _mutate_add_pool, "edit b", servers=[SERVER_B])
-        assert cs.attention() is not None and cs.attention()["status"] == "rollback_failed"
+        assert cs.attention() is not None and cs.attention()["incidents"][0]["status"] == "rollback_failed"
 
     def test_an_ok_run_of_another_service_leaves_it(self, fake, store):
         self._fail_a(fake)
@@ -609,3 +611,107 @@ class TestRollbacksAreAudited:
         cs.apply_change("dhcp4", _mutate_add_pool, "add a pool", servers=[SERVER_A])
         assert seen and seen[0][0] == "CONFIG_ROLLBACK_FAILED" and seen[0][1] == "dhcp4"
         assert "kea-a" in seen[0][2] and "add a pool" in seen[0][2]
+
+
+class TestIncidentsAreAListNotASlot:
+    """v5.65.10 (Q99 a): the note kept ONE outcome, so a later rolled_back overwrote an unresolved
+    rollback_failed (its needs_hands emptied, the next clean run cleared the banner while a daemon was
+    stopped), and a second rollback_failed replaced the first one's servers."""
+
+    @pytest.fixture
+    def store(self, monkeypatch):
+        data = {}
+        from jen.models import user as user_mod
+
+        monkeypatch.setattr(user_mod, "get_global_setting", lambda k, d="": data.get(k, d))
+        monkeypatch.setattr(user_mod, "set_global_setting", lambda k, v: data.__setitem__(k, v))
+        monkeypatch.setattr(user_mod, "audit", lambda *a, **k: None)
+        return data
+
+    @staticmethod
+    def _failed(*servers):
+        return cs.ChangeSetResult("rollback_failed", "x", [("error", "boom")], needs_hands=list(servers))
+
+    @staticmethod
+    def _back(*servers):
+        return cs.ChangeSetResult("rolled_back", "restart-failed", [("error", "nope")], list(servers))
+
+    @staticmethod
+    def _ok(*servers):
+        return cs.ChangeSetResult("ok", "ok", [], covered=list(servers))
+
+    def _statuses(self):
+        note = cs.attention()
+        return [(i["status"], tuple(i["needs_hands"])) for i in note["incidents"]] if note else []
+
+    def test_a_later_rolled_back_never_replaces_a_failed_rollback(self, store):
+        _REAL_RECORD_OUTCOME(self._failed("kea-a"), "dhcp4", "edit a")
+        _REAL_RECORD_OUTCOME(self._back("kea-b"), "dhcp4", "edit b")
+        assert self._statuses() == [("rollback_failed", ("kea-a",)), ("rolled_back", ())]
+
+    def test_the_next_clean_run_clears_the_rolled_back_incident_but_not_the_failed_one(self, store):
+        _REAL_RECORD_OUTCOME(self._failed("kea-a"), "dhcp4", "edit a")
+        _REAL_RECORD_OUTCOME(self._back("kea-b"), "dhcp4", "edit b")
+        _REAL_RECORD_OUTCOME(self._ok("kea-b"), "dhcp4", "edit b again")
+        assert self._statuses() == [("rollback_failed", ("kea-a",))]
+
+    def test_two_failed_rollbacks_are_both_shown(self, store):
+        _REAL_RECORD_OUTCOME(self._failed("kea-a"), "dhcp4", "edit a")
+        _REAL_RECORD_OUTCOME(self._failed("kea-b"), "dhcp4", "edit b")
+        assert self._statuses() == [("rollback_failed", ("kea-a",)), ("rollback_failed", ("kea-b",))]
+
+    def test_a_clean_run_covering_only_one_leaves_the_other(self, store):
+        _REAL_RECORD_OUTCOME(self._failed("kea-a"), "dhcp4", "edit a")
+        _REAL_RECORD_OUTCOME(self._failed("kea-b"), "dhcp4", "edit b")
+        _REAL_RECORD_OUTCOME(self._ok("kea-b"), "dhcp4", "fix b")
+        assert self._statuses() == [("rollback_failed", ("kea-a",))]
+
+    def test_a_clean_run_covering_both_clears_the_banner(self, store):
+        _REAL_RECORD_OUTCOME(self._failed("kea-a"), "dhcp4", "edit a")
+        _REAL_RECORD_OUTCOME(self._failed("kea-b"), "dhcp4", "edit b")
+        _REAL_RECORD_OUTCOME(self._ok("kea-a", "kea-b"), "dhcp4", "fix both")
+        assert cs.attention() is None and store[cs.ATTENTION_KEY] == ""
+
+    def test_a_run_of_another_service_resolves_nothing_that_failed(self, store):
+        _REAL_RECORD_OUTCOME(self._failed("kea-a"), "dhcp4", "edit a")
+        _REAL_RECORD_OUTCOME(self._ok("kea-a"), "dhcp6", "edit v6")
+        assert self._statuses() == [("rollback_failed", ("kea-a",))]
+
+    def test_the_same_trouble_again_refreshes_its_incident_instead_of_piling_up(self, store):
+        for _ in range(5):
+            _REAL_RECORD_OUTCOME(self._failed("kea-a"), "dhcp4", "edit a")
+        assert self._statuses() == [("rollback_failed", ("kea-a",))]
+
+    def test_the_list_is_bounded_and_keeps_failed_rollbacks_over_clean_ones(self, store):
+        _REAL_RECORD_OUTCOME(self._failed("kea-a"), "dhcp4", "edit a")
+        for i in range(cs._MAX_INCIDENTS + 5):
+            _REAL_RECORD_OUTCOME(self._back(f"kea-{i}"), f"svc{i}", f"edit {i}")
+        statuses = self._statuses()
+        assert len(statuses) == cs._MAX_INCIDENTS and ("rollback_failed", ("kea-a",)) in statuses
+
+    def test_a_note_recorded_before_the_upgrade_is_read_and_then_extended(self, store):
+        store[cs.ATTENTION_KEY] = (
+            '{"status": "rollback_failed", "service": "dhcp4", "needs_hands": ["kea-a"], "summary": "old"}'
+        )
+        _REAL_RECORD_OUTCOME(self._back("kea-b"), "dhcp4", "edit b")
+        assert self._statuses() == [("rollback_failed", ("kea-a",)), ("rolled_back", ())]
+
+    def test_end_to_end_a_failed_rollback_on_a_then_a_rolled_back_change_on_b(self, fake, store, monkeypatch):
+        monkeypatch.setattr(cs, "record_outcome", _REAL_RECORD_OUTCOME)
+        fake.responses["test-config"] = {"ok": True}
+        fake.responses["apply-config"] = {"ok": True, "sha256": "n", "helper_version": 2}
+        fake.responses["service"] = {"ok": False, "error": "x", "detail": "boom"}
+        cs.apply_change("dhcp4", _mutate_add_pool, "add a pool", servers=[SERVER_A])
+        n = {"b": 0}
+
+        def resp(server, op, payload):
+            if server["id"] == 2:
+                n["b"] += 1
+                if n["b"] == 1:
+                    return {"ok": False, "error": "systemctl failed", "detail": "Job failed"}
+            return {"ok": True, "unit": "u", "state": "active"}
+
+        fake.responses["service"] = resp
+        result = cs.apply_change("dhcp4", _mutate_add_pool, "edit b", servers=[SERVER_B])
+        assert result.status == "rolled_back"
+        assert self._statuses() == [("rollback_failed", ("kea-a",)), ("rolled_back", ())]

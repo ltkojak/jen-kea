@@ -309,16 +309,22 @@ def _version_line(reply: dict) -> str:
     return text.splitlines()[0] if text else ""
 
 
-def kea_is_up(server: dict = None) -> bool:
-    """Return True if the given server (or server 1) responds to version-get."""
+def probe_kea_health(server: dict = None) -> dict:
+    """THE Kea probe (v5.65.10, Q99): one version-get, remembered. Returns {"up", "version", "at"} and
+    writes the health cache entry. kea_is_up, the status page, the API's live probe and the cache
+    the public health endpoint reads all go through this, so a probe is one call: it used to be a
+    version-get inside kea_is_up and then a second version-get beside it (two calls at the 10 s
+    timeout on a dead server, and `up` true with an empty version when only the second one failed)."""
     reply = kea_command("version-get", server=server)
     up = reply.get("result") == 0
-    _HEALTH_CACHE[_health_key(server)] = {
-        "up": up,
-        "version": _version_line(reply) if up else None,
-        "at": time.time(),
-    }
-    return up
+    entry = {"up": up, "version": _version_line(reply) if up else None, "at": time.time()}
+    _HEALTH_CACHE[_health_key(server)] = entry
+    return entry
+
+
+def kea_is_up(server: dict = None) -> bool:
+    """Return True if the given server (or server 1) responds to version-get."""
+    return probe_kea_health(server)["up"]
 
 
 def cached_active_server() -> dict | None:
@@ -358,23 +364,17 @@ def get_all_server_status() -> list:
     """
     statuses = []
     for server in extensions.KEA_SERVERS:
-        up = kea_is_up(server=server)
+        probe = probe_kea_health(server)  # one version-get: the answer's version is used, not asked for again
+        up = probe["up"]
         ha_state = None
         ha_partner = None
-        version = ""
-        if up:
-            if len(extensions.KEA_SERVERS) > 1:
-                ha_result = kea_command("ha-heartbeat", server=server)
-                if ha_result.get("result") == 0:
-                    args = ha_result.get("arguments", {})
-                    ha_state = args.get("state", "unknown")
-                    ha_partner = args.get("partner-state", "")
-            ver = kea_command("version-get", server=server)
-            version = (
-                ver.get("arguments", {}).get("extended", ver.get("text", "")).splitlines()[0]
-                if ver.get("result") == 0
-                else ""
-            )
+        version = probe["version"] or ""
+        if up and len(extensions.KEA_SERVERS) > 1:
+            ha_result = kea_command("ha-heartbeat", server=server)
+            if ha_result.get("result") == 0:
+                args = ha_result.get("arguments", {})
+                ha_state = args.get("state", "unknown")
+                ha_partner = args.get("partner-state", "")
         statuses.append(
             {
                 "server": server,
@@ -387,14 +387,17 @@ def get_all_server_status() -> list:
     return statuses
 
 
-def get_active_kea_server() -> dict:
+def get_active_kea_server() -> dict | None:
     """
     Return the best server to target for config-get and subnet editing.
+    - No server configured: None (it used to raise IndexError).
     - Single server: always returns server 1.
     - HA: returns the primary in hot-standby/load-balancing/partner-down state.
     - Falls back to first reachable server.
     Result is cached for 10 seconds to avoid hammering ha-heartbeat.
     """
+    if not extensions.KEA_SERVERS:
+        return None
     if len(extensions.KEA_SERVERS) == 1:
         return extensions.KEA_SERVERS[0]
 

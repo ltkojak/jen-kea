@@ -418,33 +418,52 @@ def _run_change(
 
 ATTENTION_KEY = "changeset_attention"
 
+# The banner's most incidents at once; the oldest clean-rollback notes go first when it is full.
+_MAX_INCIDENTS = 20
 
-def _ok_run_clears(raw: str, result: ChangeSetResult, service: str) -> bool:
-    """May this clean run take the banner down? (v5.65.8, Q97.)
 
-    A `rolled_back` note says every server was put back and is running, so any later clean run
-    clears it. A `rollback_failed` note is the only persistent sign that a daemon may be STOPPED,
-    and it used to be cleared by ANY ok run - a DDNS save, a single-server edit that never touched
-    the server that needs hands. It now clears only when the run was for the same service and
-    covered every server in `needs_hands` (a clean restart of each is proof it is running);
-    otherwise it stays until an admin dismisses it."""
+def _incidents_of(raw) -> list[dict]:
+    """The unresolved incidents in a stored note (v5.65.10, Q99). The note is `{"incidents": [...]}`; the
+    single-note shape written by 5.65.1 to 5.65.9 (`{"status": ..., "service": ...}`) is read as a list of
+    one, so a note recorded before an upgrade is neither lost nor misread."""
     import json
 
     try:
-        note = json.loads(raw)
+        data = json.loads(raw) if isinstance(raw, str) else raw
     except Exception:
-        return True  # unreadable: nothing worth protecting
-    if not isinstance(note, dict) or note.get("status") != "rollback_failed":
+        return []
+    if not isinstance(data, dict):
+        return []
+    if isinstance(data.get("incidents"), list):
+        return [i for i in data["incidents"] if isinstance(i, dict)]
+    return [data] if data.get("status") else []
+
+
+def _incident_cleared(incident: dict, result: ChangeSetResult, service: str) -> bool:
+    """Does this clean run resolve `incident`? (v5.65.8, Q97; per incident since v5.65.10.)
+
+    A `rolled_back` incident says every server was put back and is running, so any later clean run
+    clears it. A `rollback_failed` incident is the only persistent sign that a daemon may be STOPPED: a
+    clean run clears it only when it was for the same service and covered every server in its
+    `needs_hands` (a clean restart of each is proof it is running); otherwise it stays until an admin
+    dismisses it."""
+    if incident.get("status") != "rollback_failed":
         return True
-    if note.get("service") != service:
+    if incident.get("service") != service:
         return False
-    needed = set(note.get("needs_hands") or [])
-    return needed <= set(result.covered)
+    return set(incident.get("needs_hands") or []) <= set(result.covered)
 
 
 def record_outcome(result: ChangeSetResult, service: str, summary: str) -> None:
-    """Remember a rolled-back / failed-rollback outcome for the Servers page; clear it after a
-    clean run. Best-effort telemetry: never raises, never changes the result."""
+    """Remember a rolled-back / failed-rollback outcome for the Servers page; resolve incidents after a
+    clean run. Best-effort telemetry: never raises, never changes the result.
+
+    v5.65.10 (Q99): the note is a LIST of unresolved incidents. It used to be one slot that every new
+    rolled-back / failed-rollback result overwrote, so a `rolled_back` on kea-b replaced an unresolved
+    `rollback_failed` on kea-a ("nothing was changed", and the next clean run cleared it while a daemon
+    was still stopped), and a second `rollback_failed` replaced the first one's `needs_hands`. Now each
+    outcome is appended; a clean run drops the incidents it covers and the key is cleared only when none
+    is left."""
     try:
         import json
         from datetime import datetime, timezone
@@ -452,20 +471,26 @@ def record_outcome(result: ChangeSetResult, service: str, summary: str) -> None:
         from jen.models import user as _user
 
         if result.status in ("rolled_back", "rollback_failed"):
-            _user.set_global_setting(
-                ATTENTION_KEY,
-                json.dumps(
-                    {
-                        "status": result.status,
-                        "service": service,
-                        "summary": summary,
-                        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                        "failed_restart": list(result.restart_failures),
-                        "needs_hands": list(result.needs_hands),
-                        "lines": [text for kind, text in result.lines if kind == "error"][-6:],
-                    }
-                ),
-            )
+            incident = {
+                "status": result.status,
+                "service": service,
+                "summary": summary,
+                "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "failed_restart": list(result.restart_failures),
+                "needs_hands": list(result.needs_hands),
+                "lines": [text for kind, text in result.lines if kind == "error"][-6:],
+            }
+            incidents = _incidents_of(_user.get_global_setting(ATTENTION_KEY, ""))
+            # the same trouble again (same kind, service and servers) refreshes its incident, it does not pile up
+            same = (incident["status"], service, sorted(incident["needs_hands"]))
+            incidents = [
+                i for i in incidents if (i.get("status"), i.get("service"), sorted(i.get("needs_hands") or [])) != same
+            ]
+            incidents.append(incident)
+            while len(incidents) > _MAX_INCIDENTS:
+                drop = next((i for i in incidents if i.get("status") != "rollback_failed"), incidents[0])
+                incidents.remove(drop)
+            _user.set_global_setting(ATTENTION_KEY, json.dumps({"incidents": incidents}))
             # v5.65.8 (Q97): the audit log used to record only that someone DISMISSED the notice. A rollback
             # is an event in its own right (and a rollback_failed is a server that may be stopped).
             _user.audit(
@@ -477,22 +502,20 @@ def record_outcome(result: ChangeSetResult, service: str, summary: str) -> None:
             )
         elif result.status == "ok":
             noted = _user.get_global_setting(ATTENTION_KEY, "")
-            if noted and _ok_run_clears(noted, result, service):
-                _user.set_global_setting(ATTENTION_KEY, "")
+            if noted:
+                left = [i for i in _incidents_of(noted) if not _incident_cleared(i, result, service)]
+                _user.set_global_setting(ATTENTION_KEY, json.dumps({"incidents": left}) if left else "")
     except Exception as e:
         logger.debug(f"kea_changeset: could not record the outcome: {e}")
 
 
 def attention() -> dict | None:
-    """The outcome record for the Servers page banner, or None."""
+    """The unresolved incidents for the Servers page banner, `{"incidents": [...]}` oldest first, or None."""
     try:
-        import json
-
         from jen.models import user as _user
 
-        raw = _user.get_global_setting(ATTENTION_KEY, "")
-        data = json.loads(raw) if raw else None
-        return data if isinstance(data, dict) else None
+        incidents = _incidents_of(_user.get_global_setting(ATTENTION_KEY, ""))
+        return {"incidents": incidents} if incidents else None
     except Exception:
         return None
 
