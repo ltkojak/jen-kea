@@ -99,6 +99,10 @@ def test_trace_renders_an_exchange_and_refuses_a_restricted_user(
         "tail_log",
         lambda server, path, lines=200, **kw: {"ok": True, "code": "ok", "lines": EXCHANGE, "via": "helper"},
     )
+    # v5.65.10 (Q99 h): a helper is reached over SSH, so a server with no SSH host cannot have one and a recorded
+    # helper version for it no longer counts. This journey's server has no SSH host; it records no helper either,
+    # which is the honest fixture, and the route then attempts the (stubbed) tail as it always did.
+    monkeypatch.setattr(kea_host, "helper_status", dict)
     page = logged_in_page
     page.goto(f"{base_url}/tools/trace?mac={MAC}")
     expect(page.locator("body")).to_contain_text("offered 10.0.1.55")
