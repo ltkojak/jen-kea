@@ -838,6 +838,27 @@ def _mosq_once(port, topic, timeout=15):
     )
 
 
+def _ensure_presence_enabled():
+    """Bundled plugins ship disabled - Settings -> Plugins writes an empty marker file and the
+    NEXT app start loads + migrates it (jen/services/plugins.py::enable_plugin, load_plugins()
+    inside create_app()). The one long-lived gunicorn worker `sys-jen` already runs never re-runs
+    create_app() on its own, so a marker written from a short-lived jen_py script needs a real
+    container restart before pr_tracked/pr_state/pr_sinks exist at all - it lives under
+    CONTENT_DIR (/var/lib/jen by default), the container's own writable layer, which `docker
+    restart` (unlike recreating the container) always keeps."""
+    out, _p = st.jen_py("""
+from jen.services import plugins as plugins_svc
+already = plugins_svc._is_enabled("presence")
+if not already:
+    plugins_svc.enable_plugin("presence")
+emit({"already": already})
+""")
+    if emitted(out) and emitted(out).get("already"):
+        return
+    st.run(["docker", "restart", st.JEN])
+    st.wait_jen_healthy(timeout=150)
+
+
 def _setup_scenario13(web):
     """Track S13_MAC and configure the two sinks through Presence's own real routes (never raw
     SQL for the sinks: add_sink() is what encrypts the TLS/password credential)."""
@@ -927,15 +948,20 @@ def test_13_presence_against_a_real_mqtt_broker(stack):
     retained flag and HA device_tracker discovery schema all as documented; a paused broker sets
     the sink's last_error without an unhandled exception, and a transition after it recovers both
     publishes again and clears last_error."""
+    _ensure_presence_enabled()
     web = st.Web().login()
     _setup_scenario13(web)
 
-    # ── online: both sinks publish; the plain one is non-retained (must be caught live) ──
-    capture = _mosq_capture(st.MOSQ_AUTH_PORT)
+    # ── online: both sinks publish; the plain one is non-retained (must be caught live).
+    # A generous timeout here specifically: the container restart above means the alert loop's
+    # own process just started, so this is its first_run SEED cycle (no diff at all, since
+    # nothing was tracked before the restart) followed by the first REAL diff cycle that actually
+    # notices the lease - up to two ~30s cycles, not one. ──
+    capture = _mosq_capture(st.MOSQ_AUTH_PORT, seconds=160)
     try:
         _lease_up()
-        _wait_pr_state(True)
-        stdout, stderr = capture.communicate(timeout=110)
+        _wait_pr_state(True, timeout=150)
+        stdout, stderr = capture.communicate(timeout=170)
     finally:
         if capture.poll() is None:
             capture.kill()
