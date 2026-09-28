@@ -689,6 +689,56 @@ class TestIncidentsAreAListNotASlot:
         statuses = self._statuses()
         assert len(statuses) == cs._MAX_INCIDENTS and ("rollback_failed", ("kea-a",)) in statuses
 
+    def test_21_unresolved_failed_rollbacks_are_all_kept_past_the_soft_cap(self, store):
+        """v5.66.0-beta.3 (Q105 a) — the invariant made literal: an unresolved rollback_failed is
+        NEVER evicted just to stay under _MAX_INCIDENTS (20 here), even when every entry on the
+        list is one — the list is allowed to exceed the soft cap instead."""
+        for i in range(cs._MAX_INCIDENTS + 1):
+            _REAL_RECORD_OUTCOME(self._failed(f"kea-{i}"), f"svc{i}", f"edit {i}")
+        statuses = self._statuses()
+        assert len(statuses) == cs._MAX_INCIDENTS + 1
+        assert all(status == "rollback_failed" for status, _ in statuses)
+
+    def test_a_mix_over_the_cap_only_ever_evicts_rolled_back_entries(self, store):
+        """21 unresolved failed rollbacks (already over the soft cap on their own), then 5 clean
+        rollbacks recorded afterward — each clean one is evicted immediately (there's always a
+        non-rollback_failed entry to drop), so all 21 failed incidents survive and none of the 5
+        clean ones do."""
+        for i in range(cs._MAX_INCIDENTS + 1):
+            _REAL_RECORD_OUTCOME(self._failed(f"kea-{i}"), f"svc{i}", f"edit {i}")
+        for i in range(5):
+            _REAL_RECORD_OUTCOME(self._back(f"clean-{i}"), f"cleansvc{i}", f"clean edit {i}")
+        statuses = self._statuses()
+        assert len([s for s in statuses if s[0] == "rollback_failed"]) == cs._MAX_INCIDENTS + 1
+        assert len([s for s in statuses if s[0] == "rolled_back"]) == 0
+
+    def test_the_hard_ceiling_drops_the_oldest_once_it_is_exceeded(self, store, monkeypatch):
+        """The hard ceiling is the ONE real bound — past it, the oldest unresolved incidents are
+        dropped after all, oldest first, so the stored note itself never grows forever."""
+        monkeypatch.setattr(cs, "_INCIDENTS_HARD_CEILING", 3)
+        for i in range(5):
+            _REAL_RECORD_OUTCOME(self._failed(f"kea-{i}"), f"svc{i}", f"edit {i}")
+        statuses = self._statuses()
+        assert statuses == [
+            ("rollback_failed", ("kea-2",)),
+            ("rollback_failed", ("kea-3",)),
+            ("rollback_failed", ("kea-4",)),
+        ]
+
+    def test_the_hard_ceiling_logs_an_error(self, store, monkeypatch, caplog):
+        monkeypatch.setattr(cs, "_INCIDENTS_HARD_CEILING", 3)
+        with caplog.at_level("ERROR"):
+            for i in range(5):
+                _REAL_RECORD_OUTCOME(self._failed(f"kea-{i}"), f"svc{i}", f"edit {i}")
+        assert "hard ceiling" in caplog.text
+
+    def test_under_the_hard_ceiling_no_error_is_logged(self, store, monkeypatch, caplog):
+        monkeypatch.setattr(cs, "_INCIDENTS_HARD_CEILING", 3)
+        with caplog.at_level("ERROR"):
+            for i in range(3):
+                _REAL_RECORD_OUTCOME(self._failed(f"kea-{i}"), f"svc{i}", f"edit {i}")
+        assert "hard ceiling" not in caplog.text
+
     def test_a_note_recorded_before_the_upgrade_is_read_and_then_extended(self, store):
         store[cs.ATTENTION_KEY] = (
             '{"status": "rollback_failed", "service": "dhcp4", "needs_hands": ["kea-a"], "summary": "old"}'

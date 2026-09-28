@@ -957,6 +957,11 @@ daemon, reading a log, installing a Kea package — goes through
 `sudo -n /usr/local/sbin/jen-kea-helper <op>` with a JSON request on
 stdin; it never runs anything it is handed.
 
+Step-by-step procedures for rotating the signing key, recovering from a
+release that shipped a broken helper build, and installing the helper
+by hand (including with no route to the internet) are all in
+**[docs/runbooks.md](runbooks.md)**.
+
 That means **one** sudoers line, and it is not root-equivalent the way
 the old one was — the helper's own op allowlist and path walls are the
 control:
@@ -1275,6 +1280,8 @@ sudo ./install.sh
 ```
 
 Select **Keep existing config** when prompted. The installer builds the new release under `/opt/jen/releases/<X.Y.Z>/`, points `/opt/jen/current` at it with one atomic symlink flip, restarts the service, and flips back to the previous release if it fails to start.
+
+Coming from a stable install more than one release old? **[docs/upgrading.md](upgrading.md)** covers every operator-visible change since v5.56.3, one section per change, so you know what to expect before you upgrade rather than after. Restoring a recovery bundle onto a fresh box, rotating the helper signing key, or recovering from a bad helper build are step-by-step procedures in **[docs/runbooks.md](runbooks.md)**.
 
 Your config file and SSL certificates and SSH keys (in `/etc/jen`), and your uploads, database backups and installed plugins (in `/var/lib/jen`), are never modified during an upgrade. Each release's application tree and its own virtualenv are root-owned and read-only to the service account.
 

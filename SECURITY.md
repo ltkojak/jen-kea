@@ -74,7 +74,9 @@ this repository's own GitHub Actions environment — a leaked deploy
 credential or a hijacked asset upload is defeated, a compromise of the
 signing workflow or GitHub's own infrastructure is not. Report the
 latter as a vulnerability in Jen; it's the boundary we'd want to know
-about.
+about. The step-by-step procedure for rotating the signing key itself —
+and for the "same build shipped the wrong bytes" recovery case — is
+`docs/runbooks.md`.
 
 ## A note on how this project is actually audited
 

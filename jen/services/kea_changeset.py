@@ -421,6 +421,14 @@ ATTENTION_KEY = "changeset_attention"
 # The banner's most incidents at once; the oldest clean-rollback notes go first when it is full.
 _MAX_INCIDENTS = 20
 
+# v5.66.0-beta.3 (Q105 a) — a `rollback_failed` incident is the only persistent record that a
+# daemon may be STOPPED; losing one to make room for a newer note would be worse than the note
+# never existing. The soft cap above is never enforced against one — if every incident on the
+# list is an unresolved `rollback_failed`, the list is allowed to exceed it. This hard ceiling
+# is the only real bound: twenty unresolved stopped daemons is a human's problem long before it
+# is a storage one, but the stored note itself still can't be allowed to grow forever.
+_INCIDENTS_HARD_CEILING = 200
+
 
 def _incidents_of(raw) -> list[dict]:
     """The unresolved incidents in a stored note (v5.65.10, Q99). The note is `{"incidents": [...]}`; the
@@ -488,8 +496,21 @@ def record_outcome(result: ChangeSetResult, service: str, summary: str) -> None:
             ]
             incidents.append(incident)
             while len(incidents) > _MAX_INCIDENTS:
-                drop = next((i for i in incidents if i.get("status") != "rollback_failed"), incidents[0])
+                # v5.65.10 (Q99) preferred evicting a resolved `rolled_back` note; v5.66.0-beta.3
+                # (Q105 a) makes that literal: an unresolved `rollback_failed` is NEVER evicted to
+                # stay under this soft cap — only the hard ceiling below can drop one.
+                drop = next((i for i in incidents if i.get("status") != "rollback_failed"), None)
+                if drop is None:
+                    break
                 incidents.remove(drop)
+            if len(incidents) > _INCIDENTS_HARD_CEILING:
+                logger.error(
+                    f"kea_changeset: {len(incidents)} unresolved rollback_failed incidents on "
+                    f"record — past the {_INCIDENTS_HARD_CEILING}-incident hard ceiling; the "
+                    "oldest are being dropped from the stored note. Each one may mean a server "
+                    "is still stopped; this many unresolved at once needs a human, not a bigger list."
+                )
+                del incidents[: len(incidents) - _INCIDENTS_HARD_CEILING]
             _user.set_global_setting(ATTENTION_KEY, json.dumps({"incidents": incidents}))
             # v5.65.8 (Q97): the audit log used to record only that someone DISMISSED the notice. A rollback
             # is an event in its own right (and a rollback_failed is a server that may be stopped).
