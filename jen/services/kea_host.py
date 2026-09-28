@@ -179,7 +179,7 @@ TRACE_HELPER_MIN_VERSION = 5
 # whether the Settings → Kea → SSH table OFFERS the Update helper button
 # at all. v5.29.0 gated the https socket option on v4 but the button only
 # appeared below WANT, so a v3 host had no way to get there from the UI.
-JEN_HELPER_SHIPPED_VERSION = 5  # v5 (v5.49.0): tail-log reads through a bounded deque
+JEN_HELPER_SHIPPED_VERSION = 6  # v6 (v5.66.0, Q103): the signed `update` op
 
 
 def helper_version_label(version, shipped: int | None = None) -> str:
