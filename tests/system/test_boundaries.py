@@ -1147,19 +1147,33 @@ def sign(data, name):
 
 candidate99 = make_candidate(99)
 sig99 = sign(candidate99, "s14_cand99")
-flipped = bytearray(candidate99)
+
+# A SEPARATE, higher version for the flip case: kea-a already reports 99 after the call
+# above, so a candidate that ALSO declares 99 would short-circuit at "already" before ever
+# reaching the signed path (never exercising the bad-signature check at all). Flipping a byte
+# far from the "HELPER_VERSION = 100" line keeps the declared version intact while
+# invalidating the signature computed over the UNFLIPPED bytes.
+candidate100 = make_candidate(100)
+sig100 = sign(candidate100, "s14_cand100")
+flipped = bytearray(candidate100)
 flipped[-20] ^= 0xFF
 flipped = bytes(flipped)
 
 servers = {s["name"]: s for s in extensions.KEA_SERVERS}
 results = {}
 with app.app_context():
+    # install_helper() computes its OWN `target` from _helper_source() (text) via
+    # _source_version() - not from _helper_source_bytes() - so both must report v99 or it
+    # short-circuits at "already" (current == target == 6) before ever reaching the signed path.
+    kea_host._helper_source = lambda: candidate99.decode()
     kea_host._helper_source_bytes = lambda: candidate99
     kea_host.helper_signature = lambda: sig99
     results["kea_a_signed"] = kea_host.install_helper(servers["kea-a"])
     results["kea_b_signed"] = kea_host.install_helper(servers["kea-b"])
 
+    kea_host._helper_source = lambda: flipped.decode("utf-8", "replace")
     kea_host._helper_source_bytes = lambda: flipped
+    kea_host.helper_signature = lambda: sig100  # signed over candidate100, not the flipped bytes
     results["kea_a_flipped"] = kea_host.install_helper(servers["kea-a"])
 emit(results)
 """
