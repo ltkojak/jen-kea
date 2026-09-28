@@ -201,7 +201,6 @@ real, seen = kea_host.test_config, []
 def hooked(server, service, cfg, **kw):
     r = real(server, service, cfg, **kw)
     seen.append(server["name"])
-    print(f"DEBUG hook call #{len(seen)} for {server['name']}: {r}", flush=True)
     if len(seen) == 2:  # every target has now passed preflight
         open("/tmp/s2-preflighted", "w").close()
         for _ in range(240):
@@ -277,22 +276,6 @@ def test_03_a_failed_restart_leaves_the_previous_config_live(stack):
     """kea_changeset: a validated config whose restart fails (the daemon exits at start) is rolled
     back — the previous config is what is on disk."""
     st.sh(st.JEN, "rm -f /tmp/s3-*", check=False)
-    precheck_out, _p = st.jen_py(
-        """
-from jen.services import kea_host
-with app.app_context():
-    only_a = [s for s in extensions.KEA_SERVERS if s["name"] == "kea-a"][0]
-    cfg, sha = kea_host.read_config_versioned(only_a, "dhcp4")
-    emit({"cfg_is_none": cfg is None, "test_config": kea_host.test_config(only_a, "dhcp4", cfg or {})})
-"""
-    )
-    precheck = emitted(precheck_out)
-    fs_check = st.dexec(
-        st.KEA_A, "sh", "-c", 'b="$(command -v kea-dhcp4)"; echo "b=$b"; ls -la "$b"; stat "$b"', check=False
-    )
-    assert precheck.get("test_config", {}).get("ok") is True, (
-        f"PRECHECK before scenario 03: {precheck}\nFS CHECK:\n{fs_check.stdout}\n{fs_check.stderr}"
-    )
     proc = st.jen_py_bg(CHANGESET_RESTART_FAILS)
     try:
         st.sentinel_wait(st.JEN, "/tmp/s3-before-restart", timeout=120)
@@ -796,10 +779,9 @@ exit 1
             proc.kill()
     result = result_of(stdout)
     assert result is not None, f"no result from the change set:\n{stdout[-1500:]}\n{stderr[-1500:]}"
-    assert "raised" not in result, f"INVARIANT: apply_change never raises: {result}\nDEBUG stdout:\n{stdout[-3000:]}"
+    assert "raised" not in result, f"INVARIANT: apply_change never raises: {result}"
     assert result["status"] == "rollback_failed", (
-        f"INVARIANT: a revert whose restart fails is rollback_failed, not aborted: {result}\n"
-        f"DEBUG stdout:\n{stdout[-3000:]}"
+        f"INVARIANT: a revert whose restart fails is rollback_failed, not aborted: {result}"
     )
     assert result["needs_hands"] == ["kea-a"], f"INVARIANT: the server that would not restart is named: {result}"
     assert st.kea_conf_bytes(st.KEA_A) == st.BASELINE[st.KEA_A], "kea-a's config on disk is the one it had before"
@@ -1182,7 +1164,7 @@ results = {}
 with app.app_context():
     # install_helper() computes its OWN `target` from _helper_source() (text) via
     # _source_version() - not from _helper_source_bytes() - so both must report v99 or it
-    # short-circuits at "already" (current == target == 6) before ever reaching the signed path.
+    # short-circuits at "already" (current == target == 7) before ever reaching the signed path.
     #
     # v5.66.0-beta.2 (Q104, item g) - Jen now pre-verifies a signature LOCALLY, against the
     # real embedded RELEASE_SIGNERS, before ever sending it; a throwaway key can never pass
@@ -1213,7 +1195,7 @@ emit(results)
     ]
     assert results["kea_b_signed"]["ok"] is False
     assert results["kea_b_signed"]["code"] == "bad-signature", results["kea_b_signed"]
-    assert results["kea_b_signed"]["version"] == 6, "kea-b must still report its pre-update version"
+    assert results["kea_b_signed"]["version"] == 7, "kea-b must still report its pre-update version"
     assert results["kea_a_flipped"]["ok"] is False
     assert results["kea_a_flipped"]["code"] == "bad-signature", results["kea_a_flipped"]
     assert results["kea_a_flipped"]["version"] == 99, "the earlier accepted update must stand"

@@ -8,6 +8,17 @@ FROM ${KEA_IMAGE}
 
 USER root
 
+# v5.66.0-beta.2 (Q104) - jen-kea-helper resolves EVERY binary it runs, including
+# kea-dhcp4 itself for config-test, through a root-owned _BIN_DIRS allowlist, never
+# $PATH. ISC's own image ships kea-dhcp4 owned by a dedicated "kea" service account
+# (0754 - no execute for "other"), defense-in-depth for the daemon's OWN running
+# process; a real Ubuntu/apt install puts the BINARY under root:root like any other
+# package-installed file (dpkg extracts as root; it's the daemon's RUNTIME data
+# directories that get a service-account owner, not /usr/sbin/kea-dhcp4 itself).
+# Match that here rather than weakening the helper's own trust check to fit one
+# container image's particular packaging choice.
+RUN chown root:root /usr/sbin/kea-dhcp4 && chmod 755 /usr/sbin/kea-dhcp4
+
 # openssh-keygen: v5.66.0 (Q103) - the helper's own signed `update` op runs
 # `ssh-keygen -Y verify` on this host; Alpine's `openssh` meta-package doesn't
 # always pull in the keygen binary on its own, so it's named explicitly.
