@@ -140,11 +140,11 @@ class TestDaemon:
     @pytest.mark.parametrize(
         "direct,helper,ssh,ready",
         [
-            (True, 6, True, True),
-            (True, 5, True, False),  # SSH configured and the helper behind
+            (True, 7, True, True),
+            (True, 6, True, False),  # SSH configured and the helper behind
             (True, None, True, False),
             (True, None, False, True),  # no SSH → nothing for a helper to be behind on
-            (False, 6, True, False),  # Control Agent mode is never 3.2-ready
+            (False, 7, True, False),  # Control Agent mode is never 3.2-ready
         ],
     )
     def test_kea32_ready(self, direct, helper, ssh, ready):

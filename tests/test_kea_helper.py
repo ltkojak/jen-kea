@@ -1101,12 +1101,16 @@ class TestUpdateOp:
     def test_no_ssh_keygen_is_reported_distinctly(self, helper, signing_key, tmp_path, monkeypatch):
         # Deliberately NOT _use_throwaway_signer (which now also makes ssh-keygen
         # resolvable) — the signers file is set up by hand so _find_bin("ssh-keygen") is
-        # the only thing under test, left at its real default (nothing on this box's
-        # _BIN_DIRS is really root-owned when the test itself doesn't run as root).
+        # the only thing under test. A CI box's real /usr/bin/ssh-keygen is genuinely
+        # root-owned (installed by the package manager, regardless of what UID pytest
+        # itself runs as), so leaving _find_bin at its real default would find it there —
+        # force the "missing" case explicitly instead of relying on the box's state.
         signers = tmp_path / "allowed_signers"
         signers.write_text(signing_key["signers_line"] + "\n")
         monkeypatch.setattr(helper, "_EXTRA_SIGNERS", str(signers))
         monkeypatch.setattr(helper, "_extra_signers_owner_ok", lambda path: True)
+        orig_find_bin = helper._find_bin
+        monkeypatch.setattr(helper, "_find_bin", lambda name: None if name == "ssh-keygen" else orig_find_bin(name))
         self._target(helper, monkeypatch, tmp_path)
         candidate = _candidate_bytes(99)
         sig = _sign(signing_key["priv"], "jen-kea-helper", candidate, tmp_path)
