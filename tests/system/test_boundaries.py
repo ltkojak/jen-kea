@@ -771,6 +771,15 @@ exit 1
             'b="$(command -v kea-dhcp4)"; mv "$b" "$b.real" && cat > "$b" && chmod 755 "$b" && chown root:root "$b"',
             input=wrapper,
         )
+        diag = st.dexec(
+            st.KEA_A,
+            "sh",
+            "-c",
+            'b="$(command -v kea-dhcp4)"; echo "PATH=$PATH"; echo "b=$b"; ls -la "$b" "$b.real"; '
+            'stat "$b"; id',
+            check=False,
+        )
+        raise AssertionError(f"DEBUG DUMP:\nSTDOUT:\n{diag.stdout}\nSTDERR:\n{diag.stderr}")
         st.sshd_stop(st.KEA_B)
         st.sh(st.JEN, "touch /tmp/s12-proceed")
         stdout, stderr = proc.communicate(timeout=180)
