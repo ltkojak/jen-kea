@@ -117,6 +117,8 @@ def _kea_servers_with_helper_status():
                 # needs the v4 helper (install-tls); same fail-closed rule
                 # as kea_host.tls_supported, computed from this one read.
                 "tls_supported": __caps.helper_caps(st.get("version"))["tls"],
+                # v5.66.0 (Q103) — "Update helper" needs no legacy grant at all on this host.
+                "signed_update": __caps.helper_caps(st.get("version"))["signed_update"],
             }
         )
     return rows

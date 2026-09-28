@@ -66,6 +66,15 @@ jobs:
           sha256sum jen-v${{ steps.version.outputs.version }}.tar.gz > SHA256SUMS
           cat SHA256SUMS
 
+      - name: Extract jen-kea-helper from the tarball
+        # v5.66.0 (Q103) — the exact bytes a box will install: signing the CHECKOUT's copy
+        # would leave a gap between what CI verified and what the tag actually ships (the same
+        # reason the tarball itself is built from the tag, not HEAD, above).
+        run: |
+          cd dist
+          tar xzf jen-v${{ steps.version.outputs.version }}.tar.gz jen/jen-kea-helper -O > jen-kea-helper
+          ls -la jen-kea-helper
+
       - name: Sign checksums
         # v5.26.0 (Q22) — every release from here on is signed with the
         # private half of the ed25519 key whose public half is embedded
@@ -82,6 +91,20 @@ jobs:
           chmod 600 "$key_file"
           ssh-keygen -Y sign -f "$key_file" -n jen-release SHA256SUMS
           ls -la SHA256SUMS.sig
+
+      - name: Sign the Kea host helper
+        # v5.66.0 (Q103) — same key, a DISTINCT namespace ("jen-kea-helper", never "jen-release")
+        # so a checksum signature can never be replayed as a helper-update signature or vice
+        # versa. jen-kea-helper's own "update" op verifies this exact signature under this exact
+        # namespace before ever replacing itself.
+        run: |
+          cd dist
+          key_file="$(mktemp)"
+          trap 'rm -f "$key_file"' EXIT
+          printf '%s\n' "${{ secrets.RELEASE_SIGNING_KEY }}" > "$key_file"
+          chmod 600 "$key_file"
+          ssh-keygen -Y sign -f "$key_file" -n jen-kea-helper jen-kea-helper
+          ls -la jen-kea-helper.sig
 
       - name: Extract release notes from CHANGELOG
         id: notes
@@ -135,6 +158,7 @@ jobs:
             dist/jen-v${{ steps.version.outputs.version }}.tar.gz
             dist/SHA256SUMS
             dist/SHA256SUMS.sig
+            dist/jen-kea-helper.sig
           draft: false
           # v5.32.0 (Q38) — a tag with a prerelease suffix (v5.33.0-beta.1,
           # v5.33.0-rc.1) is published as a GitHub pre-release: boxes on the

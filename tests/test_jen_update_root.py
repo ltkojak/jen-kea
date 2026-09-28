@@ -25,6 +25,7 @@ import io
 import json
 import os
 import pathlib
+import sys
 import tarfile
 import zipfile
 from unittest.mock import MagicMock, patch
@@ -179,6 +180,192 @@ class TestVerifyReleaseSignature:
         assert len(parts) == 3
         assert parts[0] == jen_update_root.RELEASE_SIGNATURE_IDENTITY
         assert parts[1] == "ssh-ed25519"
+
+    # ── v5.66.0 (Q103): the namespace parameter, reused for the helper's own signature ──
+
+    def test_default_namespace_is_jen_release(self, jen_update_root, keypair, tmp_path):
+        key_path, signers_text = keypair
+        sums_text = "abc123def456  jen-v5.26.0.tar.gz\n"
+        sig_bytes = self._sign(key_path, tmp_path, sums_text, namespace="jen-release")
+        assert jen_update_root.verify_release_signature(sums_text, sig_bytes, signers_text) is True
+
+    def test_explicit_helper_namespace_verifies_a_helper_signature(self, jen_update_root, keypair, tmp_path):
+        key_path, signers_text = keypair
+        sums_text = "HELPER_VERSION = 6\n"
+        sig_bytes = self._sign(key_path, tmp_path, sums_text, namespace="jen-kea-helper")
+        assert (
+            jen_update_root.verify_release_signature(sums_text, sig_bytes, signers_text, namespace="jen-kea-helper")
+            is True
+        )
+
+    def test_a_release_namespace_signature_is_not_accepted_as_a_helper_signature(
+        self, jen_update_root, keypair, tmp_path
+    ):
+        """The whole point of the distinct namespace: signing under "jen-release" (what
+        release.yml uses for SHA256SUMS) must never verify when the caller asks for
+        "jen-kea-helper" instead, and vice versa (test_wrong_namespace_fails already covers
+        the opposite direction generically)."""
+        key_path, signers_text = keypair
+        sums_text = "HELPER_VERSION = 6\n"
+        sig_bytes = self._sign(key_path, tmp_path, sums_text, namespace="jen-release")
+        assert (
+            jen_update_root.verify_release_signature(sums_text, sig_bytes, signers_text, namespace="jen-kea-helper")
+            is False
+        )
+
+    def test_bytes_message_is_never_re_decoded(self, jen_update_root, keypair, tmp_path):
+        """A `bytes` message is passed straight to ssh-keygen, never round-tripped through str
+        decode/encode first (which could silently alter it for non-UTF-8 content)."""
+        key_path, signers_text = keypair
+        raw = b"\x00\x01HELPER_VERSION = 6\xff\xfe"
+        sig_bytes = self._sign_bytes(key_path, tmp_path, raw, namespace="jen-kea-helper")
+        assert (
+            jen_update_root.verify_release_signature(raw, sig_bytes, signers_text, namespace="jen-kea-helper") is True
+        )
+
+    def _sign_bytes(self, key_path, tmp_path, data, namespace):
+        import subprocess as _subprocess
+
+        p = tmp_path / "raw_candidate"
+        p.write_bytes(data)
+        _subprocess.run(
+            ["ssh-keygen", "-Y", "sign", "-f", key_path, "-n", namespace, str(p)],
+            check=True,
+            capture_output=True,
+        )
+        return p.with_name(p.name + ".sig").read_bytes()
+
+    def test_helper_signature_namespace_constant_matches_the_helper_files_own(self, jen_update_root):
+        """Byte-identical to jen-kea-helper's own _UPDATE_SIGNATURE_NAMESPACE — the same twin
+        discipline as RELEASE_SIGNERS (see TestHelperUpdateSignatureTwins below)."""
+        assert jen_update_root.HELPER_SIGNATURE_NAMESPACE == "jen-kea-helper"
+
+
+class TestHelperUpdateSignatureTwins:
+    """v5.66.0 (Q103) — RELEASE_SIGNERS and the update-signature namespace must be
+    byte-identical between jen-update-root.py and jen-kea-helper: this script writes
+    <release>/app/jen-kea-helper.sig using RELEASE_SIGNERS + "jen-kea-helper", and the helper
+    later verifies an update against the SAME two values — any drift would mean a signature
+    one side accepts, the other silently doesn't (or worse, vice versa)."""
+
+    def _load_helper(self):
+        # jen-kea-helper has no .py suffix (it installs as
+        # /usr/local/sbin/jen-kea-helper), so spec_from_file_location can't infer a
+        # loader — name one explicitly, the same way tests/test_kea_helper.py does.
+        import importlib.util
+        from importlib.machinery import SourceFileLoader
+
+        path = pathlib.Path(__file__).resolve().parent.parent / "jen-kea-helper"
+        loader = SourceFileLoader("jen_kea_helper_twin_check", str(path))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        module = importlib.util.module_from_spec(spec)
+        loader.exec_module(module)
+        return module
+
+    def test_release_signers_is_byte_identical(self, jen_update_root):
+        helper = self._load_helper()
+        assert jen_update_root.RELEASE_SIGNERS == helper.RELEASE_SIGNERS
+
+    def test_namespace_is_byte_identical(self, jen_update_root):
+        helper = self._load_helper()
+        assert jen_update_root.HELPER_SIGNATURE_NAMESPACE == helper._UPDATE_SIGNATURE_NAMESPACE
+
+
+class TestInstallKeaHelperSignature:
+    """v5.66.0 (Q103) — jen-update-root.py's own side of getting the signature onto disk:
+    fetch the jen-kea-helper.sig asset, verify it against the JUST-EXTRACTED helper's real
+    bytes, write it next to the helper. Never fails the update either way."""
+
+    @pytest.fixture
+    def keypair(self, tmp_path):
+        import subprocess as _subprocess
+
+        key_path = tmp_path / "throwaway-key"
+        _subprocess.run(
+            ["ssh-keygen", "-t", "ed25519", "-C", "release@jen", "-f", str(key_path), "-N", "", "-q"],
+            check=True,
+        )
+        pub_line = key_path.with_suffix(".pub").read_text().strip()
+        parts = pub_line.split()
+        signers_text = f"{parts[2]} {parts[0]} {parts[1]}"
+        return str(key_path), signers_text
+
+    def _sign_bytes(self, key_path, data, namespace, tmp_path):
+        """Signs a COPY of `data` at a throwaway filename, never `<tmp_path>/jen-kea-helper.sig`
+        itself — that's the exact path _install_kea_helper_signature writes its OWN output to,
+        so signing directly onto the real helper file would make "the file exists" trivially
+        true regardless of whether the function under test ever wrote it."""
+        import subprocess as _subprocess
+
+        signable = tmp_path / "to_sign"
+        signable.write_bytes(data)
+        _subprocess.run(
+            ["ssh-keygen", "-Y", "sign", "-f", key_path, "-n", namespace, str(signable)],
+            check=True,
+            capture_output=True,
+        )
+        return signable.with_name(signable.name + ".sig").read_bytes()
+
+    def test_no_helper_file_is_a_silent_noop(self, jen_update_root, tmp_path):
+        jen_update_root._install_kea_helper_signature(str(tmp_path), [])
+        assert not (tmp_path / "jen-kea-helper.sig").exists()
+
+    def test_no_sig_asset_published_is_a_silent_noop(self, jen_update_root, tmp_path):
+        (tmp_path / "jen-kea-helper").write_text("HELPER_VERSION = 6\n")
+        jen_update_root._install_kea_helper_signature(
+            str(tmp_path), [{"name": "SHA256SUMS", "browser_download_url": "x"}]
+        )
+        assert not (tmp_path / "jen-kea-helper.sig").exists()
+
+    def test_a_non_github_asset_url_is_refused(self, jen_update_root, tmp_path):
+        (tmp_path / "jen-kea-helper").write_text("HELPER_VERSION = 6\n")
+        assets = [{"name": "jen-kea-helper.sig", "browser_download_url": "https://evil.example/x.sig"}]
+        jen_update_root._install_kea_helper_signature(str(tmp_path), assets)
+        assert not (tmp_path / "jen-kea-helper.sig").exists()
+
+    def test_verifying_signature_is_written_0644(self, jen_update_root, tmp_path, keypair, monkeypatch):
+        key_path, signers_text = keypair
+        monkeypatch.setattr(jen_update_root, "RELEASE_SIGNERS", signers_text)
+        helper_bytes = b"HELPER_VERSION = 6\n# body\n"
+        (tmp_path / "jen-kea-helper").write_bytes(helper_bytes)
+        sig_bytes = self._sign_bytes(key_path, helper_bytes, "jen-kea-helper", tmp_path)
+
+        good_url = f"{jen_update_root.GITHUB_ASSET_PREFIX}v6.0.0/jen-kea-helper.sig"
+        monkeypatch.setattr(jen_update_root, "fetch_text", lambda url, timeout=15: sig_bytes.decode())
+        assets = [{"name": "jen-kea-helper.sig", "browser_download_url": good_url}]
+
+        jen_update_root._install_kea_helper_signature(str(tmp_path), assets)
+        sig_dest = tmp_path / "jen-kea-helper.sig"
+        assert sig_dest.read_bytes() == sig_bytes
+        if sys.platform != "win32":
+            assert oct(sig_dest.stat().st_mode)[-3:] == "644"
+
+    def test_a_signature_that_does_not_verify_is_not_written(self, jen_update_root, tmp_path, keypair, monkeypatch):
+        key_path, signers_text = keypair
+        monkeypatch.setattr(jen_update_root, "RELEASE_SIGNERS", signers_text)
+        helper_bytes = b"HELPER_VERSION = 6\n# body\n"
+        (tmp_path / "jen-kea-helper").write_bytes(helper_bytes)
+        # signed under the WRONG namespace — verification must fail
+        sig_bytes = self._sign_bytes(key_path, helper_bytes, "jen-release", tmp_path)
+
+        good_url = f"{jen_update_root.GITHUB_ASSET_PREFIX}v6.0.0/jen-kea-helper.sig"
+        monkeypatch.setattr(jen_update_root, "fetch_text", lambda url, timeout=15: sig_bytes.decode())
+        assets = [{"name": "jen-kea-helper.sig", "browser_download_url": good_url}]
+
+        jen_update_root._install_kea_helper_signature(str(tmp_path), assets)
+        assert not (tmp_path / "jen-kea-helper.sig").exists()
+
+    def test_a_fetch_failure_does_not_raise(self, jen_update_root, tmp_path, monkeypatch):
+        (tmp_path / "jen-kea-helper").write_text("HELPER_VERSION = 6\n")
+        good_url = f"{jen_update_root.GITHUB_ASSET_PREFIX}v6.0.0/jen-kea-helper.sig"
+
+        def _raise(url, timeout=15):
+            raise OSError("network is down")
+
+        monkeypatch.setattr(jen_update_root, "fetch_text", _raise)
+        assets = [{"name": "jen-kea-helper.sig", "browser_download_url": good_url}]
+        jen_update_root._install_kea_helper_signature(str(tmp_path), assets)  # must not raise
+        assert not (tmp_path / "jen-kea-helper.sig").exists()
 
 
 def _make_release_tarball(tmp_path, *, version="5.2.6", extra=None, slip=False):

@@ -871,15 +871,23 @@ def verify_release_checksum(tarball_name, actual_hash, checksum_text):
     return expected_hash is not None and expected_hash == actual_hash
 
 
-def verify_release_signature(sums_text, sig_bytes, signers_text):
+def verify_release_signature(message, sig_bytes, signers_text, namespace=RELEASE_SIGNATURE_NAMESPACE):
     """
-    v5.26.0 (Q22) — confirm `sums_text` (the SHA256SUMS content) carries
-    a valid `ssh-keygen -Y sign` signature from an identity/key listed in
-    `signers_text` (an "allowed signers" file body — RELEASE_SIGNERS at
-    module scope in production; a throwaway test key in tests). Wraps a
-    subprocess call to `ssh-keygen -Y verify`, since Python's stdlib has
-    no ed25519-SSH-signature verifier and this avoids a new dependency
-    entirely (openssh-client ships on every target OS already).
+    v5.26.0 (Q22) — confirm `message` carries a valid `ssh-keygen -Y sign`
+    signature from an identity/key listed in `signers_text` (an "allowed
+    signers" file body — RELEASE_SIGNERS at module scope in production; a
+    throwaway test key in tests), under `namespace` — RELEASE_SIGNATURE_
+    NAMESPACE ("jen-release", the checksum file's own namespace) by
+    default. v5.66.0 (Q103) — the Kea host helper's own signature is
+    verified the same way, passing `namespace=HELPER_SIGNATURE_NAMESPACE`
+    ("jen-kea-helper") instead, so one namespace's signature can never be
+    replayed as the other's. `message` may be `str` (encoded here) or
+    `bytes` (passed through unchanged) — the helper's own bytes must
+    never round-trip through text decoding first, since that could
+    silently alter them. Wraps a subprocess call to `ssh-keygen -Y
+    verify`, since Python's stdlib has no ed25519-SSH-signature verifier
+    and this avoids a new dependency entirely (openssh-client ships on
+    every target OS already).
 
     Both the signers file and the signature itself need to be real files
     on disk for `-f`/`-s` — verify writes them to a throwaway temp
@@ -890,6 +898,8 @@ def verify_release_signature(sums_text, sig_bytes, signers_text):
     verify_release_checksum's fail-closed shape, so the caller's "if not
     verify_...(): abort" pattern stays identical for both checks.
     """
+    if isinstance(message, str):
+        message = message.encode()
     try:
         with tempfile.TemporaryDirectory() as tmp:
             signers_path = os.path.join(tmp, "allowed_signers")
@@ -908,17 +918,71 @@ def verify_release_signature(sums_text, sig_bytes, signers_text):
                     "-I",
                     RELEASE_SIGNATURE_IDENTITY,
                     "-n",
-                    RELEASE_SIGNATURE_NAMESPACE,
+                    namespace,
                     "-s",
                     sig_path,
                 ],
-                input=sums_text.encode(),
+                input=message,
                 capture_output=True,
                 timeout=10,
             )
     except (OSError, subprocess.TimeoutExpired):
         return False
     return result.returncode == 0
+
+
+# v5.66.0 (Q103) — the Kea host helper's own update-signature namespace, distinct from
+# RELEASE_SIGNATURE_NAMESPACE ("jen-release", the checksum file's) so the two are never
+# interchangeable. Byte-identical copy of jen-kea-helper's own _UPDATE_SIGNATURE_NAMESPACE
+# (a test enforces it, the same way RELEASE_SIGNERS is diffed across the two files).
+HELPER_SIGNATURE_NAMESPACE = "jen-kea-helper"
+
+
+def _install_kea_helper_signature(app_dir, assets):
+    """v5.66.0 (Q103) — fetch this release's jen-kea-helper.sig (a release asset: `git archive`
+    can't put a signature inside the very tarball it's computed from) and, if it verifies against
+    RELEASE_SIGNERS under the jen-kea-helper namespace over the JUST-EXTRACTED helper's own raw
+    bytes, write it to `<app_dir>/jen-kea-helper.sig` (0644 root) — so kea_host.helper_signature()
+    on the Jen side has it locally for every Kea-host helper update, with no network call of its
+    own. A missing or non-verifying signature is only logged; the file is simply not written, and
+    Jen's OWN update proceeds regardless — this is best-effort convenience for the Kea-host side,
+    never a gate on Jen's own upgrade (already verified, checksum and signature, earlier in
+    main()). A Kea-host helper update still works without this file: kea_host.helper_signature()
+    falls back to fetching it straight from GitHub on demand."""
+    helper_path = os.path.join(app_dir, "jen-kea-helper")
+    if not os.path.isfile(helper_path):
+        return
+    sig_asset_url = ""
+    for asset in assets:
+        if asset.get("name") == "jen-kea-helper.sig":
+            sig_asset_url = asset.get("browser_download_url", "")
+            break
+    if not sig_asset_url:
+        log(
+            "No jen-kea-helper.sig published for this release — the Kea host helper's signed "
+            "update will fetch it from GitHub when needed."
+        )
+        return
+    if not sig_asset_url.startswith(GITHUB_ASSET_PREFIX):
+        log("WARNING: jen-kea-helper.sig asset URL is not a genuine GitHub release download link — not saving it.")
+        return
+    try:
+        sig_bytes = fetch_text(sig_asset_url).encode()
+    except Exception as e:
+        log(
+            f"WARNING: could not fetch jen-kea-helper.sig — the Kea host helper's signed update will fetch it later: {e}"
+        )
+        return
+    with open(helper_path, "rb") as f:
+        helper_bytes = f.read()
+    if not verify_release_signature(helper_bytes, sig_bytes, RELEASE_SIGNERS, namespace=HELPER_SIGNATURE_NAMESPACE):
+        log("WARNING: jen-kea-helper.sig does not verify against this release's own helper file — not saving it.")
+        return
+    sig_dest = os.path.join(app_dir, "jen-kea-helper.sig")
+    with open(sig_dest, "wb") as f:
+        f.write(sig_bytes)
+    os.chmod(sig_dest, 0o644)
+    log("Saved jen-kea-helper.sig for the Kea host helper's signed update.")
 
 
 def _safe_extract_zip(zf, dest_dir):
@@ -1766,6 +1830,8 @@ def main():
         if not os.path.isdir(os.path.join(staging_app, "jen")):
             log("ERROR: update package format invalid — expected a jen/ package inside the tarball.")
             return 1
+
+        _install_kea_helper_signature(staging_app, assets)
 
         python_bin = _build_release_venv(staging_venv)
         if not python_bin:

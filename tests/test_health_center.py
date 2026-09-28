@@ -759,6 +759,38 @@ class TestHelperInstalled:
         assert "legacy python3 root grant is still present" in c.detail
         assert "kea-a" in c.detail
 
+    def test_v6_with_legacy_grant_still_present_says_not_needed_at_all(self, monkeypatch):
+        """v5.66.0 (Q103) — a host already on the signed-update version doesn't need one more
+        hop; the wording says so instead of implying the grant is still legitimately expected."""
+        from jen.services import kea_host
+
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5"}])
+        monkeypatch.setattr(
+            "jen.services.kea_host.helper_status",
+            lambda: {"1": {"version": kea_host.SIGNED_UPDATE_HELPER_MIN_VERSION, "legacy_grant": True}},
+        )
+        c = health._helper_installed(_ctx())
+        assert c.status == "warn"
+        assert "legacy python3 root grant is still present" in c.detail
+        assert "updates are signed and need no grant" in c.detail
+        assert "needed once more to reach helper v6" not in c.detail
+        assert "kea-a" in c.detail
+
+    def test_below_v6_with_legacy_grant_still_present_says_one_more_hop(self, monkeypatch):
+        """v5.66.0 (Q103) — below the signed-update version, the grant is still legitimately
+        needed once more, and the wording says so rather than reading as a plain security gap."""
+        from jen.services import kea_host
+
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5"}])
+        monkeypatch.setattr(
+            "jen.services.kea_host.helper_status",
+            lambda: {"1": {"version": kea_host.JEN_HELPER_WANT_VERSION, "legacy_grant": True}},
+        )
+        c = health._helper_installed(_ctx())
+        assert c.status == "warn"
+        assert "needed once more to reach helper v6, then never again" in c.detail
+        assert "updates are signed and need no grant" not in c.detail
+
     def test_legacy_grant_false_or_absent_does_not_warn(self, monkeypatch):
         from jen.services import kea_host
 

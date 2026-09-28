@@ -422,19 +422,48 @@ host. `service` is one of `dhcp4`, `dhcp6`, or (v5.23.0) `d2`
   directly in `/etc/kea` or `/usr/local/etc/kea` and match
   `*.conf`; logs must resolve under `/var/log` and end `.log`), not
   sudo's argument matching.
-- There is **no `self-update` op**. "Jen writes a file the Kea host then
-  runs as root" is exactly the capability being removed; letting the
-  helper update itself would put it straight back. Upgrading the helper
-  (only when its integer `HELPER_VERSION` changes — rare, called out in
-  the release notes) is pressing **Update helper** in Settings → Kea →
-  SSH — it re-copies the current file, then asks the freshly-copied
-  helper its own version rather than trusting what the copy script
-  printed (v5.19.1 fix: it used to trust the echo, and separately used
-  to treat any installed version as fully current instead of comparing
-  against the version Jen actually wants) — or a manual
-  `install -m 0755` by an administrator. Either path still needs the
-  legacy `sudo python3` grant present for that one run, same as a fresh
-  install.
+- **The invariant is now "no *unverified* self-update", not "no
+  self-update at all" (v5.66.0, Q103).** The original v5.11.0 design had
+  no `update` op whatsoever: "Jen writes a file the Kea host then runs
+  as root" was exactly the capability being removed, and letting the
+  helper update itself — trusting whatever Jen sent — would put it
+  straight back. A maintainer report showed the cost of that: every
+  helper update, forever, needed the legacy `NOPASSWD: /usr/bin/python3`
+  grant (real root) added by hand and removed again. `update` (helper
+  v6) keeps the invariant in a stronger, still-safe form instead of
+  reopening it: a candidate is installed only when `ssh-keygen -Y
+  verify` accepts a signature from the **Jen project's own release
+  key** — the identical permanent ed25519 trust root §3.1's self-updater
+  already uses, embedded in the helper byte-for-byte (a test diffs the
+  two copies) — under a namespace distinct from the release-tarball's
+  own (`jen-kea-helper`, never `jen-release`, so one signature can never
+  be replayed as the other), **and** the candidate declares a strictly
+  higher `HELPER_VERSION` than the one running (equal counts as
+  not-newer; a downgrade is never installed, even signed). A
+  fully-compromised Jen can therefore install a genuine, newer Jen
+  release's helper, and nothing else — Jen's own SSH identity is never
+  the thing being trusted, exactly as before. The op never touches
+  sudoers and never restarts anything; candidate, signature and an
+  optional local `/etc/jen-kea-helper/allowed_signers` (root-owned, not
+  group/other-writable, ≤ 8 KiB — an ADDITIVE rotation/test hook, never
+  a replacement for the embedded key) are written into a fresh
+  `tempfile.mkdtemp()` beside the real binary and removed unconditionally
+  when the op returns; the final install is a plain `os.replace()`.
+  **Rotation:** add the new key alongside the old one in BOTH
+  `RELEASE_SIGNERS` copies (`jen-update-root.py` and `jen-kea-helper`)
+  for one release before switching which key `release.yml` signs with —
+  the same shape as §3.1's own rotation note, done in the same commit
+  so the two never drift (a test enforces the twin). A host below
+  helper v6 has no `update` op at all: reaching v6 is a fresh
+  install/upgrade over the legacy `sudo python3` path, pressing
+  **Update helper** in Settings → Kea → SSH — it re-copies the current
+  file, then asks the freshly-copied helper its own version rather than
+  trusting what the copy script printed (v5.19.1 fix: it used to trust
+  the echo, and separately used to treat any installed version as fully
+  current instead of comparing against the version Jen actually wants)
+  — or a manual `install -m 0755` by an administrator. That one hop
+  still needs the legacy `sudo python3` grant present for that one run,
+  same as a fresh install — the last time it is ever needed.
 - **The legacy grant can remove itself — never create itself** (v5.49.0).
   Settings → Kea → SSH has **Remove legacy grant**: over that grant, a fixed
   script deletes `/etc/sudoers.d/jen-kea`, refusing unless the helper's own

@@ -449,6 +449,176 @@ class TestHelperDeployment:
         assert res["code"] == "sudoerror" and res["detail"] == "bad line 2"
 
 
+class TestHelperSignature:
+    """v5.66.0 (Q103) — helper_signature() prefers the sibling file jen-update-root.py writes,
+    falls back to fetching this release's own GitHub asset."""
+
+    def test_prefers_the_sibling_file(self, monkeypatch, tmp_path):
+        from jen import extensions
+
+        sig_path = tmp_path / "jen-kea-helper.sig"
+        sig_path.write_bytes(b"-----BEGIN SSH SIGNATURE-----\nfake\n-----END SSH SIGNATURE-----\n")
+        monkeypatch.setattr(extensions, "JEN_ROOT", str(tmp_path))
+        assert kea_host.helper_signature() == sig_path.read_bytes()
+
+    def test_falls_back_to_a_fetch_when_the_sibling_file_is_absent(self, monkeypatch, tmp_path):
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "JEN_ROOT", str(tmp_path))  # no jen-kea-helper.sig here
+
+        class FakeResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self, n):
+                return b"fetched-signature"
+
+        monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=10: FakeResp())
+        assert kea_host.helper_signature() == b"fetched-signature"
+
+    def test_a_fetch_failure_returns_none_not_raises(self, monkeypatch, tmp_path):
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "JEN_ROOT", str(tmp_path))
+
+        def _raise(req, timeout=10):
+            raise OSError("network down")
+
+        monkeypatch.setattr("urllib.request.urlopen", _raise)
+        assert kea_host.helper_signature() is None
+
+    def test_an_oversize_fetch_returns_none(self, monkeypatch, tmp_path):
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "JEN_ROOT", str(tmp_path))
+
+        class FakeResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self, n):
+                return b"x" * n  # always fills exactly the requested (cap + 1) read
+
+        monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=10: FakeResp())
+        assert kea_host.helper_signature() is None
+
+
+class TestInstallHelperSigned:
+    """v5.66.0 (Q103) — a host already at SIGNED_UPDATE_HELPER_MIN_VERSION takes the signed
+    `update` path and never touches the legacy engine at all."""
+
+    def test_takes_the_signed_path_not_legacy(self, monkeypatch, quiet_status):
+        monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 7\n")
+        monkeypatch.setattr(kea_host, "_helper_source_bytes", lambda: b"HELPER_VERSION = 7\n")
+        monkeypatch.setattr(kea_host, "helper_signature", lambda: b"sig-bytes")
+        monkeypatch.setattr(
+            kea_host,
+            "legacy_grant_status",
+            lambda s: (_ for _ in ()).throw(AssertionError("must not probe the legacy grant on the signed path")),
+        )
+        legacy_called = []
+        monkeypatch.setattr(kea_host, "_legacy_python3", lambda *a, **k: legacy_called.append(1) or ("ok:", "", 0))
+        monkeypatch.setattr(
+            kea_host,
+            "helper_call",
+            lambda s, op, payload=None, timeout=60: {"ok": True, "installed_version": 7, "previous_version": 6},
+        )
+        calls = iter([{"ok": True, "version": 6}, {"ok": True, "version": 7}])
+        monkeypatch.setattr(kea_host, "check_helper", lambda s: next(calls))
+
+        res = kea_host.install_helper(SERVER)
+        assert res == {"ok": True, "version": 7, "code": "upgraded", "detail": ""}
+        assert legacy_called == []
+
+    def test_no_signature_available_is_reported_distinctly(self, monkeypatch, quiet_status):
+        monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 7\n")
+        monkeypatch.setattr(kea_host, "check_helper", lambda s: {"ok": True, "version": 6})
+        monkeypatch.setattr(kea_host, "helper_signature", lambda: None)
+
+        res = kea_host.install_helper(SERVER)
+        assert res["ok"] is False and res["code"] == "no-signature"
+        assert "copy the helper by hand" in res["detail"]
+
+    @pytest.mark.parametrize(
+        "helper_error,expected_code",
+        [
+            ("bad-signature", "bad-signature"),
+            ("no-ssh-keygen", "no-ssh-keygen"),
+            ("not-newer", "not-newer"),
+            ("symlink", "symlink"),
+            ("unparseable", "error"),
+            ("not-allowed", "error"),
+        ],
+    )
+    def test_op_refusal_codes_are_worded_distinctly(self, monkeypatch, quiet_status, helper_error, expected_code):
+        monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 7\n")
+        monkeypatch.setattr(kea_host, "_helper_source_bytes", lambda: b"HELPER_VERSION = 7\n")
+        monkeypatch.setattr(kea_host, "check_helper", lambda s: {"ok": True, "version": 6})
+        monkeypatch.setattr(kea_host, "helper_signature", lambda: b"sig-bytes")
+        monkeypatch.setattr(
+            kea_host, "helper_call", lambda s, op, payload=None, timeout=60: {"ok": False, "error": helper_error}
+        )
+
+        res = kea_host.install_helper(SERVER)
+        assert res["ok"] is False
+        assert res["code"] == expected_code
+        assert res["version"] == 6
+
+    def test_helper_call_transport_failure_is_an_error_not_a_raise(self, monkeypatch, quiet_status):
+        monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 7\n")
+        monkeypatch.setattr(kea_host, "_helper_source_bytes", lambda: b"HELPER_VERSION = 7\n")
+        monkeypatch.setattr(kea_host, "check_helper", lambda s: {"ok": True, "version": 6})
+        monkeypatch.setattr(kea_host, "helper_signature", lambda: b"sig-bytes")
+
+        def _raise(*a, **k):
+            raise kea_host.HelperMissing("gone")
+
+        monkeypatch.setattr(kea_host, "helper_call", _raise)
+        res = kea_host.install_helper(SERVER)
+        assert res["ok"] is False and res["code"] == "error"
+
+    def test_stale_after_signed_update_is_reported(self, monkeypatch, quiet_status):
+        monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 7\n")
+        monkeypatch.setattr(kea_host, "_helper_source_bytes", lambda: b"HELPER_VERSION = 7\n")
+        monkeypatch.setattr(kea_host, "helper_signature", lambda: b"sig-bytes")
+        monkeypatch.setattr(
+            kea_host, "helper_call", lambda s, op, payload=None, timeout=60: {"ok": True, "installed_version": 7}
+        )
+        calls = iter([{"ok": True, "version": 6}, {"ok": True, "version": 6}])  # still 6 despite the "ok" reply
+        monkeypatch.setattr(kea_host, "check_helper", lambda s: next(calls))
+
+        res = kea_host.install_helper(SERVER)
+        assert res["ok"] is False and res["code"] == "stale"
+
+    def test_below_min_version_still_uses_the_legacy_one_last_hop(self, monkeypatch, quiet_status):
+        monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 6\n")
+        monkeypatch.setattr(kea_host, "legacy_grant_status", lambda s: _OK_GRANT)
+        monkeypatch.setattr(kea_host, "_legacy_python3", lambda s, script, timeout=60: ("ok:", "", 0))
+        signed_called = []
+        monkeypatch.setattr(kea_host, "helper_signature", lambda: signed_called.append(1) or b"x")
+        calls = iter([{"ok": True, "version": 5}, {"ok": True, "version": 6}])
+        monkeypatch.setattr(kea_host, "check_helper", lambda s: next(calls))
+
+        res = kea_host.install_helper(SERVER)
+        assert res == {"ok": True, "version": 6, "code": "upgraded", "detail": ""}
+        assert signed_called == []  # the signed path was never touched below SIGNED_UPDATE_HELPER_MIN_VERSION
+
+    def test_below_min_version_legacy_refusal_mentions_the_one_last_hop(self, monkeypatch, quiet_status):
+        monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 6\n")
+        monkeypatch.setattr(kea_host, "check_helper", lambda s: {"ok": True, "version": 5})
+        monkeypatch.setattr(kea_host, "legacy_grant_status", lambda s: _FAILED_GRANT)
+
+        res = kea_host.install_helper(SERVER)
+        assert res["ok"] is False and res["code"] == "no-path"
+        assert "one last hop" in res["detail"] and "signed" in res["detail"]
+
+
 class TestStatusTracking:
     def test_record_and_read_round_trip(self, monkeypatch):
         store = {}

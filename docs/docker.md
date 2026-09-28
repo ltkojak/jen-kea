@@ -202,6 +202,18 @@ Generated through **Settings → Kea → SSH**, stored in the
 `jen-config` volume at `/etc/jen/ssh/`. Add the public key to the Kea
 server's `authorized_keys`, same as a bare-metal install.
 
+## Kea host helper updates (v5.66.0+)
+
+A Docker image is built from source, so it never has a local
+`jen-kea-helper.sig` the way a box updated through `jen-update-root.py`
+does (that file is written only as part of the self-update pipeline).
+A **signed** "Update helper" click still works — it fetches the
+signature from this release's own GitHub asset instead, the same
+fallback a hand-installed tarball or a dev checkout uses — it just
+needs the Jen container to reach `github.com` when you press the
+button. See the Admin Guide's "Kea host helper" for what each refusal
+reason means.
+
 ---
 
 ## Updating

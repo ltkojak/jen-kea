@@ -706,8 +706,11 @@ def test_legacy_grant(server_id):
 @login_required
 @_superadmin_required
 def install_kea_helper(server_id):
-    """Deploy jen-kea-helper onto one server via the legacy sudo-python3
-    path (the one time it's needed) + write its one-line sudoers file."""
+    """Deploy or upgrade jen-kea-helper on one server. Below helper v6 this
+    still goes through the legacy sudo-python3 path (the one time it's
+    needed per hop); at v6+, kea_host.install_helper() takes the signed
+    `update` path instead and no sudoers file is touched (v5.66.0, Q103) —
+    either way the branching lives in kea_host, not here."""
     server = _find_server(server_id)
     if not server or not server.get("ssh_host"):
         flash("Server not found or SSH not configured.", "error")
@@ -732,8 +735,11 @@ def install_kea_helper(server_id):
             "you can remove the legacy /etc/sudoers.d/jen-kea (the python3 = root grant).",
             "success",
         )
-    elif res["code"] in ("no-path", "stale"):
+    elif res["code"] in ("no-path", "stale", "no-signature", "bad-signature", "no-ssh-keygen", "symlink"):
         flash(f"{name}: {res['detail']}", "error")
+    elif res["code"] == "not-newer":
+        # v5.66.0 (Q103) — a benign race (the recorded version was stale), not a real failure.
+        flash(f"{name}: {res['detail']}", "warning")
     elif res["code"] == "no-source":
         flash("jen-kea-helper is missing from this Jen install — reinstall Jen.", "error")
     elif res["code"] == "sudoerror":

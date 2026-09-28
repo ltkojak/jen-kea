@@ -869,7 +869,8 @@ def _helper_installed(ctx) -> Check:
     status = kea_host.helper_status()
     legacy = []
     behind = []  # (name, version)
-    has_legacy_grant = []
+    has_legacy_grant = []  # below v6: one more hop legitimately needs the grant
+    has_legacy_grant_signed = []  # v6+: signed updates need no grant at all any more
     for s in ssh_servers:
         entry = status.get(str(s.get("id")), {})
         v = entry.get("version")
@@ -879,7 +880,12 @@ def _helper_installed(ctx) -> Check:
             if v < kea_host.JEN_HELPER_WANT_VERSION:
                 behind.append((_server_name(s), v))
             if entry.get("legacy_grant") is True:
-                has_legacy_grant.append(_server_name(s))
+                # v5.66.0 (Q103) — the wording now says whether this host still legitimately
+                # needs the grant once more (the v5→v6 hop) or not at all (already on v6+).
+                if v >= kea_host.SIGNED_UPDATE_HELPER_MIN_VERSION:
+                    has_legacy_grant_signed.append(_server_name(s))
+                else:
+                    has_legacy_grant.append(_server_name(s))
 
     sentences = []
     if legacy:
@@ -897,7 +903,14 @@ def _helper_installed(ctx) -> Check:
     if has_legacy_grant:
         sentences.append(
             f"{', '.join(has_legacy_grant)}: helper installed but the legacy python3 root grant is still "
-            "present — Settings → Kea → SSH → Remove legacy grant (or remove /etc/sudoers.d/jen-kea by hand)"
+            "present — needed once more to reach helper v6, then never again; Settings → Kea → SSH → "
+            "Remove legacy grant (or remove /etc/sudoers.d/jen-kea by hand)"
+        )
+    if has_legacy_grant_signed:
+        sentences.append(
+            f"{', '.join(has_legacy_grant_signed)}: on helper v6+ (updates are signed and need no grant) but "
+            "the legacy python3 root grant is still present — Settings → Kea → SSH → Remove legacy grant "
+            "(or remove /etc/sudoers.d/jen-kea by hand)"
         )
 
     if sentences:

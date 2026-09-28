@@ -1333,6 +1333,49 @@ class TestKeaHelperRoutes:
         r = logged_in_client.post("/settings/infrastructure/install-kea-helper/9", follow_redirects=True)
         assert b"not found" in r.data.lower()
 
+    @pytest.mark.parametrize(
+        "code,detail",
+        [
+            ("no-signature", "no signature available for v5.66.0 (offline?) — copy the helper by hand: curl ..."),
+            (
+                "bad-signature",
+                "kea-a refused the signature on this release's helper — copy the helper by hand: curl ...",
+            ),
+            (
+                "no-ssh-keygen",
+                "kea-a has no ssh-keygen (openssh-client) — install it there, or copy the helper by hand: curl ...",
+            ),
+            (
+                "symlink",
+                "the installed path on kea-a is a symlink, not a plain file — copy the helper directly: curl ...",
+            ),
+        ],
+    )
+    def test_install_signed_update_failure_codes_show_the_detail(self, logged_in_client, monkeypatch, code, detail):
+        """v5.66.0 (Q103) — each signed-update refusal is routed the same way no-path/stale
+        already were: the flash IS install_helper()'s own detail, verbatim."""
+        self._one_ssh_server(monkeypatch)
+        from jen.services import kea_host
+
+        monkeypatch.setattr(
+            kea_host, "install_helper", lambda s: {"ok": False, "version": 6, "code": code, "detail": detail}
+        )
+        r = logged_in_client.post("/settings/infrastructure/install-kea-helper/1", follow_redirects=True)
+        assert detail.encode() in r.data
+
+    def test_install_not_newer_is_a_warning_not_an_error(self, logged_in_client, monkeypatch):
+        """v5.66.0 (Q103) — a benign race (the recorded version was stale), never a real failure."""
+        self._one_ssh_server(monkeypatch)
+        from jen.services import kea_host
+
+        detail = "kea-a already reports v6, which is not older than this release's helper — nothing to do."
+        monkeypatch.setattr(
+            kea_host, "install_helper", lambda s: {"ok": False, "version": 6, "code": "not-newer", "detail": detail}
+        )
+        r = logged_in_client.post("/settings/infrastructure/install-kea-helper/1", follow_redirects=True)
+        assert detail.encode() in r.data
+        assert b"alert-warning" in r.data
+
 
 class TestTestLegacyGrantRoute:
     """v5.65.13 (Q102) — POST /settings/infrastructure/test-legacy-grant/<id>: a read-only probe,

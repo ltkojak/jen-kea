@@ -983,23 +983,65 @@ then add the sudoers line above. **Settings → Kea → SSH** shows the
 installed version for each host once it is reachable — green when it's
 current, amber ("upgrade available") when it isn't.
 
-**Upgrading the helper.** Rare — only when the release notes call out a
-new `HELPER_VERSION`. Press **Update helper** in Settings → Kea → SSH
-(the same button, relabelled once a version is already recorded) — it
-re-copies the current file over the old one, then confirms the upgrade
-actually took by asking the freshly-copied helper its own version
-rather than trusting what the install script printed. If the copy
-somehow didn't take (a shadowing binary earlier on `$PATH`, a stale
-cache), the flash says so as "the copy did not take" instead of
-claiming success. This still runs over the legacy `sudo python3` path —
-the old grant needs to be present for one run, same as a fresh install;
-if it's already been removed, the flash gives you the manual
-`install -m 0755` command instead. There is no self-update op, on
-purpose. v5.16.0 shipped **helper v2** (optimistic concurrency — see
-below); a host still on v1 shows the amber hint and keeps working
-behind the best-effort guard until it's upgraded. **Health Center**
-(v5.19.1) also warns per host once a v1 helper is more than a passing
-state — see "Kea host helper installed" there.
+**Upgrading the helper.** Press **Update helper** in Settings → Kea → SSH
+(the same button, relabelled once a version is already recorded). What
+happens next depends on the host's current version — see "v5.66.0 ships
+helper v6 — signed updates, no grant" below for a host already at v6:
+below that, this still runs over the legacy `sudo python3` path — the
+old grant needs to be present for one run, same as a fresh install; if
+it's already been removed, the flash gives you the manual
+`install -m 0755` command instead. Either way Jen never trusts the
+install script's own printed version: it re-checks the freshly-updated
+host and reports what it actually says, so a copy that silently didn't
+take (a shadowing binary earlier on `$PATH`, a stale cache) reads as
+"the copy did not take" instead of a false success. v5.16.0 shipped
+**helper v2** (optimistic concurrency — see below); a host still on v1
+shows the amber hint and keeps working behind the best-effort guard
+until it's upgraded. **Health Center** (v5.19.1) also warns per host
+once a v1 helper is more than a passing state — see "Kea host helper
+installed" there.
+
+**v5.66.0 ships helper v6 — signed updates, no grant.** From v6 on, an
+"Update helper" click needs no legacy grant at all: Jen sends the new
+helper file together with its release signature, and the helper's own
+`update` op — never Jen — decides whether to install it, by checking
+two things itself: a valid `ssh-keygen -Y verify` signature from the
+Jen *project's* release key (the same permanent trust root the
+self-updater already uses — never Jen's own SSH identity, and never
+transferable from the release-tarball's own signature, since the two
+use distinct namespaces) under the `jen-kea-helper` namespace, and a
+`HELPER_VERSION` strictly higher than the one already running (equal
+counts as not-newer; a downgrade is never installed, even signed). A
+fully-compromised Jen can therefore install a genuine, newer Jen
+release's helper and nothing else. A host still on v5 or older takes
+one more hop through the legacy path to reach v6 — needing the old
+grant present for that one last run — and never needs it again once
+it's there. A host that shows **"signed updates"** next to its version
+in the table above has already made that hop.
+
+If a signed update is refused, the flash says exactly why: *the host
+refused the signature* points at a problem with the release itself, not
+this host — retry once a newer release is out, or copy the helper by
+hand; *no signature available* means Jen has no network access right
+now to fetch one — retry, or copy the helper by hand; *no ssh-keygen*
+means the Kea host is missing `openssh-client` (or its distro
+equivalent) — install it there and retry. `ssh-keygen -Y sign`/`-Y
+verify` need OpenSSH 8.0+, already true of every distro this guide
+targets (Ubuntu 22.04 ships 8.9, 24.04 ships 9.6) — no new dependency
+anywhere.
+
+**Key rotation.** `/etc/jen-kea-helper/allowed_signers` on the Kea host
+itself is the one place a helper update's trust root can be extended
+without a new Jen release: a root-owned file (mode without group or
+world write, at most 8 KiB), one line per key in the same "allowed
+signers" format as the embedded key —
+`release@jen <key-type> <base64-key>`. It's additive, never a
+replacement: the helper always also trusts its own embedded key. This
+exists for a genuine key rotation (list the new key here across every
+Kea host for one release before switching which key `release.yml`
+signs with — the same rotation shape as the self-updater's own trust
+root) and as a test hook for the automated suite; an operator does not
+normally need this file at all.
 
 **v5.20.0 — the legacy grant is now checked, not just used.** Every
 time Jen checks or installs the helper it also checks whether
@@ -1107,16 +1149,21 @@ full stop; the other lines only document what Jen runs, they don't
 narrow anything. Jen shows an admin banner for every host still on this
 path.
 
-The grant is needed for **one run** to install the helper, and again for
-one run each time Jen updates the helper (Update helper copies the file
-through it). The life cycle is: add the grant → Install or Update helper
-→ remove the grant (the **Remove legacy grant** button in Settings → Kea →
-SSH, or `sudo rm -f /etc/sudoers.d/jen-kea`). Leaving it in place between
-those runs is the residual risk. Two things never use
-this path at all, whatever the host has: D2 (kea-dhcp-ddns) operations
-(v5.23.0), the https "Set up direct socket" material push (v5.29.0's
-`install-tls`) and Trace (v5.49.0's client trace reads up to 1000 log lines
-through the helper) — they need the helper, at v3, v4 and any version respectively.
+The grant is needed for **one run** to install the helper, and — below
+helper v6 — for **one more run** to reach v6 (Update helper copies the
+file through it). The life cycle is: add the grant → Install or Update
+helper → remove the grant (the **Remove legacy grant** button in
+Settings → Kea → SSH, or `sudo rm -f /etc/sudoers.d/jen-kea`). Leaving
+it in place between those runs is the residual risk. **From v6 on,
+updates are verified by signature (see "Kea host helper" above) and
+never need this grant again** — a host that shows "signed updates" next
+to its helper version has already made the last hop that needed it.
+Three things never use this path at all, whatever the host has: D2
+(kea-dhcp-ddns) operations (v5.23.0), the https "Set up direct socket"
+material push (v5.29.0's `install-tls`), Trace (v5.49.0's client trace
+reads up to 1000 log lines through the helper), and — from v6 — every
+helper update itself; D2/https/Trace need the helper at v3, v4 and any
+version respectively.
 
 One line — a multi-line heredoc pastes badly into some terminals and web
 consoles:

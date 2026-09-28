@@ -236,6 +236,7 @@
                     {% elif s.helper_known %}<span class="u-52df2b">not installed — legacy path</span>
                     {% else %}<span class="u-5872de">unknown — check</span>{% endif %}
                     {% if s.legacy_grant %}<br><span class="badge u-5fdac8"  title="The old NOPASSWD: /usr/bin/python3 sudoers grant is still present on this host">legacy grant still present</span>{% endif %}
+                    {% if s.signed_update %}<br><span class="badge u-5a4529" title="Helper updates on this host are verified by signature — no sudoers grant is used for them">signed updates</span>{% endif %}
                 </td>
                 <td data-m="trailing" style="text-align:right;padding:4px 8px;white-space:nowrap;">
                     <form method="POST" action="/settings/infrastructure/check-kea-helper/{{ s.id }}" class="u-cccfa4"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -250,7 +251,7 @@
                     </form>
                     {% endif %}
                     {% if current_user.role == 'superadmin' and s.legacy_grant and s.helper_version is integer %}
-                    <form method="POST" action="/settings/infrastructure/remove-legacy-grant/{{ s.id }}" class="u-cccfa4" data-confirm="Remove /etc/sudoers.d/jen-kea on {{ s.name }}? Jen keeps working through the helper. You will need to add it again, for one run, the next time you update the helper."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <form method="POST" action="/settings/infrastructure/remove-legacy-grant/{{ s.id }}" class="u-cccfa4" data-confirm="Remove /etc/sudoers.d/jen-kea on {{ s.name }}? Jen keeps working through the helper.{% if s.signed_update %} Helper updates on this host are signature-verified — you will not need this grant again.{% else %} You will need to add it again, for one run, to reach helper v6; from v6 on, updates are signed and need it never again.{% endif %}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit" class="btn btn-sm btn-secondary">Remove legacy grant</button>
                     </form>
                     {% endif %}
@@ -261,7 +262,7 @@
         </table>
         <details class="u-56f435">
             <summary class="u-3928fa">Grant or revoke the legacy root path by hand</summary>
-            <p style="font-size:12px;color:var(--text-muted);margin:8px 0;">Jen needs this grant for ONE run to install the helper, and for ONE run each time it updates the helper; remove it afterwards, with the button above or the command below. The helper's own grant, <code>/etc/sudoers.d/jen-kea-helper</code>, is a different file and stays.</p>
+            <p style="font-size:12px;color:var(--text-muted);margin:8px 0;">Jen needs this grant for ONE run to install the helper, and — below helper v6 — for ONE more run to reach v6; remove it afterwards, with the button above or the command below. From v6 on, updates are verified by signature and need this grant never again. The helper's own grant, <code>/etc/sudoers.d/jen-kea-helper</code>, is a different file and stays.</p>
             {% for s in ssh_servers %}
             <div class="stat-label" style="margin:8px 0 4px;">{{ s.name }} &mdash; probed as <code>{{ s.ssh_user }}@{{ s.ssh_host }}</code></div>
             <div class="stat-label u-239b88">Grant (one line — paste it whole)</div>

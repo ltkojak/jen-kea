@@ -199,12 +199,14 @@ Check that SSH is running on your Kea server and the host/user in `[kea_ssh]` co
 Every Kea-side action Jen performs goes through `jen-kea-helper` at
 `/usr/local/sbin/jen-kea-helper`, behind one sudoers line. **Settings →
 Kea → SSH** shows the version for each host that has it — `v1` through
-`v4` (v5.16.0 shipped `v2`, v5.23.0 `v3` for D2, v5.29.0 `v4` for the
-https "Set up direct socket" push). A `v1` host works but shows an
+`v6` (v5.16.0 shipped `v2`, v5.23.0 `v3` for D2, v5.29.0 `v4` for the
+https "Set up direct socket" push, v5.49.0 `v5` for bounded `tail-log`,
+v5.66.0 `v6` for signed updates). A `v1` host works but shows an
 "upgrade available" hint; a `v3` host works for everything except the
 https socket setup, which says **"https setup needs jen-kea-helper
 v4+"** until you press **Update helper**. Either way the fix is the
-same button.
+same button — and once a host shows **v6**, that button needs no
+sudoers grant at all; see *"Signed helper update refused"* below.
 
 Two failure signatures, both meaning "Jen fell back to the legacy root
 `python3` path for that host":
@@ -221,15 +223,16 @@ Two failure signatures, both meaning "Jen fell back to the legacy root
   (`/opt/jen/jen-kea-helper` on a pre-5.14 flat install).
 
 Legacy grant: the old `python3` = root file is `/etc/sudoers.d/jen-kea`. Jen
-needs it for one run to install the helper and for one run each time it
-updates the helper; after that, press **Remove legacy grant** in Settings →
+needs it for one run to install the helper, and — below helper v6 — for one
+more run to reach v6; after that, press **Remove legacy grant** in Settings →
 Kea → SSH (it refuses unless the helper's own sudoers file is valid), or run
-`sudo rm -f /etc/sudoers.d/jen-kea`. To add it back for an update, use the
-collapsed **Grant or revoke the legacy root path by hand** box on the same
-card — Jen never grants itself root. Full details: **Admin Guide → Kea host
-helper**. (`/etc/sudoers.d/jen`, no `-kea`, is a DIFFERENT file — Jen's own
-self-update grant on the Jen box; removing it breaks self-update, not
-anything Kea-side.)
+`sudo rm -f /etc/sudoers.d/jen-kea`. From v6 on, updates are verified by
+signature and never need this grant again — use the collapsed **Grant or
+revoke the legacy root path by hand** box on the same card only for a fresh
+install or the v5→v6 hop; Jen never grants itself root otherwise. Full
+details: **Admin Guide → Kea host helper**. (`/etc/sudoers.d/jen`, no `-kea`,
+is a DIFFERENT file — Jen's own self-update grant on the Jen box; removing it
+breaks self-update, not anything Kea-side.)
 
 **"No legacy python3 grant" even though the grant is definitely there
 (v5.65.13).** The old one-shot probe couldn't tell a missing line apart
@@ -246,6 +249,32 @@ attempting an install. Three causes, in order of likelihood:
 3. **Wrong host** — the grant was pasted on the Jen box instead of the
    Kea box, or vice versa. The SSH card's own **user@host** names
    exactly who Jen probed as.
+
+**Signed helper update refused (v5.66.0).** Only reachable on a host
+already at helper v6 — pressing **Update helper** there needs no
+sudoers grant at all, since the helper's own `update` op verifies the
+new file itself before installing it. The flash names which of four
+checks failed:
+- *"refused the signature"* — the release's own signature didn't
+  verify. This points at the **release**, not the host: a corrupted
+  download, or (very unlikely) a signing problem in `release.yml`.
+  Retry once a newer release is out; in the meantime copy the helper by
+  hand with the command the flash gives you.
+- *"no signature available"* — Jen itself couldn't fetch a signature to
+  send (no local `jen-kea-helper.sig`, and the GitHub fetch failed —
+  usually a network issue on the Jen host). Retry, or copy the helper
+  by hand.
+- *"no ssh-keygen"* — the Kea host is missing `openssh-client` (or its
+  distro's equivalent); `ssh-keygen -Y verify` has nothing to run.
+  Install it there (`sudo apt install openssh-client` on Debian/Ubuntu,
+  `apk add openssh-keygen` on Alpine) and press the button again.
+- *"not older than this release's helper"* — a benign race: the host
+  already reports a version at or above what Jen just tried to send
+  (shown as a warning, not an error). Nothing to do.
+
+None of these touch sudoers, and none fall back to the legacy path — a
+v6 host that fails a signed update stays on its current version rather
+than silently reopening the `sudo python3` grant requirement.
 
 ### Permission denied on kea-dhcp4.conf
 
