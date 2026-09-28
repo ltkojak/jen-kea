@@ -11,18 +11,23 @@ tests stub the binary with a tiny script on a temp PATH and are skipped
 on Windows.
 """
 
+import base64
 import importlib.util
 import io
 import json
 import os
 import pathlib
+import re
+import shutil
 import stat
+import subprocess
 import sys
 from importlib.machinery import SourceFileLoader
 
 import pytest
 
 _SCRIPT_PATH = pathlib.Path(__file__).resolve().parent.parent / "jen-kea-helper"
+_UPDATE_ROOT_PATH = pathlib.Path(__file__).resolve().parent.parent / "jen-update-root.py"
 
 
 def _load():
@@ -78,13 +83,13 @@ class TestShape:
 
         ast.parse(_SCRIPT_PATH.read_text(encoding="utf-8"))
 
-    def test_no_self_update_op(self, helper):
-        # The whole point of the helper is that Jen can't make the Kea
-        # host run a file Jen wrote — an op that rewrites the helper puts
-        # that straight back.
+    def test_no_bare_self_update_op(self, helper):
+        # v5.66.0 (Q103) — there IS an "update" op now (TestUpdateOp below), but
+        # never a "self-update"/"self_update" name: the whole point is that it
+        # only ever installs a release-key-SIGNED, strictly newer candidate —
+        # never "whatever Jen sends".
         assert "self-update" not in helper._OPS
         assert "self_update" not in helper._OPS
-        assert not any("update" in op for op in helper._OPS)
 
 
 class TestD2Support:
@@ -141,7 +146,7 @@ class TestProtocolMisuse:
         stdout, stderr = io.StringIO(), io.StringIO()
         code = helper.main(argv=["jen-kea-helper", "version"], stdin=stdin, stdout=stdout, stderr=stderr)
         assert code == 2
-        assert json.loads(stdout.getvalue()) == {"ok": False, "error": "stdin-too-large", "helper_version": 5}
+        assert json.loads(stdout.getvalue()) == {"ok": False, "error": "stdin-too-large", "helper_version": 6}
 
     def test_stdout_is_exactly_one_json_document(self, helper):
         _, _, _ = _run(helper, "version", {})
@@ -165,7 +170,7 @@ class TestVersion:
         code, out, err = _run(helper, "version", {}, keep_version=True)
         assert code == 0
         assert out["ok"] is True
-        assert out["helper_version"] == helper.HELPER_VERSION == 5
+        assert out["helper_version"] == helper.HELPER_VERSION == 6
         assert out["python"].count(".") == 2
         assert err.startswith("jen-kea-helper: version ok")
 
@@ -174,7 +179,8 @@ class TestHelperVersionEnvelope:
     """v2 (v5.16.0) — every response, including protocol-error responses,
     carries helper_version so Jen learns the real number from any op.
     Bumped to 3 in v5.23.0 (Q19, d2 support), to 4 in v5.29.0 (Q29,
-    install-tls), to 5 in v5.49.0 (bounded tail-log)."""
+    install-tls), to 5 in v5.49.0 (bounded tail-log), to 6 in v5.66.0
+    (Q103, signed `update`)."""
 
     @pytest.mark.parametrize(
         "op,payload",
@@ -184,11 +190,12 @@ class TestHelperVersionEnvelope:
             ("nonsense-op", {}),
             ("tail-log", {"path": "/etc/passwd"}),
             ("install-tls", {"service": "dhcp4", "files": {}}),
+            ("update", {}),
         ],
     )
     def test_every_response_carries_helper_version(self, helper, op, payload):
         _code, out, _err = _run(helper, op, payload, keep_version=True)
-        assert out["helper_version"] == 5
+        assert out["helper_version"] == 6
 
 
 class TestPathWalls:
@@ -775,6 +782,211 @@ class TestInstallTls:
             pwd, "getpwnam", lambda name: PW() if name == "keauser" else (_ for _ in ()).throw(KeyError(name))
         )
         assert helper._daemon_group("dhcp4") == ("keauser", 4242)
+
+
+def _load_jen_update_root():
+    """The same importlib-against-file-path pattern test_jen_update_root.py uses — needed here
+    only for the RELEASE_SIGNERS twin check below."""
+    spec = importlib.util.spec_from_file_location("jen_update_root_twin_check", _UPDATE_ROOT_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _candidate_bytes(version):
+    """The real helper source with HELPER_VERSION rewritten — a realistic candidate, not a
+    fabricated stub, so a signature over it exercises the exact bytes ssh-keygen -Y verify sees."""
+    src = _SCRIPT_PATH.read_text(encoding="utf-8")
+    return re.sub(r"^HELPER_VERSION = \d+$", f"HELPER_VERSION = {version}", src, count=1, flags=re.M).encode()
+
+
+def _sign(key_path, namespace, data, tmp_path, name="candidate"):
+    """`ssh-keygen -Y sign` signs a FILE (producing `<file>.sig` beside it), unlike `-Y verify`
+    which reads the message on stdin — mirrors release.yml's own `ssh-keygen -Y sign -f ... -n
+    ... SHA256SUMS` usage exactly, just against a throwaway key and a throwaway file."""
+    cand = tmp_path / name
+    cand.write_bytes(data)
+    subprocess.run(
+        ["ssh-keygen", "-Y", "sign", "-f", str(key_path), "-n", namespace, str(cand)],
+        check=True,
+        capture_output=True,
+    )
+    return (tmp_path / f"{name}.sig").read_bytes()
+
+
+@pytest.fixture(scope="module")
+def signing_key(tmp_path_factory):
+    """A throwaway ed25519 key pair, generated once per test module run. Skipped only if
+    ssh-keygen itself is unavailable — never true on CI's ubuntu runner (openssh-client), and
+    true here only on a dev box that has somehow removed it."""
+    if shutil.which("ssh-keygen") is None:
+        pytest.skip("ssh-keygen not available")
+    d = tmp_path_factory.mktemp("s103-signing-key")
+    key_path = d / "key"
+    subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-f", str(key_path)], check=True, capture_output=True)
+    os.chmod(key_path, 0o600)
+    pub_line = (d / "key.pub").read_text().strip().split()
+    return {"priv": str(key_path), "signers_line": f"release@jen {pub_line[0]} {pub_line[1]}"}
+
+
+class TestUpdateOp:
+    """v5.66.0 (Q103) — the ONE way the helper ever replaces itself: a candidate signed by the
+    Jen project's release key under the `jen-kea-helper` namespace, declaring a strictly higher
+    HELPER_VERSION. Every test here uses a THROWAWAY key via the optional `_EXTRA_SIGNERS` file
+    (never the embedded, real RELEASE_SIGNERS — a checkout's helper is not signed by the real
+    key, and weakening that check to make a test pass would defeat the whole point)."""
+
+    def _use_throwaway_signer(self, helper, monkeypatch, signing_key, tmp_path):
+        signers = tmp_path / "allowed_signers"
+        signers.write_text(signing_key["signers_line"] + "\n")
+        monkeypatch.setattr(helper, "_EXTRA_SIGNERS", str(signers))
+        monkeypatch.setattr(helper, "_extra_signers_owner_ok", lambda path: True)
+
+    def _target(self, helper, monkeypatch, tmp_path, content=b"old helper content"):
+        target = tmp_path / "installed-helper"
+        target.write_bytes(content)
+        monkeypatch.setattr(helper, "_SELF_PATH", str(target))
+        return target
+
+    def _update(self, helper, candidate, signature):
+        payload = {
+            "helper_b64": base64.b64encode(candidate).decode(),
+            "signature_b64": base64.b64encode(signature).decode(),
+        }
+        return _run(helper, "update", payload)
+
+    def test_is_registered(self, helper):
+        assert "update" in helper._OPS
+
+    def test_release_signers_matches_jen_update_root_byte_for_byte(self, helper):
+        assert helper.RELEASE_SIGNERS == _load_jen_update_root().RELEASE_SIGNERS
+
+    def test_good_signature_installs_atomically_and_cleans_up(self, helper, signing_key, tmp_path, monkeypatch):
+        self._use_throwaway_signer(helper, monkeypatch, signing_key, tmp_path)
+        target = self._target(helper, monkeypatch, tmp_path)
+        candidate = _candidate_bytes(99)
+        sig = _sign(signing_key["priv"], "jen-kea-helper", candidate, tmp_path)
+
+        code, out, _err = self._update(helper, candidate, sig)
+        assert out == {"ok": True, "installed_version": 99, "previous_version": 6}
+        assert target.read_bytes() == candidate
+        if sys.platform != "win32":
+            assert stat.S_IMODE(target.stat().st_mode) == 0o755
+        # the temp dir op_update made (tempfile.mkdtemp beside the target) is gone — only this
+        # test's own fixture files remain (the signers file, and _sign()'s candidate + its .sig)
+        assert sorted(p.name for p in tmp_path.iterdir()) == [
+            "allowed_signers",
+            "candidate",
+            "candidate.sig",
+            "installed-helper",
+        ]
+
+    def test_flipped_byte_is_bad_signature_and_target_untouched(self, helper, signing_key, tmp_path, monkeypatch):
+        self._use_throwaway_signer(helper, monkeypatch, signing_key, tmp_path)
+        target = self._target(helper, monkeypatch, tmp_path)
+        original = target.read_bytes()
+        candidate = bytearray(_candidate_bytes(99))
+        sig = _sign(signing_key["priv"], "jen-kea-helper", bytes(candidate), tmp_path)
+        candidate[-10] ^= 0xFF  # flip a byte AFTER signing — the signature no longer matches
+
+        code, out, _err = self._update(helper, bytes(candidate), sig)
+        assert out == {"ok": False, "error": "bad-signature"}
+        assert target.read_bytes() == original
+
+    def test_wrong_namespace_is_bad_signature(self, helper, signing_key, tmp_path, monkeypatch):
+        """Signed correctly, but under `jen-release` (the checksum-signature namespace) — never
+        accepted as a helper-update signature, and vice versa (the whole point of a distinct
+        namespace: one signature can't be replayed as the other)."""
+        self._use_throwaway_signer(helper, monkeypatch, signing_key, tmp_path)
+        target = self._target(helper, monkeypatch, tmp_path)
+        original = target.read_bytes()
+        candidate = _candidate_bytes(99)
+        sig = _sign(signing_key["priv"], "jen-release", candidate, tmp_path)
+
+        code, out, _err = self._update(helper, candidate, sig)
+        assert out == {"ok": False, "error": "bad-signature"}
+        assert target.read_bytes() == original
+
+    @pytest.mark.parametrize("version", [6, 3])
+    def test_equal_or_lower_version_is_not_newer(self, helper, signing_key, tmp_path, monkeypatch, version):
+        self._use_throwaway_signer(helper, monkeypatch, signing_key, tmp_path)
+        target = self._target(helper, monkeypatch, tmp_path)
+        original = target.read_bytes()
+        candidate = _candidate_bytes(version)
+        sig = _sign(signing_key["priv"], "jen-kea-helper", candidate, tmp_path, name=f"candidate-{version}")
+
+        code, out, _err = self._update(helper, candidate, sig)
+        assert out == {"ok": False, "error": "not-newer"}
+        assert target.read_bytes() == original
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {},
+            {"helper_b64": "x"},
+            {"signature_b64": "x"},
+            {"helper_b64": 12345, "signature_b64": "x"},
+            {"helper_b64": base64.b64encode(b"x").decode(), "signature_b64": "not valid base64!!"},
+        ],
+    )
+    def test_missing_or_malformed_fields_are_not_allowed(self, helper, payload):
+        code, out, _err = _run(helper, "update", payload)
+        assert out == {"ok": False, "error": "not-allowed"}
+
+    def test_oversize_helper_is_not_allowed(self, helper, signing_key, tmp_path):
+        oversize = b"x" * (helper._UPDATE_MAX_HELPER + 1)
+        sig = _sign(signing_key["priv"], "jen-kea-helper", oversize, tmp_path)
+        code, out, _err = self._update(helper, oversize, sig)
+        assert out == {"ok": False, "error": "not-allowed"}
+
+    def test_oversize_signature_is_not_allowed(self, helper):
+        candidate = _candidate_bytes(99)
+        code, out, _err = self._update(helper, candidate, b"x" * (helper._UPDATE_MAX_SIGNERS + 1))
+        assert out == {"ok": False, "error": "not-allowed"}
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="needs a real symlink")
+    def test_self_path_symlink_is_refused(self, helper, signing_key, tmp_path, monkeypatch):
+        self._use_throwaway_signer(helper, monkeypatch, signing_key, tmp_path)
+        victim = tmp_path / "victim"
+        victim.write_text("keep me")
+        link = tmp_path / "installed-helper"
+        os.symlink(victim, link)
+        monkeypatch.setattr(helper, "_SELF_PATH", str(link))
+        candidate = _candidate_bytes(99)
+        sig = _sign(signing_key["priv"], "jen-kea-helper", candidate, tmp_path)
+
+        code, out, _err = self._update(helper, candidate, sig)
+        assert out == {"ok": False, "error": "symlink"}
+        assert victim.read_text() == "keep me"
+
+    def test_no_ssh_keygen_is_reported_distinctly(self, helper, signing_key, tmp_path, monkeypatch):
+        self._use_throwaway_signer(helper, monkeypatch, signing_key, tmp_path)
+        self._target(helper, monkeypatch, tmp_path)
+        monkeypatch.setattr(helper.shutil, "which", lambda name: None)
+        monkeypatch.setattr(helper, "_SSH_KEYGEN_FALLBACKS", ())
+        candidate = _candidate_bytes(99)
+        sig = _sign(signing_key["priv"], "jen-kea-helper", candidate, tmp_path)
+
+        code, out, _err = self._update(helper, candidate, sig)
+        assert out == {"ok": False, "error": "no-ssh-keygen"}
+
+    def test_extra_signers_file_with_bad_ownership_is_ignored(self, helper, signing_key, tmp_path, monkeypatch):
+        """The owner/mode check is monkeypatched directly (this test doesn't run as root, so it
+        can't chown a real file to root:root) — with it forced False, the throwaway key is never
+        trusted and only the embedded (real) RELEASE_SIGNERS applies, so a throwaway-signed
+        candidate is refused exactly like an unsigned one."""
+        signers = tmp_path / "allowed_signers"
+        signers.write_text(signing_key["signers_line"] + "\n")
+        monkeypatch.setattr(helper, "_EXTRA_SIGNERS", str(signers))
+        monkeypatch.setattr(helper, "_extra_signers_owner_ok", lambda path: False)
+        target = self._target(helper, monkeypatch, tmp_path)
+        original = target.read_bytes()
+        candidate = _candidate_bytes(99)
+        sig = _sign(signing_key["priv"], "jen-kea-helper", candidate, tmp_path)
+
+        code, out, _err = self._update(helper, candidate, sig)
+        assert out == {"ok": False, "error": "bad-signature"}
+        assert target.read_bytes() == original
 
 
 class TestBoundedTail:

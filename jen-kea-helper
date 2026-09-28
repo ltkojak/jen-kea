@@ -31,10 +31,16 @@ The bare command (no argument list) means "any arguments allowed" —
 that is deliberate: the control is *this file's* op allowlist and path
 walls, not sudo's argument matching. www-data cannot read or modify
 this file, and the helper never executes anything it is handed: stdin
-is data only. In particular there is **no `self-update` op** — "Jen
-writes a root-executed file on the Kea host" is exactly the capability
-being removed. Updating the helper (rare — only when the protocol
-version below changes) is a manual copy by an administrator; see
+is data only. There is still no `self-update` op in the sense of
+"install whatever Jen sends" — that capability is exactly what would
+put "Jen writes a root-executed file on the Kea host" straight back.
+From v6 (v5.66.0, Q103) there IS an `update` op, but it installs a
+candidate ONLY when `ssh-keygen -Y verify` accepts a signature from the
+Jen *project's* release key (never Jen's own SSH identity) under a
+dedicated namespace, and only when the candidate declares a strictly
+higher `HELPER_VERSION` — see that op's own section below. A helper
+below v6 has no such op; updating it still needs a manual copy by an
+administrator through the legacy grant, for that one last hop; see
 docs/admin-guide.md "Kea host helper".
 
 The legacy `sudo python3` path stays in Jen as a banner-warned fallback
@@ -95,10 +101,32 @@ v5 (v5.49.0) — `tail-log` reads the file through a bounded
 memory is bounded by the requested (at most 1000) lines whatever the size of
 the log. The request and response shapes are unchanged; the bump exists so
 Jen can offer the update (Settings → Kea → SSH shows "v5 available").
+
+v6 (v5.66.0, Q103) — `update`: the ONE way this helper ever replaces itself.
+A maintainer report: every helper update needed the legacy `NOPASSWD:
+/usr/bin/python3` grant (real root) added by hand for one click, then
+removed again — real friction, and the exact capability §3.3 exists to deny.
+This closes it WITHOUT reopening "Jen writes a file the Kea host runs as
+root": the candidate is installed only when it carries a valid
+`ssh-keygen -Y verify` signature from the Jen project's own release key
+(under a namespace, `jen-kea-helper`, distinct from the release-tarball
+namespace `jen-release` — a checksum signature can never be replayed here or
+vice versa) AND declares a STRICTLY higher `HELPER_VERSION` than this one.
+A fully-compromised Jen can therefore install a genuine, newer Jen release's
+helper and nothing else — the same trust root as the self-updater
+(docs/ARCHITECTURE.md §3.1, §3.3). The op never touches sudoers (the
+helper's own sudoers line is unaffected either way) and never restarts
+anything. `RELEASE_SIGNERS` here is byte-identical to the same-named
+constant in `jen-update-root.py` (a test enforces it) — the local
+`/etc/jen-kea-helper/allowed_signers` file (root-owned, not group/other
+writable, ≤ 8 KiB) is an OPTIONAL addition on top of it, for key rotation
+and test doubles, never a replacement.
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
 import collections
 import hashlib
 import json
@@ -106,10 +134,12 @@ import os
 import posixpath
 import re
 import shutil
+import stat
 import subprocess  # nosec B404 — every call is a fixed argv list, shell=False
 import sys
+import tempfile
 
-HELPER_VERSION = 5
+HELPER_VERSION = 6
 
 MAX_STDIN = 4 * 1024 * 1024  # 4 MiB
 
@@ -552,6 +582,146 @@ def op_install_tls(payload):
     return {"ok": True, "paths": written, "owner": f"root:{group}"}, target_dir
 
 
+# ── v6 (v5.66.0, Q103): signed self-update ────────────────────────────────────
+
+_SELF_PATH = "/usr/local/sbin/jen-kea-helper"
+# The optional rotation/test hook (see the module doc). A module-level constant so
+# tests monkeypatch it exactly like _TLS_ROOT.
+_EXTRA_SIGNERS = "/etc/jen-kea-helper/allowed_signers"
+_UPDATE_SIGNATURE_IDENTITY = "release@jen"
+_UPDATE_SIGNATURE_NAMESPACE = "jen-kea-helper"
+_UPDATE_MAX_HELPER = 512 * 1024
+_UPDATE_MAX_SIGNERS = 8 * 1024
+_HELPER_VERSION_RE = re.compile(rb"^HELPER_VERSION = (\d+)$", re.M)
+
+# v5.26.0's permanent trust root, copied here verbatim — see jen-update-root.py's own
+# RELEASE_SIGNERS for the full rotation note. tests/test_kea_helper.py diffs the two
+# byte for byte so they can never silently drift.
+RELEASE_SIGNERS = "release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD"
+
+# `shutil.which` alone isn't enough: this call runs under `sudo`'s own (frequently
+# stripped-down) environment, where PATH may not include the directory ssh-keygen
+# actually lives in even though the binary is right there.
+_SSH_KEYGEN_FALLBACKS = ("/usr/bin/ssh-keygen", "/usr/local/bin/ssh-keygen")
+
+
+def _find_ssh_keygen():
+    found = shutil.which("ssh-keygen")
+    if found:
+        return found
+    for cand in _SSH_KEYGEN_FALLBACKS:
+        if os.access(cand, os.X_OK):
+            return cand
+    return None
+
+
+def _extra_signers_owner_ok(path):
+    """True iff `path` is a REGULAR file, owned root:root, with no group/other write bit —
+    a separate function (rather than inline in `_extra_signers_text`) so a test, which can't
+    chown a real file to root without being root itself, can monkeypatch this one check
+    directly instead of faking filesystem ownership."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    if not stat.S_ISREG(st.st_mode):
+        return False
+    return st.st_uid == 0 and st.st_gid == 0 and not (st.st_mode & 0o022)
+
+
+def _extra_signers_text():
+    """The optional local addition to RELEASE_SIGNERS — a rotation hook (list the new key
+    here for one release before switching which key release.yml signs with) and a test
+    double (a throwaway key, for the system suite). Returns "" for anything short of a
+    small, root-owned, non-writable-by-others regular file: this file existing at all is
+    already unusual, and failing closed on a suspicious one is safer than raising."""
+    if not _extra_signers_owner_ok(_EXTRA_SIGNERS):
+        return ""
+    try:
+        with open(_EXTRA_SIGNERS, "rb") as f:
+            data = f.read(_UPDATE_MAX_SIGNERS + 1)
+    except OSError:
+        return ""
+    if len(data) > _UPDATE_MAX_SIGNERS:
+        return ""
+    return data.decode("utf-8", "replace")
+
+
+def op_update(payload):
+    helper_b64 = payload.get("helper_b64")
+    signature_b64 = payload.get("signature_b64")
+    if not isinstance(helper_b64, str) or not isinstance(signature_b64, str):
+        return {"ok": False, "error": "not-allowed"}, None
+    try:
+        candidate = base64.b64decode(helper_b64, validate=True)
+        signature = base64.b64decode(signature_b64, validate=True)
+    except (binascii.Error, ValueError):
+        return {"ok": False, "error": "not-allowed"}, None
+    if not candidate or len(candidate) > _UPDATE_MAX_HELPER or len(signature) > _UPDATE_MAX_SIGNERS:
+        return {"ok": False, "error": "not-allowed"}, None
+
+    keygen = _find_ssh_keygen()
+    if keygen is None:
+        return {"ok": False, "error": "no-ssh-keygen"}, None
+
+    tmp_dir = tempfile.mkdtemp(dir=os.path.dirname(_SELF_PATH))
+    try:
+        sig_path = os.path.join(tmp_dir, "candidate.sig")
+        signers_path = os.path.join(tmp_dir, "allowed_signers")
+        with open(sig_path, "wb") as f:
+            f.write(signature)
+        signers_text = RELEASE_SIGNERS.rstrip("\n") + "\n"
+        extra = _extra_signers_text()
+        if extra:
+            signers_text += extra.rstrip("\n") + "\n"
+        with open(signers_path, "w") as f:
+            f.write(signers_text)
+
+        try:
+            proc = subprocess.run(  # nosec B603
+                [
+                    keygen,
+                    "-Y",
+                    "verify",
+                    "-f",
+                    signers_path,
+                    "-I",
+                    _UPDATE_SIGNATURE_IDENTITY,
+                    "-n",
+                    _UPDATE_SIGNATURE_NAMESPACE,
+                    "-s",
+                    sig_path,
+                ],
+                input=candidate,
+                capture_output=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return {"ok": False, "error": "bad-signature"}, None
+        if proc.returncode != 0:
+            return {"ok": False, "error": "bad-signature"}, None
+
+        m = _HELPER_VERSION_RE.search(candidate)
+        if not m:
+            return {"ok": False, "error": "unparseable"}, None
+        new_version = int(m.group(1))
+        if new_version <= HELPER_VERSION:  # equal counts — a downgrade is never installed, even signed
+            return {"ok": False, "error": "not-newer"}, None
+
+        if os.path.islink(_SELF_PATH):
+            return {"ok": False, "error": "symlink"}, None
+
+        final_tmp = os.path.join(tmp_dir, "final")
+        with open(final_tmp, "wb") as f:
+            f.write(candidate)
+        _chown(final_tmp, 0, 0)
+        os.chmod(final_tmp, 0o755)
+        os.replace(final_tmp, _SELF_PATH)
+        return {"ok": True, "installed_version": new_version, "previous_version": HELPER_VERSION}, None
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 _OPS = {
     "version": op_version,
     "read-config": op_read_config,
@@ -561,6 +731,7 @@ _OPS = {
     "tail-log": op_tail_log,
     "install-package": op_install_package,
     "install-tls": op_install_tls,
+    "update": op_update,
 }
 
 
