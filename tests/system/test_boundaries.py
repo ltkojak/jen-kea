@@ -1126,8 +1126,10 @@ from jen.services import kea_host
 
 
 def make_candidate(version):
-    with open("/opt/jen/current/app/jen-kea-helper", "rb") as f:
-        src = f.read()
+    # kea_host._helper_source_bytes() already knows the real path (extensions.JEN_ROOT-
+    # relative) - a Docker image is /opt/jen/jen-kea-helper (flat), a bare-metal install is
+    # /opt/jen/current/app/jen-kea-helper (versioned) - never hardcode either one here.
+    src = kea_host._helper_source_bytes()
     return re.sub(rb"^HELPER_VERSION = \\d+$", f"HELPER_VERSION = {version}".encode(), src, count=1, flags=re.M)
 
 
