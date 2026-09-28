@@ -15,6 +15,11 @@ jobs:
     uses: ./.github/workflows/tests.yml
     permissions:
       contents: read
+    with:
+      # v5.66.0-beta.2 (Q104) — test the exact commit this job is about to archive, sign
+      # and extract release notes from below, not whatever main has drifted to since (a
+      # workflow_dispatch's default ref is the branch it was run from, not the tag).
+      ref: ${{ github.event.inputs.tag || github.ref }}
     secrets:
       JEN_DOCS_FORBIDDEN: ${{ secrets.JEN_DOCS_FORBIDDEN }}
 
@@ -28,6 +33,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
           fetch-depth: 0
 
       - name: Extract version info
@@ -56,15 +62,13 @@ jobs:
           # HEAD: identical on a tag push, but a workflow_dispatch with a
           # tag input used to archive the default branch and label it with
           # that tag (v5.8.4). legacy/ is export-ignored via .gitattributes.
-          git archive --format=tar.gz --prefix=jen/ "${{ steps.version.outputs.tag }}" \
-            -o dist/jen-v${{ steps.version.outputs.version }}.tar.gz
-          echo "Tarball built: $(ls -lh dist/)"
-
-      - name: Generate checksums
-        run: |
-          cd dist
-          sha256sum jen-v${{ steps.version.outputs.version }}.tar.gz > SHA256SUMS
-          cat SHA256SUMS
+          # v5.66.0-beta.2 (Q104, item h) — built uncompressed first: the helper's own
+          # signature is appended inside this tar (below) before it's ever gzipped, so
+          # a tarball install always has jen-kea-helper.sig sitting next to jen-kea-helper
+          # with no separate fetch needed.
+          git archive --format=tar --prefix=jen/ "${{ steps.version.outputs.tag }}" \
+            -o dist/jen-v${{ steps.version.outputs.version }}.tar
+          echo "Tar built: $(ls -lh dist/)"
 
       - name: Extract jen-kea-helper from the tarball
         # v5.66.0 (Q103) — the exact bytes a box will install: signing the CHECKOUT's copy
@@ -72,8 +76,41 @@ jobs:
         # reason the tarball itself is built from the tag, not HEAD, above).
         run: |
           cd dist
-          tar xzf jen-v${{ steps.version.outputs.version }}.tar.gz jen/jen-kea-helper -O > jen-kea-helper
+          tar xf jen-v${{ steps.version.outputs.version }}.tar jen/jen-kea-helper -O > jen-kea-helper
           ls -la jen-kea-helper
+
+      - name: Sign the Kea host helper
+        # v5.66.0 (Q103) — same key, a DISTINCT namespace ("jen-kea-helper", never "jen-release")
+        # so a checksum signature can never be replayed as a helper-update signature or vice
+        # versa. jen-kea-helper's own "update" op verifies this exact signature under this exact
+        # namespace before ever replacing itself.
+        run: |
+          cd dist
+          key_file="$(mktemp)"
+          trap 'rm -f "$key_file"' EXIT
+          printf '%s\n' "${{ secrets.RELEASE_SIGNING_KEY }}" > "$key_file"
+          chmod 600 "$key_file"
+          ssh-keygen -Y sign -f "$key_file" -n jen-kea-helper jen-kea-helper
+          ls -la jen-kea-helper.sig
+
+      - name: Append the helper signature into the tarball
+        # v5.66.0-beta.2 (Q104, item h) — staged under jen/ so its path inside the tar
+        # matches every other file; --owner=0 --group=0 --mode=0644 matches how `git
+        # archive` itself laid the rest of the tree down. Gzipped only after this append,
+        # so SHA256SUMS (next) checksums the exact bytes that ship.
+        run: |
+          mkdir -p dist/stage/jen
+          cp dist/jen-kea-helper.sig dist/stage/jen/jen-kea-helper.sig
+          tar --append --file=dist/jen-v${{ steps.version.outputs.version }}.tar \
+            -C dist/stage --owner=0 --group=0 --mode=0644 jen/jen-kea-helper.sig
+          gzip -9 dist/jen-v${{ steps.version.outputs.version }}.tar
+          echo "Tarball built: $(ls -lh dist/)"
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum jen-v${{ steps.version.outputs.version }}.tar.gz > SHA256SUMS
+          cat SHA256SUMS
 
       - name: Sign checksums
         # v5.26.0 (Q22) — every release from here on is signed with the
@@ -92,19 +129,27 @@ jobs:
           ssh-keygen -Y sign -f "$key_file" -n jen-release SHA256SUMS
           ls -la SHA256SUMS.sig
 
-      - name: Sign the Kea host helper
-        # v5.66.0 (Q103) — same key, a DISTINCT namespace ("jen-kea-helper", never "jen-release")
-        # so a checksum signature can never be replayed as a helper-update signature or vice
-        # versa. jen-kea-helper's own "update" op verifies this exact signature under this exact
-        # namespace before ever replacing itself.
+      - name: Verify both signatures before publishing
+        # v5.66.0-beta.2 (Q104, item f) — a release job that signs but never re-checks its
+        # own output could publish a mis-signed release without ever finding out. Verify
+        # against RELEASE_SIGNERS as extracted from the TARBALL'S OWN jen-update-root.py
+        # (the exact copy this release ships, not this checkout's), the same "verify what
+        # you actually shipped" discipline as building the tarball from the tag rather
+        # than HEAD, above. Either failure fails the job before a release is ever created.
         run: |
           cd dist
-          key_file="$(mktemp)"
-          trap 'rm -f "$key_file"' EXIT
-          printf '%s\n' "${{ secrets.RELEASE_SIGNING_KEY }}" > "$key_file"
-          chmod 600 "$key_file"
-          ssh-keygen -Y sign -f "$key_file" -n jen-kea-helper jen-kea-helper
-          ls -la jen-kea-helper.sig
+          signers_line="$(tar xzf jen-v${{ steps.version.outputs.version }}.tar.gz jen/jen-update-root.py -O \
+            | sed -n 's/^RELEASE_SIGNERS = "\(.*\)"$/\1/p')"
+          if [[ -z "$signers_line" ]]; then
+            echo "::error::could not find RELEASE_SIGNERS in the tarball's own jen-update-root.py"
+            exit 1
+          fi
+          printf '%s\n' "$signers_line" > allowed_signers
+          ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-release \
+            -s SHA256SUMS.sig < SHA256SUMS
+          ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper \
+            -s jen-kea-helper.sig < jen-kea-helper
+          echo "Both signatures verified against the tarball's own RELEASE_SIGNERS."
 
       - name: Extract release notes from CHANGELOG
         id: notes
