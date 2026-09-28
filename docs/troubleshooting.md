@@ -221,9 +221,11 @@ Two failure signatures, both meaning "Jen fell back to the legacy root
 - `jen-kea-helper: command not found` / `No such file or directory` —
   the **helper isn't installed**. Use **Install helper** in Settings →
   Kea → SSH (needs the legacy `/etc/sudoers.d/jen-kea` grant present
-  once), or copy it by hand:
-  `sudo install -o root -g root -m 0755 /opt/jen/current/app/jen-kea-helper /usr/local/sbin/jen-kea-helper`
-  (`/opt/jen/jen-kea-helper` on a pre-5.14 flat install).
+  once), or copy it by hand — the verified one-liner in **Admin Guide
+  → Kea host helper** (v5.66.0-beta.2 ships `jen-kea-helper.sig`
+  alongside the helper itself in `/opt/jen/current/app/`, so the same
+  offline procedure there works straight from the Jen host's own tree,
+  no network needed on either side).
 
 Legacy grant: the old `python3` = root file is `/etc/sudoers.d/jen-kea`. Jen
 needs it for one run to install the helper, and — below helper v6 — for one

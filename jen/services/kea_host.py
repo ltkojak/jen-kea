@@ -39,6 +39,16 @@ logger = logging.getLogger(__name__)
 # one-liner below (v5.65.13, Q102), never for anything that reaches over the network itself.
 _GITHUB_REPO = "ltkojak/jen-kea"
 
+# v5.66.0-beta.2 (Q104, item g) — byte-identical to the same-named constant in
+# jen-update-root.py and jen-kea-helper (tests/test_kea_host.py diffs all three the same way
+# tests/test_kea_helper.py already diffs the first two). Jen's own copy exists so
+# verify_helper_signature() below can check a helper signature LOCALLY, before ever sending
+# it to a Kea host, and so the by-hand download one-liner can embed it directly — a rotation
+# adds the new key here too, in the same commit as the other two copies.
+RELEASE_SIGNERS = "release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD"
+_RELEASE_SIGNATURE_IDENTITY = "release@jen"
+_HELPER_SIGNATURE_NAMESPACE = "jen-kea-helper"
+
 HELPER_PATH = "/usr/local/sbin/jen-kea-helper"
 JEN_HELPER_MIN_VERSION = 1
 # v5.16.0 — the version Jen wants for atomic-guarded writes + external
@@ -1097,17 +1107,57 @@ def _helper_source_bytes() -> bytes:
 
 _HELPER_SIG_MAX = 8 * 1024
 _HELPER_SIG_FETCH_TIMEOUT = 10
+_HELPER_SIG_VERIFY_TIMEOUT = 10
 
 
-def helper_signature() -> bytes | None:
-    """The release signature for the jen-kea-helper file this install would send in a signed
-    update (v5.66.0, Q103). Prefers the sibling file `JEN_ROOT/jen-kea-helper.sig`, written by
-    jen-update-root.py on every self-update from this release on; falls back to fetching it
-    from this release's own GitHub asset — a hand-installed tarball, a Docker image built from
-    source, and a dev checkout all lack the sibling file — over https, the fixed GitHub
-    releases/download prefix only, capped at 8 KiB. Returns None for a routine "not available"
-    case (no sibling file, a network error, an oversize response); never raises, so the caller
-    words one clean refusal either way."""
+def verify_helper_signature(candidate: bytes, sig: bytes) -> bool:
+    """v5.66.0-beta.2 (Q104, item g) — confirm `sig` is a genuine `jen-kea-helper`-namespace
+    signature over these EXACT `candidate` bytes, issued by RELEASE_SIGNERS. The same check
+    jen-kea-helper's own `update` op performs on the Kea host, run here FIRST so a stale,
+    corrupted, or mismatched local signature is caught before Jen ever spends a round trip
+    sending it — mirrors jen-update-root.py's verify_release_signature() (a byte-identical
+    RELEASE_SIGNERS, a throwaway temp dir for both files, the same subprocess shape). Never
+    raises: a missing ssh-keygen, a timeout, or any other transport hiccup is just "not
+    verified", never an exception the caller has to handle specially."""
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            signers_path = Path(tmp) / "allowed_signers"
+            sig_path = Path(tmp) / "jen-kea-helper.sig"
+            signers_path.write_text(RELEASE_SIGNERS)
+            sig_path.write_bytes(sig)
+            result = subprocess.run(  # nosec B603 B607 — fixed argv, no shell, a throwaway temp dir
+                [
+                    "ssh-keygen",
+                    "-Y",
+                    "verify",
+                    "-f",
+                    str(signers_path),
+                    "-I",
+                    _RELEASE_SIGNATURE_IDENTITY,
+                    "-n",
+                    _HELPER_SIGNATURE_NAMESPACE,
+                    "-s",
+                    str(sig_path),
+                ],
+                input=candidate,
+                capture_output=True,
+                timeout=_HELPER_SIG_VERIFY_TIMEOUT,
+            )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
+def _local_helper_signature(candidate: bytes) -> bytes | None:
+    """The sibling file `JEN_ROOT/jen-kea-helper.sig`, written by jen-update-root.py on every
+    self-update from v5.66.0 on — read bounded (v5.66.0-beta.2, Q104: the old read here had no
+    cap at all) and verified against `candidate` before being trusted. Returns None (never
+    raises) for "absent", "oversize", or "doesn't verify against these bytes" alike — the
+    caller can't tell those apart and doesn't need to; it just falls through to a fetch."""
     import os
 
     from jen import extensions
@@ -1115,12 +1165,24 @@ def helper_signature() -> bytes | None:
     sig_path = os.path.join(extensions.JEN_ROOT, "jen-kea-helper.sig")
     try:
         with open(sig_path, "rb") as f:
-            data = f.read()
-        if data:
-            return data
+            data = f.read(_HELPER_SIG_MAX + 1)
     except OSError:
-        pass
+        return None
+    if not data or len(data) > _HELPER_SIG_MAX:
+        return None
+    if not verify_helper_signature(candidate, data):
+        return None
+    return data
 
+
+def _fetch_helper_signature(candidate: bytes) -> bytes | None:
+    """This release's own GitHub asset — a hand-installed tarball, a Docker image built from
+    source, and a dev checkout all lack the sibling file, and (v5.66.0-beta.2, Q104) so does a
+    box whose local copy no longer verifies (a corrupted sibling file, or a signature left over
+    from before a key rotation). Over https, the fixed GitHub releases/download prefix only,
+    read bounded to _HELPER_SIG_MAX, and verified the same way the local copy is before being
+    trusted. Returns None for a routine "not available" case (network error, oversize response,
+    doesn't verify); never raises, so the caller words one clean refusal either way."""
     import urllib.request
 
     from jen import JEN_VERSION
@@ -1134,7 +1196,23 @@ def helper_signature() -> bytes | None:
         return None
     if not data or len(data) > _HELPER_SIG_MAX:
         return None
+    if not verify_helper_signature(candidate, data):
+        return None
     return data
+
+
+def helper_signature(candidate: bytes) -> bytes | None:
+    """The release signature for the jen-kea-helper file this install would send in a signed
+    update (v5.66.0, Q103). v5.66.0-beta.2 (Q104, item g) — now PRE-VERIFIED against
+    `candidate` (the exact bytes about to be sent) before either copy is trusted, not just
+    fetched and handed over blindly: prefers the local sibling file if it verifies, falls back
+    to a fresh fetch from this release's own GitHub asset if it doesn't (or is absent). Returns
+    None only when neither source produces a signature that verifies against these exact
+    bytes; never raises, so the caller words one clean refusal either way."""
+    local = _local_helper_signature(candidate)
+    if local is not None:
+        return local
+    return _fetch_helper_signature(candidate)
 
 
 def _source_version(source: str) -> int:
@@ -1154,18 +1232,43 @@ def _source_build(source: str) -> int:
 
 
 def _helper_download_command() -> str:
-    """The by-hand copy command, chained with a download step. v5.65.13 (Q102) — the old wording
-    (`sudo install -o root -g root -m 0755 ./jen-kea-helper ...`) assumed the file was already
-    sitting in the operator's current directory ON THE KEA HOST, which it usually isn't — the file
-    lives on the JEN host's own install tree. Fetches the exact file shipped with the running
-    Jen's own release tag, which is versioned right alongside HELPER_VERSION."""
+    """The ONE by-hand fallback anywhere in this app for installing jen-kea-helper — and
+    (v5.66.0-beta.2, Q104, item b) now a VERIFIED one-liner, never an unverified copy. The old
+    wording (v5.65.13, Q102: `curl ... -o /tmp/jen-kea-helper && sudo install ...`) fetched a
+    release asset over plain https and installed it with no check at all — anyone who could
+    intercept or spoof that one connection controlled what ran as root on the Kea host. This
+    fetches BOTH the helper and its signature from this release's own GitHub asset, verifies
+    the signature against the same embedded RELEASE_SIGNERS jen_update_root.py and
+    jen-kea-helper itself carry — by hand, but the EXACT same `ssh-keygen -Y verify` check
+    verify_helper_signature() runs in Python — and only then installs it. A bad signature (a
+    corrupted download, a stripped mirror, tampering in transit) makes ssh-keygen exit
+    non-zero, which the `&&` chain turns into "nothing gets installed", not "install anyway"."""
     from jen import JEN_VERSION
 
-    url = f"https://raw.githubusercontent.com/{_GITHUB_REPO}/v{JEN_VERSION}/jen-kea-helper"
+    base = f"https://github.com/{_GITHUB_REPO}/releases/download/v{JEN_VERSION}"
     return (
-        f"curl -fsSL {url} -o /tmp/jen-kea-helper && "
-        "sudo install -o root -g root -m 0755 /tmp/jen-kea-helper /usr/local/sbin/jen-kea-helper"
+        'd="$(mktemp -d)" && cd "$d" && '
+        f"curl -fsSLO {base}/jen-kea-helper && "
+        f"curl -fsSLO {base}/jen-kea-helper.sig && "
+        f"printf '%s\\n' '{RELEASE_SIGNERS}' > allowed_signers && "
+        f"ssh-keygen -Y verify -f allowed_signers -I {_RELEASE_SIGNATURE_IDENTITY} "
+        f"-n {_HELPER_SIGNATURE_NAMESPACE} -s jen-kea-helper.sig < jen-kea-helper && "
+        "sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper"
     )
+
+
+def _send_helper_update(server: dict, candidate: bytes, sig: bytes) -> dict:
+    """Build the `update` op payload and send it — split out of _install_helper_signed
+    (v5.66.0-beta.2, Q104) so a bad-signature retry with a freshly fetched signature can call
+    it a second time without duplicating the base64/payload plumbing. May raise HelperMissing
+    or HelperError, exactly as helper_call() itself does; the caller handles both."""
+    import base64
+
+    payload = {
+        "helper_b64": base64.b64encode(candidate).decode(),
+        "signature_b64": base64.b64encode(sig).decode(),
+    }
+    return helper_call(server, "update", payload, timeout=60)
 
 
 def _install_helper_signed(server: dict, target: int, target_build: int, current: int) -> dict:
@@ -1173,34 +1276,46 @@ def _install_helper_signed(server: dict, target: int, target_build: int, current
     `update` op instead of the legacy engine. No sudoers grant is asked for or needed — the op
     itself verifies a release-key signature and a strictly higher HELPER_VERSION before it ever
     replaces itself; this function's only job is to supply the candidate bytes and the matching
-    signature, and to word whatever the op refuses."""
-    name = server.get("name", "this host")
-    by_hand = _helper_download_command()
-    sig = helper_signature()
-    if sig is None:
-        from jen import JEN_VERSION
+    signature, and to word whatever the op refuses.
 
-        return {
-            "ok": False,
-            "version": current,
-            "code": "no-signature",
-            "detail": f"no signature available for v{JEN_VERSION} (offline?) — copy the helper by hand: {by_hand}",
-        }
+    v5.66.0-beta.2 (Q104, item g) — the signature is now pre-verified locally (helper_signature())
+    before it's ever sent, so a `bad-signature` reply from the HOST right after a LOCALLY-sourced
+    signature is unexpected enough to be worth one retry with a freshly fetched signature before
+    reporting failure — it can only mean the sibling file, though cryptographically valid a
+    moment ago, is somehow not what this exact release ships (e.g. a stale file left over from a
+    key rotation the host's own trust hasn't caught up to yet)."""
+    name = server.get("name", "this host")
     try:
         candidate = _helper_source_bytes()
     except OSError as e:
         return {"ok": False, "version": current, "code": "no-source", "detail": str(e)}
 
-    import base64
+    local_sig = _local_helper_signature(candidate)
+    used_local = local_sig is not None
+    sig = local_sig if used_local else _fetch_helper_signature(candidate)
+    if sig is None:
+        return {
+            "ok": False,
+            "version": current,
+            "code": "no-signature",
+            "detail": (
+                "the signature shipped with this install does not match its helper — "
+                "reinstall Jen from the release tarball"
+            ),
+        }
 
-    payload = {
-        "helper_b64": base64.b64encode(candidate).decode(),
-        "signature_b64": base64.b64encode(sig).decode(),
-    }
     try:
-        resp = helper_call(server, "update", payload, timeout=60)
+        resp = _send_helper_update(server, candidate, sig)
     except (HelperMissing, HelperError) as e:
         return {"ok": False, "version": current, "code": "error", "detail": str(e)}
+
+    if used_local and not resp.get("ok") and resp.get("error") == "bad-signature":
+        fetched = _fetch_helper_signature(candidate)
+        if fetched is not None:
+            try:
+                resp = _send_helper_update(server, candidate, fetched)
+            except (HelperMissing, HelperError) as e:
+                return {"ok": False, "version": current, "code": "error", "detail": str(e)}
 
     if resp.get("ok"):
         recheck = check_helper(server)
@@ -1222,13 +1337,19 @@ def _install_helper_signed(server: dict, target: int, target_build: int, current
             ),
         }
 
+    by_hand = _helper_download_command()
     reason = resp.get("error") or "error"
     wording = {
+        # v5.66.0-beta.2 (Q104, item b) — the ONE bad-signature retry above already tried a
+        # freshly fetched signature; a second refusal means the release itself is the problem,
+        # not this host's copy of anything — and a by-hand install would fail the exact same
+        # verification, so it's never offered as a way around it.
         "bad-signature": (
             f"{name} refused the signature on this release's helper — that points at a problem with the "
-            f"release itself, not this host; if it persists, copy the helper by hand: {by_hand}"
+            f"release itself, not this host. Do not install it by hand: the same signature would fail "
+            f"there too. Reinstall Jen from the release tarball and retry; if it persists, please report it."
         ),
-        "no-ssh-keygen": f"{name} has no ssh-keygen (openssh-client) — install it there, or copy the helper by hand: {by_hand}",
+        "no-ssh-keygen": f"{name} has no ssh-keygen (openssh-client) — install it there and retry.",
         "not-newer": f"{name} already reports v{current}, which is not older than this release's helper — nothing to do.",
         "symlink": (
             f"the installed path on {name} is a symlink, not a plain file — investigate it by hand before "

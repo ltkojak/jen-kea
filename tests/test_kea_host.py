@@ -7,8 +7,12 @@ legacy fallback against the same fake replying with the OLD tokens.
 """
 
 import hashlib
+import importlib.util
 import json
 import pathlib
+import shutil
+import subprocess
+from importlib.machinery import SourceFileLoader
 
 import pytest
 
@@ -16,6 +20,9 @@ from jen.services import kea_host
 from tests._kea6_helpers import FakeSSHClient
 
 _JEN = pathlib.Path(__file__).resolve().parent.parent / "jen"
+_REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+_HELPER_SCRIPT_PATH = _REPO_ROOT / "jen-kea-helper"
+_UPDATE_ROOT_PATH = _REPO_ROOT / "jen-update-root.py"
 
 SERVER = {"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5", "ssh_user": "kea", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
 
@@ -58,6 +65,35 @@ def _connect_seq(monkeypatch, *queues):
 
     monkeypatch.setattr(kea_host.__kea6, "_connect_ssh", connect)
     return made
+
+
+@pytest.fixture(scope="module")
+def signing_key(tmp_path_factory):
+    """v5.66.0-beta.2 (Q104, item g) — a throwaway ed25519 key pair, generated once per test
+    module run, in the same "allowed signers" format as kea_host.RELEASE_SIGNERS. Mirrors
+    tests/test_kea_helper.py's own fixture of the same name; skipped only if ssh-keygen itself
+    is unavailable — never true on CI's ubuntu runner (openssh-client), true here only on a dev
+    box that has somehow removed it."""
+    if shutil.which("ssh-keygen") is None:
+        pytest.skip("ssh-keygen not available")
+    d = tmp_path_factory.mktemp("q104-kea-host-signing-key")
+    key_path = d / "key"
+    subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-f", str(key_path)], check=True, capture_output=True)
+    pub_line = (d / "key.pub").read_text().strip().split()
+    return {"priv": str(key_path), "signers_line": f"release@jen {pub_line[0]} {pub_line[1]}"}
+
+
+def _sign(key_path, namespace, data, tmp_path, name="candidate"):
+    """Mirrors tests/test_kea_helper.py's own _sign(): `ssh-keygen -Y sign` signs a FILE
+    (producing `<file>.sig` beside it), unlike `-Y verify` which reads the message on stdin."""
+    cand = tmp_path / name
+    cand.write_bytes(data)
+    subprocess.run(
+        ["ssh-keygen", "-Y", "sign", "-f", str(key_path), "-n", namespace, str(cand)],
+        check=True,
+        capture_output=True,
+    )
+    return (tmp_path / f"{name}.sig").read_bytes()
 
 
 class TestHelperCall:
@@ -334,6 +370,69 @@ class TestNoDirectRootPathsOutsideKeaHost:
         assert not offenders, offenders
 
 
+class TestNoUnverifiedByHandFallback:
+    """v5.66.0-beta.2 (Q104, item b) — the by-hand fallback for installing jen-kea-helper is
+    now ONE verified one-liner (_helper_download_command(): fetch the helper AND its
+    signature, `ssh-keygen -Y verify` locally, only then `sudo install`). Nothing in the app
+    or its docs may show an operator a DIFFERENT, unverified way to get the helper onto a Kea
+    host — that gap (v5.65.13's plain `curl ... -o /tmp/jen-kea-helper && sudo install ...`,
+    trusting whatever bytes came back with no check at all) is exactly what this Q closes."""
+
+    _ROOTS = ("jen", "templates", "docs")
+    _EXTS = (".py", ".html", ".md")
+
+    def _text_files(self):
+        repo_root = _JEN.parent
+        for root_name in self._ROOTS:
+            root = repo_root / root_name
+            if not root.is_dir():
+                continue
+            for p in root.rglob("*"):
+                if p.is_file() and p.suffix in self._EXTS and "__pycache__" not in p.parts:
+                    yield p
+
+    def test_raw_githubusercontent_never_appears_alongside_jen_kea_helper(self):
+        # PLUGIN_REGISTRY_URL legitimately uses raw.githubusercontent.com elsewhere (an
+        # unrelated, read-only JSON metadata fetch) — this only flags the combination that
+        # used to be the OLD unverified helper-download URL.
+        offenders = []
+        for p in self._text_files():
+            for line in p.read_text(encoding="utf-8").splitlines():
+                if "raw.githubusercontent.com" in line and "jen-kea-helper" in line:
+                    offenders.append(str(p.relative_to(_JEN.parent)))
+        assert not offenders, offenders
+
+    def test_a_sudo_install_of_the_helper_never_appears_without_a_verify_step_in_the_same_file(self):
+        offenders = []
+        for p in self._text_files():
+            text = p.read_text(encoding="utf-8")
+            mentions_install = "sudo install" in text and "/usr/local/sbin/jen-kea-helper" in text
+            if mentions_install and "ssh-keygen -Y verify" not in text:
+                offenders.append(str(p.relative_to(_JEN.parent)))
+        assert not offenders, offenders
+
+    def test_the_old_fixed_tmp_path_is_gone(self):
+        """v5.65.13 (Q102) shipped `curl ... -o /tmp/jen-kea-helper && sudo install ...
+        /tmp/jen-kea-helper ...` with no verification at all — a distinctive literal fragment
+        of the unverified command that should never reappear as LIVE text anywhere (kea_host.py
+        keeps one mention in its own docstring, quoting that old wording as history — excluded
+        by name, the same way this class's other checks exclude the unrelated plugin registry)."""
+        offenders = []
+        for p in self._text_files():
+            if p.name == "kea_host.py":
+                continue
+            if "/tmp/jen-kea-helper" in p.read_text(encoding="utf-8"):
+                offenders.append(str(p.relative_to(_JEN.parent)))
+        assert not offenders, offenders
+
+    def test_the_download_command_itself_is_the_verified_one_liner(self):
+        cmd = kea_host._helper_download_command()
+        assert "ssh-keygen -Y verify" in cmd
+        assert cmd.index("ssh-keygen -Y verify") < cmd.index("sudo install")
+        assert "/tmp/" not in cmd
+        assert "raw.githubusercontent.com" not in cmd
+
+
 class TestHelperDeployment:
     def test_render_install_helper_script_embeds_source_and_sudoers_line(self):
         from jen.services.kea_authoring import render_install_helper_script
@@ -490,7 +589,7 @@ class TestInstallHelperAlreadyComparesBuilds:
         monkeypatch.setattr(kea_host, "check_helper", lambda s: {"ok": True, "version": 7, "build": 3})
         monkeypatch.setattr(kea_host, "legacy_grant_status", lambda s: _OK_GRANT)
         signed_called = []
-        monkeypatch.setattr(kea_host, "helper_signature", lambda: signed_called.append(1) or b"sig")
+        monkeypatch.setattr(kea_host, "_local_helper_signature", lambda candidate: signed_called.append(1) or b"sig")
         monkeypatch.setattr(
             kea_host,
             "helper_call",
@@ -507,7 +606,7 @@ class TestInstallHelperAlreadyComparesBuilds:
         monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 7\nHELPER_BUILD = 9\n")
         monkeypatch.setattr(kea_host, "check_helper", lambda s: {"ok": True, "version": 7, "build": 9})
         signed_called = []
-        monkeypatch.setattr(kea_host, "helper_signature", lambda: signed_called.append(1) or b"sig")
+        monkeypatch.setattr(kea_host, "_local_helper_signature", lambda candidate: signed_called.append(1) or b"sig")
 
         res = kea_host.install_helper(SERVER)
         assert res == {"ok": True, "version": 7, "code": "already", "detail": ""}
@@ -524,22 +623,71 @@ class TestInstallHelperAlreadyComparesBuilds:
         assert res == {"ok": True, "version": 6, "code": "already", "detail": ""}
 
 
+class TestVerifyHelperSignature:
+    """v5.66.0-beta.2 (Q104, item g) — the same check jen-kea-helper's own `update` op runs on
+    the Kea host, run here first so Jen never sends a signature it hasn't already checked
+    itself. Uses a THROWAWAY key (never the embedded, real RELEASE_SIGNERS — a checkout's
+    helper source is not signed by the real key, and weakening the check to make a test pass
+    would defeat the whole point)."""
+
+    def test_a_genuine_signature_verifies(self, monkeypatch, signing_key, tmp_path):
+        monkeypatch.setattr(kea_host, "RELEASE_SIGNERS", signing_key["signers_line"])
+        candidate = b"the exact helper bytes about to be sent"
+        sig = _sign(signing_key["priv"], "jen-kea-helper", candidate, tmp_path)
+        assert kea_host.verify_helper_signature(candidate, sig) is True
+
+    def test_a_signature_over_different_bytes_does_not_verify(self, monkeypatch, signing_key, tmp_path):
+        monkeypatch.setattr(kea_host, "RELEASE_SIGNERS", signing_key["signers_line"])
+        sig = _sign(signing_key["priv"], "jen-kea-helper", b"the original bytes", tmp_path)
+        assert kea_host.verify_helper_signature(b"tampered bytes", sig) is False
+
+    def test_a_signature_under_the_wrong_namespace_does_not_verify(self, monkeypatch, signing_key, tmp_path):
+        monkeypatch.setattr(kea_host, "RELEASE_SIGNERS", signing_key["signers_line"])
+        candidate = b"the exact helper bytes"
+        sig = _sign(signing_key["priv"], "jen-release", candidate, tmp_path)  # checksum namespace, not helper's
+        assert kea_host.verify_helper_signature(candidate, sig) is False
+
+    def test_garbage_bytes_do_not_verify(self, monkeypatch, signing_key):
+        monkeypatch.setattr(kea_host, "RELEASE_SIGNERS", signing_key["signers_line"])
+        assert kea_host.verify_helper_signature(b"anything", b"not a signature") is False
+
+    def test_release_signers_matches_jen_update_root_and_the_helper_byte_for_byte(self):
+        spec = importlib.util.spec_from_file_location("q104_update_root_twin_check", _UPDATE_ROOT_PATH)
+        update_root = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(update_root)
+        assert kea_host.RELEASE_SIGNERS == update_root.RELEASE_SIGNERS
+
+        loader = SourceFileLoader("q104_kea_helper_twin_check", str(_HELPER_SCRIPT_PATH))
+        helper_spec = importlib.util.spec_from_loader(loader.name, loader)
+        helper = importlib.util.module_from_spec(helper_spec)
+        loader.exec_module(helper)
+        assert kea_host.RELEASE_SIGNERS == helper.RELEASE_SIGNERS
+
+
 class TestHelperSignature:
     """v5.66.0 (Q103) — helper_signature() prefers the sibling file jen-update-root.py writes,
-    falls back to fetching this release's own GitHub asset."""
+    falls back to fetching this release's own GitHub asset. v5.66.0-beta.2 (Q104, item g) —
+    now PRE-VERIFIED against the candidate bytes before either copy is trusted: a sibling file
+    that doesn't verify (wrong bytes, or oversize/bounded-out) falls through to a fetch exactly
+    like an absent one does."""
 
-    def test_prefers_the_sibling_file(self, monkeypatch, tmp_path):
+    def test_prefers_the_sibling_file_when_it_verifies(self, monkeypatch, signing_key, tmp_path):
         from jen import extensions
 
-        sig_path = tmp_path / "jen-kea-helper.sig"
-        sig_path.write_bytes(b"-----BEGIN SSH SIGNATURE-----\nfake\n-----END SSH SIGNATURE-----\n")
+        monkeypatch.setattr(kea_host, "RELEASE_SIGNERS", signing_key["signers_line"])
+        candidate = b"the exact helper bytes"
+        sig = _sign(signing_key["priv"], "jen-kea-helper", candidate, tmp_path)
+        (tmp_path / "jen-kea-helper.sig").write_bytes(sig)
         monkeypatch.setattr(extensions, "JEN_ROOT", str(tmp_path))
-        assert kea_host.helper_signature() == sig_path.read_bytes()
+        assert kea_host.helper_signature(candidate) == sig
 
-    def test_falls_back_to_a_fetch_when_the_sibling_file_is_absent(self, monkeypatch, tmp_path):
+    def test_falls_back_to_a_fetch_when_the_sibling_file_is_absent(self, monkeypatch, signing_key, tmp_path):
         from jen import extensions
 
+        monkeypatch.setattr(kea_host, "RELEASE_SIGNERS", signing_key["signers_line"])
         monkeypatch.setattr(extensions, "JEN_ROOT", str(tmp_path))  # no jen-kea-helper.sig here
+        candidate = b"the exact helper bytes"
+        fetched_sig = _sign(signing_key["priv"], "jen-kea-helper", candidate, tmp_path, name="fetched")
 
         class FakeResp:
             def __enter__(self):
@@ -549,10 +697,59 @@ class TestHelperSignature:
                 return False
 
             def read(self, n):
-                return b"fetched-signature"
+                return fetched_sig
 
         monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=10: FakeResp())
-        assert kea_host.helper_signature() == b"fetched-signature"
+        assert kea_host.helper_signature(candidate) == fetched_sig
+
+    def test_falls_back_to_a_fetch_when_the_sibling_file_does_not_verify(self, monkeypatch, signing_key, tmp_path):
+        """A sibling file signed over the WRONG bytes (stale — left over from a previous
+        release, say) must never be trusted just because it's present and well-formed."""
+        from jen import extensions
+
+        monkeypatch.setattr(kea_host, "RELEASE_SIGNERS", signing_key["signers_line"])
+        candidate = b"the exact helper bytes"
+        stale_sig = _sign(signing_key["priv"], "jen-kea-helper", b"stale candidate bytes", tmp_path, name="stale")
+        (tmp_path / "jen-kea-helper.sig").write_bytes(stale_sig)
+        monkeypatch.setattr(extensions, "JEN_ROOT", str(tmp_path))
+        fetched_sig = _sign(signing_key["priv"], "jen-kea-helper", candidate, tmp_path, name="fetched")
+
+        class FakeResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self, n):
+                return fetched_sig
+
+        monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=10: FakeResp())
+        assert kea_host.helper_signature(candidate) == fetched_sig
+
+    def test_an_oversize_sibling_file_falls_through_to_a_fetch(self, monkeypatch, signing_key, tmp_path):
+        """v5.66.0-beta.2 (Q104, item g) — the local read had no cap at all before this Q; now
+        it's bounded the same way the fetch always was."""
+        from jen import extensions
+
+        monkeypatch.setattr(kea_host, "RELEASE_SIGNERS", signing_key["signers_line"])
+        (tmp_path / "jen-kea-helper.sig").write_bytes(b"x" * (kea_host._HELPER_SIG_MAX + 1))
+        monkeypatch.setattr(extensions, "JEN_ROOT", str(tmp_path))
+        candidate = b"the exact helper bytes"
+        fetched_sig = _sign(signing_key["priv"], "jen-kea-helper", candidate, tmp_path, name="fetched")
+
+        class FakeResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self, n):
+                return fetched_sig
+
+        monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=10: FakeResp())
+        assert kea_host.helper_signature(candidate) == fetched_sig
 
     def test_a_fetch_failure_returns_none_not_raises(self, monkeypatch, tmp_path):
         from jen import extensions
@@ -563,7 +760,7 @@ class TestHelperSignature:
             raise OSError("network down")
 
         monkeypatch.setattr("urllib.request.urlopen", _raise)
-        assert kea_host.helper_signature() is None
+        assert kea_host.helper_signature(b"candidate bytes") is None
 
     def test_an_oversize_fetch_returns_none(self, monkeypatch, tmp_path):
         from jen import extensions
@@ -581,7 +778,27 @@ class TestHelperSignature:
                 return b"x" * n  # always fills exactly the requested (cap + 1) read
 
         monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=10: FakeResp())
-        assert kea_host.helper_signature() is None
+        assert kea_host.helper_signature(b"candidate bytes") is None
+
+    def test_a_fetched_signature_that_does_not_verify_returns_none(self, monkeypatch, signing_key, tmp_path):
+        from jen import extensions
+
+        monkeypatch.setattr(kea_host, "RELEASE_SIGNERS", signing_key["signers_line"])
+        monkeypatch.setattr(extensions, "JEN_ROOT", str(tmp_path))
+        wrong_sig = _sign(signing_key["priv"], "jen-kea-helper", b"different bytes entirely", tmp_path)
+
+        class FakeResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self, n):
+                return wrong_sig
+
+        monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=10: FakeResp())
+        assert kea_host.helper_signature(b"the exact helper bytes") is None
 
 
 class TestInstallHelperSigned:
@@ -591,7 +808,7 @@ class TestInstallHelperSigned:
     def test_takes_the_signed_path_not_legacy(self, monkeypatch, quiet_status):
         monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 7\n")
         monkeypatch.setattr(kea_host, "_helper_source_bytes", lambda: b"HELPER_VERSION = 7\n")
-        monkeypatch.setattr(kea_host, "helper_signature", lambda: b"sig-bytes")
+        monkeypatch.setattr(kea_host, "_local_helper_signature", lambda candidate: b"sig-bytes")
         monkeypatch.setattr(
             kea_host,
             "legacy_grant_status",
@@ -613,12 +830,16 @@ class TestInstallHelperSigned:
 
     def test_no_signature_available_is_reported_distinctly(self, monkeypatch, quiet_status):
         monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 7\n")
+        monkeypatch.setattr(kea_host, "_helper_source_bytes", lambda: b"HELPER_VERSION = 7\n")
         monkeypatch.setattr(kea_host, "check_helper", lambda s: {"ok": True, "version": 6})
-        monkeypatch.setattr(kea_host, "helper_signature", lambda: None)
+        monkeypatch.setattr(kea_host, "_local_helper_signature", lambda candidate: None)
+        monkeypatch.setattr(kea_host, "_fetch_helper_signature", lambda candidate: None)
 
         res = kea_host.install_helper(SERVER)
         assert res["ok"] is False and res["code"] == "no-signature"
-        assert "copy the helper by hand" in res["detail"]
+        # v5.66.0-beta.2 (Q104, item g) — no by-hand fallback offered here: a Jen box that
+        # can't produce ANY signature that verifies is itself the thing to fix.
+        assert "reinstall Jen from the release tarball" in res["detail"]
 
     @pytest.mark.parametrize(
         "helper_error,expected_code",
@@ -637,7 +858,11 @@ class TestInstallHelperSigned:
         monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 7\n")
         monkeypatch.setattr(kea_host, "_helper_source_bytes", lambda: b"HELPER_VERSION = 7\n")
         monkeypatch.setattr(kea_host, "check_helper", lambda s: {"ok": True, "version": 6})
-        monkeypatch.setattr(kea_host, "helper_signature", lambda: b"sig-bytes")
+        monkeypatch.setattr(kea_host, "_local_helper_signature", lambda candidate: b"sig-bytes")
+        # v5.66.0-beta.2 (Q104, item g) — a "bad-signature" reply retries with a fetched
+        # signature before reporting; forcing that fetch to fail keeps THIS test about the
+        # wording of each code, not the retry itself (which TestBadSignatureRetry covers).
+        monkeypatch.setattr(kea_host, "_fetch_helper_signature", lambda candidate: None)
         monkeypatch.setattr(
             kea_host, "helper_call", lambda s, op, payload=None, timeout=60: {"ok": False, "error": helper_error}
         )
@@ -651,7 +876,7 @@ class TestInstallHelperSigned:
         monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 7\n")
         monkeypatch.setattr(kea_host, "_helper_source_bytes", lambda: b"HELPER_VERSION = 7\n")
         monkeypatch.setattr(kea_host, "check_helper", lambda s: {"ok": True, "version": 6})
-        monkeypatch.setattr(kea_host, "helper_signature", lambda: b"sig-bytes")
+        monkeypatch.setattr(kea_host, "_local_helper_signature", lambda candidate: b"sig-bytes")
 
         def _raise(*a, **k):
             raise kea_host.HelperMissing("gone")
@@ -663,7 +888,7 @@ class TestInstallHelperSigned:
     def test_stale_after_signed_update_is_reported(self, monkeypatch, quiet_status):
         monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 7\n")
         monkeypatch.setattr(kea_host, "_helper_source_bytes", lambda: b"HELPER_VERSION = 7\n")
-        monkeypatch.setattr(kea_host, "helper_signature", lambda: b"sig-bytes")
+        monkeypatch.setattr(kea_host, "_local_helper_signature", lambda candidate: b"sig-bytes")
         monkeypatch.setattr(
             kea_host, "helper_call", lambda s, op, payload=None, timeout=60: {"ok": True, "installed_version": 7}
         )
@@ -678,7 +903,7 @@ class TestInstallHelperSigned:
         monkeypatch.setattr(kea_host, "legacy_grant_status", lambda s: _OK_GRANT)
         monkeypatch.setattr(kea_host, "_legacy_python3", lambda s, script, timeout=60: ("ok:", "", 0))
         signed_called = []
-        monkeypatch.setattr(kea_host, "helper_signature", lambda: signed_called.append(1) or b"x")
+        monkeypatch.setattr(kea_host, "_local_helper_signature", lambda candidate: signed_called.append(1) or b"x")
         calls = iter([{"ok": True, "version": 5}, {"ok": True, "version": 6}])
         monkeypatch.setattr(kea_host, "check_helper", lambda s: next(calls))
 
@@ -694,6 +919,89 @@ class TestInstallHelperSigned:
         res = kea_host.install_helper(SERVER)
         assert res["ok"] is False and res["code"] == "no-path"
         assert "one last hop" in res["detail"] and "signed" in res["detail"]
+
+
+class TestBadSignatureRetry:
+    """v5.66.0-beta.2 (Q104, item g) — a `bad-signature` reply from the HOST right after a
+    LOCALLY-sourced signature is unexpected enough (the local copy just passed Jen's own
+    verification) to be worth one retry with a freshly fetched signature before reporting
+    failure. Never retries a second time, and never retries when the signature Jen sent was
+    already the fetched one — there's nowhere left to fall back to."""
+
+    def _install(self, monkeypatch, quiet_status, local_sig, fetched_sig, call_results):
+        import base64
+
+        monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 7\n")
+        monkeypatch.setattr(kea_host, "_helper_source_bytes", lambda: b"HELPER_VERSION = 7\n")
+        # the initial current-version check, then (only reached on an "ok" reply) the
+        # post-update recheck — a fixed 6 for both would misreport a real success as "stale".
+        checks = iter([{"ok": True, "version": 6}, {"ok": True, "version": 7, "build": 7}])
+        monkeypatch.setattr(kea_host, "check_helper", lambda s: next(checks, {"ok": True, "version": 7, "build": 7}))
+        monkeypatch.setattr(kea_host, "_local_helper_signature", lambda candidate: local_sig)
+        monkeypatch.setattr(kea_host, "_fetch_helper_signature", lambda candidate: fetched_sig)
+
+        sent_signatures = []
+        results = iter(call_results)
+
+        def fake_helper_call(s, op, payload=None, timeout=60):
+            sent_signatures.append(base64.b64decode(payload["signature_b64"]))
+            return next(results)
+
+        monkeypatch.setattr(kea_host, "helper_call", fake_helper_call)
+        res = kea_host.install_helper(SERVER)
+        return res, sent_signatures
+
+    def test_retries_once_with_the_fetched_signature_and_succeeds(self, monkeypatch, quiet_status):
+        res, sent = self._install(
+            monkeypatch,
+            quiet_status,
+            local_sig=b"local-sig",
+            fetched_sig=b"fetched-sig",
+            call_results=[
+                {"ok": False, "error": "bad-signature"},
+                {"ok": True, "installed_version": 7, "installed_build": 7},
+            ],
+        )
+        assert sent == [b"local-sig", b"fetched-sig"]  # local tried first, then the retry
+        assert res["ok"] is True
+
+    def test_a_retry_that_also_fails_reports_bad_signature_not_a_loop(self, monkeypatch, quiet_status):
+        res, sent = self._install(
+            monkeypatch,
+            quiet_status,
+            local_sig=b"local-sig",
+            fetched_sig=b"fetched-sig",
+            call_results=[
+                {"ok": False, "error": "bad-signature"},
+                {"ok": False, "error": "bad-signature"},
+            ],
+        )
+        assert sent == [b"local-sig", b"fetched-sig"]  # exactly one retry, never a second
+        assert res["ok"] is False and res["code"] == "bad-signature"
+
+    def test_no_fetched_signature_available_means_no_retry_at_all(self, monkeypatch, quiet_status):
+        res, sent = self._install(
+            monkeypatch,
+            quiet_status,
+            local_sig=b"local-sig",
+            fetched_sig=None,
+            call_results=[{"ok": False, "error": "bad-signature"}],
+        )
+        assert sent == [b"local-sig"]  # nothing to retry with
+        assert res["ok"] is False and res["code"] == "bad-signature"
+
+    def test_bad_signature_after_an_already_fetched_signature_is_never_retried(self, monkeypatch, quiet_status):
+        """local_sig=None means the FIRST attempt already used the fetched one — there is no
+        second source left to fall back to, so this must not call helper_call a second time."""
+        res, sent = self._install(
+            monkeypatch,
+            quiet_status,
+            local_sig=None,
+            fetched_sig=b"fetched-sig",
+            call_results=[{"ok": False, "error": "bad-signature"}],
+        )
+        assert sent == [b"fetched-sig"]  # only one attempt, ever
+        assert res["ok"] is False and res["code"] == "bad-signature"
 
 
 class TestStatusTracking:

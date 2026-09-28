@@ -268,6 +268,26 @@ def fetch_text(url, timeout=15):
         return resp.read().decode()
 
 
+# v5.66.0-beta.2 (Q104, item g) — a genuine ssh-keygen -Y sign signature is a few hundred
+# bytes; the same bound kea_host.py's own local/fetched signature reads use. Only
+# _install_kea_helper_signature() (below) uses this — a "+1" read that comes back oversize
+# is treated as a fetch failure, never truncated and used anyway.
+_HELPER_SIG_MAX = 8 * 1024
+
+
+def fetch_bytes_bounded(url, max_bytes, timeout=15):
+    """Like fetch_text(), but reads at most `max_bytes` + 1 and raises if that's exceeded —
+    for small, fixed-shape assets (a signature file) where an unbounded read would let a
+    compromised or misconfigured host hand back arbitrarily large data for something that
+    should never be more than a few hundred bytes."""
+    req = urllib.request.Request(url)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = resp.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise RuntimeError(f"response exceeded {max_bytes} bytes")
+    return data
+
+
 def fetch_bytes_with_sha256(url, timeout=120):
     req = urllib.request.Request(url)
     sha256 = hashlib.sha256()
@@ -967,7 +987,7 @@ def _install_kea_helper_signature(app_dir, assets):
         log("WARNING: jen-kea-helper.sig asset URL is not a genuine GitHub release download link — not saving it.")
         return
     try:
-        sig_bytes = fetch_text(sig_asset_url).encode()
+        sig_bytes = fetch_bytes_bounded(sig_asset_url, _HELPER_SIG_MAX)
     except Exception as e:
         log(
             f"WARNING: could not fetch jen-kea-helper.sig — the Kea host helper's signed update will fetch it later: {e}"

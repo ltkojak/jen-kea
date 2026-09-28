@@ -271,6 +271,41 @@ class TestHelperUpdateSignatureTwins:
         assert jen_update_root.HELPER_SIGNATURE_NAMESPACE == helper._UPDATE_SIGNATURE_NAMESPACE
 
 
+class TestFetchBytesBounded:
+    """v5.66.0-beta.2 (Q104, item g) — fetch_bytes_bounded() is fetch_text()'s bytes-and-a-cap
+    sibling, for small fixed-shape assets (a signature file) where an unbounded read would let
+    a compromised or misconfigured host hand back arbitrarily large data for something that
+    should never be more than a few hundred bytes. Mirrors kea_host.py's own bounded reads
+    (both capped at the same 8 KiB, read as max_bytes + 1 so an exactly-oversize response is
+    still caught rather than silently truncated and accepted)."""
+
+    class _FakeResp:
+        def __init__(self, data):
+            self._data = data
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self, n):
+            return self._data[:n]
+
+    def test_a_normal_response_is_returned_whole(self, jen_update_root, monkeypatch):
+        monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=15: self._FakeResp(b"a small signature"))
+        assert jen_update_root.fetch_bytes_bounded("https://example/x.sig", 1024) == b"a small signature"
+
+    def test_a_response_over_the_cap_raises(self, jen_update_root, monkeypatch):
+        monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=15: self._FakeResp(b"x" * 20))
+        with pytest.raises(RuntimeError):
+            jen_update_root.fetch_bytes_bounded("https://example/x.sig", 10)
+
+    def test_a_response_exactly_at_the_cap_is_accepted(self, jen_update_root, monkeypatch):
+        monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout=15: self._FakeResp(b"x" * 10))
+        assert jen_update_root.fetch_bytes_bounded("https://example/x.sig", 10) == b"x" * 10
+
+
 class TestInstallKeaHelperSignature:
     """v5.66.0 (Q103) — jen-update-root.py's own side of getting the signature onto disk:
     fetch the jen-kea-helper.sig asset, verify it against the JUST-EXTRACTED helper's real
@@ -331,7 +366,7 @@ class TestInstallKeaHelperSignature:
         sig_bytes = self._sign_bytes(key_path, helper_bytes, "jen-kea-helper", tmp_path)
 
         good_url = f"{jen_update_root.GITHUB_ASSET_PREFIX}v6.0.0/jen-kea-helper.sig"
-        monkeypatch.setattr(jen_update_root, "fetch_text", lambda url, timeout=15: sig_bytes.decode())
+        monkeypatch.setattr(jen_update_root, "fetch_bytes_bounded", lambda url, max_bytes, timeout=15: sig_bytes)
         assets = [{"name": "jen-kea-helper.sig", "browser_download_url": good_url}]
 
         jen_update_root._install_kea_helper_signature(str(tmp_path), assets)
@@ -349,7 +384,7 @@ class TestInstallKeaHelperSignature:
         sig_bytes = self._sign_bytes(key_path, helper_bytes, "jen-release", tmp_path)
 
         good_url = f"{jen_update_root.GITHUB_ASSET_PREFIX}v6.0.0/jen-kea-helper.sig"
-        monkeypatch.setattr(jen_update_root, "fetch_text", lambda url, timeout=15: sig_bytes.decode())
+        monkeypatch.setattr(jen_update_root, "fetch_bytes_bounded", lambda url, max_bytes, timeout=15: sig_bytes)
         assets = [{"name": "jen-kea-helper.sig", "browser_download_url": good_url}]
 
         jen_update_root._install_kea_helper_signature(str(tmp_path), assets)
@@ -359,10 +394,25 @@ class TestInstallKeaHelperSignature:
         (tmp_path / "jen-kea-helper").write_text("HELPER_VERSION = 6\n")
         good_url = f"{jen_update_root.GITHUB_ASSET_PREFIX}v6.0.0/jen-kea-helper.sig"
 
-        def _raise(url, timeout=15):
+        def _raise(url, max_bytes, timeout=15):
             raise OSError("network is down")
 
-        monkeypatch.setattr(jen_update_root, "fetch_text", _raise)
+        monkeypatch.setattr(jen_update_root, "fetch_bytes_bounded", _raise)
+        assets = [{"name": "jen-kea-helper.sig", "browser_download_url": good_url}]
+        jen_update_root._install_kea_helper_signature(str(tmp_path), assets)  # must not raise
+        assert not (tmp_path / "jen-kea-helper.sig").exists()
+
+    def test_an_oversize_signature_is_rejected(self, jen_update_root, tmp_path, monkeypatch):
+        """v5.66.0-beta.2 (Q104, item g) — fetch_bytes_bounded() itself raises past the cap;
+        this confirms _install_kea_helper_signature actually uses it (a bound only matters if
+        every caller of a fetch actually goes through it)."""
+        (tmp_path / "jen-kea-helper").write_text("HELPER_VERSION = 6\n")
+        good_url = f"{jen_update_root.GITHUB_ASSET_PREFIX}v6.0.0/jen-kea-helper.sig"
+
+        def _oversize(url, max_bytes, timeout=15):
+            raise RuntimeError(f"response exceeded {max_bytes} bytes")
+
+        monkeypatch.setattr(jen_update_root, "fetch_bytes_bounded", _oversize)
         assets = [{"name": "jen-kea-helper.sig", "browser_download_url": good_url}]
         jen_update_root._install_kea_helper_signature(str(tmp_path), assets)  # must not raise
         assert not (tmp_path / "jen-kea-helper.sig").exists()

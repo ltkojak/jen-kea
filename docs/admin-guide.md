@@ -971,17 +971,41 @@ printf '%s\n' '# Jen (DHCP console) — SSH user "youruser". The helper op allow
 **Installing the helper.** From Jen: **Settings → Kea → SSH**, then
 **Install helper** next to the server (this uses the legacy path once —
 see below — so the old grant must still be present for the button to
-work). By hand, on the Kea host — download the exact file this Jen
-release ships, then install it (`vX.Y.Z` is your installed Jen version,
-shown on the About page):
+work). By hand, on the Kea host — this is the exact command Jen itself
+shows in every flash that offers a by-hand fallback (v5.66.0-beta.2,
+Q104): it downloads BOTH the helper and its release signature, verifies
+the signature locally with `ssh-keygen -Y verify` against the same key
+embedded in Jen itself, and only installs it once that verification
+passes — nothing is ever installed unverified (`vX.Y.Z` is your
+installed Jen version, shown on the About page):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ltkojak/jen-kea/vX.Y.Z/jen-kea-helper -o /tmp/jen-kea-helper && sudo install -o root -g root -m 0755 /tmp/jen-kea-helper /usr/local/sbin/jen-kea-helper
+d="$(mktemp -d)" && cd "$d" && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper.sig && printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
 ```
 
 then add the sudoers line above. **Settings → Kea → SSH** shows the
 installed version for each host once it is reachable — green when it's
-current, amber ("upgrade available") when it isn't.
+current, amber ("upgrade available") when it isn't. A bad signature (a
+corrupted download, a stripped mirror, tampering in transit) makes
+`ssh-keygen` exit non-zero, and the `&&` chain means nothing gets
+installed — never "install anyway".
+
+**Offline / air-gapped Kea host.** If the Kea host has no route to
+GitHub, fetch `jen-kea-helper` and `jen-kea-helper.sig` on any machine
+that does — they are the same two release assets the one-liner above
+downloads — copy both onto the Kea host by whatever transport you
+trust (`scp`, a USB drive), then run the same verify-then-install steps
+locally, in the directory holding both files:
+
+```bash
+printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
+```
+
+Never skip the verify step just because you trust the transport — it's
+what catches a corrupted or partial copy before it's installed as root.
+A tarball install already has both files sitting side by side in the
+extracted `jen/` directory, so this is the same two files, not a
+separate download.
 
 **Upgrading the helper.** Press **Update helper** in Settings → Kea → SSH
 (the same button, relabelled once a version is already recorded). What
@@ -989,8 +1013,8 @@ happens next depends on the host's current version — see "v5.66.0 ships
 helper v6 — signed updates, no grant" below for a host already at v6:
 below that, this still runs over the legacy `sudo python3` path — the
 old grant needs to be present for one run, same as a fresh install; if
-it's already been removed, the flash gives you the manual
-`install -m 0755` command instead. Either way Jen never trusts the
+it's already been removed, the flash gives you the same verified
+by-hand one-liner above instead. Either way Jen never trusts the
 install script's own printed version: it re-checks the freshly-updated
 host and reports what it actually says, so a copy that silently didn't
 take (a shadowing binary earlier on `$PATH`, a stale cache) reads as
@@ -1021,14 +1045,21 @@ in the table above has already made that hop.
 
 If a signed update is refused, the flash says exactly why: *the host
 refused the signature* points at a problem with the release itself, not
-this host — retry once a newer release is out, or copy the helper by
-hand; *no signature available* means Jen has no network access right
-now to fetch one — retry, or copy the helper by hand; *no ssh-keygen*
-means the Kea host is missing `openssh-client` (or its distro
-equivalent) — install it there and retry. `ssh-keygen -Y sign`/`-Y
-verify` need OpenSSH 8.0+, already true of every distro this guide
-targets (Ubuntu 22.04 ships 8.9, 24.04 ships 9.6) — no new dependency
-anywhere.
+this host — Jen already retried once with a freshly fetched signature
+before reporting it (v5.66.0-beta.2, Q104), so this is never worth
+working around by hand; the same signature would fail there too.
+Reinstall Jen from the release tarball and retry, or wait for a newer
+release. *No signature available* (reworded in the same Q — it used to
+say "offline?") means neither Jen's own local copy nor a fresh fetch
+produced a signature that verifies against this exact helper — that
+points at the Jen install itself, so the fix is the same: reinstall
+Jen from the release tarball. *No ssh-keygen* means the Kea host is
+missing `openssh-client` (or its distro equivalent) — install it there
+and retry; `ssh-keygen -Y sign`/`-Y verify` need OpenSSH 8.0+, already
+true of every distro this guide targets (Ubuntu 22.04 ships 8.9, 24.04
+ships 9.6), so this is never a new dependency, just a missing package.
+None of these three offer the by-hand line above as a way around them
+— it would fail the exact same verification, on purpose.
 
 **Key rotation.** `/etc/jen-kea-helper/allowed_signers` on the Kea host
 itself is the one place a helper update's trust root can be extended

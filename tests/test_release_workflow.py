@@ -120,6 +120,13 @@ class TestKeaHelperSigningStep:
         text = _text()
         assert "dist/jen-kea-helper.sig" in text
 
+    def test_the_helper_itself_is_also_published_as_a_release_asset(self):
+        # v5.66.0-beta.2 (Q104, item b) — the ONE by-hand fallback (_helper_download_command())
+        # fetches the helper from this exact release asset, not raw.githubusercontent.com.
+        text = _text()
+        files_block = text[text.index("files: |") : text.index("draft: false")]
+        assert "dist/jen-kea-helper\n" in files_block or files_block.rstrip().endswith("dist/jen-kea-helper")
+
     def test_signing_happens_before_the_release_is_created(self):
         text = _text()
         assert text.index("Sign the Kea host helper") < text.index("Create GitHub Release")
@@ -132,6 +139,7 @@ class TestKeaHelperSigningStep:
             "dist/jen-v${{ steps.version.outputs.version }}.tar.gz",
             "dist/SHA256SUMS",
             "dist/SHA256SUMS.sig",
+            "dist/jen-kea-helper",
             "dist/jen-kea-helper.sig",
         ]
 

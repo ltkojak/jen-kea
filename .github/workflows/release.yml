@@ -203,6 +203,7 @@ jobs:
             dist/jen-v${{ steps.version.outputs.version }}.tar.gz
             dist/SHA256SUMS
             dist/SHA256SUMS.sig
+            dist/jen-kea-helper
             dist/jen-kea-helper.sig
           draft: false
           # v5.32.0 (Q38) — a tag with a prerelease suffix (v5.33.0-beta.1,

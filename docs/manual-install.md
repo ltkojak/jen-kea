@@ -105,8 +105,11 @@ sudo chmod 750 /var/lib/jen
 ### On each Kea host (v5.11.0+)
 
 ```bash
-# copy /opt/jen/current/app/jen-kea-helper from the Jen host first, then:
-sudo install -o root -g root -m 0755 ./jen-kea-helper /usr/local/sbin/jen-kea-helper
+# copy /opt/jen/current/app/jen-kea-helper AND jen-kea-helper.sig from the Jen host first
+# (v5.66.0-beta.2 ships both, side by side, in every tarball install) — then, in the
+# directory holding both files, verify before installing (never skip this, even when you
+# trust the copy: it's what catches a corrupted or partial transfer before it runs as root):
+printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
 echo 'youruser ALL=(root) NOPASSWD: /usr/local/sbin/jen-kea-helper' | sudo tee /etc/sudoers.d/jen-kea-helper
 sudo chmod 440 /etc/sudoers.d/jen-kea-helper
 sudo visudo -c -f /etc/sudoers.d/jen-kea-helper
