@@ -290,7 +290,7 @@ exit 1
             st.KEA_A,
             "sh",
             "-c",
-            'b="$(command -v kea-dhcp4)"; mv "$b" "$b.real" && cat > "$b" && chmod 755 "$b"',
+            'b="$(command -v kea-dhcp4)"; mv "$b" "$b.real" && cat > "$b" && chmod 755 "$b" && chown root:root "$b"',
             input=wrapper,
         )
         st.sh(st.JEN, "touch /tmp/s3-proceed")
@@ -768,7 +768,7 @@ exit 1
             st.KEA_A,
             "sh",
             "-c",
-            'b="$(command -v kea-dhcp4)"; mv "$b" "$b.real" && cat > "$b" && chmod 755 "$b"',
+            'b="$(command -v kea-dhcp4)"; mv "$b" "$b.real" && cat > "$b" && chmod 755 "$b" && chown root:root "$b"',
             input=wrapper,
         )
         st.sshd_stop(st.KEA_B)
@@ -1165,15 +1165,25 @@ with app.app_context():
     # install_helper() computes its OWN `target` from _helper_source() (text) via
     # _source_version() - not from _helper_source_bytes() - so both must report v99 or it
     # short-circuits at "already" (current == target == 6) before ever reaching the signed path.
+    #
+    # v5.66.0-beta.2 (Q104, item g) - Jen now pre-verifies a signature LOCALLY, against the
+    # real embedded RELEASE_SIGNERS, before ever sending it; a throwaway key can never pass
+    # that (by design - it's not the real key), so stubbing the composed helper_signature()
+    # would no longer reach the signed path at all. Stub _local_helper_signature() instead,
+    # the same way the OLD stub bypassed Jen's fetch/local-read machinery to exercise only the
+    # REMOTE (Kea host) verification this scenario is actually about. _fetch_helper_signature()
+    # is stubbed to None too, so a bad-signature retry (also new in this Q) doesn't reach out
+    # to the real network from inside the test container.
     kea_host._helper_source = lambda: candidate99.decode()
     kea_host._helper_source_bytes = lambda: candidate99
-    kea_host.helper_signature = lambda: sig99
+    kea_host._local_helper_signature = lambda candidate: sig99
+    kea_host._fetch_helper_signature = lambda candidate: None
     results["kea_a_signed"] = kea_host.install_helper(servers["kea-a"])
     results["kea_b_signed"] = kea_host.install_helper(servers["kea-b"])
 
     kea_host._helper_source = lambda: flipped.decode("utf-8", "replace")
     kea_host._helper_source_bytes = lambda: flipped
-    kea_host.helper_signature = lambda: sig100  # signed over candidate100, not the flipped bytes
+    kea_host._local_helper_signature = lambda candidate: sig100  # signed over candidate100, not the flipped bytes
     results["kea_a_flipped"] = kea_host.install_helper(servers["kea-a"])
 emit(results)
 """
