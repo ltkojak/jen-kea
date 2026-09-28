@@ -277,6 +277,17 @@ def test_03_a_failed_restart_leaves_the_previous_config_live(stack):
     """kea_changeset: a validated config whose restart fails (the daemon exits at start) is rolled
     back — the previous config is what is on disk."""
     st.sh(st.JEN, "rm -f /tmp/s3-*", check=False)
+    precheck_out, _p = st.jen_py(
+        """
+from jen.services import kea_host
+with app.app_context():
+    only_a = [s for s in extensions.KEA_SERVERS if s["name"] == "kea-a"][0]
+    cfg, sha = kea_host.read_config_versioned(only_a, "dhcp4")
+    emit({"cfg_is_none": cfg is None, "test_config": kea_host.test_config(only_a, "dhcp4", cfg or {})})
+"""
+    )
+    precheck = emitted(precheck_out)
+    assert precheck.get("test_config", {}).get("ok") is True, f"PRECHECK before scenario 03: {precheck}"
     proc = st.jen_py_bg(CHANGESET_RESTART_FAILS)
     try:
         st.sentinel_wait(st.JEN, "/tmp/s3-before-restart", timeout=120)
