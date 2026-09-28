@@ -2,6 +2,53 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.66.0-beta.3] - 2026-09-28
+
+A recurring pattern this audit found: a safety mechanism that mostly
+works but has one edge where it quietly gives up, plus two pieces of
+documentation the project had been getting by without. Both closed here.
+
+**An unresolved rollback_failed incident is never evicted from the
+Servers page banner.** The banner keeps the most recent twenty
+incidents and already preferred dropping a resolved one over an
+unresolved one when it filled up — but with all twenty slots genuinely
+unresolved, it fell back to dropping the oldest anyway, silently losing
+the one persistent record that a daemon may still be stopped. That's
+now literal: while every remaining incident is an unresolved
+rollback_failed, the list is simply allowed to grow past its normal
+size instead of losing one. The only real bound left is a hard ceiling
+of two hundred — that many genuinely unresolved stopped daemons at once
+is a human's problem long before it's a storage one, but the stored
+note still can't be allowed to grow forever, so past that ceiling the
+oldest are dropped after all, with a loud log entry naming exactly how
+many were on the list when it happened.
+
+**docs/runbooks.md** is four numbered, standalone procedures for things
+this project's own docs had described the shape of but never written
+out as a checklist: rotating the helper signing key (both trust-root
+copies, the per-host override file, and the overlap release that keeps
+both keys valid at once); recovering from a release that shipped a
+correctly-signed but genuinely broken helper build (a build-number bump
+and a pin-file update, never re-signing the same build under the same
+numbers); installing the Kea host helper by hand, including on a host
+with no route to the internet at all; and a full scratch-VM restore
+drill for a recovery bundle, including the exact refusal text a wrong
+passphrase and a truncated or corrupted bundle both produce — verified
+against the real restore code, which treats the two as identical on
+purpose, so an attacker guessing at a passphrase never learns how close
+they got.
+
+**docs/upgrading.md** is a living page for an operator still running the
+last stable release, one section per thing they'd actually notice
+coming forward from it — the Kea host helper, the public health
+endpoint's shape, a plugin-discovery status semantic, what the Plugins
+page says when Jen itself needs upgrading first, a one-time browser
+theme reset, the Servers page's incident list, a Docker image fix, and
+a recovery-bundle format change. It's meant to stay current: every later
+release with something an operator would notice adds to it in the same
+commit as its own changelog entry, and a test makes sure nothing gets
+silently left off the page as new releases land.
+
 ## [5.66.0-beta.2] - 2026-09-28
 
 A third-party review of the v5.66.0-beta.1 archive (the signed helper-update

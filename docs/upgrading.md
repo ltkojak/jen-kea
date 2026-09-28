@@ -120,7 +120,13 @@ clean run actually covers the same servers it named, or an administrator
 dismisses it by hand (5.65.10-beta.1). Both a clean rollback and a failed
 one are also now written to the audit log (5.65.8-beta.1), and a
 rollback whose OWN restart fails is correctly shown as a failed rollback
-rather than silently logged as an ordinary abort (5.65.6-beta.1).
+rather than silently logged as an ordinary abort (5.65.6-beta.1). An
+unresolved incident is never dropped from that list to make room for a
+newer one, either, even in the extreme case of twenty or more genuinely
+unresolved failed rollbacks at once (5.66.0-beta.3) — the only real
+bound left is a hard ceiling of two hundred, since a stored note still
+can't grow forever, but you'd see the Servers page in a very bad state
+long before that ever mattered.
 
 A multi-server config push that fails partway through an SSH round trip
 now reverts every server it had already written, rather than leaving
