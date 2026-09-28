@@ -1353,7 +1353,11 @@ class TestKeaHelperRoutes:
     )
     def test_install_signed_update_failure_codes_show_the_detail(self, logged_in_client, monkeypatch, code, detail):
         """v5.66.0 (Q103) — each signed-update refusal is routed the same way no-path/stale
-        already were: the flash IS install_helper()'s own detail, verbatim."""
+        already were: the flash IS install_helper()'s own detail (HTML-escaped by the template,
+        hence comparing against markupsafe's own escape() rather than the raw string — an
+        apostrophe renders as `&#39;`)."""
+        from markupsafe import escape
+
         self._one_ssh_server(monkeypatch)
         from jen.services import kea_host
 
@@ -1361,10 +1365,12 @@ class TestKeaHelperRoutes:
             kea_host, "install_helper", lambda s: {"ok": False, "version": 6, "code": code, "detail": detail}
         )
         r = logged_in_client.post("/settings/infrastructure/install-kea-helper/1", follow_redirects=True)
-        assert detail.encode() in r.data
+        assert str(escape(detail)).encode() in r.data
 
     def test_install_not_newer_is_a_warning_not_an_error(self, logged_in_client, monkeypatch):
         """v5.66.0 (Q103) — a benign race (the recorded version was stale), never a real failure."""
+        from markupsafe import escape
+
         self._one_ssh_server(monkeypatch)
         from jen.services import kea_host
 
@@ -1373,7 +1379,7 @@ class TestKeaHelperRoutes:
             kea_host, "install_helper", lambda s: {"ok": False, "version": 6, "code": "not-newer", "detail": detail}
         )
         r = logged_in_client.post("/settings/infrastructure/install-kea-helper/1", follow_redirects=True)
-        assert detail.encode() in r.data
+        assert str(escape(detail)).encode() in r.data
         assert b"alert-warning" in r.data
 
 
