@@ -2,6 +2,62 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.65.13-beta.1] - 2026-09-27
+
+### "Update helper" refuses with "no legacy grant" even when the grant is genuinely there
+
+`legacy_grant_present()` ran one SSH probe (`sudo -n /usr/bin/python3 -c 'print(1)'`) and
+collapsed every non-zero exit code *and* every connection exception to a bare `False`, with
+nothing logged. A maintainer report traced a persistent "helper vN is installed but vN+1 needs
+the legacy python3 grant to be re-added" refusal to exactly this: sudo was refusing the command
+for a reason that had nothing to do with a missing grant, and the operator had no way to find out
+which. `legacy_grant_status()` replaces it, returning sudo's own first stderr line, the exact
+`user@host` Jen probed as, and — only when the probe fails — a summary of a full `sudo -n -l`
+naming the python3 rule(s) on the host and any later rule granting `ALL` without `NOPASSWD` that
+could be overriding them (deliberately never `sudo -n -l <command>`, whose `listpw=any` default
+reports a command as runnable as long as *any* of the caller's rules is passwordless, making it
+useless for this specific question). "Update helper"'s refusal now says what sudo actually said,
+worded for the cause (no terminal vs. a password demand), and a new **Test legacy grant** button
+on the SSH card runs the same probe on demand without attempting an install.
+
+### One SSH user, everywhere Jen needs it
+
+Two different places derived the SSH user for a Kea server, and they could disagree: the SSH
+connection itself fell back to a dict default that never actually fires (the config file always
+sets the key, defaulting it to an empty string), while the sudoers-script renderer and the status
+line already used the correct fallback to the global default. An extra Kea server configured with
+no explicit SSH override connected as an empty string while everything shown to the operator named
+the intended user. `effective_ssh_user()` is now the one place this is decided, used by the SSH
+connection, the helper installer, the grant remover, the status line, and the templates — which
+now show `user@host` rather than the user alone, so a grant pasted onto the wrong box is visible
+at a glance.
+
+### A wrong filename in the "installed" message
+
+The success flash after installing the helper pointed at `/etc/sudoers.d/jen` as the file holding
+the legacy grant to remove afterwards — that file is Jen's own self-update grant on the Jen host;
+the legacy Kea-host grant lives in `/etc/sudoers.d/jen-kea`. Fixed, and the same slip was found and
+fixed in three more places across the docs.
+
+### Every operator copy-box command is one line
+
+A multi-line heredoc pastes badly into some terminals and web consoles. Every sudoers-grant and
+helper-install command an operator is meant to copy — in the SSH settings page and in the admin
+guide — is now a single `printf '%s\n' '<line>' ... | sudo tee <file> >/dev/null && sudo chmod
+440 <file> && sudo visudo -c -f <file>` line. The by-hand helper-copy command also now chains a
+`curl` download of `jen-kea-helper` pinned to this release's own tag, instead of assuming the file
+is already sitting next to it. A new test asserts no heredoc remains in a template.
+
+### Diagnostic notes for the ordering and no-PTY causes
+
+Both the admin guide's "Legacy grant" section and the troubleshooting guide gained notes covering
+the two general causes a correct grant can still be refused (a later `/etc/sudoers.d` file
+overriding it, and `Defaults requiretty`/`use_pty` on a hardened box), plus the wrong-host case,
+with the `sudo -n -l` diagnostic and a pointer at the new Test legacy grant button. Two independent
+diagnostics from a maintainer's own box ruled out both ordering and `requiretty` as the actual
+cause there, so no sudoers file is renamed here — the guidance stays general because the
+underlying mechanism is real for other layouts.
+
 ## [5.65.12-beta.1] - 2026-09-27
 
 ### The public health endpoint carries one field
