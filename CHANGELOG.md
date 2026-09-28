@@ -2,6 +2,38 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.66.0-beta.1] - 2026-09-28
+
+### The Kea host helper updates itself — signed, never trusted blindly
+
+Every helper update, since v5.11.0, needed the legacy `NOPASSWD: /usr/bin/python3` grant
+(real root on the Kea host) added by hand for one click and removed again afterward. A
+maintainer report: it just cost an evening because the grant was pasted onto the Jen box
+instead of the Kea box. The reason the helper could not simply replace itself was the
+original design's own invariant — a helper that installs whatever Jen sends lets anyone
+holding Jen's SSH key run arbitrary root code on every Kea host it manages.
+
+This release keeps that invariant in a stronger form instead of removing it. Helper v6 adds
+one new op, `update`, which installs a candidate only when it carries a valid `ssh-keygen -Y
+verify` signature from the Jen *project's* release key — the same permanent trust root the
+self-updater has used since v5.26.0, embedded byte-for-byte in the helper and diffed against
+the self-updater's own copy by a test — under a namespace distinct from the release
+tarball's own signature, and only when it declares a `HELPER_VERSION` strictly higher than
+the one already running. A fully compromised Jen can therefore install a genuine, newer Jen
+release's helper, and nothing else. The op never touches sudoers and never restarts
+anything; the release's own signature is published as a new asset on every tagged release
+and fetched by `jen-update-root.py` during Jen's own self-update, saved locally so a Kea-host
+update needs no network call of its own afterward (a hand-installed tarball, a Docker image
+built from source, or a dev checkout without that local file fall back to fetching it
+straight from the same release on demand).
+
+A host still on helper v5 or older takes one more hop through the legacy `sudo python3` path
+to reach v6 — the grant is needed once more, exactly as a fresh install always needed it —
+and never needs it again after. The SSH card now shows **"signed updates"** next to a host
+that has already made that hop, and a refused signed update says exactly why: a bad
+signature, a missing local `ssh-keygen`, or a benign race where the host was already at or
+past the version being sent.
+
 ## [5.65.13-beta.1] - 2026-09-27
 
 ### "Update helper" refuses with "no legacy grant" even when the grant is genuinely there
