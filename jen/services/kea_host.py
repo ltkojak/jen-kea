@@ -180,6 +180,11 @@ TRACE_HELPER_MIN_VERSION = 5
 # at all. v5.29.0 gated the https socket option on v4 but the button only
 # appeared below WANT, so a v3 host had no way to get there from the UI.
 JEN_HELPER_SHIPPED_VERSION = 6  # v6 (v5.66.0, Q103): the signed `update` op
+# v5.66.0 (Q103) — the version whose "Update helper" click needs no legacy grant at all: at
+# or above this, install_helper() takes the signed path (helper_signature() + the `update`
+# op) instead of the pre-5.11.0 sudo-python3 engine. A host below this still gets one last
+# legacy-grant hop to reach v6 — after that, never again.
+SIGNED_UPDATE_HELPER_MIN_VERSION = 6
 
 
 def helper_version_label(version, shipped: int | None = None) -> str:
@@ -1044,6 +1049,63 @@ def _helper_source():
         return f.read()
 
 
+def _helper_source_bytes() -> bytes:
+    """The jen-kea-helper file shipped with this install, as RAW BYTES — never text-decoded
+    (v5.66.0, Q103). The signed `update` op sends these bytes to the Kea host, and they must
+    be byte-identical to what release.yml actually signed; `_helper_source()` (text mode)
+    stays as it was for the legacy engine, which embeds the source as a Python string literal
+    inside a generated script rather than sending it verbatim."""
+    import os
+
+    from jen import extensions
+
+    path = os.path.join(extensions.JEN_ROOT, "jen-kea-helper")
+    with open(path, "rb") as f:
+        return f.read()
+
+
+_HELPER_SIG_MAX = 8 * 1024
+_HELPER_SIG_FETCH_TIMEOUT = 10
+
+
+def helper_signature() -> bytes | None:
+    """The release signature for the jen-kea-helper file this install would send in a signed
+    update (v5.66.0, Q103). Prefers the sibling file `JEN_ROOT/jen-kea-helper.sig`, written by
+    jen-update-root.py on every self-update from this release on; falls back to fetching it
+    from this release's own GitHub asset — a hand-installed tarball, a Docker image built from
+    source, and a dev checkout all lack the sibling file — over https, the fixed GitHub
+    releases/download prefix only, capped at 8 KiB. Returns None for a routine "not available"
+    case (no sibling file, a network error, an oversize response); never raises, so the caller
+    words one clean refusal either way."""
+    import os
+
+    from jen import extensions
+
+    sig_path = os.path.join(extensions.JEN_ROOT, "jen-kea-helper.sig")
+    try:
+        with open(sig_path, "rb") as f:
+            data = f.read()
+        if data:
+            return data
+    except OSError:
+        pass
+
+    import urllib.request
+
+    from jen import JEN_VERSION
+
+    url = f"https://github.com/{_GITHUB_REPO}/releases/download/v{JEN_VERSION}/jen-kea-helper.sig"
+    try:
+        req = urllib.request.Request(url)  # nosec B310 — https, a fixed github.com download prefix only
+        with urllib.request.urlopen(req, timeout=_HELPER_SIG_FETCH_TIMEOUT) as resp:  # nosec B310
+            data = resp.read(_HELPER_SIG_MAX + 1)
+    except Exception:
+        return None
+    if not data or len(data) > _HELPER_SIG_MAX:
+        return None
+    return data
+
+
 def _source_version(source: str) -> int:
     """HELPER_VERSION as declared by the helper text about to be copied —
     the only honest "what will the host report afterwards" number."""
@@ -1066,9 +1128,77 @@ def _helper_download_command() -> str:
     )
 
 
+def _install_helper_signed(server: dict, target: int, current: int) -> dict:
+    """v5.66.0 (Q103) — helper >= SIGNED_UPDATE_HELPER_MIN_VERSION: update through the signed
+    `update` op instead of the legacy engine. No sudoers grant is asked for or needed — the op
+    itself verifies a release-key signature and a strictly higher HELPER_VERSION before it ever
+    replaces itself; this function's only job is to supply the candidate bytes and the matching
+    signature, and to word whatever the op refuses."""
+    name = server.get("name", "this host")
+    by_hand = _helper_download_command()
+    sig = helper_signature()
+    if sig is None:
+        from jen import JEN_VERSION
+
+        return {
+            "ok": False,
+            "version": current,
+            "code": "no-signature",
+            "detail": f"no signature available for v{JEN_VERSION} (offline?) — copy the helper by hand: {by_hand}",
+        }
+    try:
+        candidate = _helper_source_bytes()
+    except OSError as e:
+        return {"ok": False, "version": current, "code": "no-source", "detail": str(e)}
+
+    import base64
+
+    payload = {
+        "helper_b64": base64.b64encode(candidate).decode(),
+        "signature_b64": base64.b64encode(sig).decode(),
+    }
+    try:
+        resp = helper_call(server, "update", payload, timeout=60)
+    except (HelperMissing, HelperError) as e:
+        return {"ok": False, "version": current, "code": "error", "detail": str(e)}
+
+    if resp.get("ok"):
+        recheck = check_helper(server)
+        real = recheck.get("version")
+        if isinstance(real, int) and real >= target:
+            return {"ok": True, "version": real, "code": "upgraded", "detail": ""}
+        return {
+            "ok": False,
+            "version": real,
+            "code": "stale",
+            "detail": (
+                f"the copy did not take — the host still reports helper v{real if real is not None else '?'}, "
+                f"expected v{target}"
+            ),
+        }
+
+    reason = resp.get("error") or "error"
+    wording = {
+        "bad-signature": (
+            f"{name} refused the signature on this release's helper — that points at a problem with the "
+            f"release itself, not this host; if it persists, copy the helper by hand: {by_hand}"
+        ),
+        "no-ssh-keygen": f"{name} has no ssh-keygen (openssh-client) — install it there, or copy the helper by hand: {by_hand}",
+        "not-newer": f"{name} already reports v{current}, which is not older than this release's helper — nothing to do.",
+        "symlink": (
+            f"the installed path on {name} is a symlink, not a plain file — investigate it by hand before "
+            f"retrying, or copy the helper directly: {by_hand}"
+        ),
+    }
+    code = reason if reason in wording else "error"
+    detail = wording.get(
+        reason, f'the signed update was refused on {name}: "{reason}" — copy the helper by hand: {by_hand}'
+    )
+    return {"ok": False, "version": current, "code": code, "detail": detail}
+
+
 def install_helper(server: dict) -> dict:
-    """Deploy (or upgrade) jen-kea-helper onto `server` — the one place
-    the legacy `sudo python3` path is still used deliberately. Returns
+    """Deploy (or upgrade) jen-kea-helper onto `server`. Returns
     {"ok": bool, "version": int|None, "code": str, "detail": str}.
 
     v5.19.1 — this used to short-circuit "already" at
@@ -1079,7 +1209,12 @@ def install_helper(server: dict) -> dict:
     check_helper() after the copy and reports what the host actually
     says, because a copy that silently didn't take (wrong path, stale
     cache, a second file shadowing it) should never be recorded as a
-    successful upgrade."""
+    successful upgrade.
+
+    v5.66.0 (Q103) — a host already at SIGNED_UPDATE_HELPER_MIN_VERSION takes the signed
+    `update` path (`_install_helper_signed`) and never touches the legacy engine at all; the
+    legacy `sudo python3` path below is now reached only to get a host TO v6 in the first
+    place (a fresh install, or the v5→v6 hop) — the one place it is still used deliberately."""
     try:
         source = _helper_source()
     except OSError as e:
@@ -1095,30 +1230,41 @@ def install_helper(server: dict) -> dict:
     if isinstance(current, int) and current >= target:
         return {"ok": True, "version": current, "code": "already", "detail": ""}
 
+    if isinstance(current, int) and current >= SIGNED_UPDATE_HELPER_MIN_VERSION:
+        return _install_helper_signed(server, target, current)
+
     status = legacy_grant_status(server)
     if not status["ok"]:
         # v5.65.13 (Q102) — a maintainer report traced to this exact spot: a plain "no legacy
         # grant" was the ONLY answer this route ever gave, even when the grant genuinely existed
         # and sudo refused it for an unrelated reason. The wording now says what sudo actually
         # said, and steers by which reason it was.
+        # v5.66.0 (Q103) — this branch is now reached only below SIGNED_UPDATE_HELPER_MIN_VERSION,
+        # so the wording says so: this is the LAST time this host will ever need the grant.
         name = server.get("name", "this host")
         by_hand = _helper_download_command()
         reason_lower = status["reason"].lower()
         if current is None:
-            detail = f'no legacy python3 grant to install through (probed as {status["user_at_host"]}: sudo said "{status["reason"]}")'
+            detail = (
+                f"no legacy python3 grant to install through (probed as {status['user_at_host']}: sudo said "
+                f'"{status["reason"]}") — needed once, to reach helper v{SIGNED_UPDATE_HELPER_MIN_VERSION}; '
+                "every update after that is signed and needs no grant"
+            )
         elif "tty" in reason_lower or "terminal" in reason_lower:
             detail = (
-                f"helper v{current} is installed but v{target} needs the legacy python3 grant for one "
-                f'run, and Jen runs sudo without a terminal on {name}: sudo said "{status["reason"]}" — '
-                f"remove requiretty/use_pty for this SSH user, or copy the helper by hand: {by_hand}"
+                f"helper v{current} is installed but v{target} needs the legacy python3 grant for this one "
+                f"last hop (from v{SIGNED_UPDATE_HELPER_MIN_VERSION}, updates are signed and need no grant), "
+                f'and Jen runs sudo without a terminal on {name}: sudo said "{status["reason"]}" — remove '
+                f"requiretty/use_pty for this SSH user, or copy the helper by hand: {by_hand}"
             )
         else:
             override_note = f" ({status['summary']})" if status["summary"] else ""
             detail = (
-                f"helper v{current} is installed but v{target} needs the legacy python3 grant for one "
-                f'run, and sudo refused it on {name}: "{status["reason"]}" — a rule later in '
-                f"/etc/sudoers.d may be overriding the jen-kea line; check with `sudo -l`{override_note}, "
-                f"or copy the helper by hand: {by_hand}"
+                f"helper v{current} is installed but v{target} needs the legacy python3 grant for this one "
+                f"last hop (from v{SIGNED_UPDATE_HELPER_MIN_VERSION}, updates are signed and need no grant), "
+                f'and sudo refused it on {name}: "{status["reason"]}" — a rule later in /etc/sudoers.d may be '
+                f"overriding the jen-kea line; check with `sudo -l`{override_note}, or copy the helper by "
+                f"hand: {by_hand}"
             )
         return {"ok": False, "version": current, "code": "no-path", "detail": detail}
 

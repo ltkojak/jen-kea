@@ -291,6 +291,8 @@ def helper_caps(helper_version, *, ssh: bool = True) -> dict:
         "helper": v is not None and ssh,
         "tls": v is not None and v >= kea_host.TLS_HELPER_MIN_VERSION and ssh,
         "trace": v is not None and v >= kea_host.TRACE_HELPER_MIN_VERSION and ssh,
+        # v5.66.0 (Q103) — "Update helper" needs no legacy grant at all on a host already here.
+        "signed_update": v is not None and v >= kea_host.SIGNED_UPDATE_HELPER_MIN_VERSION and ssh,
     }
 
 
