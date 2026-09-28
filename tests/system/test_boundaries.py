@@ -1083,3 +1083,98 @@ def test_13_presence_against_a_real_mqtt_broker(stack):
         f"INVARIANT: a successful send clears the sink's last_error (v1.0.4, Q101 c - it used to stay "
         f"stuck once set): {emitted(out)}"
     )
+
+
+# ── 14. the helper's signed update needs no sudoers grant at all ──────────────
+
+
+def test_14_signed_helper_update(stack):
+    """v5.66.0 (Q103) - the helper's own `update` op installs a candidate ONLY when it carries
+    a valid signature under the jen-kea-helper namespace and a strictly higher HELPER_VERSION -
+    never because Jen asked. INVARIANT: kea-a, given a throwaway signer via
+    /etc/jen-kea-helper/allowed_signers, accepts a signed v99 candidate with NO sudoers grant
+    present anywhere (the stack fixture already removed the legacy grant on both hosts - this
+    is the proof that a signed update genuinely needs none); kea-b (no extra signer there)
+    refuses the identical signature; a flipped byte is refused even on kea-a, whose own grant
+    stays absent and whose version stays wherever the last accepted update left it."""
+    for node in (st.KEA_A, st.KEA_B):
+        assert not st.file_exists(node, "/etc/sudoers.d/jen-kea"), (
+            f"{node} still has the legacy grant - a signed update proves nothing if it might "
+            "have fallen back to that path instead"
+        )
+
+    # A throwaway ed25519 key, generated INSIDE the Jen container (never the real release key).
+    st.dexec(st.JEN, "sh", "-c", "rm -f /tmp/s14_key* && ssh-keygen -t ed25519 -N '' -f /tmp/s14_key -q")
+    pub = st.dexec(st.JEN, "cat", "/tmp/s14_key.pub").stdout.strip().split()
+    signers_line = f"release@jen {pub[0]} {pub[1]}"
+
+    # kea-a ONLY gets the extra-signers file (root-owned, not group/other-writable) - kea-b
+    # never sees this throwaway key at all.
+    st.dexec(
+        st.KEA_A,
+        "sh",
+        "-c",
+        f"mkdir -p /etc/jen-kea-helper && printf '%s\\n' {json.dumps(signers_line)} "
+        "> /etc/jen-kea-helper/allowed_signers && chown root:root /etc/jen-kea-helper/allowed_signers "
+        "&& chmod 644 /etc/jen-kea-helper/allowed_signers",
+    )
+
+    out, _p = st.jen_py(
+        """
+import re, subprocess
+from jen.services import kea_host
+
+
+def make_candidate(version):
+    with open("/opt/jen/current/app/jen-kea-helper", "rb") as f:
+        src = f.read()
+    return re.sub(rb"^HELPER_VERSION = \\d+$", f"HELPER_VERSION = {version}".encode(), src, count=1, flags=re.M)
+
+
+def sign(data, name):
+    path = f"/tmp/{name}"
+    with open(path, "wb") as f:
+        f.write(data)
+    subprocess.run(
+        ["ssh-keygen", "-Y", "sign", "-f", "/tmp/s14_key", "-n", "jen-kea-helper", path],
+        check=True, capture_output=True,
+    )
+    with open(path + ".sig", "rb") as f:
+        return f.read()
+
+
+candidate99 = make_candidate(99)
+sig99 = sign(candidate99, "s14_cand99")
+flipped = bytearray(candidate99)
+flipped[-20] ^= 0xFF
+flipped = bytes(flipped)
+
+servers = {s["name"]: s for s in extensions.KEA_SERVERS}
+results = {}
+with app.app_context():
+    kea_host._helper_source_bytes = lambda: candidate99
+    kea_host.helper_signature = lambda: sig99
+    results["kea_a_signed"] = kea_host.install_helper(servers["kea-a"])
+    results["kea_b_signed"] = kea_host.install_helper(servers["kea-b"])
+
+    kea_host._helper_source_bytes = lambda: flipped
+    results["kea_a_flipped"] = kea_host.install_helper(servers["kea-a"])
+emit(results)
+"""
+    )
+    results = emitted(out)
+
+    assert results["kea_a_signed"] == {"ok": True, "version": 99, "code": "upgraded", "detail": ""}, results[
+        "kea_a_signed"
+    ]
+    assert results["kea_b_signed"]["ok"] is False
+    assert results["kea_b_signed"]["code"] == "bad-signature", results["kea_b_signed"]
+    assert results["kea_b_signed"]["version"] == 6, "kea-b must still report its pre-update version"
+    assert results["kea_a_flipped"]["ok"] is False
+    assert results["kea_a_flipped"]["code"] == "bad-signature", results["kea_a_flipped"]
+    assert results["kea_a_flipped"]["version"] == 99, "the earlier accepted update must stand"
+
+    for node in (st.KEA_A, st.KEA_B):
+        assert not st.file_exists(node, "/etc/sudoers.d/jen-kea"), (
+            f"{node} must still have no legacy grant - nothing above should have needed or created one"
+        )

@@ -8,7 +8,10 @@ FROM ${KEA_IMAGE}
 
 USER root
 
-RUN apk add --no-cache openssh sudo python3 bash
+# openssh-keygen: v5.66.0 (Q103) - the helper's own signed `update` op runs
+# `ssh-keygen -Y verify` on this host; Alpine's `openssh` meta-package doesn't
+# always pull in the keygen binary on its own, so it's named explicitly.
+RUN apk add --no-cache openssh openssh-keygen sudo python3 bash
 
 # The SSH account Jen logs in as. A locked account (`!` in shadow) is
 # refused by sshd even for key auth, so give it a throwaway unusable password.

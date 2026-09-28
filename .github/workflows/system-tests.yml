@@ -65,8 +65,9 @@ jobs:
           EVENT: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
           # 00 the stack boots, 01 restore, 02 change set when a server dies, 03 failed-restart rollback,
-          # 11 /api/v1/health with Kea frozen, 12 a revert whose restart fails is a persistent rollback_failed
-          CRITICAL: 'test_00 or test_01 or test_02 or test_03 or test_11 or test_12'
+          # 11 /api/v1/health with Kea frozen, 12 a revert whose restart fails is a persistent rollback_failed,
+          # 14 the helper's signed update needs no sudoers grant at all
+          CRITICAL: 'test_00 or test_01 or test_02 or test_03 or test_11 or test_12 or test_14'
         run: |
           mkdir -p system-results
           if [ -z "$SELECT" ] && [ "$EVENT" = "push" ] && [[ "$REF_NAME" == *-beta.* ]]; then
