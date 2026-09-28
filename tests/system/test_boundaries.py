@@ -287,7 +287,12 @@ with app.app_context():
 """
     )
     precheck = emitted(precheck_out)
-    assert precheck.get("test_config", {}).get("ok") is True, f"PRECHECK before scenario 03: {precheck}"
+    fs_check = st.dexec(
+        st.KEA_A, "sh", "-c", 'b="$(command -v kea-dhcp4)"; echo "b=$b"; ls -la "$b"; stat "$b"', check=False
+    )
+    assert precheck.get("test_config", {}).get("ok") is True, (
+        f"PRECHECK before scenario 03: {precheck}\nFS CHECK:\n{fs_check.stdout}\n{fs_check.stderr}"
+    )
     proc = st.jen_py_bg(CHANGESET_RESTART_FAILS)
     try:
         st.sentinel_wait(st.JEN, "/tmp/s3-before-restart", timeout=120)
