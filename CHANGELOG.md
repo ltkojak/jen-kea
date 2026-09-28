@@ -2,6 +2,77 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.66.0-beta.2] - 2026-09-28
+
+A third-party review of the v5.66.0-beta.1 archive (the signed helper-update
+design from Q103) found eight real gaps, all closed here. Nothing about
+using Jen changes — a beta.1 host takes this as a v7 signed helper update,
+with no grant of any kind, exactly the way it took v6.
+
+**The helper no longer trusts `$PATH` for anything it runs, including
+itself.** `jen-kea-helper` now starts `#!/usr/bin/python3 -I` (isolated
+mode — no `PYTHON*` environment variables, no script directory on
+`sys.path`) and resolves every binary it invokes — `kea-dhcp4`/`kea-dhcp6`,
+`kea-dhcp-ddns`, `systemctl`, `apt-get`, `ssh-keygen` — through a fixed,
+root-owned allowlist of system directories, never a bare name off the
+caller's environment. Every subprocess call runs with a sanitized,
+hardcoded environment instead of inheriting one. This closes a path-trust
+gap in a script that already runs as root behind one sudoers line.
+
+**A build number, alongside the protocol version.** `HELPER_VERSION` is
+the wire protocol; bumping it for a helper-only fix (tightening a check,
+say, with no shape change) would misrepresent what changed, but the old
+single-number scheme made such a fix permanently unable to report as
+"newer." `HELPER_BUILD` is now a second, independent number for exactly
+that case — Settings → Kea → SSH reads a fully current host as "v7 (build
+7)," and a host merely behind on build (same protocol) as "v7 (build 3,
+build 7 available)."
+
+**Preflight, and a `.prev` rollback.** A signed update used to install
+straight to disk. The helper now runs a freshly-verified candidate once as
+a throwaway self-check before ever installing it, keeps a `.prev` copy of
+the file it's replacing, and re-runs that same self-check against the
+installed copy afterward — restoring `.prev` and refusing to leave a
+broken helper behind if anything about the new copy doesn't check out.
+
+**The release pipeline tests, signs, and verifies the exact commit it
+publishes.** `release.yml`'s test job now runs against the tagged commit
+itself, not whatever the default branch has drifted to since (this only
+mattered for a manual `workflow_dispatch`, where it always could have
+diverged). The helper's own signature now ships inside the tarball
+(appended before gzipping, so a plain tarball install has it locally with
+no extra fetch — a Docker image built from source still fetches it). And,
+new here: after signing, the job re-verifies both signatures it just
+produced against the tarball's own embedded release key before ever
+creating the GitHub release, so a release that fails its own verification
+can never be published in the first place.
+
+**No unverified by-hand fallback, anywhere.** The one by-hand line this
+app has ever shown an operator — for installing `jen-kea-helper` directly
+on a Kea host — used to fetch a release asset over plain https and install
+it with no check at all. It's now a single verified one-liner: fetch the
+helper and its signature, verify locally with the same `ssh-keygen -Y
+verify` check the helper itself runs, and only then install it — a bad
+signature makes the whole chain refuse, never "install anyway." It's the
+only such line anywhere in the app or its docs now: a bad-signature
+refusal no longer offers it as a workaround (the same signature would fail
+there too), and the admin guide gains a documented offline procedure for a
+Kea host with no route to GitHub.
+
+**Jen verifies a signature itself before it ever sends one.** Previously,
+only the Kea host's own `update` op checked a signature — Jen just handed
+over whatever bytes were sitting in a local file or came back from a
+fetch. Jen now runs that same check locally first, before sending
+anything; a signature that doesn't verify against the exact bytes about to
+be sent is never trusted, whatever its source. A `bad-signature` reply
+from the host right after a locally-sourced signature — unexpected, since
+that signature just passed Jen's own check — gets one retry with a freshly
+fetched signature before being reported. Every signature read, on both the
+Jen side and the self-updater's own fetch of it, is now bounded to a
+sensible cap instead of reading an unbounded response.
+
+Beta channel; a beta.1 host offers this the same way every beta build has.
+
 ## [5.66.0-beta.1] - 2026-09-28
 
 ### The Kea host helper updates itself — signed, never trusted blindly
