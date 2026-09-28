@@ -105,7 +105,11 @@ def _kea_servers_with_helper_status():
                 # everywhere the SSH user is needed (this row, _connect_ssh, install_helper).
                 "ssh_user": kea_host.effective_ssh_user(s),
                 "helper_version": st.get("version"),  # int, None, or missing key
-                "helper_label": kea_host.helper_version_label(st.get("version"), kea_host.JEN_HELPER_SHIPPED_VERSION),
+                # v5.66.0-beta.2 (Q104) — build is passed through when the host reports one
+                # (v7+); helper_version_label() reads "v7 (build 7)" instead of just "v7".
+                "helper_label": kea_host.helper_version_label(
+                    st.get("version"), kea_host.JEN_HELPER_SHIPPED_VERSION, build=st.get("build")
+                ),
                 "helper_want": kea_host.JEN_HELPER_WANT_VERSION,
                 # v5.29.1 — the Update helper button is offered below this
                 # (the shipped file's version), not just below WANT.

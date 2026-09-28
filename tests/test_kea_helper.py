@@ -47,30 +47,25 @@ def helper():
     return _load()
 
 
-def _run(helper, op, payload, path_env=None, keep_version=False):
+def _run(helper, op, payload, keep_version=False):
     """Invoke main() with a captured stdin/stdout/stderr. Returns
-    (exit_code, parsed_stdout_json, stderr_text). v2 stamps
-    `helper_version` on every response; it's popped from the parsed dict
-    unless keep_version=True so the many `out == {...}` assertions below
-    don't all have to spell it out. TestHelperVersionEnvelope checks it's
-    always present."""
+    (exit_code, parsed_stdout_json, stderr_text). v2 stamps `helper_version`
+    (v7, Q104: `helper_build` too) on every response; both are popped from
+    the parsed dict unless keep_version=True so the many `out == {...}`
+    assertions below don't all have to spell them out.
+    TestHelperVersionEnvelope checks they're always present. v5.66.0-beta.2
+    (Q104) — no longer touches $PATH: every binary this helper runs is
+    resolved through _BIN_DIRS, never $PATH — see _fake_kea_bin below for
+    how a test supplies a stub binary now."""
     stdin = io.StringIO(json.dumps(payload))
     stdout = io.StringIO()
     stderr = io.StringIO()
-    old_path = os.environ.get("PATH")
-    if path_env is not None:
-        # prepend, don't replace — the fake kea-dhcpX stub still needs
-        # /bin/sh resolvable via a normal PATH
-        os.environ["PATH"] = path_env + os.pathsep + (old_path or "")
-    try:
-        code = helper.main(argv=["jen-kea-helper", op], stdin=stdin, stdout=stdout, stderr=stderr)
-    finally:
-        if path_env is not None:
-            os.environ["PATH"] = old_path or ""
+    code = helper.main(argv=["jen-kea-helper", op], stdin=stdin, stdout=stdout, stderr=stderr)
     out = stdout.getvalue().strip()
     parsed = json.loads(out) if out else None
     if isinstance(parsed, dict) and not keep_version:
         parsed.pop("helper_version", None)
+        parsed.pop("helper_build", None)
     return code, parsed, stderr.getvalue()
 
 
@@ -90,6 +85,12 @@ class TestShape:
         # never "whatever Jen sends".
         assert "self-update" not in helper._OPS
         assert "self_update" not in helper._OPS
+
+    def test_shebang_is_isolated_mode(self):
+        # v5.66.0-beta.2 (Q104) — the kernel resolves this via sudo's own PATH; isolated mode
+        # means no PYTHON* env vars and no script-directory sys.path entry once it's running.
+        first_line = _SCRIPT_PATH.read_text(encoding="utf-8").splitlines()[0]
+        assert first_line == "#!/usr/bin/python3 -I"
 
 
 class TestD2Support:
@@ -122,6 +123,7 @@ class TestD2Support:
             calls.append(argv)
             return Proc()
 
+        monkeypatch.setattr(helper, "_find_bin", lambda name: name)
         monkeypatch.setattr(helper.subprocess, "run", fake_run)
         code, out, _ = _run(helper, "install-package", {"service": "d2"})
         assert out["ok"] is True
@@ -146,7 +148,12 @@ class TestProtocolMisuse:
         stdout, stderr = io.StringIO(), io.StringIO()
         code = helper.main(argv=["jen-kea-helper", "version"], stdin=stdin, stdout=stdout, stderr=stderr)
         assert code == 2
-        assert json.loads(stdout.getvalue()) == {"ok": False, "error": "stdin-too-large", "helper_version": 6}
+        assert json.loads(stdout.getvalue()) == {
+            "ok": False,
+            "error": "stdin-too-large",
+            "helper_version": 7,
+            "helper_build": 7,
+        }
 
     def test_stdout_is_exactly_one_json_document(self, helper):
         _, _, _ = _run(helper, "version", {})
@@ -170,9 +177,36 @@ class TestVersion:
         code, out, err = _run(helper, "version", {}, keep_version=True)
         assert code == 0
         assert out["ok"] is True
-        assert out["helper_version"] == helper.HELPER_VERSION == 6
+        assert out["helper_version"] == helper.HELPER_VERSION == 7
+        assert out["helper_build"] == helper.HELPER_BUILD == 7
         assert out["python"].count(".") == 2
         assert err.startswith("jen-kea-helper: version ok")
+
+
+class TestBuildBumpReminder:
+    """v5.66.0-beta.2 (Q104) — tests/kea_helper_build.json pins {"build": N, "sha256": <hash
+    of jen-kea-helper at that build>}. A change to the file that does NOT also bump
+    HELPER_BUILD past the pinned value fails here — updating the pin (both the hash and the
+    build number) is how a change acknowledges it bumped the build, the same discipline
+    RELEASE_SIGNERS twins enforce for the signing key elsewhere in this suite."""
+
+    def test_file_hash_matches_the_pin_or_the_build_was_bumped_past_it(self, helper):
+        import hashlib
+
+        pin_path = pathlib.Path(__file__).resolve().parent / "kea_helper_build.json"
+        pin = json.loads(pin_path.read_text(encoding="utf-8"))
+        actual_sha = hashlib.sha256(_SCRIPT_PATH.read_bytes()).hexdigest()
+        if actual_sha == pin["sha256"]:
+            assert pin["build"] == helper.HELPER_BUILD, (
+                f"jen-kea-helper is byte-identical to the pinned build ({pin['build']}) but "
+                f"HELPER_BUILD reads {helper.HELPER_BUILD} — the two must never disagree"
+            )
+            return
+        assert pin["build"] < helper.HELPER_BUILD, (
+            f"jen-kea-helper changed (sha256 {actual_sha} != pinned {pin['sha256']}) but "
+            f"HELPER_BUILD ({helper.HELPER_BUILD}) was not bumped past the pinned build "
+            f"({pin['build']}) — bump HELPER_BUILD and update tests/kea_helper_build.json"
+        )
 
 
 class TestHelperVersionEnvelope:
@@ -180,7 +214,9 @@ class TestHelperVersionEnvelope:
     carries helper_version so Jen learns the real number from any op.
     Bumped to 3 in v5.23.0 (Q19, d2 support), to 4 in v5.29.0 (Q29,
     install-tls), to 5 in v5.49.0 (bounded tail-log), to 6 in v5.66.0
-    (Q103, signed `update`)."""
+    (Q103, signed `update`), to 7 in v5.66.0-beta.2 (Q104, PATH
+    hardening + preflight/rollback) — which also adds `helper_build` to
+    every envelope alongside `helper_version`."""
 
     @pytest.mark.parametrize(
         "op,payload",
@@ -193,9 +229,10 @@ class TestHelperVersionEnvelope:
             ("update", {}),
         ],
     )
-    def test_every_response_carries_helper_version(self, helper, op, payload):
+    def test_every_response_carries_helper_version_and_build(self, helper, op, payload):
         _code, out, _err = _run(helper, op, payload, keep_version=True)
-        assert out["helper_version"] == 6
+        assert out["helper_version"] == 7
+        assert out["helper_build"] == 7
 
 
 class TestPathWalls:
@@ -283,11 +320,14 @@ class TestReadConfig:
         assert out["sha256"] == hashlib.sha256(pretty.encode()).hexdigest()
 
 
-def _fake_kea_bin(tmp_path, name, exit_code=0, stdout="", stderr="", marker=None):
-    """Write a /bin/sh stub that mimics `kea-dhcpX -t` and return its
-    directory (to prepend to PATH). If `marker` is a path, the stub
-    `touch`es it on every call — a test can assert `-t` did or didn't
-    run."""
+def _fake_kea_bin(helper, monkeypatch, tmp_path, name, exit_code=0, stdout="", stderr="", marker=None):
+    """Write a /bin/sh stub that mimics `kea-dhcpX -t` (or any other bare-name binary this
+    helper resolves through _BIN_DIRS) and put its directory FIRST in _BIN_DIRS — v5.66.0-beta.2
+    (Q104): binaries are resolved through _BIN_DIRS now, never $PATH, so a test supplies one by
+    monkeypatching _BIN_DIRS directly rather than $PATH. The root-ownership check is stubbed
+    True for every path (the fake binaries these tests write are never really root-owned, since
+    the test itself doesn't run as root). If `marker` is a path, the stub `touch`es it on every
+    call — a test can assert it did or didn't run."""
     import shlex
 
     d = tmp_path / "bin"
@@ -303,10 +343,51 @@ def _fake_kea_bin(tmp_path, name, exit_code=0, stdout="", stderr="", marker=None
     lines.append(f"exit {exit_code}")
     script.write_text("\n".join(lines) + "\n")
     script.chmod(0o755)
+    monkeypatch.setattr(helper, "_BIN_DIRS", (str(d),) + helper._BIN_DIRS)
+    monkeypatch.setattr(helper, "_bin_owner_ok", lambda path: True)
     return str(d)
 
 
 win = pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX exec stub for kea-dhcpX")
+
+
+class TestNoPathTrust:
+    """v5.66.0-beta.2 (Q104) — every binary this helper runs is resolved through the
+    root-owned _BIN_DIRS allowlist, never $PATH. A fake binary placed FIRST on $PATH (each
+    touching its own marker file if ever run) must never be reached, however plausible its
+    name — _BIN_DIRS is left at its real, unmodified default throughout, so the isolation
+    is proved without any help from a stubbed allowlist."""
+
+    @win
+    def test_a_fake_path_binary_is_never_reached(self, helper, tmp_path, monkeypatch):
+        import shlex
+
+        evil = tmp_path / "evil-bin"
+        evil.mkdir()
+        markers = {}
+        for name in ("python3", "ssh-keygen", "systemctl", "apt-get", "kea-dhcp4"):
+            marker = tmp_path / f"{name}.touched"
+            markers[name] = marker
+            script = evil / name
+            script.write_text(f"#!/bin/sh\necho x >> {shlex.quote(str(marker))}\nexit 0\n")
+            script.chmod(0o755)
+        monkeypatch.setenv("PATH", str(evil) + os.pathsep + (os.environ.get("PATH") or ""))
+
+        monkeypatch.setattr(helper, "_ALLOWED_CONF_DIRS", (str(tmp_path),))
+        p = str(tmp_path / "kea-dhcp4.conf")
+
+        _run(helper, "version", {})
+        _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {}})
+        _run(helper, "service", {"service": "dhcp4", "action": "status"})
+        _run(helper, "install-package", {"service": "dhcp4"})
+        _run(
+            helper,
+            "update",
+            {"helper_b64": base64.b64encode(b"x").decode(), "signature_b64": base64.b64encode(b"y").decode()},
+        )
+
+        for name, marker in markers.items():
+            assert not marker.exists(), f"the fake {name!r} placed first on $PATH was reached"
 
 
 @win
@@ -316,52 +397,49 @@ class TestTestConfig:
         return str(tmp_path / "kea-dhcp4.conf")
 
     def test_missing_binary(self, helper, tmp_path, monkeypatch):
+        # no _fake_kea_bin call: _BIN_DIRS stays at its real default, and kea-dhcp4 genuinely
+        # isn't there on a dev/CI box, so _find_bin("kea-dhcp4") returns None on its own.
         p = self._paths(helper, tmp_path, monkeypatch)
-        code, out, _ = _run(
-            helper, "test-config", {"service": "dhcp4", "path": p, "config": {}}, path_env="/nonexistent"
-        )
+        code, out, _ = _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {}})
         assert out == {"ok": False, "error": "missingbinary", "binary": "kea-dhcp4"}
 
     def test_d2_missing_binary_names_kea_dhcp_ddns(self, helper, tmp_path, monkeypatch):
         monkeypatch.setattr(helper, "_ALLOWED_CONF_DIRS", (str(tmp_path),))
         p = str(tmp_path / "kea-dhcp-ddns.conf")
-        code, out, _ = _run(helper, "test-config", {"service": "d2", "path": p, "config": {}}, path_env="/nonexistent")
+        code, out, _ = _run(helper, "test-config", {"service": "d2", "path": p, "config": {}})
         assert out == {"ok": False, "error": "missingbinary", "binary": "kea-dhcp-ddns"}
 
     def test_d2_pass_runs_the_kea_dhcp_ddns_binary(self, helper, tmp_path, monkeypatch):
         monkeypatch.setattr(helper, "_ALLOWED_CONF_DIRS", (str(tmp_path),))
         p = str(tmp_path / "kea-dhcp-ddns.conf")
-        bindir = _fake_kea_bin(tmp_path, "kea-dhcp-ddns", exit_code=0)
-        code, out, _ = _run(
-            helper, "test-config", {"service": "d2", "path": p, "config": {"DhcpDdns": {}}}, path_env=bindir
-        )
+        _fake_kea_bin(helper, monkeypatch, tmp_path, "kea-dhcp-ddns", exit_code=0)
+        code, out, _ = _run(helper, "test-config", {"service": "d2", "path": p, "config": {"DhcpDdns": {}}})
         assert out == {"ok": True}
 
     def test_pass_and_tmp_is_removed(self, helper, tmp_path, monkeypatch):
         p = self._paths(helper, tmp_path, monkeypatch)
-        bindir = _fake_kea_bin(tmp_path, "kea-dhcp4", exit_code=0)
-        code, out, _ = _run(
-            helper, "test-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}}, path_env=bindir
-        )
+        _fake_kea_bin(helper, monkeypatch, tmp_path, "kea-dhcp4", exit_code=0)
+        code, out, _ = _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}})
         assert out == {"ok": True}
         assert not os.path.exists(p + ".jen_tmp")
 
     def test_testerror_detail_and_tmp_removed(self, helper, tmp_path, monkeypatch):
         p = self._paths(helper, tmp_path, monkeypatch)
-        bindir = _fake_kea_bin(tmp_path, "kea-dhcp4", exit_code=1, stderr="ERROR line one\nERROR line two\ninfo\n")
-        code, out, _ = _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {}}, path_env=bindir)
+        _fake_kea_bin(
+            helper, monkeypatch, tmp_path, "kea-dhcp4", exit_code=1, stderr="ERROR line one\nERROR line two\ninfo\n"
+        )
+        code, out, _ = _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {}})
         assert out["error"] == "testerror"
         assert out["detail"] == "ERROR line one | ERROR line two"
         assert not os.path.exists(p + ".jen_tmp")
 
     def test_tlsmissing_checked_before_the_binary_runs(self, helper, tmp_path, monkeypatch):
         p = self._paths(helper, tmp_path, monkeypatch)
-        bindir = _fake_kea_bin(tmp_path, "kea-dhcp4", exit_code=0)
+        _fake_kea_bin(helper, monkeypatch, tmp_path, "kea-dhcp4", exit_code=0)
         code, out, _ = _run(
             helper,
             "test-config",
             {"service": "dhcp4", "path": p, "config": {}, "tls_paths": [["/nope/cert.pem", "file"]]},
-            path_env=bindir,
         )
         assert out == {"ok": False, "error": "tlsmissing", "path": "/nope/cert.pem"}
         assert not os.path.exists(p + ".jen_tmp")
@@ -374,52 +452,46 @@ class TestApplyConfig:
         p = tmp_path / "kea-dhcp4.conf"
         if existing is not None:
             p.write_text(json.dumps(existing))
-        bindir = _fake_kea_bin(tmp_path, "kea-dhcp4", exit_code=0)
-        return str(p), bindir
+        _fake_kea_bin(helper, monkeypatch, tmp_path, "kea-dhcp4", exit_code=0)
+        return str(p)
 
     def test_writes_new_file_0644(self, helper, tmp_path, monkeypatch):
-        p, bindir = self._setup(helper, tmp_path, monkeypatch)
+        p = self._setup(helper, tmp_path, monkeypatch)
         code, out, _ = _run(
-            helper,
-            "apply-config",
-            {"service": "dhcp4", "path": p, "config": {"Dhcp4": {"subnet4": []}}},
-            path_env=bindir,
+            helper, "apply-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {"subnet4": []}}}
         )
         assert out["ok"] is True and out["backup"] is None
         assert json.loads(pathlib.Path(p).read_text()) == {"Dhcp4": {"subnet4": []}}
         assert stat.S_IMODE(os.stat(p).st_mode) == 0o644
 
     def test_backup_written_and_mode_preserved(self, helper, tmp_path, monkeypatch):
-        p, bindir = self._setup(helper, tmp_path, monkeypatch, existing={"old": True})
+        p = self._setup(helper, tmp_path, monkeypatch, existing={"old": True})
         os.chmod(p, 0o640)
-        code, out, _ = _run(
-            helper, "apply-config", {"service": "dhcp4", "path": p, "config": {"new": True}}, path_env=bindir
-        )
+        code, out, _ = _run(helper, "apply-config", {"service": "dhcp4", "path": p, "config": {"new": True}})
         assert out["ok"] is True and out["backup"] == p + ".jen_backup"
         assert json.loads(pathlib.Path(p + ".jen_backup").read_text()) == {"old": True}
         assert json.loads(pathlib.Path(p).read_text()) == {"new": True}
         assert stat.S_IMODE(os.stat(p).st_mode) == 0o640
 
     def test_exists_and_no_overwrite_refuses(self, helper, tmp_path, monkeypatch):
-        p, bindir = self._setup(helper, tmp_path, monkeypatch, existing={"old": True})
+        p = self._setup(helper, tmp_path, monkeypatch, existing={"old": True})
         code, out, _ = _run(
             helper,
             "apply-config",
             {"service": "dhcp4", "path": p, "config": {"new": True}, "allow_overwrite": False},
-            path_env=bindir,
         )
         assert out == {"ok": False, "error": "exists"}
         assert json.loads(pathlib.Path(p).read_text()) == {"old": True}
 
     def test_chown_calls_made_for_new_file(self, helper, tmp_path, monkeypatch):
-        p, bindir = self._setup(helper, tmp_path, monkeypatch)
+        p = self._setup(helper, tmp_path, monkeypatch)
         chowns = []
 
         def spy(path, uid, gid):
             chowns.append((str(path), uid, gid))
 
         monkeypatch.setattr(os, "chown", spy)
-        _run(helper, "apply-config", {"service": "dhcp4", "path": p, "config": {}}, path_env=bindir)
+        _run(helper, "apply-config", {"service": "dhcp4", "path": p, "config": {}})
         assert (p + ".jen_apply_tmp", 0, 0) in chowns
 
     # ── v2: optimistic concurrency ─────────────────────────────────────────
@@ -427,23 +499,20 @@ class TestApplyConfig:
     def test_apply_returns_the_sha_of_the_bytes_written(self, helper, tmp_path, monkeypatch):
         import hashlib
 
-        p, bindir = self._setup(helper, tmp_path, monkeypatch)
-        _code, out, _ = _run(
-            helper, "apply-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}}, path_env=bindir
-        )
+        p = self._setup(helper, tmp_path, monkeypatch)
+        _code, out, _ = _run(helper, "apply-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}})
         assert out["ok"] is True
         assert out["sha256"] == hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()
 
     def test_matching_expect_sha256_applies(self, helper, tmp_path, monkeypatch):
         import hashlib
 
-        p, bindir = self._setup(helper, tmp_path, monkeypatch, existing={"Dhcp4": {"a": 1}})
+        p = self._setup(helper, tmp_path, monkeypatch, existing={"Dhcp4": {"a": 1}})
         cur = hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()
         _code, out, _ = _run(
             helper,
             "apply-config",
             {"service": "dhcp4", "path": p, "config": {"Dhcp4": {"a": 2}}, "expect_sha256": cur},
-            path_env=bindir,
         )
         assert out["ok"] is True
         assert json.loads(pathlib.Path(p).read_text()) == {"Dhcp4": {"a": 2}}
@@ -457,12 +526,11 @@ class TestApplyConfig:
         p = tmp_path / "kea-dhcp4.conf"
         p.write_text(json.dumps({"Dhcp4": {"a": 1}}))
         original = p.read_bytes()
-        bindir = _fake_kea_bin(tmp_path, "kea-dhcp4", exit_code=0, marker=marker)
+        _fake_kea_bin(helper, monkeypatch, tmp_path, "kea-dhcp4", exit_code=0, marker=marker)
         _code, out, _ = _run(
             helper,
             "apply-config",
             {"service": "dhcp4", "path": str(p), "config": {"Dhcp4": {"a": 9}}, "expect_sha256": "deadbeef" * 8},
-            path_env=bindir,
         )
         assert out["ok"] is False and out["error"] == "conflict"
         assert out["sha256"] == hashlib.sha256(original).hexdigest()
@@ -471,38 +539,36 @@ class TestApplyConfig:
         assert not marker.exists()  # kea-dhcpX -t was never invoked
 
     def test_expect_empty_string_on_missing_file_applies(self, helper, tmp_path, monkeypatch):
-        p, bindir = self._setup(helper, tmp_path, monkeypatch)  # file does not exist
+        p = self._setup(helper, tmp_path, monkeypatch)  # file does not exist
         _code, out, _ = _run(
-            helper,
-            "apply-config",
-            {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}, "expect_sha256": ""},
-            path_env=bindir,
+            helper, "apply-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}, "expect_sha256": ""}
         )
         assert out["ok"] is True
 
     def test_expect_empty_string_but_file_exists_is_conflict(self, helper, tmp_path, monkeypatch):
-        p, bindir = self._setup(helper, tmp_path, monkeypatch, existing={"Dhcp4": {}})
+        p = self._setup(helper, tmp_path, monkeypatch, existing={"Dhcp4": {}})
         _code, out, _ = _run(
             helper,
             "apply-config",
             {"service": "dhcp4", "path": p, "config": {"Dhcp4": {"new": 1}}, "expect_sha256": ""},
-            path_env=bindir,
         )
         assert out["ok"] is False and out["error"] == "conflict"
 
     def test_a_lock_file_is_created_when_expect_is_given(self, helper, tmp_path, monkeypatch):
-        p, bindir = self._setup(helper, tmp_path, monkeypatch, existing={"Dhcp4": {}})
+        p = self._setup(helper, tmp_path, monkeypatch, existing={"Dhcp4": {}})
         _run(
-            helper,
-            "apply-config",
-            {"service": "dhcp4", "path": p, "config": {"Dhcp4": {"x": 1}}, "expect_sha256": ""},
-            path_env=bindir,
+            helper, "apply-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {"x": 1}}, "expect_sha256": ""}
         )
         # expect "" conflicts (file exists), but the lock is taken first
         assert pathlib.Path(p + ".jen_lock").exists()
 
 
 class TestService:
+    """v5.66.0-beta.2 (Q104) — op_service resolves "systemctl" through _find_bin now, not a
+    bare name; every test here stubs _find_bin to return the name UNCHANGED (pretending
+    resolution is a no-op) so the exact-argv assertions below — written against the
+    pre-Q104 bare-name shape — still hold, while subprocess.run itself stays mocked."""
+
     def test_tries_both_unit_names_and_enable_gets_now(self, helper, monkeypatch):
         calls = []
 
@@ -519,6 +585,7 @@ class TestService:
                 return Proc(out="active")
             return Proc(rc=0)
 
+        monkeypatch.setattr(helper, "_find_bin", lambda name: name)
         monkeypatch.setattr(helper.subprocess, "run", fake_run)
         code, out, _ = _run(helper, "service", {"service": "dhcp6", "action": "enable"})
         assert out == {"ok": True, "unit": "isc-kea-dhcp6-server", "state": "active"}
@@ -529,6 +596,7 @@ class TestService:
         class Proc:
             returncode, stdout, stderr = 0, "not-found", ""
 
+        monkeypatch.setattr(helper, "_find_bin", lambda name: name)
         monkeypatch.setattr(helper.subprocess, "run", lambda *a, **k: Proc())
         code, out, _ = _run(helper, "service", {"service": "dhcp4", "action": "restart"})
         assert out == {"ok": False, "error": "no-unit"}
@@ -550,6 +618,7 @@ class TestService:
                 return Proc(out="active")
             return Proc(rc=0)
 
+        monkeypatch.setattr(helper, "_find_bin", lambda name: name)
         monkeypatch.setattr(helper.subprocess, "run", fake_run)
         code, out, _ = _run(helper, "service", {"service": "d2", "action": "restart"})
         assert out == {"ok": True, "unit": "kea-dhcp-ddns-server", "state": "active"}
@@ -582,6 +651,9 @@ class TestTailLog:
 
 
 class TestInstallPackage:
+    """v5.66.0-beta.2 (Q104) — op_install_package resolves "apt-get" through _find_bin now;
+    both tests stub it to return the name unchanged so the exact-argv assertions still hold."""
+
     def test_argv_and_output_tail(self, helper, monkeypatch):
         calls = []
 
@@ -592,6 +664,7 @@ class TestInstallPackage:
             calls.append(argv)
             return Proc()
 
+        monkeypatch.setattr(helper, "_find_bin", lambda name: name)
         monkeypatch.setattr(helper.subprocess, "run", fake_run)
         code, out, _ = _run(helper, "install-package", {"service": "dhcp6"})
         assert out["ok"] is True
@@ -602,6 +675,7 @@ class TestInstallPackage:
         class Proc:
             returncode, stdout, stderr = 100, "", "E: Unable to locate package\n"
 
+        monkeypatch.setattr(helper, "_find_bin", lambda name: name)
         monkeypatch.setattr(helper.subprocess, "run", lambda *a, **k: Proc())
         code, out, _ = _run(helper, "install-package", {"service": "dhcp4"})
         assert out["ok"] is False and "Unable to locate" in out["output"]
@@ -793,11 +867,31 @@ def _load_jen_update_root():
     return module
 
 
-def _candidate_bytes(version):
-    """The real helper source with HELPER_VERSION rewritten — a realistic candidate, not a
-    fabricated stub, so a signature over it exercises the exact bytes ssh-keygen -Y verify sees."""
+def _candidate_bytes(version, build=None):
+    """The real helper source with HELPER_VERSION and HELPER_BUILD (Q104) rewritten — a
+    realistic candidate, not a fabricated stub, so a signature over it exercises the exact
+    bytes ssh-keygen -Y verify sees, and so a preflight/postflight probe of it genuinely
+    runs the real code. `build` defaults to `version` when not given."""
+    if build is None:
+        build = version
     src = _SCRIPT_PATH.read_text(encoding="utf-8")
-    return re.sub(r"^HELPER_VERSION = \d+$", f"HELPER_VERSION = {version}", src, count=1, flags=re.M).encode()
+    src = re.sub(r"^HELPER_VERSION = \d+$", f"HELPER_VERSION = {version}", src, count=1, flags=re.M)
+    src = re.sub(r"^HELPER_BUILD = \d+$", f"HELPER_BUILD = {build}", src, count=1, flags=re.M)
+    return src.encode()
+
+
+def _allow_real_ssh_keygen(helper, monkeypatch):
+    """op_update resolves ssh-keygen through _find_bin (a root-owned _BIN_DIRS allowlist),
+    never $PATH — patched here to answer with the REAL system ssh-keygen (found via $PATH,
+    the same way the signing_key fixture itself needs it) for that one name, so these tests
+    can drive a genuine signature check without being root. A plain _BIN_DIRS-prepend isn't
+    enough on Windows: shutil.which() resolves PATHEXT (ssh-keygen.EXE), but _find_bin joins
+    the bare name, so the two would disagree on the exact path."""
+    real = shutil.which("ssh-keygen")
+    if real is None:
+        pytest.skip("ssh-keygen not available")
+    orig_find_bin = helper._find_bin
+    monkeypatch.setattr(helper, "_find_bin", lambda name: real if name == "ssh-keygen" else orig_find_bin(name))
 
 
 def _sign(key_path, namespace, data, tmp_path, name="candidate"):
@@ -841,6 +935,22 @@ class TestUpdateOp:
         signers.write_text(signing_key["signers_line"] + "\n")
         monkeypatch.setattr(helper, "_EXTRA_SIGNERS", str(signers))
         monkeypatch.setattr(helper, "_extra_signers_owner_ok", lambda path: True)
+        _allow_real_ssh_keygen(helper, monkeypatch)
+        # v5.66.0-beta.2 (Q104): preflight/postflight run _PREFLIGHT_PYTHON (hardcoded
+        # /usr/bin/python3 in production — real on every deploy target). Point it at
+        # whichever interpreter is running THIS test, so the real preflight/postflight
+        # logic is exercised on any platform, not skipped outright.
+        monkeypatch.setattr(helper, "_PREFLIGHT_PYTHON", sys.executable)
+        if sys.platform == "win32":
+            # _CLEAN_ENV is deliberately a Linux-shaped PATH with nothing else — correct in
+            # production (this helper never runs anywhere but a real Kea host), but Windows
+            # Python needs SYSTEMROOT on the environment to reach its own crypto APIs during
+            # interpreter startup (hash randomization), so a plain _CLEAN_ENV subprocess call
+            # fails immediately here. Add it back for THIS test's own preflight/postflight
+            # subprocess only — production's _CLEAN_ENV is untouched.
+            monkeypatch.setattr(
+                helper, "_CLEAN_ENV", {**helper._CLEAN_ENV, "SYSTEMROOT": os.environ.get("SYSTEMROOT", "")}
+            )
 
     def _target(self, helper, monkeypatch, tmp_path, content=b"old helper content"):
         target = tmp_path / "installed-helper"
@@ -868,8 +978,15 @@ class TestUpdateOp:
         sig = _sign(signing_key["priv"], "jen-kea-helper", candidate, tmp_path)
 
         code, out, _err = self._update(helper, candidate, sig)
-        assert out == {"ok": True, "installed_version": 99, "previous_version": 6}
+        assert out == {
+            "ok": True,
+            "installed_version": 99,
+            "installed_build": 99,
+            "previous_version": helper.HELPER_VERSION,
+            "previous_build": helper.HELPER_BUILD,
+        }
         assert target.read_bytes() == candidate
+        assert not (tmp_path / "installed-helper.prev").exists()  # cleaned up after a good postflight
         if sys.platform != "win32":
             assert stat.S_IMODE(target.stat().st_mode) == 0o755
         # the temp dir op_update made (tempfile.mkdtemp beside the target) is gone — only this
@@ -907,17 +1024,39 @@ class TestUpdateOp:
         assert out == {"ok": False, "error": "bad-signature"}
         assert target.read_bytes() == original
 
-    @pytest.mark.parametrize("version", [6, 3])
-    def test_equal_or_lower_version_is_not_newer(self, helper, signing_key, tmp_path, monkeypatch, version):
+    @pytest.mark.parametrize(
+        "version,build,case",
+        [
+            (7, 7, "same version, same build"),
+            (7, 3, "same version, LOWER build"),
+            (6, 99, "LOWER version, even with a much higher build — a protocol downgrade is never installed"),
+            (3, 1, "lower version and lower build"),
+        ],
+    )
+    def test_equal_or_lower_is_not_newer(self, helper, signing_key, tmp_path, monkeypatch, version, build, case):
         self._use_throwaway_signer(helper, monkeypatch, signing_key, tmp_path)
         target = self._target(helper, monkeypatch, tmp_path)
         original = target.read_bytes()
-        candidate = _candidate_bytes(version)
-        sig = _sign(signing_key["priv"], "jen-kea-helper", candidate, tmp_path, name=f"candidate-{version}")
+        candidate = _candidate_bytes(version, build)
+        sig = _sign(signing_key["priv"], "jen-kea-helper", candidate, tmp_path, name=f"candidate-{version}-{build}")
 
         code, out, _err = self._update(helper, candidate, sig)
-        assert out == {"ok": False, "error": "not-newer"}
+        assert out == {"ok": False, "error": "not-newer"}, case
         assert target.read_bytes() == original
+
+    def test_same_version_higher_build_is_newer(self, helper, signing_key, tmp_path, monkeypatch):
+        """v5.66.0-beta.2 (Q104) — HELPER_BUILD orders two files that changed WITHOUT a
+        protocol bump between them; a same-VERSION, higher-BUILD candidate is accepted."""
+        self._use_throwaway_signer(helper, monkeypatch, signing_key, tmp_path)
+        target = self._target(helper, monkeypatch, tmp_path)
+        candidate = _candidate_bytes(helper.HELPER_VERSION, helper.HELPER_BUILD + 1)
+        sig = _sign(signing_key["priv"], "jen-kea-helper", candidate, tmp_path)
+
+        code, out, _err = self._update(helper, candidate, sig)
+        assert out["ok"] is True
+        assert out["installed_version"] == helper.HELPER_VERSION
+        assert out["installed_build"] == helper.HELPER_BUILD + 1
+        assert target.read_bytes() == candidate
 
     @pytest.mark.parametrize(
         "payload",
@@ -960,10 +1099,15 @@ class TestUpdateOp:
         assert victim.read_text() == "keep me"
 
     def test_no_ssh_keygen_is_reported_distinctly(self, helper, signing_key, tmp_path, monkeypatch):
-        self._use_throwaway_signer(helper, monkeypatch, signing_key, tmp_path)
+        # Deliberately NOT _use_throwaway_signer (which now also makes ssh-keygen
+        # resolvable) — the signers file is set up by hand so _find_bin("ssh-keygen") is
+        # the only thing under test, left at its real default (nothing on this box's
+        # _BIN_DIRS is really root-owned when the test itself doesn't run as root).
+        signers = tmp_path / "allowed_signers"
+        signers.write_text(signing_key["signers_line"] + "\n")
+        monkeypatch.setattr(helper, "_EXTRA_SIGNERS", str(signers))
+        monkeypatch.setattr(helper, "_extra_signers_owner_ok", lambda path: True)
         self._target(helper, monkeypatch, tmp_path)
-        monkeypatch.setattr(helper.shutil, "which", lambda name: None)
-        monkeypatch.setattr(helper, "_SSH_KEYGEN_FALLBACKS", ())
         candidate = _candidate_bytes(99)
         sig = _sign(signing_key["priv"], "jen-kea-helper", candidate, tmp_path)
 
@@ -979,6 +1123,7 @@ class TestUpdateOp:
         signers.write_text(signing_key["signers_line"] + "\n")
         monkeypatch.setattr(helper, "_EXTRA_SIGNERS", str(signers))
         monkeypatch.setattr(helper, "_extra_signers_owner_ok", lambda path: False)
+        _allow_real_ssh_keygen(helper, monkeypatch)
         target = self._target(helper, monkeypatch, tmp_path)
         original = target.read_bytes()
         candidate = _candidate_bytes(99)

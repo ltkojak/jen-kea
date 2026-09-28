@@ -199,13 +199,16 @@ Check that SSH is running on your Kea server and the host/user in `[kea_ssh]` co
 Every Kea-side action Jen performs goes through `jen-kea-helper` at
 `/usr/local/sbin/jen-kea-helper`, behind one sudoers line. **Settings →
 Kea → SSH** shows the version for each host that has it — `v1` through
-`v6` (v5.16.0 shipped `v2`, v5.23.0 `v3` for D2, v5.29.0 `v4` for the
+`v7` (v5.16.0 shipped `v2`, v5.23.0 `v3` for D2, v5.29.0 `v4` for the
 https "Set up direct socket" push, v5.49.0 `v5` for bounded `tail-log`,
-v5.66.0 `v6` for signed updates). A `v1` host works but shows an
-"upgrade available" hint; a `v3` host works for everything except the
-https socket setup, which says **"https setup needs jen-kea-helper
-v4+"** until you press **Update helper**. Either way the fix is the
-same button — and once a host shows **v6**, that button needs no
+v5.66.0 `v6` for signed updates, v5.66.0-beta.2 `v7` for a hardened
+update path — no protocol change, so a `v7` host also shows a build
+number, e.g. **"v7 (build 7)"**; a helper-only fix ships as a higher
+build on the same `v7`). A `v1` host works but shows an "upgrade
+available" hint; a `v3` host works for everything except the https
+socket setup, which says **"https setup needs jen-kea-helper v4+"**
+until you press **Update helper**. Either way the fix is the same
+button — and once a host shows **v6** or newer, that button needs no
 sudoers grant at all; see *"Signed helper update refused"* below.
 
 Two failure signatures, both meaning "Jen fell back to the legacy root
@@ -251,10 +254,10 @@ attempting an install. Three causes, in order of likelihood:
    exactly who Jen probed as.
 
 **Signed helper update refused (v5.66.0).** Only reachable on a host
-already at helper v6 — pressing **Update helper** there needs no
-sudoers grant at all, since the helper's own `update` op verifies the
-new file itself before installing it. The flash names which of four
-checks failed:
+already at helper v6 or newer — pressing **Update helper** there needs
+no sudoers grant at all, since the helper's own `update` op verifies
+the new file itself before installing it. The flash names which check
+failed:
 - *"refused the signature"* — the release's own signature didn't
   verify. This points at the **release**, not the host: a corrupted
   download, or (very unlikely) a signing problem in `release.yml`.
@@ -269,11 +272,20 @@ checks failed:
   Install it there (`sudo apt install openssh-client` on Debian/Ubuntu,
   `apk add openssh-keygen` on Alpine) and press the button again.
 - *"not older than this release's helper"* — a benign race: the host
-  already reports a version at or above what Jen just tried to send
-  (shown as a warning, not an error). Nothing to do.
+  already reports a version and build at or above what Jen just tried
+  to send (shown as a warning, not an error). Nothing to do.
+- *"candidate didn't check out"* (v7+, from `unparseable`,
+  `preflight-failed` or `postflight-failed`) — the helper verified the
+  signature but refused to install: it couldn't find a `HELPER_VERSION`
+  / `HELPER_BUILD` line in the signed file, the candidate failed a
+  self-check before being installed, or the installed copy failed that
+  same self-check right after — in which case the helper has already
+  restored the previous file from its own `.prev` backup, so the host
+  is never left without a working helper. This points at a bad build
+  reaching `release.yml`, not at anything on the Kea host; report it.
 
 None of these touch sudoers, and none fall back to the legacy path — a
-v6 host that fails a signed update stays on its current version rather
+host that fails a signed update stays on its current version rather
 than silently reopening the `sudo python3` grant requirement.
 
 ### Permission denied on kea-dhcp4.conf

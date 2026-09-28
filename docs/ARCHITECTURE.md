@@ -535,6 +535,46 @@ helper's `unknown-op` reply becomes a plain "needs helper v4" message.
 There is deliberately **no legacy fallback** for this op: key material
 never rides a generated root script.
 
+**Helper protocol v7 (v5.66.0-beta.2, Q104 — hardening the signed
+update, no protocol shape change).** A third-party review of v6's design
+found three gaps in the machinery AROUND `update`, none in what it
+verifies:
+- **No PATH trust.** Every binary the helper runs (`kea-dhcp4/6`,
+  `kea-dhcp-ddns`, `systemctl`, `apt-get`, `ssh-keygen`) is resolved
+  through `_find_bin()`, a root-owned walk over a fixed `_BIN_DIRS` list
+  (`/usr/sbin`, `/usr/bin`, `/sbin`, `/bin`, `/usr/local/sbin`,
+  `/usr/local/bin`, in that order) requiring each candidate be a regular
+  file, root-owned, and not group/other-writable — never `shutil.which()`,
+  never a bare name handed to `subprocess.run`. The helper's own shebang
+  is `#!/usr/bin/python3 -I` (isolated mode), and every subprocess it
+  spawns gets a fixed, minimal environment rather than the one it
+  inherited. This was already safe on every real target (Ubuntu's
+  `secure_path` covers it), but a root privilege boundary shouldn't
+  depend on the caller's sudoers configuration staying that way.
+- **`HELPER_BUILD`.** A helper-only change (like the PATH hardening
+  itself) doesn't bump `HELPER_VERSION` — the protocol didn't change —
+  so `op_update`'s old `new_version <= HELPER_VERSION` check would call
+  such a file `not-newer` forever. `HELPER_BUILD` is a separate integer,
+  bumped on every change to the file regardless of `HELPER_VERSION`;
+  `update` now requires the candidate's build to be strictly higher when
+  the version is equal (a protocol downgrade is still never installed,
+  even with a higher build). `tests/kea_helper_build.json` pins
+  `{"build": N, "sha256": <hash of jen-kea-helper>}` — a test fails
+  unless a file change is paired with a build bump, the same discipline
+  the `RELEASE_SIGNERS` twin test already enforces for the signing key.
+- **Preflight and rollback.** A signed, strictly-newer candidate could
+  still fail to run at all on this particular host (a syntax error, a
+  Python-version incompatibility, a host-specific import failure) —
+  `update` used to write and `os.replace` it with no check beyond "the
+  signature verifies". It now runs the candidate's own `version` op in a
+  throwaway process first (`/usr/bin/python3 -I <candidate> version`,
+  fsynced, a 10 s timeout, the fixed environment) and requires it to
+  answer `ok: true` with the exact version/build it declared; only then
+  does it copy the CURRENT helper aside to `<path>.prev`, install the new
+  one, and repeat the same check against the installed path — a failure
+  there restores `.prev` and reports `postflight-failed` instead of
+  leaving a broken helper live.
+
 - `jen-config` mutation now happens **in Jen** (`jen/services/kea_config_edit.py`,
   pure functions) rather than inside a generated script. Read → mutate →
   apply is not a single atomic step on the Kea host, but since v5.16.0

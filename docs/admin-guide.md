@@ -1043,6 +1043,21 @@ signs with — the same rotation shape as the self-updater's own trust
 root) and as a test hook for the automated suite; an operator does not
 normally need this file at all.
 
+**v5.66.0-beta.2 ships helper v7 — nothing changes for you.** A
+third-party review of the v6 design asked for the update machinery to
+be hardened, not redesigned: every binary the helper runs
+(`systemctl`, `apt-get`, `kea-dhcpX`, `ssh-keygen`) is now resolved
+through a root-owned allowlist rather than trusting the caller's
+`$PATH`, and a signed candidate is run once in a throwaway check
+before it replaces the live helper and once more right after — a
+failure at either point rolls back automatically, restoring the
+previous helper rather than leaving a broken one in place. A
+helper-only fix like this one doesn't change the protocol, so it ships
+under a new `HELPER_BUILD` number rather than bumping `HELPER_VERSION`
+— Settings → Kea → SSH shows it as **"v7 (build 7)"** once a host has
+it, and still offers **Update helper** the same way it did for v6.
+None of this needs anything from you.
+
 **v5.20.0 — the legacy grant is now checked, not just used.** Every
 time Jen checks or installs the helper it also checks whether
 `/etc/sudoers.d/jen-kea` (below) is still present, and records that

@@ -124,21 +124,26 @@ def helper_status() -> dict:
         return {}
 
 
-def record_helper_status(server_id, version, legacy_grant: bool | None = None) -> None:
+def record_helper_status(server_id, version, build=None, legacy_grant: bool | None = None) -> None:
     """Called after every helper attempt: `version` is the integer
     reported by a `version` op, an int carried forward for any other
-    successful op, or None for HelperMissing. `legacy_grant` (v5.20.0)
-    records whether the old NOPASSWD: /usr/bin/python3 sudoers grant is
-    still present on this host — True/False updates it, None (the
-    default — every caller except check_helper) leaves whatever was
-    last recorded, since most callers have no reason to SSH just to
-    check."""
+    successful op, or None for HelperMissing. `build` (v5.66.0-beta.2,
+    Q104) is `helper_build` from the same response envelope when the
+    host is already on v7+ — None (the default, matching `legacy_grant`'s
+    own convention) leaves whatever was last recorded rather than
+    clobbering it with "unknown", since most callers have no reason to
+    SSH just to check. `legacy_grant` (v5.20.0) records whether the old
+    NOPASSWD: /usr/bin/python3 sudoers grant is still present on this
+    host — True/False updates it, None (the default — every caller
+    except check_helper) leaves whatever was last recorded, since most
+    callers have no reason to SSH just to check."""
     if server_id is None:
         return
     data = helper_status()
     prev = data.get(str(server_id), {})
     data[str(server_id)] = {
         "version": version,
+        "build": build if build is not None else prev.get("build"),
         "checked": datetime.now(timezone.utc).isoformat(),
         "legacy_grant": legacy_grant if legacy_grant is not None else prev.get("legacy_grant"),
     }
@@ -150,6 +155,10 @@ def record_helper_status(server_id, version, legacy_grant: bool | None = None) -
 
 def _known_version(server_id):
     return helper_status().get(str(server_id), {}).get("version")
+
+
+def _known_build(server_id):
+    return helper_status().get(str(server_id), {}).get("build")
 
 
 def d2_supported(server_id) -> bool:
@@ -179,7 +188,13 @@ TRACE_HELPER_MIN_VERSION = 5
 # whether the Settings → Kea → SSH table OFFERS the Update helper button
 # at all. v5.29.0 gated the https socket option on v4 but the button only
 # appeared below WANT, so a v3 host had no way to get there from the UI.
-JEN_HELPER_SHIPPED_VERSION = 6  # v6 (v5.66.0, Q103): the signed `update` op
+JEN_HELPER_SHIPPED_VERSION = 7  # v7 (v5.66.0-beta.2, Q104): PATH hardening + preflight/rollback
+# v5.66.0-beta.2 (Q104) — HELPER_BUILD of the jen-kea-helper file this install ships
+# (tests/test_kea_host.py pins it to the file, the same way JEN_HELPER_SHIPPED_VERSION is).
+# A helper below v7 never reports a build at all (record_helper_status's "build" stays
+# whatever it last was, usually None) — comparisons that matter fall back to version alone
+# in that case; see install_helper()'s already-check and helper_version_label() below.
+JEN_HELPER_SHIPPED_BUILD = 7
 # v5.66.0 (Q103) — the version whose "Update helper" click needs no legacy grant at all: at
 # or above this, install_helper() takes the signed path (helper_signature() + the `update`
 # op) instead of the pre-5.11.0 sudo-python3 engine. A host below this still gets one last
@@ -187,13 +202,26 @@ JEN_HELPER_SHIPPED_VERSION = 6  # v6 (v5.66.0, Q103): the signed `update` op
 SIGNED_UPDATE_HELPER_MIN_VERSION = 6
 
 
-def helper_version_label(version, shipped: int | None = None) -> str:
+def helper_version_label(
+    version, shipped: int | None = None, build: int | None = None, shipped_build: int | None = None
+) -> str:
     """One host's version as every page words it: "v4 (v5 available)", or "v5"
-    when it is current, "not recorded" when Jen has never seen it answer."""
+    when it is current, "not recorded" when Jen has never seen it answer.
+    v5.66.0-beta.2 (Q104) — `build`/`shipped_build` are optional: a v7+ host that
+    reports one reads "v7 (build 7)" when current, or "v7 (build 3, build 7
+    available)" when it's behind on build only (same protocol version, older
+    file) — a case `version` alone can't distinguish from "fully current"."""
     shipped = JEN_HELPER_SHIPPED_VERSION if shipped is None else shipped
+    shipped_build = JEN_HELPER_SHIPPED_BUILD if shipped_build is None else shipped_build
     if not isinstance(version, int):
         return "not recorded"
-    return f"v{version} (v{shipped} available)" if version < shipped else f"v{version}"
+    if version < shipped:
+        return f"v{version} (v{shipped} available)"
+    if isinstance(build, int):
+        if build < shipped_build:
+            return f"v{version} (build {build}, build {shipped_build} available)"
+        return f"v{version} (build {build})"
+    return f"v{version}"
 
 
 def helper_version_phrase(versions, shipped: int | None = None) -> str:
@@ -903,13 +931,16 @@ def check_helper(server: dict) -> dict:
     """Run `version`, record the status — including whether the legacy
     python3 grant is still present (v5.20.0), so Health Center can warn
     about it without SSHing at render time — return the parsed result.
-    `install_helper()`'s own `check_helper()` calls get this for free."""
+    `install_helper()`'s own `check_helper()` calls get this for free.
+    v5.66.0-beta.2 (Q104) — also records `helper_build` from the same
+    response envelope, when the host is on v7+ and answers one."""
     grant = legacy_grant_present(server)
     try:
         resp = helper_call(server, "version", {})
         version = resp.get("helper_version") if resp.get("ok") else None
-        record_helper_status(server.get("id"), version, legacy_grant=grant)
-        return {"ok": bool(version), "version": version, "via": "helper"}
+        build = resp.get("helper_build") if resp.get("ok") else None
+        record_helper_status(server.get("id"), version, build=build, legacy_grant=grant)
+        return {"ok": bool(version), "version": version, "build": build, "via": "helper"}
     except HelperMissing:
         record_helper_status(server.get("id"), None, legacy_grant=grant)
         return {"ok": False, "version": None, "code": "missing"}
@@ -1113,6 +1144,15 @@ def _source_version(source: str) -> int:
     return int(m.group(1)) if m else JEN_HELPER_SHIPPED_VERSION
 
 
+def _source_build(source: str) -> int:
+    """HELPER_BUILD as declared by the helper text about to be copied — v5.66.0-beta.2
+    (Q104), beside _source_version() for the same reason: the only honest "what will the
+    host report afterwards" number, this time for the build ordering that survives a
+    helper-only fix which doesn't bump HELPER_VERSION."""
+    m = re.search(r"^HELPER_BUILD = (\d+)$", source, re.M)
+    return int(m.group(1)) if m else JEN_HELPER_SHIPPED_BUILD
+
+
 def _helper_download_command() -> str:
     """The by-hand copy command, chained with a download step. v5.65.13 (Q102) — the old wording
     (`sudo install -o root -g root -m 0755 ./jen-kea-helper ...`) assumed the file was already
@@ -1128,7 +1168,7 @@ def _helper_download_command() -> str:
     )
 
 
-def _install_helper_signed(server: dict, target: int, current: int) -> dict:
+def _install_helper_signed(server: dict, target: int, target_build: int, current: int) -> dict:
     """v5.66.0 (Q103) — helper >= SIGNED_UPDATE_HELPER_MIN_VERSION: update through the signed
     `update` op instead of the legacy engine. No sudoers grant is asked for or needed — the op
     itself verifies a release-key signature and a strictly higher HELPER_VERSION before it ever
@@ -1165,7 +1205,12 @@ def _install_helper_signed(server: dict, target: int, current: int) -> dict:
     if resp.get("ok"):
         recheck = check_helper(server)
         real = recheck.get("version")
-        if isinstance(real, int) and real >= target:
+        real_build = recheck.get("build")
+        # op_update's own preflight/postflight already guaranteed the installed file's
+        # version/build equal exactly what it verified — this re-check exists to catch a
+        # discrepancy in Jen's OWN view (a stale SSH round trip), not to re-derive "newer".
+        build_ok = real_build is None or real_build == target_build
+        if real == target and build_ok:
             return {"ok": True, "version": real, "code": "upgraded", "detail": ""}
         return {
             "ok": False,
@@ -1188,6 +1233,18 @@ def _install_helper_signed(server: dict, target: int, current: int) -> dict:
         "symlink": (
             f"the installed path on {name} is a symlink, not a plain file — investigate it by hand before "
             f"retrying, or copy the helper directly: {by_hand}"
+        ),
+        "unparseable": (
+            f"{name}'s own copy of this release's helper could not be read back — this should not happen; "
+            f"please report it. In the meantime, copy the helper by hand: {by_hand}"
+        ),
+        "preflight-failed": (
+            f"{name} refused to install this release's helper: it does not run cleanly there ({resp.get('detail', '')}) "
+            f"— the currently-installed helper was left untouched. Please report this."
+        ),
+        "postflight-failed": (
+            f"{name} rolled the update back on its own: the newly-installed helper did not answer correctly "
+            f"({resp.get('detail', '')}) — the previous helper is restored and working. Please report this."
         ),
     }
     code = reason if reason in wording else "error"
@@ -1224,14 +1281,25 @@ def install_helper(server: dict) -> dict:
     # the copy on it meant a v3 host got "already installed" back from the
     # Update helper button that v5.29.1 had just put in front of it.
     target = _source_version(source)
+    target_build = _source_build(source)
 
     chk = check_helper(server)
     current = chk.get("version")
-    if isinstance(current, int) and current >= target:
-        return {"ok": True, "version": current, "code": "already", "detail": ""}
+    current_build = chk.get("build")
+    # v5.66.0-beta.2 (Q104) — compare builds too when the host actually reports one (v7+):
+    # same VERSION, lower BUILD is a real update to offer (a helper-only fix, no protocol
+    # change), not "already". A host below v7 never reports a build, so this falls back to
+    # version alone exactly as it always did.
+    if isinstance(current, int):
+        if isinstance(current_build, int):
+            already = (current, current_build) >= (target, target_build)
+        else:
+            already = current >= target
+        if already:
+            return {"ok": True, "version": current, "code": "already", "detail": ""}
 
     if isinstance(current, int) and current >= SIGNED_UPDATE_HELPER_MIN_VERSION:
-        return _install_helper_signed(server, target, current)
+        return _install_helper_signed(server, target, target_build, current)
 
     status = legacy_grant_status(server)
     if not status["ok"]:

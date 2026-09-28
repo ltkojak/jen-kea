@@ -449,6 +449,81 @@ class TestHelperDeployment:
         assert res["code"] == "sudoerror" and res["detail"] == "bad line 2"
 
 
+class TestSourceBuild:
+    """v5.66.0-beta.2 (Q104) — _source_build() beside _source_version(), same shape."""
+
+    def test_parses_a_declared_build(self):
+        assert kea_host._source_build("HELPER_BUILD = 42\n") == 42
+
+    def test_falls_back_to_shipped_when_unparseable(self):
+        assert kea_host._source_build("x") == kea_host.JEN_HELPER_SHIPPED_BUILD
+
+    def test_the_real_file_matches_the_shipped_build(self):
+        assert kea_host._source_build(kea_host._helper_source()) == kea_host.JEN_HELPER_SHIPPED_BUILD
+
+
+class TestHelperVersionLabelBuild:
+    """v5.66.0-beta.2 (Q104) — a v7+ host that reports a build reads "v7 (build 7)"; behind
+    on build only (same protocol version) reads "v7 (build 3, build 7 available)"; a host
+    with no build info at all (pre-v7) is unaffected — same output as before this Q."""
+
+    def test_current_version_and_build(self):
+        assert kea_host.helper_version_label(7, shipped=7, build=7, shipped_build=7) == "v7 (build 7)"
+
+    def test_current_version_behind_on_build(self):
+        assert (
+            kea_host.helper_version_label(7, shipped=7, build=3, shipped_build=7) == "v7 (build 3, build 7 available)"
+        )
+
+    def test_no_build_info_is_unaffected(self):
+        assert kea_host.helper_version_label(5, shipped=7) == "v5 (v7 available)"
+        assert kea_host.helper_version_label(7, shipped=7) == "v7"
+
+
+class TestInstallHelperAlreadyComparesBuilds:
+    """v5.66.0-beta.2 (Q104) — same VERSION, lower BUILD is a real update to offer (a
+    helper-only fix with no protocol change), not "already"; a host that reports no build at
+    all (below v7) still falls back to comparing version alone."""
+
+    def test_same_version_lower_build_is_not_already(self, monkeypatch, quiet_status):
+        monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 7\nHELPER_BUILD = 9\n")
+        monkeypatch.setattr(kea_host, "check_helper", lambda s: {"ok": True, "version": 7, "build": 3})
+        monkeypatch.setattr(kea_host, "legacy_grant_status", lambda s: _OK_GRANT)
+        signed_called = []
+        monkeypatch.setattr(kea_host, "helper_signature", lambda: signed_called.append(1) or b"sig")
+        monkeypatch.setattr(
+            kea_host,
+            "helper_call",
+            lambda s, op, payload=None, timeout=60: {"ok": True, "installed_version": 7, "installed_build": 9},
+        )
+        calls = iter([{"ok": True, "version": 7, "build": 3}, {"ok": True, "version": 7, "build": 9}])
+        monkeypatch.setattr(kea_host, "check_helper", lambda s: next(calls))
+
+        res = kea_host.install_helper(SERVER)
+        assert res == {"ok": True, "version": 7, "code": "upgraded", "detail": ""}
+        assert signed_called == [1]  # the signed path WAS used — it wasn't "already"
+
+    def test_same_version_and_build_is_already(self, monkeypatch, quiet_status):
+        monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 7\nHELPER_BUILD = 9\n")
+        monkeypatch.setattr(kea_host, "check_helper", lambda s: {"ok": True, "version": 7, "build": 9})
+        signed_called = []
+        monkeypatch.setattr(kea_host, "helper_signature", lambda: signed_called.append(1) or b"sig")
+
+        res = kea_host.install_helper(SERVER)
+        assert res == {"ok": True, "version": 7, "code": "already", "detail": ""}
+        assert signed_called == []  # never even reached the signed path
+
+    def test_no_build_reported_falls_back_to_version_only(self, monkeypatch, quiet_status):
+        """A host below v7 never reports a build at all — check_helper()["build"] is None,
+        and the already-check must fall back to comparing version alone exactly as it did
+        before this Q, not treat a missing build as "0" (which would never be "already")."""
+        monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 6\nHELPER_BUILD = 1\n")
+        monkeypatch.setattr(kea_host, "check_helper", lambda s: {"ok": True, "version": 6, "build": None})
+
+        res = kea_host.install_helper(SERVER)
+        assert res == {"ok": True, "version": 6, "code": "already", "detail": ""}
+
+
 class TestHelperSignature:
     """v5.66.0 (Q103) — helper_signature() prefers the sibling file jen-update-root.py writes,
     falls back to fetching this release's own GitHub asset."""
@@ -552,7 +627,9 @@ class TestInstallHelperSigned:
             ("no-ssh-keygen", "no-ssh-keygen"),
             ("not-newer", "not-newer"),
             ("symlink", "symlink"),
-            ("unparseable", "error"),
+            ("unparseable", "unparseable"),
+            ("preflight-failed", "preflight-failed"),
+            ("postflight-failed", "postflight-failed"),
             ("not-allowed", "error"),
         ],
     )
@@ -678,11 +755,11 @@ class TestCheckHelperRecordsLegacyGrant:
         monkeypatch.setattr(
             kea_host,
             "record_helper_status",
-            lambda sid, v, legacy_grant=None: recorded.append((sid, v, legacy_grant)),
+            lambda sid, v, build=None, legacy_grant=None: recorded.append((sid, v, build, legacy_grant)),
         )
         _connect_seq(monkeypatch, [(json.dumps({"ok": True, "helper_version": 2}), "")])
         kea_host.check_helper(SERVER)
-        assert recorded == [(1, 2, True)]
+        assert recorded == [(1, 2, None, True)]
 
     def test_records_on_missing_too(self, monkeypatch, quiet_status):
         recorded = []

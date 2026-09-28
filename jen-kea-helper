@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """
 jen-kea-helper — the fixed-function privilege boundary on a Kea host
 ───────────────────────────────────────────────────────────────────
@@ -56,7 +56,10 @@ Protocol
   unreadable JSON, oversize stdin) — still printing a JSON object.
 - `HELPER_VERSION` is the protocol version. Bump it only when an op's
   request/response contract changes; Jen refuses a helper older than
-  its `JEN_HELPER_MIN_VERSION`.
+  its `JEN_HELPER_MIN_VERSION`. `HELPER_BUILD` (v7, Q104) is a separate,
+  plain integer bumped on EVERY change to this file, never reset by a
+  version bump — `HELPER_VERSION` alone can't order two files that
+  changed without a protocol change between them.
 
 v2 (v5.16.0) — optimistic concurrency:
 - `read-config` responses gain `"sha256"` — the hex SHA-256 of the raw
@@ -121,6 +124,48 @@ constant in `jen-update-root.py` (a test enforces it) — the local
 `/etc/jen-kea-helper/allowed_signers` file (root-owned, not group/other
 writable, ≤ 8 KiB) is an OPTIONAL addition on top of it, for key rotation
 and test doubles, never a replacement.
+
+v7 (v5.66.0-beta.2, Q104) — a third-party review of the v6 design (verdict:
+"fundamentally good and should remain") found the hardening below still
+missing. None of it changes what `update` VERIFIES — only how carefully
+everything around it behaves:
+- **No PATH trust.** Every binary this helper ever runs (`kea-dhcp4/6`,
+  `kea-dhcp-ddns`, `systemctl`, `apt-get`, `ssh-keygen`) is resolved through
+  `_find_bin()`, a root-owned allowlist walk over `_BIN_DIRS` — never
+  `shutil.which()`, never a bare name handed to `subprocess.run`. The
+  process itself now runs `#!/usr/bin/python3 -I` (isolated mode: no
+  `PYTHON*` env vars, no script directory on `sys.path`) and every
+  subprocess it spawns gets a fixed, minimal environment. `sudo -n
+  /usr/local/sbin/jen-kea-helper` means the kernel resolves the shebang and
+  every child process through sudo's own `secure_path` today, and that is
+  genuinely safe on the targets this ships to — but a root privilege
+  boundary must not depend on the caller's sudoers configuration staying
+  that way forever.
+- **`HELPER_BUILD`.** `HELPER_VERSION` is the protocol/capability number,
+  bumped only when a request/response contract changes — but a helper-only
+  fix (like the PATH hardening above) changes the FILE without changing
+  the protocol, and `op_update`'s old `new_version <= HELPER_VERSION` check
+  would call that `not-newer` forever. `HELPER_BUILD` is a plain integer,
+  bumped on every change to this file, never reset by a version bump;
+  `update` (from v7 on) requires the candidate's `HELPER_BUILD` to be
+  greater than this file's own (equal or lower → `not-newer`), and its
+  `HELPER_VERSION` to be at least this file's own (a protocol DOWNGRADE is
+  still never installed, even signed, even with a higher build).
+- **Preflight and rollback.** A signed, strictly-newer candidate could
+  still have a syntax error, a Python-version incompatibility, or a
+  host-specific import failure — `update` used to write and `os.replace`
+  it with no check beyond "the bytes verify". Now, after the signature and
+  version/build checks: the candidate is preflighted by running its own
+  `version` op in a throwaway process (`/usr/bin/python3 -I <candidate>
+  version` — the same fixed interpreter path every target has, exactly the
+  path the legacy grant names — with an empty JSON object on stdin, a
+  10 s timeout, the same fixed environment) and requiring exit 0 plus a
+  JSON reply whose `helper_version`/`helper_build` match what the
+  candidate declared; only then is it fsynced, the CURRENT helper copied
+  aside to `<_SELF_PATH>.prev`, and `os.replace()`d in. A POSTFLIGHT repeats
+  the same check against the newly-installed path — a failure there
+  restores `.prev` over `_SELF_PATH` and reports `postflight-failed`
+  instead of leaving a broken helper live; success removes `.prev`.
 """
 
 from __future__ import annotations
@@ -139,9 +184,25 @@ import subprocess  # nosec B404 — every call is a fixed argv list, shell=False
 import sys
 import tempfile
 
-HELPER_VERSION = 6
+HELPER_VERSION = 7
+HELPER_BUILD = 7
+# v5.66.0-beta.2 (Q104) — HELPER_BUILD is bumped on EVERY change to this file, never by
+# HELPER_VERSION alone; op_update's own _HELPER_BUILD_RE parses "^HELPER_BUILD = (\d+)$" out
+# of a candidate's raw bytes, so this line (like HELPER_VERSION's own, just above) must never
+# carry a trailing comment — anything after the digit breaks that end-of-line anchor and a
+# genuine candidate would come back "unparseable".
 
 MAX_STDIN = 4 * 1024 * 1024  # 4 MiB
+
+# v5.66.0-beta.2 (Q104) — the root-owned binary allowlist every subprocess call resolves
+# through, in this fixed order, NEVER $PATH. os.environ["PATH"] is under sudo's control
+# today (Ubuntu's own secure_path), which is safe now but not something a root privilege
+# boundary should depend on staying true. /usr/local/bin is where the system suite's
+# systemctl/keactl stand-ins live (tests/system/compose/kea-node/Dockerfile).
+_BIN_DIRS = ("/usr/sbin", "/usr/bin", "/sbin", "/bin", "/usr/local/sbin", "/usr/local/bin")
+# The fixed environment every resolved binary runs under — never the inherited one. Ops
+# that need an extra variable (apt-get's DEBIAN_FRONTEND) add it on top of this, per call.
+_CLEAN_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8"}
 
 # v4 — where `install-tls` writes, and the only names it writes. Fixed
 # here, never taken from the payload: the op's whole path wall is "these
@@ -215,21 +276,48 @@ def _file_sha256(path):
         return None
 
 
-def _kea_binary(service):
-    """Absolute path to the kea-dhcp4/6/dhcp-ddns binary, or None if not
-    found. Checks $PATH plus the two standard system locations (the .deb
-    packages install to /usr/sbin; a build-from-source often lands in
-    /usr/local/sbin), mirroring detect_installed_kea_services() on the
-    Jen side."""
-    name = _SERVICE_BINARY.get(service, "kea-dhcp6")
-    found = shutil.which(name)
-    if found:
-        return found
-    for d in ("/usr/sbin", "/usr/local/sbin"):
+def _bin_owner_ok(path):
+    """True iff `path` is a REGULAR file, owned root:root, with no group/other write bit —
+    the same shape as _extra_signers_owner_ok below, in its own function so a test (whose
+    stub binaries are never really root-owned, since the test itself doesn't run as root)
+    can monkeypatch it directly instead of faking filesystem ownership."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    if not stat.S_ISREG(st.st_mode):
+        return False
+    return st.st_uid == 0 and st.st_gid == 0 and not (st.st_mode & 0o022)
+
+
+def _find_bin(name):
+    """The first candidate under _BIN_DIRS (that fixed order) that exists, is a regular
+    file, root-owned, and not group/other-writable — every binary this helper ever runs is
+    resolved this way, NEVER through $PATH (v5.66.0-beta.2, Q104)."""
+    for d in _BIN_DIRS:
         cand = os.path.join(d, name)
-        if os.access(cand, os.X_OK):
+        if _bin_owner_ok(cand) and os.access(cand, os.X_OK):
             return cand
     return None
+
+
+def _run_bin(name, args, **kw):
+    """Resolve `name` through _find_bin and run it with the fixed _CLEAN_ENV — never the
+    inherited environment, never $PATH. `args` is the argument list AFTER the binary name.
+    Returns a subprocess.CompletedProcess, or None if the binary could not be found at all
+    under _BIN_DIRS (the caller decides what that means for its own op)."""
+    binary = _find_bin(name)
+    if binary is None:
+        return None
+    return subprocess.run([binary, *args], env=_CLEAN_ENV, **kw)  # nosec B603
+
+
+def _kea_binary(service):
+    """Absolute path to the kea-dhcp4/6/dhcp-ddns binary, resolved through the same
+    root-owned _BIN_DIRS allowlist as every other binary this helper runs — never $PATH,
+    never shutil.which()."""
+    name = _SERVICE_BINARY.get(service, "kea-dhcp6")
+    return _find_bin(name)
 
 
 # ── Kea config test (shared by test-config and apply-config) ─────────────────
@@ -260,7 +348,7 @@ def _run_kea_test(service, path, config, tls_paths):
             if not present:
                 return False, {"ok": False, "error": "tlsmissing", "path": tp}
 
-        proc = subprocess.run([binary, "-t", tmp], capture_output=True, text=True)  # nosec B603
+        proc = subprocess.run([binary, "-t", tmp], capture_output=True, text=True, env=_CLEAN_ENV)  # nosec B603
         combined = (proc.stdout or "") + (proc.stderr or "")
         if proc.returncode != 0 or "ERROR" in combined:
             lines = [ln for ln in combined.splitlines() if "ERROR" in ln or "Error" in ln]
@@ -281,6 +369,7 @@ def op_version(_payload):
     return {
         "ok": True,
         "helper_version": HELPER_VERSION,
+        "helper_build": HELPER_BUILD,
         "python": f"{v.major}.{v.minor}.{v.micro}",
     }, None
 
@@ -394,16 +483,13 @@ def _resolve_unit(service, action):
     packages, `isc-kea-{fam}-server` on older Debian/Ubuntu ones (`fam` is
     "dhcp4"/"dhcp6"/"dhcp-ddns" — Kea's own unit-naming family, not Jen's
     "d2" service name). Tries each with `systemctl show -p LoadState`;
-    returns the first that is `loaded`, else None."""
+    returns the first that is `loaded`, else None (including "systemctl
+    itself could not be found under _BIN_DIRS", the old OSError-catch
+    case)."""
     fam = _SERVICE_UNIT_FAM.get(service, "dhcp6")
     for unit in (f"kea-{fam}-server", f"isc-kea-{fam}-server"):
-        try:
-            proc = subprocess.run(  # nosec B603 B607
-                ["systemctl", "show", "-p", "LoadState", "--value", unit],
-                capture_output=True,
-                text=True,
-            )
-        except OSError:
+        proc = _run_bin("systemctl", ["show", "-p", "LoadState", "--value", unit], capture_output=True, text=True)
+        if proc is None:
             return None
         if proc.stdout.strip() == "loaded":
             return unit
@@ -411,11 +497,8 @@ def _resolve_unit(service, action):
 
 
 def _unit_state(unit):
-    try:
-        proc = subprocess.run(  # nosec B603 B607
-            ["systemctl", "is-active", unit], capture_output=True, text=True
-        )
-    except OSError:
+    proc = _run_bin("systemctl", ["is-active", unit], capture_output=True, text=True)
+    if proc is None:
         return "unknown"
     return proc.stdout.strip() or "unknown"
 
@@ -433,14 +516,13 @@ def op_service(payload):
     if action == "status":
         return {"ok": True, "unit": unit, "state": _unit_state(unit)}, unit
 
-    argv = ["systemctl", action]
+    args = [action]
     if action in ("enable", "disable"):
-        argv.append("--now")
-    argv.append(unit)
-    try:
-        proc = subprocess.run(argv, capture_output=True, text=True)  # nosec B603 B607
-    except OSError as e:
-        return {"ok": False, "error": "systemctl", "detail": str(e)}, unit
+        args.append("--now")
+    args.append(unit)
+    proc = _run_bin("systemctl", args, capture_output=True, text=True)
+    if proc is None:
+        return {"ok": False, "error": "systemctl", "detail": "systemctl not found under _BIN_DIRS"}, unit
     if proc.returncode != 0:
         tail = "\n".join((proc.stderr or proc.stdout or "").splitlines()[-5:])
         return {"ok": False, "error": "systemctl", "detail": tail}, unit
@@ -473,12 +555,15 @@ def op_install_package(payload):
     if not _valid_service(service):
         return {"ok": False, "error": "not-allowed"}, None
     package = f"kea-{_SERVICE_UNIT_FAM.get(service, 'dhcp6')}-server"
-    env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
+    apt_env = {**_CLEAN_ENV, "DEBIAN_FRONTEND": "noninteractive"}
     out = []
     ok = True
-    for argv in (["apt-get", "update", "-qq"], ["apt-get", "install", "-y", package]):
+    for args in (["update", "-qq"], ["install", "-y", package]):
+        binary = _find_bin("apt-get")
+        if binary is None:
+            return {"ok": False, "output": "apt-get not found under _BIN_DIRS"}, package
         try:
-            proc = subprocess.run(argv, capture_output=True, text=True, env=env)  # nosec B603 B607
+            proc = subprocess.run([binary, *args], capture_output=True, text=True, env=apt_env)  # nosec B603
         except OSError as e:
             return {"ok": False, "output": str(e)}, package
         out.append((proc.stdout or "") + (proc.stderr or ""))
@@ -505,13 +590,8 @@ def _daemon_group(service):
     user = ""
     unit = _resolve_unit(service, "status")
     if unit:
-        try:
-            proc = subprocess.run(  # nosec B603 B607
-                ["systemctl", "show", "-p", "User", "--value", unit], capture_output=True, text=True
-            )
-            user = (proc.stdout or "").strip()
-        except OSError:
-            user = ""
+        proc = _run_bin("systemctl", ["show", "-p", "User", "--value", unit], capture_output=True, text=True)
+        user = (proc.stdout or "").strip() if proc else ""
     try:
         import pwd
     except ImportError:  # not a POSIX host (only ever the test harness)
@@ -593,26 +673,18 @@ _UPDATE_SIGNATURE_NAMESPACE = "jen-kea-helper"
 _UPDATE_MAX_HELPER = 512 * 1024
 _UPDATE_MAX_SIGNERS = 8 * 1024
 _HELPER_VERSION_RE = re.compile(rb"^HELPER_VERSION = (\d+)$", re.M)
+_HELPER_BUILD_RE = re.compile(rb"^HELPER_BUILD = (\d+)$", re.M)
+# v5.66.0-beta.2 (Q104) — the candidate's own preflight/postflight probe. /usr/bin/python3
+# is hardcoded on purpose, not resolved through _find_bin: it is where every target this
+# ships to (Ubuntu, and the system suite's Alpine image) puts it, and it is the exact same
+# path the legacy grant has always named — the one fixed interpreter path this file can
+# assume exists without having found it some other way first.
+_PREFLIGHT_PYTHON = "/usr/bin/python3"
 
 # v5.26.0's permanent trust root, copied here verbatim — see jen-update-root.py's own
 # RELEASE_SIGNERS for the full rotation note. tests/test_kea_helper.py diffs the two
 # byte for byte so they can never silently drift.
 RELEASE_SIGNERS = "release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD"
-
-# `shutil.which` alone isn't enough: this call runs under `sudo`'s own (frequently
-# stripped-down) environment, where PATH may not include the directory ssh-keygen
-# actually lives in even though the binary is right there.
-_SSH_KEYGEN_FALLBACKS = ("/usr/bin/ssh-keygen", "/usr/local/bin/ssh-keygen")
-
-
-def _find_ssh_keygen():
-    found = shutil.which("ssh-keygen")
-    if found:
-        return found
-    for cand in _SSH_KEYGEN_FALLBACKS:
-        if os.access(cand, os.X_OK):
-            return cand
-    return None
 
 
 def _extra_signers_owner_ok(path):
@@ -647,6 +719,38 @@ def _extra_signers_text():
     return data.decode("utf-8", "replace")
 
 
+def _probe_helper_version(path):
+    """Run `<path> version` in a throwaway process — the fixed _PREFLIGHT_PYTHON
+    interpreter, isolated mode, an empty JSON object on stdin, the fixed _CLEAN_ENV, a 10 s
+    timeout — and require exit 0 plus a JSON `{"ok": true, "helper_version": N,
+    "helper_build": N}` reply. Used both to preflight a signed candidate BEFORE it replaces
+    the live helper, and to postflight the installed path right after. Returns
+    (ok, helper_version_or_None, helper_build_or_None, reason) — `reason` is a single line,
+    ssh-keygen-style (the first stderr line, or a description of what went wrong), capped at
+    200 chars, populated only when ok is False."""
+    try:
+        proc = subprocess.run(  # nosec B603
+            [_PREFLIGHT_PYTHON, "-I", path, "version"],
+            input=b"{}",
+            capture_output=True,
+            timeout=10,
+            env=_CLEAN_ENV,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return False, None, None, f"{type(e).__name__}: {e}"[:200]
+    if proc.returncode != 0:
+        first_err = (proc.stderr or b"").decode("utf-8", "replace").splitlines()
+        reason = first_err[0] if first_err else f"exited {proc.returncode}"
+        return False, None, None, reason[:200]
+    try:
+        reply = json.loads((proc.stdout or b"").decode("utf-8", "replace"))
+    except ValueError:
+        return False, None, None, "candidate's version op did not print valid JSON"
+    if not isinstance(reply, dict) or reply.get("ok") is not True:
+        return False, None, None, "candidate's version op did not answer ok"
+    return True, reply.get("helper_version"), reply.get("helper_build"), ""
+
+
 def op_update(payload):
     helper_b64 = payload.get("helper_b64")
     signature_b64 = payload.get("signature_b64")
@@ -660,7 +764,7 @@ def op_update(payload):
     if not candidate or len(candidate) > _UPDATE_MAX_HELPER or len(signature) > _UPDATE_MAX_SIGNERS:
         return {"ok": False, "error": "not-allowed"}, None
 
-    keygen = _find_ssh_keygen()
+    keygen = _find_bin("ssh-keygen")
     if keygen is None:
         return {"ok": False, "error": "no-ssh-keygen"}, None
 
@@ -695,17 +799,25 @@ def op_update(payload):
                 input=candidate,
                 capture_output=True,
                 timeout=10,
+                env=_CLEAN_ENV,
             )
         except (OSError, subprocess.TimeoutExpired):
             return {"ok": False, "error": "bad-signature"}, None
         if proc.returncode != 0:
             return {"ok": False, "error": "bad-signature"}, None
 
-        m = _HELPER_VERSION_RE.search(candidate)
-        if not m:
+        vm = _HELPER_VERSION_RE.search(candidate)
+        bm = _HELPER_BUILD_RE.search(candidate)
+        if not vm or not bm:
             return {"ok": False, "error": "unparseable"}, None
-        new_version = int(m.group(1))
-        if new_version <= HELPER_VERSION:  # equal counts — a downgrade is never installed, even signed
+        new_version = int(vm.group(1))
+        new_build = int(bm.group(1))
+        # A protocol DOWNGRADE is never installed, even signed, even with a higher build.
+        if new_version < HELPER_VERSION:
+            return {"ok": False, "error": "not-newer"}, None
+        # Same protocol: order by build (equal counts as not-newer — HELPER_BUILD is what
+        # orders two files that changed without a protocol bump between them).
+        if new_version == HELPER_VERSION and new_build <= HELPER_BUILD:
             return {"ok": False, "error": "not-newer"}, None
 
         if os.path.islink(_SELF_PATH):
@@ -714,10 +826,58 @@ def op_update(payload):
         final_tmp = os.path.join(tmp_dir, "final")
         with open(final_tmp, "wb") as f:
             f.write(candidate)
+            f.flush()
+            os.fsync(f.fileno())
+
+        # ── preflight: the candidate must run and self-report exactly what it declared ──
+        pre_ok, pre_version, pre_build, pre_reason = _probe_helper_version(final_tmp)
+        if not pre_ok or pre_version != new_version or pre_build != new_build:
+            detail = pre_reason or "the candidate's own version op disagreed with what it declared"
+            return {"ok": False, "error": "preflight-failed", "detail": detail}, None
+
+        prev_path = _SELF_PATH + ".prev"
+        if os.path.islink(prev_path):
+            return {"ok": False, "error": "symlink", "path": prev_path}, None
+        prev_saved = False
+        if os.path.isfile(_SELF_PATH) and not os.path.islink(_SELF_PATH):
+            shutil.copy2(_SELF_PATH, prev_path)
+            _chown(prev_path, 0, 0)
+            os.chmod(prev_path, 0o755)
+            prev_saved = True
+
         _chown(final_tmp, 0, 0)
         os.chmod(final_tmp, 0o755)
         os.replace(final_tmp, _SELF_PATH)
-        return {"ok": True, "installed_version": new_version, "previous_version": HELPER_VERSION}, None
+        try:
+            dir_fd = os.open(os.path.dirname(_SELF_PATH), os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass  # best-effort durability only — not every OS supports fsync on a directory fd
+
+        # ── postflight: the INSTALLED path must answer the same way, or roll back ──
+        post_ok, post_version, post_build, post_reason = _probe_helper_version(_SELF_PATH)
+        if not post_ok or post_version != new_version or post_build != new_build:
+            if prev_saved:
+                os.replace(prev_path, _SELF_PATH)
+            detail = post_reason or "the installed candidate's own version op disagreed after install"
+            return {"ok": False, "error": "postflight-failed", "detail": detail}, None
+
+        if prev_saved:
+            try:
+                os.unlink(prev_path)
+            except OSError:
+                pass
+
+        return {
+            "ok": True,
+            "installed_version": new_version,
+            "installed_build": new_build,
+            "previous_version": HELPER_VERSION,
+            "previous_build": HELPER_BUILD,
+        }, None
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -741,6 +901,7 @@ _OPS = {
 def _emit(stdout, stderr, op, result, exit_code, path=None):
     if isinstance(result, dict):
         result.setdefault("helper_version", HELPER_VERSION)
+        result.setdefault("helper_build", HELPER_BUILD)
     stdout.write(json.dumps(result))
     stdout.write("\n")
     stdout.flush()
