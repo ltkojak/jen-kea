@@ -100,7 +100,7 @@ class TestHelper:
 
     def test_a_non_integer_helper_version_is_not_a_helper(self):
         for junk in (None, "5", True, 5.0):
-            assert caps.helper_caps(junk) == {"helper": False, "tls": False, "trace": False}
+            assert caps.helper_caps(junk) == {"helper": False, "tls": False, "trace": False, "signed_update": False}
 
     def test_never_recorded_is_not_the_same_as_recorded_missing(self):
         never = _derive(V30, helper=None, known=False)
@@ -140,11 +140,11 @@ class TestDaemon:
     @pytest.mark.parametrize(
         "direct,helper,ssh,ready",
         [
-            (True, 5, True, True),
-            (True, 4, True, False),  # SSH configured and the helper behind
+            (True, 6, True, True),
+            (True, 5, True, False),  # SSH configured and the helper behind
             (True, None, True, False),
             (True, None, False, True),  # no SSH → nothing for a helper to be behind on
-            (False, 5, True, False),  # Control Agent mode is never 3.2-ready
+            (False, 6, True, False),  # Control Agent mode is never 3.2-ready
         ],
     )
     def test_kea32_ready(self, direct, helper, ssh, ready):
@@ -188,8 +188,14 @@ class TestWhy:
         assert "SSH" in c.why("tls")
 
     def test_the_ssh_card_still_reads_a_per_host_helper_version(self):
-        assert caps.helper_caps(5) == {"helper": True, "tls": True, "trace": True}
-        assert caps.helper_caps(5, ssh=False) == {"helper": False, "tls": False, "trace": False}
+        assert caps.helper_caps(5) == {"helper": True, "tls": True, "trace": True, "signed_update": False}
+        assert caps.helper_caps(6) == {"helper": True, "tls": True, "trace": True, "signed_update": True}
+        assert caps.helper_caps(5, ssh=False) == {
+            "helper": False,
+            "tls": False,
+            "trace": False,
+            "signed_update": False,
+        }
 
     def test_unknown_name_is_an_error_not_a_blank(self):
         with pytest.raises(ValueError):
