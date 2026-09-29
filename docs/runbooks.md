@@ -1,7 +1,7 @@
 # Runbooks
 
 Step-by-step procedures for the operations described elsewhere in the
-docs (the admin guide, `docs/ARCHITECTURE.md`, `SECURITY.md`) but never
+docs (the admin guide, [ARCHITECTURE.md](ARCHITECTURE.md), [SECURITY.md](../SECURITY.md)) but never
 written out as a numbered list an operator can just follow. One section
 per runbook; each stands alone — you shouldn't need to also go read the
 CHANGELOG to carry it out.

@@ -98,3 +98,32 @@ class TestDriftAgainstTheApp:
 
         assert body["info"]["version"] == JEN_VERSION
         assert set(body["paths"]) == set(build_spec("x")["paths"])
+
+
+class TestNoInstanceDataBeyondVersionAndServerUrl:
+    """v5.66.0-beta.4 (Q106) — /api/v1/openapi.json is public by decision
+    (docs/ARCHITECTURE.md §3.15): the document is built from one static dict,
+    and the ONLY values in it that come from this particular install are
+    `info.version` (already public on /api/v1/health) and `servers[0].url`
+    (the request's own host reflected back). Pinning that as a property —
+    not just trusting build_spec's current implementation to stay that way —
+    is what actually backs the "it stays public" decision."""
+
+    def test_only_version_and_server_url_vary_with_the_builder_inputs(self):
+        a = build_spec("1.2.3-beta.4", "https://jen-a.example")
+        b = build_spec("9.9.9", "https://jen-b.example")
+        a["info"]["version"] = b["info"]["version"] = "SAME"
+        a["servers"] = b["servers"] = "SAME"
+        assert a == b, "something besides info.version/servers[0].url changes with build_spec's own inputs"
+
+    def test_anonymous_body_carries_no_fixture_seed_data(self, client):
+        """Scans the RAW served body (not a hand-built one) for markers from this suite's own
+        seeded fixture data — a real subnet/server name/CIDR, and a bundled plugin id used only
+        as an illustrative path segment, never as data. The version string is stripped first
+        so it can never coincidentally match one of the (unrelated) markers below."""
+        from jen import JEN_VERSION
+
+        r = client.get("/api/v1/openapi.json")
+        text = r.get_data(as_text=True).replace(JEN_VERSION, "")
+        for marker in ("Test Kea", "Test Network", "10.99.0.0", "ipam", "network-discovery"):
+            assert marker not in text, f"fixture/instance marker {marker!r} leaked into the public API spec"

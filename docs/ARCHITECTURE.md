@@ -1410,6 +1410,53 @@ learns the real one, so the route gates on `helper` (known missing), not on
 and a scanner proving no route re-derives any of this itself;
 `tests/kea_compat/` checks the derivation against the real daemon.
 
+### 3.15 The unauthenticated surface (v5.66.0-beta.4, Q106)
+
+Every route below answers with no session cookie and no API key — named here
+once, together, rather than left implicit route by route. `tests/test_public_surface.py`
+walks the real URL map and pins this as the exact set; a route that starts
+answering anonymously without being added here on purpose fails that test.
+
+- **`GET /api/v1/health`** — the self-updater's version confirmation and a
+  recovery restore's health poll both need to reach it before Jen has ever
+  had a chance to authenticate anyone; it answers `jen_version` alone
+  (v5.65.12, Q101), never Kea's state.
+- **`GET /api/v1/openapi.json`** — the OpenAPI document describing this same
+  API surface. It's built from one static dict (`jen/routes/api_spec.py::build_spec`)
+  with no database access; the only instance-specific values it ever carries
+  are `info.version` (already public on `/api/v1/health`) and
+  `servers[0].url` (the request's own host, reflected back) —
+  `tests/test_api_spec.py` pins that as a property, not an implementation
+  detail to trust. A caller with the spec in hand learns nothing about a
+  real install it couldn't already infer from the source, which is public.
+- **`GET /login`, `GET /login/oidc`, `GET /login/oidc/callback`, and the
+  mid-flow MFA/passkey steps (`/mfa/verify`, `/mfa/enroll`)** — no route in
+  the sign-in sequence can require a session, since a session is exactly
+  what it produces. Every one of these fails closed on its own terms
+  (a bad password, an expired pending-MFA state, a locked-out IP) rather
+  than by inheriting a generic auth gate.
+- **`GET /static/<path:filename>`, `GET /content/icons/<name>.svg`,
+  `GET /content/branding/<filename>`, `GET /favicon.ico`** — page assets:
+  CSS, JS (including the vendored htmx and Chart.js), the PWA manifest
+  (`static/manifest.webmanifest` — deliberately no service worker, see
+  `tests/test_pwa_manifest.py`), an uploaded custom icon, the nav logo, the
+  favicon. The same posture browsers already assume for anything an
+  unauthenticated `<img>`/`<link>` tag can reference.
+- **The HTTP→HTTPS redirect** (`jen/httpredirect.py`, only running when SSL
+  is configured) — a separate stdlib HTTP server on port 80, outside the
+  Flask app and its URL map entirely; it does exactly one thing, an
+  unconditional redirect to the HTTPS URL, and never touches a session.
+
+Everything else — every other `/api/v1/*` route included — checks a session
+or an API key before doing anything else, several of them (`/api/v1/subnets`,
+`/api/v1/servers`, `/api/v1/leases`, `/api/v1/devices`, `/api/v1/reservations`,
+`/api/v1/events`, `/api/v1/timeline/<mac>`, `/api/v1/health/kea`,
+`/api/v1/health/checks`, `/api/v1/health/readiness`) with a hand-rolled
+`_api_auth()` check as the first line of the view rather than a decorator —
+which is exactly why `tests/test_public_surface.py` drives real anonymous
+HTTP requests instead of scanning for `@login_required`-shaped decorator
+names: a static scan would have missed every one of them.
+
 ## 4. CI/CD verification
 
 As of the process work following the v4.4.10 audit series:

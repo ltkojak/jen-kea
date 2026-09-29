@@ -11,7 +11,7 @@ Jen is a web-based management interface for [ISC Kea DHCP Server](https://www.is
 | | |
 |---|---|
 | 📦 [Installation Guide](installation.md) | Get Jen up and running |
-| ⚙️ [Configuration Reference](configuration.md) | Every config option explained |
+| ⚙️ [Configuration Reference](admin-guide.md#configuration-file-reference) | Every config option explained |
 | 👤 [User Guide](user-guide.md) | Using Jen day to day |
 | 🔧 [Admin Guide](admin-guide.md) | Setup, users, settings, upgrades |
 | 🐳 [Docker Guide](docker.md) | Running Jen in Docker |

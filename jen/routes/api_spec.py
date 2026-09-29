@@ -39,7 +39,10 @@ def build_spec(version: str, base_url: str = "") -> dict:
                 "Nothing that edits a Kea configuration file is exposed here. Plugin endpoints "
                 "(v5.57.0), mounted under /api/v1/plugins/<plugin_id>/…, use the same Bearer key "
                 "and the same write flag but are not listed here — each plugin documents its own "
-                "endpoints in its README."
+                "endpoints in its README. This document itself is served at GET /api/v1/openapi.json "
+                "with no auth, by design (v5.66.0-beta.4): it describes the surface, generated from "
+                "one static description with no database access, so it never exposes anything beyond "
+                "the version string above and this server's own URL."
             ),
         },
         "servers": [{"url": base_url or "/"}],
