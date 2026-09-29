@@ -1512,9 +1512,14 @@ def _s15_copy_bundle_into_container(local_path):
     recovery-bundle code never depends on its room, and a `docker cp` placed there right after
     the DB-recreate restart still was not there by the time restore.run() looked for it (this
     scenario's own first two rounds). /var/lib/jen is CONTENT_DIR itself — the same real,
-    persistent, www-data-owned directory Jen's own recovery-bundle build uses for its temp
-    file — not mounted specially at all, so there is nothing here to be wiped."""
+    persistent directory Jen's own recovery-bundle build uses for its temp file — not mounted
+    specially at all, so there is nothing here to be wiped. `docker cp` still writes the file as
+    root, though, and restore.run() reads it as www-data (the same user jen_py always execs as) —
+    a plain `chown` after the copy is what actually closes this out."""
     st.run(["docker", "cp", local_path, f"{st.JEN}:{S15_BUNDLE_IN_CONTAINER}"])
+    # the image's own default exec user is www-data (Dockerfile: USER www-data), which cannot
+    # chown a file `docker cp` just wrote as root — ask for root explicitly.
+    st.dexec(st.JEN, "chown", "www-data:www-data", S15_BUNDLE_IN_CONTAINER, user="root")
 
 
 def _s15_drop_and_recreate_jen_db():
