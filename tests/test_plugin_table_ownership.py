@@ -204,22 +204,18 @@ class TestOwnedTablesValidationAndCollisions:
 
 
 class TestAllOwnedTablesCrossPluginCollision:
-    """all_owned_tables() needs a real `plugins` table row per fake id (it SELECTs from it) and
-    a way to fake _manifest_for_owned_tables() without touching the real plugin directories."""
+    """all_owned_tables() enumerates plugin ids the same way load_plugins() itself does —
+    discover_plugins(), a real directory scan — NEVER Jen's own `plugins` DB table (that table
+    is write-only bookkeeping the registry-install flow populates; plain enable_plugin(), the
+    normal and for a bundled plugin the ONLY way a plugin actually gets enabled, never touches
+    it at all — v5.66.0-beta.5, caught by system-test scenario 15 finding every bundled plugin's
+    table missing from a real restore despite real rows in real tables). So these fake ids need
+    discover_plugins() itself faked, not a `plugins` table row."""
 
-    def _seed_plugin_rows(self, db, ids):
-        with db.cursor() as cur:
-            cur.execute("DELETE FROM plugins WHERE id LIKE 'zzcollide-%'")
-            for pid in ids:
-                cur.execute(
-                    "INSERT INTO plugins (id, name, version, description, author, requires_jen, enabled) "
-                    "VALUES (%s, %s, '1.0.0', '', '', '0.0.0', 1)",
-                    (pid, pid),
-                )
-        db.commit()
+    def _fake_discover(self, ids):
+        return lambda: [{"id": pid} for pid in ids]
 
-    def test_second_claimant_loses_the_table(self, db, monkeypatch):
-        self._seed_plugin_rows(db, ["zzcollide-a", "zzcollide-b"])
+    def test_second_claimant_loses_the_table(self, monkeypatch):
         manifests = {
             "zzcollide-a": {
                 "id": "zzcollide-a",
@@ -230,6 +226,7 @@ class TestAllOwnedTablesCrossPluginCollision:
                 "db_migrations": [{"version": 1, "sql": "CREATE TABLE zz_shared (id INT)"}],
             },
         }
+        monkeypatch.setattr(plugins_svc, "discover_plugins", self._fake_discover(["zzcollide-a", "zzcollide-b"]))
         monkeypatch.setattr(plugins_svc, "_manifest_for_owned_tables", lambda pid: manifests.get(pid))
 
         result = plugins_svc.all_owned_tables()
@@ -237,8 +234,7 @@ class TestAllOwnedTablesCrossPluginCollision:
         assert result["zzcollide-a"] == ["zz_shared"]
         assert result["zzcollide-b"] == []
 
-    def test_no_collision_both_keep_their_own(self, db, monkeypatch):
-        self._seed_plugin_rows(db, ["zzcollide-a", "zzcollide-b"])
+    def test_no_collision_both_keep_their_own(self, monkeypatch):
         manifests = {
             "zzcollide-a": {
                 "id": "zzcollide-a",
@@ -249,14 +245,15 @@ class TestAllOwnedTablesCrossPluginCollision:
                 "db_migrations": [{"version": 1, "sql": "CREATE TABLE zz_b_only (id INT)"}],
             },
         }
+        monkeypatch.setattr(plugins_svc, "discover_plugins", self._fake_discover(["zzcollide-a", "zzcollide-b"]))
         monkeypatch.setattr(plugins_svc, "_manifest_for_owned_tables", lambda pid: manifests.get(pid))
 
         result = plugins_svc.all_owned_tables()
         assert result["zzcollide-a"] == ["zz_a_only"]
         assert result["zzcollide-b"] == ["zz_b_only"]
 
-    def test_code_absent_plugin_is_skipped_entirely(self, db, monkeypatch):
-        self._seed_plugin_rows(db, ["zzcollide-a"])
+    def test_code_absent_plugin_is_skipped_entirely(self, monkeypatch):
+        monkeypatch.setattr(plugins_svc, "discover_plugins", self._fake_discover(["zzcollide-a"]))
         monkeypatch.setattr(plugins_svc, "_manifest_for_owned_tables", lambda pid: None)
         result = plugins_svc.all_owned_tables()
         assert "zzcollide-a" not in result
@@ -352,10 +349,16 @@ class TestPluginBackupNoticeSetting:
     every earlier bundle/backup (silently missing plugin data) is provably superseded."""
 
     def _clear(self, db):
+        """all_owned_tables() discovers plugin CODE (discover_plugins(), a real directory scan)
+        now, never a `plugins` DB row — clearing that row isn't enough to make a plugin's tables
+        invisible to export_tables() if an EARLIER test in this same session-scoped DB already
+        left them behind; only dropping them for real does."""
         with db.cursor() as cur:
             cur.execute("DELETE FROM settings WHERE setting_key='plugin_backup_notice_seen'")
             cur.execute("DELETE FROM plugins")
             cur.execute("DELETE FROM plugin_schema_migrations")
+            for t in ALL_20_PLUGIN_TABLES:
+                cur.execute(f"DROP TABLE IF EXISTS `{t}`")
         db.commit()
 
     def test_seen_flag_set_once_a_plugin_table_is_in_the_export(self, db, tmp_path):

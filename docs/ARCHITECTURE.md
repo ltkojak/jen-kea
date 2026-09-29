@@ -1479,11 +1479,17 @@ plugin whose ownership can't be expressed as "whatever my own DDL creates"
 (a table named by a computed/legacy migration, say) can override it with an
 explicit `"backup_tables": [...]` array in its manifest instead — checked for
 the same collisions (against `JEN_TABLES` and against every other plugin's
-own tables) either way. `all_owned_tables()` reads the `plugins` table for
-which plugins are actually installed and calls `owned_tables()` for each,
+own tables) either way. `all_owned_tables()` enumerates which plugins are
+actually installed via `discover_plugins()` — a real directory scan, the
+same one `load_plugins()` itself uses — and calls `owned_tables()` for each,
 giving `dbexport.py` one derived universe of "every table any export/backup/
 restore path ever needs to know about" with no manually maintained list
-anywhere to fall out of sync.
+anywhere to fall out of sync. Deliberately never Jen's own `plugins` DB
+table: that table is write-only bookkeeping the registry-install flow
+populates (`record_plugin_row()`), and plain `enable_plugin()` — the only
+way a bundled plugin ever actually gets enabled — never touches it at all,
+so querying it here would silently miss every bundled plugin's data (caught
+by system-test scenario 15, which enables plugins the ordinary way).
 
 `dbexport.export_tables()` is that universe (core `JEN_TABLES` plus every
 currently-installed plugin's owned tables) and is now the one thing behind

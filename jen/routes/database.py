@@ -75,12 +75,13 @@ def database():
     # lookup, and only while it could possibly still be true — write_jen_export() flips
     # plugin_backup_notice_seen the first time any real export actually carries a plugin's
     # tables, which makes every earlier bundle/backup on this install provably stale.
+    # export_table_groups() (not plugins.all_owned_tables() directly) so a plugin whose code is
+    # merely present but never enabled/migrated — true for every bundled plugin on a fresh
+    # install — doesn't trip the notice for data that was never there to lose.
     show_plugin_backup_notice = False
     if tab == "recovery" and current_user.role == "superadmin":
-        from jen.services import plugins as __plugins
-
         already_seen = __user.get_global_setting("plugin_backup_notice_seen", "") == "1"
-        show_plugin_backup_notice = not already_seen and any(__plugins.all_owned_tables().values())
+        show_plugin_backup_notice = not already_seen and any(dbexport.export_table_groups().values())
     return render_template(
         "database.html",
         active_tab=tab,

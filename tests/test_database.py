@@ -462,20 +462,29 @@ class TestBundleDownloadsAreNoStore:
     ):
         """v5.66.0-beta.5 (Q107) — a superadmin with a plugin installed sees the one-time notice
         until write_jen_export() actually carries that plugin's tables (jen/services/dbexport.py),
-        which is exactly what proves a fresh, Q107-aware bundle has been taken since."""
+        which is exactly what proves a fresh, Q107-aware bundle has been taken since. The route
+        checks table EXISTENCE (dbexport.export_table_groups()), not a `plugins` DB row — that
+        row is write-only bookkeeping the registry-install flow populates, never plain
+        enable_plugin() (the only way a bundled plugin like this one actually gets enabled) — so
+        the table has to be real, via a real migration run, not just a fake row."""
+        import json
         import os
+        import pathlib
 
         from jen import extensions
+        from jen.services.plugins import run_plugin_migrations
 
         monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", os.path.join(extensions.JEN_ROOT, "plugins"))
+        manifest_path = pathlib.Path(extensions.JEN_ROOT) / "plugins" / "wol" / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         with db.cursor() as cur:
             cur.execute("DELETE FROM settings WHERE setting_key='plugin_backup_notice_seen'")
-            cur.execute("DELETE FROM plugins")
-            cur.execute(
-                "INSERT INTO plugins (id, name, version, description, author, requires_jen, enabled) "
-                "VALUES ('wol', 'Wake on LAN', '1.0.4', '', '', '0.0.0', 1)"
-            )
+            cur.execute("DROP TABLE IF EXISTS wol_hosts")
+            cur.execute("DELETE FROM plugin_schema_migrations WHERE plugin_id='wol'")
         db.commit()
+        ok, msg, _count = run_plugin_migrations(manifest)
+        assert ok, msg
+
         page = logged_in_client.get("/settings/databases?tab=recovery").data.decode()
         assert "Plugin data is now part of every recovery bundle" in page
 
@@ -486,9 +495,10 @@ class TestBundleDownloadsAreNoStore:
         assert "Plugin data is now part of every recovery bundle" not in page
 
         # tidy: this is a real commit against the shared session-scoped test database, not a
-        # rolled-back transaction — leave no trace of the fake "wol" row for a later test.
+        # rolled-back transaction — leave no trace of the real table for a later test.
         with db.cursor() as cur:
-            cur.execute("DELETE FROM plugins WHERE id='wol'")
+            cur.execute("DROP TABLE IF EXISTS wol_hosts")
+            cur.execute("DELETE FROM plugin_schema_migrations WHERE plugin_id='wol'")
             cur.execute("DELETE FROM settings WHERE setting_key='plugin_backup_notice_seen'")
         db.commit()
 

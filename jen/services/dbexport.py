@@ -347,6 +347,13 @@ def write_jen_export(path, tables=None):
                 cur.execute("SELECT id, version FROM plugins")
                 for r in cur.fetchall():
                     plugin_versions[r["id"]] = r["version"]
+            # a bundled plugin merely enabled (never through the registry install flow that
+            # writes a `plugins` row) has no row here at all - fall back to its manifest's own
+            # version rather than recording null for every bundled plugin's export metadata.
+            from jen.services import plugins as _plugins_for_versions
+
+            for p in _plugins_for_versions.discover_plugins():
+                plugin_versions.setdefault(p["id"], p.get("version"))
             plugin_tables_meta = {}
             for pid, tbls in owned.items():
                 in_this_export = [t for t in tbls if t in selected_set]

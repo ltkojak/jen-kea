@@ -1349,20 +1349,18 @@ def owned_tables(plugin_id: str, manifest: dict | None = None) -> list[str]:
 
 
 def all_owned_tables() -> dict[str, list[str]]:
-    """{plugin_id: [tables]} for every plugin with a row in Jen's own `plugins` bookkeeping
-    table (installed, whether currently enabled or not — its data still needs backing up)
-    whose code is still on this machine. Processed in sorted plugin_id order so a table two
+    """{plugin_id: [tables]} for every plugin whose code is on this machine right now
+    (installed, whether currently enabled or not — its data still needs backing up),
+    discovered the same way load_plugins() itself does (discover_plugins(), a real directory
+    scan) — NEVER Jen's own `plugins` DB table, which is write-only bookkeeping populated only
+    by the registry install flow (record_plugin_row()) and never by plain enable_plugin() —
+    the normal, and for a bundled plugin the ONLY, way a plugin actually gets enabled. Querying
+    that table here would silently miss every bundled plugin that was enabled the ordinary way
+    and never separately "installed" (v5.66.0-beta.5, caught by the system-test scenario this
+    Q's restore invariant exists to prove). Processed in sorted plugin_id order so a table two
     plugins both claim is deterministically refused for whichever one sorts SECOND (logged at
     error, left out of that plugin's list; the first claimant keeps it)."""
-    from jen.models.db import jen_db
-
-    try:
-        with jen_db() as db, db.cursor() as cur:
-            cur.execute("SELECT id FROM plugins")
-            installed_ids = sorted(r["id"] for r in cur.fetchall())
-    except Exception as e:
-        logger.error(f"all_owned_tables: could not read the plugins table: {e}")
-        return {}
+    installed_ids = sorted(p["id"] for p in discover_plugins())
 
     claimed: dict[str, str] = {}
     result: dict[str, list[str]] = {}
