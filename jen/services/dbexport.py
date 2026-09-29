@@ -524,15 +524,27 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True):
         else:
             known.extend(owned.get(pid, []))
 
-    # A full restore (tables_to_restore=None) is scoped to every KNOWN table, not just the
-    # ones present in `data` — a format-1 export never had plugin-table keys at all, and even
-    # a format-2 export never carries a key for a table that had zero rows. Schema repair
-    # (clearing + re-running a plugin's migrations) must still happen for those; the row
-    # import itself is naturally a no-op via `data.get(tbl, [])` when there's nothing to insert.
-    selected_raw = tables_to_restore if tables_to_restore else known
+    selected_raw = tables_to_restore if tables_to_restore else list(data.keys())
     selected = _validate_tables(selected_raw, known)
     selected_set = set(selected)
     results = []
+
+    # Which plugins get their migrations cleared and re-run is a SEPARATE question from which
+    # tables have row data to import — a format-1 export (or a format-2 one for a table that
+    # simply had zero rows) never has a key for a plugin's table in `data` at all, and schema
+    # repair must still happen for it. On a full restore (tables_to_restore=None) every plugin
+    # in export_plugin_ids is repaired; an explicitly SCOPED restore only repairs a plugin the
+    # caller actually asked for (checked against the wider `known` universe, never `data`).
+    if tables_to_restore is None:
+        plugin_repair_ids = list(export_plugin_ids)
+    else:
+        requested = set(_validate_tables(tables_to_restore, known))
+        plugin_repair_ids = [
+            pid
+            for pid in export_plugin_ids
+            if requested
+            & set(plugin_tables_meta.get(pid, {}).get("tables", []) if plugin_tables_meta else owned.get(pid, []))
+        ]
 
     def _import_rows(conn, tbl):
         rows = data.get(tbl, [])
@@ -573,17 +585,16 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True):
 
     # ── (2) + (3) + (4): plugin tables, one plugin at a time ────────────────────────────
     try:
-        for pid in sorted(export_plugin_ids):
-            plugin_tables = (
+        for pid in sorted(plugin_repair_ids):
+            plugin_tables_all = (
                 plugin_tables_meta.get(pid, {}).get("tables", []) if plugin_tables_meta else owned.get(pid, [])
             )
-            plugin_tables = [t for t in plugin_tables if t in selected_set]
-            if not plugin_tables:
+            if not plugin_tables_all:
                 continue
             manifest = _plugins._manifest_for_owned_tables(pid)
             if manifest is None:
                 results.append(
-                    f"⚠️ {pid}: plugin code is not installed here — its data ({len(plugin_tables)} table(s)) "
+                    f"⚠️ {pid}: plugin code is not installed here — its data ({len(plugin_tables_all)} table(s)) "
                     f"was not restored; it is still inside this export/bundle. Install the plugin and restore "
                     f"again to bring it back."
                 )
@@ -599,9 +610,15 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True):
                 results.append(f"⚠️ {pid}: migration replay failed ({msg}) — its tables/data may be incomplete")
                 continue
 
+            # Only the tables the export's own `data` actually carries get rows imported — a
+            # format-1 export (or a table with zero rows) has nothing here, and that's fine:
+            # the schema repair above already put the table back, just empty.
+            plugin_tables_to_import = [t for t in plugin_tables_all if t in selected_set]
+            if not plugin_tables_to_import:
+                continue
             try:
                 conn.begin()
-                for tbl in plugin_tables:
+                for tbl in plugin_tables_to_import:
                     _import_rows(conn, tbl)
                 conn.commit()
             except Exception as e:
