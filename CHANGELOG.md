@@ -2,6 +2,53 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.66.0-beta.4] - 2026-09-29
+
+Grok's review of 5.66.0-beta.3, verified against the code before any of it
+was built: one real gap in the signed-update rollback, one thing that was
+already true but never written down, and one place a growing table could
+still cost more memory than it needed to.
+
+**The helper's `update` op never installs with no way back.** With no
+regular file at the installed path — rare, since the running helper
+normally *is* that file, but not impossible — a postflight failure on
+that first signed update had nothing to restore, because the rollback
+only ran when there was something to roll back to. `update` now refuses
+BEFORE writing or preflighting any candidate bytes with `not-installed`
+whenever nothing is installed to update; that makes the `.prev` backup,
+and therefore the rollback, unconditional from here on, and a rollback
+that itself fails is now reported as `rollback-failed`, naming both
+paths, instead of the misleading `postflight-failed`. This is the first
+build-only change since the build-number scheme was added: `HELPER_BUILD`
+moves to 8 with `HELPER_VERSION` unchanged at 7.
+
+**The unauthenticated surface is written down.** `/api/v1/health` and
+`/api/v1/openapi.json` have been public by decision since they shipped,
+but nothing ever said so out loud, or said what else on this app answers
+with no session and no API key — the sign-in sequence, static assets
+(including the PWA manifest — deliberately no service worker), and the
+HTTP→HTTPS redirect. `docs/ARCHITECTURE.md` now names every one of them
+and why, and a new test walks the real URL map with a fresh, anonymous
+client and pins that list as the actual contract — a route that starts
+answering anonymously without being added there on purpose now fails CI
+instead of going unnoticed.
+
+**The database export inside a recovery bundle is streamed to disk, one
+row at a time, instead of built as one Python object first.** `audit_log`
+is the table this was written for — a long-running install's largest,
+and the one most likely to make "hold the whole export in memory" a real
+problem. Building a bundle, a scheduled or manual backup, and downloading
+a plain database export all move onto the same streaming writer. A
+recovery bundle can now also leave `audit_log` out entirely ("without
+audit history" on the form) for an install where it dominates the size.
+Restoring is a different story — the import side still needs the whole
+document in memory at once, a bigger change left out of this release on
+purpose — so the recovery manifest now records the export's exact size,
+and `jen.tools.restore` checks that, times a measured (not guessed)
+memory factor, against the machine's actually available memory BEFORE it
+stops or touches anything, refusing plainly rather than risking an OOM
+kill partway through an import.
+
 ## [5.66.0-beta.3] - 2026-09-28
 
 A recurring pattern this audit found: a safety mechanism that mostly

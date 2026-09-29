@@ -32,6 +32,12 @@ command (for a host with no working sudoers line at all yet) now verifies
 a signature locally before installing anything, with no unverified
 fallback offered anywhere — see `docs/runbooks.md` if you ever need it.
 
+A second helper-only fix ships as build 8 (5.66.0-beta.4): the one case
+the build-7 rollback didn't cover — a signed update failing right after
+being installed with no way back, on a host with no helper file there yet
+to begin with — now refuses before writing anything at all. Nothing
+changes for you either, beyond the SSH card reading **"v7 (build 8)"**.
+
 ## The public health endpoint answers with one field
 
 `/api/v1/health` — the endpoint the self-updater and a recovery restore
@@ -155,6 +161,19 @@ building or restoring a large bundle no longer needs roughly three times
 its own size in free memory. This is fully backward compatible: a bundle
 from before this change still restores normally, the format is
 auto-detected, and there's nothing for you to do (5.65.0-beta.1).
+
+The database export inside the bundle gets the same treatment in
+5.66.0-beta.4: it's written straight to disk, one row at a time, instead
+of built as one Python object first — `audit_log` is the table this
+matters for on a long-running install. A new **"Without audit history"**
+checkbox on the recovery form leaves that one table out entirely if you'd
+rather export it separately. Restoring still needs memory in proportion
+to the export's size (a bigger change to fix that is out of scope here),
+so `jen.tools.restore` now checks — before it stops or touches
+anything — that the machine has enough free memory for the bundle it's
+about to restore, using a measured factor recorded in the manifest; see
+`docs/runbooks.md`'s "Before you start: size" step if a restore ever
+refuses on this.
 
 ## A few things that will just already be fixed
 
