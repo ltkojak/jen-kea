@@ -524,7 +524,12 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True):
         else:
             known.extend(owned.get(pid, []))
 
-    selected_raw = tables_to_restore if tables_to_restore else list(data.keys())
+    # A full restore (tables_to_restore=None) is scoped to every KNOWN table, not just the
+    # ones present in `data` — a format-1 export never had plugin-table keys at all, and even
+    # a format-2 export never carries a key for a table that had zero rows. Schema repair
+    # (clearing + re-running a plugin's migrations) must still happen for those; the row
+    # import itself is naturally a no-op via `data.get(tbl, [])` when there's nothing to insert.
+    selected_raw = tables_to_restore if tables_to_restore else known
     selected = _validate_tables(selected_raw, known)
     selected_set = set(selected)
     results = []
