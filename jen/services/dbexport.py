@@ -10,6 +10,7 @@ import gzip
 import json
 import logging
 import os
+import tempfile
 from datetime import datetime
 
 import pymysql
@@ -214,13 +215,89 @@ def _make_metadata(db_label, tables_included, extra=None):
     return meta
 
 
+def publish_backup(final_path, write_fn):
+    """Write a backup atomically: `write_fn(fileobj)` into a 0600 temp file in the SAME
+    directory as `final_path` (so the final `os.replace` is a same-filesystem rename, never
+    a copy), fsync'd before the rename, with the directory entry fsync'd afterward (best
+    effort — not every filesystem/platform supports it). On any exception the temp file is
+    removed and `final_path` is never created or modified at all — a writer that dies
+    halfway, or an ENOSPC mid-write, leaves nothing that could ever list as a backup
+    (v5.66.0-beta.6, Q108: this and the streamed export finally line up — a partial backup
+    used to be exactly as visible as a good one). `write_fn`'s return value, if any, is
+    passed straight through, so a caller that needs it (write_jen_export's meta dict) doesn't
+    have to smuggle it out through a closure."""
+    directory = os.path.dirname(final_path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".part-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            result = write_fn(f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, final_path)
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.remove(tmp_path)
+        raise
+    with contextlib.suppress(OSError):
+        dir_fd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    return result
+
+
+def _sidecar_path(backup_path: str) -> str:
+    if backup_path.endswith(".json.gz"):
+        return backup_path[: -len(".json.gz")] + ".meta.json"
+    return backup_path + ".meta.json"
+
+
+def _write_meta_sidecar(backup_path: str, meta: dict) -> None:
+    """The `<name>.meta.json` sidecar `list_backups()` reads INSTEAD of opening the
+    (possibly huge) backup file itself (v5.66.0-beta.6, Q108) — written right after the
+    backup is published, through the same `publish_backup()` as the backup itself, so a
+    sidecar can never half-exist either."""
+    sidecar = _sidecar_path(backup_path)
+    payload = {
+        "database": meta.get("database"),
+        "tables": meta.get("tables"),
+        "plugin_tables": meta.get("plugin_tables") or {},
+        "exported_at": meta.get("exported_at"),
+        "jen_version": meta.get("jen_app_version") or meta.get("jen_version"),
+        "compressed_bytes": os.path.getsize(backup_path) if os.path.isfile(backup_path) else None,
+        "uncompressed_bytes": meta.get("jen_db_uncompressed_bytes") or meta.get("uncompressed_bytes"),
+        "row_counts": meta.get("row_counts") or {},
+    }
+
+    def write_fn(f):
+        f.write(json.dumps(payload, default=str).encode("utf-8"))
+
+    publish_backup(sidecar, write_fn)
+
+
 def _write_backup(payload_dict, filename):
+    """Writes `payload_dict` as gzip JSON, atomically (v5.66.0-beta.6, Q108 — through
+    `publish_backup()`, so a failure mid-write leaves no final file at all, the same
+    guarantee `write_jen_export`-based backups now have) and writes its `.meta.json`
+    sidecar right after. Return value is unchanged (the final path) — every existing caller
+    keeps working without a change."""
     os.makedirs(BACKUP_DIR, exist_ok=True)
-    path = os.path.join(BACKUP_DIR, filename)
-    with gzip.open(path, "wt", encoding="utf-8") as f:
-        json.dump(payload_dict, f, default=str)
-    os.chmod(path, 0o600)
-    return path
+    final_path = os.path.join(BACKUP_DIR, filename)
+    uncompressed_len = {}
+
+    def write_fn(f):
+        text = json.dumps(payload_dict, default=str)
+        uncompressed_len["n"] = len(text.encode("utf-8"))
+        with gzip.open(f, "wt", encoding="utf-8") as gz:
+            gz.write(text)
+
+    publish_backup(final_path, write_fn)
+    meta = dict(payload_dict.get("_meta") or {})
+    meta["uncompressed_bytes"] = uncompressed_len.get("n")
+    _write_meta_sidecar(final_path, meta)
+    return final_path
 
 
 def _read_backup(path):
@@ -231,6 +308,26 @@ def _read_backup(path):
         # Try uncompressed (older exports)
         with open(path, encoding="utf-8") as f:
             return json.load(f)
+
+
+def read_legacy_backup_details(filename: str) -> dict | None:
+    """Parses a pre-Q108 backup (no sidecar yet) exactly once — the ONE time this ever
+    costs opening the full file — and writes its sidecar so `list_backups()` never has to
+    do this again for this file. Returns the sidecar dict, or None if the file is missing
+    or unreadable."""
+    path = os.path.join(BACKUP_DIR, os.path.basename(filename))
+    if not os.path.isfile(path):
+        return None
+    try:
+        payload = _read_backup(path)
+    except Exception:
+        return None
+    _write_meta_sidecar(path, dict(payload.get("_meta") or {}))
+    try:
+        with open(_sidecar_path(path), encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -305,7 +402,11 @@ def write_jen_export(path, tables=None):
     mode) and `jen_db_rows` (the row_counts total) — both for the recovery manifest's size
     guard, never written into the export file itself.
 
-    Written 0600: every table here can carry secrets (users, api_keys, mfa_*, kea_config_revisions)."""
+    Written 0600 when `path` is an actual path — chmod needs a filesystem name, so it's
+    skipped when `path` is already an open file object (v5.66.0-beta.6, Q108:
+    `publish_backup()`'s callers pass their own already-0600 temp file this way; every table
+    here can carry secrets — users, api_keys, mfa_*, kea_config_revisions — so a bare-mode
+    fallback here would be a real leak, never used)."""
     conn = _direct_jen_conn()
     row_counts = {}
     try:
@@ -374,7 +475,8 @@ def write_jen_export(path, tables=None):
             uncompressed_bytes = f.tell()
     finally:
         conn.close()
-    os.chmod(path, 0o600)
+    if isinstance(path, (str, os.PathLike)):
+        os.chmod(path, 0o600)
     result = dict(meta)
     result["jen_db_uncompressed_bytes"] = uncompressed_bytes
     result["jen_db_rows"] = sum(row_counts.values())
@@ -992,22 +1094,47 @@ def save_schedule(enabled, frequency, hour, keep_count, include_jen, include_kea
         db.commit()
 
 
+_STALE_PART_AGE_S = 24 * 60 * 60
+
+
+def _sweep_stale_part_files():
+    """Removes any `.part-*.tmp` left behind by a `publish_backup()` that never got to
+    finish (a killed process, a crash) and is now older than a day — nothing else ever
+    counts or lists these, so a truly ancient one would otherwise just sit there forever
+    (v5.66.0-beta.6, Q108). A young one is left alone: it may belong to a publish that is
+    genuinely still in progress right now."""
+    if not os.path.isdir(BACKUP_DIR):
+        return
+    cutoff = datetime.utcnow().timestamp() - _STALE_PART_AGE_S
+    for f in os.listdir(BACKUP_DIR):
+        if not (f.startswith(".part-") and f.endswith(".tmp")):
+            continue
+        path = os.path.join(BACKUP_DIR, f)
+        with contextlib.suppress(OSError):
+            if os.path.getmtime(path) < cutoff:
+                os.remove(path)
+
+
 def run_scheduled_backup():
     """Run a scheduled backup — called by APScheduler or manually."""
     sched = get_schedule()
     if not sched:
         return
+    _sweep_stale_part_files()
+    os.makedirs(BACKUP_DIR, exist_ok=True)
     ts = datetime.utcnow().strftime("%Y-%m-%d-%H%M%S")
+    keep = int(sched.get("keep_count", 7))
     results = []
     if sched.get("include_jen"):
         try:
-            # v5.66.0-beta.4 (Q106) — straight to disk via write_jen_export(), never a
-            # round trip through export_jen()'s bytes + json.loads() + _write_backup()'s
-            # own re-serialize.
-            os.makedirs(BACKUP_DIR, exist_ok=True)
+            # v5.66.0-beta.6 (Q108) — publish_backup(): a failure mid-write leaves no final
+            # file at all, so pruning (a kind's own backups only, and only because THIS run
+            # actually published a new one) can never run against a half-written directory.
             path = os.path.join(BACKUP_DIR, f"jen-scheduled-{ts}.json.gz")
-            write_jen_export(path)
+            meta = publish_backup(path, lambda f: write_jen_export(f))
+            _write_meta_sidecar(path, meta)
             results.append(f"Jen: {path}")
+            _prune_backups(keep, "jen")
         except Exception as e:
             results.append(f"Jen: FAILED — {e}")
     if sched.get("include_kea"):
@@ -1016,12 +1143,9 @@ def run_scheduled_backup():
             payload = json.loads(content.decode("utf-8"))
             path = _write_backup(payload, f"kea-scheduled-{ts}.json.gz")
             results.append(f"Kea: {path}")
+            _prune_backups(keep, "kea")
         except Exception as e:
             results.append(f"Kea: FAILED — {e}")
-
-    # Prune old backups
-    keep = int(sched.get("keep_count", 7))
-    _prune_backups(keep)
 
     # Update last_run
     from jen.models.db import jen_db
@@ -1033,30 +1157,45 @@ def run_scheduled_backup():
         db.commit()
 
 
-def _prune_backups(keep_count):
-    """Delete oldest backup files keeping only the last N."""
+def _prune_backups(keep_count, kind):
+    """Delete the oldest `<kind>-scheduled-*.json.gz` backups (and their `.meta.json`
+    sidecars) beyond `keep_count`, oldest first (v5.66.0-beta.6, Q108). `kind` is 'jen' or
+    'kea' — retention is per kind now, never blind to which half of a run actually
+    succeeded, and a MANUAL backup (`<kind>-manual-*`, never `-scheduled-`) is not a
+    candidate here at all: the schedule only ever prunes what the schedule itself wrote."""
     if not os.path.isdir(BACKUP_DIR):
         return
+    prefix = f"{kind}-scheduled-"
     files = sorted(
-        [os.path.join(BACKUP_DIR, f) for f in os.listdir(BACKUP_DIR) if f.endswith(".json.gz")], key=os.path.getmtime
+        (
+            os.path.join(BACKUP_DIR, f)
+            for f in os.listdir(BACKUP_DIR)
+            if f.startswith(prefix) and f.endswith(".json.gz")
+        ),
+        key=os.path.getmtime,
     )
     for old in files[:-keep_count] if len(files) > keep_count else []:
         with contextlib.suppress(Exception):
             os.remove(old)
+        with contextlib.suppress(Exception):
+            os.remove(_sidecar_path(old))
 
 
 def backup_count() -> int:
-    """Number of backup files — a directory listing, nothing more. The
-    Settings landing page needs only this; list_backups() decompresses and
-    JSON-parses every file for its `_meta` header, which is far too heavy
-    for a status hint once daily backups accumulate (v5.13.0)."""
+    """Number of backup files — a directory listing, nothing more."""
     if not os.path.isdir(BACKUP_DIR):
         return 0
     return sum(1 for f in os.listdir(BACKUP_DIR) if f.endswith(".json.gz"))
 
 
 def list_backups():
-    """Return list of backup file dicts for the UI."""
+    """Return list of backup file dicts for the UI. Reads ONLY each backup's own
+    `<name>.meta.json` sidecar (v5.66.0-beta.6, Q108) — never opens, decompresses, or
+    JSON-parses the backup file itself, however large it's grown; a directory of daily
+    backups now costs one small file read per row, not one full-file parse. A backup from
+    before this Q (no sidecar yet) lists with just its size and mtime and `has_sidecar:
+    False`, so the page can offer a one-time "Read details" action for it — the cost of
+    actually parsing a legacy file is paid at most once, ever, per file."""
     if not os.path.isdir(BACKUP_DIR):
         return []
     results = []
@@ -1066,18 +1205,21 @@ def list_backups():
         path = os.path.join(BACKUP_DIR, fname)
         size = os.path.getsize(path)
         mtime = datetime.utcfromtimestamp(os.path.getmtime(path)).strftime("%Y-%m-%d %H:%M UTC")
-        # Peek at metadata without loading entire file
         db_label = "?"
         tables = []
         exported_at = ""
-        try:
-            payload = _read_backup(path)
-            meta = payload.get("_meta", {})
-            db_label = meta.get("database", "?").upper()
-            tables = meta.get("tables", [])
-            exported_at = meta.get("exported_at", "")[:19].replace("T", " ")
-        except Exception:
-            pass
+        has_sidecar = False
+        sidecar = _sidecar_path(path)
+        if os.path.isfile(sidecar):
+            try:
+                with open(sidecar, encoding="utf-8") as f:
+                    meta = json.load(f)
+                db_label = (meta.get("database") or "?").upper()
+                tables = meta.get("tables") or []
+                exported_at = (meta.get("exported_at") or "")[:19].replace("T", " ")
+                has_sidecar = True
+            except Exception:
+                pass
         results.append(
             {
                 "filename": fname,
@@ -1087,6 +1229,7 @@ def list_backups():
                 "db": db_label,
                 "tables": tables,
                 "exported_at": exported_at,
+                "has_sidecar": has_sidecar,
             }
         )
     return results

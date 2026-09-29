@@ -20,7 +20,17 @@ import tempfile
 import threading
 from datetime import datetime
 
-from flask import Blueprint, Response, flash, redirect, render_template, request, stream_with_context, url_for
+from flask import (
+    Blueprint,
+    Response,
+    flash,
+    redirect,
+    render_template,
+    request,
+    send_file,
+    stream_with_context,
+    url_for,
+)
 from flask_login import login_required
 
 from jen import extensions
@@ -453,14 +463,14 @@ def download_backup(filename):
     if not os.path.isfile(path):
         flash("Backup file not found.", "error")
         return redirect(url_for("database.database", tab="backups"))
-    with open(path, "rb") as f:
-        data = f.read()
     __user.audit("DB_BACKUP_DOWNLOAD", safe, "")
-    return Response(
-        data,
-        mimetype="application/gzip",
-        headers={"Content-Disposition": f"attachment; filename={safe}", "Cache-Control": "no-store"},
-    )
+    # v5.66.0-beta.6 (Q108) — send_file streams straight from disk; the old `f.read()` +
+    # Response(data, ...) held the whole (possibly very large) backup in the worker's memory
+    # for the length of the request. conditional=False: no ETag/If-Range machinery for a
+    # file that's about to be deleted or replaced by the next backup anyway.
+    resp = send_file(path, mimetype="application/gzip", as_attachment=True, download_name=safe, conditional=False)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 @bp.route("/database/backup/delete/<path:filename>", methods=["POST"])
@@ -471,11 +481,25 @@ def delete_backup(filename):
     path = os.path.join(dbexport.BACKUP_DIR, safe)
     try:
         os.remove(path)
+        with contextlib.suppress(OSError):
+            os.remove(dbexport._sidecar_path(path))
         __user.audit("DB_BACKUP_DELETE", safe, "")
         flash(f"Backup '{safe}' deleted.", "success")
     except Exception as e:
         logger.error(f"Could not delete backup '{safe}': {e}")
         flash("Could not delete backup. Check server logs for details.", "error")
+    return redirect(url_for("database.database", tab="backups"))
+
+
+@bp.route("/database/backup/details/<path:filename>", methods=["POST"])
+@login_required
+@_superadmin_required
+def backup_details(filename):
+    """One-time "Read details" for a backup made before v5.66.0-beta.6 — parses it exactly
+    once and writes its `.meta.json` sidecar, so list_backups() never has to open it again."""
+    safe = os.path.basename(filename)
+    if dbexport.read_legacy_backup_details(safe) is None:
+        flash(f"Could not read details for '{safe}'.", "error")
     return redirect(url_for("database.database", tab="backups"))
 
 
@@ -489,12 +513,12 @@ def backup_now():
     results = []
     if "jen" in include:
         try:
-            # v5.66.0-beta.4 (Q106) — straight to disk via write_jen_export(), never a
-            # round trip through export_jen()'s bytes + json.loads() + _write_backup()'s
-            # own re-serialize (the same reason the recovery bundle moved onto it).
+            # v5.66.0-beta.6 (Q108) — publish_backup(): a failure mid-write leaves no final
+            # file at all, so a manual backup can never half-exist and list as good either.
             os.makedirs(dbexport.BACKUP_DIR, exist_ok=True)
             path = os.path.join(dbexport.BACKUP_DIR, f"jen-manual-{ts}.json.gz")
-            dbexport.write_jen_export(path)
+            meta = dbexport.publish_backup(path, lambda f: dbexport.write_jen_export(f))
+            dbexport._write_meta_sidecar(path, meta)
             results.append((True, f"Jen backup saved: {os.path.basename(path)}"))
             __user.audit("DB_BACKUP_MANUAL", "jen", path)
         except Exception as e:

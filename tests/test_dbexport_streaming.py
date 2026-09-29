@@ -10,6 +10,7 @@ doesn't run under --noconftest locally; CI is the arbiter.
 
 import gzip
 import json
+import os
 import tracemalloc
 
 from jen.services import dbexport
@@ -109,6 +110,93 @@ class TestScheduledAndManualBackupWriteStraightToDisk:
         with db.cursor() as cur:
             cur.execute("SELECT last_status FROM backup_schedule WHERE id=1")
             assert "Jen:" in cur.fetchone()["last_status"]
+
+    def test_scheduled_jen_backup_gets_a_sidecar(self, db, monkeypatch, tmp_path):
+        """v5.66.0-beta.6 (Q108) — publish_backup() + _write_meta_sidecar()."""
+        monkeypatch.setattr(dbexport, "BACKUP_DIR", str(tmp_path))
+        with db.cursor() as cur:
+            cur.execute(
+                "REPLACE INTO backup_schedule "
+                "(id, enabled, frequency, hour, keep_count, include_jen, include_kea) "
+                "VALUES (1, 1, 'daily', 3, 7, 1, 0)"
+            )
+        db.commit()
+
+        dbexport.run_scheduled_backup()
+
+        backup = next(tmp_path.glob("jen-scheduled-*.json.gz"))
+        sidecar = dbexport._sidecar_path(str(backup))
+        assert os.path.isfile(sidecar)
+        with open(sidecar, encoding="utf-8") as f:
+            meta = json.load(f)
+        assert meta["database"] == "jen"
+        assert meta["uncompressed_bytes"] > 0
+
+
+class TestScheduledBackupRetentionIsPerKind:
+    """v5.66.0-beta.6 (Q108) — a kind is pruned only when THAT kind's new backup was
+    actually published in this run: a run whose Jen half fails must never touch Jen's
+    existing good backups, even though the Kea half succeeded and prunes its own."""
+
+    def _set_schedule(self, db, keep_count=7, include_jen=1, include_kea=1):
+        with db.cursor() as cur:
+            cur.execute(
+                "REPLACE INTO backup_schedule "
+                "(id, enabled, frequency, hour, keep_count, include_jen, include_kea) "
+                "VALUES (1, 1, 'daily', 3, %s, %s, %s)",
+                (keep_count, include_jen, include_kea),
+            )
+        db.commit()
+
+    def _seed_scheduled_files(self, tmp_path, kind, count):
+        """`count` pre-existing `<kind>-scheduled-*.json.gz` files, oldest first, staggered
+        mtimes so pruning's oldest-first order is deterministic."""
+        paths = []
+        for i in range(count):
+            p = tmp_path / f"{kind}-scheduled-seed{i}.json.gz"
+            p.write_bytes(b"x")
+            t = p.stat().st_mtime - (count - i) * 10
+            os.utime(p, (t, t))
+            paths.append(p)
+        return paths
+
+    def test_failing_jen_half_never_touches_jens_existing_backups(self, db, monkeypatch, tmp_path):
+        monkeypatch.setattr(dbexport, "BACKUP_DIR", str(tmp_path))
+        self._seed_scheduled_files(tmp_path, "jen", 3)
+        self._set_schedule(db, keep_count=1)  # would prune down to 1 if it ran at all
+
+        monkeypatch.setattr(
+            dbexport, "write_jen_export", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("simulated failure"))
+        )
+        dbexport.run_scheduled_backup()
+
+        # the 3 seeded Jen backups are untouched — the failed run never published a new
+        # one, so Jen's kind was never a pruning candidate this run
+        assert len(list(tmp_path.glob("jen-scheduled-*.json.gz"))) == 3
+        # Kea's own backup DID publish and prune down to keep_count=1
+        kea_files = list(tmp_path.glob("kea-scheduled-*.json.gz"))
+        assert len(kea_files) == 1
+
+        with db.cursor() as cur:
+            cur.execute("SELECT last_status FROM backup_schedule WHERE id=1")
+            status = cur.fetchone()["last_status"]
+        assert "Jen: FAILED" in status
+        assert "Kea:" in status and "FAILED" not in status.split("Kea:")[1]
+
+    def test_seven_good_backups_plus_one_failed_run_leaves_seven(self, db, monkeypatch, tmp_path):
+        """The exact property named in the spec: seven good backups + one failed run
+        still leaves seven — the failure must never be allowed to prune below what
+        actually exists."""
+        monkeypatch.setattr(dbexport, "BACKUP_DIR", str(tmp_path))
+        self._seed_scheduled_files(tmp_path, "jen", 7)
+        self._set_schedule(db, keep_count=7, include_kea=0)
+
+        monkeypatch.setattr(
+            dbexport, "write_jen_export", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("simulated failure"))
+        )
+        dbexport.run_scheduled_backup()
+
+        assert len(list(tmp_path.glob("jen-scheduled-*.json.gz"))) == 7
 
 
 class TestExportMemoryStaysBounded:

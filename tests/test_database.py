@@ -31,6 +31,7 @@ _DATABASE_ROUTES = [
     ("POST", "/database/export/kea", {}),
     ("GET", "/database/backup/download/somefile.json.gz", {}),
     ("POST", "/database/backup/delete/somefile.json.gz", {}),
+    ("POST", "/database/backup/details/somefile.json.gz", {}),  # v5.66.0-beta.6 (Q108)
     ("POST", "/database/backup/now", {}),
     ("POST", "/database/import/inspect", {}),
     ("POST", "/database/import/confirm", {}),
@@ -514,3 +515,29 @@ class TestBackupDownloadIsNoStore:
         r = logged_in_client.get("/database/backup/download/jen-manual-test.json.gz")
         assert r.status_code == 200
         assert r.headers["Cache-Control"] == "no-store"
+
+    def test_50mb_backup_download_stays_memory_bounded(self, logged_in_client, db, monkeypatch, tmp_path):
+        """v5.66.0-beta.6 (Q108) — send_file() streams straight from disk; the old
+        `f.read()` + `Response(data, ...)` held the whole file in the worker's memory for
+        the length of the request."""
+        import tracemalloc
+
+        from jen.services import dbexport
+
+        monkeypatch.setattr(dbexport, "BACKUP_DIR", str(tmp_path))
+        path = tmp_path / "jen-manual-big.json.gz"
+        with open(path, "wb") as f:
+            f.seek(50 * 1024 * 1024 - 1)
+            f.write(b"\0")  # a real 50 MB sparse file on disk — never held whole to create it
+
+        tracemalloc.start()
+        try:
+            r = logged_in_client.get("/database/backup/download/jen-manual-big.json.gz")
+            body = b"".join(r.response)  # force the streamed body through, same as a real download
+            _current, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+
+        assert len(body) == 50 * 1024 * 1024
+        print(f"MEASURED backup-download peak for a 50 MB file: {peak} bytes ({peak / (1024 * 1024):.1f} MB)")
+        assert peak < 20 * 1024 * 1024, f"download of a 50 MB backup peaked at {peak} bytes — no longer streamed"
