@@ -451,54 +451,172 @@ def parse_import_file(file_bytes):
     return meta, data, None
 
 
+def _plugin_invariant_violations(conn) -> list[tuple[str, str]]:
+    """(plugin_id, table) for every plugin with recorded migrations whose code is on this
+    machine but one of its owned tables does not actually exist — the exact broken state a
+    pre-5.66.0-beta.5 restore used to leave (v5.66.0-beta.5, Q107). Checked, never raised, at
+    the end of every restore/import: jen.services.plugins.load_plugins()'s own self-heal fixes
+    this at the next Jen startup regardless, so a violation here is a warning, not a failure."""
+    from jen.services import plugins as _plugins
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT DISTINCT plugin_id FROM plugin_schema_migrations")
+        migrated_ids = [r["plugin_id"] for r in cur.fetchall()]
+    violations = []
+    for pid in migrated_ids:
+        manifest = _plugins._manifest_for_owned_tables(pid)
+        if manifest is None:
+            continue
+        for t in _plugins.owned_tables(pid, manifest):
+            if not _table_exists(conn, t):
+                violations.append((pid, t))
+    return violations
+
+
 def import_jen(file_bytes, tables_to_restore=None, truncate=True):
     """
     Restore Jen DB tables from export bytes.
     tables_to_restore: list of table names to restore, or None for all in file.
     truncate: if True, clears existing rows before inserting (replace mode).
     Returns list of result strings.
-    """
+
+    v5.66.0-beta.5 (Q107) — plugin-owned tables restore in a fixed order, never blindly
+    trusting the export's own plugin_schema_migrations rows (a restored "already applied" row
+    with no table behind it is exactly the bug this Q closes): (1) core tables import first,
+    EXCEPT plugin_schema_migrations — its old rows are never restored as-is; (2) for each
+    plugin named in the export (`_meta.plugin_tables`, format 2) whose code is on THIS machine:
+    its migration rows are cleared and its migrations re-run through the normal runner — tables
+    created at the CODE's own level, never from DDL in the file, rows recorded by the runner
+    itself; (3) that plugin's row data is imported the same column-intersection way core tables
+    always have been, so a column added since the export just takes its default; (4) a plugin
+    named in the export whose code is NOT here is skipped with a named warning — its data stays
+    in the file/bundle untouched, for a later install to pick up. A format-1 export (no
+    `plugin_tables` — everything before this Q) has no per-plugin scope to go by, so every
+    CURRENTLY INSTALLED, code-present plugin gets the same clear-and-rerun treatment for the
+    same reason, even though a format-1 export never actually carried plugin row data to
+    restore. The invariant this exists for — a recorded migration always implies its tables
+    exist — is checked once at the end and reported as a warning line if it's ever still
+    violated (jen.services.plugins.load_plugins()'s self-heal is the actual fix, run on Jen's
+    next start regardless of what this function does)."""
+    from jen.services import plugins as _plugins
+
     meta, data, err = parse_import_file(file_bytes)
     if err:
         raise ValueError(err)
     if meta.get("database") != "jen":
         raise ValueError(f"This export is for '{meta.get('database')}' — expected 'jen'. Wrong file?")
 
+    fmt = meta.get("format", 1)
+    plugin_tables_meta = meta.get("plugin_tables") if fmt >= 2 else None
+    owned = _plugins.all_owned_tables()  # {plugin_id: [tables]} - installed + code present, NOW
+
+    if plugin_tables_meta:
+        export_plugin_ids = list(plugin_tables_meta.keys())
+    else:
+        # format 1, or a format-2 export that named no plugins: no per-plugin scope to go by -
+        # every currently installed, code-present plugin gets migrations cleared and re-run.
+        export_plugin_ids = list(owned.keys())
+
+    known = list(JEN_TABLES.keys())
+    for pid in export_plugin_ids:
+        if plugin_tables_meta:
+            known.extend(plugin_tables_meta.get(pid, {}).get("tables", []))
+        else:
+            known.extend(owned.get(pid, []))
+
     selected_raw = tables_to_restore if tables_to_restore else list(data.keys())
-    selected = _validate_tables(selected_raw, JEN_TABLES)
+    selected = _validate_tables(selected_raw, known)
+    selected_set = set(selected)
     results = []
+
+    def _import_rows(conn, tbl):
+        rows = data.get(tbl, [])
+        if not _table_exists(conn, tbl):
+            results.append(f"⚠️ {tbl}: table does not exist in current schema — skipped")
+            return
+        with conn.cursor() as cur:
+            if truncate:
+                cur.execute(f"DELETE FROM `{tbl}`")
+            if rows:
+                real_cols = _get_table_columns(conn, tbl)
+                cols = [c for c in rows[0] if c in real_cols]
+                if not cols:
+                    results.append(f"⚠️ {tbl}: no recognized columns in import data — skipped")
+                    return
+                col_str = ", ".join(f"`{c}`" for c in cols)
+                ph_str = ", ".join(["%s"] * len(cols))
+                cur.executemany(
+                    f"INSERT IGNORE INTO `{tbl}` ({col_str}) VALUES ({ph_str})",
+                    [[r.get(c) for c in cols] for r in rows],
+                )
+        results.append(f"✅ {tbl}: {len(rows)} rows restored")
+
+    # ── (1) core tables, EXCEPT plugin_schema_migrations ───────────────────────────────
+    core_selected = [t for t in selected if t in JEN_TABLES and t != "plugin_schema_migrations"]
     conn = _direct_jen_conn()
     try:
         conn.begin()
         conn.cursor().execute("SET FOREIGN_KEY_CHECKS=0")
-        for tbl in selected:
-            rows = data.get(tbl, [])
-            if not _table_exists(conn, tbl):
-                results.append(f"⚠️ {tbl}: table does not exist in current schema — skipped")
-                continue
-            with conn.cursor() as cur:
-                if truncate:
-                    cur.execute(f"DELETE FROM `{tbl}`")
-                if rows:
-                    real_cols = _get_table_columns(conn, tbl)
-                    cols = [c for c in rows[0] if c in real_cols]
-                    if not cols:
-                        results.append(f"⚠️ {tbl}: no recognized columns in import data — skipped")
-                        continue
-                    col_str = ", ".join(f"`{c}`" for c in cols)
-                    ph_str = ", ".join(["%s"] * len(cols))
-                    cur.executemany(
-                        f"INSERT IGNORE INTO `{tbl}` ({col_str}) VALUES ({ph_str})",
-                        [[r.get(c) for c in cols] for r in rows],
-                    )
-            results.append(f"✅ {tbl}: {len(rows)} rows restored")
+        for tbl in core_selected:
+            _import_rows(conn, tbl)
         conn.cursor().execute("SET FOREIGN_KEY_CHECKS=1")
         conn.commit()
     except Exception as e:
         conn.rollback()
+        conn.close()
         raise RuntimeError(f"Import failed and was rolled back: {e}") from e
+
+    # ── (2) + (3) + (4): plugin tables, one plugin at a time ────────────────────────────
+    try:
+        for pid in sorted(export_plugin_ids):
+            plugin_tables = (
+                plugin_tables_meta.get(pid, {}).get("tables", []) if plugin_tables_meta else owned.get(pid, [])
+            )
+            plugin_tables = [t for t in plugin_tables if t in selected_set]
+            if not plugin_tables:
+                continue
+            manifest = _plugins._manifest_for_owned_tables(pid)
+            if manifest is None:
+                results.append(
+                    f"⚠️ {pid}: plugin code is not installed here — its data ({len(plugin_tables)} table(s)) "
+                    f"was not restored; it is still inside this export/bundle. Install the plugin and restore "
+                    f"again to bring it back."
+                )
+                continue
+
+            from jen.models.db import jen_db
+
+            with jen_db() as db, db.cursor() as cur:
+                cur.execute("DELETE FROM plugin_schema_migrations WHERE plugin_id=%s", (pid,))
+                db.commit()
+            ok, msg, _count = _plugins.run_plugin_migrations(manifest)
+            if not ok:
+                results.append(f"⚠️ {pid}: migration replay failed ({msg}) — its tables/data may be incomplete")
+                continue
+
+            try:
+                conn.begin()
+                for tbl in plugin_tables:
+                    _import_rows(conn, tbl)
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                results.append(f"⚠️ {pid}: row import failed and was rolled back ({e})")
     finally:
         conn.close()
+
+    conn2 = _direct_jen_conn()
+    try:
+        violations = _plugin_invariant_violations(conn2)
+    finally:
+        conn2.close()
+    if violations:
+        named = ", ".join(f"{pid}.{t}" for pid, t in violations)
+        results.append(
+            f"⚠️ invariant check: recorded migration(s) with a missing table ({named}) — "
+            f"Jen will repair this automatically the next time it starts"
+        )
+
     return results
 
 

@@ -36,6 +36,7 @@ KINDS = (
     "drift.resolved",
     "alert.sent",
     "discovery.unknown",
+    "plugin.schema_repaired",
 )
 
 KIND_MAX_LENGTH = 40  # events.kind is VARCHAR(40) (jen/models/migrations.py)

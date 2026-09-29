@@ -372,6 +372,11 @@ def load_plugins(app) -> None:
             continue
         plugin_id = plugin["id"]
         version = plugin.get("version")
+        # v5.66.0-beta.5 (Q107) — self-heal BEFORE the normal migration run below: a plugin
+        # restored from a pre-Q107 bundle can have migration rows recorded with no table behind
+        # them (the migration row said "already applied", so nothing would otherwise re-create
+        # it) — repair that first so the normal run just sees a clean, fully-migrated plugin.
+        self_heal_missing_tables(plugin)
         mig_ok, mig_msg, mig_count = run_plugin_migrations(plugin)
         if not mig_ok:
             ok_version = get_global_setting(f"plugin_migrated_ok:{plugin_id}")
@@ -1377,6 +1382,54 @@ def all_owned_tables() -> dict[str, list[str]]:
             kept.append(t)
         result[plugin_id] = kept
     return result
+
+
+def _table_exists_now(table: str) -> bool:
+    """A standalone existence check through the pooled jen_db() connection — for callers (the
+    self-heal check below) that live outside dbexport.py's own raw-connection world."""
+    from jen.models.db import jen_db
+
+    with jen_db() as db, db.cursor() as cur:
+        cur.execute("SHOW TABLES LIKE %s", (table,))
+        return bool(cur.fetchone())
+
+
+def self_heal_missing_tables(manifest: dict) -> list[str]:
+    """A plugin with recorded migrations but a missing owned table is exactly the state a
+    pre-5.66.0-beta.5 restore leaves (the migration row said "already applied", so nothing ever
+    re-created the table) — this clears its migration rows and re-runs them fresh through the
+    normal runner, safe even for ALTERs already applied elsewhere (CREATE TABLE IF NOT EXISTS,
+    _DDL_ALREADY_IN_EFFECT). Returns the list of tables that were missing (empty when nothing
+    needed healing) so the caller can log/audit/emit only when something actually happened."""
+    plugin_id = manifest["id"]
+    if not _plugin_applied_versions(plugin_id):
+        return []  # never migrated at all - nothing recorded to be inconsistent with
+    missing = [t for t in owned_tables(plugin_id, manifest) if not _table_exists_now(t)]
+    if not missing:
+        return []
+
+    logger.warning(
+        f"Plugin '{plugin_id}' has recorded migrations but is missing table(s) {missing} — "
+        f"repairing by re-running its migrations (self-heal, v5.66.0-beta.5, Q107)"
+    )
+    from jen.models.db import jen_db
+
+    with jen_db() as db, db.cursor() as cur:
+        cur.execute("DELETE FROM plugin_schema_migrations WHERE plugin_id=%s", (plugin_id,))
+        db.commit()
+    ok, msg, _count = run_plugin_migrations(manifest)
+    if not ok:
+        logger.error(f"Plugin '{plugin_id}' self-heal migration re-run failed: {msg}")
+
+    with contextlib.suppress(Exception):
+        from jen.services import events as _events
+
+        _events.emit("plugin.schema_repaired", detail=f"{plugin_id}: recreated table(s) {', '.join(missing)}")
+    with contextlib.suppress(Exception):
+        from jen.models.user import audit as _audit
+
+        _audit("PLUGIN_SCHEMA_REPAIRED", plugin_id, f"missing table(s) recreated: {', '.join(missing)}")
+    return missing
 
 
 # ── Registry ──────────────────────────────────────────────────────────────────
