@@ -1485,12 +1485,14 @@ emit({"ok": True})
     )
 
 
+S15_BUNDLE_IN_CONTAINER = "/var/lib/jen/s15.bundle"
+
+
 def _s15_build_recovery_bundle(web):
     """Through the real route — never dbexport.export_jen()/recovery.build() called directly —
     the same /settings/databases/recovery-bundle a superadmin would actually click. Returns the
-    HOST path it was saved to; the Jen container's own /tmp is a size-capped tmpfs (compose.yml)
-    that does NOT survive a `docker restart`, so copying the bundle INTO the container has to
-    wait until after the DB-recreate restart just ahead — never done here."""
+    HOST path it was saved to; copying it INTO the container has to wait until after the
+    DB-recreate restart just ahead, so it is never done here."""
     import tempfile
 
     web.login()  # refresh recent-auth: the route is step-up gated and seeding above took a while
@@ -1506,7 +1508,13 @@ def _s15_build_recovery_bundle(web):
 
 
 def _s15_copy_bundle_into_container(local_path):
-    st.run(["docker", "cp", local_path, f"{st.JEN}:/tmp/s15.bundle"])
+    """/tmp is out — compose.yml mounts it as a size-capped tmpfs specifically so the real
+    recovery-bundle code never depends on its room, and a `docker cp` placed there right after
+    the DB-recreate restart still was not there by the time restore.run() looked for it (this
+    scenario's own first two rounds). /var/lib/jen is CONTENT_DIR itself — the same real,
+    persistent, www-data-owned directory Jen's own recovery-bundle build uses for its temp
+    file — not mounted specially at all, so there is nothing here to be wiped."""
+    st.run(["docker", "cp", local_path, f"{st.JEN}:{S15_BUNDLE_IN_CONTAINER}"])
 
 
 def _s15_drop_and_recreate_jen_db():
@@ -1520,7 +1528,7 @@ def _s15_restore():
     out, _p = st.jen_py(
         f"""
 from jen.tools import restore
-rc = restore.run("/tmp/s15.bundle", {S15_PASSPHRASE!r}, no_stop=True)
+rc = restore.run({S15_BUNDLE_IN_CONTAINER!r}, {S15_PASSPHRASE!r}, no_stop=True)
 emit({{"rc": rc}})
 """,
         timeout=180,
