@@ -1368,12 +1368,16 @@ def _s15_seed_all_plugins(web):
     )
     # ipam_conflict_state: a real Kea lease and a designated-static IPAM entry at the same IP in
     # the same real, Kea-managed subnet — _check_conflicts() below finds it for real, no stand-in.
-    _s15_lease_up("10.99.0.200", S15_CONFLICT_MAC, "s15-conflict-lease")
+    # Order matters: _designation_blocker() (plugins/ipam/plugin.py) deliberately REFUSES to newly
+    # mark an address static/planned while a live lease already holds it — exactly the conflict
+    # this seeds on purpose — so the entry has to be designated FIRST, with the lease added after
+    # (a raw DB insert, not a route, so it never goes through that same block).
     web.post(
         "/network/ipam/entry/kea/1",
         data={"ip": "10.99.0.200", "ipam_status": "static", "label": "s15-conflict"},
         page="/network/ipam/",
     )
+    _s15_lease_up("10.99.0.200", S15_CONFLICT_MAC, "s15-conflict-lease")
 
     # ── network-discovery: nd_settings, nd_known_hosts (real routes) ──
     web.post("/network/discovery/schedule/1", data={"every_hours": "24"}, page="/network/discovery/")
@@ -1436,7 +1440,7 @@ with app.app_context():
     # ipam: ipam_conflict_state — the real periodic check, no I/O to stand in (a real Kea lease
     # and a real designated-static entry at the same IP already exist)
     with _dbm.jen_db() as _db, _db.cursor() as _cur:
-        _cur.execute("SELECT ip, ipam_status, subnet_kind FROM ipam_static_entries WHERE ip='10.99.0.200'")
+        _cur.execute("SELECT ip, subnet_id, entry_status FROM ipam_static_entries WHERE ip='10.99.0.200'")
         diag["ipam_entry_before"] = _cur.fetchone()
     with _dbm.kea_db() as _kdb, _kdb.cursor() as _kcur:
         _kcur.execute("SELECT INET_NTOA(address) AS ip FROM lease4 WHERE address=INET_ATON('10.99.0.200')")
