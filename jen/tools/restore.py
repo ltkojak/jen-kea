@@ -255,11 +255,16 @@ def check_kea_major(manifest: dict, bundle_dir: Path) -> list[str]:
 
 # v5.66.0-beta.4 (Q106) — measured, not guessed: tests/test_dbexport_streaming.py drives the
 # real dbexport.parse_import_file + import_jen() insert path under tracemalloc, over three
-# synthetic export sizes, and prints peak/uncompressed for each. This is that measured ratio,
-# rounded up for headroom — see docs/runbooks.md "Before you start: size" for the three data
-# points it was measured from. A streaming importer would remove the need for this guard
-# entirely; that's explicitly out of scope here (it needs a line-delimited export format).
-RESTORE_MEMORY_FACTOR = 6.0
+# synthetic audit_log sizes (2,000 / 20,000 / 100,000 rows). Measured peak/uncompressed (k)
+# actually FALLS as the export grows — about 6.1x at 2,000 rows, 3.4x at 20,000, 3.0x at
+# 100,000 (fixed per-call overhead amortizing) — so the worst ratio is at the smallest,
+# least dangerous size. This is that worst observed ratio with headroom for run-to-run and
+# environment variance, not the number that would be tightest for a large, actually risky
+# export — erring conservative on a memory-safety check is the right tradeoff. See
+# docs/runbooks.md "Before you start: size" for the three data points. A streaming importer
+# would remove the need for this guard entirely; that's explicitly out of scope here (it
+# needs a line-delimited export format).
+RESTORE_MEMORY_FACTOR = 7.0
 
 
 def _mem_available_bytes(meminfo_path: str = "/proc/meminfo") -> int | None:

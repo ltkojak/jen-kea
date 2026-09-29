@@ -180,8 +180,13 @@ a throwaway VM, never against a live box, before you need it for real.
    it stops or touches anything, that the box has enough free memory —
    measured (`tests/test_dbexport_streaming.py::TestRestoreMemoryFactor`,
    driving the real import path under `tracemalloc` over three synthetic
-   `audit_log` sizes), not guessed, at roughly **6× the export's
-   uncompressed size** (`jen.tools.restore.RESTORE_MEMORY_FACTOR`). If a
+   `audit_log` sizes), not guessed: peak/uncompressed came out around
+   **6.1× at 2,000 rows (737 KB), 3.4× at 20,000 rows (7.4 MB), and 3.0×
+   at 100,000 rows (37 MB)** — the ratio actually falls as the export
+   grows (fixed per-call overhead amortizing), so the guard uses the
+   worst of those three, with headroom, as a flat **7×**
+   (`jen.tools.restore.RESTORE_MEMORY_FACTOR`) — conservative for a large
+   export, which is the case that actually matters. If a
    restore refuses on this check, the message names both figures; the two
    ways to shrink the export are lowering Settings → System → Audit Log Retention
    before the NEXT export, or checking **"Without audit history"** on the
