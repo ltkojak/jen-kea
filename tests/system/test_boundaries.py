@@ -1507,7 +1507,7 @@ def _s15_drop_and_recreate_jen_db():
     """The disaster-recovery case this scenario exists for: not a truncate, a genuinely empty
     database — the state a freshly installed Jen (or one restored onto new hardware) starts
     from. jen.* grants are on the schema NAME, not tied to its existence, so they survive."""
-    st.dexec(st.MARIADB, "mysql", "-uroot", "-psys_root_pw", "-e", "DROP DATABASE jen; CREATE DATABASE jen;")
+    st.dexec(st.MARIADB, "mariadb", "-uroot", "-psys_root_pw", "-e", "DROP DATABASE jen; CREATE DATABASE jen;")
 
 
 def _s15_restore():
