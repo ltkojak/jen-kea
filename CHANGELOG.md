@@ -2,6 +2,73 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.66.0-beta.5] - 2026-09-29
+
+Q107: none of the 20 tables the 7 bundled plugins own were ever part of a
+backup, export, recovery bundle, or restore — every one silently vanished,
+and a restored `plugin_schema_migrations` row made the next start believe
+the missing table's migration had already run, so it was never recreated
+either.
+
+**Plugin table ownership is derived, not hand-maintained.**
+`jen/services/plugins.py::owned_tables()` parses (never executes) a
+plugin's own `manifest.json` `db_migrations` DDL and derives exactly the
+tables it owns; a plugin whose ownership can't be expressed that way can
+declare it explicitly with a `backup_tables` override instead. Ownership
+enumeration itself goes through `discover_plugins()` — the same real
+directory scan `load_plugins()` uses — never Jen's own `plugins` DB table,
+which turned out to be write-only bookkeeping the registry-install flow
+populates and plain `enable_plugin()` (the only way a bundled plugin ever
+actually gets turned on) never touches at all; querying it would have
+silently missed every bundled plugin's data all over again.
+`dbexport.export_tables()` is the one universe (core tables plus every
+installed plugin's own) now behind every export path — the manual Export
+tab, scheduled and on-demand backups, and the recovery bundle — so a
+plugin installed today is in tomorrow's backup with no code change
+anywhere else.
+
+**The restore order never trusts a migration row over the table itself.**
+Core tables import first, except `plugin_schema_migrations`, whose rows
+from the file are never restored as-is. For each plugin named in a
+restored export whose code is on this machine, its migration rows are
+cleared and its migrations re-run through the normal runner — its tables
+come from the code's own `CREATE TABLE`, never from DDL embedded in the
+file — and its row data imports the same way core tables always have. A
+plugin named in the export whose code isn't here is skipped and named,
+its data left untouched for a later install to bring back. A format-1
+export (everything before this release) has no per-plugin scope to go
+by, so every currently installed, code-present plugin gets the same
+clear-and-rerun treatment, recreating its schema even though the file
+never carried its row data to begin with.
+
+**A pre-existing install already broken by an older restore repairs
+itself.** `jen/services/plugins.py::self_heal_missing_tables()` runs for
+every enabled plugin before its normal migration check on every Jen
+start from now on — if a migration is recorded but its table is missing,
+it's repaired the same way, no manual intervention needed.
+
+**Backups and recovery bundles taken before this release never had any
+plugin's data in them to begin with** — restoring one leaves every
+plugin exactly as a fresh install has it. The recovery tab shows a
+one-time notice naming this until a bundle or export actually carries a
+plugin's own tables; take a fresh one once you're on this release.
+
+**Bundled Watchdog's periodic probe never actually recorded a check,
+ever — found while proving all of the above end to end.** Its own tick
+selected every column `due_targets()` needs to decide anything is due
+except `enabled`, so every target looked undue unconditionally and the
+whole probe cycle returned without writing a row. One column added to
+one query; the fix ships in this bundled copy, with a proper release
+through the plugin's own repo to follow.
+
+A new system-test scenario installs all seven bundled plugins, puts
+real rows in every one of their 20 tables through each plugin's own
+route or (for the few tables only a periodic job against real network
+I/O ever writes) its real underlying function, builds a recovery bundle
+through the real route, drops and recreates the Jen database genuinely
+empty, restores, and confirms every plugin's own page still answers with
+every row back.
+
 ## [5.66.0-beta.4] - 2026-09-29
 
 Grok's review of 5.66.0-beta.3, verified against the code before any of it
