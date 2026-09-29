@@ -269,6 +269,13 @@ class TestBundledManifestDerivationMatchesInformationSchema:
     from the manifest, an actual before/after diff of the live schema."""
 
     def _tables_in_schema(self, db):
+        # MySQL 8's information_schema.tables is itself InnoDB-backed, so a read inside an
+        # already-open REPEATABLE READ transaction on THIS connection can still see the
+        # snapshot from before a table created via the migration runner's OWN connection
+        # committed - commit first so every call starts a fresh snapshot (MariaDB's older,
+        # non-transactional I_S never had this problem, which is why this only showed up on
+        # one of the three CI matrix legs).
+        db.commit()
         with db.cursor() as cur:
             # MySQL 8 returns this column as "TABLE_NAME" (uppercase); MariaDB as "table_name" -
             # an explicit alias normalizes it instead of depending on the server's own casing.
