@@ -575,6 +575,23 @@ verifies:
   there restores `.prev` and reports `postflight-failed` instead of
   leaving a broken helper live.
 
+**Helper build 8 (v5.66.0-beta.4, Q106 — a build-only change; `HELPER_VERSION`
+stays 7).** The one gap the rollback above still had: it only ran `if
+prev_saved`, and `prev_saved` was only set when `_SELF_PATH` was already a
+regular file — so on the rare host where it wasn't (no helper installed
+yet, or something else occupying the path), a postflight failure on that
+first `update` had no `.prev` to restore, and the new, broken bytes stayed
+installed anyway. `update` replaces an installed helper, it never installs
+one: `op_update` now refuses BEFORE writing or preflighting any candidate
+bytes with `not-installed` whenever `_SELF_PATH` is not a plain regular
+file, which makes the `.prev` copy — and therefore the rollback — always
+happen from here on. A rollback that itself fails (`os.replace` raising —
+disk full, permissions changed mid-flight) is reported as `rollback-failed`
+naming both `_SELF_PATH` and `.prev`, rather than the misleading
+`postflight-failed` (which implies the old helper is back); this is the
+one signed-update failure that is a genuine incident needing hands on the
+host. `tests/kea_helper_build.json` re-pinned to build 8.
+
 - `jen-config` mutation now happens **in Jen** (`jen/services/kea_config_edit.py`,
   pure functions) rather than inside a generated script. Read → mutate →
   apply is not a single atomic step on the Kea host, but since v5.16.0

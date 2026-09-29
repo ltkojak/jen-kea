@@ -166,6 +166,24 @@ everything around it behaves:
   the same check against the newly-installed path — a failure there
   restores `.prev` over `_SELF_PATH` and reports `postflight-failed`
   instead of leaving a broken helper live; success removes `.prev`.
+
+Build 8 (v5.66.0-beta.4, Q106) — a third-party review of v7 found the one
+path through `op_update` that installs bytes with no way back: with no
+regular file at `_SELF_PATH` (a rare state — the running helper normally
+IS that file — but the postflight rollback above only fires `if
+prev_saved`, and `prev_saved` was False here), the old code still ran the
+replace, so a postflight failure on that first "update" had nothing to
+restore. `update` replaces an installed helper, it never installs one:
+`op_update` now refuses BEFORE writing or preflighting any candidate
+bytes, with `not-installed`, whenever `_SELF_PATH` is not a plain regular
+file. That makes the `.prev` copy unconditional — `prev_saved` is gone as
+a variable — so a rollback is always attempted on a postflight failure,
+and a rollback that ITSELF fails (`os.replace` raising, e.g. disk full)
+is reported as `rollback-failed`, naming both `_SELF_PATH` and its
+`.prev`, instead of the misleading `postflight-failed` (which implies the
+old helper is back). This is the first build-only change: `HELPER_BUILD`
+moves to 8 with `HELPER_VERSION` unchanged at 7 — the two new error
+tokens are values inside the existing envelope, not a contract change.
 """
 
 from __future__ import annotations
@@ -185,7 +203,7 @@ import sys
 import tempfile
 
 HELPER_VERSION = 7
-HELPER_BUILD = 7
+HELPER_BUILD = 8
 # v5.66.0-beta.2 (Q104) — HELPER_BUILD is bumped on EVERY change to this file, never by
 # HELPER_VERSION alone; op_update's own _HELPER_BUILD_RE parses "^HELPER_BUILD = (\d+)$" out
 # of a candidate's raw bytes, so this line (like HELPER_VERSION's own, just above) must never
@@ -822,6 +840,10 @@ def op_update(payload):
 
         if os.path.islink(_SELF_PATH):
             return {"ok": False, "error": "symlink"}, None
+        if not os.path.isfile(_SELF_PATH):
+            # update() replaces an installed helper, it never installs one — refuse before
+            # any candidate bytes are written or preflighted (v5.66.0-beta.4, Q106).
+            return {"ok": False, "error": "not-installed"}, None
 
         final_tmp = os.path.join(tmp_dir, "final")
         with open(final_tmp, "wb") as f:
@@ -838,12 +860,12 @@ def op_update(payload):
         prev_path = _SELF_PATH + ".prev"
         if os.path.islink(prev_path):
             return {"ok": False, "error": "symlink", "path": prev_path}, None
-        prev_saved = False
-        if os.path.isfile(_SELF_PATH) and not os.path.islink(_SELF_PATH):
-            shutil.copy2(_SELF_PATH, prev_path)
-            _chown(prev_path, 0, 0)
-            os.chmod(prev_path, 0o755)
-            prev_saved = True
+        # _SELF_PATH is guaranteed a plain regular file at this point (checked above), so the
+        # rollback copy is now unconditional — there is no longer a "nothing to roll back to"
+        # case (v5.66.0-beta.4, Q106).
+        shutil.copy2(_SELF_PATH, prev_path)
+        _chown(prev_path, 0, 0)
+        os.chmod(prev_path, 0o755)
 
         _chown(final_tmp, 0, 0)
         os.chmod(final_tmp, 0o755)
@@ -860,16 +882,27 @@ def op_update(payload):
         # ── postflight: the INSTALLED path must answer the same way, or roll back ──
         post_ok, post_version, post_build, post_reason = _probe_helper_version(_SELF_PATH)
         if not post_ok or post_version != new_version or post_build != new_build:
-            if prev_saved:
-                os.replace(prev_path, _SELF_PATH)
             detail = post_reason or "the installed candidate's own version op disagreed after install"
+            try:
+                os.replace(prev_path, _SELF_PATH)
+            except OSError as e:
+                # The rollback itself failed — _SELF_PATH may still hold the broken candidate
+                # and the old bytes are stranded at prev_path. Never call this postflight-failed
+                # (which implies the previous helper is back); name both paths so an
+                # administrator knows exactly what to check by hand (v5.66.0-beta.4, Q106).
+                return {
+                    "ok": False,
+                    "error": "rollback-failed",
+                    "detail": f"{detail}; restoring the previous helper also failed: {e}",
+                    "path": _SELF_PATH,
+                    "prev_path": prev_path,
+                }, None
             return {"ok": False, "error": "postflight-failed", "detail": detail}, None
 
-        if prev_saved:
-            try:
-                os.unlink(prev_path)
-            except OSError:
-                pass
+        try:
+            os.unlink(prev_path)
+        except OSError:
+            pass
 
         return {
             "ok": True,

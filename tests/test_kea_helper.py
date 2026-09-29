@@ -151,8 +151,8 @@ class TestProtocolMisuse:
         assert json.loads(stdout.getvalue()) == {
             "ok": False,
             "error": "stdin-too-large",
-            "helper_version": 7,
-            "helper_build": 7,
+            "helper_version": helper.HELPER_VERSION,
+            "helper_build": helper.HELPER_BUILD,
         }
 
     def test_stdout_is_exactly_one_json_document(self, helper):
@@ -178,7 +178,7 @@ class TestVersion:
         assert code == 0
         assert out["ok"] is True
         assert out["helper_version"] == helper.HELPER_VERSION == 7
-        assert out["helper_build"] == helper.HELPER_BUILD == 7
+        assert out["helper_build"] == helper.HELPER_BUILD == 8
         assert out["python"].count(".") == 2
         assert err.startswith("jen-kea-helper: version ok")
 
@@ -231,8 +231,8 @@ class TestHelperVersionEnvelope:
     )
     def test_every_response_carries_helper_version_and_build(self, helper, op, payload):
         _code, out, _err = _run(helper, op, payload, keep_version=True)
-        assert out["helper_version"] == 7
-        assert out["helper_build"] == 7
+        assert out["helper_version"] == helper.HELPER_VERSION == 7
+        assert out["helper_build"] == helper.HELPER_BUILD
 
 
 class TestPathWalls:
@@ -1136,6 +1136,82 @@ class TestUpdateOp:
         code, out, _err = self._update(helper, candidate, sig)
         assert out == {"ok": False, "error": "bad-signature"}
         assert target.read_bytes() == original
+
+    def test_no_installed_file_refuses_not_installed_and_writes_nothing(
+        self, helper, signing_key, tmp_path, monkeypatch
+    ):
+        """v5.66.0-beta.4 (Q106) — update() replaces an installed helper, it never installs
+        one: with no regular file at _SELF_PATH, it refuses before writing or preflighting
+        anything at all."""
+        self._use_throwaway_signer(helper, monkeypatch, signing_key, tmp_path)
+        target = tmp_path / "installed-helper"  # never created
+        monkeypatch.setattr(helper, "_SELF_PATH", str(target))
+        candidate = _candidate_bytes(99)
+        sig = _sign(signing_key["priv"], "jen-kea-helper", candidate, tmp_path)
+
+        code, out, _err = self._update(helper, candidate, sig)
+        assert out == {"ok": False, "error": "not-installed"}
+        assert not target.exists()
+        # nothing beyond this test's own fixture files (the signers file, and _sign()'s
+        # candidate + its .sig) — no tmp_dir, no partial install
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["allowed_signers", "candidate", "candidate.sig"]
+
+    def test_postflight_failure_restores_the_previous_bytes_and_leaves_no_prev(
+        self, helper, signing_key, tmp_path, monkeypatch
+    ):
+        self._use_throwaway_signer(helper, monkeypatch, signing_key, tmp_path)
+        target = self._target(helper, monkeypatch, tmp_path)
+        original = target.read_bytes()
+        candidate = _candidate_bytes(99)
+        sig = _sign(signing_key["priv"], "jen-kea-helper", candidate, tmp_path)
+
+        real_probe = helper._probe_helper_version
+
+        def fake_probe(path):
+            # the postflight probe is the one call against the INSTALLED path — fail only
+            # that one; the preflight probe (against a temp file elsewhere) runs for real.
+            if path == str(target):
+                return False, None, None, "boom: candidate crashed after install"
+            return real_probe(path)
+
+        monkeypatch.setattr(helper, "_probe_helper_version", fake_probe)
+
+        code, out, _err = self._update(helper, candidate, sig)
+        assert out == {"ok": False, "error": "postflight-failed", "detail": "boom: candidate crashed after install"}
+        assert target.read_bytes() == original
+        assert not (tmp_path / "installed-helper.prev").exists()
+
+    def test_a_failed_rollback_reports_rollback_failed_naming_both_paths(
+        self, helper, signing_key, tmp_path, monkeypatch
+    ):
+        """v5.66.0-beta.4 (Q106) — the rollback after a postflight failure is now unconditional;
+        this is what fires when the rollback itself can't be applied."""
+        self._use_throwaway_signer(helper, monkeypatch, signing_key, tmp_path)
+        target = self._target(helper, monkeypatch, tmp_path)
+        candidate = _candidate_bytes(99)
+        sig = _sign(signing_key["priv"], "jen-kea-helper", candidate, tmp_path)
+
+        monkeypatch.setattr(
+            helper,
+            "_probe_helper_version",
+            lambda path: (False, None, None, "boom") if path == str(target) else (True, 99, 99, ""),
+        )
+        real_replace = os.replace
+        prev_path = str(target) + ".prev"
+
+        def fake_replace(src, dst):
+            if str(src) == prev_path:
+                raise OSError("disk exploded")
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(helper.os, "replace", fake_replace)
+
+        code, out, _err = self._update(helper, candidate, sig)
+        assert out["ok"] is False
+        assert out["error"] == "rollback-failed"
+        assert out["path"] == str(target)
+        assert out["prev_path"] == prev_path
+        assert "boom" in out["detail"] and "disk exploded" in out["detail"]
 
 
 class TestBoundedTail:

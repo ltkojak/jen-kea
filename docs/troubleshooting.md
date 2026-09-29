@@ -285,10 +285,26 @@ failed:
   restored the previous file from its own `.prev` backup, so the host
   is never left without a working helper. This points at a bad build
   reaching `release.yml`, not at anything on the Kea host; report it.
+- *"no helper to update"* (build 8+, from `not-installed`) — there is no
+  regular file at `/usr/local/sbin/jen-kea-helper` for `update` to
+  replace (an unusual state; the running copy normally IS that file).
+  `update` only ever replaces an installed helper — install one first
+  with the by-hand command the flash gives you.
+- *"failed to update AND failed to roll back"* (build 8+, from
+  `rollback-failed`) — the only signed-update failure that is a real
+  incident: the newly-installed candidate failed its postflight check
+  AND restoring the previous helper from its `.prev` backup also failed
+  (disk full, permissions changed mid-flight). The flash names both
+  paths. SSH to the Kea host directly and check which of the two —
+  `/usr/local/sbin/jen-kea-helper` (may be the broken candidate) and
+  `/usr/local/sbin/jen-kea-helper.prev` (the old, working bytes) — is
+  usable, then `sudo cp` the working one back into place by hand
+  (`sudo chown root:root`, `sudo chmod 0755`).
 
-None of these touch sudoers, and none fall back to the legacy path — a
-host that fails a signed update stays on its current version rather
-than silently reopening the `sudo python3` grant requirement.
+None of these except `rollback-failed` touch anything on disk beyond a
+verified, working helper — a host that fails a signed update for any
+other reason stays on its current, working version rather than silently
+reopening the `sudo python3` grant requirement.
 
 ### Permission denied on kea-dhcp4.conf
 

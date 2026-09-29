@@ -1124,13 +1124,22 @@ def test_14_signed_helper_update(stack):
 import re, subprocess
 from jen.services import kea_host
 
+# The REAL, unpatched source - captured once, before anything below ever reassigns
+# kea_host._helper_source_bytes, so every candidate this scenario builds (including the
+# build-only one) is derived from what actually shipped, never from a previous candidate.
+base_src = kea_host._helper_source_bytes()
+real_version = int(re.search(rb"^HELPER_VERSION = (\\d+)$", base_src, re.M).group(1))
+real_build = int(re.search(rb"^HELPER_BUILD = (\\d+)$", base_src, re.M).group(1))
 
-def make_candidate(version):
+
+def make_candidate(version, build=None):
     # kea_host._helper_source_bytes() already knows the real path (extensions.JEN_ROOT-
     # relative) - a Docker image is /opt/jen/jen-kea-helper (flat), a bare-metal install is
     # /opt/jen/current/app/jen-kea-helper (versioned) - never hardcode either one here.
-    src = kea_host._helper_source_bytes()
-    return re.sub(rb"^HELPER_VERSION = \\d+$", f"HELPER_VERSION = {version}".encode(), src, count=1, flags=re.M)
+    src = re.sub(rb"^HELPER_VERSION = \\d+$", f"HELPER_VERSION = {version}".encode(), base_src, count=1, flags=re.M)
+    if build is not None:
+        src = re.sub(rb"^HELPER_BUILD = \\d+$", f"HELPER_BUILD = {build}".encode(), src, count=1, flags=re.M)
+    return src
 
 
 def sign(data, name):
@@ -1144,6 +1153,13 @@ def sign(data, name):
     with open(path + ".sig", "rb") as f:
         return f.read()
 
+
+# v5.66.0-beta.4 (Q106) - the FIRST build-only signed update: same HELPER_VERSION as what's
+# already installed, HELPER_BUILD one higher. Built and sent BEFORE candidate99 below, while
+# kea-a is still at its pristine as-shipped (real_version, real_build) - the ordering check
+# this proves lives in HELPER_VERSION equal but HELPER_BUILD higher, not a version bump.
+candidate_build_only = make_candidate(real_version, real_build + 1)
+sig_build_only = sign(candidate_build_only, "s14_cand_build_only")
 
 candidate99 = make_candidate(99)
 sig99 = sign(candidate99, "s14_cand99")
@@ -1174,6 +1190,13 @@ with app.app_context():
     # REMOTE (Kea host) verification this scenario is actually about. _fetch_helper_signature()
     # is stubbed to None too, so a bad-signature retry (also new in this Q) doesn't reach out
     # to the real network from inside the test container.
+    kea_host._helper_source = lambda: candidate_build_only.decode()
+    kea_host._helper_source_bytes = lambda: candidate_build_only
+    kea_host._local_helper_signature = lambda candidate: sig_build_only
+    kea_host._fetch_helper_signature = lambda candidate: None
+    results["kea_a_build_only"] = kea_host.install_helper(servers["kea-a"])
+    results["kea_a_build_only_check"] = kea_host.check_helper(servers["kea-a"])
+
     kea_host._helper_source = lambda: candidate99.decode()
     kea_host._helper_source_bytes = lambda: candidate99
     kea_host._local_helper_signature = lambda candidate: sig99
@@ -1185,10 +1208,24 @@ with app.app_context():
     kea_host._helper_source_bytes = lambda: flipped
     kea_host._local_helper_signature = lambda candidate: sig100  # signed over candidate100, not the flipped bytes
     results["kea_a_flipped"] = kea_host.install_helper(servers["kea-a"])
+results["real_version"] = real_version
+results["real_build"] = real_build
 emit(results)
 """
     )
     results = emitted(out)
+
+    real_version, real_build = results["real_version"], results["real_build"]
+    # v5.66.0-beta.4 (Q106) - the build-only path: same HELPER_VERSION, HELPER_BUILD one
+    # higher, accepted through the signed update exactly like a version bump is.
+    assert results["kea_a_build_only"] == {
+        "ok": True,
+        "version": real_version,
+        "code": "upgraded",
+        "detail": "",
+    }, results["kea_a_build_only"]
+    assert results["kea_a_build_only_check"]["version"] == real_version
+    assert results["kea_a_build_only_check"]["build"] == real_build + 1, results["kea_a_build_only_check"]
 
     assert results["kea_a_signed"] == {"ok": True, "version": 99, "code": "upgraded", "detail": ""}, results[
         "kea_a_signed"

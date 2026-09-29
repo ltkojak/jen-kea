@@ -1094,6 +1094,21 @@ under a new `HELPER_BUILD` number rather than bumping `HELPER_VERSION`
 it, and still offers **Update helper** the same way it did for v6.
 None of this needs anything from you.
 
+**This release ships helper build 8 — the update op never installs with
+no way back.** Another review found the one case the v7 rollback above
+didn't cover: on the rare host with no helper file at all yet at the
+installed path, a postflight failure on that very first signed update
+had nothing to restore. `update` now refuses up front, before writing
+anything, when there's nothing installed to update — the flash reads
+*"no helper to update"* and the fix is the same by-hand install command
+given for a v5-or-older host's one last hop. If a signed update fails
+its postflight check AND the automatic rollback also fails (very rare —
+disk full, or permissions changed on the Kea host mid-update), the flash
+reads *"failed to update AND failed to roll back"* and names both the
+installed path and its `.prev` backup — that one case genuinely needs
+you on the host by hand; see `docs/runbooks.md`. Settings → Kea → SSH
+shows this build as **"v7 (build 8)"**.
+
 **v5.20.0 — the legacy grant is now checked, not just used.** Every
 time Jen checks or installs the helper it also checks whether
 `/etc/sudoers.d/jen-kea` (below) is still present, and records that

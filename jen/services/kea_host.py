@@ -1367,6 +1367,20 @@ def _install_helper_signed(server: dict, target: int, target_build: int, current
             f"{name} rolled the update back on its own: the newly-installed helper did not answer correctly "
             f"({resp.get('detail', '')}) — the previous helper is restored and working. Please report this."
         ),
+        # v5.66.0-beta.4 (Q106) — HELPER_BUILD 8: update() refuses BEFORE writing anything when
+        # there is nothing installed to update, instead of installing with no way back.
+        "not-installed": (
+            f"{name} has no helper at /usr/local/sbin/jen-kea-helper to update — install it by hand instead: {by_hand}"
+        ),
+        # v5.66.0-beta.4 (Q106) — the rollback after a postflight failure is now unconditional;
+        # THIS is what fires when that rollback itself fails (disk full, permissions changed
+        # mid-flight) — the host may be left with the broken candidate live and the old bytes
+        # stranded at .prev, so both paths are named and this needs hands immediately.
+        "rollback-failed": (
+            f"{name} failed to update AND failed to roll back ({resp.get('detail', '')}) — this needs hands "
+            f"on the host right now: check {resp.get('path', '/usr/local/sbin/jen-kea-helper')} and its saved "
+            f"copy at {resp.get('prev_path', '/usr/local/sbin/jen-kea-helper.prev')} by hand before retrying."
+        ),
     }
     code = reason if reason in wording else "error"
     detail = wording.get(
