@@ -1426,19 +1426,40 @@ def _s15_seed_all_plugins(web):
     # ── the six tables no route writes: the real code, only the one external I/O call stood in ──
     script = """
 import sys
+diag = {}
 with app.app_context():
+    import jen.models.db as _dbm
+
     # presence: pr_state — the real per-transition writer, no I/O involved at all
     sys.modules["jen_plugin_presence"]._apply_transition("__PRESENCE_MAC__", True)
 
     # ipam: ipam_conflict_state — the real periodic check, no I/O to stand in (a real Kea lease
     # and a real designated-static entry at the same IP already exist)
-    sys.modules["jen_plugin_ipam"]._check_conflicts()
+    with _dbm.jen_db() as _db, _db.cursor() as _cur:
+        _cur.execute("SELECT ip, ipam_status, subnet_kind FROM ipam_static_entries WHERE ip='10.99.0.200'")
+        diag["ipam_entry_before"] = _cur.fetchone()
+    with _dbm.kea_db() as _kdb, _kdb.cursor() as _kcur:
+        _kcur.execute("SELECT INET_NTOA(address) AS ip FROM lease4 WHERE address=INET_ATON('10.99.0.200')")
+        diag["lease_before"] = _kcur.fetchone()
+    ipam_mod = sys.modules["jen_plugin_ipam"]
+    diag["kea_conflicts_found"] = len(list(ipam_mod._kea_conflicts()))
+    ipam_mod._check_conflicts()
 
     # watchdog: wd_state, wd_checks — the real tick, a real TCP probe against real MariaDB
+    with _dbm.jen_db() as _db, _db.cursor() as _cur:
+        _cur.execute("SELECT id, ip, probe, enabled, interval_min FROM wd_targets WHERE label='s15-mariadb'")
+        diag["wd_target_before"] = _cur.fetchone()
     sys.modules["jen_plugin_watchdog"]._tick()
 
     # dns-sync: ds_records — the real sync (plan/apply/ledger), the remote Pi-hole/AdGuard
     # HTTP calls stood in (this stack runs neither)
+    with _dbm.jen_db() as _db, _db.cursor() as _cur:
+        _cur.execute(
+            "SELECT id, enabled, previewed_at, sources, subnet_ids FROM ds_targets WHERE id=__DS_TARGET_ID__"
+        )
+        diag["ds_target_before"] = _cur.fetchone()
+        _cur.execute("SELECT hostname, ip FROM ipam_static_entries WHERE hostname='s15host'")
+        diag["ipam_source_row"] = _cur.fetchone()
     ds_mod = sys.modules["jen_plugin_dns-sync"]
     ds_mod._fetch_remote = lambda target, sid=None: {}
     ds_mod._apply_add = lambda target, sid, name, ip: None
@@ -1451,17 +1472,19 @@ with app.app_context():
     subnet_map = nd_mod._subnet_map()
     cidr = subnet_map[1]["cidr"]
     job_id = nd_mod._reserve_scan(1)
+    diag["nd_job_id"] = job_id
     nd_mod._scan_subnet = lambda cidr: [
         {"ip": "10.99.0.210", "mac": "aa:bb:cc:dd:ee:15", "hostname": "s15-nmap-host", "vendor": ""}
     ]
-    nd_mod._run_scan_job(1, cidr, job_id, trigger="manual")
+    if job_id is not None:
+        nd_mod._run_scan_job(1, cidr, job_id, trigger="manual")
 
     # switchport: sp_ports, sp_mac_ports — the real poll, the SNMP walk stood in
     sp_mod = sys.modules["jen_plugin_switchport"]
-    import jen.models.db as _dbm
     with _dbm.jen_db() as _db, _db.cursor() as _cur:
         _cur.execute("SELECT id, host, community, vlan_indexing FROM sp_switches WHERE name='s15-sw'")
         switch = _cur.fetchone()
+    diag["switch"] = switch
 
     def _fake_walk(host, community, oid):
         if oid == sp_mod.OID_DOT1D_BASE_PORT_IFINDEX:
@@ -1475,14 +1498,15 @@ with app.app_context():
         return ""
 
     sp_mod._run_snmpbulkwalk = _fake_walk
-    sp_mod._poll_switch(switch)
-emit({"ok": True})
+    if switch is not None:
+        sp_mod._poll_switch(switch)
+emit({"ok": True, "diag": diag})
 """
     script = script.replace("__PRESENCE_MAC__", S15_PRESENCE_MAC).replace("__DS_TARGET_ID__", str(ds_target_id))
     out, _p = st.jen_py(script, timeout=120)
-    assert emitted(out) and emitted(out).get("ok"), (
-        f"seeding the no-route plugin tables failed:\n{_p.stdout[-2000:]}\n{_p.stderr[-2000:]}"
-    )
+    r = emitted(out)
+    assert r and r.get("ok"), f"seeding the no-route plugin tables failed:\n{_p.stdout[-2000:]}\n{_p.stderr[-2000:]}"
+    return r.get("diag", {})
 
 
 S15_BUNDLE_IN_CONTAINER = "/var/lib/jen/s15.bundle"
@@ -1603,12 +1627,13 @@ def test_15_bundled_plugin_data_survives_a_full_recovery_restore(stack):
     plugin's own page still answers once Jen is back up."""
     _s15_enable_all_plugins()
     web = st.Web().login()
-    _s15_seed_all_plugins(web)
+    seed_diag = _s15_seed_all_plugins(web)
 
     seeded = _s15_row_counts()
     empty_before_export = [t for t, n in seeded["counts"].items() if n < 1]
     assert not empty_before_export, (
-        f"seeding itself never landed a row for: {empty_before_export} — plugins table: {seeded['plugin_rows']}"
+        f"seeding itself never landed a row for: {empty_before_export} — "
+        f"plugins table: {seeded['plugin_rows']}\ndiagnostics: {seed_diag}"
     )
 
     bundle_path = _s15_build_recovery_bundle(web)
