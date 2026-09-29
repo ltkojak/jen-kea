@@ -406,7 +406,7 @@ def _tick():
             db = _get_db()
             with db.cursor() as cur:
                 cur.execute(
-                    "SELECT id, ip, probe, interval_min, fails_to_down, label, subnet_id, mac "
+                    "SELECT id, ip, probe, interval_min, fails_to_down, label, subnet_id, mac, enabled "
                     "FROM wd_targets WHERE enabled=1"
                 )
                 targets = cur.fetchall()

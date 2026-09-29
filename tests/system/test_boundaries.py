@@ -1477,9 +1477,9 @@ with app.app_context():
     cidr = subnet_map[1]["cidr"]
     job_id = nd_mod._reserve_scan(1)
     diag["nd_job_id"] = job_id
-    nd_mod._scan_subnet = lambda cidr: [
-        {"ip": "10.99.0.210", "mac": "aa:bb:cc:dd:ee:15", "hostname": "s15-nmap-host", "vendor": ""}
-    ]
+    nd_mod._scan_subnet = lambda cidr: {
+        "hosts": [{"ip": "10.99.0.210", "mac": "aa:bb:cc:dd:ee:15", "hostname": "s15-nmap-host", "vendor": ""}]
+    }
     if job_id is not None:
         nd_mod._run_scan_job(1, cidr, job_id, trigger="manual")
 
