@@ -1485,9 +1485,12 @@ emit({"ok": True})
     )
 
 
-def _s15_build_and_apply_recovery_bundle(web):
+def _s15_build_recovery_bundle(web):
     """Through the real route — never dbexport.export_jen()/recovery.build() called directly —
-    the same /settings/databases/recovery-bundle a superadmin would actually click."""
+    the same /settings/databases/recovery-bundle a superadmin would actually click. Returns the
+    HOST path it was saved to; the Jen container's own /tmp is a size-capped tmpfs (compose.yml)
+    that does NOT survive a `docker restart`, so copying the bundle INTO the container has to
+    wait until after the DB-recreate restart just ahead — never done here."""
     import tempfile
 
     web.login()  # refresh recent-auth: the route is step-up gated and seeding above took a while
@@ -1499,7 +1502,10 @@ def _s15_build_and_apply_recovery_bundle(web):
     assert r.status_code == 200 and r.content, f"recovery bundle build failed: {r.status_code} {r.text[:500]}"
     with tempfile.NamedTemporaryFile(suffix=".tar.enc", delete=False) as f:
         f.write(r.content)
-        local_path = f.name
+        return f.name
+
+
+def _s15_copy_bundle_into_container(local_path):
     st.run(["docker", "cp", local_path, f"{st.JEN}:/tmp/s15.bundle"])
 
 
@@ -1568,12 +1574,13 @@ def test_15_bundled_plugin_data_survives_a_full_recovery_restore(stack):
     web = st.Web().login()
     _s15_seed_all_plugins(web)
 
-    _s15_build_and_apply_recovery_bundle(web)
+    bundle_path = _s15_build_recovery_bundle(web)
 
     _s15_drop_and_recreate_jen_db()
     st.run(["docker", "restart", st.JEN])
     st.wait_jen_healthy(timeout=150)
 
+    _s15_copy_bundle_into_container(bundle_path)
     _s15_restore()
 
     # the restored `plugins` rows say every plugin is enabled again, but the one long-lived
