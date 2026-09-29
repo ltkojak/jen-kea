@@ -336,6 +336,114 @@ class TestCheckKeaMajor:
                 jen_config.app_config.reload()
 
 
+class TestMemAvailableBytes:
+    """v5.66.0-beta.4 (Q106) — _mem_available_bytes() parses a real /proc/meminfo-shaped
+    file; a test overrides the path rather than mocking /proc itself (which doesn't exist
+    on every platform this suite runs on)."""
+
+    def _write_meminfo(self, path, mem_available_kb):
+        path.write_text(
+            "MemTotal:       16330000 kB\n"
+            "MemFree:         1234000 kB\n"
+            f"MemAvailable:   {mem_available_kb} kB\n"
+            "Buffers:          200000 kB\n",
+            encoding="utf-8",
+        )
+
+    def test_parses_mem_available_kb_as_bytes(self, tmp_path):
+        from jen.tools.restore import _mem_available_bytes
+
+        p = tmp_path / "meminfo"
+        self._write_meminfo(p, 2048000)
+        assert _mem_available_bytes(str(p)) == 2048000 * 1024
+
+    def test_missing_file_returns_none(self, tmp_path):
+        from jen.tools.restore import _mem_available_bytes
+
+        assert _mem_available_bytes(str(tmp_path / "does-not-exist")) is None
+
+    def test_no_mem_available_line_returns_none(self, tmp_path):
+        from jen.tools.restore import _mem_available_bytes
+
+        p = tmp_path / "meminfo"
+        p.write_text("MemTotal:       16330000 kB\nMemFree:         1234000 kB\n", encoding="utf-8")
+        assert _mem_available_bytes(str(p)) is None
+
+    def test_unparseable_value_returns_none(self, tmp_path):
+        from jen.tools.restore import _mem_available_bytes
+
+        p = tmp_path / "meminfo"
+        p.write_text("MemAvailable:   not-a-number kB\n", encoding="utf-8")
+        assert _mem_available_bytes(str(p)) is None
+
+
+class TestCheckMemory:
+    """v5.66.0-beta.4 (Q106) — the pre-restore memory guard: refuses BEFORE anything is
+    stopped or touched when the bundle's recorded export size, times RESTORE_MEMORY_FACTOR,
+    exceeds what /proc/meminfo currently reports available."""
+
+    def test_no_recorded_size_skips_the_check(self, monkeypatch):
+        from jen.tools import restore
+
+        monkeypatch.setattr(restore, "_mem_available_bytes", lambda: 0)  # would refuse if reached
+        restore.check_memory(_manifest())  # no jen_db_uncompressed_bytes key at all — must not raise
+
+    def test_unreadable_meminfo_skips_the_check(self, monkeypatch):
+        from jen.tools import restore
+
+        monkeypatch.setattr(restore, "_mem_available_bytes", lambda: None)
+        restore.check_memory(_manifest(jen_db_uncompressed_bytes=10**12))  # huge, but no answer to check against
+
+    def test_plenty_of_memory_passes(self, monkeypatch):
+        from jen.tools import restore
+
+        monkeypatch.setattr(restore, "_mem_available_bytes", lambda: 100 * 1024 * 1024 * 1024)  # 100 GB
+        restore.check_memory(_manifest(jen_db_uncompressed_bytes=10 * 1024 * 1024))  # 10 MB
+
+    def test_not_enough_memory_refuses_with_both_figures_named(self, monkeypatch):
+        from jen.tools import restore
+
+        monkeypatch.setattr(restore, "_mem_available_bytes", lambda: 100 * 1024 * 1024)  # 100 MB available
+        with pytest.raises(restore.RestoreRefused) as exc:
+            restore.check_memory(_manifest(jen_db_uncompressed_bytes=200 * 1024 * 1024))  # needs ~1.2 GB at 6x
+        assert "MB" in str(exc.value)
+        assert "MemAvailable" in str(exc.value)
+
+    def test_refuses_before_anything_is_stopped_or_snapshotted(self, monkeypatch, tmp_path):
+        """The property that actually matters: check_memory() runs strictly BEFORE
+        run()'s quiesce/snapshot block — this drives run() far enough (with an
+        artificially tiny available-memory answer) to prove it returns with nothing
+        touched, rather than unit-testing check_memory() in isolation only."""
+        import contextlib
+
+        from jen import config as jen_config
+        from jen import extensions
+        from jen.tools import restore
+
+        monkeypatch.setattr(restore, "_mem_available_bytes", lambda: 1)  # ~0 available
+        called = {"stop": False, "snapshot": False}
+        monkeypatch.setattr(restore, "_have_systemctl", lambda: True)
+        monkeypatch.setattr(restore, "_service_active", lambda: (called.__setitem__("stop", True), True)[1])
+        monkeypatch.setattr(restore, "take_snapshot", lambda *a, **k: called.__setitem__("snapshot", True))
+
+        manifest = _manifest(jen_db_uncompressed_bytes=10 * 1024 * 1024 * 1024)  # 10 GB
+        members = {"manifest.json": json.dumps(manifest).encode()}
+        blob = build(members, "correct horse battery staple")
+        bundle_path = tmp_path / "bundle.tar.enc"
+        bundle_path.write_bytes(blob)
+
+        original = extensions.CONFIG_FILE
+        try:
+            rc = restore.run(str(bundle_path), "correct horse battery staple", etc_jen=str(tmp_path / "etc_jen"))
+        finally:
+            monkeypatch.setattr(extensions, "CONFIG_FILE", original)
+            with contextlib.suppress(Exception):
+                jen_config.app_config.reload()
+
+        assert rc == 1
+        assert called == {"stop": False, "snapshot": False}
+
+
 class TestRunEndToEnd:
     """The round trip the spec asks for: build a bundle from a temp
     tree, restore it into another temp tree. DB-backed — the bundle's

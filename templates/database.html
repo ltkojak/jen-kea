@@ -320,12 +320,14 @@
         <div class="form-hint u-da12f2">
             Write this passphrase down somewhere safe — Jen never stores it, and there is no recovery if you lose it.
         </div>
+        <label class="u-3928fa"><input type="checkbox" name="without_audit_history" value="1"> <span class="u-01f649">Without audit history</span> — leaves the <code>audit_log</code> table out of the bundle (the biggest table on a long-running install); export it separately from Settings → Databases → Export if you need it later</label>
         <button type="submit" class="btn btn-primary">{{ icon("box") }} Download recovery bundle</button>
     </form>
 </div>
 <div class="card u-32e230">
     <div style="padding:8px 4px;color:var(--text-muted);font-size:13px;">
         To restore onto a new machine, run <code class="mono-box">sudo ./install.sh --restore /path/to/bundle.tar.enc</code> — see the admin guide's "Recover Jen on a new machine" runbook for the full walkthrough.
+        Restoring a large database needs free memory too — roughly 6&times; the bundle's uncompressed database size (measured; see the runbook's "Before you start: size" step) — <code>jen.tools.restore</code> checks and refuses before touching anything if the box doesn't have enough available. If <code>audit_log</code> is most of your database, leaving it out above (and lowering Audit Log Retention under Settings → System) is the fastest way to shrink both the bundle and the memory a restore needs.
     </div>
 </div>
 {% endif %}

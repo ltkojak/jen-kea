@@ -253,6 +253,60 @@ def check_kea_major(manifest: dict, bundle_dir: Path) -> list[str]:
     return warnings
 
 
+# v5.66.0-beta.4 (Q106) — measured, not guessed: tests/test_dbexport_streaming.py drives the
+# real dbexport.parse_import_file + import_jen() insert path under tracemalloc, over three
+# synthetic export sizes, and prints peak/uncompressed for each. This is that measured ratio,
+# rounded up for headroom — see docs/runbooks.md "Before you start: size" for the three data
+# points it was measured from. A streaming importer would remove the need for this guard
+# entirely; that's explicitly out of scope here (it needs a line-delimited export format).
+RESTORE_MEMORY_FACTOR = 6.0
+
+
+def _mem_available_bytes(meminfo_path: str = "/proc/meminfo") -> int | None:
+    """Linux's own best estimate of allocatable memory (includes reclaimable page cache, unlike
+    MemFree) from /proc/meminfo — None off Linux, or if the file can't be read/parsed, so the
+    caller can skip the check rather than refuse blind on an unknown platform. `meminfo_path`
+    is only ever overridden by a test — production always reads the real file."""
+    try:
+        with open(meminfo_path, encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
+def check_memory(manifest: dict) -> None:
+    """Refuses BEFORE anything is stopped, snapshotted, or touched when the bundle's own
+    recorded Jen-DB export size, times RESTORE_MEMORY_FACTOR, exceeds what /proc/meminfo
+    reports as currently available — an OOM kill mid-import leaves the database import half
+    done with no rollback of its own (the import runs inside one transaction, but the process
+    dying is not the same as it rolling back cleanly), so this is checked before the point of
+    no return, not after. Silently skipped for an older bundle with no recorded size (a
+    manifest field added in this Q), or off a non-Linux host (`_mem_available_bytes()` returns
+    None) — this can only warn early, never guarantee an OOM won't happen for some other
+    reason, so it never blocks a platform it can't measure."""
+    size = manifest.get("jen_db_uncompressed_bytes")
+    if not isinstance(size, int) or size <= 0:
+        return
+    available = _mem_available_bytes()
+    if available is None:
+        return
+    needed = int(size * RESTORE_MEMORY_FACTOR)
+    if needed > available:
+        raise RestoreRefused(
+            f"this bundle's database export is {size / (1024 * 1024):.0f} MB uncompressed; "
+            f"restoring it needs roughly {needed / (1024 * 1024):.0f} MB of free memory "
+            f"(a measured factor of {RESTORE_MEMORY_FACTOR}x — see docs/runbooks.md), but this "
+            f"machine currently reports only {available / (1024 * 1024):.0f} MB available "
+            f"(/proc/meminfo MemAvailable). Nothing has been stopped or changed. Free up memory, "
+            f"add swap, lower Settings → System → Audit Log Retention and retry, or restore on a "
+            f"box with more RAM — or export the bundle again with 'without audit history' checked "
+            f"if audit history is most of the size."
+        )
+
+
 def restore_etc_jen(bundle_dir: Path, etc_jen: Path) -> list[str]:
     lines = []
     owner = _existing_owner(etc_jen) or _existing_owner(etc_jen.parent)
@@ -620,6 +674,7 @@ def run(
             check_jen_major(manifest)
             check_bundle_version(manifest, force=force)
             kea_warnings = check_kea_major(manifest, bundle_dir)
+            check_memory(manifest)
         except RestoreRefused as e:
             print(f"refused: {e}", file=sys.stderr)
             return 1
@@ -712,6 +767,9 @@ def run(
     print("     database, but its code was NOT re-copied here; reinstall from the registry")
     print("     for anything the page flags as missing.")
     print("  4. Confirm HTTPS and SSH to your Kea hosts both still work as expected.")
+    if manifest.get("jen_db_audit_history_included") is False:
+        print("  5. This bundle was made with 'Without audit history' checked — the audit_log")
+        print("     table is empty. Restore one exported separately if you need it.")
     return 0
 
 

@@ -151,23 +151,27 @@ def _direct_conn(host, port, user, password, database):
     )
 
 
+def _clean_row(row):
+    """One row, datetimes ISO-formatted and binary columns hex-encoded — the same cleanup
+    _dump_table and write_jen_export's streaming path both need, factored out so the
+    row-by-row streamer isn't duplicating it (v5.66.0-beta.4, Q106)."""
+    clean = {}
+    for k, v in row.items():
+        if isinstance(v, (datetime,)):
+            clean[k] = v.isoformat() if v else None
+        elif isinstance(v, (bytes, bytearray)):
+            clean[k] = v.hex()
+        else:
+            clean[k] = v
+    return clean
+
+
 def _dump_table(conn, table):
     """Return all rows from table as a list of dicts, with datetime serialized."""
     with conn.cursor() as cur:
         cur.execute(f"SELECT * FROM `{table}`")
         rows = cur.fetchall()
-    result = []
-    for row in rows:
-        clean = {}
-        for k, v in row.items():
-            if isinstance(v, (datetime,)):
-                clean[k] = v.isoformat() if v else None
-            elif isinstance(v, (bytes, bytearray)):
-                clean[k] = v.hex()
-            else:
-                clean[k] = v
-        result.append(clean)
-    return result
+    return [_clean_row(row) for row in rows]
 
 
 def _table_exists(conn, table):
@@ -234,27 +238,89 @@ def _read_backup(path):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def write_jen_export(path, tables=None):
+    """Write the exact same JSON document export_jen() returns — `{"data": {...},
+    "_meta": {...}}` (key order is free: data first here, _meta with its row_counts last) —
+    straight to `path` as gzip text, one row at a time from a server-side cursor
+    (`SSDictCursor` + `fetchmany`). Never holds a whole table's rows in memory, unlike the old
+    "build one big dict, then json.dumps it" shape — the growth tables (audit_log especially)
+    are exactly why (v5.66.0-beta.4, Q106). The recovery bundle, the manual/scheduled backup,
+    and the /database/export/jen download route all write here directly now; export_jen()
+    below is a thin wrapper for the few callers that still want bytes back.
+
+    Returns the `_meta` dict actually written, plus two figures the WRITTEN document does not
+    carry (they can only be known once writing is done): `jen_db_uncompressed_bytes` (the
+    document's own decompressed size — `gzip.GzipFile.tell()` reports exactly this in write
+    mode) and `jen_db_rows` (the row_counts total) — both for the recovery manifest's size
+    guard, never written into the export file itself.
+
+    Written 0600: every table here can carry secrets (users, api_keys, mfa_*, kea_config_revisions)."""
+    selected = _validate_tables(tables, JEN_TABLES) if tables else list(JEN_TABLES.keys())
+    conn = _direct_jen_conn()
+    row_counts = {}
+    try:
+        with gzip.open(path, "wt", encoding="utf-8") as f:
+            f.write('{"data": {')
+            for i, tbl in enumerate(selected):
+                if i:
+                    f.write(", ")
+                f.write(json.dumps(tbl))
+                f.write(": [")
+                count = 0
+                if _table_exists(conn, tbl):
+                    with conn.cursor(pymysql.cursors.SSDictCursor) as cur:
+                        cur.execute(f"SELECT * FROM `{tbl}`")
+                        first_row = True
+                        while True:
+                            rows = cur.fetchmany(1000)
+                            if not rows:
+                                break
+                            for row in rows:
+                                if not first_row:
+                                    f.write(", ")
+                                first_row = False
+                                f.write(json.dumps(_clean_row(row), default=str))
+                                count += 1
+                f.write("]")
+                row_counts[tbl] = count
+            meta = _make_metadata("jen", selected)
+            meta["row_counts"] = row_counts
+            f.write('}, "_meta": ')
+            f.write(json.dumps(meta, default=str))
+            f.write("}")
+            uncompressed_bytes = f.tell()
+    finally:
+        conn.close()
+    os.chmod(path, 0o600)
+    result = dict(meta)
+    result["jen_db_uncompressed_bytes"] = uncompressed_bytes
+    result["jen_db_rows"] = sum(row_counts.values())
+    return result
+
+
 def export_jen(tables=None):
     """
     Export selected Jen DB tables.
     tables: list of table names, or None for all.
     Returns (json_bytes, filename).
+
+    A thin wrapper around write_jen_export (v5.66.0-beta.4, Q106): writes to a throwaway
+    temp file, reads it back, deletes it. Kept for callers that genuinely want the bytes
+    (a small export, or a caller with no path to stream to) rather than a memory-safety win.
     """
-    selected = _validate_tables(tables, JEN_TABLES) if tables else list(JEN_TABLES.keys())
-    conn = _direct_jen_conn()
-    payload = {"_meta": _make_metadata("jen", selected), "data": {}}
-    try:
-        for tbl in selected:
-            if _table_exists(conn, tbl):
-                payload["data"][tbl] = _dump_table(conn, tbl)
-            else:
-                payload["data"][tbl] = []
-        payload["_meta"]["row_counts"] = {t: len(payload["data"][t]) for t in selected}
-    finally:
-        conn.close()
+    import tempfile
+
     ts = datetime.utcnow().strftime("%Y-%m-%d-%H%M%S")
     filename = f"jen-export-{ts}.json.gz"
-    content = json.dumps(payload, default=str).encode("utf-8")
+    fd, tmp_path = tempfile.mkstemp(suffix=".json.gz")
+    os.close(fd)
+    try:
+        write_jen_export(tmp_path, tables)
+        with gzip.open(tmp_path, "rt", encoding="utf-8") as f:
+            content = f.read().encode("utf-8")
+    finally:
+        with contextlib.suppress(OSError):
+            os.remove(tmp_path)
     return content, filename
 
 
@@ -708,10 +774,12 @@ def run_scheduled_backup():
     results = []
     if sched.get("include_jen"):
         try:
-            content, fname = export_jen()
-            # content is plain JSON bytes — _write_backup handles gzip compression
-            payload = json.loads(content.decode("utf-8"))
-            path = _write_backup(payload, f"jen-scheduled-{ts}.json.gz")
+            # v5.66.0-beta.4 (Q106) — straight to disk via write_jen_export(), never a
+            # round trip through export_jen()'s bytes + json.loads() + _write_backup()'s
+            # own re-serialize.
+            os.makedirs(BACKUP_DIR, exist_ok=True)
+            path = os.path.join(BACKUP_DIR, f"jen-scheduled-{ts}.json.gz")
+            write_jen_export(path)
             results.append(f"Jen: {path}")
         except Exception as e:
             results.append(f"Jen: FAILED — {e}")

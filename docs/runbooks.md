@@ -169,6 +169,25 @@ A recovery bundle (Settings → Databases → Recovery, `jen-recovery-*.tar.enc`
 is only as good as a restore drill actually proving it works. Do this on
 a throwaway VM, never against a live box, before you need it for real.
 
+0. **Before you start: size.** The Jen database export inside the bundle
+   is written straight to disk, one row at a time (v5.66.0-beta.4, Q106) —
+   building it never needs much memory, however large `audit_log` has
+   grown. Restoring it is a different story: `jen.tools.restore` still
+   decompresses and parses the whole export as one JSON document (a
+   streaming importer is a bigger change, out of scope here), and the
+   recovery manifest records exactly how big that document is
+   (`jen_db_uncompressed_bytes`) so `jen.tools.restore` can check, BEFORE
+   it stops or touches anything, that the box has enough free memory —
+   measured (`tests/test_dbexport_streaming.py::TestRestoreMemoryFactor`,
+   driving the real import path under `tracemalloc` over three synthetic
+   `audit_log` sizes), not guessed, at roughly **6× the export's
+   uncompressed size** (`jen.tools.restore.RESTORE_MEMORY_FACTOR`). If a
+   restore refuses on this check, the message names both figures; the two
+   ways to shrink the export are lowering Settings → System → Audit Log Retention
+   before the NEXT export, or checking **"Without audit history"** on the
+   recovery bundle form (`audit_log` is the one table this leaves out —
+   export it separately from Settings → Databases → Export if you need it
+   after all).
 1. **Provision a scratch VM** and run a normal `sudo ./install.sh` on it
    — this sets up the venv, the systemd unit, and sudoers; the restore
    below layers *state* onto that working install, it does not set one

@@ -109,16 +109,37 @@ def _split_mark(line: str) -> tuple[bool, str]:
 @login_required
 @_superadmin_required
 def export_jen():
+    """v5.66.0-beta.4 (Q106) — streams from a tempfile via dbexport.write_jen_export()
+    instead of building the whole document (and then a whole second gzip.compress() copy
+    of it) in memory first — the same reason the recovery bundle moved onto it."""
     tables = request.form.getlist("tables") or None
+    tmp_path = None
     try:
-        content, filename = dbexport.export_jen(tables)
+        os.makedirs(extensions.CONTENT_TMP_DIR, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=extensions.CONTENT_TMP_DIR, suffix=".jen-export.json.gz")
+        os.close(fd)
+        dbexport.write_jen_export(tmp_path, tables)
+        filename = f"jen-export-{datetime.utcnow().strftime('%Y-%m-%d-%H%M%S')}.json.gz"
         __user.audit("DB_EXPORT", "jen", f"Exported tables: {tables or 'all'}")
+
+        def _stream():
+            try:
+                with open(tmp_path, "rb") as f:
+                    while chunk := f.read(1024 * 1024):
+                        yield chunk
+            finally:
+                with contextlib.suppress(OSError):
+                    os.remove(tmp_path)
+
         return Response(
-            gzip.compress(content),
+            stream_with_context(_stream()),
             mimetype="application/gzip",
             headers={"Content-Disposition": f"attachment; filename={filename}", "Cache-Control": "no-store"},
         )
     except Exception as e:
+        if tmp_path:
+            with contextlib.suppress(OSError):
+                os.remove(tmp_path)
         logger.error(f"Jen DB export failed: {e}")
         flash("Export failed. Check server logs for details.", "error")
         return redirect(url_for("database.database", tab="export"))
@@ -162,7 +183,7 @@ def export_kea():
 # (assembled in memory, 200 MB cap) are still READABLE by restore.py.
 
 
-def _recovery_manifest() -> dict:
+def _recovery_manifest(db_meta: dict, without_audit_history: bool) -> dict:
     from jen import JEN_VERSION
     from jen.models.migrations import MIGRATIONS
     from jen.services import kea as __kea
@@ -193,6 +214,12 @@ def _recovery_manifest() -> dict:
         "kea_versions": kea_versions,
         "plugins": [{"id": p.get("id"), "version": p.get("version")} for p in discover_plugins()],
         "helper_versions": __host.helper_status(),
+        # v5.66.0-beta.4 (Q106) — jen.tools.restore's pre-restore memory guard reads
+        # jen_db_uncompressed_bytes; jen_db_audit_history_included is printed by the restore
+        # checklist so an operator who unchecked it isn't surprised the audit trail is empty.
+        "jen_db_uncompressed_bytes": db_meta.get("jen_db_uncompressed_bytes"),
+        "jen_db_rows": db_meta.get("jen_db_rows"),
+        "jen_db_audit_history_included": not without_audit_history,
     }
 
 
@@ -222,11 +249,32 @@ def _walk_files(root: str, prefix: str, skip: set[str] | None = None) -> dict[st
     return out
 
 
-def _recovery_members() -> dict[str, bytes | str]:
+def _recovery_members(tmp_dir: str, without_audit_history: bool = False) -> tuple[dict[str, bytes | str], str | None]:
     """Every file the bundle carries, as `{archive path: content}` — `bytes`
     for the small generated members, a filesystem path (str) for files that
-    are streamed from disk."""
-    members: dict[str, bytes | str] = {"manifest.json": json.dumps(_recovery_manifest(), indent=2).encode("utf-8")}
+    are streamed from disk. Returns (members, db_export_path): the Jen DB
+    export is written to a 0600 temp file in `tmp_dir` (v5.66.0-beta.4,
+    Q106, so a large audit_log never holds the whole dump in memory) and
+    the caller is responsible for removing it once build_stream has read
+    it — the same way it already removes its own bundle tempfile."""
+    tables = None
+    if without_audit_history:
+        tables = [t for t in dbexport.JEN_TABLES if t != "audit_log"]
+    db_fd, db_export_path = tempfile.mkstemp(dir=tmp_dir, suffix=".jen_db.json.gz")
+    os.close(db_fd)
+    try:
+        db_meta = dbexport.write_jen_export(db_export_path, tables=tables)
+    except Exception:
+        # the caller only learns db_export_path from this function's return value — a failure
+        # here (a DB error mid-export, say) means it never sees it and could never clean it up
+        with contextlib.suppress(OSError):
+            os.remove(db_export_path)
+        raise
+
+    members: dict[str, bytes | str] = {
+        "manifest.json": json.dumps(_recovery_manifest(db_meta, without_audit_history), indent=2).encode("utf-8"),
+        "jen_db.json.gz": db_export_path,
+    }
 
     if os.path.isfile(extensions.CONFIG_FILE):
         with open(extensions.CONFIG_FILE, "rb") as f:
@@ -255,9 +303,6 @@ def _recovery_members() -> dict[str, bytes | str]:
     members.update(_walk_files(os.path.dirname(extensions.SSL_CERT), "ssl"))
     members.update(_walk_files(os.path.dirname(extensions.SSH_KEY_PATH), "ssh"))
 
-    content, _fname = dbexport.export_jen()
-    members["jen_db.json.gz"] = gzip.compress(content)
-
     # content/ — CONTENT_DIR minus the scheduled-backup archives (redundant
     # with the fresh jen_db.json.gz above) and the plugin code trees
     # (re-fetched by id+version from the registry on restore, not frozen).
@@ -285,7 +330,7 @@ def _recovery_members() -> dict[str, bytes | str]:
             if row and row.get("config"):
                 members[f"kea-configs/{srv['name']}-{service}.json"] = row["config"].encode("utf-8")
 
-    return members
+    return members, db_export_path
 
 
 @bp.route("/settings/databases/recovery-bundle", methods=["POST"])
@@ -310,20 +355,30 @@ def recovery_bundle():
     hostname = socket.gethostname() or "jen"
     ts = datetime.utcnow().strftime("%Y-%m-%d-%H%M%S")
     filename = f"jen-recovery-{hostname}-{ts}.tar.enc"
+    without_audit_history = request.form.get("without_audit_history") == "1"
 
     tmp_path = None
+    db_export_path = None
 
     def _discard():
-        if tmp_path:
-            with contextlib.suppress(OSError):
-                os.remove(tmp_path)
+        for p in (tmp_path, db_export_path):
+            if p:
+                with contextlib.suppress(OSError):
+                    os.remove(p)
 
     try:
-        members = _recovery_members()
         os.makedirs(extensions.CONTENT_TMP_DIR, exist_ok=True)
+        members, db_export_path = _recovery_members(extensions.CONTENT_TMP_DIR, without_audit_history)
         fd, tmp_path = tempfile.mkstemp(dir=extensions.CONTENT_TMP_DIR, suffix=".tar.enc")
-        with os.fdopen(fd, "wb") as f:
-            size = recovery.build_stream(members, passphrase, f)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                size = recovery.build_stream(members, passphrase, f)
+        finally:
+            # the DB export tempfile is throwaway either way — build_stream has already
+            # read it (or failed trying), so it's never needed again past this point
+            if db_export_path:
+                with contextlib.suppress(OSError):
+                    os.remove(db_export_path)
     except recovery.BundleTooLarge as e:
         _discard()
         logger.warning(f"recovery bundle too large: {e}")
@@ -414,9 +469,12 @@ def backup_now():
     results = []
     if "jen" in include:
         try:
-            content, _ = dbexport.export_jen()
-            payload = json.loads(content.decode("utf-8"))
-            path = dbexport._write_backup(payload, f"jen-manual-{ts}.json.gz")
+            # v5.66.0-beta.4 (Q106) — straight to disk via write_jen_export(), never a
+            # round trip through export_jen()'s bytes + json.loads() + _write_backup()'s
+            # own re-serialize (the same reason the recovery bundle moved onto it).
+            os.makedirs(dbexport.BACKUP_DIR, exist_ok=True)
+            path = os.path.join(dbexport.BACKUP_DIR, f"jen-manual-{ts}.json.gz")
+            dbexport.write_jen_export(path)
             results.append((True, f"Jen backup saved: {os.path.basename(path)}"))
             __user.audit("DB_BACKUP_MANUAL", "jen", path)
         except Exception as e:

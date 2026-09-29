@@ -119,6 +119,30 @@ class TestBackupPathTraversalProtection:
         outside_target.unlink()
 
 
+class TestBackupNowWritesStraightToDisk:
+    """v5.66.0-beta.4 (Q106) — backup_now()'s 'jen' branch moved onto
+    dbexport.write_jen_export() directly (no more export_jen() bytes +
+    json.loads() + _write_backup() round trip)."""
+
+    def test_jen_backup_is_written_and_readable(self, logged_in_client, db, mock_kea, monkeypatch, tmp_path):
+        import gzip
+        import json
+
+        from jen.services import dbexport
+
+        monkeypatch.setattr(dbexport, "BACKUP_DIR", str(tmp_path))
+        r = logged_in_client.post("/database/backup/now", data={"include": ["jen"]}, follow_redirects=True)
+        assert r.status_code == 200
+        assert b"backup saved" in r.data.lower()
+
+        files = list(tmp_path.glob("jen-manual-*.json.gz"))
+        assert len(files) == 1
+        with gzip.open(files[0], "rt", encoding="utf-8") as f:
+            payload = json.loads(f.read())
+        assert payload["_meta"]["database"] == "jen"
+        assert "settings" in payload["data"]
+
+
 class TestImportConfirmTmpPathValidation:
     """import_confirm() decodes a client-submitted base64 tmp_path and
     requires it to both start with /tmp/jen_import_ AND already exist as a
@@ -262,6 +286,69 @@ class TestRecoveryBundleRoute:
         manifest = json.loads(tf.extractfile("manifest.json").read())
         assert manifest["jen_version"] == JEN_VERSION
         assert "channel" in manifest and "schema_version" in manifest
+
+    def test_manifest_carries_the_db_export_size_and_audit_history_included_by_default(
+        self, logged_in_client, db, mock_kea
+    ):
+        """v5.66.0-beta.4 (Q106) — jen.tools.restore's pre-restore memory guard reads
+        jen_db_uncompressed_bytes/jen_db_rows straight from this manifest."""
+        import json
+
+        from jen.services.recovery import open_bundle
+
+        r = logged_in_client.post(
+            "/settings/databases/recovery-bundle",
+            data={"passphrase": self.PASSPHRASE, "passphrase_confirm": self.PASSPHRASE},
+        )
+        tf = open_bundle(r.data, self.PASSPHRASE)
+        manifest = json.loads(tf.extractfile("manifest.json").read())
+        assert isinstance(manifest["jen_db_uncompressed_bytes"], int) and manifest["jen_db_uncompressed_bytes"] > 0
+        assert isinstance(manifest["jen_db_rows"], int)
+        assert manifest["jen_db_audit_history_included"] is True
+
+    def test_without_audit_history_excludes_the_table_and_says_so_in_the_manifest(self, logged_in_client, db, mock_kea):
+        import gzip
+        import json
+
+        from jen.services.recovery import open_bundle
+
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM audit_log")
+            cur.execute("INSERT INTO audit_log (action, entity, details, username) VALUES ('NOTE', 'x', 'y', 'admin')")
+        db.commit()
+
+        r = logged_in_client.post(
+            "/settings/databases/recovery-bundle",
+            data={
+                "passphrase": self.PASSPHRASE,
+                "passphrase_confirm": self.PASSPHRASE,
+                "without_audit_history": "1",
+            },
+        )
+        tf = open_bundle(r.data, self.PASSPHRASE)
+        manifest = json.loads(tf.extractfile("manifest.json").read())
+        assert manifest["jen_db_audit_history_included"] is False
+        db_export = json.loads(gzip.decompress(tf.extractfile("jen_db.json.gz").read()))
+        assert "audit_log" not in db_export["data"]
+        assert "settings" in db_export["data"]  # every OTHER table is still there
+
+    def test_no_temp_files_left_behind_after_a_successful_build(
+        self, logged_in_client, db, mock_kea, monkeypatch, tmp_path
+    ):
+        """The DB export is written to a 0600 temp file beside the bundle's own — both must be
+        gone once the response has been fully consumed, not just the bundle's own tempfile."""
+        from jen import extensions
+
+        content_tmp = tmp_path / "content-tmp"
+        content_tmp.mkdir()
+        monkeypatch.setattr(extensions, "CONTENT_TMP_DIR", str(content_tmp))
+        r = logged_in_client.post(
+            "/settings/databases/recovery-bundle",
+            data={"passphrase": self.PASSPHRASE, "passphrase_confirm": self.PASSPHRASE},
+        )
+        assert r.status_code == 200
+        _ = r.data  # force the streamed body through fully (the test client already buffers it)
+        assert list(content_tmp.iterdir()) == []
 
 
 class TestRecoveryBundleKeys:

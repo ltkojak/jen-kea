@@ -1352,11 +1352,13 @@ sudo systemctl restart jen
 - `jen.config` — every credential Jen holds: the Jen and Kea database passwords, Kea Control Agent credentials, and (if configured) the OIDC client secret.
 - The MFA encryption key (`/etc/jen/mfa_key`) — without it, every stored TOTP secret and passkey is permanently unusable, and encrypted `kea_config_revisions`/`alert_channels` rows can't be decrypted either.
 - `/etc/jen/ssl/` and `/etc/jen/ssh/` wholesale — Jen's own HTTPS certificate and key, the private Kea CA (v5.29.0) if you use direct HTTPS control sockets, and the SSH keypair Jen uses to reach your Kea hosts.
-- A fresh export of every Jen database table (users, reservations notes, alert config, MFA, API keys, audit log, plugin state — everything `Settings → Databases → Export` can select, plus a few tables that export never exposed individually).
+- A fresh export of every Jen database table (users, reservations notes, alert config, MFA, API keys, audit log, plugin state — everything `Settings → Databases → Export` can select, plus a few tables that export never exposed individually) — check **"Without audit history"** on the form to leave `audit_log` out (the biggest table on a long-running install); export it separately from `Settings → Databases → Export` afterward if you need it.
 - Uploaded content (custom icons, the nav logo) — not the plugin code trees themselves (those come back from the plugin registry on restore) and not the scheduled-backup archives (redundant with the fresh export just taken).
 - The latest Kea config Jen has a record of pushing or noticing, per server and service — a reference copy, never pushed anywhere automatically.
 
 Since 5.65.0 the bundle is written and read as a stream (format `JENREC2`), so building or restoring one no longer needs memory in proportion to its size, and the size limit is 2 GB rather than 200 MB. A bundle made by an earlier Jen (`JENREC1`) still restores exactly as before. A bundle that was cut short or edited is refused with the same message as a wrong passphrase, and nothing on the box is touched.
+
+The database export inside the bundle is itself written straight to disk one row at a time now too (v5.66.0-beta.4) — building the bundle never needs much memory, however large `audit_log` has grown. **Restoring still does** (see the step-by-step below), which is exactly why the manifest records the export's size and `jen.tools.restore` checks it against the machine's free memory before touching anything.
 
 The bundle is only as secret as the passphrase. Anyone with both the file and the passphrase can read all of the above. Store the file somewhere only you control, and never send the passphrase alongside it (a different channel, or memorize it).
 
@@ -1366,7 +1368,7 @@ The bundle is only as secret as the passphrase. Anyone with both the file and th
 sudo ./install.sh --restore /path/to/jen-recovery-*.tar.enc
 ```
 
-You'll be prompted for the passphrase (never pass it as a command-line argument — anything on argv is visible to every other process on the box via `ps`). The installer refuses to proceed if the bundle's Jen major version doesn't match the installed one, or if the Kea server the bundle's own `jen.config` points at is reachable right now and running a different Kea *major* version than the manifest recorded at export time (unreachable skips this check with a loud warning, since you may be restoring before Kea itself is back up). Once those pass, the restore runs as a sequence, all through `python3 -m jen.tools.restore` (the module `install.sh --restore` calls):
+You'll be prompted for the passphrase (never pass it as a command-line argument — anything on argv is visible to every other process on the box via `ps`). The installer refuses to proceed if the bundle's Jen major version doesn't match the installed one, if the Kea server the bundle's own `jen.config` points at is reachable right now and running a different Kea *major* version than the manifest recorded at export time (unreachable skips this check with a loud warning, since you may be restoring before Kea itself is back up), or (v5.66.0-beta.4) if this machine does not currently report enough free memory to restore the bundle's database export — measured, not guessed (`docs/runbooks.md`'s "Before you start: size" step), and checked BEFORE anything is stopped or touched; the refusal names both the memory needed and what `/proc/meminfo` reports available. Once those pass, the restore runs as a sequence, all through `python3 -m jen.tools.restore` (the module `install.sh --restore` calls):
 
 1. **Stop** — if `jen` is a running systemd service it is stopped, so nothing is writing to the config, content or database while they are replaced.
 2. **Snapshot** — everything about to be overwritten is saved to `<content dir>/backups/pre-restore-<UTC timestamp>/` (mode 0700): a tar of `/etc/jen`, a tar of the content directory (without `backups/` and `tmp/`), and a fresh export of the Jen database. If the snapshot cannot be taken, nothing is changed.
@@ -1382,6 +1384,7 @@ Afterward:
 2. Log in and go to **Settings → Kea → SSH** — run **Update helper** on each server. A helper-version mismatch right after a restore is expected, not a bug (this box's `jen-kea-helper` copy came from wherever `install.sh` last ran, not from the old box).
 3. Check **Settings → Plugins** — the database rows for any plugin you had installed came back with the restore, but the plugin *code* was not re-copied; reinstall from the registry for anything the page flags as missing.
 4. Confirm HTTPS and the SSH connection to each Kea host still work — the restored certs/keys should just work if the new box's hostname and network position match the old one, but verify rather than assume.
+5. If the bundle was made with **"Without audit history"** checked, `audit_log` is empty — the restore's own printed checklist says so; restore one exported separately if you need it.
 
 Never touches a Kea host directly — every Kea-side operation you take after a restore (the helper update, anything else) goes through the exact same UI you'd use any other day.
 

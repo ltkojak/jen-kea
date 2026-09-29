@@ -1901,8 +1901,19 @@ checked against the file sizes before anything is written and again by
 the running total. `restore.py` detects the format by magic
 (`decrypt_any()`); its extract and rollback paths copy files in 1 MiB
 reads rather than reading each whole. The database dump inside the bundle
-is still assembled in memory by `dbexport` (a separate, much smaller
-problem).
+was still assembled in memory by `dbexport` until v5.66.0-beta.4 (Q106):
+`dbexport.write_jen_export()` now streams it, one row at a time from a
+server-side cursor, straight to a 0600 temp file beside the bundle's own —
+`audit_log` ("can be large") no longer means holding the whole table (and
+a second, `json.dumps`'d copy of it) in memory just to build the export.
+The RESTORE side is the one that still holds the whole document at once
+(`gzip.decompress` + `json.loads` of the entire export) — a streaming
+IMPORTER would need a line-delimited format, a bigger change left out of
+this Q on purpose — so the recovery manifest now records the export's
+uncompressed size and row count, and `jen.tools.restore` checks that,
+times a measured (not guessed — `tests/test_dbexport_streaming.py`)
+memory factor, against `/proc/meminfo`'s `MemAvailable` BEFORE it stops
+or touches anything, refusing rather than risking an OOM kill mid-import.
 
 **The bundle is everything in §6.1's `/etc/jen/` row and most of
 `/var/lib/jen/`, in the clear once decrypted — it is explicitly NOT
@@ -1913,8 +1924,9 @@ credential Jen holds), the MFA encryption key (§3.6 — without it, every
 stored TOTP secret and passkey the export/import cycle otherwise
 survives becomes permanently unreadable), the Jen-managed Kea CA and
 Jen's own HTTPS key if configured (§3.12), and the SSH keypair used for
-every Kea host (§3.2). Alongside those: a full `export_jen()` of every
-`jen_db` table, and `/var/lib/jen` content minus `backups/` (redundant
+every Kea host (§3.2). Alongside those: a full `write_jen_export()` of
+every `jen_db` table (optionally minus `audit_log` — "without audit
+history" on the bundle form), and `/var/lib/jen` content minus `backups/` (redundant
 with the fresh export just taken) and the plugin-code trees under
 `plugins-installed`/legacy `plugins/` (§3.10) — a restore re-registers
 installed plugins by id/version and leaves fetching their code to the
