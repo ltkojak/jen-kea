@@ -1540,24 +1540,42 @@ emit({{"rc": rc}})
     )
     r = emitted(out)
     assert r and r["rc"] == 0, f"restore failed: {r}\n{_p.stdout[-2000:]}\n{_p.stderr[-2000:]}"
+    # restore.run()'s own per-table "restored"/warning lines - not asserted on here (rc==0 is
+    # the pass/fail signal), but carried along so a later empty-tables failure can show them
+    # instead of a bare count.
+    return _p.stdout
 
 
-def _s15_verify_rows():
+def _s15_row_counts():
+    """{table: row count} for every plugin table, plus the `plugins` table's own rows — used
+    both right after seeding (proving the seed itself landed) and after restore (the actual
+    INVARIANT this scenario exists for)."""
     out, _p = st.jen_py(
         f"""
 import jen.models.db as db_mod
 counts = {{}}
 with db_mod.jen_db() as jdb, jdb.cursor() as cur:
+    cur.execute("SELECT id, version FROM plugins")
+    plugin_rows = cur.fetchall()
     for t in {S15_ALL_TABLES!r}:
         cur.execute("SELECT COUNT(*) AS n FROM `" + t + "`")
         counts[t] = cur.fetchone()["n"]
-emit({{"counts": counts}})
+emit({{"counts": counts, "plugin_rows": plugin_rows}})
 """
     )
     r = emitted(out)
-    assert r, "no result from the post-restore row-count check"
+    assert r, "no result from the row-count check"
+    return r
+
+
+def _s15_verify_rows(restore_stdout=""):
+    r = _s15_row_counts()
     empty = [t for t, n in r["counts"].items() if n < 1]
-    assert not empty, f"INVARIANT: every plugin table has at least one row after restore — empty: {empty}"
+    assert not empty, (
+        f"INVARIANT: every plugin table has at least one row after restore — empty: {empty}\n"
+        f"plugins table after restore: {r['plugin_rows']}\n"
+        f"restore.run()'s own output:\n{restore_stdout[-3000:]}"
+    )
 
 
 def _s15_verify_pages(web):
@@ -1587,6 +1605,12 @@ def test_15_bundled_plugin_data_survives_a_full_recovery_restore(stack):
     web = st.Web().login()
     _s15_seed_all_plugins(web)
 
+    seeded = _s15_row_counts()
+    empty_before_export = [t for t, n in seeded["counts"].items() if n < 1]
+    assert not empty_before_export, (
+        f"seeding itself never landed a row for: {empty_before_export} — plugins table: {seeded['plugin_rows']}"
+    )
+
     bundle_path = _s15_build_recovery_bundle(web)
 
     _s15_drop_and_recreate_jen_db()
@@ -1594,7 +1618,7 @@ def test_15_bundled_plugin_data_survives_a_full_recovery_restore(stack):
     st.wait_jen_healthy(timeout=150)
 
     _s15_copy_bundle_into_container(bundle_path)
-    _s15_restore()
+    restore_stdout = _s15_restore()
 
     # the restored `plugins` rows say every plugin is enabled again, but the one long-lived
     # gunicorn worker only picks that up (blueprints, routes) on its own next start — same
@@ -1602,6 +1626,6 @@ def test_15_bundled_plugin_data_survives_a_full_recovery_restore(stack):
     st.run(["docker", "restart", st.JEN])
     st.wait_jen_healthy(timeout=150)
 
-    _s15_verify_rows()
+    _s15_verify_rows(restore_stdout)
     web2 = st.Web().login()
     _s15_verify_pages(web2)
