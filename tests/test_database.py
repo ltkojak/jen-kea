@@ -449,6 +449,49 @@ class TestBundleDownloadsAreNoStore:
         system_page = logged_in_client.get("/settings/system").data.decode()
         assert "redacted</strong> one" in system_page
 
+    def test_no_plugin_backup_notice_with_no_plugins_installed(self, logged_in_client, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM settings WHERE setting_key='plugin_backup_notice_seen'")
+            cur.execute("DELETE FROM plugins")
+        db.commit()
+        page = logged_in_client.get("/settings/databases?tab=recovery").data.decode()
+        assert "Plugin data is now part of every recovery bundle" not in page
+
+    def test_plugin_backup_notice_shown_until_a_real_export_carries_a_plugin_table(
+        self, logged_in_client, db, monkeypatch
+    ):
+        """v5.66.0-beta.5 (Q107) — a superadmin with a plugin installed sees the one-time notice
+        until write_jen_export() actually carries that plugin's tables (jen/services/dbexport.py),
+        which is exactly what proves a fresh, Q107-aware bundle has been taken since."""
+        import os
+
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", os.path.join(extensions.JEN_ROOT, "plugins"))
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM settings WHERE setting_key='plugin_backup_notice_seen'")
+            cur.execute("DELETE FROM plugins")
+            cur.execute(
+                "INSERT INTO plugins (id, name, version, description, author, requires_jen, enabled) "
+                "VALUES ('wol', 'Wake on LAN', '1.0.4', '', '', '0.0.0', 1)"
+            )
+        db.commit()
+        page = logged_in_client.get("/settings/databases?tab=recovery").data.decode()
+        assert "Plugin data is now part of every recovery bundle" in page
+
+        from jen.models.user import set_global_setting
+
+        set_global_setting("plugin_backup_notice_seen", "1")
+        page = logged_in_client.get("/settings/databases?tab=recovery").data.decode()
+        assert "Plugin data is now part of every recovery bundle" not in page
+
+        # tidy: this is a real commit against the shared session-scoped test database, not a
+        # rolled-back transaction — leave no trace of the fake "wol" row for a later test.
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM plugins WHERE id='wol'")
+            cur.execute("DELETE FROM settings WHERE setting_key='plugin_backup_notice_seen'")
+        db.commit()
+
 
 class TestBackupDownloadIsNoStore:
     """v5.49.0-beta.6 (Q56-7) - the scheduled-backup download is a database dump."""

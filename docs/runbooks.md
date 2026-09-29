@@ -225,7 +225,13 @@ a throwaway VM, never against a live box, before you need it for real.
    subnets, whatever the bundle should have carried), and leave the box
    running for a while. A restore that "completed successfully" but
    silently left something out is a real failure mode a health check
-   alone won't catch.
+   alone won't catch. If any bundled plugin (DNS Sync, IPAM, Network
+   Discovery, Presence, Switchport, Watchdog, Wake-on-LAN) was installed
+   on the box the bundle came from, check **Settings → Plugins** and that
+   plugin's own page too (v5.66.0-beta.5 — its data tables are in the
+   bundle now, not just its enabled/disabled row; a bundle made before
+   this release never had them to restore in the first place, so this
+   check only proves anything on a bundle taken after upgrading).
 
 **What a wrong passphrase looks like, verified against the real
 `jen.tools.restore`:**

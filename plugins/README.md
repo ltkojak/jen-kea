@@ -456,6 +456,42 @@ applied, so a plain `ALTER` is safe on a re-run and on a fresh database
 that never had what it drops. A plugin that relies on that must set
 `requires_jen` to `5.28.2` or later.
 
+## Table ownership — what ends up in a backup or recovery bundle (v5.66.0-beta.5)
+
+Jen derives which tables your plugin owns straight from your own
+`db_migrations` DDL — it parses (never executes) every `CREATE TABLE`,
+`DROP TABLE`, and `RENAME TABLE`/`ALTER TABLE … RENAME TO` across your
+migrations and works out the set of tables that exist after all of them
+have run. That derived set is what every export, scheduled backup, and
+recovery bundle includes for your plugin — nothing to register, nothing
+to keep in sync by hand as you add migrations.
+
+This fails the plugin's own migration run (and its install) if the
+derivation collides with a core Jen table name or another plugin's own
+table — a naming accident here is exactly the kind of bug you want caught
+at install time, not discovered the day someone restores a backup and
+two plugins' rows landed in the same table.
+
+If your ownership genuinely can't be expressed as "whatever my own DDL
+creates" (a table your migrations only ever `ALTER`, never `CREATE`,
+because your plugin adopted a table another release created under a
+different name, say), list it explicitly instead:
+
+```json
+{
+  "id": "your-plugin",
+  "db_migrations": [...],
+  "backup_tables": ["your_custom_table", "your_other_table"]
+}
+```
+
+`backup_tables`, when present, replaces the derivation entirely for your
+plugin — it isn't merged with it — and is checked against the same
+collision rules. Only reach for it when the derivation genuinely can't
+express your ownership; for the overwhelming majority of plugins (every
+bundled one included) the derivation alone is correct and this key
+should stay absent.
+
 ## Why a checksum is required
 
 `install_plugin()` refuses outright if a registry entry has no

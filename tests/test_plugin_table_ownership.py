@@ -343,3 +343,41 @@ class TestExportTablesAndGroupsCoverAllTwenty:
         for plugin_id in BUNDLED_IDS:
             assert plugin_id in groups, f"{plugin_id} missing from export_table_groups()"
             assert groups[plugin_id], f"{plugin_id} has an empty table group"
+
+
+class TestPluginBackupNoticeSetting:
+    """write_jen_export() flips plugin_backup_notice_seen the first time a real export
+    actually carries at least one plugin's own table — the recovery tab's one-time notice
+    (jen/routes/database.py) reads it to know a fresh, Q107-aware bundle has been taken, so
+    every earlier bundle/backup (silently missing plugin data) is provably superseded."""
+
+    def _clear(self, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM settings WHERE setting_key='plugin_backup_notice_seen'")
+            cur.execute("DELETE FROM plugins")
+            cur.execute("DELETE FROM plugin_schema_migrations")
+        db.commit()
+
+    def test_seen_flag_set_once_a_plugin_table_is_in_the_export(self, db, tmp_path):
+        from jen.models.user import get_global_setting
+
+        self._clear(db)
+        manifest = _bundled_manifest("wol")
+        ok, msg, _count = run_plugin_migrations(manifest)
+        assert ok, msg
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO plugins (id, name, version, description, author, requires_jen, enabled) "
+                "VALUES (%s, %s, %s, '', '', '0.0.0', 1)",
+                (manifest["id"], manifest.get("name", manifest["id"]), manifest.get("version", "0.0.0")),
+            )
+        db.commit()
+        dbexport.write_jen_export(str(tmp_path / "export.json.gz"))
+        assert get_global_setting("plugin_backup_notice_seen", "") == "1"
+
+    def test_not_set_when_no_plugin_is_installed(self, db, tmp_path):
+        from jen.models.user import get_global_setting
+
+        self._clear(db)
+        dbexport.write_jen_export(str(tmp_path / "export.json.gz"))
+        assert get_global_setting("plugin_backup_notice_seen", "") != "1"

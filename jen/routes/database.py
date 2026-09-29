@@ -71,6 +71,16 @@ def database():
     plugin_table_groups = (
         dbexport.export_table_groups() if tab == "export" and current_user.role == "superadmin" else {}
     )
+    # The recovery card's one-time notice: only a superadmin viewing that tab pays for the
+    # lookup, and only while it could possibly still be true — write_jen_export() flips
+    # plugin_backup_notice_seen the first time any real export actually carries a plugin's
+    # tables, which makes every earlier bundle/backup on this install provably stale.
+    show_plugin_backup_notice = False
+    if tab == "recovery" and current_user.role == "superadmin":
+        from jen.services import plugins as __plugins
+
+        already_seen = __user.get_global_setting("plugin_backup_notice_seen", "") == "1"
+        show_plugin_backup_notice = not already_seen and any(__plugins.all_owned_tables().values())
     return render_template(
         "database.html",
         active_tab=tab,
@@ -79,6 +89,7 @@ def database():
         schedule=schedule,
         jen_tables=dbexport.JEN_TABLES,
         plugin_table_groups=plugin_table_groups,
+        show_plugin_backup_notice=show_plugin_backup_notice,
         kea_groups=dbexport.KEA_EXPORT_GROUPS,
         jen_db_host=extensions.JEN_DB_HOST,
         jen_db_name=extensions.JEN_DB_NAME,

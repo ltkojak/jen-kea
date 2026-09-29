@@ -306,10 +306,15 @@
 {% endif %}
 
 {% if active_tab == 'recovery' %}
+{% if show_plugin_backup_notice %}
+<div class="alert alert-warning u-905d8b">
+    {{ icon("triangle-alert") }} <strong>Plugin data is now part of every recovery bundle</strong> — an installed plugin's own data (synced DNS records, IPAM entries, discovered hosts, and so on) was never included before this release. Any bundle you already have was taken before this change and does not contain it; download a fresh one below once you're ready to rely on it for plugin data too.
+</div>
+{% endif %}
 <div class="card" style="border:2px solid var(--danger);">
     <div class="card-header"><h3 class="u-497726">{{ icon("box") }} Recovery bundle — contains secrets</h3></div>
     <p class="u-ec76a1">
-        One encrypted file to stand Jen back up on a new machine: <code>jen.config</code>, the MFA encryption key, TLS/SSH keys, a fresh export of every Jen database table, uploaded content (icons, branding), and the latest Kea config Jen has seen for each server.
+        One encrypted file to stand Jen back up on a new machine: <code>jen.config</code>, the MFA encryption key, TLS/SSH keys, a fresh export of every Jen database table and every installed plugin's own data, uploaded content (icons, branding), and the latest Kea config Jen has seen for each server.
     </p>
     <div class="alert alert-warning u-905d8b">
         {{ icon("triangle-alert") }} <strong>This bundle is NOT redacted</strong> — unlike the support bundle, it contains real secrets (database credentials, the MFA key, private keys) so the restore actually works. It is only as secret as the passphrase you choose below; anyone with both the file and the passphrase can decrypt everything in it. Store it somewhere only you control, and never send the passphrase alongside the file. For a file to attach to a bug report, use the redacted <em>support bundle</em> (Settings → System) instead.

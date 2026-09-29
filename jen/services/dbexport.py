@@ -353,6 +353,14 @@ def write_jen_export(path, tables=None):
                 if in_this_export:
                     plugin_tables_meta[pid] = {"version": plugin_versions.get(pid), "tables": in_this_export}
             meta["plugin_tables"] = plugin_tables_meta
+            if plugin_tables_meta:
+                # the recovery tab's one-time notice (jen/routes/database.py) reads this: once
+                # a real export has actually carried at least one plugin's tables, every earlier
+                # bundle/backup taken on this install is provably superseded and the notice
+                # never needs to show again.
+                from jen.models.user import set_global_setting
+
+                set_global_setting("plugin_backup_notice_seen", "1")
             f.write('}, "_meta": ')
             f.write(json.dumps(meta, default=str))
             f.write("}")

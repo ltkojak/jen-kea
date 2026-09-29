@@ -1241,3 +1241,347 @@ emit(results)
         assert not st.file_exists(node, "/etc/sudoers.d/jen-kea"), (
             f"{node} must still have no legacy grant - nothing above should have needed or created one"
         )
+
+
+# ── 15. Every bundled plugin's data survives a full recovery/restore (Q107) ───
+
+S15_PLUGINS = ("dns-sync", "ipam", "network-discovery", "presence", "switchport", "watchdog", "wol")
+S15_TABLES_BY_PLUGIN = {
+    "dns-sync": ["ds_targets", "ds_records"],
+    "ipam": ["ipam_subnets", "ipam_static_entries", "ipam_assignment_history", "ipam_conflict_state"],
+    "network-discovery": ["nd_scan_jobs", "nd_scan_results", "nd_known_hosts", "nd_settings"],
+    "presence": ["pr_tracked", "pr_state", "pr_sinks"],
+    "switchport": ["sp_switches", "sp_ports", "sp_mac_ports"],
+    "watchdog": ["wd_targets", "wd_state", "wd_checks"],
+    "wol": ["wol_hosts"],
+}
+S15_ALL_TABLES = [t for tables in S15_TABLES_BY_PLUGIN.values() for t in tables]
+S15_WOL_MAC = "de:ad:be:ef:15:01"
+S15_PRESENCE_MAC = "de:ad:be:ef:15:02"
+S15_CONFLICT_MAC = "de:ad:be:ef:15:03"
+S15_SWITCH_HOST = "10.99.0.202"
+S15_PASSPHRASE = "s15-recovery-passphrase-is-long-enough"
+
+
+def _s15_enable_all_plugins():
+    """Bundled plugins ship disabled — same reasoning as _ensure_presence_enabled, generalised
+    to all seven in one pass (one restart, not seven)."""
+    out, _p = st.jen_py(
+        f"""
+from jen.services import plugins as plugins_svc
+restarted = False
+for pid in {S15_PLUGINS!r}:
+    if not plugins_svc._is_enabled(pid):
+        plugins_svc.enable_plugin(pid)
+        restarted = True
+emit({{"restarted": restarted}})
+"""
+    )
+    if emitted(out) and emitted(out)["restarted"]:
+        st.run(["docker", "restart", st.JEN])
+        st.wait_jen_healthy(timeout=150)
+        time.sleep(40)  # see _ensure_presence_enabled: the alert loop's first_run seed pass
+
+
+def _s15_query_one(sql):
+    out, _p = st.jen_py(
+        f"""
+import jen.models.db as db_mod
+with db_mod.jen_db() as jdb, jdb.cursor() as cur:
+    cur.execute({sql!r})
+    row = cur.fetchone()
+emit({{"row": row}})
+"""
+    )
+    r = emitted(out)
+    return r["row"] if r else None
+
+
+def _s15_resolve(hostname):
+    out, _p = st.jen_py(
+        f"""
+import socket
+emit({{"ip": socket.gethostbyname({hostname!r})}})
+"""
+    )
+    return emitted(out)["ip"]
+
+
+def _s15_lease_up(ip, mac, hostname):
+    hex_mac = mac.replace(":", "").upper()
+    out, _p = st.jen_py(
+        f"""
+import jen.models.db as db_mod
+with db_mod.kea_db() as kdb, kdb.cursor() as cur:
+    cur.execute("DELETE FROM lease4 WHERE HEX(hwaddr)=%s", ({hex_mac!r},))
+    cur.execute(
+        "INSERT INTO lease4 (address, hwaddr, valid_lifetime, expire, subnet_id, state, hostname) "
+        "VALUES (INET_ATON(%s), UNHEX(%s), 3600, DATE_ADD(NOW(), INTERVAL 1 HOUR), 1, 0, %s)",
+        ({ip!r}, {hex_mac!r}, {hostname!r}),
+    )
+    kdb.commit()
+emit({{"ok": True}})
+"""
+    )
+    assert emitted(out) and emitted(out)["ok"]
+
+
+def _s15_seed_all_plugins(web):
+    """Rows in every one of the 20 tables the 7 bundled plugins own, through each plugin's own
+    real route wherever one exists. Five tables (ds_records, ipam_conflict_state,
+    nd_scan_results, sp_ports, sp_mac_ports, wd_state, wd_checks — six, actually, across four
+    plugins) are only ever written by a periodic job against real network I/O (a Pi-hole/
+    AdGuard server, an SNMP switch, an nmap-scanned subnet, a pinged/probed host): for those the
+    real top-level function runs for real (the actual plan/apply/record code, the actual DB
+    writes) and only the ONE external I/O call is stood in — watchdog's probe is the one
+    exception that needs no stand-in at all, since a plain TCP connect to the stack's own real
+    MariaDB is exactly the real thing. Never raw SQL for anything a route or the plugin's own
+    code would normally write."""
+    # ── dns-sync: ds_targets (real route) ──
+    web.post(
+        "/network/dns-sync/targets/add",
+        data={
+            "name": "s15-adguard",
+            "kind": "adguard",
+            "url": "http://s15-fake-adguard.invalid",
+            "domain": "lan",
+            "sources": ["ipam"],
+            "scope_all": "on",
+        },
+        page="/network/dns-sync/",
+    )
+    ds_target_id = _s15_query_one("SELECT id FROM ds_targets WHERE name='s15-adguard'")["id"]
+    web.post(f"/network/dns-sync/targets/{ds_target_id}/preview", page="/network/dns-sync/")
+    web.post(f"/network/dns-sync/targets/{ds_target_id}/toggle", page="/network/dns-sync/")
+
+    # ── ipam: ipam_subnets, ipam_static_entries, ipam_assignment_history (real routes) ──
+    web.post(
+        "/network/ipam/subnets/add",
+        data={"name": "s15-net", "cidr": "10.15.0.0/24"},
+        page="/network/ipam/",
+    )
+    ipam_subnet_id = _s15_query_one("SELECT id FROM ipam_subnets WHERE name='s15-net'")["id"]
+    web.post(
+        f"/network/ipam/entry/u/{ipam_subnet_id}",
+        data={"ip": "10.15.0.50", "ipam_status": "static", "label": "s15-static", "hostname": "s15host"},
+        page="/network/ipam/",
+    )
+    # ipam_conflict_state: a real Kea lease and a designated-static IPAM entry at the same IP in
+    # the same real, Kea-managed subnet — _check_conflicts() below finds it for real, no stand-in.
+    _s15_lease_up("10.99.0.200", S15_CONFLICT_MAC, "s15-conflict-lease")
+    web.post(
+        "/network/ipam/entry/kea/1",
+        data={"ip": "10.99.0.200", "ipam_status": "static", "label": "s15-conflict"},
+        page="/network/ipam/",
+    )
+
+    # ── network-discovery: nd_settings, nd_known_hosts (real routes) ──
+    web.post("/network/discovery/schedule/1", data={"every_hours": "24"}, page="/network/discovery/")
+    web.post(
+        "/network/discovery/known/1",
+        data={"ip": "10.99.0.201", "note": "s15 known host"},
+        page="/network/discovery/",
+    )
+
+    # ── switchport: sp_switches (real route) ──
+    web.post(
+        "/network/switchport/switches/add",
+        data={"name": "s15-sw", "host": S15_SWITCH_HOST},
+        page="/network/switchport/",
+    )
+
+    # ── watchdog: wd_targets (real route) — a genuinely reachable target: the stack's own MariaDB ──
+    mariadb_ip = _s15_resolve("mariadb")
+    web.post(
+        "/network/watchdog/targets/add",
+        data={"ip": mariadb_ip, "probe": "tcp:3306", "label": "s15-mariadb"},
+        page="/network/watchdog/",
+    )
+
+    # ── wol: wol_hosts (real route) ──
+    web.post(
+        "/management/wol/favourites/add",
+        data={"mac": S15_WOL_MAC, "label": "s15 host"},
+        page="/management/wol/",
+    )
+
+    # ── presence: pr_tracked, pr_sinks (real routes) ──
+    web.post(
+        "/management/presence/track",
+        data={"mac": S15_PRESENCE_MAC, "label": "s15 phone"},
+        page="/management/presence/",
+    )
+    web.post(
+        "/management/presence/sinks/add",
+        data={
+            "name": "s15-sink",
+            "kind": "mqtt",
+            "url": f"mqtt://{st.MOSQ_USER}@mosquitto:{st.MOSQ_AUTH_PORT}",
+            "credential": st.MOSQ_PASS,
+            "topic_prefix": "jen/presence",
+        },
+        page="/management/presence/",
+    )
+
+    # ── the six tables no route writes: the real code, only the one external I/O call stood in ──
+    script = """
+import sys
+with app.app_context():
+    # presence: pr_state — the real per-transition writer, no I/O involved at all
+    sys.modules["jen_plugin_presence"]._apply_transition("__PRESENCE_MAC__", True)
+
+    # ipam: ipam_conflict_state — the real periodic check, no I/O to stand in (a real Kea lease
+    # and a real designated-static entry at the same IP already exist)
+    sys.modules["jen_plugin_ipam"]._check_conflicts()
+
+    # watchdog: wd_state, wd_checks — the real tick, a real TCP probe against real MariaDB
+    sys.modules["jen_plugin_watchdog"]._tick()
+
+    # dns-sync: ds_records — the real sync (plan/apply/ledger), the remote Pi-hole/AdGuard
+    # HTTP calls stood in (this stack runs neither)
+    ds_mod = sys.modules["jen_plugin_dns-sync"]
+    ds_mod._fetch_remote = lambda target, sid=None: {}
+    ds_mod._apply_add = lambda target, sid, name, ip: None
+    ds_mod._apply_remove = lambda target, sid, name, ip: None
+    ds_mod._sync_one_target(__DS_TARGET_ID__)
+
+    # network-discovery: nd_scan_jobs, nd_scan_results — the real reserve/run path, nmap's own
+    # network scan stood in (nothing on this stack's own network is a subnet Jen owns)
+    nd_mod = sys.modules["jen_plugin_network-discovery"]
+    subnet_map = nd_mod._subnet_map()
+    cidr = subnet_map[1]["cidr"]
+    job_id = nd_mod._reserve_scan(1)
+    nd_mod._scan_subnet = lambda cidr: [
+        {"ip": "10.99.0.210", "mac": "aa:bb:cc:dd:ee:15", "hostname": "s15-nmap-host", "vendor": ""}
+    ]
+    nd_mod._run_scan_job(1, cidr, job_id, trigger="manual")
+
+    # switchport: sp_ports, sp_mac_ports — the real poll, the SNMP walk stood in
+    sp_mod = sys.modules["jen_plugin_switchport"]
+    import jen.models.db as _dbm
+    with _dbm.jen_db() as _db, _db.cursor() as _cur:
+        _cur.execute("SELECT id, host, community, vlan_indexing FROM sp_switches WHERE name='s15-sw'")
+        switch = _cur.fetchone()
+
+    def _fake_walk(host, community, oid):
+        if oid == sp_mod.OID_DOT1D_BASE_PORT_IFINDEX:
+            return "." + oid + ".1 = INTEGER: 1001"
+        if oid == sp_mod.OID_IF_NAME:
+            return "." + oid + '.1001 = STRING: "Gi1/0/1"'
+        if oid == sp_mod.OID_IF_ALIAS:
+            return "." + oid + '.1001 = STRING: "s15-uplink"'
+        if oid == sp_mod.OID_DOT1Q_TP_FDB_PORT:
+            return "." + oid + ".10.170.85.187.204.221.238 = INTEGER: 1"
+        return ""
+
+    sp_mod._run_snmpbulkwalk = _fake_walk
+    sp_mod._poll_switch(switch)
+emit({"ok": True})
+"""
+    script = script.replace("__PRESENCE_MAC__", S15_PRESENCE_MAC).replace("__DS_TARGET_ID__", str(ds_target_id))
+    out, _p = st.jen_py(script, timeout=120)
+    assert emitted(out) and emitted(out).get("ok"), (
+        f"seeding the no-route plugin tables failed:\n{_p.stdout[-2000:]}\n{_p.stderr[-2000:]}"
+    )
+
+
+def _s15_build_and_apply_recovery_bundle(web):
+    """Through the real route — never dbexport.export_jen()/recovery.build() called directly —
+    the same /settings/databases/recovery-bundle a superadmin would actually click."""
+    import tempfile
+
+    web.login()  # refresh recent-auth: the route is step-up gated and seeding above took a while
+    r = web.post(
+        "/settings/databases/recovery-bundle",
+        data={"passphrase": S15_PASSPHRASE, "passphrase_confirm": S15_PASSPHRASE},
+        page="/settings/databases?tab=recovery",
+    )
+    assert r.status_code == 200 and r.content, f"recovery bundle build failed: {r.status_code} {r.text[:500]}"
+    with tempfile.NamedTemporaryFile(suffix=".tar.enc", delete=False) as f:
+        f.write(r.content)
+        local_path = f.name
+    st.run(["docker", "cp", local_path, f"{st.JEN}:/tmp/s15.bundle"])
+
+
+def _s15_drop_and_recreate_jen_db():
+    """The disaster-recovery case this scenario exists for: not a truncate, a genuinely empty
+    database — the state a freshly installed Jen (or one restored onto new hardware) starts
+    from. jen.* grants are on the schema NAME, not tied to its existence, so they survive."""
+    st.dexec(st.MARIADB, "mysql", "-uroot", "-psys_root_pw", "-e", "DROP DATABASE jen; CREATE DATABASE jen;")
+
+
+def _s15_restore():
+    out, _p = st.jen_py(
+        f"""
+from jen.tools import restore
+rc = restore.run("/tmp/s15.bundle", {S15_PASSPHRASE!r}, no_stop=True)
+emit({{"rc": rc}})
+""",
+        timeout=180,
+    )
+    r = emitted(out)
+    assert r and r["rc"] == 0, f"restore failed: {r}\n{_p.stdout[-2000:]}\n{_p.stderr[-2000:]}"
+
+
+def _s15_verify_rows():
+    out, _p = st.jen_py(
+        f"""
+import jen.models.db as db_mod
+counts = {{}}
+with db_mod.jen_db() as jdb, jdb.cursor() as cur:
+    for t in {S15_ALL_TABLES!r}:
+        cur.execute("SELECT COUNT(*) AS n FROM `" + t + "`")
+        counts[t] = cur.fetchone()["n"]
+emit({{"counts": counts}})
+"""
+    )
+    r = emitted(out)
+    assert r, "no result from the post-restore row-count check"
+    empty = [t for t, n in r["counts"].items() if n < 1]
+    assert not empty, f"INVARIANT: every plugin table has at least one row after restore — empty: {empty}"
+
+
+def _s15_verify_pages(web):
+    pages = {
+        "dns-sync": "/network/dns-sync/",
+        "ipam": "/network/ipam/",
+        "network-discovery": "/network/discovery/",
+        "presence": "/management/presence/",
+        "switchport": "/network/switchport/",
+        "watchdog": "/network/watchdog/",
+        "wol": "/management/wol/",
+    }
+    for pid, path in pages.items():
+        r = web.get(path)
+        assert r.status_code == 200, f"{pid}'s main page answered {r.status_code} after restore"
+
+
+def test_15_bundled_plugin_data_survives_a_full_recovery_restore(stack):
+    """None of the 20 tables the 7 bundled plugins own were ever part of a backup, export,
+    recovery bundle, or restore before this Q — every one silently vanished on a restore, and
+    worse, a restored plugin_schema_migrations row made the next start believe the missing
+    table's migration had already run, so it was never recreated either. INVARIANT: every
+    plugin's schema AND its rows come back — through the real recovery-bundle route, a REAL
+    empty-then-recreated Jen database (not a truncate), and the real restore.run() — and every
+    plugin's own page still answers once Jen is back up."""
+    _s15_enable_all_plugins()
+    web = st.Web().login()
+    _s15_seed_all_plugins(web)
+
+    _s15_build_and_apply_recovery_bundle(web)
+
+    _s15_drop_and_recreate_jen_db()
+    st.run(["docker", "restart", st.JEN])
+    st.wait_jen_healthy(timeout=150)
+
+    _s15_restore()
+
+    # the restored `plugins` rows say every plugin is enabled again, but the one long-lived
+    # gunicorn worker only picks that up (blueprints, routes) on its own next start — same
+    # reasoning as _ensure_presence_enabled.
+    st.run(["docker", "restart", st.JEN])
+    st.wait_jen_healthy(timeout=150)
+
+    _s15_verify_rows()
+    web2 = st.Web().login()
+    _s15_verify_pages(web2)

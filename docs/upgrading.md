@@ -175,6 +175,26 @@ about to restore, using a measured factor recorded in the manifest; see
 `docs/runbooks.md`'s "Before you start: size" step if a restore ever
 refuses on this.
 
+## Backups and recovery bundles now include every bundled plugin's own data
+
+Before 5.66.0-beta.5, a backup (scheduled or manual, Settings → Databases
+→ Export) or a recovery bundle only ever carried Jen's own core tables —
+if you had DNS Sync, IPAM, Network Discovery, Presence, Switchport,
+Watchdog, or Wake-on-LAN installed, its *data* (synced DNS records, IPAM
+entries, discovered hosts, tracked devices, and so on) was never in any
+backup or bundle you took, even though the plugin itself showed up as
+installed again after a restore. From this release on, every table any
+currently installed plugin owns is included automatically — nothing to
+turn on, no config to change.
+
+**This only affects bundles and backups taken from now on.** One made
+before 5.66.0-beta.5 never had plugin data in it to begin with, so
+restoring an old one still leaves every plugin's data exactly as a fresh
+install has it — empty, not lost by the restore, just never captured in
+the first place. If you rely on a plugin's data being recoverable, take a
+fresh backup or recovery bundle once you've upgraded to this release or
+later.
+
 ## A few things that will just already be fixed
 
 None of these need anything from you — they're upgrades you get for

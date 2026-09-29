@@ -1457,6 +1457,81 @@ which is exactly why `tests/test_public_surface.py` drives real anonymous
 HTTP requests instead of scanning for `@login_required`-shaped decorator
 names: a static scan would have missed every one of them.
 
+### 3.16 Plugin table ownership, derived from a manifest's own migration DDL (v5.66.0-beta.5, Q107)
+
+Before this Q, every export/backup/recovery-bundle/restore path in
+`jen/services/dbexport.py` worked off one fixed constant, `JEN_TABLES` — the
+26 tables Jen's own core schema owns. None of the 20 tables the 7 bundled
+plugins own (`ds_targets`, `ipam_subnets`, `sp_ports`, `wd_checks`, …) were
+ever in it, so every backup, scheduled or manual, and every recovery bundle
+silently dropped every plugin's data. Worse than losing it outright: restoring
+one also restored its stale `plugin_schema_migrations` rows, and
+`load_plugins()` reads "migration already applied" as "table already
+exists" — so the table was never recreated either, on that install, ever,
+until someone noticed and intervened by hand.
+
+The fix is a derivation, not a second registry to keep in sync by hand.
+`jen/services/plugins.py::owned_tables(plugin_id)` parses (never executes) the
+plugin's own `manifest.json` `db_migrations` DDL — every `CREATE TABLE`,
+`DROP TABLE`, `RENAME TABLE`/`ALTER TABLE … RENAME TO` — and derives the set
+of tables that plugin owns *right now*, after every migration it ships. A
+plugin whose ownership can't be expressed as "whatever my own DDL creates"
+(a table named by a computed/legacy migration, say) can override it with an
+explicit `"backup_tables": [...]` array in its manifest instead — checked for
+the same collisions (against `JEN_TABLES` and against every other plugin's
+own tables) either way. `all_owned_tables()` reads the `plugins` table for
+which plugins are actually installed and calls `owned_tables()` for each,
+giving `dbexport.py` one derived universe of "every table any export/backup/
+restore path ever needs to know about" with no manually maintained list
+anywhere to fall out of sync.
+
+`dbexport.export_tables()` is that universe (core `JEN_TABLES` plus every
+currently-installed plugin's owned tables) and is now the one thing behind
+every export path — the manual "Export" tab, both scheduled and on-demand
+backups, and the recovery bundle all call it, so a plugin installed today is
+in tomorrow's 3 a.m. backup with no code change anywhere else. A restored
+export's `_meta.format: 2` carries `plugin_tables: {plugin_id: {version,
+tables}}` — the per-plugin scope the restore side needs; a pre-Q107 export
+has no such key (`format: 1`) and is handled as its own path below.
+
+The restore order in `dbexport.import_jen()` is fixed, and deliberately never
+trusts a migration row over checking the table itself exists:
+
+1. **Core tables import first, except `plugin_schema_migrations`** — its
+   rows from the file are never restored as-is; a stale "already applied"
+   row is exactly the bug above.
+2. **For each plugin named in the export whose code is on THIS machine**,
+   its `plugin_schema_migrations` rows are cleared and its migrations are
+   re-run through the normal runner (`run_plugin_migrations()`) — its tables
+   come from the CODE's own `CREATE TABLE IF NOT EXISTS`, never from DDL
+   embedded in the export file, and the migration rows that mark it done are
+   the runner's own, not the file's.
+3. **That plugin's row data imports** the same column-intersection way core
+   tables always have — a column added to the schema since the export just
+   takes its default.
+4. **A plugin named in the export whose code is NOT here is skipped**, named
+   in a warning; its data is untouched in the file/bundle, ready for a later
+   install of that plugin to bring back.
+5. **A format-1 export** (everything before this Q — never carried plugin
+   row data to begin with) has no per-plugin scope to read, so every
+   *currently installed, code-present* plugin gets the same clear-and-rerun
+   migration treatment, for the same "never trust a stale migration row"
+   reason — it recreates the schema even though there was never any row data
+   in the file to go with it.
+
+`dbexport._plugin_invariant_violations()` checks once, at the end of any
+restore, that the invariant actually holds — a recorded migration always
+implies its table exists — and reports it as a warning line if it doesn't.
+It is deliberately not a hard failure: the real, permanent fix is
+`jen/services/plugins.py::self_heal_missing_tables()`, called from
+`load_plugins()` before a plugin's normal migration check on every Jen
+start from now on. It detects exactly this "migration recorded but table
+missing" state per table and repairs it the same way — clear the migration
+row, re-run — which also means an install broken by a *pre*-Q107 restore
+repairs itself the next time Jen starts, no manual intervention needed. It
+emits a `plugin.schema_repaired` event and a `PLUGIN_SCHEMA_REPAIRED` audit
+row when it actually heals something, so a repair is visible, not silent.
+
 ## 4. CI/CD verification
 
 As of the process work following the v4.4.10 audit series:
@@ -1925,8 +2000,10 @@ stored TOTP secret and passkey the export/import cycle otherwise
 survives becomes permanently unreadable), the Jen-managed Kea CA and
 Jen's own HTTPS key if configured (§3.12), and the SSH keypair used for
 every Kea host (§3.2). Alongside those: a full `write_jen_export()` of
-every `jen_db` table (optionally minus `audit_log` — "without audit
-history" on the bundle form), and `/var/lib/jen` content minus `backups/` (redundant
+every `jen_db` table AND every table any installed plugin owns (§3.16 —
+`dbexport.export_tables()`, not just the fixed core set; optionally minus
+`audit_log` — "without audit history" on the bundle form), and
+`/var/lib/jen` content minus `backups/` (redundant
 with the fresh export just taken) and the plugin-code trees under
 `plugins-installed`/legacy `plugins/` (§3.10) — a restore re-registers
 installed plugins by id/version and leaves fetching their code to the
