@@ -933,10 +933,17 @@ class TestBadSignatureRetry:
 
         monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 7\n")
         monkeypatch.setattr(kea_host, "_helper_source_bytes", lambda: b"HELPER_VERSION = 7\n")
+        # the fake source text has no HELPER_BUILD line, so _source_build() falls back to
+        # JEN_HELPER_SHIPPED_BUILD — the recheck below must report that same build or the
+        # "did the copy actually take" build_ok comparison in _install_helper_signed reports
+        # a real success as "stale" instead.
+        shipped_build = kea_host.JEN_HELPER_SHIPPED_BUILD
         # the initial current-version check, then (only reached on an "ok" reply) the
         # post-update recheck — a fixed 6 for both would misreport a real success as "stale".
-        checks = iter([{"ok": True, "version": 6}, {"ok": True, "version": 7, "build": 7}])
-        monkeypatch.setattr(kea_host, "check_helper", lambda s: next(checks, {"ok": True, "version": 7, "build": 7}))
+        checks = iter([{"ok": True, "version": 6}, {"ok": True, "version": 7, "build": shipped_build}])
+        monkeypatch.setattr(
+            kea_host, "check_helper", lambda s: next(checks, {"ok": True, "version": 7, "build": shipped_build})
+        )
         monkeypatch.setattr(kea_host, "_local_helper_signature", lambda candidate: local_sig)
         monkeypatch.setattr(kea_host, "_fetch_helper_signature", lambda candidate: fetched_sig)
 
@@ -959,7 +966,7 @@ class TestBadSignatureRetry:
             fetched_sig=b"fetched-sig",
             call_results=[
                 {"ok": False, "error": "bad-signature"},
-                {"ok": True, "installed_version": 7, "installed_build": 7},
+                {"ok": True, "installed_version": 7, "installed_build": kea_host.JEN_HELPER_SHIPPED_BUILD},
             ],
         )
         assert sent == [b"local-sig", b"fetched-sig"]  # local tried first, then the retry
