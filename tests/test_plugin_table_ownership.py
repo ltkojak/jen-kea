@@ -14,13 +14,27 @@ migrations actually create).
 """
 
 import json
+import os
 import pathlib
 
+import pytest
+
+from jen import extensions
 from jen.services import dbexport
 from jen.services import plugins as plugins_svc
 from jen.services.plugins import _derive_owned_tables, owned_tables, run_plugin_migrations
 
 BUNDLED_IDS = ("dns-sync", "ipam", "network-discovery", "presence", "switchport", "watchdog", "wol")
+
+
+@pytest.fixture(autouse=True)
+def _real_bundled_plugins(monkeypatch):
+    """all_owned_tables()/_manifest_for_owned_tables() go through plugins._plugin_dir(), which
+    reads extensions.PLUGIN_DIR_BUNDLED — conftest.py deliberately points that at a nonexistent
+    path everywhere else, for test isolation from the real bundled plugin tree. Repoint it back
+    for this file, the same way tests/test_plugin_loading.py already does."""
+    monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", os.path.join(extensions.JEN_ROOT, "plugins"))
+
 
 ALL_20_PLUGIN_TABLES = {
     "ds_targets",
@@ -256,8 +270,10 @@ class TestBundledManifestDerivationMatchesInformationSchema:
 
     def _tables_in_schema(self, db):
         with db.cursor() as cur:
-            cur.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE()")
-            return {r["table_name"] for r in cur.fetchall()}
+            # MySQL 8 returns this column as "TABLE_NAME" (uppercase); MariaDB as "table_name" -
+            # an explicit alias normalizes it instead of depending on the server's own casing.
+            cur.execute("SELECT table_name AS tbl FROM information_schema.tables WHERE table_schema = DATABASE()")
+            return {r["tbl"] for r in cur.fetchall()}
 
     def _run_and_diff(self, db, plugin_id):
         manifest = _bundled_manifest(plugin_id)

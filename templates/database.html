@@ -94,7 +94,7 @@
                 </div>
                 <div id="jen-tables" class="u-fdc279">
                     {% for tbl, desc in jen_tables.items() %}
-                    <label style="font-size:12px;cursor:pointer;display:flex;align-items:flex-start;gap:5px;" title="{{ desc }}">
+                    <label class="u-825981" title="{{ desc }}">
                         <input type="checkbox" name="tables" value="{{ tbl }}" checked class="u-7a21c6">
                         <span><code class="u-11a508">{{ tbl }}</code><br><span style="color:var(--text-muted);font-size:10px;">{{ desc[:45] }}{% if desc|length > 45 %}…{% endif %}</span></span>
                     </label>
@@ -102,7 +102,7 @@
                     {% for plugin_id, plugin_tables in plugin_table_groups.items() %}
                     <div style="flex-basis:100%;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-top:6px;">{{ plugin_id }} plugin</div>
                     {% for tbl in plugin_tables %}
-                    <label style="font-size:12px;cursor:pointer;display:flex;align-items:flex-start;gap:5px;">
+                    <label class="u-825981">
                         <input type="checkbox" name="tables" value="{{ tbl }}" checked class="u-7a21c6">
                         <span><code class="u-11a508">{{ tbl }}</code></span>
                     </label>
