@@ -238,6 +238,50 @@ def _read_backup(path):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _existing_owned_tables(conn) -> dict[str, list[str]]:
+    """plugins.all_owned_tables(), filtered to the tables that actually exist right now — a
+    plugin whose migrations haven't run yet (or ran partway) never contributes a table nobody
+    could actually export rows from (v5.66.0-beta.5, Q107)."""
+    from jen.services import plugins as _plugins
+
+    owned = _plugins.all_owned_tables()
+    return {pid: [t for t in tables if _table_exists(conn, t)] for pid, tables in owned.items()}
+
+
+def export_tables(conn=None) -> list[str]:
+    """Core JEN_TABLES plus every table a currently-installed plugin owns that actually exists
+    right now (v5.66.0-beta.5, Q107) — the ONE table set write_jen_export() (default,
+    tables=None), both backup routes, the scheduled backup, the recovery bundle, the restore
+    snapshot and migrate_jen all use, so a plugin's data is never silently left out of any of
+    them. Reuses `conn` when given (write_jen_export already has one open); opens and closes
+    its own otherwise."""
+    own_conn = conn is None
+    if own_conn:
+        conn = _direct_jen_conn()
+    try:
+        tables = list(JEN_TABLES.keys())
+        for plugin_tables in _existing_owned_tables(conn).values():
+            tables.extend(plugin_tables)
+        return tables
+    finally:
+        if own_conn:
+            conn.close()
+
+
+def export_table_groups(conn=None) -> dict[str, list[str]]:
+    """{plugin_id: [tables]} for the export page's table picker — one group per currently-
+    installed plugin whose owned tables actually exist right now (empty-table plugins are left
+    out entirely, same as export_tables())."""
+    own_conn = conn is None
+    if own_conn:
+        conn = _direct_jen_conn()
+    try:
+        return {pid: tables for pid, tables in _existing_owned_tables(conn).items() if tables}
+    finally:
+        if own_conn:
+            conn.close()
+
+
 def write_jen_export(path, tables=None):
     """Write the exact same JSON document export_jen() returns — `{"data": {...},
     "_meta": {...}}` (key order is free: data first here, _meta with its row_counts last) —
@@ -248,6 +292,13 @@ def write_jen_export(path, tables=None):
     and the /database/export/jen download route all write here directly now; export_jen()
     below is a thin wrapper for the few callers that still want bytes back.
 
+    v5.66.0-beta.5 (Q107) — `tables=None` now means export_tables() (core + every existing
+    plugin table), not just JEN_TABLES; an explicit `tables` list is validated against that
+    same wider universe, so a caller can ask for a specific plugin's tables too. `_meta` gains
+    `format: 2` and `plugin_tables: {plugin_id: {"version": <installed>, "tables": [...]}}` —
+    only for plugins that actually contributed a selected table — so a restore knows exactly
+    which plugins this export covers and at what version, without guessing from `data`'s keys.
+
     Returns the `_meta` dict actually written, plus two figures the WRITTEN document does not
     carry (they can only be known once writing is done): `jen_db_uncompressed_bytes` (the
     document's own decompressed size — `gzip.GzipFile.tell()` reports exactly this in write
@@ -255,10 +306,15 @@ def write_jen_export(path, tables=None):
     guard, never written into the export file itself.
 
     Written 0600: every table here can carry secrets (users, api_keys, mfa_*, kea_config_revisions)."""
-    selected = _validate_tables(tables, JEN_TABLES) if tables else list(JEN_TABLES.keys())
     conn = _direct_jen_conn()
     row_counts = {}
     try:
+        owned = _existing_owned_tables(conn)
+        universe = list(JEN_TABLES.keys())
+        for plugin_tables in owned.values():
+            universe.extend(plugin_tables)
+        selected = _validate_tables(tables, universe) if tables else universe
+        selected_set = set(selected)
         with gzip.open(path, "wt", encoding="utf-8") as f:
             f.write('{"data": {')
             for i, tbl in enumerate(selected):
@@ -285,6 +341,18 @@ def write_jen_export(path, tables=None):
                 row_counts[tbl] = count
             meta = _make_metadata("jen", selected)
             meta["row_counts"] = row_counts
+            meta["format"] = 2
+            plugin_versions = {}
+            with conn.cursor() as cur:
+                cur.execute("SELECT id, version FROM plugins")
+                for r in cur.fetchall():
+                    plugin_versions[r["id"]] = r["version"]
+            plugin_tables_meta = {}
+            for pid, tbls in owned.items():
+                in_this_export = [t for t in tbls if t in selected_set]
+                if in_this_export:
+                    plugin_tables_meta[pid] = {"version": plugin_versions.get(pid), "tables": in_this_export}
+            meta["plugin_tables"] = plugin_tables_meta
             f.write('}, "_meta": ')
             f.write(json.dumps(meta, default=str))
             f.write("}")
@@ -523,14 +591,18 @@ def migrate_jen(target_host, target_port, target_user, target_password, target_d
             progress_cb(msg)
         logger.info(f"migrate_jen: {msg}")
 
-    if tables:
-        selected = _validate_tables(tables, JEN_TABLES) or list(JEN_TABLES.keys())
-    else:
-        selected = list(JEN_TABLES.keys())
     results = []
 
     _cb(f"Connecting to source Jen DB ({extensions.JEN_DB_HOST}/{extensions.JEN_DB_NAME})...")
     src = _direct_jen_conn()
+    # v5.66.0-beta.5 (Q107) — the same universe write_jen_export() uses: core JEN_TABLES plus
+    # every currently-installed plugin's tables that actually exist on the SOURCE, so a plugin
+    # table is never silently left off a migrated-to-a-new-server Jen either.
+    universe = export_tables(src)
+    if tables:
+        selected = _validate_tables(tables, universe) or universe
+    else:
+        selected = universe
     _cb(f"Connecting to target ({target_host}/{target_db})...")
     try:
         dst = _direct_conn(target_host, target_port, target_user, target_password, target_db)

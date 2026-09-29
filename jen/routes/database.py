@@ -66,6 +66,11 @@ def database():
         "kea_db_user": cfg.get("kea_db", "user", fallback=""),
         "kea_db_name": cfg.get("kea_db", "database", fallback="kea"),
     }
+    # v5.66.0-beta.5 (Q107) — one group per plugin, only computed for the export tab (the one
+    # DB round trip a superadmin viewing another tab shouldn't pay for).
+    plugin_table_groups = (
+        dbexport.export_table_groups() if tab == "export" and current_user.role == "superadmin" else {}
+    )
     return render_template(
         "database.html",
         active_tab=tab,
@@ -73,6 +78,7 @@ def database():
         backups=backups,
         schedule=schedule,
         jen_tables=dbexport.JEN_TABLES,
+        plugin_table_groups=plugin_table_groups,
         kea_groups=dbexport.KEA_EXPORT_GROUPS,
         jen_db_host=extensions.JEN_DB_HOST,
         jen_db_name=extensions.JEN_DB_NAME,
@@ -259,7 +265,9 @@ def _recovery_members(tmp_dir: str, without_audit_history: bool = False) -> tupl
     it — the same way it already removes its own bundle tempfile."""
     tables = None
     if without_audit_history:
-        tables = [t for t in dbexport.JEN_TABLES if t != "audit_log"]
+        # v5.66.0-beta.5 (Q107) — export_tables(), not just JEN_TABLES minus audit_log: a
+        # plugin's tables are never dropped just because audit history was left out.
+        tables = [t for t in dbexport.export_tables() if t != "audit_log"]
     db_fd, db_export_path = tempfile.mkstemp(dir=tmp_dir, suffix=".jen_db.json.gz")
     os.close(db_fd)
     try:

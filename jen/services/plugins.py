@@ -1215,6 +1215,170 @@ def run_plugin_migrations(manifest: dict) -> tuple[bool, str, int]:
     return True, "", count
 
 
+# ── Table ownership (v5.66.0-beta.5, Q107) ──────────────────────────────────
+#
+# jen/services/dbexport.py's JEN_TABLES never listed a single one of the 20
+# tables the seven bundled plugins create — every export, backup, recovery
+# bundle and restore silently left plugin data out, and worse: a restored
+# plugin_schema_migrations row with no table behind it made load_plugins()
+# believe a migration had already run and skip creating the table at all.
+# owned_tables()/all_owned_tables() answer "what does this plugin own" from
+# the plugin's OWN migration DDL — never executed here, only pattern-matched
+# — so dbexport can build one table set that actually covers everything.
+
+_TABLE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_CREATE_TABLE_RE = re.compile(r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?`?(\w+)`?", re.IGNORECASE)
+_DROP_TABLE_RE = re.compile(r"DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?`?(\w+)`?", re.IGNORECASE)
+_RENAME_TABLE_RE = re.compile(r"RENAME\s+TABLE\s+`?(\w+)`?\s+TO\s+`?(\w+)`?", re.IGNORECASE)
+# ALTER TABLE a RENAME [TO] b — but "ALTER TABLE a RENAME INDEX/COLUMN/KEY x ..." renames
+# something ELSE, not the table; the reserved-word check below tells the two apart.
+_ALTER_RENAME_RE = re.compile(r"ALTER\s+TABLE\s+`?(\w+)`?\s+RENAME\s+(?:TO\s+)?`?(\w+)`?", re.IGNORECASE)
+_RENAME_TARGET_RESERVED = {"index", "column", "key"}
+
+
+def _normalize_owned_migrations(raw_migrations):
+    """The same pre-4.4.18-flat-string-tolerant normalization run_plugin_migrations() applies,
+    kept as its own small copy here (not shared) so a change to the migration RUNNER's error
+    handling can never silently change what owned_tables() derives, or vice versa. Malformed
+    entries are just skipped — a manifest bad enough to fail this is already going to fail
+    run_plugin_migrations() loudly; this function only ever answers "what tables would this
+    create", never executes anything."""
+    normalized = []
+    for i, m in enumerate(raw_migrations or []):
+        if isinstance(m, str):
+            normalized.append({"version": i + 1, "sql": m})
+        elif isinstance(m, dict) and isinstance(m.get("sql"), str) and isinstance(m.get("version"), int):
+            normalized.append(m)
+    return sorted(normalized, key=lambda m: m["version"])
+
+
+def _derive_owned_tables(db_migrations) -> list[str]:
+    """Every table a plugin's own migration DDL creates, derived by parsing — never executing —
+    each statement in version order: CREATE TABLE adds, DROP TABLE removes, and RENAME TABLE
+    a TO b / ALTER TABLE a RENAME [TO] b rename in place. Order is first-created order, which is
+    all that matters here (a plain list of names, not a dependency order)."""
+    owned: list[str] = []
+    seen: set[str] = set()
+
+    def _add(name):
+        if name not in seen:
+            owned.append(name)
+            seen.add(name)
+
+    def _remove(name):
+        if name in seen:
+            owned.remove(name)
+            seen.discard(name)
+
+    for m in _normalize_owned_migrations(db_migrations):
+        sql = m["sql"]
+        cm = _CREATE_TABLE_RE.search(sql)
+        if cm:
+            _add(cm.group(1))
+            continue
+        dm = _DROP_TABLE_RE.search(sql)
+        if dm:
+            _remove(dm.group(1))
+            continue
+        rm = _RENAME_TABLE_RE.search(sql)
+        if rm:
+            _remove(rm.group(1))
+            _add(rm.group(2))
+            continue
+        am = _ALTER_RENAME_RE.search(sql)
+        if am and am.group(2).lower() not in _RENAME_TARGET_RESERVED:
+            _remove(am.group(1))
+            _add(am.group(2))
+    return owned
+
+
+def _manifest_for_owned_tables(plugin_id: str) -> dict | None:
+    """This plugin's manifest, read fresh from whichever copy _plugin_dir() finds — None when
+    its code isn't on this machine at all. Deliberately independent of discover_plugins() (which
+    also sanitizes nav icons and checks version/API compatibility, none of which matters for
+    "what tables does this plugin's code create")."""
+    path = _plugin_dir(plugin_id)
+    if path is None:
+        return None
+    manifest_path = os.path.join(path, "manifest.json")
+    if not os.path.isfile(manifest_path):
+        return None
+    try:
+        with open(manifest_path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error(f"owned_tables: could not read manifest.json for plugin '{plugin_id}': {e}")
+        return None
+
+
+def owned_tables(plugin_id: str, manifest: dict | None = None) -> list[str]:
+    """Every table `plugin_id` owns: its manifest's optional `backup_tables` override if present
+    (no bundled plugin needs one), else derived from its own db_migrations DDL. A candidate
+    whose name doesn't match ^[a-z][a-z0-9_]{0,63}$, or that collides with a core Jen table, is
+    refused — logged at error, left out of the returned list. Cross-plugin collisions (two
+    plugins both claiming the same table) are NOT checked here — that needs every plugin's
+    candidates at once to decide who claimed it first; see all_owned_tables()."""
+    from jen.services import dbexport as _dbexport
+
+    if manifest is None:
+        manifest = _manifest_for_owned_tables(plugin_id)
+    if manifest is None:
+        return []
+
+    override = manifest.get("backup_tables")
+    if isinstance(override, list) and all(isinstance(t, str) for t in override):
+        candidates = list(override)
+    else:
+        candidates = _derive_owned_tables(manifest.get("db_migrations"))
+
+    result = []
+    for t in candidates:
+        if not _TABLE_NAME_RE.match(t):
+            logger.error(f"Plugin '{plugin_id}' claims table {t!r} with an invalid name — refused, left out")
+            continue
+        if t in _dbexport.JEN_TABLES:
+            logger.error(f"Plugin '{plugin_id}' claims core table {t!r} — refused, left out")
+            continue
+        result.append(t)
+    return result
+
+
+def all_owned_tables() -> dict[str, list[str]]:
+    """{plugin_id: [tables]} for every plugin with a row in Jen's own `plugins` bookkeeping
+    table (installed, whether currently enabled or not — its data still needs backing up)
+    whose code is still on this machine. Processed in sorted plugin_id order so a table two
+    plugins both claim is deterministically refused for whichever one sorts SECOND (logged at
+    error, left out of that plugin's list; the first claimant keeps it)."""
+    from jen.models.db import jen_db
+
+    try:
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("SELECT id FROM plugins")
+            installed_ids = sorted(r["id"] for r in cur.fetchall())
+    except Exception as e:
+        logger.error(f"all_owned_tables: could not read the plugins table: {e}")
+        return {}
+
+    claimed: dict[str, str] = {}
+    result: dict[str, list[str]] = {}
+    for plugin_id in installed_ids:
+        manifest = _manifest_for_owned_tables(plugin_id)
+        if manifest is None:
+            continue
+        kept = []
+        for t in owned_tables(plugin_id, manifest):
+            owner = claimed.get(t)
+            if owner is not None and owner != plugin_id:
+                logger.error(
+                    f"Plugin '{plugin_id}' claims table {t!r}, already claimed by '{owner}' — refused, left out"
+                )
+                continue
+            claimed[t] = plugin_id
+            kept.append(t)
+        result[plugin_id] = kept
+    return result
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 

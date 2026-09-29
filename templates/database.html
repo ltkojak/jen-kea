@@ -99,6 +99,15 @@
                         <span><code class="u-11a508">{{ tbl }}</code><br><span style="color:var(--text-muted);font-size:10px;">{{ desc[:45] }}{% if desc|length > 45 %}…{% endif %}</span></span>
                     </label>
                     {% endfor %}
+                    {% for plugin_id, plugin_tables in plugin_table_groups.items() %}
+                    <div style="flex-basis:100%;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-top:6px;">{{ plugin_id }} plugin</div>
+                    {% for tbl in plugin_tables %}
+                    <label style="font-size:12px;cursor:pointer;display:flex;align-items:flex-start;gap:5px;">
+                        <input type="checkbox" name="tables" value="{{ tbl }}" checked class="u-7a21c6">
+                        <span><code class="u-11a508">{{ tbl }}</code></span>
+                    </label>
+                    {% endfor %}
+                    {% endfor %}
                 </div>
             </div>
             <button type="submit" class="btn btn-primary u-046678">Download Jen Export</button>
