@@ -258,7 +258,9 @@ cd jen
 sudo ./install.sh
 ```
 
-The installer checks requirements, walks through configuration interactively, tests Kea API and database connections, and starts the service.
+The installer checks requirements, walks through configuration interactively, tests Kea API and database connections, and starts the service. A value you never actually change from its placeholder is left blank rather than written as if it were real.
+
+For a repeatable install, skip the wizard with `sudo ./install.sh --answers <file> --unattended` — a `KEY=value` file in the same `JEN_*` vocabulary the Docker `.env` path below uses (see [`docs/installation.md`](docs/installation.md) for the full list).
 
 ### Docker
 

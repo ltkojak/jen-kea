@@ -65,12 +65,53 @@ sudo ./install.sh
 ```
 
 The installer will:
-1. Run pre-flight checks (OS, Python, disk space, dependencies)
+1. Run pre-flight checks (OS, Python, disk space on the real targets, dependencies)
 2. Ask: bare metal or Docker
-3. Walk you through all configuration values interactively
-4. Test Kea API and database connections
-5. Install files, set permissions, enable service
-6. Start Jen and verify it responds
+3. Walk you through all configuration values interactively — testing the
+   Kea API and each database as you go, offering to read Kea's own
+   subnet list instead of asking you to retype it, and offering to
+   create the Jen database itself when MariaDB is local and root can
+   already connect
+4. Install files, set permissions, enable service
+5. Start Jen and verify it responds
+
+A value you never actually change from its placeholder (a URL still
+reading `YOUR-KEA-SERVER`, say) is left blank in `jen.config` rather than
+written as if it were real — Jen's own Health and Getting started pages
+say what's still missing.
+
+### Method 1b — Scripted / unattended install
+
+For a repeatable install (a base image, a provisioning script, this
+project's own CI) skip the wizard entirely with an answers file:
+
+```bash
+cat > answers.env << 'EOF'
+JEN_KEA_API_URL=http://kea.example.lan:8000
+JEN_KEA_API_USER=kea-api
+JEN_KEA_API_PASS=...
+JEN_KEA_DB_HOST=kea.example.lan
+JEN_KEA_DB_USER=kea
+JEN_KEA_DB_PASS=...
+JEN_DB_HOST=127.0.0.1
+JEN_DB_USER=jen
+JEN_DB_PASS=...
+JEN_INITIAL_ADMIN_PASSWORD=...
+JEN_SUBNETS=1=Production,10.10.10.0/24;30=IoT,10.10.30.0/24
+EOF
+chmod 600 answers.env
+sudo ./install.sh --answers answers.env --unattended
+```
+
+Same `JEN_*` names `.env.example` and the Docker path already use — see
+that file for the full list, including the optional SSH and DDNS
+settings. The file is parsed as plain `KEY=value` lines, never sourced
+as a shell script, and refused unless it's a regular file not writable
+by group or other. Anything the file leaves out still prompts if a
+terminal is attached; without one, a missing required value is a fatal
+error naming it. `JEN_*` values also work as plain environment
+variables with no file at all, taking the same priority order (file,
+then environment, then a prompt or a default).
 
 ### Method 2 — Docker (external MySQL)
 
@@ -104,13 +145,12 @@ every path and owner, service + sudoers + updater) is in
 
 ## First Login
 
-Open `http://YOUR-SERVER-IP:5050` in your browser.
-
-| Username | Password |
-|---|---|
-| admin | admin |
-
-**Change this password immediately** — go to Users → Change My Password.
+Open `http://YOUR-SERVER-IP:5050` in your browser. Username is `admin`;
+the password is whichever one you set in the wizard (or gave as
+`JEN_INITIAL_ADMIN_PASSWORD`). If you left it blank, Jen generated one
+itself — it's printed once during install and saved to
+`/var/lib/jen/initial-admin-password` (readable by root only), and
+you'll be asked to change it on first login.
 
 ---
 

@@ -265,10 +265,14 @@ jobs:
 
       # v5.9.1 — install.sh is a load-bearing part of the deployment story
       # and had no static-analysis gate. Severity `error` to start: the
-      # script predates this check and carries style warnings; genuine
-      # errors fail the build today, warnings get worked down over time.
-      - name: shellcheck (errors)
-        run: shellcheck -S error install.sh uninstall.sh
+      # script predated this check and carried style warnings.
+      # v5.67.0 (Q113, item d) — raised to `warning` now that both scripts
+      # are actually clean at that level (four real findings fixed: two
+      # unused color variables, require_root() referencing $* when nothing
+      # ever passes it args, and one `local x=$(cmd)` that could mask a
+      # failing command's exit status).
+      - name: shellcheck (warnings)
+        run: shellcheck -S warning install.sh uninstall.sh
 
   # v5.67.0 (Q113) — install.sh had never actually been run by anything
   # before this: CI provisioned /opt/jen and /etc/jen by hand and the

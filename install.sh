@@ -29,6 +29,7 @@
 #                                    --no-stop (Docker / not a systemd unit), --start, --force
 #    sudo ./install.sh --rollback <snapshot dir>
 #                                    Undo a restore from its pre-restore snapshot
+#    sudo ./install.sh --help        Show this message
 # ─────────────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
@@ -99,12 +100,54 @@ ROLLBACK_ARMED=false
 ANSWERS_FILE=""
 declare -A ANSWERS
 
+# v5.67.0 (Q113) — defined this early, before any other function, so
+# --help can print and exit from the flag-parsing loop below it: bash
+# executes top-level statements in order, and a function has to be
+# DEFINED before something earlier in the file can call it. The text is
+# the header comment above, restated as real output instead of only a
+# comment a person has to open the file to read — tests/test_install_help.py
+# greps both and fails if a flag is in one but not the other.
+print_help() {
+    cat << 'HELPEOF'
+Jen - The Kea DHCP Management Console
+
+Usage:
+  sudo ./install.sh               Auto-detect fresh install or upgrade
+  sudo ./install.sh --upgrade     Non-interactive upgrade, keep config
+  sudo ./install.sh --configure   Re-run config wizard only
+  sudo ./install.sh --repair      Reinstall files + restart, keep config
+  sudo ./install.sh --unattended  Fully silent upgrade (CI/CD)
+  sudo ./install.sh --docker      Docker installation path
+  sudo ./install.sh --answers <file>
+                                   Fresh install from a KEY=value file (the
+                                   same JEN_* names as .env.example) instead
+                                   of the interactive wizard. With a TTY,
+                                   only what the file leaves out is still
+                                   asked; without one, a missing required
+                                   value is a fatal error naming it. The
+                                   same JEN_* names also work as plain
+                                   environment variables, with the file
+                                   (when given) taking priority.
+  sudo ./install.sh --restore <bundle.tar.enc>
+                                   Restore a recovery bundle (Settings → Databases
+                                   → Recovery) onto this install — run AFTER a normal
+                                   install/upgrade, not instead of one.
+                                   Stops Jen, snapshots what it replaces, restarts and
+                                   health-checks, and rolls back on failure. Flags:
+                                   --no-stop (Docker / not a systemd unit), --start, --force
+  sudo ./install.sh --rollback <snapshot dir>
+                                   Undo a restore from its pre-restore snapshot
+  sudo ./install.sh --help        Show this message
+HELPEOF
+}
+
 # v5.44.0 (Q45) — --restore takes the bundle path as its own next
 # argument, unlike every other flag here, so this loop is index-based
 # (shift) rather than the plain `for arg in "$@"` every other flag
 # still uses. --answers (Q113) needs the same shift.
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --help|-h)     print_help; exit 0 ;;
         --upgrade)     MODE_UPGRADE=true ;;
         --configure)   MODE_CONFIGURE=true ;;
         --repair)      MODE_REPAIR=true ;;
@@ -136,12 +179,10 @@ R='\033[0;31m'    # red
 G='\033[0;32m'    # green
 Y='\033[1;33m'    # yellow
 C='\033[0;36m'    # cyan
-T='\033[0;32m'    # teal (green)
 B='\033[1m'       # bold
 DIM='\033[2m'     # dim
 NC='\033[0m'      # reset
 BG_T='\033[46m'   # teal background
-BG_B='\033[40m'   # black background
 
 # ── Output helpers ────────────────────────────────────────────────────────────
 ok()      { echo -e "  ${G}[  OK  ]${NC}  $*"; }
@@ -406,7 +447,7 @@ show_mode_banner() {
 # ── Require root ──────────────────────────────────────────────────────────────
 require_root() {
     if [[ $EUID -ne 0 ]]; then
-        fatal "This installer must be run as root.  →  sudo ./install.sh $*"
+        fatal "This installer must be run as root.  →  sudo ./install.sh"
     fi
 }
 
@@ -818,7 +859,22 @@ collect_config() {
     fi
     blank
 
-    # ── Kea API ───────────────────────────────────────────────────────────────
+    # v5.67.0 (Q113) — one function per section (each under ~60 lines),
+    # called in the order the wizard has always asked them. Every one
+    # reads/writes the same globals write_config() expects afterward
+    # (KEA_API_URL, SUBNET_LINES, ADMIN_PASS, ...) — no parameters to
+    # thread through, same as when this was one long function.
+    _configure_kea_api
+    _configure_kea_db
+    _configure_jen_db
+    _configure_admin
+    _configure_subnets
+    _configure_ssh
+    _configure_ddns
+    _configure_ports
+}
+
+_configure_kea_api() {
     echo -e "  ${B}Kea Control Agent${NC}  ${DIM}(the Kea REST API)${NC}"
     blank
     local _edit=false
@@ -839,7 +895,7 @@ collect_config() {
         if test_kea_api "$KEA_API_URL" "$KEA_API_USER" "$KEA_API_PASS"; then
             spinner_stop; ok "Kea API connection successful"
             KEA_API_REACHABLE=true
-            break
+            return
         fi
         spinner_stop
         KEA_API_REACHABLE=false
@@ -847,15 +903,16 @@ collect_config() {
         case "$_RETRY_ACTION" in
             retry) continue ;;
             edit) _edit=true; continue ;;
-            continue) _blank_if_placeholder KEA_API_URL "http://YOUR-KEA-SERVER:8000"; break ;;
+            continue) _blank_if_placeholder KEA_API_URL "http://YOUR-KEA-SERVER:8000"; return ;;
         esac
     done
+}
 
-    # ── Kea DB ────────────────────────────────────────────────────────────────
+_configure_kea_db() {
     blank
     echo -e "  ${B}Kea MySQL Database${NC}"
     blank
-    _edit=false
+    local _edit=false
     while true; do
         if [[ "$_edit" == "true" ]]; then
             KEA_DB_HOST=$(prompt_input  "Host"     "$KEA_DB_HOST")
@@ -874,103 +931,105 @@ collect_config() {
         sleep 0.5
         if test_mysql "$KEA_DB_HOST" "$KEA_DB_USER" "$KEA_DB_PASS" "$KEA_DB_NAME"; then
             spinner_stop; ok "Kea database connection successful"
-            break
+            return
         fi
         spinner_stop
         _connection_failure_choice "Kea database" "${KEA_DB_USER}@${KEA_DB_HOST}/${KEA_DB_NAME}"
         case "$_RETRY_ACTION" in
             retry) continue ;;
             edit) _edit=true; continue ;;
-            continue) _blank_if_placeholder KEA_DB_HOST "YOUR-KEA-SERVER"; break ;;
+            continue) _blank_if_placeholder KEA_DB_HOST "YOUR-KEA-SERVER"; return ;;
         esac
     done
+}
 
-    # ── Jen DB ────────────────────────────────────────────────────────────────
-    # Skipped for the Docker "bundled MariaDB" path — docker-compose.mysql.yml
-    # owns those credentials and wires them into the jen container itself.
+# Skipped for the Docker "bundled MariaDB" path — docker-compose.mysql.yml
+# owns those credentials and wires them into the jen container itself.
+_configure_jen_db() {
     if [[ "${SKIP_JEN_DB:-false}" == "true" ]]; then
         JEN_DB_HOST="jen-mysql"; JEN_DB_USER="jen"; JEN_DB_PASS=""; JEN_DB_NAME="jen"
-    else
-        blank
-        echo -e "  ${B}Jen MySQL Database${NC}  ${DIM}(users, audit log, settings)${NC}"
-        blank
+        return
+    fi
+    blank
+    echo -e "  ${B}Jen MySQL Database${NC}  ${DIM}(users, audit log, settings)${NC}"
+    blank
+    local _edit=false
+    while true; do
+        if [[ "$_edit" == "true" ]]; then
+            JEN_DB_HOST=$(prompt_input  "Host"     "$JEN_DB_HOST")
+            JEN_DB_USER=$(prompt_input  "Username" "$JEN_DB_USER")
+            JEN_DB_PASS=$(prompt_secret "Password")
+            JEN_DB_NAME=$(prompt_input  "Database" "$JEN_DB_NAME")
+        else
+            JEN_DB_HOST=$(_ask  "JEN_DB_HOST" "Host"     "${KEA_DB_HOST:-localhost}")
+            JEN_DB_USER=$(_ask  "JEN_DB_USER" "Username" "jen")
+            JEN_DB_PASS=$(_ask_secret "JEN_DB_PASS" "Password")
+            JEN_DB_NAME=$(_ask  "JEN_DB_NAME" "Database" "jen")
+        fi
         _edit=false
+        blank
+        spinner_start "Testing Jen database connection..."
+        sleep 0.5
+        if test_mysql "$JEN_DB_HOST" "$JEN_DB_USER" "$JEN_DB_PASS" "$JEN_DB_NAME"; then
+            spinner_stop; ok "Jen database connection successful"
+            return
+        fi
+        spinner_stop
+        if _jen_db_offer_create; then
+            continue
+        fi
+        _connection_failure_choice "Jen database" "${JEN_DB_USER}@${JEN_DB_HOST}/${JEN_DB_NAME}"
+        case "$_RETRY_ACTION" in
+            retry) continue ;;
+            edit) _edit=true; continue ;;
+            continue) _blank_if_placeholder JEN_DB_HOST "YOUR-KEA-SERVER"; return ;;
+        esac
+    done
+}
+
+# v5.67.0 (Q113) — JEN_INITIAL_ADMIN_PASSWORD, same name the Docker path
+# (.env.example, run.py) already uses. Left blank, Jen generates one
+# itself on first start and writes it to $CONTENT_DIR/initial-admin-password
+# (see write_config/_seed_jen_db) — the wizard's own confirm-twice loop
+# stays for the TTY path since that is the one place a typo is invisible.
+_configure_admin() {
+    [[ "$IS_UPGRADE" == "true" ]] && return
+    blank
+    echo -e "  ${B}Admin Account${NC}"
+    blank
+    local admin_pass
+    if [[ -n "${ANSWERS[JEN_INITIAL_ADMIN_PASSWORD]+x}" || -n "${JEN_INITIAL_ADMIN_PASSWORD:-}" ]]; then
+        admin_pass=$(_cfgval "JEN_INITIAL_ADMIN_PASSWORD")
+        if [[ -n "$admin_pass" && ${#admin_pass} -lt 8 ]]; then
+            fatal "JEN_INITIAL_ADMIN_PASSWORD must be at least 8 characters."
+        fi
+    elif [[ "$HAVE_TTY" == "true" && "$MODE_UNATTENDED" == "false" ]]; then
+        local admin_pass2
         while true; do
-            if [[ "$_edit" == "true" ]]; then
-                JEN_DB_HOST=$(prompt_input  "Host"     "$JEN_DB_HOST")
-                JEN_DB_USER=$(prompt_input  "Username" "$JEN_DB_USER")
-                JEN_DB_PASS=$(prompt_secret "Password")
-                JEN_DB_NAME=$(prompt_input  "Database" "$JEN_DB_NAME")
-            else
-                JEN_DB_HOST=$(_ask  "JEN_DB_HOST" "Host"     "${KEA_DB_HOST:-localhost}")
-                JEN_DB_USER=$(_ask  "JEN_DB_USER" "Username" "jen")
-                JEN_DB_PASS=$(_ask_secret "JEN_DB_PASS" "Password")
-                JEN_DB_NAME=$(_ask  "JEN_DB_NAME" "Database" "jen")
+            admin_pass=$(prompt_secret "Admin password (min 8 chars, Enter to auto-generate one)")
+            [[ -z "$admin_pass" ]] && break
+            if [[ ${#admin_pass} -lt 8 ]]; then
+                warn "Password must be at least 8 characters."; continue
             fi
-            _edit=false
-            blank
-            spinner_start "Testing Jen database connection..."
-            sleep 0.5
-            if test_mysql "$JEN_DB_HOST" "$JEN_DB_USER" "$JEN_DB_PASS" "$JEN_DB_NAME"; then
-                spinner_stop; ok "Jen database connection successful"
-                break
-            fi
-            spinner_stop
-            if _jen_db_offer_create; then
-                continue
-            fi
-            _connection_failure_choice "Jen database" "${JEN_DB_USER}@${JEN_DB_HOST}/${JEN_DB_NAME}"
-            case "$_RETRY_ACTION" in
-                retry) continue ;;
-                edit) _edit=true; continue ;;
-                continue) _blank_if_placeholder JEN_DB_HOST "YOUR-KEA-SERVER"; break ;;
-            esac
+            admin_pass2=$(prompt_secret "Confirm admin password")
+            [[ "$admin_pass" == "$admin_pass2" ]] && break
+            warn "Passwords do not match — try again."
         done
+    else
+        admin_pass=""
     fi
-
-    # ── Admin password ────────────────────────────────────────────────────────
-    # v5.67.0 (Q113) — JEN_INITIAL_ADMIN_PASSWORD, same name the Docker path
-    # (.env.example, run.py) already uses. Left blank, Jen generates one
-    # itself on first start and writes it to
-    # $CONTENT_DIR/initial-admin-password (see write_config/_seed_jen_db,
-    # below) — the wizard's own confirm-twice loop stays for the TTY path
-    # since that is the one place a typo is otherwise invisible.
-    if [[ "$IS_UPGRADE" == "false" ]]; then
-        blank
-        echo -e "  ${B}Admin Account${NC}"
-        blank
-        local admin_pass
-        if [[ -n "${ANSWERS[JEN_INITIAL_ADMIN_PASSWORD]+x}" || -n "${JEN_INITIAL_ADMIN_PASSWORD:-}" ]]; then
-            admin_pass=$(_cfgval "JEN_INITIAL_ADMIN_PASSWORD")
-            if [[ -n "$admin_pass" && ${#admin_pass} -lt 8 ]]; then
-                fatal "JEN_INITIAL_ADMIN_PASSWORD must be at least 8 characters."
-            fi
-        elif [[ "$HAVE_TTY" == "true" && "$MODE_UNATTENDED" == "false" ]]; then
-            local admin_pass2
-            while true; do
-                admin_pass=$(prompt_secret "Admin password (min 8 chars, Enter to auto-generate one)")
-                [[ -z "$admin_pass" ]] && break
-                if [[ ${#admin_pass} -lt 8 ]]; then
-                    warn "Password must be at least 8 characters."; continue
-                fi
-                admin_pass2=$(prompt_secret "Confirm admin password")
-                [[ "$admin_pass" == "$admin_pass2" ]] && break
-                warn "Passwords do not match — try again."
-            done
-        else
-            admin_pass=""
-        fi
-        ADMIN_PASS="$admin_pass"
-        if [[ -n "$ADMIN_PASS" ]]; then
-            ok "Admin password set"
-        else
-            ok "No admin password given — Jen will generate one on first start"
-        fi
+    ADMIN_PASS="$admin_pass"
+    if [[ -n "$ADMIN_PASS" ]]; then
+        ok "Admin password set"
+    else
+        ok "No admin password given — Jen will generate one on first start"
     fi
+}
 
-    # ── Subnets ───────────────────────────────────────────────────────────────
-    # v5.67.0 (Q113) — JEN_SUBNETS, same "id=Name,CIDR;id=Name,CIDR" format
-    # run.py's Docker env-var path already parses.
+# v5.67.0 (Q113) — JEN_SUBNETS, same "id=Name,CIDR;id=Name,CIDR" format
+# run.py's Docker env-var path already parses; when the Kea API test just
+# passed, its own subnet4 list is offered for confirmation first.
+_configure_subnets() {
     blank
     echo -e "  ${B}Subnet Map${NC}  ${DIM}(your Kea subnets — you can add more later in Settings)${NC}"
     blank
@@ -989,9 +1048,6 @@ collect_config() {
         done
         [[ $added -eq 0 ]] && warn "JEN_SUBNETS set but no entries parsed from it — check the id=Name,CIDR format"
     elif [[ "$HAVE_TTY" == "true" && "$MODE_UNATTENDED" == "false" ]]; then
-        # v5.67.0 (Q113) — when the Kea API test just passed, read Kea's
-        # OWN subnet4 list and offer it for confirmation instead of asking
-        # the operator to retype what Kea already knows.
         if [[ "$KEA_API_REACHABLE" == "true" ]]; then
             local discovered; discovered=$(_kea_discovered_subnets "$KEA_API_URL" "$KEA_API_USER" "$KEA_API_PASS")
             if [[ -n "$discovered" ]]; then
@@ -1021,8 +1077,9 @@ collect_config() {
         warn "No subnets added — edit $CONFIG_FILE to add them later"
         SUBNET_LINES="# 1 = Production, 10.10.10.0/24\n# 30 = IoT, 10.10.30.0/24\n"
     fi
+}
 
-    # ── SSH ───────────────────────────────────────────────────────────────────
+_configure_ssh() {
     blank
     echo -e "  ${B}SSH Access${NC}  ${DIM}(optional — enables subnet editing from the UI)${NC}"
     blank
@@ -1041,8 +1098,9 @@ collect_config() {
     else
         KEA_SSH_HOST=""; KEA_SSH_USER=""; KEA_CONF_PATH="/etc/kea/kea-dhcp4.conf"
     fi
+}
 
-    # ── DDNS ──────────────────────────────────────────────────────────────────
+_configure_ddns() {
     blank
     echo -e "  ${B}DDNS Integration${NC}  ${DIM}(optional — Technitium, Pi-hole, AdGuard, SSH)${NC}"
     blank
@@ -1079,8 +1137,9 @@ collect_config() {
         DDNS_PROVIDER="none"; DDNS_URL=""; DDNS_TOKEN=""
         DDNS_LOG="/var/log/kea/kea-ddns.log"; DDNS_ZONE=""
     fi
+}
 
-    # ── Ports ─────────────────────────────────────────────────────────────────
+_configure_ports() {
     blank
     echo -e "  ${B}Server Ports${NC}"
     blank
@@ -1101,7 +1160,7 @@ write_config() {
     mkdir -p "$CONFIG_DIR"
 
     if [[ -f "$CONFIG_FILE" ]]; then
-        local bak="${BACKUP_DIR}/jen.config.$(date +%Y%m%d_%H%M%S).bak"
+        local bak; bak="${BACKUP_DIR}/jen.config.$(date +%Y%m%d_%H%M%S).bak"
         mkdir -p "$BACKUP_DIR"
         cp "$CONFIG_FILE" "$bak"
         ok "Backed up existing config → ${DIM}${bak}${NC}"
@@ -1711,16 +1770,6 @@ print_summary() {
     _box_line "  ${DIM}Logs:     sudo journalctl -u jen -f${NC}"
     _box_line "  ${DIM}Restart:  sudo systemctl restart jen${NC}"
     _box_line ""
-    if [[ "$IS_UPGRADE" == "false" && "$MODE_REPAIR" == "false" ]]; then
-        echo -e "  ${C}╠══════════════════════════════════════════════════════╣${NC}"
-        _box_line ""
-        _box_line "  ${B}Next steps:${NC}"
-        _box_line "   1.  Open Jen and verify your Kea data appears"
-        _box_line "   2.  Settings → SSH Key → Generate key, add to Kea"
-        _box_line "   3.  Settings → Alerts → Add a notification channel"
-        _box_line "   4.  Settings → MFA → Enable for your account"
-        _box_line ""
-    fi
     echo -e "  ${C}╚══════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
@@ -1907,135 +1956,126 @@ _docker_pick_compose_and_run() {
 }
 
 # ── Main ──────────────────────────────────────────────────────────────────────
-main() {
-    show_banner
-    require_root
+# v5.67.0 (Q113) — tiny one-line steps, wrapped as functions too, so every
+# entry in MODE_STEPS below is a real function name and the table reads as
+# a complete, literal list of what each mode actually does.
+_skip_configure()   { CONFIGURE=false; }
+_arm_rollback()      { ROLLBACK_ARMED=true; }
+_disarm_rollback()   { ROLLBACK_ARMED=false; }
 
-    # v5.67.0 (Q113) — load the answers file, if given, before anything
-    # that could read from it. Every other mode (restore, configure,
-    # repair, docker) ignores it; it only ever feeds collect_config.
-    [[ -n "$ANSWERS_FILE" ]] && _load_answers_file "$ANSWERS_FILE"
+# v5.67.0 (Q113) — one step list per mode, so "what does --repair actually
+# do" is a single line to read rather than a scroll through main(). "standard"
+# covers both a fresh install and an upgrade: collect_config() (and, inside
+# it, _configure_admin) already branch on IS_UPGRADE to keep the existing
+# config instead of asking — that was true before this table existed too.
+declare -A MODE_STEPS=(
+    [standard]="preflight_checks install_dependencies collect_config backup_existing migrate_content snapshot_external_files _arm_rollback install_files setup_venv compile_app write_config activate_release start_service verify_install _disarm_rollback remove_flat_leftovers print_summary"
+    [repair]="preflight_checks install_dependencies _skip_configure backup_existing snapshot_external_files _arm_rollback install_files setup_venv compile_app activate_release start_service verify_install _disarm_rollback remove_flat_leftovers print_summary"
+)
 
-    # Handle --restore mode (v5.44.0, Q45) — layers a recovery bundle onto
-    # an ALREADY-installed Jen (venv, systemd unit, sudoers untouched).
-    # Deliberately thin: every real decision (passphrase, version checks,
-    # what gets written, the DB import) lives in jen/tools/restore.py,
-    # which needs cryptography/pymysql and JSON/version parsing that are
-    # all far more pleasant in Python than bash. This shells out to it
-    # and does nothing else — no new sudoers-invoked command is added
-    # (rule 8), because this IS the installer, run directly by the
-    # operator via sudo, the same way every other mode here already is.
-    if [[ "$MODE_RESTORE" == "true" ]]; then
-        if [[ -n "${RESTORE_ROLLBACK:-}" ]]; then
-            # --rollback <snapshot dir>: redo the rollback of a restore by hand.
-            RESTORE_PY="$PYBIN"
-            [[ -x "$RESTORE_PY" ]] || fatal "No Jen venv found ($RESTORE_PY) — run 'sudo ./install.sh' first."
-            info "Rolling back from $RESTORE_ROLLBACK"
-            if ! (cd "$(app_pyroot)" && "$RESTORE_PY" -m jen.tools.restore --rollback "$RESTORE_ROLLBACK" ${RESTORE_NOSTOP:-}); then
-                fatal "Rollback failed — see the messages above."
-            fi
-            ok "Rollback complete."
-            exit 0
-        fi
-        if [[ -z "$RESTORE_BUNDLE" ]]; then
-            fatal "Usage: sudo ./install.sh --restore /path/to/bundle.tar.enc [--no-stop] [--start] [--force]"
-        fi
-        if [[ ! -f "$RESTORE_BUNDLE" ]]; then
-            fatal "Bundle not found: $RESTORE_BUNDLE"
-        fi
+_run_steps() {
+    local mode="$1" step
+    for step in ${MODE_STEPS[$mode]}; do
+        "$step"
+    done
+}
+
+# Handle --restore mode (v5.44.0, Q45) — layers a recovery bundle onto
+# an ALREADY-installed Jen (venv, systemd unit, sudoers untouched).
+# Deliberately thin: every real decision (passphrase, version checks,
+# what gets written, the DB import) lives in jen/tools/restore.py,
+# which needs cryptography/pymysql and JSON/version parsing that are
+# all far more pleasant in Python than bash. This shells out to it
+# and does nothing else — no new sudoers-invoked command is added
+# (rule 8), because this IS the installer, run directly by the
+# operator via sudo, the same way every other mode here already is.
+# Every path either fatal()s or exit 0s — never returns to main().
+_run_restore_mode() {
+    if [[ -n "${RESTORE_ROLLBACK:-}" ]]; then
+        # --rollback <snapshot dir>: redo the rollback of a restore by hand.
         RESTORE_PY="$PYBIN"
-        if [[ ! -x "$RESTORE_PY" ]]; then
-            fatal "No Jen venv found ($RESTORE_PY) — run 'sudo ./install.sh' first, then --restore."
+        [[ -x "$RESTORE_PY" ]] || fatal "No Jen venv found ($RESTORE_PY) — run 'sudo ./install.sh' first."
+        info "Rolling back from $RESTORE_ROLLBACK"
+        if ! (cd "$(app_pyroot)" && "$RESTORE_PY" -m jen.tools.restore --rollback "$RESTORE_ROLLBACK" ${RESTORE_NOSTOP:-}); then
+            fatal "Rollback failed — see the messages above."
         fi
-        info "Restoring from $RESTORE_BUNDLE"
-        # `if ! ( ... )` — not a bare `cmd1 && cmd2` — so a nonzero exit
-        # from the Python tool is caught here, not treated by `set -e`
-        # as a reason to abort the whole script before fatal() can run.
-        if ! (cd "$(app_pyroot)" && "$RESTORE_PY" -m jen.tools.restore "$RESTORE_BUNDLE" ${RESTORE_FORCE:-} ${RESTORE_NOSTOP:-} ${RESTORE_START:-}); then
-            fatal "Restore failed — see the messages above."
-        fi
-        ok "Restore complete."
+        ok "Rollback complete."
         exit 0
     fi
-
-    # Handle --configure mode (just re-run wizard, restart service)
-    if [[ "$MODE_CONFIGURE" == "true" ]]; then
-        detect_existing
-        show_mode_banner
-        CONFIGURE=true
-        collect_config
-        write_config
-        spinner_start "Restarting Jen to apply new config..."
-        systemctl restart jen 2>/dev/null || true
-        sleep 2; spinner_stop
-        systemctl is-active --quiet jen && ok "Jen restarted" || warn "Jen may not have restarted cleanly"
-        print_summary
-        exit 0
+    if [[ -z "$RESTORE_BUNDLE" ]]; then
+        fatal "Usage: sudo ./install.sh --restore /path/to/bundle.tar.enc [--no-stop] [--start] [--force]"
     fi
-
-    # Handle --repair mode — rebuild this release's app/ and venv/ from the
-    # tarball and re-activate it. Keeps user content and config untouched.
-    if [[ "$MODE_REPAIR" == "true" ]]; then
-        detect_existing
-        show_mode_banner
-        preflight_checks
-        install_dependencies
-        CONFIGURE=false
-        backup_existing
-        snapshot_external_files
-        ROLLBACK_ARMED=true
-        install_files
-        setup_venv
-        compile_app
-        activate_release
-        start_service
-        verify_install
-        ROLLBACK_ARMED=false
-        remove_flat_leftovers
-        print_summary
-        exit 0
+    if [[ ! -f "$RESTORE_BUNDLE" ]]; then
+        fatal "Bundle not found: $RESTORE_BUNDLE"
     fi
+    RESTORE_PY="$PYBIN"
+    if [[ ! -x "$RESTORE_PY" ]]; then
+        fatal "No Jen venv found ($RESTORE_PY) — run 'sudo ./install.sh' first, then --restore."
+    fi
+    info "Restoring from $RESTORE_BUNDLE"
+    # `if ! ( ... )` — not a bare `cmd1 && cmd2` — so a nonzero exit
+    # from the Python tool is caught here, not treated by `set -e`
+    # as a reason to abort the whole script before fatal() can run.
+    if ! (cd "$(app_pyroot)" && "$RESTORE_PY" -m jen.tools.restore "$RESTORE_BUNDLE" ${RESTORE_FORCE:-} ${RESTORE_NOSTOP:-} ${RESTORE_START:-}); then
+        fatal "Restore failed — see the messages above."
+    fi
+    ok "Restore complete."
+    exit 0
+}
 
-    # Handle --docker mode
-    if [[ "$MODE_DOCKER" == "true" ]]; then
-        detect_existing
-        show_mode_banner
+# --configure mode: just re-run the wizard and restart the service. Keeps
+# user content and the release tree untouched.
+_run_configure_mode() {
+    detect_existing
+    show_mode_banner
+    CONFIGURE=true
+    collect_config
+    write_config
+    spinner_start "Restarting Jen to apply new config..."
+    systemctl restart jen 2>/dev/null || true
+    sleep 2; spinner_stop
+    systemctl is-active --quiet jen && ok "Jen restarted" || warn "Jen may not have restarted cleanly"
+    print_summary
+    exit 0
+}
+
+# Standard flow only: offer Docker as the install type on a fresh install
+# (never on an upgrade — MODE_DOCKER, once set, is decided for good). Exits
+# via docker_install() when chosen; otherwise returns and the caller
+# continues the bare-metal path.
+_offer_docker_instead() {
+    [[ "$IS_UPGRADE" == "true" ]] && return
+    blank
+    echo -e "  ${B}Install Type:${NC}"
+    blank
+    echo -e "    ${B}1)${NC}  Bare metal / systemd  ${DIM}(recommended)${NC}"
+    echo -e "    ${B}2)${NC}  Docker"
+    blank
+    local itype; itype=$(prompt_choice "1")
+    if [[ "$itype" == "2" ]]; then
+        MODE_DOCKER=true
         docker_install
         exit 0
     fi
+}
 
-    # Standard flow — auto-detect
-    detect_existing
-    show_mode_banner
-
-    if [[ "$IS_UPGRADE" == "false" ]]; then
-        blank
-        echo -e "  ${B}Install Type:${NC}"
-        blank
-        echo -e "    ${B}1)${NC}  Bare metal / systemd  ${DIM}(recommended)${NC}"
-        echo -e "    ${B}2)${NC}  Docker"
-        blank
-        local itype; itype=$(prompt_choice "1")
-        if [[ "$itype" == "2" ]]; then
-            MODE_DOCKER=true
-            docker_install
-            exit 0
-        fi
-    fi
-
-    if [[ "$IS_UPGRADE" == "true" && "$MODE_UPGRADE" == "false" && "$MODE_UNATTENDED" == "false" ]]; then
-        blank
-        echo -e "  ${B}Existing installation detected:${NC} v${EXISTING_VERSION/unknown/—}"
-        blank
-        [[ "$(prompt_yn "Upgrade to Jen v${JEN_VERSION}?" "y")" == "n" ]] && \
-            { info "Upgrade canceled."; exit 0; }
-        blank
-        if [[ "$(prompt_yn "Create a database backup before upgrading?" "y")" == "y" ]]; then
-            spinner_start "Backing up Jen and Kea databases..."
-            mkdir -p /var/lib/jen/backups
-            # $PYBIN is the venv python on a 5.8.x→ upgrade, else system
-            # python3 (which a pre-5.8.0 install populated with pymysql).
-            if "$PYBIN" -c "
+# Standard flow only: confirm an upgrade interactively and offer a
+# pre-upgrade backup — skipped entirely on a fresh install, with
+# --upgrade, or with --unattended. Exits 0 if the operator declines.
+_confirm_upgrade_or_exit() {
+    [[ "$IS_UPGRADE" == "true" && "$MODE_UPGRADE" == "false" && "$MODE_UNATTENDED" == "false" ]] || return
+    blank
+    echo -e "  ${B}Existing installation detected:${NC} v${EXISTING_VERSION/unknown/—}"
+    blank
+    [[ "$(prompt_yn "Upgrade to Jen v${JEN_VERSION}?" "y")" == "n" ]] && \
+        { info "Upgrade canceled."; exit 0; }
+    blank
+    if [[ "$(prompt_yn "Create a database backup before upgrading?" "y")" == "y" ]]; then
+        spinner_start "Backing up Jen and Kea databases..."
+        mkdir -p /var/lib/jen/backups
+        # $PYBIN is the venv python on a 5.8.x→ upgrade, else system
+        # python3 (which a pre-5.8.0 install populated with pymysql).
+        if "$PYBIN" -c "
 import sys, json, gzip, datetime, pymysql, pymysql.cursors, configparser
 cfg = configparser.ConfigParser()
 cfg.read('/etc/jen/jen.config')
@@ -2067,32 +2107,47 @@ for which in ['jen','kea']:
     except Exception as e:
         print(f'fail:{which}:{e}', file=sys.stderr)
 " 2>/tmp/jen_backup_err; then
-                spinner_stop
-                ok "Pre-upgrade backups saved to /var/lib/jen/backups/"
-            else
-                spinner_stop
-                warn "Pre-upgrade backup failed (non-fatal) — check /tmp/jen_backup_err"
-            fi
+            spinner_stop
+            ok "Pre-upgrade backups saved to /var/lib/jen/backups/"
+        else
+            spinner_stop
+            warn "Pre-upgrade backup failed (non-fatal) — check /tmp/jen_backup_err"
         fi
     fi
+}
 
-    preflight_checks
-    install_dependencies
-    collect_config
-    backup_existing
-    migrate_content
-    snapshot_external_files
-    ROLLBACK_ARMED=true
-    install_files
-    setup_venv
-    compile_app
-    write_config
-    activate_release
-    start_service
-    verify_install
-    ROLLBACK_ARMED=false
-    remove_flat_leftovers
-    print_summary
+main() {
+    show_banner
+    require_root
+
+    # v5.67.0 (Q113) — load the answers file, if given, before anything
+    # that could read from it. Every other mode (restore, configure,
+    # repair, docker) ignores it; it only ever feeds collect_config.
+    [[ -n "$ANSWERS_FILE" ]] && _load_answers_file "$ANSWERS_FILE"
+
+    [[ "$MODE_RESTORE" == "true" ]] && _run_restore_mode
+    [[ "$MODE_CONFIGURE" == "true" ]] && _run_configure_mode
+
+    if [[ "$MODE_REPAIR" == "true" ]]; then
+        detect_existing
+        show_mode_banner
+        _run_steps repair
+        exit 0
+    fi
+
+    if [[ "$MODE_DOCKER" == "true" ]]; then
+        detect_existing
+        show_mode_banner
+        docker_install
+        exit 0
+    fi
+
+    # Standard flow — auto-detect fresh install vs upgrade.
+    detect_existing
+    show_mode_banner
+    _offer_docker_instead
+    _confirm_upgrade_or_exit
+    _run_steps standard
 }
 
 trap 'spinner_stop; err "Installer interrupted."; rollback; exit 1' INT TERM
