@@ -1,5 +1,23 @@
 # Host Watchdog Plugin — Changelog
 
+## [1.0.5] - 2026-09-30
+
+### Fixed
+
+- **The periodic schedule has never recorded a single check, for any target, since 1.0.0.**
+  `_tick()`'s own query selected every column `due_targets()` needs to decide anything is due
+  EXCEPT `enabled` — so every row it fetched had no `enabled` key at all, `due_targets()`'s own
+  first line (`if not t.get("enabled"): continue`) skipped every target unconditionally, `due`
+  was always empty, and `_tick()` returned before ever writing a `wd_checks` or `wd_state` row.
+  The WHERE clause already limited the query to enabled targets — the column just wasn't in the
+  SELECT list, so the row dict it produced never carried the key the pure function actually
+  reads. One word added to the query. **Manual "Check now" was never affected** — it calls the
+  probe directly, not through this path — so a target's current state and its history from a
+  manual check are untouched; only the unattended, scheduled checks were silently skipped, for
+  every install, on every version before this one. If you've been relying on the schedule, the
+  uptime figure you see after upgrading starts filling in from here — it was never being
+  recorded before, not lost.
+
 ## [1.0.4] - 2026-09-27
 
 Jen's Q100 sweep: onto Jen 5.65.10's shared helpers, plus four smaller findings from the same audit.

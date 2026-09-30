@@ -281,6 +281,18 @@ one in the list. If you have a saved link or bookmark that opens this form
 with `?subnet=` instead of `?subnet_id=`, it still works — that name is
 kept as an alias.
 
+## Host Watchdog's scheduled probing starts recording now, not before
+
+As of the bundled Host Watchdog 1.0.5 (5.66.0-beta.9), the periodic
+schedule actually records a check for the first time. Its own query for
+due targets never fetched the one column the check-selection logic
+needed, so the scheduled probe silently skipped every target, forever,
+on every install, since Watchdog first shipped — manual "Check now" was
+never affected, and worked exactly as before. If you've been relying on
+the schedule, the 7-day uptime figure starts filling in from this
+upgrade forward; a target's history before it is empty because nothing
+was ever recorded, not because anything was lost.
+
 ## A few things that will just already be fixed
 
 None of these need anything from you — they're upgrades you get for

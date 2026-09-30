@@ -186,7 +186,7 @@
   {
     "id": "watchdog",
     "name": "Host Watchdog",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "description": "Probes chosen hosts on a schedule and alerts when one stops answering, and again when it comes back — the gap Network Discovery leaves, since it only alerts on a new unknown host appearing. Ping (unprivileged ICMP) or TCP connect, added from a Kea reservation, an IPAM Lite entry, or any IP. 7-day uptime, per-target history, a JSON API.",
     "author": "Matthew Thibodeau",
     "requires_jen": "5.65.10",
@@ -225,8 +225,8 @@
         "sql": "ALTER TABLE wd_checks ADD INDEX idx_target_checked (target_id, checked_at)"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-watchdog/raw/v1.0.4",
-    "sha256": "a11f9ddd18585bc2e8b9020b511c98d084e0c0794c4a5abb81063d4f97e4f758",
+    "download_url": "https://github.com/ltkojak/jen-plugin-watchdog/raw/v1.0.5",
+    "sha256": "8e5f38facaf71eb0fa724e75cec7b42c708d86910eaca2a72f3419f92920f28f",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-watchdog/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-watchdog",
     "os_packages": [
