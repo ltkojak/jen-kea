@@ -1161,15 +1161,21 @@ def sign(data, name):
 candidate_build_only = make_candidate(real_version, real_build + 1)
 sig_build_only = sign(candidate_build_only, "s14_cand_build_only")
 
-candidate99 = make_candidate(99)
+# v5.66.0-beta.7 (Q109) - HELPER_BUILD is checked independently of HELPER_VERSION now (the
+# exact fix this Q makes): a candidate whose build isn't ALSO higher than what's currently
+# installed is "already", full stop, regardless of how much higher its version is. kea-a is
+# already at build real_build+1 from the step above, so candidate99's own build must clear
+# that too, not just its version.
+candidate99 = make_candidate(99, real_build + 2)
 sig99 = sign(candidate99, "s14_cand99")
 
-# A SEPARATE, higher version for the flip case: kea-a already reports 99 after the call
-# above, so a candidate that ALSO declares 99 would short-circuit at "already" before ever
-# reaching the signed path (never exercising the bad-signature check at all). Flipping a byte
-# far from the "HELPER_VERSION = 100" line keeps the declared version intact while
-# invalidating the signature computed over the UNFLIPPED bytes.
-candidate100 = make_candidate(100)
+# A SEPARATE, higher version AND build for the flip case: kea-a already reports 99/real_build+2
+# after the call above, so a candidate that doesn't clear BOTH would short-circuit at "already"
+# before ever reaching the signed path (never exercising the bad-signature check at all).
+# Flipping a byte far from the "HELPER_VERSION = 100" / "HELPER_BUILD = ..." lines keeps the
+# declared version/build intact while invalidating the signature computed over the UNFLIPPED
+# bytes.
+candidate100 = make_candidate(100, real_build + 3)
 sig100 = sign(candidate100, "s14_cand100")
 flipped = bytearray(candidate100)
 flipped[-20] ^= 0xFF
