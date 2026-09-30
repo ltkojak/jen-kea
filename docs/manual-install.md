@@ -27,7 +27,7 @@ system site-packages.
 | `/opt/jen/current` | symlink | relative symlink → `releases/<live>`; the unit runs `current/venv/bin/python current/app/run.py` |
 | `/var/lib/jen/` | `www-data:www-data`, `0750` | user content: `icons/`, `branding/`, `backups/`, `plugins/`, `plugins-enabled/`, `keys/` — **never touched by upgrades** (v5.13.0) |
 | `/etc/jen/` | `www-data:www-data` | `jen.config`, `ssl/`, `ssh/`, `backups/` — **never touched by upgrades** |
-| `/etc/jen/jen.config` | `root:www-data`, `0640` | config + secrets |
+| `/etc/jen/jen.config` | `www-data:www-data`, `0600` | config + secrets |
 | `/etc/systemd/system/jen.service` | root | the unit |
 | `/etc/sudoers.d/jen` | root, `0440` | the two `systemctl` grants www-data needs (restart, self-update trigger) |
 | `/usr/local/sbin/jen-update-root.py` | `root:root`, `0700` | in-app self-updater (runs as root, outside every dir www-data can write) |
@@ -65,7 +65,7 @@ still-flat box also works.
 ```bash
 sudo cp jen.config.example /etc/jen/jen.config
 sudo nano /etc/jen/jen.config      # Kea API, kea_db, jen_db, ssh, subnets, ports
-sudo chown root:www-data /etc/jen/jen.config && sudo chmod 640 /etc/jen/jen.config
+sudo chown www-data:www-data /etc/jen/jen.config && sudo chmod 600 /etc/jen/jen.config
 ```
 
 Create the Jen database (Jen runs its own migrations on first start):

@@ -117,7 +117,7 @@ By default, Kea shuts itself down if it loses the MySQL connection. Add reconnec
 
 ## Configuration File Reference
 
-All Jen configuration lives in `/etc/jen/jen.config`. The file is owned by `root:www-data` with permissions `640`.
+All Jen configuration lives in `/etc/jen/jen.config`. The file is owned by `www-data:www-data` with permissions `600`.
 
 ### [kea] section
 

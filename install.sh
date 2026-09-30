@@ -973,8 +973,14 @@ CONFEOF
     # failed with EACCES until the next `install.sh --upgrade`. AppConfig
     # now also writes atomically via os.replace so an affected box
     # self-heals on its first save — see jen/config.py::_write_parser.)
+    # v5.67.0 (Q113) — 0600, not 0640: owner and group are the SAME user
+    # (www-data:www-data), so the group-read bit never granted anyone
+    # anything; tightened here and in AppConfig's own writer (which
+    # re-applies the mode on every Settings save) so a file holding every
+    # DB password, API credential and DDNS token this install has stays
+    # owner-only for good, not just until the next save.
     chown "$JEN_USER:$JEN_USER" "$CONFIG_FILE"
-    chmod 640 "$CONFIG_FILE"
+    chmod 600 "$CONFIG_FILE"
     ok "Config written → ${DIM}${CONFIG_FILE}${NC}"
 
     # Initialize the database on a fresh install: run migrations and seed

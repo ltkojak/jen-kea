@@ -269,7 +269,7 @@ class AppConfig:
         with open(tmp, "w") as f:
             parser.write(f)
         with contextlib.suppress(OSError):
-            os.chmod(tmp, 0o640)
+            os.chmod(tmp, 0o600)
         os.replace(tmp, self.path)
 
     def write_value(self, section: str, key: str, value: str, reload: bool = True) -> None:

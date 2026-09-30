@@ -247,4 +247,4 @@ class TestAtomicWrite:
 
         assert extensions.KEA_API_PASS == "rotated-secret"
         mode = os.stat(str(isolated_config)).st_mode & 0o777
-        assert mode == 0o640, oct(mode)
+        assert mode == 0o600, oct(mode)

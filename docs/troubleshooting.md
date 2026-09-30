@@ -48,8 +48,8 @@ Fix:
 ```bash
 sudo cp /path/to/jen/jen.config.example /etc/jen/jen.config
 sudo nano /etc/jen/jen.config    # fill in your values
-sudo chown root:www-data /etc/jen/jen.config
-sudo chmod 640 /etc/jen/jen.config
+sudo chown www-data:www-data /etc/jen/jen.config
+sudo chmod 600 /etc/jen/jen.config
 sudo systemctl restart jen
 ```
 
