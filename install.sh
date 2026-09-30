@@ -490,13 +490,28 @@ preflight_checks() {
     command -v curl       &>/dev/null && ok "curl"       || warn "curl not found — connection tests unavailable"
     command -v mysql      &>/dev/null && ok "mysql client" || warn "mysql client not found — DB tests unavailable"
 
-    # Disk space
-    local avail_kb
-    avail_kb=$(df /opt 2>/dev/null | awk 'NR==2{print $4}' || echo "0")
-    if [[ $avail_kb -gt 102400 ]]; then
-        ok "Disk space: $(( avail_kb / 1024 ))MB free"
+    # Disk space — v5.67.0 (Q113): the real targets, not a hardcoded /opt.
+    # $INSTALL_DIR/$CONFIG_DIR/$CONTENT_DIR don't exist yet on a fresh
+    # box, so walk each up to the nearest existing ancestor (its mount
+    # point, in practice) and check THAT — /etc or /var/lib can genuinely
+    # be a separate, smaller partition than /opt. Reports the tightest.
+    local target avail_kb min_avail_kb="" tightest="" check_path
+    for target in "$INSTALL_DIR" "$CONFIG_DIR" "$CONTENT_DIR"; do
+        check_path="$target"
+        while [[ ! -d "$check_path" && "$check_path" != "/" ]]; do
+            check_path="$(dirname "$check_path")"
+        done
+        avail_kb=$(df "$check_path" 2>/dev/null | awk 'NR==2{print $4}')
+        avail_kb="${avail_kb:-0}"
+        if [[ -z "$min_avail_kb" || "$avail_kb" -lt "$min_avail_kb" ]]; then
+            min_avail_kb="$avail_kb"
+            tightest="$target (on $check_path)"
+        fi
+    done
+    if [[ "$min_avail_kb" -gt 102400 ]]; then
+        ok "Disk space: $(( min_avail_kb / 1024 ))MB free  ${DIM}(tightest: ${tightest})${NC}"
     else
-        warn "Low disk space: $(( avail_kb / 1024 ))MB — recommend 100MB+"
+        warn "Low disk space: $(( min_avail_kb / 1024 ))MB free on ${tightest} — recommend 100MB+"
     fi
 
     blank
@@ -620,25 +635,130 @@ test_mysql() {
     mysql -h"$host" -u"$user" -p"$pass" "$db" -e "SELECT 1;" &>/dev/null 2>&1
 }
 
-# v5.67.0 (Q113) — what collect_config does after a connection test fails.
-# Non-interactive (answers file, JEN_* env, or --unattended): just warn and
-# keep the value as typed — the retry/edit/continue choice only makes sense
-# with someone at the keyboard to ask. Interactive: unchanged from before
-# this Q for now (warn and continue); Q113 step 2 replaces this body with
-# the real retry/edit/continue prompt.
-_connection_failure_choice() {
-    local what="$1" detail="$2"
-    warn "Could not reach $what ($detail) — check the value and credentials after install"
+# v5.67.0 (Q113) — a value still equal to the placeholder default it was
+# never actually changed from is never written to jen.config; the key is
+# left blank instead, so Jen's own Health/Getting-started pages say what's
+# missing rather than a literal "YOUR-KEA-SERVER" reaching the config file.
+_blank_if_placeholder() {
+    local -n _ref="$1"
+    [[ "$_ref" == "$2" ]] && _ref=""
 }
 
-_jen_db_failure_choice() {
-    warn "Could not connect to Jen database. Create it with:"
+# v5.67.0 (Q113) — what collect_config does after a connection test fails.
+# Non-interactive (answers file, JEN_* env, or --unattended): nobody to
+# ask, so warn and continue — the value is left exactly as given (it came
+# from a deliberate source, not a default the operator never touched).
+# Interactive: a real choice, explicitly recorded in the transcript
+# (never a silent fall-through) — retry the same values, edit and try
+# again, or continue without it. Sets _RETRY_ACTION to retry|edit|continue.
+_connection_failure_choice() {
+    local what="$1" detail="$2"
+    if [[ "$HAVE_TTY" != "true" || "$MODE_UNATTENDED" == "true" ]]; then
+        warn "Could not reach $what ($detail) — continuing; configure it later in Jen"
+        _RETRY_ACTION="continue"
+        return
+    fi
+    warn "Could not reach $what ($detail)"
     blank
-    echo -e "    ${C}CREATE DATABASE ${JEN_DB_NAME};${NC}"
+    while true; do
+        echo -e "    ${B}r)${NC}  Retry with the same values"
+        echo -e "    ${B}e)${NC}  Edit and try again"
+        echo -e "    ${B}c)${NC}  Continue without it — I will finish in Jen"
+        blank
+        printf "  ${Y}  ▸${NC} Choice [${C}c${NC}]: " > /dev/tty
+        local choice; read -r choice < /dev/tty
+        choice="${choice:-c}"
+        case "${choice,,}" in
+            r) ok "Retrying $what"; _RETRY_ACTION="retry"; return ;;
+            e) ok "Editing $what"; _RETRY_ACTION="edit"; return ;;
+            c) ok "Continuing without $what — configure it later in Jen"; _RETRY_ACTION="continue"; return ;;
+            *) echo -e "  ${R}  Please enter r, e or c.${NC}" > /dev/tty ;;
+        esac
+    done
+}
+
+# v5.67.0 (Q113) — when the Jen database can't be reached AND it's local
+# with working root-socket auth, offer to create it instead of just
+# printing SQL for the operator to run by hand afterward. Never attempted
+# for a remote host — this only ever touches a database on THIS box.
+_jen_db_can_self_create() {
+    local host="$1"
+    [[ "$host" == "localhost" || "$host" == "127.0.0.1" || "$host" == "::1" ]] || return 1
+    command -v mysql &>/dev/null || return 1
+    mysql -u root -e "SELECT 1;" &>/dev/null 2>&1
+}
+
+_jen_db_offer_create() {
+    blank
+    warn "Could not connect to Jen database. The SQL to create it:"
+    blank
+    echo -e "    ${C}CREATE DATABASE \`${JEN_DB_NAME}\`;${NC}"
     echo -e "    ${C}CREATE USER '${JEN_DB_USER}'@'%' IDENTIFIED BY 'yourpassword';${NC}"
-    echo -e "    ${C}GRANT ALL PRIVILEGES ON ${JEN_DB_NAME}.* TO '${JEN_DB_USER}'@'%';${NC}"
+    echo -e "    ${C}GRANT ALL PRIVILEGES ON \`${JEN_DB_NAME}\`.* TO '${JEN_DB_USER}'@'%';${NC}"
     echo -e "    ${C}FLUSH PRIVILEGES;${NC}"
     blank
+    if [[ "$HAVE_TTY" == "true" && "$MODE_UNATTENDED" == "false" ]] && _jen_db_can_self_create "$JEN_DB_HOST"; then
+        if [[ "$(prompt_yn "MariaDB is local and root can connect without a password — create it now?" "y")" == "y" ]]; then
+            if mysql -u root -e "
+CREATE DATABASE IF NOT EXISTS \`${JEN_DB_NAME}\`;
+CREATE USER IF NOT EXISTS '${JEN_DB_USER}'@'%' IDENTIFIED BY '${JEN_DB_PASS}';
+GRANT ALL PRIVILEGES ON \`${JEN_DB_NAME}\`.* TO '${JEN_DB_USER}'@'%';
+FLUSH PRIVILEGES;" 2>/dev/null; then
+                ok "Database and user created"
+                return 0
+            else
+                err "Could not create the database — check the MariaDB error log"
+            fi
+        fi
+    fi
+    return 1
+}
+
+# v5.67.0 (Q113) — when the Kea API test just passed, read its OWN subnet4
+# list (config-get) instead of asking the operator to retype what Kea
+# already knows. Prints "id=subnet" lines; empty output (parse failure,
+# no subnets configured) means the caller falls back to typing them.
+_kea_discovered_subnets() {
+    local url="$1" user="$2" pass="$3"
+    command -v curl &>/dev/null && command -v python3 &>/dev/null || return 1
+    curl -s -u "${user}:${pass}" -X POST "${url}/" \
+        -H "Content-Type: application/json" \
+        -d '{"command":"config-get","service":["dhcp4"]}' \
+        --connect-timeout 5 2>/dev/null \
+    | python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    if isinstance(data, list):
+        data = data[0] if data else {}
+    subnets = data.get('arguments', {}).get('Dhcp4', {}).get('subnet4', [])
+    for s in subnets:
+        sid = s.get('id')
+        cidr = s.get('subnet')
+        if sid is not None and cidr:
+            print(f'{sid}={cidr}')
+except Exception:
+    pass
+" 2>/dev/null
+}
+
+# v5.67.0 (Q113) — the interactive subnet-entry loop, extracted out of
+# collect_config so it can be reached both as the plain fallback (no Kea
+# API reachable) and after a declined/empty Kea subnet discovery.
+# Appends to the caller's SUBNET_LINES directly.
+_manual_subnet_entry_loop() {
+    while true; do
+        printf "  ${Y}  ▸${NC} Subnet ID (Enter to finish): " > /dev/tty
+        local SID; read -r SID < /dev/tty
+        [[ -z "$SID" ]] && break
+        if ! [[ "$SID" =~ ^[0-9]+$ ]]; then warn "Subnet ID must be a number"; continue; fi
+        local sname scidr
+        sname=$(prompt_input "  Friendly name" "Subnet${SID}")
+        scidr=$(prompt_input "  CIDR"          "192.168.${SID}.0/24")
+        SUBNET_LINES="${SUBNET_LINES}${SID} = ${sname}, ${scidr}\n"
+        ok "Added: ${SID} = ${sname}, ${scidr}"
+        blank
+    done
 }
 
 # ── Configuration wizard ──────────────────────────────────────────────────────
@@ -701,38 +821,69 @@ collect_config() {
     # ── Kea API ───────────────────────────────────────────────────────────────
     echo -e "  ${B}Kea Control Agent${NC}  ${DIM}(the Kea REST API)${NC}"
     blank
-    KEA_API_URL=$(_ask  "JEN_KEA_API_URL"  "API URL"      "http://YOUR-KEA-SERVER:8000")
-    KEA_API_USER=$(_ask "JEN_KEA_API_USER" "API username" "kea-api")
-    KEA_API_PASS=$(_ask_secret "JEN_KEA_API_PASS" "API password")
-    blank
-    spinner_start "Testing Kea API connection..."
-    sleep 0.5
-    if test_kea_api "$KEA_API_URL" "$KEA_API_USER" "$KEA_API_PASS"; then
-        spinner_stop; ok "Kea API connection successful"
-        KEA_API_REACHABLE=true
-    else
+    local _edit=false
+    while true; do
+        if [[ "$_edit" == "true" ]]; then
+            KEA_API_URL=$(prompt_input  "API URL"      "$KEA_API_URL")
+            KEA_API_USER=$(prompt_input "API username" "$KEA_API_USER")
+            KEA_API_PASS=$(prompt_secret "API password")
+        else
+            KEA_API_URL=$(_ask  "JEN_KEA_API_URL"  "API URL"      "http://YOUR-KEA-SERVER:8000")
+            KEA_API_USER=$(_ask "JEN_KEA_API_USER" "API username" "kea-api")
+            KEA_API_PASS=$(_ask_secret "JEN_KEA_API_PASS" "API password")
+        fi
+        _edit=false
+        blank
+        spinner_start "Testing Kea API connection..."
+        sleep 0.5
+        if test_kea_api "$KEA_API_URL" "$KEA_API_USER" "$KEA_API_PASS"; then
+            spinner_stop; ok "Kea API connection successful"
+            KEA_API_REACHABLE=true
+            break
+        fi
         spinner_stop
         KEA_API_REACHABLE=false
         _connection_failure_choice "Kea API" "$KEA_API_URL"
-    fi
+        case "$_RETRY_ACTION" in
+            retry) continue ;;
+            edit) _edit=true; continue ;;
+            continue) _blank_if_placeholder KEA_API_URL "http://YOUR-KEA-SERVER:8000"; break ;;
+        esac
+    done
 
     # ── Kea DB ────────────────────────────────────────────────────────────────
     blank
     echo -e "  ${B}Kea MySQL Database${NC}"
     blank
-    KEA_DB_HOST=$(_ask  "JEN_KEA_DB_HOST" "Host"     "YOUR-KEA-SERVER")
-    KEA_DB_USER=$(_ask  "JEN_KEA_DB_USER" "Username" "kea")
-    KEA_DB_PASS=$(_ask_secret "JEN_KEA_DB_PASS" "Password")
-    KEA_DB_NAME=$(_ask  "JEN_KEA_DB_NAME" "Database" "kea")
-    blank
-    spinner_start "Testing Kea database connection..."
-    sleep 0.5
-    if test_mysql "$KEA_DB_HOST" "$KEA_DB_USER" "$KEA_DB_PASS" "$KEA_DB_NAME"; then
-        spinner_stop; ok "Kea database connection successful"
-    else
+    _edit=false
+    while true; do
+        if [[ "$_edit" == "true" ]]; then
+            KEA_DB_HOST=$(prompt_input  "Host"     "$KEA_DB_HOST")
+            KEA_DB_USER=$(prompt_input  "Username" "$KEA_DB_USER")
+            KEA_DB_PASS=$(prompt_secret "Password")
+            KEA_DB_NAME=$(prompt_input  "Database" "$KEA_DB_NAME")
+        else
+            KEA_DB_HOST=$(_ask  "JEN_KEA_DB_HOST" "Host"     "YOUR-KEA-SERVER")
+            KEA_DB_USER=$(_ask  "JEN_KEA_DB_USER" "Username" "kea")
+            KEA_DB_PASS=$(_ask_secret "JEN_KEA_DB_PASS" "Password")
+            KEA_DB_NAME=$(_ask  "JEN_KEA_DB_NAME" "Database" "kea")
+        fi
+        _edit=false
+        blank
+        spinner_start "Testing Kea database connection..."
+        sleep 0.5
+        if test_mysql "$KEA_DB_HOST" "$KEA_DB_USER" "$KEA_DB_PASS" "$KEA_DB_NAME"; then
+            spinner_stop; ok "Kea database connection successful"
+            break
+        fi
         spinner_stop
         _connection_failure_choice "Kea database" "${KEA_DB_USER}@${KEA_DB_HOST}/${KEA_DB_NAME}"
-    fi
+        case "$_RETRY_ACTION" in
+            retry) continue ;;
+            edit) _edit=true; continue ;;
+            continue) _blank_if_placeholder KEA_DB_HOST "YOUR-KEA-SERVER"; break ;;
+        esac
+    done
 
     # ── Jen DB ────────────────────────────────────────────────────────────────
     # Skipped for the Docker "bundled MariaDB" path — docker-compose.mysql.yml
@@ -743,19 +894,38 @@ collect_config() {
         blank
         echo -e "  ${B}Jen MySQL Database${NC}  ${DIM}(users, audit log, settings)${NC}"
         blank
-        JEN_DB_HOST=$(_ask  "JEN_DB_HOST" "Host"     "${KEA_DB_HOST:-localhost}")
-        JEN_DB_USER=$(_ask  "JEN_DB_USER" "Username" "jen")
-        JEN_DB_PASS=$(_ask_secret "JEN_DB_PASS" "Password")
-        JEN_DB_NAME=$(_ask  "JEN_DB_NAME" "Database" "jen")
-        blank
-        spinner_start "Testing Jen database connection..."
-        sleep 0.5
-        if test_mysql "$JEN_DB_HOST" "$JEN_DB_USER" "$JEN_DB_PASS" "$JEN_DB_NAME"; then
-            spinner_stop; ok "Jen database connection successful"
-        else
+        _edit=false
+        while true; do
+            if [[ "$_edit" == "true" ]]; then
+                JEN_DB_HOST=$(prompt_input  "Host"     "$JEN_DB_HOST")
+                JEN_DB_USER=$(prompt_input  "Username" "$JEN_DB_USER")
+                JEN_DB_PASS=$(prompt_secret "Password")
+                JEN_DB_NAME=$(prompt_input  "Database" "$JEN_DB_NAME")
+            else
+                JEN_DB_HOST=$(_ask  "JEN_DB_HOST" "Host"     "${KEA_DB_HOST:-localhost}")
+                JEN_DB_USER=$(_ask  "JEN_DB_USER" "Username" "jen")
+                JEN_DB_PASS=$(_ask_secret "JEN_DB_PASS" "Password")
+                JEN_DB_NAME=$(_ask  "JEN_DB_NAME" "Database" "jen")
+            fi
+            _edit=false
+            blank
+            spinner_start "Testing Jen database connection..."
+            sleep 0.5
+            if test_mysql "$JEN_DB_HOST" "$JEN_DB_USER" "$JEN_DB_PASS" "$JEN_DB_NAME"; then
+                spinner_stop; ok "Jen database connection successful"
+                break
+            fi
             spinner_stop
-            _jen_db_failure_choice
-        fi
+            if _jen_db_offer_create; then
+                continue
+            fi
+            _connection_failure_choice "Jen database" "${JEN_DB_USER}@${JEN_DB_HOST}/${JEN_DB_NAME}"
+            case "$_RETRY_ACTION" in
+                retry) continue ;;
+                edit) _edit=true; continue ;;
+                continue) _blank_if_placeholder JEN_DB_HOST "YOUR-KEA-SERVER"; break ;;
+            esac
+        done
     fi
 
     # ── Admin password ────────────────────────────────────────────────────────
@@ -819,20 +989,33 @@ collect_config() {
         done
         [[ $added -eq 0 ]] && warn "JEN_SUBNETS set but no entries parsed from it — check the id=Name,CIDR format"
     elif [[ "$HAVE_TTY" == "true" && "$MODE_UNATTENDED" == "false" ]]; then
-        local added=0
-        while true; do
-            printf "  ${Y}  ▸${NC} Subnet ID (Enter to finish): " > /dev/tty
-            read -r SID < /dev/tty
-            [[ -z "$SID" ]] && break
-            if ! [[ "$SID" =~ ^[0-9]+$ ]]; then warn "Subnet ID must be a number"; continue; fi
-            local sname scidr
-            sname=$(prompt_input "  Friendly name" "Subnet${SID}")
-            scidr=$(prompt_input "  CIDR"          "192.168.${SID}.0/24")
-            SUBNET_LINES="${SUBNET_LINES}${SID} = ${sname}, ${scidr}\n"
-            ok "Added: ${SID} = ${sname}, ${scidr}"
-            added=$((added+1))
-            blank
-        done
+        # v5.67.0 (Q113) — when the Kea API test just passed, read Kea's
+        # OWN subnet4 list and offer it for confirmation instead of asking
+        # the operator to retype what Kea already knows.
+        if [[ "$KEA_API_REACHABLE" == "true" ]]; then
+            local discovered; discovered=$(_kea_discovered_subnets "$KEA_API_URL" "$KEA_API_USER" "$KEA_API_PASS")
+            if [[ -n "$discovered" ]]; then
+                echo -e "  ${C}Kea reports these subnets:${NC}"
+                blank
+                local _dline _dsid _dcidr
+                while IFS= read -r _dline; do
+                    [[ -z "$_dline" ]] && continue
+                    _dsid="${_dline%%=*}"; _dcidr="${_dline#*=}"
+                    echo -e "    ${B}${_dsid}${NC}  ${_dcidr}"
+                done <<< "$discovered"
+                blank
+                if [[ "$(prompt_yn "Use these subnets?" "y")" == "y" ]]; then
+                    while IFS= read -r _dline; do
+                        [[ -z "$_dline" ]] && continue
+                        _dsid="${_dline%%=*}"; _dcidr="${_dline#*=}"
+                        SUBNET_LINES="${SUBNET_LINES}${_dsid} = Subnet${_dsid}, ${_dcidr}\n"
+                    done <<< "$discovered"
+                    ok "Subnets added from Kea"
+                    blank
+                fi
+            fi
+        fi
+        [[ -z "$SUBNET_LINES" ]] && _manual_subnet_entry_loop
     fi
     if [[ -z "$SUBNET_LINES" ]]; then
         warn "No subnets added — edit $CONFIG_FILE to add them later"
