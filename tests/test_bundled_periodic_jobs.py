@@ -67,6 +67,12 @@ def test_every_bundled_plugins_periodic_job_runs_and_writes(app, monkeypatch, tm
     plugins_svc._loaded_plugins.clear()
     saved_periodic = list(background._periodic)
     background._periodic.clear()
+    # create_app() below re-runs AppConfig.apply(), which re-derives EVERY extensions.* global
+    # from the real config file — overwriting the app fixture's own test values (extensions.
+    # KEA_SERVERS's "Test Kea" name among them) for the rest of the process, not just this test.
+    # A full snapshot/restore of the module's own __dict__ is the only way to undo that reliably
+    # without hand-tracking every global AppConfig.apply() happens to touch.
+    extensions_snapshot = dict(vars(extensions))
 
     seeded_lease4_hwaddrs = []
     seeded_jen_rows = []  # (table, where_col, where_val), deleted in this order at cleanup
@@ -239,6 +245,8 @@ def test_every_bundled_plugins_periodic_job_runs_and_writes(app, monkeypatch, tm
         plugins_svc._loaded_plugins.clear()
         plugins_svc._loaded_plugins.update(saved_loaded)
         background._periodic[:] = saved_periodic
+        vars(extensions).clear()
+        vars(extensions).update(extensions_snapshot)
 
         with jen_db() as db:
             tables_after = _tables(db)
