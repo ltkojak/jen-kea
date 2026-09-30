@@ -1393,26 +1393,44 @@ verify_install() {
         || warn "Config file not found — Jen may not start correctly"
 
     # Templates
-    local tpl_result
+    # v5.67.0 (Q113) — two real bugs, found together once install.sh first
+    # ran somewhere that could actually reach this far. (1) This hand-
+    # maintained filter list (utcfmt/utcdate/utctime) had drifted from the
+    # real app's own five (jen/__init__.py also registers relfmt and
+    # hostname) — any template using either failed Jinja's compile-time
+    # filter lookup, which this check correctly treated as an error. (2)
+    # `tpl_result=$(...)` followed by a bare `if [[ $? -eq 0 ]]` dies
+    # silently under `set -e` the moment the command substitution itself
+    # fails — the `err`/`echo` branch meant to explain the failure never
+    # runs. Together: every fresh install has been failing this check
+    # since relfmt/hostname were added, and failing SILENTLY, right after
+    # "Config file present", with no visible reason. The fix uses the
+    # real app's own Jinja environment (create_app() has already run once,
+    # successfully, in _seed_jen_db above — never a hand-maintained filter
+    # list to drift again) and the standard `cmd && ok=0 || ok=$?` idiom
+    # so a genuine failure is reported instead of silently killing the
+    # installer.
+    local tpl_result tpl_status
     tpl_result=$("$PYBIN" -c "
-from jinja2 import Environment, FileSystemLoader
 import os, sys
-env = Environment(loader=FileSystemLoader('$(app_pyroot)/templates'))
-# Register custom filters used by Jen so validation doesn't false-fail
-for f in ['utcfmt','utcdate','utctime']:
-    env.filters[f] = lambda v, fmt=None: v
+sys.path.insert(0, '$(app_pyroot)')
+from jen import create_app
+app = create_app()
 errors = []
-for t in os.listdir('$(app_pyroot)/templates'):
-    if t.endswith('.html'):
-        try: env.get_template(t)
-        except Exception as e: errors.append(f'{t}: {e}')
+with app.app_context():
+    for t in os.listdir('$(app_pyroot)/templates'):
+        if t.endswith('.html'):
+            try:
+                app.jinja_env.get_template(t)
+            except Exception as e:
+                errors.append(f'{t}: {e}')
 if errors:
-    for e in errors: print(e)
+    for e in errors:
+        print(e)
     sys.exit(1)
-else:
-    print(len([f for f in os.listdir('$(app_pyroot)/templates') if f.endswith('.html')]))
-" 2>&1)
-    if [[ $? -eq 0 ]]; then
+print(len([f for f in os.listdir('$(app_pyroot)/templates') if f.endswith('.html')]))
+" 2>&1) && tpl_status=0 || tpl_status=$?
+    if [[ "$tpl_status" -eq 0 ]]; then
         ok "Templates validated  ${DIM}(${tpl_result} files)${NC}"
     else
         err "Template validation failed:"; echo "$tpl_result"; exit 1
@@ -1420,7 +1438,7 @@ else:
 
     # Modules
     if [[ -d "$(app_pyroot)/jen" ]]; then
-        local mod_result
+        local mod_result mod_status
         mod_result=$("$PYBIN" -c "
 import sys; sys.path.insert(0, '$(app_pyroot)')
 errors = []
@@ -1433,8 +1451,8 @@ for m in ['jen.extensions','jen.config','jen.models.db','jen.models.user',
 if errors:
     for e in errors: print(e); sys.exit(1)
 else: print(len([m for m in ['jen.extensions','jen.config','jen.models.db','jen.models.user','jen.services.kea','jen.services.alerts','jen.services.fingerprint','jen.services.mfa','jen.services.auth']]))
-" 2>&1)
-        if [[ $? -eq 0 ]]; then
+" 2>&1) && mod_status=0 || mod_status=$?
+        if [[ "$mod_status" -eq 0 ]]; then
             ok "Package modules verified  ${DIM}(${mod_result} modules)${NC}"
         else
             warn "Module check had issues (non-fatal):  ${DIM}${mod_result}${NC}"
