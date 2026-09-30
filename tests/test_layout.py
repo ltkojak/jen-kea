@@ -10,10 +10,16 @@ the functions are called directly, the way jen-update-root.py's own
 updater-harness tests already run its real functions against real temp
 dirs rather than a hand-retyped mock.
 
-_layout_parents_root_owned's ownership walk needs to run as real root
-against a real POSIX filesystem to mean anything — skipped here and
-exercised for real by the `install` CI job (tests.yml), which does run
-install.sh as root on a real Ubuntu runner.
+_layout_parents_root_owned's ancestor walk DOES run for real here (no
+patching) — found, on the first real CI run, that GitHub's own hosted
+Ubuntu runner ships /opt mode 777 (its tool-cache installers need to
+write there without sudo), which made a hard fatal on "group/other-
+writable" impossible to pass for the ordinary /opt/jen default anywhere
+on this CI. Non-root OWNERSHIP of an ancestor is still fatal; a merely
+permissive-but-root-owned one is now a warning, and
+_layout_app_dir_not_preplanted (a real symlink check on app_dir itself)
+is what actually closes the redirect attack the whole check exists for
+— see TestParentDirectoryPermissiveness below.
 """
 
 import os
@@ -146,6 +152,44 @@ class TestValidationTable:
         )
         assert r.returncode == 0, r.stdout + r.stderr
         assert r.stdout.strip() == "/srv/jen-app|/srv/jen-etc|/srv/jen-data"
+
+
+class TestParentDirectoryPermissiveness:
+    """A group/other-writable but still root-OWNED ancestor (like GitHub's
+    own /opt on its hosted runners) must not block the default install —
+    only a warning. A symlink already planted at app_dir itself is the
+    real threat, and that's still a hard refusal.
+
+    These call the two functions directly rather than through
+    _resolve_layout_dirs: tmp_path lives under /tmp, which is itself one
+    of the forbidden prefixes _layout_path_ok checks first — going
+    through the full pipeline here would test that rule instead of the
+    one each test actually means to exercise."""
+
+    def test_group_writable_root_owned_ancestor_is_a_warning_not_fatal(self, tmp_path):
+        permissive_parent = tmp_path / "permissive"
+        permissive_parent.mkdir()
+        os.chmod(permissive_parent, 0o777)
+        app_dir = permissive_parent / "jen"
+        r = _run(tmp_path, f'_layout_parents_root_owned "{app_dir}"; echo "rc=$?"')
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "rc=0" in r.stdout
+        assert "writable by group or other" in r.stdout
+
+    def test_app_dir_already_a_symlink_is_refused(self, tmp_path):
+        real_target = tmp_path / "elsewhere"
+        real_target.mkdir()
+        app_dir = tmp_path / "jen"
+        app_dir.symlink_to(real_target)
+        r = _run(tmp_path, f'_layout_app_dir_not_preplanted "{app_dir}"')
+        assert r.returncode != 0
+        assert "symlink" in r.stdout
+
+    def test_app_dir_not_yet_existing_is_fine(self, tmp_path):
+        app_dir = tmp_path / "does-not-exist-yet"
+        r = _run(tmp_path, f'_layout_app_dir_not_preplanted "{app_dir}"; echo "rc=$?"')
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "rc=0" in r.stdout
 
 
 class TestExistingLayoutFile:

@@ -430,6 +430,15 @@ _layout_not_nested() {
 # could redirect" reasoning, applied here to where root is about to build
 # app_dir's tree).
 _layout_parents_root_owned() {
+    # v5.67.0 (Q114) — non-root OWNERSHIP of an existing ancestor is still a
+    # hard refusal: that means someone other than root administers the
+    # path at all. A merely group/other-WRITABLE root-owned ancestor
+    # (found in CI: GitHub's hosted runner image ships /opt mode 777, for
+    # its own tool-cache installers) is only a warning — real-world FHS
+    # permissiveness varies and this alone doesn't let anyone redirect
+    # app_dir once it exists; _layout_app_dir_not_preplanted (below) is
+    # what actually closes the "app_dir already exists as a symlink,
+    # planted before root ever ran this" attack the whole check exists for.
     local path="$1" dir owner mode
     dir="$path"
     while [[ "$dir" != "/" ]]; do
@@ -441,9 +450,24 @@ _layout_parents_root_owned() {
             fatal "app_dir's existing parent $dir is not root-owned (uid $owner) — refusing to install under it."
         fi
         if [[ -n "$mode" ]] && (( (8#$mode & 8#0022) != 0 )); then
-            fatal "app_dir's existing parent $dir is writable by group or other (mode $mode) — refusing to install under it."
+            warn "app_dir's existing parent $dir is writable by group or other (mode $mode)."
         fi
     done
+    return 0
+}
+
+# _layout_app_dir_not_preplanted PATH — if PATH already exists, it must not
+# be a symlink: the actual attack a permissive ancestor (above) would
+# otherwise enable is someone pre-creating app_dir itself as a symlink
+# before root ever runs install.sh, so root's writes land wherever that
+# symlink points instead. A non-symlink existing app_dir (e.g. a prior
+# install's own directory, on --upgrade) is fine — this only refuses the
+# redirect case.
+_layout_app_dir_not_preplanted() {
+    local path="$1"
+    if [[ -L "$path" ]]; then
+        fatal "app_dir ($path) already exists and is a symlink — refusing to install through it."
+    fi
     return 0
 }
 
@@ -524,6 +548,7 @@ _resolve_layout_dirs() {
     _layout_not_nested app_dir "$INSTALL_DIR" data_dir "$CONTENT_DIR"
     _layout_not_nested config_dir "$CONFIG_DIR" data_dir "$CONTENT_DIR"
     _layout_parents_root_owned "$INSTALL_DIR"
+    _layout_app_dir_not_preplanted "$INSTALL_DIR"
 }
 
 # _layout_path_ok's normpath check shells out to python3 for exact parity
