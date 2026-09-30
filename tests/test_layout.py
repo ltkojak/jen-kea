@@ -192,6 +192,21 @@ class TestParentDirectoryPermissiveness:
         assert "rc=0" in r.stdout
 
 
+# A pytest CI job (unlike the `install` job) runs as a plain, non-root
+# user, so tests that only want to exercise what happens with an already
+# TRUSTED layout file (parsing, disagreement-refusal, adoption) can't
+# construct one for real — _validate_layout_file_or_fatal's "owned by
+# root" check would fire first and mask the thing being tested. Bypassed
+# with a post-source function override, the same technique
+# tests/test_kea_helper.py already uses for jen-kea-helper's own
+# analogous _bin_dir_ok check (monkeypatch.setattr(helper, "_bin_dir_ok",
+# lambda d: True)) — the trust check itself has its own dedicated tests
+# below (test_non_root_owned_layout_file_is_refused,
+# test_group_writable_layout_file_is_refused,
+# test_symlinked_layout_file_is_refused).
+_BYPASS_FILE_TRUST_CHECK = "_validate_layout_file_or_fatal() { :; }\n"
+
+
 class TestExistingLayoutFile:
     def _write_layout(self, tmp_path, app="/srv/jen/app", config="/srv/jen/etc", data="/srv/jen/data"):
         layout = tmp_path / "jen-layout.conf"
@@ -206,7 +221,8 @@ class TestExistingLayoutFile:
         layout = self._write_layout(tmp_path)
         r = _run(
             tmp_path,
-            f"""
+            _BYPASS_FILE_TRUST_CHECK
+            + f"""
             LAYOUT_FILE="{layout}"
             _resolve_layout_dirs
             echo "$INSTALL_DIR|$CONFIG_DIR|$CONTENT_DIR"
@@ -219,7 +235,8 @@ class TestExistingLayoutFile:
         layout = self._write_layout(tmp_path)
         r = _run(
             tmp_path,
-            f"""
+            _BYPASS_FILE_TRUST_CHECK
+            + f"""
             LAYOUT_FILE="{layout}"
             OPT_APP_DIR="/somewhere/else"
             _resolve_layout_dirs
@@ -232,7 +249,8 @@ class TestExistingLayoutFile:
         layout = self._write_layout(tmp_path)
         r = _run(
             tmp_path,
-            f"""
+            _BYPASS_FILE_TRUST_CHECK
+            + f"""
             LAYOUT_FILE="{layout}"
             OPT_APP_DIR="/srv/jen/app"
             _resolve_layout_dirs
@@ -251,9 +269,24 @@ class TestExistingLayoutFile:
         assert "owned by root" in r.stdout
 
     def test_group_writable_layout_file_is_refused(self, tmp_path):
+        # Same non-root CI constraint as above, but this test's whole
+        # point IS the mode check — bypass only the owner/group portion
+        # (which a non-root-created file could never pass) and keep the
+        # real mode check intact.
         layout = self._write_layout(tmp_path)
         os.chmod(layout, 0o664)
-        r = _run(tmp_path, f'LAYOUT_FILE="{layout}"\n_resolve_layout_dirs')
+        bypass_owner_only = (
+            "_validate_layout_file_or_fatal() {\n"
+            '    local f="$1" mode\n'
+            '    [[ -L "$f" ]] && fatal "$f must be a regular file, not a symlink."\n'
+            '    [[ -f "$f" ]] || fatal "$f exists but is not a regular file."\n'
+            '    mode=$(stat -c \'%a\' "$f" 2>/dev/null || stat -f \'%OLp\' "$f" 2>/dev/null || echo "")\n'
+            '    if [[ -n "$mode" ]] && (( (8#$mode & 8#0022) != 0 )); then\n'
+            '        fatal "$f is writable by group or other (mode $mode) — refusing to trust it."\n'
+            "    fi\n"
+            "}\n"
+        )
+        r = _run(tmp_path, bypass_owner_only + f'LAYOUT_FILE="{layout}"\n_resolve_layout_dirs')
         assert r.returncode != 0
         assert "writable by group or other" in r.stdout
 
