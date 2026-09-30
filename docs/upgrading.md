@@ -269,6 +269,18 @@ candidates by hand for testing; a normal Update helper click on an
 official release is unaffected. `HELPER_BUILD` moves to 9 with this
 release.
 
+## Add Reservation no longer defaults to the first subnet
+
+As of 5.66.0-beta.8, opening "Create reservation" for a device already
+known to Jen — from the Devices page, a lease row, or either bundled
+plugin's own page — resolves the subnet from where that device actually
+is: its own link parameter, the address's range, or the device's current
+MAC, in that order. When none of that can be resolved, the form now opens
+on a "Choose a subnet…" placeholder instead of silently picking the first
+one in the list. If you have a saved link or bookmark that opens this form
+with `?subnet=` instead of `?subnet_id=`, it still works — that name is
+kept as an alias.
+
 ## A few things that will just already be fixed
 
 None of these need anything from you — they're upgrades you get for

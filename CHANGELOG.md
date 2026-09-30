@@ -2,6 +2,49 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.66.0-beta.8] - 2026-09-30
+
+A maintainer report: "Create reservation" for a device already leased at
+`10.10.30.56`, the IoT subnet, opened the form with a completely different
+subnet selected. IP, MAC and hostname were prefilled correctly — saving as
+offered would have asked Kea for a reservation in the wrong subnet. The
+form's subnet select had always just shown whatever came first; nothing
+ever told it which subnet a given device was actually in, and three of the
+four links that open the form on a device either sent the wrong query
+parameter or none at all.
+
+**The form no longer defaults to the first subnet.** Add Reservation now
+resolves the subnet itself, first hit wins, and only ever from a subnet the
+signed-in user can access: the `subnet_id` on the link, then `subnet` (the
+older parameter name some links still carried), then the subnet whose own
+address range contains the prefilled IP, then the subnet the device's MAC
+is currently in. When none of that resolves anything, the form opens on a
+disabled "Choose a subnet…" placeholder instead of picking one for you —
+the first option is never a silent default again. The IPv6 form got the
+same placeholder. Every link that opens this form now sends the right
+parameter and properly encodes it, including the Devices page's own row
+action, which had never sent a subnet at all; the two bundled plugins that
+also open this form (IPAM Lite, Network Discovery) fixed their own copies
+of the same link.
+
+**The form follows the address you type.** While the subnet select hasn't
+been touched by hand, changing the IP field keeps the selection matched to
+whatever address is typed; if the two ever disagree, an inline note says
+so and names the subnet the address actually belongs to.
+
+**Two more bugs, found while fixing this one.** Every failure on this
+form — an invalid field, an inaccessible subnet, an error back from Kea —
+used to redirect to a blank form, losing everything already typed, notes
+included. It now shows the same form again with every field exactly as
+submitted. And nothing on Jen's side ever checked that the address
+actually belonged to the subnet chosen before asking Kea to reserve it;
+Kea's own reservation-add command already refuses that exact mismatch, so
+Jen now catches it first and says specifically which subnet the address
+really belongs to, rather than just relaying Kea's own error text
+afterward. The IPv6 form's POST route gained a matching check of its own —
+it had only ever confirmed a subnet existed, never that the signed-in user
+could actually see it.
+
 ## [5.66.0-beta.7] - 2026-09-30
 
 A third-party review of the signed helper-update machinery found a real
