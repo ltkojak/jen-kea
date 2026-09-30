@@ -2,6 +2,42 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.66.0-beta.9] - 2026-09-30
+
+A finding from the same session that stood up the real-database system
+suite: bundled Host Watchdog's own periodic schedule has never recorded a
+single check, for any target, on any install, since it first shipped.
+`_tick()`'s own query selected every column its pure `due_targets()`
+needed to decide anything was due except `enabled` — so every row it
+fetched had no `enabled` key at all, `due_targets()`'s own first line
+skipped every target unconditionally, and the schedule returned before
+ever writing a check. Manual "Check now" was never affected — it calls
+the probe directly, not through this path.
+
+**jen-plugin-watchdog 1.0.5** adds the one missing word to the query, and
+a regression that calls the real `_tick()` end to end rather than the
+pure functions it calls in isolation — exactly the seam the bug lived in
+and the plugin's own harness had never actually exercised.
+
+**The bundled copy had already been hand-patched** to unblock a system
+scenario, while the registry itself stayed pinned to the still-broken
+1.0.4 — the next ordinary bundled resync would have quietly overwritten
+the fix with the registry's own stale version. The bundled copy is
+confirmed byte-identical to the tagged 1.0.5 release and the registry is
+re-pinned to it.
+
+**Every bundled plugin's periodic job gets a net.** A new test loads
+every bundled plugin against a real, fully-built app and the real test
+database, reads back the actual function each plugin handed to
+`register_periodic`, seeds one representative row through that plugin's
+own tables, stubs only its network-touching primitive, and calls every
+job once — asserting it never raises, and, for the four plugins whose job
+writes a state or history table when it works (Host Watchdog, Network
+Discovery, Local DNS Sync, Presence), that it actually wrote one. A job
+that runs clean and writes nothing over a seeded target — exactly what
+Watchdog's own schedule did, silently, for five releases — is the
+failure this test now exists to catch.
+
 ## [5.66.0-beta.8] - 2026-09-30
 
 A maintainer report: "Create reservation" for a device already leased at
