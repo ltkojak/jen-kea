@@ -44,13 +44,34 @@ class TestReleaseWorkflowExists:
         assert "\t" not in _text()
 
 
-class TestTestedRefMatchesSignedRef:
-    """v5.66.0-beta.2 (Q104, item e/f) — tests.yml gains a `ref` input (default '', so
-    ci.yml and any other existing caller are unaffected); release.yml's own checkout and
-    its call into tests.yml both pass the SAME expression, so the commit that gets
-    archived, signed and note-extracted is provably the one CI just tested."""
+class TestTagResolvedOnceToOneSHA:
+    """v5.66.0-beta.7 (Q109, item d) — a tag name is a mutable pointer. release.yml used to
+    resolve it THREE separate times (its own checkout, the called tests.yml's checkout, and
+    the git-archive step) via the same textual expression — safe only as long as nothing moved
+    the tag in between. A `resolve` job now runs first, resolves the tag to ONE commit SHA via
+    `git rev-parse "<tag>^{commit}"`, and every later job/step uses that SHA; the tag name is
+    looked at again only once more, immediately before publishing, to refuse a tag that has
+    moved since resolution. Invariant: the SHA tested is the SHA archived, signed and
+    published."""
 
-    _REF_EXPR = "${{ github.event.inputs.tag || github.ref }}"
+    def test_resolve_job_exists_and_runs_before_test_and_release(self):
+        text = _text()
+        assert "resolve:" in text
+        assert text.index("resolve:") < text.index("\n  test:")
+        assert text.index("\n  test:") < text.index("\n  release:")
+
+    def test_resolve_job_outputs_sha_and_tag(self):
+        text = _text()
+        resolve_block = text[text.index("resolve:") : text.index("\n  test:")]
+        assert "outputs:" in resolve_block
+        assert "sha: ${{ steps.resolve.outputs.sha }}" in resolve_block
+        assert "tag: ${{ steps.resolve.outputs.tag }}" in resolve_block
+
+    def test_resolve_step_uses_rev_parse_commit_peel(self):
+        text = _text()
+        resolve_block = text[text.index("resolve:") : text.index("\n  test:")]
+        assert 'git rev-parse "${TAG}^{commit}"' in resolve_block
+        assert 'echo "sha=$SHA" >> "$GITHUB_OUTPUT"' in resolve_block
 
     def test_tests_workflow_call_declares_a_ref_input_defaulting_to_empty(self):
         text = _tests_text()
@@ -69,16 +90,39 @@ class TestTestedRefMatchesSignedRef:
         text = _CI.read_text(encoding="utf-8")
         assert "ref:" not in text
 
-    def test_release_job_checkout_uses_the_same_ref_expression(self):
+    def test_test_job_needs_resolve_and_uses_its_sha(self):
         text = _text()
-        checkout_block = text[text.index("release:") : text.index("Extract version info")]
-        assert self._REF_EXPR in checkout_block
-
-    def test_release_passes_the_same_ref_into_the_called_tests_workflow(self):
-        text = _text()
-        test_job_block = text[text.index("test:") : text.index("release:")]
+        test_job_block = text[text.index("\n  test:") : text.index("\n  release:")]
+        assert "needs: resolve" in test_job_block
         assert "with:" in test_job_block
-        assert self._REF_EXPR in test_job_block
+        assert "ref: ${{ needs.resolve.outputs.sha }}" in test_job_block
+
+    def test_release_job_needs_resolve_and_test(self):
+        text = _text()
+        release_start = text.index("\n  release:")
+        release_header = text[release_start : text.index("steps:", release_start)]
+        assert "needs: [resolve, test]" in release_header
+
+    def test_release_job_checkout_uses_the_resolved_sha(self):
+        text = _text()
+        checkout_block = text[text.index("\n  release:") : text.index("Extract version info")]
+        assert "ref: ${{ needs.resolve.outputs.sha }}" in checkout_block
+
+    def test_archive_uses_the_resolved_sha_not_the_tag_name(self):
+        text = _text()
+        assert 'git archive --format=tar --prefix=jen/ "${{ needs.resolve.outputs.sha }}"' in text
+
+    def test_tag_is_reresolved_and_compared_immediately_before_publishing(self):
+        text = _text()
+        assert "Confirm the tag has not moved" in text
+        confirm_step = text[text.index("Confirm the tag has not moved") : text.index("Extract release notes")]
+        assert 'git rev-parse "${{ needs.resolve.outputs.tag }}^{commit}"' in confirm_step
+        assert "exit 1" in confirm_step
+        assert text.index("Confirm the tag has not moved") < text.index("Create GitHub Release")
+
+    def test_the_confirm_step_runs_after_both_signatures_are_verified(self):
+        text = _text()
+        assert text.index("Verify both signatures") < text.index("Confirm the tag has not moved")
 
 
 class TestKeaHelperSigningStep:
@@ -151,8 +195,10 @@ class TestHelperSignatureAppendedIntoTarball:
     tarball)."""
 
     def test_tar_is_built_uncompressed_first(self):
+        # v5.66.0-beta.7 (Q109, item d) — archived from the resolve() job's SHA now, not the
+        # tag name; see TestTagResolvedOnceToOneSHA.
         text = _text()
-        assert 'git archive --format=tar --prefix=jen/ "${{ steps.version.outputs.tag }}"' in text
+        assert 'git archive --format=tar --prefix=jen/ "${{ needs.resolve.outputs.sha }}"' in text
 
     def test_the_signature_is_appended_before_gzipping(self):
         text = _text()

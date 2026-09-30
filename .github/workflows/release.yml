@@ -11,20 +11,54 @@ on:
         required: true
 
 jobs:
+  resolve:
+    # v5.66.0-beta.7 (Q109, item d) — a tag is a mutable pointer, and this workflow used to
+    # resolve it THREE separate times (this job's own checkout below, the called tests.yml's
+    # checkout, and the git-archive step) via the same textual expression — safe only as long
+    # as nothing ever moved the tag in between. Resolve it to one commit SHA exactly once,
+    # here, first: every later job and step uses that SHA, never the tag name again, except
+    # for the one deliberate re-check immediately before publishing (see "Confirm the tag has
+    # not moved" below). The invariant: the SHA tested is the SHA archived, signed and
+    # published.
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Resolve the tag to one commit SHA
+        id: resolve
+        run: |
+          # Support both tag push and manual workflow_dispatch
+          if [[ -n "${{ github.event.inputs.tag }}" ]]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          SHA="$(git rev-parse "${TAG}^{commit}")"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Resolved $TAG -> $SHA"
+
   test:
+    needs: resolve
     uses: ./.github/workflows/tests.yml
     permissions:
       contents: read
     with:
-      # v5.66.0-beta.2 (Q104) — test the exact commit this job is about to archive, sign
-      # and extract release notes from below, not whatever main has drifted to since (a
-      # workflow_dispatch's default ref is the branch it was run from, not the tag).
-      ref: ${{ github.event.inputs.tag || github.ref }}
+      # v5.66.0-beta.7 (Q109) — the exact commit resolve() just pinned, not the tag name
+      # (which could move again while this job runs).
+      ref: ${{ needs.resolve.outputs.sha }}
     secrets:
       JEN_DOCS_FORBIDDEN: ${{ secrets.JEN_DOCS_FORBIDDEN }}
 
   release:
-    needs: test
+    needs: [resolve, test]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -33,18 +67,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ needs.resolve.outputs.sha }}
           fetch-depth: 0
 
       - name: Extract version info
         id: version
         run: |
-          # Support both tag push and manual workflow_dispatch
-          if [[ -n "${{ github.event.inputs.tag }}" ]]; then
-            TAG="${{ github.event.inputs.tag }}"
-          else
-            TAG="${GITHUB_REF_NAME}"
-          fi
+          TAG="${{ needs.resolve.outputs.tag }}"
           VERSION="${TAG#v}"
           MAJOR=$(echo "$VERSION" | cut -d. -f1)
           MINOR=$(echo "$VERSION" | cut -d. -f2)
@@ -66,7 +95,9 @@ jobs:
           # signature is appended inside this tar (below) before it's ever gzipped, so
           # a tarball install always has jen-kea-helper.sig sitting next to jen-kea-helper
           # with no separate fetch needed.
-          git archive --format=tar --prefix=jen/ "${{ steps.version.outputs.tag }}" \
+          # v5.66.0-beta.7 (Q109, item d) — archived by the RESOLVED SHA, not the tag name:
+          # the tag is only ever a human label from here on, never what actually gets built.
+          git archive --format=tar --prefix=jen/ "${{ needs.resolve.outputs.sha }}" \
             -o dist/jen-v${{ steps.version.outputs.version }}.tar
           echo "Tar built: $(ls -lh dist/)"
 
@@ -150,6 +181,20 @@ jobs:
           ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper \
             -s jen-kea-helper.sig < jen-kea-helper
           echo "Both signatures verified against the tarball's own RELEASE_SIGNERS."
+
+      - name: Confirm the tag has not moved
+        # v5.66.0-beta.7 (Q109, item d) — everything above was tested, archived and signed
+        # from the SHA resolve() pinned at the very start of this run. Re-resolve the tag
+        # name one last time, right before publishing: if it now points somewhere else (force-
+        # pushed, deleted and recreated while this run was in flight), refuse rather than
+        # publish a release whose assets don't match what the tag currently names.
+        run: |
+          CURRENT="$(git rev-parse "${{ needs.resolve.outputs.tag }}^{commit}")"
+          if [[ "$CURRENT" != "${{ needs.resolve.outputs.sha }}" ]]; then
+            echo "::error::${{ needs.resolve.outputs.tag }} now points at $CURRENT, not the resolved ${{ needs.resolve.outputs.sha }} tested and archived above — refusing to publish a stale commit."
+            exit 1
+          fi
+          echo "${{ needs.resolve.outputs.tag }} still points at ${{ needs.resolve.outputs.sha }} — publishing."
 
       - name: Extract release notes from CHANGELOG
         id: notes
