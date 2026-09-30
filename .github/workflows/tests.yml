@@ -270,6 +270,275 @@ jobs:
       - name: shellcheck (errors)
         run: shellcheck -S error install.sh uninstall.sh
 
+  # v5.67.0 (Q113) — install.sh had never actually been run by anything
+  # before this: CI provisioned /opt/jen and /etc/jen by hand and the
+  # system-test suite runs Jen in Docker. This runs the REAL script
+  # against REAL systemd, REAL sudo, a REAL MariaDB and a REAL kea-dhcp4,
+  # on both Ubuntu releases the README claims support for: a fresh
+  # install from an --answers file, the upgrade every operator is about
+  # to make (latest stable, signature-verified, then this commit's
+  # tarball over it), and uninstall. Gates release.yml the same way
+  # every job in this reusable workflow does.
+  install:
+    name: install.sh (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+
+    env:
+      JEN_ROOT: ${{ github.workspace }}
+      # v5.67.0-beta.1 (Q113): kept in sync with kea-compat.yml's own
+      # non-dev matrix legs by hand — this job needs exactly one real,
+      # stable Kea, not the whole compatibility matrix.
+      KEA_IMAGE: docker.cloudsmith.io/isc/docker/kea-dhcp4:3.2.0
+
+    # Kea's own database. Jen's database is provisioned on this same
+    # server in a step below — the common real-world topology (both on
+    # one host) needs only one MariaDB image running, not two.
+    services:
+      database:
+        image: mariadb:11.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_pw
+          MYSQL_DATABASE: kea
+          MYSQL_USER: kea
+          MYSQL_PASSWORD: kea_pw
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mariadb-admin ping -h 127.0.0.1 -u root -pci_root_pw"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies (for the Kea config generator)
+        run: pip install -q -r requirements.txt
+
+      - name: Create Jen's database
+        # Same server as Kea's, a separate database and user — the
+        # topology install.sh's own wizard describes for "Jen DB host"
+        # defaulting to the Kea DB host.
+        run: |
+          mysql -h 127.0.0.1 -u root -pci_root_pw -e "
+            CREATE DATABASE jen;
+            CREATE USER 'jen'@'%' IDENTIFIED BY 'jen_pw';
+            GRANT ALL PRIVILEGES ON jen.* TO 'jen'@'%';
+            FLUSH PRIVILEGES;"
+
+      - name: Install the Kea MySQL schema
+        # Same recipe as kea-compat.yml: no kea-admin image is published,
+        # so borrow the daemon image (it already has ISC's apk repo
+        # configured) at the SAME version the schema must match.
+        run: |
+          docker pull "$KEA_IMAGE"
+          docker run --rm --network host --entrypoint ash "$KEA_IMAGE" -c '
+            set -e
+            apk add --no-cache curl bash >/dev/null
+            curl -1sLf "https://dl.cloudsmith.io/public/isc/kea-3-2/setup.alpine.sh" | bash >/dev/null
+            apk update >/dev/null
+            apk add --no-cache mariadb-client "isc-kea-admin~=3.2.0" >/dev/null
+            echo "[client]" > /etc/my.cnf.d/nossl.cnf
+            echo "skip-ssl" >> /etc/my.cnf.d/nossl.cnf
+            kea-admin db-init mysql -h 127.0.0.1 -u kea -p kea_pw -n kea
+          '
+
+      - name: Start kea-dhcp4
+        run: |
+          mkdir -p kea-conf
+          python -m tests.kea_compat.kea_config > kea-conf/kea-dhcp4.conf
+          printf '%s' jen > kea-conf/jen-api.user
+          printf '%s' jen_api_pw > kea-conf/jen-api.pw
+          chmod 644 kea-conf/jen-api.user kea-conf/jen-api.pw
+          docker run -d --name kea --network host --tmpfs /var/run/kea \
+            -e MARIADB_TLS_DISABLE_PEER_VERIFICATION=1 \
+            -v "$PWD/kea-conf:/etc/kea:ro" "$KEA_IMAGE"
+          for i in $(seq 1 30); do
+            if curl -sf -m 2 -H 'Content-Type: application/json' \
+                 -u jen:jen_api_pw -d '{"command":"version-get"}' http://127.0.0.1:8004/ >/dev/null; then
+              echo "kea-dhcp4 answered after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::kea-dhcp4 never answered on :8004"
+          docker logs kea
+          exit 1
+
+      - name: Build this commit's tarball
+        run: |
+          mkdir -p dist
+          git archive --format=tar --prefix=jen/ HEAD | gzip -9 > dist/jen-head.tar.gz
+          ls -lh dist/
+
+      - name: Write the answers file
+        # v5.67.0 (Q113) — JEN_INITIAL_ADMIN_PASSWORD set means init_jen_db()
+        # seeds the admin account with THIS password and must_change_password=0
+        # (see jen/models/db.py) — the login assertion below logs in with it.
+        run: |
+          umask 077
+          cat > "$RUNNER_TEMP/answers.env" << 'EOF'
+          JEN_KEA_API_URL=http://127.0.0.1:8004
+          JEN_KEA_API_USER=jen
+          JEN_KEA_API_PASS=jen_api_pw
+          JEN_KEA_DB_HOST=127.0.0.1
+          JEN_KEA_DB_USER=kea
+          JEN_KEA_DB_PASS=kea_pw
+          JEN_KEA_DB_NAME=kea
+          JEN_DB_HOST=127.0.0.1
+          JEN_DB_USER=jen
+          JEN_DB_PASS=jen_pw
+          JEN_DB_NAME=jen
+          JEN_INITIAL_ADMIN_PASSWORD=ci-test-passw0rd-!
+          JEN_SUBNETS=1=Test,10.99.0.0/24
+          JEN_HTTP_PORT=5050
+          JEN_HTTPS_PORT=8443
+          EOF
+
+      - name: Fresh install from the answers file
+        run: |
+          mkdir -p "$RUNNER_TEMP/install-head"
+          tar xzf dist/jen-head.tar.gz -C "$RUNNER_TEMP/install-head"
+          cd "$RUNNER_TEMP/install-head/jen"
+          sudo ./install.sh --answers "$RUNNER_TEMP/answers.env" --unattended
+
+      - name: Assert the fresh install is real
+        run: |
+          set -e
+          systemctl is-active --quiet jen
+          systemctl is-enabled --quiet jen
+          echo "service active and enabled"
+
+          curl -sf http://127.0.0.1:5050/api/v1/health | grep -q jen_version
+          echo "health endpoint answers"
+
+          [[ "$(sudo stat -c '%U:%G' /opt/jen/current/app/run.py)" == "root:root" ]]
+          sudo -u www-data test ! -w /opt/jen/current/app/run.py
+          echo "app tree root-owned, not writable by the service user"
+
+          [[ "$(sudo stat -c '%a' /etc/jen/jen.config)" == "600" ]]
+          [[ "$(sudo stat -c '%U:%G' /etc/jen/jen.config)" == "www-data:www-data" ]]
+          echo "jen.config is 0600, service-owned"
+
+          sudo visudo -c -f /etc/sudoers.d/jen
+          echo "sudoers entry is valid"
+
+          systemctl cat jen-update.service >/dev/null
+          systemctl cat jen-plugin-install.service >/dev/null
+          echo "the three units are installed"
+
+          cookie="$RUNNER_TEMP/cookies.txt"
+          csrf=$(curl -sc "$cookie" http://127.0.0.1:5050/login | grep -oP 'name="csrf_token" value="\K[^"]+' | head -1)
+          [[ -n "$csrf" ]]
+          code=$(curl -sb "$cookie" -c "$cookie" -X POST http://127.0.0.1:5050/login \
+            -d "username=admin&password=ci-test-passw0rd-!&csrf_token=$csrf" \
+            -o /dev/null -w '%{http_code}')
+          [[ "$code" =~ ^3 ]]
+          echo "logged in as admin with the answers file's own password"
+
+      - name: Uninstall (interim reset before the stable jump)
+        working-directory: ${{ runner.temp }}/install-head/jen
+        run: printf 'y\n1\n' | sudo ./uninstall.sh
+
+      - name: Fetch the latest stable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/stable"
+          gh release download --repo "${{ github.repository }}" \
+            --pattern 'jen-v*.tar.gz' --pattern 'SHA256SUMS*' --dir "$RUNNER_TEMP/stable"
+          ls -lh "$RUNNER_TEMP/stable"
+
+      - name: Verify the stable release's signature
+        # Same verification release.yml runs on itself before publishing
+        # (ssh-keygen -Y verify against RELEASE_SIGNERS as extracted from
+        # the downloaded tarball's OWN jen-update-root.py) — a public-key
+        # check, no secret needed to verify, only to sign.
+        run: |
+          cd "$RUNNER_TEMP/stable"
+          tarball="$(ls jen-v*.tar.gz)"
+          signers_line="$(tar xzf "$tarball" jen/jen-update-root.py -O \
+            | sed -n 's/^RELEASE_SIGNERS = "\(.*\)"$/\1/p')"
+          [[ -n "$signers_line" ]] || { echo "::error::no RELEASE_SIGNERS in the downloaded tarball"; exit 1; }
+          printf '%s\n' "$signers_line" > allowed_signers
+          ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-release \
+            -s SHA256SUMS.sig < SHA256SUMS
+          sha256sum -c --ignore-missing SHA256SUMS
+          echo "Latest stable release verified."
+
+      - name: Fresh install (latest stable) — the upgrade's starting point
+        run: |
+          mkdir -p "$RUNNER_TEMP/install-stable"
+          tar xzf "$RUNNER_TEMP/stable"/jen-v*.tar.gz -C "$RUNNER_TEMP/install-stable"
+          cd "$RUNNER_TEMP/install-stable/jen"
+          sudo ./install.sh --answers "$RUNNER_TEMP/answers.env" --unattended
+
+      - name: Assert the stable baseline is healthy
+        run: |
+          systemctl is-active --quiet jen
+          curl -sf http://127.0.0.1:5050/api/v1/health | grep -q jen_version
+
+      - name: Upgrade to this commit
+        working-directory: ${{ runner.temp }}/install-head/jen
+        run: sudo ./install.sh --unattended
+
+      - name: Assert the upgrade is healthy and data survived
+        run: |
+          set -e
+          systemctl is-active --quiet jen
+          curl -sf http://127.0.0.1:5050/api/v1/health | grep -q jen_version
+          echo "healthy after upgrade"
+
+          test -d /opt/jen/releases
+          [[ $(find /opt/jen/releases -mindepth 1 -maxdepth 1 -type d | wc -l) -ge 2 ]]
+          echo "the previous release directory is kept for rollback"
+
+          cookie="$RUNNER_TEMP/cookies2.txt"
+          csrf=$(curl -sc "$cookie" http://127.0.0.1:5050/login | grep -oP 'name="csrf_token" value="\K[^"]+' | head -1)
+          code=$(curl -sb "$cookie" -c "$cookie" -X POST http://127.0.0.1:5050/login \
+            -d "username=admin&password=ci-test-passw0rd-!&csrf_token=$csrf" \
+            -o /dev/null -w '%{http_code}')
+          [[ "$code" =~ ^3 ]]
+          echo "the admin account from before the upgrade is still there"
+
+      - name: Uninstall
+        working-directory: ${{ runner.temp }}/install-head/jen
+        run: printf 'y\n1\n' | sudo ./uninstall.sh
+
+      - name: Assert uninstall left what docs/installation.md promises
+        run: |
+          set -e
+          [[ ! -d /opt/jen ]]
+          [[ ! -f /etc/systemd/system/jen.service ]]
+          [[ ! -f /etc/sudoers.d/jen ]]
+          sudo test -f /etc/jen/jen.config
+          sudo test -d /etc/jen/ssl
+          sudo test -d /etc/jen/ssh
+          sudo test -d /var/lib/jen
+          echo "app + service + sudoers removed; config, SSL, SSH and content preserved"
+
+      - name: Kea log on failure
+        if: failure()
+        run: docker logs kea 2>&1 | tail -100 || true
+
+      - name: Jen service log on failure
+        if: failure()
+        run: sudo journalctl -u jen -n 200 --no-pager || true
+
   bandit:
     runs-on: ubuntu-latest
     steps:

@@ -10,6 +10,16 @@
 #    sudo ./install.sh --repair      Reinstall files + restart, keep config
 #    sudo ./install.sh --unattended  Fully silent upgrade (CI/CD)
 #    sudo ./install.sh --docker      Docker installation path
+#    sudo ./install.sh --answers <file>
+#                                    Fresh install from a KEY=value file (the
+#                                    same JEN_* names as .env.example) instead
+#                                    of the interactive wizard. With a TTY,
+#                                    only what the file leaves out is still
+#                                    asked; without one, a missing required
+#                                    value is a fatal error naming it. The
+#                                    same JEN_* names also work as plain
+#                                    environment variables, with the file
+#                                    (when given) taking priority.
 #    sudo ./install.sh --restore <bundle.tar.enc>
 #                                    Restore a recovery bundle (Settings → Databases
 #                                    → Recovery) onto this install — run AFTER a normal
@@ -82,10 +92,17 @@ EXISTING_VERSION=""
 # on an upgrade; fatal() rolls back automatically while this is set (below).
 ROLLBACK_ARMED=false
 
+# v5.67.0 (Q113) — a fresh install can be driven from a file instead of the
+# interactive wizard. Same KEY=value vocabulary as .env.example/run.py's
+# JEN_* Docker variables (see _cfgval below) so there is exactly one set of
+# names to learn across bare metal and Docker.
+ANSWERS_FILE=""
+declare -A ANSWERS
+
 # v5.44.0 (Q45) — --restore takes the bundle path as its own next
 # argument, unlike every other flag here, so this loop is index-based
 # (shift) rather than the plain `for arg in "$@"` every other flag
-# still uses.
+# still uses. --answers (Q113) needs the same shift.
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --upgrade)     MODE_UPGRADE=true ;;
@@ -93,6 +110,10 @@ while [[ $# -gt 0 ]]; do
         --repair)      MODE_REPAIR=true ;;
         --unattended)  MODE_UNATTENDED=true ;;
         --docker)      MODE_DOCKER=true ;;
+        --answers)
+            shift
+            ANSWERS_FILE="${1:-}"
+            ;;
         --restore)
             MODE_RESTORE=true
             shift
@@ -206,6 +227,98 @@ prompt_choice() {
     printf "  ${Y}  ▸${NC} Choice [${C}%s${NC}]: " "$default" > /dev/tty
     read -r answer < /dev/tty
     echo "${answer:-$default}"
+}
+
+# ── Answers file (v5.67.0, Q113) ─────────────────────────────────────────────
+# A fresh install's non-interactive source of truth: KEY=value lines, the
+# same JEN_* names .env.example and run.py's Docker env-var path already
+# use. Read line by line, never sourced — no character an answer's value
+# might contain (`$`, backticks, `;`) is ever handed to the shell to
+# interpret. Refused unless it is a regular file, not a symlink, and not
+# writable by group or other (it can carry passwords).
+HAVE_TTY=false
+[[ -t 0 ]] && HAVE_TTY=true
+
+_load_answers_file() {
+    local f="$1"
+    [[ -e "$f" ]] || fatal "Answers file not found: $f"
+    [[ -L "$f" ]] && fatal "Answers file must be a regular file, not a symlink: $f"
+    [[ -f "$f" ]] || fatal "Answers file is not a regular file: $f"
+    local mode
+    mode=$(stat -c '%a' "$f" 2>/dev/null || stat -f '%OLp' "$f" 2>/dev/null || echo "")
+    # Group-write is octal 0020, other-write is 0002 — refuse if either bit
+    # is set, however many permission digits this stat happened to print.
+    if [[ -n "$mode" ]] && (( (8#$mode & 8#0022) != 0 )); then
+        fatal "Answers file is writable by group or other (mode $mode) — refusing: $f  (fix: chmod 600 $f)"
+    fi
+
+    local line key value
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%$'\r'}"                          # tolerate a CRLF file
+        [[ -z "$line" ]] && continue
+        [[ "$line" == \#* ]] && continue
+        [[ "$line" != *=* ]] && continue
+        key="${line%%=*}"
+        key="${key//[[:space:]]/}"
+        value="${line#*=}"
+        [[ -n "$key" ]] && ANSWERS["$key"]="$value"
+    done < "$f"
+}
+
+# _cfgval NAME — the raw resolved value (answers file, else JEN_<NAME> env,
+# else empty) with no prompting and no default. Used where a value's mere
+# presence matters (e.g. "was SSH configured at all?").
+_cfgval() {
+    local name="$1"
+    if [[ -n "${ANSWERS[$name]+x}" ]]; then
+        printf '%s' "${ANSWERS[$name]}"
+    elif [[ -n "${!name:-}" ]]; then
+        printf '%s' "${!name}"
+    fi
+}
+
+# _ask NAME "Question" "default" [required]
+# Resolution order: --answers file, then the JEN_<NAME> environment
+# variable — either one is used silently, with no prompt, matching the
+# non-interactive contract. Only when NEITHER supplies a value does this
+# fall back to the interactive prompt (when a TTY is available) or to
+# "default" (or a named fatal error, when "required" is passed and
+# "default" is empty).
+_ask() {
+    local name="$1" question="$2" default="$3" required="${4:-}"
+    if [[ -n "${ANSWERS[$name]+x}" ]]; then
+        printf '%s' "${ANSWERS[$name]}"; return
+    fi
+    if [[ -n "${!name:-}" ]]; then
+        printf '%s' "${!name}"; return
+    fi
+    if [[ "$HAVE_TTY" == "true" && "$MODE_UNATTENDED" == "false" ]]; then
+        prompt_input "$question" "$default"; return
+    fi
+    if [[ -z "$default" && "$required" == "required" ]]; then
+        fatal "Missing required value for $name — set it in --answers or the $name environment variable."
+    fi
+    printf '%s' "$default"
+}
+
+# _ask_secret NAME "Question" [required] — same resolution order as _ask,
+# but the interactive fallback never echoes and there is no "default" to
+# fall back to (a secret has none).
+_ask_secret() {
+    local name="$1" question="$2" required="${3:-}"
+    if [[ -n "${ANSWERS[$name]+x}" ]]; then
+        printf '%s' "${ANSWERS[$name]}"; return
+    fi
+    if [[ -n "${!name:-}" ]]; then
+        printf '%s' "${!name}"; return
+    fi
+    if [[ "$HAVE_TTY" == "true" && "$MODE_UNATTENDED" == "false" ]]; then
+        prompt_secret "$question"; return
+    fi
+    if [[ "$required" == "required" ]]; then
+        fatal "Missing required value for $name — set it in --answers or the $name environment variable."
+    fi
+    printf ''
 }
 
 # ── Spinner ───────────────────────────────────────────────────────────────────
@@ -500,6 +613,27 @@ test_mysql() {
     mysql -h"$host" -u"$user" -p"$pass" "$db" -e "SELECT 1;" &>/dev/null 2>&1
 }
 
+# v5.67.0 (Q113) — what collect_config does after a connection test fails.
+# Non-interactive (answers file, JEN_* env, or --unattended): just warn and
+# keep the value as typed — the retry/edit/continue choice only makes sense
+# with someone at the keyboard to ask. Interactive: unchanged from before
+# this Q for now (warn and continue); Q113 step 2 replaces this body with
+# the real retry/edit/continue prompt.
+_connection_failure_choice() {
+    local what="$1" detail="$2"
+    warn "Could not reach $what ($detail) — check the value and credentials after install"
+}
+
+_jen_db_failure_choice() {
+    warn "Could not connect to Jen database. Create it with:"
+    blank
+    echo -e "    ${C}CREATE DATABASE ${JEN_DB_NAME};${NC}"
+    echo -e "    ${C}CREATE USER '${JEN_DB_USER}'@'%' IDENTIFIED BY 'yourpassword';${NC}"
+    echo -e "    ${C}GRANT ALL PRIVILEGES ON ${JEN_DB_NAME}.* TO '${JEN_DB_USER}'@'%';${NC}"
+    echo -e "    ${C}FLUSH PRIVILEGES;${NC}"
+    blank
+}
+
 # ── Configuration wizard ──────────────────────────────────────────────────────
 collect_config() {
     blank
@@ -507,9 +641,16 @@ collect_config() {
     divider
     blank
 
-    # On upgrade with existing config — offer choices
+    # On upgrade with existing config — offer choices. v5.67.0 (Q113):
+    # MODE_UNATTENDED must short-circuit this the same way every other
+    # prompt in this script already does — this raw read was the one
+    # place that didn't, so `--unattended` on a box that already has a
+    # config tried to read /dev/tty and aborted under set -e instead of
+    # silently keeping the existing config the way the doc comment for
+    # --unattended promises.
     if [[ "$IS_UPGRADE" == "true" && -f "$CONFIG_FILE" && \
-          "$MODE_UPGRADE" == "false" && "$MODE_REPAIR" == "false" ]]; then
+          "$MODE_UPGRADE" == "false" && "$MODE_REPAIR" == "false" && \
+          "$MODE_UNATTENDED" == "false" ]]; then
         echo -e "  ${G}Existing config found:${NC} ${DIM}${CONFIG_FILE}${NC}"
         blank
         echo -e "    ${B}1)${NC}  Keep existing config  ${DIM}(recommended)${NC}"
@@ -532,7 +673,8 @@ collect_config() {
         [[ "$(prompt_yn "Are you sure?" "n")" == "n" ]] && \
             { blank; ok "Keeping existing configuration"; CONFIGURE=false; return; }
         CONFIGURE=true
-    elif [[ "$MODE_UPGRADE" == "true" || "$MODE_REPAIR" == "true" ]]; then
+    elif [[ "$MODE_UPGRADE" == "true" || "$MODE_REPAIR" == "true" || \
+            ( "$IS_UPGRADE" == "true" && -f "$CONFIG_FILE" && "$MODE_UNATTENDED" == "true" ) ]]; then
         blank
         ok "Keeping existing configuration"
         CONFIGURE=false
@@ -542,39 +684,47 @@ collect_config() {
     fi
 
     blank
-    info "Let's set up Jen. Press Enter to accept defaults shown in ${C}cyan${NC}."
+    if [[ -n "$ANSWERS_FILE" ]]; then
+        info "Configuring Jen from ${C}${ANSWERS_FILE}${NC}. Anything it leaves out is still asked below."
+    else
+        info "Let's set up Jen. Press Enter to accept defaults shown in ${C}cyan${NC}."
+    fi
     blank
 
     # ── Kea API ───────────────────────────────────────────────────────────────
     echo -e "  ${B}Kea Control Agent${NC}  ${DIM}(the Kea REST API)${NC}"
     blank
-    KEA_API_URL=$(prompt_input  "API URL"      "http://YOUR-KEA-SERVER:8000")
-    KEA_API_USER=$(prompt_input "API username" "kea-api")
-    KEA_API_PASS=$(prompt_secret "API password")
+    KEA_API_URL=$(_ask  "JEN_KEA_API_URL"  "API URL"      "http://YOUR-KEA-SERVER:8000")
+    KEA_API_USER=$(_ask "JEN_KEA_API_USER" "API username" "kea-api")
+    KEA_API_PASS=$(_ask_secret "JEN_KEA_API_PASS" "API password")
     blank
     spinner_start "Testing Kea API connection..."
     sleep 0.5
     if test_kea_api "$KEA_API_URL" "$KEA_API_USER" "$KEA_API_PASS"; then
         spinner_stop; ok "Kea API connection successful"
+        KEA_API_REACHABLE=true
     else
-        spinner_stop; warn "Could not reach Kea API — check URL and credentials after install"
+        spinner_stop
+        KEA_API_REACHABLE=false
+        _connection_failure_choice "Kea API" "$KEA_API_URL"
     fi
 
     # ── Kea DB ────────────────────────────────────────────────────────────────
     blank
     echo -e "  ${B}Kea MySQL Database${NC}"
     blank
-    KEA_DB_HOST=$(prompt_input  "Host"     "YOUR-KEA-SERVER")
-    KEA_DB_USER=$(prompt_input  "Username" "kea")
-    KEA_DB_PASS=$(prompt_secret "Password")
-    KEA_DB_NAME=$(prompt_input  "Database" "kea")
+    KEA_DB_HOST=$(_ask  "JEN_KEA_DB_HOST" "Host"     "YOUR-KEA-SERVER")
+    KEA_DB_USER=$(_ask  "JEN_KEA_DB_USER" "Username" "kea")
+    KEA_DB_PASS=$(_ask_secret "JEN_KEA_DB_PASS" "Password")
+    KEA_DB_NAME=$(_ask  "JEN_KEA_DB_NAME" "Database" "kea")
     blank
     spinner_start "Testing Kea database connection..."
     sleep 0.5
     if test_mysql "$KEA_DB_HOST" "$KEA_DB_USER" "$KEA_DB_PASS" "$KEA_DB_NAME"; then
         spinner_stop; ok "Kea database connection successful"
     else
-        spinner_stop; warn "Could not connect to Kea database — check credentials after install"
+        spinner_stop
+        _connection_failure_choice "Kea database" "${KEA_DB_USER}@${KEA_DB_HOST}/${KEA_DB_NAME}"
     fi
 
     # ── Jen DB ────────────────────────────────────────────────────────────────
@@ -586,10 +736,10 @@ collect_config() {
         blank
         echo -e "  ${B}Jen MySQL Database${NC}  ${DIM}(users, audit log, settings)${NC}"
         blank
-        JEN_DB_HOST=$(prompt_input  "Host"     "${KEA_DB_HOST:-localhost}")
-        JEN_DB_USER=$(prompt_input  "Username" "jen")
-        JEN_DB_PASS=$(prompt_secret "Password")
-        JEN_DB_NAME=$(prompt_input  "Database" "jen")
+        JEN_DB_HOST=$(_ask  "JEN_DB_HOST" "Host"     "${KEA_DB_HOST:-localhost}")
+        JEN_DB_USER=$(_ask  "JEN_DB_USER" "Username" "jen")
+        JEN_DB_PASS=$(_ask_secret "JEN_DB_PASS" "Password")
+        JEN_DB_NAME=$(_ask  "JEN_DB_NAME" "Database" "jen")
         blank
         spinner_start "Testing Jen database connection..."
         sleep 0.5
@@ -597,67 +747,107 @@ collect_config() {
             spinner_stop; ok "Jen database connection successful"
         else
             spinner_stop
-            warn "Could not connect to Jen database. Create it with:"
-            blank
-            echo -e "    ${C}CREATE DATABASE ${JEN_DB_NAME};${NC}"
-            echo -e "    ${C}CREATE USER '${JEN_DB_USER}'@'%' IDENTIFIED BY 'yourpassword';${NC}"
-            echo -e "    ${C}GRANT ALL PRIVILEGES ON ${JEN_DB_NAME}.* TO '${JEN_DB_USER}'@'%';${NC}"
-            echo -e "    ${C}FLUSH PRIVILEGES;${NC}"
-            blank
+            _jen_db_failure_choice
         fi
     fi
 
     # ── Admin password ────────────────────────────────────────────────────────
+    # v5.67.0 (Q113) — JEN_INITIAL_ADMIN_PASSWORD, same name the Docker path
+    # (.env.example, run.py) already uses. Left blank, Jen generates one
+    # itself on first start and writes it to
+    # $CONTENT_DIR/initial-admin-password (see write_config/_seed_jen_db,
+    # below) — the wizard's own confirm-twice loop stays for the TTY path
+    # since that is the one place a typo is otherwise invisible.
     if [[ "$IS_UPGRADE" == "false" ]]; then
         blank
         echo -e "  ${B}Admin Account${NC}"
         blank
-        local admin_pass admin_pass2
-        while true; do
-            admin_pass=$(prompt_secret "Admin password (min 8 chars)")
-            if [[ ${#admin_pass} -lt 8 ]]; then
-                warn "Password must be at least 8 characters."; continue
+        local admin_pass
+        if [[ -n "${ANSWERS[JEN_INITIAL_ADMIN_PASSWORD]+x}" || -n "${JEN_INITIAL_ADMIN_PASSWORD:-}" ]]; then
+            admin_pass=$(_cfgval "JEN_INITIAL_ADMIN_PASSWORD")
+            if [[ -n "$admin_pass" && ${#admin_pass} -lt 8 ]]; then
+                fatal "JEN_INITIAL_ADMIN_PASSWORD must be at least 8 characters."
             fi
-            admin_pass2=$(prompt_secret "Confirm admin password")
-            [[ "$admin_pass" == "$admin_pass2" ]] && break
-            warn "Passwords do not match — try again."
-        done
+        elif [[ "$HAVE_TTY" == "true" && "$MODE_UNATTENDED" == "false" ]]; then
+            local admin_pass2
+            while true; do
+                admin_pass=$(prompt_secret "Admin password (min 8 chars, Enter to auto-generate one)")
+                [[ -z "$admin_pass" ]] && break
+                if [[ ${#admin_pass} -lt 8 ]]; then
+                    warn "Password must be at least 8 characters."; continue
+                fi
+                admin_pass2=$(prompt_secret "Confirm admin password")
+                [[ "$admin_pass" == "$admin_pass2" ]] && break
+                warn "Passwords do not match — try again."
+            done
+        else
+            admin_pass=""
+        fi
         ADMIN_PASS="$admin_pass"
-        ok "Admin password set"
+        if [[ -n "$ADMIN_PASS" ]]; then
+            ok "Admin password set"
+        else
+            ok "No admin password given — Jen will generate one on first start"
+        fi
     fi
 
     # ── Subnets ───────────────────────────────────────────────────────────────
+    # v5.67.0 (Q113) — JEN_SUBNETS, same "id=Name,CIDR;id=Name,CIDR" format
+    # run.py's Docker env-var path already parses.
     blank
     echo -e "  ${B}Subnet Map${NC}  ${DIM}(your Kea subnets — you can add more later in Settings)${NC}"
     blank
     SUBNET_LINES=""
-    local added=0
-    while true; do
-        printf "  ${Y}  ▸${NC} Subnet ID (Enter to finish): " > /dev/tty
-        read -r SID < /dev/tty
-        [[ -z "$SID" ]] && break
-        if ! [[ "$SID" =~ ^[0-9]+$ ]]; then warn "Subnet ID must be a number"; continue; fi
-        local sname scidr
-        sname=$(prompt_input "  Friendly name" "Subnet${SID}")
-        scidr=$(prompt_input "  CIDR"          "192.168.${SID}.0/24")
-        SUBNET_LINES="${SUBNET_LINES}${SID} = ${sname}, ${scidr}\n"
-        ok "Added: ${SID} = ${sname}, ${scidr}"
-        added=$((added+1))
-        blank
-    done
-    [[ $added -eq 0 ]] && {
+    if [[ -n "${ANSWERS[JEN_SUBNETS]+x}" || -n "${JEN_SUBNETS:-}" ]]; then
+        local subnets_raw entry sid rest added=0
+        subnets_raw=$(_cfgval "JEN_SUBNETS")
+        IFS=';' read -ra _subnet_entries <<< "$subnets_raw"
+        for entry in "${_subnet_entries[@]}"; do
+            entry="${entry#"${entry%%[![:space:]]*}"}"
+            [[ -z "$entry" || "$entry" != *=* ]] && continue
+            sid="${entry%%=*}"; rest="${entry#*=}"
+            SUBNET_LINES="${SUBNET_LINES}${sid} = ${rest}\n"
+            ok "Added: ${sid} = ${rest}"
+            added=$((added+1))
+        done
+        [[ $added -eq 0 ]] && warn "JEN_SUBNETS set but no entries parsed from it — check the id=Name,CIDR format"
+    elif [[ "$HAVE_TTY" == "true" && "$MODE_UNATTENDED" == "false" ]]; then
+        local added=0
+        while true; do
+            printf "  ${Y}  ▸${NC} Subnet ID (Enter to finish): " > /dev/tty
+            read -r SID < /dev/tty
+            [[ -z "$SID" ]] && break
+            if ! [[ "$SID" =~ ^[0-9]+$ ]]; then warn "Subnet ID must be a number"; continue; fi
+            local sname scidr
+            sname=$(prompt_input "  Friendly name" "Subnet${SID}")
+            scidr=$(prompt_input "  CIDR"          "192.168.${SID}.0/24")
+            SUBNET_LINES="${SUBNET_LINES}${SID} = ${sname}, ${scidr}\n"
+            ok "Added: ${SID} = ${sname}, ${scidr}"
+            added=$((added+1))
+            blank
+        done
+    fi
+    if [[ -z "$SUBNET_LINES" ]]; then
         warn "No subnets added — edit $CONFIG_FILE to add them later"
         SUBNET_LINES="# 1 = Production, 10.10.10.0/24\n# 30 = IoT, 10.10.30.0/24\n"
-    }
+    fi
 
     # ── SSH ───────────────────────────────────────────────────────────────────
     blank
     echo -e "  ${B}SSH Access${NC}  ${DIM}(optional — enables subnet editing from the UI)${NC}"
     blank
-    if [[ "$(prompt_yn "Configure SSH to Kea server?" "y")" == "y" ]]; then
-        KEA_SSH_HOST=$(prompt_input  "Kea SSH host"  "${KEA_DB_HOST:-YOUR-KEA-SERVER}")
-        KEA_SSH_USER=$(prompt_input  "SSH username"  "$(logname 2>/dev/null || echo 'ubuntu')")
-        KEA_CONF_PATH=$(prompt_input "Kea config file" "/etc/kea/kea-dhcp4.conf")
+    if [[ -n "${ANSWERS[JEN_KEA_SSH_HOST]+x}" || -n "${JEN_KEA_SSH_HOST:-}" ]]; then
+        KEA_SSH_HOST=$(_cfgval "JEN_KEA_SSH_HOST")
+        KEA_SSH_USER=$(_ask "JEN_KEA_SSH_USER" "SSH username" "")
+        KEA_CONF_PATH=$(_ask "JEN_KEA_CONF" "Kea config file" "/etc/kea/kea-dhcp4.conf")
+    elif [[ "$HAVE_TTY" == "true" && "$MODE_UNATTENDED" == "false" ]]; then
+        if [[ "$(prompt_yn "Configure SSH to Kea server?" "y")" == "y" ]]; then
+            KEA_SSH_HOST=$(prompt_input  "Kea SSH host"  "${KEA_DB_HOST:-YOUR-KEA-SERVER}")
+            KEA_SSH_USER=$(prompt_input  "SSH username"  "")
+            KEA_CONF_PATH=$(prompt_input "Kea config file" "/etc/kea/kea-dhcp4.conf")
+        else
+            KEA_SSH_HOST=""; KEA_SSH_USER=""; KEA_CONF_PATH="/etc/kea/kea-dhcp4.conf"
+        fi
     else
         KEA_SSH_HOST=""; KEA_SSH_USER=""; KEA_CONF_PATH="/etc/kea/kea-dhcp4.conf"
     fi
@@ -666,24 +856,35 @@ collect_config() {
     blank
     echo -e "  ${B}DDNS Integration${NC}  ${DIM}(optional — Technitium, Pi-hole, AdGuard, SSH)${NC}"
     blank
-    if [[ "$(prompt_yn "Configure DDNS?" "n")" == "y" ]]; then
-        echo -e "    ${B}1)${NC} Technitium  ${B}2)${NC} Pi-hole  ${B}3)${NC} AdGuard  ${B}4)${NC} SSH/Bind9  ${B}5)${NC} None"
-        local dns_choice; dns_choice=$(prompt_choice "1")
-        case "$dns_choice" in
-            1) DDNS_PROVIDER="technitium"
-               DDNS_URL=$(prompt_input   "Technitium API URL"   "https://your-technitium/api")
-               DDNS_TOKEN=$(prompt_secret "Technitium API token") ;;
-            2) DDNS_PROVIDER="pihole"
-               DDNS_URL=$(prompt_input   "Pi-hole URL"           "http://your-pihole")
-               DDNS_TOKEN=$(prompt_secret "Pi-hole password/token") ;;
-            3) DDNS_PROVIDER="adguard"
-               DDNS_URL=$(prompt_input   "AdGuard URL"           "http://your-adguard:3000")
-               DDNS_TOKEN=$(prompt_secret "AdGuard password") ;;
-            4) DDNS_PROVIDER="ssh"; DDNS_URL=""; DDNS_TOKEN="" ;;
-            *) DDNS_PROVIDER="none"; DDNS_URL=""; DDNS_TOKEN="" ;;
-        esac
-        DDNS_LOG=$(prompt_input "DDNS log path" "/var/log/kea/kea-ddns.log")
-        DDNS_ZONE=$(prompt_input "Forward zone"  "your.domain.com")
+    if [[ -n "${ANSWERS[JEN_DDNS_PROVIDER]+x}" || -n "${JEN_DDNS_PROVIDER:-}" ]]; then
+        DDNS_PROVIDER=$(_cfgval "JEN_DDNS_PROVIDER"); DDNS_PROVIDER="${DDNS_PROVIDER:-none}"
+        DDNS_URL=$(_cfgval "JEN_DDNS_URL")
+        DDNS_TOKEN=$(_cfgval "JEN_DDNS_TOKEN")
+        DDNS_LOG=$(_ask "JEN_DDNS_LOG" "DDNS log path" "/var/log/kea/kea-ddns.log")
+        DDNS_ZONE=$(_cfgval "JEN_DDNS_ZONE")
+    elif [[ "$HAVE_TTY" == "true" && "$MODE_UNATTENDED" == "false" ]]; then
+        if [[ "$(prompt_yn "Configure DDNS?" "n")" == "y" ]]; then
+            echo -e "    ${B}1)${NC} Technitium  ${B}2)${NC} Pi-hole  ${B}3)${NC} AdGuard  ${B}4)${NC} SSH/Bind9  ${B}5)${NC} None"
+            local dns_choice; dns_choice=$(prompt_choice "1")
+            case "$dns_choice" in
+                1) DDNS_PROVIDER="technitium"
+                   DDNS_URL=$(prompt_input   "Technitium API URL"   "https://your-technitium/api")
+                   DDNS_TOKEN=$(prompt_secret "Technitium API token") ;;
+                2) DDNS_PROVIDER="pihole"
+                   DDNS_URL=$(prompt_input   "Pi-hole URL"           "http://your-pihole")
+                   DDNS_TOKEN=$(prompt_secret "Pi-hole password/token") ;;
+                3) DDNS_PROVIDER="adguard"
+                   DDNS_URL=$(prompt_input   "AdGuard URL"           "http://your-adguard:3000")
+                   DDNS_TOKEN=$(prompt_secret "AdGuard password") ;;
+                4) DDNS_PROVIDER="ssh"; DDNS_URL=""; DDNS_TOKEN="" ;;
+                *) DDNS_PROVIDER="none"; DDNS_URL=""; DDNS_TOKEN="" ;;
+            esac
+            DDNS_LOG=$(prompt_input "DDNS log path" "/var/log/kea/kea-ddns.log")
+            DDNS_ZONE=$(prompt_input "Forward zone"  "your.domain.com")
+        else
+            DDNS_PROVIDER="none"; DDNS_URL=""; DDNS_TOKEN=""
+            DDNS_LOG="/var/log/kea/kea-ddns.log"; DDNS_ZONE=""
+        fi
     else
         DDNS_PROVIDER="none"; DDNS_URL=""; DDNS_TOKEN=""
         DDNS_LOG="/var/log/kea/kea-ddns.log"; DDNS_ZONE=""
@@ -693,8 +894,8 @@ collect_config() {
     blank
     echo -e "  ${B}Server Ports${NC}"
     blank
-    HTTP_PORT=$(prompt_input  "HTTP port"  "5050")
-    HTTPS_PORT=$(prompt_input "HTTPS port" "8443")
+    HTTP_PORT=$(_ask  "JEN_HTTP_PORT"  "HTTP port"  "5050")
+    HTTPS_PORT=$(_ask "JEN_HTTPS_PORT" "HTTPS port" "8443")
     blank
 }
 
@@ -769,54 +970,65 @@ CONFEOF
     chmod 640 "$CONFIG_FILE"
     ok "Config written → ${DIM}${CONFIG_FILE}${NC}"
 
-    # Set admin password if this is a fresh install
-    if [[ "$IS_UPGRADE" == "false" && -n "${ADMIN_PASS:-}" ]]; then
-        _set_admin_password "$ADMIN_PASS"
-    fi
+    # Initialize the database on a fresh install: run migrations and seed
+    # the admin account (see _seed_jen_db below for why this replaced a
+    # direct UPDATE against `users`).
+    [[ "$IS_UPGRADE" == "false" ]] && _seed_jen_db "${ADMIN_PASS:-}"
     blank
 }
 
-_set_admin_password() {
-    local pass="$1"
-    # v4.4.8: previously interpolated $pass directly into Python source
-    # inside this heredoc (generate_password_hash('$pass', ...)) — a
-    # password containing a single quote broke the Python syntax outright,
-    # and since stderr is redirected to /dev/null with || true swallowing
-    # the exit code, it failed completely silently: no error shown, no
-    # "Admin password updated" message either, and the password was never
-    # actually set. Passing it via an environment variable and reading it
-    # with os.environ sidesteps quoting entirely — no character in the
-    # password can break the Python source, because it's never embedded
-    # in the source at all.
-    JEN_INSTALL_ADMIN_PASS="$pass" "$PYBIN" << PYEOF 2>/dev/null || true
-import os
+# v5.67.0 (Q113) — a real finding from wiring up the first CI job that
+# actually runs a fresh install: the OLD _set_admin_password ran a raw
+# `UPDATE users SET password=... WHERE username='admin'` at exactly this
+# point in the flow, but nothing has EVER called create_app() yet on a
+# fresh box — jen/models/db.py::init_jen_db() (which runs migrations and
+# seeds the 'admin' row) only runs the first time create_app() does, which
+# was always later, inside start_service()'s systemctl start. So the UPDATE
+# always hit a `users` table that didn't exist yet: on an existing (kea_db-
+# only) MySQL server it raised "table doesn't exist" and was silently
+# swallowed by `|| true`; on a from-scratch database it wouldn't even have
+# connected. Either way, whatever password the operator just typed was
+# thrown away, and Jen booted with the auto-generated
+# $CONTENT_DIR/initial-admin-password token instead — while the summary at
+# the end of a successful run still claimed "Login: admin / (password you
+# set above)". A fresh install has never actually honored a typed admin
+# password.
+#
+# The fix reuses the exact mechanism the Docker path already has instead
+# of re-implementing password hashing and raw DB access in bash:
+# JEN_INITIAL_ADMIN_PASSWORD is read by init_jen_db() itself, at seed time,
+# so calling create_app() here — once, as $JEN_USER (the user that will
+# actually run the app, so any file it creates, like
+# initial-admin-password, ends up correctly owned) — runs the real
+# migrations and the real seed logic in one step. Left blank, Jen falls
+# back to its own generated-token path exactly as it always has for
+# Docker. A failure here is fatal, not a swallowed warning: an install
+# that "completes" without an initialized database only fails later, more
+# confusingly, inside start_service.
+_seed_jen_db() {
+    local pass="$1" out
+    # shellcheck disable=SC2086 # deliberately unquoted: with $pass empty,
+    # this contributes NO extra word to the command at all — quoting it
+    # would instead pass env one empty-string argument, which env rejects
+    # as not a KEY=value pair. The inner "$pass" is quoted, so a password
+    # containing spaces still arrives as one word when it IS set.
+    out=$(runuser -u "$JEN_USER" -- env ${pass:+JEN_INITIAL_ADMIN_PASSWORD="$pass"} "$PYBIN" -c "
 import sys
 sys.path.insert(0, '$(app_pyroot)')
-try:
-    # Use Jen's own hasher (scrypt as of v5.8.0) so the installer and the
-    # app never disagree on the password-hash format.
-    from jen.models.user import hash_password
-    import pymysql, configparser
-    cfg = configparser.ConfigParser(interpolation=None)
-    cfg.read('$CONFIG_FILE')
-    db = pymysql.connect(
-        host=cfg.get('jen_db','host'), user=cfg.get('jen_db','user'),
-        password=cfg.get('jen_db','password'), database=cfg.get('jen_db','database'),
-        cursorclass=pymysql.cursors.DictCursor, connect_timeout=5
-    )
-    pw = os.environ['JEN_INSTALL_ADMIN_PASS']
-    hashed = hash_password(pw)
-    with db.cursor() as cur:
-        # v5.6.0 — also clear must_change_password: the operator picked
-        # this password in the wizard, so don't make them change it again
-        # on first login. (The seed sets the flag; nothing cleared it,
-        # so bare-metal installs forced a redundant change.)
-        cur.execute("UPDATE users SET password=%s, must_change_password=0 WHERE username='admin'", (hashed,))
-    db.commit(); db.close()
-    print("  Admin password updated.")
-except Exception as e:
-    print(f"  Note: Could not set admin password now — set it on first login. ({e})")
-PYEOF
+from jen import create_app
+create_app()
+print('JEN_DB_SEED_OK')
+" 2>&1) || true
+    if [[ "$out" != *JEN_DB_SEED_OK* ]]; then
+        err "Could not initialize the Jen database:"
+        echo "$out"
+        fatal "Database initialization failed — see above. Check jen_db in $CONFIG_FILE and that the database exists."
+    fi
+    if [[ -n "$pass" ]]; then
+        ok "Admin account created"
+    else
+        ok "Admin account created — initial password in ${CONTENT_DIR}/initial-admin-password"
+    fi
 }
 
 # ── Backup existing install ───────────────────────────────────────────────────
@@ -1484,6 +1696,11 @@ _docker_pick_compose_and_run() {
 main() {
     show_banner
     require_root
+
+    # v5.67.0 (Q113) — load the answers file, if given, before anything
+    # that could read from it. Every other mode (restore, configure,
+    # repair, docker) ignores it; it only ever feeds collect_config.
+    [[ -n "$ANSWERS_FILE" ]] && _load_answers_file "$ANSWERS_FILE"
 
     # Handle --restore mode (v5.44.0, Q45) — layers a recovery bundle onto
     # an ALREADY-installed Jen (venv, systemd unit, sudoers untouched).

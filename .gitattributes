@@ -12,6 +12,13 @@ jen-kea-helper text eol=lf
 jen-update-root.py text eol=lf
 run.py text eol=lf
 
+# v5.67.0 (Q113) — install.sh/uninstall.sh are `#!/bin/bash` scripts an
+# operator runs directly (and, from this release, that CI runs for real
+# on genuine Ubuntu runners); the same CRLF-breaks-the-shebang reasoning
+# as jen-kea-helper above.
+install.sh text eol=lf
+uninstall.sh text eol=lf
+
 # v5.17.0 — systemd rejects a unit file with CRLF line endings.
 jen.service text eol=lf
 jen-update.service text eol=lf
