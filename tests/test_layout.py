@@ -167,11 +167,32 @@ class TestParentDirectoryPermissiveness:
     one each test actually means to exercise."""
 
     def test_group_writable_root_owned_ancestor_is_a_warning_not_fatal(self, tmp_path):
+        # Same non-root CI constraint as TestExistingLayoutFile's mode
+        # test: a directory this test creates can never actually be
+        # root-OWNED on a non-root CI job, so the real ownership check
+        # would fire first and mask the mode check this test means to
+        # verify. Bypass just the ownership half, keep the real mode
+        # check intact — same technique, see _BYPASS_FILE_TRUST_CHECK.
         permissive_parent = tmp_path / "permissive"
         permissive_parent.mkdir()
         os.chmod(permissive_parent, 0o777)
         app_dir = permissive_parent / "jen"
-        r = _run(tmp_path, f'_layout_parents_root_owned "{app_dir}"; echo "rc=$?"')
+        bypass_ownership_only = (
+            "_layout_parents_root_owned() {\n"
+            '    local path="$1" dir mode\n'
+            '    dir="$path"\n'
+            '    while [[ "$dir" != "/" ]]; do\n'
+            '        dir=$(dirname "$dir")\n'
+            '        [[ -e "$dir" ]] || continue\n'
+            '        mode=$(stat -c \'%a\' "$dir" 2>/dev/null || stat -f \'%OLp\' "$dir" 2>/dev/null || echo "")\n'
+            '        if [[ -n "$mode" ]] && (( (8#$mode & 8#0022) != 0 )); then\n'
+            '            warn "app_dir\'s existing parent $dir is writable by group or other (mode $mode)."\n'
+            "        fi\n"
+            "    done\n"
+            "    return 0\n"
+            "}\n"
+        )
+        r = _run(tmp_path, bypass_ownership_only + f'_layout_parents_root_owned "{app_dir}"; echo "rc=$?"')
         assert r.returncode == 0, r.stdout + r.stderr
         assert "rc=0" in r.stdout
         assert "writable by group or other" in r.stdout
