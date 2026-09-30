@@ -8,8 +8,8 @@ the part of the recovery flow that must work with the app not running.
 Prompts for the passphrase on the TTY (`getpass` — never a CLI argument
 or environment variable; both are visible to any other process on the
 box via `/proc` or `ps`), decrypts, checks version compatibility,
-writes `/etc/jen` and the content directory, imports the database, and
-prints a checklist of what a human still has to do.
+writes the config directory and the content directory, imports the
+database, and prints a checklist of what a human still has to do.
 
 Assumes a normal `sudo ./install.sh` has already run on this machine —
 this restores STATE onto a working Jen install; it does not set one up
@@ -391,8 +391,8 @@ def restore_etc_jen(bundle_dir: Path, etc_jen: Path) -> list[str]:
 
 
 def _bundle_owned(bundle_dir: Path) -> tuple[set[str], set[str]]:
-    """(paths under /etc/jen, paths under the content dir) that this bundle
-    writes — everything else already on disk is left alone."""
+    """(paths under the config dir, paths under the content dir) that this
+    bundle writes — everything else already on disk is left alone."""
     etc: set[str] = set()
     for name in ("jen.config", "mfa_key", "secret_key"):
         if (bundle_dir / name).is_file():
@@ -602,10 +602,10 @@ def _tar_tree(root: Path, out: Path, exclude: tuple[str, ...] = ()) -> None:
 
 
 def take_snapshot(etc_jen: Path, content_dir: Path) -> Path:
-    """`<content>/backups/pre-restore-<UTC ts>/`: a tar of /etc/jen, a tar of
-    the content dir minus backups/tmp, and a fresh jen_db.json.gz — all 0600
-    in a 0700 directory. Raises on any failure (the caller refuses the
-    restore rather than proceed without a way back).
+    """`<content>/backups/pre-restore-<UTC ts>/`: a tar of the config dir,
+    a tar of the content dir minus backups/tmp, and a fresh jen_db.json.gz
+    — all 0600 in a 0700 directory. Raises on any failure (the caller
+    refuses the restore rather than proceed without a way back).
 
     v5.66.0-beta.6 (Q108) — the database member is written straight to disk via
     write_jen_export(path) directly, never held whole as bytes first (`_export_db()`'s old
@@ -665,8 +665,8 @@ def _restore_tree(tar_path: Path, root: Path, exclude: tuple[str, ...] = ()) -> 
 
 
 def rollback_snapshot(snap: Path, etc_jen: Path, content_dir: Path) -> None:
-    """Put /etc/jen, the content dir and the database back the way the
-    snapshot found them."""
+    """Put the config dir, the content dir and the database back the way
+    the snapshot found them."""
     snap = Path(snap)
     _restore_tree(snap / "etc-jen.tar", Path(etc_jen))
     _restore_tree(snap / "content.tar", Path(content_dir), _SNAPSHOT_EXCLUDE)
@@ -698,7 +698,7 @@ def _fail_with_rollback(snap: Path, etc_jen: Path, content_dir: Path, reason: st
 def run(
     bundle_path: str,
     passphrase: str,
-    etc_jen: str = "/etc/jen",
+    etc_jen: str | None = None,
     content_dir: str | None = None,
     force: bool = False,
     no_stop: bool = False,
@@ -709,6 +709,7 @@ def run(
     from jen import extensions
     from jen.services.recovery import BadPassphrase
 
+    etc_jen = etc_jen or extensions.CONFIG_DIR
     content_dir = content_dir or extensions.CONTENT_DIR
 
     with tempfile.TemporaryDirectory(prefix="jen-restore-") as tmp:
@@ -781,7 +782,7 @@ def run(
             )
 
         for label, root, owned, excl in (
-            ("/etc/jen", Path(etc_jen), etc_owned, ()),
+            (etc_jen, Path(etc_jen), etc_owned, ()),
             ("the content directory", Path(content_dir), content_owned, _SNAPSHOT_EXCLUDE),
         ):
             extra = unknown_files(root, owned, excl)
@@ -825,7 +826,7 @@ def run(
 
 
 def run_rollback(
-    snapshot_dir: str, etc_jen: str = "/etc/jen", content_dir: str | None = None, no_stop: bool = False
+    snapshot_dir: str, etc_jen: str | None = None, content_dir: str | None = None, no_stop: bool = False
 ) -> int:
     """`--rollback <dir>`: redo the rollback by hand from a named snapshot."""
     from jen import extensions
@@ -835,6 +836,7 @@ def run_rollback(
         if not (snap / name).is_file():
             print(f"error: {snap} is not a pre-restore snapshot (missing {name})", file=sys.stderr)
             return 1
+    etc_jen = etc_jen or extensions.CONFIG_DIR
     content_dir = content_dir or extensions.CONTENT_DIR
     manage = not no_stop and _have_systemctl()
     was_running = manage and _service_active()
@@ -879,7 +881,9 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Undo a restore from its pre-restore snapshot directory",
     )
-    parser.add_argument("--etc-jen", default="/etc/jen", help="Where to write config/keys (default: /etc/jen)")
+    parser.add_argument(
+        "--etc-jen", default=None, help="Where to write config/keys (default: Jen's own config directory)"
+    )
     parser.add_argument("--content-dir", default=None, help="Where to restore content (default: Jen's own)")
     parser.add_argument("--force", action="store_true", help="Restore a bundle from a newer Jen / newer schema anyway")
     args = parser.parse_args(argv)

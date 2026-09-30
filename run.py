@@ -125,11 +125,16 @@ _TLS_CIPHERS = "ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!MD5:
 
 def _build_config_from_env():
     """
-    If JEN_KEA_API_URL is set, write /etc/jen/jen.config from environment
+    If JEN_KEA_API_URL is set, write <config_dir>/jen.config from environment
     variables. This allows Docker deployments without a mounted config file.
-    Skips if /etc/jen/jen.config already exists and contains a valid api_url.
+    Skips if <config_dir>/jen.config already exists and contains a valid api_url.
+
+    v5.67.0 (Q114) — config_path/key_path respect JEN_CONFIG_DIR the same
+    way extensions.CONFIG_DIR does, so a relocated install's container
+    still writes/finds its auto-generated config in the right place.
     """
-    config_path = "/etc/jen/jen.config"
+    config_dir = os.environ.get("JEN_CONFIG_DIR", "/etc/jen")
+    config_path = os.path.join(config_dir, "jen.config")
 
     # Check if we have env vars
     if not os.environ.get("JEN_KEA_API_URL"):
@@ -160,7 +165,7 @@ def _build_config_from_env():
                 sid, rest = entry.split("=", 1)
                 subnet_lines += f"{sid.strip()} = {rest.strip()}\n"
 
-    os.makedirs("/etc/jen", exist_ok=True)
+    os.makedirs(config_dir, exist_ok=True)
     config_content = f"""# Jen - auto-generated from environment variables
 [kea]
 api_url  = {os.environ.get("JEN_KEA_API_URL", "")}
@@ -189,7 +194,7 @@ https_port = {os.environ.get("JEN_HTTPS_PORT", "8443")}
 [kea_ssh]
 host     = {os.environ.get("JEN_KEA_SSH_HOST", "")}
 user     = {os.environ.get("JEN_KEA_SSH_USER", "")}
-key_path = /etc/jen/ssh/jen_rsa
+key_path = {os.path.join(config_dir, "ssh", "jen_rsa")}
 kea_conf = {os.environ.get("JEN_KEA_CONF", "/etc/kea/kea-dhcp4.conf")}
 
 [subnets]

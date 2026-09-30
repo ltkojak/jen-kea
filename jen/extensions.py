@@ -187,18 +187,27 @@ DHCP4_LOG: str = "/var/log/kea/kea-dhcp4.log"
 _active_server_cache: dict = {"server": None, "ts": 0}
 
 # ── File paths ───────────────────────────────────────────────────────────────
-CONFIG_FILE = "/etc/jen/jen.config"
+# v5.67.0 (Q114) — CONFIG_DIR is the /etc/jen equivalent, relocatable the
+# same way JEN_ROOT/CONTENT_DIR already are: JEN_CONFIG_DIR env override
+# (set by jen.service's rendered Environment= line — see
+# jen.service.template) wins; else, in a dev/CI checkout (JEN_ROOT set),
+# $JEN_ROOT/etc; else the historical /etc/jen. Every file below it is
+# derived from this one constant instead of repeating the literal.
+CONFIG_DIR = os.environ.get("JEN_CONFIG_DIR") or (
+    os.path.join(JEN_ROOT, "etc") if "JEN_ROOT" in os.environ else "/etc/jen"
+)
+CONFIG_FILE = os.path.join(CONFIG_DIR, "jen.config")
 # v5.4.0 — Fernet key for encrypting MFA (TOTP) secrets at rest. Lives
-# under /etc/jen (the config/secrets dir, preserved across upgrades),
+# under CONFIG_DIR (the config/secrets dir, preserved across upgrades),
 # NOT in the database it protects. Plain module constant like the paths
 # above — the test suite repoints it the same way it repoints CONFIG_FILE.
 # jen/services/crypto.py falls back to $JEN_ROOT/.mfa_key when this path
 # isn't writable, mirroring _load_secret_key()'s two-candidate approach.
-MFA_KEY_PATH = "/etc/jen/mfa_key"
-SSL_CERT = "/etc/jen/ssl/certificate.crt"
-SSL_KEY = "/etc/jen/ssl/private.key"
-SSL_CA = "/etc/jen/ssl/ca_bundle.crt"
-SSL_COMBINED = "/etc/jen/ssl/combined.crt"
+MFA_KEY_PATH = os.path.join(CONFIG_DIR, "mfa_key")
+SSL_CERT = os.path.join(CONFIG_DIR, "ssl", "certificate.crt")
+SSL_KEY = os.path.join(CONFIG_DIR, "ssl", "private.key")
+SSL_CA = os.path.join(CONFIG_DIR, "ssl", "ca_bundle.crt")
+SSL_COMBINED = os.path.join(CONFIG_DIR, "ssl", "combined.crt")
 STATIC_DIR = os.path.join(JEN_ROOT, "static")
 TEMPLATE_DIR = os.path.join(JEN_ROOT, "templates")
 ICONS_BUNDLED_DIR = os.path.join(JEN_ROOT, "static", "icons", "brands")
@@ -250,12 +259,19 @@ NAV_LOGO_PATH = os.path.join(CONTENT_BRANDING_DIR, "nav_logo")
 PLUGIN_DIR = CONTENT_PLUGIN_DIR  # registry-installed plugins (writable)
 PLUGIN_DIR_BUNDLED = os.path.join(JEN_ROOT, "plugins")  # shipped, read-only
 # v5.27.0 (Q23) — root-owned registry installs, landed by
-# jen-update-root.py --plugins. Fixed, NOT relative to JEN_ROOT/CONTENT_DIR
-# — this is only ever meaningful on a real systemd host (Docker/dev
-# checkouts never populate it, and discover_plugins() below just finds
-# it empty there, same as it already does for PLUGIN_DIR_BUNDLED on a
-# checkout with no bundled plugins).
-PLUGIN_DIR_ROOT = "/opt/jen/plugins-installed"
+# jen-update-root.py --plugins. This is only ever meaningful on a real
+# systemd host (Docker/dev checkouts never populate it, and
+# discover_plugins() below just finds it empty there, same as it already
+# does for PLUGIN_DIR_BUNDLED on a checkout with no bundled plugins).
+#   v5.67.0 (Q114) — derived from the INSTALL root (stripping the
+#   versioned layout's "/current/app" suffix from JEN_ROOT when present),
+#   not a literal "/opt/jen": a relocated install's rendered jen.service
+#   sets JEN_ROOT to "<app_dir>/current/app", so this correctly lands at
+#   "<app_dir>/plugins-installed" instead. Every other JEN_ROOT shape
+#   (the flat/Docker/dev-checkout default) falls back to the historical
+#   "/opt/jen", unchanged.
+_INSTALL_ROOT = JEN_ROOT[: -len("/current/app")] if JEN_ROOT.endswith("/current/app") else "/opt/jen"
+PLUGIN_DIR_ROOT = os.path.join(_INSTALL_ROOT, "plugins-installed")
 PLUGIN_REGISTRY_URL = "https://raw.githubusercontent.com/ltkojak/jen-kea/main/plugins/registry.json"
-SSH_KEY_PATH = "/etc/jen/ssh/jen_rsa"
-SSH_KNOWN_HOSTS = "/etc/jen/ssh/known_hosts"
+SSH_KEY_PATH = os.path.join(CONFIG_DIR, "ssh", "jen_rsa")
+SSH_KNOWN_HOSTS = os.path.join(CONFIG_DIR, "ssh", "known_hosts")

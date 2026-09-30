@@ -270,9 +270,14 @@ class TestVersionedReleaseLayout:
         assert "WorkingDirectory=@@APP_DIR@@/current/app" in s
 
     def test_updater_has_the_versioned_layout_primitives(self):
+        # v5.67.0 (Q114) — RELEASES_DIR/CURRENT_LINK are derived from the
+        # loaded layout's app_dir now, not a literal "/opt/jen/..." (see
+        # load_layout()); "/opt/jen" is still the default when no
+        # /etc/jen-layout.conf exists.
         u = _text("jen-update-root.py")
-        assert 'RELEASES_DIR = "/opt/jen/releases"' in u
-        assert 'CURRENT_LINK = "/opt/jen/current"' in u
+        assert 'RELEASES_DIR = os.path.join(INSTALL_DIR, "releases")' in u
+        assert 'CURRENT_LINK = os.path.join(INSTALL_DIR, "current")' in u
+        assert '"app_dir": "/opt/jen"' in u
         assert "def _switch_current(" in u
         assert "def _extract_release(" in u
         assert "def _prune_old_releases(" in u

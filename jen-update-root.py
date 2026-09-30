@@ -173,10 +173,6 @@ GITHUB_ASSET_PREFIX = f"https://github.com/{GITHUB_REPO}/releases/download/"
 RELEASE_SIGNERS = "release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD"
 RELEASE_SIGNATURE_IDENTITY = "release@jen"
 RELEASE_SIGNATURE_NAMESPACE = "jen-release"
-INSTALL_DIR = "/opt/jen"
-VENV_DIR = "/opt/jen/venv"  # legacy flat venv path (pre-5.14 / Docker); removed by the migration run
-RELEASES_DIR = "/opt/jen/releases"  # v5.14.0 — releases/<X.Y.Z>/{app,venv}
-CURRENT_LINK = "/opt/jen/current"  # v5.14.0 — relative symlink → releases/<live>
 SYSTEM_PYTHON = "/usr/bin/python3"
 SELF_INSTALL_PATH = "/usr/local/sbin/jen-update-root.py"
 UPDATE_SERVICE_PATH = "/etc/systemd/system/jen-update.service"
@@ -184,27 +180,127 @@ UPDATE_SERVICE_PATH = "/etc/systemd/system/jen-update.service"
 # jen/services/plugins.py the same way jen-update.service is triggered
 # by settings/updates.py; see main()'s --plugins dispatch.
 PLUGIN_INSTALL_SERVICE_PATH = "/etc/systemd/system/jen-plugin-install.service"
-CONFIG_FILE = "/etc/jen/jen.config"
-# Hardcoded in jen/extensions.py — not configurable. Their presence is
-# exactly what jen.config.ssl_configured() keys on, so the updater can
-# read the same signal without importing the jen package.
-SSL_CERT = "/etc/jen/ssl/certificate.crt"
-SSL_KEY = "/etc/jen/ssl/private.key"
+PLUGIN_REGISTRY_URL = "https://raw.githubusercontent.com/ltkojak/jen-kea/main/plugins/registry.json"
 
-# v5.13.0 — user-writable content lives here, outside /opt/jen. Hardcoded
-# in jen/extensions.py the same way the SSL paths above are; the updater
-# migrates pre-5.13 content into it and chowns it to www-data.
-CONTENT_DIR = "/var/lib/jen"
+# ── Layout (v5.67.0, Q114) ───────────────────────────────────────────────────
+# LAYOUT_FILE is a FIXED path, never an argument (rule 8 / jen-sudoers pins
+# this script's invocation byte-for-byte — www-data must never be able to
+# hand root a path of its own choosing; see docs/ARCHITECTURE.md §3.1).
+# Absent = every install before this Q, and every install that never asked
+# to relocate: today's historical defaults below, unchanged. Present but
+# invalid is a hard refusal (LAYOUT_ERROR, checked first thing by main()
+# and process_plugin_requests() — never a silent fallback to the
+# defaults). Mirrors install.sh's _resolve_layout_dirs/_layout_path_ok/
+# _layout_not_nested/_validate_layout_file_or_fatal — tests/test_layout.py
+# (bash) and this module's own tests (python) each exercise their own side
+# of the same validation table.
+LAYOUT_FILE = "/etc/jen-layout.conf"
+_DEFAULT_LAYOUT = {"app_dir": "/opt/jen", "config_dir": "/etc/jen", "data_dir": "/var/lib/jen"}
+_LAYOUT_FORBIDDEN_PREFIXES = ("/tmp", "/run", "/proc", "/sys", "/dev", "/home")
+
+
+def _layout_path_ok(name, path):
+    """None on success, else the reason it's rejected."""
+    if not path.startswith("/"):
+        return f"{name} must be an absolute path: {path}"
+    if path == "/":
+        return f"{name} cannot be /"
+    if ".." in path:
+        return f"{name} must not contain ..: {path}"
+    normalized = os.path.normpath(path)
+    if normalized != path:
+        return f"{name} must be a normalized path (try {normalized}): {path}"
+    for prefix in _LAYOUT_FORBIDDEN_PREFIXES:
+        if path == prefix or path.startswith(prefix + "/"):
+            return f"{name} must not live under {prefix}: {path}"
+    return None
+
+
+def _layout_not_nested(a_name, a_path, b_name, b_path):
+    if a_path == b_path or a_path.startswith(b_path + "/") or b_path.startswith(a_path + "/"):
+        return f"{a_name} ({a_path}) and {b_name} ({b_path}) must not be nested inside one another."
+    return None
+
+
+def _validate_layout_file(path):
+    """None if `path` is trustworthy (regular file, root:root, not a
+    symlink, no group/other write), else the reason it's refused."""
+    if os.path.islink(path):
+        return f"{path} must be a regular file, not a symlink."
+    if not os.path.isfile(path):
+        return f"{path} exists but is not a regular file."
+    st = os.stat(path)
+    if st.st_uid != 0:
+        return f"{path} must be owned by root (found uid {st.st_uid}) — refusing to trust it."
+    if st.st_gid != 0:
+        return f"{path} must be group root (found gid {st.st_gid}) — refusing to trust it."
+    if st.st_mode & 0o022:
+        return f"{path} is writable by group or other (mode {oct(st.st_mode & 0o777)}) — refusing to trust it."
+    return None
+
+
+def load_layout(layout_file=LAYOUT_FILE):
+    """The root-trusted {app_dir, config_dir, data_dir} dict. Raises
+    RuntimeError (never returns a partial/guessed result) if the file is
+    present but fails validation."""
+    if not os.path.exists(layout_file) and not os.path.islink(layout_file):
+        return dict(_DEFAULT_LAYOUT)
+
+    err = _validate_layout_file(layout_file)
+    if err:
+        raise RuntimeError(err)
+
+    cp = configparser.ConfigParser(interpolation=None)
+    cp.read(layout_file)
+    values = {}
+    for key in ("app_dir", "config_dir", "data_dir"):
+        v = cp.get("layout", key, fallback="").strip()
+        if not v:
+            raise RuntimeError(f"{layout_file} is missing {key}")
+        err = _layout_path_ok(key, v)
+        if err:
+            raise RuntimeError(err)
+        values[key] = v
+
+    for a, b in (("app_dir", "config_dir"), ("app_dir", "data_dir"), ("config_dir", "data_dir")):
+        err = _layout_not_nested(a, values[a], b, values[b])
+        if err:
+            raise RuntimeError(err)
+
+    return values
+
+
+try:
+    _layout = load_layout()
+    LAYOUT_ERROR = None
+except RuntimeError as _e:
+    _layout = dict(_DEFAULT_LAYOUT)
+    LAYOUT_ERROR = str(_e)
+
+INSTALL_DIR = _layout["app_dir"]
+VENV_DIR = os.path.join(INSTALL_DIR, "venv")  # legacy flat venv path (pre-5.14 / Docker); removed by the migration run
+RELEASES_DIR = os.path.join(INSTALL_DIR, "releases")  # v5.14.0 — releases/<X.Y.Z>/{app,venv}
+CURRENT_LINK = os.path.join(INSTALL_DIR, "current")  # v5.14.0 — relative symlink → releases/<live>
+CONFIG_FILE = os.path.join(_layout["config_dir"], "jen.config")
+# Hardcoded in jen/extensions.py — not configurable per-value, only via the
+# shared layout above. Their presence is exactly what jen.config.ssl_configured()
+# keys on, so the updater can read the same signal without importing the jen package.
+SSL_CERT = os.path.join(_layout["config_dir"], "ssl", "certificate.crt")
+SSL_KEY = os.path.join(_layout["config_dir"], "ssl", "private.key")
+
+# v5.13.0 — user-writable content lives here, outside the app tree.
+# Hardcoded in jen/extensions.py the same way the SSL paths above are; the
+# updater migrates pre-5.13 content into it and chowns it to www-data.
+CONTENT_DIR = _layout["data_dir"]
 
 # v5.27.0 (Q23) — root-owned plugin installs. PLUGIN_REQUESTS_DIR mirrors
 # extensions.CONTENT_PLUGIN_REQUESTS_DIR; ROOT_PLUGIN_DIR mirrors
-# extensions.PLUGIN_DIR_ROOT. Deliberately `/opt/jen/plugins-installed`,
-# NOT `/opt/jen/plugins` — the latter is one of _ROLLBACK_ITEMS below and
+# extensions.PLUGIN_DIR_ROOT. Deliberately "<app_dir>/plugins-installed",
+# NOT "<app_dir>/plugins" — the latter is one of _ROLLBACK_ITEMS below and
 # gets rmtree'd wholesale by _remove_flat_leftovers() after a migration
 # run; a real, checked collision, not a hypothetical one.
-PLUGIN_REQUESTS_DIR = "/var/lib/jen/plugin-requests"
-ROOT_PLUGIN_DIR = "/opt/jen/plugins-installed"
-PLUGIN_REGISTRY_URL = "https://raw.githubusercontent.com/ltkojak/jen-kea/main/plugins/registry.json"
+PLUGIN_REQUESTS_DIR = os.path.join(CONTENT_DIR, "plugin-requests")
+ROOT_PLUGIN_DIR = os.path.join(INSTALL_DIR, "plugins-installed")
 # Mirrors jen/services/plugins.py::_PLUGIN_ID_RE — duplicated, not
 # imported, since this script can't import the jen package. Slightly
 # stricter (no leading hyphen) than the original; every real registry
@@ -304,25 +400,50 @@ def fetch_bytes_with_sha256(url, timeout=120):
     return b"".join(chunks), sha256.hexdigest()
 
 
+def render_jen_service(template_path, out_path, app_dir=None, config_dir=None, data_dir=None):
+    """v5.67.0 (Q114) — fill jen.service.template's @@APP_DIR@@/
+    @@CONFIG_DIR@@/@@DATA_DIR@@ placeholders from the resolved layout
+    (module globals by default, so a normal update needs no arguments)
+    and write the result to out_path. Mirrors install.sh's own
+    render_jen_service() byte-for-byte in what it substitutes, just in
+    Python — install.sh renders this same template at first install,
+    this function re-renders it on every later in-app update, so a
+    relocated install's unit is never silently overwritten with one
+    hardcoded back to the defaults."""
+    app_dir = app_dir if app_dir is not None else INSTALL_DIR
+    config_dir = config_dir if config_dir is not None else _layout["config_dir"]
+    data_dir = data_dir if data_dir is not None else CONTENT_DIR
+    with open(template_path, encoding="utf-8") as f:
+        text = f.read()
+    text = text.replace("@@APP_DIR@@", app_dir).replace("@@CONFIG_DIR@@", config_dir).replace("@@DATA_DIR@@", data_dir)
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(text)
+
+
 def install_external_files(app_dir):
     """
     v5.14.0 — install the files a release ships that live OUTSIDE the
-    release directory: the systemd unit (`jen.service`, + `daemon-reload`)
-    and the sudoers grant (`jen-sudoers`, validated with `visudo -c`
-    first, never installed on a failure). The application tree itself is
-    no longer copied anywhere — it IS `app_dir` (`releases/<ver>/app/`),
-    reached through the `current` symlink. `jen-update-root.py` and
-    `jen-update.service` are handled by install_self_update_files() with
-    its atomic replace-while-running dance. `app_dir` is
-    `releases/<ver>/app` and is already `root:root` (chowned on the
-    staging dir before the rename).
+    release directory: the systemd unit (rendered from
+    `jen.service.template`, + `daemon-reload`) and the sudoers grant
+    (`jen-sudoers`, validated with `visudo -c` first, never installed on
+    a failure). The application tree itself is no longer copied anywhere
+    — it IS `app_dir` (`releases/<ver>/app/`), reached through the
+    `current` symlink. `jen-update-root.py` and `jen-update.service` are
+    handled by install_self_update_files() with its atomic
+    replace-while-running dance. `app_dir` is `releases/<ver>/app` and is
+    already `root:root` (chowned on the staging dir before the rename).
+
+    v5.67.0 (Q114) — the unit is RENDERED, not copied verbatim: a plain
+    copy would overwrite a relocated install's correctly-rendered unit
+    with the shipped template's literal @@APP_DIR@@ placeholders the
+    moment an in-app update ran.
 
     Kept as its own function so it's testable against a hand-built
     directory without mocking the network or tar extraction.
     """
-    service_src = os.path.join(app_dir, "jen.service")
+    service_src = os.path.join(app_dir, "jen.service.template")
     if os.path.isfile(service_src):
-        shutil.copy2(service_src, "/etc/systemd/system/jen.service")
+        render_jen_service(service_src, "/etc/systemd/system/jen.service")
         subprocess.run(["/usr/bin/systemctl", "daemon-reload"], check=True)
 
     sudoers_src = os.path.join(app_dir, "jen-sudoers")
@@ -1461,7 +1582,14 @@ def process_plugin_requests(
     oneshot; a second `systemctl start` while it's active is a no-op,
     so that request would otherwise sit until the NEXT trigger) is
     picked up again within the same invocation instead.
+
+    v5.67.0 (Q114) — refuses outright, before touching anything, if
+    LAYOUT_FILE was present but failed validation (see load_layout()):
+    never silently falls back to the module's default constants.
     """
+    if LAYOUT_ERROR:
+        log(f"ERROR: {LAYOUT_ERROR} — refusing to run.")
+        return 1
     try:
         st = os.lstat(requests_dir)
     except OSError:
@@ -1697,6 +1825,13 @@ def _rollback_release(snapshot_dir, prev, migration_run, version, release_dir):
 
 
 def main():
+    # v5.67.0 (Q114) — refuses outright, before touching anything, if
+    # LAYOUT_FILE was present but failed validation (see load_layout()
+    # above): never silently falls back to the module's default constants.
+    if LAYOUT_ERROR:
+        log(f"ERROR: {LAYOUT_ERROR} — refusing to run.")
+        return 1
+
     # v5.27.0 (Q23) — the ONE argv this script ever accepts, and only
     # because jen-sudoers pins the entire invocation byte-for-byte
     # ("sudo systemctl start --no-block jen-plugin-install.service",

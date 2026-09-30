@@ -2298,7 +2298,12 @@ _run_restore_mode() {
         RESTORE_PY="$PYBIN"
         [[ -x "$RESTORE_PY" ]] || fatal "No Jen venv found ($RESTORE_PY) — run 'sudo ./install.sh' first."
         info "Rolling back from $RESTORE_ROLLBACK"
-        if ! (cd "$(app_pyroot)" && "$RESTORE_PY" -m jen.tools.restore --rollback "$RESTORE_ROLLBACK" ${RESTORE_NOSTOP:-}); then
+        # v5.67.0 (Q114) — pass this install's own layout explicitly: this
+        # subprocess has no systemd Environment= lines to inherit
+        # JEN_CONFIG_DIR/JEN_CONTENT_DIR from, so a relocated install
+        # would otherwise silently fall back to jen.tools.restore's own
+        # historical defaults.
+        if ! (cd "$(app_pyroot)" && "$RESTORE_PY" -m jen.tools.restore --rollback "$RESTORE_ROLLBACK" --etc-jen "$CONFIG_DIR" --content-dir "$CONTENT_DIR" ${RESTORE_NOSTOP:-}); then
             fatal "Rollback failed — see the messages above."
         fi
         ok "Rollback complete."

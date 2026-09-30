@@ -25,6 +25,7 @@ import io
 import json
 import os
 import pathlib
+import re
 import sys
 import tarfile
 import zipfile
@@ -71,6 +72,112 @@ class TestScriptExistsWithCorrectShape:
         content = _SCRIPT_PATH.read_text()
         assert "argparse" not in content
         assert 'sys.argv[1:] == ["--plugins"]' in content
+
+
+class TestLoadLayout:
+    """v5.67.0 (Q114) — load_layout() is the root-trusted source of
+    app_dir/config_dir/data_dir. Mirrors install.sh's
+    _resolve_layout_dirs/_layout_path_ok/_layout_not_nested/
+    _validate_layout_file_or_fatal — tests/test_layout.py exercises the
+    bash side of the same validation table.
+
+    Every test that needs a "valid" file (passing _validate_layout_file's
+    owner/group/mode check) needs real POSIX semantics: Windows' os.chmod
+    can't clear the group/other-write bits os.stat then reports, so a
+    freshly written file always reads back as mode 0o666 there. Skipped
+    as a whole class rather than test-by-test — verified for real by the
+    `install`/`pytest` CI jobs on real Ubuntu runners."""
+
+    pytestmark = pytest.mark.skipif(os.name != "posix", reason="POSIX file permission bits required")
+
+    def _write(self, path, app="/opt/jen", config="/etc/jen", data="/var/lib/jen"):
+        path.write_text(f"[layout]\napp_dir = {app}\nconfig_dir = {config}\ndata_dir = {data}\n")
+        os.chmod(path, 0o644)
+
+    def test_absent_file_returns_historical_defaults(self, jen_update_root, tmp_path):
+        missing = tmp_path / "does-not-exist" / "jen-layout.conf"
+        assert jen_update_root.load_layout(str(missing)) == {
+            "app_dir": "/opt/jen",
+            "config_dir": "/etc/jen",
+            "data_dir": "/var/lib/jen",
+        }
+
+    def test_present_and_valid_is_returned(self, jen_update_root, tmp_path):
+        layout = tmp_path / "jen-layout.conf"
+        self._write(layout, app="/srv/jen/app", config="/srv/jen/etc", data="/srv/jen/data")
+        result = jen_update_root.load_layout(str(layout))
+        assert result == {"app_dir": "/srv/jen/app", "config_dir": "/srv/jen/etc", "data_dir": "/srv/jen/data"}
+
+    @pytest.mark.skipif(os.name != "posix" or os.geteuid() != 0, reason="requires real root to prove ownership refusal")
+    def test_non_root_owned_file_raises(self, jen_update_root, tmp_path):
+        layout = tmp_path / "jen-layout.conf"
+        self._write(layout)
+        os.chown(layout, 1000, 1000)
+        with pytest.raises(RuntimeError, match="owned by root"):
+            jen_update_root.load_layout(str(layout))
+
+    def test_group_writable_file_raises(self, jen_update_root, tmp_path):
+        layout = tmp_path / "jen-layout.conf"
+        self._write(layout)
+        os.chmod(layout, 0o664)
+        with pytest.raises(RuntimeError, match="writable by group or other"):
+            jen_update_root.load_layout(str(layout))
+
+    def test_symlinked_file_raises(self, jen_update_root, tmp_path):
+        real = tmp_path / "real-layout.conf"
+        self._write(real)
+        link = tmp_path / "jen-layout.conf"
+        link.symlink_to(real)
+        with pytest.raises(RuntimeError, match="symlink"):
+            jen_update_root.load_layout(str(link))
+
+    def test_missing_key_raises(self, jen_update_root, tmp_path):
+        layout = tmp_path / "jen-layout.conf"
+        layout.write_text("[layout]\napp_dir = /opt/jen\nconfig_dir = /etc/jen\n")
+        os.chmod(layout, 0o644)
+        with pytest.raises(RuntimeError, match="missing data_dir"):
+            jen_update_root.load_layout(str(layout))
+
+    @pytest.mark.parametrize(
+        "path,expect_in_error",
+        [
+            ("opt/jen", "absolute"),
+            ("/", "cannot be /"),
+            ("/opt/../etc/jen2", ".."),
+            ("/tmp/jen", "/tmp"),
+            ("/run/jen", "/run"),
+            ("/proc/jen", "/proc"),
+            ("/sys/jen", "/sys"),
+            ("/dev/jen", "/dev"),
+            ("/home/jen", "/home"),
+        ],
+    )
+    def test_app_dir_rejections(self, jen_update_root, tmp_path, path, expect_in_error):
+        layout = tmp_path / "jen-layout.conf"
+        self._write(layout, app=path)
+        with pytest.raises(RuntimeError, match=re.escape(expect_in_error)):
+            jen_update_root.load_layout(str(layout))
+
+    def test_nested_data_under_app_raises(self, jen_update_root, tmp_path):
+        layout = tmp_path / "jen-layout.conf"
+        self._write(layout, app="/srv/jen", data="/srv/jen/data")
+        with pytest.raises(RuntimeError, match="nested"):
+            jen_update_root.load_layout(str(layout))
+
+    def test_siblings_are_not_nested(self, jen_update_root, tmp_path):
+        layout = tmp_path / "jen-layout.conf"
+        self._write(layout, app="/srv/jen-app", config="/srv/jen-etc", data="/srv/jen-data")
+        result = jen_update_root.load_layout(str(layout))
+        assert result == {"app_dir": "/srv/jen-app", "config_dir": "/srv/jen-etc", "data_dir": "/srv/jen-data"}
+
+    def test_module_level_constants_derive_from_the_layout(self, jen_update_root):
+        # The module's own globals (computed once, at import time) must
+        # agree with what a fresh load_layout() call for the same
+        # (absent, in a normal test environment) file would produce.
+        assert jen_update_root.LAYOUT_ERROR is None
+        assert jen_update_root._layout["app_dir"] == jen_update_root.INSTALL_DIR
+        assert jen_update_root._layout["data_dir"] == jen_update_root.CONTENT_DIR
+        assert os.path.join(jen_update_root._layout["config_dir"], "jen.config") == jen_update_root.CONFIG_FILE
 
 
 class TestVerifyReleaseChecksum:
@@ -434,7 +541,7 @@ def _make_release_tarball(tmp_path, *, version="5.2.6", extra=None, slip=False):
     (root / "jen" / "static" / "favicon.ico").write_bytes(b"ICON")
     (root / "jen" / "plugins" / "ipam").mkdir(parents=True)
     (root / "jen" / "plugins" / "ipam" / "manifest.json").write_text('{"id":"ipam"}')
-    (root / "jen" / "jen.service").write_text("[Service]\nExecStart=x\n")
+    (root / "jen" / "jen.service.template").write_text("[Service]\nExecStart=@@APP_DIR@@/x\n")
     (root / "jen" / "jen-sudoers").write_text("www-data ALL=(root) NOPASSWD: /usr/bin/systemctl restart jen\n")
     (root / "jen" / "jen-update-root.py").write_text("# v2 updater\n")
     (root / "jen" / "jen-update.service").write_text("[Unit]\nDescription=x\n")
@@ -472,7 +579,7 @@ class TestExtractRelease:
         assert (dest / "templates" / "base.html").exists()
         assert (dest / "static" / "favicon.ico").exists()
         assert (dest / "plugins" / "ipam" / "manifest.json").exists()
-        assert (dest / "jen.service").exists()
+        assert (dest / "jen.service.template").exists()
         assert (dest / "jen-sudoers").exists()
         assert (dest / "jen-update-root.py").exists()
         # nothing left with a doubled prefix
@@ -490,28 +597,52 @@ class TestExtractRelease:
 class TestInstallExternalFiles:
     """v5.14.0 — the file install of the app tree IS the extraction +
     symlink flip; install_external_files() only handles the two files a
-    release ships that live OUTSIDE the release directory: jen.service
-    and jen-sudoers. (jen-update-root.py / jen-update.service are
-    install_self_update_files()'s job.)"""
+    release ships that live OUTSIDE the release directory: the systemd
+    unit and jen-sudoers. (jen-update-root.py / jen-update.service are
+    install_self_update_files()'s job.)
+
+    v5.67.0 (Q114) — the unit ships as jen.service.template
+    (@@APP_DIR@@/@@CONFIG_DIR@@/@@DATA_DIR@@ placeholders) and is
+    RENDERED, not shutil.copy2'd verbatim — see render_jen_service()."""
 
     def _app_dir(self, tmp_path, with_service=True, with_sudoers=True):
         app = tmp_path / "release" / "app"
         app.mkdir(parents=True)
         if with_service:
-            (app / "jen.service").write_text("[Service]\nExecStart=x\n")
+            (app / "jen.service.template").write_text(
+                "[Service]\nExecStart=@@APP_DIR@@/current/venv/bin/python\n"
+                "Environment=JEN_CONFIG_DIR=@@CONFIG_DIR@@\n"
+                "Environment=JEN_CONTENT_DIR=@@DATA_DIR@@\n"
+            )
         if with_sudoers:
             (app / "jen-sudoers").write_text("www-data ALL=(root) NOPASSWD: /usr/bin/systemctl restart jen\n")
         return app
 
-    def test_service_file_installed_and_daemon_reloaded(self, jen_update_root, tmp_path):
+    def test_render_jen_service_fills_every_placeholder(self, jen_update_root, tmp_path):
+        app = self._app_dir(tmp_path, with_sudoers=False)
+        out = tmp_path / "jen.service"
+        jen_update_root.render_jen_service(
+            str(app / "jen.service.template"),
+            str(out),
+            app_dir="/srv/jen",
+            config_dir="/srv/etc",
+            data_dir="/srv/data",
+        )
+        rendered = out.read_text()
+        assert "ExecStart=/srv/jen/current/venv/bin/python" in rendered
+        assert "Environment=JEN_CONFIG_DIR=/srv/etc" in rendered
+        assert "Environment=JEN_CONTENT_DIR=/srv/data" in rendered
+        assert "@@" not in rendered
+
+    def test_install_external_files_renders_not_copies_the_unit(self, jen_update_root, tmp_path):
         app = self._app_dir(tmp_path, with_sudoers=False)
         calls = []
         with (
-            patch("shutil.copy2") as copy2,
+            patch.object(jen_update_root, "render_jen_service") as render_mock,
             patch("subprocess.run", side_effect=lambda c, **k: calls.append(c) or MagicMock(returncode=0)),
         ):
             jen_update_root.install_external_files(str(app))
-        assert any("jen.service" in str(c) for c in copy2.call_args_list)
+        render_mock.assert_called_once_with(str(app / "jen.service.template"), "/etc/systemd/system/jen.service")
         assert ["/usr/bin/systemctl", "daemon-reload"] in calls
 
     def test_valid_sudoers_installed_after_visudo_passes(self, jen_update_root, tmp_path):

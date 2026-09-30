@@ -177,7 +177,9 @@ class AppConfig:
         extensions.KEA_SSH_HOST = cfg.get("kea_ssh", "host", fallback="")
         extensions.KEA_SSH_USER = cfg.get("kea_ssh", "user", fallback="")
         extensions.KEA_CONF = cfg.get("kea_ssh", "kea_conf", fallback="/etc/kea/kea-dhcp4.conf")
-        extensions.SSH_KEY_PATH = cfg.get("kea_ssh", "key_path", fallback="/etc/jen/ssh/jen_rsa")
+        extensions.SSH_KEY_PATH = cfg.get(
+            "kea_ssh", "key_path", fallback=os.path.join(extensions.CONFIG_DIR, "ssh", "jen_rsa")
+        )
 
         extensions.DDNS_LOG = cfg.get("ddns", "log_path", fallback="/var/log/kea/kea-ddns.log")
         extensions.DHCP4_LOG = cfg.get("kea", "dhcp4_log_path", fallback="/var/log/kea/kea-dhcp4.log").strip()
@@ -368,7 +370,9 @@ class AppConfig:
                 "api_pass": primary_pass,
                 "ssh_host": cfg.get("kea_ssh", "host", fallback=""),
                 "ssh_user": cfg.get("kea_ssh", "user", fallback=""),
-                "ssh_key": cfg.get("kea_ssh", "key_path", fallback="/etc/jen/ssh/jen_rsa"),
+                "ssh_key": cfg.get(
+                    "kea_ssh", "key_path", fallback=os.path.join(extensions.CONFIG_DIR, "ssh", "jen_rsa")
+                ),
                 "kea_conf": cfg.get("kea_ssh", "kea_conf", fallback="/etc/kea/kea-dhcp4.conf"),
                 "role": cfg.get("kea", "role", fallback="primary"),
             }
@@ -409,7 +413,7 @@ class AppConfig:
                     "api_pass": cfg.get(sec, "api_pass", fallback=primary_pass),
                     "ssh_host": cfg.get(sec, "ssh_host", fallback=""),
                     "ssh_user": cfg.get(sec, "ssh_user", fallback=""),
-                    "ssh_key": cfg.get(sec, "ssh_key", fallback="/etc/jen/ssh/jen_rsa"),
+                    "ssh_key": cfg.get(sec, "ssh_key", fallback=os.path.join(extensions.CONFIG_DIR, "ssh", "jen_rsa")),
                     "kea_conf": cfg.get(sec, "kea_conf", fallback="/etc/kea/kea-dhcp4.conf"),
                     "role": cfg.get(sec, "role", fallback="standby"),
                 }
