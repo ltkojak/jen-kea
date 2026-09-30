@@ -20,7 +20,7 @@ import pytest
 REPO = pathlib.Path(__file__).resolve().parent.parent
 RUN_PY = (REPO / "run.py").read_text(encoding="utf-8")
 INSTALL_SH = (REPO / "install.sh").read_text(encoding="utf-8")
-SERVICE = (REPO / "jen.service").read_text(encoding="utf-8")
+SERVICE = (REPO / "jen.service.template").read_text(encoding="utf-8")
 
 
 class TestRunPyReExec:
@@ -133,13 +133,15 @@ class TestInstallShVenv:
 
 class TestServiceFile:
     """v5.14.0 — the unit points at the versioned layout's stable
-    `/opt/jen/current` symlink."""
+    `<app_dir>/current` symlink. v5.67.0 (Q114) — jen.service is rendered
+    from jen.service.template, so these check the @@APP_DIR@@ placeholder
+    rather than a literal /opt/jen."""
 
     def test_execstart_is_the_release_venv_and_app(self):
-        assert "ExecStart=/opt/jen/current/venv/bin/python /opt/jen/current/app/run.py" in SERVICE
+        assert "ExecStart=@@APP_DIR@@/current/venv/bin/python @@APP_DIR@@/current/app/run.py" in SERVICE
 
     def test_workingdirectory_is_current_app(self):
-        assert "WorkingDirectory=/opt/jen/current/app" in SERVICE
+        assert "WorkingDirectory=@@APP_DIR@@/current/app" in SERVICE
 
     def test_comment_explains_the_transition_fallback(self):
         assert "re-exec shim" in SERVICE

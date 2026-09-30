@@ -5,21 +5,31 @@ After=network.target
 [Service]
 Type=simple
 User=www-data
-# v5.14.0 — the versioned layout. `/opt/jen/current` is a symlink to the
+# v5.14.0 — the versioned layout. `@@APP_DIR@@/current` is a symlink to the
 # live release directory (`releases/<X.Y.Z>/`), flipped atomically by
 # install.sh and the root self-updater. The unit points at that stable
 # path; a rollback is one symlink flip + `systemctl restart jen`.
-WorkingDirectory=/opt/jen/current/app
+WorkingDirectory=@@APP_DIR@@/current/app
 # The per-release venv interpreter runs run.py directly — run.py's own
 # re-exec shim then sees it is already the venv python and stays put. On
 # a still-flat box (the transition install of 5.14.0, or Docker) this
-# path won't exist yet; the shim falls back to /opt/jen/venv or the
+# path won't exist yet; the shim falls back to the flat venv or the
 # system interpreter, and the migration run / `install.sh --upgrade`
 # creates `current`.
-ExecStart=/opt/jen/current/venv/bin/python /opt/jen/current/app/run.py
+ExecStart=@@APP_DIR@@/current/venv/bin/python @@APP_DIR@@/current/app/run.py
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
+# v5.67.0 (Q114) — this unit is rendered, not copied, from
+# jen.service.template: @@APP_DIR@@/@@CONFIG_DIR@@/@@DATA_DIR@@ are filled
+# in from /etc/jen-layout.conf (absent = the historical defaults
+# /opt/jen, /etc/jen, /var/lib/jen — see docs/ARCHITECTURE.md §6.1). These
+# three Environment= lines are what let jen/extensions.py's existing
+# JEN_ROOT / JEN_CONFIG_DIR / JEN_CONTENT_DIR overrides resolve every
+# app-side path without any layout-specific code in the app itself.
+Environment=JEN_ROOT=@@APP_DIR@@/current/app
+Environment=JEN_CONFIG_DIR=@@CONFIG_DIR@@
+Environment=JEN_CONTENT_DIR=@@DATA_DIR@@
 
 # v5.5.0 — run.py launches gunicorn (directly via exec when there's no
 # SSL, or as a child alongside the HTTP->HTTPS redirect when there is).
@@ -35,7 +45,7 @@ TimeoutStopSec=40
 # self-updater is its own unit (jen-update.service) and is deliberately
 # left un-sandboxed — do not copy these lines there.
 ProtectSystem=strict
-ReadWritePaths=/etc/jen /var/lib/jen
+ReadWritePaths=@@CONFIG_DIR@@ @@DATA_DIR@@
 PrivateTmp=yes
 ProtectHome=yes
 ProtectKernelTunables=yes

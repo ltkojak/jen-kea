@@ -261,9 +261,13 @@ class TestVersionedReleaseLayout:
         assert steps.index("verify_install") < steps.index("remove_flat_leftovers")
 
     def test_service_unit_points_at_current(self):
-        s = _text("jen.service")
-        assert "ExecStart=/opt/jen/current/venv/bin/python /opt/jen/current/app/run.py" in s
-        assert "WorkingDirectory=/opt/jen/current/app" in s
+        # v5.67.0 (Q114) — jen.service is rendered from jen.service.template
+        # now; this (host-side, non-Docker) unit's paths are checked against
+        # the @@APP_DIR@@ placeholder here (see test_venv_isolation.py's
+        # TestServiceFile for the same check with more context).
+        s = _text("jen.service.template")
+        assert "ExecStart=@@APP_DIR@@/current/venv/bin/python @@APP_DIR@@/current/app/run.py" in s
+        assert "WorkingDirectory=@@APP_DIR@@/current/app" in s
 
     def test_updater_has_the_versioned_layout_primitives(self):
         u = _text("jen-update-root.py")

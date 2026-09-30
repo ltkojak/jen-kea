@@ -19,8 +19,10 @@ run.py text eol=lf
 install.sh text eol=lf
 uninstall.sh text eol=lf
 
-# v5.17.0 — systemd rejects a unit file with CRLF line endings.
-jen.service text eol=lf
+# v5.17.0 — systemd rejects a unit file with CRLF line endings. jen.service
+# itself is rendered (v5.67.0, Q114) from jen.service.template — pin the
+# template, not a file that no longer exists in the repo.
+jen.service.template text eol=lf
 jen-update.service text eol=lf
 
 # v5.64.x (Q84) — the system-test stack's shell scripts and Dockerfiles run

@@ -12,6 +12,35 @@ CONFIG_DIR="/etc/jen"
 CONTENT_DIR="/var/lib/jen"          # v5.13.0 — uploads, DB backups, plugins
 SERVICE_FILE="/etc/systemd/system/jen.service"
 SUDOERS_FILE="/etc/sudoers.d/jen"
+LAYOUT_FILE="/etc/jen-layout.conf"  # v5.67.0 (Q114) — absent = the defaults above, unchanged
+
+# v5.67.0 (Q114) — a relocated install records where app/config/data
+# actually live in $LAYOUT_FILE (root:root 0644, outside $CONFIG_DIR —
+# see docs/ARCHITECTURE.md §3.1). Same bare "key = value" reader as
+# install.sh's own _layout_file_get, never sourced. A present-but-invalid
+# file (wrong owner, group/other-writable, a symlink) is left alone
+# entirely — this script only ever READS it to find out where to look,
+# never trusts it for anything root-privileged.
+if [[ -f "$LAYOUT_FILE" && ! -L "$LAYOUT_FILE" ]]; then
+    _layout_get() {
+        local key="$1" line v
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            line="${line%$'\r'}"
+            [[ "$line" =~ ^[[:space:]]*${key}[[:space:]]*=(.*)$ ]] || continue
+            v="${BASH_REMATCH[1]}"
+            v="${v#"${v%%[![:space:]]*}"}"
+            v="${v%"${v##*[![:space:]]}"}"
+            printf '%s' "$v"
+            return
+        done < "$LAYOUT_FILE"
+    }
+    layout_app=$(_layout_get app_dir)
+    layout_config=$(_layout_get config_dir)
+    layout_data=$(_layout_get data_dir)
+    [[ -n "$layout_app"    ]] && INSTALL_DIR="$layout_app"
+    [[ -n "$layout_config" ]] && CONFIG_DIR="$layout_config"
+    [[ -n "$layout_data"   ]] && CONTENT_DIR="$layout_data"
+fi
 
 # ── ANSI colors ──────────────────────────────────────────────────────────────
 R='\033[0;31m'
@@ -186,6 +215,10 @@ fi
 if [[ "$REMOVAL_LEVEL" == "3" ]]; then
     rm -rf "$CONFIG_DIR" "$CONTENT_DIR"
     ok "Removed all Jen data  ${DIM}(${CONFIG_DIR}, ${CONTENT_DIR})${NC}"
+    if [[ -f "$LAYOUT_FILE" ]]; then
+        rm -f "$LAYOUT_FILE"
+        ok "Removed layout record  ${DIM}(${LAYOUT_FILE})${NC}"
+    fi
 fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────

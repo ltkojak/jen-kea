@@ -20,6 +20,22 @@
 #                                    same JEN_* names also work as plain
 #                                    environment variables, with the file
 #                                    (when given) taking priority.
+#    sudo ./install.sh --app-dir <dir> --config-dir <dir> --data-dir <dir>
+#                                    Fresh-install-only: install the app tree,
+#                                    /etc/jen equivalent, and user-writable
+#                                    data directory somewhere other than the
+#                                    defaults (/opt/jen, /etc/jen, /var/lib/jen
+#                                    — any left unset keeps its default). The
+#                                    choice is recorded root-owned in
+#                                    /etc/jen-layout.conf and every later run
+#                                    (--upgrade/--repair/--configure) reads it
+#                                    back; passing one of these flags again
+#                                    with a different value is refused —
+#                                    relocating an existing install is a
+#                                    runbook (docs/runbooks.md), not a flag.
+#                                    Same JEN_APP_DIR / JEN_CONFIG_DIR /
+#                                    JEN_DATA_DIR names in --answers or the
+#                                    environment.
 #    sudo ./install.sh --restore <bundle.tar.enc>
 #                                    Restore a recovery bundle (Settings → Databases
 #                                    → Recovery) onto this install — run AFTER a normal
@@ -36,47 +52,16 @@ set -euo pipefail
 
 JEN_VERSION="5.67.0-beta.1"
 
-# ── Paths ────────────────────────────────────────────────────────────────────
-INSTALL_DIR="/opt/jen"
-CONFIG_DIR="/etc/jen"
-CONTENT_DIR="/var/lib/jen"          # v5.13.0 — user-writable content (uploads, backups, plugins)
-SERVICE_FILE="/etc/systemd/system/jen.service"
-SUDOERS_FILE="/etc/sudoers.d/jen"
-CONFIG_FILE="/etc/jen/jen.config"
-BACKUP_DIR="/etc/jen/backups"       # jen.config backups (NOT the DB backups — those are $CONTENT_DIR/backups)
 JEN_USER="www-data"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROLLBACK_JEN=""
 ROLLBACK_PKG=""
 
-# v5.14.0 — versioned release directories. Each release is built whole
-# under releases/<X.Y.Z>/{app,venv}; `current` is a relative symlink to
-# the live one, flipped atomically (ln -s + mv -T). A rollback is one
-# flip back — the previous release dir is never touched.
-RELEASES_DIR="$INSTALL_DIR/releases"
-CURRENT_LINK="$INSTALL_DIR/current"
-RELEASE_DIR="$RELEASES_DIR/$JEN_VERSION"   # the release THIS run installs
-APP_DIR="$RELEASE_DIR/app"
-
-# v5.8.0 — bare-metal Jen runs from its own venv, not system site-packages
-# (no more --break-system-packages). VENV_PY is this release's interpreter;
-# PYBIN is whatever's usable right now for the installer's own inline
-# python helpers — the currently-live release's venv (pre-upgrade DB
-# backup needs pymysql), else a flat pre-5.14 venv, else system python.
-VENV_DIR="$RELEASE_DIR/venv"
-VENV_PY="$VENV_DIR/bin/python"
-PYBIN="python3"
-[[ -x "$INSTALL_DIR/venv/bin/python" ]] && PYBIN="$INSTALL_DIR/venv/bin/python"
-[[ -x "$CURRENT_LINK/venv/bin/python" ]] && PYBIN="$CURRENT_LINK/venv/bin/python"
-
-# The app tree the installer's inline python helpers should import from:
-# this run's release once install_files has populated it, else the live
-# release, else a flat pre-5.14 tree.
-app_pyroot() {
-    if   [[ -d "$APP_DIR/jen" ]]; then echo "$APP_DIR"
-    elif [[ -d "$CURRENT_LINK/app/jen" ]]; then echo "$CURRENT_LINK/app"
-    else echo "$INSTALL_DIR"; fi
-}
+# v5.67.0 (Q114) — /etc/jen-layout.conf, NOT under $CONFIG_DIR: see
+# docs/ARCHITECTURE.md §3.1 — $CONFIG_DIR is chowned to $JEN_USER, so a
+# root-trusted "where do app/config/data live" file has to sit outside it,
+# at a fixed path both this script and the root updater always agree on.
+LAYOUT_FILE="/etc/jen-layout.conf"
 
 # ── Mode flags ────────────────────────────────────────────────────────────────
 MODE_UPGRADE=false
@@ -99,6 +84,13 @@ ROLLBACK_ARMED=false
 # names to learn across bare metal and Docker.
 ANSWERS_FILE=""
 declare -A ANSWERS
+
+# v5.67.0 (Q114) — an explicit --app-dir/--config-dir/--data-dir, if given.
+# Resolved against any existing $LAYOUT_FILE / --answers / JEN_*_DIR env in
+# _resolve_layout_dirs below, once the flag loop and _cfgval both exist.
+OPT_APP_DIR=""
+OPT_CONFIG_DIR=""
+OPT_DATA_DIR=""
 
 # v5.67.0 (Q113) — defined this early, before any other function, so
 # --help can print and exit from the flag-parsing loop below it: bash
@@ -128,6 +120,16 @@ Usage:
                                    same JEN_* names also work as plain
                                    environment variables, with the file
                                    (when given) taking priority.
+  sudo ./install.sh --app-dir <dir> --config-dir <dir> --data-dir <dir>
+                                   Fresh-install-only: relocate the app tree,
+                                   /etc/jen equivalent, or data directory
+                                   (defaults: /opt/jen, /etc/jen,
+                                   /var/lib/jen). Recorded in
+                                   /etc/jen-layout.conf; a later run that
+                                   disagrees with it is refused. Same
+                                   JEN_APP_DIR / JEN_CONFIG_DIR /
+                                   JEN_DATA_DIR names in --answers or the
+                                   environment.
   sudo ./install.sh --restore <bundle.tar.enc>
                                    Restore a recovery bundle (Settings → Databases
                                    → Recovery) onto this install — run AFTER a normal
@@ -156,6 +158,18 @@ while [[ $# -gt 0 ]]; do
         --answers)
             shift
             ANSWERS_FILE="${1:-}"
+            ;;
+        --app-dir)
+            shift
+            OPT_APP_DIR="${1:-}"
+            ;;
+        --config-dir)
+            shift
+            OPT_CONFIG_DIR="${1:-}"
+            ;;
+        --data-dir)
+            shift
+            OPT_DATA_DIR="${1:-}"
             ;;
         --restore)
             MODE_RESTORE=true
@@ -360,6 +374,199 @@ _ask_secret() {
         fatal "Missing required value for $name — set it in --answers or the $name environment variable."
     fi
     printf ''
+}
+
+# ── Layout (v5.67.0, Q114) ───────────────────────────────────────────────────
+# Where app_dir/config_dir/data_dir may NOT live — none of these hold
+# persistent root-owned application state, or (in /home's case) carry their
+# own unrelated ownership conventions. Mirrored word-for-word in
+# jen-update-root.py's load_layout(); tests/test_layout.py and
+# tests/test_jen_update_root.py each exercise their own side of the same
+# table so the two can't silently drift apart.
+_LAYOUT_FORBIDDEN_PREFIXES=(/tmp /run /proc /sys /dev /home)
+
+# _layout_path_ok NAME PATH — absolute, normalized (no "..", matches its own
+# os.path.normpath), not "/", not under a forbidden prefix. Prints the
+# failure reason and returns non-zero rather than calling fatal itself, so
+# _resolve_layout_dirs can decide the exact wording; silent success.
+_layout_path_ok() {
+    local name="$1" path="$2"
+    if [[ "$path" != /* ]]; then
+        echo "$name must be an absolute path: $path"; return 1
+    fi
+    if [[ "$path" == "/" ]]; then
+        echo "$name cannot be /"; return 1
+    fi
+    if [[ "$path" == *".."* ]]; then
+        echo "$name must not contain ..: $path"; return 1
+    fi
+    local normalized
+    normalized=$("$PYBIN_FOR_LAYOUT" -c "import os,sys; print(os.path.normpath(sys.argv[1]))" "$path" 2>/dev/null) || normalized=""
+    if [[ -n "$normalized" && "$normalized" != "$path" ]]; then
+        echo "$name must be a normalized path (try $normalized): $path"; return 1
+    fi
+    local prefix
+    for prefix in "${_LAYOUT_FORBIDDEN_PREFIXES[@]}"; do
+        if [[ "$path" == "$prefix" || "$path" == "$prefix/"* ]]; then
+            echo "$name must not live under $prefix: $path"; return 1
+        fi
+    done
+    return 0
+}
+
+# _layout_not_nested A_NAME A_PATH B_NAME B_PATH — fatal if either is an
+# ancestor of (or equal to) the other. Siblings under the same parent (the
+# common case — e.g. data_dir next to app_dir) are not nesting and pass.
+_layout_not_nested() {
+    local an="$1" ap="$2" bn="$3" bp="$4"
+    if [[ "$ap" == "$bp" || "$ap" == "$bp/"* || "$bp" == "$ap/"* ]]; then
+        fatal "$an ($ap) and $bn ($bp) must not be nested inside one another."
+    fi
+}
+
+# _layout_parents_root_owned PATH — every EXISTING ancestor directory of
+# PATH must be root-owned and not group/other-writable, mirroring
+# jen-kea-helper's _bin_dir_ok (same "don't trust a directory a lesser user
+# could redirect" reasoning, applied here to where root is about to build
+# app_dir's tree).
+_layout_parents_root_owned() {
+    local path="$1" dir owner mode
+    dir="$path"
+    while [[ "$dir" != "/" ]]; do
+        dir=$(dirname "$dir")
+        [[ -e "$dir" ]] || continue
+        owner=$(stat -c '%u' "$dir" 2>/dev/null || stat -f '%u' "$dir" 2>/dev/null || echo "")
+        mode=$(stat -c '%a' "$dir" 2>/dev/null || stat -f '%OLp' "$dir" 2>/dev/null || echo "")
+        if [[ -n "$owner" && "$owner" != "0" ]]; then
+            fatal "app_dir's existing parent $dir is not root-owned (uid $owner) — refusing to install under it."
+        fi
+        if [[ -n "$mode" ]] && (( (8#$mode & 8#0022) != 0 )); then
+            fatal "app_dir's existing parent $dir is writable by group or other (mode $mode) — refusing to install under it."
+        fi
+    done
+    return 0
+}
+
+# _validate_layout_file_or_fatal FILE — regular file, root:root, not a
+# symlink, no group/other write. A present-but-invalid file is a hard
+# refusal, never a silent fallback to defaults (docs/ARCHITECTURE.md §3.1:
+# this file exists specifically so nothing $JEN_USER can write ever reaches
+# root's own path resolution — silently tolerating a bad one would defeat
+# that boundary without anyone noticing).
+_validate_layout_file_or_fatal() {
+    local f="$1" owner group mode
+    [[ -L "$f" ]] && fatal "$f must be a regular file, not a symlink."
+    [[ -f "$f" ]] || fatal "$f exists but is not a regular file."
+    owner=$(stat -c '%u' "$f" 2>/dev/null || stat -f '%u' "$f" 2>/dev/null || echo "")
+    group=$(stat -c '%g' "$f" 2>/dev/null || stat -f '%g' "$f" 2>/dev/null || echo "")
+    mode=$(stat -c '%a' "$f" 2>/dev/null || stat -f '%OLp' "$f" 2>/dev/null || echo "")
+    [[ "$owner" == "0" ]] || fatal "$f must be owned by root (found uid $owner) — refusing to trust it."
+    [[ "$group" == "0" ]] || fatal "$f must be group root (found gid $group) — refusing to trust it."
+    if [[ -n "$mode" ]] && (( (8#$mode & 8#0022) != 0 )); then
+        fatal "$f is writable by group or other (mode $mode) — refusing to trust it."
+    fi
+}
+
+# _layout_file_get FILE KEY — a bare "key = value" line's trimmed value, or
+# empty. Never sourced (same reasoning as the answers file above): nothing
+# resembling shell syntax in this file is ever handed to the shell.
+_layout_file_get() {
+    local f="$1" key="$2" line v
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%$'\r'}"
+        [[ "$line" =~ ^[[:space:]]*${key}[[:space:]]*=(.*)$ ]] || continue
+        v="${BASH_REMATCH[1]}"
+        v="${v#"${v%%[![:space:]]*}"}"
+        v="${v%"${v##*[![:space:]]}"}"
+        printf '%s' "$v"
+        return
+    done < "$f"
+}
+
+# _resolve_layout_dirs — sets INSTALL_DIR/CONFIG_DIR/CONTENT_DIR. An
+# existing $LAYOUT_FILE (a prior install, of any mode) is authoritative;
+# any --app-dir/--config-dir/--data-dir (or JEN_*_DIR answers/env) that
+# disagrees with it is refused outright — relocating is a runbook
+# (docs/runbooks.md §5), not a flag, so there is never a partial move. With
+# no layout file (fresh install, or one from before Q114), an explicit
+# value wins, else today's literal default — unchanged for every install
+# that never asks for this.
+_resolve_layout_dirs() {
+    local want_app want_config want_data
+    want_app=$(_cfgval JEN_APP_DIR); [[ -n "$OPT_APP_DIR" ]] && want_app="$OPT_APP_DIR"
+    want_config=$(_cfgval JEN_CONFIG_DIR); [[ -n "$OPT_CONFIG_DIR" ]] && want_config="$OPT_CONFIG_DIR"
+    want_data=$(_cfgval JEN_DATA_DIR); [[ -n "$OPT_DATA_DIR" ]] && want_data="$OPT_DATA_DIR"
+
+    if [[ -f "$LAYOUT_FILE" ]]; then
+        _validate_layout_file_or_fatal "$LAYOUT_FILE"
+        local existing_app existing_config existing_data
+        existing_app=$(_layout_file_get "$LAYOUT_FILE" app_dir)
+        existing_config=$(_layout_file_get "$LAYOUT_FILE" config_dir)
+        existing_data=$(_layout_file_get "$LAYOUT_FILE" data_dir)
+        [[ -n "$want_app"    && "$want_app"    != "$existing_app"    ]] && fatal "This install's app_dir is already $existing_app (per $LAYOUT_FILE) — relocating an existing install is a runbook (docs/runbooks.md), not an install.sh flag."
+        [[ -n "$want_config" && "$want_config" != "$existing_config" ]] && fatal "This install's config_dir is already $existing_config (per $LAYOUT_FILE) — relocating an existing install is a runbook (docs/runbooks.md), not an install.sh flag."
+        [[ -n "$want_data"   && "$want_data"   != "$existing_data"   ]] && fatal "This install's data_dir is already $existing_data (per $LAYOUT_FILE) — relocating an existing install is a runbook (docs/runbooks.md), not an install.sh flag."
+        INSTALL_DIR="$existing_app"
+        CONFIG_DIR="$existing_config"
+        CONTENT_DIR="$existing_data"
+        return 0
+    fi
+
+    INSTALL_DIR="${want_app:-/opt/jen}"
+    CONFIG_DIR="${want_config:-/etc/jen}"
+    CONTENT_DIR="${want_data:-/var/lib/jen}"
+
+    local reason
+    reason=$(_layout_path_ok app_dir "$INSTALL_DIR")    || fatal "$reason"
+    reason=$(_layout_path_ok config_dir "$CONFIG_DIR")  || fatal "$reason"
+    reason=$(_layout_path_ok data_dir "$CONTENT_DIR")   || fatal "$reason"
+    _layout_not_nested app_dir "$INSTALL_DIR" config_dir "$CONFIG_DIR"
+    _layout_not_nested app_dir "$INSTALL_DIR" data_dir "$CONTENT_DIR"
+    _layout_not_nested config_dir "$CONFIG_DIR" data_dir "$CONTENT_DIR"
+    _layout_parents_root_owned "$INSTALL_DIR"
+}
+
+# _layout_path_ok's normpath check shells out to python3 for exact parity
+# with load_layout()'s own os.path.normpath — resolved once, here, since
+# PYBIN (the release-aware interpreter picked below) doesn't exist yet at
+# this point in the script.
+PYBIN_FOR_LAYOUT="python3"
+
+_resolve_layout_dirs
+
+# ── Paths ────────────────────────────────────────────────────────────────────
+SERVICE_FILE="/etc/systemd/system/jen.service"
+SUDOERS_FILE="/etc/sudoers.d/jen"
+CONFIG_FILE="$CONFIG_DIR/jen.config"
+BACKUP_DIR="$CONFIG_DIR/backups"    # jen.config backups (NOT the DB backups — those are $CONTENT_DIR/backups)
+
+# v5.14.0 — versioned release directories. Each release is built whole
+# under releases/<X.Y.Z>/{app,venv}; `current` is a relative symlink to
+# the live one, flipped atomically (ln -s + mv -T). A rollback is one
+# flip back — the previous release dir is never touched.
+RELEASES_DIR="$INSTALL_DIR/releases"
+CURRENT_LINK="$INSTALL_DIR/current"
+RELEASE_DIR="$RELEASES_DIR/$JEN_VERSION"   # the release THIS run installs
+APP_DIR="$RELEASE_DIR/app"
+
+# v5.8.0 — bare-metal Jen runs from its own venv, not system site-packages
+# (no more --break-system-packages). VENV_PY is this release's interpreter;
+# PYBIN is whatever's usable right now for the installer's own inline
+# python helpers — the currently-live release's venv (pre-upgrade DB
+# backup needs pymysql), else a flat pre-5.14 venv, else system python.
+VENV_DIR="$RELEASE_DIR/venv"
+VENV_PY="$VENV_DIR/bin/python"
+PYBIN="python3"
+[[ -x "$INSTALL_DIR/venv/bin/python" ]] && PYBIN="$INSTALL_DIR/venv/bin/python"
+[[ -x "$CURRENT_LINK/venv/bin/python" ]] && PYBIN="$CURRENT_LINK/venv/bin/python"
+
+# The app tree the installer's inline python helpers should import from:
+# this run's release once install_files has populated it, else the live
+# release, else a flat pre-5.14 tree.
+app_pyroot() {
+    if   [[ -d "$APP_DIR/jen" ]]; then echo "$APP_DIR"
+    elif [[ -d "$CURRENT_LINK/app/jen" ]]; then echo "$CURRENT_LINK/app"
+    else echo "$INSTALL_DIR"; fi
 }
 
 # ── Spinner ───────────────────────────────────────────────────────────────────
@@ -1490,12 +1697,55 @@ migrate_content() {
     ok "User content is under $CONTENT_DIR"
 }
 
+# ── Layout file (v5.67.0, Q114) ──────────────────────────────────────────────
+# Written once, on a genuinely fresh install only — an upgrade/repair/
+# configure run against an existing install never reaches here with
+# IS_UPGRADE false, and _resolve_layout_dirs above has already refused a
+# disagreeing flag long before this step could run. Root:root 0644,
+# outside $CONFIG_DIR (docs/ARCHITECTURE.md §3.1): the root updater must
+# never learn a path from anywhere $JEN_USER can write, and $CONFIG_DIR is
+# chowned to it.
+write_layout_file() {
+    [[ "$IS_UPGRADE" == "true" ]] && return 0
+    [[ -f "$LAYOUT_FILE" ]] && return 0
+    cat > "$LAYOUT_FILE" << EOF
+# Jen install layout — written once by install.sh at first install. Read
+# by jen-update-root.py (the root self-updater) and by install.sh itself
+# on every later --upgrade/--repair/--configure run. Do not hand-edit to
+# relocate an existing install — see docs/runbooks.md for that procedure.
+[layout]
+app_dir = $INSTALL_DIR
+config_dir = $CONFIG_DIR
+data_dir = $CONTENT_DIR
+EOF
+    chown root:root "$LAYOUT_FILE"
+    chmod 644 "$LAYOUT_FILE"
+    ok "Layout recorded  ${DIM}(app=$INSTALL_DIR config=$CONFIG_DIR data=$CONTENT_DIR)${NC}"
+}
+
+# ── Render jen.service (v5.67.0, Q114) ───────────────────────────────────────
+# jen.service.template ships inside the release tree with @@APP_DIR@@ /
+# @@CONFIG_DIR@@ / @@DATA_DIR@@ placeholders instead of literal paths — the
+# unit has to reflect wherever THIS install's app/config/data actually
+# live. jen-update-root.py renders the same template the same way on
+# every in-app update (see install_external_files there), so a relocated
+# install's unit is never silently overwritten with one hardcoded back to
+# the defaults. Syntax-verified in verify_install() once `current` exists.
+render_jen_service() {
+    local template="$1" out="$2"
+    sed -e "s#@@APP_DIR@@#$INSTALL_DIR#g" \
+        -e "s#@@CONFIG_DIR@@#$CONFIG_DIR#g" \
+        -e "s#@@DATA_DIR@@#$CONTENT_DIR#g" \
+        "$template" > "$out"
+}
+
 # ── Install files ─────────────────────────────────────────────────────────────
 # v5.14.0 — the whole tarball goes into releases/$JEN_VERSION/app; the
-# shipped OUT-OF-TREE files (jen.service, jen-sudoers, jen-update-root.py,
-# jen-update.service) are installed from that copy. `current` is NOT
-# flipped here — setup_venv() has to build releases/$JEN_VERSION/venv
-# first, then activate_release() does the atomic flip.
+# shipped OUT-OF-TREE files (jen.service.template, jen-sudoers,
+# jen-update-root.py, jen-update.service) are installed from that copy.
+# `current` is NOT flipped here — setup_venv() has to build
+# releases/$JEN_VERSION/venv first, then activate_release() does the
+# atomic flip.
 install_files() {
     blank
     echo -e "  ${B}${C}INSTALLING FILES${NC}"
@@ -1517,7 +1767,7 @@ install_files() {
     ok "Installed release tree  ${DIM}($(find "$APP_DIR/jen" -name '*.py' 2>/dev/null | wc -l) modules)${NC}"
 
     # ── Out-of-tree files, from the just-installed release copy ──────────
-    cp "$APP_DIR/jen.service" "$SERVICE_FILE"
+    render_jen_service "$APP_DIR/jen.service.template" "$SERVICE_FILE"
     ok "Installed systemd service"
 
     if [[ -f "$APP_DIR/jen-sudoers" ]]; then
@@ -1650,6 +1900,22 @@ verify_install() {
     [[ -f "$CONFIG_FILE" ]] \
         && ok "Config file present  ${DIM}(${CONFIG_FILE})${NC}" \
         || warn "Config file not found — Jen may not start correctly"
+
+    # Unit (v5.67.0, Q114) — render_jen_service() only checks that `sed`
+    # ran; this is the real syntax/semantics check, run here (not right
+    # after rendering in install_files) because WorkingDirectory only
+    # exists once activate_release has flipped `current` into place.
+    if command -v systemd-analyze &>/dev/null; then
+        local unit_result unit_status
+        unit_result=$(systemd-analyze verify "$SERVICE_FILE" 2>&1) && unit_status=0 || unit_status=$?
+        if [[ "$unit_status" -eq 0 ]]; then
+            ok "systemd unit verified"
+        else
+            err "systemd-analyze verify failed for $SERVICE_FILE:"; echo "$unit_result"; exit 1
+        fi
+    else
+        warn "systemd-analyze not found — skipping unit verification"
+    fi
 
     # Templates
     # v5.67.0 (Q113) — two real bugs, found together once install.sh first
@@ -1980,7 +2246,7 @@ _disarm_rollback()   { ROLLBACK_ARMED=false; }
 # it, _configure_admin) already branch on IS_UPGRADE to keep the existing
 # config instead of asking — that was true before this table existed too.
 declare -A MODE_STEPS=(
-    [standard]="preflight_checks install_dependencies collect_config backup_existing migrate_content snapshot_external_files _arm_rollback install_files setup_venv compile_app write_config activate_release start_service verify_install _disarm_rollback remove_flat_leftovers print_summary"
+    [standard]="preflight_checks install_dependencies collect_config backup_existing write_layout_file migrate_content snapshot_external_files _arm_rollback install_files setup_venv compile_app write_config activate_release start_service verify_install _disarm_rollback remove_flat_leftovers print_summary"
     [repair]="preflight_checks install_dependencies _skip_configure backup_existing snapshot_external_files _arm_rollback install_files setup_venv compile_app activate_release start_service verify_install _disarm_rollback remove_flat_leftovers print_summary"
 )
 
