@@ -185,14 +185,29 @@ a throwaway VM, never against a live box, before you need it for real.
    at 100,000 rows (37 MB)** — the ratio actually falls as the export
    grows (fixed per-call overhead amortizing), so the guard uses the
    worst of those three, with headroom, as a flat **7×**
-   (`jen.tools.restore.RESTORE_MEMORY_FACTOR`) — conservative for a large
-   export, which is the case that actually matters. If a
-   restore refuses on this check, the message names both figures; the two
-   ways to shrink the export are lowering Settings → System → Audit Log Retention
-   before the NEXT export, or checking **"Without audit history"** on the
-   recovery bundle form (`audit_log` is the one table this leaves out —
-   export it separately from Settings → Databases → Export if you need it
-   after all).
+   (`jen.tools.restore.RESTORE_MEMORY_FACTOR`).
+
+   **v5.66.0-beta.6 (Q108) — the check weighs whichever side is bigger,
+   not just the incoming bundle.** A small bundle restored onto a box
+   whose CURRENT database is large still has to hold that current
+   database's own export in memory — for the pre-restore snapshot taken
+   just before the bundle is applied, and again for a rollback if
+   anything afterward goes wrong — so `jen.tools.restore` now measures the
+   existing database's real size too (a real export to a throwaway file
+   in the snapshot directory, deleted right after — costs time and disk
+   there, never memory) and refuses if `max(incoming, existing) × 7`
+   would exceed what's available, naming whichever side was the actual
+   problem. The same step also confirms the snapshot directory has room
+   for the snapshot itself (twice the existing database's compressed
+   size) before anything is touched. If a restore refuses on either
+   check, the message names the actual figures; the ways to shrink
+   either side are the same as before — lower Settings → System → Audit
+   Log Retention before the next export/backup, or check **"Without
+   audit history"** on the recovery bundle form (`audit_log` is the one
+   table this leaves out — export it separately from Settings →
+   Databases → Export if you need it after all) — or restore onto a box
+   with more RAM or free disk. The check never suggests adding swap: it
+   measures real, currently-available memory, and swap isn't that.
 1. **Provision a scratch VM** and run a normal `sudo ./install.sh` on it
    — this sets up the venv, the systemd unit, and sudoers; the restore
    below layers *state* onto that working install, it does not set one

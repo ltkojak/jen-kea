@@ -2,6 +2,63 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.66.0-beta.6] - 2026-09-30
+
+A backup wrote straight to its final filename — a writer that died
+halfway (a crash, a full disk) left a truncated file that still listed
+as a real backup, and retention ran unconditionally over every backup
+regardless of which half of a scheduled run actually succeeded: a week
+of a broken Jen half and a healthy Kea half deleted the last good Jen
+backup along with everything before it. The ordinary database import
+page had no size limit and no memory check at all — only the recovery
+bundle's restore did. And a restore's own memory check weighed only the
+incoming bundle, never the database already on the box, so a small
+bundle restored onto a box with a large existing database could pass
+the check and still run out of memory during the snapshot or a rollback.
+
+**A backup is published atomically or not at all.**
+`dbexport.publish_backup(final_path, write_fn)` is the fix underneath
+every backup path now: written to a 0600 temporary file in the same
+directory, fsync'd, then renamed onto the final name — any failure along
+the way removes the temporary file and the final name is never created
+at all. Retention is per database now, scheduled backups only (a manual
+backup is never pruned by the schedule), and a database's own backups
+are only pruned when that database's new backup actually published in
+the run doing the pruning.
+
+**Listing backups no longer means opening every one of them.** Since the
+metadata moved to the end of the export document, listing backups meant
+fully decompressing and parsing each file just to show its date and
+tables in a table row. Every backup now gets a small sidecar file
+written right after it, and the Backups page reads only that. A backup
+from before this release (no sidecar yet) gets a one-time **Read
+details** action that parses it exactly once, ever, and writes the
+sidecar so it's never paid again. Downloading a backup now streams
+straight from disk instead of holding the whole file in the server's
+memory first.
+
+**The rollback snapshot taken before a restore applies is written
+straight to disk too**, never held whole as bytes in memory first — the
+same change the recovery bundle and scheduled backups already got.
+
+**A restore's memory check now weighs whichever database is bigger, not
+just the incoming one.** Before applying a restore, Jen now measures the
+CURRENT database's own size (a real, streamed export to a throwaway
+file, never held in memory) alongside the incoming bundle's recorded
+size, and refuses if either one — not just the incoming side — would
+need more memory than the box currently has free. It also confirms
+there's enough free disk space for the snapshot about to be taken. A
+refusal names whichever side was actually the problem, and no longer
+suggests adding swap — the check measures real, available memory, and
+swap was never counted toward it anyway.
+
+**The ordinary import page finally has limits.** An uploaded file is
+spooled straight to disk instead of read fully into memory, refused
+above a configurable compressed-size cap (`[backups] max_import_mb`,
+512 MB by default — also set as the whole app's own upload ceiling, so
+nothing else was left uncapped either), and checked against the same
+memory guard a restore uses — all before a single table is touched.
+
 ## [5.66.0-beta.5] - 2026-09-29
 
 Q107: none of the 20 tables the 7 bundled plugins own were ever part of a

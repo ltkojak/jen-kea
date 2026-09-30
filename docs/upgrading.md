@@ -195,6 +195,53 @@ the first place. If you rely on a plugin's data being recoverable, take a
 fresh backup or recovery bundle once you've upgraded to this release or
 later.
 
+## A scheduled backup that partly fails no longer prunes the good half
+
+Before 5.66.0-beta.6, a scheduled backup wrote straight to its final
+filename — if the process died partway through (a crash, a full disk),
+whatever was written so far still listed as a backup, and the retention
+step ran regardless of whether that run's own backup actually succeeded.
+A week of the Jen half failing while the Kea half kept succeeding could
+prune away the last good Jen backup along with everything before it.
+Every backup is now written to a temporary file first and only renamed
+into place once it's fully and successfully written; retention only
+prunes a database's own backups, and only when that database's new
+backup actually published in the run that's pruning. Nothing to
+configure — this is how every scheduled and manual backup works from
+now on.
+
+The Backups list on Settings → Databases now reads a small sidecar file
+next to each backup instead of opening the backup itself, so the page
+loads quickly even with years of daily backups. A backup from before
+this release (no sidecar yet) shows a **Read details** action that reads
+it once, permanently, the first time you look at it.
+
+## The ordinary database import page now has real limits
+
+Before 5.66.0-beta.6, uploading a file on Settings → Databases → Import
+had no size limit and no memory check at all — only the recovery
+bundle's restore did. The import page now refuses a compressed upload
+over 512 MB by default (`[backups] max_import_mb` in `jen.config` if you
+need to change it) and runs the same memory check a restore does before
+parsing anything. If you regularly import large exports and hit the
+new cap, raise `max_import_mb`; if you hit the memory check, the same
+advice as a restore refusal applies — free memory, lower audit log
+retention, or a box with more RAM.
+
+## A restore's memory check now also weighs the database already on the box
+
+Before 5.66.0-beta.6, restoring a recovery bundle checked only whether
+the box had enough memory for the INCOMING bundle's own database export.
+A small bundle restored onto a box whose CURRENT database was large
+could still pass that check and then run out of memory anyway — the
+pre-restore snapshot (and a rollback, if one was ever needed) has to
+hold the existing database's export just as much as an import holds the
+incoming one. The check now measures both sides and refuses on whichever
+is bigger, naming which one was the actual problem; it also confirms
+there's enough free disk space for the snapshot before anything is
+stopped. See `docs/runbooks.md`'s "Before you start: size" step for the
+details if a restore ever refuses on this.
+
 ## A few things that will just already be fixed
 
 None of these need anything from you — they're upgrades you get for
