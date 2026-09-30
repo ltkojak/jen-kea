@@ -30,15 +30,36 @@ _SECURITY = _ROOT / "SECURITY.md"
 _FLOOR = "5.56.4-beta.1"  # the oldest heading upgrading.md must cover — 5.56.3 itself is the baseline
 
 
+def _beta_history_versions() -> list[str]:
+    """Versions named on the newest stable entry's own `**Beta history:**` line.
+    A promotion folds the individual `## [X.Y.Z-beta.N]` headings those versions
+    used to have into one stable heading — they stop existing as headings, but
+    they're still real prior releases this guard must keep checking for."""
+    text = _CHANGELOG.read_text(encoding="utf-8")
+    match = re.search(r"\*\*Beta history:\*\*\s*(.+)", text)
+    if not match:
+        return []
+    return [v.strip().rstrip(".") for v in match.group(1).split(",")]
+
+
 def _changelog_versions_since_floor() -> list[str]:
     """Every `## [X.Y.Z...]` heading in CHANGELOG.md at or above the floor version,
+    plus every version named on the newest stable entry's own Beta history line,
     oldest CHANGELOG.md entry counted first being 5.56.4-beta.1 (5.56.3 itself, the
     stable floor everything is relative to, is deliberately excluded — the guard is
     about not skipping anything ADDED since, not about restating the floor)."""
     text = _CHANGELOG.read_text(encoding="utf-8")
     headings = re.findall(r"^## \[([^\]]+)\]", text, re.M)
     floor_rank = parse_version(_FLOOR)
-    return [v for v in headings if parse_version(v) >= floor_rank]
+    versions = [v for v in headings if parse_version(v) >= floor_rank]
+    versions += [v for v in _beta_history_versions() if parse_version(v) >= floor_rank]
+    seen = set()
+    deduped = []
+    for v in versions:
+        if v not in seen:
+            seen.add(v)
+            deduped.append(v)
+    return deduped
 
 
 class TestUpgradingDocExists:
@@ -49,11 +70,17 @@ class TestUpgradingDocExists:
 class TestUpgradingDocCoversEveryVersionSinceTheFloor:
     def test_the_floor_itself_resolves_to_a_real_changelog_heading(self):
         # a canary against the floor constant itself going stale (e.g. a future
-        # renumbering) — if 5.56.4-beta.1 ever stops being a real heading, this
-        # test (not the coverage test below, which would just silently cover
-        # less) is what should fail.
+        # renumbering) — if 5.56.4-beta.1 ever stops being findable, this test
+        # (not the coverage test below, which would just silently cover less)
+        # is what should fail. It can appear either as its own literal heading
+        # (pre-promotion) or, once a promotion folds it away, on the newest
+        # stable entry's own Beta history line.
         text = _CHANGELOG.read_text(encoding="utf-8")
-        assert f"## [{_FLOOR}]" in text
+        as_heading = f"## [{_FLOOR}]" in text
+        in_beta_history = _FLOOR in _beta_history_versions()
+        assert as_heading or in_beta_history, (
+            f"{_FLOOR} is neither a CHANGELOG heading nor on the newest stable entry's Beta history line"
+        )
 
     def test_every_changelog_heading_since_5_56_4_is_mentioned(self):
         text = _UPGRADING.read_text(encoding="utf-8")
