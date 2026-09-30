@@ -145,26 +145,35 @@ class TestBackupNowWritesStraightToDisk:
 
 
 class TestImportConfirmTmpPathValidation:
-    """import_confirm() decodes a client-submitted base64 tmp_path and
-    requires it to both start with /tmp/jen_import_ AND already exist as a
-    file — the two checks together mean a tampered tmp_path can't be used
-    to read or import an arbitrary file on the server."""
+    """import_confirm() decodes a client-submitted base64 tmp_path and requires it to both
+    resolve inside Jen's own CONTENT_TMP_DIR scratch directory AND already exist as a file —
+    the two checks together mean a tampered tmp_path can't be used to read or import an
+    arbitrary file on the server. v5.66.0-beta.6 (Q108) moved the real directory off /tmp
+    (import_inspect() now spools there too, alongside every other Jen scratch file) —
+    validation follows the same directory, not a hardcoded /tmp prefix."""
 
-    def test_rejects_path_outside_tmp_import_prefix(self, logged_in_client):
+    def test_rejects_path_outside_the_scratch_directory(self, logged_in_client):
         tampered = base64.b64encode(b"/etc/passwd").decode()
         r = logged_in_client.post("/database/import/confirm", data={"tmp_path": tampered}, follow_redirects=True)
         assert r.status_code == 200
         assert b"expired" in r.data.lower() or b"re-upload" in r.data.lower()
 
     def test_rejects_correct_prefix_but_nonexistent_file(self, logged_in_client):
-        fake = base64.b64encode(b"/tmp/jen_import_doesnotexist123").decode()
+        import os
+
+        from jen import extensions
+
+        fake_path = os.path.join(extensions.CONTENT_TMP_DIR, "jen_import_doesnotexist123.json.gz")
+        fake = base64.b64encode(fake_path.encode()).decode()
         r = logged_in_client.post("/database/import/confirm", data={"tmp_path": fake}, follow_redirects=True)
         assert r.status_code == 200
         assert b"expired" in r.data.lower() or b"re-upload" in r.data.lower()
 
-    def test_accepts_and_consumes_a_real_tmp_import_file(self, logged_in_client, tmp_path, monkeypatch):
+    def test_accepts_and_consumes_a_real_tmp_import_file(self, logged_in_client, monkeypatch):
+        import os
         import tempfile
 
+        from jen import extensions
         from jen.services import dbexport
 
         # A minimal, syntactically valid export payload so parse_import_file
@@ -173,8 +182,11 @@ class TestImportConfirmTmpPathValidation:
         monkeypatch.setattr(
             dbexport, "parse_import_file", lambda file_bytes: ({"database": "unknown-for-test"}, {}, None)
         )
+        os.makedirs(extensions.CONTENT_TMP_DIR, exist_ok=True)
         # kept past the block on purpose — the route reads it back by path
-        real_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json.gz", dir="/tmp", prefix="jen_import_")  # noqa: SIM115
+        real_tmp = tempfile.NamedTemporaryFile(  # noqa: SIM115
+            delete=False, suffix=".json.gz", dir=extensions.CONTENT_TMP_DIR, prefix="jen_import_"
+        )
         real_tmp.write(b"placeholder")
         real_tmp.close()
         encoded = base64.b64encode(real_tmp.name.encode()).decode()
@@ -183,9 +195,86 @@ class TestImportConfirmTmpPathValidation:
         assert r.status_code == 200
         # The temp file must be consumed (unlinked) either way, valid path
         # or not — it should never survive a confirm attempt.
-        import os
-
         assert not os.path.exists(real_tmp.name)
+
+
+class TestImportInspectCapAndAdmission:
+    """v5.66.0-beta.6 (Q108) — import_inspect() spools the upload (never f.read()), refuses
+    above [backups] max_import_mb, then runs the same admission check a restore does before
+    ever calling parse_import_file()."""
+
+    def _with_max_import_mb(self, monkeypatch, mb):
+        import configparser
+
+        from jen import extensions
+
+        test_cfg = configparser.ConfigParser()
+        test_cfg.read_dict({s: dict(extensions.cfg.items(s)) for s in extensions.cfg.sections()})
+        test_cfg.read_dict({"backups": {"max_import_mb": str(mb)}})
+        monkeypatch.setattr(extensions, "cfg", test_cfg)
+
+    def test_upload_over_the_cap_is_refused_before_anything_is_parsed(self, logged_in_client, monkeypatch):
+        import io
+
+        from jen.services import dbexport
+
+        self._with_max_import_mb(monkeypatch, 1)  # 1 MB cap
+
+        def boom(file_bytes):
+            raise AssertionError("parse_import_file() ran on an upload that was over the cap")
+
+        monkeypatch.setattr(dbexport, "parse_import_file", boom)
+
+        oversized = b"x" * (2 * 1024 * 1024)  # 2 MB, over the 1 MB cap
+        r = logged_in_client.post(
+            "/database/import/inspect",
+            data={"file": (io.BytesIO(oversized), "big.json.gz")},
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        assert b"cap" in r.data.lower() or b"512" in r.data or b"1 mb" in r.data.lower()
+
+    def test_admission_check_refuses_before_parsing(self, logged_in_client, monkeypatch):
+        """A tiny available-memory answer must refuse a real (small but nonzero) gzip
+        upload before parse_import_file() ever runs — mirroring restore.check_memory()'s
+        own 'refuses before anything is touched' property."""
+        import gzip
+        import io
+
+        from jen.services import dbexport
+
+        content = gzip.compress(b'{"data": {}, "_meta": {"database": "jen"}}' * 1000)
+
+        def boom(file_bytes):
+            raise AssertionError("parse_import_file() ran despite the admission check refusing")
+
+        monkeypatch.setattr(dbexport, "parse_import_file", boom)
+        monkeypatch.setattr("jen.tools.restore._mem_available_bytes", lambda: 1)  # ~0 available
+
+        r = logged_in_client.post(
+            "/database/import/inspect",
+            data={"file": (io.BytesIO(content), "small.json.gz")},
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+
+    def test_a_small_valid_export_reaches_the_confirm_page(self, logged_in_client):
+        import gzip
+        import io
+        import json
+
+        payload = {"data": {"settings": []}, "_meta": {"database": "jen", "tables": ["settings"]}}
+        content = gzip.compress(json.dumps(payload).encode())
+        r = logged_in_client.post(
+            "/database/import/inspect",
+            data={"file": (io.BytesIO(content), "small.json.gz")},
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        assert b"confirm" in r.data.lower() or b"import" in r.data.lower()
 
 
 class TestRecoveryBundleRoute:
@@ -533,11 +622,15 @@ class TestBackupDownloadIsNoStore:
         tracemalloc.start()
         try:
             r = logged_in_client.get("/database/backup/download/jen-manual-big.json.gz")
-            body = b"".join(r.response)  # force the streamed body through, same as a real download
+            # count bytes WITHOUT retaining them — b"".join(r.response) would itself hold a
+            # second full copy of the body, swamping the very peak this test is measuring
+            total = 0
+            for chunk in r.response:
+                total += len(chunk)
             _current, peak = tracemalloc.get_traced_memory()
         finally:
             tracemalloc.stop()
 
-        assert len(body) == 50 * 1024 * 1024
+        assert total == 50 * 1024 * 1024
         print(f"MEASURED backup-download peak for a 50 MB file: {peak} bytes ({peak / (1024 * 1024):.1f} MB)")
         assert peak < 20 * 1024 * 1024, f"download of a 50 MB backup peaked at {peak} bytes — no longer streamed"
