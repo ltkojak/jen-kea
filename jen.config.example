@@ -238,3 +238,13 @@ forward_zone = your.domain.com
 # api_url  = http://YOUR-KEA-SERVER:53001
 # api_user = kea-api
 # api_pass = your-kea-api-password
+
+# [backups] — optional; every value below already has the fallback shown
+# max_import_mb — Settings → Databases → Import refuses a compressed upload
+# larger than this, before it is even spooled to disk in full (v5.66.0-beta.6).
+# The same figure sets Flask's own MAX_CONTENT_LENGTH for the whole app, so it
+# also bounds every other upload (an icon, a plugin zip) — all far smaller
+# than a database export, so raising it for a large fleet's exports costs
+# nothing elsewhere.
+# [backups]
+# max_import_mb = 512

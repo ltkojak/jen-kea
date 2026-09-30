@@ -538,33 +538,82 @@ def backup_now():
 
 
 # ── Import ────────────────────────────────────────────────────────────────────
+_IMPORT_READ_CHUNK = 1024 * 1024
+
+
 @bp.route("/database/import/inspect", methods=["POST"])
 @login_required
 @_superadmin_required
 def import_inspect():
-    """Parse uploaded file and return metadata for confirmation page."""
+    """Spool the upload straight to a temp file (never `f.read()`), refuse above the
+    compressed-size cap while still spooling, measure its real uncompressed size by
+    streaming it through gzip exactly once (never trusting the gzip ISIZE trailer — it wraps
+    at 4 GB and the file is attacker-controlled either way), run the same admission check a
+    restore does, and only THEN parse it for the confirmation page. Every refusal here
+    happens before a single table is touched (v5.66.0-beta.6, Q108)."""
+    import base64
+    import contextlib
+
     f = request.files.get("file")
     if not f:
         flash("No file uploaded.", "error")
         return redirect(url_for("database.database", tab="export"))
-    file_bytes = f.read()
+
+    max_mb = extensions.cfg.getint("backups", "max_import_mb", fallback=512) if extensions.cfg else 512
+    max_bytes = max_mb * 1024 * 1024
+
+    os.makedirs(extensions.CONTENT_TMP_DIR, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=extensions.CONTENT_TMP_DIR, prefix="jen_import_", suffix=".json.gz")
+
+    def _abort(message):
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        flash(message, "error")
+        return redirect(url_for("database.database", tab="export"))
+
+    compressed_size = 0
+    with os.fdopen(fd, "wb") as out:
+        while True:
+            chunk = f.stream.read(_IMPORT_READ_CHUNK)
+            if not chunk:
+                break
+            compressed_size += len(chunk)
+            if compressed_size > max_bytes:
+                out.close()
+                return _abort(f"That file is over the {max_mb} MB import cap ([backups] max_import_mb in jen.config).")
+            out.write(chunk)
+
+    uncompressed_size = 0
+    try:
+        with gzip.open(tmp_path, "rb") as gz:
+            while True:
+                chunk = gz.read(_IMPORT_READ_CHUNK)
+                if not chunk:
+                    break
+                uncompressed_size += len(chunk)
+    except OSError:
+        return _abort("Cannot read file: not a valid gzip export.")
+
+    from jen.tools.restore import RESTORE_MEMORY_FACTOR, _mem_available_bytes
+
+    available = _mem_available_bytes()
+    if available is not None:
+        try:
+            dbexport.admission_check(uncompressed_size, 0, available, RESTORE_MEMORY_FACTOR)
+        except dbexport.AdmissionRefused as e:
+            return _abort(f"Cannot import: {e}")
+
+    with open(tmp_path, "rb") as fh:
+        file_bytes = fh.read()
     meta, data, err = dbexport.parse_import_file(file_bytes)
     if err:
-        flash(f"Cannot read file: {err}", "error")
-        return redirect(url_for("database.database", tab="export"))
-    # Store bytes in session-style temp file for the confirm step
-    import base64
-    import tempfile
+        return _abort(f"Cannot read file: {err}")
 
-    # kept past the block on purpose — the path is handed to the confirm step
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json.gz", dir="/tmp", prefix="jen_import_")  # noqa: SIM115
-    tmp.write(file_bytes)
-    tmp.close()
     return render_template(
         "database_import_confirm.html",
         meta=meta,
         data_summary={t: len(v) for t, v in data.items()},
-        tmp_path=base64.b64encode(tmp.name.encode()).decode(),
+        tmp_path=base64.b64encode(tmp_path.encode()).decode(),
         jen_tables=dbexport.JEN_TABLES,
         kea_groups=dbexport.KEA_EXPORT_GROUPS,
     )
@@ -577,8 +626,10 @@ def import_confirm():
     import base64
 
     tmp_path = base64.b64decode(request.form.get("tmp_path", "")).decode()
-    # Validate path is within the expected temp directory — prevent path traversal
-    if not tmp_path or not tmp_path.startswith("/tmp/jen_import_") or not os.path.isfile(tmp_path):
+    # Validate the path is within Jen's own scratch directory — prevent path traversal
+    real_tmp_dir = os.path.realpath(extensions.CONTENT_TMP_DIR)
+    real_tmp_path = os.path.realpath(tmp_path) if tmp_path else ""
+    if not tmp_path or not real_tmp_path.startswith(real_tmp_dir + os.sep) or not os.path.isfile(tmp_path):
         flash("Import session expired. Please re-upload.", "error")
         return redirect(url_for("database.database", tab="import"))
     with open(tmp_path, "rb") as f:

@@ -378,36 +378,91 @@ class TestMemAvailableBytes:
 
 
 class TestCheckMemory:
-    """v5.66.0-beta.4 (Q106) — the pre-restore memory guard: refuses BEFORE anything is
-    stopped or touched when the bundle's recorded export size, times RESTORE_MEMORY_FACTOR,
-    exceeds what /proc/meminfo currently reports available."""
+    """v5.66.0-beta.6 (Q108) — the pre-restore admission guard: refuses BEFORE anything is
+    stopped or touched when `max(incoming, existing) × RESTORE_MEMORY_FACTOR` exceeds what
+    /proc/meminfo currently reports available, or the snapshot directory doesn't have room.
+    `_sizing_pass()` (a real write_jen_export() to the box's CURRENT database) is mocked in
+    every test here — it needs a real DB connection, which these pure tests don't have."""
 
-    def test_no_recorded_size_skips_the_check(self, monkeypatch):
+    def test_no_recorded_size_and_tiny_existing_skips_the_check(self, monkeypatch, tmp_path):
         from jen.tools import restore
 
         monkeypatch.setattr(restore, "_mem_available_bytes", lambda: 0)  # would refuse if reached
-        restore.check_memory(_manifest())  # no jen_db_uncompressed_bytes key at all — must not raise
+        monkeypatch.setattr(restore, "_sizing_pass", lambda snap_dir: (0, 0))
+        restore.check_memory(_manifest(), str(tmp_path))  # no jen_db_uncompressed_bytes key at all
 
-    def test_unreadable_meminfo_skips_the_check(self, monkeypatch):
+    def test_unreadable_meminfo_skips_the_check_entirely(self, monkeypatch, tmp_path):
+        """available is None short-circuits BEFORE the sizing pass ever runs."""
         from jen.tools import restore
 
         monkeypatch.setattr(restore, "_mem_available_bytes", lambda: None)
-        restore.check_memory(_manifest(jen_db_uncompressed_bytes=10**12))  # huge, but no answer to check against
 
-    def test_plenty_of_memory_passes(self, monkeypatch):
+        def boom(snap_dir):
+            raise AssertionError("the sizing pass ran even though meminfo was unreadable")
+
+        monkeypatch.setattr(restore, "_sizing_pass", boom)
+        restore.check_memory(_manifest(jen_db_uncompressed_bytes=10**12), str(tmp_path))
+
+    def test_plenty_of_memory_passes(self, monkeypatch, tmp_path):
         from jen.tools import restore
 
         monkeypatch.setattr(restore, "_mem_available_bytes", lambda: 100 * 1024 * 1024 * 1024)  # 100 GB
-        restore.check_memory(_manifest(jen_db_uncompressed_bytes=10 * 1024 * 1024))  # 10 MB
+        monkeypatch.setattr(restore, "_sizing_pass", lambda snap_dir: (1024, 1024))  # existing db negligible
+        restore.check_memory(_manifest(jen_db_uncompressed_bytes=10 * 1024 * 1024), str(tmp_path))  # 10 MB
 
-    def test_not_enough_memory_refuses_with_both_figures_named(self, monkeypatch):
+    def test_not_enough_memory_refuses_with_both_figures_named(self, monkeypatch, tmp_path):
         from jen.tools import restore
 
         monkeypatch.setattr(restore, "_mem_available_bytes", lambda: 100 * 1024 * 1024)  # 100 MB available
+        monkeypatch.setattr(restore, "_sizing_pass", lambda snap_dir: (0, 0))  # existing db negligible
         with pytest.raises(restore.RestoreRefused) as exc:
-            restore.check_memory(_manifest(jen_db_uncompressed_bytes=200 * 1024 * 1024))  # needs ~1.2 GB at 6x
+            restore.check_memory(_manifest(jen_db_uncompressed_bytes=200 * 1024 * 1024), str(tmp_path))
         assert "MB" in str(exc.value)
         assert "MemAvailable" in str(exc.value)
+
+    def test_the_existing_database_can_trigger_the_refusal_too(self, monkeypatch, tmp_path):
+        """The actual property new in this Q: the OLD check only ever weighed the incoming
+        bundle. A tiny incoming bundle onto a box whose CURRENT database is huge must still
+        refuse — the pre-restore snapshot (and any later rollback) has to hold the existing
+        database's own export just as much as an import holds the incoming one."""
+        from jen.tools import restore
+
+        monkeypatch.setattr(restore, "_mem_available_bytes", lambda: 100 * 1024 * 1024)  # 100 MB available
+        monkeypatch.setattr(
+            restore, "_sizing_pass", lambda snap_dir: (200 * 1024 * 1024, 20 * 1024 * 1024)
+        )  # existing db needs ~1.4 GB at 7x
+        with pytest.raises(restore.RestoreRefused) as exc:
+            restore.check_memory(_manifest(jen_db_uncompressed_bytes=1024), str(tmp_path))  # tiny incoming
+        assert "already on this machine" in str(exc.value)
+
+    def test_a_sizing_pass_failure_degrades_to_the_incoming_side_alone(self, monkeypatch, tmp_path, capsys):
+        """No DB reachable (or any other sizing-pass failure) must not block a restore over a
+        measurement it simply couldn't take — it degrades, with a warning, rather than
+        refusing outright."""
+        from jen.tools import restore
+
+        monkeypatch.setattr(restore, "_mem_available_bytes", lambda: 100 * 1024 * 1024 * 1024)  # 100 GB
+
+        def boom(snap_dir):
+            raise RuntimeError("database unreachable")
+
+        monkeypatch.setattr(restore, "_sizing_pass", boom)
+        restore.check_memory(_manifest(jen_db_uncompressed_bytes=10 * 1024 * 1024), str(tmp_path))
+        assert "warning" in capsys.readouterr().err.lower()
+
+    def test_insufficient_disk_space_refuses(self, monkeypatch, tmp_path):
+        import types
+
+        from jen.tools import restore
+
+        monkeypatch.setattr(restore, "_mem_available_bytes", lambda: 100 * 1024 * 1024 * 1024)  # plenty of memory
+        monkeypatch.setattr(restore, "_sizing_pass", lambda snap_dir: (1024, 500 * 1024 * 1024))  # 500 MB compressed
+        monkeypatch.setattr(
+            restore.shutil, "disk_usage", lambda path: types.SimpleNamespace(free=100 * 1024 * 1024)
+        )  # only 100 MB free, needs 2x500=1000 MB
+        with pytest.raises(restore.RestoreRefused) as exc:
+            restore.check_memory(_manifest(jen_db_uncompressed_bytes=1024), str(tmp_path))
+        assert "disk" in str(exc.value).lower()
 
     def test_refuses_before_anything_is_stopped_or_snapshotted(self, monkeypatch, tmp_path):
         """The property that actually matters: check_memory() runs strictly BEFORE
@@ -421,6 +476,7 @@ class TestCheckMemory:
         from jen.tools import restore
 
         monkeypatch.setattr(restore, "_mem_available_bytes", lambda: 1)  # ~0 available
+        monkeypatch.setattr(restore, "_sizing_pass", lambda snap_dir: (0, 0))
         called = {"stop": False, "snapshot": False}
         monkeypatch.setattr(restore, "_have_systemctl", lambda: True)
         monkeypatch.setattr(restore, "_service_active", lambda: (called.__setitem__("stop", True), True)[1])

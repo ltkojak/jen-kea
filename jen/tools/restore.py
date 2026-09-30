@@ -24,7 +24,6 @@ import argparse
 import configparser
 import contextlib
 import getpass
-import gzip
 import json
 import os
 import shutil
@@ -282,34 +281,83 @@ def _mem_available_bytes(meminfo_path: str = "/proc/meminfo") -> int | None:
     return None
 
 
-def check_memory(manifest: dict) -> None:
-    """Refuses BEFORE anything is stopped, snapshotted, or touched when the bundle's own
-    recorded Jen-DB export size, times RESTORE_MEMORY_FACTOR, exceeds what /proc/meminfo
-    reports as currently available — an OOM kill mid-import leaves the database import half
+def _sizing_pass(snap_dir: Path) -> tuple[int, int]:
+    """A real write_jen_export() to a throwaway temp file in `snap_dir`, purely to learn the
+    CURRENT database's exact (uncompressed, compressed) size before anything is stopped —
+    streamed, so it costs time and disk, never memory (v5.66.0-beta.6, Q108). Deleted
+    immediately after; the real snapshot is taken separately, after the stop, as always."""
+    import tempfile
+
+    from jen.services import dbexport
+
+    snap_dir.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=str(snap_dir), prefix=".sizing-", suffix=".json.gz")
+    os.close(fd)
+    try:
+        meta = dbexport.write_jen_export(tmp_path)
+        return meta["jen_db_uncompressed_bytes"], os.path.getsize(tmp_path)
+    finally:
+        with contextlib.suppress(OSError):
+            os.remove(tmp_path)
+
+
+def check_memory(manifest: dict, content_dir: str | Path) -> None:
+    """Refuses BEFORE anything is stopped, snapshotted, or touched when
+    `max(incoming, existing) × RESTORE_MEMORY_FACTOR` exceeds what /proc/meminfo reports as
+    currently available, OR when the snapshot directory doesn't have twice the existing
+    database's compressed size free — an OOM kill mid-import leaves the database import half
     done with no rollback of its own (the import runs inside one transaction, but the process
     dying is not the same as it rolling back cleanly), so this is checked before the point of
-    no return, not after. Silently skipped for an older bundle with no recorded size (a
-    manifest field added in this Q), or off a non-Linux host (`_mem_available_bytes()` returns
-    None) — this can only warn early, never guarantee an OOM won't happen for some other
-    reason, so it never blocks a platform it can't measure."""
-    size = manifest.get("jen_db_uncompressed_bytes")
-    if not isinstance(size, int) or size <= 0:
-        return
+    no return, not after.
+
+    v5.66.0-beta.6 (Q108) — the bundle's own recorded size used to be the ONLY side weighed:
+    a small bundle onto a box with a LARGE existing database passed this check, then the
+    snapshot or a later rollback (which re-imports the pre-restore export) exhausted memory
+    anyway. `_sizing_pass()` runs `write_jen_export()` to a throwaway temp file in the
+    snapshot directory to learn the CURRENT database's exact size (streamed, so it costs time
+    and disk here, not memory) — its failure (no DB reachable, say) degrades to weighing the
+    incoming side alone rather than refusing to restore at all over a measurement it
+    couldn't take.
+
+    Skipped entirely off a non-Linux host (`_mem_available_bytes()` returns None) — this can
+    only warn early, never guarantee an OOM won't happen for some other reason, so it never
+    blocks a platform it can't measure."""
+    from jen.services import dbexport
+
+    incoming = manifest.get("jen_db_uncompressed_bytes")
+    incoming = incoming if isinstance(incoming, int) and incoming > 0 else 0
     available = _mem_available_bytes()
     if available is None:
         return
-    needed = int(size * RESTORE_MEMORY_FACTOR)
-    if needed > available:
-        raise RestoreRefused(
-            f"this bundle's database export is {size / (1024 * 1024):.0f} MB uncompressed; "
-            f"restoring it needs roughly {needed / (1024 * 1024):.0f} MB of free memory "
-            f"(a measured factor of {RESTORE_MEMORY_FACTOR}x — see docs/runbooks.md), but this "
-            f"machine currently reports only {available / (1024 * 1024):.0f} MB available "
-            f"(/proc/meminfo MemAvailable). Nothing has been stopped or changed. Free up memory, "
-            f"add swap, lower Settings → System → Audit Log Retention and retry, or restore on a "
-            f"box with more RAM — or export the bundle again with 'without audit history' checked "
-            f"if audit history is most of the size."
+
+    existing_uncompressed = 0
+    free_disk = None
+    needed_disk = None
+    snap_dir = Path(content_dir) / "backups"
+    try:
+        existing_uncompressed, existing_compressed = _sizing_pass(snap_dir)
+        free_disk = shutil.disk_usage(snap_dir).free
+        needed_disk = 2 * existing_compressed
+    except Exception as e:
+        print(
+            f"warning: could not measure the existing database's size ({e}) — the admission "
+            f"check weighs the incoming bundle's own recorded size alone.",
+            file=sys.stderr,
         )
+
+    if incoming <= 0 and existing_uncompressed <= 0:
+        return
+    try:
+        dbexport.admission_check(
+            incoming, existing_uncompressed, available, RESTORE_MEMORY_FACTOR, free_disk, needed_disk
+        )
+    except dbexport.AdmissionRefused as e:
+        raise RestoreRefused(
+            f"{e} See docs/runbooks.md. Free up memory, lower Settings → System → Audit Log "
+            f"Retention and retry, restore on a box with more RAM or disk, or export the "
+            f"bundle again with 'without audit history' checked if audit history is most of "
+            f"the size."
+        ) from e
 
 
 def restore_etc_jen(bundle_dir: Path, etc_jen: Path) -> list[str]:
@@ -525,13 +573,6 @@ def _point_config_at(cfg: Path) -> None:
     jen_config.app_config.reload()
 
 
-def _export_db() -> bytes:
-    from jen.services import dbexport
-
-    content, _fname = dbexport.export_jen()
-    return gzip.compress(content)
-
-
 def _import_db(gz: bytes) -> list[str]:
     from jen.services import dbexport
 
@@ -564,7 +605,14 @@ def take_snapshot(etc_jen: Path, content_dir: Path) -> Path:
     """`<content>/backups/pre-restore-<UTC ts>/`: a tar of /etc/jen, a tar of
     the content dir minus backups/tmp, and a fresh jen_db.json.gz — all 0600
     in a 0700 directory. Raises on any failure (the caller refuses the
-    restore rather than proceed without a way back)."""
+    restore rather than proceed without a way back).
+
+    v5.66.0-beta.6 (Q108) — the database member is written straight to disk via
+    write_jen_export(path) directly, never held whole as bytes first (`_export_db()`'s old
+    export_jen() + gzip.compress() round trip) — the same reason every other backup path
+    moved onto write_jen_export() in Q106/Q107."""
+    from jen.services import dbexport
+
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     base = Path(content_dir) / "backups" / f"pre-restore-{ts}"
     snap, n = base, 1
@@ -578,9 +626,7 @@ def take_snapshot(etc_jen: Path, content_dir: Path) -> Path:
     os.chmod(snap, 0o700)
     _tar_tree(Path(etc_jen), snap / "etc-jen.tar")
     _tar_tree(Path(content_dir), snap / "content.tar", _SNAPSHOT_EXCLUDE)
-    db = snap / "jen_db.json.gz"
-    db.write_bytes(_export_db())
-    os.chmod(db, 0o600)
+    dbexport.write_jen_export(str(snap / "jen_db.json.gz"))
     return snap
 
 
@@ -679,7 +725,7 @@ def run(
             check_jen_major(manifest)
             check_bundle_version(manifest, force=force)
             kea_warnings = check_kea_major(manifest, bundle_dir)
-            check_memory(manifest)
+            check_memory(manifest, content_dir)
         except RestoreRefused as e:
             print(f"refused: {e}", file=sys.stderr)
             return 1

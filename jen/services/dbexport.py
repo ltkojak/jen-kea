@@ -541,6 +541,55 @@ def export_kea(group="reservations"):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+class AdmissionRefused(Exception):
+    """Raised by admission_check() — refused before anything is touched. Each caller
+    translates this into its own idiom: jen.tools.restore wraps it as RestoreRefused (adding
+    the runbook pointer and the free-up-memory suggestions); the ordinary import page catches
+    it and flashes the message, same as any other pre-parse refusal."""
+
+
+def admission_check(
+    incoming_bytes: int,
+    existing_bytes: int,
+    available_bytes: int,
+    factor: float,
+    free_disk_bytes: int | None = None,
+    needed_disk_bytes: int | None = None,
+) -> None:
+    """The one shared rule behind both the restore's pre-flight check (jen.tools.restore
+    .check_memory()) and the ordinary import page's pre-flight check (v5.66.0-beta.6, Q108):
+    refuses when `max(incoming_bytes, existing_bytes) × factor` exceeds `available_bytes` —
+    weighing the LARGER of the two sides, never the incoming one alone, since a small bundle
+    restored onto a box with a large existing database still has to hold that existing
+    database's export in memory during the pre-restore snapshot and any later rollback. The
+    disk check is entirely optional (skipped unless both `free_disk_bytes` and
+    `needed_disk_bytes` are given — the import page's own upload cap already bounds its disk
+    use a different way) — when given, refuses if `free_disk_bytes < needed_disk_bytes` too.
+    Raises AdmissionRefused naming whichever figure was the problem; never touches anything
+    itself."""
+    incoming_bytes = incoming_bytes or 0
+    existing_bytes = existing_bytes or 0
+    larger = max(incoming_bytes, existing_bytes)
+    needed_mem = int(larger * factor)
+    if needed_mem > available_bytes:
+        side = (
+            "the database being imported/restored"
+            if incoming_bytes >= existing_bytes
+            else "the database already on this machine"
+        )
+        raise AdmissionRefused(
+            f"{side} is {larger / (1024 * 1024):.0f} MB uncompressed; this needs roughly "
+            f"{needed_mem / (1024 * 1024):.0f} MB of free memory (a measured factor of {factor}x), "
+            f"but this machine currently reports only {available_bytes / (1024 * 1024):.0f} MB "
+            f"available (/proc/meminfo MemAvailable)."
+        )
+    if free_disk_bytes is not None and needed_disk_bytes is not None and needed_disk_bytes > free_disk_bytes:
+        raise AdmissionRefused(
+            f"only {free_disk_bytes / (1024 * 1024):.0f} MB free disk space here, but this needs "
+            f"roughly {needed_disk_bytes / (1024 * 1024):.0f} MB free."
+        )
+
+
 def parse_import_file(file_bytes):
     """
     Parse an uploaded export file. Returns (meta, data, error).

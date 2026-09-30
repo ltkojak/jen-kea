@@ -148,6 +148,15 @@ def create_app() -> Flask:
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
     app.config["SESSION_COOKIE_SECURE"] = _https_context()
 
+    # v5.66.0-beta.6 (Q108) — a blanket cap on any request body Werkzeug will accept at all;
+    # the DB import route's own [backups] max_import_mb check (jen/routes/database.py) is the
+    # one that actually explains itself to the operator, but nothing upstream of it stopped an
+    # oversized upload before this. Every other upload in the app (an icon, a plugin zip) is
+    # far smaller, so one generous ceiling covers all of them with room to spare.
+    app.config["MAX_CONTENT_LENGTH"] = (
+        extensions.cfg.getint("backups", "max_import_mb", fallback=512) * 1024 * 1024 if extensions.cfg else None
+    )
+
     # v5.17.0 (Q6 6D) — behind a trusted reverse proxy, rewrite REMOTE_ADDR /
     # url_scheme from the forwarding headers BEFORE Flask sees the request.
     if extensions.TRUSTED_PROXIES:

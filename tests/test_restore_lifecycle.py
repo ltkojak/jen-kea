@@ -97,7 +97,19 @@ def world(tmp_path, monkeypatch):
 
     monkeypatch.setattr(restore.subprocess, "run", fake_run)
     monkeypatch.setattr(restore.shutil, "which", lambda name: "/usr/bin/systemctl")
-    monkeypatch.setattr(restore, "_export_db", lambda: OLD_DB)
+
+    # v5.66.0-beta.6 (Q108) — take_snapshot() and check_memory()'s own sizing pass both call
+    # dbexport.write_jen_export(path) directly now (never restore._export_db(), removed) — the
+    # fake writes OLD_DB straight to whatever path it's given, the same stand-in role
+    # _export_db() used to play.
+    def fake_write_jen_export(path, tables=None):
+        with open(path, "wb") as f:
+            f.write(OLD_DB)
+        return {"jen_db_uncompressed_bytes": len(OLD_DB), "database": "jen", "tables": [], "row_counts": {}}
+
+    from jen.services import dbexport as _dbexport_mod
+
+    monkeypatch.setattr(_dbexport_mod, "write_jen_export", fake_write_jen_export)
     monkeypatch.setattr(restore, "check_kea_major", lambda manifest, bundle_dir: [])  # would reload the real app config
 
     def fake_import(gz):
@@ -230,10 +242,12 @@ class TestFailureRollsBack:
     def test_snapshot_failure_refuses_without_changes(self, world, monkeypatch):
         before = _tree(world.etc)
 
-        def nope():
+        def nope(path, tables=None):
             raise RuntimeError("database unreachable")
 
-        monkeypatch.setattr(restore, "_export_db", nope)
+        from jen.services import dbexport as _dbexport_mod
+
+        monkeypatch.setattr(_dbexport_mod, "write_jen_export", nope)
         assert _run(world) == 1
         assert _tree(world.etc) == before
         assert not any(e[0] == "apply-db" for e in world.events)
@@ -445,7 +459,16 @@ def dbworld(world, monkeypatch):
     export" can be asserted, and an import that can die halfway."""
     db = {"users": [{"id": 1, "name": "old-admin"}], "settings": [{"k": "a", "v": "old"}]}
     world.db = db
-    monkeypatch.setattr(restore, "_export_db", lambda: json.dumps(db).encode())
+
+    def fake_write_jen_export(path, tables=None):
+        data = json.dumps(db).encode()
+        with open(path, "wb") as f:
+            f.write(data)
+        return {"jen_db_uncompressed_bytes": len(data), "database": "jen", "tables": [], "row_counts": {}}
+
+    from jen.services import dbexport as _dbexport_mod
+
+    monkeypatch.setattr(_dbexport_mod, "write_jen_export", fake_write_jen_export)
 
     def fake_import(gz):
         data = json.loads(gz)
