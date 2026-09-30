@@ -2,6 +2,66 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.66.0-beta.7] - 2026-09-30
+
+A third-party review of the signed helper-update machinery found a real
+gap in its own ordering check: a candidate declaring a HIGHER protocol
+version skipped the build check entirely, so a lower build could ride
+through on a version bump — the opposite of what `HELPER_BUILD` exists to
+prevent. The by-hand install line, the one path every automatic mechanism
+falls back to, also skipped the self-test the automatic path already runs
+before trusting a candidate, and still offered itself as a workaround for
+a couple of refusals where installing over the problem was never actually
+safe. And a release could, in principle, test one commit and publish a
+different one if the tag moved in between — the tag was resolved three
+separate times across the workflow, each trusting it wouldn't.
+
+**The build and protocol checks are independent now.** `jen-kea-helper`'s
+`update` op used to nest its build comparison inside "same protocol
+version" — so a candidate with a higher `HELPER_VERSION` never had its
+`HELPER_BUILD` checked at all. The two checks now run unconditionally,
+every time: a lower protocol version is refused as a downgrade, and a
+build that isn't strictly higher is refused as not-newer, regardless of
+how the versions compare. `HELPER_BUILD` moves to 9. Jen's own
+"already installed" check had the identical gap — a single lexicographic
+comparison that let a higher version mask a stale build — and is fixed
+the same way.
+
+**The helper checks the directory a trusted binary lives in, not just the
+binary itself.** Every system binary the helper runs (`systemctl`,
+`apt-get`, `ssh-keygen`, the Kea daemons) was already required to be a
+root-owned, non-writable file; the directory holding it was never
+checked. A root-owned binary sitting in a directory anyone in its group
+could write to was still trusted. The helper now confirms the directory
+itself — its real path, so a symlinked `/bin` resolves to the directory
+that actually holds the files — is root-owned and not group/other-writable
+before it even looks at what's inside.
+
+**The verified by-hand install line now self-tests what it downloads.**
+The automatic signed-update path has always run a candidate's own
+`version` op and checked its answer before trusting it; the by-hand
+one-liner an operator copies from a flash or the docs went straight from
+verifying the signature to installing. It now runs that same self-check
+in between — nothing installs unless the file it just verified also
+reports back exactly the version and build it claimed. The line is also
+narrower about when it's offered at all: only for a first install, the
+one-time hop off the legacy grant, a helper that isn't installed yet, and
+the case where Jen itself couldn't produce a signature to send. A
+refusal from anywhere else — an unexpected symlink at the install path, a
+copy that doesn't read back as it should, or anything this app has never
+seen before — now says what was observed and points at investigating or
+reporting it, never at installing over it.
+
+**A release is pinned to one commit from start to finish.** The tag a
+release build starts from is a mutable pointer, and the workflow used to
+resolve it three separate times on trust: once for its own checkout,
+once for the commit it asked the test suite to check, and once again to
+build the tarball. A new first step resolves the tag to one commit SHA
+before anything else runs; every later step — testing, archiving, signing
+— uses that SHA, never the tag name again. Immediately before the release
+is published, the tag is resolved one final time and the run refuses to
+continue unless it still names that exact commit.
+
 ## [5.66.0-beta.6] - 2026-09-30
 
 A backup wrote straight to its final filename — a writer that died

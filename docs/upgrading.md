@@ -242,6 +242,33 @@ there's enough free disk space for the snapshot before anything is
 stopped. See `docs/runbooks.md`'s "Before you start: size" step for the
 details if a restore ever refuses on this.
 
+## The by-hand helper install line self-tests what it downloads, and is offered less often
+
+As of 5.66.0-beta.7, the exact command Jen shows in a flash, on the SSH card, and in
+`docs/admin-guide.md`/`docs/runbooks.md`/`docs/manual-install.md` for
+installing `jen-kea-helper` by hand now runs one more check between
+verifying the release signature and installing the file: it runs the
+downloaded candidate's own `version` op and confirms it reports exactly
+the version and build this release ships, the same self-check the
+automatic Update helper button already ran before this. It's also
+offered in fewer places than before — only when installing around a
+refusal is actually safe (a first install, the one-time hop off the
+legacy grant, a helper that isn't installed yet, or the case where Jen
+itself couldn't produce a signature to send). A refusal from anywhere
+else now says what was observed and asks you to investigate or report
+it, rather than offering a command to run over it.
+
+## The signed helper update's own build check is stricter
+
+`HELPER_BUILD` (the counter that orders two helper files that changed
+without a protocol version bump between them) is now checked
+independently of `HELPER_VERSION`, closing a gap where a candidate
+declaring a higher protocol version could carry a build that wasn't
+actually newer. This only matters if you build and sign your own helper
+candidates by hand for testing; a normal Update helper click on an
+official release is unaffected. `HELPER_BUILD` moves to 9 with this
+release.
+
 ## A few things that will just already be fixed
 
 None of these need anything from you — they're upgrades you get for
