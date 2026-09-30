@@ -326,7 +326,23 @@ def settings_kea():
         ssl_configured=__config.ssl_configured(),
         metrics_token=extensions.cfg.get("server", "metrics_token", fallback="") if extensions.cfg else "",
         metrics_open=extensions.cfg.getboolean("server", "metrics_open", fallback=False) if extensions.cfg else False,
+        # v5.66.0-beta.7 (Q109, item b) — the SSH card's own copy box for the by-hand helper
+        # install, one source (kea_host._helper_download_command()) with every doc copy and
+        # every flash that offers it (tests/test_kea_host.py::TestDocsCarryTheSameByHandLine).
+        helper_by_hand_command=_helper_by_hand_command(),
     )
+
+
+def _helper_by_hand_command() -> str:
+    """The SSH card's copy box needs this even when jen-kea-helper isn't readable for some
+    reason (a stripped-down container image, a permissions problem) — the page as a whole
+    must still render, so a failure here degrades to an empty string rather than a 500."""
+    from jen.services import kea_host
+
+    try:
+        return kea_host._helper_download_command()
+    except OSError:
+        return ""
 
 
 @bp.route("/settings/infrastructure/save-kea", methods=["POST"])

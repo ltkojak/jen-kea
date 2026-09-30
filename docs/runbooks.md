@@ -123,19 +123,26 @@ with no route to the internet at all.
 This is the exact command Jen itself shows in every flash that offers a
 by-hand fallback (v5.66.0-beta.2, Q104 item b) — copy it from there
 rather than retyping it, since it embeds the release version and the
-signing key inline. Run it as a user with `sudo` on the Kea host:
+signing key inline. It also runs the downloaded candidate's own
+`version` op and checks it reports exactly the version/build this
+release ships (v5.66.0-beta.7, Q109 — the same self-check the automatic
+signed-update path already runs before installing anything), so `7` and
+`9` below are this release's own `HELPER_VERSION`/`HELPER_BUILD`, not
+placeholders to fill in. Run it as a user with `sudo` on the Kea host:
 
 ```bash
-d="$(mktemp -d)" && cd "$d" && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper.sig && printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
+d="$(mktemp -d)" && cd "$d" && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper.sig && printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && /usr/bin/python3 -I jen-kea-helper version </dev/null | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin);sys.exit(0 if d.get("ok") is True and d.get("helper_version")==7 and d.get("helper_build")==9 else 1)' && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
 ```
 
 It downloads both the helper and its signature from this release's own
 GitHub asset, verifies the signature locally with `ssh-keygen -Y verify`
 against the same embedded key Jen carries, and only installs the file if
-that verification passes — a corrupted download or a tampered mirror
-makes `ssh-keygen` exit non-zero, and the `&&` chain means nothing gets
-installed. **Never install a copy that fails this verification, by hand
-or otherwise** — if the check fails, the problem is the download or the
+that verification AND the self-check both pass — a corrupted download or
+a tampered mirror makes `ssh-keygen` exit non-zero, and a candidate that
+doesn't self-report what it just verified as makes the self-check exit
+non-zero; the `&&` chain means nothing gets installed either way.
+**Never install a copy that fails this verification, by hand or
+otherwise** — if the check fails, the problem is the download or the
 release, not something to work around.
 
 Then add the sudoers line, if this is a fresh install with no grant yet:
@@ -156,7 +163,7 @@ run the same verify-then-install steps locally, in the directory holding
 both files:
 
 ```bash
-printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
+printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && /usr/bin/python3 -I jen-kea-helper version </dev/null | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin);sys.exit(0 if d.get("ok") is True and d.get("helper_version")==7 and d.get("helper_build")==9 else 1)' && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
 ```
 
 Never skip the verify step just because you trust the transport — it's

@@ -262,13 +262,15 @@ the new file itself before installing it. The flash names which check
 failed:
 - *"refused the signature"* — the release's own signature didn't
   verify. This points at the **release**, not the host: a corrupted
-  download, or (very unlikely) a signing problem in `release.yml`.
-  Retry once a newer release is out; in the meantime copy the helper by
-  hand with the command the flash gives you.
+  download, or (very unlikely) a signing problem in `release.yml`. A
+  by-hand install is never offered here (v5.66.0-beta.7, Q109) — the
+  identical signature would fail there too. Retry once a newer release
+  is out; if it persists, please report it.
 - *"no signature available"* — Jen itself couldn't fetch a signature to
   send (no local `jen-kea-helper.sig`, and the GitHub fetch failed —
-  usually a network issue on the Jen host). Retry, or copy the helper
-  by hand.
+  usually a network issue on the Jen host). Retry, or copy the helper by
+  hand with the command the flash gives you — it works fully offline
+  too, straight from a tarball install's own two files.
 - *"no ssh-keygen"* — the Kea host is missing `openssh-client` (or its
   distro's equivalent); `ssh-keygen -Y verify` has nothing to run.
   Install it there (`sudo apt install openssh-client` on Debian/Ubuntu,

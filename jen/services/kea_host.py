@@ -204,7 +204,7 @@ JEN_HELPER_SHIPPED_VERSION = 7  # v7 (v5.66.0-beta.2, Q104): PATH hardening + pr
 # A helper below v7 never reports a build at all (record_helper_status's "build" stays
 # whatever it last was, usually None) — comparisons that matter fall back to version alone
 # in that case; see install_helper()'s already-check and helper_version_label() below.
-JEN_HELPER_SHIPPED_BUILD = 8  # v5.66.0-beta.4 (Q106): update() never installs with no way back
+JEN_HELPER_SHIPPED_BUILD = 9  # v5.66.0-beta.7 (Q109): protocol/build checked independently, _bin_dir_ok
 # v5.66.0 (Q103) — the version whose "Update helper" click needs no legacy grant at all: at
 # or above this, install_helper() takes the signed path (helper_signature() + the `update`
 # op) instead of the pre-5.11.0 sudo-python3 engine. A host below this still gets one last
@@ -1231,6 +1231,44 @@ def _source_build(source: str) -> int:
     return int(m.group(1)) if m else JEN_HELPER_SHIPPED_BUILD
 
 
+def _helper_self_test_command() -> str:
+    """v5.66.0-beta.7 (Q109, item b) — the piece the by-hand line used to skip: the automatic
+    signed-update path already preflights a candidate by running its OWN `version` op and
+    checking the reply before installing it (Q104, item preflight/rollback); the by-hand line
+    went straight from `ssh-keygen -Y verify` to `sudo install` with no equivalent. This runs
+    the just-downloaded candidate's `version` op and exits non-zero unless the JSON reply says
+    `ok: true` with EXACTLY the version/build this release's own source declares (baked in as
+    literals here — V and B are read from _source_version()/_source_build() of the file this
+    install ships, the same "what will the host report afterwards" numbers install_helper()
+    itself targets)."""
+    source = _helper_source()
+    target_version = _source_version(source)
+    target_build = _source_build(source)
+    check = (
+        "import json,sys;d=json.load(sys.stdin);"
+        f'sys.exit(0 if d.get("ok") is True and d.get("helper_version")=={target_version} '
+        f'and d.get("helper_build")=={target_build} else 1)'
+    )
+    return f"/usr/bin/python3 -I jen-kea-helper version </dev/null | /usr/bin/python3 -c '{check}'"
+
+
+def _helper_verify_and_install_command() -> str:
+    """The verify-then-selftest-then-install tail shared by `_helper_download_command()` (the
+    online one-liner, below) and the offline/local case (a tarball install already has both
+    `jen-kea-helper` and `jen-kea-helper.sig` sitting side by side — see docs/admin-guide.md
+    and docs/runbooks.md § 3): both are this exact same suffix, run in the directory holding
+    both files. `_helper_self_test_command()` (v5.66.0-beta.7, Q109, item b) now runs BETWEEN
+    the signature verify and the install — the by-hand path used to skip the self-test the
+    automatic signed-update path already performs."""
+    return (
+        f"printf '%s\\n' '{RELEASE_SIGNERS}' > allowed_signers && "
+        f"ssh-keygen -Y verify -f allowed_signers -I {_RELEASE_SIGNATURE_IDENTITY} "
+        f"-n {_HELPER_SIGNATURE_NAMESPACE} -s jen-kea-helper.sig < jen-kea-helper && "
+        f"{_helper_self_test_command()} && "
+        "sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper"
+    )
+
+
 def _helper_download_command() -> str:
     """The ONE by-hand fallback anywhere in this app for installing jen-kea-helper — and
     (v5.66.0-beta.2, Q104, item b) now a VERIFIED one-liner, never an unverified copy. The old
@@ -1240,9 +1278,11 @@ def _helper_download_command() -> str:
     fetches BOTH the helper and its signature from this release's own GitHub asset, verifies
     the signature against the same embedded RELEASE_SIGNERS jen_update_root.py and
     jen-kea-helper itself carry — by hand, but the EXACT same `ssh-keygen -Y verify` check
-    verify_helper_signature() runs in Python — and only then installs it. A bad signature (a
-    corrupted download, a stripped mirror, tampering in transit) makes ssh-keygen exit
-    non-zero, which the `&&` chain turns into "nothing gets installed", not "install anyway"."""
+    verify_helper_signature() runs in Python — self-tests the downloaded candidate (v5.66.0-
+    beta.7, Q109, item b) — and only then installs it. A bad signature (a corrupted download, a
+    stripped mirror, tampering in transit) makes ssh-keygen exit non-zero, and a candidate that
+    doesn't self-report what it just verified as makes the self-test exit non-zero — either way
+    the `&&` chain means "nothing gets installed", never "install anyway"."""
     from jen import JEN_VERSION
 
     base = f"https://github.com/{_GITHUB_REPO}/releases/download/v{JEN_VERSION}"
@@ -1250,10 +1290,7 @@ def _helper_download_command() -> str:
         'd="$(mktemp -d)" && cd "$d" && '
         f"curl -fsSLO {base}/jen-kea-helper && "
         f"curl -fsSLO {base}/jen-kea-helper.sig && "
-        f"printf '%s\\n' '{RELEASE_SIGNERS}' > allowed_signers && "
-        f"ssh-keygen -Y verify -f allowed_signers -I {_RELEASE_SIGNATURE_IDENTITY} "
-        f"-n {_HELPER_SIGNATURE_NAMESPACE} -s jen-kea-helper.sig < jen-kea-helper && "
-        "sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper"
+        f"{_helper_verify_and_install_command()}"
     )
 
 
@@ -1294,13 +1331,20 @@ def _install_helper_signed(server: dict, target: int, target_build: int, current
     used_local = local_sig is not None
     sig = local_sig if used_local else _fetch_helper_signature(candidate)
     if sig is None:
+        # v5.66.0-beta.7 (Q109, item b) — this is one of the four cases that DOES offer the
+        # by-hand line: nothing on the WIRE was ever refused here, Jen simply couldn't put
+        # together a signature to send (offline, or a corrupted/rotated-away sibling file) —
+        # the exact "copy both files, verify, self-test, install" the by-hand command does,
+        # which a tarball install can already do straight from its own tree with no network.
         return {
             "ok": False,
             "version": current,
             "code": "no-signature",
             "detail": (
                 "the signature shipped with this install does not match its helper — "
-                "reinstall Jen from the release tarball"
+                "reinstall Jen from the release tarball, or copy the helper by hand (a tarball "
+                "install already has both jen-kea-helper and jen-kea-helper.sig side by side, "
+                f"so this works fully offline too): {_helper_download_command()}"
             ),
         }
 
@@ -1351,13 +1395,19 @@ def _install_helper_signed(server: dict, target: int, target_build: int, current
         ),
         "no-ssh-keygen": f"{name} has no ssh-keygen (openssh-client) — install it there and retry.",
         "not-newer": f"{name} already reports v{current}, which is not older than this release's helper — nothing to do.",
+        # v5.66.0-beta.7 (Q109, item b) — symlink and unparseable used to offer a by-hand
+        # install as a way around the refusal; neither is a case where installing around it is
+        # safe. A pre-planted symlink at the installed path may mean something else on the
+        # host is already interfering with it, and an unparseable readback means the host's own
+        # copy of a release Jen already trusts didn't behave as declared — both need a human to
+        # look at the host, not another unattended write to it.
         "symlink": (
-            f"the installed path on {name} is a symlink, not a plain file — investigate it by hand before "
-            f"retrying, or copy the helper directly: {by_hand}"
+            f"the installed path on {name} is a symlink, not a plain file — nothing was changed. "
+            f"Investigate it by hand before retrying; do not install over it."
         ),
         "unparseable": (
-            f"{name}'s own copy of this release's helper could not be read back — this should not happen; "
-            f"please report it. In the meantime, copy the helper by hand: {by_hand}"
+            f"{name}'s own copy of this release's helper could not be read back — nothing was changed. "
+            f"This should not happen; please report it rather than installing over it."
         ),
         "preflight-failed": (
             f"{name} refused to install this release's helper: it does not run cleanly there ({resp.get('detail', '')}) "
@@ -1383,8 +1433,11 @@ def _install_helper_signed(server: dict, target: int, target_build: int, current
         ),
     }
     code = reason if reason in wording else "error"
+    # v5.66.0-beta.7 (Q109, item b) — an unrecognized refusal is exactly the "investigate,
+    # don't install around it" case: this app has never seen the host say this before, so
+    # installing over it by hand would be a guess, not a fix.
     detail = wording.get(
-        reason, f'the signed update was refused on {name}: "{reason}" — copy the helper by hand: {by_hand}'
+        reason, f'the signed update was refused on {name}: "{reason}" — nothing was changed; please report it.'
     )
     return {"ok": False, "version": current, "code": code, "detail": detail}
 
@@ -1425,9 +1478,16 @@ def install_helper(server: dict) -> dict:
     # same VERSION, lower BUILD is a real update to offer (a helper-only fix, no protocol
     # change), not "already". A host below v7 never reports a build, so this falls back to
     # version alone exactly as it always did.
+    # v5.66.0-beta.7 (Q109) — the two checks are now INDEPENDENT, mirroring op_update's own
+    # fix: a lexicographic (current, current_build) >= (target, target_build) tuple compare
+    # had the identical gap the helper's own not-newer check had — a HIGHER target version
+    # with a not-newer build read as "not already" (current tuple < target tuple, since
+    # version dominates lexicographic order) and would have been offered as an update the
+    # helper's own op_update would then have refused as build-not-newer. "Already" now means
+    # either side alone already disqualifies the target from being a real update.
     if isinstance(current, int):
         if isinstance(current_build, int):
-            already = (current, current_build) >= (target, target_build)
+            already = target < current or target_build <= current_build
         else:
             already = current >= target
         if already:

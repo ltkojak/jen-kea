@@ -184,6 +184,22 @@ is reported as `rollback-failed`, naming both `_SELF_PATH` and its
 old helper is back). This is the first build-only change: `HELPER_BUILD`
 moves to 8 with `HELPER_VERSION` unchanged at 7 — the two new error
 tokens are values inside the existing envelope, not a contract change.
+
+Build 9 (v5.66.0-beta.7, Q109) — ChatGPT's review found a real gap in the ordering check
+itself: `op_update` refused a candidate as `not-newer` only when `new_version <
+HELPER_VERSION`, or (nested under `new_version == HELPER_VERSION`) when `new_build <=
+HELPER_BUILD` — so a candidate declaring a HIGHER `HELPER_VERSION` skipped the build check
+entirely, letting a lower build through on a protocol bump (a build-only fix accidentally
+regressed by whatever built the higher-versioned candidate). The two checks are now
+INDEPENDENT, run unconditionally in this order: `new_version < HELPER_VERSION` refuses with
+detail `protocol-downgrade`; `new_build <= HELPER_BUILD` refuses with detail
+`build-not-newer` — regardless of how the versions compare. `kea_host.py`'s own
+`install_helper()` "already installed" short-circuit follows the identical rule now (it used
+to compare `(version, build)` as a single lexicographic tuple, which had the same gap).
+`_find_bin()` also gained a directory-level check, `_bin_dir_ok()`: the DIRECTORY a trusted
+binary lives in (its `realpath`, so a usrmerge `/bin -> /usr/bin` symlink is followed) must
+itself be root-owned and not group/other-writable before any file inside it is even looked
+at — defence in depth alongside the existing per-file `_bin_owner_ok()` check.
 """
 
 from __future__ import annotations
@@ -203,7 +219,7 @@ import sys
 import tempfile
 
 HELPER_VERSION = 7
-HELPER_BUILD = 8
+HELPER_BUILD = 9
 # v5.66.0-beta.2 (Q104) — HELPER_BUILD is bumped on EVERY change to this file, never by
 # HELPER_VERSION alone; op_update's own _HELPER_BUILD_RE parses "^HELPER_BUILD = (\d+)$" out
 # of a candidate's raw bytes, so this line (like HELPER_VERSION's own, just above) must never
@@ -308,11 +324,28 @@ def _bin_owner_ok(path):
     return st.st_uid == 0 and st.st_gid == 0 and not (st.st_mode & 0o022)
 
 
+def _bin_dir_ok(d):
+    """True iff `d`'s REAL directory — os.path.realpath, so a usrmerge symlink like
+    /bin -> /usr/bin is followed to the directory that actually holds the files — is owned
+    by uid 0 and not group/other-writable (v5.66.0-beta.7, Q109). A per-FILE check alone
+    (_bin_owner_ok, above) trusts whatever directory a candidate binary happens to sit in;
+    this closes that gap one level up, before any file inside the directory is even looked
+    at. In its own monkeypatchable function for the same reason _bin_owner_ok is."""
+    try:
+        st = os.stat(os.path.realpath(d))
+    except OSError:
+        return False
+    return stat.S_ISDIR(st.st_mode) and st.st_uid == 0 and not (st.st_mode & 0o022)
+
+
 def _find_bin(name):
-    """The first candidate under _BIN_DIRS (that fixed order) that exists, is a regular
-    file, root-owned, and not group/other-writable — every binary this helper ever runs is
-    resolved this way, NEVER through $PATH (v5.66.0-beta.2, Q104)."""
+    """The first candidate under _BIN_DIRS (that fixed order) whose directory passes
+    _bin_dir_ok AND is itself a regular file, root-owned, and not group/other-writable —
+    every binary this helper ever runs is resolved this way, NEVER through $PATH
+    (v5.66.0-beta.2, Q104; the directory-level check is v5.66.0-beta.7, Q109)."""
     for d in _BIN_DIRS:
+        if not _bin_dir_ok(d):
+            continue
         cand = os.path.join(d, name)
         if _bin_owner_ok(cand) and os.access(cand, os.X_OK):
             return cand
@@ -830,13 +863,16 @@ def op_update(payload):
             return {"ok": False, "error": "unparseable"}, None
         new_version = int(vm.group(1))
         new_build = int(bm.group(1))
-        # A protocol DOWNGRADE is never installed, even signed, even with a higher build.
+        # v5.66.0-beta.7 (Q109) — two INDEPENDENT checks, both run unconditionally. The old
+        # code nested the build check inside "new_version == HELPER_VERSION", so a candidate
+        # declaring a HIGHER version skipped the build check entirely and let a lower build
+        # through on a protocol bump. HELPER_BUILD orders every file change regardless of
+        # HELPER_VERSION — a protocol bump does not reset it — so it is checked here on its
+        # own, every time, exactly like the protocol-downgrade check next to it.
         if new_version < HELPER_VERSION:
-            return {"ok": False, "error": "not-newer"}, None
-        # Same protocol: order by build (equal counts as not-newer — HELPER_BUILD is what
-        # orders two files that changed without a protocol bump between them).
-        if new_version == HELPER_VERSION and new_build <= HELPER_BUILD:
-            return {"ok": False, "error": "not-newer"}, None
+            return {"ok": False, "error": "not-newer", "detail": "protocol-downgrade"}, None
+        if new_build <= HELPER_BUILD:
+            return {"ok": False, "error": "not-newer", "detail": "build-not-newer"}, None
 
         if os.path.islink(_SELF_PATH):
             return {"ok": False, "error": "symlink"}, None

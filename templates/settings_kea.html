@@ -260,6 +260,13 @@
             {% endfor %}
             </tbody>
         </table>
+        {% if helper_by_hand_command %}
+        <details class="u-56f435">
+            <summary class="u-3928fa">Install or update the helper by hand</summary>
+            <p style="font-size:12px;color:var(--text-muted);margin:8px 0;">The exact command Jen itself shows in every flash that offers a by-hand fallback: downloads the helper and its release signature, verifies the signature, self-tests the downloaded candidate, and only then installs it — nothing gets installed unverified or unchecked. See <code>docs/admin-guide.md</code> &rarr; Kea host helper for the offline variant (a tarball install already has both files locally).</p>
+            <pre class="mono" style="background:var(--surface2);padding:10px;border-radius:var(--radius);font-size:11px;border:1px solid var(--border);overflow-x:auto;white-space:pre-wrap;word-break:break-all;">{{ helper_by_hand_command }}</pre>
+        </details>
+        {% endif %}
         <details class="u-56f435">
             <summary class="u-3928fa">Grant or revoke the legacy root path by hand</summary>
             <p style="font-size:12px;color:var(--text-muted);margin:8px 0;">Jen needs this grant for ONE run to install the helper, and — below helper v6 — for ONE more run to reach v6; remove it afterwards, with the button above or the command below. From v6 on, updates are verified by signature and need this grant never again. The helper's own grant, <code>/etc/sudoers.d/jen-kea-helper</code>, is a different file and stays.</p>

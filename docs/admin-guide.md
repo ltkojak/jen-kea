@@ -981,20 +981,25 @@ work). By hand, on the Kea host — this is the exact command Jen itself
 shows in every flash that offers a by-hand fallback (v5.66.0-beta.2,
 Q104): it downloads BOTH the helper and its release signature, verifies
 the signature locally with `ssh-keygen -Y verify` against the same key
-embedded in Jen itself, and only installs it once that verification
-passes — nothing is ever installed unverified (`vX.Y.Z` is your
-installed Jen version, shown on the About page):
+embedded in Jen itself, runs the downloaded candidate's own `version` op
+and checks it reports exactly the version/build this release ships
+(v5.66.0-beta.7, Q109 — the same self-check the automatic signed-update
+path already runs before installing anything), and only installs it once
+both pass — nothing is ever installed unverified or unchecked (`vX.Y.Z`
+is your installed Jen version, shown on the About page; `7`/`9` are this
+release's `HELPER_VERSION`/`HELPER_BUILD`):
 
 ```bash
-d="$(mktemp -d)" && cd "$d" && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper.sig && printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
+d="$(mktemp -d)" && cd "$d" && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper.sig && printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && /usr/bin/python3 -I jen-kea-helper version </dev/null | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin);sys.exit(0 if d.get("ok") is True and d.get("helper_version")==7 and d.get("helper_build")==9 else 1)' && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
 ```
 
 then add the sudoers line above. **Settings → Kea → SSH** shows the
 installed version for each host once it is reachable — green when it's
 current, amber ("upgrade available") when it isn't. A bad signature (a
 corrupted download, a stripped mirror, tampering in transit) makes
-`ssh-keygen` exit non-zero, and the `&&` chain means nothing gets
-installed — never "install anyway".
+`ssh-keygen` exit non-zero, a candidate that doesn't self-report what it
+just verified as makes the self-check exit non-zero, and the `&&` chain
+means nothing gets installed either way — never "install anyway".
 
 **Offline / air-gapped Kea host.** If the Kea host has no route to
 GitHub, fetch `jen-kea-helper` and `jen-kea-helper.sig` on any machine
@@ -1004,7 +1009,7 @@ trust (`scp`, a USB drive), then run the same verify-then-install steps
 locally, in the directory holding both files:
 
 ```bash
-printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
+printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && /usr/bin/python3 -I jen-kea-helper version </dev/null | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin);sys.exit(0 if d.get("ok") is True and d.get("helper_version")==7 and d.get("helper_build")==9 else 1)' && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
 ```
 
 Never skip the verify step just because you trust the transport — it's

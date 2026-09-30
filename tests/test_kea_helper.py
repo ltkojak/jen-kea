@@ -178,7 +178,7 @@ class TestVersion:
         assert code == 0
         assert out["ok"] is True
         assert out["helper_version"] == helper.HELPER_VERSION == 7
-        assert out["helper_build"] == helper.HELPER_BUILD == 8
+        assert out["helper_build"] == helper.HELPER_BUILD == 9
         assert out["python"].count(".") == 2
         assert err.startswith("jen-kea-helper: version ok")
 
@@ -345,7 +345,81 @@ def _fake_kea_bin(helper, monkeypatch, tmp_path, name, exit_code=0, stdout="", s
     script.chmod(0o755)
     monkeypatch.setattr(helper, "_BIN_DIRS", (str(d),) + helper._BIN_DIRS)
     monkeypatch.setattr(helper, "_bin_owner_ok", lambda path: True)
+    # v5.66.0-beta.7 (Q109) — _find_bin now also checks the DIRECTORY (_bin_dir_ok), not just
+    # the file; stubbed True for the same reason _bin_owner_ok is above (this tmp_path
+    # directory is never really root-owned, since the test itself doesn't run as root).
+    monkeypatch.setattr(helper, "_bin_dir_ok", lambda d: True)
     return str(d)
+
+
+class TestBinDirOk:
+    """v5.66.0-beta.7 (Q109, item c) — _find_bin() already checked that a candidate BINARY is
+    root-owned and not group/other-writable (_bin_owner_ok); it never checked the DIRECTORY
+    the binary sits in, so a root-owned file inside a group-writable directory (which anyone
+    in that group can replace with their own file, then have root-owned metadata copied onto
+    it, or simply rename a new file into place inside) passed anyway. _bin_dir_ok() closes
+    that. These tests fake os.stat's return for a real tmp_path directory rather than really
+    chowning it to uid 0, since the test process itself doesn't run as root."""
+
+    class _FakeStat:
+        def __init__(self, mode, uid):
+            self.st_mode = mode
+            self.st_uid = uid
+
+    def _patch_stat_for(self, helper, monkeypatch, target_dir, mode, uid):
+        real_stat = helper.os.stat
+        target_real = os.path.realpath(str(target_dir))
+
+        def fake_stat(path):
+            if os.path.realpath(str(path)) == target_real:
+                return self._FakeStat(mode, uid)
+            return real_stat(path)
+
+        monkeypatch.setattr(helper.os, "stat", fake_stat)
+
+    def test_root_owned_non_writable_directory_passes(self, helper, monkeypatch, tmp_path):
+        d = tmp_path / "sbin"
+        d.mkdir()
+        self._patch_stat_for(helper, monkeypatch, d, stat.S_IFDIR | 0o755, uid=0)
+        assert helper._bin_dir_ok(str(d)) is True
+
+    def test_group_writable_root_owned_directory_fails(self, helper, monkeypatch, tmp_path):
+        d = tmp_path / "sbin"
+        d.mkdir()
+        self._patch_stat_for(helper, monkeypatch, d, stat.S_IFDIR | 0o775, uid=0)
+        assert helper._bin_dir_ok(str(d)) is False
+
+    def test_other_writable_root_owned_directory_fails(self, helper, monkeypatch, tmp_path):
+        d = tmp_path / "sbin"
+        d.mkdir()
+        self._patch_stat_for(helper, monkeypatch, d, stat.S_IFDIR | 0o757, uid=0)
+        assert helper._bin_dir_ok(str(d)) is False
+
+    def test_non_root_owned_directory_fails_even_if_not_writable(self, helper, monkeypatch, tmp_path):
+        d = tmp_path / "sbin"
+        d.mkdir()
+        self._patch_stat_for(helper, monkeypatch, d, stat.S_IFDIR | 0o755, uid=1000)
+        assert helper._bin_dir_ok(str(d)) is False
+
+    def test_missing_directory_fails_closed(self, helper):
+        assert helper._bin_dir_ok("/does/not/exist/at/all/q109") is False
+
+    def test_find_bin_skips_a_directory_that_fails_the_dir_check_even_when_the_file_itself_passes(
+        self, helper, monkeypatch, tmp_path
+    ):
+        """The exact scenario this Q closes: a root-owned, non-writable binary — the kind
+        _bin_owner_ok alone would happily accept — sitting inside a directory that is itself
+        group-writable must never be used."""
+        bad_dir = tmp_path / "bad"
+        bad_dir.mkdir()
+        (bad_dir / "systemctl").write_bytes(b"#!/bin/true\n")
+        good_dir = tmp_path / "good"
+        good_dir.mkdir()
+        monkeypatch.setattr(helper, "_BIN_DIRS", (str(bad_dir), str(good_dir)))
+        monkeypatch.setattr(helper, "_bin_owner_ok", lambda path: True)
+        monkeypatch.setattr(helper, "_bin_dir_ok", lambda d: d != str(bad_dir))
+
+        assert helper._find_bin("systemctl") is None  # bad_dir skipped; good_dir has no such file
 
 
 win = pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX exec stub for kea-dhcpX")
@@ -1025,15 +1099,30 @@ class TestUpdateOp:
         assert target.read_bytes() == original
 
     @pytest.mark.parametrize(
-        "version,build,case",
+        "version,build,case,detail",
         [
-            (7, 7, "same version, same build"),
-            (7, 3, "same version, LOWER build"),
-            (6, 99, "LOWER version, even with a much higher build — a protocol downgrade is never installed"),
-            (3, 1, "lower version and lower build"),
+            (7, 7, "same version, same build", "build-not-newer"),
+            (7, 3, "same version, LOWER build", "build-not-newer"),
+            (
+                6,
+                99,
+                "LOWER version, even with a much higher build — a protocol downgrade is never installed",
+                "protocol-downgrade",
+            ),
+            (3, 1, "lower version and lower build", "protocol-downgrade"),
+            (
+                8,
+                8,
+                "HIGHER version, but build not newer — v5.66.0-beta.7 (Q109): the old code nested the "
+                "build check inside 'same version', so a higher-VERSION candidate skipped it entirely",
+                "build-not-newer",
+            ),
+            (8, 7, "HIGHER version, LOWER build — the exact regression Q109 closes", "build-not-newer"),
         ],
     )
-    def test_equal_or_lower_is_not_newer(self, helper, signing_key, tmp_path, monkeypatch, version, build, case):
+    def test_equal_or_lower_is_not_newer(
+        self, helper, signing_key, tmp_path, monkeypatch, version, build, case, detail
+    ):
         self._use_throwaway_signer(helper, monkeypatch, signing_key, tmp_path)
         target = self._target(helper, monkeypatch, tmp_path)
         original = target.read_bytes()
@@ -1041,7 +1130,7 @@ class TestUpdateOp:
         sig = _sign(signing_key["priv"], "jen-kea-helper", candidate, tmp_path, name=f"candidate-{version}-{build}")
 
         code, out, _err = self._update(helper, candidate, sig)
-        assert out == {"ok": False, "error": "not-newer"}, case
+        assert out == {"ok": False, "error": "not-newer", "detail": detail}, case
         assert target.read_bytes() == original
 
     def test_same_version_higher_build_is_newer(self, helper, signing_key, tmp_path, monkeypatch):

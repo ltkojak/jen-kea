@@ -433,6 +433,77 @@ class TestNoUnverifiedByHandFallback:
         assert "raw.githubusercontent.com" not in cmd
 
 
+class TestHelperSelfTestBeforeInstall:
+    """v5.66.0-beta.7 (Q109, item b) — the by-hand line used to go straight from `ssh-keygen -Y
+    verify` to `sudo install`, skipping the self-check the automatic signed-update path already
+    runs on a candidate before installing it (Q104's preflight). The one-liner now runs the
+    just-downloaded candidate's own `version` op and checks it reports EXACTLY the
+    version/build this release's own source declares, between the verify and the install."""
+
+    def test_self_test_runs_between_verify_and_install(self, monkeypatch):
+        monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 7\nHELPER_BUILD = 9\n")
+        cmd = kea_host._helper_download_command()
+        assert cmd.index("ssh-keygen -Y verify") < cmd.index("python3 -c")
+        assert cmd.index("python3 -c") < cmd.index("sudo install")
+
+    def test_self_test_bakes_in_the_real_source_version_and_build(self, monkeypatch):
+        monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 12\nHELPER_BUILD = 34\n")
+        cmd = kea_host._helper_self_test_command()
+        assert '"helper_version")==12' in cmd
+        assert '"helper_build")==34' in cmd
+
+    def test_self_test_runs_the_downloaded_candidate_not_the_installed_one(self):
+        cmd = kea_host._helper_self_test_command()
+        assert "/usr/bin/python3 -I jen-kea-helper version" in cmd
+
+    def test_local_offline_variant_is_the_exact_tail_of_the_online_one(self, monkeypatch):
+        """docs/admin-guide.md and docs/runbooks.md both show a SHORTER local-only variant (no
+        curl download — a tarball install already has both files side by side) for the offline
+        case; it must be an exact suffix of the online one-liner, never a hand-maintained fork
+        of it that could silently drift out of sync."""
+        monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 7\nHELPER_BUILD = 9\n")
+        online = kea_host._helper_download_command()
+        local = kea_host._helper_verify_and_install_command()
+        assert online.endswith(local)
+
+
+class TestDocsCarryTheSameByHandLine:
+    """v5.66.0-beta.7 (Q109, item b) — one source (_helper_download_command() and
+    _helper_verify_and_install_command()), several places that show a copy of it. Rather than
+    trust hand-maintained doc prose to stay in sync forever, render the real command (with
+    JEN_VERSION normalised to the same `vX.Y.Z` placeholder the docs already use) and assert
+    it appears byte-for-byte in each doc's fenced code block."""
+
+    def _online_normalized(self):
+        from jen import JEN_VERSION
+
+        cmd = kea_host._helper_download_command()  # the real, currently-shipped source
+        return cmd.replace(f"v{JEN_VERSION}", "vX.Y.Z")
+
+    def _local_only(self):
+        return kea_host._helper_verify_and_install_command()
+
+    def test_admin_guide_online_block_matches(self):
+        text = (_REPO_ROOT / "docs" / "admin-guide.md").read_text(encoding="utf-8")
+        assert self._online_normalized() in text
+
+    def test_admin_guide_offline_block_matches(self):
+        text = (_REPO_ROOT / "docs" / "admin-guide.md").read_text(encoding="utf-8")
+        assert self._local_only() in text
+
+    def test_runbooks_online_block_matches(self):
+        text = (_REPO_ROOT / "docs" / "runbooks.md").read_text(encoding="utf-8")
+        assert self._online_normalized() in text
+
+    def test_runbooks_offline_block_matches(self):
+        text = (_REPO_ROOT / "docs" / "runbooks.md").read_text(encoding="utf-8")
+        assert self._local_only() in text
+
+    def test_manual_install_block_matches(self):
+        text = (_REPO_ROOT / "docs" / "manual-install.md").read_text(encoding="utf-8")
+        assert self._local_only() in text
+
+
 class TestHelperDeployment:
     def test_render_install_helper_script_embeds_source_and_sudoers_line(self):
         from jen.services.kea_authoring import render_install_helper_script
@@ -621,6 +692,24 @@ class TestInstallHelperAlreadyComparesBuilds:
 
         res = kea_host.install_helper(SERVER)
         assert res == {"ok": True, "version": 6, "code": "already", "detail": ""}
+
+    def test_higher_version_but_not_newer_build_is_still_already(self, monkeypatch, quiet_status):
+        """v5.66.0-beta.7 (Q109) — the exact regression this Q closes: the old
+        `(current, current_build) >= (target, target_build)` tuple compare read a HIGHER
+        target version as automatically "not already" regardless of build, since version
+        dominates lexicographic order — so a target declaring v8/build-7 against an
+        installed v7/build-9 looked like a real update and would have been sent to the
+        signed path, which op_update itself would then have refused as build-not-newer.
+        The two checks are independent now: build alone can make it "already" even when
+        the candidate's protocol version is higher."""
+        monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 8\nHELPER_BUILD = 7\n")
+        monkeypatch.setattr(kea_host, "check_helper", lambda s: {"ok": True, "version": 7, "build": 9})
+        signed_called = []
+        monkeypatch.setattr(kea_host, "_local_helper_signature", lambda candidate: signed_called.append(1) or b"sig")
+
+        res = kea_host.install_helper(SERVER)
+        assert res == {"ok": True, "version": 7, "code": "already", "detail": ""}
+        assert signed_called == []  # never even reached the signed path
 
 
 class TestVerifyHelperSignature:
@@ -837,24 +926,31 @@ class TestInstallHelperSigned:
 
         res = kea_host.install_helper(SERVER)
         assert res["ok"] is False and res["code"] == "no-signature"
-        # v5.66.0-beta.2 (Q104, item g) — no by-hand fallback offered here: a Jen box that
-        # can't produce ANY signature that verifies is itself the thing to fix.
+        # v5.66.0-beta.7 (Q109, item b) — the by-hand line IS now offered here: this is one of
+        # the four cases the spec names (first install, the v5-bootstrap hop, not-installed,
+        # and this one) — a Jen box that can't produce a signature to send is exactly the
+        # "do it offline, from the tarball's own two files" case.
         assert "reinstall Jen from the release tarball" in res["detail"]
+        assert "sudo install -o root -g root" in res["detail"]
 
     @pytest.mark.parametrize(
-        "helper_error,expected_code",
+        "helper_error,expected_code,offers_by_hand",
         [
-            ("bad-signature", "bad-signature"),
-            ("no-ssh-keygen", "no-ssh-keygen"),
-            ("not-newer", "not-newer"),
-            ("symlink", "symlink"),
-            ("unparseable", "unparseable"),
-            ("preflight-failed", "preflight-failed"),
-            ("postflight-failed", "postflight-failed"),
-            ("not-allowed", "error"),
+            ("bad-signature", "bad-signature", False),
+            ("no-ssh-keygen", "no-ssh-keygen", False),
+            ("not-newer", "not-newer", False),
+            ("symlink", "symlink", False),
+            ("unparseable", "unparseable", False),
+            ("preflight-failed", "preflight-failed", False),
+            ("postflight-failed", "postflight-failed", False),
+            ("not-installed", "not-installed", True),
+            ("rollback-failed", "rollback-failed", False),
+            ("not-allowed", "error", False),
         ],
     )
-    def test_op_refusal_codes_are_worded_distinctly(self, monkeypatch, quiet_status, helper_error, expected_code):
+    def test_op_refusal_codes_are_worded_distinctly(
+        self, monkeypatch, quiet_status, helper_error, expected_code, offers_by_hand
+    ):
         monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 7\n")
         monkeypatch.setattr(kea_host, "_helper_source_bytes", lambda: b"HELPER_VERSION = 7\n")
         monkeypatch.setattr(kea_host, "check_helper", lambda s: {"ok": True, "version": 6})
@@ -864,13 +960,25 @@ class TestInstallHelperSigned:
         # wording of each code, not the retry itself (which TestBadSignatureRetry covers).
         monkeypatch.setattr(kea_host, "_fetch_helper_signature", lambda candidate: None)
         monkeypatch.setattr(
-            kea_host, "helper_call", lambda s, op, payload=None, timeout=60: {"ok": False, "error": helper_error}
+            kea_host,
+            "helper_call",
+            lambda s, op, payload=None, timeout=60: {
+                "ok": False,
+                "error": helper_error,
+                "path": "/usr/local/sbin/jen-kea-helper",
+                "prev_path": "/usr/local/sbin/jen-kea-helper.prev",
+            },
         )
 
         res = kea_host.install_helper(SERVER)
         assert res["ok"] is False
         assert res["code"] == expected_code
         assert res["version"] == 6
+        # v5.66.0-beta.7 (Q109, item b) — a by-hand install is offered ONLY for not-installed
+        # here (first-install and no-signature are covered by their own tests above); every
+        # other refusal says what was observed and points at investigation/reporting it,
+        # never at installing around it.
+        assert ("sudo install -o root -g root" in res["detail"]) is offers_by_hand
 
     def test_helper_call_transport_failure_is_an_error_not_a_raise(self, monkeypatch, quiet_status):
         monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 7\n")
