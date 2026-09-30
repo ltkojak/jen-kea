@@ -213,7 +213,9 @@ class TestInstallShExternalFileRollback:
         source = self._source()
         for mode in ("standard", "repair"):
             steps = self._mode_steps(source, mode)
-            assert "snapshot_external_files" in steps, f"snapshot_external_files is never called in the {mode} step list"
+            assert "snapshot_external_files" in steps, (
+                f"snapshot_external_files is never called in the {mode} step list"
+            )
             assert "install_files" in steps, f"install_files is never called in the {mode} step list"
             assert steps.index("snapshot_external_files") < steps.index("install_files"), (
                 f"install_files runs before snapshot_external_files in the {mode} step list"
