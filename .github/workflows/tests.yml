@@ -497,6 +497,18 @@ jobs:
         # child's tty and makes its own exit status the wrapped command's;
         # TERM=linux sidesteps the clear/terminfo bug this same v5.66.0
         # code has (fixed on this branch, not on the already-tagged one).
+        #
+        # v5.66.0's verify_install() also carries the identical stale-
+        # Jinja-filter-list + `$?`-after-assignment set -e bugs this Q
+        # fixed on this branch (jen/__init__.py has registered relfmt and
+        # hostname since before this tag) — confirmed against this exact
+        # run's own log: config written, admin password updated, service
+        # started and reported running, THEN the same silent death
+        # verify_install() always has here. That is an already-tagged
+        # release's own cosmetic reporting bug, not a real install
+        # failure — the actual install is done by that point. Tolerated
+        # here with `|| true`; the next step is what actually decides
+        # whether this leg succeeded.
         run: |
           mkdir -p "$RUNNER_TEMP/install-stable"
           tar xzf "$RUNNER_TEMP/stable"/jen-v*.tar.gz -C "$RUNNER_TEMP/install-stable"
@@ -525,7 +537,8 @@ jobs:
           5050
           8443
           WIZARD
-          script -qec "sudo TERM=linux ./install.sh" /dev/null < "$RUNNER_TEMP/stable-wizard-input.txt"
+          script -qec "sudo TERM=linux ./install.sh" /dev/null < "$RUNNER_TEMP/stable-wizard-input.txt" \
+            || echo "::notice::v5.66.0's own verify_install() died on a bug already fixed on this branch — checking the real outcome in the next step"
 
       - name: Assert the stable baseline is healthy
         run: |
