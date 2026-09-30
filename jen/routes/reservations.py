@@ -6,6 +6,7 @@ Reservation management routes including bulk operations.
 
 import csv
 import io
+import ipaddress
 import logging
 
 from flask import (
@@ -22,6 +23,7 @@ from flask_login import current_user, login_required
 import jen.models.db as __db
 import jen.models.user as __user
 import jen.services.auth as __auth
+import jen.services.client_subject as __client_subject
 import jen.services.events as __events
 import jen.services.fingerprint as __fp
 import jen.services.kea as __kea
@@ -300,18 +302,79 @@ def _reservations_v6():
     return render_template("reservations.html", **template_vars)
 
 
+def _resolve_add_reservation_subnet(accessible_map: dict, ip: str, mac: str) -> int | None:
+    """Where the Add Reservation form preselects its subnet — first hit wins, and only ever a
+    subnet the caller can access (ARCHITECTURE §2: an inaccessible subnet is never selected or
+    named, even as a fallback): (1) `subnet_id`; (2) `subnet`, the alias some plugin links still
+    carry; (3) the subnet whose CIDR contains the prefilled IP; (4) the MAC's current subnet
+    (`client_subject.client_subnet_for_mac`). None means nothing resolved — the form opens on
+    its placeholder option, never a silent default (v5.66.0-beta.8, Q110)."""
+    for raw in (request.args.get("subnet_id", ""), request.args.get("subnet", "")):
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            candidate = int(raw)
+        except ValueError:
+            continue
+        if candidate in accessible_map:
+            return candidate
+    ip = (ip or "").strip()
+    if ip:
+        candidate = __client_subject.subnet_for_ip(ip)
+        if candidate is not None and candidate in accessible_map:
+            return candidate
+    mac = (mac or "").strip()
+    if mac:
+        candidate = __client_subject.client_subnet_for_mac(mac)
+        if candidate is not None and candidate in accessible_map:
+            return candidate
+    return None
+
+
+def _address_outside_subnet(subnet_id: int, ip: str) -> tuple[bool, int | None]:
+    """True (plus the real subnet `ip` belongs to, if any) when `ip` is not inside `subnet_id`'s
+    own CIDR — checked here BEFORE ever calling Kea (v5.66.0-beta.8, Q110): Kea's host_cmds
+    `reservation-add` refuses the identical mismatch itself (host_cmds.cc's
+    validateHostForSubnet4 — "is not matching the IPv4 subnet prefix"), so catching it here first
+    saves the round trip and gives a far more specific, actionable message than Kea's own text."""
+    info = extensions.SUBNET_MAP.get(subnet_id)
+    if not info:
+        return False, None
+    try:
+        addr = ipaddress.IPv4Address(ip)
+        cidr = ipaddress.IPv4Network(info["cidr"], strict=False)
+    except (ValueError, KeyError):
+        return False, None
+    if addr in cidr:
+        return False, None
+    return True, __client_subject.subnet_for_ip(ip)
+
+
 @bp.route("/reservations/add")
 @login_required
 @_admin_required
 def add_reservation():
+    ip = request.args.get("ip", "")
+    mac = request.args.get("mac", "")
+    subnet_map = current_user.filter_subnet_map(extensions.SUBNET_MAP)
+    resolved = _resolve_add_reservation_subnet(subnet_map, ip, mac)
     prefill = {
-        "ip": request.args.get("ip", ""),
-        "mac": request.args.get("mac", ""),
+        "ip": ip,
+        "mac": mac,
         "hostname": request.args.get("hostname", ""),
-        "subnet_id": request.args.get("subnet_id", ""),
+        "notes": "",
+        "dns_override": "",
+        "subnet_id": resolved if resolved is not None else "",
     }
     return render_template(
-        "add_reservation.html", subnet_map=current_user.filter_subnet_map(extensions.SUBNET_MAP), prefill=prefill
+        "add_reservation.html",
+        subnet_map=subnet_map,
+        prefill=prefill,
+        # v5.66.0-beta.8 (Q110) — the nonce'd "follows the address" script needs to know each
+        # accessible subnet's own CIDR client-side; only ever the caller's OWN map, never the
+        # unfiltered one.
+        subnet_cidrs={sid: info["cidr"] for sid, info in subnet_map.items()},
     )
 
 
@@ -324,14 +387,39 @@ def add_reservation_post():
     hostname = request.form.get("hostname", "").strip()[:253]
     notes = request.form.get("notes", "").strip()[:1000]
     dns_override = request.form.get("dns_override", "").strip()
+    raw_subnet = request.form.get("subnet_id", "").strip()
+    subnet_map = current_user.filter_subnet_map(extensions.SUBNET_MAP)
+
+    # v5.66.0-beta.8 (Q110) — every failure path below re-renders the form with everything the
+    # operator typed instead of a blank redirect; HTTP 400 in place of the old 302.
+    def _refuse(*errors):
+        for e in errors:
+            flash(e, "error")
+        prefill = {
+            "ip": ip,
+            "mac": mac,
+            "hostname": hostname,
+            "notes": notes,
+            "dns_override": dns_override,
+            "subnet_id": raw_subnet,
+        }
+        return render_template(
+            "add_reservation.html",
+            subnet_map=subnet_map,
+            prefill=prefill,
+            subnet_cidrs={sid: info["cidr"] for sid, info in subnet_map.items()},
+        ), 400
+
+    # No fallback to subnet 1 — an untouched or empty select is refused, never silently defaulted.
+    if not raw_subnet:
+        return _refuse("Choose a subnet.")
     try:
-        subnet_id = int(request.form.get("subnet_id", 1))
+        subnet_id = int(raw_subnet)
     except ValueError:
-        flash("Invalid subnet.", "error")
-        return redirect(url_for("reservations.add_reservation"))
-    if not current_user.can_access_subnet(subnet_id):
-        flash("You do not have access to that subnet.", "error")
-        return redirect(url_for("reservations.add_reservation"))
+        return _refuse("Invalid subnet.")
+    if subnet_id not in subnet_map:
+        return _refuse("You do not have access to that subnet.")
+
     errors = []
     if not __auth.valid_ip(ip):
         errors.append(f"Invalid IP: {ip}")
@@ -341,10 +429,22 @@ def add_reservation_post():
         errors.append(f"Invalid hostname: {hostname}")
     if dns_override and not __auth.valid_dns(dns_override):
         errors.append(f"Invalid DNS: {dns_override}")
+    if not errors:
+        # v5.66.0-beta.8 (Q110) — verified against Kea's own host_cmds source
+        # (validateHostForSubnet4): reservation-add refuses an ip-address outside the named
+        # subnet-id's own range, every time subnet-id isn't 0. Catching it here first is a local
+        # check, not a round trip, and names the subnet the address actually belongs to.
+        outside, actual_subnet_id = _address_outside_subnet(subnet_id, ip)
+        if outside:
+            info = extensions.SUBNET_MAP[subnet_id]
+            msg = f"{ip} is not inside {info['name']} ({info['cidr']})"
+            if actual_subnet_id is not None and current_user.can_access_subnet(actual_subnet_id):
+                actual_info = extensions.SUBNET_MAP[actual_subnet_id]
+                msg += f" — it belongs to {actual_info['name']} ({actual_info['cidr']})"
+            errors.append(msg)
     if errors:
-        for e in errors:
-            flash(e, "error")
-        return redirect(url_for("reservations.add_reservation"))
+        return _refuse(*errors)
+
     res = {"subnet-id": subnet_id, "hw-address": mac, "ip-address": ip, "hostname": hostname}
     if dns_override:
         res["option-data"] = [{"name": "domain-name-servers", "data": dns_override}]
@@ -369,8 +469,7 @@ def add_reservation_post():
         __events.emit("reservation.added", mac=mac, ip=ip, subnet_id=subnet_id, hostname=hostname or None)
         return redirect(url_for("reservations.reservations"))
     else:
-        flash(f"Kea error: {result.get('text', 'Unknown error')}", "error")
-        return redirect(url_for("reservations.add_reservation"))
+        return _refuse(f"Kea error: {result.get('text', 'Unknown error')}")
 
 
 @bp.route("/reservations/edit/<int:host_id>")
@@ -549,6 +648,11 @@ def add_reservation6():
     prefill = {
         "duid": request.args.get("duid", ""),
         "hostname": request.args.get("hostname", ""),
+        "address": "",
+        "prefix": "",
+        "prefix_len": "",
+        # v5.66.0-beta.8 (Q110) — no first-option default here either: an unresolved subnet_id
+        # opens the form on its placeholder option, the same as the v4 form.
         "subnet_id": request.args.get("subnet_id", ""),
     }
     return render_template(
@@ -572,14 +676,35 @@ def add_reservation6_post():
     address = request.form.get("address", "").strip()
     prefix = request.form.get("prefix", "").strip()
     prefix_len_raw = request.form.get("prefix_len", "").strip()
+    raw_subnet = request.form.get("subnet_id", "").strip()
+    subnet6_map = current_user.filter_subnet_map(extensions.SUBNET6_MAP)
+
+    # v5.66.0-beta.8 (Q110) — every failure path re-renders with everything typed instead of a
+    # blank redirect; HTTP 400 in place of the old 302 (the same treatment the v4 form got).
+    def _refuse(*errors):
+        for e in errors:
+            flash(e, "error")
+        prefill = {
+            "duid": duid,
+            "hostname": hostname,
+            "address": address,
+            "prefix": prefix,
+            "prefix_len": prefix_len_raw,
+            "subnet_id": raw_subnet,
+        }
+        return render_template("add_reservation6.html", subnet6_map=subnet6_map, prefill=prefill), 400
+
+    if not raw_subnet:
+        return _refuse("Choose a subnet.")
     try:
-        subnet_id = int(request.form.get("subnet_id", 0))
+        subnet_id = int(raw_subnet)
     except ValueError:
-        flash("Invalid subnet.", "error")
-        return redirect(url_for("reservations.add_reservation6"))
-    if subnet_id not in extensions.SUBNET6_MAP:
-        flash("Invalid IPv6 subnet.", "error")
-        return redirect(url_for("reservations.add_reservation6"))
+        return _refuse("Invalid subnet.")
+    # v5.66.0-beta.8 (Q110) — checked against the CALLER's accessible map now, not the whole
+    # SUBNET6_MAP: the old check only verified the subnet existed, never that a subnet-restricted
+    # admin could actually see it (ARCHITECTURE §2 — found on the way, same shape as the v4 bug).
+    if subnet_id not in subnet6_map:
+        return _refuse("You do not have access to that subnet.")
 
     errors = []
     try:
@@ -604,9 +729,7 @@ def add_reservation6_post():
         except ValueError:
             errors.append("Prefix length is required when reserving a prefix.")
     if errors:
-        for e in errors:
-            flash(e, "error")
-        return redirect(url_for("reservations.add_reservation6"))
+        return _refuse(*errors)
 
     result = __kea6.add_v6_reservation(
         subnet_id,
@@ -621,8 +744,7 @@ def add_reservation6_post():
         __user.audit("ADD_RESERVATION6", duid_norm, f"subnet={subnet_id} hostname={hostname}")
         return redirect(url_for("reservations.reservations", view="v6"))
     else:
-        flash(f"Kea error: {result.get('text', 'Unknown error')}", "error")
-        return redirect(url_for("reservations.add_reservation6"))
+        return _refuse(f"Kea error: {result.get('text', 'Unknown error')}")
 
 
 @bp.route("/reservations/delete6", methods=["POST"])

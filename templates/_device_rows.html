@@ -59,7 +59,7 @@
                 {% if d.has_reservation %}
                 <span class="action-menu-item disabled">{{ icon_pin() }}Reservation exists</span>
                 {% else %}
-                <a href="/reservations/add?mac={{ d.mac }}&ip={{ d.last_ip or '' }}&hostname={{ d.last_hostname or '' }}" class="action-menu-item">{{ icon_pin() }}Create reservation</a>
+                <a href="/reservations/add?mac={{ d.mac|urlencode }}&ip={{ (d.last_ip or '')|urlencode }}&hostname={{ (d.last_hostname or '')|urlencode }}&subnet_id={{ (d.last_subnet_id or '')|urlencode }}" class="action-menu-item">{{ icon_pin() }}Create reservation</a>
                 {% endif %}
                 <a href="/timeline?mac={{ d.mac }}" class="action-menu-item">{{ icon("clock") }} Timeline</a>
                 <a href="/client?q={{ d.mac }}" class="action-menu-item">{{ icon("search") }} Investigate</a>

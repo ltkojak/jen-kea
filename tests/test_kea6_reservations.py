@@ -256,6 +256,19 @@ class TestAddReservation6Route:
         resp = logged_in_client.get("/reservations/add6", follow_redirects=False)
         assert resp.status_code == 302
 
+    def test_no_subnet_id_opens_on_the_placeholder_not_the_first_option(self, logged_in_client, monkeypatch):
+        """v5.66.0-beta.8 (Q110) — same placeholder treatment as the v4 form."""
+        monkeypatch.setattr(
+            extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
+        )
+        resp = logged_in_client.get("/reservations/add6")
+        assert resp.status_code == 200
+        body = resp.data.decode()
+        start = body.index('name="subnet_id"')
+        select = body[start : body.index("</select>", start)]
+        assert 'value="" selected' in select and "disabled" in select
+        assert '<option value="1" selected' not in select
+
     def test_post_success_redirects_to_v6_reservations(self, logged_in_client, monkeypatch):
         import jen.services.kea6 as kea6_module
 
@@ -277,6 +290,9 @@ class TestAddReservation6Route:
         assert "view=v6" in resp.headers["Location"]
 
     def test_post_rejects_invalid_subnet(self, logged_in_client, monkeypatch):
+        """v5.66.0-beta.8 (Q110) — a failed v6 POST re-renders the form directly (400), the
+        same treatment the v4 form got, and checks the CALLER's accessible map now, not the
+        whole SUBNET6_MAP (ARCHITECTURE §2 — the v6 route had never checked this before)."""
         monkeypatch.setattr(
             extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
         )
@@ -287,10 +303,9 @@ class TestAddReservation6Route:
                 "duid": "00030001aabbccddeeff",
                 "address": "2001:db8::10",
             },
-            follow_redirects=True,
         )
-        assert resp.status_code == 200
-        assert b"Invalid IPv6 subnet" in resp.data
+        assert resp.status_code == 400
+        assert b"do not have access" in resp.data
 
     def test_post_rejects_missing_address_and_prefix(self, logged_in_client, monkeypatch):
         monkeypatch.setattr(
@@ -302,9 +317,8 @@ class TestAddReservation6Route:
                 "subnet_id": "1",
                 "duid": "00030001aabbccddeeff",
             },
-            follow_redirects=True,
         )
-        assert resp.status_code == 200
+        assert resp.status_code == 400
         assert b"Specify an address" in resp.data
 
     def test_post_rejects_invalid_duid(self, logged_in_client, monkeypatch):
@@ -318,9 +332,8 @@ class TestAddReservation6Route:
                 "duid": "not-hex-zz",
                 "address": "2001:db8::10",
             },
-            follow_redirects=True,
         )
-        assert resp.status_code == 200
+        assert resp.status_code == 400
         assert b"DUID" in resp.data
 
     def test_kea_failure_surfaces_error_and_stays_on_form(self, logged_in_client, monkeypatch):
@@ -339,10 +352,45 @@ class TestAddReservation6Route:
                 "duid": "00030001aabbccddeeff",
                 "address": "2001:db8::10",
             },
-            follow_redirects=True,
         )
-        assert resp.status_code == 200
+        assert resp.status_code == 400
         assert b"duplicate reservation" in resp.data
+
+    def test_missing_subnet_id_is_refused_not_defaulted(self, logged_in_client, monkeypatch):
+        """v5.66.0-beta.8 (Q110) — the old code defaulted a missing subnet_id to 0; an untouched
+        form (the placeholder is never actually selectable) is refused instead."""
+        monkeypatch.setattr(
+            extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
+        )
+        resp = logged_in_client.post(
+            "/reservations/add6",
+            data={"subnet_id": "", "duid": "00030001aabbccddeeff", "address": "2001:db8::10"},
+        )
+        assert resp.status_code == 400
+        assert b"choose a subnet" in resp.data.lower()
+
+    def test_a_failed_post_keeps_every_field(self, logged_in_client, monkeypatch):
+        monkeypatch.setattr(
+            extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
+        )
+        resp = logged_in_client.post(
+            "/reservations/add6",
+            data={
+                "subnet_id": "1",
+                "duid": "not-hex-zz",
+                "hostname": "my-host",
+                "address": "2001:db8::10",
+                "prefix": "2001:db8:1:1000::",
+                "prefix_len": "56",
+            },
+        )
+        assert resp.status_code == 400
+        body = resp.data.decode()
+        assert 'value="my-host"' in body
+        assert 'value="2001:db8::10"' in body
+        assert 'value="2001:db8:1:1000::"' in body
+        assert 'value="56"' in body
+        assert '<option value="1" selected' in body
 
 
 class TestDeleteReservation6Route:

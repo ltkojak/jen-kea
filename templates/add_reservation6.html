@@ -11,8 +11,9 @@
             <div class="form-group">
                 <label>Subnet *</label>
                 <select name="subnet_id" required>
+                    <option value="" {% if not prefill.subnet_id %}selected{% endif %} disabled>Choose a subnet…</option>
                     {% for sid, info in subnet6_map.items() %}
-                    <option value="{{ sid }}" {% if prefill and prefill.subnet_id|string == sid|string %}selected{% endif %}>{{ info.name }} — {{ info.cidr }}</option>
+                    <option value="{{ sid }}" {% if prefill.subnet_id and prefill.subnet_id|string == sid|string %}selected{% endif %}>{{ info.name }} — {{ info.cidr }}</option>
                     {% endfor %}
                 </select>
             </div>
@@ -29,17 +30,17 @@
         <div class="form-row">
             <div class="form-group">
                 <label>Address (IA_NA) <span class="u-5d8d64">(optional)</span></label>
-                <input type="text" name="address" placeholder="2001:db8::10">
+                <input type="text" name="address" placeholder="2001:db8::10" value="{{ prefill.address if prefill else '' }}">
             </div>
         </div>
         <div class="form-row">
             <div class="form-group">
                 <label>Delegated Prefix (IA_PD) <span class="u-5d8d64">(optional)</span></label>
-                <input type="text" name="prefix" placeholder="2001:db8:1:1000::">
+                <input type="text" name="prefix" placeholder="2001:db8:1:1000::" value="{{ prefill.prefix if prefill else '' }}">
             </div>
             <div class="form-group">
                 <label>Prefix Length</label>
-                <input type="number" name="prefix_len" min="1" max="128" placeholder="56">
+                <input type="number" name="prefix_len" min="1" max="128" placeholder="56" value="{{ prefill.prefix_len if prefill else '' }}">
             </div>
         </div>
         <div class="form-hint u-2b583d">At least one of address or prefix is required — both can be set for a device that needs both.</div>

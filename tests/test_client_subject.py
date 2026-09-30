@@ -16,7 +16,36 @@ from jen.services.client_subject import (
     detect_kind,
     hex_to_mac,
     mac_hex,
+    subnet_for_ip,
 )
+
+
+class TestSubnetForIp:
+    """v5.66.0-beta.8 (Q110) — moved here from jen.services.plugin_helpers so a core route
+    (add_reservation) can use the same CIDR walk a plugin's own copy already did, without
+    importing a plugin-facing module for it. plugin_helpers.subnet_for_ip now just calls this."""
+
+    @pytest.fixture(autouse=True)
+    def _map(self, monkeypatch):
+        from jen import extensions
+
+        monkeypatch.setattr(
+            extensions,
+            "SUBNET_MAP",
+            {
+                1: {"name": "a", "cidr": "10.98.1.0/24"},
+                2: {"name": "b", "cidr": "10.77.0.0/24"},
+                3: {"name": "bad", "cidr": "nope"},
+            },
+        )
+
+    def test_the_subnet_that_holds_the_address(self):
+        assert subnet_for_ip("10.98.1.5") == 1
+        assert subnet_for_ip(" 10.77.0.200 ") == 2
+
+    @pytest.mark.parametrize("ip", ["192.0.2.1", "not an ip", "", None, "10.98.1.999"])
+    def test_an_address_in_no_subnet_or_not_an_address_is_none(self, ip):
+        assert subnet_for_ip(ip) is None
 
 
 class TestDetectKind:

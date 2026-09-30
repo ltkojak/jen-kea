@@ -83,6 +83,21 @@ class TestDevicesActionMenu:
         assert b"Create reservation" in resp.data
         assert b"/reservations/add?mac=" in resp.data
 
+    def test_unreserved_devices_link_carries_its_own_subnet_id(self, logged_in_client, db):
+        """v5.66.0-beta.8 (Q110) — the device row's own last_subnet_id must ride the link, so
+        Add Reservation opens on the subnet this device is actually in, never a silent default."""
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM devices")
+            cur.execute("DELETE FROM hosts WHERE dhcp4_subnet_id IS NOT NULL")
+        db.commit()
+        _insert_device(db, mac_hex="aabbccddee09", last_ip="10.99.0.53", subnet_id=1)
+        db.commit()
+
+        resp = logged_in_client.get("/devices")
+        assert resp.status_code == 200
+        assert b"/reservations/add?mac=aa%3Abb%3Acc%3Add%3Aee%3A09" in resp.data
+        assert b"subnet_id=1" in resp.data
+
     def test_admin_sees_edit_and_delete_items(self, logged_in_client, db):
         with db.cursor() as cur:
             cur.execute("DELETE FROM devices")

@@ -20,7 +20,6 @@ place. Additive: `PLUGIN_API_VERSION` stays 3.
 Nothing here does work at import time.
 """
 
-import ipaddress
 import re
 from functools import wraps
 
@@ -66,18 +65,14 @@ def subnet_for_ip(ip) -> int | None:
     """The id of the Kea subnet (from the unfiltered map) whose CIDR contains `ip`, or None: an
     unparseable address, or one in no Kea subnet. Derive a row's subnet from where the address IS,
     never from a `subnet_id` the caller typed (docs/ARCHITECTURE.md §2); None means "no attributable
-    subnet", which is for unrestricted callers only (`can_access_subnet`)."""
-    try:
-        addr = ipaddress.IPv4Address(str(ip).strip())
-    except ValueError:
-        return None
-    for sid, info in extensions.SUBNET_MAP.items():
-        try:
-            if addr in ipaddress.IPv4Network(info["cidr"], strict=False):
-                return sid
-        except (KeyError, ValueError):
-            continue
-    return None
+    subnet", which is for unrestricted callers only (`can_access_subnet`).
+
+    v5.66.0-beta.8 (Q110) — the CIDR walk itself now lives in jen.services.client_subject (a core
+    route, add_reservation, needed the same lookup and must not import a plugin-facing module for
+    it); this stays as the name every plugin already imports through jen.plugin_api."""
+    from jen.services.client_subject import subnet_for_ip as _core_subnet_for_ip
+
+    return _core_subnet_for_ip(ip)
 
 
 def search_scope(accessible_ids, all_subnets, column):

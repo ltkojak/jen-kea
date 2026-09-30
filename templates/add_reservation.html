@@ -9,15 +9,17 @@
         <div class="form-row">
             <div class="form-group">
                 <label>Subnet *</label>
-                <select name="subnet_id" required>
+                <select name="subnet_id" id="reservation-subnet" required>
+                    <option value="" {% if not prefill.subnet_id %}selected{% endif %} disabled>Choose a subnet…</option>
                     {% for sid, info in subnet_map.items() %}
-                    <option value="{{ sid }}" {% if prefill and prefill.subnet_id|string == sid|string %}selected{% endif %}>{{ info.name }} — {{ info.cidr }}</option>
+                    <option value="{{ sid }}" {% if prefill.subnet_id and prefill.subnet_id|string == sid|string %}selected{% endif %}>{{ info.name }} — {{ info.cidr }}</option>
                     {% endfor %}
                 </select>
+                <div class="form-hint" id="reservation-subnet-hint" hidden></div>
             </div>
             <div class="form-group">
                 <label>IP Address *</label>
-                <input type="text" name="ip" placeholder="x.x.x.x" value="{{ prefill.ip if prefill else '' }}" required>
+                <input type="text" name="ip" id="reservation-ip" placeholder="x.x.x.x" value="{{ prefill.ip if prefill else '' }}" required>
             </div>
         </div>
         <div class="form-row">
@@ -32,11 +34,11 @@
         </div>
         <div class="form-group">
             <label>DNS Override <span class="u-5d8d64">(optional)</span></label>
-            <input type="text" name="dns_override" placeholder="Leave blank for subnet default, e.g. 1.1.1.1, 8.8.8.8">
+            <input type="text" name="dns_override" placeholder="Leave blank for subnet default, e.g. 1.1.1.1, 8.8.8.8" value="{{ prefill.dns_override if prefill else '' }}">
         </div>
         <div class="form-group">
             <label>Notes <span class="u-5d8d64">(optional)</span></label>
-            <textarea name="notes" rows="2" placeholder="Optional notes about this device..."></textarea>
+            <textarea name="notes" rows="2" placeholder="Optional notes about this device...">{{ prefill.notes if prefill else '' }}</textarea>
         </div>
         <div class="u-a76d59">
             <button type="submit" class="btn btn-primary">Add Reservation</button>
@@ -44,4 +46,58 @@
         </div>
     </form>
 </div>
+<script nonce="{{ csp_nonce }}">
+(function() {
+    var SUBNET_CIDRS = {{ subnet_cidrs | tojson }};
+    var ipInput = document.getElementById('reservation-ip');
+    var select = document.getElementById('reservation-subnet');
+    var hint = document.getElementById('reservation-subnet-hint');
+    var userTouchedSelect = false;
+
+    function subnetForIp(ip) {
+        var octets = ip.trim().split('.');
+        if (octets.length !== 4) return null;
+        var nums = octets.map(Number);
+        if (nums.some(function(o) { return isNaN(o) || o < 0 || o > 255; })) return null;
+        var addr = ((nums[0] << 24) | (nums[1] << 16) | (nums[2] << 8) | nums[3]) >>> 0;
+        for (var sid in SUBNET_CIDRS) {
+            var cidrParts = SUBNET_CIDRS[sid].split('/');
+            var netOctets = cidrParts[0].split('.').map(Number);
+            var prefix = parseInt(cidrParts[1], 10);
+            if (netOctets.length !== 4 || isNaN(prefix)) continue;
+            var net = ((netOctets[0] << 24) | (netOctets[1] << 16) | (netOctets[2] << 8) | netOctets[3]) >>> 0;
+            var mask = prefix === 0 ? 0 : (0xFFFFFFFF << (32 - prefix)) >>> 0;
+            if ((addr & mask) >>> 0 === (net & mask) >>> 0) return sid;
+        }
+        return null;
+    }
+
+    function updateForIp() {
+        var ip = ipInput.value.trim();
+        var sid = subnetForIp(ip);
+        if (!ip || sid === null) {
+            hint.hidden = true;
+            return;
+        }
+        if (!userTouchedSelect && select.value !== sid) {
+            select.value = sid;
+        }
+        if (select.value && select.value !== sid) {
+            var opt = select.querySelector('option[value="' + sid + '"]');
+            var name = opt ? opt.textContent.trim() : ('subnet ' + sid);
+            hint.textContent = ip + ' is not inside the selected subnet — it belongs to ' + name + '.';
+            hint.hidden = false;
+        } else {
+            hint.hidden = true;
+        }
+    }
+
+    select.addEventListener('change', function() {
+        userTouchedSelect = true;
+        updateForIp();
+    });
+    ipInput.addEventListener('input', updateForIp);
+    if (ipInput.value) updateForIp();
+})();
+</script>
 {% endblock %}

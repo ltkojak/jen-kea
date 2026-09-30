@@ -105,7 +105,8 @@ class TestAddReservation:
         assert r.status_code == 200
 
     def test_add_reservation_invalid_mac(self, logged_in_client, mock_kea_reservations):
-        """Invalid MAC address is rejected."""
+        """Invalid MAC address is rejected — v5.66.0-beta.8 (Q110): a failed POST now
+        re-renders the form directly (400), never a blank redirect."""
         r = logged_in_client.post(
             "/reservations/add",
             data={
@@ -114,9 +115,8 @@ class TestAddReservation:
                 "ip": "10.99.0.50",
                 "hostname": "test-device",
             },
-            follow_redirects=True,
         )
-        assert r.status_code == 200
+        assert r.status_code == 400
         assert b"invalid" in r.data.lower() or b"error" in r.data.lower()
 
     def test_add_reservation_invalid_ip(self, logged_in_client, mock_kea_reservations):
@@ -129,9 +129,8 @@ class TestAddReservation:
                 "ip": "999.999.999.999",
                 "hostname": "test-device",
             },
-            follow_redirects=True,
         )
-        assert r.status_code == 200
+        assert r.status_code == 400
         assert b"invalid" in r.data.lower() or b"error" in r.data.lower()
 
     def test_add_reservation_missing_fields(self, logged_in_client, mock_kea_reservations):
@@ -144,9 +143,180 @@ class TestAddReservation:
                 "ip": "",
                 "hostname": "",
             },
-            follow_redirects=True,
         )
+        assert r.status_code == 400
+
+
+class TestAddReservationSubnetResolution:
+    """v5.66.0-beta.8 (Q110) — the Add Reservation form no longer defaults to the first subnet
+    when nothing tells it which one a device belongs to. jen.services.client_subject.subnet_for_ip
+    and .client_subnet_for_mac drive the resolution; conftest's SUBNET_MAP has exactly one real
+    subnet (id 1, 10.99.0.0/24)."""
+
+    MAC = "aa:bb:cc:dd:ee:20"
+    MAC_HEX = "AABBCCDDEE20"
+    IP_IN_SUBNET_1 = "10.99.0.77"
+
+    def _select_block(self, body: str) -> str:
+        start = body.index('name="subnet_id"')
+        end = body.index("</select>", start)
+        return body[start:end]
+
+    def test_step1_subnet_id_wins(self, logged_in_client):
+        r = logged_in_client.get("/reservations/add?subnet_id=1")
         assert r.status_code == 200
+        select = self._select_block(r.data.decode())
+        assert '<option value="1" selected' in select
+
+    def test_step2_subnet_alias_is_accepted(self, logged_in_client):
+        """The pre-Q110 plugin-link parameter name still works."""
+        r = logged_in_client.get("/reservations/add?subnet=1")
+        assert r.status_code == 200
+        select = self._select_block(r.data.decode())
+        assert '<option value="1" selected' in select
+
+    def test_step3_falls_back_to_the_ips_own_cidr(self, logged_in_client):
+        r = logged_in_client.get(f"/reservations/add?ip={self.IP_IN_SUBNET_1}")
+        assert r.status_code == 200
+        select = self._select_block(r.data.decode())
+        assert '<option value="1" selected' in select
+
+    def test_step4_falls_back_to_the_macs_current_subnet(self, logged_in_client, db):
+        """No subnet_id/subnet/ip resolves anything, but the MAC has a live lease in subnet 1."""
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4 WHERE hwaddr=UNHEX(%s)", (self.MAC_HEX,))
+            cur.execute(
+                "INSERT INTO lease4 (address, hwaddr, subnet_id, valid_lifetime, expire, state) VALUES "
+                "(INET_ATON('10.99.0.88'), UNHEX(%s), 1, 3600, DATE_ADD(NOW(), INTERVAL 1 HOUR), 0)",
+                (self.MAC_HEX,),
+            )
+        db.commit()
+
+        r = logged_in_client.get(f"/reservations/add?mac={self.MAC}")
+        assert r.status_code == 200
+        select = self._select_block(r.data.decode())
+        assert '<option value="1" selected' in select
+
+    def test_step5_nothing_resolves_the_placeholder_is_selected(self, logged_in_client):
+        r = logged_in_client.get("/reservations/add")
+        assert r.status_code == 200
+        select = self._select_block(r.data.decode())
+        assert 'value="" selected' in select and "disabled" in select
+        # never a silent default onto the first real option
+        assert '<option value="1" selected' not in select
+
+    def test_garbage_ip_and_mac_never_resolve_anything(self, logged_in_client):
+        r = logged_in_client.get("/reservations/add?ip=not-an-ip&mac=not-a-mac")
+        assert r.status_code == 200
+        select = self._select_block(r.data.decode())
+        assert 'value="" selected' in select
+
+    def test_an_inaccessible_subnet_id_is_never_selected_or_named(self, client, db):
+        """A restricted admin's subnet_id/ip/mac never selects — or even mentions — subnet 1,
+        which conftest's SUBNET_MAP is the only real one (ARCHITECTURE §2)."""
+        from tests.conftest import restricted_client
+
+        restricted_client(client, db, allowed_subnets=[999])
+
+        for qs in ("subnet_id=1", "subnet=1", f"ip={self.IP_IN_SUBNET_1}"):
+            r = client.get(f"/reservations/add?{qs}")
+            assert r.status_code == 200
+            body = r.data.decode()
+            select = self._select_block(body)
+            assert 'value="" selected' in select
+            assert "10.99.0.0/24" not in body, f"an inaccessible subnet must never be named ({qs})"
+
+
+class TestAddReservationKeepsWhatWasTyped:
+    """v5.66.0-beta.8 (Q110) — every failure re-renders the form with everything the operator
+    typed, never a blank redirect."""
+
+    def test_a_failed_post_keeps_every_field(self, logged_in_client, mock_kea_reservations):
+        r = logged_in_client.post(
+            "/reservations/add",
+            data={
+                "subnet_id": "1",
+                "mac": "not-a-mac",
+                "ip": "10.99.0.50",
+                "hostname": "office-printer",
+                "dns_override": "1.1.1.1",
+                "notes": "second floor, near the window",
+            },
+        )
+        assert r.status_code == 400
+        body = r.data.decode()
+        assert 'value="10.99.0.50"' in body
+        assert 'value="office-printer"' in body
+        assert 'value="1.1.1.1"' in body
+        assert "second floor, near the window" in body
+        assert '<option value="1" selected' in body
+
+    def test_a_hostname_with_special_characters_survives_the_round_trip(self, logged_in_client, mock_kea_reservations):
+        r = logged_in_client.post(
+            "/reservations/add",
+            data={
+                "subnet_id": "1",
+                "mac": "not-a-mac",  # forces the re-render without ever calling Kea
+                "ip": "10.99.0.50",
+                "hostname": 'a&b"c',
+            },
+        )
+        assert r.status_code == 400
+        assert "a&amp;b&#34;c" in r.data.decode() or "a&amp;b&quot;c" in r.data.decode()
+
+    def test_choosing_no_subnet_is_refused_not_defaulted(self, logged_in_client, mock_kea_reservations):
+        """The old code defaulted an empty/missing subnet_id to subnet 1 — an untouched form
+        (the placeholder never actually selectable) must be refused instead."""
+        r = logged_in_client.post(
+            "/reservations/add",
+            data={"subnet_id": "", "mac": "aa:bb:cc:dd:ee:ff", "ip": "10.99.0.50", "hostname": "x"},
+        )
+        assert r.status_code == 400
+        assert b"choose a subnet" in r.data.lower()
+
+
+class TestAddReservationAddressMustBeInSubnet:
+    """v5.66.0-beta.8 (Q110) — verified against Kea's own host_cmds source
+    (HostCmdsImpl::validateHostForSubnet4): reservation-add refuses an ip-address outside the
+    named subnet-id's own range every time subnet-id isn't 0, with the exact wording "is not
+    matching the IPv4 subnet prefix" — Jen now catches this locally, before ever calling Kea,
+    and names which subnet the address actually belongs to."""
+
+    def test_an_address_outside_the_chosen_subnet_is_refused_with_the_real_one_named(
+        self, logged_in_client, mock_kea_reservations
+    ):
+        r = logged_in_client.post(
+            "/reservations/add",
+            data={
+                "subnet_id": "1",
+                "mac": "aa:bb:cc:dd:ee:ff",
+                "ip": "192.0.2.50",  # nowhere near 10.99.0.0/24
+                "hostname": "x",
+            },
+        )
+        assert r.status_code == 400
+        assert b"192.0.2.50 is not inside" in r.data
+
+    def test_kea_never_sees_the_call_when_jen_refuses_first(self, logged_in_client, monkeypatch):
+        from jen.services import kea as kea_svc
+
+        calls = []
+        monkeypatch.setattr(kea_svc, "kea_command", lambda cmd, *a, **kw: calls.append(cmd) or {"result": 0})
+        r = logged_in_client.post(
+            "/reservations/add",
+            data={"subnet_id": "1", "mac": "aa:bb:cc:dd:ee:ff", "ip": "192.0.2.50", "hostname": "x"},
+        )
+        assert r.status_code == 400
+        assert calls == []
+
+    def test_an_address_inside_the_subnet_is_never_refused_on_this_ground(
+        self, logged_in_client, mock_kea_reservations
+    ):
+        r = logged_in_client.post(
+            "/reservations/add",
+            data={"subnet_id": "1", "mac": "aa:bb:cc:dd:ee:ff", "ip": "10.99.0.50", "hostname": "x"},
+        )
+        assert r.status_code in (200, 302)
 
 
 class TestEditReservation:

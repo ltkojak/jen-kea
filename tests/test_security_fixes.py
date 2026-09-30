@@ -23,6 +23,8 @@ class TestSubnetRestrictionOnMutations:
     mutating or export route, even by submitting form fields directly."""
 
     def test_add_reservation_rejected_for_out_of_scope_subnet(self, client, db, mock_kea):
+        """v5.66.0-beta.8 (Q110) — a failed POST re-renders the form directly (400), never a
+        blank redirect."""
         _restricted_client(client, db, allowed_subnets=[999])
         r = client.post(
             "/reservations/add",
@@ -32,9 +34,8 @@ class TestSubnetRestrictionOnMutations:
                 "ip": "10.99.0.20",
                 "hostname": "sneaky",
             },
-            follow_redirects=True,
         )
-        assert r.status_code == 200
+        assert r.status_code == 400
         assert b"do not have access" in r.data.lower()
 
     def test_edit_reservation_rejected_for_out_of_scope_subnet(self, client, db, mock_kea):

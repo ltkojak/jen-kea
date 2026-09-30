@@ -98,6 +98,43 @@ class TestLeasesToExplain:
         assert mac_value.replace(":", "").lower() == "aabbccddee01"
 
 
+def _seed_device(mac="aa:bb:cc:dd:ee:30", last_ip="10.99.0.51", subnet_id=1, hostname="e2e-device-host"):
+    conn = _kea_db()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM devices WHERE mac=%s", (mac,))
+            cur.execute(
+                "INSERT INTO devices (mac, last_ip, last_hostname, last_subnet_id, first_seen, last_seen) "
+                "VALUES (%s, %s, %s, %s, NOW(), NOW())",
+                (mac, last_ip, hostname, subnet_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+class TestDevicesToAddReservation:
+    """v5.66.0-beta.8 (Q110) — Add Reservation used to open on whatever subnet happened to be
+    first in the select; the link now carries the device's own subnet, and the form preselects
+    it instead of defaulting silently."""
+
+    def test_create_reservation_lands_on_the_devices_own_subnet(self, logged_in_page, base_url):
+        _seed_device()
+        page = logged_in_page
+        page.goto(f"{base_url}/devices")
+        page.wait_for_selector("text=e2e-device-host")
+
+        row = page.locator("tr", has_text="e2e-device-host").first
+        row.locator(".action-menu-btn").click()
+        row.locator(".action-menu-item", has_text="Create reservation").click()
+
+        page.wait_for_url("**/reservations/add**")
+        selected = page.locator("select[name='subnet_id'] option:checked")
+        assert selected.count() == 1
+        assert selected.get_attribute("value") == "1"
+        assert page.locator('input[name="ip"]').input_value() == "10.99.0.51"
+
+
 class TestSearchToInvestigate:
     """v5.63.0 (Q82) — search a MAC, follow "Investigate" into the
     Investigation page, and confirm every tab renders with the same

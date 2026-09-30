@@ -30,7 +30,7 @@
                 {% if l.has_reservation %}
                 <a href="/reservations?search={{ l.mac }}" class="action-menu-item">{{ icon_pin() }}View reservation</a>
                 {% else %}
-                <a href="/reservations/add?ip={{ l.ip }}&mac={{ l.mac }}&hostname={{ l.hostname }}&subnet_id={{ l.subnet_id }}" class="action-menu-item">{{ icon_pin() }}Create reservation</a>
+                <a href="/reservations/add?ip={{ l.ip|urlencode }}&mac={{ l.mac|urlencode }}&hostname={{ l.hostname|urlencode }}&subnet_id={{ l.subnet_id|urlencode }}" class="action-menu-item">{{ icon_pin() }}Create reservation</a>
                 <a href="/tools/explain?mac={{ l.mac }}&subnet={{ l.subnet_id }}&hostname={{ l.hostname|urlencode }}" class="action-menu-item">{{ icon("compass") }} Why this address?</a>
                 <a href="/timeline?mac={{ l.mac }}" class="action-menu-item">{{ icon("clock") }} Timeline</a>
                 {% if current_user.role in ('superadmin','admin') and current_user.all_subnets %}<a href="/tools/trace?mac={{ l.mac }}" class="action-menu-item">{{ icon("search-code") }} Trace in Kea log</a>{% endif %}

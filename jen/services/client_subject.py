@@ -217,6 +217,30 @@ def client_subnet_for_mac(mac: str) -> int | None:
     return None
 
 
+def subnet_for_ip(ip) -> int | None:
+    """The id of the Kea subnet (from the unfiltered map) whose CIDR contains `ip`, or None: an
+    unparseable address, or one in no Kea subnet. Derive a row's subnet from where the address IS,
+    never from a `subnet_id` the caller typed (docs/ARCHITECTURE.md §2); None means "no attributable
+    subnet", which is for unrestricted callers only (`can_access_subnet`).
+
+    v5.66.0-beta.8 (Q110) — moved here from jen.services.plugin_helpers (which now just calls this)
+    so a core route (add_reservation) can use the same CIDR walk a plugin's own copy already did,
+    without importing a plugin-facing module for it."""
+    from jen import extensions
+
+    try:
+        addr = ipaddress.IPv4Address(str(ip).strip())
+    except ValueError:
+        return None
+    for sid, info in extensions.SUBNET_MAP.items():
+        try:
+            if addr in ipaddress.IPv4Network(info["cidr"], strict=False):
+                return sid
+        except (KeyError, ValueError):
+            continue
+    return None
+
+
 def load_leases4(mac: str, ip: str = "") -> list[dict]:
     """Every active (state=0) v4 lease for this identifier — MAC first, or
     the single lease at this address when only an IP is known — newest
