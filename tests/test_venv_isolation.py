@@ -122,10 +122,13 @@ class TestInstallShVenv:
         assert 'chown -R "$JEN_USER:$JEN_USER" "$VENV_DIR"' not in INSTALL_SH
 
     def test_setup_venv_runs_in_install_and_repair_flows(self):
-        # both the standard main() flow and --repair call it (the def
-        # itself is `setup_venv()` with parens, so it's not counted here)
-        calls = re.findall(r"^\s+setup_venv\s*$", INSTALL_SH, re.M)
-        assert len(calls) >= 2, f"expected setup_venv called in ≥2 flows, found {len(calls)}"
+        # v5.67.0 (Q113, item d) — main()'s dispatch is a MODE_STEPS
+        # associative array now (mode -> space-separated step-list
+        # string); both the standard flow and --repair must name it.
+        for mode in ("standard", "repair"):
+            m = re.search(rf'\[{mode}\]="([^"]*)"', INSTALL_SH)
+            assert m, f"no MODE_STEPS[{mode}] entry found in install.sh"
+            assert "setup_venv" in m.group(1).split(), f"setup_venv is never called in the {mode} step list"
 
 
 class TestServiceFile:

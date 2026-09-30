@@ -197,32 +197,39 @@ class TestInstallShExternalFileRollback:
         end = source.index("\n}", start)
         return source[start:end]
 
+    def _mode_steps(self, source, mode):
+        """v5.67.0 (Q113, item d) — main()'s dispatch is a MODE_STEPS
+        associative array now (mode -> space-separated step-list string),
+        not a literal sequence of calls inside main() itself; _arm_rollback/
+        _disarm_rollback stand in for ROLLBACK_ARMED=true/false so every
+        entry in the table is a real function name. Extract one mode's
+        step list the same source-shape way the rest of this file checks
+        anything — no execution, just text."""
+        m = re.search(rf'\[{mode}\]="([^"]*)"', source)
+        assert m, f"no MODE_STEPS[{mode}] entry found in install.sh"
+        return m.group(1).split()
+
     def test_snapshot_called_before_install_files_in_main(self):
         source = self._source()
-        main_body = self._function_body(source, "main")
-        snapshot_positions = [m.start() for m in re.finditer(r"\bsnapshot_external_files\b", main_body)]
-        install_files_positions = [m.start() for m in re.finditer(r"^\s*install_files\s*$", main_body, re.MULTILINE)]
-        assert snapshot_positions, "snapshot_external_files is never called in main()"
-        assert install_files_positions, "install_files is never called in main()"
-        for install_pos in install_files_positions:
-            assert any(sp < install_pos for sp in snapshot_positions), (
-                "install_files is called in main() without a preceding snapshot_external_files call"
+        for mode in ("standard", "repair"):
+            steps = self._mode_steps(source, mode)
+            assert "snapshot_external_files" in steps, f"snapshot_external_files is never called in the {mode} step list"
+            assert "install_files" in steps, f"install_files is never called in the {mode} step list"
+            assert steps.index("snapshot_external_files") < steps.index("install_files"), (
+                f"install_files runs before snapshot_external_files in the {mode} step list"
             )
 
     def test_rollback_armed_brackets_install_files_through_verify_install(self):
         source = self._source()
-        main_body = self._function_body(source, "main")
-        install_positions = [m.start() for m in re.finditer(r"^\s*install_files\s*$", main_body, re.MULTILINE)]
-        verify_positions = [m.start() for m in re.finditer(r"^\s*verify_install\s*$", main_body, re.MULTILINE)]
-        armed_positions = [m.start() for m in re.finditer(r"^\s*ROLLBACK_ARMED=true\s*$", main_body, re.MULTILINE)]
-        disarmed_positions = [m.start() for m in re.finditer(r"^\s*ROLLBACK_ARMED=false\s*$", main_body, re.MULTILINE)]
-        assert armed_positions, "ROLLBACK_ARMED=true is never set in main()"
-        assert disarmed_positions, "ROLLBACK_ARMED=false is never set in main()"
-        for install_pos in install_positions:
-            assert any(a < install_pos for a in armed_positions), "install_files runs before ROLLBACK_ARMED is set"
-        for verify_pos in verify_positions:
-            assert any(d > verify_pos for d in disarmed_positions), (
-                "ROLLBACK_ARMED is never cleared after verify_install"
+        for mode in ("standard", "repair"):
+            steps = self._mode_steps(source, mode)
+            assert "_arm_rollback" in steps, f"ROLLBACK_ARMED is never armed in the {mode} step list"
+            assert "_disarm_rollback" in steps, f"ROLLBACK_ARMED is never disarmed in the {mode} step list"
+            assert steps.index("_arm_rollback") < steps.index("install_files"), (
+                f"install_files runs before ROLLBACK_ARMED is armed in the {mode} step list"
+            )
+            assert steps.index("verify_install") < steps.index("_disarm_rollback"), (
+                f"ROLLBACK_ARMED is never cleared after verify_install in the {mode} step list"
             )
 
     def test_fatal_rolls_back_when_armed_during_an_upgrade(self):

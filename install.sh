@@ -1354,9 +1354,20 @@ snapshot_external_files() {
 }
 
 # ── Restore external files (used by rollback(), both branches) ──────────────
+# v5.67.0 (Q113) — found auditing the same bug class this Q fixed in
+# _confirm_upgrade_or_exit: `|| return` with no explicit code inherits the
+# FAILED condition's own exit status, which is fatal under set -e when the
+# caller (rollback(), called bare from both a normal failure and the
+# INT/TERM trap) reaches it as a bare statement. Only reachable if
+# $ROLLBACK_EXT is set but its directory is somehow gone by the time a
+# rollback runs — snapshot_external_files() always mkdir's it right when
+# it sets the variable, so this was likely never hit in practice, but a
+# rollback that silently stops rolling back is exactly the wrong failure
+# mode to leave sitting in the one path this Q's own set -e audit exists
+# to catch.
 _restore_external_files() {
     [[ -z "${ROLLBACK_EXT:-}" ]] && return
-    [[ -d "$ROLLBACK_EXT" ]] || return
+    [[ -d "$ROLLBACK_EXT" ]] || return 0
     local f base dest
     for f in "$ROLLBACK_EXT"/*; do
         [[ -f "$f" ]] || continue
@@ -2063,7 +2074,13 @@ _offer_docker_instead() {
 # pre-upgrade backup — skipped entirely on a fresh install, with
 # --upgrade, or with --unattended. Exits 0 if the operator declines.
 _confirm_upgrade_or_exit() {
-    [[ "$IS_UPGRADE" == "true" && "$MODE_UPGRADE" == "false" && "$MODE_UNATTENDED" == "false" ]] || return
+    # `|| return` (no explicit code) inherits the FAILED condition's own
+    # exit status (1) as the function's return value — harmless on a
+    # fresh install called from an if/while condition, but fatal under
+    # set -e when called as a bare statement from main(), which is
+    # exactly how this one is called. `return 0` always reports success
+    # for the (extremely common) early-return case.
+    [[ "$IS_UPGRADE" == "true" && "$MODE_UPGRADE" == "false" && "$MODE_UNATTENDED" == "false" ]] || return 0
     blank
     echo -e "  ${B}Existing installation detected:${NC} v${EXISTING_VERSION/unknown/—}"
     blank

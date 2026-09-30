@@ -249,11 +249,16 @@ class TestVersionedReleaseLayout:
         assert "remove_flat_leftovers" in sh
 
     def test_installer_activate_runs_after_setup_venv(self):
+        # v5.67.0 (Q113, item d) — main()'s dispatch is a MODE_STEPS
+        # associative array now (mode -> space-separated step-list
+        # string), not a literal sequence of calls inside main() itself.
         sh = _text("install.sh")
-        main_fn = sh[sh.rindex("\nmain() {") :]
-        assert main_fn.index("setup_venv") < main_fn.index("activate_release")
-        assert main_fn.index("activate_release") < main_fn.index("start_service")
-        assert main_fn.index("verify_install") < main_fn.index("remove_flat_leftovers")
+        m = re.search(r'\[standard\]="([^"]*)"', sh)
+        assert m, "no MODE_STEPS[standard] entry found in install.sh"
+        steps = m.group(1).split()
+        assert steps.index("setup_venv") < steps.index("activate_release")
+        assert steps.index("activate_release") < steps.index("start_service")
+        assert steps.index("verify_install") < steps.index("remove_flat_leftovers")
 
     def test_service_unit_points_at_current(self):
         s = _text("jen.service")
