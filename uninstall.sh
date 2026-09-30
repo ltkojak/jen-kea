@@ -34,7 +34,10 @@ divider() { echo -e "  ${DIM}${R}$(printf '─%.0s' {1..54})${NC}"; }
 [[ $EUID -eq 0 ]] || fatal "Must run as root — sudo ./uninstall.sh"
 
 # ── Banner ────────────────────────────────────────────────────────────────────
-clear
+# v5.67.0 (Q113) — same fix as install.sh's show_banner(): `clear` exits
+# non-zero when it can't resolve $TERM via terminfo, which kills this
+# script under set -e in a context with no real terminal (CI).
+clear 2>/dev/null || true
 echo ""
 echo -e "  ${R}╔══════════════════════════════════════════════════════╗${NC}"
 echo -e "  ${R}║${NC}                                                      ${R}║${NC}"

@@ -368,7 +368,14 @@ _box_line() {
 
 # ── BBS/ANSI banner ───────────────────────────────────────────────────────────
 show_banner() {
-    clear
+    # v5.67.0 (Q113) — `clear` looks up the terminal's capabilities via
+    # $TERM/terminfo and exits non-zero ("'unknown': I need something more
+    # specific.") when it can't resolve one — which every real operator's
+    # SSH session always has and no CI runner does. install.sh had never
+    # run anywhere without a real terminal before this Q's CI job, so
+    # nothing ever hit this: under `set -e` it killed the whole script
+    # before a single line of output. Purely cosmetic either way.
+    clear 2>/dev/null || true
     echo ""
     echo -e "  ${C}╔══════════════════════════════════════════════════════╗${NC}"
     echo -e "  ${C}║${NC}${B}                                                      ${NC}${C}║${NC}"

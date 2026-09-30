@@ -410,16 +410,11 @@ jobs:
           EOF
 
       - name: Fresh install from the answers file
-        # v5.67.0-beta.1 (Q113) diagnostic: the first CI run of this job
-        # failed here in well under a second — too fast to have reached
-        # apt-get — printing only `'unknown': I need something more
-        # specific.` with no other context. `bash -x` traces every command
-        # so the next run pins the exact line; remove once diagnosed.
         run: |
           mkdir -p "$RUNNER_TEMP/install-head"
           tar xzf dist/jen-head.tar.gz -C "$RUNNER_TEMP/install-head"
           cd "$RUNNER_TEMP/install-head/jen"
-          sudo bash -x ./install.sh --answers "$RUNNER_TEMP/answers.env" --unattended 2>&1 | tail -200
+          sudo ./install.sh --answers "$RUNNER_TEMP/answers.env" --unattended
 
       - name: Assert the fresh install is real
         run: |
