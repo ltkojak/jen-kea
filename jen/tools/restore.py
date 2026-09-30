@@ -782,7 +782,7 @@ def run(
             )
 
         for label, root, owned, excl in (
-            (etc_jen, Path(etc_jen), etc_owned, ()),
+            ("the config directory", Path(etc_jen), etc_owned, ()),
             ("the content directory", Path(content_dir), content_owned, _SNAPSHOT_EXCLUDE),
         ):
             extra = unknown_files(root, owned, excl)

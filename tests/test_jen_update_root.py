@@ -86,13 +86,43 @@ class TestLoadLayout:
     can't clear the group/other-write bits os.stat then reports, so a
     freshly written file always reads back as mode 0o666 there. Skipped
     as a whole class rather than test-by-test — verified for real by the
-    `install`/`pytest` CI jobs on real Ubuntu runners."""
+    `install`/`pytest` CI jobs on real Ubuntu runners.
+
+    Even on real POSIX, only the `install` CI job runs as root — the
+    plain `pytest` job (this one) is a non-root user, so a file this
+    test creates can never actually BE root-owned. Every test that
+    doesn't mean to test the ownership check itself bypasses just that
+    (`_bypass_ownership`), the same technique tests/test_layout.py uses
+    on the bash side and tests/test_kea_helper.py already established
+    for jen-kea-helper's own analogous _bin_dir_ok check."""
 
     pytestmark = pytest.mark.skipif(os.name != "posix", reason="POSIX file permission bits required")
 
     def _write(self, path, app="/opt/jen", config="/etc/jen", data="/var/lib/jen"):
         path.write_text(f"[layout]\napp_dir = {app}\nconfig_dir = {config}\ndata_dir = {data}\n")
         os.chmod(path, 0o644)
+
+    def _bypass_ownership(self, monkeypatch, jen_update_root, mode_check=False):
+        """Replace _validate_layout_file with a version that skips the
+        owner/group check a non-root test process could never pass —
+        keeping the real mode check when mode_check=True (for the one
+        test that needs it), a no-op otherwise."""
+        real_mode_bits = 0o022
+
+        def _patched(path):
+            if os.path.islink(path):
+                return f"{path} must be a regular file, not a symlink."
+            if not os.path.isfile(path):
+                return f"{path} exists but is not a regular file."
+            if mode_check:
+                st = os.stat(path)
+                if st.st_mode & real_mode_bits:
+                    return (
+                        f"{path} is writable by group or other (mode {oct(st.st_mode & 0o777)}) — refusing to trust it."
+                    )
+            return None
+
+        monkeypatch.setattr(jen_update_root, "_validate_layout_file", _patched)
 
     def test_absent_file_returns_historical_defaults(self, jen_update_root, tmp_path):
         missing = tmp_path / "does-not-exist" / "jen-layout.conf"
@@ -102,7 +132,8 @@ class TestLoadLayout:
             "data_dir": "/var/lib/jen",
         }
 
-    def test_present_and_valid_is_returned(self, jen_update_root, tmp_path):
+    def test_present_and_valid_is_returned(self, jen_update_root, tmp_path, monkeypatch):
+        self._bypass_ownership(monkeypatch, jen_update_root)
         layout = tmp_path / "jen-layout.conf"
         self._write(layout, app="/srv/jen/app", config="/srv/jen/etc", data="/srv/jen/data")
         result = jen_update_root.load_layout(str(layout))
@@ -116,7 +147,8 @@ class TestLoadLayout:
         with pytest.raises(RuntimeError, match="owned by root"):
             jen_update_root.load_layout(str(layout))
 
-    def test_group_writable_file_raises(self, jen_update_root, tmp_path):
+    def test_group_writable_file_raises(self, jen_update_root, tmp_path, monkeypatch):
+        self._bypass_ownership(monkeypatch, jen_update_root, mode_check=True)
         layout = tmp_path / "jen-layout.conf"
         self._write(layout)
         os.chmod(layout, 0o664)
@@ -124,6 +156,8 @@ class TestLoadLayout:
             jen_update_root.load_layout(str(layout))
 
     def test_symlinked_file_raises(self, jen_update_root, tmp_path):
+        # No bypass needed: the symlink check runs before the ownership
+        # check, so this doesn't touch the part a non-root process fails.
         real = tmp_path / "real-layout.conf"
         self._write(real)
         link = tmp_path / "jen-layout.conf"
@@ -131,7 +165,8 @@ class TestLoadLayout:
         with pytest.raises(RuntimeError, match="symlink"):
             jen_update_root.load_layout(str(link))
 
-    def test_missing_key_raises(self, jen_update_root, tmp_path):
+    def test_missing_key_raises(self, jen_update_root, tmp_path, monkeypatch):
+        self._bypass_ownership(monkeypatch, jen_update_root)
         layout = tmp_path / "jen-layout.conf"
         layout.write_text("[layout]\napp_dir = /opt/jen\nconfig_dir = /etc/jen\n")
         os.chmod(layout, 0o644)
@@ -152,19 +187,22 @@ class TestLoadLayout:
             ("/home/jen", "/home"),
         ],
     )
-    def test_app_dir_rejections(self, jen_update_root, tmp_path, path, expect_in_error):
+    def test_app_dir_rejections(self, jen_update_root, tmp_path, monkeypatch, path, expect_in_error):
+        self._bypass_ownership(monkeypatch, jen_update_root)
         layout = tmp_path / "jen-layout.conf"
         self._write(layout, app=path)
         with pytest.raises(RuntimeError, match=re.escape(expect_in_error)):
             jen_update_root.load_layout(str(layout))
 
-    def test_nested_data_under_app_raises(self, jen_update_root, tmp_path):
+    def test_nested_data_under_app_raises(self, jen_update_root, tmp_path, monkeypatch):
+        self._bypass_ownership(monkeypatch, jen_update_root)
         layout = tmp_path / "jen-layout.conf"
         self._write(layout, app="/srv/jen", data="/srv/jen/data")
         with pytest.raises(RuntimeError, match="nested"):
             jen_update_root.load_layout(str(layout))
 
-    def test_siblings_are_not_nested(self, jen_update_root, tmp_path):
+    def test_siblings_are_not_nested(self, jen_update_root, tmp_path, monkeypatch):
+        self._bypass_ownership(monkeypatch, jen_update_root)
         layout = tmp_path / "jen-layout.conf"
         self._write(layout, app="/srv/jen-app", config="/srv/jen-etc", data="/srv/jen-data")
         result = jen_update_root.load_layout(str(layout))
