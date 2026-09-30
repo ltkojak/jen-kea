@@ -1,344 +1,59 @@
-# Upgrading from 5.56.3
+# Upgrading from 5.66.0
 
-Everything below changed since v5.56.3 — the last stable release before
+Everything below changed since v5.66.0 — the last stable release before
 this one — that you'd actually notice or need to know about when you
 upgrade. Run `sudo ./install.sh` on the new tarball (or use the in-app
 updater) the normal way; nothing here needs a manual step beyond what's
 called out explicitly. See `docs/runbooks.md` for step-by-step
 procedures, and `CHANGELOG.md` if you want the full detail behind any
-item below.
+item below. The previous page, covering everything since 5.56.3 through
+the 5.66.0 baseline, is archived at
+[`docs/release-history/upgrading-5.56.3-to-5.66.0.md`](release-history/upgrading-5.56.3-to-5.66.0.md).
 
-## The Kea host helper stays exactly where it is until you press Update
+## install.sh can be scripted
 
-Jen never updates `jen-kea-helper` on its own — a host keeps whatever
-version it's already running until you press **Update helper** in
-Settings → Kea → SSH, the same as it always has.
+`sudo ./install.sh --answers <file> --unattended` drives a fresh
+install from a `KEY=value` file instead of the interactive wizard —
+the same `JEN_*` names `.env.example` and the Docker path already use,
+so there's nothing new to learn if you've ever filled in a `.env` for
+the container path. The same names also work as plain environment
+variables with no file at all. Nothing changes for an existing install
+running `sudo ./install.sh` to upgrade in place — it still auto-detects
+and keeps your configuration exactly as before (5.67.0-beta.1).
 
-If a host is still on helper v5 or older, that one press needs the
-legacy `NOPASSWD: /usr/bin/python3` sudoers grant present — exactly as a
-fresh install always needed it. Once it's made that hop to v6 (5.66.0-beta.1),
-every update after that is verified by a release signature and needs no
-grant at all, ever again. The SSH card shows **"signed updates"** next to
-a host once it's there. If **Update helper** says there's no legacy
-grant even though you're sure one exists, press **Test legacy grant**
-next to it to see exactly what `sudo` said rather than a generic refusal
-(5.65.13-beta.1).
+## A fresh install's connection failures behave differently
 
-The helper itself was hardened further in 5.66.0-beta.2 — nothing changes
-for you here either. The SSH card now shows a build number alongside the
-version (`v7 (build 7)`), since a helper-only fix can ship without
-changing what the helper's protocol looks like; the one by-hand install
-command (for a host with no working sudoers line at all yet) now verifies
-a signature locally before installing anything, with no unverified
-fallback offered anywhere — see `docs/runbooks.md` if you ever need it.
+If you run the wizard by hand and a Kea API or database test fails,
+you're now offered retry / edit / continue instead of a bare warning
+that just carries on. A value you never actually change from its
+placeholder default is written to `jen.config` as empty rather than
+as the placeholder itself — Jen's own Health and Getting started pages
+already read an empty key as "not configured" and say so. When the
+Kea API test passes, its own subnet list is offered for confirmation
+instead of asking you to retype it; when the Jen database is local
+and root can already connect, you're offered to create it (the SQL
+shown first either way). None of this affects an existing install or
+an upgrade — it's the fresh-install wizard only (5.67.0-beta.1).
 
-A second helper-only fix ships as build 8 (5.66.0-beta.4): the one case
-the build-7 rollback didn't cover — a signed update failing right after
-being installed with no way back, on a host with no helper file there yet
-to begin with — now refuses before writing anything at all. Nothing
-changes for you either, beyond the SSH card reading **"v7 (build 8)"**.
+## jen.config tightens to 0600
 
-## The public health endpoint answers with one field
+The config file holding every DB password, API credential and DDNS
+token this install has moves from `0640` to `0600` — owner and group
+have been the same service user since v5.10.4, so the group-read bit
+never actually granted anyone anything. This happens automatically on
+your next config save (Settings, or the next `install.sh` run); nothing
+for you to do (5.67.0-beta.1).
 
-`/api/v1/health` — the endpoint the self-updater and a recovery restore
-poll to confirm Jen is back up, unauthenticated by design — carries
-`jen_version` alone now. It changed shape a few times along the way
-(added a live Kea probe and a `subnets` count in 5.65.6-beta.1; briefly
-added a full per-server `kea_servers` list in 5.65.8-beta.1) before
-settling here: the per-server list moved to the key-gated
-`/api/v1/health/kea` (5.65.10-beta.1) and the remaining Kea summary
-fields followed it in 5.65.12-beta.1, since nothing that actually reads
-the public endpoint — the updater, a restore, the system test suite —
-ever wanted more than the version string, and there was no reason to
-hand an unauthenticated caller a live inventory of your Kea servers. If
-you had a script polling `/api/v1/health` for anything besides
-`jen_version`, point it at `/api/v1/health/kea` (an API key) instead.
+## Two bugs that only ever affected a genuinely fresh install
 
-The same endpoint also no longer makes Jen wait on Kea to answer at all
-(5.65.6-beta.1) — it used to call Kea inline, which meant it could take
-up to 20 seconds to answer with Kea unreachable, occasionally fooling
-the self-updater's own health check into rolling back a perfectly good
-update. It now answers from Jen's own background-refreshed cache.
-
-## Network Discovery's "known" hosts list — who manages it, and when it updates
-
-Marking a host known (or forgetting one) writes an entry with no subnet
-of its own, since the same MAC can matter to more than one subnet's
-rogue-device alert — which meant a subnet-scoped administrator could
-silence or re-arm the alert for a host outside subnets they can see. The
-known-hosts list is now for administrators who can see every subnet
-only; the **Known** and **Forget** buttons no longer appear for a scoped
-account (5.65.9-beta.1). If a scoped administrator has been maintaining
-this list, an unrestricted one needs to take it over — entries already
-on the list are untouched.
-
-Separately, a host's known/unknown status used to get written into each
-scan's own stored results at the moment you marked it — so the results
-page, an export, and the dashboard's rogue count all kept showing the
-OLD status until that subnet's next scan ran. Status is now derived at
-read time from the current known-hosts list every time it's shown, so
-marking a host known (or forgetting one) is reflected everywhere
-immediately (5.65.11-beta.1).
-
-## Bundled plugins upgrade together with Jen, not ahead of it
-
-Every bundled plugin now requires at least Jen 5.57.0, and several
-require 5.65.2 or later for authorization fixes that landed there — a
-5.56.3 box checking for plugin updates used to be offered ones it
-couldn't actually take. The Plugins page now says **"Update needs Jen
-vX.Y.Z — upgrade Jen first"** in place of the button when that's the
-case (and **"Upgrade Jen to vX.Y.Z to install"** for a plugin you don't
-have yet), and the install/update routes themselves refuse before
-fetching or requesting anything (5.65.10-beta.1). Upgrade Jen first, then
-the plugin updates become available the next time you check.
-
-Five new plugins were bundled since 5.56.3, each its own opt-in install
-from the Plugins page: **Host Watchdog** (uptime monitoring with
-alerting, 5.58.0-beta.1), **Local DNS Sync** (pushes DHCP names to
-Pi-hole, AdGuard Home, or exports Unbound `local-data`, 5.59.0-beta.1),
-**Switch Port Locator** (SNMP: which switch port is a MAC actually
-plugged into, 5.60.0-beta.1), **Wake & Actions** (a Wake-on-LAN button on
-every Lease/Reservation/Device row plus a favourites page, 5.61.0-beta.1),
-and **Presence** (publishes a device's online/offline state to Home
-Assistant, MQTT, or a plain HTTP endpoint, 5.62.0-beta.1). None of them
-do anything until you install and enable them.
-
-## Your browser's theme may need picking again, once
-
-Every browser gets the install-default theme on its first load after
-this upgrade — the old, permanently-tainted storage key that used to
-shadow whatever you picked was cleared on purpose (a genuine bug: the
-picker had been writing its own fallback into every browser's storage on
-the very first page load since the theme system shipped, so nothing
-could ever actually change what a browser showed afterward). If you'd
-picked something other than the install default, pick it again once;
-after that it sticks normally.
-
-## The Servers page tracks every unresolved rollback, not just the last one
-
-A config push that had to roll back — because a server wouldn't restart
-on it, say — used to occupy one banner slot on the Servers page that a
-LATER, unrelated rollback simply overwrote: an unresolved "this server
-may still be stopped" notice could vanish the moment a different,
-successful rollback happened on any other server. The banner is now a
-list of every unresolved incident; each is cleared only when a later
-clean run actually covers the same servers it named, or an administrator
-dismisses it by hand (5.65.10-beta.1). Both a clean rollback and a failed
-one are also now written to the audit log (5.65.8-beta.1), and a
-rollback whose OWN restart fails is correctly shown as a failed rollback
-rather than silently logged as an ordinary abort (5.65.6-beta.1). An
-unresolved incident is never dropped from that list to make room for a
-newer one, either, even in the extreme case of twenty or more genuinely
-unresolved failed rollbacks at once (5.66.0-beta.3) — the only real
-bound left is a hard ceiling of two hundred, since a stored note still
-can't grow forever, but you'd see the Servers page in a very bad state
-long before that ever mattered.
-
-A multi-server config push that fails partway through an SSH round trip
-now reverts every server it had already written, rather than leaving
-some on the new config and others on the old one; a revert that itself
-can't be applied is reported by name as needing hands, not silently
-called "still fine" (5.65.1-beta.1).
-
-## If you're running the Docker image
-
-The shipped Docker image failed to start at all — `gunicorn` crash-looped
-with "No module named 'jen'" — for every release since gunicorn arrived
-(v5.5.0): 5.56.3 itself carried the identical bug. Fixed with an explicit
-working directory in the image plus a fallback in
-the launcher itself (5.65.1-beta.1). The image also now installs `nmap`,
-`iputils-ping`, and `snmp` so Network Discovery, Host Watchdog, and
-Switch Port Locator all actually work inside a container, and hides the
-self-update / Restart controls that don't apply without systemd
-(5.65.10-beta.1).
-
-## Recovery bundles moved to a streaming format
-
-A recovery bundle (Settings → Databases → Recovery) is now written and
-read as a streaming, chunked format instead of held whole in memory —
-the practical effect is the size ceiling went from 200 MB to 2 GB, and
-building or restoring a large bundle no longer needs roughly three times
-its own size in free memory. This is fully backward compatible: a bundle
-from before this change still restores normally, the format is
-auto-detected, and there's nothing for you to do (5.65.0-beta.1).
-
-The database export inside the bundle gets the same treatment in
-5.66.0-beta.4: it's written straight to disk, one row at a time, instead
-of built as one Python object first — `audit_log` is the table this
-matters for on a long-running install. A new **"Without audit history"**
-checkbox on the recovery form leaves that one table out entirely if you'd
-rather export it separately. Restoring still needs memory in proportion
-to the export's size (a bigger change to fix that is out of scope here),
-so `jen.tools.restore` now checks — before it stops or touches
-anything — that the machine has enough free memory for the bundle it's
-about to restore, using a measured factor recorded in the manifest; see
-`docs/runbooks.md`'s "Before you start: size" step if a restore ever
-refuses on this.
-
-## Backups and recovery bundles now include every bundled plugin's own data
-
-Before 5.66.0-beta.5, a backup (scheduled or manual, Settings → Databases
-→ Export) or a recovery bundle only ever carried Jen's own core tables —
-if you had DNS Sync, IPAM, Network Discovery, Presence, Switchport,
-Watchdog, or Wake-on-LAN installed, its *data* (synced DNS records, IPAM
-entries, discovered hosts, tracked devices, and so on) was never in any
-backup or bundle you took, even though the plugin itself showed up as
-installed again after a restore. From this release on, every table any
-currently installed plugin owns is included automatically — nothing to
-turn on, no config to change.
-
-**This only affects bundles and backups taken from now on.** One made
-before 5.66.0-beta.5 never had plugin data in it to begin with, so
-restoring an old one still leaves every plugin's data exactly as a fresh
-install has it — empty, not lost by the restore, just never captured in
-the first place. If you rely on a plugin's data being recoverable, take a
-fresh backup or recovery bundle once you've upgraded to this release or
-later.
-
-## A scheduled backup that partly fails no longer prunes the good half
-
-Before 5.66.0-beta.6, a scheduled backup wrote straight to its final
-filename — if the process died partway through (a crash, a full disk),
-whatever was written so far still listed as a backup, and the retention
-step ran regardless of whether that run's own backup actually succeeded.
-A week of the Jen half failing while the Kea half kept succeeding could
-prune away the last good Jen backup along with everything before it.
-Every backup is now written to a temporary file first and only renamed
-into place once it's fully and successfully written; retention only
-prunes a database's own backups, and only when that database's new
-backup actually published in the run that's pruning. Nothing to
-configure — this is how every scheduled and manual backup works from
-now on.
-
-The Backups list on Settings → Databases now reads a small sidecar file
-next to each backup instead of opening the backup itself, so the page
-loads quickly even with years of daily backups. A backup from before
-this release (no sidecar yet) shows a **Read details** action that reads
-it once, permanently, the first time you look at it.
-
-## The ordinary database import page now has real limits
-
-Before 5.66.0-beta.6, uploading a file on Settings → Databases → Import
-had no size limit and no memory check at all — only the recovery
-bundle's restore did. The import page now refuses a compressed upload
-over 512 MB by default (`[backups] max_import_mb` in `jen.config` if you
-need to change it) and runs the same memory check a restore does before
-parsing anything. If you regularly import large exports and hit the
-new cap, raise `max_import_mb`; if you hit the memory check, the same
-advice as a restore refusal applies — free memory, lower audit log
-retention, or a box with more RAM.
-
-## A restore's memory check now also weighs the database already on the box
-
-Before 5.66.0-beta.6, restoring a recovery bundle checked only whether
-the box had enough memory for the INCOMING bundle's own database export.
-A small bundle restored onto a box whose CURRENT database was large
-could still pass that check and then run out of memory anyway — the
-pre-restore snapshot (and a rollback, if one was ever needed) has to
-hold the existing database's export just as much as an import holds the
-incoming one. The check now measures both sides and refuses on whichever
-is bigger, naming which one was the actual problem; it also confirms
-there's enough free disk space for the snapshot before anything is
-stopped. See `docs/runbooks.md`'s "Before you start: size" step for the
-details if a restore ever refuses on this.
-
-## The by-hand helper install line self-tests what it downloads, and is offered less often
-
-As of 5.66.0-beta.7, the exact command Jen shows in a flash, on the SSH card, and in
-`docs/admin-guide.md`/`docs/runbooks.md`/`docs/manual-install.md` for
-installing `jen-kea-helper` by hand now runs one more check between
-verifying the release signature and installing the file: it runs the
-downloaded candidate's own `version` op and confirms it reports exactly
-the version and build this release ships, the same self-check the
-automatic Update helper button already ran before this. It's also
-offered in fewer places than before — only when installing around a
-refusal is actually safe (a first install, the one-time hop off the
-legacy grant, a helper that isn't installed yet, or the case where Jen
-itself couldn't produce a signature to send). A refusal from anywhere
-else now says what was observed and asks you to investigate or report
-it, rather than offering a command to run over it.
-
-## The signed helper update's own build check is stricter
-
-`HELPER_BUILD` (the counter that orders two helper files that changed
-without a protocol version bump between them) is now checked
-independently of `HELPER_VERSION`, closing a gap where a candidate
-declaring a higher protocol version could carry a build that wasn't
-actually newer. This only matters if you build and sign your own helper
-candidates by hand for testing; a normal Update helper click on an
-official release is unaffected. `HELPER_BUILD` moves to 9 with this
-release.
-
-## Add Reservation no longer defaults to the first subnet
-
-As of 5.66.0-beta.8, opening "Create reservation" for a device already
-known to Jen — from the Devices page, a lease row, or either bundled
-plugin's own page — resolves the subnet from where that device actually
-is: its own link parameter, the address's range, or the device's current
-MAC, in that order. When none of that can be resolved, the form now opens
-on a "Choose a subnet…" placeholder instead of silently picking the first
-one in the list. If you have a saved link or bookmark that opens this form
-with `?subnet=` instead of `?subnet_id=`, it still works — that name is
-kept as an alias.
-
-## Host Watchdog's scheduled probing starts recording now, not before
-
-As of the bundled Host Watchdog 1.0.5 (5.66.0-beta.9), the periodic
-schedule actually records a check for the first time. Its own query for
-due targets never fetched the one column the check-selection logic
-needed, so the scheduled probe silently skipped every target, forever,
-on every install, since Watchdog first shipped — manual "Check now" was
-never affected, and worked exactly as before. If you've been relying on
-the schedule, the 7-day uptime figure starts filling in from this
-upgrade forward; a target's history before it is empty because nothing
-was ever recorded, not because anything was lost.
-
-## A few things that will just already be fixed
-
-None of these need anything from you — they're upgrades you get for
-free by being on this version at all, worth knowing existed:
-
-- The Investigate page (Network → Investigate, or the **Investigate**
-  action from a Lease/Reservation/Device row) — one page, six tabs, for
-  a given MAC, IP, or hostname (5.63.0-beta.1) — had several places
-  where it could show a subnet-restricted administrator information
-  about a device outside their scope; all fixed (5.65.2-beta.1).
-- Health Center gained a **Server capabilities** row per Kea server
-  (5.64.0-beta.1).
-- Settings → System's Plugins table briefly rendered its column headers
-  between rows instead of above them (5.57.1-beta.1); separately, sticky
-  table headers on every desktop page — added 5.56.4-beta.1 — never
-  actually worked at all, which 5.57.1-beta.1's own attempted fix didn't
-  catch either; the real cause was fixed properly in 5.58.1-beta.1 (a
-  build that was mistagged and shouldn't be installed directly — take
-  5.58.2-beta.1 or later, which is the identical fix with its version
-  number corrected). A wide table's sideways scroll is now an explicit
-  opt-in that trades away the sticky header, since the two can't coexist.
-- API-key callers of IPAM Lite's JSON API (added 5.57.1-beta.1) got a
-  server error on every call from 5.57 through 5.65.8 — fixed in
-  5.65.9-beta.1; if you tried it in that window and gave up, it works now.
-- A plugin bundled onto a box after its initial install used to show up
-  in Plugin Manager as permanently "writable — reinstall to harden," and
-  reinstalling never actually fixed it; fixed in 5.58.3-beta.1.
-- Host Watchdog and Local DNS Sync (bundled 5.58.0-beta.1 and
-  5.59.0-beta.1) failed to load at all, on any Jen install, from the day
-  each shipped — one bad periodic-job interval, one bad alert-type name;
-  fixed in 5.60.1-beta.1. If either never seemed to do anything, it
-  works now.
-- Plugin API v3 (5.57.0-beta.1) is what every plugin bundled since is
-  built on — Timeline events, custom alert types, row actions and JSON
-  API routes for plugin authors. The DDNS Errors dashboard panel started
-  naming the actual reason it skipped a record instead of a bare
-  "nothing to report" in the same release.
-- A nav icon that rendered as the literal word "cable" instead of a
-  glyph, and every other unrecognized plugin icon name, now falls back
-  to a generic icon instead (5.65.3-beta.1).
-
-Everything else in this window (5.58.2-beta.1's own version-numbering
-correction, 5.62.1-beta.1's test-infrastructure work, and the steady run
-of cross-subnet authorization hardening across 5.65.4-beta.1 through
-5.65.9-beta.1 — including 5.65.5-beta.1's fixes and Presence's sink
-configuration becoming superadmin-only, and 5.65.7-beta.1's plugin error
-messages becoming generic instead of raw database/socket text — for
-every bundled plugin) is either invisible from the outside or already
-folded into the sections above.
+If you've installed Jen since `relfmt`/`hostname` became real Jinja
+filters, a fresh install's own post-install verification step has been
+failing silently right after the service started — the service itself
+came up fine, you'd just never see the "Installation complete!" summary
+box. And a fresh install's admin password (typed in the wizard, or
+given as `JEN_INITIAL_ADMIN_PASSWORD`) was silently discarded, with
+Jen falling back to its own auto-generated token instead — the
+`sudo cat /var/lib/jen/initial-admin-password` instruction already in
+this doc's own First Login guidance was the actual working path the
+whole time. Both are fixed; neither affects an existing install or an
+upgrade, since neither bug was ever in the upgrade path (5.67.0-beta.1).

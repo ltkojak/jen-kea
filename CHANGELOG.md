@@ -2,6 +2,100 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.67.0-beta.1] - 2026-09-30
+
+Beta channel. Stacked on 5.66.0. `install.sh` has never been run by
+anything since gunicorn made `shellcheck -S error` its only gate —
+CI hand-created `/opt/jen` and `/etc/jen` for the unit suite, and the
+system-test suite runs Jen in Docker. A new `install` job now runs the
+real script, on both `ubuntu-22.04` and `ubuntu-24.04`, against a real
+MariaDB and a real `kea-dhcp4`: a fresh install from an answers file,
+the upgrade every 5.66.0 operator is about to make, and uninstall —
+gating every push and release the same way the rest of the test suite
+does.
+
+**A fresh install can be scripted.** `sudo ./install.sh --answers
+<file> --unattended` drives the whole wizard from a `KEY=value` file
+in the same `JEN_*` vocabulary `.env.example` and the Docker path
+already use — no new names to learn. The file is parsed line by line,
+never sourced, and refused unless it's a regular file not writable by
+group or other. The same `JEN_*` names also work as plain environment
+variables with no file at all. With a TTY, anything the file leaves
+out is still asked; without one, a missing required value is a fatal
+error naming it.
+
+**A failed connection test is a real choice now, not a shrug.**
+Interactively, a failed Kea API or database test offers retry (same
+values), edit (re-prompt them), or continue without it — each choice
+echoed so it's visible in the transcript. A value still equal to its
+own placeholder default when the operator chooses to continue anyway
+is never written to `jen.config`; the key is left empty instead, so
+Jen's own Health and Getting started pages say what's actually
+missing rather than a URL that only looks configured. When the Kea
+API test passes, its own subnet list is read via `config-get` and
+offered for confirmation before the manual entry loop is even
+reached. When the Jen database is local and root can already connect
+without a password, the installer offers to create it — the SQL
+shown first either way. The SSH user no longer defaults to `ubuntu`
+when nothing else is available. The disk check now walks
+`$INSTALL_DIR`/`$CONFIG_DIR`/`$CONTENT_DIR` up to each one's nearest
+existing ancestor and reports whichever is tightest, instead of a
+hardcoded `df /opt` regardless of where anything actually lives.
+
+**Cleaner, without a rewrite.** `main`'s mode dispatch is a table now
+— `MODE_STEPS["standard"]`/`["repair"]` name every step in order, so
+"what does `--repair` actually do" is one line to read. `collect_config`
+is eight functions (Kea API, Kea DB, Jen DB, admin, subnets, SSH,
+DDNS, ports), each under 60 lines, instead of one 325-line one.
+`--help` exists and prints every flag `main()` actually parses — a
+test checks the flags the argument parser recognizes, the flags
+`--help` prints, and the flags the header comment mentions all agree.
+`shellcheck` is raised from `-S error` to `-S warning`, and both
+scripts are genuinely clean at that level.
+
+**Four real bugs, each invisible until `install.sh` had somewhere to
+actually run.** `clear`, the first thing both scripts' banners do,
+exits non-zero whenever it can't resolve `$TERM` through terminfo —
+which every real operator's SSH session always has and no CI runner
+does; under `set -e` that silently killed the whole script before a
+single line of output. `verify_install()`'s template check
+pre-registered three Jinja filter names to keep its syntax-only
+validation from false-failing, but the real app has registered five
+since before this release — any template using `relfmt` or `hostname`
+has been failing this check, silently, on every fresh install, for
+the same `set -e` reason. Fresh-install admin-password seeding ran a
+raw `UPDATE users ... WHERE username='admin'` before anything had
+ever called `create_app()` on the box, so the table it was updating
+didn't exist yet — whatever password an operator typed was thrown
+away every time, while the completion summary still claimed it had
+been set; it now calls `create_app()` itself, once, as the service
+user, reusing the same `JEN_INITIAL_ADMIN_PASSWORD` mechanism the
+Docker path already had rather than re-implementing password hashing
+in bash. And `[[ condition ]] || return` with no explicit code
+inherits the failed condition's own exit status as the function's
+return value — harmless when only ever used as an `if`/`while`
+condition, fatal under `set -e` when called as a bare statement,
+which is exactly how the new mode-dispatch functions call each other;
+found in the new upgrade-confirmation step and, auditing for the same
+shape, one pre-existing instance in the rollback path the `INT`/`TERM`
+trap depends on.
+
+`jen.config` is `0600`, not `0640`, for good — both `install.sh`'s own
+chmod and `AppConfig`'s writer (which re-applies the mode on every
+Settings save) agree now, since owner and group have been the same
+user since v5.10.4 and the group-read bit never granted anyone
+anything. `print_summary`'s generic "Next steps" advice list is gone;
+the URL already at the top of the same box is the one next step, and
+the four paths right above it (Config/App/Logs/Restart) are the ones
+an operator actually reaches for.
+
+Docs: `docs/installation.md` gains a "Scripted / unattended install"
+method, fixes a stale claim that first login is `admin`/`admin` (it
+hasn't been since v5.17.0), and notes that a value left at its
+placeholder is never written. `manual-install.md` and the README's
+installation section both point at `--answers` as the middle ground
+between the wizard and going fully by hand.
+
 ## [5.66.0] - 2026-09-30
 
 *Stable. Everything below shipped beta-first between 2026-09-23 and 2026-09-30.*

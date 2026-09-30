@@ -371,7 +371,19 @@ release after it, every MINOR and every non-trivial PATCH ships beta-first:
 4. **Promotion is the maintainer's call** ("promote"). The promotion commit changes
    only version strings and the CHANGELOG (fold the beta headings into one
    `## [X.Y.Z]` entry with a "Beta history" line); no code. Push, CI green, tag
-   `vX.Y.Z`. Both channels are offered it.
+   `vX.Y.Z`. Both channels are offered it. **One standard exception to
+   version-only:** folding away the individual beta headings removes the literal
+   CHANGELOG heading `tests/test_upgrading_doc.py`'s floor canary checks for
+   directly, so the promotion commit also makes that test accept the floor on
+   the newest stable entry's own Beta history line (this fix is now permanent
+   code — a future promotion shouldn't need to repeat it). The floor's own
+   *value* doesn't move in the promotion commit itself: `docs/upgrading.md`
+   keeps its old baseline through promotion (still true, still worth reading),
+   and the **first release commit after promotion** is what starts a fresh
+   `docs/upgrading.md` at the new baseline (the old page archives to
+   `docs/release-history/upgrading-<old>-to-<new>.md`) and moves the test
+   floor forward to that release's own version — an un-numbered but standard
+   part of the next Q, not the promotion itself.
 5. A PATCH to a *stable* release while a later beta soaks is the one branch case:
    `git checkout -b release/X.Y vX.Y.Z` → cherry-pick → bump → tag from that branch →
    delete the branch. Trivial fixes to a beta itself skip the soak (`-beta.N+1`).

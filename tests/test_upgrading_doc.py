@@ -2,12 +2,21 @@
 tests/test_upgrading_doc.py
 ────────────────────────────
 v5.66.0-beta.3 (Q105 c) — docs/upgrading.md is a living page, one section per
-operator-visible change since v5.56.3, meant to be kept current by every later
-release commit (the round-3 recipe line: "a release commit updates
-docs/upgrading.md when the CHANGELOG entry has an operator-visible item"). This
-is the cheap "did you actually read them all" guard the spec calls for: every
-CHANGELOG heading from 5.56.4 onward must appear in the page at least once. It
-can't verify the PROSE is accurate — only that nothing was silently skipped.
+operator-visible change since the last stable baseline, meant to be kept
+current by every later release commit (the round-3 recipe line: "a release
+commit updates docs/upgrading.md when the CHANGELOG entry has an
+operator-visible item"). This is the cheap "did you actually read them all"
+guard the spec calls for: every CHANGELOG heading since the floor must appear
+in the page at least once. It can't verify the PROSE is accurate — only that
+nothing was silently skipped.
+
+v5.67.0-beta.1 (Q112 promotion, Q113 release commit) — the floor moves
+forward every time the stable baseline does: 5.66.0's promotion folded the
+previous page's 38 beta headings away, docs/upgrading.md started a fresh
+"Upgrading from 5.66.0" page, and the old one moved to
+docs/release-history/upgrading-5.56.3-to-5.66.0.md. The floor here moves to
+the first beta after that promotion (5.67.0-beta.1) in the same commit —
+CLAUDE.md's "Release channels" step 4 names this as standard from here on.
 
 Also covers docs/runbooks.md (Q105 b): it exists and is linked from the two
 places an operator would actually go looking for it.
@@ -27,7 +36,7 @@ _CHANGELOG = _ROOT / "CHANGELOG.md"
 _ADMIN_GUIDE = _ROOT / "docs" / "admin-guide.md"
 _SECURITY = _ROOT / "SECURITY.md"
 
-_FLOOR = "5.56.4-beta.1"  # the oldest heading upgrading.md must cover — 5.56.3 itself is the baseline
+_FLOOR = "5.67.0-beta.1"  # the oldest heading upgrading.md must cover — 5.66.0 itself is the baseline
 
 
 def _beta_history_versions() -> list[str]:
