@@ -105,6 +105,8 @@ def world(tmp_path, monkeypatch):
     def fake_write_jen_export(path, tables=None):
         with open(path, "wb") as f:
             f.write(OLD_DB)
+        if os.name != "nt":
+            os.chmod(path, 0o600)  # the real write_jen_export() does this; TestSnapshot checks it
         return {"jen_db_uncompressed_bytes": len(OLD_DB), "database": "jen", "tables": [], "row_counts": {}}
 
     from jen.services import dbexport as _dbexport_mod
@@ -464,6 +466,8 @@ def dbworld(world, monkeypatch):
         data = json.dumps(db).encode()
         with open(path, "wb") as f:
             f.write(data)
+        if os.name != "nt":
+            os.chmod(path, 0o600)  # the real write_jen_export() does this
         return {"jen_db_uncompressed_bytes": len(data), "database": "jen", "tables": [], "row_counts": {}}
 
     from jen.services import dbexport as _dbexport_mod

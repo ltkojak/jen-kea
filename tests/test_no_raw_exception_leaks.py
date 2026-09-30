@@ -95,11 +95,13 @@ def _raise_only_outside_load_user(original_fn, exc):
 ALLOWED_RAW_EXCEPTION_LINES = [
     (
         "jen/routes/database.py",
-        'flash(f"Cannot read file: {err}"',
+        '_abort(f"Cannot read file: {err}"',
         "err here is parse_import_file()'s own deliberate, sanitized message "
         "about the user's own uploaded file (e.g. a JSON decode failure) — "
         "not a raw exception object, and it's about their own file's content, "
-        "not Jen's internal state.",
+        "not Jen's internal state. _abort() (v5.66.0-beta.6, Q108) is a thin "
+        "wrapper around flash()+redirect() shared by every refusal in "
+        "import_inspect(); the message itself is unchanged.",
     ),
     (
         "jen/routes/plugins.py",
