@@ -2,6 +2,67 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.67.0-beta.3] - 2026-10-01
+
+Beta channel. Stacked on 5.67.0-beta.2. A fresh install's first hour now
+has a guide: `/setup`, a six-step wizard a superadmin lands on once, the
+first time they log in with Kea not yet connected — connect Kea, see
+what it found, install the Kea host helper, capture a config baseline,
+make a recovery point, investigate a first client. Every step can be
+skipped and picked up again later from Getting started, which now links
+straight into whichever step is still open.
+
+**Connect, and see what Jen found.** The connect step tests Kea's API
+and database live, in the browser, with the same two-attempt
+Control-Agent-then-direct-socket fallback Settings already uses, and a
+real retry on failure rather than a terminal re-prompt. Once connected,
+the found step shows Kea's version, which hooks are loaded (and what's
+lost without each one), HA status, IPv6, and the subnets Kea itself
+reports — named `Subnet<id>` by default, same as `install.sh`'s own
+discovery, editable before confirming.
+
+**The Kea host helper, baseline, recovery, and your first client.** The
+helper step walks through authorizing Jen's SSH key (generating one on
+the spot if none exists yet) and installing `jen-kea-helper` — calling
+the existing `install_helper()`/`check_helper()` exactly as Settings
+does, with no new sudo string anywhere behind it. The baseline step is
+one call to the existing `read_config()`, which already records a
+baseline revision as a side effect. The recovery step reuses the
+existing recovery-bundle route unchanged, plus the backup-schedule
+toggle. The investigate step shows the most recent leases with a one-
+click hand-off to `/tools/explain`, and marks the wizard's own
+elapsed-time clock complete.
+
+**Kea connects after install now, not during it.** `install.sh` no
+longer asks about Kea's API, database, subnets, SSH access, or DDNS at
+all — it asks for exactly three things: Jen's own database, the ports,
+and an admin password. An `--answers` file or `JEN_*` environment
+variable can still supply any of the Kea keys directly, silently
+skipping the matching `/setup` step; a scripted install with none of
+them produces a healthy, Kea-less Jen whose first superadmin login lands
+on `/setup` — proven by a new install CI leg that runs exactly that
+answers file end to end. Finding this gap also surfaced a real one:
+`AppConfig.load()` had required Kea's API and database config to even
+boot since v4.0.0, which would have refused to start a genuinely
+Kea-less fresh install before a superadmin could ever reach `/setup` to
+fill them in — Jen's own database is the one thing it genuinely can't
+run without, so that's the only section still required.
+
+The one-time entry redirect lives in `dashboard()` itself, not the
+forced-password-change route — the page every successful login of every
+kind (a forced change, a normal login, OIDC, a passkey, an answers-file
+install with the admin password already set) actually reaches, so it
+fires regardless of how a superadmin got there.
+
+A six-step journey (`tests/e2e/test_setup_wizard_journeys.py`) walks the
+whole thing through a real browser against the shared e2e Kea double;
+since every step writes something real and persistent through the exact
+choke point an operator's own save would use, and the live e2e server is
+shared across the whole suite, it snapshots and restores the config file
+byte-for-byte afterward rather than re-deriving every field a current
+(or future) step might touch. The six step pages also feed the README's
+screenshot set (`JEN_E2E_DATASET=demo`), for Q116.
+
 ## [5.67.0-beta.2] - 2026-09-30
 
 Beta channel. Stacked on 5.67.0-beta.1. The app tree, the `/etc/jen`
