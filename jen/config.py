@@ -91,13 +91,14 @@ class AppConfig:
                 f"Config file not found: {self.path}\nCopy jen.config.example to {self.path} and fill in your values."
             )
         cfg.read(self.path)
+        # v5.67.0 (Q115) — Kea's API/database are no longer required for Jen
+        # to boot at all: a fresh install with none of that configured is
+        # the whole point of the /setup wizard (jen.services.setup_wizard,
+        # jen/routes/setup.py) — kea_connected() already treats a blank
+        # KEA_API_URL/SUBNET_MAP as a legitimate, handled state everywhere
+        # else in the app (dashboard, health checks, …). Jen's own database
+        # is the one thing it genuinely cannot run without.
         required = [
-            ("kea", "api_url"),
-            ("kea", "api_user"),
-            ("kea", "api_pass"),
-            ("kea_db", "host"),
-            ("kea_db", "user"),
-            ("kea_db", "password"),
             ("jen_db", "host"),
             ("jen_db", "user"),
             ("jen_db", "password"),

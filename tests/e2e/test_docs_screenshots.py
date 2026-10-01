@@ -205,6 +205,7 @@ class TestSetupWizardScreenshots:
 
     def test_setup_connect(self, desktop, base_url):
         desktop.goto(f"{base_url}/setup/connect", wait_until="load")
+        desktop.wait_for_selector('input[name="api_url"]', timeout=15000)
         _wait_rendered(
             desktop, f"() => document.body.innerText.includes('Kea API URL') && ({NO_LOADING_JS})", "setup-connect"
         )
@@ -213,6 +214,7 @@ class TestSetupWizardScreenshots:
 
     def test_setup_found(self, desktop, base_url):
         desktop.goto(f"{base_url}/setup/found", wait_until="load")
+        desktop.wait_for_selector("h1", timeout=15000)
         _wait_rendered(
             desktop, f"() => document.body.innerText.includes('What Jen found') && ({NO_LOADING_JS})", "setup-found"
         )
@@ -221,6 +223,7 @@ class TestSetupWizardScreenshots:
 
     def test_setup_helper(self, desktop, base_url):
         desktop.goto(f"{base_url}/setup/helper", wait_until="load")
+        desktop.wait_for_selector("h1", timeout=15000)
         _wait_rendered(
             desktop, f"() => document.body.innerText.includes('Kea host helper') && ({NO_LOADING_JS})", "setup-helper"
         )
@@ -229,6 +232,7 @@ class TestSetupWizardScreenshots:
 
     def test_setup_baseline(self, desktop, base_url):
         desktop.goto(f"{base_url}/setup/baseline", wait_until="load")
+        desktop.wait_for_selector("h1", timeout=15000)
         _wait_rendered(
             desktop,
             f"() => document.body.innerText.includes('Capture a baseline') && ({NO_LOADING_JS})",
@@ -239,6 +243,7 @@ class TestSetupWizardScreenshots:
 
     def test_setup_recovery(self, desktop, base_url):
         desktop.goto(f"{base_url}/setup/recovery", wait_until="load")
+        desktop.wait_for_selector("h1", timeout=15000)
         _wait_rendered(
             desktop, f"() => document.body.innerText.includes('recovery point') && ({NO_LOADING_JS})", "setup-recovery"
         )
@@ -247,6 +252,7 @@ class TestSetupWizardScreenshots:
 
     def test_setup_investigate(self, desktop, base_url):
         desktop.goto(f"{base_url}/setup/investigate", wait_until="load")
+        desktop.wait_for_selector("h1", timeout=15000)
         _wait_rendered(
             desktop,
             f"() => document.body.innerText.includes('Investigate a client') && ({NO_LOADING_JS})",
