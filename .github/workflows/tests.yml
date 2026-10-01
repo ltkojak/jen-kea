@@ -590,6 +590,19 @@ jobs:
           sudo grep -q '10.99.0.0/24' /etc/jen/jen.config
           echo "stable baseline healthy, subnet config present"
 
+      # v5.67.0-beta.5 (Q117) — v5.66.0's own install_files() left app_dir
+      # group/other-writable on THIS runner (an additive `chmod -R a+rX`
+      # never clears a write bit `mkdir -p`/`cp -r` set under whatever
+      # umask was in effect — fixed on this branch with `go-w`, but the
+      # stable release just installed above predates that fix). HEAD's
+      # own _layout_appdir_itself_ok now correctly refuses to trust that
+      # before upgrading it — exactly the hard stop docs/troubleshooting.md
+      # describes, with its own one-line fix. This step is that fix,
+      # standing in for the operator the real Health-row warning would
+      # have told to run it before upgrading.
+      - name: Fix the stable baseline's own permissive app_dir before upgrading it
+        run: sudo chmod go-w /opt/jen
+
       - name: Upgrade to this commit
         working-directory: ${{ runner.temp }}/install-head/jen
         run: sudo TERM=linux ./install.sh --unattended

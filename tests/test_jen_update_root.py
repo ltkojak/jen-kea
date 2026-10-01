@@ -560,15 +560,20 @@ class TestCheckLayout:
     def test_uninstall_mode_refuses_an_unrecognized_unmarked_directory(
         self, jen_update_root, _bypass_ownership, monkeypatch, tmp_path
     ):
+        # No LAYOUT_FILE and no explicit flags — uninstall.sh's own real
+        # call is always bare `--check-layout --for uninstall`, so
+        # _DEFAULT_LAYOUT is the only source of truth here, same reasoning
+        # as the upgrade-mode tests above.
         app, config, data = tmp_path / "app", tmp_path / "etc", tmp_path / "data"
         app.mkdir()
         config.mkdir()
         data.mkdir()
         (app / "unrelated-stuff").write_text("x")
         monkeypatch.setattr(jen_update_root, "LAYOUT_FILE", "/does/not/exist/jen-layout.conf")
-        ok, result = jen_update_root.check_layout(
-            "uninstall", app_dir=str(app), config_dir=str(config), data_dir=str(data)
+        monkeypatch.setattr(
+            jen_update_root, "_DEFAULT_LAYOUT", {"app_dir": str(app), "config_dir": str(config), "data_dir": str(data)}
         )
+        ok, result = jen_update_root.check_layout("uninstall")
         assert not ok and "does not carry Jen's own marker" in result
 
     def test_uninstall_mode_stamps_a_marker_on_a_recognized_unmarked_directory(
@@ -582,10 +587,11 @@ class TestCheckLayout:
         (config / "jen.config").write_text("[jen_db]\n")
         (data / "icons").mkdir()
         monkeypatch.setattr(jen_update_root, "LAYOUT_FILE", "/does/not/exist/jen-layout.conf")
+        monkeypatch.setattr(
+            jen_update_root, "_DEFAULT_LAYOUT", {"app_dir": str(app), "config_dir": str(config), "data_dir": str(data)}
+        )
         with patch("os.chown"), patch("os.chmod"):
-            ok, result = jen_update_root.check_layout(
-                "uninstall", app_dir=str(app), config_dir=str(config), data_dir=str(data)
-            )
+            ok, result = jen_update_root.check_layout("uninstall")
         assert ok, result
 
 
