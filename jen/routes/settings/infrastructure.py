@@ -2052,6 +2052,14 @@ def save_metrics_settings():
 @login_required
 @_admin_required
 def generate_ssh_key():
+    # v5.67.0 (Q115) — the setup wizard's helper step offers key generation
+    # too, and needs to land back on /setup/helper instead of Settings. A
+    # fixed-choice flag, not an arbitrary redirect target, so this can
+    # never become an open redirect.
+    if request.form.get("next") == "setup":
+        redirect_target = url_for("setup.setup_helper")
+    else:
+        redirect_target = url_for("settings.settings_kea")
     os.makedirs(os.path.dirname(extensions.SSH_KEY_PATH), exist_ok=True)
     try:
         subprocess.run(
@@ -2086,4 +2094,4 @@ def generate_ssh_key():
     except Exception as e:
         logger.error(f"Error generating SSH key: {e}")
         flash("Error generating SSH key. Check server logs for details.", "error")
-    return redirect(url_for("settings.settings_kea"))
+    return redirect(redirect_target)

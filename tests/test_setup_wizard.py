@@ -217,6 +217,106 @@ class TestDiscover:
         assert found["proposed_subnets"] == {}
 
 
+# ── step 3: the Kea host helper — pure/mocked parts ─────────────────────────
+
+
+class TestSshTarget:
+    def test_ready_needs_both_host_and_user(self):
+        assert setup_wizard.ssh_target_ready({"ssh_host": "", "ssh_user": ""}) is False
+        assert setup_wizard.ssh_target_ready({"ssh_host": "kea.lan", "ssh_user": ""}) is False
+        assert setup_wizard.ssh_target_ready({"ssh_host": "", "ssh_user": "jen"}) is False
+        assert setup_wizard.ssh_target_ready({"ssh_host": "kea.lan", "ssh_user": "jen"}) is True
+
+    def test_save_rejects_an_invalid_host_or_user(self):
+        ok, err = setup_wizard.save_ssh_target("-oProxyCommand=x", "jen")
+        assert ok is False and err
+
+        ok, err = setup_wizard.save_ssh_target("kea.lan", "not a valid user!")
+        assert ok is False and err
+
+    def test_save_writes_kea_ssh_section_on_success(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr("jen.config.app_config.write_values", lambda items: calls.append(items))
+        ok, err = setup_wizard.save_ssh_target("kea.lan", "jen")
+        assert ok is True and err == ""
+        assert calls == [[("kea_ssh", "host", "kea.lan"), ("kea_ssh", "user", "jen")]]
+
+
+class TestTestSsh:
+    def test_ok_when_connect_succeeds(self, monkeypatch):
+        ssh = MagicMock()
+        monkeypatch.setattr("jen.services.kea6._connect_ssh", lambda server: ssh)
+        result = setup_wizard.test_ssh({"ssh_host": "kea.lan"})
+        assert result == {"ok": True, "detail": ""}
+        ssh.close.assert_called_once()
+
+    def test_failure_is_reported_not_raised(self, monkeypatch):
+        monkeypatch.setattr("jen.services.kea6._connect_ssh", lambda server: (_ for _ in ()).throw(OSError("refused")))
+        result = setup_wizard.test_ssh({"ssh_host": "kea.lan"})
+        assert result["ok"] is False
+        assert "refused" in result["detail"]
+
+
+class TestHelperWrappers:
+    def test_helper_status_passes_through_check_helper(self, monkeypatch):
+        monkeypatch.setattr("jen.services.kea_host.check_helper", lambda server: {"ok": True, "version": 6})
+        assert setup_wizard.helper_status({"id": 1}) == {"ok": True, "version": 6}
+
+    def test_install_helper_step_passes_through_install_helper(self, monkeypatch):
+        sentinel = {"ok": False, "version": None, "code": "sudoerror", "detail": "no dice"}
+        monkeypatch.setattr("jen.services.kea_host.install_helper", lambda server: sentinel)
+        assert setup_wizard.install_helper_step({"id": 1}) is sentinel
+
+    def test_helper_download_command_passes_through(self, monkeypatch):
+        monkeypatch.setattr("jen.services.kea_host._helper_download_command", lambda: "curl ... | sudo bash")
+        assert setup_wizard.helper_download_command() == "curl ... | sudo bash"
+
+
+# ── step 4: baseline — mocked ────────────────────────────────────────────────
+
+
+class TestCaptureBaseline:
+    def test_unreadable_config_is_reported_not_raised(self, monkeypatch):
+        monkeypatch.setattr("jen.services.kea_host.read_config", lambda server, service: None)
+        result = setup_wizard.capture_baseline({"id": 1}, "dhcp4")
+        assert result == {"ok": False, "revision": None}
+
+    def test_a_readable_config_returns_the_latest_revision(self, monkeypatch):
+        monkeypatch.setattr("jen.services.kea_host.read_config", lambda server, service: {"Dhcp4": {}})
+        monkeypatch.setattr(
+            "jen.services.config_revisions.latest", lambda server_id, service: {"id": 1, "source": "baseline"}
+        )
+        result = setup_wizard.capture_baseline({"id": 1}, "dhcp4")
+        assert result == {"ok": True, "revision": {"id": 1, "source": "baseline"}}
+
+
+# ── the wizard's own clock ───────────────────────────────────────────────────
+
+
+class TestWizardClock:
+    def test_mark_started_only_writes_once(self, monkeypatch):
+        store = {}
+        monkeypatch.setattr("jen.models.user.get_global_setting", lambda key, default="": store.get(key, default))
+        monkeypatch.setattr("jen.models.user.set_global_setting", lambda key, value: store.__setitem__(key, value))
+        setup_wizard.mark_started()
+        first = store[setup_wizard._STARTED_KEY]
+        setup_wizard.mark_started()
+        assert store[setup_wizard._STARTED_KEY] == first
+
+    def test_elapsed_seconds_is_none_before_started(self, monkeypatch):
+        monkeypatch.setattr("jen.models.user.get_global_setting", lambda key, default="": "")
+        assert setup_wizard.elapsed_seconds() is None
+
+    def test_get_state_never_starts_the_clock(self, monkeypatch):
+        """get_state() is called by onboarding.checklist() on every page
+        load — it must never have the side effect mark_started() has."""
+        calls = []
+        monkeypatch.setattr("jen.models.user.get_global_setting", lambda key, default="": "")
+        monkeypatch.setattr("jen.models.user.set_global_setting", lambda key, value: calls.append((key, value)))
+        setup_wizard.get_state()
+        assert calls == []
+
+
 # ── routes — access control ─────────────────────────────────────────────────
 
 
@@ -246,6 +346,36 @@ class TestSetupAccessControl:
         r = logged_in_client.get("/setup/")
         assert r.status_code == 302
         assert "/setup/connect" in r.headers["Location"]
+
+    @pytest.mark.parametrize(
+        "path,marker",
+        [
+            ("/setup/helper", b"Kea host helper"),
+            ("/setup/baseline", b"Capture a baseline"),
+            ("/setup/recovery", b"recovery point"),
+            ("/setup/investigate", b"Investigate a client"),
+        ],
+    )
+    def test_superadmin_sees_each_remaining_step(self, logged_in_client, path, marker):
+        r = logged_in_client.get(path)
+        assert r.status_code == 200
+        assert marker.lower() in r.data.lower()
+
+    @pytest.mark.parametrize("path", ["/setup/helper", "/setup/baseline", "/setup/recovery", "/setup/investigate"])
+    def test_admin_is_turned_away_from_every_remaining_step(self, client, db, path):
+        from tests.conftest import restricted_client
+
+        c, _ = restricted_client(client, db, allowed_subnets=[1], role="admin")
+        r = c.get(path)
+        assert r.status_code != 200
+
+    @pytest.mark.parametrize("path", ["/setup/helper", "/setup/baseline", "/setup/recovery", "/setup/investigate"])
+    def test_viewer_is_turned_away_from_every_remaining_step(self, client, db, path):
+        from tests.conftest import restricted_client
+
+        c, _ = restricted_client(client, db, allowed_subnets=[1], role="viewer")
+        r = c.get(path)
+        assert r.status_code != 200
 
 
 # ── the one-time entry redirect ─────────────────────────────────────────────

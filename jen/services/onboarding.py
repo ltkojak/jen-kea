@@ -55,8 +55,16 @@ def checklist(ctx: dict) -> dict:
     checks = ctx.get("checks", {})
     rows: list[dict] = []
 
-    _from_check(rows, checks, "kea_reachable", "Kea is reachable", "/servers")
-    _from_check(rows, checks, "kea_subnets_declared", "Every subnet is named", "/settings/kea")
+    # v5.67.0 (Q115) — a row whose matching wizard step is still open (not
+    # done or skipped) links into /setup/<step> instead of the Settings
+    # page it would otherwise land on; once that step is resolved the link
+    # reverts to its usual target. wizard_open() is pure (get_state() does
+    # one settings read, no side effect), safe to call on every page load.
+    def _link(step: str, fallback: str) -> str:
+        return fallback if step in ctx.get("wizard_state", {}) else f"/setup/{step}"
+
+    _from_check(rows, checks, "kea_reachable", "Kea is reachable", _link("connect", "/servers"))
+    _from_check(rows, checks, "kea_subnets_declared", "Every subnet is named", _link("found", "/settings/kea"))
 
     helper = checks.get("helper_installed")
     helper_ver = checks.get("kea32_helper_version")
@@ -66,7 +74,7 @@ def checklist(ctx: dict) -> dict:
             "title": "SSH and the Kea host helper are current",
             "done": helper_done,
             "detail": helper.detail if helper else "check unavailable",
-            "link": "/settings/kea",
+            "link": _link("helper", "/settings/kea"),
         }
     )
 
@@ -110,7 +118,7 @@ def checklist(ctx: dict) -> dict:
             "title": "A backup exists or is scheduled",
             "done": has_backup,
             "detail": "present" if has_backup else "no backups yet",
-            "link": "/settings/databases?tab=backups",
+            "link": _link("recovery", "/settings/databases?tab=backups"),
         }
     )
 
@@ -138,6 +146,7 @@ def build_ctx(user, is_superadmin: bool) -> dict:
     from jen import extensions
     from jen.models.db import jen_db
     from jen.services import dbexport, health, mfa
+    from jen.services import setup_wizard as __setup_wizard
 
     checks = {c.id: c for c in health.run_checks({"subnet_filter": user.can_access_subnet})}
 
@@ -165,6 +174,7 @@ def build_ctx(user, is_superadmin: bool) -> dict:
         "backup_schedule_enabled": bool(schedule.get("enabled")) if schedule else False,
         "ha_mode": bool(extensions.cfg.get("kea", "ha_mode", fallback="")),
         "server_count": len(extensions.KEA_SERVERS),
+        "wizard_state": __setup_wizard.get_state(),
     }
 
 

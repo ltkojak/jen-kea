@@ -135,6 +135,37 @@ class TestChecklistRows:
         assert row["done"] is True
 
 
+# ── v5.67.0 (Q115) — links into whichever wizard step is still open ─────────
+
+
+class TestSetupWizardLinks:
+    def test_open_steps_link_into_setup(self):
+        summary = onboarding.checklist(_ctx(wizard_state={}))
+        by_title = {r["title"]: r for r in summary["rows"]}
+        assert by_title["Kea is reachable"]["link"] == "/setup/connect"
+        assert by_title["Every subnet is named"]["link"] == "/setup/found"
+        assert by_title["SSH and the Kea host helper are current"]["link"] == "/setup/helper"
+        assert by_title["A backup exists or is scheduled"]["link"] == "/setup/recovery"
+
+    def test_resolved_steps_fall_back_to_their_usual_link(self):
+        resolved = {"connect": "done", "found": "skipped", "helper": "done", "recovery": "done"}
+        summary = onboarding.checklist(_ctx(wizard_state=resolved))
+        by_title = {r["title"]: r for r in summary["rows"]}
+        assert by_title["Kea is reachable"]["link"] == "/servers"
+        assert by_title["Every subnet is named"]["link"] == "/settings/kea"
+        assert by_title["SSH and the Kea host helper are current"]["link"] == "/settings/kea"
+        assert by_title["A backup exists or is scheduled"]["link"] == "/settings/databases?tab=backups"
+
+    def test_missing_wizard_state_does_not_crash(self):
+        """A ctx with no "wizard_state" key at all (every other test in
+        this file) must not raise — checklist() predates the wizard and
+        most callers never set it. ctx.get(..., {}) treats that the same
+        as an empty state (every step still open)."""
+        summary = onboarding.checklist(_ctx())
+        by_title = {r["title"]: r for r in summary["rows"]}
+        assert by_title["Kea is reachable"]["link"] == "/setup/connect"
+
+
 # ── dismiss flag ──────────────────────────────────────────────────────────────
 
 

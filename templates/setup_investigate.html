@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Setup — Investigate{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>{{ icon("search", "ico-lg") }} Investigate a client</h1>
+    <p>Step 6 of 6 — pick a recent lease and see why that client got what it got.</p>
+</div>
+
+{% include "_setup_progress.html" %}
+
+<div class="card" style="padding:24px;max-width:720px;">
+    {% if leases %}
+    <table class="table">
+        <thead><tr><th>IP</th><th>Hostname</th><th>MAC</th><th>Subnet</th><th>Obtained</th><th></th></tr></thead>
+        <tbody>
+        {% for l in leases %}
+        <tr>
+            <td class="mono">{{ l.ip }}</td>
+            <td>{{ l.hostname | hostname or "—" }}</td>
+            <td class="mono">{{ l.mac }}</td>
+            <td>{{ l.subnet_name }}</td>
+            <td class="mono u-5872de">{{ l.obtained|utctime }}</td>
+            <td>
+                <form method="POST" action="/setup/investigate/visit">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="mac" value="{{ l.mac }}">
+                    <button type="submit" class="btn btn-secondary btn-sm">Explain</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="u-c92bea">No active leases yet — once a client picks one up, it'll show here.</p>
+    <form method="POST" action="/setup/investigate/visit">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-primary">Finish setup</button>
+    </form>
+    {% endif %}
+
+    {% if all_resolved %}
+    <div class="alert alert-success" style="margin-top:16px;">
+        {{ icon("check") }} First hour complete
+        {% if elapsed_seconds is not none %} — took {{ (elapsed_seconds // 60) }} minute(s){% endif %}.
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

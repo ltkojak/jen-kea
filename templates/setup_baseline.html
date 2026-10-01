@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Setup — Baseline{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>{{ icon("camera", "ico-lg") }} Capture a baseline</h1>
+    <p>Step 4 of 6 — a snapshot of Kea's current config, so Jen can tell you what changed later.</p>
+</div>
+
+{% include "_setup_progress.html" %}
+
+<div class="card" style="padding:24px;max-width:640px;">
+    <p>Jen will read <code>{{ server.kea_conf or "/etc/kea/kea-dhcp4.conf" }}</code> from
+        <code>{{ server.ssh_host or "your Kea host" }}</code> and record it as the starting point for
+        config history and drift detection.</p>
+    <form method="POST" action="/setup/baseline" style="display:inline;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-primary">Capture baseline</button>
+    </form>
+    <form method="POST" action="/setup/baseline" style="display:inline;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="skip">
+        <button type="submit" class="btn btn-secondary">Skip for now</button>
+    </form>
+</div>
+{% endblock %}

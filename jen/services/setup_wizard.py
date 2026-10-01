@@ -23,15 +23,11 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
-# v5.67.0 (Q115) — only the steps THIS commit has a route for. Step 2
-# of this Q adds "helper"/"baseline"/"recovery"/"investigate" here once
-# their routes exist; current_step()/setup_home() resolve a step name
-# straight to a url_for(), so a name with no registered route would
-# crash every visit to bare /setup the moment it became "current".
-STEPS = ("connect", "found")
+STEPS = ("connect", "found", "helper", "baseline", "recovery", "investigate")
 
 _STATE_KEY = "setup_wizard_state"
 _REDIRECT_SHOWN_KEY = "setup_wizard_redirect_shown"
+_STARTED_KEY = "setup_wizard_started_at"
 
 
 # ── step state ────────────────────────────────────────────────────────────────
@@ -39,7 +35,11 @@ _REDIRECT_SHOWN_KEY = "setup_wizard_redirect_shown"
 
 def get_state() -> dict:
     """`{step: "done"|"skipped"}` for whichever steps have been resolved;
-    a step absent from the dict is still pending."""
+    a step absent from the dict is still pending. Pure (besides the
+    settings read) — Getting started's checklist calls this on every page
+    load to link into whichever step is still open, so it must never have
+    a side effect. mark_started() is the one place that starts the
+    wizard's own clock, and only an actual /setup page view calls it."""
     from jen.models.user import get_global_setting
 
     raw = get_global_setting(_STATE_KEY, "")
@@ -50,6 +50,42 @@ def get_state() -> dict:
     except (TypeError, ValueError):
         return {}
     return {k: v for k, v in data.items() if k in STEPS and v in ("done", "skipped")}
+
+
+def _utcnow_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
+
+def mark_started() -> None:
+    """Start the wizard's own clock, the first time an actual /setup page
+    is viewed. Called from routes/setup.py's _progress() (every step
+    page), never from get_state() — onboarding.py's checklist() reads
+    wizard state on every page load and must not start this clock just by
+    existing."""
+    from jen.models.user import get_global_setting, set_global_setting
+
+    if not get_global_setting(_STARTED_KEY, ""):
+        set_global_setting(_STARTED_KEY, _utcnow_iso())
+
+
+def elapsed_seconds() -> int | None:
+    """How long ago mark_started() first ran — None if /setup hasn't been
+    opened yet this install."""
+    from datetime import datetime
+
+    from jen.models.user import get_global_setting
+
+    started = get_global_setting(_STARTED_KEY, "")
+    if not started:
+        return None
+    try:
+        start = datetime.fromisoformat(started)
+        now = datetime.fromisoformat(_utcnow_iso())
+        return max(0, int((now - start).total_seconds()))
+    except ValueError:
+        return None
 
 
 def set_step(step: str, status: str) -> None:
@@ -280,3 +316,144 @@ HOOK_LABELS = {
     "ha_commands": "libdhcp_ha",
     "ddns": "DDNS updates",
 }
+
+
+# ── step 3: the Kea host helper ─────────────────────────────────────────────
+
+
+def primary_server() -> dict:
+    """extensions.KEA_SERVERS[0] — server id 1, the primary Kea host the
+    connect step just configured. config.py's derive_kea_servers() always
+    returns an id-1 entry (even with a blank ssh_host), so this never
+    raises."""
+    from jen import extensions
+
+    return extensions.KEA_SERVERS[0]
+
+
+def ssh_target_ready(server: dict) -> bool:
+    return bool(server.get("ssh_host") and server.get("ssh_user"))
+
+
+def save_ssh_target(host: str, user: str) -> tuple[bool, str]:
+    """Validate and write [kea_ssh] host/user — the same validators and
+    the same app_config.write_values choke point
+    jen.routes.settings.infrastructure.save_infra_ssh() already uses for
+    server 1. Returns (ok, error_message)."""
+    from jen.config import app_config
+    from jen.services import auth as __auth
+
+    host = (host or "").strip()
+    user = (user or "").strip()
+    if not host or not __auth.valid_ssh_target(host):
+        return False, "Enter a valid SSH host (hostname or IP address)."
+    if not user or not __auth.valid_unix_username(user):
+        return False, "Enter a valid unix username."
+    app_config.write_values([("kea_ssh", "host", host), ("kea_ssh", "user", user)])
+    return True, ""
+
+
+def test_ssh(server: dict) -> dict:
+    """Open and immediately close an SSH connection — the same primitive
+    every other Kea-host feature uses (jen.services.kea6._connect_ssh).
+    {"ok": bool, "detail": str}."""
+    from jen.services import kea6 as __kea6
+
+    try:
+        ssh = __kea6._connect_ssh(server)
+        ssh.close()
+        return {"ok": True, "detail": ""}
+    except Exception as e:
+        return {"ok": False, "detail": str(e)}
+
+
+def helper_status(server: dict) -> dict:
+    from jen.services import kea_host as __kea_host
+
+    return __kea_host.check_helper(server)
+
+
+def install_helper_step(server: dict) -> dict:
+    """One call to the real installer — {"ok", "version", "code", "detail"}.
+    `detail` is already a complete, context-specific message (it covers
+    the legacy-sudo-grant bootstrap, a stale sudoers override, and the
+    by-hand fallback command on its own), so the route surfaces it
+    verbatim rather than re-deriving kea_host.install_helper()'s many
+    branches here."""
+    from jen.services import kea_host as __kea_host
+
+    return __kea_host.install_helper(server)
+
+
+def helper_download_command() -> str:
+    """The "verified by-hand" one-liner (docs/runbooks.md's "Online — the
+    verified one-liner"). Already called across the routes/services
+    boundary from jen.routes.settings.infrastructure, so doing the same
+    here from another service follows existing precedent."""
+    from jen.services import kea_host as __kea_host
+
+    return __kea_host._helper_download_command()
+
+
+# ── step 4: baseline ─────────────────────────────────────────────────────────
+
+
+def capture_baseline(server: dict, service: str = "dhcp4") -> dict:
+    """Reading a live config IS how Jen records a baseline revision
+    (kea_host.read_config -> _capture_baseline_or_external_change) —
+    there's no separate "create baseline" action to call. Returns
+    {"ok": bool, "revision": dict|None}."""
+    from jen.services import config_revisions as __rev
+    from jen.services import kea_host as __kea_host
+
+    cfg = __kea_host.read_config(server, service)
+    if cfg is None:
+        return {"ok": False, "revision": None}
+    return {"ok": True, "revision": __rev.latest(server.get("id"), service)}
+
+
+# ── step 6: investigate ──────────────────────────────────────────────────────
+
+
+def recent_leases(limit: int = 5) -> list[dict]:
+    """The `limit` most recent active DHCPv4 leases, subnet-restricted the
+    same way dashboard.py's own /api/recent-leases widget is — a small,
+    independent query rather than reusing that route's private
+    HTML-fragment response, since this step needs a plain row of data to
+    link from (to /tools/explain), not that widget's own markup."""
+    from jen import extensions
+    from jen.models import db as __db
+    from jen.services.access import add_subnet_restriction
+
+    out = []
+    try:
+        with __db.kea_db() as conn:
+            where, params = add_subnet_restriction(["l.state=0"], [], "l", "subnet_id")
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT inet_ntoa(l.address) AS ip, l.hostname,
+                           HEX(l.hwaddr) AS mac_hex, l.subnet_id,
+                           (l.expire - INTERVAL l.valid_lifetime SECOND) AS obtained
+                    FROM lease4 l
+                    WHERE {" AND ".join(where)}
+                    ORDER BY (l.expire - INTERVAL l.valid_lifetime SECOND) DESC
+                    LIMIT %s
+                    """,
+                    (*params, limit),
+                )
+                for row in cur.fetchall():
+                    mac = ":".join(row["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if row["mac_hex"] else ""
+                    sname = extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", str(row["subnet_id"]))
+                    out.append(
+                        {
+                            "ip": row["ip"],
+                            "hostname": row["hostname"] or "",
+                            "mac": mac,
+                            "subnet_name": sname,
+                            "obtained": row["obtained"],
+                        }
+                    )
+    except Exception as e:
+        logger.warning(f"setup_wizard.recent_leases failed: {e}")
+    return out

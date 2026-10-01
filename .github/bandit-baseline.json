@@ -5,13 +5,13 @@
     "_totals": {
       "CONFIDENCE.HIGH": 89,
       "CONFIDENCE.LOW": 0,
-      "CONFIDENCE.MEDIUM": 54,
+      "CONFIDENCE.MEDIUM": 55,
       "CONFIDENCE.UNDEFINED": 0,
       "SEVERITY.HIGH": 5,
       "SEVERITY.LOW": 90,
-      "SEVERITY.MEDIUM": 48,
+      "SEVERITY.MEDIUM": 49,
       "SEVERITY.UNDEFINED": 0,
-      "loc": 12796,
+      "loc": 13403,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -314,6 +314,19 @@
       "nosec": 0,
       "skipped_tests": 0
     },
+    "jen/routes/setup.py": {
+      "CONFIDENCE.HIGH": 0,
+      "CONFIDENCE.LOW": 0,
+      "CONFIDENCE.MEDIUM": 0,
+      "CONFIDENCE.UNDEFINED": 0,
+      "SEVERITY.HIGH": 0,
+      "SEVERITY.LOW": 0,
+      "SEVERITY.MEDIUM": 0,
+      "SEVERITY.UNDEFINED": 0,
+      "loc": 257,
+      "nosec": 0,
+      "skipped_tests": 0
+    },
     "jen/routes/subnets.py": {
       "CONFIDENCE.HIGH": 10,
       "CONFIDENCE.LOW": 0,
@@ -493,6 +506,19 @@
       "SEVERITY.MEDIUM": 0,
       "SEVERITY.UNDEFINED": 0,
       "loc": 93,
+      "nosec": 0,
+      "skipped_tests": 0
+    },
+    "jen/services/setup_wizard.py": {
+      "CONFIDENCE.HIGH": 0,
+      "CONFIDENCE.LOW": 0,
+      "CONFIDENCE.MEDIUM": 1,
+      "CONFIDENCE.UNDEFINED": 0,
+      "SEVERITY.HIGH": 0,
+      "SEVERITY.LOW": 0,
+      "SEVERITY.MEDIUM": 1,
+      "SEVERITY.UNDEFINED": 0,
+      "loc": 350,
       "nosec": 0,
       "skipped_tests": 0
     },
@@ -1981,6 +2007,34 @@
       "line_number": 693,
       "line_range": [
         693
+      ],
+      "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
+      "test_id": "B608",
+      "test_name": "hardcoded_sql_expressions"
+    },
+    {
+      "code": "433                 cur.execute(\n434                     f\"\"\"\n435                     SELECT inet_ntoa(l.address) AS ip, l.hostname,\n436                            HEX(l.hwaddr) AS mac_hex, l.subnet_id,\n437                            (l.expire - INTERVAL l.valid_lifetime SECOND) AS obtained\n438                     FROM lease4 l\n439                     WHERE {\" AND \".join(where)}\n440                     ORDER BY (l.expire - INTERVAL l.valid_lifetime SECOND) DESC\n441                     LIMIT %s\n442                     \"\"\",\n443                     (*params, limit),\n",
+      "col_offset": 20,
+      "end_col_offset": 23,
+      "filename": "jen/services/setup_wizard.py",
+      "issue_confidence": "MEDIUM",
+      "issue_cwe": {
+        "id": 89,
+        "link": "https://cwe.mitre.org/data/definitions/89.html"
+      },
+      "issue_severity": "MEDIUM",
+      "issue_text": "Possible SQL injection vector through string-based query construction.",
+      "line_number": 434,
+      "line_range": [
+        434,
+        435,
+        436,
+        437,
+        438,
+        439,
+        440,
+        441,
+        442
       ],
       "more_info": "https://bandit.readthedocs.io/en/1.9.4/plugins/b608_hardcoded_sql_expressions.html",
       "test_id": "B608",
