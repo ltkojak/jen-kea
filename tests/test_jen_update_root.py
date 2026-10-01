@@ -1838,7 +1838,9 @@ class TestMainSourceShape:
         i = src.index("snapshot_install(snapshot_dir)")
         after = src[i : i + 600]
         assert "except (OSError, shutil.Error)" in after
-        assert "/opt/jen untouched" in after and "return 1" in after
+        # v5.67.0-beta.5 (Q117, item d) — the message now names the real
+        # (relocation-aware) INSTALL_DIR rather than a hardcoded /opt/jen.
+        assert "{INSTALL_DIR} untouched" in after and "return 1" in after
 
     def test_switch_region_is_inside_a_rollback_try_except(self, jen_update_root):
         src = self._main(jen_update_root)

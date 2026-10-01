@@ -673,7 +673,8 @@ jobs:
           tar xzf dist/jen-head.tar.gz -C "$RUNNER_TEMP/install-relocated"
           cd "$RUNNER_TEMP/install-relocated/jen"
           sudo TERM=linux ./install.sh --answers "$RUNNER_TEMP/answers.env" --unattended \
-            --app-dir /srv/jen/app --config-dir /srv/jen/etc --data-dir /srv/jen/data
+            --app-dir /srv/jen/app --config-dir /srv/jen/etc --data-dir /srv/jen/data \
+            2>&1 | tee "$RUNNER_TEMP/relocated-install.log"
 
       - name: Assert the relocated install is real
         run: |
@@ -704,6 +705,34 @@ jobs:
 
           [[ ! -e /opt/jen ]]
           echo "nothing landed at the historical default app_dir"
+
+      # v5.67.0-beta.5 (Q117, item d) — the behavioral half of the fix:
+      # install.sh's [kea_ssh] key_path and its SSL-summary check, plus
+      # three jen-update-root.py log lines, hardcoded /etc/jen or
+      # /opt/jen regardless of where the install actually lives. Four
+      # real sources, grepped for the three literal defaults — a
+      # commented reference to the always-fixed /etc/jen-layout.conf
+      # (in the rendered unit's own template comments) is the one
+      # expected, excluded match.
+      - name: Assert no hardcoded layout literal leaked into the relocated install
+        run: |
+          set -e
+          fail=0
+          check() {
+              local label="$1" file="$2"
+              if [[ -f "$file" ]] && grep -Ev '^\s*#' "$file" | grep -qE '/etc/jen([^-]|$)|/opt/jen|/var/lib/jen'; then
+                  echo "::error::$label ($file) contains a hardcoded layout literal"
+                  grep -Ev '^\s*#' "$file" | grep -E '/etc/jen([^-]|$)|/opt/jen|/var/lib/jen'
+                  fail=1
+              fi
+          }
+          check "generated jen.config"   /srv/jen/etc/jen.config
+          check "rendered unit"          /etc/systemd/system/jen.service
+          check "install run's own summary" "$RUNNER_TEMP/relocated-install.log"
+          sudo journalctl -u jen-update --no-pager > "$RUNNER_TEMP/jen-update.journal" 2>/dev/null || true
+          check "jen-update.service journal" "$RUNNER_TEMP/jen-update.journal"
+          [[ $fail -eq 0 ]]
+          echo "no hardcoded /etc/jen, /opt/jen or /var/lib/jen in any generated artifact"
 
       - name: Upgrade the relocated install in place
         working-directory: ${{ runner.temp }}/install-relocated/jen

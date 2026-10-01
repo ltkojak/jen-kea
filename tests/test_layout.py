@@ -30,6 +30,7 @@ jen-kea-helper's own analogous _bin_dir_ok).
 
 import pathlib
 import platform
+import re
 import shlex
 import subprocess
 import textwrap
@@ -345,3 +346,55 @@ class TestNoDuplicateValidationLogic:
     def test_uninstall_sh_has_no_own_layout_trust_logic(self):
         text = _UNINSTALL_SH.read_text(encoding="utf-8")
         assert "_layout_get" not in text
+
+
+class TestNoHardcodedLayoutLiteralsOutsideAllowedSpots:
+    """v5.67.0-beta.5 (Q117, item d) — a relocated install must never see
+    a literal /opt/jen, /etc/jen or /var/lib/jen leak into its own
+    generated artifacts or operator-facing messages: ChatGPT's review
+    found install.sh's [kea_ssh] key_path and its SSL-summary check, plus
+    three jen-update-root.py log lines, hardcoding one of these
+    regardless of where the install actually lives (the app's own
+    relocation-aware fallback — jen/extensions.py's CONFIG_DIR/
+    SSH_KEY_PATH — got silently overridden by the literal). The install
+    CI job's relocated leg (.github/workflows/tests.yml) is the
+    behavioral half of this regression: it greps the actually-generated
+    jen.config, the rendered unit and the install run's own printed
+    summary for these three strings. This is the source half: every line
+    in install.sh/uninstall.sh containing one is either a comment, one of
+    the three default-assignment lines (`VAR="${x:-/opt/jen}"` or a bare
+    `VAR="/opt/jen"`), inside install.sh's own --help text, or a
+    reference to /etc/jen-layout.conf (a fixed sibling path that is never
+    itself relocatable, regardless of where app_dir/config_dir/data_dir
+    move to)."""
+
+    _LITERAL_RE = re.compile(r"/etc/jen(?!-layout\.conf)|/opt/jen|/var/lib/jen")
+    _ASSIGNMENT_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*="')
+
+    def _violations(self, path: pathlib.Path) -> list:
+        violations = []
+        in_help = False
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            stripped = line.strip()
+            if stripped == "cat << 'HELPEOF'":
+                in_help = True
+                continue
+            if stripped == "HELPEOF":
+                in_help = False
+                continue
+            if in_help or stripped.startswith("#"):
+                continue
+            if not self._LITERAL_RE.search(line):
+                continue
+            if self._ASSIGNMENT_RE.match(stripped):
+                continue
+            violations.append((lineno, line))
+        return violations
+
+    def test_install_sh_has_no_stray_literal(self):
+        violations = self._violations(_INSTALL_SH)
+        assert violations == [], violations
+
+    def test_uninstall_sh_has_no_stray_literal(self):
+        violations = self._violations(_UNINSTALL_SH)
+        assert violations == [], violations

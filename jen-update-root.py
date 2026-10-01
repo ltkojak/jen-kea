@@ -777,7 +777,7 @@ def install_python_dependencies(requirements_path, python_bin):
     if result.returncode == 0:
         log("Dependencies installed.")
         return True
-    log("ERROR: pip install failed — aborting update, /opt/jen untouched.")
+    log(f"ERROR: pip install failed — aborting update, {INSTALL_DIR} untouched.")
     for label, r in attempts or [("", result)]:
         tail = (r.stderr or r.stdout or "").strip()
         log(f"  [{label or 'pip'}]: {tail}" if tail else f"  [{label or 'pip'}]: (no output, exit {r.returncode})")
@@ -2365,7 +2365,7 @@ def main():
 
         python_bin = _build_release_venv(staging_venv)
         if not python_bin:
-            log("ERROR: could not build the release's virtualenv — aborting, /opt/jen untouched.")
+            log(f"ERROR: could not build the release's virtualenv — aborting, {INSTALL_DIR} untouched.")
             return 1
 
         if not install_python_dependencies(os.path.join(staging_app, "requirements.txt"), python_bin):
@@ -2396,8 +2396,8 @@ def main():
             log(
                 f"ERROR: the health probe cannot reach the currently-running Jen at {probe_url} "
                 "— it would wrongly roll back a good update. Aborting before the switch. "
-                "Check `systemctl status jen`, the [server] ports in /etc/jen/jen.config, and whether "
-                "/etc/jen/ssl/certificate.crt + private.key match how Jen is actually serving."
+                f"Check `systemctl status jen`, the [server] ports in {CONFIG_FILE}, and whether "
+                f"{SSL_CERT} + {SSL_KEY} match how Jen is actually serving."
             )
             return 1
 
@@ -2412,7 +2412,7 @@ def main():
         try:
             snapshot_install(snapshot_dir)
         except (OSError, shutil.Error) as e:
-            log(f"ERROR: could not snapshot the current install — aborting, /opt/jen untouched: {e}")
+            log(f"ERROR: could not snapshot the current install — aborting, {INSTALL_DIR} untouched: {e}")
             shutil.rmtree(snapshot_dir, ignore_errors=True)
             return 1
 
