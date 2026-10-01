@@ -432,7 +432,14 @@ class TestCheckLayout:
     same technique TestLoadLayout's _bypass_ownership and
     tests/test_layout.py's own bash-side bypasses already use; a non-root
     CI process could never construct a real root-owned ancestor to test
-    the success path against."""
+    the success path against. The forbidden-prefix list is cleared too:
+    pytest's own tmp_path lives under /tmp, one of those prefixes, so a
+    real candidate directory built from it would be refused by THAT rule
+    before ever reaching the marker/ancestor logic a given test means to
+    exercise (caught the hard way — CI's own non-Windows pytest job, where
+    tmp_path really does resolve to /tmp/...). Grammar and shared-root
+    refusal have their own dedicated, filesystem-free tests in
+    TestLayoutPathOkSharedRootsAndGrammar above."""
 
     # Every scenario here, even a refusal, goes through _layout_path_ok's
     # pre-existing normalize check first — on Windows that rewrites a
@@ -445,6 +452,7 @@ class TestCheckLayout:
     def _bypass_ownership(self, jen_update_root, monkeypatch):
         monkeypatch.setattr(jen_update_root, "_layout_ancestors_ok", lambda name, path: None)
         monkeypatch.setattr(jen_update_root, "_layout_appdir_itself_ok", lambda path: None)
+        monkeypatch.setattr(jen_update_root, "_LAYOUT_FORBIDDEN_PREFIXES", ())
 
     def test_install_mode_without_explicit_paths_is_refused(self, jen_update_root):
         ok, result = jen_update_root.check_layout("install")
@@ -611,6 +619,10 @@ class TestCheckLayoutCli:
     def test_success_prints_key_value_lines(self, jen_update_root, capsys, monkeypatch, tmp_path):
         monkeypatch.setattr(jen_update_root, "_layout_ancestors_ok", lambda name, path: None)
         monkeypatch.setattr(jen_update_root, "_layout_appdir_itself_ok", lambda path: None)
+        # tmp_path lives under /tmp, one of _LAYOUT_FORBIDDEN_PREFIXES —
+        # cleared here for the same reason TestCheckLayout's own
+        # _bypass_ownership fixture clears it.
+        monkeypatch.setattr(jen_update_root, "_LAYOUT_FORBIDDEN_PREFIXES", ())
         app, config, data = str(tmp_path / "app"), str(tmp_path / "etc"), str(tmp_path / "data")
         rc = jen_update_root.check_layout_cli(
             ["--for", "install", "--app-dir", app, "--config-dir", config, "--data-dir", data]

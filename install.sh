@@ -1627,9 +1627,16 @@ install_files() {
     # the service user. User-writable content lives under $CONTENT_DIR
     # (migrate_content, above, chowns that to $JEN_USER). jen.config keeps
     # its own service-user ownership (write_config, below).
+    #
+    # v5.67.0-beta.5 (Q117) — `a+rX` alone only ADDS bits; it never clears
+    # a write bit `mkdir -p`/`cp -r` left set under a permissive umask
+    # (CI's own runner creates $INSTALL_DIR 0777 this way). `go-w` closes
+    # that — found by _layout_appdir_itself_ok actually refusing the
+    # result on this job's own later --upgrade leg, the first thing ever
+    # checking "is app_dir itself group/other-writable" on a real run.
     spinner_start "Setting permissions..."
     chown -R root:root "$INSTALL_DIR"
-    chmod -R a+rX "$INSTALL_DIR"
+    chmod -R a+rX,go-w "$INSTALL_DIR"
     chown -R "$JEN_USER:$JEN_USER" "$CONFIG_DIR"
     spinner_stop
     ok "Permissions set  ${DIM}(app tree: root, content: ${JEN_USER})${NC}"
