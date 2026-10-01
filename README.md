@@ -41,6 +41,36 @@ sudo ./install.sh
 
 The installer asks for exactly three things — Jen's own database, the ports, and an admin password — then starts the service. Kea connects afterward, live, through `/setup`. For a repeatable install, skip the prompts entirely with `sudo ./install.sh --answers <file> --unattended` (see [`docs/installation.md`](docs/installation.md)).
 
+### Docker
+
+Jen is configured entirely through `.env` (`JEN_*` variables) — `run.py`
+generates `jen.config` inside the container on first start; never edit
+`jen.config` by hand with Docker. The guided installer writes `.env`
+for you:
+
+```bash
+cd jen
+sudo ./install.sh --docker
+```
+
+Or by hand — **external** database (Jen's own DB lives on a server you run):
+
+```bash
+cd jen
+cp .env.example .env      # fill in JEN_* (Kea + Jen DB + JEN_INITIAL_ADMIN_PASSWORD)
+docker compose up -d
+```
+
+**Bundled** database (Docker runs MariaDB for Jen — the "ten minutes" path above):
+
+```bash
+cd jen
+cp .env.example .env      # fill in the Kea section, MYSQL_ROOT_PASSWORD,
+                          # JEN_MYSQL_PASSWORD, JEN_INITIAL_ADMIN_PASSWORD
+                          # (leave the JEN_DB_* lines blank)
+docker compose -f docker-compose.mysql.yml up -d
+```
+
 ---
 
 ![Jen dashboard](docs/images/dashboard.png)
