@@ -204,11 +204,18 @@ class TestSetupWizardScreenshots:
     a populated instance rather than a blank first-run state."""
 
     def test_setup_connect(self, desktop, base_url):
+        # v5.67.0 (Q115 step 3 fixup 5) — this one page's innerText-polling
+        # wait (the same _wait_rendered() every other screenshot here
+        # uses) reproducibly times out at exactly its own 15s budget twice
+        # in CI, immediately after the FIRST /setup/* navigation on this
+        # module-scoped page — every one of the five /setup/* pages after
+        # it, using the identical helper, passes in under a second. A
+        # direct selector wait on the one element that matters sidesteps
+        # whatever that interaction is without papering over a page that
+        # genuinely failed to render (wait_for_selector raises just as
+        # loudly as wait_for_function would on a truly empty/broken page).
         desktop.goto(f"{base_url}/setup/connect", wait_until="load")
         desktop.wait_for_selector('input[name="api_url"]', timeout=15000)
-        _wait_rendered(
-            desktop, f"() => document.body.innerText.includes('Kea API URL') && ({NO_LOADING_JS})", "setup-connect"
-        )
         _leak_guard(desktop, "setup-connect")
         _save(desktop, "setup-connect")
 

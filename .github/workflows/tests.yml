@@ -688,6 +688,15 @@ jobs:
         run: sudo rm -f /etc/jen-layout.conf
 
       - name: Write an answers file with no Kea keys at all
+        # v5.67.0 (Q115 step 3 fixup 6) — no JEN_INITIAL_ADMIN_PASSWORD
+        # here: the jen database this whole job shares was created once at
+        # the very top and is never dropped between legs (only install.sh's
+        # own app tree gets reinstalled), so the admin row the FIRST leg's
+        # answers file seeded is still the only one in `users` — Jen's own
+        # seeding (jen/models/db.py::init_jen_db) is "if no users exist",
+        # by design, so a second JEN_INITIAL_ADMIN_PASSWORD here would be
+        # silently ignored. Logging in below with that first leg's own
+        # ci-test-passw0rd-! is correct, not a workaround.
         run: |
           umask 077
           cat > "$RUNNER_TEMP/answers-no-kea.env" << 'EOF'
@@ -695,7 +704,6 @@ jobs:
           JEN_DB_USER=jen
           JEN_DB_PASS=jen_pw
           JEN_DB_NAME=jen
-          JEN_INITIAL_ADMIN_PASSWORD=ci-test-passw0rd-no-kea!
           JEN_HTTP_PORT=5050
           JEN_HTTPS_PORT=8443
           EOF
@@ -718,7 +726,7 @@ jobs:
           csrf=$(curl -sc "$cookie" http://127.0.0.1:5050/login | grep -oP 'name="csrf_token" value="\K[^"]+' | head -1)
           [[ -n "$csrf" ]]
           login_location=$(curl -sb "$cookie" -c "$cookie" -X POST http://127.0.0.1:5050/login \
-            -d "username=admin&password=ci-test-passw0rd-no-kea!&csrf_token=$csrf" \
+            -d "username=admin&password=ci-test-passw0rd-!&csrf_token=$csrf" \
             -o /dev/null -w '%{redirect_url}')
           echo "login redirected to: $login_location"
           dashboard_location=$(curl -sb "$cookie" -c "$cookie" "http://127.0.0.1:5050${login_location}" \
