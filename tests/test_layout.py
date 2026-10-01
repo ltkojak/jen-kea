@@ -368,7 +368,12 @@ class TestNoHardcodedLayoutLiteralsOutsideAllowedSpots:
     itself relocatable, regardless of where app_dir/config_dir/data_dir
     move to)."""
 
-    _LITERAL_RE = re.compile(r"/etc/jen(?!-layout\.conf)|/opt/jen|/var/lib/jen")
+    # (?<![\w/]) — a real standalone reference, not a substring inside a
+    # larger path (the behavioral CI check needs the same guard: the
+    # relocated leg's own --config-dir /srv/jen/etc makes the generated
+    # config's own path /srv/jen/etc/jen.config, which otherwise
+    # self-matches "/etc/jen" in its middle).
+    _LITERAL_RE = re.compile(r"(?<![\w/])/etc/jen(?!-layout\.conf)|(?<![\w/])/opt/jen|(?<![\w/])/var/lib/jen")
     _ASSIGNMENT_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*="')
 
     def _violations(self, path: pathlib.Path) -> list:

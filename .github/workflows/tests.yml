@@ -718,11 +718,17 @@ jobs:
         run: |
           set -e
           fail=0
+          # (?<![\w/]) — a real standalone reference, not a substring
+          # inside a larger path: this leg's own --config-dir /srv/jen/etc
+          # makes the GENERATED config's own path /srv/jen/etc/jen.config,
+          # which otherwise self-matches "/etc/jen" in its middle.
           check() {
               local label="$1" file="$2"
-              if [[ -f "$file" ]] && grep -Ev '^\s*#' "$file" | grep -qE '/etc/jen([^-]|$)|/opt/jen|/var/lib/jen'; then
+              if [[ -f "$file" ]] && sudo cat "$file" | grep -Pv '^\s*#' \
+                  | grep -Pq '(?<![\w/])/etc/jen(?!-layout\.conf)|(?<![\w/])/opt/jen|(?<![\w/])/var/lib/jen'; then
                   echo "::error::$label ($file) contains a hardcoded layout literal"
-                  grep -Ev '^\s*#' "$file" | grep -E '/etc/jen([^-]|$)|/opt/jen|/var/lib/jen'
+                  sudo cat "$file" | grep -Pv '^\s*#' \
+                      | grep -P '(?<![\w/])/etc/jen(?!-layout\.conf)|(?<![\w/])/opt/jen|(?<![\w/])/var/lib/jen'
                   fail=1
               fi
           }
