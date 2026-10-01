@@ -20,6 +20,8 @@ dials a real host and is left to the unit suite
 (tests/test_setup_wizard.py::TestTestSsh) rather than exercised here.
 """
 
+import pathlib
+
 import pytest
 
 from tests._kea_host_fakes import FakeHelper
@@ -31,7 +33,20 @@ pytestmark = pytest.mark.e2e
 class TestSetupWizardJourney:
     def test_all_six_steps(self, logged_in_page, base_url, monkeypatch):
         from jen import extensions
+        from jen.config import app_config
         from jen.services import kea_host
+
+        # v5.67.0 (Q115 step 3 fixup 2) — every step here writes something
+        # real and persistent (connect, subnets, the SSH target) through
+        # the exact same app_config choke point a real operator's save
+        # would use — this is session-scoped live_server, shared with
+        # every other e2e journey, so a real write here outlives this
+        # test. CI caught it: saving an SSH target made a LATER, unrelated
+        # journey's "with no SSH configured" assumption false. A snapshot
+        # of the whole config file, restored byte-for-byte afterward, is
+        # simpler and more certainly complete than re-deriving every field
+        # this wizard (or a future step added to it) might touch.
+        config_backup = pathlib.Path(extensions.CONFIG_FILE).read_text()
 
         fake = FakeHelper()
         fake.helper_version = 7  # jen-kea-helper's own HELPER_VERSION
@@ -40,51 +55,71 @@ class TestSetupWizardJourney:
 
         page = logged_in_page
 
-        # Step 1: connect — the same Kea API and jen_test (standing in for
-        # Kea's own DB, same as every other test in this suite) live_server
-        # already proved reachable at session setup.
-        page.goto(f"{base_url}/setup/connect")
-        page.fill('input[name="api_url"]', extensions.KEA_API_URL)
-        page.fill('input[name="kea_db_host"]', TEST_DB["host"])
-        page.fill('input[name="kea_db_user"]', TEST_DB["user"])
-        page.fill('input[name="kea_db_pass"]', TEST_DB["password"])
-        page.fill('input[name="kea_db_name"]', TEST_DB["database"])
-        page.get_by_role("button", name="Test & Connect").click()
-        page.wait_for_url("**/setup/found", timeout=10000)
+        try:
+            # Step 1: connect — the same Kea API and jen_test (standing in
+            # for Kea's own DB, same as every other test in this suite)
+            # live_server already proved reachable at session setup.
+            page.goto(f"{base_url}/setup/connect")
+            page.fill('input[name="api_url"]', extensions.KEA_API_URL)
+            page.fill('input[name="kea_db_host"]', TEST_DB["host"])
+            page.fill('input[name="kea_db_user"]', TEST_DB["user"])
+            page.fill('input[name="kea_db_pass"]', TEST_DB["password"])
+            page.fill('input[name="kea_db_name"]', TEST_DB["database"])
+            page.get_by_role("button", name="Test & Connect").click()
+            page.wait_for_url("**/setup/found", timeout=10000)
 
-        # Step 2: what Jen found — the fake Kea's default config-get
-        # response (tests/e2e/_fake_kea_server.py's TWO_SUBNET_DHCP4)
-        # reports real subnets, so this is the "Use these subnets" branch.
-        page.get_by_role("button", name="Use these subnets").click()
-        page.wait_for_url("**/setup/helper", timeout=10000)
+            # Step 2: what Jen found — the fake Kea's default config-get
+            # response (tests/e2e/_fake_kea_server.py's TWO_SUBNET_DHCP4)
+            # reports real subnets, so this is the "Use these subnets"
+            # branch.
+            page.get_by_role("button", name="Use these subnets").click()
+            page.wait_for_url("**/setup/helper", timeout=10000)
 
-        # Step 3: the Kea host helper. The target never needs to be a real,
-        # reachable host — helper_call is mocked above, so nothing here
-        # actually opens a socket.
-        page.fill('input[name="ssh_host"]', "10.0.0.5")
-        page.fill('input[name="ssh_user"]', "jen")
-        page.get_by_role("button", name="Save target").click()
-        page.wait_for_url("**/setup/helper", timeout=10000)
-        page.get_by_role("button", name="Install the helper").click()
-        page.wait_for_url("**/setup/baseline", timeout=10000)
+            # Step 3: the Kea host helper. The target never needs to be a
+            # real, reachable host — helper_call is mocked above, so
+            # nothing here actually opens a socket.
+            page.fill('input[name="ssh_host"]', "10.0.0.5")
+            page.fill('input[name="ssh_user"]', "jen")
+            page.get_by_role("button", name="Save target").click()
+            page.wait_for_url("**/setup/helper", timeout=10000)
+            page.get_by_role("button", name="Install the helper").click()
+            page.wait_for_url("**/setup/baseline", timeout=10000)
 
-        # Step 4: baseline — kea_host.read_config() reads through the
-        # same mocked helper_call, from fake.configs set up above.
-        page.get_by_role("button", name="Capture baseline").click()
-        page.wait_for_url("**/setup/recovery", timeout=10000)
+            # Step 4: baseline — kea_host.read_config() reads through the
+            # same mocked helper_call, from fake.configs set up above.
+            page.get_by_role("button", name="Capture baseline").click()
+            page.wait_for_url("**/setup/recovery", timeout=10000)
 
-        # Step 5: recovery point — confirm without actually downloading a
-        # bundle (that form posts to the existing, already-tested
-        # /settings/databases/recovery-bundle route unchanged).
-        page.get_by_role("button", name="I've saved it — continue").click()
-        page.wait_for_url("**/setup/investigate", timeout=10000)
-
-        # Step 6: investigate — whichever branch this session's shared
-        # lease state puts us in, the primary action marks the step done.
-        if page.get_by_role("button", name="Finish setup").count():
-            page.get_by_role("button", name="Finish setup").click()
+            # Step 5: recovery point — confirm without actually downloading
+            # a bundle (that form posts to the existing, already-tested
+            # /settings/databases/recovery-bundle route unchanged).
+            page.get_by_role("button", name="I've saved it — continue").click()
             page.wait_for_url("**/setup/investigate", timeout=10000)
-            assert "First hour complete" in page.content()
-        else:
-            page.get_by_role("button", name="Explain").first.click()
-            page.wait_for_url("**/tools/explain**", timeout=10000)
+
+            # Step 6: investigate — whichever branch this session's shared
+            # lease state puts us in, the primary action marks the step
+            # done.
+            if page.get_by_role("button", name="Finish setup").count():
+                page.get_by_role("button", name="Finish setup").click()
+                page.wait_for_url("**/setup/investigate", timeout=10000)
+                assert "First hour complete" in page.content()
+            else:
+                page.get_by_role("button", name="Explain").first.click()
+                page.wait_for_url("**/tools/explain**", timeout=10000)
+        finally:
+            pathlib.Path(extensions.CONFIG_FILE).write_text(config_backup)
+            app_config.reload()
+            # The wizard's own step state lives in the settings key/value
+            # table, not jen.config — clear it too, and the 30-second
+            # settings cache (jen/models/user.py) that would otherwise
+            # keep serving a later test a stale "every step resolved"
+            # answer for up to 30 more seconds.
+            from jen.models import user as jen_user
+            from jen.models.db import jen_db
+
+            with jen_db() as db, db.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM settings WHERE setting_key IN "
+                    "('setup_wizard_state', 'setup_wizard_redirect_shown', 'setup_wizard_started_at')"
+                )
+            jen_user._settings_cache_ts = 0
