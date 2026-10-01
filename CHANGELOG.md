@@ -2,6 +2,89 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.67.0-beta.5] - 2026-10-01
+
+Beta channel. Stacked on 5.67.0-beta.4. A ChatGPT review of the layout
+and `/setup` work shipped in 5.67.0-beta.2 through beta.4 confirmed
+twelve findings; this release fixes all of them.
+
+**One layout contract, enforced the same way everywhere.** `jen-update-root.py`
+gains `check_layout()` — the single place `app_dir`/`config_dir`/`data_dir`
+are validated, called identically by `install.sh` (a fresh install or an
+upgrade), the in-app updater (every privileged run), and `uninstall.sh`.
+It refuses a shared system root outright (`/`, `/etc`, `/usr`, `/bin`,
+and the like), requires a fresh-install target to be absent, empty, or
+already carrying a root-owned `.jen-directory` marker, and now hard-stops
+when any *existing ancestor* of one of those directories is writable by
+group or other — a local user could otherwise rename the real directory
+aside and plant a symlink for the next privileged run to follow.
+`install.sh` and `uninstall.sh` were rewritten onto this one checker
+instead of each keeping its own copy of the same rules, and CI gained a
+dedicated negative leg (`install-layout-negative`) that chmods an
+ancestor permissive and asserts the install refuses. A genuinely latent
+bug came out of writing that leg: `chmod -R a+rX` only adds permission
+bits, so a world-writable directory left behind by a permissive umask
+was never actually fixed by it — `chmod -R a+rX,go-w` does.
+
+**A relocated install stops writing `/etc/jen` into itself.** `--app-dir`/
+`--config-dir`/`--data-dir` (5.67.0-beta.2) correctly derived every real
+path, but the generated `jen.config`, the rendered systemd unit, and a
+few updater log lines still hard-coded the historical defaults —
+cosmetic, since nothing actually read the wrong value, but confusing to
+read on a relocated box. Fixed, and now guarded by a CI step that greps
+the generated output of a relocated install for a stray `/etc/jen`,
+`/opt/jen`, or `/var/lib/jen` literal outside the one place each is
+allowed to appear.
+
+**`/setup`'s Connect step can reach what Settings can.** Kea behind a
+private CA or requiring a client certificate (Kea's own documented
+mutual-TLS control socket) could be configured from Settings but not
+from the first-run wizard, which only ever tried a bare HTTPS `GET`.
+`jen/services/kea.py` gains `test_connection()` and `probe_command()` —
+one shared, TLS-aware probing primitive now used by both Settings' probe
+route and `/setup`'s Connect step, with a new Advanced TLS expander
+(CA bundle, client cert/key, "do not verify") on the Connect form. Tested
+against real local `ThreadingHTTPServer` instances wrapped in `ssl`, with
+a private CA and client certificates generated through the `cryptography`
+library, per this project's own rule against mocking probe/TLS behavior.
+
+**IPv6 tells the truth about what it hasn't checked.** "What Jen found"
+used to report `ipv6_enabled` — Jen's own switch state — in a way that
+read as a claim about whether Kea itself had DHCPv6 configured, which
+nothing on that page had actually verified. A new, explicit "Check for
+DHCPv6" action probes the real `dhcp6` service (a `config-get`
+`subnet6` listing) before anything v6-related is reported or offered,
+and "Manage IPv6 in Jen" only becomes available once that probe
+succeeds — kept separate from the existing SSH-based `toggle_ipv6()`,
+since a service that already answered a probe doesn't need starting.
+
+**Subnet names survive a second run of Setup, and an export schedule
+can't 500.** "What Jen found" used to propose a fresh name for every
+subnet Kea reported, discarding whatever an operator had already
+renamed it to, and silently dropped any subnet Jen knew about that
+Kea's live report didn't include this time. It now keeps an existing
+name when the same subnet id still has the same CIDR, lists anything
+orphaned as an explicit, unchecked removal, and merges into the stored
+subnet map instead of replacing it outright. Subnet names are validated
+once, in one place (`jen.config.invalid_subnet_name_reason()`), before
+anything is written — both from the add-subnet form and from `/setup`.
+The recovery-point step only marks itself done once a bundle from that
+session has actually finished downloading, not merely because a button
+was clicked, and a new "A recovery bundle exists" row on Getting
+started tracks the same fact. The database export schedule form now
+validates its hour and retention fields through one shared function
+(`dbexport.validate_schedule()`) and re-renders with a 400 instead of
+letting a bad value either silently fall back or crash the route. And
+"Investigate a client," the wizard's last step, now opens the full
+six-tab Investigation page instead of only the narrow Explain tab.
+
+Every finding above has its own docs update: `docs/installation.md`
+(the dedicated-directory requirement and the path grammar),
+`docs/runbooks.md` §5 (relocating an existing install), `docs/ARCHITECTURE.md`
+§3.1/§6 (the layout contract as the one source of truth), `docs/troubleshooting.md`
+(every layout refusal and its fix), `docs/user-guide.md` (the first-hour
+wizard as it behaves now), and `docs/upgrading.md`.
+
 ## [5.67.0-beta.4] - 2026-10-01
 
 Beta channel. Stacked on 5.67.0-beta.3. The README is rebuilt around
