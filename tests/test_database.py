@@ -440,6 +440,22 @@ class TestRecoveryBundleRoute:
         _ = r.data  # force the streamed body through fully (the test client already buffers it)
         assert list(content_tmp.iterdir()) == []
 
+    def test_last_recovery_bundle_settings_are_recorded_once_the_stream_finishes(self, logged_in_client, db, mock_kea):
+        """v5.67.0-beta.5 (Q117, item i) — /setup's Recovery step relies on
+        these three settings to tell a real download from a clicked
+        button; this is the one route that writes them."""
+        from jen.models.user import get_global_setting
+
+        r = logged_in_client.post(
+            "/settings/databases/recovery-bundle",
+            data={"passphrase": self.PASSPHRASE, "passphrase_confirm": self.PASSPHRASE},
+        )
+        assert r.status_code == 200
+        body = r.data  # force the streamed body through fully — the setting is written in _stream()'s finally
+        assert get_global_setting("last_recovery_bundle_at", "") != ""
+        assert get_global_setting("last_recovery_bundle_size", "") == str(len(body))
+        assert get_global_setting("last_recovery_bundle_excluded_audit", "") == "false"
+
 
 class TestRecoveryBundleKeys:
     """v5.49.0-beta.2 (audit B) - the fallback secret/MFA keys ride as

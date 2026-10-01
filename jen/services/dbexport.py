@@ -1112,6 +1112,61 @@ def get_schedule():
         return {}
 
 
+# v5.67.0-beta.5 (Q117, item j) — scheduler.py's own _run_backup_job only
+# ever checks `freq == "weekly"`; every other value runs daily-shaped.
+# "daily"/"weekly" is the whole set it actually understands — read from
+# there, not guessed, and it's also the only two <option>s
+# templates/database.html's own <select> ever offers.
+VALID_SCHEDULE_FREQUENCIES = ("daily", "weekly")
+_SCHEDULE_HOUR_RANGE = range(24)
+_SCHEDULE_KEEP_RANGE = range(1, 31)
+
+
+def validate_schedule(form) -> tuple[dict, list[str]]:
+    """Validate and parse a backup-schedule POST (a Flask `request.form`
+    or any `.get(key, default)`-shaped mapping) — shared by
+    routes/database.py::save_schedule and routes/setup.py's own
+    Recovery-step "schedule" action, which both used to do a bare
+    `int(form.get("hour"))` with no try/except: a malformed value
+    (empty, non-numeric, out of range) was an unhandled 500 rather than
+    a validation error.
+
+    Returns (values, errors). `values` is only complete and safe to pass
+    to save_schedule() when `errors` is empty — a field that failed
+    validation is left out of `values` entirely rather than guessed at,
+    so a caller can't accidentally use a half-valid result."""
+    errors = []
+    values = {
+        "enabled": 1 if form.get("enabled") else 0,
+        "include_jen": 1 if form.get("include_jen") else 0,
+        "include_kea": 1 if form.get("include_kea") else 0,
+    }
+
+    frequency = (form.get("frequency", "daily") or "daily").strip()
+    if frequency in VALID_SCHEDULE_FREQUENCIES:
+        values["frequency"] = frequency
+    else:
+        errors.append(f"Frequency must be one of: {', '.join(VALID_SCHEDULE_FREQUENCIES)}.")
+
+    try:
+        hour = int(form.get("hour", "2") or "2")
+        if hour not in _SCHEDULE_HOUR_RANGE:
+            raise ValueError
+        values["hour"] = hour
+    except (TypeError, ValueError):
+        errors.append("Hour must be a whole number from 0 to 23.")
+
+    try:
+        keep_count = int(form.get("keep_count", "7") or "7")
+        if keep_count not in _SCHEDULE_KEEP_RANGE:
+            raise ValueError
+        values["keep_count"] = keep_count
+    except (TypeError, ValueError):
+        errors.append("Keep must be a whole number from 1 to 30.")
+
+    return values, errors
+
+
 def save_schedule(enabled, frequency, hour, keep_count, include_jen, include_kea):
     from jen.models.db import jen_db
 

@@ -459,3 +459,109 @@ class TestJenTablesCoverage:
         created = self._migration_created_tables()
         stale = set(JEN_TABLES) - created
         assert not stale, f"JEN_TABLES has entrie(s) no migration creates: {stale}"
+
+
+class TestValidateSchedule:
+    """v5.67.0-beta.5 (Q117, item j) — routes/database.py::save_schedule
+    and routes/setup.py's own Recovery-step "schedule" action both used
+    to do a bare int(form.get("hour")) with no try/except: a malformed
+    value was an unhandled 500. validate_schedule() is the one shared,
+    pure validator both routes now call."""
+
+    def test_a_full_valid_form_round_trips(self):
+        from jen.services.dbexport import validate_schedule
+
+        form = {
+            "enabled": "1",
+            "frequency": "weekly",
+            "hour": "3",
+            "keep_count": "14",
+            "include_jen": "1",
+            "include_kea": "",
+        }
+        values, errors = validate_schedule(form)
+        assert errors == []
+        assert values == {
+            "enabled": 1,
+            "include_jen": 1,
+            "include_kea": 0,
+            "frequency": "weekly",
+            "hour": 3,
+            "keep_count": 14,
+        }
+
+    def test_defaults_when_fields_are_absent(self):
+        from jen.services.dbexport import validate_schedule
+
+        values, errors = validate_schedule({})
+        assert errors == []
+        assert values["frequency"] == "daily"
+        assert values["hour"] == 2
+        assert values["keep_count"] == 7
+        assert values["enabled"] == 0
+
+    def test_non_numeric_hour_is_an_error_not_a_crash(self):
+        from jen.services.dbexport import validate_schedule
+
+        values, errors = validate_schedule({"hour": "not-a-number"})
+        assert "hour" not in values
+        assert any("Hour" in e for e in errors)
+
+    def test_empty_hour_falls_back_to_the_default_not_a_crash(self):
+        # routes/database.py's old `int(form.get("hour", 2))` only fell
+        # back to the default for a MISSING key — a present-but-empty
+        # value (a cleared <input>) still reached a bare int("") and
+        # crashed. validate_schedule treats empty the same as missing
+        # (the more forgiving reading of a cleared form field) rather
+        # than refusing it outright — either way, it never crashes.
+        from jen.services.dbexport import validate_schedule
+
+        values, errors = validate_schedule({"hour": ""})
+        assert errors == []
+        assert values["hour"] == 2
+
+    def test_out_of_range_hour_is_refused(self):
+        from jen.services.dbexport import validate_schedule
+
+        for bad in ("-1", "24", "100"):
+            values, errors = validate_schedule({"hour": bad})
+            assert "hour" not in values, bad
+            assert any("Hour" in e for e in errors), bad
+
+    def test_boundary_hours_are_accepted(self):
+        from jen.services.dbexport import validate_schedule
+
+        for ok in ("0", "23"):
+            values, errors = validate_schedule({"hour": ok})
+            assert errors == [], ok
+            assert values["hour"] == int(ok)
+
+    def test_out_of_range_keep_count_is_refused(self):
+        from jen.services.dbexport import validate_schedule
+
+        for bad in ("0", "31", "-5"):
+            values, errors = validate_schedule({"keep_count": bad})
+            assert "keep_count" not in values, bad
+            assert any("Keep" in e for e in errors), bad
+
+    def test_an_unrecognized_frequency_is_refused(self):
+        from jen.services.dbexport import validate_schedule
+
+        values, errors = validate_schedule({"frequency": "monthly"})
+        assert "frequency" not in values
+        assert any("Frequency" in e for e in errors)
+
+    def test_every_valid_frequency_round_trips(self):
+        from jen.services.dbexport import VALID_SCHEDULE_FREQUENCIES, validate_schedule
+
+        for freq in VALID_SCHEDULE_FREQUENCIES:
+            values, errors = validate_schedule({"frequency": freq})
+            assert errors == []
+            assert values["frequency"] == freq
+
+    def test_multiple_bad_fields_report_multiple_errors(self):
+        from jen.services.dbexport import validate_schedule
+
+        values, errors = validate_schedule({"frequency": "monthly", "hour": "99", "keep_count": "0"})
+        assert len(errors) == 3
+        assert values == {"enabled": 0, "include_jen": 0, "include_kea": 0}

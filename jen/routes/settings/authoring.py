@@ -578,10 +578,17 @@ def author_kea_config_post(service):
         existing, _ = _author_kea_subnets_and_db(service)
         merged = dict(existing)
         merged.update(subnets)
-        if service == "dhcp4":
-            __config.write_subnets_config(merged)
-        else:
-            __config.write_subnets6_config(merged)
+        try:
+            if service == "dhcp4":
+                __config.write_subnets_config(merged)
+            else:
+                __config.write_subnets6_config(merged)
+        except ValueError as e:
+            # v5.67.0-beta.5 (Q117, item h) — the config file(s) above are
+            # already written to the server(s); only Jen's own [subnets]
+            # record failed. Flashed, not raised, so the operator sees
+            # which subnet name to fix rather than a 500.
+            errors.append(f"Jen could not record the subnet(s) used: {e}")
 
     for r in results:
         flash(r, "success")

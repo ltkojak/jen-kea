@@ -92,3 +92,49 @@ matrix, a compatibility table, a new `docs/about.md` and
 `docs/features.md`) and updates the GitHub repository's own description,
 topics and social-preview image. None of it touches installed code,
 config, or behavior — there is nothing for an existing install to do.
+
+## A permissive app_dir now blocks an upgrade until fixed
+
+The layout checker that validates `app_dir`/`config_dir`/`data_dir` on
+every privileged run (added 5.67.0-beta.2) now hard-refuses when an
+*existing ancestor* directory of one of them is writable by group or
+other — a local user could otherwise rename the root-owned directory
+aside and plant a symlink in its place for the next update to follow.
+5.67.0-beta.2 only warned about this case (to accommodate a CI
+runner's own `/opt`); that was the wrong trade — the CI accommodation
+now lives in CI itself. On the historical default layout this almost
+never matters (Ubuntu's own `/opt` ships `755`), but if `install.sh`
+refuses with "... is writable by group or other", the message names the
+exact directory — `sudo chmod go-w <that directory>` and re-run.
+`docs/troubleshooting.md` has the full list of layout refusals and
+their fixes (5.67.0-beta.5).
+
+## Nothing to do: a relocated install no longer writes /etc/jen into itself
+
+A relocated install's generated `jen.config`, rendered systemd unit, and
+updater log messages used to still say `/etc/jen`/`/opt/jen` in a few
+spots regardless of where the install actually lives — cosmetic only
+(the app itself already derived the real paths correctly), but
+confusing to read. Fixed; nothing for any install, relocated or not, to
+do (5.67.0-beta.5).
+
+## /setup gets TLS-aware, tells the truth about IPv6, and merges instead of replacing
+
+All four changes below are to the fresh-install `/setup` wizard only —
+none of them affect an existing install or an in-place upgrade:
+
+- **Connect** now has an Advanced TLS expander (CA bundle, client
+  certificate/key, "do not verify") so a site with a private CA or
+  Kea's default mutual-TLS control socket can actually connect from
+  this step, the same as it already could from Settings.
+- **What Jen found** no longer renames a subnet you've already named,
+  and no longer silently drops one Kea didn't report this time —
+  anything orphaned is offered as an explicit, unchecked removal
+  instead. **IPv6** now says "not checked" until you press **Check for
+  DHCPv6** yourself; nothing v6-related runs before that.
+- **Recovery point** only marks itself done once a bundle from that
+  setup run has actually finished downloading, not just because a
+  button was clicked — Getting started also gains its own "A recovery
+  bundle exists" row, separate from the existing backup row.
+- **Investigate a client** opens the full six-tab Investigation page
+  now, not just the narrow Explain tab (5.67.0-beta.5).

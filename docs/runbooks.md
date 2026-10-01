@@ -290,6 +290,21 @@ different value is refused outright (`docs/ARCHITECTURE.md` §3.1 and
 §6.1 explain why the file is trusted the way it is). Relocating an
 existing install is this runbook, done by hand, while Jen is stopped.
 
+Step 4 below (re-rendering the unit) runs the SAME `jen-update-root.py
+--check-layout` every other privileged run does (`docs/installation.md`
+Method 1c's "A dedicated directory" and "ancestor" subsections) against
+the new location: its own existing ancestors must be root-owned and
+not group/other-writable (the one-line fix is named in the refusal if
+not), and it's recognized as genuinely Jen's own by the
+`.jen-directory` marker. `cp -a SOURCE/. DEST/` (step 2 below) copies
+that marker along with everything else, since it's a dot-prefixed file
+inside the directory being copied — nothing extra to do for it, but
+don't swap it for a `cp -a SOURCE DEST` (no trailing `/.`) or an rsync
+invocation that excludes dotfiles, or the new location arrives
+unmarked and the next upgrade has to recognize it by content instead
+(still fine — see `docs/ARCHITECTURE.md` §6.1 — just slower to reason
+about if something looks wrong).
+
 The steps below move the **data directory** (`/var/lib/jen` by default —
 uploads, database backups, registry-installed plugins) onto a new
 volume, the case an operator actually hits in practice (a disk running

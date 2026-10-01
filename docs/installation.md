@@ -145,6 +145,53 @@ already recorded is refused outright: relocating an **existing** install
 is a runbook (`docs/runbooks.md` §5), not a flag, since a partial move
 would leave root-owned state in two places at once.
 
+#### A dedicated directory, nothing shared (v5.67.0-beta.5)
+
+Each of `--app-dir`/`--config-dir`/`--data-dir` must name a directory
+that belongs to Jen alone, never a shared system location another
+package writes to:
+
+- **Not a shared FHS root**, exact match: `/etc`, `/var`, `/var/lib`,
+  `/var/log`, `/var/cache`, `/usr`, `/usr/local`, `/usr/lib`,
+  `/usr/share`, `/opt`, `/srv`, `/mnt`, `/media`, `/boot`, `/bin`,
+  `/sbin`, `/lib`, `/lib64`, `/root`, `/snap` are all refused outright
+  — a *child* of one (`/opt/jen`, the default) is fine. Also still
+  refused: `/tmp`, `/run`, `/proc`, `/sys`, `/dev`, `/home`.
+- **A conservative path grammar**: letters, digits, `.`, `_`, `-` per
+  path segment, 200 characters max. This isn't pickiness — install.sh
+  renders `jen.service` with `sed -e s#@@APP_DIR@@#$INSTALL_DIR#g` (a
+  `#` or `&` in the path would rewrite the sed expression), `%` is a
+  systemd specifier, and a space would split `ExecStart` into multiple
+  arguments.
+- **A fresh target must be absent, an empty directory, or already
+  carry Jen's own marker.** A directory with real, unrelated content
+  is never silently reused.
+
+If any of this refuses a candidate you believe should work, the
+message says exactly which rule and why — there's no way to override
+it short of choosing a different path.
+
+#### Every existing ancestor must be root-owned and not writable by anyone else
+
+Once a candidate's own grammar/shared-root checks pass, `install.sh`
+(and, on every later privileged run, the root self-updater) walks every
+*existing* ancestor directory of each of the three paths and refuses if
+any of them is not owned by root, or is writable by group or other.
+This is not a warning — it's a hard stop, because a writable parent
+lets a local user rename the root-owned child aside and plant a symlink
+in its place for the next privileged run to follow.
+
+The one-line fix, named in the refusal itself:
+
+```bash
+sudo chmod go-w <the ancestor directory it names>
+```
+
+Ubuntu's own `/opt` ships `755` (not writable by group or other), so a
+default, unrelocated install never hits this. It's most likely to come
+up relocating under a directory something else created with a
+permissive umask — fix the one directory named and re-run.
+
 ### Method 2 — Docker (external MySQL)
 
 ```bash

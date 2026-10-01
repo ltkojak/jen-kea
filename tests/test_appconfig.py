@@ -14,7 +14,7 @@ import os
 import pytest
 
 from jen import extensions
-from jen.config import app_config, load_config, write_config_value, write_subnets_config
+from jen.config import app_config, invalid_subnet_name_reason, load_config, write_config_value, write_subnets_config
 
 
 @pytest.fixture
@@ -63,6 +63,22 @@ class TestAppConfig:
         write_subnets_config({2: {"name": "IoT", "cidr": "10.0.50.0/24"}})
         assert extensions.SUBNET_MAP == {2: {"name": "IoT", "cidr": "10.0.50.0/24"}}
 
+    def test_write_subnets_refuses_a_name_with_a_comma_and_writes_nothing(self, isolated_config):
+        # v5.67.0-beta.5 (Q117, item h) — a comma breaks write_subnets'
+        # own "name, cidr" storage format (config.py's parser splits on
+        # it), silently dropping the whole entry on the next reload. The
+        # choke point refuses it outright instead, and leaves the
+        # existing [subnets] section untouched (never a partial write).
+        with pytest.raises(ValueError, match="comma"):
+            write_subnets_config({2: {"name": "IoT, Lab", "cidr": "10.0.50.0/24"}})
+        assert extensions.SUBNET_MAP == {1: {"name": "LAN", "cidr": "192.168.1.0/24"}}
+
+    def test_write_subnets_refuses_an_empty_or_overlong_name(self, isolated_config):
+        with pytest.raises(ValueError, match="required"):
+            write_subnets_config({2: {"name": "", "cidr": "10.0.50.0/24"}})
+        with pytest.raises(ValueError, match="64 characters"):
+            write_subnets_config({2: {"name": "x" * 65, "cidr": "10.0.50.0/24"}})
+
     def test_mutate_rederives_kea_servers(self, isolated_config):
         def add_server(p):
             p.add_section("kea_server_2")
@@ -106,6 +122,30 @@ class TestAppConfig:
         extensions.CONFIG_FILE = str(bad)
         with pytest.raises(ValueError):
             app_config.load()
+
+
+class TestInvalidSubnetNameReason:
+    """v5.67.0-beta.5 (Q117, item h) — the choke point's own validation,
+    tested directly and purely (no config file needed): write_subnets()/
+    write_subnets6() call this for every name before writing anything."""
+
+    def test_a_normal_name_is_fine(self):
+        assert invalid_subnet_name_reason("Office LAN") is None
+
+    def test_empty_is_refused(self):
+        assert invalid_subnet_name_reason("") == "Name is required"
+
+    def test_over_64_chars_is_refused(self):
+        assert invalid_subnet_name_reason("x" * 65) is not None
+        assert invalid_subnet_name_reason("x" * 64) is None
+
+    @pytest.mark.parametrize("bad_char", [",", "=", "[", "]"])
+    def test_forbidden_storage_format_characters_are_refused(self, bad_char):
+        assert invalid_subnet_name_reason(f"Office{bad_char}LAN") is not None
+
+    def test_a_control_character_is_refused(self):
+        assert invalid_subnet_name_reason("Office\nLAN") is not None
+        assert invalid_subnet_name_reason("Office\tLAN") is not None
 
 
 class TestTrustedProxies:

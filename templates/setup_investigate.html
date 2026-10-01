@@ -3,7 +3,7 @@
 {% block content %}
 <div class="page-header">
     <h1>{{ icon("search", "ico-lg") }} Investigate a client</h1>
-    <p>Step 6 of 6 — pick a recent lease and see why that client got what it got.</p>
+    <p>Step 6 of 6 — pick a recent lease and open its Investigation page: Overview, Explain, Trace, Timeline, DNS, and Config, all in one place.</p>
 </div>
 
 {% include "_setup_progress.html" %}
@@ -24,7 +24,7 @@
                 <form method="POST" action="/setup/investigate/visit">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="mac" value="{{ l.mac }}">
-                    <button type="submit" class="btn btn-secondary btn-sm">Explain</button>
+                    <button type="submit" class="btn btn-secondary btn-sm">Investigate</button>
                 </form>
             </td>
         </tr>

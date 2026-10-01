@@ -62,21 +62,42 @@
     {% endif %}
 
     <h4>Subnets Kea reports</h4>
-    {% if found.proposed_subnets %}
+    {% if found.proposed_subnets or found.orphaned_subnets %}
     <form method="POST" action="/setup/found">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {% if found.proposed_subnets %}
         <table class="table">
             <thead><tr><th>ID</th><th>Name</th><th>CIDR</th></tr></thead>
             <tbody>
                 {% for sid, info in found.proposed_subnets.items() %}
                 <tr>
                     <td>{{ sid }}</td>
-                    <td><input type="text" name="name_{{ sid }}" value="{{ info.name }}"></td>
+                    <td><input type="text" name="name_{{ sid }}" value="{{ info.name }}" maxlength="64"></td>
                     <td><code>{{ info.cidr }}</code></td>
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
+        {% else %}
+        <p class="u-865c33">Kea reports no subnets yet.</p>
+        {% endif %}
+        {% if found.orphaned_subnets %}
+        <h4>Subnets Jen knows that Kea didn't report this time</h4>
+        <p class="u-865c33">Not removed unless you check "remove" — Kea may just be unreachable, or this subnet may live on a different server.</p>
+        <table class="table">
+            <thead><tr><th>ID</th><th>Name</th><th>CIDR</th><th>Remove</th></tr></thead>
+            <tbody>
+                {% for sid, info in found.orphaned_subnets.items() %}
+                <tr>
+                    <td>{{ sid }}</td>
+                    <td>{{ info.name }}</td>
+                    <td><code>{{ info.cidr }}</code></td>
+                    <td><input type="checkbox" name="remove_{{ sid }}" value="1"></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
         <button type="submit" class="btn btn-primary">Use these subnets</button>
         <button type="submit" name="action" value="skip" class="btn btn-secondary">Skip for now</button>
     </form>

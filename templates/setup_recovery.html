@@ -10,6 +10,9 @@
 
 <div class="card u-d53a7a">
     <h3 class="u-d46224">Download a recovery bundle</h3>
+    {% if recovery.fresh %}
+    <p>{{ icon('circle-check') }} Downloaded {{ recovery.size }} bytes at {{ recovery.at }}{% if recovery.excluded_audit_history %} (audit history excluded){% endif %}.</p>
+    {% endif %}
     <form method="POST" action="/settings/databases/recovery-bundle" autocomplete="off" data-download>
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
@@ -25,7 +28,7 @@
         <div class="form-hint u-da12f2">
             Write this passphrase down somewhere safe — Jen never stores it, and there is no recovery if you lose it.
         </div>
-        <button type="submit" class="btn btn-primary">{{ icon("box") }} Download recovery bundle</button>
+        <button type="submit" class="btn btn-primary">{{ icon("box") }} Download recovery bundle{% if recovery.fresh %} again{% endif %}</button>
     </form>
 
     <h3>Or schedule regular backups</h3>
@@ -56,16 +59,19 @@
     </form>
 
     <div class="u-1b0f49">
+        {% if recovery.fresh %}
         <form method="POST" action="/setup/recovery" class="u-cccfa4">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="action" value="done">
-            <button type="submit" class="btn btn-primary">I've saved it — continue</button>
+            <button type="submit" class="btn btn-primary">Continue</button>
         </form>
+        {% else %}
         <form method="POST" action="/setup/recovery" class="u-cccfa4">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="action" value="skip">
-            <button type="submit" class="btn btn-secondary">Skip for now</button>
+            <button type="submit" class="btn btn-secondary">I will do this later</button>
         </form>
+        {% endif %}
     </div>
 </div>
 {% endblock %}

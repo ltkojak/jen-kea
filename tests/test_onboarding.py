@@ -36,6 +36,7 @@ def _ctx(**over):
         "alert_channels_enabled": 1,
         "backup_count": 1,
         "backup_schedule_enabled": False,
+        "last_recovery_bundle_at": "2026-10-01T00:00:00",
         "ha_mode": False,
         "server_count": 1,
     }
@@ -134,6 +135,21 @@ class TestChecklistRows:
         row = next(r for r in summary["rows"] if "HA" in r["title"])
         assert row["done"] is True
 
+    def test_recovery_bundle_row_undone_when_never_downloaded(self):
+        # v5.67.0-beta.5 (Q117, item i) — distinct from "A backup
+        # exists": a recovery bundle (encrypted, config + keys, one-time
+        # download) had no row of its own before this Q.
+        summary = onboarding.checklist(_ctx(last_recovery_bundle_at=""))
+        row = next(r for r in summary["rows"] if r["title"] == "A recovery bundle exists")
+        assert row["done"] is False
+        assert row["detail"] == "none downloaded yet"
+
+    def test_recovery_bundle_row_done_when_downloaded(self):
+        summary = onboarding.checklist(_ctx(last_recovery_bundle_at="2026-10-01T12:00:00"))
+        row = next(r for r in summary["rows"] if r["title"] == "A recovery bundle exists")
+        assert row["done"] is True
+        assert "2026-10-01T12:00:00" in row["detail"]
+
 
 # ── v5.67.0 (Q115) — links into whichever wizard step is still open ─────────
 
@@ -146,6 +162,7 @@ class TestSetupWizardLinks:
         assert by_title["Every subnet is named"]["link"] == "/setup/found"
         assert by_title["SSH and the Kea host helper are current"]["link"] == "/setup/helper"
         assert by_title["A backup exists or is scheduled"]["link"] == "/setup/recovery"
+        assert by_title["A recovery bundle exists"]["link"] == "/setup/recovery"
 
     def test_resolved_steps_fall_back_to_their_usual_link(self):
         resolved = {"connect": "done", "found": "skipped", "helper": "done", "recovery": "done"}
@@ -155,6 +172,7 @@ class TestSetupWizardLinks:
         assert by_title["Every subnet is named"]["link"] == "/settings/kea"
         assert by_title["SSH and the Kea host helper are current"]["link"] == "/settings/kea"
         assert by_title["A backup exists or is scheduled"]["link"] == "/settings/databases?tab=backups"
+        assert by_title["A recovery bundle exists"]["link"] == "/settings/databases?tab=recovery"
 
     def test_missing_wizard_state_does_not_crash(self):
         """A ctx with no "wizard_state" key at all (every other test in

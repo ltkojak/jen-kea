@@ -253,9 +253,19 @@ def setup_found():
     for sid, info in found["proposed_subnets"].items():
         name = request.form.get(f"name_{sid}", info["name"]).strip() or info["name"]
         subnets[sid] = {"name": name, "cidr": info["cidr"]}
-    if subnets:
-        __setup.save_subnets(subnets)
-    __user.audit("SETUP_WIZARD", "found", f"subnets={len(subnets)}")
+    remove_ids = {sid for sid in found["orphaned_subnets"] if request.form.get(f"remove_{sid}", "") == "1"}
+    if subnets or remove_ids:
+        merged, error = __setup.save_subnets(subnets, remove_ids)
+        if error:
+            flash(f"Subnets not saved: {error}.", "error")
+            return render_template(
+                "setup_found.html",
+                progress=_progress(),
+                found=found,
+                hook_loss=__setup.HOOK_LOSS,
+                hook_labels=__setup.HOOK_LABELS,
+            )
+    __user.audit("SETUP_WIZARD", "found", f"subnets={len(subnets)} removed={len(remove_ids)}")
     __setup.set_step("found", "done")
     return redirect(next_url)
 
@@ -363,26 +373,52 @@ def setup_recovery():
     from jen.services import dbexport
 
     if request.method == "GET":
-        return render_template("setup_recovery.html", progress=_progress(), schedule=dbexport.get_schedule())
+        return render_template(
+            "setup_recovery.html",
+            progress=_progress(),
+            schedule=dbexport.get_schedule(),
+            recovery=__setup.recovery_bundle_status(),
+        )
 
     action = request.form.get("action", "")
     if action == "skip":
         __setup.set_step("recovery", "skipped")
+        __user.audit("SETUP_WIZARD", "recovery", "skipped")
         return redirect(url_for("setup.setup_investigate"))
 
     if action == "schedule":
-        enabled = 1 if request.form.get("enabled") else 0
-        frequency = request.form.get("frequency", "daily")
-        hour = int(request.form.get("hour", 2) or 2)
-        keep_count = max(1, min(30, int(request.form.get("keep_count", 7) or 7)))
-        include_jen = 1 if request.form.get("include_jen") else 0
-        include_kea = 1 if request.form.get("include_kea") else 0
-        dbexport.save_schedule(enabled, frequency, hour, keep_count, include_jen, include_kea)
-        __user.audit("SETUP_WIZARD", "recovery", f"schedule enabled={bool(enabled)}")
+        values, errors = dbexport.validate_schedule(request.form)
+        if errors:
+            for e in errors:
+                flash(e, "error")
+            return (
+                render_template(
+                    "setup_recovery.html",
+                    progress=_progress(),
+                    schedule=dbexport.get_schedule(),
+                    recovery=__setup.recovery_bundle_status(),
+                ),
+                400,
+            )
+        dbexport.save_schedule(
+            values["enabled"],
+            values["frequency"],
+            values["hour"],
+            values["keep_count"],
+            values["include_jen"],
+            values["include_kea"],
+        )
+        __user.audit("SETUP_WIZARD", "recovery", f"schedule enabled={bool(values['enabled'])}")
         flash("Backup schedule saved.", "success")
         return redirect(url_for("setup.setup_recovery"))
 
     if action == "done":
+        # v5.67.0-beta.5 (Q117, item i) — "done" used to mean only that
+        # this button was clicked; now it means a real bundle this setup
+        # run itself produced actually finished downloading.
+        if not __setup.recovery_bundle_status()["fresh"]:
+            flash("No recovery bundle has been downloaded yet in this setup run.", "error")
+            return redirect(url_for("setup.setup_recovery"))
         __setup.set_step("recovery", "done")
         __user.audit("SETUP_WIZARD", "recovery", "confirmed")
         return redirect(url_for("setup.setup_investigate"))
@@ -418,7 +454,13 @@ def setup_investigate_visit():
         took = f" — took {elapsed // 60} minute(s)" if elapsed is not None else ""
         flash(f"First hour complete{took}.", "success")
     if mac:
-        return redirect(url_for("explain.explain_page", mac=mac))
+        # v5.67.0-beta.5 (Q117, item k) — the Investigation page
+        # (jen/routes/client.py, six tabs: Overview, Explain, Trace,
+        # Timeline, DNS, Config) has existed since v5.63.0; this used
+        # to open only the narrow Explain tab (Q115's own spec, since
+        # corrected). "overview" is client_page()'s own default tab, so
+        # it's left implicit here rather than named.
+        return redirect(url_for("client.client_page", q=mac))
     return redirect(url_for("setup.setup_investigate"))
 
 

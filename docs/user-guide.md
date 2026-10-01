@@ -4,6 +4,55 @@ This guide covers the day-to-day use of Jen for managing your Kea DHCP infrastru
 
 ---
 
+## First-hour setup wizard (v5.67.0)
+
+A fresh install with Kea not yet connected lands a superadmin on `/setup`
+right after the forced password change — six steps, each skippable and
+resumable from [Getting started](#getting-started-v5390) later. The
+six-dot progress indicator at the top of every step shows what's done,
+skipped, or still open.
+
+1. **Connect** — the Kea API URL, credentials, and Kea's own database
+   connection. An **Advanced TLS** expander (collapsed unless you
+   already have values to show) covers a CA bundle path, "do not
+   verify," and a client certificate/key pair — the same four settings
+   and the same validation as Settings → Kea Server, so a site with a
+   private CA or Kea's default mutual-TLS control socket connects here
+   just as it would there (v5.67.0-beta.5).
+2. **What Jen found** — Kea's version, loaded hooks, HA status, and the
+   subnets it reports. A subnet Jen already knows by the same ID and
+   CIDR keeps the name you already gave it; only a genuinely new
+   subnet gets proposed as "Subnet*N*". Submitting this step **merges**
+   into Jen's existing subnet map — it never silently drops a subnet
+   Jen knows about that Kea didn't report this time around (a
+   temporarily unreachable server, or one that lives elsewhere); those
+   are listed separately with their own opt-in "remove" checkbox
+   (v5.67.0-beta.5). **DHCPv6** starts as "not checked" — Jen never
+   probes it on your behalf. Press **Check for DHCPv6** (direct mode
+   asks for the dhcp6 control socket URL; Control Agent mode reuses the
+   v4 connection with the dhcp6 service) to see whether Kea actually
+   answers for v6; if it does, **Manage IPv6 in Jen** saves the
+   endpoint, proposes a `[subnets6]` map, and turns on Jen's own IPv6
+   management — nothing v6-related ever runs unless you press that
+   button yourself.
+3. **Kea host helper** — installs/updates `jen-kea-helper` over SSH,
+   the root-owned script Jen uses for config pushes and service
+   control on the Kea host (`docs/ARCHITECTURE.md` §3.3).
+4. **Baseline** — reads Kea's live config once, recording it as the
+   first revision Jen can diff against later. Once IPv6 is actually
+   being managed in Jen (step 2), this captures a dhcp6 baseline too.
+5. **Recovery point** — download an encrypted recovery bundle (Settings
+   → Databases → Recovery has the same control). This step only marks
+   itself done once a bundle from *this* setup run has actually
+   finished downloading — not just because a button was clicked
+   (v5.67.0-beta.5). You can also schedule standing backups here.
+6. **Investigate a client** — pick a recent lease and open its full
+   Investigation page (Overview, Explain, Trace, Timeline, DNS, Config
+   — the same page `/client?q=...` always opens) to see why that
+   client got what it got.
+
+---
+
 ## Dashboard
 
 The dashboard is the first page you see after logging in. It gives you a live overview of your entire DHCP infrastructure at a glance.

@@ -48,21 +48,14 @@ bp = Blueprint("database", __name__)
 
 
 # ── Main page ─────────────────────────────────────────────────────────────────
-@bp.route("/settings/databases")
-@login_required
-@_admin_required
-def database():
-    """
-    v5.9.0 — Settings → Databases. The Connections tab (the Jen / Kea DB
-    connection settings that used to sit on the Infrastructure tab) is
-    admin-visible; the export/import/backup/schedule/migrate tools are
-    superadmin-only, gated per tab in the template AND on every POST route
-    below exactly as before — the page moving under Settings changes no
-    privilege boundary.
-    """
+def _render_database_page(tab: str):
+    """The Settings → Databases page body, factored out of database()
+    (v5.67.0-beta.5, Q117, item j) so a validation failure elsewhere in
+    this module (save_schedule) can re-render the SAME page with its
+    error message and a 400 status, landing on the right tab, instead of
+    a redirect that can't carry a non-3xx status to the browser."""
     from flask_login import current_user
 
-    tab = request.args.get("tab", "connections")
     if current_user.role != "superadmin":
         tab = "connections"
     backups = dbexport.list_backups() if current_user.role == "superadmin" else []
@@ -107,6 +100,13 @@ def database():
         kea_db_host=extensions.KEA_DB_HOST,
         kea_db_name=extensions.KEA_DB_NAME,
     )
+
+
+@bp.route("/settings/databases")
+@login_required
+@_admin_required
+def database():
+    return _render_database_page(request.args.get("tab", "connections"))
 
 
 @bp.route("/database")
@@ -429,13 +429,30 @@ def recovery_bundle():
         __user.audit("RECOVERY_BUNDLE_EXPORT", "settings", f"{filename} ({size} bytes, {len(members)} members)")
 
         def _stream():
+            # v5.67.0-beta.5 (Q117, item i) — `sent_fully` only flips True
+            # once the whole file has been read and yielded; a client
+            # that disconnects mid-stream hits GeneratorExit at the
+            # `yield` and skips straight to `finally` without it, so a
+            # recorded last_recovery_bundle_at always means a bundle the
+            # operator actually finished downloading — not just one
+            # Jen finished building.
+            sent_fully = False
             try:
                 with open(tmp_path, "rb") as f:
                     while chunk := f.read(1024 * 1024):
                         yield chunk
+                sent_fully = True
             finally:
                 with contextlib.suppress(OSError):
                     os.remove(tmp_path)
+                if sent_fully:
+                    from jen.models.user import set_global_setting
+
+                    set_global_setting("last_recovery_bundle_at", datetime.utcnow().isoformat())
+                    set_global_setting("last_recovery_bundle_size", str(size))
+                    set_global_setting(
+                        "last_recovery_bundle_excluded_audit", "true" if without_audit_history else "false"
+                    )
 
         return Response(
             stream_with_context(_stream()),
@@ -666,16 +683,24 @@ def import_confirm():
 @login_required
 @_superadmin_required
 def save_schedule():
-    enabled = 1 if request.form.get("enabled") else 0
-    frequency = request.form.get("frequency", "daily")
-    hour = int(request.form.get("hour", 2))
-    keep_count = max(1, min(30, int(request.form.get("keep_count", 7))))
-    include_jen = 1 if request.form.get("include_jen") else 0
-    include_kea = 1 if request.form.get("include_kea") else 0
+    values, errors = dbexport.validate_schedule(request.form)
+    if errors:
+        for e in errors:
+            flash(e, "error")
+        return _render_database_page("schedule"), 400
     try:
-        dbexport.save_schedule(enabled, frequency, hour, keep_count, include_jen, include_kea)
+        dbexport.save_schedule(
+            values["enabled"],
+            values["frequency"],
+            values["hour"],
+            values["keep_count"],
+            values["include_jen"],
+            values["include_kea"],
+        )
         flash("Backup schedule saved.", "success")
-        __user.audit("DB_SCHEDULE", "backup", f"enabled={enabled} freq={frequency} hour={hour}")
+        __user.audit(
+            "DB_SCHEDULE", "backup", f"enabled={values['enabled']} freq={values['frequency']} hour={values['hour']}"
+        )
     except Exception as e:
         logger.error(f"Could not save backup schedule: {e}")
         flash("Could not save schedule. Check server logs for details.", "error")

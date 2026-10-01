@@ -325,12 +325,26 @@ plugin installs, the one place that gap still existed.
 **What this means for any future change:** rule 8 in `CLAUDE.md` — a
 changed `sudo` command string is a changed sudoers line in the same
 commit, and this section is updated with it. Never add a parameter to
-any of the three commands. `jen-update-root.py` must never derive a
-decision from `sys.argv` beyond the fixed `--plugins` dispatch it
-already refuses to extend (`tests/test_jen_update_root.py` pins this),
-nor from the *content* of any file `www-data` can write — a plugin
-marker's filename (which plugin id, which action) is the only thing
-read from it, never its bytes.
+any of the three commands, nor derive a decision from the *content* of
+any file `www-data` can write — a plugin marker's filename (which
+plugin id, which action) is the only thing read from it, never its
+bytes.
+
+`jen-update-root.py` must never derive a decision from `sys.argv`
+reachable via the sudoers grant above beyond the fixed `--plugins`
+dispatch (`tests/test_jen_update_root.py` pins this). `--check-layout`
+and `--write-layout-markers` (v5.67.0-beta.5, Q117 — see "Relocatable
+install" below) are a deliberate, narrower exception to that rule's
+*spirit*, not a loophole in it: neither is ever reachable through the
+sudoers grant at all. `jen-sudoers` still pins the two systemd units'
+`ExecStart` lines byte-for-byte (no argv, or exactly `--plugins`), and
+the installed script is `root:root` mode `0700`, so a compromised
+`www-data` cannot exec it directly with *any* argv, pinned or not.
+Only a human already running `install.sh`/`uninstall.sh` as root
+(`sudo ./install.sh`, `sudo ./uninstall.sh`) ever calls either flag — a
+direct function call from an already-root process, not a privilege
+escalation path. A genuinely new sudoers-reachable flag is still held
+to the original, stricter rule.
 
 **systemd sandboxing (v5.17.0 / Q6 6E).** `jen.service` runs with
 `ProtectSystem=strict` (only `/etc/jen` and `/var/lib/jen` writable —
@@ -391,8 +405,75 @@ value outside the shared rules `docs/installation.md` Method 1c and
 nonzero exit from `jen-update-root.py`, `fatal()` from `install.sh` —
 never a silent fallback to the defaults, the same fail-closed posture
 as the checksum/signature checks elsewhere in this section.
-`tests/test_layout.py` and `tests/test_jen_update_root.py::TestLoadLayout`
-exercise the same validation table from the bash and Python sides.
+
+**ONE checker (v5.67.0-beta.5, Q117).** A ChatGPT review of
+5.67.0-beta.3, confirmed by Fable against the shipped commit, found
+`install.sh`'s own bash copy of the path-validation rules had already
+drifted from `jen-update-root.py`'s Python copy: the bash side's
+forbidden-prefix list let `--config-dir /etc` or `--app-dir /usr`
+through, both of which then got recursively `chown`'d/`chmod`'d by
+`install_files()`. The fix was to delete the bash copy outright —
+`install.sh` and `uninstall.sh` now both call
+`jen-update-root.py --check-layout --for {install,upgrade,uninstall}
+[--app-dir X --config-dir Y --data-dir Z]` (install.sh's own copy,
+already running as root; uninstall.sh's installed `/usr/local/sbin`
+copy) and treat its stdout/exit code as the single source of truth —
+see the exception carved out for this in "What this means for any
+future change" above. The contract this one checker enforces:
+
+- **A dedicated directory, not just "not obviously wrong".** Every FHS
+  shared root (`/etc`, `/opt`, `/usr`, `/usr/local`, `/var`, `/var/lib`,
+  and the rest of the list in `jen-update-root.py`'s own
+  `_LAYOUT_SHARED_ROOTS`) is refused outright, exact match — a sibling
+  like `/optional-thing` is unaffected. A conservative path grammar
+  (letters, digits, `.`, `_`, `-` per segment, 200 characters) closes
+  the specific injection surface `install.sh` already has into a layout
+  path: `sed -e s#@@APP_DIR@@#$INSTALL_DIR#g` when rendering
+  `jen.service` (a `#` or `&` rewrites the sed expression), `%` as a
+  systemd specifier, a space splitting `ExecStart`.
+- **Every existing ancestor must be root-owned and not group/other-
+  writable — a hard refusal, no CI-driven exception.** Q114 downgraded
+  the writable case to a warning because GitHub's hosted runner ships
+  `/opt` mode 777; that was wrong — a writable parent lets a local user
+  rename the root-owned child aside and plant a symlink in its place for
+  the next privileged run to follow, which is exactly the attack this
+  check exists to close. The CI accommodation now belongs in CI itself
+  (`.github/workflows/tests.yml`'s `install` job hardens `/opt` to 755
+  before using it; `install-layout-negative` proves the refusal still
+  fires against a 777 ancestor). `app_dir` itself (once it exists) gets
+  the same treatment on every privileged run, not just at first
+  install — `config_dir`/`data_dir` are intentionally `www-data`-owned
+  (§6.1) so this direct check is `app_dir`-only; their safety comes from
+  the ancestor walk and the marker below.
+- **The dedicated-directory marker.** A layout target for a *fresh*
+  install must be absent, an empty directory, or already carry a
+  `.jen-directory` marker (`role`/`version`, plain `key = value` text,
+  root:root 0644, same trust level as the layout file) — never a
+  directory with unrelated real content, silently reused. A genuine
+  pre-Q117 install has no marker yet: `--for upgrade`/`--for uninstall`
+  recognize one by the same content each role's own install step always
+  puts there (`config_dir` has `jen.config`; `app_dir` has `releases/`
+  or a flat `run.py`; `data_dir` has `icons`/`branding`/`backups`/
+  `keys`) and retroactively stamp the marker the first time they see it.
+  An unrecognized, unmarked directory is tolerated on `--for upgrade`
+  (refusing every upgrade until a human intervenes would be its own
+  outage) but refused outright on `--for uninstall` (destructive, so it
+  never guesses). `install.sh` itself stamps a fresh install's markers
+  once `install_files()`/`migrate_content()` have actually created the
+  three directories (`--write-layout-markers`, called after the
+  install's own `--check-layout --for install` ran — that call is
+  necessarily *before* anything exists, so it never writes a marker
+  itself). A box from before Q114 has no layout file yet but a real,
+  non-empty `app_dir`: `install.sh` detects that and sends `--for
+  upgrade` rather than `--for install`, since the latter's absent/
+  empty/marked rule exists only to stop a *fresh* install from silently
+  reusing unrelated content.
+
+`tests/test_layout.py` exercises `install.sh`'s own glue (argument-
+building, key=value parsing, refusal pass-through) against a stubbed
+checker; `tests/test_jen_update_root.py` exercises the real validation
+rules — grammar, shared roots, nesting, ancestor ownership, the marker
+contract — against real temp dirs.
 
 ### 3.2 SSH host-key verification (trust-on-first-use)
 
@@ -1933,14 +2014,24 @@ The table below uses the historical defaults — `/opt/jen` (`app_dir`),
 `/etc/jen` (`config_dir`), `/var/lib/jen` (`data_dir`) — what every
 install gets when `/etc/jen-layout.conf` is absent, which is every
 install before v5.67.0 and any install since that never asked to
-relocate. §3.1 above covers where that file lives and why; the three
-directories may not be nested inside one another, none may live under
-`/tmp`/`/run`/`/proc`/`/sys`/`/dev`/`/home`, and `docs/installation.md`
-Method 1c is where an operator actually sets them at install time.
+relocate. §3.1 above covers where that file lives and why, and (since
+v5.67.0-beta.5, Q117) the single `jen-update-root.py --check-layout`
+implementation that now enforces every rule for both `install.sh` and
+`uninstall.sh`: the three directories may not be nested inside one
+another; none may live under `/tmp`/`/run`/`/proc`/`/sys`/`/dev`/
+`/home` or be (or live under) a shared FHS root like `/etc`/`/opt`/
+`/usr`/`/var`; each must satisfy a conservative path grammar; every
+existing ancestor must be root-owned and not group/other-writable, a
+hard refusal re-checked on *every* privileged run, not just at first
+install; and each must carry (or earn, by content, on upgrade) a
+`.jen-directory` marker before an install/upgrade/uninstall trusts it.
+`docs/installation.md` Method 1c is where an operator actually sets
+these at install time.
 
 | Path | Holds | Owner / mode | What an upgrade does |
 |------|-------|--------------|----------------------|
 | `/etc/jen-layout.conf` (v5.67.0) | `app_dir`/`config_dir`/`data_dir`, if this install relocated any of them | `root:root`, `0644` | Written once, at fresh install. Never touched by an upgrade; hand-editing it to relocate an *existing* install is refused — `docs/runbooks.md` §5 is the real procedure. |
+| `<app_dir>/.jen-directory`, `<config_dir>/.jen-directory`, `<data_dir>/.jen-directory` (v5.67.0-beta.5) | That directory's `role` and the Jen `version` that stamped it | `root:root`, `0644` | Written once `install.sh` has actually created the three directories (`--write-layout-markers`). A pre-Q117 install earns its markers retroactively, the first time `--check-layout --for upgrade`/`--for uninstall` recognizes each directory by its own real content. |
 | `<app_dir>/releases/<X.Y.Z>/app/` | One release's full tree: `jen/`, `templates/`, `static/`, `plugins/` (every bundled plugin directory, seven today; `shipped_plugin_ids()`), `run.py`, the shipped external files (including `jen.service.template`), `docs/` | `root:root`, `a+rX` — read-and-execute only for `www-data` | Built whole under a `.staging-<ts>` sibling, then `os.rename()`d into place. Byte-compiled as root. The previous release's directory is left untouched. |
 | `<app_dir>/releases/<X.Y.Z>/venv/` | That release's virtualenv, built for its own `requirements.txt` | `root:root` | Built fresh per release — the rollback is a true point-in-time revert of dependencies too. |
 | `<app_dir>/current` | Relative symlink → `releases/<live>` | symlink | Flipped with `os.replace()` (atomic). A rollback flips it back. |

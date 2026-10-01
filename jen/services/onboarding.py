@@ -122,6 +122,21 @@ def checklist(ctx: dict) -> dict:
         }
     )
 
+    # v5.67.0-beta.5 (Q117, item i) — a recovery bundle is a distinct
+    # thing from a database backup (encrypted, includes config/keys, a
+    # one-time download rather than a standing schedule) and had no row
+    # of its own; "A backup exists" could read as covering it when it
+    # never did.
+    recovery_bundle_at = ctx.get("last_recovery_bundle_at", "")
+    rows.append(
+        {
+            "title": "A recovery bundle exists",
+            "done": bool(recovery_bundle_at),
+            "detail": f"downloaded {recovery_bundle_at}" if recovery_bundle_at else "none downloaded yet",
+            "link": _link("recovery", "/settings/databases?tab=recovery"),
+        }
+    )
+
     _from_check(rows, checks, "lease_snapshot_fresh", "Lease snapshots are flowing", "/settings/system")
 
     if ctx.get("ha_mode"):
@@ -172,6 +187,7 @@ def build_ctx(user, is_superadmin: bool) -> dict:
         "alert_channels_enabled": channels,
         "backup_count": dbexport.backup_count(),
         "backup_schedule_enabled": bool(schedule.get("enabled")) if schedule else False,
+        "last_recovery_bundle_at": __setup_wizard.recovery_bundle_status()["at"],
         "ha_mode": bool(extensions.cfg.get("kea", "ha_mode", fallback="")),
         "server_count": len(extensions.KEA_SERVERS),
         "wizard_state": __setup_wizard.get_state(),

@@ -66,6 +66,39 @@ def _parse_trusted_proxies(raw: str) -> list:
     return nets
 
 
+# v5.67.0-beta.5 (Q117, item h) — write_subnets()/write_subnets6()'s own
+# storage format is "name, cidr[, paired_v4_subnet_id]"; a name containing
+# any of these breaks that split(",") on the next read (_parse_subnet_map,
+# below) and the whole entry is silently dropped — not rejected at write
+# time, just gone on the next reload with nothing but a log warning. `=`,
+# `[` and `]` are refused too: ConfigParser's own INI syntax would read a
+# `name = x` value fine today, but a name containing them is one format
+# change away from the same silent-corruption class.
+SUBNET_NAME_MAX_LEN = 64
+_SUBNET_NAME_FORBIDDEN_CHARS = ",=[]"
+
+
+def invalid_subnet_name_reason(name: str) -> str | None:
+    """None if `name` is safe to store, else a short, user-facing reason.
+    write_subnets()/write_subnets6() call this for every name before
+    writing anything, so nothing bypasses it — a bad name always raises
+    ValueError there at minimum. routes/subnets.py's add-subnet form
+    also calls it directly first, for an inline refusal before Kea's
+    own config is ever touched, rather than only finding out from the
+    choke point after the fact; /setup's Found step relies on the choke
+    point alone (jen.services.setup_wizard.save_subnets catches the
+    ValueError and turns it into a flash message)."""
+    if not name:
+        return "Name is required"
+    if len(name) > SUBNET_NAME_MAX_LEN:
+        return f"Name must be at most {SUBNET_NAME_MAX_LEN} characters"
+    if any(c in name for c in _SUBNET_NAME_FORBIDDEN_CHARS):
+        return "Name must not contain a comma, =, [ or ]"
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in name):
+        return "Name must not contain a control character"
+    return None
+
+
 class AppConfig:
     """Owns loading, writing, and derivation of jen.config."""
 
@@ -297,7 +330,15 @@ class AppConfig:
             self.reload()
 
     def write_subnets(self, subnet_dict: dict, reload: bool = True) -> None:
-        """Rewrite the [subnets] section entirely, then reload."""
+        """Rewrite the [subnets] section entirely, then reload.
+
+        v5.67.0-beta.5 (Q117, item h) — every name is validated BEFORE
+        anything is written (never a partial write): a bad one raises
+        ValueError rather than silently corrupting the stored line."""
+        for sid, info in subnet_dict.items():
+            reason = invalid_subnet_name_reason(info["name"])
+            if reason:
+                raise ValueError(f"subnet {sid}: {reason}")
         parser = self._read_parser()
         if parser.has_section("subnets"):
             parser.remove_section("subnets")
@@ -312,6 +353,10 @@ class AppConfig:
         """Rewrite the [subnets6] section entirely, then reload. Mirrors
         write_subnets() above; includes the optional paired_subnet4_id
         third field when an entry has one set."""
+        for sid, info in subnet_dict.items():
+            reason = invalid_subnet_name_reason(info["name"])
+            if reason:
+                raise ValueError(f"subnet {sid}: {reason}")
         parser = self._read_parser()
         if parser.has_section("subnets6"):
             parser.remove_section("subnets6")

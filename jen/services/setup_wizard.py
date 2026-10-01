@@ -262,12 +262,19 @@ def save_connection(
 
 def discover() -> dict:
     """Live facts about the primary Kea server: version, hooks (and what
-    each buys), HA, v6 presence, and the subnet map Kea itself reports
-    (named Subnet<id> by default — Kea's own config carries no richer
-    name for a subnet than its CIDR; install.sh's own discovery names
-    them the same way). Never raises — a failed probe just reports
-    "unreachable" fields, same contract as every other live-Kea read in
-    this codebase."""
+    each buys), HA, v6 presence, and the subnet map Kea itself reports.
+    Never raises — a failed probe just reports "unreachable" fields,
+    same contract as every other live-Kea read in this codebase.
+
+    v5.67.0-beta.5 (Q117, item h) — a subnet Jen already knows by the
+    SAME id and CIDR keeps its own name as the proposal (this step used
+    to re-propose "Subnet<id>" for every live subnet, renaming away
+    whatever the operator had already called it, every time /setup was
+    revisited). A changed CIDR under a reused id, or a genuinely new id,
+    still proposes "Subnet<id>" — there's no existing name to keep.
+    "orphaned_subnets" lists what Jen has that Kea's live report did
+    NOT return, for the template to offer as an opt-in removal — never
+    dropped silently by the merge in routes/setup.py."""
     from jen import extensions
     from jen.services import capabilities, config_drift, kea_ha
     from jen.services import kea as __kea
@@ -283,7 +290,13 @@ def discover() -> dict:
 
     ha = kea_ha.ha_config(dhcp4_cfg) if dhcp4_cfg else None
     live_subnets = config_drift.fetch_live_subnet_map("v4")
-    proposed = {sid: {"name": f"Subnet{sid}", "cidr": cidr} for sid, cidr in sorted(live_subnets.items())}
+    known = extensions.SUBNET_MAP
+    proposed = {}
+    for sid, cidr in sorted(live_subnets.items()):
+        existing = known.get(sid)
+        name = existing["name"] if existing and existing["cidr"] == cidr else f"Subnet{sid}"
+        proposed[sid] = {"name": name, "cidr": cidr}
+    orphaned = {sid: info for sid, info in known.items() if sid not in live_subnets}
 
     return {
         "reachable": caps.reachable,
@@ -298,6 +311,7 @@ def discover() -> dict:
         "ha": ha,
         "ipv6_enabled": _ipv6_enabled(),
         "proposed_subnets": proposed,
+        "orphaned_subnets": orphaned,
     }
 
 
@@ -307,10 +321,29 @@ def _ipv6_enabled() -> bool:
     return get_global_setting("ipv6_enabled", "false") == "true"
 
 
-def save_subnets(subnets: dict) -> None:
+def save_subnets(renamed: dict, remove_ids: set = frozenset()) -> tuple[dict, str | None]:
+    """Merge `renamed` (the Found step's own proposed/edited subnets,
+    `{sid: {"name", "cidr"}}`) into Jen's FULL existing subnet map —
+    never a bare replace (v5.67.0-beta.5, Q117, item h: the old
+    behavior silently dropped any subnet Jen knew about that Kea's
+    live report didn't return this time). `remove_ids` drops only the
+    ids a superadmin explicitly checked for removal among the
+    orphaned ones discover() reported — omission never removes
+    anything. Returns (final_map, error): error is None on success,
+    else the first bad name's reason from the choke point
+    (AppConfig.write_subnets) — nothing is written on a bad name."""
+    from jen import extensions
     from jen.config import app_config
 
-    app_config.write_subnets(subnets)
+    merged = dict(extensions.SUBNET_MAP)
+    merged.update(renamed)
+    for sid in remove_ids:
+        merged.pop(sid, None)
+    try:
+        app_config.write_subnets(merged)
+    except ValueError as e:
+        return merged, str(e)
+    return merged, None
 
 
 def probe_v6(url: str, user: str, password: str, *, omit_service: bool) -> dict:
@@ -489,6 +522,44 @@ def capture_baseline(server: dict, service: str = "dhcp4") -> dict:
     return {"ok": True, "revision": __rev.latest(server.get("id"), service)}
 
 
+# ── step 5: recovery point ───────────────────────────────────────────────────
+
+
+def recovery_bundle_status() -> dict:
+    """Whether a REAL recovery bundle has actually been downloaded, not
+    just whether a button on this step was clicked (v5.67.0-beta.5,
+    Q117, item i — the old "I've saved it" button set the step "done"
+    unconditionally). `last_recovery_bundle_at` is written by
+    routes/database.py's recovery_bundle() route itself, only once its
+    streaming response has fully finished sending (never on a build
+    failure or a client disconnecting mid-download). "fresh" is true
+    only when that bundle is newer than THIS setup run's own start —
+    an old bundle from months ago doesn't retroactively complete a
+    setup run that never made a new one.
+    Returns {"exists", "at", "size", "excluded_audit_history", "fresh"}.
+    """
+    from datetime import datetime
+
+    from jen.models.user import get_global_setting
+
+    at = get_global_setting("last_recovery_bundle_at", "")
+    if not at:
+        return {"exists": False, "at": "", "size": 0, "excluded_audit_history": False, "fresh": False}
+
+    size = int(get_global_setting("last_recovery_bundle_size", "0") or 0)
+    excluded = get_global_setting("last_recovery_bundle_excluded_audit", "false") == "true"
+
+    fresh = False
+    started = get_global_setting(_STARTED_KEY, "")
+    if started:
+        try:
+            fresh = datetime.fromisoformat(at) >= datetime.fromisoformat(started)
+        except ValueError:
+            fresh = False
+
+    return {"exists": True, "at": at, "size": size, "excluded_audit_history": excluded, "fresh": fresh}
+
+
 # ── step 6: investigate ──────────────────────────────────────────────────────
 
 
@@ -497,7 +568,8 @@ def recent_leases(limit: int = 5) -> list[dict]:
     same way dashboard.py's own /api/recent-leases widget is — a small,
     independent query rather than reusing that route's private
     HTML-fragment response, since this step needs a plain row of data to
-    link from (to /tools/explain), not that widget's own markup."""
+    link from (to /client's Investigation page — v5.67.0-beta.5, Q117,
+    item k, not /tools/explain), not that widget's own markup."""
     from jen import extensions
     from jen.models import db as __db
     from jen.services.access import add_subnet_restriction

@@ -376,8 +376,9 @@ def add_subnet_post():
         flash(f"Subnet ID {new_id} is already in use.", "error")
         return redirect(url_for("subnets.add_subnet"))
 
-    if not new_name:
-        flash("A friendly name is required.", "error")
+    name_reason = __config.invalid_subnet_name_reason(new_name)
+    if name_reason:
+        flash(name_reason, "error")
         return redirect(url_for("subnets.add_subnet"))
 
     try:

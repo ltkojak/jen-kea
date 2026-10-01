@@ -327,6 +327,58 @@ class TestDiscover:
             1: {"name": "Subnet1", "cidr": "10.0.0.0/24"},
             2: {"name": "Subnet2", "cidr": "10.0.1.0/24"},
         }
+        assert found["orphaned_subnets"] == {}
+
+    def _mock_discover_deps(self, monkeypatch, *, live_subnets, known_subnets):
+        from jen import extensions
+
+        caps = MagicMock(
+            reachable=True, kea_version_text="2.7.5", host_cmds=True, lease_cmds=True, ha_commands=False, ddns=False
+        )
+        monkeypatch.setattr("jen.services.capabilities.for_primary", lambda **kw: caps)
+        monkeypatch.setattr(
+            "jen.services.kea.kea_command",
+            lambda *a, **kw: {"result": 0, "arguments": {"Dhcp4": {"subnet4": []}}},
+        )
+        monkeypatch.setattr("jen.services.kea_ha.ha_config", lambda cfg: None)
+        monkeypatch.setattr("jen.services.config_drift.fetch_live_subnet_map", lambda family="v4": live_subnets)
+        monkeypatch.setattr(setup_wizard, "_ipv6_enabled", lambda: False)
+        monkeypatch.setattr(extensions, "SUBNET_MAP", known_subnets)
+
+    def test_a_subnet_jen_already_knows_by_the_same_id_and_cidr_keeps_its_name(self, monkeypatch):
+        # v5.67.0-beta.5 (Q117, item h) — this used to re-propose
+        # "Subnet<id>" for every live subnet every time /setup was
+        # revisited, renaming away whatever the operator had already
+        # called it.
+        self._mock_discover_deps(
+            monkeypatch,
+            live_subnets={1: "10.0.0.0/24"},
+            known_subnets={1: {"name": "Office LAN", "cidr": "10.0.0.0/24"}},
+        )
+        found = setup_wizard.discover()
+        assert found["proposed_subnets"] == {1: {"name": "Office LAN", "cidr": "10.0.0.0/24"}}
+
+    def test_a_changed_cidr_under_a_reused_id_proposes_a_fresh_default_name(self, monkeypatch):
+        self._mock_discover_deps(
+            monkeypatch,
+            live_subnets={1: "10.0.9.0/24"},
+            known_subnets={1: {"name": "Office LAN", "cidr": "10.0.0.0/24"}},
+        )
+        found = setup_wizard.discover()
+        assert found["proposed_subnets"] == {1: {"name": "Subnet1", "cidr": "10.0.9.0/24"}}
+
+    def test_a_known_subnet_kea_did_not_report_is_orphaned_not_dropped(self, monkeypatch):
+        self._mock_discover_deps(
+            monkeypatch,
+            live_subnets={1: "10.0.0.0/24"},
+            known_subnets={
+                1: {"name": "Office LAN", "cidr": "10.0.0.0/24"},
+                2: {"name": "Old VLAN", "cidr": "10.0.1.0/24"},
+            },
+        )
+        found = setup_wizard.discover()
+        assert found["proposed_subnets"] == {1: {"name": "Office LAN", "cidr": "10.0.0.0/24"}}
+        assert found["orphaned_subnets"] == {2: {"name": "Old VLAN", "cidr": "10.0.1.0/24"}}
 
     def test_a_failed_config_get_does_not_raise(self, monkeypatch):
         caps = MagicMock(
@@ -343,6 +395,73 @@ class TestDiscover:
         assert found["reachable"] is False
         assert found["ha"] is None
         assert found["proposed_subnets"] == {}
+
+
+class TestSaveSubnets:
+    """v5.67.0-beta.5 (Q117, item h) — save_subnets() merges into Jen's
+    FULL existing subnet map; it never replaces it wholesale, and never
+    drops an orphaned subnet unless its id is explicitly in
+    `remove_ids`."""
+
+    def _mock_subnet_map(self, monkeypatch, known_subnets):
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "SUBNET_MAP", known_subnets)
+
+    def test_renames_apply_and_everything_else_survives(self, monkeypatch):
+        self._mock_subnet_map(
+            monkeypatch,
+            {
+                1: {"name": "Office LAN", "cidr": "10.0.0.0/24"},
+                2: {"name": "Old VLAN", "cidr": "10.0.1.0/24"},
+            },
+        )
+        calls = []
+        monkeypatch.setattr("jen.config.app_config.write_subnets", lambda d: calls.append(d))
+        merged, error = setup_wizard.save_subnets({1: {"name": "Renamed LAN", "cidr": "10.0.0.0/24"}})
+        assert error is None
+        assert merged == {
+            1: {"name": "Renamed LAN", "cidr": "10.0.0.0/24"},
+            2: {"name": "Old VLAN", "cidr": "10.0.1.0/24"},
+        }
+        assert calls == [merged]
+
+    def test_remove_ids_drops_only_the_checked_orphans(self, monkeypatch):
+        self._mock_subnet_map(
+            monkeypatch,
+            {
+                1: {"name": "Office LAN", "cidr": "10.0.0.0/24"},
+                2: {"name": "Old VLAN", "cidr": "10.0.1.0/24"},
+                3: {"name": "Another Old One", "cidr": "10.0.2.0/24"},
+            },
+        )
+        monkeypatch.setattr("jen.config.app_config.write_subnets", lambda d: None)
+        merged, error = setup_wizard.save_subnets({}, remove_ids={2})
+        assert error is None
+        assert merged == {
+            1: {"name": "Office LAN", "cidr": "10.0.0.0/24"},
+            3: {"name": "Another Old One", "cidr": "10.0.2.0/24"},
+        }
+
+    def test_an_unchecked_orphan_is_never_dropped(self, monkeypatch):
+        self._mock_subnet_map(
+            monkeypatch, {1: {"name": "A", "cidr": "10.0.0.0/24"}, 2: {"name": "B", "cidr": "10.0.1.0/24"}}
+        )
+        monkeypatch.setattr("jen.config.app_config.write_subnets", lambda d: None)
+        merged, error = setup_wizard.save_subnets({})
+        assert error is None
+        assert 2 in merged
+
+    def test_a_bad_name_is_refused_and_nothing_is_written(self, monkeypatch):
+        self._mock_subnet_map(monkeypatch, {1: {"name": "A", "cidr": "10.0.0.0/24"}})
+        calls = []
+        monkeypatch.setattr(
+            "jen.config.app_config.write_subnets",
+            lambda d: calls.append(d) or (_ for _ in ()).throw(ValueError("subnet 1: Name must not contain a comma")),
+        )
+        merged, error = setup_wizard.save_subnets({1: {"name": "A, B", "cidr": "10.0.0.0/24"}})
+        assert error == "subnet 1: Name must not contain a comma"
+        assert calls  # write_subnets WAS called (it's the one that raised) — caller sees the error, not a crash
 
 
 # ── step 3: the Kea host helper — pure/mocked parts ─────────────────────────
@@ -416,6 +535,63 @@ class TestCaptureBaseline:
         )
         result = setup_wizard.capture_baseline({"id": 1}, "dhcp4")
         assert result == {"ok": True, "revision": {"id": 1, "source": "baseline"}}
+
+
+# ── step 5: recovery point ───────────────────────────────────────────────────
+
+
+class TestRecoveryBundleStatus:
+    """v5.67.0-beta.5 (Q117, item i) — real bundle state, not "was a
+    button clicked". routes/database.py's recovery_bundle() route is the
+    only writer of these three settings, only once its stream has
+    actually finished sending."""
+
+    def _mock_settings(self, monkeypatch, store):
+        monkeypatch.setattr("jen.models.user.get_global_setting", lambda key, default="": store.get(key, default))
+
+    def test_never_downloaded(self, monkeypatch):
+        self._mock_settings(monkeypatch, {})
+        status = setup_wizard.recovery_bundle_status()
+        assert status == {"exists": False, "at": "", "size": 0, "excluded_audit_history": False, "fresh": False}
+
+    def test_downloaded_after_this_setup_run_started_is_fresh(self, monkeypatch):
+        self._mock_settings(
+            monkeypatch,
+            {
+                setup_wizard._STARTED_KEY: "2026-10-01T10:00:00",
+                "last_recovery_bundle_at": "2026-10-01T10:05:00",
+                "last_recovery_bundle_size": "12345",
+                "last_recovery_bundle_excluded_audit": "true",
+            },
+        )
+        status = setup_wizard.recovery_bundle_status()
+        assert status["exists"] is True
+        assert status["fresh"] is True
+        assert status["size"] == 12345
+        assert status["excluded_audit_history"] is True
+
+    def test_an_old_bundle_from_before_this_setup_run_is_not_fresh(self, monkeypatch):
+        self._mock_settings(
+            monkeypatch,
+            {
+                setup_wizard._STARTED_KEY: "2026-10-01T10:00:00",
+                "last_recovery_bundle_at": "2026-01-01T00:00:00",
+                "last_recovery_bundle_size": "999",
+                "last_recovery_bundle_excluded_audit": "false",
+            },
+        )
+        status = setup_wizard.recovery_bundle_status()
+        assert status["exists"] is True
+        assert status["fresh"] is False
+
+    def test_malformed_timestamp_is_not_fresh_not_raised(self, monkeypatch):
+        self._mock_settings(
+            monkeypatch,
+            {setup_wizard._STARTED_KEY: "2026-10-01T10:00:00", "last_recovery_bundle_at": "not-a-timestamp"},
+        )
+        status = setup_wizard.recovery_bundle_status()
+        assert status["exists"] is True
+        assert status["fresh"] is False
 
 
 # ── the wizard's own clock ───────────────────────────────────────────────────
@@ -504,6 +680,24 @@ class TestSetupAccessControl:
         c, _ = restricted_client(client, db, allowed_subnets=[1], role="viewer")
         r = c.get(path)
         assert r.status_code != 200
+
+
+class TestInvestigateVisitRedirect:
+    """v5.67.0-beta.5 (Q117, item k) — the wizard's own last step used to
+    open only the narrow /tools/explain page; the full six-tab
+    Investigation page (jen/routes/client.py, since v5.63.0) is what a
+    superadmin actually lands on now."""
+
+    def test_choosing_a_lease_opens_the_investigation_page_overview_tab(self, logged_in_client, db):
+        r = logged_in_client.post("/setup/investigate/visit", data={"mac": "aa:bb:cc:dd:ee:ff"})
+        assert r.status_code == 302
+        assert r.headers["Location"] == "/client?q=aa%3Abb%3Acc%3Add%3Aee%3Aff"
+
+    def test_skipping_without_a_mac_stays_on_the_step(self, logged_in_client, db):
+        r = logged_in_client.post("/setup/investigate/visit", data={})
+        assert r.status_code == 302
+        assert "/setup/investigate" in r.headers["Location"]
+        assert "/client" not in r.headers["Location"]
 
 
 # ── the one-time entry redirect ─────────────────────────────────────────────

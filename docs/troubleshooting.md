@@ -736,6 +736,54 @@ newest other + anything marked `.keep`; it prunes the rest on its next
 run. Delete extras by hand with `sudo rm -rf /opt/jen/releases/<X.Y.Z>`
 (never the one `current` points at).
 
+**Layout refusals (v5.67.0-beta.5+).** `install.sh`, `uninstall.sh`, and
+the root self-updater all validate `app_dir`/`config_dir`/`data_dir`
+through one shared check (`docs/ARCHITECTURE.md` §3.1/§6.1) on every
+privileged run, not just at fresh-install time. Each refusal names the
+exact fix:
+
+- **"... must be a dedicated directory, not a shared system path" /
+  "... must not live under /tmp" (etc.)** — the path you gave is (or is
+  under) a shared FHS location Jen refuses to live in or under. Choose
+  a dedicated subdirectory instead — `docs/installation.md` Method 1c
+  lists every refused root.
+- **"... may only contain letters, digits, '.', '_', '-' per path
+  segment" / "... must be at most 200 characters"** — the path's
+  grammar, not its location, is the problem. Rename the directory.
+- **"... existing parent <dir> is not root-owned" / "... is writable by
+  group or other"** — an *existing ancestor* of the path, not the path
+  itself, fails this check. The writable-by-group-or-other case names
+  its own one-line fix: `sudo chmod go-w <dir>`. The not-root-owned case
+  means something other than root administers that ancestor at all —
+  there's no safe workaround short of choosing a path whose ancestors
+  really are root's own.
+- **"... already exists and is a symlink"** — refusing to install
+  through a symlink at the target path itself (not an ancestor):
+  something pre-planted it there. Investigate before removing it; this
+  is exactly the attack the ancestor check above also exists to close.
+- **"... already exists, is not empty, and does not carry Jen's own
+  marker"** — a *fresh install* target must be absent, empty, or
+  already marked as Jen's own (`.jen-directory` inside it). If this is
+  genuinely a pre-Q117 Jen directory being upgraded rather than a fresh
+  install, you're running `install.sh` without an existing
+  `/etc/jen-layout.conf` present yet — the installer should detect the
+  existing content automatically and take the upgrade path instead;
+  if it doesn't, check that the directory really does contain what
+  Jen's own content (`jen.config` for config_dir, `releases/` or
+  `run.py` for app_dir, `icons`/`branding`/`backups`/`keys` for
+  data_dir) looks like.
+- **"This install's <role> is already <path> — relocating an existing
+  install is a runbook (docs/runbooks.md), not a flag"** — see
+  `docs/runbooks.md` §5.
+- **"<role> (<path>) does not carry Jen's own marker and isn't
+  recognizable as one — refusing"** (uninstall only) — `uninstall.sh`
+  refuses to `rm -rf` a directory it can't confirm is genuinely Jen's.
+  If it really is, create the marker by hand as root (`role = app_dir`
+  — or `config_dir`/`data_dir` — and `version = <installed version>`,
+  two lines, in `<dir>/.jen-directory`, mode `0644`) and retry; if it
+  isn't, you likely have `/etc/jen-layout.conf` pointing somewhere it
+  shouldn't — check it before doing anything destructive by hand.
+
 ---
 
 ## Log Locations
