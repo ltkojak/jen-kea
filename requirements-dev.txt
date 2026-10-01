@@ -11,6 +11,7 @@ pytest
 bandit
 pip-audit
 ruff==0.16.6
+pyyaml  # tests/test_readme_compat_table.py reads the CI workflow files directly
 
 # Browser end-to-end suite (tests/e2e/, v5.39.0/Q40) — excluded from the
 # default `pytest`/`pytest tests/` run (tests/e2e/conftest.py

@@ -4,7 +4,7 @@
 
 # Jen — Kea DHCP Management Console
 
-A full-featured web-based management interface for [ISC Kea DHCP Server](https://www.isc.org/kea/), built with Python and Flask. Jen provides a comprehensive UI for managing DHCP leases, reservations, subnets, and infrastructure — accessible from any browser including mobile and iPad.
+**Jen manages [ISC Kea DHCP Server](https://www.isc.org/kea/) from any browser — a self-hosted console built for a homelab to a small business, one to a handful of Kea servers.** Edit subnets and reservations, see why a client got the address it got, and recover from a bad config change, without touching a terminal on the Kea box itself. ([What Jen is, in detail →](docs/about.md))
 
 [![Latest stable release](https://img.shields.io/github/v/release/ltkojak/jen-kea?label=Stable&style=flat)](https://github.com/ltkojak/jen-kea/releases/latest)
 [![Latest beta](https://img.shields.io/github/v/release/ltkojak/jen-kea?include_prereleases&label=Beta&style=flat&color=orange)](https://github.com/ltkojak/jen-kea/releases)
@@ -13,6 +13,33 @@ A full-featured web-based management interface for [ISC Kea DHCP Server](https:/
 [![Flask](https://img.shields.io/badge/Flask-3.1+-green?style=flat)](https://flask.palletsprojects.com)
 [![License](https://img.shields.io/badge/License-GPL_v3-blue?style=flat)](LICENSE)
 
+---
+
+## Get started
+
+### Try it in ten minutes
+
+Docker, bundled database, nothing else to stand up first:
+
+```bash
+git clone https://github.com/ltkojak/jen-kea.git && cd jen-kea
+cp .env.example .env   # set MYSQL_ROOT_PASSWORD, JEN_MYSQL_PASSWORD, JEN_INITIAL_ADMIN_PASSWORD — leave the Kea section blank to connect it later from /setup
+docker compose -f docker-compose.mysql.yml up -d
+```
+
+Open `http://localhost:5050`, log in as `admin`, and `/setup` walks you through connecting a Kea server — or skip it and connect one later from Settings.
+
+### Install natively
+
+For a bare-metal or VM install, onto an existing Ubuntu 22.04/24.04 box:
+
+```bash
+tar xzf jen-vX.Y.Z.tar.gz   # the latest release, see the badge above
+cd jen
+sudo ./install.sh
+```
+
+The installer asks for exactly three things — Jen's own database, the ports, and an admin password — then starts the service. Kea connects afterward, live, through `/setup`. For a repeatable install, skip the prompts entirely with `sudo ./install.sh --answers <file> --unattended` (see [`docs/installation.md`](docs/installation.md)).
 
 ---
 
@@ -33,6 +60,14 @@ A full-featured web-based management interface for [ISC Kea DHCP Server](https:/
 **Reports**
 ![Reports](docs/images/reports.png)
 
+**The first hour — `/setup`, a six-step guided wizard a fresh install lands on once**
+![Connect Kea](docs/images/setup-connect.png)
+![What Jen found](docs/images/setup-found.png)
+![The Kea host helper](docs/images/setup-helper.png)
+![Baseline](docs/images/setup-baseline.png)
+![Recovery point](docs/images/setup-recovery.png)
+![Investigate](docs/images/setup-investigate.png)
+
 **On a phone**
 
 <p align="center">
@@ -47,162 +82,26 @@ These screenshots are generated in CI from a fictional dataset (`tests/e2e/demo_
 
 ---
 
-## Features
+## What Jen does
 
-### Dashboard
-- Live subnet utilization cards with dynamic/reserved breakdown and gateway/DNS display
-- Recently issued leases with time filter
-- Server status and HA state
-- Alert summary feed
-- Auto-refresh with configurable interval
-- Customizable widget layout
-- Seven built-in color themes (Dark, Light, High contrast, Phosphor, Slate, Ember, Retro) or an install-defined custom palette — picked per person, independent of the install default (v5.55.0, more presets in v5.56.0)
+Full detail, with the version each capability shipped in, is in [`docs/features.md`](docs/features.md). This is the quick reference — what each area does, and what it needs beyond the base install.
 
-### Lease & Reservation Management
-- Browse active leases with subnet, search, and time filters
-- Manual lease release, stale lease cleanup
-- One-click convert dynamic lease to reservation
-- Full reservation add/edit/delete with notes
-- Bulk CSV import and export
-- Duplicate detection (IP and MAC)
-
-### Subnet Management
-- Edit pool ranges, lease times, gateway, and DNS directly from the UI
-- Changes applied via SSH to Kea with config validation before restart
-- Every change is validated (`kea-dhcp4 -t`) and backed up on the host
-  before it's written; a multi-server change is pre-flighted on every
-  server before the first write and reverted if a later server refuses it
-- Gateway and DNS visible on subnet cards
-- Shared networks: subnets grouped by network, create/delete a network,
-  move a subnet in or out (v5.15.0)
-- Config history per server — diff and restore any past config, and a
-  write is refused if the file changed under you (v5.16.0)
-- DHCP options at the global, shared-network, subnet, and pool level,
-  with an effective-options view showing precedence (v5.18.0)
-- Client classes — a guided rule builder or a raw expression, a
-  config-test preview before you save, and a checklist for attaching
-  each one to subnets/pools/shared networks as a guard or additional
-  class (v5.19.0)
-- Config history is encrypted at rest and masked by default (secrets
-  redacted in the diff and the download); a superadmin can still pull
-  the real body with a step-up confirmation (v5.20.0)
-- HA operations console — live local/remote HA state, a per-subnet
-  lease-count comparison across the pair, and the HA commands (sync,
-  scopes, maintenance, reset) as confirmed, audited buttons (v5.21.0)
-- DDNS as a first-class D2 subsystem alongside the existing provider
-  integrations — status/naming/config tabs for Kea's own kea-dhcp-ddns
-  daemon (forward/reverse zones, TSIG keys), plus a Verify tool that
-  checks real DNS results through the Jen host's own resolver (v5.23.0)
-- Import from Windows DHCP — upload an `Export-DhcpServer` XML export,
-  review the subnets/pools/options/reservations/classes Jen would create,
-  preview a real `kea-dhcp4 -t` + diff, then apply in one guarded push
-  (v5.24.0)
-- Import from ISC DHCP — upload a `dhcpd.conf` (subnets, ranges, shared
-  networks, hosts, classes, pool allow/deny) through the same review →
-  preview → apply wizard, every unmappable directive listed with its
-  line number (v5.37.0)
-- "Why did this client get this?" — give it a MAC (and whatever else the
-  client sends) and see the path Kea takes: subnet, reservation, which
-  classes matched and why, eligible pools, the answer address, and every
-  option with its source and what it overrode. Says plainly what it
-  can't evaluate instead of guessing (v5.35.0)
-
-### Diagnose and plan
-- **Investigate a client** — one identifier (a MAC, an IPv4 address or a
-  hostname) resolved once, with Overview, Explain, Trace, Timeline, DNS and
-  Config tabs onto it, every result stamped with when it was read, and the
-  same subnet-access rules on every tab (v5.63.0)
-- **Getting started** — a first-hour checklist with a nav reminder until
-  it's done (v5.39.0)
-- **Explain** — why did this client get this address? Subnet, reservation,
-  classes, pools and options, with what each overrode (v5.35.0)
-- **Trace** — what Kea actually logged for one client, in plain English,
-  read through the existing helper — no packet capture (v5.48.0)
-- **Timeline** — everything recorded about one client: events, config
-  changes, alerts, lease and reservation (v5.42.0)
-- **Configuration Doctor** — contradictions, unused objects and risky
-  settings in the live Kea config (v5.40.0)
-- **DNS ↔ DHCP Reconcile** — checks every reservation and lease name
-  against forward and reverse DNS, read-only (v5.47.0)
-- **Exhaustion forecast** — which pools run out, and when, from lease
-  history (v5.36.0)
-- **Kea 3.2 readiness** — what to change before the Control Agent goes away
-  (v5.38.0)
-- **Per-server capabilities** — one place that knows what each Kea server can
-  do (its Kea version, connection mode, host helper and hooks), with one plain
-  sentence for anything that is off; shown as a Health Center row (v5.64.0)
-
-### Operate
-- **Planned maintenance** — a stepper for taking one HA server down and back
-  without a split-brain (v5.38.0)
-- **Packet health** — DHCP drops, parse failures and NAKs per server from
-  Kea's own counters, with the drop reasons Kea 3.2 adds (v5.41.0)
-- **Recovery bundle** — one encrypted file with config, keys, content and the
-  Jen database; `install.sh --restore` puts it back (v5.44.0). Since v5.65.0 it
-  is a chunked, authenticated stream — never held in memory, up to 2 GB — and
-  bundles from earlier releases still restore
-- **Grafana dashboard** and API health endpoints for monitoring (v5.43.0)
-
-### Health Center
-- One page of read-only checks — server reachability, Kea version, HA
-  state, hooks, clock sync, config drift, pool utilization, DDNS, TLS
-  certificate expiry, database and schema, the Kea host helper
-- No SSH at render time; safe to leave open and poll, auto-refreshes
-- Each check links to the page that fixes it; JSON endpoint for scripts
-
-### IPv6 (DHCPv6)
-- Off by default; enable per-deployment from Settings → Kea
-- Leases, Devices, Reservations, Subnets, Dashboard, and global Search
-  all support an IPv4/IPv6 view
-- Add, edit, and delete IPv6 reservations (address, delegated prefix,
-  or both) and subnet pools/timers from the UI, with the same
-  validate-before-apply safety as IPv4 subnet edits
-- Author a starting `kea-dhcp4.conf`/`kea-dhcp6.conf` from Jen when one
-  doesn't exist yet — pulls interfaces and database settings from the
-  other protocol's config when it's already running, so adding IPv6 to
-  an existing IPv4 deployment doesn't mean re-entering everything by hand
-- `/metrics` gains dedicated `jen_subnet6_*`/`jen_kea6_up` series
-
-### Device Management
-- Device inventory with type detection (OUI fingerprinting)
-- Filter by type, subnet, search, stale status
-- Custom device icons
-
-### Notifications
-- Multi-channel alerts: Pushover, Telegram, Slack, ntfy, Discord, Email, Generic Webhook
-- Alert types: Kea up/down, new lease, new device, rogue device, daily summary, subnet utilization threshold
-- Per-channel configuration and test
-
-### Security & Access Control
-- Three-tier role system: SuperAdmin / Admin / Viewer
-- Subnet-level access control per user
-- MFA — TOTP authenticator apps (secrets encrypted at rest) and passkeys / WebAuthn as a second factor (v5.31.0)
-- Step-up auth — changing your own MFA re-asks for your password (v5.17.0)
-- Trusted device management
-- Login rate limiting
-- Session timeout (global default with per-user override)
-- Full audit log with configurable retention
-- HTTPS via SSL certificate upload, or terminate TLS at a trusted reverse proxy (v5.17.0)
-- Single sign-on via OpenID Connect (Authentik, Keycloak, Entra ID, Okta…) — role mapped from a claim, re-evaluated on every login; local accounts keep working alongside it (v5.25.0)
-
-### Database & Backup
-- Scheduled backups (Jen DB + Kea reservations)
-- Manual backup and restore
-- Database export/import
-
-### Plugin System
-- Install optional add-ins from Settings → Plugins
-- Plugin registry fetched live from GitHub
-- Enable/disable/update/uninstall from the UI
-- Seven plugins bundled with Jen, each an opt-in enable and each obeying the
-  same subnet access rules as the core pages:
-  - **Network Discovery** — find devices on a subnet that Kea does not know
-  - **IPAM Lite** — the whole address space of a subnet, managed or not
-  - **Host Watchdog** — probe chosen hosts and alert when one stops answering (v1.0.0)
-  - **Local DNS Sync** — push DHCP names into Pi-hole or AdGuard Home, touching only records it created (v1.0.0)
-  - **Switch Port Locator** — which switch port a MAC is on, read from managed switches over SNMP (v1.0.0)
-  - **Wake & Actions** — Wake-on-LAN from any lease, reservation or device row (v1.0.0)
-  - **Presence** — publish tracked devices' online/offline state to Home Assistant, MQTT or an HTTP endpoint (v1.0.0)
+| Area | What Jen does | What it needs |
+|---|---|---|
+| Dashboard & monitoring | Live subnet utilization, recent leases, HA state, alerts, 7 built-in themes | — |
+| Leases & reservations | Browse/release/export leases; convert a dynamic lease to a reservation; bulk CSV import | `host_cmds` hook for write operations |
+| Subnets, pools & options | Edit pools, lease times, gateway/DNS, shared networks, DHCP options at every level, client classes, config history with restore | SSH + the [Kea host helper](#glossary) |
+| Import | From a Windows DHCP export or an ISC `dhcpd.conf`, reviewed and previewed before applying | SSH + the Kea host helper |
+| Diagnose | Investigate / Explain / Trace / Timeline for one client; Configuration Doctor; DNS↔DHCP reconcile | Trace needs the Kea host helper; fuller answers with `lease_cmds`/`host_cmds` |
+| Plan | Pool exhaustion forecast; Kea 3.2 readiness check | — |
+| High availability | Live HA state, a per-subnet lease comparison across the pair, and a guided maintenance stepper | the `libdhcp_ha` hook |
+| Packet health | Drops, parse failures and NAKs from Kea's own counters, with Kea 3.2's richer drop reasons | Kea 3.2+ for drop-reason detail |
+| Recovery | One encrypted bundle (Jen's database, config, keys, content); `install.sh --restore` puts it back | — |
+| IPv6 (DHCPv6) | Leases, Devices, Reservations, Subnets, Dashboard and Search in a v6 view; author a starting `kea-dhcp6.conf` | Off by default; Kea built with DHCPv6 |
+| Device management | Inventory with OUI fingerprinting, filter by type/subnet, custom icons | — |
+| Notifications | 7 channels (Pushover, Telegram, Slack, ntfy, Discord, Email, Webhook), 6 alert types | — |
+| Access control | 3 roles, per-subnet scope, TOTP/passkey MFA, SSO via OpenID Connect, full audit log | — |
+| Plugins | 7 bundled add-ins — network discovery, IPAM, host watchdog, DNS sync, switch-port locator, Wake-on-LAN, presence | Each opt-in; some need an extra host tool (`nmap`, `snmpbulkwalk`) |
 
 ---
 
@@ -232,64 +131,21 @@ threat model.
 
 ---
 
-## Requirements
+## Compatibility
 
-- Ubuntu 22.04 or 24.04 (bare metal or Docker)
-- Python 3.10+
-- ISC Kea DHCP with a MySQL/MariaDB backend, reachable one of two ways:
-  - **Kea 3.0+ with the Control Agent** (`kea-ctrl-agent`) — deprecated by ISC in 3.0, **removed in 3.2**
-  - **Kea 2.7.2+ with per-daemon HTTP(S) control sockets** — required for Kea 3.2+. Since v5.29.0 Jen sets these up for you (Settings → Kea → "Set up direct socket", http or mutual TLS with a Jen-managed CA); the by-hand version is in the Admin Guide's "Kea → Direct control sockets"
-- MySQL or MariaDB
+Generated from Jen's own CI, not hand-maintained — if a version isn't
+tested here, it isn't claimed.
 
----
+| | Tested |
+|---|---|
+| **Kea** | 3.0.3 (LTS) and 3.2.0 (stable) — real `kea-dhcp4` images, weekly; 3.3.1 (dev, informational only) |
+| **Operating system** | Ubuntu 22.04, Ubuntu 24.04 |
+| **Database** | MariaDB 10.11, MariaDB 11.4, MySQL 8.0 |
+| **Python** | 3.10, 3.12 |
 
-## Installation
-
-### Guided Installer (recommended)
-
-Install from the **[latest stable release](https://github.com/ltkojak/jen-kea/releases/latest)** — download its
-`jen-vX.Y.Z.tar.gz` (every release is signed; the installer and the in-app updater verify the signature). The `main`
-branch is where the next beta is built and usually carries an unpromoted `-beta.N` version: don't install from a
-clone unless you mean to run the beta channel.
-
-```bash
-tar xzf jen-vX.Y.Z.tar.gz
-cd jen
-sudo ./install.sh
-```
-
-The installer checks requirements, walks through configuration interactively, tests Kea API and database connections, and starts the service. A value you never actually change from its placeholder is left blank rather than written as if it were real.
-
-For a repeatable install, skip the wizard with `sudo ./install.sh --answers <file> --unattended` — a `KEY=value` file in the same `JEN_*` vocabulary the Docker `.env` path below uses (see [`docs/installation.md`](docs/installation.md) for the full list).
-
-### Docker
-
-Docker is configured entirely through `.env` (`JEN_*` variables) — `run.py`
-generates `jen.config` inside the container on first start. The guided
-installer writes `.env` for you:
-
-```bash
-cd jen
-sudo ./install.sh --docker
-```
-
-Or by hand — **external** database (Jen's own DB lives on a server you run):
-
-```bash
-cd jen
-cp .env.example .env      # fill in JEN_* (Kea + Jen DB + JEN_INITIAL_ADMIN_PASSWORD)
-docker compose up -d
-```
-
-**Bundled** database (Docker runs MariaDB for Jen):
-
-```bash
-cd jen
-cp .env.example .env      # fill in the Kea section, MYSQL_ROOT_PASSWORD,
-                          # JEN_MYSQL_PASSWORD, JEN_INITIAL_ADMIN_PASSWORD
-                          # (leave the JEN_DB_* lines blank)
-docker compose -f docker-compose.mysql.yml up -d
-```
+Kea versions below 3.0 are not supported. Kea 3.2+ removed the Control
+Agent — Jen talks to each daemon's own control socket instead (Settings
+→ Kea → "Set up direct socket"), set up automatically from v5.29.0.
 
 ---
 
@@ -303,12 +159,11 @@ Open `http://your-server:5050` and sign in as **`admin`**.
   `/var/lib/jen/initial-admin-password` (also in the log / Docker logs).
   Jen requires you to change it immediately, then deletes the file.
 
-From v5.67.0, the installer no longer asks for Kea's API, database, subnets,
-SSH access, or DDNS up front — a fresh install with none of that pre-filled
-lands you on **`/setup`** after your first login: a six-step guided
-first hour that connects Kea live, shows what it found, installs the Kea
-host helper, captures a config baseline, makes a recovery point, and walks
-you through investigating your first client. Every step can be skipped and
+From v5.67.0, a fresh install with Kea not yet connected lands you on
+**`/setup`** after your first login: a six-step guided first hour that
+connects Kea live, shows what it found, installs the Kea host helper,
+captures a config baseline, makes a recovery point, and walks you
+through investigating your first client. Every step can be skipped and
 picked up again later from the Getting Started checklist.
 
 ---
@@ -351,17 +206,18 @@ Jen supports optional plugins installable from **Settings → Plugins**.
 
 [ISC Stork](https://www.isc.org/stork/) is the official monitoring
 dashboard for Kea and BIND. It and Jen solve overlapping problems from
-opposite directions.
+opposite directions; every claim below is checked against ISC's own
+Stork documentation, not assumed.
 
 | | **Jen** | **ISC Stork** |
 |---|---|---|
-| Architecture | Agentless — one process connects out to each server | Agent (`stork-agent`) on every managed server |
-| Primary focus | Day-to-day **management**: edit subnets/pools/reservations, manage leases and devices | **Monitoring** and metrics, with configuration editing added more recently |
-| Config changes | Validated SSH push to `kea-dhcp*.conf`, host-side backup, pre-flight across servers, config-history restore | Kea config-management API |
-| Scale target | Homelab to small business, a handful of servers | Small to large fleets |
-| Access control | Three roles + per-subnet scoping, built-in MFA (TOTP) | RBAC; auth via LDAP or local |
+| Architecture | Agentless — one process connects out to each server | An agent (`stork-agent`) installed on every managed server |
+| Primary focus | Day-to-day **management**: edit subnets/pools/reservations, manage leases and devices | **Monitoring** and metrics; config editing (subnets, reservations, options) added more recently, with some capabilities still unavailable |
+| Config changes | Validated SSH push to `kea-dhcp*.conf`, host-side backup, pre-flight across servers, config-history restore | A Kea config-management API (hooks or direct JSON) |
+| Scale target | Homelab to small business, a handful of servers | Built to centralize monitoring across a fleet |
+| Access control | Three roles + per-subnet scoping, local accounts, TOTP/passkey MFA or OpenID Connect SSO | Three roles (`super-admin`/`admin`/`read-only`), local accounts or LDAP |
 | Database | MySQL / MariaDB | PostgreSQL |
-| Extras | Device inventory & OUI fingerprinting, multi-channel alerting, plugin system, custom branding | Grafana/Prometheus integration, BIND 9 support |
+| Extras | Device inventory & OUI fingerprinting, multi-channel alerting, plugin system, custom branding | Grafana/Prometheus export; BIND 9 monitoring (early stage, read-only) |
 | License | GPL v3 | MPL 2.0 |
 
 If you run a fleet, want Prometheus/Grafana dashboards, or also manage
@@ -370,6 +226,31 @@ small number of Kea servers from any browser, that's what Jen is for.
 Where a fleet console shows what happened, Jen also answers why this client
 got this address, what is about to run out, what changed, and what to do
 before Kea 3.2.
+
+---
+
+## Glossary
+
+Terms the docs use one way, everywhere:
+
+- **Kea host helper** (`jen-kea-helper`) — a small, fixed-function
+  script installed on each Kea server (one `sudo` grant, one binary)
+  that performs config reads/writes, validation, and restarts on Jen's
+  behalf. Jen never runs arbitrary commands on a Kea host.
+- **Recovery bundle** — a single encrypted file with Jen's database,
+  config, keys and content; restorable with `install.sh --restore`.
+  Not a Kea backup — Kea's own data lives in its own database.
+- **Change set** — the unit Jen uses to push one logical edit to every
+  SSH-configured Kea server: every target validated before the first
+  write, writes in sequence, already-committed targets reverted if a
+  later one fails.
+- **Subnet map** — the subnets Jen knows about and their display
+  names, configured in Jen and kept separate from Kea's own subnet
+  config, which Jen reads but does not define.
+
+See [`docs/about.md`](docs/about.md) for the full picture — what Jen
+is, is not, and requires — written for someone deciding whether to try
+it, not for an existing user.
 
 ---
 
