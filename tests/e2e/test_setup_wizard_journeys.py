@@ -52,9 +52,10 @@ class TestSetupWizardJourney:
         page.get_by_role("button", name="Test & Connect").click()
         page.wait_for_url("**/setup/found", timeout=10000)
 
-        # Step 2: what Jen found — the fake Kea reports no subnets, so
-        # this is the "Continue" (skip) branch, not "Use these subnets".
-        page.get_by_role("button", name="Continue").click()
+        # Step 2: what Jen found — the fake Kea's default config-get
+        # response (tests/e2e/_fake_kea_server.py's TWO_SUBNET_DHCP4)
+        # reports real subnets, so this is the "Use these subnets" branch.
+        page.get_by_role("button", name="Use these subnets").click()
         page.wait_for_url("**/setup/helper", timeout=10000)
 
         # Step 3: the Kea host helper. The target never needs to be a real,
