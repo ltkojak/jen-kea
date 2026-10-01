@@ -729,7 +729,9 @@ jobs:
             -d "username=admin&password=ci-test-passw0rd-!&csrf_token=$csrf" \
             -o /dev/null -w '%{redirect_url}')
           echo "login redirected to: $login_location"
-          dashboard_location=$(curl -sb "$cookie" -c "$cookie" "http://127.0.0.1:5050${login_location}" \
+          # %{redirect_url} is already an absolute URL (http://127.0.0.1:5050/),
+          # not a path — curl it directly rather than re-prefixing the host.
+          dashboard_location=$(curl -sb "$cookie" -c "$cookie" "$login_location" \
             -o /dev/null -w '%{redirect_url}')
           echo "dashboard redirected to: $dashboard_location"
           [[ "$dashboard_location" == *"/setup"* ]]
