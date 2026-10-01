@@ -691,7 +691,7 @@ class TestInvestigateVisitRedirect:
     def test_choosing_a_lease_opens_the_investigation_page_overview_tab(self, logged_in_client, db):
         r = logged_in_client.post("/setup/investigate/visit", data={"mac": "aa:bb:cc:dd:ee:ff"})
         assert r.status_code == 302
-        assert r.headers["Location"] == "/client?q=aa%3Abb%3Acc%3Add%3Aee%3Aff"
+        assert r.headers["Location"] == "/client?q=aa:bb:cc:dd:ee:ff"
 
     def test_skipping_without_a_mac_stays_on_the_step(self, logged_in_client, db):
         r = logged_in_client.post("/setup/investigate/visit", data={})
