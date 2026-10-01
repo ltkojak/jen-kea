@@ -198,7 +198,9 @@ def setup_found():
     # own control socket from dhcp4's, so it needs the operator's own
     # URL for it.
     if action in ("check_v6", "enable_v6"):
-        if extensions.KEA_CONNECTION_MODE == "direct":
+        from jen.services import capabilities as __caps
+
+        if __caps.is_direct():
             v6_url = request.form.get("v6_url", "").strip()
             from jen.services import auth as __auth
 

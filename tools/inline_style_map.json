@@ -135,6 +135,7 @@
  "font-weight:600;margin-bottom:6px": "u-85c718",
  "font-weight:600;margin-bottom:8px": "u-d77151",
  "font-weight:600;margin-bottom:8px;color:var(--text)": "u-6f3b9b",
+ "font-weight:normal;display:flex;align-items:center;gap:6px;margin-top:6px": "u-bf5dd8",
  "font-weight:normal;display:flex;align-items:center;gap:6px;margin-top:6px;font-size:12px": "u-6125e5",
  "margin-bottom:10px": "u-761d3a",
  "margin-bottom:12px": "u-da12f2",
