@@ -84,3 +84,11 @@ that never asked to relocate), everything stays exactly at
 `/opt/jen`/`/etc/jen`/`/var/lib/jen` as always. Moving an *existing*
 install's data directory afterward is a short runbook, not a flag —
 see `docs/runbooks.md` §5 (5.67.0-beta.2).
+
+## Nothing to do: the README and repository front door
+
+5.67.0-beta.4 rebuilds the README (one positioning sentence, a feature
+matrix, a compatibility table, a new `docs/about.md` and
+`docs/features.md`) and updates the GitHub repository's own description,
+topics and social-preview image. None of it touches installed code,
+config, or behavior — there is nothing for an existing install to do.

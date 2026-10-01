@@ -2,6 +2,57 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.67.0-beta.4] - 2026-10-01
+
+Beta channel. Stacked on 5.67.0-beta.3. The README is rebuilt around
+one sentence of positioning instead of 374 lines where nothing said in
+one line what Jen is, for whom, or at what scale.
+
+**One sentence up top, a ten-minute path beside the native install.**
+"Jen manages ISC Kea DHCP from any browser — a self-hosted console
+built for a homelab to a small business, one to a handful of Kea
+servers." sits right under the title, linking to a new plain-language
+`docs/about.md` for an indexer or someone deciding whether to try it.
+"Try it in ten minutes" (Docker, bundled database, three commands) sits
+beside "Install natively" — both showcase last Q's own new capability
+directly: leave Kea blank and connect it afterward from `/setup`,
+no longer something either path needs up front.
+
+**A feature matrix and a compatibility table that cannot drift.** The
+150-line feature-by-feature prose wall moves to `docs/features.md` and
+is replaced in the README by one row per area — what Jen does, what it
+needs (hook, helper, HA, Kea version). A new Compatibility section
+states exactly what's tested: Kea versions, OS, database, Python —
+generated from the truth, not hand-maintained. `tests/test_readme_compat_table.py`
+reads `.github/workflows/kea-compat.yml`'s own matrix and `tests.yml`'s
+install/pytest job matrices directly (regex over the raw YAML text,
+scoped to each job's own line range — no new dependency for Jen's real
+`requirements.txt`, since the CI `pytest` job installs only that file
+plus bare `pytest`) and fails if the README disagrees. A version bumped
+in CI without a matching README edit is caught here instead of being
+wrong forever.
+
+**The Stork comparison, re-verified.** Every claim was checked against
+ISC's current Stork documentation before being written, not carried
+forward from memory: the agent architecture, PostgreSQL, MPL 2.0, the
+three-tier RBAC with local-or-LDAP auth, and that Stork's own docs
+describe monitoring as the core with config editing added more
+recently and still incomplete. The six `/setup` screenshots from last
+Q's own CI artifact are committed into `docs/images/` alongside the
+existing eight.
+
+**Repository metadata and a social preview.** `gh repo edit` sets the
+description to the same one sentence, the homepage to `docs/about.md`,
+and nine topics (`kea`, `dhcp`, `isc-kea`, `dhcp-server`, `ipam`,
+`network-management`, `homelab`, `self-hosted`, `flask`) — previously
+none of the above. A 1280×640 social-preview image (the logo over a
+darkened dashboard screenshot, built with Pillow) is generated into
+`docs/images/`; uploading it to GitHub's own repo settings is a click
+only the maintainer can make. An ISC listing-request draft (what Jen
+is, the licence, the Kea versions tested weekly against ISC's own
+images, the link) is ready for the maintainer to send from their own
+account — nothing is submitted by this release.
+
 ## [5.67.0-beta.3] - 2026-10-01
 
 Beta channel. Stacked on 5.67.0-beta.2. A fresh install's first hour now
