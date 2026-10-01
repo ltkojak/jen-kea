@@ -129,11 +129,12 @@ def _build_config_from_env():
     variables. This allows Docker deployments without a mounted config file.
     Skips if <config_dir>/jen.config already exists and contains a valid api_url.
 
-    v5.67.0 (Q114) — config_path/key_path respect JEN_CONFIG_DIR the same
-    way extensions.CONFIG_DIR does, so a relocated install's container
-    still writes/finds its auto-generated config in the right place.
+    v5.67.0 (Q114) — config_path/key_path use extensions.CONFIG_DIR
+    directly (JEN_CONFIG_DIR env override, same as everywhere else) so
+    a relocated install's container still writes/finds its
+    auto-generated config in the right place.
     """
-    config_dir = os.environ.get("JEN_CONFIG_DIR", "/etc/jen")
+    config_dir = extensions.CONFIG_DIR
     config_path = os.path.join(config_dir, "jen.config")
 
     # Check if we have env vars
@@ -333,8 +334,8 @@ def main():
         logger.critical(
             "gunicorn is not importable — falling back to the werkzeug development "
             "server. This is NOT a supported way to run Jen in production. Install "
-            "dependencies (pip install -r /opt/jen/requirements.txt) and restart. "
-            "Running on werkzeug for now so the console stays up."
+            f"dependencies (pip install -r {extensions.JEN_ROOT}/requirements.txt) and "
+            "restart. Running on werkzeug for now so the console stays up."
         )
         return _serve_werkzeug_fallback(use_ssl, http_port, https_port)
 

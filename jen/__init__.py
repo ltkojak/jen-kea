@@ -46,21 +46,33 @@ def _https_context() -> bool:
 
 
 def _venv_migration_incomplete() -> bool:
-    """v5.8.1 — a bare-metal /opt/jen install running on the *system*
-    interpreter with no /opt/jen/venv: the v5.8.0 venv migration didn't
-    finish (an older box without python3-venv, or a failed build), so Jen
-    is running without the isolation it advertises. `sudo ./install.sh
+    """v5.8.1 — a bare-metal app_dir install running on the *system*
+    interpreter with no venv: the v5.8.0 venv migration didn't finish
+    (an older box without python3-venv, or a failed build), so Jen is
+    running without the isolation it advertises. `sudo ./install.sh
     --repair` rebuilds it. Docker and dev checkouts deliberately have no
-    venv and are not flagged."""
+    venv and are not flagged.
+
+    v5.67.0 (Q114) — a relocated install still sets JEN_ROOT (via the
+    rendered unit's Environment= line, not a dev/CI checkout), so this
+    checks app_root/current/venv rather than a literal /opt/jen; the
+    install-root derivation is the same one extensions.PLUGIN_DIR_ROOT
+    uses (strip the versioned layout's /current/app suffix, else the
+    historical /opt/jen default)."""
     import sys
 
     if sys.prefix != sys.base_prefix:
         return False  # already running inside a venv
-    if os.path.exists("/.dockerenv") or os.environ.get("JEN_ROOT"):
-        return False  # container / dev checkout
-    if os.path.exists("/opt/jen/current/venv/bin/python"):
+    if os.path.exists("/.dockerenv"):
+        return False  # container
+    if os.environ.get("JEN_ROOT") and not extensions.JEN_ROOT.endswith("/current/app"):
+        return False  # a raw dev/CI checkout, not a relocated versioned install
+    install_root = extensions._INSTALL_ROOT
+    if os.path.exists(os.path.join(install_root, "current", "venv", "bin", "python")):
         return False  # v5.14.0 versioned layout — the per-release venv is there
-    return os.path.isfile("/opt/jen/run.py") and not os.path.exists("/opt/jen/venv/bin/python")
+    return os.path.isfile(os.path.join(install_root, "run.py")) and not os.path.exists(
+        os.path.join(install_root, "venv", "bin", "python")
+    )
 
 
 # Static for the process lifetime — a --repair that builds the venv also
@@ -897,14 +909,18 @@ def _register_blueprints(app: Flask) -> None:
 def _load_secret_key() -> str:
     """Load (or create) the persistent Flask session secret key.
 
-    Tries /etc/jen/secret_key first, then falls back to a location under
-    the app's own install dir if /etc/jen isn't writable (e.g. permissions
-    drift). Only if BOTH fail do we fall back to a purely in-memory random
-    key — and that path logs loudly, because it silently invalidates every
-    session on every single restart, which is a confusing "why do I keep
-    getting logged out" bug for the person running this (v4.4.2).
+    Tries the config dir's secret_key first, then falls back to a
+    location under the app's own install dir if that isn't writable
+    (e.g. permissions drift). Only if BOTH fail do we fall back to a
+    purely in-memory random key — and that path logs loudly, because it
+    silently invalidates every session on every single restart, which is
+    a confusing "why do I keep getting logged out" bug for the person
+    running this (v4.4.2).
     """
-    candidates = ["/etc/jen/secret_key", os.path.join(extensions.CONTENT_KEYS_DIR, ".secret_key")]
+    candidates = [
+        os.path.join(extensions.CONFIG_DIR, "secret_key"),
+        os.path.join(extensions.CONTENT_KEYS_DIR, ".secret_key"),
+    ]
     for key_file in candidates:
         try:
             if os.path.exists(key_file):

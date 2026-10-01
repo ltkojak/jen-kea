@@ -362,6 +362,38 @@ channels. The version grammar and the picker are one block of code in
 `jen/version.py`, embedded byte-for-byte in the script and diffed by a
 test, so the two sides cannot drift on what "newer" means.
 
+**Relocatable install (v5.67.0, Q114): where root's paths come from is
+its own trust boundary, separate from `jen.config`.** `install.sh` can
+put the app tree, `/etc/jen` equivalent and data directory anywhere
+(`docs/installation.md` Method 1c) instead of the historical
+`/opt/jen`/`/etc/jen`/`/var/lib/jen`. That choice has to reach
+`jen-update-root.py` somehow — but `jen.config` is exactly the wrong
+place to read it from: unlike the update channel above, a *path* is
+something the root side then trusts absolutely (it's about to `chown`,
+extract a tarball, and write a systemd unit there), and `jen.config`
+lives inside `/etc/jen`, which is `chown`ed to `www-data`
+(`install.sh` — see §6.1). Reading a layout path from it would let a
+fully-compromised `www-data` redirect root's own writes anywhere it
+chose, defeating the entire boundary this section exists to describe.
+
+The layout instead lives in `/etc/jen-layout.conf` — root:root, mode
+`0644`, and deliberately **outside** `/etc/jen` itself, so nothing
+`www-data` can write is ever in the path root reads to find out where
+things are. `install.sh` writes it once, at first install; every later
+`--upgrade`/`--repair`/`--configure` run and every invocation of
+`jen-update-root.py` read it back (`load_layout()` there; rule 8 still
+holds — this is a fixed path the script reads itself, never an
+argument, exactly like the channel above). Absent means the historical
+defaults, unchanged for every install made before this Q. Present but
+failing validation (wrong owner, a symlink, group/other-writable, a
+value outside the shared rules `docs/installation.md` Method 1c and
+`docs/ARCHITECTURE.md` §6.1 describe) is a hard refusal — logged and a
+nonzero exit from `jen-update-root.py`, `fatal()` from `install.sh` —
+never a silent fallback to the defaults, the same fail-closed posture
+as the checksum/signature checks elsewhere in this section.
+`tests/test_layout.py` and `tests/test_jen_update_root.py::TestLoadLayout`
+exercise the same validation table from the bash and Python sides.
+
 ### 3.2 SSH host-key verification (trust-on-first-use)
 
 Every outbound SSH connection Jen makes (`subnets.py`, `ddns.py`,
@@ -1886,7 +1918,7 @@ configured by the installer. Terminating TLS in nginx/caddy and running
 gunicorn HTTP-only behind it is a valid deployment, just not the
 default — the default keeps the "one `install.sh` and done" story.
 
-### 6.1 On-disk layout (v5.13.0, extended in v5.14.0)
+### 6.1 On-disk layout (v5.13.0, extended in v5.14.0, relocatable since v5.67.0)
 
 Through v5.12.x the application tree under `/opt/jen` held user-writable
 content — custom icons, the uploaded favicon and nav logo, database
@@ -1897,27 +1929,59 @@ imports, and later run it as `www-data` on the next restart, has a way to
 stay resident across an update. v5.13.0 split the two apart; v5.14.0
 added the versioned release directories.
 
+The table below uses the historical defaults — `/opt/jen` (`app_dir`),
+`/etc/jen` (`config_dir`), `/var/lib/jen` (`data_dir`) — what every
+install gets when `/etc/jen-layout.conf` is absent, which is every
+install before v5.67.0 and any install since that never asked to
+relocate. §3.1 above covers where that file lives and why; the three
+directories may not be nested inside one another, none may live under
+`/tmp`/`/run`/`/proc`/`/sys`/`/dev`/`/home`, and `docs/installation.md`
+Method 1c is where an operator actually sets them at install time.
+
 | Path | Holds | Owner / mode | What an upgrade does |
 |------|-------|--------------|----------------------|
-| `/opt/jen/releases/<X.Y.Z>/app/` | One release's full tree: `jen/`, `templates/`, `static/`, `plugins/` (every bundled plugin directory, seven today; `shipped_plugin_ids()`), `run.py`, the shipped external files, `docs/` | `root:root`, `a+rX` — read-and-execute only for `www-data` | Built whole under a `.staging-<ts>` sibling, then `os.rename()`d into place. Byte-compiled as root. The previous release's directory is left untouched. |
-| `/opt/jen/releases/<X.Y.Z>/venv/` | That release's virtualenv, built for its own `requirements.txt` | `root:root` | Built fresh per release — the rollback is a true point-in-time revert of dependencies too. |
-| `/opt/jen/current` | Relative symlink → `releases/<live>` | symlink | Flipped with `os.replace()` (atomic). A rollback flips it back. |
-| `/opt/jen/` (flat, pre-5.14) | `jen/`, `run.py`, `templates/`, `static/`, `plugins/`, `venv/` | `root:root`, `a+rX` | Removed by the migration run / `install.sh` once the versioned layout is live. Docker stays flat. |
-| `/opt/jen/plugins-installed/` (v5.27.0, §3.10) | Registry-installed plugins landed by `jen-plugin-install.service` | `root:root`, `a+rX,go-w` — read-and-execute only for `www-data` | Written only by `jen-update-root.py --plugins`, one plugin id at a time, via a staged-directory `os.rename()`. Untouched by a Jen release upgrade. |
-| `/etc/jen/` | `jen.config`, its backups, TLS certs (`ssl/`), SSH keys (`ssh/`) | `www-data` | Never touched. |
-| `/var/lib/jen/` | User content: `icons/`, `branding/` (`nav_logo.*`, `favicon.ico`), `backups/` (database backups), `plugins/` (legacy registry-installed, pre-5.27.0 — see §3.10), `plugins-enabled/` (enable markers), `plugin-requests/` (v5.27.0 install/remove markers + results), `keys/` (`.secret_key`, `.mfa_key` fallbacks) | `www-data`, `750` | Never touched. Populated once, on the upgrade to 5.13.0, by moving the old locations out of `/opt/jen`. |
+| `/etc/jen-layout.conf` (v5.67.0) | `app_dir`/`config_dir`/`data_dir`, if this install relocated any of them | `root:root`, `0644` | Written once, at fresh install. Never touched by an upgrade; hand-editing it to relocate an *existing* install is refused — `docs/runbooks.md` §5 is the real procedure. |
+| `<app_dir>/releases/<X.Y.Z>/app/` | One release's full tree: `jen/`, `templates/`, `static/`, `plugins/` (every bundled plugin directory, seven today; `shipped_plugin_ids()`), `run.py`, the shipped external files (including `jen.service.template`), `docs/` | `root:root`, `a+rX` — read-and-execute only for `www-data` | Built whole under a `.staging-<ts>` sibling, then `os.rename()`d into place. Byte-compiled as root. The previous release's directory is left untouched. |
+| `<app_dir>/releases/<X.Y.Z>/venv/` | That release's virtualenv, built for its own `requirements.txt` | `root:root` | Built fresh per release — the rollback is a true point-in-time revert of dependencies too. |
+| `<app_dir>/current` | Relative symlink → `releases/<live>` | symlink | Flipped with `os.replace()` (atomic). A rollback flips it back. |
+| `<app_dir>/` (flat, pre-5.14) | `jen/`, `run.py`, `templates/`, `static/`, `plugins/`, `venv/` | `root:root`, `a+rX` | Removed by the migration run / `install.sh` once the versioned layout is live. Docker stays flat. |
+| `<app_dir>/plugins-installed/` (v5.27.0, §3.10) | Registry-installed plugins landed by `jen-plugin-install.service` | `root:root`, `a+rX,go-w` — read-and-execute only for `www-data` | Written only by `jen-update-root.py --plugins`, one plugin id at a time, via a staged-directory `os.rename()`. Untouched by a Jen release upgrade. |
+| `<config_dir>/` | `jen.config`, its backups, TLS certs (`ssl/`), SSH keys (`ssh/`) | `www-data` | Never touched. |
+| `<data_dir>/` | User content: `icons/`, `branding/` (`nav_logo.*`, `favicon.ico`), `backups/` (database backups), `plugins/` (legacy registry-installed, pre-5.27.0 — see §3.10), `plugins-enabled/` (enable markers), `plugin-requests/` (v5.27.0 install/remove markers + results), `keys/` (`.secret_key`, `.mfa_key` fallbacks) | `www-data`, `750` | Never touched. Populated once, on the upgrade to 5.13.0, by moving the old locations out of `<app_dir>`. |
 | `/tmp` | Scratch only (`PrivateTmp=yes`) | per-service namespace | n/a |
 
-`extensions.JEN_ROOT` reads `/opt/jen/current/app` when it exists, else
-the flat `/opt/jen` (the `JEN_ROOT` env var overrides both, for dev and
-CI). Because `current` is a symlink flipped atomically, a running worker
+`jen.service` is **rendered**, not shipped ready-to-use (v5.67.0):
+`jen.service.template` carries `@@APP_DIR@@`/`@@CONFIG_DIR@@`/
+`@@DATA_DIR@@` placeholders, filled in by `install.sh`'s
+`render_jen_service()` at install time and by `jen-update-root.py`'s copy
+of the same function on every later in-app update (`install_external_files()`
+there renders instead of copying verbatim specifically so a relocated
+install's unit is never silently overwritten with one hardcoded back to
+the defaults). The rendered unit sets `Environment=JEN_ROOT=<app_dir>/current/app
+JEN_CONFIG_DIR=<config_dir> JEN_CONTENT_DIR=<data_dir>` and
+`ReadWritePaths=<config_dir> <data_dir>`; `systemd-analyze verify` checks
+the rendered result both in `install.sh` (`verify_install()`) and in CI.
+
+`extensions.JEN_ROOT` reads `<app_dir>/current/app` when it exists, else
+the flat `<app_dir>` (the `JEN_ROOT` env var overrides both, for dev and
+CI, and is how the rendered unit's `Environment=` line reaches the app
+without any layout-specific code in `jen/extensions.py` itself).
+Because `current` is a symlink flipped atomically, a running worker
 that opened a file under it keeps reading the old release until it
 restarts — which the updater does anyway.
 
-`extensions.CONTENT_DIR` is the single read surface for the `/var/lib/jen`
-row:
-`/var/lib/jen` in production, `$JEN_ROOT/var` in a source checkout,
-overridable with `JEN_CONTENT_DIR`. The app factory best-effort *copies*
+`extensions.CONFIG_DIR` (v5.67.0) and `extensions.CONTENT_DIR` are the
+single read surfaces for the `<config_dir>` and `<data_dir>` rows,
+mirroring each other exactly: `JEN_CONFIG_DIR`/`JEN_CONTENT_DIR` env
+override wins; else, in a source checkout (`JEN_ROOT` set),
+`$JEN_ROOT/etc`/`$JEN_ROOT/var`; else the historical `/etc/jen`/
+`/var/lib/jen`. `CONFIG_FILE`, `MFA_KEY_PATH`, `SSL_CERT`/`SSL_KEY`/
+`SSL_CA`/`SSL_COMBINED`, `SSH_KEY_PATH` and `SSH_KNOWN_HOSTS` all derive
+from `CONFIG_DIR`; `PLUGIN_DIR_ROOT` derives from the install root (the
+same `<app_dir>` `JEN_ROOT` resolves against, with the versioned
+layout's `/current/app` suffix stripped back off) rather than
+`CONTENT_DIR`, since root-owned plugin installs live under the app tree,
+not the data tree — see §3.10. The app factory best-effort *copies*
 any content still in an old `/opt/jen` location into `CONTENT_DIR` on
 every boot (idempotent, never clobbers, never crashes the factory) — a
 safety net for a box the root-side move missed, and for the Docker named

@@ -3,15 +3,17 @@ jen/services/content.py
 ───────────────────────
 v5.13.0 — user-writable content moved out of the application tree.
 
-`/opt/jen` is reinstalled from the release tarball on every upgrade and is
-now root-owned / read-only to the service user. Everything Jen writes at
-runtime — uploaded brand icons, the nav logo, a custom favicon, DB
-backups, registry-installed plugins, plugin enable markers, and the
-secret-key / MFA-key fallbacks — lives under `extensions.CONTENT_DIR`
-(`/var/lib/jen` in production, `$JEN_ROOT/var` in a checkout).
+The app tree is reinstalled from the release tarball on every upgrade
+and is now root-owned / read-only to the service user. Everything Jen
+writes at runtime — uploaded brand icons, the nav logo, a custom
+favicon, DB backups, registry-installed plugins, plugin enable markers,
+and the secret-key / MFA-key fallbacks — lives under
+`extensions.CONTENT_DIR` (`/var/lib/jen` by default in production,
+`$JEN_ROOT/var` in a checkout — see `docs/ARCHITECTURE.md` §6.1 for the
+relocatable layout).
 
 `ensure_content_dirs()` creates the subtree at startup; `migrate_legacy_content()`
-does a best-effort COPY from the old `/opt/jen/...` locations for a box the
+does a best-effort COPY from the old app-tree locations for a box the
 installer/updater migration missed (notably Docker's old `jen-icons`
 named volume). Both are called once from `create_app()` and never crash
 the factory.
@@ -111,7 +113,7 @@ def _copy_tree_if_new_empty(src: str, dst: str, label: str) -> None:
 
 
 def migrate_legacy_content() -> None:
-    """Best-effort COPY of pre-5.13 content from /opt/jen into CONTENT_DIR.
+    """Best-effort COPY of pre-5.13 content from the app tree into CONTENT_DIR.
     Idempotent (skips anything already present at the destination) and
     never moves. Covers a box the root-side migration missed and Docker's
     old `jen-icons` volume."""

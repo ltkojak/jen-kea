@@ -31,7 +31,7 @@ JEN_TABLES = {
     "settings": "All Jen application settings",
     "alert_channels": (
         "Alert channel configuration (Telegram etc.). Delivery tokens in the "
-        "config column are encrypted at rest; the key lives in /etc/jen, NOT in "
+        "config column are encrypted at rest; the key lives in the config directory, NOT in "
         "this export — channels will not deliver after restore onto a different "
         "install until their tokens are re-entered."
     ),
@@ -39,7 +39,7 @@ JEN_TABLES = {
     "alert_log": "Historical alert delivery log",
     "saved_searches": "Saved filter presets",
     "dashboard_prefs": "Per-user dashboard widget layout",
-    "mfa_methods": "MFA method records (TOTP secrets encrypted at rest; the key lives in /etc/jen, NOT in this export — secrets will not restore onto a different install)",
+    "mfa_methods": "MFA method records (TOTP secrets encrypted at rest; the key lives in the config directory, NOT in this export — secrets will not restore onto a different install)",
     "mfa_backup_codes": "MFA backup/recovery codes",
     "mfa_trusted_devices": "Trusted device tokens for MFA bypass",
     "api_keys": "API key records (hashed — raw keys not recoverable)",
@@ -59,7 +59,7 @@ JEN_TABLES = {
     "plugin_schema_migrations": "Per-plugin schema migration tracking",
     "kea_config_revisions": (
         "Kea config history Jen has pushed or noticed — config bodies are encrypted at rest; "
-        "the key lives in /etc/jen, NOT in this export"
+        "the key lives in the config directory, NOT in this export"
     ),
     "lease6_history": "Historical IPv6 lease count snapshots",
     "server_stats": "Packet health snapshots (statistic-get-all counters per server)",

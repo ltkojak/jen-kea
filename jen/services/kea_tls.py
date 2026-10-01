@@ -16,7 +16,7 @@ crossing the wire), homelab management addresses are RFC 1918 IPs with
 no public DNS name, and ACME issues server certs only. A CA Jen owns
 issues both halves and can rotate them wholesale.
 
-Where things live (Jen host, `/etc/jen/ssl` — never touched by upgrades):
+Where things live (Jen host, `<config_dir>/ssl` — never touched by upgrades):
   kea-ca.crt / kea-ca.key           the CA (EC P-256, 10 years)
   jen-kea-client.pem / .key         Jen's client cert (5 years, clientAuth)
   kea-servers/<id>-<service>.crt    a copy of each issued server cert, so
@@ -48,11 +48,12 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
+from jen import extensions
 from jen.services.certs import write_atomically
 
 logger = logging.getLogger(__name__)
 
-SSL_DIR = "/etc/jen/ssl"
+SSL_DIR = os.path.join(extensions.CONFIG_DIR, "ssl")
 CA_DAYS = 3650  # maintainer decision 2026-09-13: 10-year CA
 LEAF_DAYS = 1826  # 5-year leaves
 # The fixed layout the helper's install-tls op writes on a Kea host.

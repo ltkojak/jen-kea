@@ -144,7 +144,7 @@ def verify_totp(user_id, code):
         for row in rows:
             # v5.4.0 — secrets are encrypted at rest. Fail CLOSED on a
             # decrypt failure (unreadable row is skipped, not trusted): a
-            # DB restored/migrated without its /etc/jen/mfa_key leaves the
+            # DB restored/migrated without its config dir's mfa_key leaves the
             # user on backup codes / an admin MFA reset, never bypassed.
             try:
                 secret = _crypto.decrypt_secret(row["secret"])

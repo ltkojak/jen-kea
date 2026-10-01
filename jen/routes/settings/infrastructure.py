@@ -2052,7 +2052,7 @@ def save_metrics_settings():
 @login_required
 @_admin_required
 def generate_ssh_key():
-    os.makedirs("/etc/jen/ssh", exist_ok=True)
+    os.makedirs(os.path.dirname(extensions.SSH_KEY_PATH), exist_ok=True)
     try:
         subprocess.run(
             [

@@ -113,6 +113,38 @@ error naming it. `JEN_*` values also work as plain environment
 variables with no file at all, taking the same priority order (file,
 then environment, then a prompt or a default).
 
+### Method 1c — Relocating app/config/data (v5.67.0)
+
+By default Jen lives at the paths it always has: the app tree under
+`/opt/jen`, config and secrets under `/etc/jen`, user-writable data
+under `/var/lib/jen`. Any or all three can be relocated at **fresh
+install time only**:
+
+```bash
+sudo ./install.sh \
+    --app-dir /srv/jen/app \
+    --config-dir /srv/jen/etc \
+    --data-dir /srv/jen/data
+```
+
+The common case is `--data-dir` alone — pointing uploads, database
+backups and registry-installed plugins at a separate volume (a second
+disk, a mounted NFS/NAS share, a ZFS dataset with its own snapshot
+policy) without moving the application itself. Each flag stands alone;
+any left unset keeps its default. The same three values are also
+`JEN_APP_DIR` / `JEN_CONFIG_DIR` / `JEN_DATA_DIR` in `--answers` or the
+plain environment, following the same resolution order as every other
+setting in Method 1b.
+
+The chosen layout is recorded root-owned in `/etc/jen-layout.conf` (see
+`docs/ARCHITECTURE.md` §3.1 and §6.1 for why that file lives outside
+`/etc/jen` itself) and every later `--upgrade` / `--repair` /
+`--configure` run reads it back automatically — you never repeat these
+flags. Passing one of them again with a *different* value than what's
+already recorded is refused outright: relocating an **existing** install
+is a runbook (`docs/runbooks.md` §5), not a flag, since a partial move
+would leave root-owned state in two places at once.
+
 ### Method 2 — Docker (external MySQL)
 
 ```bash

@@ -107,7 +107,7 @@ def save_update_channel():
         app_config.write_value("updates", "channel", channel)
     except Exception as e:
         logger.error(f"could not write [updates] channel: {e}")
-        flash("Could not save the channel — is /etc/jen/jen.config writable by Jen?", "error")
+        flash(f"Could not save the channel — is {extensions.CONFIG_FILE} writable by Jen?", "error")
         return redirect(url_for("settings.settings_system"))
     __user.audit("UPDATE_CHANNEL", "settings", f"{previous} -> {channel}")
     if channel == "beta":

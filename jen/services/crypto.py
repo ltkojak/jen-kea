@@ -4,7 +4,7 @@ jen/services/crypto.py
 Symmetric encryption at rest for reversible secrets that Jen must be
 able to read back in cleartext: TOTP shared secrets (`mfa_methods.secret`,
 v5.4.0) and alert-channel notification tokens (`alert_channels.config`,
-v5.7.0). One Fernet key (`/etc/jen/mfa_key`) protects both.
+v5.7.0). One Fernet key (`extensions.MFA_KEY_PATH`, `<config_dir>/mfa_key`) protects both.
 
 Why encryption and not hashing
 ──────────────────────────────
@@ -17,13 +17,13 @@ a key kept outside the database, not a hash.
 
 Key management
 ──────────────
-The Fernet key lives at `extensions.MFA_KEY_PATH` (`/etc/jen/mfa_key`),
-with a fallback to `$JEN_ROOT/.mfa_key` if `/etc/jen` isn't writable —
+The Fernet key lives at `extensions.MFA_KEY_PATH` (`<config_dir>/mfa_key`),
+with a fallback to `$JEN_ROOT/.mfa_key` if the config dir isn't writable —
 the same two-candidate pattern as `_load_secret_key()` in
 `jen/__init__.py`, and like that key it is created on first use rather
 than by the installer. On an upgrade, migration 17 is the first thing
 to touch it: it runs as the Jen service user, which `install.sh` has
-just `chown`ed `/etc/jen` to, so the write succeeds.
+just `chown`ed the config dir to, so the write succeeds.
 
 Unlike the Flask session key, there is **no ephemeral in-memory
 fallback**. An ephemeral session key just logs everyone out on restart;
@@ -143,7 +143,7 @@ def _load_or_create_key() -> bytes:
         "No MFA encryption key could be created at "
         + " or ".join(_key_candidates())
         + f" (last error: {last_error}). TOTP verification will fail closed "
-        "until this is fixed — check that the Jen service user can write to /etc/jen."
+        f"until this is fixed — check that the Jen service user can write to {extensions.CONFIG_DIR}."
     )
 
 
@@ -218,6 +218,6 @@ def decrypt_secret(stored: str, what: str = "MFA secret") -> str:
         raise SecretDecryptError(
             f"Stored {what} could not be decrypted with the current key. "
             "If this database was restored or migrated from another install, "
-            "its /etc/jen/mfa_key must be copied across too; otherwise the "
+            f"its {extensions.MFA_KEY_PATH} must be copied across too; otherwise the "
             "affected secret must be re-entered."
         ) from e

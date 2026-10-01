@@ -698,7 +698,7 @@ def _m018_encrypt_alert_channel_config(db):
     shared DB host) hands over working credentials for every channel.
 
     Same fix as migration 17: wrap the value with crypto.encrypt_secret()
-    so it becomes a `v1:`-prefixed Fernet token, key kept in /etc/jen
+    so it becomes a `v1:`-prefixed Fernet token, key kept in the config dir
     outside the database. The whole blob is encrypted (not per-field) so
     a new channel type with new secret fields is covered automatically.
     New saves encrypt at write time (jen/routes/settings/alerts.py via

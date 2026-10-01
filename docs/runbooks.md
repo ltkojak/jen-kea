@@ -279,3 +279,72 @@ specific one to ask for.
 If either message shows up on a genuinely correct passphrase and an
 intact file, re-copy the bundle (transfer corruption is the most common
 real cause) before assuming the bundle itself is bad.
+
+## 5. Moving an existing install's data directory
+
+`install.sh --app-dir/--config-dir/--data-dir` (`docs/installation.md`
+Method 1c) only ever apply at **fresh install time** — an existing
+install's layout, once recorded in `/etc/jen-layout.conf`, is
+authoritative, and a later run that passes one of those flags with a
+different value is refused outright (`docs/ARCHITECTURE.md` §3.1 and
+§6.1 explain why the file is trusted the way it is). Relocating an
+existing install is this runbook, done by hand, while Jen is stopped.
+
+The steps below move the **data directory** (`/var/lib/jen` by default —
+uploads, database backups, registry-installed plugins) onto a new
+volume, the case an operator actually hits in practice (a disk running
+low, moving onto NFS/NAS, a dataset with its own snapshot policy).
+Moving `app_dir` or `config_dir` instead is the same shape — stop Jen,
+move the directory, edit the one line in `/etc/jen-layout.conf`, render
++ verify the unit, start Jen — substituting that directory and that
+layout key throughout.
+
+1. **Stop Jen** so nothing writes to the data directory mid-move:
+   ```bash
+   sudo systemctl stop jen
+   ```
+2. **Copy the data to its new home**, preserving ownership and
+   permissions, before touching anything the running config points at:
+   ```bash
+   sudo mkdir -p /srv/jen/data
+   sudo cp -a /var/lib/jen/. /srv/jen/data/
+   ```
+   Verify the copy — `diff -rq /var/lib/jen /srv/jen/data` should report
+   nothing — before the next step makes the old location's continued
+   existence irrelevant.
+3. **Edit `/etc/jen-layout.conf`** (create it, root:root 0644, if this
+   install predates it and has never had one — absent has always meant
+   "the historical defaults," so the file may simply not exist yet):
+   ```ini
+   [layout]
+   app_dir = /opt/jen
+   config_dir = /etc/jen
+   data_dir = /srv/jen/data
+   ```
+   Keep `app_dir`/`config_dir` at whatever this install already uses —
+   only change the one key you're actually moving.
+4. **Re-render `jen.service`** so its `ReadWritePaths=` and
+   `Environment=JEN_CONTENT_DIR=` lines agree with the new location, and
+   verify the result before trusting it:
+   ```bash
+   sudo ./install.sh --repair
+   sudo systemctl daemon-reload
+   ```
+   `--repair` reinstalls files and re-renders the unit from the layout
+   you just edited without touching `jen.config` or re-asking any
+   configuration question; it runs `systemd-analyze verify` on the
+   rendered unit itself and refuses to proceed if that fails.
+5. **Start Jen and confirm it's reading the new location:**
+   ```bash
+   sudo systemctl start jen
+   systemctl show jen -p Environment | tr ' ' '\n' | grep JEN_CONTENT_DIR
+   ```
+   should print `Environment=JEN_CONTENT_DIR=/srv/jen/data`. Log in, check
+   an uploaded icon or the branding logo still renders, and confirm a new
+   database backup (Settings → Databases → Backup) lands in
+   `/srv/jen/data/backups/`.
+6. **Remove the old copy** only once you've confirmed the above — not
+   before:
+   ```bash
+   sudo rm -rf /var/lib/jen
+   ```

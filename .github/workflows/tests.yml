@@ -598,6 +598,76 @@ jobs:
           sudo test -d /var/lib/jen
           echo "app + service + sudoers removed; config, SSL, SSH and content preserved"
 
+      # v5.67.0 (Q114) — the same fresh-install/upgrade/uninstall cycle
+      # again, this time with --app-dir/--config-dir/--data-dir, reusing
+      # this job's already-running Kea/MariaDB rather than a second job
+      # (which would just re-pay their startup cost). Ports are reused
+      # from the legs above — each one's own uninstall already stopped
+      # the service before this starts.
+      - name: Fresh install with a relocated layout
+        run: |
+          mkdir -p "$RUNNER_TEMP/install-relocated"
+          tar xzf dist/jen-head.tar.gz -C "$RUNNER_TEMP/install-relocated"
+          cd "$RUNNER_TEMP/install-relocated/jen"
+          sudo TERM=linux ./install.sh --answers "$RUNNER_TEMP/answers.env" --unattended \
+            --app-dir /srv/jen/app --config-dir /srv/jen/etc --data-dir /srv/jen/data
+
+      - name: Assert the relocated install is real
+        run: |
+          set -e
+          systemctl is-active --quiet jen
+          curl -sf http://127.0.0.1:5050/api/v1/health | grep -q jen_version
+          echo "relocated service healthy"
+
+          [[ "$(sudo stat -c '%U:%G' /srv/jen/app/current/app/run.py)" == "root:root" ]]
+          sudo -u www-data test ! -w /srv/jen/app/current/app/run.py
+          echo "relocated app tree root-owned, not writable by the service user"
+
+          [[ "$(sudo stat -c '%a' /srv/jen/etc/jen.config)" == "600" ]]
+          [[ "$(sudo stat -c '%U:%G' /srv/jen/etc/jen.config)" == "www-data:www-data" ]]
+          echo "relocated jen.config is 0600, service-owned"
+
+          [[ "$(sudo stat -c '%U:%a' /etc/jen-layout.conf)" == "root:644" ]]
+          sudo grep -q '^app_dir = /srv/jen/app$' /etc/jen-layout.conf
+          sudo grep -q '^config_dir = /srv/jen/etc$' /etc/jen-layout.conf
+          sudo grep -q '^data_dir = /srv/jen/data$' /etc/jen-layout.conf
+          echo "layout file recorded root:root 0644 with the chosen paths"
+
+          env=$(systemctl show jen -p Environment --value)
+          grep -q 'JEN_CONFIG_DIR=/srv/jen/etc' <<< "$env"
+          grep -q 'JEN_CONTENT_DIR=/srv/jen/data' <<< "$env"
+          grep -q 'JEN_ROOT=/srv/jen/app/current/app' <<< "$env"
+          echo "rendered unit's Environment= matches the relocated layout"
+
+          [[ ! -e /opt/jen ]]
+          echo "nothing landed at the historical default app_dir"
+
+      - name: Upgrade the relocated install in place
+        working-directory: ${{ runner.temp }}/install-relocated/jen
+        run: sudo TERM=linux ./install.sh --unattended
+
+      - name: Assert the relocated upgrade is healthy
+        run: |
+          set -e
+          systemctl is-active --quiet jen
+          curl -sf http://127.0.0.1:5050/api/v1/health | grep -q jen_version
+          sudo grep -q '10.99.0.0/24' /srv/jen/etc/jen.config
+          echo "relocated upgrade healthy, config preserved"
+
+      - name: Uninstall the relocated install
+        working-directory: ${{ runner.temp }}/install-relocated/jen
+        run: printf 'y\n1\n' | sudo ./uninstall.sh
+
+      - name: Assert relocated uninstall left what it should
+        run: |
+          set -e
+          [[ ! -d /srv/jen/app ]]
+          [[ ! -f /etc/systemd/system/jen.service ]]
+          sudo test -f /srv/jen/etc/jen.config
+          sudo test -d /srv/jen/data
+          sudo test -f /etc/jen-layout.conf
+          echo "relocated app removed; config/data/layout-record preserved (level 1)"
+
       - name: Kea log on failure
         if: failure()
         run: docker logs kea 2>&1 | tail -100 || true

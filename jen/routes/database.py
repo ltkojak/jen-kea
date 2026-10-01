@@ -203,7 +203,7 @@ def export_kea():
 #
 # Memory (v5.65.0, Q85): the bundle is written as JENREC2 — chunked AES-GCM —
 # straight into the tempfile by `recovery.build_stream()`, and every file under
-# /etc/jen and the content directory is handed over as a PATH, read in small
+# the config dir and the content directory is handed over as a PATH, read in small
 # pieces while the tar is written. Peak memory is about two 4 MB chunks plus
 # the small in-memory members (manifest, config, keys, the database dump), not
 # a multiple of the bundle; the size cap is 2 GB (recovery.SIZE_CAP_BYTES) and

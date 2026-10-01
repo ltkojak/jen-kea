@@ -21,6 +21,7 @@ Quick links into the procedures below, roughly in the order you're likely to nee
 - **Undo a restore** — `sudo ./install.sh --rollback <snapshot dir>`, see [Recover Jen on a new machine](#recover-jen-on-a-new-machine)
 - **Restore from a backup on the same machine** — Settings → Databases → Backups (export/import individual tables without moving to a new box)
 - **Get help** — Settings → System → "Report an issue" opens a GitHub issue with your version filled in; grab a support bundle first from the button next to it
+- **Relocate app/config/data at install time** — [On-Disk Paths](#on-disk-paths-v5670); moving an *existing* install's data directory afterward is `docs/runbooks.md` §5
 
 ---
 
@@ -60,6 +61,31 @@ sudo ./install.sh
 - [ ] Configure Telegram alerts if desired
 - [ ] Generate SSH key in Settings → Kea → SSH
 - [ ] Add the public key to your Kea server's authorized_keys
+
+---
+
+## On-Disk Paths (v5.67.0)
+
+By default:
+
+| What | Default path | Env override (systemd sets this for a relocated install) |
+|------|---------------|------------------------------------------------------------|
+| App tree (`app_dir`) | `/opt/jen` | `JEN_ROOT` (`<app_dir>/current/app`) |
+| Config, secrets, TLS, SSH keys (`config_dir`) | `/etc/jen` | `JEN_CONFIG_DIR` |
+| User-writable data — uploads, DB backups, plugins (`data_dir`) | `/var/lib/jen` | `JEN_CONTENT_DIR` |
+
+Any or all three can be chosen at **fresh install time** with
+`install.sh --app-dir`/`--config-dir`/`--data-dir` — see
+`docs/installation.md` Method 1c for the flags and
+`docs/ARCHITECTURE.md` §3.1/§6.1 for why the choice is recorded in a
+separate, root-owned `/etc/jen-layout.conf` rather than in `jen.config`
+itself. Every later `--upgrade`/`--repair`/`--configure` run reads that
+file back automatically; you never repeat the flags, and passing one
+again with a different value is refused.
+
+**Moving an existing install's data directory** (the common case — a
+disk running low, moving onto NFS/NAS) is a short, deliberate procedure
+with Jen stopped, not a flag: `docs/runbooks.md` §5.
 
 ---
 

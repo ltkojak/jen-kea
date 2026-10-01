@@ -83,7 +83,15 @@ fixture, so every test errors without a reachable MariaDB. What works locally:
   (a DB-backed test class mixed into an otherwise-pure file): test_dependency_consistency,
   test_docker_config, test_small_hardening_fixes, test_htmx_vendoring, test_pwa_manifest,
   test_device_identity, test_sudoers_command_matching, test_jen_update_root,
-  test_changelog. CI is the arbiter; expect one push per round.
+  test_changelog, test_no_hardcoded_layout_paths (Q114 — pure `ast` analysis, no DB, but
+  needs --noconftest the same way test_config_doctor doesn't). test_layout (Q114 — sources
+  install.sh's own functions into a real bash process) self-skips its whole module on
+  Windows regardless of --noconftest; it and test_jen_update_root's `TestLoadLayout` both
+  need real Linux to mean anything, and even there the plain `pytest` CI job runs as a
+  non-root user — a test that needs a *trusted* (root-owned) file bypasses just the
+  ownership check via a post-source/monkeypatched override rather than skipping outright,
+  the same technique test_kea_helper.py already established for jen-kea-helper's own
+  analogous `_bin_dir_ok`. CI is the arbiter; expect one push per round.
 - `tests/e2e/` (Q40 — Playwright, `pytest.mark.e2e`) needs both a MariaDB **and**
   `playwright install chromium`, so it doesn't run here either — but its collection
   *safety* does: `py -m pytest --collect-only -q` must still exit 0 and collect every

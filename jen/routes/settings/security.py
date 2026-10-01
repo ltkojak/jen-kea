@@ -99,7 +99,7 @@ def validate_cert_material(cert_data: str, key_data: str, ca_data: str | None) -
     v5.9.1 — return None if cert + key (+ CA bundle, when given) load as a
     real TLS server chain, else a short reason. The old check was textual
     ("contains BEGIN CERTIFICATE"), so a valid certificate paired with the
-    wrong private key sailed through, got written to /etc/jen/ssl, and
+    wrong private key sailed through, got written to the config dir's ssl/, and
     gunicorn then refused to start — a self-inflicted outage. Loading the
     material with the same API gunicorn uses catches malformed PEMs and a
     mismatched key before anything on disk is touched. Pure — tested in

@@ -117,7 +117,7 @@ def _decrypted(row: dict | None) -> dict | None:
     jen.services.crypto) if the row is encrypted but the key can't
     decrypt it — deliberately NOT caught here, so a caller can tell that
     apart from "no such revision" / a DB error and show it as its own
-    condition (a bad/missing /etc/jen/mfa_key), not silently return
+    condition (a bad/missing mfa_key in the config dir), not silently return
     None or garbled text."""
     if row is not None and row.get("config") is not None:
         row["config"] = decrypt_secret(row["config"], what="config revision")

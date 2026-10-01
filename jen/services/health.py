@@ -755,7 +755,7 @@ def _cert_expiry(ctx) -> Check:
 def _kea_tls_expiry(ctx) -> Check:
     """v5.29.0 (Q29, C4) — the Jen-managed Kea CA, Jen's client cert,
     and every server cert Jen issued (it keeps a copy per server/daemon
-    under /etc/jen/ssl/kea-servers/ exactly so this never has to SSH).
+    under the config dir's ssl/kea-servers/ exactly so this never has to SSH).
     Leaves are 5-year and the CA 10-year, so the bands are wider than
     the web-UI certificate's: warn at 90 days, fail at 14 or expired.
     Skips entirely when no CA has ever been created — a Control Agent

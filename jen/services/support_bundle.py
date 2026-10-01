@@ -16,7 +16,7 @@ Two layers, kept apart on purpose:
   is not.
 
 What is NEVER read: the SSH key, the mTLS client key, the CA key,
-`/etc/jen/mfa_key`, `mfa_methods`, `mfa_backup_codes`, `api_keys`,
+the config dir's `mfa_key`, `mfa_methods`, `mfa_backup_codes`, `api_keys`,
 `users`, `alert_channels` (their config blobs carry tokens), and the
 config-revision *history* (only the latest revision per server and
 service, and that one redacted). Paths to key files are included;

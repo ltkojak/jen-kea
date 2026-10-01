@@ -2,8 +2,9 @@
 jen/routes/content.py
 ─────────────────────
 v5.13.0 — serves user-uploaded content out of `extensions.CONTENT_DIR`
-(`/var/lib/jen`), which is outside the application tree. Replaces the old
-custom-icon and nav-logo URLs that lived under the static route.
+(`/var/lib/jen` by default), which is outside the application tree.
+Replaces the old custom-icon and nav-logo URLs that lived under the
+static route.
 
   GET /content/icons/<name>.svg        — an uploaded brand icon
   GET /content/branding/<filename>     — nav_logo.{png,svg,jpg,jpeg,webp}

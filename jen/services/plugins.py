@@ -3,7 +3,7 @@ jen/services/plugins.py
 ───────────────────────
 Plugin framework for Jen.
 
-A plugin is a directory under /opt/jen/plugins/<plugin-id>/ containing:
+A plugin is a directory under `<app_dir>/plugins/<plugin-id>/` containing:
   manifest.json   — metadata, version, Jen requirement, nav entries
   plugin.py       — optional: defines register(app) to add Flask blueprints
 
