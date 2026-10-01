@@ -92,8 +92,12 @@ class TestSetupWizardJourney:
 
             # Step 5: recovery point — confirm without actually downloading
             # a bundle (that form posts to the existing, already-tested
-            # /settings/databases/recovery-bundle route unchanged).
-            page.get_by_role("button", name="I've saved it — continue").click()
+            # /settings/databases/recovery-bundle route unchanged). No
+            # bundle was downloaded this run, so recovery.fresh is False
+            # and the button reads "I will do this later" (v5.67.0-beta.5,
+            # Q117 item i — the step no longer marks itself done on a bare
+            # click).
+            page.get_by_role("button", name="I will do this later").click()
             page.wait_for_url("**/setup/investigate", timeout=10000)
 
             # Step 6: investigate — whichever branch this session's shared
@@ -104,8 +108,10 @@ class TestSetupWizardJourney:
                 page.wait_for_url("**/setup/investigate", timeout=10000)
                 assert "First hour complete" in page.content()
             else:
-                page.get_by_role("button", name="Explain").first.click()
-                page.wait_for_url("**/tools/explain**", timeout=10000)
+                # v5.67.0-beta.5 (Q117 item k) — this now opens the full
+                # six-tab Investigation page, not the narrow Explain tab.
+                page.get_by_role("button", name="Investigate").first.click()
+                page.wait_for_url("**/client**", timeout=10000)
         finally:
             pathlib.Path(extensions.CONFIG_FILE).write_text(config_backup)
             app_config.reload()
