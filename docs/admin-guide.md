@@ -57,10 +57,13 @@ sudo ./install.sh
   `sudo cat /var/lib/jen/initial-admin-password`.
 - [ ] Jen forces a password change on that first login; the file is
   deleted once you complete it
+- [ ] A fresh install with Kea not yet connected lands you on **`/setup`**
+  next (v5.67.0) — a six-step guided first hour: connect Kea, see what it
+  found, install the Kea host helper, capture a baseline, make a recovery
+  point, investigate your first client. Any step can be skipped and
+  picked up later from Getting Started.
 - [ ] Upload SSL certificate in Settings → Access & Security → SSL Certificate
 - [ ] Configure Telegram alerts if desired
-- [ ] Generate SSH key in Settings → Kea → SSH
-- [ ] Add the public key to your Kea server's authorized_keys
 
 ---
 

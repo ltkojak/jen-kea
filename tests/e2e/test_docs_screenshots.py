@@ -196,6 +196,66 @@ class TestDesktopScreenshots:
         _save(desktop, "reports")
 
 
+class TestSetupWizardScreenshots:
+    """v5.67.0 (Q115) — the six /setup steps, feeding Q116's front-door work.
+    Superadmin-only pages a fresh install would show empty; the demo
+    dataset's own Kea connection means these capture the "already
+    connected" look instead, same as every other screenshot here shows
+    a populated instance rather than a blank first-run state."""
+
+    def test_setup_connect(self, desktop, base_url):
+        desktop.goto(f"{base_url}/setup/connect", wait_until="load")
+        _wait_rendered(
+            desktop, f"() => document.body.innerText.includes('Kea API URL') && ({NO_LOADING_JS})", "setup-connect"
+        )
+        _leak_guard(desktop, "setup-connect")
+        _save(desktop, "setup-connect")
+
+    def test_setup_found(self, desktop, base_url):
+        desktop.goto(f"{base_url}/setup/found", wait_until="load")
+        _wait_rendered(
+            desktop, f"() => document.body.innerText.includes('What Jen found') && ({NO_LOADING_JS})", "setup-found"
+        )
+        _leak_guard(desktop, "setup-found")
+        _save(desktop, "setup-found")
+
+    def test_setup_helper(self, desktop, base_url):
+        desktop.goto(f"{base_url}/setup/helper", wait_until="load")
+        _wait_rendered(
+            desktop, f"() => document.body.innerText.includes('Kea host helper') && ({NO_LOADING_JS})", "setup-helper"
+        )
+        _leak_guard(desktop, "setup-helper")
+        _save(desktop, "setup-helper")
+
+    def test_setup_baseline(self, desktop, base_url):
+        desktop.goto(f"{base_url}/setup/baseline", wait_until="load")
+        _wait_rendered(
+            desktop,
+            f"() => document.body.innerText.includes('Capture a baseline') && ({NO_LOADING_JS})",
+            "setup-baseline",
+        )
+        _leak_guard(desktop, "setup-baseline")
+        _save(desktop, "setup-baseline")
+
+    def test_setup_recovery(self, desktop, base_url):
+        desktop.goto(f"{base_url}/setup/recovery", wait_until="load")
+        _wait_rendered(
+            desktop, f"() => document.body.innerText.includes('recovery point') && ({NO_LOADING_JS})", "setup-recovery"
+        )
+        _leak_guard(desktop, "setup-recovery")
+        _save(desktop, "setup-recovery")
+
+    def test_setup_investigate(self, desktop, base_url):
+        desktop.goto(f"{base_url}/setup/investigate", wait_until="load")
+        _wait_rendered(
+            desktop,
+            f"() => document.body.innerText.includes('Investigate a client') && ({NO_LOADING_JS})",
+            "setup-investigate",
+        )
+        _leak_guard(desktop, "setup-investigate")
+        _save(desktop, "setup-investigate")
+
+
 class TestPhoneScreenshots:
     def test_phone_dashboard(self, phone, base_url):
         phone.goto(f"{base_url}/", wait_until="load")

@@ -987,53 +987,6 @@ FLUSH PRIVILEGES;" 2>/dev/null; then
     return 1
 }
 
-# v5.67.0 (Q113) — when the Kea API test just passed, read its OWN subnet4
-# list (config-get) instead of asking the operator to retype what Kea
-# already knows. Prints "id=subnet" lines; empty output (parse failure,
-# no subnets configured) means the caller falls back to typing them.
-_kea_discovered_subnets() {
-    local url="$1" user="$2" pass="$3"
-    command -v curl &>/dev/null && command -v python3 &>/dev/null || return 1
-    curl -s -u "${user}:${pass}" -X POST "${url}/" \
-        -H "Content-Type: application/json" \
-        -d '{"command":"config-get","service":["dhcp4"]}' \
-        --connect-timeout 5 2>/dev/null \
-    | python3 -c "
-import json, sys
-try:
-    data = json.load(sys.stdin)
-    if isinstance(data, list):
-        data = data[0] if data else {}
-    subnets = data.get('arguments', {}).get('Dhcp4', {}).get('subnet4', [])
-    for s in subnets:
-        sid = s.get('id')
-        cidr = s.get('subnet')
-        if sid is not None and cidr:
-            print(f'{sid}={cidr}')
-except Exception:
-    pass
-" 2>/dev/null
-}
-
-# v5.67.0 (Q113) — the interactive subnet-entry loop, extracted out of
-# collect_config so it can be reached both as the plain fallback (no Kea
-# API reachable) and after a declined/empty Kea subnet discovery.
-# Appends to the caller's SUBNET_LINES directly.
-_manual_subnet_entry_loop() {
-    while true; do
-        printf "  ${Y}  ▸${NC} Subnet ID (Enter to finish): " > /dev/tty
-        local SID; read -r SID < /dev/tty
-        [[ -z "$SID" ]] && break
-        if ! [[ "$SID" =~ ^[0-9]+$ ]]; then warn "Subnet ID must be a number"; continue; fi
-        local sname scidr
-        sname=$(prompt_input "  Friendly name" "Subnet${SID}")
-        scidr=$(prompt_input "  CIDR"          "192.168.${SID}.0/24")
-        SUBNET_LINES="${SUBNET_LINES}${SID} = ${sname}, ${scidr}\n"
-        ok "Added: ${SID} = ${sname}, ${scidr}"
-        blank
-    done
-}
-
 # ── Configuration wizard ──────────────────────────────────────────────────────
 collect_config() {
     blank
@@ -1106,73 +1059,52 @@ collect_config() {
     _configure_ports
 }
 
+# v5.67.0 (Q115) — Kea's API/database/subnets/SSH/DDNS are no longer asked
+# here interactively at all (an answers file or JEN_* env var still fills
+# them in silently, same as before — _cfgval, never _ask, so a TTY never
+# prompts for any of the five sections below): Jen's own /setup wizard is
+# now where a fresh install connects Kea, live, with the same validation
+# and a real retry loop in the browser instead of a terminal. A value given
+# here is still tested once, informationally, so an operator scripting an
+# install still sees whether it actually worked.
 _configure_kea_api() {
-    echo -e "  ${B}Kea Control Agent${NC}  ${DIM}(the Kea REST API)${NC}"
+    echo -e "  ${B}Kea Control Agent${NC}  ${DIM}(the Kea REST API — connect it later from Jen's own /setup)${NC}"
     blank
-    local _edit=false
-    while true; do
-        if [[ "$_edit" == "true" ]]; then
-            KEA_API_URL=$(prompt_input  "API URL"      "$KEA_API_URL")
-            KEA_API_USER=$(prompt_input "API username" "$KEA_API_USER")
-            KEA_API_PASS=$(prompt_secret "API password")
-        else
-            KEA_API_URL=$(_ask  "JEN_KEA_API_URL"  "API URL"      "http://YOUR-KEA-SERVER:8000")
-            KEA_API_USER=$(_ask "JEN_KEA_API_USER" "API username" "kea-api")
-            KEA_API_PASS=$(_ask_secret "JEN_KEA_API_PASS" "API password")
-        fi
-        _edit=false
-        blank
-        spinner_start "Testing Kea API connection..."
-        sleep 0.5
-        if test_kea_api "$KEA_API_URL" "$KEA_API_USER" "$KEA_API_PASS"; then
-            spinner_stop; ok "Kea API connection successful"
-            KEA_API_REACHABLE=true
-            return
-        fi
-        spinner_stop
-        KEA_API_REACHABLE=false
-        _connection_failure_choice "Kea API" "$KEA_API_URL"
-        case "$_RETRY_ACTION" in
-            retry) continue ;;
-            edit) _edit=true; continue ;;
-            continue) _blank_if_placeholder KEA_API_URL "http://YOUR-KEA-SERVER:8000"; return ;;
-        esac
-    done
+    KEA_API_URL=$(_cfgval "JEN_KEA_API_URL")
+    KEA_API_USER=$(_cfgval "JEN_KEA_API_USER")
+    KEA_API_PASS=$(_cfgval "JEN_KEA_API_PASS")
+    if [[ -z "$KEA_API_URL" ]]; then
+        ok "Skipped — connect Kea from Jen's own /setup after you log in"
+        return
+    fi
+    spinner_start "Testing Kea API connection..."
+    sleep 0.5
+    if test_kea_api "$KEA_API_URL" "$KEA_API_USER" "$KEA_API_PASS"; then
+        spinner_stop; ok "Kea API connection successful"
+    else
+        spinner_stop; warn "Could not reach the Kea API — connect it later from Jen's own /setup"
+    fi
 }
 
 _configure_kea_db() {
     blank
-    echo -e "  ${B}Kea MySQL Database${NC}"
+    echo -e "  ${B}Kea MySQL Database${NC}  ${DIM}(connect it later from Jen's own /setup)${NC}"
     blank
-    local _edit=false
-    while true; do
-        if [[ "$_edit" == "true" ]]; then
-            KEA_DB_HOST=$(prompt_input  "Host"     "$KEA_DB_HOST")
-            KEA_DB_USER=$(prompt_input  "Username" "$KEA_DB_USER")
-            KEA_DB_PASS=$(prompt_secret "Password")
-            KEA_DB_NAME=$(prompt_input  "Database" "$KEA_DB_NAME")
-        else
-            KEA_DB_HOST=$(_ask  "JEN_KEA_DB_HOST" "Host"     "YOUR-KEA-SERVER")
-            KEA_DB_USER=$(_ask  "JEN_KEA_DB_USER" "Username" "kea")
-            KEA_DB_PASS=$(_ask_secret "JEN_KEA_DB_PASS" "Password")
-            KEA_DB_NAME=$(_ask  "JEN_KEA_DB_NAME" "Database" "kea")
-        fi
-        _edit=false
-        blank
-        spinner_start "Testing Kea database connection..."
-        sleep 0.5
-        if test_mysql "$KEA_DB_HOST" "$KEA_DB_USER" "$KEA_DB_PASS" "$KEA_DB_NAME"; then
-            spinner_stop; ok "Kea database connection successful"
-            return
-        fi
-        spinner_stop
-        _connection_failure_choice "Kea database" "${KEA_DB_USER}@${KEA_DB_HOST}/${KEA_DB_NAME}"
-        case "$_RETRY_ACTION" in
-            retry) continue ;;
-            edit) _edit=true; continue ;;
-            continue) _blank_if_placeholder KEA_DB_HOST "YOUR-KEA-SERVER"; return ;;
-        esac
-    done
+    KEA_DB_HOST=$(_cfgval "JEN_KEA_DB_HOST")
+    KEA_DB_USER=$(_cfgval "JEN_KEA_DB_USER")
+    KEA_DB_PASS=$(_cfgval "JEN_KEA_DB_PASS")
+    KEA_DB_NAME=$(_cfgval "JEN_KEA_DB_NAME"); KEA_DB_NAME="${KEA_DB_NAME:-kea}"
+    if [[ -z "$KEA_DB_HOST" ]]; then
+        ok "Skipped — connect Kea's database from Jen's own /setup after you log in"
+        return
+    fi
+    spinner_start "Testing Kea database connection..."
+    sleep 0.5
+    if test_mysql "$KEA_DB_HOST" "$KEA_DB_USER" "$KEA_DB_PASS" "$KEA_DB_NAME"; then
+        spinner_stop; ok "Kea database connection successful"
+    else
+        spinner_stop; warn "Could not reach the Kea database — connect it later from Jen's own /setup"
+    fi
 }
 
 # Skipped for the Docker "bundled MariaDB" path — docker-compose.mysql.yml
@@ -1258,12 +1190,13 @@ _configure_admin() {
     fi
 }
 
-# v5.67.0 (Q113) — JEN_SUBNETS, same "id=Name,CIDR;id=Name,CIDR" format
-# run.py's Docker env-var path already parses; when the Kea API test just
-# passed, its own subnet4 list is offered for confirmation first.
+# v5.67.0 (Q113, trimmed Q115) — JEN_SUBNETS, same "id=Name,CIDR;id=Name,CIDR"
+# format run.py's Docker env-var path already parses. No answers given: Jen's
+# own /setup wizard reads Kea's live subnet4 list instead (see
+# jen.services.setup_wizard.discover()) — this no longer asks interactively.
 _configure_subnets() {
     blank
-    echo -e "  ${B}Subnet Map${NC}  ${DIM}(your Kea subnets — you can add more later in Settings)${NC}"
+    echo -e "  ${B}Subnet Map${NC}  ${DIM}(add these later from Jen's own /setup, or here now)${NC}"
     blank
     SUBNET_LINES=""
     if [[ -n "${ANSWERS[JEN_SUBNETS]+x}" || -n "${JEN_SUBNETS:-}" ]]; then
@@ -1279,95 +1212,36 @@ _configure_subnets() {
             added=$((added+1))
         done
         [[ $added -eq 0 ]] && warn "JEN_SUBNETS set but no entries parsed from it — check the id=Name,CIDR format"
-    elif [[ "$HAVE_TTY" == "true" && "$MODE_UNATTENDED" == "false" ]]; then
-        if [[ "$KEA_API_REACHABLE" == "true" ]]; then
-            local discovered; discovered=$(_kea_discovered_subnets "$KEA_API_URL" "$KEA_API_USER" "$KEA_API_PASS")
-            if [[ -n "$discovered" ]]; then
-                echo -e "  ${C}Kea reports these subnets:${NC}"
-                blank
-                local _dline _dsid _dcidr
-                while IFS= read -r _dline; do
-                    [[ -z "$_dline" ]] && continue
-                    _dsid="${_dline%%=*}"; _dcidr="${_dline#*=}"
-                    echo -e "    ${B}${_dsid}${NC}  ${_dcidr}"
-                done <<< "$discovered"
-                blank
-                if [[ "$(prompt_yn "Use these subnets?" "y")" == "y" ]]; then
-                    while IFS= read -r _dline; do
-                        [[ -z "$_dline" ]] && continue
-                        _dsid="${_dline%%=*}"; _dcidr="${_dline#*=}"
-                        SUBNET_LINES="${SUBNET_LINES}${_dsid} = Subnet${_dsid}, ${_dcidr}\n"
-                    done <<< "$discovered"
-                    ok "Subnets added from Kea"
-                    blank
-                fi
-            fi
-        fi
-        [[ -z "$SUBNET_LINES" ]] && _manual_subnet_entry_loop
     fi
     if [[ -z "$SUBNET_LINES" ]]; then
-        warn "No subnets added — edit $CONFIG_FILE to add them later"
+        ok "Skipped — add subnets from Jen's own /setup after you log in"
         SUBNET_LINES="# 1 = Production, 10.10.10.0/24\n# 30 = IoT, 10.10.30.0/24\n"
     fi
 }
 
 _configure_ssh() {
     blank
-    echo -e "  ${B}SSH Access${NC}  ${DIM}(optional — enables subnet editing from the UI)${NC}"
+    echo -e "  ${B}SSH Access${NC}  ${DIM}(optional — connect it later from Jen's own /setup)${NC}"
     blank
-    if [[ -n "${ANSWERS[JEN_KEA_SSH_HOST]+x}" || -n "${JEN_KEA_SSH_HOST:-}" ]]; then
-        KEA_SSH_HOST=$(_cfgval "JEN_KEA_SSH_HOST")
-        KEA_SSH_USER=$(_ask "JEN_KEA_SSH_USER" "SSH username" "")
-        KEA_CONF_PATH=$(_ask "JEN_KEA_CONF" "Kea config file" "/etc/kea/kea-dhcp4.conf")
-    elif [[ "$HAVE_TTY" == "true" && "$MODE_UNATTENDED" == "false" ]]; then
-        if [[ "$(prompt_yn "Configure SSH to Kea server?" "y")" == "y" ]]; then
-            KEA_SSH_HOST=$(prompt_input  "Kea SSH host"  "${KEA_DB_HOST:-YOUR-KEA-SERVER}")
-            KEA_SSH_USER=$(prompt_input  "SSH username"  "")
-            KEA_CONF_PATH=$(prompt_input "Kea config file" "/etc/kea/kea-dhcp4.conf")
-        else
-            KEA_SSH_HOST=""; KEA_SSH_USER=""; KEA_CONF_PATH="/etc/kea/kea-dhcp4.conf"
-        fi
-    else
-        KEA_SSH_HOST=""; KEA_SSH_USER=""; KEA_CONF_PATH="/etc/kea/kea-dhcp4.conf"
+    KEA_SSH_HOST=$(_cfgval "JEN_KEA_SSH_HOST")
+    KEA_SSH_USER=$(_cfgval "JEN_KEA_SSH_USER")
+    KEA_CONF_PATH=$(_cfgval "JEN_KEA_CONF"); KEA_CONF_PATH="${KEA_CONF_PATH:-/etc/kea/kea-dhcp4.conf}"
+    if [[ -z "$KEA_SSH_HOST" ]]; then
+        ok "Skipped — set this up from Jen's own /setup after you log in"
     fi
 }
 
 _configure_ddns() {
     blank
-    echo -e "  ${B}DDNS Integration${NC}  ${DIM}(optional — Technitium, Pi-hole, AdGuard, SSH)${NC}"
+    echo -e "  ${B}DDNS Integration${NC}  ${DIM}(optional — Technitium, Pi-hole, AdGuard, SSH; configure later in Settings)${NC}"
     blank
-    if [[ -n "${ANSWERS[JEN_DDNS_PROVIDER]+x}" || -n "${JEN_DDNS_PROVIDER:-}" ]]; then
-        DDNS_PROVIDER=$(_cfgval "JEN_DDNS_PROVIDER"); DDNS_PROVIDER="${DDNS_PROVIDER:-none}"
-        DDNS_URL=$(_cfgval "JEN_DDNS_URL")
-        DDNS_TOKEN=$(_cfgval "JEN_DDNS_TOKEN")
-        DDNS_LOG=$(_ask "JEN_DDNS_LOG" "DDNS log path" "/var/log/kea/kea-ddns.log")
-        DDNS_ZONE=$(_cfgval "JEN_DDNS_ZONE")
-    elif [[ "$HAVE_TTY" == "true" && "$MODE_UNATTENDED" == "false" ]]; then
-        if [[ "$(prompt_yn "Configure DDNS?" "n")" == "y" ]]; then
-            echo -e "    ${B}1)${NC} Technitium  ${B}2)${NC} Pi-hole  ${B}3)${NC} AdGuard  ${B}4)${NC} SSH/Bind9  ${B}5)${NC} None"
-            local dns_choice; dns_choice=$(prompt_choice "1")
-            case "$dns_choice" in
-                1) DDNS_PROVIDER="technitium"
-                   DDNS_URL=$(prompt_input   "Technitium API URL"   "https://your-technitium/api")
-                   DDNS_TOKEN=$(prompt_secret "Technitium API token") ;;
-                2) DDNS_PROVIDER="pihole"
-                   DDNS_URL=$(prompt_input   "Pi-hole URL"           "http://your-pihole")
-                   DDNS_TOKEN=$(prompt_secret "Pi-hole password/token") ;;
-                3) DDNS_PROVIDER="adguard"
-                   DDNS_URL=$(prompt_input   "AdGuard URL"           "http://your-adguard:3000")
-                   DDNS_TOKEN=$(prompt_secret "AdGuard password") ;;
-                4) DDNS_PROVIDER="ssh"; DDNS_URL=""; DDNS_TOKEN="" ;;
-                *) DDNS_PROVIDER="none"; DDNS_URL=""; DDNS_TOKEN="" ;;
-            esac
-            DDNS_LOG=$(prompt_input "DDNS log path" "/var/log/kea/kea-ddns.log")
-            DDNS_ZONE=$(prompt_input "Forward zone"  "your.domain.com")
-        else
-            DDNS_PROVIDER="none"; DDNS_URL=""; DDNS_TOKEN=""
-            DDNS_LOG="/var/log/kea/kea-ddns.log"; DDNS_ZONE=""
-        fi
-    else
-        DDNS_PROVIDER="none"; DDNS_URL=""; DDNS_TOKEN=""
-        DDNS_LOG="/var/log/kea/kea-ddns.log"; DDNS_ZONE=""
+    DDNS_PROVIDER=$(_cfgval "JEN_DDNS_PROVIDER"); DDNS_PROVIDER="${DDNS_PROVIDER:-none}"
+    DDNS_URL=$(_cfgval "JEN_DDNS_URL")
+    DDNS_TOKEN=$(_cfgval "JEN_DDNS_TOKEN")
+    DDNS_LOG=$(_cfgval "JEN_DDNS_LOG"); DDNS_LOG="${DDNS_LOG:-/var/log/kea/kea-ddns.log}"
+    DDNS_ZONE=$(_cfgval "JEN_DDNS_ZONE")
+    if [[ "$DDNS_PROVIDER" == "none" ]]; then
+        ok "Skipped — configure DDNS later in Settings"
     fi
 }
 

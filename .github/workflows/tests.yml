@@ -679,6 +679,58 @@ jobs:
           sudo test -f /etc/jen-layout.conf
           echo "relocated app removed; config/data/layout-record preserved (level 1)"
 
+      # v5.67.0 (Q115 step 3) — install.sh no longer asks for Kea's API,
+      # database, subnets, SSH, or DDNS interactively (jen/setup now
+      # does that, live, after first login); an answers file that leaves
+      # all of those keys out must still produce a healthy install whose
+      # first superadmin login lands on /setup instead of the dashboard.
+      - name: Clear the leftover layout record from the legs above
+        run: sudo rm -f /etc/jen-layout.conf
+
+      - name: Write an answers file with no Kea keys at all
+        run: |
+          umask 077
+          cat > "$RUNNER_TEMP/answers-no-kea.env" << 'EOF'
+          JEN_DB_HOST=127.0.0.1
+          JEN_DB_USER=jen
+          JEN_DB_PASS=jen_pw
+          JEN_DB_NAME=jen
+          JEN_INITIAL_ADMIN_PASSWORD=ci-test-passw0rd-no-kea!
+          JEN_HTTP_PORT=5050
+          JEN_HTTPS_PORT=8443
+          EOF
+
+      - name: Fresh install from the no-Kea answers file
+        run: |
+          mkdir -p "$RUNNER_TEMP/install-no-kea"
+          tar xzf dist/jen-head.tar.gz -C "$RUNNER_TEMP/install-no-kea"
+          cd "$RUNNER_TEMP/install-no-kea/jen"
+          sudo TERM=linux ./install.sh --answers "$RUNNER_TEMP/answers-no-kea.env" --unattended
+
+      - name: Assert a Kea-less install lands a fresh superadmin on /setup
+        run: |
+          set -e
+          systemctl is-active --quiet jen
+          curl -sf http://127.0.0.1:5050/api/v1/health | grep -q jen_version
+          echo "Kea-less install is healthy"
+
+          cookie="$RUNNER_TEMP/cookies-no-kea.txt"
+          csrf=$(curl -sc "$cookie" http://127.0.0.1:5050/login | grep -oP 'name="csrf_token" value="\K[^"]+' | head -1)
+          [[ -n "$csrf" ]]
+          login_location=$(curl -sb "$cookie" -c "$cookie" -X POST http://127.0.0.1:5050/login \
+            -d "username=admin&password=ci-test-passw0rd-no-kea!&csrf_token=$csrf" \
+            -o /dev/null -w '%{redirect_url}')
+          echo "login redirected to: $login_location"
+          dashboard_location=$(curl -sb "$cookie" -c "$cookie" "http://127.0.0.1:5050${login_location}" \
+            -o /dev/null -w '%{redirect_url}')
+          echo "dashboard redirected to: $dashboard_location"
+          [[ "$dashboard_location" == *"/setup"* ]]
+          echo "a fresh, Kea-less superadmin lands on /setup"
+
+      - name: Uninstall the no-Kea install
+        working-directory: ${{ runner.temp }}/install-no-kea/jen
+        run: printf 'y\n1\n' | sudo ./uninstall.sh
+
       - name: Kea log on failure
         if: failure()
         run: docker logs kea 2>&1 | tail -100 || true

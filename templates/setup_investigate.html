@@ -41,7 +41,7 @@
 
     {% if all_resolved %}
     <div class="alert alert-success u-1b0f49">
-        {{ icon("check") }} First hour complete
+        {{ icon("circle-check") }} First hour complete
         {% if elapsed_seconds is not none %} — took {{ (elapsed_seconds // 60) }} minute(s){% endif %}.
     </div>
     {% endif %}

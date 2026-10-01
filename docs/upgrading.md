@@ -23,17 +23,29 @@ and keeps your configuration exactly as before (5.67.0-beta.1).
 
 ## A fresh install's connection failures behave differently
 
-If you run the wizard by hand and a Kea API or database test fails,
-you're now offered retry / edit / continue instead of a bare warning
-that just carries on. A value you never actually change from its
-placeholder default is written to `jen.config` as empty rather than
-as the placeholder itself — Jen's own Health and Getting started pages
-already read an empty key as "not configured" and say so. When the
-Kea API test passes, its own subnet list is offered for confirmation
-instead of asking you to retype it; when the Jen database is local
-and root can already connect, you're offered to create it (the SQL
-shown first either way). None of this affects an existing install or
-an upgrade — it's the fresh-install wizard only (5.67.0-beta.1).
+If you run the wizard by hand and Jen's own database test fails, you're
+offered retry / edit / continue instead of a bare warning that just
+carries on; when it's local and root can already connect, you're offered
+to create it (the SQL shown first either way). None of this affects an
+existing install or an upgrade — it's the fresh-install wizard only
+(5.67.0-beta.1).
+
+## Kea connects after install now, not during it
+
+The installer no longer asks for Kea's API, database, subnets, SSH
+access, or DDNS at all — it only asks for Jen's own database, the ports,
+and an admin password. Log in once installed (as a fresh install always
+has, same as before) and a six-step guided **`/setup`** wizard connects
+Kea live, in the browser — the same connection testing the old terminal
+prompts did, with a real retry loop instead of a terminal re-prompt, plus
+installing the Kea host helper, capturing a config baseline, making a
+recovery point, and investigating your first client. An `--answers` file
+or `JEN_*` environment variable can still supply `JEN_KEA_API_URL`,
+`JEN_SUBNETS`, `JEN_KEA_SSH_HOST`, `JEN_DDNS_PROVIDER`, or any of their
+companions directly — doing so skips the matching `/setup` step, same as
+every other answers-file key already skips its own prompt. None of this
+affects an existing install or an upgrade — it only changes what a fresh
+install's terminal session asks (5.67.0-beta.3).
 
 ## jen.config tightens to 0600
 

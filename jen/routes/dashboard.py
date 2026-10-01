@@ -9,7 +9,7 @@ import json
 import logging
 import secrets
 
-from flask import Blueprint, Response, jsonify, render_template, request
+from flask import Blueprint, Response, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 
 import jen.models.db as __db
@@ -123,6 +123,21 @@ def _get_subnets6_data(accessible_v4_ids) -> list:
 @bp.route("/")
 @login_required
 def dashboard():
+    # v5.67.0 (Q115) — the one-time /setup entry redirect: a superadmin,
+    # the first time they EVER land on the dashboard with Kea not yet
+    # connected, goes to /setup once instead — covers every login path
+    # (forced password change, a normal login, an answers-file install
+    # with the admin password already set, OIDC, a passkey), not just
+    # one of them, since this is the one page every successful login
+    # reaches. Never fires again after that, even if Kea is later
+    # disconnected (a first-run nudge, not a standing gate — Getting
+    # started links into /setup for anyone who wants it later).
+    if current_user.role == "superadmin":
+        from jen.services import setup_wizard
+
+        if setup_wizard.needs_entry_redirect():
+            setup_wizard.mark_entry_redirect_shown()
+            return redirect(url_for("setup.setup_home"))
     try:
         hours = float(request.args.get("hours", "0.5"))
     except ValueError:

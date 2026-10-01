@@ -67,18 +67,18 @@ sudo ./install.sh
 The installer will:
 1. Run pre-flight checks (OS, Python, disk space on the real targets, dependencies)
 2. Ask: bare metal or Docker
-3. Walk you through all configuration values interactively — testing the
-   Kea API and each database as you go, offering to read Kea's own
-   subnet list instead of asking you to retype it, and offering to
-   create the Jen database itself when MariaDB is local and root can
-   already connect
+3. Ask only for Jen's own database, the HTTP/HTTPS ports, and an admin
+   password — testing Jen's database as you go and offering to create it
+   itself when MariaDB is local and root can already connect
 4. Install files, set permissions, enable service
 5. Start Jen and verify it responds
 
-A value you never actually change from its placeholder (a URL still
-reading `YOUR-KEA-SERVER`, say) is left blank in `jen.config` rather than
-written as if it were real — Jen's own Health and Getting started pages
-say what's still missing.
+From v5.67.0, Kea's API, database, subnets, SSH access, and DDNS are no
+longer asked here at all — log in once installed and a six-step guided
+**`/setup`** wizard connects Kea live, in the browser, with the same
+testing and retry the old terminal prompts used to do (see "First Login"
+in the README). An `--answers` file (below) can still supply any of those
+keys directly, skipping the matching `/setup` step entirely.
 
 ### Method 1b — Scripted / unattended install
 

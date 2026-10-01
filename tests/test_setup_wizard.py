@@ -379,17 +379,26 @@ class TestSetupAccessControl:
 
 
 # ── the one-time entry redirect ─────────────────────────────────────────────
+#
+# v5.67.0 (Q115 step 3) — moved from force_password_change() to
+# dashboard() itself: an answers-file install with
+# JEN_INITIAL_ADMIN_PASSWORD already set never passes through forced
+# password change at all (init_jen_db() seeds must_change_password=0
+# directly), so the forced-password-change hook alone never fired for
+# that path. dashboard() is the one page every successful login of every
+# kind (forced change, a normal login, OIDC, a passkey) actually reaches.
 
 
-class TestEntryRedirectThroughForcedPasswordChange:
-    def _force_must_change(self, db):
-        with db.cursor() as cur:
-            cur.execute("UPDATE users SET must_change_password=1 WHERE username='admin'")
-        db.commit()
-
+class TestEntryRedirectOnDashboard:
     def _superadmin_session(self, client):
         with client.session_transaction() as sess:
             sess["_user_cache"] = {"id": 1, "username": "admin", "role": "superadmin", "session_timeout": None}
+            sess["_user_id"] = "1"
+            sess["_fresh"] = True
+
+    def _admin_session(self, client):
+        with client.session_transaction() as sess:
+            sess["_user_cache"] = {"id": 1, "username": "admin", "role": "admin", "session_timeout": None}
             sess["_user_id"] = "1"
             sess["_fresh"] = True
 
@@ -401,13 +410,8 @@ class TestEntryRedirectThroughForcedPasswordChange:
         monkeypatch.setattr(extensions, "SUBNET_MAP", {})
         monkeypatch.setattr("jen.models.user.get_global_setting", lambda key, default="": "false")
         monkeypatch.setattr(sw, "mark_entry_redirect_shown", lambda: None)
-        self._force_must_change(db)
         self._superadmin_session(client)
-        r = client.post(
-            "/force-password-change",
-            data={"new_password": "a-real-password-1", "confirm_password": "a-real-password-1"},
-            follow_redirects=False,
-        )
+        r = client.get("/", follow_redirects=False)
         assert r.status_code == 302
         assert "/setup" in r.headers["Location"]
 
@@ -417,11 +421,28 @@ class TestEntryRedirectThroughForcedPasswordChange:
         monkeypatch.setattr(extensions, "KEA_API_URL", "")
         monkeypatch.setattr(extensions, "SUBNET_MAP", {})
         monkeypatch.setattr("jen.models.user.get_global_setting", lambda key, default="": "true")
-        self._force_must_change(db)
+        self._superadmin_session(client)
+        r = client.get("/", follow_redirects=False)
+        assert r.status_code != 302 or "/setup" not in r.headers.get("Location", "")
+
+    def test_non_superadmin_is_never_redirected(self, client, db, monkeypatch):
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "KEA_API_URL", "")
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {})
+        monkeypatch.setattr("jen.models.user.get_global_setting", lambda key, default="": "false")
+        self._admin_session(client)
+        r = client.get("/", follow_redirects=False)
+        assert r.status_code != 302 or "/setup" not in r.headers.get("Location", "")
+
+    def test_force_password_change_always_goes_to_the_dashboard(self, client, db):
+        with db.cursor() as cur:
+            cur.execute("UPDATE users SET must_change_password=1 WHERE username='admin'")
+        db.commit()
         self._superadmin_session(client)
         r = client.post(
             "/force-password-change",
-            data={"new_password": "a-real-password-2", "confirm_password": "a-real-password-2"},
+            data={"new_password": "a-real-password-3", "confirm_password": "a-real-password-3"},
             follow_redirects=False,
         )
         assert r.status_code == 302

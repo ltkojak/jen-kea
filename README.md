@@ -303,6 +303,14 @@ Open `http://your-server:5050` and sign in as **`admin`**.
   `/var/lib/jen/initial-admin-password` (also in the log / Docker logs).
   Jen requires you to change it immediately, then deletes the file.
 
+From v5.67.0, the installer no longer asks for Kea's API, database, subnets,
+SSH access, or DDNS up front — a fresh install with none of that pre-filled
+lands you on **`/setup`** after your first login: a six-step guided
+first hour that connects Kea live, shows what it found, installs the Kea
+host helper, captures a config baseline, makes a recovery point, and walks
+you through investigating your first client. Every step can be skipped and
+picked up again later from the Getting Started checklist.
+
 ---
 
 ## Upgrading
