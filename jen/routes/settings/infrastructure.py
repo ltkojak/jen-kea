@@ -615,28 +615,12 @@ def _probe_once(url, user, pwd, omit_service, service="dhcp4", verify=None, cert
     v5.29.0 (Q29) — `verify` / `cert` override the configured TLS
     material: the https setup flow probes a socket with a CA and client
     certificate Jen has NOT adopted yet (it only writes them into its
-    config once the socket answers)."""
-    payload = {"command": "version-get"}
-    if not omit_service:
-        payload["service"] = [service]
-    try:
-        resp = __kea.http.post(
-            url,
-            json=payload,
-            auth=(user, pwd),
-            timeout=8,
-            verify=verify if verify is not None else (extensions.KEA_API_CA or extensions.KEA_API_TLS_VERIFY),
-            cert=cert if cert is not None else __kea._tls_client_cert(),
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        d = data[0] if isinstance(data, list) else data
-        if d.get("result") != 0:
-            return "", d.get("text", "Kea returned an error")
-        return (d.get("arguments", {}).get("extended", "") or d.get("text", "")).strip(), ""
-    except Exception as e:
-        # any transport failure is just "this endpoint didn't answer"
-        return "", str(e)
+    config once the socket answers).
+
+    v5.67.0-beta.5 (Q117, item f) — delegates to kea.test_connection(),
+    the one shared TLS-aware probe primitive /setup's Connect step now
+    also uses, rather than keeping its own copy of this body."""
+    return __kea.test_connection(url, user, pwd, service=service, omit_service=omit_service, verify=verify, cert=cert)
 
 
 # v5.29.3 — a daemon that was just restarted opens its HTTP listener LAST

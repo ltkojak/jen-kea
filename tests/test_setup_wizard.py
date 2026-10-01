@@ -164,6 +164,134 @@ class TestTestKeaConnection:
         assert result["attempts"][0]["error"] == "unauthorized"
 
 
+# ── save_connection() — pure, write_values mocked ───────────────────────────
+
+
+class TestSaveConnection:
+    def test_writes_the_four_tls_keys_even_when_empty(self, monkeypatch):
+        """v5.67.0-beta.5 (Q117, item f) — unlike the password fields,
+        the TLS keys are always written (not conditional): an unchecked
+        Advanced TLS expander means "no TLS material", which must
+        actively clear whatever a previous save left behind."""
+        calls = []
+        monkeypatch.setattr("jen.config.app_config.write_values", lambda items: calls.append(items))
+        setup_wizard.save_connection(
+            api_url="http://kea:8000",
+            api_user="u",
+            api_pass="",
+            mode="ca",
+            kea_db_host="kea-db",
+            kea_db_user="kea",
+            kea_db_pass="",
+            kea_db_name="kea",
+        )
+        assert calls == [
+            [
+                ("kea", "api_url", "http://kea:8000"),
+                ("kea", "api_user", "u"),
+                ("kea", "connection_mode", "ca"),
+                ("kea", "api_ca", ""),
+                ("kea", "api_tls_verify", "true"),
+                ("kea", "api_client_cert", ""),
+                ("kea", "api_client_key", ""),
+                ("kea_db", "host", "kea-db"),
+                ("kea_db", "user", "kea"),
+                ("kea_db", "database", "kea"),
+            ]
+        ]
+
+    def test_writes_the_submitted_tls_material(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr("jen.config.app_config.write_values", lambda items: calls.append(items))
+        setup_wizard.save_connection(
+            api_url="https://kea:8004",
+            api_user="u",
+            api_pass="",
+            mode="direct",
+            kea_db_host="kea-db",
+            kea_db_user="kea",
+            kea_db_pass="",
+            kea_db_name="kea",
+            api_ca="/etc/jen/ssl/kea-ca.pem",
+            api_tls_verify=False,
+            api_client_cert="/etc/jen/ssl/client.pem",
+            api_client_key="/etc/jen/ssl/client.key",
+        )
+        items = {k: v for section, k, v in calls[0] if section == "kea"}
+        assert items["api_ca"] == "/etc/jen/ssl/kea-ca.pem"
+        assert items["api_tls_verify"] == "false"
+        assert items["api_client_cert"] == "/etc/jen/ssl/client.pem"
+        assert items["api_client_key"] == "/etc/jen/ssl/client.key"
+
+
+# ── probe_v6() / enable_v6() — mocked kea.probe_command, no real Kea ────────
+
+
+class TestProbeV6:
+    def test_ok_shape_with_subnets(self, monkeypatch):
+        def fake_probe_command(url, user, pwd, command, **kw):
+            if command == "version-get":
+                return {"result": 0, "arguments": {"extended": "3.2.0"}, "text": ""}, ""
+            assert command == "config-get"
+            return (
+                {
+                    "result": 0,
+                    "arguments": {
+                        "Dhcp6": {
+                            "subnet6": [{"id": 1, "subnet": "2001:db8::/64"}, {"id": 2, "subnet": "2001:db8:1::/64"}]
+                        }
+                    },
+                },
+                "",
+            )
+
+        monkeypatch.setattr("jen.services.kea.probe_command", fake_probe_command)
+        result = setup_wizard.probe_v6("http://kea:8000", "u", "p", omit_service=False)
+        assert result["ok"] is True
+        assert result["version"] == "3.2.0"
+        assert result["subnet6_count"] == 2
+        assert result["proposed_subnets6"] == {
+            1: {"name": "Subnet1", "cidr": "2001:db8::/64"},
+            2: {"name": "Subnet2", "cidr": "2001:db8:1::/64"},
+        }
+
+    def test_unreachable_is_a_clean_failure(self, monkeypatch):
+        monkeypatch.setattr("jen.services.kea.probe_command", lambda *a, **kw: (None, "connection refused"))
+        result = setup_wizard.probe_v6("http://kea:8000", "u", "p", omit_service=False)
+        assert result["ok"] is False
+        assert result["error"] == "connection refused"
+        assert result["subnet6_count"] == 0
+        assert result["proposed_subnets6"] == {}
+
+    def test_config_get_failure_still_reports_the_version(self, monkeypatch):
+        def fake_probe_command(url, user, pwd, command, **kw):
+            if command == "version-get":
+                return {"result": 0, "arguments": {"extended": "3.2.0"}, "text": ""}, ""
+            return None, "config-get not permitted"
+
+        monkeypatch.setattr("jen.services.kea.probe_command", fake_probe_command)
+        result = setup_wizard.probe_v6("http://kea:8000", "u", "p", omit_service=False)
+        assert result["ok"] is True
+        assert result["version"] == "3.2.0"
+        assert result["subnet6_count"] == 0
+        assert result["proposed_subnets6"] == {}
+
+
+class TestEnableV6:
+    def test_writes_endpoint_subnets_and_the_flag(self, monkeypatch):
+        values_calls = []
+        subnets6_calls = []
+        flag_calls = []
+        monkeypatch.setattr("jen.config.app_config.write_values", lambda items: values_calls.append(items))
+        monkeypatch.setattr("jen.config.app_config.write_subnets6", lambda subnets: subnets6_calls.append(subnets))
+        monkeypatch.setattr("jen.models.user.set_global_setting", lambda key, value: flag_calls.append((key, value)))
+        subnets6 = {1: {"name": "Subnet1", "cidr": "2001:db8::/64"}}
+        setup_wizard.enable_v6("http://kea:8006", subnets6)
+        assert values_calls == [[("kea6", "api_url", "http://kea:8006")]]
+        assert subnets6_calls == [subnets6]
+        assert flag_calls == [("ipv6_enabled", "true")]
+
+
 # ── discover() — service layer mocked, no real Kea ──────────────────────────
 
 

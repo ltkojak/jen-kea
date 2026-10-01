@@ -72,6 +72,10 @@ def setup_connect():
             kea_db_host=extensions.KEA_DB_HOST,
             kea_db_user=extensions.KEA_DB_USER,
             kea_db_name=extensions.KEA_DB_NAME,
+            api_ca=extensions.KEA_API_CA,
+            api_tls_verify=extensions.KEA_API_TLS_VERIFY,
+            api_client_cert=extensions.KEA_API_CLIENT_CERT,
+            api_client_key=extensions.KEA_API_CLIENT_KEY,
         )
 
     api_url = request.form.get("api_url", "").strip()
@@ -81,8 +85,15 @@ def setup_connect():
     kea_db_user = request.form.get("kea_db_user", "").strip()
     kea_db_pass = request.form.get("kea_db_pass", "")
     kea_db_name = request.form.get("kea_db_name", "").strip() or "kea"
+    # v5.67.0-beta.5 (Q117, item f) — Advanced TLS, same four fields and
+    # same validation as Settings' own save_infra_kea.
+    api_ca = request.form.get("api_ca", "").strip()
+    api_tls_verify = request.form.get("api_tls_verify", "") == "1"
+    api_client_cert = request.form.get("api_client_cert", "").strip()
+    api_client_key = request.form.get("api_client_key", "").strip()
 
     from jen.services import auth as __auth
+    from jen.services import kea as __kea
 
     retry_ctx = {
         "api_url": api_url,
@@ -90,6 +101,10 @@ def setup_connect():
         "kea_db_host": kea_db_host,
         "kea_db_user": kea_db_user,
         "kea_db_name": kea_db_name,
+        "api_ca": api_ca,
+        "api_tls_verify": api_tls_verify,
+        "api_client_cert": api_client_cert,
+        "api_client_key": api_client_key,
     }
     if not api_url or not __auth.valid_api_url(api_url, require_port=False):
         flash("Enter a valid Kea API URL (http:// or https://).", "error")
@@ -97,8 +112,28 @@ def setup_connect():
     if not kea_db_host or not kea_db_user:
         flash("Kea's database host and username are required.", "error")
         return render_template("setup_connect.html", progress=_progress(), **retry_ctx)
+    if api_ca and not os.path.isfile(api_ca):
+        flash(f"CA bundle path not found on the Jen host: {api_ca}", "error")
+        return render_template("setup_connect.html", progress=_progress(), **retry_ctx)
+    if bool(api_client_cert) != bool(api_client_key):
+        flash("Set both the client certificate and key, or neither.", "error")
+        return render_template("setup_connect.html", progress=_progress(), **retry_ctx)
+    for label, path in (("client certificate", api_client_cert), ("client key", api_client_key)):
+        if path and not os.path.isfile(path):
+            flash(f"Client {label} not found on the Jen host: {path}", "error")
+            return render_template("setup_connect.html", progress=_progress(), **retry_ctx)
+    tls_err = __kea.validate_client_tls_material(api_client_cert, api_client_key, api_ca)
+    if tls_err:
+        flash(f"TLS settings not saved: {tls_err}.", "error")
+        return render_template("setup_connect.html", progress=_progress(), **retry_ctx)
 
-    kea_result = __setup.test_kea_connection(api_url, api_user, api_pass)
+    # Probe with the candidate TLS material — not yet saved, so the
+    # probe must override what's currently configured rather than fall
+    # back to it (the same reasoning Settings' own https setup flow
+    # already uses for a socket Jen hasn't adopted yet).
+    probe_verify = api_ca or api_tls_verify
+    probe_cert = (api_client_cert, api_client_key) if api_client_cert and api_client_key else None
+    kea_result = __setup.test_kea_connection(api_url, api_user, api_pass, verify=probe_verify, cert=probe_cert)
     db_ok, db_info = __setup.test_kea_db(kea_db_host, kea_db_user, kea_db_pass, kea_db_name)
 
     if not kea_result["ok"] or not db_ok:
@@ -118,6 +153,10 @@ def setup_connect():
         kea_db_user=kea_db_user,
         kea_db_pass=kea_db_pass,
         kea_db_name=kea_db_name,
+        api_ca=api_ca,
+        api_tls_verify=api_tls_verify,
+        api_client_cert=api_client_cert,
+        api_client_key=api_client_key,
     )
     __user.audit("SETUP_WIZARD", "connect", f"url={kea_result['url']} mode={kea_result['mode']}")
     flash(f"Connected — Kea {kea_result['version'] or 'unknown version'}, {kea_result['mode']} mode.", "success")
@@ -132,6 +171,8 @@ def setup_connect():
 @login_required
 @_superadmin_required
 def setup_found():
+    from jen import extensions
+
     found = __setup.discover()
 
     if request.method == "GET":
@@ -144,11 +185,67 @@ def setup_found():
         )
 
     next_url = url_for("setup.setup_helper")
-
     action = request.form.get("action", "")
+
     if action == "skip":
         __setup.set_step("found", "skipped")
         return redirect(next_url)
+
+    # v5.67.0-beta.5 (Q117, item g) — both v6 actions are a superadmin's
+    # own explicit act (CLAUDE.md "IPv6": nothing v6 fires unless
+    # asked). CA mode reuses the already-connected v4 Control Agent URL
+    # with service=["dhcp6"]; direct mode has no way to infer dhcp6's
+    # own control socket from dhcp4's, so it needs the operator's own
+    # URL for it.
+    if action in ("check_v6", "enable_v6"):
+        if extensions.KEA_CONNECTION_MODE == "direct":
+            v6_url = request.form.get("v6_url", "").strip()
+            from jen.services import auth as __auth
+
+            if not v6_url or not __auth.valid_api_url(v6_url, require_port=True):
+                flash("Enter a valid DHCPv6 control socket URL (e.g. http://kea:8006).", "error")
+                return render_template(
+                    "setup_found.html",
+                    progress=_progress(),
+                    found=found,
+                    hook_loss=__setup.HOOK_LOSS,
+                    hook_labels=__setup.HOOK_LABELS,
+                )
+            v6_probe = __setup.probe_v6(v6_url, extensions.KEA_API_USER, extensions.KEA_API_PASS, omit_service=True)
+        else:
+            v6_url = extensions.KEA_API_URL
+            v6_probe = __setup.probe_v6(v6_url, extensions.KEA_API_USER, extensions.KEA_API_PASS, omit_service=False)
+
+        if not v6_probe["ok"]:
+            flash(f"DHCPv6 did not answer: {v6_probe['error'] or 'no response'}.", "error")
+            return render_template(
+                "setup_found.html",
+                progress=_progress(),
+                found=found,
+                hook_loss=__setup.HOOK_LOSS,
+                hook_labels=__setup.HOOK_LABELS,
+                v6_url=v6_url,
+            )
+
+        if action == "check_v6":
+            __user.audit(
+                "SETUP_WIZARD", "check_v6", f"version={v6_probe['version']} subnets={v6_probe['subnet6_count']}"
+            )
+            return render_template(
+                "setup_found.html",
+                progress=_progress(),
+                found=found,
+                hook_loss=__setup.HOOK_LOSS,
+                hook_labels=__setup.HOOK_LABELS,
+                v6_probe=v6_probe,
+                v6_url=v6_url,
+            )
+
+        # action == "enable_v6"
+        __setup.enable_v6(v6_url, v6_probe["proposed_subnets6"])
+        __user.audit("SETUP_WIZARD", "enable_v6", f"url={v6_url} subnets={v6_probe['subnet6_count']}")
+        flash(f"IPv6 is now managed in Jen — Kea {v6_probe['version'] or 'unknown version'}.", "success")
+        return redirect(url_for("setup.setup_found"))
 
     subnets = {}
     for sid, info in found["proposed_subnets"].items():
@@ -237,8 +334,17 @@ def setup_baseline():
 
     result = __setup.capture_baseline(server, "dhcp4")
     if result["ok"]:
+        # v5.67.0-beta.5 (Q117, item g) — once a superadmin has actually
+        # pressed "Manage IPv6 in Jen" on the Found step (never before —
+        # CLAUDE.md "IPv6": nothing v6 fires unless asked), the baseline
+        # this step captures should cover dhcp6 too, not just dhcp4.
+        # Best-effort: a v6 capture failure doesn't fail the v4 one.
+        v6_note = ""
+        if __setup._ipv6_enabled():
+            v6_result = __setup.capture_baseline(server, "dhcp6")
+            v6_note = " (dhcp6 too)" if v6_result["ok"] else " — dhcp6 baseline failed, dhcp4 still captured"
         __user.audit("SETUP_WIZARD", "baseline", f"server={server.get('id')}")
-        flash("Baseline captured.", "success")
+        flash(f"Baseline captured{v6_note}.", "success")
         __setup.set_step("baseline", "done")
         return redirect(url_for("setup.setup_recovery"))
     flash("Could not read Kea's config — check the helper step above.", "error")

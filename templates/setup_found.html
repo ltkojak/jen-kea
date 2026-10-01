@@ -36,7 +36,30 @@
     {% endif %}
 
     <h4>IPv6</h4>
-    <p>{{ "Enabled" if found.ipv6_enabled else "Off (the default)" }}.</p>
+    {% if found.ipv6_enabled %}
+    <p>{{ icon('circle-check') }} Managed in Jen.</p>
+    {% elif v6_probe %}
+    <p>DHCPv6 answered — Kea {{ v6_probe.version or "unknown version" }}, {{ v6_probe.subnet6_count }} subnet(s) found.</p>
+    <form method="POST" action="/setup/found">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="enable_v6">
+        {% if v6_url %}<input type="hidden" name="v6_url" value="{{ v6_url }}">{% endif %}
+        <button type="submit" class="btn btn-primary">Manage IPv6 in Jen</button>
+    </form>
+    {% else %}
+    <p class="u-865c33">DHCPv6: not checked — Jen's IPv6 management is off.</p>
+    <form method="POST" action="/setup/found">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="check_v6">
+        {% if found.connection_mode == "direct" %}
+        <div class="form-group" style="max-width:360px;">
+            <label>DHCPv6 control socket URL</label>
+            <input type="text" name="v6_url" value="{{ v6_url or '' }}" placeholder="http://kea:8006">
+        </div>
+        {% endif %}
+        <button type="submit" class="btn btn-secondary">{{ icon("search") }} Check for DHCPv6</button>
+    </form>
+    {% endif %}
 
     <h4>Subnets Kea reports</h4>
     {% if found.proposed_subnets %}

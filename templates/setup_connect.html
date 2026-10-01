@@ -28,6 +28,35 @@
                 <input type="password" name="api_pass" placeholder="(leave blank for none)">
             </div>
         </div>
+        <details class="u-56f435"{% if api_ca or api_client_cert %} open{% endif %}>
+            <summary class="u-3928fa">Advanced TLS</summary>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>CA bundle path (optional)</label>
+                    <input type="text" name="api_ca" value="{{ api_ca }}" placeholder="/etc/jen/ssl/kea-ca.pem">
+                    <div class="form-hint">Only for an <code>https://</code> URL — pins TLS verification to this CA bundle on the Jen host.</div>
+                </div>
+                <div class="form-group">
+                    <label>Verify TLS</label>
+                    <label style="font-weight:normal;display:flex;align-items:center;gap:6px;margin-top:6px;">
+                        <input type="checkbox" name="api_tls_verify" value="1" {% if api_tls_verify %}checked{% endif %}>
+                        Verify the control socket's certificate
+                    </label>
+                    <div class="form-hint">Ignored for <code>http://</code>. Uncheck only for a self-signed cert with no CA bundle.</div>
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Client certificate (optional)</label>
+                    <input type="text" name="api_client_cert" value="{{ api_client_cert }}" placeholder="/etc/jen/ssl/jen-kea-client.pem">
+                </div>
+                <div class="form-group">
+                    <label>Client key</label>
+                    <input type="text" name="api_client_key" value="{{ api_client_key }}" placeholder="/etc/jen/ssl/jen-kea-client.key">
+                    <div class="form-hint">For Kea sockets with <code>cert-required</code> (Kea's default for <code>https</code>). Key must be readable by www-data — <code>root:www-data</code> 640 under <code>/etc/jen/ssl/</code>.</div>
+                </div>
+            </div>
+        </details>
         <h3>Kea's database</h3>
         <div class="form-row">
             <div class="form-group">

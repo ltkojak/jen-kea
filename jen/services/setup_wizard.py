@@ -151,43 +151,27 @@ def mark_entry_redirect_shown() -> None:
 # ── step 1: connect ──────────────────────────────────────────────────────────
 
 
-def _probe_version(url: str, user: str, password: str, *, omit_service: bool, service: str = "dhcp4"):
-    """One version-get against a candidate endpoint. Returns (version_text,
-    error) — exactly one is non-empty. Deliberately a small, independent
-    copy of jen.routes.settings.infrastructure._probe_once's shape rather
-    than an import from a routes module (the wrong direction for a
-    service to depend on) or a shared refactor of already-working,
-    already-tested code — the wizard's own needs are simpler (no TLS
-    client-cert override) and this is the whole function."""
-    import requests
-
-    payload = {"command": "version-get"}
-    if not omit_service:
-        payload["service"] = [service]
-    try:
-        resp = requests.post(url, json=payload, auth=(user, password), timeout=8)
-        resp.raise_for_status()
-        data = resp.json()
-        d = data[0] if isinstance(data, list) else data
-        if d.get("result") != 0:
-            return "", d.get("text", "Kea returned an error")
-        return (d.get("arguments", {}).get("extended", "") or d.get("text", "")).strip(), ""
-    except Exception as e:
-        return "", str(e)
-
-
-def test_kea_connection(url: str, user: str, password: str, *, service: str = "dhcp4") -> dict:
+def test_kea_connection(url: str, user: str, password: str, *, service: str = "dhcp4", verify=None, cert=None) -> dict:
     """Try `url` as given (Control Agent style, with a "service" field);
     if nothing answers, retry the same host on the daemon's own default
     direct-socket port (8004/8006) — the same two-step fallback
     jen.routes.settings.infrastructure.probe_kea() uses for an already-
     configured connection, run here against a connection that hasn't
     been saved yet. Returns
-    {"ok", "mode": "ca"|"direct"|None, "url", "version", "version_text", "attempts"}."""
+    {"ok", "mode": "ca"|"direct"|None, "url", "version", "version_text", "attempts"}.
+
+    v5.67.0-beta.5 (Q117, item f) — `verify`/`cert` let the Connect
+    step's own Advanced TLS fields (not yet saved) override the
+    currently-configured material, the same way Settings' own https
+    setup flow probes a candidate before adopting it. Both attempts
+    below go through kea.test_connection(), the one shared TLS-aware
+    probe primitive — this function used to keep its own copy that
+    never looked at TLS settings at all."""
     from jen.services.kea import parse_kea_version
+    from jen.services.kea import test_connection as _probe
 
     attempts = []
-    version_text, err = _probe_version(url, user, password, omit_service=False, service=service)
+    version_text, err = _probe(url, user, password, service=service, omit_service=False, verify=verify, cert=cert)
     attempts.append({"url": url, "mode": "ca", "error": err})
     if version_text:
         v = parse_kea_version(version_text)
@@ -204,7 +188,7 @@ def test_kea_connection(url: str, user: str, password: str, *, service: str = "d
     scheme = urlparse(url).scheme or "http"
     if host:
         alt = f"{scheme}://{host}:{8006 if service == 'dhcp6' else 8004}"
-        version_text2, err2 = _probe_version(alt, user, password, omit_service=True, service=service)
+        version_text2, err2 = _probe(alt, user, password, service=service, omit_service=True, verify=verify, cert=cert)
         attempts.append({"url": alt, "mode": "direct", "error": err2})
         if version_text2:
             v = parse_kea_version(version_text2)
@@ -228,16 +212,40 @@ def test_kea_db(host: str, user: str, password: str, database: str, port: int = 
     return dbexport.test_connection(host, port, user, password, database)
 
 
-def save_connection(*, api_url, api_user, api_pass, mode, kea_db_host, kea_db_user, kea_db_pass, kea_db_name) -> None:
+def save_connection(
+    *,
+    api_url,
+    api_user,
+    api_pass,
+    mode,
+    kea_db_host,
+    kea_db_user,
+    kea_db_pass,
+    kea_db_name,
+    api_ca="",
+    api_tls_verify=True,
+    api_client_cert="",
+    api_client_key="",
+) -> None:
     """Write both [kea] and [kea_db] in one reload — same choke point
     (app_config.write_values) Settings' own save-kea/save-kea-db routes
-    use, just combined into the one write this step needs."""
+    use, just combined into the one write this step needs.
+
+    v5.67.0-beta.5 (Q117, item f) — the four Advanced TLS keys, same as
+    save_infra_kea's own writes: always written (not conditional like
+    the password fields) since an unchecked expander means "no TLS
+    material", which must actively clear any value a previous save left
+    behind, not silently keep it."""
     from jen.config import app_config
 
     items = [
         ("kea", "api_url", api_url),
         ("kea", "api_user", api_user),
         ("kea", "connection_mode", mode),
+        ("kea", "api_ca", api_ca),
+        ("kea", "api_tls_verify", "true" if api_tls_verify else "false"),
+        ("kea", "api_client_cert", api_client_cert),
+        ("kea", "api_client_key", api_client_key),
         ("kea_db", "host", kea_db_host),
         ("kea_db", "user", kea_db_user),
         ("kea_db", "database", kea_db_name),
@@ -303,6 +311,75 @@ def save_subnets(subnets: dict) -> None:
     from jen.config import app_config
 
     app_config.write_subnets(subnets)
+
+
+def probe_v6(url: str, user: str, password: str, *, omit_service: bool) -> dict:
+    """Explicit, superadmin-pressed check for whether Kea's dhcp6 daemon
+    answers at all (v5.67.0-beta.5, Q117, item g) — never run
+    automatically: `discover()`'s own `ipv6_enabled` only ever reported
+    Jen's OWN switch, but the Found step's old prose implied it also
+    meant "Kea has no DHCPv6" on a dual-stack site, which it never
+    actually checked. CLAUDE.md "IPv6": nothing v6 fires unless asked —
+    this function is the one place that's now true even in the asking.
+
+    `url`/`omit_service` mirror test_kea_connection's own CA-vs-direct
+    split: CA mode reuses the already-connected v4 Control Agent URL
+    with service=["dhcp6"]; direct mode needs its own per-daemon socket
+    URL, since Kea has no way to infer one daemon's control socket from
+    another's. Returns {"ok", "version", "version_text",
+    "subnet6_count", "proposed_subnets6", "error"} — never raises; a
+    failed probe just reports ok: False, same contract as every other
+    live-Kea read in this codebase."""
+    from jen.services import kea_config_view as _view
+    from jen.services.kea import parse_kea_version
+    from jen.services.kea import probe_command as _probe_cmd
+
+    version_result, err = _probe_cmd(url, user, password, "version-get", service="dhcp6", omit_service=omit_service)
+    if version_result is None:
+        return {
+            "ok": False,
+            "error": err,
+            "version": "",
+            "version_text": "",
+            "subnet6_count": 0,
+            "proposed_subnets6": {},
+        }
+
+    version_text = (version_result.get("arguments", {}).get("extended", "") or version_result.get("text", "")).strip()
+    v = parse_kea_version(version_text)
+
+    proposed6 = {}
+    cfg_result, _cfg_err = _probe_cmd(url, user, password, "config-get", service="dhcp6", omit_service=omit_service)
+    if cfg_result is not None:
+        dhcp6_cfg = cfg_result.get("arguments", {}).get("Dhcp6", {})
+        for s, _sn in sorted(_view.iter_subnet6(dhcp6_cfg), key=lambda pair: pair[0]["id"]):
+            proposed6[s["id"]] = {"name": f"Subnet{s['id']}", "cidr": s.get("subnet", "")}
+
+    return {
+        "ok": True,
+        "error": "",
+        "version": ".".join(str(n) for n in v) if v else "",
+        "version_text": version_text,
+        "subnet6_count": len(proposed6),
+        "proposed_subnets6": proposed6,
+    }
+
+
+def enable_v6(url: str, subnets6: dict) -> None:
+    """ "Manage IPv6 in Jen" — called only after probe_v6() has already
+    confirmed dhcp6 answers. Flips Jen's own display flag, saves the
+    confirmed dhcp6 endpoint (so later reads use it instead of inheriting
+    v4's), and proposes the subnet6 map. Deliberately NOT toggle_ipv6()
+    (routes/settings/infrastructure.py): that route's job is
+    starting/stopping kea-dhcp6-server over SSH on a server that isn't
+    running it yet — here it already IS running and already answered,
+    so there's nothing to start."""
+    from jen.config import app_config
+    from jen.models.user import set_global_setting
+
+    app_config.write_values([("kea6", "api_url", url)])
+    app_config.write_subnets6(subnets6)
+    set_global_setting("ipv6_enabled", "true")
 
 
 HOOK_LOSS = {

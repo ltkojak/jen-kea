@@ -120,6 +120,93 @@ def validate_client_tls_material(cert_path: str, key_path: str, ca_path: str) ->
     return None
 
 
+def test_connection(
+    url: str,
+    user: str,
+    password: str,
+    *,
+    service: str = "dhcp4",
+    omit_service: bool = False,
+    verify=None,
+    cert=None,
+    timeout: int = 8,
+):
+    """One version-get probe against `url`, independent of the globally
+    configured connection. The ONE TLS-aware probe primitive (v5.67.0-beta.5,
+    Q117, item f) — Settings' own probe-kea route and /setup's Connect
+    step both call this rather than each keeping a separate copy; the
+    setup wizard's own prior copy never looked at TLS settings at all,
+    so a site with a private CA or Kea's default mTLS socket failed at
+    the very first step of the flagship flow.
+
+    `verify`/`cert` explicitly override the configured TLS material —
+    for probing a candidate that hasn't been saved yet (as both callers
+    above do); omitted (None), they fall back to the current [kea]
+    api_ca/api_tls_verify / api_client_cert+api_client_key via
+    `_tls_verify()`/`_tls_client_cert()`. Returns (version_text, error):
+    exactly one is non-empty.
+    """
+    result, err = probe_command(
+        url,
+        user,
+        password,
+        "version-get",
+        service=service,
+        omit_service=omit_service,
+        verify=verify,
+        cert=cert,
+        timeout=timeout,
+    )
+    if result is None:
+        return "", err
+    return (result.get("arguments", {}).get("extended", "") or result.get("text", "")).strip(), ""
+
+
+def probe_command(
+    url: str,
+    user: str,
+    password: str,
+    command: str,
+    *,
+    service: str = "dhcp4",
+    omit_service: bool = False,
+    arguments: dict = None,
+    verify=None,
+    cert=None,
+    timeout: int = 8,
+):
+    """Like test_connection, but for an arbitrary read-only command —
+    test_connection's own TLS-aware POST, generalized (v5.67.0-beta.5,
+    Q117, item g) so the setup wizard's explicit "Check for DHCPv6" probe
+    can follow a successful version-get with a config-get against the
+    SAME not-yet-adopted candidate, to list what the daemon actually
+    serves before anything is saved. Returns (result_dict, error):
+    exactly one is non-empty/non-None — `result_dict` is Kea's own reply
+    (`{"result": 0, "arguments": {...}, ...}`), not just its text."""
+    payload = {"command": command}
+    if not omit_service:
+        payload["service"] = [service]
+    if arguments:
+        payload["arguments"] = arguments
+    try:
+        resp = http.post(
+            url,
+            json=payload,
+            auth=(user, password),
+            timeout=timeout,
+            verify=verify if verify is not None else _tls_verify(),
+            cert=cert if cert is not None else _tls_client_cert(),
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        d = data[0] if isinstance(data, list) else data
+        if d.get("result") != 0:
+            return None, d.get("text", "Kea returned an error")
+        return d, ""
+    except Exception as e:
+        return None, str(e)
+
+
 def _endpoint_for(server: dict, service: str):
     """
     Resolve (url, user, pwd) for one command — or return an error dict
