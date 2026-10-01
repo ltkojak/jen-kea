@@ -224,7 +224,9 @@ class TestContentDirLayout:
         assert "migrate_content" in sh
         assert 'chown -R root:root "$INSTALL_DIR"' in sh
         assert 'chown -R "$JEN_USER:$JEN_USER" "$INSTALL_DIR"' not in sh
-        assert "/var/lib/jen/backups" in sh  # pre-upgrade DB backup
+        # v5.67.0 (Q114) — the pre-upgrade DB backup now derives its path
+        # from $CONTENT_DIR (relocatable), not a literal /var/lib/jen.
+        assert "$CONTENT_DIR/backups" in sh  # pre-upgrade DB backup
         assert "/opt/jen/backups" not in sh
 
     def test_uninstall_removes_content_dir_on_full_wipe(self):

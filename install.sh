@@ -1499,7 +1499,16 @@ _seed_jen_db() {
     # would instead pass env one empty-string argument, which env rejects
     # as not a KEY=value pair. The inner "$pass" is quoted, so a password
     # containing spaces still arrives as one word when it IS set.
-    out=$(runuser -u "$JEN_USER" -- env ${pass:+JEN_INITIAL_ADMIN_PASSWORD="$pass"} "$PYBIN" -c "
+    #
+    # v5.67.0 (Q114) — JEN_ROOT/JEN_CONFIG_DIR/JEN_CONTENT_DIR exported
+    # for the same reason every python one-liner install.sh shells out to
+    # needs them: this subprocess has no systemd Environment= lines to
+    # inherit a relocated layout from, so without this create_app() would
+    # silently fall back to the historical defaults instead of reading
+    # THIS install's own jen.config.
+    out=$(runuser -u "$JEN_USER" -- env ${pass:+JEN_INITIAL_ADMIN_PASSWORD="$pass"} \
+        JEN_ROOT="$(app_pyroot)" JEN_CONFIG_DIR="$CONFIG_DIR" JEN_CONTENT_DIR="$CONTENT_DIR" \
+        "$PYBIN" -c "
 import sys
 sys.path.insert(0, '$(app_pyroot)')
 from jen import create_app
@@ -1961,7 +1970,7 @@ verify_install() {
     # so a genuine failure is reported instead of silently killing the
     # installer.
     local tpl_result tpl_status
-    tpl_result=$("$PYBIN" -c "
+    tpl_result=$(env JEN_ROOT="$(app_pyroot)" JEN_CONFIG_DIR="$CONFIG_DIR" JEN_CONTENT_DIR="$CONTENT_DIR" "$PYBIN" -c "
 import os, sys
 sys.path.insert(0, '$(app_pyroot)')
 from jen import create_app
@@ -1989,7 +1998,7 @@ print(len([f for f in os.listdir('$(app_pyroot)/templates') if f.endswith('.html
     # Modules
     if [[ -d "$(app_pyroot)/jen" ]]; then
         local mod_result mod_status
-        mod_result=$("$PYBIN" -c "
+        mod_result=$(env JEN_ROOT="$(app_pyroot)" JEN_CONFIG_DIR="$CONFIG_DIR" JEN_CONTENT_DIR="$CONTENT_DIR" "$PYBIN" -c "
 import sys; sys.path.insert(0, '$(app_pyroot)')
 errors = []
 for m in ['jen.extensions','jen.config','jen.models.db','jen.models.user',
@@ -2300,10 +2309,12 @@ _run_restore_mode() {
         info "Rolling back from $RESTORE_ROLLBACK"
         # v5.67.0 (Q114) — pass this install's own layout explicitly: this
         # subprocess has no systemd Environment= lines to inherit
-        # JEN_CONFIG_DIR/JEN_CONTENT_DIR from, so a relocated install
-        # would otherwise silently fall back to jen.tools.restore's own
-        # historical defaults.
-        if ! (cd "$(app_pyroot)" && "$RESTORE_PY" -m jen.tools.restore --rollback "$RESTORE_ROLLBACK" --etc-jen "$CONFIG_DIR" --content-dir "$CONTENT_DIR" ${RESTORE_NOSTOP:-}); then
+        # JEN_ROOT/JEN_CONFIG_DIR/JEN_CONTENT_DIR from, so a relocated
+        # install would otherwise silently fall back to jen.tools.restore's
+        # own historical defaults (--etc-jen/--content-dir cover the two
+        # explicit arguments restore.run() takes; JEN_ROOT covers
+        # extensions.JEN_ROOT, used internally for the bundled-plugin check).
+        if ! (cd "$(app_pyroot)" && JEN_ROOT="$(app_pyroot)" "$RESTORE_PY" -m jen.tools.restore --rollback "$RESTORE_ROLLBACK" --etc-jen "$CONFIG_DIR" --content-dir "$CONTENT_DIR" ${RESTORE_NOSTOP:-}); then
             fatal "Rollback failed — see the messages above."
         fi
         ok "Rollback complete."
@@ -2323,7 +2334,11 @@ _run_restore_mode() {
     # `if ! ( ... )` — not a bare `cmd1 && cmd2` — so a nonzero exit
     # from the Python tool is caught here, not treated by `set -e`
     # as a reason to abort the whole script before fatal() can run.
-    if ! (cd "$(app_pyroot)" && "$RESTORE_PY" -m jen.tools.restore "$RESTORE_BUNDLE" ${RESTORE_FORCE:-} ${RESTORE_NOSTOP:-} ${RESTORE_START:-}); then
+    # v5.67.0 (Q114) — same explicit layout as the --rollback leg above
+    # (this one was missed in step 2 — --etc-jen/--content-dir default to
+    # extensions.CONFIG_DIR/CONTENT_DIR, which fall back to the historical
+    # defaults without JEN_CONFIG_DIR/JEN_CONTENT_DIR set).
+    if ! (cd "$(app_pyroot)" && JEN_ROOT="$(app_pyroot)" "$RESTORE_PY" -m jen.tools.restore "$RESTORE_BUNDLE" --etc-jen "$CONFIG_DIR" --content-dir "$CONTENT_DIR" ${RESTORE_FORCE:-} ${RESTORE_NOSTOP:-} ${RESTORE_START:-}); then
         fatal "Restore failed — see the messages above."
     fi
     ok "Restore complete."
@@ -2385,13 +2400,13 @@ _confirm_upgrade_or_exit() {
     blank
     if [[ "$(prompt_yn "Create a database backup before upgrading?" "y")" == "y" ]]; then
         spinner_start "Backing up Jen and Kea databases..."
-        mkdir -p /var/lib/jen/backups
+        mkdir -p "$CONTENT_DIR/backups"
         # $PYBIN is the venv python on a 5.8.x→ upgrade, else system
         # python3 (which a pre-5.8.0 install populated with pymysql).
         if "$PYBIN" -c "
 import sys, json, gzip, datetime, pymysql, pymysql.cursors, configparser
 cfg = configparser.ConfigParser()
-cfg.read('/etc/jen/jen.config')
+cfg.read('$CONFIG_FILE')
 ts = datetime.datetime.utcnow().strftime('%Y-%m-%d-%H%M%S')
 errors = []
 for which in ['jen','kea']:
@@ -2412,7 +2427,7 @@ for which in ['jen','kea']:
             data[tbl] = [{k: str(v) if hasattr(v,'isoformat') else v for k,v in r.items()} for r in rows]
         conn.close()
         payload = {'_meta':{'database':which,'exported_at':ts,'jen_export_version':1,'tables':tables},'data':data}
-        fname = f'/var/lib/jen/backups/{which}-pre-upgrade-${JEN_VERSION}-{ts}.json.gz'
+        fname = f'$CONTENT_DIR/backups/{which}-pre-upgrade-${JEN_VERSION}-{ts}.json.gz'
         with gzip.open(fname,'wt',encoding='utf-8') as f:
             json.dump(payload,f,default=str)
         import os; os.chmod(fname,0o600)
@@ -2421,7 +2436,7 @@ for which in ['jen','kea']:
         print(f'fail:{which}:{e}', file=sys.stderr)
 " 2>/tmp/jen_backup_err; then
             spinner_stop
-            ok "Pre-upgrade backups saved to /var/lib/jen/backups/"
+            ok "Pre-upgrade backups saved to $CONTENT_DIR/backups/"
         else
             spinner_stop
             warn "Pre-upgrade backup failed (non-fatal) — check /tmp/jen_backup_err"
