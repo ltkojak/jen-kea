@@ -8,8 +8,8 @@
 
 {% include "_setup_progress.html" %}
 
-<div class="card" style="padding:24px;max-width:640px;">
-    <h3 style="margin-top:0;">1. SSH target</h3>
+<div class="card u-d53a7a">
+    <h3 class="u-d46224">1. SSH target</h3>
     <form method="POST" action="/setup/helper">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="action" value="save_target">
@@ -29,7 +29,7 @@
     <h3>2. Jen's public key</h3>
     {% if has_key %}
     <p>Authorize this key on <code>{{ server.ssh_user or 'the SSH user above' }}@{{ server.ssh_host or 'your Kea host' }}</code>:</p>
-    <pre class="u-86abda" style="white-space:pre-wrap;word-break:break-all;">{{ pub_key }}</pre>
+    <pre class="u-86abda u-3f3a6c">{{ pub_key }}</pre>
     <p class="form-hint">Append it to that account's <code>~/.ssh/authorized_keys</code>, e.g.
         <code>mkdir -p ~/.ssh &amp;&amp; echo '{{ pub_key }}' &gt;&gt; ~/.ssh/authorized_keys</code>.</p>
     {% else %}
@@ -42,22 +42,22 @@
     {% endif %}
 
     <h3>3. Test &amp; install</h3>
-    <form method="POST" action="/setup/helper" style="display:inline;">
+    <form method="POST" action="/setup/helper" class="u-cccfa4">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="action" value="test_ssh">
         <button type="submit" class="btn btn-secondary" {{ "disabled" if not target_ready }}>Test SSH</button>
     </form>
-    <form method="POST" action="/setup/helper" style="display:inline;">
+    <form method="POST" action="/setup/helper" class="u-cccfa4">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="action" value="install">
         <button type="submit" class="btn btn-primary" {{ "disabled" if not target_ready }}>Install the helper</button>
     </form>
-    <form method="POST" action="/setup/helper" style="display:inline;">
+    <form method="POST" action="/setup/helper" class="u-cccfa4">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="action" value="skip">
         <button type="submit" class="btn btn-secondary">Skip for now</button>
     </form>
     <p class="form-hint">Prefer to do it by hand? Run this as {{ server.ssh_user or "the SSH user above" }} on the Kea host:</p>
-    <pre class="u-86abda" style="white-space:pre-wrap;word-break:break-all;">{{ download_command }}</pre>
+    <pre class="u-86abda u-3f3a6c">{{ download_command }}</pre>
 </div>
 {% endblock %}

@@ -8,7 +8,7 @@
 
 {% include "_setup_progress.html" %}
 
-<div class="card" style="padding:24px;max-width:720px;">
+<div class="card u-834fcd">
     {% if leases %}
     <table class="table">
         <thead><tr><th>IP</th><th>Hostname</th><th>MAC</th><th>Subnet</th><th>Obtained</th><th></th></tr></thead>
@@ -40,7 +40,7 @@
     {% endif %}
 
     {% if all_resolved %}
-    <div class="alert alert-success" style="margin-top:16px;">
+    <div class="alert alert-success u-1b0f49">
         {{ icon("check") }} First hour complete
         {% if elapsed_seconds is not none %} — took {{ (elapsed_seconds // 60) }} minute(s){% endif %}.
     </div>

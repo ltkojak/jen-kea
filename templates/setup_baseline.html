@@ -8,15 +8,15 @@
 
 {% include "_setup_progress.html" %}
 
-<div class="card" style="padding:24px;max-width:640px;">
+<div class="card u-d53a7a">
     <p>Jen will read <code>{{ server.kea_conf or "/etc/kea/kea-dhcp4.conf" }}</code> from
         <code>{{ server.ssh_host or "your Kea host" }}</code> and record it as the starting point for
         config history and drift detection.</p>
-    <form method="POST" action="/setup/baseline" style="display:inline;">
+    <form method="POST" action="/setup/baseline" class="u-cccfa4">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-primary">Capture baseline</button>
     </form>
-    <form method="POST" action="/setup/baseline" style="display:inline;">
+    <form method="POST" action="/setup/baseline" class="u-cccfa4">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="action" value="skip">
         <button type="submit" class="btn btn-secondary">Skip for now</button>

@@ -8,11 +8,11 @@
 
 {% include "_setup_progress.html" %}
 
-<div class="card" style="padding:24px;max-width:720px;">
+<div class="card u-834fcd">
     {% if not found.reachable %}
     <p class="u-5872de">Kea didn't answer this time — <a href="/setup/connect">go back and check the connection</a>.</p>
     {% else %}
-    <h3 style="margin-top:0;">Kea {{ found.kea_version or "unknown version" }} &middot; {{ found.connection_mode }} mode</h3>
+    <h3 class="u-d46224">Kea {{ found.kea_version or "unknown version" }} &middot; {{ found.connection_mode }} mode</h3>
 
     <h4>Hooks</h4>
     <ul>

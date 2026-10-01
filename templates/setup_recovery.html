@@ -8,8 +8,8 @@
 
 {% include "_setup_progress.html" %}
 
-<div class="card" style="padding:24px;max-width:640px;">
-    <h3 style="margin-top:0;">Download a recovery bundle</h3>
+<div class="card u-d53a7a">
+    <h3 class="u-d46224">Download a recovery bundle</h3>
     <form method="POST" action="/settings/databases/recovery-bundle" autocomplete="off" data-download>
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
@@ -55,13 +55,13 @@
         <button type="submit" class="btn btn-secondary">Save schedule</button>
     </form>
 
-    <div style="margin-top:16px;">
-        <form method="POST" action="/setup/recovery" style="display:inline;">
+    <div class="u-1b0f49">
+        <form method="POST" action="/setup/recovery" class="u-cccfa4">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="action" value="done">
             <button type="submit" class="btn btn-primary">I've saved it — continue</button>
         </form>
-        <form method="POST" action="/setup/recovery" style="display:inline;">
+        <form method="POST" action="/setup/recovery" class="u-cccfa4">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="action" value="skip">
             <button type="submit" class="btn btn-secondary">Skip for now</button>
