@@ -465,6 +465,17 @@ def force_password_change():
             "Password changed (forced — first login or admin-assigned password)",
         )
         flash("Password changed successfully.", "success")
+        # v5.67.0 (Q115) — a superadmin, right after a forced password
+        # change, on an install Kea isn't connected to yet, lands on
+        # /setup once — never again after this, even if Kea is later
+        # disconnected (a first-run nudge, not a standing gate; Getting
+        # started links into /setup for anyone who wants it later).
+        if current_user.role == "superadmin":
+            from jen.services import setup_wizard
+
+            if setup_wizard.needs_entry_redirect():
+                setup_wizard.mark_entry_redirect_shown()
+                return redirect(url_for("setup.setup_home"))
         return redirect(url_for("dashboard.dashboard"))
     except Exception as e:
         logger.error(f"Forced password change error: {e}")

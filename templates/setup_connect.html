@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Setup — Connect{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>{{ icon("plug", "ico-lg") }} Set up Jen</h1>
+    <p>Step 1 of 6 — connect Jen to your Kea server.</p>
+</div>
+
+{% include "_setup_progress.html" %}
+
+<div class="card" style="padding:24px;max-width:640px;">
+    <form method="POST" action="/setup/connect">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Kea API URL</label>
+                <input type="text" name="api_url" value="{{ api_url }}" placeholder="http://your-kea-server:8000" required>
+                <div class="form-hint">The Control Agent, or a daemon's own control socket — Jen tries both.</div>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>API Username</label>
+                <input type="text" name="api_user" value="{{ api_user }}">
+            </div>
+            <div class="form-group">
+                <label>API Password</label>
+                <input type="password" name="api_pass" placeholder="(leave blank for none)">
+            </div>
+        </div>
+        <h3>Kea's database</h3>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Database host</label>
+                <input type="text" name="kea_db_host" value="{{ kea_db_host }}" required>
+            </div>
+            <div class="form-group">
+                <label>Database username</label>
+                <input type="text" name="kea_db_user" value="{{ kea_db_user }}" required>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Database password</label>
+                <input type="password" name="kea_db_pass" placeholder="(leave blank for none)">
+            </div>
+            <div class="form-group">
+                <label>Database name</label>
+                <input type="text" name="kea_db_name" value="{{ kea_db_name or 'kea' }}">
+            </div>
+        </div>
+        <button type="submit" class="btn btn-primary">Test &amp; Connect</button>
+    </form>
+</div>
+{% endblock %}

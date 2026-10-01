@@ -872,6 +872,7 @@ def _register_blueprints(app: Flask) -> None:
     from jen.routes.search import bp as search_bp
     from jen.routes.servers import bp as servers_bp
     from jen.routes.settings import bp as settings_bp
+    from jen.routes.setup import bp as setup_bp
     from jen.routes.subnets import bp as subnets_bp
     from jen.routes.timeline import bp as timeline_bp
     from jen.routes.trace import bp as trace_bp
@@ -899,6 +900,7 @@ def _register_blueprints(app: Flask) -> None:
         search_bp,
         servers_bp,
         settings_bp,
+        setup_bp,
         subnets_bp,
         timeline_bp,
         users_bp,

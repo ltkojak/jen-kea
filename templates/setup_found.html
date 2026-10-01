@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Setup — What Jen found{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>{{ icon("search", "ico-lg") }} What Jen found</h1>
+    <p>Step 2 of 6 — a live look at the Kea server you just connected.</p>
+</div>
+
+{% include "_setup_progress.html" %}
+
+<div class="card" style="padding:24px;max-width:720px;">
+    {% if not found.reachable %}
+    <p class="u-5872de">Kea didn't answer this time — <a href="/setup/connect">go back and check the connection</a>.</p>
+    {% else %}
+    <h3 style="margin-top:0;">Kea {{ found.kea_version or "unknown version" }} &middot; {{ found.connection_mode }} mode</h3>
+
+    <h4>Hooks</h4>
+    <ul>
+        {% for hook, present in found.hooks.items() %}
+        <li>
+            {{ icon('circle-check') if present else icon('circle') }}
+            {{ hook_labels.get(hook, hook) }}
+            {% if not present and hook in hook_loss %}
+            <span class="u-865c33">— not loaded: {{ hook_loss[hook] }}</span>
+            {% endif %}
+        </li>
+        {% endfor %}
+    </ul>
+
+    <h4>High availability</h4>
+    {% if found.ha %}
+    <p>Mode <code>{{ found.ha.mode }}</code>, {{ found.ha.peers|length }} peer(s) configured
+       {% if found.ha.peers|length < 2 %}— <a href="/servers">add a second server</a> to pair with it{% endif %}.</p>
+    {% else %}
+    <p class="u-865c33">No HA hook configured — one server only, for now.</p>
+    {% endif %}
+
+    <h4>IPv6</h4>
+    <p>{{ "Enabled" if found.ipv6_enabled else "Off (the default)" }}.</p>
+
+    <h4>Subnets Kea reports</h4>
+    {% if found.proposed_subnets %}
+    <form method="POST" action="/setup/found">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <table class="table">
+            <thead><tr><th>ID</th><th>Name</th><th>CIDR</th></tr></thead>
+            <tbody>
+                {% for sid, info in found.proposed_subnets.items() %}
+                <tr>
+                    <td>{{ sid }}</td>
+                    <td><input type="text" name="name_{{ sid }}" value="{{ info.name }}"></td>
+                    <td><code>{{ info.cidr }}</code></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <button type="submit" class="btn btn-primary">Use these subnets</button>
+        <button type="submit" name="action" value="skip" class="btn btn-secondary">Skip for now</button>
+    </form>
+    {% else %}
+    <p class="u-865c33">Kea reports no subnets yet.</p>
+    <form method="POST" action="/setup/found">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" name="action" value="skip" class="btn btn-secondary">Continue</button>
+    </form>
+    {% endif %}
+    {% endif %}
+</div>
+{% endblock %}

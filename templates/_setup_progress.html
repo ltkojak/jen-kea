@@ -1,0 +1,14 @@
+{# v5.67.0 (Q115) — the six-dot step indicator shared by every /setup page.
+   `progress` is {"state": {step: "done"|"skipped"}, "steps": [...], "current": step}. #}
+<div class="u-setup-progress" style="display:flex;gap:8px;align-items:center;margin-bottom:20px;flex-wrap:wrap;">
+    {% for step in progress.steps %}
+    <span style="display:flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;font-size:0.85em;
+        {% if step == progress.current %}background:var(--accent);color:#fff;
+        {% elif progress.state.get(step) == 'done' %}background:var(--success-bg,#1f6f43);color:#fff;
+        {% elif progress.state.get(step) == 'skipped' %}background:var(--border);color:var(--text-muted);
+        {% else %}background:var(--bg-alt);color:var(--text-muted);{% endif %}">
+        {% if progress.state.get(step) == 'done' %}{{ icon('circle-check') }}{% endif %}
+        {{ loop.index }}. {{ step|capitalize }}
+    </span>
+    {% endfor %}
+</div>
