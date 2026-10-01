@@ -2,6 +2,78 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.67.0-beta.2] - 2026-09-30
+
+Beta channel. Stacked on 5.67.0-beta.1. The app tree, the `/etc/jen`
+equivalent, and the user-writable data directory can now each be put
+somewhere other than the historical `/opt/jen`/`/etc/jen`/`/var/lib/jen`
+at install time — the common case being a separate data volume for
+uploads, database backups, and plugins without moving the application
+itself.
+
+**Where things live is a choice now, not a given.** `sudo ./install.sh
+--app-dir DIR --config-dir DIR --data-dir DIR` (any left unset keeps its
+default) relocates a fresh install. The choice is recorded root-owned
+0644 in `/etc/jen-layout.conf`, deliberately outside `/etc/jen` itself:
+`/etc/jen` is chowned to the service user, so a root-trusted "where do
+things live" file has to sit somewhere nothing but root can ever write.
+Every later `--upgrade`/`--repair`/`--configure` run reads that file
+back automatically; passing one of the three flags again with a
+different value is refused outright — relocating an *existing* install
+is a runbook (`docs/runbooks.md` §5: stop Jen, move the directory, edit
+one line, `--repair` to re-render and verify the unit, start, confirm),
+never a flag, since a partial move would leave root-owned state in two
+places at once.
+
+**The validation is shared, word for word, by both sides.** A chosen
+path must be absolute, normalized, not `/`, not under
+`/tmp`/`/run`/`/proc`/`/sys`/`/dev`/`/home`, and the three directories
+may not be nested inside one another. `install.sh` additionally checks
+that every existing ancestor of a fresh `app_dir` is root-owned (a
+non-root-OWNED ancestor is still a hard refusal; a merely
+group/other-writable one — found on GitHub's own CI runner, which ships
+`/opt` mode 777 for its tool-cache installers — is a warning, with the
+real redirect attack closed by refusing an `app_dir` that already exists
+as a symlink). `jen-update-root.py` carries the identical path-validation
+rules in its own `load_layout()`, read from the same fixed
+`/etc/jen-layout.conf` path every time (never an argument — the sudoers
+grant pins this script's invocation byte-for-byte, and a path is exactly
+the kind of input the service user must never be able to hand to root).
+A present-but-invalid layout file is a hard refusal on both sides, logged
+and non-fatal-to-nothing — never a silent fallback to the defaults.
+
+**The systemd unit is rendered, not shipped ready to use.**
+`jen.service.template` carries `@@APP_DIR@@`/`@@CONFIG_DIR@@`/
+`@@DATA_DIR@@` placeholders, filled in by `install.sh` at first install
+and by `jen-update-root.py`'s copy of the same renderer on every later
+in-app update — without the render-not-copy fix, the first automatic
+update of a relocated install would have silently overwritten its own
+correctly-rendered unit with one hardcoded back to the defaults.
+`systemd-analyze verify` checks the rendered result once `current`
+exists, both in the installer and in CI. The rendered unit sets
+`Environment=JEN_ROOT=... JEN_CONFIG_DIR=... JEN_CONTENT_DIR=...`, which
+is the entire app-side implementation: `jen/extensions.py`'s existing
+`JEN_ROOT`/`JEN_CONTENT_DIR` overrides already did the work, and a new
+`JEN_CONFIG_DIR` override (mirroring the same pattern) is all the app
+itself needed to learn.
+
+**Four real bugs, found by a new test that parses every shipped file
+with `ast` and fails on a hardcoded `/opt/jen`, `/etc/jen`, or
+`/var/lib/jen` outside a comment or docstring** — every one would have
+made a relocated install silently write to the wrong, default location
+at runtime: the app factory's own `os.makedirs()` calls for the SSL/SSH
+subdirectories, the SSH-key-generation route's matching `os.makedirs()`,
+the Kea-CA module's `SSL_DIR` constant, and the Flask session secret
+key's first fallback candidate. A relocated install exercises all of
+this for real now too — a new CI leg does a full fresh
+install/upgrade/uninstall cycle at `/srv/jen/{app,etc,data}`, asserting
+the layout file, the rendered unit's environment, and that nothing
+landed at the historical default.
+
+See `docs/installation.md` ("Method 1c"), `docs/admin-guide.md`
+("On-Disk Paths"), `docs/runbooks.md` (§5), and `docs/ARCHITECTURE.md`
+(§3.1, §6.1) for the full picture.
+
 ## [5.67.0-beta.1] - 2026-09-30
 
 Beta channel. Stacked on 5.66.0. `install.sh` has never been run by

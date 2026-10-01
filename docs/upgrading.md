@@ -57,3 +57,18 @@ Jen falling back to its own auto-generated token instead — the
 this doc's own First Login guidance was the actual working path the
 whole time. Both are fixed; neither affects an existing install or an
 upgrade, since neither bug was ever in the upgrade path (5.67.0-beta.1).
+
+## A fresh install can relocate app/config/data
+
+`sudo ./install.sh --app-dir DIR --config-dir DIR --data-dir DIR` puts
+the app tree, the `/etc/jen` equivalent, or the user-writable data
+directory somewhere other than the historical defaults — the common
+case being a separate volume for uploads, database backups and
+plugins. The choice is recorded in `/etc/jen-layout.conf` and every
+later `--upgrade`/`--repair`/`--configure` run reads it back
+automatically. This changes nothing for an existing install: absent
+that file (every install made before this release, and any made since
+that never asked to relocate), everything stays exactly at
+`/opt/jen`/`/etc/jen`/`/var/lib/jen` as always. Moving an *existing*
+install's data directory afterward is a short runbook, not a flag —
+see `docs/runbooks.md` §5 (5.67.0-beta.2).
