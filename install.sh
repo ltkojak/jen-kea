@@ -376,186 +376,103 @@ _ask_secret() {
     printf ''
 }
 
-# ── Layout (v5.67.0, Q114) ───────────────────────────────────────────────────
-# Where app_dir/config_dir/data_dir may NOT live — none of these hold
-# persistent root-owned application state, or (in /home's case) carry their
-# own unrelated ownership conventions. Mirrored word-for-word in
-# jen-update-root.py's load_layout(); tests/test_layout.py and
-# tests/test_jen_update_root.py each exercise their own side of the same
-# table so the two can't silently drift apart.
-_LAYOUT_FORBIDDEN_PREFIXES=(/tmp /run /proc /sys /dev /home)
+# ── Layout (v5.67.0, Q114; ONE checker since v5.67.0-beta.5, Q117) ──────────
+# v5.67.0-beta.5 — every validation rule (the forbidden/shared-root list,
+# the path grammar, ancestor ownership, the dedicated-directory/marker
+# contract) now lives in exactly one place: jen-update-root.py's own
+# check_layout(), called below. install.sh used to carry its own bash copy
+# of this logic alongside the Python one in load_layout() — a ChatGPT
+# review of 5.67.0-beta.3 found the two had already drifted (the bash
+# side's forbidden-prefix list let `--config-dir /etc` through, which this
+# script then recursively chown'd). Calling the one real implementation
+# instead of re-deriving it in bash is what keeps that from happening
+# again. tests/test_layout.py now exercises this through the checker, not
+# through bash functions that no longer exist.
+PYBIN_FOR_LAYOUT="python3"
 
-# _layout_path_ok NAME PATH — absolute, normalized (no "..", matches its own
-# os.path.normpath), not "/", not under a forbidden prefix. Prints the
-# failure reason and returns non-zero rather than calling fatal itself, so
-# _resolve_layout_dirs can decide the exact wording; silent success.
-_layout_path_ok() {
-    local name="$1" path="$2"
-    if [[ "$path" != /* ]]; then
-        echo "$name must be an absolute path: $path"; return 1
-    fi
-    if [[ "$path" == "/" ]]; then
-        echo "$name cannot be /"; return 1
-    fi
-    if [[ "$path" == *".."* ]]; then
-        echo "$name must not contain ..: $path"; return 1
-    fi
-    local normalized
-    normalized=$("$PYBIN_FOR_LAYOUT" -c "import os,sys; print(os.path.normpath(sys.argv[1]))" "$path" 2>/dev/null) || normalized=""
-    if [[ -n "$normalized" && "$normalized" != "$path" ]]; then
-        echo "$name must be a normalized path (try $normalized): $path"; return 1
-    fi
-    local prefix
-    for prefix in "${_LAYOUT_FORBIDDEN_PREFIXES[@]}"; do
-        if [[ "$path" == "$prefix" || "$path" == "$prefix/"* ]]; then
-            echo "$name must not live under $prefix: $path"; return 1
-        fi
-    done
-    return 0
+# _layout_checker [ARGS...] — the extracted tarball's own copy of
+# jen-update-root.py (it ships at the repo root, same place jen-kea-helper
+# does). install.sh is already running as root (sudo ./install.sh), so
+# this is a direct function call, never the sudoers-gated path — see that
+# script's own module comment above check_layout_cli() for why a new argv
+# mode there is still safe.
+_layout_checker() {
+    "$PYBIN_FOR_LAYOUT" "$SCRIPT_DIR/jen-update-root.py" --check-layout "$@"
 }
 
-# _layout_not_nested A_NAME A_PATH B_NAME B_PATH — fatal if either is an
-# ancestor of (or equal to) the other. Siblings under the same parent (the
-# common case — e.g. data_dir next to app_dir) are not nesting and pass.
-_layout_not_nested() {
-    local an="$1" ap="$2" bn="$3" bp="$4"
-    if [[ "$ap" == "$bp" || "$ap" == "$bp/"* || "$bp" == "$ap/"* ]]; then
-        fatal "$an ($ap) and $bn ($bp) must not be nested inside one another."
-    fi
-}
-
-# _layout_parents_root_owned PATH — every EXISTING ancestor directory of
-# PATH must be root-owned and not group/other-writable, mirroring
-# jen-kea-helper's _bin_dir_ok (same "don't trust a directory a lesser user
-# could redirect" reasoning, applied here to where root is about to build
-# app_dir's tree).
-_layout_parents_root_owned() {
-    # v5.67.0 (Q114) — non-root OWNERSHIP of an existing ancestor is still a
-    # hard refusal: that means someone other than root administers the
-    # path at all. A merely group/other-WRITABLE root-owned ancestor
-    # (found in CI: GitHub's hosted runner image ships /opt mode 777, for
-    # its own tool-cache installers) is only a warning — real-world FHS
-    # permissiveness varies and this alone doesn't let anyone redirect
-    # app_dir once it exists; _layout_app_dir_not_preplanted (below) is
-    # what actually closes the "app_dir already exists as a symlink,
-    # planted before root ever ran this" attack the whole check exists for.
-    local path="$1" dir owner mode
-    dir="$path"
-    while [[ "$dir" != "/" ]]; do
-        dir=$(dirname "$dir")
-        [[ -e "$dir" ]] || continue
-        owner=$(stat -c '%u' "$dir" 2>/dev/null || stat -f '%u' "$dir" 2>/dev/null || echo "")
-        mode=$(stat -c '%a' "$dir" 2>/dev/null || stat -f '%OLp' "$dir" 2>/dev/null || echo "")
-        if [[ -n "$owner" && "$owner" != "0" ]]; then
-            fatal "app_dir's existing parent $dir is not root-owned (uid $owner) — refusing to install under it."
-        fi
-        if [[ -n "$mode" ]] && (( (8#$mode & 8#0022) != 0 )); then
-            warn "app_dir's existing parent $dir is writable by group or other (mode $mode)."
-        fi
-    done
-    return 0
-}
-
-# _layout_app_dir_not_preplanted PATH — if PATH already exists, it must not
-# be a symlink: the actual attack a permissive ancestor (above) would
-# otherwise enable is someone pre-creating app_dir itself as a symlink
-# before root ever runs install.sh, so root's writes land wherever that
-# symlink points instead. A non-symlink existing app_dir (e.g. a prior
-# install's own directory, on --upgrade) is fine — this only refuses the
-# redirect case.
-_layout_app_dir_not_preplanted() {
-    local path="$1"
-    if [[ -L "$path" ]]; then
-        fatal "app_dir ($path) already exists and is a symlink — refusing to install through it."
-    fi
-    return 0
-}
-
-# _validate_layout_file_or_fatal FILE — regular file, root:root, not a
-# symlink, no group/other write. A present-but-invalid file is a hard
-# refusal, never a silent fallback to defaults (docs/ARCHITECTURE.md §3.1:
-# this file exists specifically so nothing $JEN_USER can write ever reaches
-# root's own path resolution — silently tolerating a bad one would defeat
-# that boundary without anyone noticing).
-_validate_layout_file_or_fatal() {
-    local f="$1" owner group mode
-    [[ -L "$f" ]] && fatal "$f must be a regular file, not a symlink."
-    [[ -f "$f" ]] || fatal "$f exists but is not a regular file."
-    owner=$(stat -c '%u' "$f" 2>/dev/null || stat -f '%u' "$f" 2>/dev/null || echo "")
-    group=$(stat -c '%g' "$f" 2>/dev/null || stat -f '%g' "$f" 2>/dev/null || echo "")
-    mode=$(stat -c '%a' "$f" 2>/dev/null || stat -f '%OLp' "$f" 2>/dev/null || echo "")
-    [[ "$owner" == "0" ]] || fatal "$f must be owned by root (found uid $owner) — refusing to trust it."
-    [[ "$group" == "0" ]] || fatal "$f must be group root (found gid $group) — refusing to trust it."
-    if [[ -n "$mode" ]] && (( (8#$mode & 8#0022) != 0 )); then
-        fatal "$f is writable by group or other (mode $mode) — refusing to trust it."
-    fi
-}
-
-# _layout_file_get FILE KEY — a bare "key = value" line's trimmed value, or
-# empty. Never sourced (same reasoning as the answers file above): nothing
-# resembling shell syntax in this file is ever handed to the shell.
-_layout_file_get() {
-    local f="$1" key="$2" line v
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        line="${line%$'\r'}"
-        [[ "$line" =~ ^[[:space:]]*${key}[[:space:]]*=(.*)$ ]] || continue
-        v="${BASH_REMATCH[1]}"
-        v="${v#"${v%%[![:space:]]*}"}"
-        v="${v%"${v##*[![:space:]]}"}"
-        printf '%s' "$v"
-        return
-    done < "$f"
+# _layout_kv TEXT KEY — one "key=value" line (the checker's own stdout
+# format) picked out by key.
+_layout_kv() {
+    printf '%s\n' "$1" | sed -n "s/^${2}=//p"
 }
 
 # _resolve_layout_dirs — sets INSTALL_DIR/CONFIG_DIR/CONTENT_DIR. An
 # existing $LAYOUT_FILE (a prior install, of any mode) is authoritative;
 # any --app-dir/--config-dir/--data-dir (or JEN_*_DIR answers/env) that
-# disagrees with it is refused outright — relocating is a runbook
-# (docs/runbooks.md §5), not a flag, so there is never a partial move. With
-# no layout file (fresh install, or one from before Q114), an explicit
-# value wins, else today's literal default — unchanged for every install
-# that never asks for this.
+# disagrees with it is refused by the checker itself — relocating is a
+# runbook (docs/runbooks.md §5), not a flag, so there is never a partial
+# move. With no layout file (fresh install, or one from before Q114), an
+# explicit value wins, else today's literal default — unchanged for every
+# install that never asks for this.
+#
+# v5.67.0-beta.5 (Q117) — a box from before Q114 has no $LAYOUT_FILE yet
+# but a real, non-empty app_dir: that candidate is passed to the checker
+# as --for upgrade, not --for install — install mode's own rule (absent,
+# empty, or already marked) exists to stop a FRESH install from silently
+# reusing a directory with unrelated content, and would otherwise refuse
+# such a box's very first run under this Q. Caught by actually running
+# this against a simulated pre-Q114 /opt/jen in the install CI job.
 _resolve_layout_dirs() {
     local want_app want_config want_data
     want_app=$(_cfgval JEN_APP_DIR); [[ -n "$OPT_APP_DIR" ]] && want_app="$OPT_APP_DIR"
     want_config=$(_cfgval JEN_CONFIG_DIR); [[ -n "$OPT_CONFIG_DIR" ]] && want_config="$OPT_CONFIG_DIR"
     want_data=$(_cfgval JEN_DATA_DIR); [[ -n "$OPT_DATA_DIR" ]] && want_data="$OPT_DATA_DIR"
 
-    if [[ -f "$LAYOUT_FILE" ]]; then
-        _validate_layout_file_or_fatal "$LAYOUT_FILE"
-        local existing_app existing_config existing_data
-        existing_app=$(_layout_file_get "$LAYOUT_FILE" app_dir)
-        existing_config=$(_layout_file_get "$LAYOUT_FILE" config_dir)
-        existing_data=$(_layout_file_get "$LAYOUT_FILE" data_dir)
-        [[ -n "$want_app"    && "$want_app"    != "$existing_app"    ]] && fatal "This install's app_dir is already $existing_app (per $LAYOUT_FILE) — relocating an existing install is a runbook (docs/runbooks.md), not an install.sh flag."
-        [[ -n "$want_config" && "$want_config" != "$existing_config" ]] && fatal "This install's config_dir is already $existing_config (per $LAYOUT_FILE) — relocating an existing install is a runbook (docs/runbooks.md), not an install.sh flag."
-        [[ -n "$want_data"   && "$want_data"   != "$existing_data"   ]] && fatal "This install's data_dir is already $existing_data (per $LAYOUT_FILE) — relocating an existing install is a runbook (docs/runbooks.md), not an install.sh flag."
-        INSTALL_DIR="$existing_app"
-        CONFIG_DIR="$existing_config"
-        CONTENT_DIR="$existing_data"
-        return 0
-    fi
+    local out rc=0 args mode="install"
+
+    [[ -f "$LAYOUT_FILE" ]] && mode="upgrade"
 
     INSTALL_DIR="${want_app:-/opt/jen}"
     CONFIG_DIR="${want_config:-/etc/jen}"
     CONTENT_DIR="${want_data:-/var/lib/jen}"
 
-    local reason
-    reason=$(_layout_path_ok app_dir "$INSTALL_DIR")    || fatal "$reason"
-    reason=$(_layout_path_ok config_dir "$CONFIG_DIR")  || fatal "$reason"
-    reason=$(_layout_path_ok data_dir "$CONTENT_DIR")   || fatal "$reason"
-    _layout_not_nested app_dir "$INSTALL_DIR" config_dir "$CONFIG_DIR"
-    _layout_not_nested app_dir "$INSTALL_DIR" data_dir "$CONTENT_DIR"
-    _layout_not_nested config_dir "$CONFIG_DIR" data_dir "$CONTENT_DIR"
-    _layout_parents_root_owned "$INSTALL_DIR"
-    _layout_app_dir_not_preplanted "$INSTALL_DIR"
+    [[ "$mode" == "install" && -d "$INSTALL_DIR" ]] && mode="upgrade"
+
+    if [[ "$mode" == "upgrade" ]]; then
+        args=(--for upgrade)
+        [[ -n "$want_app"    ]] && args+=(--app-dir "$want_app")
+        [[ -n "$want_config" ]] && args+=(--config-dir "$want_config")
+        [[ -n "$want_data"   ]] && args+=(--data-dir "$want_data")
+        out=$(_layout_checker "${args[@]}" 2>&1) || rc=$?
+        [[ $rc -ne 0 ]] && fatal "$out"
+        INSTALL_DIR=$(_layout_kv "$out" app_dir)
+        CONFIG_DIR=$(_layout_kv "$out" config_dir)
+        CONTENT_DIR=$(_layout_kv "$out" data_dir)
+        return 0
+    fi
+
+    out=$(_layout_checker --for install --app-dir "$INSTALL_DIR" --config-dir "$CONFIG_DIR" --data-dir "$CONTENT_DIR" 2>&1) || rc=$?
+    [[ $rc -ne 0 ]] && fatal "$out"
+    return 0
 }
 
-# _layout_path_ok's normpath check shells out to python3 for exact parity
-# with load_layout()'s own os.path.normpath — resolved once, here, since
-# PYBIN (the release-aware interpreter picked below) doesn't exist yet at
-# this point in the script.
-PYBIN_FOR_LAYOUT="python3"
+# write_layout_markers — stamps .jen-directory into each of
+# INSTALL_DIR/CONFIG_DIR/CONTENT_DIR once they genuinely exist (called
+# late in the fresh-install sequence, after install_files/migrate_content
+# have created them — check_layout's own --for install validation runs
+# BEFORE anything is created, so it never writes a marker itself). An
+# upgrade never calls this: an upgrade's own _resolve_layout_dirs call
+# above (--for upgrade) retroactively stamps a pre-Q117 install the first
+# time it recognizes one by content, and a post-Q117 install already
+# carries its markers from here.
+write_layout_markers() {
+    [[ "$IS_UPGRADE" == "true" ]] && return 0
+    local out
+    out=$("$PYBIN_FOR_LAYOUT" "$SCRIPT_DIR/jen-update-root.py" --write-layout-markers \
+        --app-dir "$INSTALL_DIR" --config-dir "$CONFIG_DIR" --data-dir "$CONTENT_DIR" \
+        --version "$JEN_VERSION" 2>&1) || fatal "$out"
+    ok "Layout directories marked as Jen's own"
+}
 
 _resolve_layout_dirs
 
@@ -2154,7 +2071,7 @@ _disarm_rollback()   { ROLLBACK_ARMED=false; }
 # it, _configure_admin) already branch on IS_UPGRADE to keep the existing
 # config instead of asking — that was true before this table existed too.
 declare -A MODE_STEPS=(
-    [standard]="preflight_checks install_dependencies collect_config backup_existing write_layout_file migrate_content snapshot_external_files _arm_rollback install_files setup_venv compile_app write_config activate_release start_service verify_install _disarm_rollback remove_flat_leftovers print_summary"
+    [standard]="preflight_checks install_dependencies collect_config backup_existing write_layout_file migrate_content snapshot_external_files _arm_rollback install_files setup_venv compile_app write_config activate_release start_service verify_install _disarm_rollback remove_flat_leftovers write_layout_markers print_summary"
     [repair]="preflight_checks install_dependencies _skip_configure backup_existing snapshot_external_files _arm_rollback install_files setup_venv compile_app activate_release start_service verify_install _disarm_rollback remove_flat_leftovers print_summary"
 )
 

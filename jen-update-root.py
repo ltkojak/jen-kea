@@ -199,6 +199,49 @@ _DEFAULT_LAYOUT = {"app_dir": "/opt/jen", "config_dir": "/etc/jen", "data_dir": 
 _LAYOUT_FORBIDDEN_PREFIXES = ("/tmp", "/run", "/proc", "/sys", "/dev", "/home")
 
 
+# v5.67.0-beta.5 (Q117) — a ChatGPT review of 5.67.0-beta.3, confirmed by
+# Fable: the forbidden-PREFIX list above stops app_dir living under /tmp
+# or /home, but says nothing about `--config-dir /etc` or `--app-dir
+# /usr` — both pass _layout_path_ok as written and then get recursively
+# chown'd/chmod'd (install.sh's own install_files()). The contract is
+# "a dedicated Jen directory", not "anywhere that isn't obviously wrong":
+# every FHS shared root is refused outright, exact match (a prefix match
+# would also refuse a sibling like /optional-thing, which is legitimate).
+_LAYOUT_SHARED_ROOTS = frozenset(
+    (
+        "/etc",
+        "/var",
+        "/var/lib",
+        "/var/log",
+        "/var/cache",
+        "/usr",
+        "/usr/local",
+        "/usr/lib",
+        "/usr/share",
+        "/opt",
+        "/srv",
+        "/mnt",
+        "/media",
+        "/boot",
+        "/bin",
+        "/sbin",
+        "/lib",
+        "/lib64",
+        "/root",
+        "/snap",
+    )
+)
+# The path grammar every layout directory must satisfy — nothing else is
+# made to work. install.sh renders jen.service with `sed -e
+# s#@@APP_DIR@@#$INSTALL_DIR#g` (a `#` or `&` in the path rewrites the sed
+# expression), `%` is a systemd specifier, a space splits ExecStart — all
+# of those passed _layout_path_ok before this Q.
+_LAYOUT_PATH_RE = re.compile(r"^/[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$")
+_LAYOUT_PATH_MAX_LEN = 200
+_LAYOUT_MARKER_NAME = ".jen-directory"
+_LAYOUT_ROLES = ("app_dir", "config_dir", "data_dir")
+
+
 def _layout_path_ok(name, path):
     """None on success, else the reason it's rejected."""
     if not path.startswith("/"):
@@ -213,6 +256,12 @@ def _layout_path_ok(name, path):
     for prefix in _LAYOUT_FORBIDDEN_PREFIXES:
         if path == prefix or path.startswith(prefix + "/"):
             return f"{name} must not live under {prefix}: {path}"
+    if path in _LAYOUT_SHARED_ROOTS:
+        return f"{name} must be a dedicated directory, not a shared system path: {path}"
+    if len(path) > _LAYOUT_PATH_MAX_LEN:
+        return f"{name} must be at most {_LAYOUT_PATH_MAX_LEN} characters: {path}"
+    if not _LAYOUT_PATH_RE.match(path):
+        return f"{name} may only contain letters, digits, '.', '_', '-' per path segment: {path}"
     return None
 
 
@@ -898,6 +947,315 @@ def _installed_version():
         except OSError:
             continue
     return "?"
+
+
+# ── --check-layout (v5.67.0-beta.5, Q117) ───────────────────────────────────
+# ONE implementation of every layout-safety rule, called by install.sh (the
+# copy in the extracted tarball — it's already running as root via `sudo
+# ./install.sh`, so this is a direct function call, not a sudoers-gated
+# one) and by uninstall.sh (the installed /usr/local/sbin copy, same
+# reasoning). Neither this mode nor any other new argv is EVER reachable
+# from a compromised www-data: jen-sudoers pins the two systemd units'
+# ExecStart lines byte-for-byte (no argv, or exactly "--plugins" — see
+# main() below and docs/ARCHITECTURE.md §3.1), and the installed script
+# itself is root:root mode 0700, so www-data cannot even exec it directly.
+# Only a human already running install.sh/uninstall.sh as root reaches
+# --check-layout at all.
+
+
+def _layout_marker_path(path):
+    return os.path.join(path, _LAYOUT_MARKER_NAME)
+
+
+def _read_layout_marker(path):
+    """{"role":..., "version":...} if `path` carries a valid marker
+    (plain "key = value" lines, same format as the layout file itself —
+    never sourced, nothing resembling shell syntax is ever executed),
+    else None."""
+    marker = _layout_marker_path(path)
+    if os.path.islink(marker) or not os.path.isfile(marker):
+        return None
+    values = {}
+    try:
+        with open(marker, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                values[k.strip()] = v.strip()
+    except OSError:
+        return None
+    return values if "role" in values else None
+
+
+def write_layout_marker(path, role, version):
+    """Stamp `path` as genuinely Jen's own — root:root 0644, same trust
+    level as the layout file itself. Called by install.sh once a layout
+    directory actually exists (this module's own --for install check runs
+    BEFORE anything is created, so it never writes one itself), and by
+    check_layout() below to retroactively mark a pre-Q117 install the
+    first time it's recognized by its own content."""
+    marker = _layout_marker_path(path)
+    with open(marker, "w", encoding="utf-8") as f:
+        f.write(
+            f"# Written by jen-update-root.py --check-layout. Do not edit or remove.\nrole = {role}\nversion = {version}\n"
+        )
+    os.chown(marker, 0, 0)
+    os.chmod(marker, 0o644)
+
+
+def _recognized_by_content(path, role):
+    """True if `path` looks like a genuine pre-Q117 Jen directory for
+    `role`, judged by the same content each role's own install step
+    already puts there — used ONLY to retroactively stamp a marker on an
+    upgrade of an install that predates markers, never to let a directory
+    with no real connection to Jen through."""
+    if role == "config_dir":
+        return os.path.isfile(os.path.join(path, "jen.config"))
+    if role == "app_dir":
+        return os.path.isdir(os.path.join(path, "releases")) or os.path.isfile(os.path.join(path, "run.py"))
+    if role == "data_dir":
+        return any(os.path.isdir(os.path.join(path, sub)) for sub in ("icons", "branding", "backups", "keys"))
+    return False
+
+
+def _layout_target_ok_for_install(name, path):
+    """None on success (absent, an empty directory, or already carrying
+    Jen's own marker), else the refusal reason. A directory that exists
+    with real, unrelated content is never silently reused — that's the
+    whole point of the marker."""
+    if not os.path.exists(path):
+        return None
+    if os.path.islink(path):
+        return f"{name} ({path}) already exists and is a symlink — refusing to install through it."
+    if not os.path.isdir(path):
+        return f"{name} ({path}) already exists and is not a directory."
+    if _read_layout_marker(path) is not None:
+        return None
+    if not os.listdir(path):
+        return None
+    return f"{name} ({path}) already exists, is not empty, and does not carry Jen's own marker — refusing to reuse it."
+
+
+def _layout_ancestors_ok(name, path):
+    """None on success, else the refusal reason. v5.67.0-beta.5 (Q117) —
+    EVERY existing ancestor must be root-owned and not group/other-
+    writable, full stop: v5.67.0-beta.2 (Q114) downgraded the writable
+    case to a warning because GitHub's hosted CI runner ships /opt mode
+    777, reasoning that pre-planting app_dir as a symlink (closed
+    separately, below) was the only real attack. It wasn't — write
+    permission on a parent lets a local user RENAME the root-owned child
+    aside and put a symlink in its place AFTER install finishes, which
+    the root updater then follows on its next privileged run. The CI
+    accommodation belongs in CI (a `chmod 755 /opt` before the job runs),
+    not in the check."""
+    d = path
+    while d != "/":
+        d = os.path.dirname(d)
+        if not os.path.exists(d) and not os.path.islink(d):
+            continue
+        st = os.lstat(d)
+        if stat.S_ISLNK(st.st_mode):
+            return f"{name}'s existing parent {d} is a symlink — refusing to install under it."
+        if st.st_uid != 0:
+            return f"{name}'s existing parent {d} is not root-owned (uid {st.st_uid}) — refusing to install under it."
+        if st.st_mode & 0o022:
+            return (
+                f"{name}'s existing parent {d} is writable by group or other "
+                f"(mode {oct(st.st_mode & 0o777)}) — refusing to install under it (fix: sudo chmod go-w {d})."
+            )
+    return None
+
+
+def _layout_appdir_itself_ok(path):
+    """None on success, else the refusal reason. Once app_dir exists it
+    must be a real root-owned directory: not a symlink, not group/other-
+    writable — re-checked on every privileged run (install, upgrade,
+    uninstall), not just once at fresh-install time, since a local user
+    gaining write access to app_dir's own parent after the fact is
+    exactly the attack _layout_ancestors_ok's history above describes.
+    config_dir/data_dir are intentionally www-data-owned
+    (docs/ARCHITECTURE.md §6.1), so this check is app_dir-only; their own
+    safety comes from the ancestor walk and the marker."""
+    if not os.path.exists(path) and not os.path.islink(path):
+        return None
+    if os.path.islink(path):
+        return f"app_dir ({path}) is a symlink — refusing to trust it."
+    st = os.stat(path)
+    if not stat.S_ISDIR(st.st_mode):
+        return f"app_dir ({path}) exists and is not a directory."
+    if st.st_uid != 0:
+        return f"app_dir ({path}) is not root-owned (uid {st.st_uid}) — refusing to trust it."
+    if st.st_mode & 0o022:
+        return (
+            f"app_dir ({path}) is writable by group or other (mode {oct(st.st_mode & 0o777)}) "
+            f"— refusing to trust it (fix: sudo chmod go-w {path})."
+        )
+    return None
+
+
+def check_layout(for_mode, app_dir=None, config_dir=None, data_dir=None):
+    """Validate a layout for `for_mode` ("install", "upgrade" or
+    "uninstall"). Returns (ok, result): result is {"app_dir", "config_dir",
+    "data_dir"} on success, or a single refusal string on failure — never
+    a partial result either way."""
+    if for_mode == "install":
+        if not (app_dir and config_dir and data_dir):
+            return False, "install mode needs --app-dir, --config-dir and --data-dir"
+        values = {"app_dir": app_dir, "config_dir": config_dir, "data_dir": data_dir}
+    else:
+        if os.path.exists(LAYOUT_FILE) or os.path.islink(LAYOUT_FILE):
+            err = _validate_layout_file(LAYOUT_FILE)
+            if err:
+                return False, err
+            cp = configparser.ConfigParser(interpolation=None)
+            cp.read(LAYOUT_FILE)
+            values = {}
+            for key in _LAYOUT_ROLES:
+                v = cp.get("layout", key, fallback="").strip()
+                if not v:
+                    return False, f"{LAYOUT_FILE} is missing {key}"
+                values[key] = v
+        else:
+            values = dict(_DEFAULT_LAYOUT)
+        for key, flag in (("app_dir", app_dir), ("config_dir", config_dir), ("data_dir", data_dir)):
+            if flag and flag != values[key]:
+                return False, (
+                    f"This install's {key} is already {values[key]} — relocating an existing "
+                    "install is a runbook (docs/runbooks.md), not a flag."
+                )
+
+    for key in _LAYOUT_ROLES:
+        err = _layout_path_ok(key, values[key])
+        if err:
+            return False, err
+
+    for a, b in (("app_dir", "config_dir"), ("app_dir", "data_dir"), ("config_dir", "data_dir")):
+        err = _layout_not_nested(a, values[a], b, values[b])
+        if err:
+            return False, err
+
+    for key in _LAYOUT_ROLES:
+        err = _layout_ancestors_ok(key, values[key])
+        if err:
+            return False, err
+
+    err = _layout_appdir_itself_ok(values["app_dir"])
+    if err:
+        return False, err
+
+    if for_mode == "install":
+        for key in _LAYOUT_ROLES:
+            err = _layout_target_ok_for_install(key, values[key])
+            if err:
+                return False, err
+    else:
+        for key in _LAYOUT_ROLES:
+            path = values[key]
+            if not os.path.isdir(path):
+                continue  # nothing to check/stamp yet — not expected on a real install, never crash over it
+            if _read_layout_marker(path) is not None:
+                continue
+            if _recognized_by_content(path, key):
+                try:
+                    write_layout_marker(path, key, _installed_version())
+                except OSError as e:
+                    return False, f"{key} ({path}) could not be marked: {e}"
+            elif for_mode == "uninstall":
+                # Destructive — refuse rather than guess at an unmarked,
+                # unrecognized directory. An upgrade logs and continues
+                # (handled by the caller), since refusing every upgrade
+                # until a human intervenes would be its own outage.
+                return (
+                    False,
+                    f"{key} ({path}) does not carry Jen's own marker and isn't recognizable as one — refusing.",
+                )
+
+    return True, values
+
+
+def write_layout_markers_cli(argv):
+    """`--write-layout-markers --app-dir X --config-dir Y --data-dir Z
+    --version V`. Stamps all three once install.sh has actually created
+    them (check_layout's own "install" validation runs earlier, before
+    they exist, so it never writes a marker itself). Never called for an
+    upgrade — check_layout("upgrade", ...) already retroactively stamps a
+    pre-Q117 install the first time it recognizes one by content. Returns
+    0 on success; prints one refusal line to stderr and returns 1 on any
+    write failure. Never reachable from www-data — see the module comment
+    above."""
+    app_dir = config_dir = data_dir = version = None
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--app-dir" and i + 1 < len(argv):
+            app_dir = argv[i + 1]
+            i += 2
+        elif arg == "--config-dir" and i + 1 < len(argv):
+            config_dir = argv[i + 1]
+            i += 2
+        elif arg == "--data-dir" and i + 1 < len(argv):
+            data_dir = argv[i + 1]
+            i += 2
+        elif arg == "--version" and i + 1 < len(argv):
+            version = argv[i + 1]
+            i += 2
+        else:
+            print(f"--write-layout-markers: unrecognized argument {arg!r}", file=sys.stderr)
+            return 1
+
+    if not (app_dir and config_dir and data_dir and version):
+        print("--write-layout-markers needs --app-dir, --config-dir, --data-dir and --version", file=sys.stderr)
+        return 1
+
+    for path, role in ((app_dir, "app_dir"), (config_dir, "config_dir"), (data_dir, "data_dir")):
+        try:
+            write_layout_marker(path, role, version)
+        except OSError as e:
+            print(f"{role} ({path}) could not be marked: {e}", file=sys.stderr)
+            return 1
+    return 0
+
+
+def check_layout_cli(argv):
+    """`--check-layout --for {install,upgrade,uninstall} [--app-dir X
+    --config-dir Y --data-dir Z]`. Prints the three validated paths
+    (`key=value`, one per line) and returns 0 on success; prints one
+    refusal line to stderr and returns 1 on failure. Never reachable from
+    www-data — see the module comment above."""
+    for_mode = None
+    app_dir = config_dir = data_dir = None
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--for" and i + 1 < len(argv):
+            for_mode = argv[i + 1]
+            i += 2
+        elif arg == "--app-dir" and i + 1 < len(argv):
+            app_dir = argv[i + 1]
+            i += 2
+        elif arg == "--config-dir" and i + 1 < len(argv):
+            config_dir = argv[i + 1]
+            i += 2
+        elif arg == "--data-dir" and i + 1 < len(argv):
+            data_dir = argv[i + 1]
+            i += 2
+        else:
+            print(f"--check-layout: unrecognized argument {arg!r}", file=sys.stderr)
+            return 1
+
+    if for_mode not in ("install", "upgrade", "uninstall"):
+        print("--check-layout: --for must be install, upgrade or uninstall", file=sys.stderr)
+        return 1
+
+    ok, result = check_layout(for_mode, app_dir=app_dir, config_dir=config_dir, data_dir=data_dir)
+    if not ok:
+        print(result, file=sys.stderr)
+        return 1
+    for key in _LAYOUT_ROLES:
+        print(f"{key}={result[key]}")
+    return 0
 
 
 def _ssl_enabled():
@@ -1825,6 +2183,20 @@ def _rollback_release(snapshot_dir, prev, migration_run, version, release_dir):
 
 
 def main():
+    # v5.67.0-beta.5 (Q117) — --check-layout and --write-layout-markers are
+    # dispatched BEFORE the LAYOUT_ERROR gate below: they do their own
+    # independent validation (install.sh calls them with brand-new
+    # candidate paths that have nothing to do with whatever
+    # /etc/jen-layout.conf currently says, if anything), so an unrelated
+    # existing-file failure must never block them. Neither is the
+    # sudoers-gated path — see the module comment above check_layout_cli()
+    # for why new argv here is still safe: only install.sh/uninstall.sh,
+    # already running as root, ever reach them.
+    if sys.argv[1:2] == ["--check-layout"]:
+        return check_layout_cli(sys.argv[2:])
+    if sys.argv[1:2] == ["--write-layout-markers"]:
+        return write_layout_markers_cli(sys.argv[2:])
+
     # v5.67.0 (Q114) — refuses outright, before touching anything, if
     # LAYOUT_FILE was present but failed validation (see load_layout()
     # above): never silently falls back to the module's default constants.
@@ -1832,12 +2204,15 @@ def main():
         log(f"ERROR: {LAYOUT_ERROR} — refusing to run.")
         return 1
 
-    # v5.27.0 (Q23) — the ONE argv this script ever accepts, and only
-    # because jen-sudoers pins the entire invocation byte-for-byte
-    # ("sudo systemctl start --no-block jen-plugin-install.service",
-    # which in turn runs this script with exactly this one flag,
-    # nothing attacker-controllable). Anything else is refused outright
-    # rather than silently falling through to the self-update flow.
+    # v5.27.0 (Q23) — the other argv this script accepts via the
+    # sudoers-gated path, and only because jen-sudoers pins the entire
+    # invocation byte-for-byte ("sudo systemctl start --no-block
+    # jen-plugin-install.service", which in turn runs this script with
+    # exactly this one flag, nothing attacker-controllable). Anything
+    # else — including --check-layout/--write-layout-markers with
+    # malformed args (handled above, but a disagreeing invocation would
+    # have already returned) — is refused outright rather than silently
+    # falling through to the self-update flow.
     if sys.argv[1:]:
         if sys.argv[1:] == ["--plugins"]:
             return process_plugin_requests()

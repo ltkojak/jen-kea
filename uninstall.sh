@@ -7,40 +7,14 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 INSTALL_DIR="/opt/jen"
 CONFIG_DIR="/etc/jen"
 CONTENT_DIR="/var/lib/jen"          # v5.13.0 — uploads, DB backups, plugins
 SERVICE_FILE="/etc/systemd/system/jen.service"
 SUDOERS_FILE="/etc/sudoers.d/jen"
 LAYOUT_FILE="/etc/jen-layout.conf"  # v5.67.0 (Q114) — absent = the defaults above, unchanged
-
-# v5.67.0 (Q114) — a relocated install records where app/config/data
-# actually live in $LAYOUT_FILE (root:root 0644, outside $CONFIG_DIR —
-# see docs/ARCHITECTURE.md §3.1). Same bare "key = value" reader as
-# install.sh's own _layout_file_get, never sourced. A present-but-invalid
-# file (wrong owner, group/other-writable, a symlink) is left alone
-# entirely — this script only ever READS it to find out where to look,
-# never trusts it for anything root-privileged.
-if [[ -f "$LAYOUT_FILE" && ! -L "$LAYOUT_FILE" ]]; then
-    _layout_get() {
-        local key="$1" line v
-        while IFS= read -r line || [[ -n "$line" ]]; do
-            line="${line%$'\r'}"
-            [[ "$line" =~ ^[[:space:]]*${key}[[:space:]]*=(.*)$ ]] || continue
-            v="${BASH_REMATCH[1]}"
-            v="${v#"${v%%[![:space:]]*}"}"
-            v="${v%"${v##*[![:space:]]}"}"
-            printf '%s' "$v"
-            return
-        done < "$LAYOUT_FILE"
-    }
-    layout_app=$(_layout_get app_dir)
-    layout_config=$(_layout_get config_dir)
-    layout_data=$(_layout_get data_dir)
-    [[ -n "$layout_app"    ]] && INSTALL_DIR="$layout_app"
-    [[ -n "$layout_config" ]] && CONFIG_DIR="$layout_config"
-    [[ -n "$layout_data"   ]] && CONTENT_DIR="$layout_data"
-fi
 
 # ── ANSI colors ──────────────────────────────────────────────────────────────
 R='\033[0;31m'
@@ -61,6 +35,22 @@ divider() { echo -e "  ${DIM}${R}$(printf '─%.0s' {1..54})${NC}"; }
 
 # ── Root check ────────────────────────────────────────────────────────────────
 [[ $EUID -eq 0 ]] || fatal "Must run as root — sudo ./uninstall.sh"
+
+# ── Resolve layout (v5.67.0 Q114; via the ONE checker since v5.67.0-beta.5,
+# Q117) ───────────────────────────────────────────────────────────────────────
+# Delegates to jen-update-root.py --check-layout --for uninstall — the
+# same validation install.sh itself uses (see that script's own comment
+# above its _layout_checker), never a second bash copy of the same rules.
+# This is destructive, so a missing checker, an invalid/untrusted
+# $LAYOUT_FILE, or an unmarked and unrecognizable directory are all hard
+# refusals here — never a silent fallback to the historical defaults.
+UPDATER_PY="/usr/local/sbin/jen-update-root.py"
+[[ -f "$UPDATER_PY" ]] || UPDATER_PY="$SCRIPT_DIR/jen-update-root.py"
+[[ -f "$UPDATER_PY" ]] || fatal "jen-update-root.py not found at /usr/local/sbin/ or beside this script — cannot safely resolve this install's layout for a destructive uninstall."
+LAYOUT_OUT=$(python3 "$UPDATER_PY" --check-layout --for uninstall 2>&1) || fatal "$LAYOUT_OUT"
+INSTALL_DIR=$(printf '%s\n' "$LAYOUT_OUT" | sed -n 's/^app_dir=//p')
+CONFIG_DIR=$(printf '%s\n' "$LAYOUT_OUT" | sed -n 's/^config_dir=//p')
+CONTENT_DIR=$(printf '%s\n' "$LAYOUT_OUT" | sed -n 's/^data_dir=//p')
 
 # ── Banner ────────────────────────────────────────────────────────────────────
 # v5.67.0 (Q113) — same fix as install.sh's show_banner(): `clear` exits

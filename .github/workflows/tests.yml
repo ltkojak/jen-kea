@@ -274,6 +274,35 @@ jobs:
       - name: shellcheck (warnings)
         run: shellcheck -S warning install.sh uninstall.sh
 
+  # v5.67.0-beta.5 (Q117) — _layout_ancestors_ok refuses outright (never
+  # just warns) when an EXISTING ancestor of a layout directory is
+  # writable by group or other: a local user could otherwise rename the
+  # root-owned child aside after install finishes and plant a symlink in
+  # its place for the next privileged run to follow. Needs no Kea/DB/
+  # tarball — the check runs at the very top of install.sh, before
+  # main() — so this is deliberately its own small job, not folded into
+  # the heavy `install` job below.
+  install-layout-negative:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: A group/other-writable ancestor is refused
+        run: |
+          sudo mkdir -p /opt/permissive-parent
+          sudo chmod 777 /opt/permissive-parent
+          set +e
+          out=$(sudo TERM=linux ./install.sh --app-dir /opt/permissive-parent/jen 2>&1)
+          rc=$?
+          set -e
+          echo "$out"
+          [[ $rc -ne 0 ]]
+          echo "$out" | grep -q "writable by group or other"
+          echo "refused as expected — rc=$rc"
+
   # v5.67.0 (Q113) — install.sh had never actually been run by anything
   # before this: CI provisioned /opt/jen and /etc/jen by hand and the
   # system-test suite runs Jen in Docker. This runs the REAL script
@@ -324,6 +353,16 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.ref || github.ref }}
+
+      # v5.67.0-beta.5 (Q117) — this hosted runner image ships /opt mode
+      # 777 (its own tool-cache installers write there without sudo);
+      # _layout_ancestors_ok now refuses that outright rather than
+      # warning (see install-layout-negative above for the check itself),
+      # so every /opt/jen leg below needs a sane /opt first. A real host
+      # is already like this — install-layout-negative is what still
+      # proves the check itself works.
+      - name: Harden /opt for this runner
+        run: sudo chmod 755 /opt
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0

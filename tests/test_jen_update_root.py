@@ -218,6 +218,464 @@ class TestLoadLayout:
         assert os.path.join(jen_update_root._layout["config_dir"], "jen.config") == jen_update_root.CONFIG_FILE
 
 
+class TestLayoutPathOkSharedRootsAndGrammar:
+    """v5.67.0-beta.5 (Q117) — _layout_path_ok's three new checks, added
+    on top of the pre-existing absolute/not-"/"/no-".."/normalized/
+    not-forbidden-prefix ones TestLoadLayout's parametrized rejections
+    already cover.
+
+    Skipped as a whole class on Windows for the same reason
+    TestLoadLayout is: the pre-existing normalize check
+    (os.path.normpath) runs before any of these new ones and rewrites a
+    POSIX path to backslashes there, so even a "should be refused" case
+    here would pass for the wrong reason. Verified for real by the
+    `install`/`pytest` CI jobs on real Ubuntu runners."""
+
+    pytestmark = pytest.mark.skipif(os.name != "posix", reason="POSIX path semantics required")
+
+    def test_shared_root_exact_match_is_refused(self, jen_update_root):
+        for path in ("/etc", "/opt", "/usr/local", "/var/lib"):
+            err = jen_update_root._layout_path_ok("config_dir", path)
+            assert err is not None and "dedicated directory" in err, path
+
+    def test_a_child_of_a_shared_root_is_fine(self, jen_update_root):
+        for path in ("/etc/jen", "/opt/jen", "/usr/local/jen", "/var/lib/jen"):
+            assert jen_update_root._layout_path_ok("config_dir", path) is None, path
+
+    def test_grammar_refuses_shell_metacharacters(self, jen_update_root):
+        for bad in ("/opt/jen app", "/opt/jen#1", "/opt/jen&x", "/opt/jen%n", "/opt/jen;x", "/opt/jen$x"):
+            err = jen_update_root._layout_path_ok("app_dir", bad)
+            assert err is not None, bad
+
+    def test_grammar_accepts_dots_underscores_and_hyphens(self, jen_update_root):
+        for good in ("/srv/jen-app", "/srv/jen_app.v2", "/srv/my.jen/app"):
+            assert jen_update_root._layout_path_ok("app_dir", good) is None, good
+
+    def test_overlong_path_is_refused(self, jen_update_root):
+        path = "/srv/" + ("a" * 250)
+        err = jen_update_root._layout_path_ok("app_dir", path)
+        assert err is not None and "characters" in err
+
+
+class TestLayoutMarker:
+    """v5.67.0-beta.5 (Q117) — the .jen-directory marker: a plain "key =
+    value" file (never sourced), root:root 0644. write_layout_marker's
+    os.chown needs real root, so it's mocked here the same way
+    TestInstallSelfUpdateFiles mocks it for install_self_update_files."""
+
+    @pytest.mark.skipif(os.name != "posix", reason="os.chown requires POSIX")
+    def test_write_then_read_round_trips(self, jen_update_root, tmp_path):
+        with patch("os.chown"), patch("os.chmod"):
+            jen_update_root.write_layout_marker(str(tmp_path), "app_dir", "5.67.0-beta.5")
+        marker = jen_update_root._read_layout_marker(str(tmp_path))
+        assert marker == {"role": "app_dir", "version": "5.67.0-beta.5"}
+
+    def test_absent_marker_reads_as_none(self, jen_update_root, tmp_path):
+        assert jen_update_root._read_layout_marker(str(tmp_path)) is None
+
+    @pytest.mark.skipif(os.name != "posix", reason="symlink creation requires POSIX/elevated Windows privilege")
+    def test_symlinked_marker_is_never_trusted(self, jen_update_root, tmp_path):
+        real = tmp_path / "real-marker"
+        real.write_text("role = app_dir\nversion = 1.0.0\n")
+        d = tmp_path / "d"
+        d.mkdir()
+        (d / ".jen-directory").symlink_to(real)
+        assert jen_update_root._read_layout_marker(str(d)) is None
+
+    def test_marker_missing_role_key_reads_as_none(self, jen_update_root, tmp_path):
+        (tmp_path / ".jen-directory").write_text("version = 1.0.0\n")
+        assert jen_update_root._read_layout_marker(str(tmp_path)) is None
+
+
+class TestRecognizedByContent:
+    """v5.67.0-beta.5 (Q117) — retroactively recognizing a pre-Q117 Jen
+    directory by the content each role's own install step already puts
+    there, used only to stamp a marker on upgrade/uninstall, never to
+    trust an unrelated directory."""
+
+    def test_config_dir_recognized_by_jen_config(self, jen_update_root, tmp_path):
+        (tmp_path / "jen.config").write_text("[jen_db]\n")
+        assert jen_update_root._recognized_by_content(str(tmp_path), "config_dir") is True
+
+    def test_app_dir_recognized_by_releases_subdir(self, jen_update_root, tmp_path):
+        (tmp_path / "releases").mkdir()
+        assert jen_update_root._recognized_by_content(str(tmp_path), "app_dir") is True
+
+    def test_app_dir_recognized_by_flat_run_py(self, jen_update_root, tmp_path):
+        (tmp_path / "run.py").write_text("# jen\n")
+        assert jen_update_root._recognized_by_content(str(tmp_path), "app_dir") is True
+
+    def test_data_dir_recognized_by_any_known_subdir(self, jen_update_root, tmp_path):
+        (tmp_path / "backups").mkdir()
+        assert jen_update_root._recognized_by_content(str(tmp_path), "data_dir") is True
+
+    def test_empty_directory_is_not_recognized(self, jen_update_root, tmp_path):
+        for role in ("app_dir", "config_dir", "data_dir"):
+            assert jen_update_root._recognized_by_content(str(tmp_path), role) is False
+
+
+class TestLayoutTargetOkForInstall:
+    """v5.67.0-beta.5 (Q117) — a layout target for a FRESH install must be
+    absent, an empty directory, or already carrying Jen's own marker."""
+
+    def test_absent_path_is_fine(self, jen_update_root, tmp_path):
+        assert jen_update_root._layout_target_ok_for_install("app_dir", str(tmp_path / "nope")) is None
+
+    def test_empty_existing_directory_is_fine(self, jen_update_root, tmp_path):
+        assert jen_update_root._layout_target_ok_for_install("app_dir", str(tmp_path)) is None
+
+    @pytest.mark.skipif(os.name != "posix", reason="os.chown requires POSIX")
+    def test_marked_directory_is_reused(self, jen_update_root, tmp_path):
+        with patch("os.chown"), patch("os.chmod"):
+            jen_update_root.write_layout_marker(str(tmp_path), "app_dir", "5.67.0-beta.5")
+        assert jen_update_root._layout_target_ok_for_install("app_dir", str(tmp_path)) is None
+
+    def test_nonempty_unmarked_directory_is_refused(self, jen_update_root, tmp_path):
+        (tmp_path / "something").write_text("real content\n")
+        err = jen_update_root._layout_target_ok_for_install("app_dir", str(tmp_path))
+        assert err is not None and "does not carry Jen's own marker" in err
+
+    @pytest.mark.skipif(os.name != "posix", reason="symlink creation requires POSIX/elevated Windows privilege")
+    def test_symlink_is_refused(self, jen_update_root, tmp_path):
+        real = tmp_path / "real"
+        real.mkdir()
+        link = tmp_path / "link"
+        link.symlink_to(real)
+        err = jen_update_root._layout_target_ok_for_install("app_dir", str(link))
+        assert err is not None and "symlink" in err
+
+    def test_existing_plain_file_is_refused(self, jen_update_root, tmp_path):
+        f = tmp_path / "a-file"
+        f.write_text("x")
+        err = jen_update_root._layout_target_ok_for_install("app_dir", str(f))
+        assert err is not None and "not a directory" in err
+
+
+class TestLayoutAncestorsOk:
+    """v5.67.0-beta.5 (Q117) — every EXISTING ancestor of a layout path
+    must be root-owned and not group/other-writable, full stop (no CI
+    warn-only downgrade — that belongs in CI itself, via `chmod 755
+    /opt`). The refusal cases run for real, without root: a pytest
+    tmp_path's own ancestors are never root-owned on ordinary CI, which
+    is exactly the condition this class tests. The success case needs
+    real root to construct, so it's skipped otherwise."""
+
+    def test_non_root_owned_ancestor_is_refused(self, jen_update_root, tmp_path):
+        candidate = tmp_path / "nested" / "app"
+        err = jen_update_root._layout_ancestors_ok("app_dir", str(candidate))
+        assert err is not None
+        assert "not root-owned" in err or "writable by group or other" in err
+
+    @pytest.mark.skipif(os.name != "posix", reason="symlink creation requires POSIX/elevated Windows privilege")
+    def test_symlinked_ancestor_is_refused(self, jen_update_root, tmp_path):
+        real = tmp_path / "real-parent"
+        real.mkdir()
+        link = tmp_path / "linked-parent"
+        link.symlink_to(real)
+        candidate = link / "app"
+        err = jen_update_root._layout_ancestors_ok("app_dir", str(candidate))
+        assert err is not None and "symlink" in err
+
+    def test_nonexistent_ancestor_chain_is_skipped(self, jen_update_root):
+        # Every ancestor of this candidate is missing on any real
+        # machine — none of them can be checked, so there's nothing to
+        # refuse (the install step creates them fresh).
+        err = jen_update_root._layout_ancestors_ok("app_dir", "/this-does-not-exist-anywhere/jen")
+        assert err is None
+
+    @pytest.mark.skipif(os.name != "posix" or os.geteuid() != 0, reason="requires real root-owned ancestors")
+    def test_root_owned_non_writable_ancestors_pass(self, jen_update_root, tmp_path):
+        os.chmod(tmp_path, 0o755)
+        os.chown(tmp_path, 0, 0)
+        candidate = tmp_path / "app"
+        assert jen_update_root._layout_ancestors_ok("app_dir", str(candidate)) is None
+
+
+class TestLayoutAppdirItselfOk:
+    """v5.67.0-beta.5 (Q117) — app_dir ITSELF (not just its ancestors)
+    must be a real root-owned directory once it exists — config_dir/
+    data_dir are intentionally www-data-owned, so this check is
+    app_dir-only (docs/ARCHITECTURE.md §6.1)."""
+
+    def test_absent_path_is_fine(self, jen_update_root, tmp_path):
+        assert jen_update_root._layout_appdir_itself_ok(str(tmp_path / "nope")) is None
+
+    @pytest.mark.skipif(os.name != "posix", reason="symlink creation requires POSIX/elevated Windows privilege")
+    def test_symlink_is_refused(self, jen_update_root, tmp_path):
+        real = tmp_path / "real"
+        real.mkdir()
+        link = tmp_path / "link"
+        link.symlink_to(real)
+        err = jen_update_root._layout_appdir_itself_ok(str(link))
+        assert err is not None and "symlink" in err
+
+    def test_existing_plain_file_is_refused(self, jen_update_root, tmp_path):
+        f = tmp_path / "a-file"
+        f.write_text("x")
+        err = jen_update_root._layout_appdir_itself_ok(str(f))
+        assert err is not None and "not a directory" in err
+
+    @pytest.mark.skipif(os.name != "posix", reason="os.geteuid requires POSIX")
+    def test_non_root_owned_directory_is_refused(self, jen_update_root, tmp_path):
+        # tmp_path is owned by whatever user is running pytest, never
+        # root, on ordinary (non-root) CI — a real refusal, no mocking.
+        err = jen_update_root._layout_appdir_itself_ok(str(tmp_path))
+        if os.geteuid() == 0:
+            pytest.skip("running as root — this directory really is root-owned here")
+        assert err is not None and "not root-owned" in err
+
+
+class TestCheckLayout:
+    """v5.67.0-beta.5 (Q117) — check_layout() end to end. The ancestor/
+    app_dir-ownership checks are bypassed here (monkeypatched to always
+    pass) for every test that isn't specifically about ownership — the
+    same technique TestLoadLayout's _bypass_ownership and
+    tests/test_layout.py's own bash-side bypasses already use; a non-root
+    CI process could never construct a real root-owned ancestor to test
+    the success path against."""
+
+    # Every scenario here, even a refusal, goes through _layout_path_ok's
+    # pre-existing normalize check first — on Windows that rewrites a
+    # POSIX path to backslashes and fires before the thing a given test
+    # means to exercise, the same reason TestLoadLayout skips as a whole
+    # class. Real Linux (CI) is the arbiter.
+    pytestmark = pytest.mark.skipif(os.name != "posix", reason="POSIX path semantics required")
+
+    @pytest.fixture(autouse=False)
+    def _bypass_ownership(self, jen_update_root, monkeypatch):
+        monkeypatch.setattr(jen_update_root, "_layout_ancestors_ok", lambda name, path: None)
+        monkeypatch.setattr(jen_update_root, "_layout_appdir_itself_ok", lambda path: None)
+
+    def test_install_mode_without_explicit_paths_is_refused(self, jen_update_root):
+        ok, result = jen_update_root.check_layout("install")
+        assert not ok and "needs --app-dir" in result
+
+    def test_install_mode_bad_grammar_is_refused(self, jen_update_root, _bypass_ownership):
+        ok, result = jen_update_root.check_layout(
+            "install", app_dir="/srv/jen app", config_dir="/etc/jen", data_dir="/var/lib/jen"
+        )
+        assert not ok
+
+    def test_install_mode_nested_paths_refused(self, jen_update_root, _bypass_ownership):
+        ok, result = jen_update_root.check_layout(
+            "install", app_dir="/srv/jen", config_dir="/etc/jen", data_dir="/srv/jen/data"
+        )
+        assert not ok and "nested" in result
+
+    def test_install_mode_success_returns_the_three_values(self, jen_update_root, _bypass_ownership, tmp_path):
+        app = str(tmp_path / "app")
+        config = str(tmp_path / "etc")
+        data = str(tmp_path / "data")
+        ok, result = jen_update_root.check_layout("install", app_dir=app, config_dir=config, data_dir=data)
+        assert ok, result
+        assert result == {"app_dir": app, "config_dir": config, "data_dir": data}
+
+    def test_install_mode_refuses_a_nonempty_unmarked_target(self, jen_update_root, _bypass_ownership, tmp_path):
+        app = tmp_path / "app"
+        app.mkdir()
+        (app / "unrelated").write_text("x")
+        ok, result = jen_update_root.check_layout(
+            "install", app_dir=str(app), config_dir=str(tmp_path / "etc"), data_dir=str(tmp_path / "data")
+        )
+        assert not ok and "does not carry Jen's own marker" in result
+
+    def test_upgrade_mode_no_layout_file_uses_defaults(self, jen_update_root, _bypass_ownership, monkeypatch):
+        monkeypatch.setattr(jen_update_root, "LAYOUT_FILE", "/does/not/exist/jen-layout.conf")
+        ok, result = jen_update_root.check_layout("upgrade")
+        assert ok, result
+        assert result == dict(jen_update_root._DEFAULT_LAYOUT)
+
+    def test_upgrade_mode_disagreeing_flag_is_refused(self, jen_update_root, _bypass_ownership, monkeypatch, tmp_path):
+        layout_file = tmp_path / "jen-layout.conf"
+        layout_file.write_text(
+            "[layout]\napp_dir = /srv/jen/app\nconfig_dir = /srv/jen/etc\ndata_dir = /srv/jen/data\n"
+        )
+        monkeypatch.setattr(jen_update_root, "LAYOUT_FILE", str(layout_file))
+        monkeypatch.setattr(jen_update_root, "_validate_layout_file", lambda p: None)
+        ok, result = jen_update_root.check_layout("upgrade", app_dir="/somewhere/else")
+        assert not ok and "runbook" in result
+
+    def test_upgrade_mode_agreeing_flag_is_accepted(self, jen_update_root, _bypass_ownership, monkeypatch, tmp_path):
+        layout_file = tmp_path / "jen-layout.conf"
+        layout_file.write_text(
+            "[layout]\napp_dir = /srv/jen/app\nconfig_dir = /srv/jen/etc\ndata_dir = /srv/jen/data\n"
+        )
+        monkeypatch.setattr(jen_update_root, "LAYOUT_FILE", str(layout_file))
+        monkeypatch.setattr(jen_update_root, "_validate_layout_file", lambda p: None)
+        ok, result = jen_update_root.check_layout("upgrade", app_dir="/srv/jen/app")
+        assert ok, result
+        assert result["app_dir"] == "/srv/jen/app"
+
+    def test_upgrade_mode_stamps_a_marker_on_a_recognized_unmarked_directory(
+        self, jen_update_root, _bypass_ownership, monkeypatch, tmp_path
+    ):
+        # No LAYOUT_FILE AND no explicit flags — the real shape of
+        # install.sh's own call for a pre-Q114 box with no layout file
+        # yet (_resolve_layout_dirs sends --for upgrade with no --app-dir/
+        # etc unless the operator overrode them): _DEFAULT_LAYOUT is the
+        # only source of truth, so it's patched to point at this test's
+        # own tmp dirs rather than passing them as (dis)agreeing flags.
+        app, config, data = tmp_path / "app", tmp_path / "etc", tmp_path / "data"
+        app.mkdir()
+        config.mkdir()
+        data.mkdir()
+        (app / "run.py").write_text("# jen\n")
+        (config / "jen.config").write_text("[jen_db]\n")
+        (data / "backups").mkdir()
+        monkeypatch.setattr(jen_update_root, "LAYOUT_FILE", "/does/not/exist/jen-layout.conf")
+        monkeypatch.setattr(
+            jen_update_root, "_DEFAULT_LAYOUT", {"app_dir": str(app), "config_dir": str(config), "data_dir": str(data)}
+        )
+        with patch("os.chown"), patch("os.chmod"):
+            ok, result = jen_update_root.check_layout("upgrade")
+        assert ok, result
+        assert jen_update_root._read_layout_marker(str(app)) is not None
+        assert jen_update_root._read_layout_marker(str(config)) is not None
+        assert jen_update_root._read_layout_marker(str(data)) is not None
+
+    def test_upgrade_mode_tolerates_an_unrecognized_unmarked_directory(
+        self, jen_update_root, _bypass_ownership, monkeypatch, tmp_path
+    ):
+        app, config, data = tmp_path / "app", tmp_path / "etc", tmp_path / "data"
+        app.mkdir()
+        config.mkdir()
+        data.mkdir()
+        (app / "unrelated-stuff").write_text("x")
+        monkeypatch.setattr(jen_update_root, "LAYOUT_FILE", "/does/not/exist/jen-layout.conf")
+        monkeypatch.setattr(
+            jen_update_root, "_DEFAULT_LAYOUT", {"app_dir": str(app), "config_dir": str(config), "data_dir": str(data)}
+        )
+        ok, result = jen_update_root.check_layout("upgrade")
+        assert ok, result
+        assert jen_update_root._read_layout_marker(str(app)) is None
+
+    def test_uninstall_mode_refuses_an_unrecognized_unmarked_directory(
+        self, jen_update_root, _bypass_ownership, monkeypatch, tmp_path
+    ):
+        app, config, data = tmp_path / "app", tmp_path / "etc", tmp_path / "data"
+        app.mkdir()
+        config.mkdir()
+        data.mkdir()
+        (app / "unrelated-stuff").write_text("x")
+        monkeypatch.setattr(jen_update_root, "LAYOUT_FILE", "/does/not/exist/jen-layout.conf")
+        ok, result = jen_update_root.check_layout(
+            "uninstall", app_dir=str(app), config_dir=str(config), data_dir=str(data)
+        )
+        assert not ok and "does not carry Jen's own marker" in result
+
+    def test_uninstall_mode_stamps_a_marker_on_a_recognized_unmarked_directory(
+        self, jen_update_root, _bypass_ownership, monkeypatch, tmp_path
+    ):
+        app, config, data = tmp_path / "app", tmp_path / "etc", tmp_path / "data"
+        app.mkdir()
+        config.mkdir()
+        data.mkdir()
+        (app / "releases").mkdir()
+        (config / "jen.config").write_text("[jen_db]\n")
+        (data / "icons").mkdir()
+        monkeypatch.setattr(jen_update_root, "LAYOUT_FILE", "/does/not/exist/jen-layout.conf")
+        with patch("os.chown"), patch("os.chmod"):
+            ok, result = jen_update_root.check_layout(
+                "uninstall", app_dir=str(app), config_dir=str(config), data_dir=str(data)
+            )
+        assert ok, result
+
+
+class TestCheckLayoutCli:
+    """v5.67.0-beta.5 (Q117) — the `--check-layout` argv surface itself:
+    install.sh/uninstall.sh are the only callers (see the module comment
+    above check_layout_cli), communicating over stdout/stderr + exit
+    code, never Python objects."""
+
+    def test_missing_for_is_refused(self, jen_update_root, capsys):
+        rc = jen_update_root.check_layout_cli([])
+        assert rc == 1
+        assert "--for must be" in capsys.readouterr().err
+
+    def test_invalid_for_value_is_refused(self, jen_update_root, capsys):
+        rc = jen_update_root.check_layout_cli(["--for", "bogus"])
+        assert rc == 1
+        assert "--for must be" in capsys.readouterr().err
+
+    def test_unrecognized_argument_is_refused(self, jen_update_root, capsys):
+        rc = jen_update_root.check_layout_cli(["--for", "install", "--bogus", "x"])
+        assert rc == 1
+        assert "unrecognized argument" in capsys.readouterr().err
+
+    def test_install_mode_missing_dirs_prints_refusal_to_stderr(self, jen_update_root, capsys):
+        rc = jen_update_root.check_layout_cli(["--for", "install"])
+        assert rc == 1
+        assert "needs --app-dir" in capsys.readouterr().err
+
+    @pytest.mark.skipif(os.name != "posix", reason="POSIX path semantics required (os.path.normpath)")
+    def test_success_prints_key_value_lines(self, jen_update_root, capsys, monkeypatch, tmp_path):
+        monkeypatch.setattr(jen_update_root, "_layout_ancestors_ok", lambda name, path: None)
+        monkeypatch.setattr(jen_update_root, "_layout_appdir_itself_ok", lambda path: None)
+        app, config, data = str(tmp_path / "app"), str(tmp_path / "etc"), str(tmp_path / "data")
+        rc = jen_update_root.check_layout_cli(
+            ["--for", "install", "--app-dir", app, "--config-dir", config, "--data-dir", data]
+        )
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert f"app_dir={app}" in out
+        assert f"config_dir={config}" in out
+        assert f"data_dir={data}" in out
+
+
+class TestWriteLayoutMarkersCli:
+    """v5.67.0-beta.5 (Q117) — install.sh's own `write_layout_markers`
+    step calls this once the three directories genuinely exist."""
+
+    def test_missing_arguments_is_refused(self, jen_update_root, capsys):
+        rc = jen_update_root.write_layout_markers_cli(["--app-dir", "/a"])
+        assert rc == 1
+        assert "needs --app-dir" in capsys.readouterr().err
+
+    def test_unrecognized_argument_is_refused(self, jen_update_root, capsys):
+        rc = jen_update_root.write_layout_markers_cli(["--bogus", "x"])
+        assert rc == 1
+        assert "unrecognized argument" in capsys.readouterr().err
+
+    @pytest.mark.skipif(os.name != "posix", reason="os.chown requires POSIX")
+    def test_success_marks_all_three(self, jen_update_root, tmp_path):
+        app, config, data = tmp_path / "app", tmp_path / "etc", tmp_path / "data"
+        app.mkdir()
+        config.mkdir()
+        data.mkdir()
+        with patch("os.chown"), patch("os.chmod"):
+            rc = jen_update_root.write_layout_markers_cli(
+                [
+                    "--app-dir",
+                    str(app),
+                    "--config-dir",
+                    str(config),
+                    "--data-dir",
+                    str(data),
+                    "--version",
+                    "5.67.0-beta.5",
+                ]
+            )
+        assert rc == 0
+        for d in (app, config, data):
+            marker = jen_update_root._read_layout_marker(str(d))
+            assert marker is not None and marker["version"] == "5.67.0-beta.5"
+
+    @pytest.mark.skipif(os.name != "posix", reason="os.chown requires POSIX")
+    def test_write_failure_is_reported_and_refused(self, jen_update_root, capsys, tmp_path):
+        # app_dir doesn't exist — writing its marker file fails with
+        # ENOENT, which must be reported, not crash the whole call.
+        missing = tmp_path / "does-not-exist"
+        config, data = tmp_path / "etc", tmp_path / "data"
+        config.mkdir()
+        data.mkdir()
+        with patch("os.chown"), patch("os.chmod"):
+            rc = jen_update_root.write_layout_markers_cli(
+                ["--app-dir", str(missing), "--config-dir", str(config), "--data-dir", str(data), "--version", "1.0.0"]
+            )
+        assert rc == 1
+        assert "could not be marked" in capsys.readouterr().err
+
+
 class TestVerifyReleaseChecksum:
     def test_matching_checksum_returns_true(self, jen_update_root):
         checksum_text = "abc123def456  jen-v5.2.6.tar.gz\n"
