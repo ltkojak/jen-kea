@@ -604,6 +604,17 @@ jobs:
       # (which would just re-pay their startup cost). Ports are reused
       # from the legs above — each one's own uninstall already stopped
       # the service before this starts.
+      #
+      # The level-1 uninstalls above intentionally preserve
+      # /etc/jen-layout.conf (same as jen.config/content — "detected
+      # automatically" on a reinstall), so one is still sitting there
+      # recording app_dir=/opt/jen from the very first leg's fresh
+      # install. This leg means a genuinely fresh, clean box — the
+      # caught-by-this-same-leg's-first-real-run bug was install.sh
+      # correctly refusing to relocate an "existing" install over it.
+      - name: Clear the leftover layout record from the legs above
+        run: sudo rm -f /etc/jen-layout.conf
+
       - name: Fresh install with a relocated layout
         run: |
           mkdir -p "$RUNNER_TEMP/install-relocated"
