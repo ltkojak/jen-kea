@@ -505,7 +505,11 @@ jobs:
           set -e
           pid=$(systemctl show jen -p MainPID --value)
           [[ "$pid" != "0" ]]
-          sudo tr '\0' '\n' < "/proc/$pid/environ" | grep -q '^INVOCATION_ID='
+          # the redirect itself opens the fd as the UNPRIVILEGED shell —
+          # sudo has to wrap that open too, not just `tr`, since
+          # /proc/<pid>/environ is only readable by its own owner
+          # (www-data) or root.
+          sudo sh -c "tr '\\0' '\\n' < /proc/$pid/environ" | grep -q '^INVOCATION_ID='
           echo "INVOCATION_ID present in the running gunicorn worker's own environment"
 
       # v5.67.0-beta.6 (Q118) — the install CI job never opened a single

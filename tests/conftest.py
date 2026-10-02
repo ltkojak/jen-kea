@@ -361,6 +361,24 @@ def db():
 
 
 @pytest.fixture(autouse=True)
+def _not_a_systemd_host(monkeypatch):
+    """v5.67.0-beta.6 (Q118) — GitHub Actions' own hosted runner is itself
+    a systemd-managed host (the runner agent is a systemd service), and
+    INVOCATION_ID is inherited down through every child process it spawns
+    — including this very pytest job. jen.services.runtime.deployment()
+    correctly reads that as "systemd," which is exactly right for a real
+    Jen unit but wrong for a test suite that has always run as a plain
+    dev/CI checkout (and still does — JEN_ROOT is set for exactly this).
+    Confirmed by a real CI failure the first time this Q's own tests ran:
+    install_plugin() routed to the root-privileged service path a
+    dev-checkout test never expected. Cleared before every test; a test
+    that wants to exercise the real systemd branch sets either var back
+    with its own monkeypatch, same as any other fixture override."""
+    monkeypatch.delenv("INVOCATION_ID", raising=False)
+    monkeypatch.delenv("JEN_SERVICE_MANAGER", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _reset_capabilities_cache():
     """v5.64.0 (Q83) — jen.services.capabilities caches a server's Kea version
     for 60 s; every test starts (and ends) with none, so one test's mocked
