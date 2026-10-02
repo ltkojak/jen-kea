@@ -480,6 +480,18 @@ Re-enable after logging in via Settings → Login Rate Limiting.
 
 ---
 
+## Reservations restored by an older Jen never match their client
+
+**Symptom.** After restoring a Kea backup or import file through Jen, or migrating the Kea database from the Databases page, a reservation is listed with the right IP and name but the client keeps getting a dynamic address. **Cause (fixed in 5.67.0-beta.11, present in every release before it, stable included).** The export wrote a binary column — a reservation's identifier — as hex text, nothing decoded it, and the restore stored that text: the six-byte MAC `34:13:43:e6:0e:2a` came back as the twelve characters `341343e60e2a`. The row looks right in every listing; Kea simply never matches it.
+
+**Find it.** Health Center → **Kea reservations have plausible identifiers**: `fail` names how many rows. It only recognises what is recognisable: a hw-address, DUID or client-id that is an even number of hex-digit characters of a plausible length (12, 16 or 40 for a hardware address). Circuit-id and flex-id are never flagged — ASCII hex is legitimate text there.
+
+**Repair it.** Settings → Databases → **Import** → **Check reservation identifiers** (superadmin). The page is a dry run: it lists each damaged row with the text stored now and the bytes it will become. Tick the rows and press **Repair selected**; each row is changed only if it still holds exactly what the preview showed, and only `hosts.dhcp_identifier` is written. If the correct identifier already exists on another reservation (you re-created it by hand) that row is skipped and left as it is — delete the damaged one from Reservations. Jen never changes Kea's schema; this is data, in the table Kea's own tooling would write.
+
+**What it cannot repair.** Per-host option values (`dhcp4_options.value`, `dhcp6_options.value`) cannot be told apart from values somebody meant, so they are not touched: after a restore made before this release, check any reservation-level option by hand. Leases come back on their own — they expire and renew.
+
+---
+
 ## Reservations Page 500 Error
 
 Usually a database schema mismatch. Check:

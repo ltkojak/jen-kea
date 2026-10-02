@@ -1609,6 +1609,63 @@ emit({{"rc": rc}})
     return _p.stdout
 
 
+def _s15_fingerprint():
+    """What a failed restore must leave exactly as it found it: who the users are and which plugins the
+    `plugins` table says are installed (the bundle restores seven rows into it; the empty database this
+    scenario starts from has none). Compared before and after the failing restore below."""
+    out, _p = st.jen_py(
+        """
+import jen.models.db as db_mod
+with db_mod.jen_db() as jdb, jdb.cursor() as cur:
+    cur.execute("SELECT username, role FROM users ORDER BY username")
+    users = cur.fetchall()
+    cur.execute("SELECT id FROM plugins ORDER BY id")
+    plugins = [r["id"] for r in cur.fetchall()]
+emit({"users": users, "plugins": plugins})
+"""
+    )
+    r = emitted(out)
+    assert r is not None, f"no fingerprint:\n{_p.stdout[-1500:]}\n{_p.stderr[-1500:]}"
+    return r
+
+
+def _s15_a_failing_plugin_restore_is_rolled_back():
+    """v5.67.0-beta.11 (Q123, item d) — the case this scenario never had: a recovery whose plugin data
+    does NOT come back. One bundled plugin's migration replay is made to fail (the plugin's own code is
+    present, so this is an error, not a warning), through the real restore.run() against the real bundle.
+    INVARIANT: it exits non-zero, names the plugin, says it rolled back, and Jen's database is as it was
+    before — the restore is not allowed to print "restored", start Jen and exit 0 over missing data.
+    Stood in: only the failure itself (plugins.run_plugin_migrations answering "failed" for wol)."""
+    before = _s15_fingerprint()
+    out, p = st.jen_py(
+        f"""
+from jen.services import plugins
+from jen.tools import restore
+_real = plugins.run_plugin_migrations
+def _fail_wol(manifest):
+    if manifest.get("id") == "wol":
+        return False, "simulated migration failure", 0
+    return _real(manifest)
+plugins.run_plugin_migrations = _fail_wol
+rc = restore.run({S15_BUNDLE_IN_CONTAINER!r}, {S15_PASSPHRASE!r}, no_stop=True)
+emit({{"rc": rc}})
+""",
+        timeout=240,
+    )
+    r = emitted(out)
+    assert r is not None, f"the failing restore never answered:\n{p.stdout[-2000:]}\n{p.stderr[-2000:]}"
+    assert r["rc"] == 1, (
+        f"a restore that lost a present plugin's data must exit 1 (rolled back), got {r}\n"
+        f"{p.stdout[-2000:]}\n{p.stderr[-2000:]}"
+    )
+    assert "wol" in p.stderr and "wol_hosts" in p.stderr, (
+        f"the error must name the plugin and the table:\n{p.stderr[-2000:]}"
+    )
+    assert "rolled back" in p.stderr, f"the restore must say it rolled back:\n{p.stderr[-2000:]}"
+    after = _s15_fingerprint()
+    assert after == before, f"the failed restore left the database changed:\nbefore {before}\nafter  {after}"
+
+
 def _s15_row_counts():
     """{table: row count} for every plugin table, plus the `plugins` table's own rows — used
     both right after seeding (proving the seed itself landed) and after restore (the actual
@@ -1682,6 +1739,7 @@ def test_15_bundled_plugin_data_survives_a_full_recovery_restore(stack):
     st.wait_jen_healthy(timeout=150)
 
     _s15_copy_bundle_into_container(bundle_path)
+    _s15_a_failing_plugin_restore_is_rolled_back()
     restore_stdout = _s15_restore()
 
     # the restored `plugins` rows say every plugin is enabled again, but the one long-lived

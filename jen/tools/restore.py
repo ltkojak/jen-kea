@@ -447,14 +447,20 @@ def restore_content(bundle_dir: Path, content_dir: Path) -> int:
     return count
 
 
-def restore_jen_db(bundle_dir: Path, config_file: Path) -> list[str]:
+def restore_jen_db(bundle_dir: Path, config_file: Path, lenient_plugins: bool = False) -> list[str]:
     """Import jen_db.json.gz through the DB import already used by
     Settings → Databases → Import — the same code path, just driven
     from a standalone script instead of a web request. Points
     extensions.CONFIG_FILE at the config just restored to `config_file`
     and reloads, so the DB credentials used are the ones that were
     just written — not whatever the pre-restore install had, and not
-    whatever this process happened to have loaded earlier."""
+    whatever this process happened to have loaded earlier.
+
+    v5.67.0-beta.11 (Q123, item d) — STRICT about plugins by default: a plugin whose code is on this machine
+    that lost data (migration replay, row import or invariant check failed) raises
+    dbexport.PluginRestoreError, which run() turns into a rollback. `lenient_plugins=True`
+    (`--lenient-plugins`) is the explicit escape: the failures come back as "❌" lines, are printed, and are
+    recorded in the restore report."""
     from jen import config as jen_config
     from jen import extensions
     from jen.services import dbexport
@@ -465,7 +471,7 @@ def restore_jen_db(bundle_dir: Path, config_file: Path) -> list[str]:
     db_file = bundle_dir / "jen_db.json.gz"
     if not db_file.is_file():
         return ["no jen_db.json.gz in bundle — database not restored"]
-    return dbexport.import_jen(db_file.read_bytes())
+    return dbexport.import_jen(db_file.read_bytes(), strict_plugins=not lenient_plugins)
 
 
 # ── lifecycle: quiesce → snapshot → apply → start → health-check → roll back ──
@@ -695,6 +701,22 @@ def _fail_with_rollback(snap: Path, etc_jen: Path, content_dir: Path, reason: st
     return 1
 
 
+def _write_report(snap: Path, bundle_path: str, lenient_plugins: bool, accepted_failures: list[str]) -> None:
+    """`restore-report.txt` beside the snapshot: what was restored, from what, and — when --lenient-plugins
+    was given — exactly which plugin failures were accepted (v5.67.0-beta.11, Q123). Best-effort: a report
+    that cannot be written never fails a restore that otherwise succeeded."""
+    lines = [
+        f"restored: {datetime.now(timezone.utc).isoformat()}",
+        f"bundle: {bundle_path}",
+        f"plugin data: {'LENIENT (--lenient-plugins)' if lenient_plugins else 'strict'}",
+    ]
+    if lenient_plugins:
+        lines.append("accepted plugin failures:")
+        lines.extend(f"  {line}" for line in accepted_failures or ["  (none)"])
+    with contextlib.suppress(OSError):
+        (snap / "restore-report.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def run(
     bundle_path: str,
     passphrase: str,
@@ -703,6 +725,7 @@ def run(
     force: bool = False,
     no_stop: bool = False,
     start: bool = False,
+    lenient_plugins: bool = False,
 ) -> int:
     import tempfile
 
@@ -769,13 +792,16 @@ def run(
 
         # ── apply ────────────────────────────────────────────────────────
         restart = was_running or start
+        accepted_failures: list[str] = []  # only ever filled under --lenient-plugins
         try:
             for line in restore_etc_jen(bundle_dir, Path(etc_jen)):
                 print(line)
             content_count = restore_content(bundle_dir, Path(content_dir))
             print(f"restored {content_count} content file(s)")
-            for line in restore_jen_db(bundle_dir, Path(etc_jen) / "jen.config"):
+            for line in restore_jen_db(bundle_dir, Path(etc_jen) / "jen.config", lenient_plugins=lenient_plugins):
                 print(line)
+                if line.startswith("\u274c"):
+                    accepted_failures.append(line)
         except Exception as e:
             return _fail_with_rollback(
                 snap, Path(etc_jen), Path(content_dir), f"apply failed: {e}", manage, was_running
@@ -805,8 +831,15 @@ def run(
                 )
             print("jen is up and answering.")
 
+    _write_report(snap, bundle_path, lenient_plugins, accepted_failures)
     print()
     print(f"Recovery bundle restored. A snapshot of what it replaced is at {snap}")
+    if lenient_plugins:
+        print()
+        print("--lenient-plugins was used: plugin data failures were accepted instead of rolling back.")
+        for line in accepted_failures or ["(none occurred)"]:
+            print(f"  {line}")
+        print(f"  recorded in {snap}/restore-report.txt")
     print(f"(undo with: sudo ./install.sh --rollback {snap})")
     print("Next:")
     if not (manage and restart):
@@ -886,6 +919,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--content-dir", default=None, help="Where to restore content (default: Jen's own)")
     parser.add_argument("--force", action="store_true", help="Restore a bundle from a newer Jen / newer schema anyway")
+    parser.add_argument(
+        "--lenient-plugins",
+        action="store_true",
+        help="Accept a plugin's data failing to restore (default: roll the whole restore back). "
+        "The failures are printed and recorded in the restore report.",
+    )
     args = parser.parse_args(argv)
 
     if args.rollback:
@@ -910,6 +949,7 @@ def main(argv: list[str] | None = None) -> int:
         force=args.force,
         no_stop=args.no_stop,
         start=args.start,
+        lenient_plugins=args.lenient_plugins,
     )
 
 

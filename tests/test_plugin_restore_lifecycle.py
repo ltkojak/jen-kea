@@ -167,7 +167,7 @@ class TestFullPluginRestoreLifecycle:
             assert not _table_present(db, t), f"{t} should not exist after the wipe"
 
         results = dbexport.import_jen(path.read_bytes())
-        warnings = [r for r in results if r.startswith("⚠️")]
+        warnings = [r for r in results if r.startswith(("⚠️", "❌"))]  # Q123: a failure is "❌" now
         assert not warnings, warnings
 
         db.commit()  # a fresh snapshot for the reads below - import_jen() wrote via its own connections
@@ -247,6 +247,84 @@ class TestCodeAbsentPluginPath:
         with db.cursor() as cur:  # every OTHER plugin still restored fine
             cur.execute("SELECT COUNT(*) AS cnt FROM ds_targets")
             assert cur.fetchone()["cnt"] >= 1
+
+
+class TestStrictAboutAPluginWhoseCodeIsPresent:
+    """v5.67.0-beta.11 (Q123, item d) — import_jen(strict_plugins=True) turns every way a plugin can lose data
+    (migration replay, row import, invariant) into an error naming the plugin and the table; a plugin whose
+    code is ABSENT stays a warning (its data is still in the file — Q107)."""
+
+    def _exported_and_wiped(self, db, tmp_path):
+        _install_and_migrate_all(db)
+        _seed_all_20_tables(db)
+        path = tmp_path / "export.json.gz"
+        dbexport.write_jen_export(str(path))
+        _wipe_plugin_schema(db, BUNDLED_IDS, ALL_20)
+        return path.read_bytes()
+
+    def test_a_failed_migration_replay_raises_naming_plugin_and_table(self, db, monkeypatch, tmp_path):
+        blob = self._exported_and_wiped(db, tmp_path)
+        real = plugins_svc.run_plugin_migrations
+        monkeypatch.setattr(
+            plugins_svc,
+            "run_plugin_migrations",
+            lambda manifest: (False, "simulated", 0) if manifest["id"] == "wol" else real(manifest),
+        )
+        with pytest.raises(dbexport.PluginRestoreError) as e:
+            dbexport.import_jen(blob, strict_plugins=True)
+        assert "wol" in str(e.value) and "wol_hosts" in str(e.value) and "migration replay failed" in str(e.value)
+        assert [f[0] for f in e.value.failures] == ["wol"]
+
+    def test_the_same_failure_is_an_error_line_not_a_warning_when_not_strict(self, db, monkeypatch, tmp_path):
+        blob = self._exported_and_wiped(db, tmp_path)
+        real = plugins_svc.run_plugin_migrations
+        monkeypatch.setattr(
+            plugins_svc,
+            "run_plugin_migrations",
+            lambda manifest: (False, "simulated", 0) if manifest["id"] == "wol" else real(manifest),
+        )
+        results = dbexport.import_jen(blob)  # the Databases import page's mode
+        failed = [r for r in results if "wol" in r and "migration replay failed" in r]
+        assert failed and failed[0].startswith("❌"), results
+        with db.cursor() as cur:  # every other plugin still came back
+            db.commit()
+            cur.execute("SELECT COUNT(*) AS cnt FROM ds_targets")
+            assert cur.fetchone()["cnt"] >= 1
+
+    def test_a_failed_row_import_raises_naming_the_table(self, db, monkeypatch, tmp_path):
+        blob = self._exported_and_wiped(db, tmp_path)
+        real = dbexport._decode_import_rows
+
+        def boom(table, *a, **k):
+            if table == "wol_hosts":
+                raise dbexport.BinaryValueError("wol_hosts.mac (row 1): simulated")
+            return real(table, *a, **k)
+
+        monkeypatch.setattr(dbexport, "_decode_import_rows", boom)
+        with pytest.raises(dbexport.PluginRestoreError) as e:
+            dbexport.import_jen(blob, strict_plugins=True)
+        assert e.value.failures[0][0] == "wol" and e.value.failures[0][1] == ["wol_hosts"]
+        assert "row import failed" in str(e.value)
+
+    def test_a_plugin_whose_code_is_absent_is_still_only_a_warning_even_when_strict(self, db, monkeypatch, tmp_path):
+        blob = self._exported_and_wiped(db, tmp_path)
+        real = plugins_svc._manifest_for_owned_tables
+        monkeypatch.setattr(plugins_svc, "_manifest_for_owned_tables", lambda pid: None if pid == "wol" else real(pid))
+        results = dbexport.import_jen(blob, strict_plugins=True)  # must NOT raise
+        assert any("wol" in r and "not installed here" in r and r.startswith("⚠️") for r in results)
+
+    def test_a_violated_invariant_raises_in_strict_mode_and_warns_otherwise(self, db, monkeypatch, tmp_path):
+        blob = self._exported_and_wiped(db, tmp_path)
+        monkeypatch.setattr(dbexport, "_plugin_invariant_violations", lambda conn: [("wol", "wol_hosts")])
+        with pytest.raises(dbexport.PluginRestoreError, match="no table behind it"):
+            dbexport.import_jen(blob, strict_plugins=True)
+        results = dbexport.import_jen(blob)
+        assert any(r.startswith("⚠️") and "invariant check" in r for r in results)
+
+    def test_a_clean_restore_is_not_an_error_in_either_mode(self, db, tmp_path):
+        blob = self._exported_and_wiped(db, tmp_path)
+        results = dbexport.import_jen(blob, strict_plugins=True)
+        assert not [r for r in results if r.startswith(("⚠️", "❌"))], results
 
 
 class TestSelfHealPath:

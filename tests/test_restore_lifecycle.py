@@ -85,7 +85,7 @@ def world(tmp_path, monkeypatch):
     bundle.write_bytes(build(members, PASS))
 
     events = []
-    state = types.SimpleNamespace(active=True, rc={}, healthy=True, apply_error=None, imports=[])
+    state = types.SimpleNamespace(active=True, rc={}, healthy=True, apply_error=None, imports=[], plugin_failure=False)
 
     def fake_run(argv, **kw):
         assert argv[0] == "systemctl" and isinstance(argv, list)
@@ -122,11 +122,11 @@ def world(tmp_path, monkeypatch):
     monkeypatch.setattr(restore, "_import_db", fake_import)
     monkeypatch.setattr(restore, "_point_config_at", lambda cfg: events.append(("config", str(cfg))))
 
-    def fake_restore_db(bundle_dir, config_file):
+    def fake_restore_db(bundle_dir, config_file, lenient_plugins=False):
         events.append(("apply-db",))
         if state.apply_error:
             raise RuntimeError(state.apply_error)
-        return ["✅ restored"]
+        return _plugin_failure_outcome(state, lenient_plugins) or ["✅ restored"]
 
     monkeypatch.setattr(restore, "restore_jen_db", fake_restore_db)
 
@@ -140,6 +140,22 @@ def world(tmp_path, monkeypatch):
 
 def _run(w, **kw):
     return restore.run(str(w.bundle), PASS, etc_jen=str(w.etc), content_dir=str(w.content), **kw)
+
+
+PLUGIN_FAILURE_LINE = "❌ wol.wol_hosts: row import failed and was rolled back (simulated)"
+
+
+def _plugin_failure_outcome(state, lenient_plugins):
+    """What the real restore_jen_db() does with dbexport.import_jen(strict_plugins=not lenient_plugins) when a
+    plugin whose code is present loses data: raise PluginRestoreError (strict) or hand back a "❌" line
+    (lenient). None when nothing was made to fail."""
+    if not getattr(state, "plugin_failure", False):
+        return None
+    from jen.services import dbexport
+
+    if not lenient_plugins:
+        raise dbexport.PluginRestoreError([("wol", ["wol_hosts"], "row import failed and was rolled back (simulated)")])
+    return [PLUGIN_FAILURE_LINE]
 
 
 class TestSnapshot:
@@ -485,13 +501,16 @@ def dbworld(world, monkeypatch):
     monkeypatch.setattr(restore, "_import_db", fake_import)
     world.db_before = json.loads(json.dumps(db))
 
-    def fake_restore_db(bundle_dir, config_file):
+    def fake_restore_db(bundle_dir, config_file, lenient_plugins=False):
         world.events.append(("apply-db",))
         db["users"] = [{"id": 1, "name": "restored-admin"}]  # the first table lands ...
         if world.state.apply_error:
             raise RuntimeError(world.state.apply_error)  # ... then the import dies
         db["settings"] = [{"k": "a", "v": "restored"}]
-        return ["ok"]
+        # ... and a plugin's own data is the LAST thing to come back: in strict mode its failure raises
+        # (dbexport.import_jen(strict_plugins=True) does), in lenient mode it is a "❌" line
+        lines = _plugin_failure_outcome(world.state, lenient_plugins)
+        return lines or ["ok"]
 
     monkeypatch.setattr(restore, "restore_jen_db", fake_restore_db)
     return world
@@ -581,6 +600,76 @@ class TestMidApplyFailuresRestoreThePreviousState:
         assert _run(w) == 0
         assert w.db["settings"][0]["v"] == "restored"
         assert (w.etc / "mfa_key").read_bytes() == b"NEW-MFA"
+
+
+class TestAPluginThatLostItsDataIsNotARecovery:
+    """v5.67.0-beta.11 (Q123, item d) — a recovery that lost plugin data used to print "restored", start Jen,
+    pass the health wait and exit 0. For a plugin whose code is present it is a FAILED restore now: the same
+    rollback every other failed apply gets, byte for byte — unless the operator says --lenient-plugins."""
+
+    def test_strict_is_the_default_and_rolls_everything_back(self, dbworld, capsys):
+        w = dbworld
+        w.before_etc, w.before_content = _tree(w.etc), _tree(w.content)
+        w.state.plugin_failure = True
+        assert _run(w) == 1
+        err = capsys.readouterr().err
+        assert "wol" in err and "wol_hosts" in err, "the error names the plugin and the table"
+        assert "rolled back" in err
+        # DB rows, /etc/jen and the content directory are exactly what they were before the restore
+        assert _tree(w.etc) == w.before_etc and _tree(w.content) == w.before_content
+        assert w.db == w.db_before
+        assert w.db["users"][0]["name"] == "old-admin"  # the first table that DID land is back too
+        assert ("systemctl", "start", "jen") in w.events  # it was running: it runs again
+        assert not any(e[0] == "health" for e in w.events)  # the apply failed before Jen was ever started
+
+    def test_lenient_accepts_it_prints_it_and_records_it(self, dbworld, capsys):
+        w = dbworld
+        w.state.plugin_failure = True
+        assert _run(w, lenient_plugins=True) == 0
+        out = capsys.readouterr().out
+        assert "--lenient-plugins was used" in out and PLUGIN_FAILURE_LINE in out
+        snap = _snapshot_dirs(w)[0]
+        report = (snap / "restore-report.txt").read_text(encoding="utf-8")
+        assert "LENIENT" in report and PLUGIN_FAILURE_LINE in report
+        assert w.db["settings"][0]["v"] == "restored"  # everything else was restored
+
+    def test_a_restore_with_no_plugin_failure_says_strict_in_its_report(self, dbworld, capsys):
+        w = dbworld
+        assert _run(w) == 0
+        assert "--lenient-plugins" not in capsys.readouterr().out
+        report = (_snapshot_dirs(w)[0] / "restore-report.txt").read_text(encoding="utf-8")
+        assert "plugin data: strict" in report and "accepted" not in report
+
+    def test_lenient_with_nothing_to_accept_says_so(self, dbworld, capsys):
+        w = dbworld
+        assert _run(w, lenient_plugins=True) == 0
+        out = capsys.readouterr().out
+        assert "(none occurred)" in out
+
+    def test_the_flag_reaches_run_from_the_command_line(self, world, monkeypatch):
+        seen = {}
+        monkeypatch.setattr(restore.getpass, "getpass", lambda prompt="": PASS)
+        monkeypatch.setattr(restore, "run", lambda bundle, passphrase, **kw: seen.update(kw) or 0)
+        assert restore.main([str(world.bundle), "--lenient-plugins"]) == 0
+        assert seen["lenient_plugins"] is True
+        seen.clear()
+        assert restore.main([str(world.bundle)]) == 0
+        assert seen["lenient_plugins"] is False
+
+    def test_the_rollback_import_stays_lenient(self):
+        """rolling back re-imports a snapshot taken moments ago; a plugin hiccup there must not turn a
+        rollback into a second failure."""
+        import inspect
+
+        assert "strict_plugins" not in inspect.getsource(restore._import_db)
+
+    def test_install_sh_passes_the_flag_through_and_documents_it(self):
+        import pathlib
+
+        sh = (pathlib.Path(__file__).resolve().parent.parent / "install.sh").read_text(encoding="utf-8")
+        assert '--lenient-plugins) RESTORE_LENIENT="--lenient-plugins"' in sh
+        assert "${RESTORE_LENIENT:-}" in sh
+        assert sh.count("--lenient-plugins (accept a plugin failing to restore)") == 2  # header + --help
 
 
 class TestExistingFilesNotInTheBundle:

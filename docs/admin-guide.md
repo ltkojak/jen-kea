@@ -1377,6 +1377,24 @@ sudo systemctl restart jen
 
 ---
 
+## Kea data: exports, backups and migration (v5.67.0-beta.11)
+
+**Settings → Databases** offers three Kea groups, and they are not the same thing:
+
+| Group | Tables | What it is for |
+|---|---|---|
+| **Kea host reservations (IPv4 and IPv6)** | `hosts`, `dhcp4_options`, `dhcp6_options`, `ipv6_reservations` | Every permanent host reservation with its per-host options. This is what the **scheduled backup**, **Back Up Now**, and the Recovery step of the setup wizard save, and the default for a Kea migration. |
+| **Kea host reservations — IPv4 only** | `hosts`, `dhcp4_options` | The IPv4 half, kept for exports made before the group above existed. |
+| **Active leases** | `lease4` | A point-in-time snapshot, on request only. Leases are transient — they expire and renew on their own — so they are never part of a backup. |
+
+A backup is *reservations*, not "Kea's database": it carries no leases and none of Kea's configuration (that lives in `kea-dhcp4.conf`, which Jen keeps a revision history of under Servers → Config history). A table that does not exist on your Kea is left out of the file rather than written empty.
+
+The Kea export is streamed to disk one row at a time, like the Jen export, so a large `lease4` never has to fit in memory.
+
+**Export format 3.** A binary column — a reservation's identifier, a lease's hardware address, an option's value — is written as `{"$bin": "<hex>"}`, a tagged object that cannot be confused with text that merely looks like hex, and the file's `_meta.binary_columns` lists which columns were binary. On import Jen decodes by the **target's own column types**: a tagged value always becomes bytes; a bare string bound for a binary column in an older file (formats 1 and 2 wrote hex text) is decoded as hex; a value that is not valid hex **refuses that table**, naming the column and row, and imports nothing into it — the other tables in the file are still imported. A database-to-database **migration** copies the bytes as bytes and never goes through the file format at all. Restores run in foreign-key order: `hosts` before the option and IPv6 rows that point at it, whatever order the file lists them.
+
+> **If you restored or migrated Kea reservations through Jen before 5.67.0-beta.11** every identifier on those rows was stored as the text of its own hex (a MAC stored as the twelve characters `341343e60e2a`), and those clients never matched their reservation again. The Health Center's **Kea reservations have plausible identifiers** check finds them, and **Settings → Databases → Import → Check reservation identifiers** shows exactly which rows, with before and after, and repairs the ones you tick. See [Troubleshooting](troubleshooting.md#reservations-restored-by-an-older-jen-never-match-their-client).
+
 ## Recovery Bundle (v5.44.0)
 
 ### Recover Jen on a new machine
@@ -1410,7 +1428,9 @@ You'll be prompted for the passphrase (never pass it as a command-line argument 
 4. **Start and health-check** — Jen is started again (only if it was running before, or you passed `--start`) and `/api/v1/health` is polled for up to 60 seconds on the restored `[server] http_port`.
 5. **Roll back on failure** — if anything raises during the apply, or Jen does not come up healthy, the snapshot is put back (config, content, database), Jen is started again, and the command exits non-zero naming the snapshot directory.
 
-Flags: `--no-stop` skips the stop/start (use it in Docker, or where Jen is not a systemd unit — stop it yourself first), `--start` starts Jen afterwards even if it was not running, `--force` allows a bundle from a newer Jen. Snapshots are small and are kept. To undo a restore that finished but turned out wrong: `sudo ./install.sh --rollback /path/to/pre-restore-<timestamp>` (add `--no-stop` if Jen is not a systemd unit).
+**A plugin that lost its data fails the restore (v5.67.0-beta.11).** For a plugin whose code is on this machine, a failed migration replay, a failed row import or a failed invariant check used to print a warning, start Jen, pass the health wait and exit 0 over missing data. It is now an error that names the plugin and the table and takes the same rollback as any failed apply: Jen is as it was before the restore, byte for byte. `--lenient-plugins` is the explicit escape — the failures are printed, and recorded with the snapshot in `restore-report.txt`. A plugin whose code is **not** on this machine stays a warning: its data is still in the bundle for a later restore. The Settings → Databases import page shows the same failures as errors, not as a line among the successes.
+
+Flags: `--no-stop` skips the stop/start (use it in Docker, or where Jen is not a systemd unit — stop it yourself first), `--start` starts Jen afterwards even if it was not running, `--force` allows a bundle from a newer Jen, `--lenient-plugins` accepts a plugin's data failing to restore (below). Snapshots are small and are kept. To undo a restore that finished but turned out wrong: `sudo ./install.sh --rollback /path/to/pre-restore-<timestamp>` (add `--no-stop` if Jen is not a systemd unit).
 
 Afterward:
 
@@ -1543,6 +1563,7 @@ same run as JSON for scripting (`?partial=1` returns the HTML fragment).
 | **TLS certificate expiry** | days until Jen's HTTPS certificate expires — warns at 30 days, fails at 7 | Settings → Access & Security → upload a renewed certificate |
 | **Jen database** / **Kea database** | a `SELECT 1` round trip and its latency | the database host / credentials |
 | **Database schema current** | the applied migration version matches the latest | restart Jen (migrations run at startup) |
+| **Kea reservations have plausible identifiers** (v5.67.0-beta.11) | `hosts` rows whose identifier (hw-address, DUID or client-id) is the ASCII text of its own hex — the mark an older restore or migration left; `skip` for a subnet-restricted account (the count is fleet-wide) | Settings → Databases → Import → Check reservation identifiers |
 | **Kea host helper installed** | each SSH-configured Kea host has recorded a `jen-kea-helper` version, and (v5.20.0) whether the legacy `python3` grant is still present | Settings → Kea → SSH → Install helper; **Remove legacy grant** (or remove `/etc/sudoers.d/jen-kea` by hand) |
 | **Background workers running** | the scheduler + alert loop started with this process | only reported under gunicorn, not the werkzeug fallback |
 | **Jen up to date** | always `skip` here — run the check from **Settings → System → Updates** (it contacts GitHub) | — |

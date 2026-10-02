@@ -781,11 +781,33 @@ def _plugin_invariant_violations(conn) -> list[tuple[str, str]]:
     return violations
 
 
-def import_jen(file_bytes, tables_to_restore=None, truncate=True):
+class PluginRestoreError(RuntimeError):
+    """A plugin whose CODE IS PRESENT on this machine lost data in a restore (v5.67.0-beta.11, Q123, item d).
+    Raised by import_jen(strict_plugins=True) after every plugin has been tried, so the message names ALL of
+    them; `.failures` is [(plugin_id, [tables], reason), ...]. A plugin whose code is absent is never an
+    error — its data is still in the file, for a later install to pick up (Q107)."""
+
+    def __init__(self, failures):
+        self.failures = failures
+        named = "; ".join(
+            f"{pid} (table{'s' if len(tbls) != 1 else ''} {', '.join(tbls) or '?'}): {why}"
+            for pid, tbls, why in failures
+        )
+        super().__init__(f"plugin data was NOT fully restored — {named}")
+
+
+def import_jen(file_bytes, tables_to_restore=None, truncate=True, strict_plugins=False):
     """
     Restore Jen DB tables from export bytes.
     tables_to_restore: list of table names to restore, or None for all in file.
     truncate: if True, clears existing rows before inserting (replace mode).
+    strict_plugins: (v5.67.0-beta.11, Q123, item d) for a plugin whose code is present here, a failed
+        migration replay, a failed row import or a failed invariant check RAISES PluginRestoreError (after
+        every plugin was tried) instead of being a line in the result list. jen.tools.restore runs strict by
+        default and turns the error into a rollback — a recovery that lost plugin data used to print
+        "restored", start Jen and exit 0. The Databases import page stays non-strict (the operator is
+        watching, and chose a file) but the same failures are now "❌" lines it shows as ERRORS, never a "⚠️"
+        among successes.
     Returns list of result strings.
 
     v5.66.0-beta.5 (Q107) — plugin-owned tables restore in a fixed order, never blindly
@@ -836,6 +858,7 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True):
     selected = _validate_tables(selected_raw, known)
     selected_set = set(selected)
     results = []
+    failures = []  # (plugin_id, [tables], reason) — a plugin whose code is HERE and whose data did not come back
 
     # Which plugins get their migrations cleared and re-run is a SEPARATE question from which
     # tables have row data to import — a format-1 export (or a format-2 one for a table that
@@ -919,7 +942,8 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True):
                 db.commit()
             ok, msg, _count = _plugins.run_plugin_migrations(manifest)
             if not ok:
-                results.append(f"⚠️ {pid}: migration replay failed ({msg}) — its tables/data may be incomplete")
+                failures.append((pid, list(plugin_tables_all), f"migration replay failed ({msg})"))
+                results.append(f"❌ {pid}: migration replay failed ({msg}) — its tables/data may be incomplete")
                 continue
 
             # Only the tables the export's own `data` actually carries get rows imported — a
@@ -928,14 +952,23 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True):
             plugin_tables_to_import = [t for t in plugin_tables_all if t in selected_set]
             if not plugin_tables_to_import:
                 continue
+            current_tbl = None
             try:
                 conn.begin()
                 for tbl in plugin_tables_to_import:
+                    current_tbl = tbl
                     _import_rows(conn, tbl)
                 conn.commit()
             except Exception as e:
                 conn.rollback()
-                results.append(f"⚠️ {pid}: row import failed and was rolled back ({e})")
+                failures.append(
+                    (
+                        pid,
+                        [current_tbl] if current_tbl else list(plugin_tables_to_import),
+                        f"row import failed and was rolled back ({e})",
+                    )
+                )
+                results.append(f"❌ {pid}.{current_tbl}: row import failed and was rolled back ({e})")
     finally:
         conn.close()
 
@@ -950,6 +983,11 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True):
             f"⚠️ invariant check: recorded migration(s) with a missing table ({named}) — "
             f"Jen will repair this automatically the next time it starts"
         )
+        for pid, tbl in violations:
+            failures.append((pid, [tbl], "a recorded migration has no table behind it"))
+
+    if strict_plugins and failures:
+        raise PluginRestoreError(failures)
 
     return results
 

@@ -255,6 +255,21 @@ a throwaway VM, never against a live box, before you need it for real.
    this release never had them to restore in the first place, so this
    check only proves anything on a bundle taken after upgrading).
 
+7. **A plugin that lost its data fails the drill (v5.67.0-beta.11).** If a
+   bundled plugin whose code is on the scratch VM cannot get its data back
+   (its migration replay, its row import or the final invariant check
+   fails), `jen.tools.restore` now rolls the WHOLE restore back — Jen,
+   config, content and database as they were before, byte for byte — exits
+   non-zero and names the plugin and the table, instead of printing
+   "restored" over missing data. That is the answer to want from a drill:
+   fix what it names (usually a plugin version older than the bundle's),
+   then restore again. `sudo ./install.sh --restore <bundle>
+   --lenient-plugins` is the explicit escape for the day you would rather
+   have everything else back and deal with that plugin by hand; the
+   accepted failures are printed and recorded in `restore-report.txt` in
+   the pre-restore snapshot directory. A plugin whose code is simply not on
+   the VM stays a warning, as before — its data is still in the bundle.
+
 **What a wrong passphrase looks like, verified against the real
 `jen.tools.restore`:**
 ```

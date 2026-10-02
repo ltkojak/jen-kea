@@ -42,7 +42,8 @@
 #                                    install/upgrade, not instead of one.
 #                                    Stops Jen, snapshots what it replaces, restarts and
 #                                    health-checks, and rolls back on failure. Flags:
-#                                    --no-stop (Docker / not a systemd unit), --start, --force
+#                                    --no-stop (Docker / not a systemd unit), --start, --force,
+#                                    --lenient-plugins (accept a plugin failing to restore)
 #    sudo ./install.sh --rollback <snapshot dir>
 #                                    Undo a restore from its pre-restore snapshot
 #    sudo ./install.sh --help        Show this message
@@ -136,7 +137,8 @@ Usage:
                                    install/upgrade, not instead of one.
                                    Stops Jen, snapshots what it replaces, restarts and
                                    health-checks, and rolls back on failure. Flags:
-                                   --no-stop (Docker / not a systemd unit), --start, --force
+                                   --no-stop (Docker / not a systemd unit), --start, --force,
+                                   --lenient-plugins (accept a plugin failing to restore)
   sudo ./install.sh --rollback <snapshot dir>
                                    Undo a restore from its pre-restore snapshot
   sudo ./install.sh --help        Show this message
@@ -179,6 +181,7 @@ while [[ $# -gt 0 ]]; do
         --force)       RESTORE_FORCE="--force" ;;
         --no-stop)     RESTORE_NOSTOP="--no-stop" ;;
         --start)       RESTORE_START="--start" ;;
+        --lenient-plugins) RESTORE_LENIENT="--lenient-plugins" ;;
         --rollback)
             MODE_RESTORE=true
             shift
@@ -2304,7 +2307,7 @@ _run_restore_mode() {
         exit 0
     fi
     if [[ -z "$RESTORE_BUNDLE" ]]; then
-        fatal "Usage: sudo ./install.sh --restore /path/to/bundle.tar.enc [--no-stop] [--start] [--force]"
+        fatal "Usage: sudo ./install.sh --restore /path/to/bundle.tar.enc [--no-stop] [--start] [--force] [--lenient-plugins]"
     fi
     if [[ ! -f "$RESTORE_BUNDLE" ]]; then
         fatal "Bundle not found: $RESTORE_BUNDLE"
@@ -2321,7 +2324,7 @@ _run_restore_mode() {
     # (this one was missed in step 2 — --etc-jen/--content-dir default to
     # extensions.CONFIG_DIR/CONTENT_DIR, which fall back to the historical
     # defaults without JEN_CONFIG_DIR/JEN_CONTENT_DIR set).
-    if ! (cd "$(app_pyroot)" && JEN_ROOT="$(app_pyroot)" JEN_CONFIG_DIR="$CONFIG_DIR" JEN_CONTENT_DIR="$CONTENT_DIR" "$RESTORE_PY" -m jen.tools.restore "$RESTORE_BUNDLE" --etc-jen "$CONFIG_DIR" --content-dir "$CONTENT_DIR" ${RESTORE_FORCE:-} ${RESTORE_NOSTOP:-} ${RESTORE_START:-}); then
+    if ! (cd "$(app_pyroot)" && JEN_ROOT="$(app_pyroot)" JEN_CONFIG_DIR="$CONFIG_DIR" JEN_CONTENT_DIR="$CONTENT_DIR" "$RESTORE_PY" -m jen.tools.restore "$RESTORE_BUNDLE" --etc-jen "$CONFIG_DIR" --content-dir "$CONTENT_DIR" ${RESTORE_FORCE:-} ${RESTORE_NOSTOP:-} ${RESTORE_START:-} ${RESTORE_LENIENT:-}); then
         fatal "Restore failed — see the messages above."
     fi
     ok "Restore complete."
