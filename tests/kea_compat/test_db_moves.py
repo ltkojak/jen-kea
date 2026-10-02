@@ -22,6 +22,7 @@ Every test skips unless KEA_COMPAT_URL AND KEA_COMPAT_DB_HOST are set (kea-compa
 import json
 import os
 import re
+import socket
 
 import pymysql
 import pymysql.cursors
@@ -131,9 +132,24 @@ def add_host(c, n, *, itype=0, sub4=71, sub6=None, hostname=None, host_id=None):
         return host_id if host_id is not None else cur.lastrowid
 
 
+def _requires_a_value(c, table, column):
+    """True when the REAL table has `column` NOT NULL without a default — the 3.x options tables' `client_classes`
+    (longtext NOT NULL) is the one this found: an INSERT that omits it is an error in strict mode."""
+    r = rows(
+        c,
+        "SELECT is_nullable, column_default FROM information_schema.columns "
+        "WHERE table_schema = DATABASE() AND table_name = %s AND column_name = %s",
+        table,
+        column,
+    )
+    return bool(r) and r[0]["is_nullable"] == "NO" and r[0]["column_default"] is None
+
+
 def add_option(c, table, host_id, code, value: bytes, *, scope=3, tag="q127", **extra):
     cols = {"code": code, "value": value, "formatted_value": tag, "space": "dhcp4", "scope_id": scope}
     cols["host_id"] = host_id
+    if _requires_a_value(c, table, "client_classes"):
+        cols["client_classes"] = ""
     cols.update(extra)
     with c.cursor() as cur:
         cur.execute(
@@ -142,11 +158,16 @@ def add_option(c, table, host_id, code, value: bytes, *, scope=3, tag="q127", **
         return cur.lastrowid
 
 
+def v6(address: str) -> bytes:
+    """The REAL schema stores ipv6_reservations.address as binary(16) (every Kea 3.x this suite runs against)."""
+    return socket.inet_pton(socket.AF_INET6, address)
+
+
 def add_v6(c, host_id, address):
     with c.cursor() as cur:
         cur.execute(
             "INSERT INTO ipv6_reservations (address, prefix_len, type, host_id) VALUES (%s, 128, 0, %s)",
-            (address, host_id),
+            (v6(address), host_id),
         )
         return cur.lastrowid
 
@@ -232,6 +253,7 @@ KEA_TABLES = (
     "dhcp6_options",
     "ipv6_reservations",
     "lease4",
+    "lease6",
     "host_identifier_type",
     "dhcp_option_scope",
     "schema_version",
@@ -364,8 +386,8 @@ def test_overwrite_updates_in_place_and_keeps_the_children_the_file_does_not_car
     assert [(r["host_id"], r["hostname"]) for r in hs] == [(h, "q127-new")], f"updated in place, id stable: {hs}"
     v4 = [r["formatted_value"] for r in rows(kea, "SELECT formatted_value FROM dhcp4_options WHERE host_id = %s", h)]
     assert v4 == ["q127-new-dns"], f"the file's IPv4 options replace the host's: {v4}"
-    v6 = rows(kea, "SELECT address FROM ipv6_reservations WHERE host_id = %s", h)
-    assert [r["address"] for r in v6] == ["2001:db8:71::3"], f"the IPv6 reservation must survive: {v6}"
+    kept = rows(kea, "SELECT address FROM ipv6_reservations WHERE host_id = %s", h)
+    assert [bytes(r["address"]) for r in kept] == [v6("2001:db8:71::3")], f"the IPv6 reservation must survive: {kept}"
     o6 = rows(kea, "SELECT formatted_value FROM dhcp6_options WHERE host_id = %s", h)
     assert [r["formatted_value"] for r in o6] == ["q127-v6-dns"], f"the DHCPv6 option must survive: {o6}"
 
@@ -406,17 +428,10 @@ def test_the_backup_carries_host_scoped_options_only(kea):
     h = add_host(kea, 7)
     add_option(kea, "dhcp4_options", h, 6, bytes([1, 1, 1, 1]), tag="q127-host-scope", scope=3)
     add_option(kea, "dhcp4_options", None, 6, bytes([2, 2, 2, 2]), tag="q127-global-scope", scope=0)
-    add_option(kea, "dhcp4_options", None, 6, bytes([3, 3, 3, 3]), tag="q127-subnet-scope", scope=1, dhcp4_subnet_id=71)
-    add_option(
-        kea,
-        "dhcp4_options",
-        None,
-        6,
-        bytes([4, 4, 4, 4]),
-        tag="q127-class-scope",
-        scope=2,
-        dhcp_client_class="q127-class",
-    )
+    # the subnet and class rows carry no subnet id / class name: those are foreign keys into the config-backend
+    # tables, which this database has no rows for; what the backup must filter on is scope_id and host_id
+    add_option(kea, "dhcp4_options", None, 6, bytes([3, 3, 3, 3]), tag="q127-subnet-scope", scope=1)
+    add_option(kea, "dhcp4_options", None, 6, bytes([4, 4, 4, 4]), tag="q127-class-scope", scope=2)
     content, _ = dbexport.export_kea("reservations_all")
     payload = json.loads(content)
     mine = [

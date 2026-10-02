@@ -45,7 +45,8 @@ def _conn(database=None):
 @pytest.fixture
 def kea_tables(db):
     """The Kea-side tables, emptied before AND after: these tests own whatever is in them."""
-    tables = ["hosts", "dhcp4_options", "dhcp6_options", "ipv6_reservations", "lease4"]
+    # children before parents: Kea's own foreign keys (Q127: this suite's schema has them now) say so
+    tables = ["ipv6_reservations", "dhcp6_options", "dhcp4_options", "hosts", "lease4"]
 
     def wipe():
         db.commit()
@@ -74,8 +75,8 @@ def _seed(db):
             ],
         )
         cur.executemany(
-            "INSERT INTO dhcp4_options (option_id, code, value, formatted_value, space, host_id) "
-            "VALUES (%s, %s, %s, %s, %s, %s)",
+            "INSERT INTO dhcp4_options (option_id, code, value, formatted_value, space, host_id, scope_id, "
+            "client_classes) VALUES (%s, %s, %s, %s, %s, %s, 3, '')",
             [
                 (1, 6, NOT_UTF8, None, "dhcp4", 1),
                 (2, 43, None, "text-value", "dhcp4", 2),
@@ -102,8 +103,8 @@ def _seed(db):
             "VALUES (1, '2001:db8::10', 128, 0, 7, 7), (2, '2001:db8:1::', 56, 2, NULL, 7)"
         )
         cur.execute(
-            "INSERT INTO dhcp6_options (option_id, code, value, formatted_value, space, host_id) "
-            "VALUES (1, 23, %s, NULL, 'dhcp6', 7), (2, 24, NULL, 'example.org', 'dhcp6', 7)",
+            "INSERT INTO dhcp6_options (option_id, code, value, formatted_value, space, host_id, scope_id, "
+            "client_classes) VALUES (1, 23, %s, NULL, 'dhcp6', 7, 3, ''), (2, 24, NULL, 'example.org', 'dhcp6', 7, 3, '')",
             (NOT_UTF8 + bytes([0]),),
         )
     db.commit()
@@ -181,7 +182,7 @@ class TestRoundTripThroughExportAndImport:
         content, _ = dbexport.export_kea(group)
         kea_tables.commit()
         with kea_tables.cursor() as cur:
-            for t in ("hosts", "dhcp4_options", "dhcp6_options", "ipv6_reservations", "lease4"):
+            for t in ("ipv6_reservations", "dhcp6_options", "dhcp4_options", "lease4", "hosts"):
                 cur.execute(f"DELETE FROM `{t}`")
         kea_tables.commit()
 
