@@ -206,10 +206,10 @@ class TestDesktopScreenshots:
             "    const t = find();"
             "    if (!t) return false;"
             "    r = t.closest('.card').getBoundingClientRect();"
-            "    if (r.top >= 0 && r.top < 150) return true;"
-            "    window.scrollBy(0, r.top - 60);"
+            "    if (r.top >= 100 && r.top < 160) return true;"
+            "    window.scrollBy(0, r.top - 125);"
             "  }"
-            "  return r ? (r.top >= 0 && r.top < 300) : false;"
+            "  return r ? (r.top >= 60 && r.top < 300) : false;"
             "}"
         )
         assert in_view, "reports: Production's chart card never settled near the top of the frame"
