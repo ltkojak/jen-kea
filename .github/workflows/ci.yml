@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+# v5.67.0-beta.10 (Q122) — see tests.yml: every step under pipefail, enforced by tests/test_workflow_hygiene.py.
+defaults:
+  run:
+    shell: bash -eo pipefail {0}
+
 jobs:
   test:
     uses: ./.github/workflows/tests.yml

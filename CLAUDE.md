@@ -389,9 +389,12 @@ release after it, every MINOR and every non-trivial PATCH ships beta-first:
    keeps its old baseline through promotion (still true, still worth reading),
    and the **first release commit after promotion** is what starts a fresh
    `docs/upgrading.md` at the new baseline (the old page archives to
-   `docs/release-history/upgrading-<old>-to-<new>.md`) and moves the test
-   floor forward to that release's own version — an un-numbered but standard
-   part of the next Q, not the promotion itself.
+   `docs/release-history/upgrading-<old>-to-<new>.md`), moves the test
+   floor forward to that release's own version, **and moves
+   `JEN_STABLE_VERSION` (top of `.github/workflows/tests.yml`) — the stable
+   release the upgrade-from-stable CI job starts from — to the newly promoted
+   one** — an un-numbered but standard part of the next Q, not the promotion
+   itself.
 5. A PATCH to a *stable* release while a later beta soaks is the one branch case:
    `git checkout -b release/X.Y vX.Y.Z` → cherry-pick → bump → tag from that branch →
    delete the branch. Trivial fixes to a beta itself skip the soak (`-beta.N+1`).

@@ -10,6 +10,11 @@ on:
         description: 'Version tag (e.g. v3.7.5)'
         required: true
 
+# v5.67.0-beta.10 (Q122) — see tests.yml: every step under pipefail, enforced by tests/test_workflow_hygiene.py.
+defaults:
+  run:
+    shell: bash -eo pipefail {0}
+
 jobs:
   resolve:
     # v5.66.0-beta.7 (Q109, item d) — a tag is a mutable pointer, and this workflow used to

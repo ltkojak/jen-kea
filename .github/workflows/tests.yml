@@ -22,6 +22,25 @@ on:
 permissions:
   contents: read
 
+# v5.67.0-beta.10 (Q122) — every step runs under `bash -eo pipefail`, never the
+# runner's default `bash -e`. Without pipefail a pipeline's status is its LAST
+# command's: `install.sh … | tee log` reported tee's success whatever the
+# installer did. tests/test_workflow_hygiene.py refuses a workflow that drops
+# this, a step that overrides it, `! grep` (bash exempts a negated command from
+# errexit, so every such "assertion" was a no-op) and `cmd | grep -q` (under
+# pipefail an early-exiting grep SIGPIPEs the writer: fails for the wrong reason).
+defaults:
+  run:
+    shell: bash -eo pipefail {0}
+
+env:
+  # The stable release the upgrade-from-stable job starts from — PINNED, not
+  # "whatever latest is": a new release must never silently change what an
+  # old test means. Moved in the first release commit after a promotion
+  # (CLAUDE.md "Release channels", step 4); tests/test_workflow_hygiene.py
+  # checks its shape and that it is never newer than the tree.
+  JEN_STABLE_VERSION: '5.66.0'
+
 jobs:
   pytest:
     name: pytest (py${{ matrix.python-version }} · ${{ matrix.db-image }})
@@ -300,8 +319,11 @@ jobs:
           set -e
           echo "$out"
           [[ $rc -ne 0 ]]
-          echo "$out" | grep -q "writable by group or other"
-          echo "refused as expected — rc=$rc"
+          grep -q "writable by group or other" <<< "$out"
+          # v5.67.0-beta.10 (Q122) — and WHICH directory: the refusal names the
+          # exact ancestor, which is what the operator's one-line fix targets
+          grep -q "existing parent /opt/permissive-parent is writable by group or other" <<< "$out"
+          echo "refused as expected, naming /opt/permissive-parent — rc=$rc"
 
   # v5.67.0 (Q113) — install.sh had never actually been run by anything
   # before this: CI provisioned /opt/jen and /etc/jen by hand and the
@@ -372,55 +394,10 @@ jobs:
       - name: Install dependencies (for the Kea config generator)
         run: pip install -q -r requirements.txt
 
-      - name: Create Jen's database
-        # Same server as Kea's, a separate database and user — the
-        # topology install.sh's own wizard describes for "Jen DB host"
-        # defaulting to the Kea DB host.
-        run: |
-          mysql -h 127.0.0.1 -u root -pci_root_pw -e "
-            CREATE DATABASE jen;
-            CREATE USER 'jen'@'%' IDENTIFIED BY 'jen_pw';
-            GRANT ALL PRIVILEGES ON jen.* TO 'jen'@'%';
-            FLUSH PRIVILEGES;"
-
-      - name: Install the Kea MySQL schema
-        # Same recipe as kea-compat.yml: no kea-admin image is published,
-        # so borrow the daemon image (it already has ISC's apk repo
-        # configured) at the SAME version the schema must match.
-        run: |
-          docker pull "$KEA_IMAGE"
-          docker run --rm --network host --entrypoint ash "$KEA_IMAGE" -c '
-            set -e
-            apk add --no-cache curl bash >/dev/null
-            curl -1sLf "https://dl.cloudsmith.io/public/isc/kea-3-2/setup.alpine.sh" | bash >/dev/null
-            apk update >/dev/null
-            apk add --no-cache mariadb-client "isc-kea-admin~=3.2.0" >/dev/null
-            echo "[client]" > /etc/my.cnf.d/nossl.cnf
-            echo "skip-ssl" >> /etc/my.cnf.d/nossl.cnf
-            kea-admin db-init mysql -h 127.0.0.1 -u kea -p kea_pw -n kea
-          '
-
-      - name: Start kea-dhcp4
-        run: |
-          mkdir -p kea-conf
-          python -m tests.kea_compat.kea_config > kea-conf/kea-dhcp4.conf
-          printf '%s' jen > kea-conf/jen-api.user
-          printf '%s' jen_api_pw > kea-conf/jen-api.pw
-          chmod 644 kea-conf/jen-api.user kea-conf/jen-api.pw
-          docker run -d --name kea --network host --tmpfs /var/run/kea \
-            -e MARIADB_TLS_DISABLE_PEER_VERIFICATION=1 \
-            -v "$PWD/kea-conf:/etc/kea:ro" "$KEA_IMAGE"
-          for i in $(seq 1 30); do
-            if curl -sf -m 2 -H 'Content-Type: application/json' \
-                 -u jen:jen_api_pw -d '{"command":"version-get"}' http://127.0.0.1:8004/ >/dev/null; then
-              echo "kea-dhcp4 answered after ${i}s"
-              exit 0
-            fi
-            sleep 1
-          done
-          echo "::error::kea-dhcp4 never answered on :8004"
-          docker logs kea
-          exit 1
+      - name: Jen's database, Kea's schema and a real kea-dhcp4
+        uses: ./.github/actions/kea-fixture
+        with:
+          kea-image: ${{ env.KEA_IMAGE }}
 
       - name: Build this commit's tarball
         run: |
@@ -466,7 +443,7 @@ jobs:
           systemctl is-enabled --quiet jen
           echo "service active and enabled"
 
-          curl -sf http://127.0.0.1:5050/api/v1/health | grep -q jen_version
+          grep -q jen_version < <(curl -sf http://127.0.0.1:5050/api/v1/health)
           echo "health endpoint answers"
 
           [[ "$(sudo stat -c '%U:%G' /opt/jen/current/app/run.py)" == "root:root" ]]
@@ -485,7 +462,7 @@ jobs:
           echo "the three units are installed"
 
           cookie="$RUNNER_TEMP/cookies.txt"
-          csrf=$(curl -sc "$cookie" http://127.0.0.1:5050/login | grep -oP 'name="csrf_token" value="\K[^"]+' | head -1)
+          csrf=$(curl -sc "$cookie" http://127.0.0.1:5050/login | grep -m1 -oP 'name="csrf_token" value="\K[^"]+')
           [[ -n "$csrf" ]]
           code=$(curl -sb "$cookie" -c "$cookie" -X POST http://127.0.0.1:5050/login \
             -d "username=admin&password=ci-test-passw0rd-!&csrf_token=$csrf" \
@@ -509,7 +486,8 @@ jobs:
           # sudo has to wrap that open too, not just `tr`, since
           # /proc/<pid>/environ is only readable by its own owner
           # (www-data) or root.
-          sudo sh -c "tr '\\0' '\\n' < /proc/$pid/environ" | grep -q '^INVOCATION_ID='
+          proc_env=$(sudo sh -c "tr '\\0' '\\n' < /proc/$pid/environ")
+          grep -q '^INVOCATION_ID=' <<< "$proc_env"
           echo "INVOCATION_ID present in the running gunicorn worker's own environment"
 
       # v5.67.0-beta.6 (Q118) — the install CI job never opened a single
@@ -525,182 +503,31 @@ jobs:
           system_page=$(curl -sb "$cookie" -c "$cookie" http://127.0.0.1:5050/settings/system)
           grep -q 'Update Now' <<< "$system_page"
           grep -q 'data-confirm="Restart Jen now?"' <<< "$system_page"
-          ! grep -q "container image.s job" <<< "$system_page"
-          ! grep -q 'Restart the container to restart Jen' <<< "$system_page"
+          if grep -q "container image.s job" <<< "$system_page"; then
+            echo "::error::Settings -> System shows the Docker 'container image's job' wording"; exit 1
+          fi
+          if grep -q 'Restart the container to restart Jen' <<< "$system_page"; then
+            echo "::error::Settings -> System shows the Docker restart wording"; exit 1
+          fi
           echo "Settings -> System shows the real Update/Restart controls, no Docker wording"
 
           plugins_page=$(curl -sb "$cookie" -c "$cookie" http://127.0.0.1:5050/settings/plugins)
           grep -q 'root-privileged service' <<< "$plugins_page"
-          ! grep -q 'Installed plugins live in' <<< "$plugins_page"
+          if grep -q 'Installed plugins live in' <<< "$plugins_page"; then
+            echo "::error::the plugin manager shows the Docker/legacy install-path wording"; exit 1
+          fi
           echo "plugin manager shows the root-managed install path"
 
-          curl -sb "$cookie" -c "$cookie" http://127.0.0.1:5050/settings/infrastructure/update-status \
-              | grep -q 'active_state'
+          update_status=$(curl -sb "$cookie" -c "$cookie" http://127.0.0.1:5050/settings/infrastructure/update-status)
+          grep -q 'active_state' <<< "$update_status"
           echo "update-status endpoint answers"
-
-      - name: Uninstall (interim reset before the stable jump)
-        working-directory: ${{ runner.temp }}/install-head/jen
-        run: printf 'y\n1\n' | sudo ./uninstall.sh
-
-      - name: Fetch the latest stable release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/stable"
-          gh release download --repo "${{ github.repository }}" \
-            --pattern 'jen-v*.tar.gz' --pattern 'SHA256SUMS*' --dir "$RUNNER_TEMP/stable"
-          ls -lh "$RUNNER_TEMP/stable"
-
-      - name: Verify the stable release's signature
-        # Same verification release.yml runs on itself before publishing
-        # (ssh-keygen -Y verify against RELEASE_SIGNERS as extracted from
-        # the downloaded tarball's OWN jen-update-root.py) — a public-key
-        # check, no secret needed to verify, only to sign.
-        run: |
-          cd "$RUNNER_TEMP/stable"
-          tarball="$(ls jen-v*.tar.gz)"
-          signers_line="$(tar xzf "$tarball" jen/jen-update-root.py -O \
-            | sed -n 's/^RELEASE_SIGNERS = "\(.*\)"$/\1/p')"
-          [[ -n "$signers_line" ]] || { echo "::error::no RELEASE_SIGNERS in the downloaded tarball"; exit 1; }
-          printf '%s\n' "$signers_line" > allowed_signers
-          ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-release \
-            -s SHA256SUMS.sig < SHA256SUMS
-          sha256sum -c --ignore-missing SHA256SUMS
-          echo "Latest stable release verified."
-
-      - name: Fresh install (latest stable) — the upgrade's starting point
-        # v5.66.0 is immutable, already-tagged code that predates
-        # --answers entirely, and --unattended there only resolves
-        # prompt_input/_yn/_choice to their DEFAULTS — useless placeholder
-        # hosts like "YOUR-KEA-SERVER", not this job's real service
-        # containers, which would fail to connect and never even reach a
-        # running service. So this leg drives the full original wizard
-        # through a real pty instead, answering every prompt in the exact
-        # order v5.66.0's collect_config() asks them (confirmed against
-        # `git show v5.66.0:install.sh`): install type, Kea API
-        # URL/user/pass, Kea DB host/user/pass/name, Jen DB
-        # host/user/pass/name, admin password (+ confirm), one subnet
-        # (id/name/CIDR) then Enter to finish, SSH y/n, DDNS y/n, HTTP/
-        # HTTPS ports. `script -qec ... -e` forwards piped stdin to the
-        # child's tty and makes its own exit status the wrapped command's;
-        # TERM=linux sidesteps the clear/terminfo bug this same v5.66.0
-        # code has (fixed on this branch, not on the already-tagged one).
-        #
-        # v5.66.0's verify_install() also carries the identical stale-
-        # Jinja-filter-list + `$?`-after-assignment set -e bugs this Q
-        # fixed on this branch (jen/__init__.py has registered relfmt and
-        # hostname since before this tag) — confirmed against this exact
-        # run's own log: config written, admin password updated, service
-        # started and reported running, THEN the same silent death
-        # verify_install() always has here. That is an already-tagged
-        # release's own cosmetic reporting bug, not a real install
-        # failure — the actual install is done by that point. Tolerated
-        # here with `|| true`; the next step is what actually decides
-        # whether this leg succeeded.
-        run: |
-          mkdir -p "$RUNNER_TEMP/install-stable"
-          tar xzf "$RUNNER_TEMP/stable"/jen-v*.tar.gz -C "$RUNNER_TEMP/install-stable"
-          cd "$RUNNER_TEMP/install-stable/jen"
-          cat > "$RUNNER_TEMP/stable-wizard-input.txt" << 'WIZARD'
-          1
-          http://127.0.0.1:8004
-          jen
-          jen_api_pw
-          127.0.0.1
-          kea
-          kea_pw
-          kea
-          127.0.0.1
-          jen
-          jen_pw
-          jen
-          ci-test-passw0rd-!
-          ci-test-passw0rd-!
-          1
-          Test
-          10.99.0.0/24
-
-          n
-          n
-          5050
-          8443
-          WIZARD
-          script -qec "sudo TERM=linux ./install.sh" /dev/null < "$RUNNER_TEMP/stable-wizard-input.txt" \
-            || echo "::notice::v5.66.0's own verify_install() died on a bug already fixed on this branch — checking the real outcome in the next step"
-
-      - name: Assert the stable baseline is healthy
-        run: |
-          systemctl is-active --quiet jen
-          curl -sf http://127.0.0.1:5050/api/v1/health | grep -q jen_version
-          sudo grep -q '10.99.0.0/24' /etc/jen/jen.config
-          echo "stable baseline healthy, subnet config present"
-
-      # v5.67.0-beta.5 (Q117) — v5.66.0's own install_files() left app_dir
-      # group/other-writable on THIS runner (an additive `chmod -R a+rX`
-      # never clears a write bit `mkdir -p`/`cp -r` set under whatever
-      # umask was in effect — fixed on this branch with `go-w`, but the
-      # stable release just installed above predates that fix). HEAD's
-      # own _layout_appdir_itself_ok now correctly refuses to trust that
-      # before upgrading it — exactly the hard stop docs/troubleshooting.md
-      # describes, with its own one-line fix. This step is that fix,
-      # standing in for the operator the real Health-row warning would
-      # have told to run it before upgrading.
-      - name: Fix the stable baseline's own permissive app_dir before upgrading it
-        run: sudo chmod go-w /opt/jen
-
-      - name: Upgrade to this commit
-        working-directory: ${{ runner.temp }}/install-head/jen
-        run: sudo TERM=linux ./install.sh --unattended
-
-      - name: Assert the upgrade is healthy and data survived
-        # v5.66.0's own admin-password seeding is the bug fixed earlier in
-        # this Q (it never called create_app(), so a typed password was
-        # silently discarded and Jen fell back to its own generated
-        # initial-admin-password token) — logging in with a password THIS
-        # job chose would test that pre-existing bug, not the upgrade.
-        # "Data survived" instead checks the one thing collect_config()
-        # genuinely skips on an upgrade (CONFIGURE=false keeps the
-        # existing file verbatim): the subnet line from the stable leg's
-        # config is still there, untouched, after HEAD's install.sh ran.
-        # JEN_VERSION is still identical on both legs until the release
-        # commit at the end of this Q bumps it, so "the running code
-        # actually changed" is checked by content (this Q's --answers
-        # flag existing in the installed tree), not by a version string
-        # or a second release directory appearing.
-        run: |
-          set -e
-          systemctl is-active --quiet jen
-          curl -sf http://127.0.0.1:5050/api/v1/health | grep -q jen_version
-          echo "healthy after upgrade"
-
-          sudo grep -q -- '--answers' /opt/jen/current/app/install.sh
-          echo "the upgrade actually replaced the running code"
-
-          sudo grep -q '10.99.0.0/24' /etc/jen/jen.config
-          echo "the config from before the upgrade is still there"
-
-      # v5.67.0-beta.6 (Q118) — same assertion as the fresh-install leg
-      # above, now against a box that went through install.sh's UPGRADE
-      # path rather than a fresh install — the two code paths render the
-      # unit differently enough (render_jen_service() is called from both
-      # install_files() and here) that it's worth proving independently,
-      # not assuming the fresh-install leg's pass covers it.
-      - name: Assert Settings -> System still knows this is systemd after the upgrade
-        run: |
-          set -e
-          cookie="$RUNNER_TEMP/cookies-upgrade.txt"
-          csrf=$(curl -sc "$cookie" http://127.0.0.1:5050/login | grep -oP 'name="csrf_token" value="\K[^"]+' | head -1)
-          curl -sb "$cookie" -c "$cookie" -X POST http://127.0.0.1:5050/login \
-            -d "username=admin&password=ci-test-passw0rd-!&csrf_token=$csrf" -o /dev/null
-          system_page=$(curl -sb "$cookie" -c "$cookie" http://127.0.0.1:5050/settings/system)
-          grep -q 'Update Now' <<< "$system_page"
-          ! grep -q "container image.s job" <<< "$system_page"
-          echo "post-upgrade: Settings -> System still shows the real Update control, no Docker wording"
 
       - name: Uninstall
         working-directory: ${{ runner.temp }}/install-head/jen
         run: printf 'y\n1\n' | sudo ./uninstall.sh
 
+      # (the upgrade-from-the-latest-stable legs that used to sit between a first
+      # install and this uninstall are their own job now: upgrade-from-stable)
       - name: Assert uninstall left what docs/installation.md promises
         run: |
           set -e
@@ -743,7 +570,7 @@ jobs:
         run: |
           set -e
           systemctl is-active --quiet jen
-          curl -sf http://127.0.0.1:5050/api/v1/health | grep -q jen_version
+          grep -q jen_version < <(curl -sf http://127.0.0.1:5050/api/v1/health)
           echo "relocated service healthy"
 
           [[ "$(sudo stat -c '%U:%G' /srv/jen/app/current/app/run.py)" == "root:root" ]]
@@ -784,12 +611,14 @@ jobs:
         run: |
           set -e
           cookie="$RUNNER_TEMP/cookies-relocated.txt"
-          csrf=$(curl -sc "$cookie" http://127.0.0.1:5050/login | grep -oP 'name="csrf_token" value="\K[^"]+' | head -1)
+          csrf=$(curl -sc "$cookie" http://127.0.0.1:5050/login | grep -m1 -oP 'name="csrf_token" value="\K[^"]+')
           curl -sb "$cookie" -c "$cookie" -X POST http://127.0.0.1:5050/login \
             -d "username=admin&password=ci-test-passw0rd-!&csrf_token=$csrf" -o /dev/null
           system_page=$(curl -sb "$cookie" -c "$cookie" http://127.0.0.1:5050/settings/system)
           grep -q 'Update Now' <<< "$system_page"
-          ! grep -q "container image.s job" <<< "$system_page"
+          if grep -q "container image.s job" <<< "$system_page"; then
+            echo "::error::Settings -> System shows the Docker 'container image's job' wording"; exit 1
+          fi
           echo "relocated install: Settings -> System shows the real Update control, no Docker wording"
 
       # v5.67.0-beta.5 (Q117, item d) — the behavioral half of the fix:
@@ -808,21 +637,24 @@ jobs:
           # inside a larger path: this leg's own --config-dir /srv/jen/etc
           # makes the GENERATED config's own path /srv/jen/etc/jen.config,
           # which otherwise self-matches "/etc/jen" in its middle.
+          pattern='(?<![\w/])/etc/jen(?!-layout\.conf)|(?<![\w/])/opt/jen|(?<![\w/])/var/lib/jen'
           check() {
-              local label="$1" file="$2"
-              if [[ -f "$file" ]] && sudo cat "$file" | grep -Pv '^\s*#' \
-                  | grep -Pq '(?<![\w/])/etc/jen(?!-layout\.conf)|(?<![\w/])/opt/jen|(?<![\w/])/var/lib/jen'; then
+              local label="$1" file="$2" hits
+              [[ -f "$file" ]] || return 0
+              # comment lines out, then look — no pipeline, so no SIGPIPE and no masked status
+              hits=$(sudo grep -Pv '^\s*#' "$file" | grep -P "$pattern" || true)
+              if [[ -n "$hits" ]]; then
                   echo "::error::$label ($file) contains a hardcoded layout literal"
-                  sudo cat "$file" | grep -Pv '^\s*#' \
-                      | grep -P '(?<![\w/])/etc/jen(?!-layout\.conf)|(?<![\w/])/opt/jen|(?<![\w/])/var/lib/jen'
+                  echo "$hits"
                   fail=1
               fi
           }
           check "generated jen.config"   /srv/jen/etc/jen.config
           check "rendered unit"          /etc/systemd/system/jen.service
           check "install run's own summary" "$RUNNER_TEMP/relocated-install.log"
-          sudo journalctl -u jen-update --no-pager > "$RUNNER_TEMP/jen-update.journal" 2>/dev/null || true
-          check "jen-update.service journal" "$RUNNER_TEMP/jen-update.journal"
+          # (jen-update.service's journal used to be checked here too: nothing in
+          # this job ever starts that unit, so it was always empty — the real hop
+          # now runs in the upgrade-from-stable job)
           [[ $fail -eq 0 ]]
           echo "no hardcoded /etc/jen, /opt/jen or /var/lib/jen in any generated artifact"
 
@@ -834,7 +666,7 @@ jobs:
         run: |
           set -e
           systemctl is-active --quiet jen
-          curl -sf http://127.0.0.1:5050/api/v1/health | grep -q jen_version
+          grep -q jen_version < <(curl -sf http://127.0.0.1:5050/api/v1/health)
           sudo grep -q '10.99.0.0/24' /srv/jen/etc/jen.config
           echo "relocated upgrade healthy, config preserved"
 
@@ -900,11 +732,11 @@ jobs:
         run: |
           set -e
           systemctl is-active --quiet jen
-          curl -sf http://127.0.0.1:5050/api/v1/health | grep -q jen_version
+          grep -q jen_version < <(curl -sf http://127.0.0.1:5050/api/v1/health)
           echo "Kea-less install is healthy"
 
           cookie="$RUNNER_TEMP/cookies-no-kea.txt"
-          csrf=$(curl -sc "$cookie" http://127.0.0.1:5050/login | grep -oP 'name="csrf_token" value="\K[^"]+' | head -1)
+          csrf=$(curl -sc "$cookie" http://127.0.0.1:5050/login | grep -m1 -oP 'name="csrf_token" value="\K[^"]+')
           [[ -n "$csrf" ]]
           login_location=$(curl -sb "$cookie" -c "$cookie" -X POST http://127.0.0.1:5050/login \
             -d "username=admin&password=ci-test-passw0rd-!&csrf_token=$csrf" \
@@ -957,7 +789,7 @@ jobs:
         run: |
           set -e
           systemctl is-active --quiet jen
-          curl -sf http://127.0.0.1:5050/api/v1/health | grep -q jen_version
+          grep -q jen_version < <(curl -sf http://127.0.0.1:5050/api/v1/health)
           sudo grep -q '^app_dir = /srv/q121/ans/app$' /etc/jen-layout.conf
           sudo grep -q '^config_dir = /srv/q121/ans/etc$' /etc/jen-layout.conf
           sudo grep -q '^data_dir = /srv/q121/ans/data$' /etc/jen-layout.conf
@@ -1007,7 +839,7 @@ jobs:
           set -e
           echo "$out" | tail -5
           [[ $rc -ne 0 ]]
-          echo "$out" | grep -q "does not carry Jen's own marker"
+          grep -q "does not carry Jen's own marker" <<< "$out"
           after=$(sudo stat -c '%U:%G %a' /srv/q121/foreign /srv/q121/foreign/their-file)
           [[ "$before" == "$after" ]]
           sudo test ! -e /srv/q121/foreign/.jen-directory
@@ -1040,7 +872,7 @@ jobs:
           # no answers file, no config prompts: the kept config is detected and used
           sudo TERM=linux ./install.sh --unattended
           systemctl is-active --quiet jen
-          curl -sf http://127.0.0.1:5050/api/v1/health | grep -q jen_version
+          grep -q jen_version < <(curl -sf http://127.0.0.1:5050/api/v1/health)
           sudo grep -q 'ci-sentinel' /etc/jen/jen.config
           sudo grep -q '^api_url  = http://127.0.0.1:8004$' /etc/jen/jen.config
           echo "the existing jen.config was kept, not rewritten from blank Kea sections"
@@ -1107,7 +939,7 @@ jobs:
           set -e
           echo "$out" | tail -4
           [[ $rc -ne 0 ]]
-          echo "$out" | grep -q "predates --check-layout"
+          grep -q "predates --check-layout" <<< "$out"
           sudo test -d /opt/jen
           echo "refused with a clear message; nothing was removed"
 
@@ -1115,7 +947,8 @@ jobs:
         run: |
           set -e
           sudo install -m 700 -o root -g root "$RUNNER_TEMP/install-head/jen/jen-update-root.py" /usr/local/sbin/jen-update-root.py
-          sudo python3 /usr/local/sbin/jen-update-root.py --check-layout --help | grep -q -- '--check-layout'
+          checker_help=$(sudo python3 /usr/local/sbin/jen-update-root.py --check-layout --help)
+          grep -q -- '--check-layout' <<< "$checker_help"
           sudo test -f /etc/systemd/system/jen-update.service
           sudo test -f /etc/systemd/system/jen-plugin-install.service
           printf 'y\n3\nDELETE\n' | sudo "$RUNNER_TEMP/lone/uninstall.sh"
@@ -1147,7 +980,7 @@ jobs:
         run: |
           set -e
           systemctl is-active --quiet jen
-          curl -sf http://127.0.0.1:5050/api/v1/health | grep -q jen_version
+          grep -q jen_version < <(curl -sf http://127.0.0.1:5050/api/v1/health)
           sudo test -f /srv/q121/life/app/current/app/run.py
           sudo test -f /srv/q121/life/etc/jen.config
           sudo test -d /srv/q121/life/etc/ssh
@@ -1173,7 +1006,7 @@ jobs:
           if grep -q "NO backup was written" "$RUNNER_TEMP/upgrade.log"; then
             echo "::error::the upgrade reported that no backup was written"; exit 1
           fi
-          backup=$(sudo sh -c 'ls /srv/q121/life/data/backups/jen-pre-upgrade-*.json.gz | head -1')
+          backup=$(sudo find /srv/q121/life/data/backups -name 'jen-pre-upgrade-*.json.gz' -print -quit)
           [[ -n "$backup" ]]
           sudo test -f "${backup%.json.gz}.meta.json"
           [[ "$(sudo stat -c '%U:%a' "$backup")" == "www-data:600" ]]
@@ -1194,7 +1027,7 @@ jobs:
           cd "$RUNNER_TEMP/install-head/jen"
           sudo TERM=linux ./install.sh --repair
           systemctl is-active --quiet jen
-          curl -sf http://127.0.0.1:5050/api/v1/health | grep -q jen_version
+          grep -q jen_version < <(curl -sf http://127.0.0.1:5050/api/v1/health)
           [[ ! -e /opt/jen && ! -e /etc/jen && ! -e /var/lib/jen ]]
 
       - name: Q121 life cycle — uninstall level 1, then a reinstall onto the kept layout and config
@@ -1241,6 +1074,329 @@ jobs:
           [[ ! -e /opt/jen && ! -e /etc/jen && ! -e /var/lib/jen ]]
           echo "the whole life cycle ran on /srv/q121/life and never created anything under the default paths"
           sudo rm -rf /srv/q121
+
+      - name: Kea log on failure
+        if: failure()
+        run: docker logs kea 2>&1 | tail -100 || true
+
+      - name: Jen service log on failure
+        if: failure()
+        run: sudo journalctl -u jen -n 200 --no-pager || true
+
+  # v5.67.0-beta.10 (Q122) — the upgrade every operator is about to make, as
+  # its own job on a CLEAN runner. It used to be a leg of the install job,
+  # running AFTER HEAD's own fresh install and a level-1 uninstall: it started
+  # with HEAD's migrated database, HEAD's markers and layout file and HEAD's
+  # updater, fed a prompt script written for v5.66.0 to whatever "latest"
+  # happened to be, and swallowed any failure of the stable installer with
+  # `|| echo`. Now:
+  #   * the stable release is PINNED (JEN_STABLE_VERSION, top of this file;
+  #     moved in the first release commit after a promotion — CLAUDE.md
+  #     "Release channels", step 4) and its signature is checked against the
+  #     key pinned in THIS repo, not one extracted from the tarball under test;
+  #   * nothing is masked: the one known failure of the stable installer is
+  #     accepted by its exact shape, and everything else fails the job;
+  #   * the health check compares the VALUE of jen_version, before and after;
+  #   * two ways up, each on its own runner (matrix `via`):
+  #       installer — HEAD's install.sh over the stable box (what the README
+  #                   tells an operator to do);
+  #       updater   — the STABLE release's OWN jen-update-root.py, the code that
+  #                   really runs when someone presses Update now, driven
+  #                   through the hop onto HEAD's tree by tools/ci_updater_hop.py
+  #                   (the download/signature seams stood in for, named there),
+  #                   then HEAD's updater for a second hop.
+  upgrade-from-stable:
+    name: upgrade from stable (${{ matrix.os }}, via ${{ matrix.via }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            via: installer
+          - os: ubuntu-24.04
+            via: installer
+          - os: ubuntu-22.04
+            via: updater
+          - os: ubuntu-24.04
+            via: updater
+
+    env:
+      JEN_ROOT: ${{ github.workspace }}
+      KEA_IMAGE: docker.cloudsmith.io/isc/docker/kea-dhcp4:3.2.0
+      ADMIN_PASSWORD: ci-test-passw0rd-!
+
+    services:
+      database:
+        image: mariadb:11.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_pw
+          MYSQL_DATABASE: kea
+          MYSQL_USER: kea
+          MYSQL_PASSWORD: kea_pw
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mariadb-admin ping -h 127.0.0.1 -u root -pci_root_pw"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      # The hosted images ship /opt mode 777; see the install job's own note.
+      - name: Harden /opt for this runner
+        run: sudo chmod 755 /opt
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies (for the Kea config generator)
+        run: pip install -q -r requirements.txt
+
+      - name: Jen's database, Kea's schema and a real kea-dhcp4
+        uses: ./.github/actions/kea-fixture
+        with:
+          kea-image: ${{ env.KEA_IMAGE }}
+
+      - name: Build this commit's tarball
+        run: |
+          mkdir -p dist
+          git archive --format=tar --prefix=jen/ HEAD | gzip -9 > dist/jen-head.tar.gz
+          head_version=$(sed -n 's/^JEN_VERSION = "\(.*\)"$/\1/p' jen/__init__.py)
+          [[ -n "$head_version" ]]
+          echo "HEAD_VERSION=$head_version" >> "$GITHUB_ENV"
+          echo "HEAD is $head_version; the stable release under test is $JEN_STABLE_VERSION"
+
+      - name: Fetch the pinned stable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/stable"
+          gh release download "v${JEN_STABLE_VERSION}" --repo "${{ github.repository }}" \
+            --pattern 'jen-v*.tar.gz' --pattern 'SHA256SUMS*' --dir "$RUNNER_TEMP/stable"
+          ls -lh "$RUNNER_TEMP/stable"
+          test -f "$RUNNER_TEMP/stable/jen-v${JEN_STABLE_VERSION}.tar.gz"
+
+      # The signers are the key pinned in THIS repo (the same RELEASE_SIGNERS
+      # line the updater and the helper carry) — not extracted from the tarball
+      # being verified, which would let a forged release vouch for itself.
+      - name: Verify the stable release's signature against the repo's pinned key
+        run: |
+          signers_line="$(sed -n 's/^RELEASE_SIGNERS = "\(.*\)"$/\1/p' jen-update-root.py)"
+          [[ -n "$signers_line" ]]
+          cd "$RUNNER_TEMP/stable"
+          printf '%s\n' "$signers_line" > allowed_signers
+          ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-release \
+            -s SHA256SUMS.sig < SHA256SUMS
+          sha256sum -c --ignore-missing SHA256SUMS
+          echo "v${JEN_STABLE_VERSION} verified."
+
+      # v5.66.0 is immutable, already-tagged code that predates --answers
+      # entirely, and --unattended there only resolves prompts to their
+      # DEFAULTS (useless placeholder hosts, not this job's real services). So
+      # this leg drives the full original wizard through a real pty, answering
+      # every prompt in the order v5.66.0's collect_config() asks them
+      # (confirmed against `git show v5.66.0:install.sh`): install type, Kea API
+      # URL/user/pass, Kea DB host/user/pass/name, Jen DB host/user/pass/name,
+      # admin password (+ confirm), one subnet (id/name/CIDR) then Enter, SSH
+      # y/n, DDNS y/n, HTTP/HTTPS ports. TERM=linux sidesteps the clear/terminfo
+      # bug that same code has.
+      #
+      # NOTHING IS MASKED. v5.66.0's verify_install() carries a bug fixed since
+      # (a stale Jinja filter list, then a `$?` after an assignment under
+      # set -e), so its installer exits non-zero AFTER the service is up and the
+      # config is written, right after printing "Config file present". That
+      # exact shape — and only that — is accepted below; any other failure, or
+      # that failure without the service running, fails the job.
+      - name: Fresh install of the pinned stable release
+        run: |
+          mkdir -p "$RUNNER_TEMP/install-stable"
+          tar xzf "$RUNNER_TEMP/stable/jen-v${JEN_STABLE_VERSION}.tar.gz" -C "$RUNNER_TEMP/install-stable"
+          cd "$RUNNER_TEMP/install-stable/jen"
+          cat > "$RUNNER_TEMP/stable-wizard-input.txt" << 'WIZARD'
+          1
+          http://127.0.0.1:8004
+          jen
+          jen_api_pw
+          127.0.0.1
+          kea
+          kea_pw
+          kea
+          127.0.0.1
+          jen
+          jen_pw
+          jen
+          ci-test-passw0rd-!
+          ci-test-passw0rd-!
+          1
+          Test
+          10.99.0.0/24
+
+          n
+          n
+          5050
+          8443
+          WIZARD
+          set +e
+          script -qec "sudo TERM=linux ./install.sh" /dev/null < "$RUNNER_TEMP/stable-wizard-input.txt" > "$RUNNER_TEMP/stable-install.log"
+          rc=$?
+          set -e
+          tail -25 "$RUNNER_TEMP/stable-install.log"
+          if [[ $rc -ne 0 ]]; then
+            # the one known shape: died right after "Config file present", with no FATAL/FAIL line anywhere
+            if grep -q "FATAL\|FAIL" "$RUNNER_TEMP/stable-install.log"; then
+              echo "::error::the stable installer failed (rc=$rc) with an error line — not its known verify_install bug"; exit 1
+            fi
+            if [[ "$(grep -v '^\s*$' "$RUNNER_TEMP/stable-install.log" | tail -1 | sed 's/\x1b\[[0-9;]*[A-Za-z]//g; s/\r//g')" != *"Config file present"* ]]; then
+              echo "::error::the stable installer failed (rc=$rc) somewhere other than its known verify_install bug"; exit 1
+            fi
+            echo "::notice::v${JEN_STABLE_VERSION}'s own verify_install() died after 'Config file present' (a bug fixed since); the real outcome is asserted next"
+          fi
+
+      - name: Assert the stable baseline is the pinned version, healthy, with its data
+        run: |
+          source .github/scripts/ci-lib.sh
+          systemctl is-active --quiet jen
+          expect_eq "$(jen_version)" "$JEN_STABLE_VERSION" "the running version before the upgrade"
+          sudo grep -q '10.99.0.0/24' /etc/jen/jen.config
+          # the updater on disk is the stable release's own, byte for byte
+          tar xzf "$RUNNER_TEMP/stable/jen-v${JEN_STABLE_VERSION}.tar.gz" -C "$RUNNER_TEMP" jen/jen-update-root.py
+          expect_eq "$(sudo sha256sum < /usr/local/sbin/jen-update-root.py)" "$(sha256sum < "$RUNNER_TEMP/jen/jen-update-root.py")" "the installed updater"
+          echo "stable baseline: v$(jen_version), subnet config present, its own updater installed"
+
+      # v5.66.0's own admin-password seeding discards a typed password (the bug
+      # Q113 fixed: it never called create_app()), so on a clean box the admin's
+      # password is Jen's generated token behind a forced change. Set it the way
+      # the app itself would — with the STABLE release's own hasher — so the
+      # assertions after the upgrade can log in, which also proves the account
+      # survived it.
+      - name: Give the stable box's admin a known password
+        run: |
+          sudo runuser -u www-data -- env JEN_ROOT=/opt/jen/current/app JEN_CONFIG_DIR=/etc/jen JEN_CONTENT_DIR=/var/lib/jen \
+            ADMIN_PASSWORD="$ADMIN_PASSWORD" /opt/jen/current/venv/bin/python - << 'EOF'
+          import os, sys
+          sys.path.insert(0, "/opt/jen/current/app")
+          from jen import create_app
+          create_app()
+          from jen.models.db import jen_db
+          from jen.models.user import hash_password
+          with jen_db() as db, db.cursor() as cur:
+              cur.execute(
+                  "UPDATE users SET password=%s, must_change_password=0 WHERE username='admin'",
+                  (hash_password(os.environ["ADMIN_PASSWORD"]),),
+              )
+              assert cur.rowcount == 1, "no admin row to update"
+          print("admin password set")
+          EOF
+
+      # v5.67.0-beta.5 (Q117) — v5.66.0's own install_files() left app_dir
+      # group/other-writable on THIS runner (an additive `chmod -R a+rX` never
+      # clears a write bit mkdir/cp set under whatever umask was in effect —
+      # fixed since with `go-w`, but the stable release just installed above
+      # predates that fix). HEAD's own _layout_appdir_itself_ok correctly
+      # refuses to trust that before upgrading it: the hard stop
+      # docs/troubleshooting.md describes, with its one-line fix. This step is
+      # that fix, standing in for the operator the Health row would have told.
+      - name: Fix the stable baseline's own permissive app_dir
+        run: sudo chmod go-w /opt/jen
+
+      # ── via installer ────────────────────────────────────────────────────
+      - name: Upgrade with HEAD's install.sh
+        if: matrix.via == 'installer'
+        run: |
+          mkdir -p "$RUNNER_TEMP/install-head"
+          tar xzf dist/jen-head.tar.gz -C "$RUNNER_TEMP/install-head"
+          cd "$RUNNER_TEMP/install-head/jen"
+          sudo TERM=linux ./install.sh --unattended
+
+      - name: Assert the installer upgrade is HEAD, healthy, and the data survived
+        if: matrix.via == 'installer'
+        run: |
+          source .github/scripts/ci-lib.sh
+          systemctl is-active --quiet jen
+          expect_eq "$(jen_version)" "$HEAD_VERSION" "the running version after install.sh"
+          sudo grep -q -- '--answers' /opt/jen/current/app/install.sh
+          sudo grep -q '10.99.0.0/24' /etc/jen/jen.config
+          cookie="$RUNNER_TEMP/cookies-upgrade.txt"
+          jen_login "$cookie" "$ADMIN_PASSWORD"
+          system_page=$(curl -sb "$cookie" -c "$cookie" "$JEN_URL/settings/system")
+          require 'Update Now' "$system_page" "Settings -> System lost its Update control after the upgrade"
+          refuse "container image.s job" "$system_page" "Settings -> System shows Docker wording after the upgrade"
+          echo "upgraded v${JEN_STABLE_VERSION} -> v${HEAD_VERSION}: running version, config and the admin account all survived"
+
+      # ── via updater ──────────────────────────────────────────────────────
+      # The stable release's OWN updater, run for real. The box needs the beta
+      # channel to be offered HEAD (a prerelease); everything else is the real
+      # main(): see tools/ci_updater_hop.py for the four named stand-ins.
+      - name: Hop 1 — the stable release's own updater onto HEAD's tree
+        if: matrix.via == 'updater'
+        run: |
+          printf '\n[updates]\nchannel = beta\n' | sudo tee -a /etc/jen/jen.config > /dev/null
+          sudo python3 tools/ci_updater_hop.py hop \
+            --updater /usr/local/sbin/jen-update-root.py \
+            --tarball dist/jen-head.tar.gz --version "$HEAD_VERSION" --prerelease
+
+      - name: Assert hop 1 landed on HEAD with the box intact
+        if: matrix.via == 'updater'
+        run: |
+          source .github/scripts/ci-lib.sh
+          systemctl is-active --quiet jen
+          expect_eq "$(jen_version)" "$HEAD_VERSION" "the running version after hop 1"
+          expect_eq "$(readlink /opt/jen/current)" "releases/$HEAD_VERSION" "where current points"
+          # the stable updater's install_self_update_files() put HEAD's updater in place
+          expect_eq "$(sudo sha256sum < /usr/local/sbin/jen-update-root.py)" "$(sha256sum < jen-update-root.py)" "the updater after hop 1"
+          sudo grep -q '10.99.0.0/24' /etc/jen/jen.config
+          cookie="$RUNNER_TEMP/cookies-hop1.txt"
+          jen_login "$cookie" "$ADMIN_PASSWORD"
+          system_page=$(curl -sb "$cookie" -c "$cookie" "$JEN_URL/settings/system")
+          # the stable updater copies a jen.service only if the new tree ships
+          # one (HEAD ships a template), so the unit is still the stable box's
+          # own — the deployment fallback (INVOCATION_ID) is what keeps the
+          # controls right until the second hop renders the new one
+          require 'Update Now' "$system_page" "Settings -> System has no Update control after hop 1"
+          refuse "container image.s job" "$system_page" "Settings -> System shows Docker wording after hop 1"
+          echo "hop 1: v${JEN_STABLE_VERSION} -> v${HEAD_VERSION} by the stable release's own updater"
+
+      - name: Hop 2 — HEAD's updater onto a newer release
+        if: matrix.via == 'updater'
+        run: |
+          # the new updater refuses an app_dir that is group/other-writable; hop 1 changed no ownership, this stays fixed
+          next="${HEAD_VERSION%%-*}"
+          IFS=. read -r major minor patch <<< "$next"
+          next="${major}.${minor}.$((patch + 1))"
+          echo "NEXT_VERSION=$next" >> "$GITHUB_ENV"
+          python3 tools/ci_updater_hop.py bump --src dist/jen-head.tar.gz --out dist/jen-next.tar.gz --version "$next"
+          sudo python3 tools/ci_updater_hop.py hop \
+            --updater /usr/local/sbin/jen-update-root.py \
+            --tarball dist/jen-next.tar.gz --version "$next"
+
+      - name: Assert hop 2 — the rendered unit and the Update control
+        if: matrix.via == 'updater'
+        run: |
+          source .github/scripts/ci-lib.sh
+          systemctl is-active --quiet jen
+          expect_eq "$(jen_version)" "$NEXT_VERSION" "the running version after hop 2"
+          expect_eq "$(readlink /opt/jen/current)" "releases/$NEXT_VERSION" "where current points"
+          unit=$(systemctl cat jen)
+          require 'JEN_SERVICE_MANAGER=systemd' "$unit" "the unit HEAD's updater rendered lacks JEN_SERVICE_MANAGER=systemd"
+          require 'JEN_ROOT=/opt/jen/current/app' "$unit" "the rendered unit does not point JEN_ROOT at the live release"
+          refuse '@@' "$unit" "the rendered unit still carries an unsubstituted placeholder"
+          cookie="$RUNNER_TEMP/cookies-hop2.txt"
+          jen_login "$cookie" "$ADMIN_PASSWORD"
+          system_page=$(curl -sb "$cookie" -c "$cookie" "$JEN_URL/settings/system")
+          require 'Update Now' "$system_page" "Settings -> System has no Update control after hop 2"
+          require 'data-confirm="Restart Jen now?"' "$system_page" "Settings -> System has no Restart control after hop 2"
+          refuse "container image.s job" "$system_page" "Settings -> System shows Docker wording after hop 2"
+          echo "hop 2: HEAD's own updater went v${HEAD_VERSION} -> v${NEXT_VERSION}; the rendered unit and both controls are right"
 
       - name: Kea log on failure
         if: failure()

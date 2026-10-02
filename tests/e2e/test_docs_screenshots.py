@@ -53,7 +53,14 @@ def test_the_leak_guard_was_given_its_secret_markers():
 def _leak_guard(page, name):
     text = page.evaluate("() => document.body.innerText").lower()
     hits = [f for f in demo_data.FORBIDDEN if f in text]
-    assert not hits, f"{name}: leaked real-network marker(s) {hits} — the demo dataset is not supposed to contain these"
+    # v5.67.0-beta.10 (Q122) — a COUNT, never the markers themselves: the markers are the private
+    # names JEN_DOCS_FORBIDDEN exists to keep out of the repository, and an assertion message lands
+    # in a public CI log (and in the uploaded traces).
+    assert not hits, (
+        f"{name}: {len(hits)} real-network marker(s) leaked into the page — the demo dataset is not "
+        "supposed to contain any (the markers are deliberately not printed; search the page text for "
+        "the JEN_DOCS_FORBIDDEN entries locally)"
+    )
 
 
 def _save(page, name):

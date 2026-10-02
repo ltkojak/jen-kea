@@ -1,0 +1,73 @@
+name: Kea and Jen database fixture
+description: >-
+  Jen's own database (on the job's MariaDB service), Kea's schema, and a real
+  kea-dhcp4 listening on 127.0.0.1:8004 — what the install job and the
+  upgrade-from-stable job both need (v5.67.0-beta.10, Q122: shared so the two
+  jobs cannot drift apart). The job must already have checked out the repo and
+  set up Python, and provide a mariadb service on 3306 with root password
+  ci_root_pw and a `kea` database/user (kea / kea_pw).
+
+inputs:
+  kea-image:
+    description: The ISC kea-dhcp4 image (an exact patch version).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Create Jen's database
+      # Same server as Kea's, a separate database and user — the topology
+      # install.sh's own wizard describes for "Jen DB host" defaulting to the
+      # Kea DB host.
+      shell: bash -eo pipefail {0}
+      run: |
+        mysql -h 127.0.0.1 -u root -pci_root_pw -e "
+          CREATE DATABASE jen;
+          CREATE USER 'jen'@'%' IDENTIFIED BY 'jen_pw';
+          GRANT ALL PRIVILEGES ON jen.* TO 'jen'@'%';
+          FLUSH PRIVILEGES;"
+
+    - name: Install the Kea MySQL schema
+      # Same recipe as kea-compat.yml: no kea-admin image is published, so
+      # borrow the daemon image (it already has ISC's apk repo configured) at
+      # the SAME version the schema must match.
+      shell: bash -eo pipefail {0}
+      env:
+        KEA_IMAGE: ${{ inputs.kea-image }}
+      run: |
+        docker pull "$KEA_IMAGE"
+        docker run --rm --network host --entrypoint ash "$KEA_IMAGE" -c '
+          set -e
+          apk add --no-cache curl bash >/dev/null
+          curl -1sLf "https://dl.cloudsmith.io/public/isc/kea-3-2/setup.alpine.sh" | bash >/dev/null
+          apk update >/dev/null
+          apk add --no-cache mariadb-client "isc-kea-admin~=3.2.0" >/dev/null
+          echo "[client]" > /etc/my.cnf.d/nossl.cnf
+          echo "skip-ssl" >> /etc/my.cnf.d/nossl.cnf
+          kea-admin db-init mysql -h 127.0.0.1 -u kea -p kea_pw -n kea
+        '
+
+    - name: Start kea-dhcp4
+      shell: bash -eo pipefail {0}
+      env:
+        KEA_IMAGE: ${{ inputs.kea-image }}
+      run: |
+        mkdir -p kea-conf
+        python -m tests.kea_compat.kea_config > kea-conf/kea-dhcp4.conf
+        printf '%s' jen > kea-conf/jen-api.user
+        printf '%s' jen_api_pw > kea-conf/jen-api.pw
+        chmod 644 kea-conf/jen-api.user kea-conf/jen-api.pw
+        docker run -d --name kea --network host --tmpfs /var/run/kea \
+          -e MARIADB_TLS_DISABLE_PEER_VERIFICATION=1 \
+          -v "$PWD/kea-conf:/etc/kea:ro" "$KEA_IMAGE"
+        for i in $(seq 1 30); do
+          if curl -sf -m 2 -H 'Content-Type: application/json' \
+               -u jen:jen_api_pw -d '{"command":"version-get"}' http://127.0.0.1:8004/ >/dev/null; then
+            echo "kea-dhcp4 answered after ${i}s"
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "::error::kea-dhcp4 never answered on :8004"
+        docker logs kea
+        exit 1
