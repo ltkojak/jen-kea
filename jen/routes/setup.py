@@ -97,6 +97,7 @@ def setup_connect():
     api_client_key = request.form.get("api_client_key", "").strip()
 
     from jen.services import auth as __auth
+    from jen.services import capabilities as __caps
     from jen.services import kea as __kea
 
     retry_ctx = {
@@ -161,7 +162,8 @@ def setup_connect():
     test_db_pass = kea_db_pass or extensions.KEA_DB_PASS
     # An answer that cannot be identified keeps the mode already saved for THIS url (Q120, item b).
     saved_url = (extensions.KEA_API_URL or "").rstrip("/")
-    default_mode = extensions.KEA_CONNECTION_MODE if saved_url and api_url.rstrip("/") == saved_url else "ca"
+    saved_mode = "direct" if __caps.is_direct() else "ca"
+    default_mode = saved_mode if saved_url and api_url.rstrip("/") == saved_url else "ca"
     kea_result = __setup.test_kea_connection(
         api_url, api_user, test_api_pass, verify=probe_verify, cert=probe_cert, default_mode=default_mode
     )

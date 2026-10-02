@@ -1313,7 +1313,7 @@ class TestFoundRoute:
         page = r.data.decode()
         assert "Kea HA peers detected" in page and "Servers Jen manages" in page
         assert "Add this peer to Jen" in page
-        assert "add_server_url=http%3A%2F%2F192.0.2.2%3A8000" in page
+        assert "add_server_url=http://192.0.2.2:8000" in page  # werkzeug leaves : and / unencoded in a query
         assert "s1</strong>" not in page, "this very server is managed; only the other peer is offered"
 
     def test_enabling_ipv6_passes_the_ticked_removals_through(self, logged_in_client, monkeypatch):
