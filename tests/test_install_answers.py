@@ -184,3 +184,29 @@ class TestPreUpgradeBackup:
             assert gone not in text, gone
         for there in ("publish_backup", "write_jen_export", "_write_meta_sidecar", 'runuser -u "$JEN_USER"'):
             assert there in text, there
+
+
+class TestNoSpinnerWithoutATerminal:
+    """v5.67.0-beta.9 (Q121) — found by the install job's first --repair run: the spinner wrote to /dev/tty, which
+    does not exist without a terminal, and set -e killed the install. --upgrade and --repair are not --unattended."""
+
+    def test_no_terminal_means_a_plain_line_and_no_background_animation(self, tmp_path):
+        r = _run(
+            tmp_path,
+            """
+            set +e
+            HAVE_TTY=false; MODE_UNATTENDED=false
+            spinner_start "Restarting Jen service..."
+            echo "pid=[${_spinner_pid}] rc=$?"
+            spinner_stop
+            echo "after-stop rc=$?"
+            """,
+        )
+        assert "Restarting Jen service" in r.stdout
+        assert "pid=[] rc=0" in r.stdout
+        assert "after-stop rc=0" in r.stdout
+        assert "/dev/tty" not in r.stderr
+
+    def test_a_terminal_still_gets_the_animation_guard(self):
+        text = (pathlib.Path(__file__).resolve().parent.parent / "install.sh").read_text(encoding="utf-8")
+        assert '[[ "$MODE_UNATTENDED" == "true" || "$HAVE_TTY" != "true" ]]' in text

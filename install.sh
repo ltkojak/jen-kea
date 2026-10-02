@@ -558,7 +558,15 @@ _set_paths
 _spinner_pid=""
 spinner_start() {
     local msg="$1"
-    if [[ "$MODE_UNATTENDED" == "true" ]]; then
+    # v5.67.0-beta.9 (Q121) — CI caught this running --repair for the first
+    # time without --unattended and without a terminal: the spinner writes
+    # every frame to /dev/tty, which does not exist there ("No such device or
+    # address"), and under set -e that killed the install. --upgrade and
+    # --repair are "non-interactive" modes but not --unattended, so they hit it
+    # from cron, Ansible or any ssh without -t. No terminal on stdin (HAVE_TTY,
+    # the same signal every prompt already uses) means no animation, just the
+    # line.
+    if [[ "$MODE_UNATTENDED" == "true" || "$HAVE_TTY" != "true" ]]; then
         info "$msg"
         return
     fi
