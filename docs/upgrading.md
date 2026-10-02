@@ -153,3 +153,33 @@ it would have run itself: `sudo systemctl start jen-update.service`.
 See `docs/troubleshooting.md` for the full detail. Nothing else about
 an affected install was wrong, and Docker/dev checkouts were never
 affected (5.67.0-beta.6).
+
+## A security audit's fixes — nothing for most installs to do
+
+A review of the layout/installer work and the first-hour setup wizard
+found seven issues, all fixed; `sudo ./install.sh` (fresh, `--upgrade`,
+`--repair`) and the in-app updater pick up every one automatically —
+none need a manual step:
+
+- Two places in `install.sh` ran Python as root when they should have
+  run as the service account (a theoretical privilege-escalation path,
+  never observed in practice); the root self-updater's own layout
+  marker write is now immune to a symlink planted in a directory the
+  service account owns; an upgrade's rollback snapshot of root's own
+  files (the sudoers grant, the systemd units, the updater itself) moved
+  to a directory only root can write, closing a gap present since the
+  very first versioned-release installer.
+- The self-update service now actually runs the layout checks four
+  documents already said it did; Settings → Health gains an "install
+  path is trusted" row reflecting the result.
+- A Docker container started with no Kea configured at all (the
+  README's own advertised path) used to crash-loop forever — fixed; an
+  already-running container is unaffected.
+- `/setup`'s recovery step, and `/getting-started`, could 500 for every
+  admin once a recovery bundle had actually been downloaded — fixed; a
+  box that never hit this needs nothing.
+- A subnet name that predates this project's own name validator (added
+  in 5.67.0-beta.5) could make an unrelated later subnet change fail
+  after Kea's own side had already gone through — fixed; an existing
+  odd name is preserved exactly as it was, or repaired automatically if
+  it genuinely can't be stored, logged either way (5.67.0-beta.7).

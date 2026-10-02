@@ -26,7 +26,7 @@ from jen.services.runtime import deployment
 
 logger = logging.getLogger(__name__)
 
-JEN_VERSION = "5.67.0-beta.6"
+JEN_VERSION = "5.67.0-beta.7"
 
 # Cache ssl_configured result — cert files don't change at runtime
 _ssl_configured_cache: bool | None = None

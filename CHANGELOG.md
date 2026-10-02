@@ -2,6 +2,88 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.67.0-beta.7] - 2026-10-02
+
+Beta channel. Stacked on 5.67.0-beta.6. A security audit of the whole
+`v5.66.0..v5.67.0-beta.6` range — the layout/installer work, the setup
+wizard, deployment paths, and the CI claims made about all of it — found
+seven real problems, every one in already-shipped code.
+
+**The installer built the whole app as root.** `install.sh`'s own
+`verify_install()` ran two inline Python snippets — the template check
+and the module check — as root, unwrapped, where the existing DB-seeding
+step right above them correctly used `runuser`. Both call `create_app()`,
+which imports every enabled plugin out of the data directory the
+**service account** owns: a compromised service account that planted a
+plugin there got it imported as uid 0 on the very next `install.sh` run
+(an upgrade, `--unattended`, or `--repair`). Fixed: both snippets run as
+the service user now, exactly like the seed step. A new source-guard
+test scans every inline Python snippet in `install.sh`/`uninstall.sh`
+and refuses one that imports Jen's own code without `runuser` — the
+only Python this project ever runs directly as root is the dedicated
+self-updater script, pinned pure-stdlib.
+
+**A symlink in the wrong directory could get root to overwrite one of
+its own trusted files.** The root-owned `.jen-directory` layout marker
+lives inside directories the service account owns by design; the code
+that writes it opened the marker's path directly and `chown`/`chmod`'d
+it by path too, following a symlink planted there straight to, say, the
+sudoers file. Now refuses outright if anything unexpected already
+occupies that name, and writes through a disposable temporary file
+swapped into place atomically — a symlink is replaced, never walked
+through, even in the narrow window between the check and the write.
+
+**A pre-existing problem, since the very first versioned-release
+installer: an upgrade's own rollback snapshot of root's files — the
+sudoers grant, the systemd units, the self-updater script itself —
+lived in a directory the service account owns.** A compromised service
+account could edit the snapshot and simply wait for a future rollback to
+have root restore the tampered copy straight into place. Moved under
+the root-owned application directory, where it always should have
+lived.
+
+**The self-update service never actually ran the layout checks it was
+documented to run.** Four separate documents said the root-privileged
+updater re-validated the install's own directories — ownership, a
+writable ancestor, the dedicated-directory marker — on every run; the
+code only ever checked file trust and grammar. Both of its entry points
+now run the real check first. A present-but-corrupted layout file used
+to crash the whole process instead of refusing cleanly — fixed. Settings
+→ Health gains the "install path is trusted" row the test suite has
+referenced since the layout work first shipped but nothing actually
+built.
+
+**A Docker container with no Kea configured crash-looped forever.** This
+project's own README says to leave the Kea section blank and connect it
+afterward from the browser — but the container's config generator wrote
+nothing at all unless a Kea URL was present, so Jen had no config file
+to even start from. Fixed: a config is written whenever Jen's own
+database is configured, Kea or not, and is never regenerated once
+anything has actually been set up. `docker_install` now waits for a real
+health response instead of trusting that a container merely exists.
+
+**A recovery bundle's own freshness check could 500 the whole setup
+wizard.** Two different clocks — one written timezone-aware, one written
+timezone-naive — were compared directly the moment an operator actually
+finished downloading a bundle — raising a type error a nearby
+`except ValueError` was never going to catch. One shared, always-aware
+clock fixes it, verified through the real code paths that write both
+timestamps rather than a hand-built test case that happened to dodge the
+mismatch entirely.
+
+**A single oddly-named subnet could break every later subnet change.**
+Validating a subnet's name on every write — including names a previous
+release had already accepted without complaint — meant one old name
+alone could make a brand new, unrelated add, delete, or import fail
+after Kea's half of the change had already gone through. Now an
+untouched name is left exactly as it was; a name that genuinely can't be
+stored at all is repaired automatically and logged rather than
+discarded. A Windows DHCP import sanitizes a scope's own display name
+the same way before it ever reaches Jen's own store.
+
+`docs/ARCHITECTURE.md`, `docs/docker.md`, the README, and the usual
+`docs/upgrading.md` entry all reflect the above.
+
 ## [5.67.0-beta.6] - 2026-10-02
 
 Beta channel. Stacked on 5.67.0-beta.5. A native install running since
