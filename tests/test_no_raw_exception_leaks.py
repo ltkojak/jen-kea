@@ -94,6 +94,23 @@ def _raise_only_outside_load_user(original_fn, exc):
 # Each entry: (file, line-content substring, reason it's intentionally safe)
 ALLOWED_RAW_EXCEPTION_LINES = [
     (
+        "jen/routes/subnets.py",
+        'flash(f"Subnet {new_id} was created in Kea, but Jen\'s own record could not be saved: {e}"',
+        "v5.67.0-beta.7 (Q119, item g) — e is a ValueError raised by "
+        "jen.config.write_subnets_config(), whose message is always "
+        "jen.config.invalid_subnet_name_reason()'s own deliberate, "
+        "sanitized, user-facing text about a subnet NAME (e.g. 'Name "
+        "must be at most 64 characters') — a validation error about "
+        "input an admin typed in, prefixed with 'subnet {sid}: ', never "
+        "a raw database/filesystem exception or anything from Jen's own "
+        "internal state.",
+    ),
+    (
+        "jen/routes/subnets.py",
+        'flash(f"Subnet {subnet_id} was removed from Kea, but Jen\'s own record could not be saved: {e}"',
+        "Same ValueError source and reasoning as the add-subnet flash above.",
+    ),
+    (
         "jen/routes/database.py",
         '_abort(f"Cannot read file: {err}"',
         "err here is parse_import_file()'s own deliberate, sanitized message "
