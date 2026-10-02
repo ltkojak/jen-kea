@@ -196,7 +196,10 @@ PLUGIN_REGISTRY_URL = "https://raw.githubusercontent.com/ltkojak/jen-kea/main/pl
 # of the same validation table.
 LAYOUT_FILE = "/etc/jen-layout.conf"
 _DEFAULT_LAYOUT = {"app_dir": "/opt/jen", "config_dir": "/etc/jen", "data_dir": "/var/lib/jen"}
-_LAYOUT_FORBIDDEN_PREFIXES = ("/tmp", "/run", "/proc", "/sys", "/dev", "/home")
+# v5.67.0-beta.9 (Q121, item h) — "/root" joins the list: "/root" itself was already a refused shared
+# root, but "/root/jen" passed the grammar and can never work — jen.service runs with ProtectHome=yes,
+# which hides /root (and /home) from the service user entirely.
+_LAYOUT_FORBIDDEN_PREFIXES = ("/tmp", "/run", "/proc", "/sys", "/dev", "/home", "/root")
 
 
 # v5.67.0-beta.5 (Q117) — a ChatGPT review of 5.67.0-beta.3, confirmed by
@@ -236,7 +239,10 @@ _LAYOUT_SHARED_ROOTS = frozenset(
 # s#@@APP_DIR@@#$INSTALL_DIR#g` (a `#` or `&` in the path rewrites the sed
 # expression), `%` is a systemd specifier, a space splits ExecStart — all
 # of those passed _layout_path_ok before this Q.
-_LAYOUT_PATH_RE = re.compile(r"^/[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$")
+# v5.67.0-beta.9 (Q121, item h) — anchored with \A and \Z, not ^ and $: `$` also matches just before a
+# trailing newline, so "/srv/jen\n" satisfied the grammar this comment is about (and then split a
+# line of the rendered unit in two).
+_LAYOUT_PATH_RE = re.compile(r"\A/[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*\Z")
 _LAYOUT_PATH_MAX_LEN = 200
 _LAYOUT_MARKER_NAME = ".jen-directory"
 _LAYOUT_ROLES = ("app_dir", "config_dir", "data_dir")
@@ -1077,7 +1083,13 @@ def _recognized_by_content(path, role):
     if role == "config_dir":
         return os.path.isfile(os.path.join(path, "jen.config"))
     if role == "app_dir":
-        return os.path.isdir(os.path.join(path, "releases")) or os.path.isfile(os.path.join(path, "run.py"))
+        # releases/ (5.14+), run.py (2.6+ flat) or jen.py (older flat) — the same three signals
+        # install.sh's detect_existing() has always read a version from.
+        return (
+            os.path.isdir(os.path.join(path, "releases"))
+            or os.path.isfile(os.path.join(path, "run.py"))
+            or os.path.isfile(os.path.join(path, "jen.py"))
+        )
     if role == "data_dir":
         return any(os.path.isdir(os.path.join(path, sub)) for sub in ("icons", "branding", "backups", "keys"))
     return False
@@ -1097,6 +1109,15 @@ def _layout_target_ok_for_install(name, path):
     if _read_layout_marker(path) is not None:
         return None
     if not os.listdir(path):
+        return None
+    # v5.67.0-beta.9 (Q121, item c) — an app-only uninstall (uninstall.sh level 1, which has always promised
+    # "your existing config will be detected automatically") leaves config_dir and data_dir behind; before
+    # this, a box whose uninstall predated markers refused its own config directory here as "not empty and
+    # unmarked". Recognised by CONTENT (jen.config; the icons/branding/backups/keys subdirectories) they
+    # are Jen's own, and install.sh stamps them with a marker once the install completes. app_dir is
+    # deliberately not on this list: an app_dir with Jen's content is an UPGRADE (detect_layout_mode), and
+    # one with anything else is refused.
+    if name in ("config_dir", "data_dir") and _recognized_by_content(path, name):
         return None
     return f"{name} ({path}) already exists, is not empty, and does not carry Jen's own marker — refusing to reuse it."
 
@@ -1156,6 +1177,26 @@ def _layout_appdir_itself_ok(path):
             f"— refusing to trust it (fix: sudo chmod go-w {path})."
         )
     return None
+
+
+def detect_layout_mode(app_dir=None):
+    """ "upgrade" when an install already exists, else "install" — decided HERE, by the same marker-or-
+    content rule the rest of this contract uses, never by whether a directory merely exists
+    (v5.67.0-beta.9, Q121, item b). install.sh used to ask `[[ -d "$INSTALL_DIR" ]]`: a pre-created EMPTY
+    --app-dir (which the contract allows) was refused as "relocating an existing install", and an existing
+    non-Jen /opt/jen with no layout file was treated as an upgrade — tolerated, then chowned and stamped.
+
+    An install exists when the root-trusted layout file records one, or when the (candidate) app_dir
+    carries Jen's marker or is recognised by its content. Anything else — absent, empty, or somebody
+    else's files — is "install", whose own check then accepts the first two and refuses the third."""
+    if os.path.exists(LAYOUT_FILE) or os.path.islink(LAYOUT_FILE):
+        return "upgrade"
+    path = app_dir or _DEFAULT_LAYOUT["app_dir"]
+    if os.path.islink(path) or not os.path.isdir(path):
+        return "install"
+    if _read_layout_marker(path) is not None or _recognized_by_content(path, "app_dir"):
+        return "upgrade"
+    return "install"
 
 
 def check_layout(for_mode, app_dir=None, config_dir=None, data_dir=None):
@@ -1291,12 +1332,28 @@ def write_layout_markers_cli(argv):
     return 0
 
 
+_CHECK_LAYOUT_USAGE = (
+    "usage: jen-update-root.py --check-layout --for {install,upgrade,uninstall,auto} "
+    "[--app-dir DIR] [--config-dir DIR] [--data-dir DIR]\n"
+    "  auto decides install versus upgrade itself (detect_layout_mode) and prints it as mode=<install|upgrade>."
+)
+
+
 def check_layout_cli(argv):
-    """`--check-layout --for {install,upgrade,uninstall} [--app-dir X
+    """`--check-layout --for {install,upgrade,uninstall,auto} [--app-dir X
     --config-dir Y --data-dir Z]`. Prints the three validated paths
     (`key=value`, one per line) and returns 0 on success; prints one
     refusal line to stderr and returns 1 on failure. Never reachable from
-    www-data — see the module comment above."""
+    www-data — see the module comment above.
+
+    v5.67.0-beta.9 (Q121) — `auto` (item b) first prints `mode=install|upgrade` as decided by
+    detect_layout_mode(), then validates for that mode, filling any directory not given from today's
+    defaults when the mode is install. `--help` (item d) exits 0 with the usage line: uninstall.sh asks an
+    INSTALLED updater `--check-layout --help` to learn whether it understands this mode at all — a 5.66.0
+    copy answers "unrecognized arguments" and a nonzero status."""
+    if argv[:1] in (["--help"], ["-h"]):
+        print(_CHECK_LAYOUT_USAGE)
+        return 0
     for_mode = None
     app_dir = config_dir = data_dir = None
     i = 0
@@ -1318,9 +1375,17 @@ def check_layout_cli(argv):
             print(f"--check-layout: unrecognized argument {arg!r}", file=sys.stderr)
             return 1
 
-    if for_mode not in ("install", "upgrade", "uninstall"):
-        print("--check-layout: --for must be install, upgrade or uninstall", file=sys.stderr)
+    if for_mode not in ("install", "upgrade", "uninstall", "auto"):
+        print("--check-layout: --for must be install, upgrade, uninstall or auto", file=sys.stderr)
         return 1
+
+    if for_mode == "auto":
+        for_mode = detect_layout_mode(app_dir)
+        if for_mode == "install":
+            app_dir = app_dir or _DEFAULT_LAYOUT["app_dir"]
+            config_dir = config_dir or _DEFAULT_LAYOUT["config_dir"]
+            data_dir = data_dir or _DEFAULT_LAYOUT["data_dir"]
+        print(f"mode={for_mode}")
 
     ok, result = check_layout(for_mode, app_dir=app_dir, config_dir=config_dir, data_dir=data_dir)
     if for_mode != "install":

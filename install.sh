@@ -307,15 +307,33 @@ _load_answers_file() {
         fatal "Answers file is writable by group or other (mode $mode) — refusing: $f  (fix: chmod 600 $f)"
     fi
 
-    local line key value
+    # v5.67.0-beta.9 (Q121, item h) — the parser used to take `KEY = value` with the value's leading space
+    # (so a password gained one), keep surrounding quotes literally (a quoted value was installed WITH its
+    # quotes), and drop an `export KEY=value` line outright (the first word made the "key" something no
+    # caller asks for). It now trims whitespace around the value, strips ONE matching pair of surrounding
+    # quotes, and accepts a leading `export`. Still read line by line, never sourced.
+    local line key value first last
     while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%$'\r'}"                          # tolerate a CRLF file
+        line="${line#"${line%%[![:space:]]*}"}"       # leading whitespace
         [[ -z "$line" ]] && continue
         [[ "$line" == \#* ]] && continue
+        if [[ "$line" == export[[:space:]]* ]]; then
+            line="${line#export}"
+            line="${line#"${line%%[![:space:]]*}"}"
+        fi
         [[ "$line" != *=* ]] && continue
         key="${line%%=*}"
         key="${key//[[:space:]]/}"
         value="${line#*=}"
+        value="${value#"${value%%[![:space:]]*}"}"    # whitespace after the =
+        value="${value%"${value##*[![:space:]]}"}"    # trailing whitespace
+        if [[ ${#value} -ge 2 ]]; then
+            first="${value:0:1}"; last="${value: -1}"
+            if [[ ( "$first" == '"' || "$first" == "'" ) && "$last" == "$first" ]]; then
+                value="${value:1:${#value}-2}"
+            fi
+        fi
         [[ -n "$key" ]] && ANSWERS["$key"]="$value"
     done < "$f"
 }
@@ -406,8 +424,10 @@ _layout_kv() {
     printf '%s\n' "$1" | sed -n "s/^${2}=//p"
 }
 
-# _resolve_layout_dirs — sets INSTALL_DIR/CONFIG_DIR/CONTENT_DIR. An
-# existing $LAYOUT_FILE (a prior install, of any mode) is authoritative;
+# _resolve_layout_dirs — sets LAYOUT_MODE and INSTALL_DIR/CONFIG_DIR/
+# CONTENT_DIR, all from the checker's own answer to
+# `--check-layout --for auto [--app-dir ...]` (v5.67.0-beta.9, Q121, item b).
+# An existing $LAYOUT_FILE (a prior install, of any mode) is authoritative;
 # any --app-dir/--config-dir/--data-dir (or JEN_*_DIR answers/env) that
 # disagrees with it is refused by the checker itself — relocating is a
 # runbook (docs/runbooks.md §5), not a flag, so there is never a partial
@@ -415,44 +435,40 @@ _layout_kv() {
 # explicit value wins, else today's literal default — unchanged for every
 # install that never asks for this.
 #
-# v5.67.0-beta.5 (Q117) — a box from before Q114 has no $LAYOUT_FILE yet
-# but a real, non-empty app_dir: that candidate is passed to the checker
-# as --for upgrade, not --for install — install mode's own rule (absent,
-# empty, or already marked) exists to stop a FRESH install from silently
-# reusing a directory with unrelated content, and would otherwise refuse
-# such a box's very first run under this Q. Caught by actually running
-# this against a simulated pre-Q114 /opt/jen in the install CI job.
+# Install versus upgrade is the CHECKER's decision, by the same marker-or-
+# content rule the rest of the layout contract uses — never "does the
+# directory exist": install.sh used to ask `[[ -d "$INSTALL_DIR" ]]`, so a
+# pre-created EMPTY --app-dir (which the contract allows) was refused as
+# "relocating an existing install", and a non-Jen /opt/jen with no layout
+# file was treated as an upgrade, tolerated, then chowned and stamped. A
+# pre-Q114 box (no $LAYOUT_FILE, a real app_dir) is recognised by content
+# and so reads as an upgrade without being asked to prove anything else.
+#
+# Must be called AFTER the flags and the answers file have been read (main()
+# does both first): a JEN_APP_DIR/JEN_CONFIG_DIR/JEN_DATA_DIR in --answers
+# used to be silently ignored, because this ran at top level, before the
+# answers file was loaded — `--answers` with JEN_APP_DIR=/srv/jen/app
+# installed to the defaults and recorded them.
+LAYOUT_MODE="install"
 _resolve_layout_dirs() {
-    local want_app want_config want_data
+    local want_app want_config want_data out rc=0
+    local args=(--for auto)
     want_app=$(_cfgval JEN_APP_DIR); [[ -n "$OPT_APP_DIR" ]] && want_app="$OPT_APP_DIR"
     want_config=$(_cfgval JEN_CONFIG_DIR); [[ -n "$OPT_CONFIG_DIR" ]] && want_config="$OPT_CONFIG_DIR"
     want_data=$(_cfgval JEN_DATA_DIR); [[ -n "$OPT_DATA_DIR" ]] && want_data="$OPT_DATA_DIR"
 
-    local out rc=0 args mode="install"
+    [[ -n "$want_app"    ]] && args+=(--app-dir "$want_app")
+    [[ -n "$want_config" ]] && args+=(--config-dir "$want_config")
+    [[ -n "$want_data"   ]] && args+=(--data-dir "$want_data")
 
-    [[ -f "$LAYOUT_FILE" ]] && mode="upgrade"
-
-    INSTALL_DIR="${want_app:-/opt/jen}"
-    CONFIG_DIR="${want_config:-/etc/jen}"
-    CONTENT_DIR="${want_data:-/var/lib/jen}"
-
-    [[ "$mode" == "install" && -d "$INSTALL_DIR" ]] && mode="upgrade"
-
-    if [[ "$mode" == "upgrade" ]]; then
-        args=(--for upgrade)
-        [[ -n "$want_app"    ]] && args+=(--app-dir "$want_app")
-        [[ -n "$want_config" ]] && args+=(--config-dir "$want_config")
-        [[ -n "$want_data"   ]] && args+=(--data-dir "$want_data")
-        out=$(_layout_checker "${args[@]}" 2>&1) || rc=$?
-        [[ $rc -ne 0 ]] && fatal "$out"
-        INSTALL_DIR=$(_layout_kv "$out" app_dir)
-        CONFIG_DIR=$(_layout_kv "$out" config_dir)
-        CONTENT_DIR=$(_layout_kv "$out" data_dir)
-        return 0
-    fi
-
-    out=$(_layout_checker --for install --app-dir "$INSTALL_DIR" --config-dir "$CONFIG_DIR" --data-dir "$CONTENT_DIR" 2>&1) || rc=$?
+    out=$(_layout_checker "${args[@]}" 2>&1) || rc=$?
     [[ $rc -ne 0 ]] && fatal "$out"
+    LAYOUT_MODE=$(_layout_kv "$out" mode)
+    INSTALL_DIR=$(_layout_kv "$out" app_dir)
+    CONFIG_DIR=$(_layout_kv "$out" config_dir)
+    CONTENT_DIR=$(_layout_kv "$out" data_dir)
+    [[ -n "$INSTALL_DIR" && -n "$CONFIG_DIR" && -n "$CONTENT_DIR" ]] \
+        || fatal "The layout checker did not return all three directories: $out"
     return 0
 }
 
@@ -474,44 +490,58 @@ write_layout_markers() {
     ok "Layout directories marked as Jen's own"
 }
 
-_resolve_layout_dirs
-
 # ── Paths ────────────────────────────────────────────────────────────────────
-SERVICE_FILE="/etc/systemd/system/jen.service"
-SUDOERS_FILE="/etc/sudoers.d/jen"
-CONFIG_FILE="$CONFIG_DIR/jen.config"
-BACKUP_DIR="$CONFIG_DIR/backups"    # jen.config backups (NOT the DB backups — those are $CONTENT_DIR/backups)
-# v5.67.0-beta.7 (Q119, item c) — the external-files rollback snapshot
-# (jen-sudoers, the systemd units, jen-update-root.py itself) is NOT a
-# config backup and must never live under $CONFIG_DIR: that directory is
-# service-user-owned (§6.1), so a compromised service account could edit
-# a snapshotted copy of jen-update-root.py or a unit file and wait for
-# ANY later rollback to have root restore its payload straight into
-# /usr/local/sbin or /etc/systemd/system. $INSTALL_DIR is root-owned
-# throughout (install_files's own chown -R root:root covers this
-# subdirectory too, on every run), so that's where root's own rollback
-# material belongs.
-ROOT_ROLLBACK_DIR="$INSTALL_DIR/.rollback"
+# v5.67.0-beta.9 (Q121, items a/h) — everything below derives from the three
+# layout directories, so it lives in a function main() calls AFTER the flags,
+# the answers file and root have all been dealt with and the layout is
+# resolved. It used to run at top level, before any of them: the layout was
+# resolved before the answers file was read, and before require_root, and for
+# --docker too (which has no layout at all). The three assignments right below
+# are today's historical defaults — what every variable holds until
+# _resolve_layout_dirs replaces them, and what --docker keeps (it never
+# touches any of them).
+INSTALL_DIR="/opt/jen"
+CONFIG_DIR="/etc/jen"
+CONTENT_DIR="/var/lib/jen"
 
-# v5.14.0 — versioned release directories. Each release is built whole
-# under releases/<X.Y.Z>/{app,venv}; `current` is a relative symlink to
-# the live one, flipped atomically (ln -s + mv -T). A rollback is one
-# flip back — the previous release dir is never touched.
-RELEASES_DIR="$INSTALL_DIR/releases"
-CURRENT_LINK="$INSTALL_DIR/current"
-RELEASE_DIR="$RELEASES_DIR/$JEN_VERSION"   # the release THIS run installs
-APP_DIR="$RELEASE_DIR/app"
+_set_paths() {
+    SERVICE_FILE="/etc/systemd/system/jen.service"
+    SUDOERS_FILE="/etc/sudoers.d/jen"
+    CONFIG_FILE="$CONFIG_DIR/jen.config"
+    BACKUP_DIR="$CONFIG_DIR/backups"    # jen.config backups (NOT the DB backups — those are $CONTENT_DIR/backups)
+    # v5.67.0-beta.7 (Q119, item c) — the external-files rollback snapshot
+    # (jen-sudoers, the systemd units, jen-update-root.py itself) is NOT a
+    # config backup and must never live under $CONFIG_DIR: that directory is
+    # service-user-owned (§6.1), so a compromised service account could edit
+    # a snapshotted copy of jen-update-root.py or a unit file and wait for
+    # ANY later rollback to have root restore its payload straight into
+    # /usr/local/sbin or /etc/systemd/system. $INSTALL_DIR is root-owned
+    # throughout (install_files's own chown -R root:root covers this
+    # subdirectory too, on every run), so that's where root's own rollback
+    # material belongs.
+    ROOT_ROLLBACK_DIR="$INSTALL_DIR/.rollback"
 
-# v5.8.0 — bare-metal Jen runs from its own venv, not system site-packages
-# (no more --break-system-packages). VENV_PY is this release's interpreter;
-# PYBIN is whatever's usable right now for the installer's own inline
-# python helpers — the currently-live release's venv (pre-upgrade DB
-# backup needs pymysql), else a flat pre-5.14 venv, else system python.
-VENV_DIR="$RELEASE_DIR/venv"
-VENV_PY="$VENV_DIR/bin/python"
-PYBIN="python3"
-[[ -x "$INSTALL_DIR/venv/bin/python" ]] && PYBIN="$INSTALL_DIR/venv/bin/python"
-[[ -x "$CURRENT_LINK/venv/bin/python" ]] && PYBIN="$CURRENT_LINK/venv/bin/python"
+    # v5.14.0 — versioned release directories. Each release is built whole
+    # under releases/<X.Y.Z>/{app,venv}; `current` is a relative symlink to
+    # the live one, flipped atomically (ln -s + mv -T). A rollback is one
+    # flip back — the previous release dir is never touched.
+    RELEASES_DIR="$INSTALL_DIR/releases"
+    CURRENT_LINK="$INSTALL_DIR/current"
+    RELEASE_DIR="$RELEASES_DIR/$JEN_VERSION"   # the release THIS run installs
+    APP_DIR="$RELEASE_DIR/app"
+
+    # v5.8.0 — bare-metal Jen runs from its own venv, not system site-packages
+    # (no more --break-system-packages). VENV_PY is this release's interpreter;
+    # PYBIN is whatever's usable right now for the installer's own inline
+    # python helpers — the currently-live release's venv (pre-upgrade DB
+    # backup needs pymysql), else a flat pre-5.14 venv, else system python.
+    VENV_DIR="$RELEASE_DIR/venv"
+    VENV_PY="$VENV_DIR/bin/python"
+    PYBIN="python3"
+    [[ -x "$INSTALL_DIR/venv/bin/python" ]] && PYBIN="$INSTALL_DIR/venv/bin/python"
+    [[ -x "$CURRENT_LINK/venv/bin/python" ]] && PYBIN="$CURRENT_LINK/venv/bin/python"
+    return 0    # the line above is a bare `[[ ]] && ...`: false would otherwise be this function's status, fatal under set -e
+}
 
 # The app tree the installer's inline python helpers should import from:
 # this run's release once install_files has populated it, else the live
@@ -521,6 +551,8 @@ app_pyroot() {
     elif [[ -d "$CURRENT_LINK/app/jen" ]]; then echo "$CURRENT_LINK/app"
     else echo "$INSTALL_DIR"; fi
 }
+
+_set_paths
 
 # ── Spinner ───────────────────────────────────────────────────────────────────
 _spinner_pid=""
@@ -613,7 +645,15 @@ require_root() {
 
 # ── Detect existing install ───────────────────────────────────────────────────
 detect_existing() {
-    if [[ -f "$CURRENT_LINK/app/run.py" ]] || [[ -f "$INSTALL_DIR/run.py" ]] || [[ -f "$INSTALL_DIR/jen.py" ]] || [[ -d "$INSTALL_DIR/jen" ]]; then
+    # v5.67.0-beta.9 (Q121, item b) — the checker's own answer (LAYOUT_MODE:
+    # marker, or recognised by content) says whether an install is recorded
+    # here at all; the files below say whether there is anything TO upgrade.
+    # A box whose app was removed (uninstall.sh level 1) but whose layout
+    # file and config were kept is "upgrade" to the checker and a reinstall
+    # to everything below — it has no release to back up, snapshot or roll
+    # back to.
+    if [[ "$LAYOUT_MODE" == "upgrade" ]] && \
+       { [[ -f "$CURRENT_LINK/app/run.py" ]] || [[ -f "$INSTALL_DIR/run.py" ]] || [[ -f "$INSTALL_DIR/jen.py" ]] || [[ -d "$INSTALL_DIR/jen" ]]; }; then
         IS_UPGRADE=true
         # Version: the versioned layout's current/app first (v5.14.0), then
         # the flat jen/__init__.py (2.6.x+), jen.py (pre-2.6), legacy/jen.py.
@@ -889,6 +929,17 @@ _jen_db_can_self_create() {
     mysql -u root -e "SELECT 1;" &>/dev/null 2>&1
 }
 
+# v5.67.0-beta.9 (Q121, item h) — a SQL string literal for MySQL/MariaDB:
+# backslash and the quote itself doubled. The self-create below used to put
+# the password straight into the statement, so a password containing a quote
+# broke the statement (or, worse, was part of it).
+_sql_quote() {
+    local s="$1" q="'"
+    s="${s//\\/\\\\}"
+    s="${s//$q/$q$q}"
+    printf "'%s'" "$s"
+}
+
 _jen_db_offer_create() {
     blank
     warn "Could not connect to Jen database. The SQL to create it:"
@@ -899,12 +950,21 @@ _jen_db_offer_create() {
     echo -e "    ${C}FLUSH PRIVILEGES;${NC}"
     blank
     if [[ "$HAVE_TTY" == "true" && "$MODE_UNATTENDED" == "false" ]] && _jen_db_can_self_create "$JEN_DB_HOST"; then
+        # Identifiers (the database and user names) are interpolated, never
+        # quoted — so only names that cannot carry SQL are accepted; the
+        # password goes through _sql_quote. The statement is fed on stdin, so
+        # the password never appears in a process listing.
+        if [[ ! "$JEN_DB_NAME" =~ ^[A-Za-z0-9_.-]+$ || ! "$JEN_DB_USER" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+            warn "Not creating it for you: the database or user name has characters this installer will not put into SQL — use the statements above by hand."
+            return 1
+        fi
         if [[ "$(prompt_yn "MariaDB is local and root can connect without a password — create it now?" "y")" == "y" ]]; then
-            if mysql -u root -e "
-CREATE DATABASE IF NOT EXISTS \`${JEN_DB_NAME}\`;
-CREATE USER IF NOT EXISTS '${JEN_DB_USER}'@'%' IDENTIFIED BY '${JEN_DB_PASS}';
+            local create_sql
+            create_sql="CREATE DATABASE IF NOT EXISTS \`${JEN_DB_NAME}\`;
+CREATE USER IF NOT EXISTS '${JEN_DB_USER}'@'%' IDENTIFIED BY $(_sql_quote "$JEN_DB_PASS");
 GRANT ALL PRIVILEGES ON \`${JEN_DB_NAME}\`.* TO '${JEN_DB_USER}'@'%';
-FLUSH PRIVILEGES;" 2>/dev/null; then
+FLUSH PRIVILEGES;"
+            if printf '%s\n' "$create_sql" | mysql -u root 2>/dev/null; then
                 ok "Database and user created"
                 return 0
             else
@@ -929,9 +989,25 @@ collect_config() {
     # config tried to read /dev/tty and aborted under set -e instead of
     # silently keeping the existing config the way the doc comment for
     # --unattended promises.
-    if [[ "$IS_UPGRADE" == "true" && -f "$CONFIG_FILE" && \
+    #
+    # v5.67.0-beta.9 (Q121, item c) — "an existing jen.config is KEPT" is no
+    # longer an UPGRADE-only rule. uninstall.sh level 1 keeps the config and
+    # promises "your existing config will be detected automatically"; a
+    # reinstall onto it is a fresh install as far as IS_UPGRADE goes (there is
+    # no app to upgrade), and collect_config used to rewrite jen.config from
+    # blank Kea sections on a marked box. Now: a config that exists is kept
+    # unless --configure was given, an answers file included (it feeds a NEW
+    # config, and says so). No TTY to ask on is treated like --unattended,
+    # since the menu below reads /dev/tty.
+    if [[ -f "$CONFIG_FILE" && "$MODE_CONFIGURE" == "false" && -n "$ANSWERS_FILE" ]]; then
+        blank
+        ok "Keeping existing configuration  ${DIM}(${CONFIG_FILE}; --answers only feeds a NEW config — --configure rewrites this one)${NC}"
+        CONFIGURE=false
+        return
+    fi
+    if [[ -f "$CONFIG_FILE" && \
           "$MODE_UPGRADE" == "false" && "$MODE_REPAIR" == "false" && \
-          "$MODE_UNATTENDED" == "false" ]]; then
+          "$MODE_UNATTENDED" == "false" && "$HAVE_TTY" == "true" ]]; then
         echo -e "  ${G}Existing config found:${NC} ${DIM}${CONFIG_FILE}${NC}"
         blank
         echo -e "    ${B}1)${NC}  Keep existing config  ${DIM}(recommended)${NC}"
@@ -955,7 +1031,7 @@ collect_config() {
             { blank; ok "Keeping existing configuration"; CONFIGURE=false; return; }
         CONFIGURE=true
     elif [[ "$MODE_UPGRADE" == "true" || "$MODE_REPAIR" == "true" || \
-            ( "$IS_UPGRADE" == "true" && -f "$CONFIG_FILE" && "$MODE_UNATTENDED" == "true" ) ]]; then
+            ( -f "$CONFIG_FILE" && ( "$MODE_UNATTENDED" == "true" || "$HAVE_TTY" == "false" ) ) ]]; then
         blank
         ok "Keeping existing configuration"
         CONFIGURE=false
@@ -1055,7 +1131,7 @@ _configure_jen_db() {
         else
             JEN_DB_HOST=$(_ask  "JEN_DB_HOST" "Host"     "${KEA_DB_HOST:-localhost}")
             JEN_DB_USER=$(_ask  "JEN_DB_USER" "Username" "jen")
-            JEN_DB_PASS=$(_ask_secret "JEN_DB_PASS" "Password")
+            JEN_DB_PASS=$(_ask_secret "JEN_DB_PASS" "Password" required)
             JEN_DB_NAME=$(_ask  "JEN_DB_NAME" "Database" "jen")
         fi
         _edit=false
@@ -1301,11 +1377,11 @@ CONFEOF
 # confusingly, inside start_service.
 _seed_jen_db() {
     local pass="$1" out
-    # shellcheck disable=SC2086 # deliberately unquoted: with $pass empty,
-    # this contributes NO extra word to the command at all — quoting it
-    # would instead pass env one empty-string argument, which env rejects
-    # as not a KEY=value pair. The inner "$pass" is quoted, so a password
-    # containing spaces still arrives as one word when it IS set.
+    # v5.67.0-beta.9 (Q121, item h) — the admin password goes to the child on
+    # its STDIN (printf is a shell builtin: no process ever carries it in its
+    # argument list), and the snippet puts it into the environment of its OWN
+    # process before create_app(). It used to be `env JEN_INITIAL_ADMIN_PASSWORD=
+    # "$pass" ...`, visible to every local user in `ps` for the whole run.
     #
     # v5.67.0 (Q114) — JEN_ROOT/JEN_CONFIG_DIR/JEN_CONTENT_DIR exported
     # for the same reason every python one-liner install.sh shells out to
@@ -1313,11 +1389,14 @@ _seed_jen_db() {
     # inherit a relocated layout from, so without this create_app() would
     # silently fall back to the historical defaults instead of reading
     # THIS install's own jen.config.
-    out=$(runuser -u "$JEN_USER" -- env ${pass:+JEN_INITIAL_ADMIN_PASSWORD="$pass"} \
+    out=$(printf '%s' "$pass" | runuser -u "$JEN_USER" -- env \
         JEN_ROOT="$(app_pyroot)" JEN_CONFIG_DIR="$CONFIG_DIR" JEN_CONTENT_DIR="$CONTENT_DIR" \
         "$PYBIN" -c "
-import sys
+import os, sys
 sys.path.insert(0, '$(app_pyroot)')
+_pw = sys.stdin.read()
+if _pw:
+    os.environ['JEN_INITIAL_ADMIN_PASSWORD'] = _pw
 from jen import create_app
 create_app()
 print('JEN_DB_SEED_OK')
@@ -1555,6 +1634,14 @@ migrate_content() {
 }
 
 # ── Layout file (v5.67.0, Q114) ──────────────────────────────────────────────
+# v5.67.0-beta.9 (Q121, item f) — written LAST in a fresh install (after
+# verify_install), not at step 5 of 19. A fresh install that failed anywhere
+# between used to leave this file behind recording directories that were never
+# completed: a retry with DIFFERENT directories was then refused as
+# "relocating an existing install", and uninstall.sh refused the half-made
+# config directory. A file that only ever exists for a finished install cannot
+# do either.
+#
 # Written once, on a genuinely fresh install only — an upgrade/repair/
 # configure run against an existing install never reaches here with
 # IS_UPGRADE false, and _resolve_layout_dirs above has already refused a
@@ -1760,9 +1847,14 @@ verify_install() {
     blank
 
     # Service
+    # v5.67.0-beta.9 (Q121, item f) — every failure below goes through
+    # fatal(), never a bare `return 1`/`exit 1`: fatal() is what rolls an
+    # upgrade back (ROLLBACK_ARMED is still set here) and what the INT/TERM
+    # trap's own cleanup is modelled on. A bare exit skipped all of it, so a
+    # verification failure left a broken upgrade in place.
     systemctl is-active --quiet jen \
         && ok "Service running" \
-        || { err "Service not running"; return 1; }
+        || { err "Service not running"; fatal "Verification failed — the service is not running (journalctl -u jen)"; }
 
     # Config
     [[ -f "$CONFIG_FILE" ]] \
@@ -1779,7 +1871,8 @@ verify_install() {
         if [[ "$unit_status" -eq 0 ]]; then
             ok "systemd unit verified"
         else
-            err "systemd-analyze verify failed for $SERVICE_FILE:"; echo "$unit_result"; exit 1
+            err "systemd-analyze verify failed for $SERVICE_FILE:"; echo "$unit_result"
+            fatal "Verification failed — the rendered systemd unit is invalid"
         fi
     else
         warn "systemd-analyze not found — skipping unit verification"
@@ -1833,7 +1926,8 @@ print(len([f for f in os.listdir('$(app_pyroot)/templates') if f.endswith('.html
     if [[ "$tpl_status" -eq 0 ]]; then
         ok "Templates validated  ${DIM}(${tpl_result} files)${NC}"
     else
-        err "Template validation failed:"; echo "$tpl_result"; exit 1
+        err "Template validation failed:"; echo "$tpl_result"
+        fatal "Verification failed — a template does not compile"
     fi
 
     # Modules
@@ -2154,7 +2248,7 @@ _disarm_rollback()   { ROLLBACK_ARMED=false; }
 # it, _configure_admin) already branch on IS_UPGRADE to keep the existing
 # config instead of asking — that was true before this table existed too.
 declare -A MODE_STEPS=(
-    [standard]="preflight_checks install_dependencies collect_config backup_existing write_layout_file migrate_content snapshot_external_files _arm_rollback install_files setup_venv compile_app write_config activate_release start_service verify_install _disarm_rollback remove_flat_leftovers write_layout_markers print_summary"
+    [standard]="preflight_checks install_dependencies collect_config backup_existing migrate_content snapshot_external_files _arm_rollback install_files setup_venv compile_app write_config activate_release start_service verify_install _disarm_rollback remove_flat_leftovers write_layout_file write_layout_markers print_summary"
     [repair]="preflight_checks install_dependencies _skip_configure backup_existing snapshot_external_files _arm_rollback install_files setup_venv compile_app activate_release start_service verify_install _disarm_rollback remove_flat_leftovers print_summary"
 )
 
@@ -2188,7 +2282,14 @@ _run_restore_mode() {
         # own historical defaults (--etc-jen/--content-dir cover the two
         # explicit arguments restore.run() takes; JEN_ROOT covers
         # extensions.JEN_ROOT, used internally for the bundled-plugin check).
-        if ! (cd "$(app_pyroot)" && JEN_ROOT="$(app_pyroot)" "$RESTORE_PY" -m jen.tools.restore --rollback "$RESTORE_ROLLBACK" --etc-jen "$CONFIG_DIR" --content-dir "$CONTENT_DIR" ${RESTORE_NOSTOP:-}); then
+        # v5.67.0-beta.9 (Q121, item e) — ALL THREE variables, on both of the
+        # restore/rollback lines. With JEN_ROOT alone, extensions.CONFIG_DIR is
+        # $JEN_ROOT/etc: every restore printed a reload warning, its sizing
+        # pass and the rollback snapshot used whatever database the BUNDLE's
+        # own config named, and a legacy writable plugin read as "code is not
+        # installed here". tests/test_install_python_env.py scans every python
+        # invocation in this script for the same three together.
+        if ! (cd "$(app_pyroot)" && JEN_ROOT="$(app_pyroot)" JEN_CONFIG_DIR="$CONFIG_DIR" JEN_CONTENT_DIR="$CONTENT_DIR" "$RESTORE_PY" -m jen.tools.restore --rollback "$RESTORE_ROLLBACK" --etc-jen "$CONFIG_DIR" --content-dir "$CONTENT_DIR" ${RESTORE_NOSTOP:-}); then
             fatal "Rollback failed — see the messages above."
         fi
         ok "Rollback complete."
@@ -2212,7 +2313,7 @@ _run_restore_mode() {
     # (this one was missed in step 2 — --etc-jen/--content-dir default to
     # extensions.CONFIG_DIR/CONTENT_DIR, which fall back to the historical
     # defaults without JEN_CONFIG_DIR/JEN_CONTENT_DIR set).
-    if ! (cd "$(app_pyroot)" && JEN_ROOT="$(app_pyroot)" "$RESTORE_PY" -m jen.tools.restore "$RESTORE_BUNDLE" --etc-jen "$CONFIG_DIR" --content-dir "$CONTENT_DIR" ${RESTORE_FORCE:-} ${RESTORE_NOSTOP:-} ${RESTORE_START:-}); then
+    if ! (cd "$(app_pyroot)" && JEN_ROOT="$(app_pyroot)" JEN_CONFIG_DIR="$CONFIG_DIR" JEN_CONTENT_DIR="$CONTENT_DIR" "$RESTORE_PY" -m jen.tools.restore "$RESTORE_BUNDLE" --etc-jen "$CONFIG_DIR" --content-dir "$CONTENT_DIR" ${RESTORE_FORCE:-} ${RESTORE_NOSTOP:-} ${RESTORE_START:-}); then
         fatal "Restore failed — see the messages above."
     fi
     ok "Restore complete."
@@ -2322,10 +2423,22 @@ main() {
     show_banner
     require_root
 
-    # v5.67.0 (Q113) — load the answers file, if given, before anything
-    # that could read from it. Every other mode (restore, configure,
-    # repair, docker) ignores it; it only ever feeds collect_config.
+    # v5.67.0-beta.9 (Q121, items a/h) — in THIS order, and no earlier:
+    #  1. root, so nothing below (the answers file, the layout checker) is
+    #     read or run by an unprivileged caller;
+    #  2. umask 022 — a hardened sudo umask (077 is common) would otherwise
+    #     make every file this script creates (the venv above all) unreadable
+    #     to the service user;
+    #  3. the answers file, so JEN_APP_DIR/JEN_CONFIG_DIR/JEN_DATA_DIR in it
+    #     count (they used to be ignored: the layout was resolved at top
+    #     level, before this ran);
+    #  4. the layout — except for --docker, which has no layout at all.
+    umask 022
     [[ -n "$ANSWERS_FILE" ]] && _load_answers_file "$ANSWERS_FILE"
+    if [[ "$MODE_DOCKER" != "true" ]]; then
+        _resolve_layout_dirs
+        _set_paths
+    fi
 
     [[ "$MODE_RESTORE" == "true" ]] && _run_restore_mode
     [[ "$MODE_CONFIGURE" == "true" ]] && _run_configure_mode

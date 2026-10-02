@@ -8,7 +8,7 @@ own bash copy of the validation rules had already drifted from
 jen-update-root.py's Python copy (the bash side's forbidden-prefix list let
 `--config-dir /etc` through, which install_files() then recursively
 chown'd/chmod'd). The fix was to delete the bash copy entirely:
-_resolve_layout_dirs now just builds `--for install|upgrade [--app-dir ...]`
+_resolve_layout_dirs now just builds `--for auto [--app-dir ...]` (v5.67.0-beta.9, Q121; it was install|upgrade)
 arguments, calls `jen-update-root.py --check-layout` (the ONE
 implementation — see that module's own "── --check-layout" section), and
 either adopts its printed `key=value` paths or fatal()s with its refusal
@@ -49,35 +49,19 @@ def _sourceable(tmp_path: pathlib.Path, prelude: str = "") -> pathlib.Path:
     traps stripped, so sourcing it defines every function/variable without
     running the installer.
 
-    install.sh calls `_resolve_layout_dirs` itself at top level (not from
-    main()) — the rest of the script needs INSTALL_DIR/CONFIG_DIR/
-    CONTENT_DIR to build SERVICE_FILE/CONFIG_FILE/RELEASES_DIR/etc., all
-    computed before main() ever runs. That means a `_layout_checker`
-    override only takes effect for this auto-call if it's spliced in
-    BEFORE that one line, not appended after `source` returns — any given
-    test's `prelude` (its _layout_checker stub) is inserted right there.
+    v5.67.0-beta.9 (Q121) — install.sh no longer calls `_resolve_layout_dirs`
+    at top level (main() does, after the flags, the answers file and root), so
+    sourcing defines everything and runs nothing. A test's `prelude` (its
+    `_layout_checker` stub) is appended AFTER the definitions it replaces.
     """
     text = _INSTALL_SH.read_text(encoding="utf-8")
     lines = [line for line in text.splitlines() if not line.startswith("trap ") and line.strip() != 'main "$@"']
-    call_line = lines.index("_resolve_layout_dirs")
-    if prelude:
-        lines[call_line:call_line] = prelude.splitlines()
     out = tmp_path / "install_lib.sh"
-    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    out.write_text("\n".join(lines) + "\n" + prelude + "\n", encoding="utf-8")
     return out
 
 
-# A minimal _layout_checker override for tests that don't care what it
-# returns — just enough that install.sh's own top-level auto-call to
-# _resolve_layout_dirs (see _sourceable's docstring) succeeds quietly
-# during `source`, rather than trying to exec a jen-update-root.py that
-# was never copied into tmp_path alongside the stripped install.sh.
-_NOOP_CHECKER = (
-    "_layout_checker() { printf 'app_dir=/opt/jen\\nconfig_dir=/etc/jen\\ndata_dir=/var/lib/jen\\n'; return 0; }\n"
-)
-
-
-def _run(tmp_path: pathlib.Path, script: str, prelude: str = _NOOP_CHECKER) -> subprocess.CompletedProcess:
+def _run(tmp_path: pathlib.Path, script: str, prelude: str = "") -> subprocess.CompletedProcess:
     lib = _sourceable(tmp_path, prelude=prelude)
     full = textwrap.dedent(f"""
         set -uo pipefail
@@ -88,34 +72,12 @@ def _run(tmp_path: pathlib.Path, script: str, prelude: str = _NOOP_CHECKER) -> s
 
 
 def _checker_stub(probe: pathlib.Path, stdout: str, rc: int = 0) -> str:
-    """A _layout_checker override that (1) records its own argv to `probe`,
-    one argument per line, and (2) prints `stdout` and exits `rc` —
-    isolating _resolve_layout_dirs's own argument-building and key=value
-    parsing from the real Python validator it would otherwise call. Must
-    be installed via `_run`'s `prelude` (see `_sourceable`), not appended
-    to `script`: install.sh's own top-level `_resolve_layout_dirs` call
-    runs during `source`, before any override a test script adds
-    afterward could ever take effect.
-
-    The FIRST call the stub ever sees is always that top-level auto-call
-    (today's defaults — no test has set OPT_APP_DIR/LAYOUT_FILE yet at
-    that point) and is always answered with a harmless canned success, so
-    `source` itself never fails; the scenario each test actually means to
-    exercise is the SECOND call, made explicitly by `script` after it sets
-    up whatever OPT_*/LAYOUT_FILE state the test is about, and that is
-    the one whose argv is recorded and whose configured stdout/rc apply.
-    A FILE (not a shell variable) tracks which call this is: every call
-    goes through `out=$(_layout_checker ...)`, and `$(...)` always forks a
-    subshell, so a variable assignment inside the function body is lost
-    the instant that subshell exits — only filesystem state survives it."""
-    seen_marker = probe.with_name(probe.name + ".seen")
+    """A `_layout_checker` override that (1) records its own argv to `probe`,
+    one argument per line, and (2) prints `stdout` and exits `rc` — isolating
+    _resolve_layout_dirs's own argument-building and key=value parsing from
+    the real Python validator it would otherwise call."""
     return (
         "_layout_checker() {\n"
-        f"    if [[ ! -e {shlex.quote(str(seen_marker))} ]]; then\n"
-        f"        : > {shlex.quote(str(seen_marker))}\n"
-        "        printf 'app_dir=/opt/jen\\nconfig_dir=/etc/jen\\ndata_dir=/var/lib/jen\\n'\n"
-        "        return 0\n"
-        "    fi\n"
         f"    printf '%s\\n' \"$@\" > {shlex.quote(str(probe))}\n"
         f"    printf '%s' {shlex.quote(stdout)}\n"
         f"    return {rc}\n"
@@ -123,40 +85,34 @@ def _checker_stub(probe: pathlib.Path, stdout: str, rc: int = 0) -> str:
     )
 
 
-class TestFreshInstallGlue:
-    """No $LAYOUT_FILE on disk — _resolve_layout_dirs must call the
-    checker with --for install and today's resolved candidate paths
-    (defaults, or any --app-dir/--config-dir/--data-dir /
-    JEN_*_DIR override), then adopt its printed app_dir/config_dir/
-    data_dir verbatim."""
+_INSTALL_OUT = "mode=install\napp_dir=/opt/jen\nconfig_dir=/etc/jen\ndata_dir=/var/lib/jen\n"
 
-    def test_calls_checker_with_for_install_and_default_candidates(self, tmp_path):
+
+class TestResolveGlue:
+    """_resolve_layout_dirs hands the checker `--for auto` plus only the
+    directories actually asked for (--app-dir/--config-dir/--data-dir, or
+    JEN_APP_DIR/JEN_CONFIG_DIR/JEN_DATA_DIR from the answers file or the
+    environment), then adopts what the checker prints — the three paths AND
+    the install-versus-upgrade decision (v5.67.0-beta.9, Q121, item b: that
+    decision is the checker's, by marker-or-content, never `[[ -d ]]`)."""
+
+    def test_no_flags_means_no_directory_arguments(self, tmp_path):
         probe = tmp_path / "argv.txt"
-        stdout = "app_dir=/opt/jen\nconfig_dir=/etc/jen\ndata_dir=/var/lib/jen\n"
         r = _run(
             tmp_path,
             """
             _resolve_layout_dirs
-            echo "$INSTALL_DIR|$CONFIG_DIR|$CONTENT_DIR"
+            echo "$LAYOUT_MODE|$INSTALL_DIR|$CONFIG_DIR|$CONTENT_DIR"
             """,
-            prelude=_checker_stub(probe, stdout),
+            prelude=_checker_stub(probe, _INSTALL_OUT),
         )
         assert r.returncode == 0, r.stdout + r.stderr
-        assert r.stdout.strip() == "/opt/jen|/etc/jen|/var/lib/jen"
-        assert probe.read_text(encoding="utf-8").split() == [
-            "--for",
-            "install",
-            "--app-dir",
-            "/opt/jen",
-            "--config-dir",
-            "/etc/jen",
-            "--data-dir",
-            "/var/lib/jen",
-        ]
+        assert r.stdout.strip() == "install|/opt/jen|/etc/jen|/var/lib/jen"
+        assert probe.read_text(encoding="utf-8").split() == ["--for", "auto"]
 
-    def test_custom_dirs_are_passed_through_to_the_checker(self, tmp_path):
+    def test_flags_are_forwarded(self, tmp_path):
         probe = tmp_path / "argv.txt"
-        stdout = "app_dir=/srv/jen/app\nconfig_dir=/srv/jen/etc\ndata_dir=/srv/jen/data\n"
+        out = "mode=install\napp_dir=/srv/jen/app\nconfig_dir=/srv/jen/etc\ndata_dir=/srv/jen/data\n"
         r = _run(
             tmp_path,
             """
@@ -164,13 +120,13 @@ class TestFreshInstallGlue:
             _resolve_layout_dirs
             echo "$INSTALL_DIR|$CONFIG_DIR|$CONTENT_DIR"
             """,
-            prelude=_checker_stub(probe, stdout),
+            prelude=_checker_stub(probe, out),
         )
         assert r.returncode == 0, r.stdout + r.stderr
         assert r.stdout.strip() == "/srv/jen/app|/srv/jen/etc|/srv/jen/data"
         assert probe.read_text(encoding="utf-8").split() == [
             "--for",
-            "install",
+            "auto",
             "--app-dir",
             "/srv/jen/app",
             "--config-dir",
@@ -179,9 +135,9 @@ class TestFreshInstallGlue:
             "/srv/jen/data",
         ]
 
-    def test_only_app_dir_set_others_stay_default(self, tmp_path):
+    def test_only_the_directories_asked_for_are_forwarded(self, tmp_path):
         probe = tmp_path / "argv.txt"
-        stdout = "app_dir=/srv/jen\nconfig_dir=/etc/jen\ndata_dir=/var/lib/jen\n"
+        out = "mode=install\napp_dir=/srv/jen\nconfig_dir=/etc/jen\ndata_dir=/var/lib/jen\n"
         r = _run(
             tmp_path,
             """
@@ -189,20 +145,81 @@ class TestFreshInstallGlue:
             _resolve_layout_dirs
             echo "$INSTALL_DIR|$CONFIG_DIR|$CONTENT_DIR"
             """,
-            prelude=_checker_stub(probe, stdout),
+            prelude=_checker_stub(probe, out),
         )
         assert r.returncode == 0, r.stdout + r.stderr
         assert r.stdout.strip() == "/srv/jen|/etc/jen|/var/lib/jen"
+        assert probe.read_text(encoding="utf-8").split() == ["--for", "auto", "--app-dir", "/srv/jen"]
+
+    def test_layout_keys_from_the_answers_file_count(self, tmp_path):
+        """Item a — JEN_APP_DIR in --answers used to be ignored: the layout was resolved at top level, before
+        the answers file was read, so the install went to the defaults and recorded them."""
+        probe = tmp_path / "argv.txt"
+        out = "mode=install\napp_dir=/srv/jen/app\nconfig_dir=/srv/jen/etc\ndata_dir=/srv/jen/data\n"
+        r = _run(
+            tmp_path,
+            """
+            ANSWERS[JEN_APP_DIR]=/srv/jen/app
+            ANSWERS[JEN_CONFIG_DIR]=/srv/jen/etc
+            ANSWERS[JEN_DATA_DIR]=/srv/jen/data
+            _resolve_layout_dirs
+            echo "$INSTALL_DIR"
+            """,
+            prelude=_checker_stub(probe, out),
+        )
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert r.stdout.strip() == "/srv/jen/app"
         assert probe.read_text(encoding="utf-8").split() == [
             "--for",
-            "install",
+            "auto",
             "--app-dir",
-            "/srv/jen",
+            "/srv/jen/app",
             "--config-dir",
-            "/etc/jen",
+            "/srv/jen/etc",
             "--data-dir",
-            "/var/lib/jen",
+            "/srv/jen/data",
         ]
+
+    def test_layout_keys_from_the_environment_count_and_a_flag_beats_them(self, tmp_path):
+        probe = tmp_path / "argv.txt"
+        r = _run(
+            tmp_path,
+            """
+            JEN_APP_DIR=/from/env
+            OPT_APP_DIR=/from/flag
+            _resolve_layout_dirs
+            """,
+            prelude=_checker_stub(
+                probe, "mode=install\napp_dir=/from/flag\nconfig_dir=/etc/jen\ndata_dir=/var/lib/jen\n"
+            ),
+        )
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert probe.read_text(encoding="utf-8").split() == ["--for", "auto", "--app-dir", "/from/flag"]
+
+    def test_the_mode_is_the_checkers_answer_not_whether_the_directory_exists(self, tmp_path):
+        """Item b — a pre-created EMPTY app dir is an install (the checker says so); the old
+        `[[ -d "$INSTALL_DIR" ]]` called it an upgrade and refused to "relocate" it."""
+        app_dir = tmp_path / "pre-created-empty"
+        app_dir.mkdir()
+        probe = tmp_path / "argv.txt"
+        out = f"mode=install\napp_dir={app_dir}\nconfig_dir=/etc/jen\ndata_dir=/var/lib/jen\n"
+        r = _run(
+            tmp_path,
+            f"""
+            OPT_APP_DIR="{app_dir}"
+            _resolve_layout_dirs
+            echo "$LAYOUT_MODE"
+            """,
+            prelude=_checker_stub(probe, out),
+        )
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert r.stdout.strip() == "install"
+
+    def test_an_upgrade_answer_is_adopted(self, tmp_path):
+        probe = tmp_path / "argv.txt"
+        out = "mode=upgrade\napp_dir=/srv/jen/app\nconfig_dir=/srv/jen/etc\ndata_dir=/srv/jen/data\n"
+        r = _run(tmp_path, '_resolve_layout_dirs; echo "$LAYOUT_MODE"', prelude=_checker_stub(probe, out))
+        assert r.stdout.strip() == "upgrade"
 
     def test_checker_refusal_is_fatal_verbatim(self, tmp_path):
         probe = tmp_path / "argv.txt"
@@ -211,106 +228,15 @@ class TestFreshInstallGlue:
         assert r.returncode != 0
         assert "must be a dedicated directory" in r.stdout
 
-    def test_existing_app_dir_with_no_layout_file_is_treated_as_an_upgrade(self, tmp_path):
-        # A pre-Q114 box: no $LAYOUT_FILE yet, but a real, already-
-        # populated app_dir. check_layout's own "install" mode requires
-        # absent/empty/marked (a fresh-install-only rule) — sending that
-        # mode here would refuse this box's very first run under Q117.
-        # _resolve_layout_dirs must detect the existing directory and
-        # call the checker with --for upgrade instead.
-        app_dir = tmp_path / "opt-jen"
-        app_dir.mkdir()
-        (app_dir / "run.py").write_text("# a real pre-Q114 install\n")
-        probe = tmp_path / "argv.txt"
-        stdout = f"app_dir={app_dir}\nconfig_dir=/etc/jen\ndata_dir=/var/lib/jen\n"
-        r = _run(
-            tmp_path,
-            f"""
-            OPT_APP_DIR="{app_dir}"
-            _resolve_layout_dirs
-            echo "$INSTALL_DIR|$CONFIG_DIR|$CONTENT_DIR"
-            """,
-            prelude=_checker_stub(probe, stdout),
-        )
-        assert r.returncode == 0, r.stdout + r.stderr
-        assert r.stdout.strip() == f"{app_dir}|/etc/jen|/var/lib/jen"
-        assert probe.read_text(encoding="utf-8").split() == ["--for", "upgrade", "--app-dir", str(app_dir)]
-
-    def test_nonexistent_app_dir_with_no_layout_file_stays_install_mode(self, tmp_path):
-        app_dir = tmp_path / "does-not-exist-yet"
-        probe = tmp_path / "argv.txt"
-        stdout = f"app_dir={app_dir}\nconfig_dir=/etc/jen\ndata_dir=/var/lib/jen\n"
-        r = _run(
-            tmp_path,
-            f"""
-            OPT_APP_DIR="{app_dir}"
-            _resolve_layout_dirs
-            """,
-            prelude=_checker_stub(probe, stdout),
-        )
-        assert r.returncode == 0, r.stdout + r.stderr
-        assert probe.read_text(encoding="utf-8").split()[:2] == ["--for", "install"]
-
-
-class TestUpgradeGlue:
-    """An existing $LAYOUT_FILE — _resolve_layout_dirs must call the
-    checker with --for upgrade, forwarding only the flags actually given
-    (an upgrade with no flags passes none at all; the checker itself reads
-    the existing file), and the disagreement refusal (now entirely the
-    checker's own job) passes through unchanged."""
-
-    def _write_layout(self, tmp_path):
-        layout = tmp_path / "jen-layout.conf"
-        layout.write_text(
-            "[layout]\napp_dir = /srv/jen/app\nconfig_dir = /srv/jen/etc\ndata_dir = /srv/jen/data\n", encoding="utf-8"
-        )
-        return layout
-
-    def test_existing_layout_calls_checker_with_for_upgrade_and_no_flags_by_default(self, tmp_path):
-        layout = self._write_layout(tmp_path)
-        probe = tmp_path / "argv.txt"
-        stdout = "app_dir=/srv/jen/app\nconfig_dir=/srv/jen/etc\ndata_dir=/srv/jen/data\n"
-        r = _run(
-            tmp_path,
-            f"""
-            LAYOUT_FILE="{layout}"
-            _resolve_layout_dirs
-            echo "$INSTALL_DIR|$CONFIG_DIR|$CONTENT_DIR"
-            """,
-            prelude=_checker_stub(probe, stdout),
-        )
-        assert r.returncode == 0, r.stdout + r.stderr
-        assert r.stdout.strip() == "/srv/jen/app|/srv/jen/etc|/srv/jen/data"
-        assert probe.read_text(encoding="utf-8").split() == ["--for", "upgrade"]
-
-    def test_explicit_flags_are_forwarded_to_the_checker_on_upgrade(self, tmp_path):
-        layout = self._write_layout(tmp_path)
-        probe = tmp_path / "argv.txt"
-        stdout = "app_dir=/srv/jen/app\nconfig_dir=/srv/jen/etc\ndata_dir=/srv/jen/data\n"
-        r = _run(
-            tmp_path,
-            f"""
-            LAYOUT_FILE="{layout}"
-            OPT_APP_DIR="/srv/jen/app"
-            _resolve_layout_dirs
-            """,
-            prelude=_checker_stub(probe, stdout),
-        )
-        assert r.returncode == 0, r.stdout + r.stderr
-        assert probe.read_text(encoding="utf-8").split() == ["--for", "upgrade", "--app-dir", "/srv/jen/app"]
-
     def test_disagreeing_flag_refusal_is_fatal_verbatim(self, tmp_path):
-        # The disagreement check itself now lives entirely in
-        # check_layout() (Python, see tests/test_jen_update_root.py) —
-        # this only proves the bash side passes the refusal through
-        # unchanged rather than re-deriving or swallowing it.
-        layout = self._write_layout(tmp_path)
+        # The disagreement check itself lives entirely in check_layout()
+        # (Python, tests/test_jen_update_root.py) — this only proves the bash
+        # side passes the refusal through unchanged.
         probe = tmp_path / "argv.txt"
         msg = "This install's app_dir is already /srv/jen/app — relocating an existing install is a runbook (docs/runbooks.md), not a flag."
         r = _run(
             tmp_path,
-            f"""
-            LAYOUT_FILE="{layout}"
+            """
             OPT_APP_DIR="/somewhere/else"
             _resolve_layout_dirs
             """,
@@ -318,6 +244,72 @@ class TestUpgradeGlue:
         )
         assert r.returncode != 0
         assert "runbook" in r.stdout
+
+    def test_an_incomplete_answer_is_fatal_not_a_half_resolved_layout(self, tmp_path):
+        probe = tmp_path / "argv.txt"
+        r = _run(tmp_path, "_resolve_layout_dirs", prelude=_checker_stub(probe, "mode=install\napp_dir=/opt/jen\n"))
+        assert r.returncode != 0
+        assert "did not return all three" in r.stdout
+
+
+class TestPathsFollowTheLayout:
+    def test_the_defaults_are_defined_before_anything_resolves(self, tmp_path):
+        """--docker never resolves a layout, so every derived variable must already exist."""
+        r = _run(tmp_path, 'echo "$INSTALL_DIR|$CONFIG_FILE|$RELEASES_DIR|$APP_DIR|$ROOT_ROLLBACK_DIR"')
+        out = r.stdout.strip()
+        assert out.startswith("/opt/jen|/etc/jen/jen.config|/opt/jen/releases|/opt/jen/releases/")
+        assert out.endswith("/app|/opt/jen/.rollback")
+
+    def test_set_paths_rederives_everything_from_the_resolved_dirs(self, tmp_path):
+        r = _run(
+            tmp_path,
+            """
+            INSTALL_DIR=/srv/jen/app; CONFIG_DIR=/srv/jen/etc; CONTENT_DIR=/srv/jen/data
+            _set_paths
+            echo "$CONFIG_FILE|$BACKUP_DIR|$RELEASES_DIR|$CURRENT_LINK|$ROOT_ROLLBACK_DIR"
+            """,
+        )
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert r.stdout.strip() == (
+            "/srv/jen/etc/jen.config|/srv/jen/etc/backups|/srv/jen/app/releases|/srv/jen/app/current|/srv/jen/app/.rollback"
+        )
+
+    def test_set_paths_returns_zero_even_when_no_venv_exists(self, tmp_path):
+        """Its last statement is a bare `[[ -x ... ]] && ...`; false would otherwise be the status, and
+        install.sh runs under set -e."""
+        r = _run(tmp_path, "set -e; INSTALL_DIR=/nonexistent/jen; _set_paths; echo survived")
+        assert r.stdout.strip() == "survived"
+
+
+class TestMainOrdersTheSteps:
+    """v5.67.0-beta.9 (Q121, items a/h) — the layout is resolved in main(), in a fixed order: root, umask,
+    the answers file, then the layout (not for --docker). Read from the source, since main() itself cannot
+    be run without a root, a systemd and a real install."""
+
+    def _main(self) -> str:
+        text = _INSTALL_SH.read_text(encoding="utf-8")
+        start = text.index("\nmain() {")
+        return text[start : text.index("\n}\n", start)]
+
+    def test_nothing_resolves_a_layout_at_top_level_any_more(self):
+        text = _INSTALL_SH.read_text(encoding="utf-8")
+        top_level_calls = [ln for ln in text.splitlines() if ln.strip() == "_resolve_layout_dirs"]
+        assert len(top_level_calls) == 1, "only main()'s own (indented) call remains"
+        assert top_level_calls[0].startswith("        "), "and it is indented inside main(), not a top-level statement"
+
+    def test_order_root_umask_answers_layout(self):
+        body = self._main()
+        order = [body.index(s) for s in ("require_root", "umask 022", "_load_answers_file", "_resolve_layout_dirs")]
+        assert order == sorted(order), order
+
+    def test_docker_skips_the_layout(self):
+        body = self._main()
+        guard = body.index('if [[ "$MODE_DOCKER" != "true" ]]; then')
+        assert guard < body.index("_resolve_layout_dirs") < body.index("_set_paths")
+
+    def test_the_answers_file_is_loaded_once_and_only_in_main(self):
+        text = _INSTALL_SH.read_text(encoding="utf-8")
+        assert text.count('_load_answers_file "$ANSWERS_FILE"') == 1
 
 
 class TestLayoutKv:

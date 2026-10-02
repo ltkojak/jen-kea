@@ -812,6 +812,173 @@ class TestWriteLayoutMarkersCli:
         assert "could not be marked" in capsys.readouterr().err
 
 
+class TestQ121CheckerAdditions:
+    """v5.67.0-beta.9 (Q121) — the checker's half of the installer's remaining defects: the install-versus-upgrade
+    decision (item b), a reinstall onto kept config and data directories (item c), `--help` for uninstall.sh's
+    probe of an installed copy (item d), and the grammar's `\\Z` anchor and `/root` (item h)."""
+
+    pytestmark = pytest.mark.skipif(os.name != "posix", reason="POSIX path semantics required")
+
+    @pytest.fixture(autouse=False)
+    def _bypass(self, jen_update_root, monkeypatch, tmp_path):
+        monkeypatch.setattr(jen_update_root, "_layout_ancestors_ok", lambda name, path: None)
+        monkeypatch.setattr(jen_update_root, "_layout_appdir_itself_ok", lambda path: None)
+        monkeypatch.setattr(jen_update_root, "_LAYOUT_FORBIDDEN_PREFIXES", ())
+        # no recorded layout on this box: a path under tmp_path that does not exist
+        monkeypatch.setattr(jen_update_root, "LAYOUT_FILE", str(tmp_path / "no-such-layout.conf"))
+
+    # ── (b) the mode is the checker's decision ──────────────────────────────────
+
+    def test_an_absent_app_dir_is_an_install(self, jen_update_root, _bypass, tmp_path):
+        assert jen_update_root.detect_layout_mode(str(tmp_path / "nope")) == "install"
+
+    def test_a_pre_created_empty_app_dir_is_an_install_not_an_upgrade(self, jen_update_root, _bypass, tmp_path):
+        """The old bash `[[ -d "$INSTALL_DIR" ]]` called this an upgrade and refused to "relocate" it."""
+        d = tmp_path / "empty"
+        d.mkdir()
+        assert jen_update_root.detect_layout_mode(str(d)) == "install"
+
+    def test_an_app_dir_recognised_by_content_is_an_upgrade(self, jen_update_root, _bypass, tmp_path):
+        for name in ("releases", "run.py", "jen.py"):
+            d = tmp_path / f"app-{name}"
+            d.mkdir()
+            (d / name).mkdir() if name == "releases" else (d / name).write_text("# jen\n")
+            assert jen_update_root.detect_layout_mode(str(d)) == "upgrade", name
+
+    def test_a_marked_app_dir_is_an_upgrade(self, jen_update_root, _bypass, tmp_path):
+        with patch("os.fchown"), patch("os.fchmod"):
+            jen_update_root.write_layout_marker(str(tmp_path), "app_dir", "5.67.0-beta.9")
+        assert jen_update_root.detect_layout_mode(str(tmp_path)) == "upgrade"
+
+    def test_somebody_elses_directory_is_an_install_whose_own_check_then_refuses_it(
+        self, jen_update_root, _bypass, tmp_path
+    ):
+        """The old behaviour treated this as an upgrade, tolerated it, then chowned and stamped it."""
+        d = tmp_path / "someone-elses"
+        d.mkdir()
+        (d / "their-file").write_text("not jen\n")
+        assert jen_update_root.detect_layout_mode(str(d)) == "install"
+        ok, result = jen_update_root.check_layout(
+            "install", app_dir=str(d), config_dir=str(tmp_path / "etc"), data_dir=str(tmp_path / "data")
+        )
+        assert not ok and "does not carry Jen's own marker" in result
+
+    def test_a_recorded_layout_file_means_an_install_exists_even_with_no_app_dir(
+        self, jen_update_root, monkeypatch, tmp_path
+    ):
+        layout = tmp_path / "jen-layout.conf"
+        layout.write_text("[layout]\n")
+        monkeypatch.setattr(jen_update_root, "LAYOUT_FILE", str(layout))
+        assert jen_update_root.detect_layout_mode(str(tmp_path / "gone")) == "upgrade"
+
+    def test_the_symlinked_app_dir_is_never_an_upgrade(self, jen_update_root, _bypass, tmp_path):
+        real = tmp_path / "real"
+        real.mkdir()
+        (real / "run.py").write_text("x")
+        link = tmp_path / "link"
+        link.symlink_to(real)
+        assert jen_update_root.detect_layout_mode(str(link)) == "install"
+
+    # ── (c) a reinstall onto kept config/data ────────────────────────────────────
+
+    def test_install_accepts_a_config_dir_recognised_by_content(self, jen_update_root, tmp_path):
+        (tmp_path / "jen.config").write_text("[jen_db]\n")
+        assert jen_update_root._layout_target_ok_for_install("config_dir", str(tmp_path)) is None
+
+    def test_install_accepts_a_data_dir_recognised_by_content(self, jen_update_root, tmp_path):
+        (tmp_path / "backups").mkdir()
+        assert jen_update_root._layout_target_ok_for_install("data_dir", str(tmp_path)) is None
+
+    def test_install_still_refuses_an_app_dir_with_jens_content_that_is_the_modes_job(self, jen_update_root, tmp_path):
+        """An app_dir with Jen's content is an UPGRADE (detect_layout_mode); install mode does not adopt it."""
+        (tmp_path / "releases").mkdir()
+        err = jen_update_root._layout_target_ok_for_install("app_dir", str(tmp_path))
+        assert err is not None and "does not carry Jen's own marker" in err
+
+    def test_install_still_refuses_unrelated_content_in_config_or_data(self, jen_update_root, tmp_path):
+        (tmp_path / "somebody-elses.txt").write_text("x")
+        for name in ("config_dir", "data_dir"):
+            assert jen_update_root._layout_target_ok_for_install(name, str(tmp_path)) is not None
+
+    # ── CLI: --for auto and --help ───────────────────────────────────────────────
+
+    def test_cli_auto_prints_the_mode_then_the_paths_for_a_fresh_box(self, jen_update_root, _bypass, tmp_path, capsys):
+        app, config, data = str(tmp_path / "app"), str(tmp_path / "etc"), str(tmp_path / "data")
+        rc = jen_update_root.check_layout_cli(
+            ["--for", "auto", "--app-dir", app, "--config-dir", config, "--data-dir", data]
+        )
+        assert rc == 0
+        lines = capsys.readouterr().out.splitlines()
+        assert lines[0] == "mode=install"
+        assert set(lines[1:]) == {f"app_dir={app}", f"config_dir={config}", f"data_dir={data}"}
+
+    def test_cli_auto_fills_unspecified_directories_from_the_defaults_when_installing(
+        self, jen_update_root, _bypass, tmp_path, capsys, monkeypatch
+    ):
+        monkeypatch.setattr(
+            jen_update_root,
+            "_DEFAULT_LAYOUT",
+            {"app_dir": str(tmp_path / "a"), "config_dir": str(tmp_path / "c"), "data_dir": str(tmp_path / "d")},
+        )
+        rc = jen_update_root.check_layout_cli(["--for", "auto"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "mode=install" in out and f"app_dir={tmp_path / 'a'}" in out
+
+    def test_cli_auto_on_a_recognised_install_says_upgrade(
+        self, jen_update_root, _bypass, tmp_path, capsys, monkeypatch
+    ):
+        app = tmp_path / "app"
+        (app / "releases").mkdir(parents=True)
+        monkeypatch.setattr(
+            jen_update_root,
+            "_DEFAULT_LAYOUT",
+            {"app_dir": str(app), "config_dir": str(tmp_path / "c"), "data_dir": str(tmp_path / "d")},
+        )
+        monkeypatch.setattr(jen_update_root, "_write_layout_check_cache", lambda ok, result: None)
+        rc = jen_update_root.check_layout_cli(["--for", "auto"])
+        assert rc == 0
+        assert capsys.readouterr().out.splitlines()[0] == "mode=upgrade"
+
+    def test_cli_help_exits_zero_with_a_usage_line(self, jen_update_root, capsys):
+        """uninstall.sh probes an INSTALLED updater with `--check-layout --help`; only a copy that understands
+        the mode answers 0 (a 5.66.0 one says "unrecognized arguments")."""
+        for flag in ("--help", "-h"):
+            assert jen_update_root.check_layout_cli([flag]) == 0
+            assert "--check-layout" in capsys.readouterr().out
+
+    def test_cli_help_is_reachable_through_main_without_touching_anything(self):
+        src = (_SCRIPT_PATH).read_text(encoding="utf-8")
+        assert 'if sys.argv[1:2] == ["--check-layout"]:' in src, "main() hands every --check-layout argv to the CLI"
+
+    def test_cli_accepts_auto_in_the_for_validation(self, jen_update_root, capsys):
+        rc = jen_update_root.check_layout_cli(["--for", "bogus"])
+        assert rc == 1 and "auto" in capsys.readouterr().err
+
+    # ── (h) grammar anchors and /root ────────────────────────────────────────────
+
+    def test_a_trailing_newline_no_longer_passes_the_grammar(self, jen_update_root):
+        """`$` also matches just before a trailing newline; \\Z does not."""
+        for bad in ("/srv/jen\n", "/srv/jen/app\n"):
+            assert jen_update_root._layout_path_ok("app_dir", bad) is not None, repr(bad)
+        assert jen_update_root._layout_path_ok("app_dir", "/srv/jen") is None
+
+    def test_the_grammar_pattern_is_anchored_with_A_and_Z(self, jen_update_root):
+        assert jen_update_root._LAYOUT_PATH_RE.pattern.startswith("\\A")
+        assert jen_update_root._LAYOUT_PATH_RE.pattern.endswith("\\Z")
+
+    def test_a_path_under_root_is_refused(self, jen_update_root):
+        for bad in ("/root/jen", "/root/jen/app"):
+            err = jen_update_root._layout_path_ok("app_dir", bad)
+            assert err is not None and "/root" in err, bad
+
+    def test_root_itself_is_still_refused(self, jen_update_root):
+        assert jen_update_root._layout_path_ok("app_dir", "/root") is not None
+
+    def test_a_sibling_that_merely_starts_with_root_is_fine(self, jen_update_root):
+        assert jen_update_root._layout_path_ok("app_dir", "/rootless/jen") is None
+
+
 class TestVerifyReleaseChecksum:
     def test_matching_checksum_returns_true(self, jen_update_root):
         checksum_text = "abc123def456  jen-v5.2.6.tar.gz\n"

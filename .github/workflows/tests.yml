@@ -914,6 +914,146 @@ jobs:
         working-directory: ${{ runner.temp }}/install-no-kea/jen
         run: printf 'y\n1\n' | sudo ./uninstall.sh
 
+      # ─────────────────────────────────────────────────────────────────────
+      # v5.67.0-beta.9 (Q121) — the installer's remaining defects, each proved
+      # by running the REAL script on this runner. Every leg below starts from
+      # a box with no Jen on it (the level-1 uninstalls above keep config,
+      # content and the layout record on purpose).
+      # ─────────────────────────────────────────────────────────────────────
+      - name: Q121 reset — a box with no Jen on it
+        run: |
+          set -e
+          sudo systemctl stop jen 2>/dev/null || true
+          sudo rm -rf /etc/jen /var/lib/jen /opt/jen /srv/jen /srv/q121 /etc/jen-layout.conf
+          sudo rm -f /etc/systemd/system/jen.service /etc/sudoers.d/jen
+          sudo systemctl daemon-reload
+
+      # (a) — JEN_APP_DIR/JEN_CONFIG_DIR/JEN_DATA_DIR in an --answers file,
+      # with NO flag at all. The layout used to be resolved at the top of the
+      # script, before the answers file was read, so this installed to
+      # /opt/jen and recorded the defaults.
+      - name: Q121 (a) — relocate through the answers file alone
+        run: |
+          set -e
+          umask 077
+          cp "$RUNNER_TEMP/answers.env" "$RUNNER_TEMP/answers-relocate.env"
+          {
+            echo "JEN_APP_DIR=/srv/q121/ans/app"
+            echo "JEN_CONFIG_DIR=/srv/q121/ans/etc"
+            echo "JEN_DATA_DIR=/srv/q121/ans/data"
+          } >> "$RUNNER_TEMP/answers-relocate.env"
+          cd "$RUNNER_TEMP/install-head/jen"
+          sudo TERM=linux ./install.sh --answers "$RUNNER_TEMP/answers-relocate.env" --unattended
+
+      - name: Q121 (a) — assert it went where the answers file said
+        run: |
+          set -e
+          systemctl is-active --quiet jen
+          curl -sf http://127.0.0.1:5050/api/v1/health | grep -q jen_version
+          sudo grep -q '^app_dir = /srv/q121/ans/app$' /etc/jen-layout.conf
+          sudo grep -q '^config_dir = /srv/q121/ans/etc$' /etc/jen-layout.conf
+          sudo grep -q '^data_dir = /srv/q121/ans/data$' /etc/jen-layout.conf
+          sudo test -f /srv/q121/ans/app/current/app/run.py
+          sudo test -f /srv/q121/ans/etc/jen.config
+          [[ ! -e /opt/jen && ! -e /etc/jen && ! -e /var/lib/jen ]]
+          echo "the answers file's own layout keys were honoured, and nothing landed at the defaults"
+
+      - name: Q121 (a) — put the box back
+        run: |
+          set -e
+          cd "$RUNNER_TEMP/install-head/jen"
+          printf 'y\n1\n' | sudo ./uninstall.sh
+          sudo rm -rf /srv/q121 /etc/jen-layout.conf
+
+      # (b) — install versus upgrade is the checker's decision, not "does the
+      # directory exist". A pre-created EMPTY --app-dir is allowed by the
+      # contract and used to be refused as "relocating an existing install".
+      - name: Q121 (b) — a pre-created empty app dir is a fresh install
+        run: |
+          set -e
+          sudo mkdir -p /srv/q121/b/empty-app
+          cd "$RUNNER_TEMP/install-head/jen"
+          sudo TERM=linux ./install.sh --answers "$RUNNER_TEMP/answers.env" --unattended \
+            --app-dir /srv/q121/b/empty-app --config-dir /srv/q121/b/etc --data-dir /srv/q121/b/data
+          systemctl is-active --quiet jen
+          sudo test -f /srv/q121/b/empty-app/current/app/run.py
+          sudo grep -q '^app_dir = /srv/q121/b/empty-app$' /etc/jen-layout.conf
+          echo "an empty, pre-created --app-dir installed cleanly"
+          printf 'y\n1\n' | sudo ./uninstall.sh
+          sudo rm -rf /srv/q121 /etc/jen-layout.conf
+
+      # …and a directory with somebody else's files in it, with no layout
+      # file, used to be treated as an UPGRADE: tolerated, then chowned and
+      # stamped. It is refused now, and not touched.
+      - name: Q121 (b) — somebody else's directory is refused and left alone
+        run: |
+          set -e
+          sudo mkdir -p /srv/q121/foreign
+          echo "not jen" | sudo tee /srv/q121/foreign/their-file >/dev/null
+          before=$(sudo stat -c '%U:%G %a' /srv/q121/foreign /srv/q121/foreign/their-file)
+          cd "$RUNNER_TEMP/install-head/jen"
+          set +e
+          out=$(sudo TERM=linux ./install.sh --answers "$RUNNER_TEMP/answers.env" --unattended \
+            --app-dir /srv/q121/foreign --config-dir /srv/q121/fe --data-dir /srv/q121/fd 2>&1)
+          rc=$?
+          set -e
+          echo "$out" | tail -5
+          [[ $rc -ne 0 ]]
+          echo "$out" | grep -q "does not carry Jen's own marker"
+          after=$(sudo stat -c '%U:%G %a' /srv/q121/foreign /srv/q121/foreign/their-file)
+          [[ "$before" == "$after" ]]
+          sudo test ! -e /srv/q121/foreign/.jen-directory
+          sudo test ! -e /srv/q121/foreign/releases
+          sudo test ! -e /etc/jen-layout.conf
+          sudo test ! -e /srv/q121/fe
+          echo "refused, ownership/mode unchanged, no marker, no release tree, no layout record"
+          sudo rm -rf /srv/q121
+
+      # (c) — reinstall after an app-only uninstall (uninstall.sh level 1,
+      # which promises "your existing config will be detected
+      # automatically"). collect_config used to rewrite jen.config from blank
+      # Kea sections, and a box whose uninstall predated markers refused its
+      # own config directory as "not empty and unmarked".
+      - name: Q121 (c) — fresh install, with a sentinel in the config
+        run: |
+          set -e
+          cd "$RUNNER_TEMP/install-head/jen"
+          sudo TERM=linux ./install.sh --answers "$RUNNER_TEMP/answers.env" --unattended
+          sudo sh -c "echo '# ci-sentinel: this config must survive a reinstall' >> /etc/jen/jen.config"
+          sudo grep -q 'ci-sentinel' /etc/jen/jen.config
+
+      - name: Q121 (c) — reinstall onto the kept config (layout record present)
+        run: |
+          set -e
+          cd "$RUNNER_TEMP/install-head/jen"
+          printf 'y\n1\n' | sudo ./uninstall.sh
+          sudo test ! -e /opt/jen
+          sudo test -f /etc/jen/jen.config
+          # no answers file, no config prompts: the kept config is detected and used
+          sudo TERM=linux ./install.sh --unattended
+          systemctl is-active --quiet jen
+          curl -sf http://127.0.0.1:5050/api/v1/health | grep -q jen_version
+          sudo grep -q 'ci-sentinel' /etc/jen/jen.config
+          sudo grep -q '^api_url  = http://127.0.0.1:8004$' /etc/jen/jen.config
+          echo "the existing jen.config was kept, not rewritten from blank Kea sections"
+
+      - name: Q121 (c) — reinstall onto a config and data dir that predate markers
+        run: |
+          set -e
+          cd "$RUNNER_TEMP/install-head/jen"
+          printf 'y\n1\n' | sudo ./uninstall.sh
+          # a box whose uninstall predates 5.67: no layout record, no markers anywhere
+          sudo rm -f /etc/jen-layout.conf /etc/jen/.jen-directory /var/lib/jen/.jen-directory
+          sudo TERM=linux ./install.sh --unattended
+          systemctl is-active --quiet jen
+          sudo grep -q 'ci-sentinel' /etc/jen/jen.config
+          sudo test -f /etc/jen/.jen-directory
+          sudo test -f /var/lib/jen/.jen-directory
+          sudo test -f /etc/jen-layout.conf
+          echo "config and data were recognised by content and re-stamped"
+          printf 'y\n1\n' | sudo ./uninstall.sh
+          sudo rm -rf /etc/jen /var/lib/jen /etc/jen-layout.conf
+
       - name: Kea log on failure
         if: failure()
         run: docker logs kea 2>&1 | tail -100 || true
