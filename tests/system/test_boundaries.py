@@ -82,7 +82,7 @@ with app.app_context():
     assert "Restart the container to restart Jen" in system_page, "INVARIANT: Docker wording shown for restart"
     assert 'data-confirm="Restart Jen now?"' not in system_page, "INVARIANT: no systemd Restart control in a container"
 
-    plugins_page = web.get("/plugins").text
+    plugins_page = web.get("/settings/plugins").text
     assert "Installed plugins live in" in plugins_page, "INVARIANT: Docker wording shown for plugin installs"
     assert "root-privileged service" not in plugins_page, "INVARIANT: no root-managed plugin wording in a container"
 

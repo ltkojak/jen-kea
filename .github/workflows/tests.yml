@@ -529,7 +529,7 @@ jobs:
           ! grep -q 'Restart the container to restart Jen' <<< "$system_page"
           echo "Settings -> System shows the real Update/Restart controls, no Docker wording"
 
-          plugins_page=$(curl -sb "$cookie" -c "$cookie" http://127.0.0.1:5050/plugins)
+          plugins_page=$(curl -sb "$cookie" -c "$cookie" http://127.0.0.1:5050/settings/plugins)
           grep -q 'root-privileged service' <<< "$plugins_page"
           ! grep -q 'Installed plugins live in' <<< "$plugins_page"
           echo "plugin manager shows the root-managed install path"
