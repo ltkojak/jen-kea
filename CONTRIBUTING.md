@@ -64,8 +64,14 @@ JEN_DB_HOST=127.0.0.1 JEN_DB_USER=jen JEN_DB_PASS=... \
 To run the app locally (Linux):
 
 ```bash
-JEN_ROOT=$(pwd) python3 run.py     # expects /etc/jen/jen.config or JEN_* env vars
+JEN_ROOT=$(pwd) python3 run.py
 ```
+
+With `JEN_ROOT` set, Jen reads its config from `$JEN_ROOT/etc/jen.config` and keeps
+its content under `$JEN_ROOT/var` — not `/etc/jen` and `/var/lib/jen` — unless
+`JEN_CONFIG_DIR` / `JEN_DATA_DIR` say otherwise. Either put a `jen.config` there,
+or give `run.py` the `JEN_*` environment variables (the same names `.env.example`
+uses) and it writes one on first start.
 
 ## Before you open a PR
 

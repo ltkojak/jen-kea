@@ -980,6 +980,103 @@ class TestQ121CheckerAdditions:
         assert jen_update_root._layout_path_ok("app_dir", "/rootless/jen") is None
 
 
+class TestRenderUnitCli:
+    """v5.67.0-beta.10 (Q122) — `--render-unit`, the one hand-usable renderer of jen.service.template
+    (docs/manual-install.md is built around it, and the install job runs the doc's own commands)."""
+
+    pytestmark = pytest.mark.skipif(os.name != "posix", reason="POSIX path semantics required")
+
+    TEMPLATE = _SCRIPT_PATH.parent / "jen.service.template"
+
+    def test_default_layout_renders_the_historical_paths(self, jen_update_root, tmp_path, capsys, monkeypatch):
+        monkeypatch.setattr(jen_update_root, "INSTALL_DIR", "/opt/jen")
+        monkeypatch.setattr(jen_update_root, "CONTENT_DIR", "/var/lib/jen")
+        monkeypatch.setattr(
+            jen_update_root, "_layout", {"app_dir": "/opt/jen", "config_dir": "/etc/jen", "data_dir": "/var/lib/jen"}
+        )
+        out = tmp_path / "jen.service"
+        assert jen_update_root.render_unit_cli([str(self.TEMPLATE), str(out)]) == 0
+        text = out.read_text(encoding="utf-8")
+        assert "@@" not in text
+        assert "Environment=JEN_ROOT=/opt/jen/current/app" in text
+        assert "ReadWritePaths=/etc/jen /var/lib/jen" in text
+        assert "Environment=JEN_SERVICE_MANAGER=systemd" in text
+        assert oct(out.stat().st_mode & 0o777) == "0o644"
+
+    def test_explicit_directories_are_used(self, jen_update_root, tmp_path):
+        out = tmp_path / "jen.service"
+        rc = jen_update_root.render_unit_cli(
+            [
+                str(self.TEMPLATE),
+                str(out),
+                "--app-dir",
+                "/srv/jen/app",
+                "--config-dir",
+                "/srv/jen/etc",
+                "--data-dir",
+                "/srv/jen/data",
+            ]
+        )
+        assert rc == 0
+        text = out.read_text(encoding="utf-8")
+        assert "WorkingDirectory=/srv/jen/app/current/app" in text
+        assert "Environment=JEN_CONFIG_DIR=/srv/jen/etc" in text and "Environment=JEN_CONTENT_DIR=/srv/jen/data" in text
+
+    def test_it_is_byte_identical_to_what_the_updater_renders(self, jen_update_root, tmp_path):
+        """One renderer: the flag calls render_jen_service(), the function every in-app update runs."""
+        via_flag, via_function = tmp_path / "a.service", tmp_path / "b.service"
+        dirs = {"app_dir": "/srv/jen/app", "config_dir": "/srv/jen/etc", "data_dir": "/srv/jen/data"}
+        jen_update_root.render_unit_cli(
+            [
+                str(self.TEMPLATE),
+                str(via_flag),
+                "--app-dir",
+                dirs["app_dir"],
+                "--config-dir",
+                dirs["config_dir"],
+                "--data-dir",
+                dirs["data_dir"],
+            ]
+        )
+        jen_update_root.render_jen_service(str(self.TEMPLATE), str(via_function), **dirs)
+        assert via_flag.read_bytes() == via_function.read_bytes()
+
+    @pytest.mark.parametrize(
+        "bad", ["/srv/jen app", "/srv/jen#1", "/etc", "/root/jen", "relative/path", "/srv/jen" + chr(10)]
+    )
+    def test_a_directory_failing_the_layout_grammar_is_refused_and_nothing_is_written(
+        self, jen_update_root, tmp_path, capsys, bad
+    ):
+        out = tmp_path / "jen.service"
+        assert jen_update_root.render_unit_cli([str(self.TEMPLATE), str(out), "--app-dir", bad]) == 1
+        assert not out.exists()
+        assert capsys.readouterr().err
+
+    def test_a_missing_template_or_output_directory_is_refused(self, jen_update_root, tmp_path, capsys):
+        assert jen_update_root.render_unit_cli([str(tmp_path / "nope.template"), str(tmp_path / "o")]) == 1
+        assert jen_update_root.render_unit_cli([str(self.TEMPLATE), str(tmp_path / "no-dir" / "o")]) == 1
+
+    def test_an_unfillable_placeholder_is_refused(self, jen_update_root, tmp_path, capsys):
+        template = tmp_path / "t"
+        template.write_text("ExecStart=@@APP_DIR@@/x @@SOMETHING_NEW@@" + chr(10), encoding="utf-8")
+        out = tmp_path / "o"
+        assert jen_update_root.render_unit_cli([str(template), str(out)]) == 1
+        assert not out.exists()
+        assert "placeholder" in capsys.readouterr().err
+
+    def test_wrong_arguments_print_the_usage(self, jen_update_root, capsys):
+        assert jen_update_root.render_unit_cli([]) == 1
+        assert "--render-unit" in capsys.readouterr().err
+        assert jen_update_root.render_unit_cli(["--help"]) == 0
+        assert jen_update_root.render_unit_cli(["a", "b", "--bogus"]) == 1
+
+    def test_main_dispatches_it_before_the_update_flow_and_it_is_not_a_sudoers_command(self):
+        src = _SCRIPT_PATH.read_text(encoding="utf-8")
+        assert 'if sys.argv[1:2] == ["--render-unit"]:' in src
+        sudoers = (_SCRIPT_PATH.parent / "jen-sudoers").read_text(encoding="utf-8")
+        assert "render-unit" not in sudoers
+
+
 class TestVerifyReleaseChecksum:
     def test_matching_checksum_returns_true(self, jen_update_root):
         checksum_text = "abc123def456  jen-v5.2.6.tar.gz\n"

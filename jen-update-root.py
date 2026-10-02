@@ -1339,6 +1339,90 @@ _CHECK_LAYOUT_USAGE = (
 )
 
 
+_RENDER_UNIT_USAGE = (
+    "usage: jen-update-root.py --render-unit TEMPLATE OUT [--app-dir DIR] [--config-dir DIR] [--data-dir DIR]\n"
+    "  renders jen.service.template (its @@APP_DIR@@/@@CONFIG_DIR@@/@@DATA_DIR@@ placeholders) to OUT using this\n"
+    "  box's layout — /etc/jen-layout.conf, else /opt/jen, /etc/jen, /var/lib/jen — or the directories given."
+)
+
+
+def render_unit_cli(argv):
+    """`--render-unit TEMPLATE OUT [--app-dir X --config-dir Y --data-dir Z]` — the ONE renderer of
+    jen.service.template, usable by hand (v5.67.0-beta.10, Q122). docs/manual-install.md used to tell an
+    operator to copy a `jen.service` that stopped shipping in 5.67.0 and append an `Environment=` line to the
+    missing file; install.sh renders the unit with sed and the in-app updater with render_jen_service(), and a
+    third way — a hand-copied literal — is exactly how a relocated install ends up with a unit that points
+    back at the defaults. This calls the same render_jen_service() the updater itself runs on every update.
+
+    Defaults to this box's own resolved layout (so on an install that never relocated, the template renders
+    with /opt/jen, /etc/jen and /var/lib/jen). Every directory — given or resolved — passes the layout
+    path grammar before anything is written, an unresolved placeholder in the output is an error, and the
+    file is written root-owned 0644 through a temporary file and a rename. Run by hand as root, like
+    --check-layout and --write-layout-markers: never reachable through sudoers (jen-sudoers pins its three
+    grants byte for byte, and none of them is this)."""
+    if argv[:1] in (["--help"], ["-h"]):
+        print(_RENDER_UNIT_USAGE)
+        return 0
+    positional = []
+    dirs = {}
+    i = 0
+    flags = {"--app-dir": "app_dir", "--config-dir": "config_dir", "--data-dir": "data_dir"}
+    while i < len(argv):
+        arg = argv[i]
+        if arg in flags and i + 1 < len(argv):
+            dirs[flags[arg]] = argv[i + 1]
+            i += 2
+        elif arg.startswith("--"):
+            print(f"--render-unit: unrecognized argument {arg!r}", file=sys.stderr)
+            return 1
+        else:
+            positional.append(arg)
+            i += 1
+    if len(positional) != 2:
+        print(_RENDER_UNIT_USAGE, file=sys.stderr)
+        return 1
+    template, out = positional
+    resolved = {
+        "app_dir": dirs.get("app_dir", INSTALL_DIR),
+        "config_dir": dirs.get("config_dir", _layout["config_dir"]),
+        "data_dir": dirs.get("data_dir", CONTENT_DIR),
+    }
+    for key, path in resolved.items():
+        err = _layout_path_ok(key, path)
+        if err:
+            print(err, file=sys.stderr)
+            return 1
+    if not os.path.isfile(template):
+        print(f"--render-unit: template not found: {template}", file=sys.stderr)
+        return 1
+    out_dir = os.path.dirname(os.path.abspath(out))
+    if not os.path.isdir(out_dir):
+        print(f"--render-unit: {out_dir} is not a directory", file=sys.stderr)
+        return 1
+    fd, tmp = tempfile.mkstemp(prefix=".jen.service.", dir=out_dir)
+    os.close(fd)
+    try:
+        render_jen_service(template, tmp, **resolved)
+        with open(tmp, encoding="utf-8") as f:
+            text = f.read()
+        if "@@" in text:
+            print(
+                "--render-unit: the template has a placeholder this renderer does not fill — refusing.", file=sys.stderr
+            )
+            return 1
+        os.chmod(tmp, 0o644)
+        with contextlib.suppress(PermissionError, OSError):
+            os.chown(tmp, 0, 0)
+        os.replace(tmp, out)
+    finally:
+        with contextlib.suppress(OSError):
+            os.remove(tmp)
+    print(
+        f"rendered {out}  (app_dir={resolved['app_dir']} config_dir={resolved['config_dir']} data_dir={resolved['data_dir']})"
+    )
+    return 0
+
+
 def check_layout_cli(argv):
     """`--check-layout --for {install,upgrade,uninstall,auto} [--app-dir X
     --config-dir Y --data-dir Z]`. Prints the three validated paths
@@ -2353,6 +2437,11 @@ def main():
         return check_layout_cli(sys.argv[2:])
     if sys.argv[1:2] == ["--write-layout-markers"]:
         return write_layout_markers_cli(sys.argv[2:])
+    # v5.67.0-beta.10 (Q122) — the same standing as the two above: run by hand as root (docs/manual-install.md),
+    # does its own validation of the directories it is given, and is not one of the three sudoers-pinned
+    # invocations.
+    if sys.argv[1:2] == ["--render-unit"]:
+        return render_unit_cli(sys.argv[2:])
 
     # v5.67.0 (Q114) — refuses outright, before touching anything, if
     # LAYOUT_FILE was present but failed validation (see load_layout()

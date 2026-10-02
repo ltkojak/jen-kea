@@ -156,3 +156,70 @@ class TestNoJenRootAsADeploymentCondition:
             "JEN_ROOT is a path default, never a deployment condition — "
             "use jen.services.runtime.deployment() instead:\n" + "\n".join(offenders)
         )
+
+
+class TestRestartService:
+    """v5.67.0-beta.10 (Q122) — "Save & Restart", the port change and the certificate upload/removal each ran
+    `sudo systemctl restart jen` unconditionally; in a container there is no sudo and no unit, the call failed
+    inside a thread nobody watched, and the page said "Jen is restarting..." while nothing restarted. The one
+    helper now picks the restart by deployment(). Each test drives the real function with delay=0 and a
+    fake at the one process boundary (subprocess.run / os.kill), never by stubbing deployment()'s answer's
+    consequences."""
+
+    def _wait(self, event):
+        assert event.wait(5), "the restart never ran"
+
+    def test_systemd_runs_exactly_the_command_the_sudoers_file_grants(self, monkeypatch):
+        import threading
+
+        _clear_signals(monkeypatch)
+        _patch_dockerenv(monkeypatch, False)
+        monkeypatch.setenv("JEN_SERVICE_MANAGER", "systemd")
+        done, calls = threading.Event(), []
+        monkeypatch.setattr(runtime.subprocess, "run", lambda cmd, *a, **k: (calls.append(cmd), done.set()))
+        assert runtime.restart_service(delay=0) == "systemd"
+        self._wait(done)
+        assert calls == [["/usr/bin/sudo", "/usr/bin/systemctl", "restart", "jen"]]
+        sudoers = (pathlib.Path(__file__).resolve().parent.parent / "jen-sudoers").read_text(encoding="utf-8")
+        assert "NOPASSWD: /usr/bin/systemctl restart jen\n" in sudoers
+
+    def test_docker_signals_the_gunicorn_master_and_never_shells_out(self, monkeypatch):
+        import threading
+
+        _clear_signals(monkeypatch)
+        _patch_dockerenv(monkeypatch, True)
+        done, sent = threading.Event(), []
+        monkeypatch.setattr(runtime.os, "getppid", lambda: 4242)
+        monkeypatch.setattr(runtime.os, "kill", lambda pid, sig: (sent.append((pid, sig)), done.set()))
+        monkeypatch.setattr(
+            runtime.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no sudo in a container"))
+        )
+        assert runtime.restart_service(delay=0) == "docker"
+        self._wait(done)
+        assert sent == [(4242, runtime.signal.SIGTERM)]
+
+    def test_a_dev_checkout_restarts_nothing_and_says_so(self, monkeypatch):
+        _clear_signals(monkeypatch)
+        _patch_dockerenv(monkeypatch, False)
+        monkeypatch.setattr(
+            runtime.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not run"))
+        )
+        monkeypatch.setattr(runtime.os, "kill", lambda *a: (_ for _ in ()).throw(AssertionError("must not signal")))
+        assert runtime.restart_service(delay=0) == "none"
+        assert "restart it yourself" in runtime.RESTART_BY_HAND
+
+    def test_no_route_still_shells_out_to_systemctl_restart_itself(self):
+        repo = pathlib.Path(__file__).resolve().parent.parent
+        offenders = [
+            str(p.relative_to(repo))
+            for p in sorted((repo / "jen" / "routes").rglob("*.py"))
+            if '"restart", "jen"' in p.read_text(encoding="utf-8")
+        ]
+        assert not offenders, f"{offenders}: use jen.services.runtime.restart_service()"
+
+    def test_both_compose_files_restart_the_container_when_jen_stops_itself(self):
+        repo = pathlib.Path(__file__).resolve().parent.parent
+        for name in ("docker-compose.yml", "docker-compose.mysql.yml"):
+            text = (repo / name).read_text(encoding="utf-8")
+            jen_block = text.split("  jen:\n", 1)[1].split("\n  jen-mysql:", 1)[0]
+            assert "restart: unless-stopped" in jen_block, name

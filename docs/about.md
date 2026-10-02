@@ -25,8 +25,10 @@ Public License v3. The source is at
 - Jen does not require an agent on the Kea host. It connects out to
   Kea's existing HTTP API and database, and over SSH for config
   changes; nothing is installed on the Kea server except an optional
-  helper script (`jen-kea-helper`) that performs a small, fixed set of
-  config-push and service-restart operations.
+  helper script (`jen-kea-helper`) that runs only when Jen invokes it and
+  performs a fixed set of operations: report its version, read, test and
+  apply a Kea config, control the Kea service, tail a Kea log, install
+  the Kea packages, install a TLS certificate and update itself.
 - Jen is not a DNS server, and does not manage BIND or other DNS
   software directly — it can push DHCP hostnames into a handful of
   third-party DNS/DHCP-aware tools (Pi-hole, AdGuard Home) through an
@@ -49,34 +51,36 @@ exact Kea, OS, database, and Python versions tested in CI.
 
 ## Jen compared to ISC Stork
 
-[ISC Stork](https://www.isc.org/stork/) is the official monitoring and
-management dashboard for Kea and BIND. The two tools overlap but take
-different approaches:
+[ISC Stork](https://www.isc.org/stork/) is ISC's own graphical monitoring
+and management tool for Kea and BIND 9. The two tools overlap but take
+different approaches. Everything said about Stork here comes from ISC's pages
+and nothing they do not say is claimed. Checked on 2026-10-02 against ISC's pages: <https://www.isc.org/stork/> (what Stork is, PostgreSQL, MPL 2.0, Prometheus/Grafana), <https://stork.readthedocs.io/en/latest/overview.html> (agent per machine, BIND 9 read-only, configuration capabilities not all available), <https://stork.readthedocs.io/en/latest/usage.html> (the three user groups), <https://stork.readthedocs.io/en/latest/dhcp.html> (subnet management needs the `subnet_cmds` or `cb_cmds` hook) and <https://stork.readthedocs.io/en/latest/install.html> (LDAP through a hook).
+
 
 - **Architecture.** Stork installs an agent (`stork-agent`) on every
   managed server. Jen connects out from a single process and installs
   nothing on the Kea server beyond an optional helper script.
-- **Primary focus.** Stork's own documentation describes monitoring
-  and metrics as its core, with Kea configuration editing (subnets,
-  shared networks, host reservations, global parameters, DHCP options)
-  added more recently and some capabilities still unavailable through
-  it. Jen's core is day-to-day DHCP management — editing subnets,
+- **Primary focus.** Stork monitors Kea and BIND 9 and also edits Kea
+  configuration (subnets, shared networks, host reservations, global
+  parameters, DHCP options) through Kea's hook libraries; its
+  documentation says some configuration capabilities are not yet
+  available through it. Jen's core is day-to-day DHCP management — editing subnets,
   pools, reservations, and options — with monitoring and diagnostics
   built around that.
 - **Database.** Stork requires PostgreSQL. Jen requires MySQL or
   MariaDB — the same database family Kea itself typically uses.
 - **Access control.** Both support role-based access: Stork has three
   built-in groups (`super-admin`, `admin`, `read-only`) with local
-  accounts or LDAP; Jen has three roles (Superadmin, Admin, Viewer)
+  accounts, or LDAP through a hook; Jen has three roles (Superadmin, Admin, Viewer)
   with per-subnet scoping, local accounts, TOTP/passkey MFA, or OpenID
   Connect SSO.
-- **Scale.** Stork's agent-per-server model is built to centralize
-  monitoring across a fleet. Jen is built for one to a handful of Kea
-  servers.
+- **Shape.** Stork is one server plus an agent on each managed machine,
+  covering Kea and BIND 9. Jen is Kea only and is built for one to a
+  handful of Kea servers.
 - **License.** Stork is MPL 2.0. Jen is GPL v3.
 
-Running a large Kea fleet, wanting Grafana/Prometheus dashboards for
-it, or also managing BIND are reasons to use Stork. Managing day-to-day
+Wanting Grafana/Prometheus dashboards (the Stork agent is a Prometheus
+exporter) or also managing BIND are reasons to use Stork. Managing day-to-day
 DHCP configuration for a small number of Kea servers from a browser is
 what Jen is for; the two are not mutually exclusive.
 

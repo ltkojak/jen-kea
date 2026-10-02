@@ -91,7 +91,7 @@ Each server is authored from its <em>own</em> API settings and binds its <em>own
                 <input type="text" name="tls_trust_anchor" id="f-tls-ca" value="/etc/kea/tls/ca.crt" class="u-72126d">
             </div>
         </div>
-        <div class="form-hint u-2b583d">Paths on the Kea host — Kea's own server certificate + key, and the CA that signed Jen's client certificate (trust-anchor). See the Admin Guide → Direct control sockets → TLS. <code>cert-required</code> will be <strong>{{ 'true (Jen presents /etc/jen/ssl/…)' if cert_required else 'false (no client certificate configured in Settings → Kea)' }}</strong>.</div>
+        <div class="form-hint u-2b583d">Paths on the Kea host — Kea's own server certificate + key, and the CA that signed Jen's client certificate (trust-anchor). See the Admin Guide → Direct control sockets → TLS. <code>cert-required</code> will be <strong>{{ 'true (Jen presents ' ~ jen_layout.config_dir ~ '/ssl/…)' if cert_required else 'false (no client certificate configured in Settings → Kea)' }}</strong>.</div>
         {% endif %}
         {% endif %}
         <div class="form-row">

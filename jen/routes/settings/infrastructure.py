@@ -9,7 +9,6 @@ import logging
 import os
 import re
 import subprocess
-import threading
 import time
 from urllib.parse import urlparse
 
@@ -22,6 +21,7 @@ import jen.services.auth as __auth
 import jen.services.capabilities as __caps
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
+import jen.services.runtime as __runtime
 from jen import extensions
 from jen.routes.settings import bp
 from jen.services.access import admin_required as _admin_required
@@ -1899,17 +1899,15 @@ def save_ha_settings():
 @login_required
 @_admin_required
 def restart_jen():
-    flash("Jen is restarting...", "success")
-    __user.set_global_setting("restart_pending", "false")
-    __user.audit("RESTART", "jen", "Manual restart triggered from Infrastructure settings")
-
-    def do_restart():
-        import time
-
-        time.sleep(2)
-        subprocess.run(["/usr/bin/sudo", "/usr/bin/systemctl", "restart", "jen"])
-
-    threading.Thread(target=do_restart, daemon=True).start()
+    # v5.67.0-beta.10 (Q122) — jen.services.runtime.restart_service() picks the restart by deployment
+    # (systemd or Docker); on a host that is neither, it says so instead of claiming a restart.
+    how = __runtime.restart_service()
+    if how == "none":
+        flash(__runtime.RESTART_BY_HAND, "warning")
+    else:
+        __user.set_global_setting("restart_pending", "false")
+        flash("Jen is restarting...", "success")
+    __user.audit("RESTART", "jen", f"Manual restart triggered from Infrastructure settings ({how})")
     return redirect(url_for("settings.settings_system"))
 
 
@@ -1959,13 +1957,9 @@ def save_ports():
     )
     flash(msg, "success")
 
-    def do_restart():
-        import time
-
-        time.sleep(2)
-        subprocess.run(["/usr/bin/sudo", "/usr/bin/systemctl", "restart", "jen"])
-
-    threading.Thread(target=do_restart, daemon=True).start()
+    # v5.67.0-beta.10 (Q122) — see restart_jen() above.
+    if __runtime.restart_service() == "none":
+        flash(__runtime.RESTART_BY_HAND, "warning")
 
     return redirect(url_for("settings.settings_system"))
 

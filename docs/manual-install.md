@@ -10,34 +10,57 @@ an air-gapped host, or just wanting to know exactly what lands where.
 Targets Ubuntu 22.04 / 24.04 + Python 3.10+ + Kea 3.0+ with a
 MySQL/MariaDB backend. Adjust package names for other distros.
 
+> **These commands are tested.** CI's `manual-install` job extracts every
+> block on this page marked as runnable (`tools/doc_commands.py`) and runs
+> them, in order, on a clean Ubuntu runner — then checks that Jen came up at
+> this release's version. The blocks that cannot run there (editing the
+> config, the SQL, the Kea-host steps, the ones that follow a log) are the
+> ones that are not marked, and a short stand-in does what the text says to do
+> by hand. A command on this page that stops working fails that job.
+
+<!-- ci:hook enter-tree -->
+
 ## 1. System packages
 
+<!-- ci:run -->
 ```bash
-sudo apt install -y python3 python3-venv python3-pip \
-    mariadb-client-core openssh-client openssl curl
+sudo apt install -y python3 python3-venv python3-pip openssh-client openssl curl
+command -v mysql >/dev/null || sudo apt install -y mariadb-client-core
 ```
 
 `python3-venv` is required — Jen runs from its own virtualenv, not
-system site-packages.
+system site-packages. `mariadb-client-core` supplies the `mysql` client;
+the second line installs it only when one is not already there (it
+conflicts with Oracle's `mysql-client-core`).
 
 ## 2. Layout (v5.14.0 — versioned release directories)
 
 | Path | Owner | Purpose |
 |---|---|---|
-| `/opt/jen/releases/<X.Y.Z>/app/` | `root:root`, `a+rX` | one release's full tree (`jen/`, `run.py`, `templates/`, `static/`, `plugins/`, the shipped external files, `docs/`) — read-only to the service account |
-| `/opt/jen/releases/<X.Y.Z>/venv/` | `root:root` | that release's virtualenv, built for its own `requirements.txt` |
+| `/opt/jen/releases/<version>/app/` | `root:root`, `a+rX` | one release's full tree (`jen/`, `run.py`, `templates/`, `static/`, `plugins/`, the shipped external files, `docs/`) — read-only to the service account |
+| `/opt/jen/releases/<version>/venv/` | `root:root` | that release's virtualenv, built for its own `requirements.txt` |
 | `/opt/jen/current` | symlink | relative symlink → `releases/<live>`; the unit runs `current/venv/bin/python current/app/run.py` |
 | `/var/lib/jen/` | `www-data:www-data`, `0750` | user content: `icons/`, `branding/`, `backups/`, `plugins/`, `plugins-enabled/`, `keys/` — **never touched by upgrades** (v5.13.0) |
 | `/etc/jen/` | `www-data:www-data` | `jen.config`, `ssl/`, `ssh/`, `backups/` — **never touched by upgrades** |
 | `/etc/jen/jen.config` | `www-data:www-data`, `0600` | config + secrets |
-| `/etc/systemd/system/jen.service` | root | the unit |
-| `/etc/sudoers.d/jen` | root, `0440` | the two `systemctl` grants www-data needs (restart, self-update trigger) |
-| `/usr/local/sbin/jen-update-root.py` | `root:root`, `0700` | in-app self-updater (runs as root, outside every dir www-data can write) |
-| `/etc/systemd/system/jen-update.service` | root | oneshot that invokes the updater |
+| `/etc/systemd/system/jen.service` | root | the unit, **rendered** from `jen.service.template` (step 5) |
+| `/etc/sudoers.d/jen` | root, `0440` | the three `systemctl` grants `www-data` needs (restart, self-update trigger, plugin-install trigger) |
+| `/usr/local/sbin/jen-update-root.py` | `root:root`, `0700` | in-app self-updater (runs as root, outside every dir `www-data` can write) |
+| `/etc/systemd/system/jen-update.service`, `jen-plugin-install.service` | root | the two oneshot units that invoke the updater |
+
+The version is read from the tree itself, **whole** — a beta is
+`5.67.0-beta.10`, not `5.67.0`. The in-app updater treats
+`releases/<version>` as the live release's name and removes the ones it no
+longer needs, so a directory named for a truncated version would be removed
+out from under the running service.
 
 ```bash
-tar xzf jen-vX.Y.Z.tar.gz && cd jen
-VER=$(grep -oP 'JEN_VERSION\s*=\s*"\K[0-9.]+' jen/__init__.py)
+tar xzf jen-vX.Y.Z.tar.gz && cd jen      # substitute the release you downloaded
+```
+
+<!-- ci:run -->
+```bash
+VER=$(grep -oP 'JEN_VERSION\s*=\s*"\K[^"]+' jen/__init__.py)
 REL="/opt/jen/releases/$VER"
 
 sudo mkdir -p "$REL/app" /etc/jen/ssl /etc/jen/ssh /etc/jen/backups \
@@ -46,15 +69,19 @@ sudo cp -r . "$REL/app/"
 sudo rm -rf "$REL/app/.git" "$REL/app/tests"
 ```
 
+Keep `VER` and `REL` set in this shell for the steps below — they are the
+only variables this page uses.
+
 ## 3. Virtualenv (per release)
 
+<!-- ci:run -->
 ```bash
 sudo python3 -m venv "$REL/venv"
 sudo "$REL/venv/bin/pip" install --upgrade pip
 sudo "$REL/venv/bin/pip" install -r "$REL/app/requirements.txt"
 sudo "$REL/venv/bin/python" -m compileall -q "$REL/venv/lib" "$REL/app/jen" "$REL/app/plugins"
 # leave the whole release dir root-owned
-sudo chown -R root:root "$REL" && sudo chmod -R a+rX "$REL"
+sudo chown -R root:root "$REL" && sudo chmod -R a+rX,go-w "$REL"
 ```
 
 `jen.service` runs the release's venv interpreter directly. `run.py`
@@ -64,14 +91,28 @@ still-flat box also works.
 
 ## 4. Config
 
+<!-- ci:run -->
 ```bash
-sudo cp jen.config.example /etc/jen/jen.config
-sudo nano /etc/jen/jen.config      # Kea API, kea_db, jen_db, ssh, subnets, ports
+sudo cp "$REL/app/jen.config.example" /etc/jen/jen.config
+```
+
+Edit it — Kea API, `kea_db`, `jen_db`, SSH, subnets, ports. (Or leave the Kea
+sections for the `/setup` wizard to fill in once Jen is running; only
+`[jen_db]` has to be right to start.)
+
+<!-- ci:hook edit-config -->
+```bash
+sudo nano /etc/jen/jen.config
+```
+
+<!-- ci:run -->
+```bash
 sudo chown www-data:www-data /etc/jen/jen.config && sudo chmod 600 /etc/jen/jen.config
 ```
 
 Create the Jen database (Jen runs its own migrations on first start):
 
+<!-- ci:hook create-db -->
 ```sql
 CREATE DATABASE jen;
 CREATE USER 'jen'@'%' IDENTIFIED BY 'a-strong-password';
@@ -84,31 +125,49 @@ the main install guide.
 
 ## 5. Service, sudoers, updater
 
+The unit is **rendered**, not copied: `jen.service.template` carries
+`@@APP_DIR@@`, `@@CONFIG_DIR@@` and `@@DATA_DIR@@` placeholders, and
+`jen-update-root.py --render-unit` is the one renderer — the same function
+the in-app updater runs on every update, so a hand-installed unit and a
+managed one come out identical. With no flags it uses this box's layout
+(`/etc/jen-layout.conf` if present, otherwise `/opt/jen`, `/etc/jen` and
+`/var/lib/jen`); `--app-dir`, `--config-dir` and `--data-dir` override. It
+refuses a path outside the layout grammar and an unresolved placeholder.
+
+<!-- ci:run -->
 ```bash
-# The shipped external files live inside the release now.
-sudo cp "$REL/app/jen.service"        /etc/systemd/system/jen.service
-# v5.67.0-beta.6 — the explicit signal Jen's own deployment() check
-# (jen/services/runtime.py) looks for first to tell a real systemd host
-# apart from Docker/dev. Not strictly required here — systemd already
-# sets INVOCATION_ID for every unit it starts, which deployment() falls
-# back to — but install.sh's own rendered unit carries it, so a
-# hand-copied one should too.
-echo "Environment=JEN_SERVICE_MANAGER=systemd" | sudo tee -a /etc/systemd/system/jen.service >/dev/null
-sudo cp "$REL/app/jen-sudoers"        /etc/sudoers.d/jen
-sudo chmod 440                        /etc/sudoers.d/jen
-sudo visudo -cf /etc/sudoers.d/jen    # sanity-check before it takes effect
+# The updater first — it is also what renders the unit.
 sudo cp "$REL/app/jen-update-root.py" /usr/local/sbin/jen-update-root.py
 sudo chown root:root                  /usr/local/sbin/jen-update-root.py
 sudo chmod 700                        /usr/local/sbin/jen-update-root.py
-sudo cp "$REL/app/jen-update.service" /etc/systemd/system/jen-update.service
+sudo /usr/bin/python3 /usr/local/sbin/jen-update-root.py --render-unit \
+    "$REL/app/jen.service.template" /etc/systemd/system/jen.service
+
+sudo cp "$REL/app/jen-sudoers"        /etc/sudoers.d/jen
+sudo chmod 440                        /etc/sudoers.d/jen
+sudo visudo -cf /etc/sudoers.d/jen    # sanity-check before it takes effect
+sudo cp "$REL/app/jen-update.service"         /etc/systemd/system/jen-update.service
+sudo cp "$REL/app/jen-plugin-install.service" /etc/systemd/system/jen-plugin-install.service
 
 # Activate this release (relative symlink, replaced atomically).
 sudo ln -sfn "releases/$VER" /opt/jen/current.tmp
 sudo mv -T /opt/jen/current.tmp /opt/jen/current
 
-sudo chown -R root:root /opt/jen && sudo chmod -R a+rX /opt/jen
+sudo chown -R root:root /opt/jen && sudo chmod -R a+rX,go-w /opt/jen
 sudo chown -R www-data:www-data /etc/jen /var/lib/jen
 sudo chmod 750 /var/lib/jen
+```
+
+The rendered unit already carries `Environment=JEN_SERVICE_MANAGER=systemd`,
+the explicit signal Jen's own deployment check looks for first; there is
+nothing to append to it.
+
+Check the result the way the installer's own pre-flight does — it prints the
+three directories it accepted:
+
+<!-- ci:run -->
+```bash
+sudo /usr/bin/python3 /usr/local/sbin/jen-update-root.py --check-layout --for auto
 ```
 
 ### On each Kea host (v5.11.0+)
@@ -132,10 +191,16 @@ host helper for the legacy fallback grant.
 
 ## 6. Start
 
+<!-- ci:run -->
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now jen
-sudo systemctl status jen
+sudo systemctl status jen --no-pager
+```
+
+Follow the log with:
+
+```bash
 journalctl -u jen -f
 ```
 
@@ -151,12 +216,13 @@ first login and deletes the file once you complete it.
 ## Upgrading manually
 
 Repeat steps 2, 3, and 5 with the new tarball — a **new**
-`releases/<X.Y.Z>/` directory — then activate it with the `ln -sfn` /
+`releases/<version>/` directory — then activate it with the `ln -sfn` /
 `mv -T` pair from step 5 and `sudo systemctl daemon-reload && sudo
-systemctl restart jen`. The old release directory stays on disk as a
-hand-rollback target (`sudo ln -sfn releases/<old> /opt/jen/current &&
-sudo systemctl restart jen`). Or use the in-app update button, which
-runs the staged, rollback-capable updater at
+systemctl restart jen`. Render the unit again with `--render-unit` from the
+new release's template, and copy `jen-update-root.py` from it first: that
+script, not the unit, is what the in-app updater trusts. The old release
+directory stays on disk as a hand-rollback target. Or use the in-app update
+button, which runs the staged, rollback-capable updater at
 `/usr/local/sbin/jen-update-root.py`: it builds the whole release under
 a staging directory (its own venv included) and the install is one
 atomic symlink flip, so a rollback is a true point-in-time revert. See
@@ -171,6 +237,6 @@ attempt rolls back cleanly to the previous version.
 
 ```bash
 ls /opt/jen/releases                 # what's on disk
-sudo ln -sfn releases/<X.Y.Z> /opt/jen/current
+sudo ln -sfn releases/<version> /opt/jen/current
 sudo systemctl restart jen
 ```

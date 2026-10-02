@@ -811,11 +811,16 @@ dev checkout. Fixed in v5.67.0-beta.6
 is answered now, and it never reads `JEN_ROOT`). The button this bug
 hides is the only way to reach the fix, so updating a box stuck on one
 of the affected betas needs the one line the button itself would have
-run:
+run — **and the box must be on the beta channel**, because the updater
+offers a pre-release only to one (a stable-channel box finds nothing newer
+than the beta it is on, and the command does nothing). Put `channel = beta`
+under `[updates]` in `jen.config`, then:
 ```bash
 sudo systemctl start jen-update.service
 journalctl -u jen-update -f
 ```
+Or skip the updater: extract the newer release tarball and run
+`sudo ./install.sh --upgrade`.
 Nothing else about the box is wrong — Jen itself, the plugin manager's
 root-managed install path, and the data-directory check all silently
 fell back to their Docker/dev behavior on the same bug, and all three

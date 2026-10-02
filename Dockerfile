@@ -49,6 +49,9 @@ COPY jen/          /opt/jen/jen/
 COPY templates/    /opt/jen/templates/
 COPY static/       /opt/jen/static/
 COPY plugins/      /opt/jen/plugins/
+# v5.67.0-beta.10 (Q122) — the Grafana dashboard Settings serves for download lives here; without this
+# the image had no contrib/ and that download errored.
+COPY contrib/      /opt/jen/contrib/
 COPY jen-kea-helper /opt/jen/jen-kea-helper
 
 # v5.13.0 — the application tree is root-owned and read-only to the service

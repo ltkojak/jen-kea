@@ -53,6 +53,9 @@ and as a gate on every tagged release (`release.yml`).
 ### Test environment notes
 
 - `JEN_ROOT` env var (v5.3.3) overrides the `/opt/jen` install root for local/CI use.
+  Since Q114 it also moves the config and content *defaults* to `$JEN_ROOT/etc` and
+  `$JEN_ROOT/var` (`JEN_CONFIG_DIR` / `JEN_DATA_DIR` win over it) — config is NOT read
+  from `/etc/jen` once it is set — and `runtime.deployment()` never reads it.
   CI still symlinks `/opt/jen/templates` and `/opt/jen/static` and pre-creates
   `/etc/jen/{ssl,ssh}` because `init_jen_db()` and `create_app()` touch those paths.
 - `tests/conftest.py`: `client` is function-scoped (fresh cookie jar per test),

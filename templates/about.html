@@ -37,9 +37,9 @@
                 {% if ssl_on %}<span class="u-d5881b"> ✓ Active</span>{% endif %}
             </td></tr>
         <tr><td class="stat-label u-d8c022">Config File</td>
-            <td class="mono u-6cb285">/etc/jen/jen.config</td></tr>
+            <td class="mono u-6cb285">{{ jen_layout.config_file }}</td></tr>
         <tr><td class="stat-label u-d8c022">App Directory</td>
-            <td class="mono u-6cb285">/opt/jen</td></tr>
+            <td class="mono u-6cb285">{{ jen_layout.app_dir }}</td></tr>
         <tr><td class="stat-label u-d8c022">Kea SSH Host</td>
             <td class="mono u-6cb285">{{ kea_ssh_host or '—' }}</td></tr>
         {% endif %}
@@ -55,10 +55,10 @@
     </div>
     <div style="border-top:1px solid var(--border);margin:16px 0;"></div>
     <p style="color:var(--text-muted);font-size:13px;line-height:1.7;margin-bottom:12px;">
-        A full-featured web management interface for ISC Kea DHCP Server, built as a practical alternative to ISC Stork for homelab and small infrastructure deployments.
+        A full-featured web management interface for ISC Kea DHCP Server, built for homelab and small infrastructure deployments. It sits alongside ISC's Stork rather than replacing it; the README compares the two.
     </p>
     <p style="color:var(--text-muted);font-size:13px;line-height:1.7;margin-bottom:20px;">
-        Jen provides lease management, static reservations, subnet editing, Telegram alerts, audit logging, and more — all from a browser-based UI.
+        Jen provides lease management, static reservations, subnet editing, multi-channel alerts, audit logging, and more — all from a browser-based UI.
     </p>
     <div style="border-top:1px solid var(--border);padding-top:16px;">
         <div class="u-760160">CREATED BY</div>

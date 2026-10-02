@@ -180,7 +180,7 @@
 <!-- Manual backup -->
 <div class="card u-49f14f">
     <div class="card-header"><h3>{{ icon("save") }} Run Backup Now</h3></div>
-    <p class="u-c0a2eb">Saves a backup to <code>/opt/jen/backups/</code> immediately. Files are compressed and readable only by the jen service user.</p>
+    <p class="u-c0a2eb">Saves a backup to <code>{{ jen_layout.backup_dir }}/</code> immediately. Files are compressed and readable only by the jen service user.</p>
     <form method="POST" action="/database/backup/now" style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <label class="u-3928fa"><input type="checkbox" name="include" value="jen" checked> <span class="u-01f649">Jen Database</span> ({{ jen_db_host }}/{{ jen_db_name }})</label>
         <label class="u-3928fa"><input type="checkbox" name="include" value="kea" checked> <span class="u-69cda4">Kea Database</span> ({{ kea_db_host }}/{{ kea_db_name }})</label>
@@ -190,7 +190,7 @@
 
 <!-- Backup list -->
 <div class="card">
-    <div class="card-header"><h3>{{ icon("folder") }} Stored Backups <span style="font-weight:400;font-size:13px;color:var(--text-muted);">— /opt/jen/backups/</span></h3></div>
+    <div class="card-header"><h3>{{ icon("folder") }} Stored Backups <span style="font-weight:400;font-size:13px;color:var(--text-muted);">— {{ jen_layout.backup_dir }}/</span></h3></div>
     {% if backups %}
     <table class="rowlist table">
         <thead><tr>
@@ -252,7 +252,7 @@
 <div class="card" style="max-width:560px;">
     <div class="card-header"><h3>{{ icon("clock") }} Scheduled Backups</h3></div>
     <p class="u-503124">
-        Automatic backups are saved to <code>/opt/jen/backups/</code> and rotated by retention count.
+        Automatic backups are saved to <code>{{ jen_layout.backup_dir }}/</code> and rotated by retention count.
         {% if schedule and schedule.last_run %}
         <br>Last run: <strong>{{ schedule.last_run }}</strong> — {{ schedule.last_status or 'no status' }}
         {% endif %}

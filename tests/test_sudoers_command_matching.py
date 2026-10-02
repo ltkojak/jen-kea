@@ -40,13 +40,17 @@ import pathlib
 # under jen/routes/settings/ at all (it's a service module, and its own
 # route layer is jen/routes/plugins.py), so the glob below wouldn't have
 # found it otherwise.
-SETTINGS_SOURCE_FILES = sorted(glob.glob("jen/routes/settings/*.py") + ["jen/services/plugins.py"])
+# v5.67.0-beta.10 (Q122) — jen/services/runtime.py joined it: restart_service() is where the one
+# `sudo systemctl restart jen` the four Save-and-restart paths share now lives.
+SETTINGS_SOURCE_FILES = sorted(
+    glob.glob("jen/routes/settings/*.py") + ["jen/services/plugins.py", "jen/services/runtime.py"]
+)
 
 
 def _parse_sudoers_authorized_commands(path="jen-sudoers"):
     """Return the set of authorized command strings (everything after
     'NOPASSWD: ') from the sudoers file, one per line."""
-    text = pathlib.Path(path).read_text()
+    text = pathlib.Path(path).read_text(encoding="utf-8")
     commands = set()
     for line in text.splitlines():
         line = line.strip()
@@ -89,7 +93,7 @@ def _find_sudo_invocations(paths=None):
             self.generic_visit(node)
 
     for path in paths:
-        Visitor().visit(ast.parse(pathlib.Path(path).read_text()))
+        Visitor().visit(ast.parse(pathlib.Path(path).read_text(encoding="utf-8")))
     return invocations
 
 

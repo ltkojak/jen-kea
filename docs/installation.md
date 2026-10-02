@@ -78,7 +78,10 @@ longer asked here at all — log in once installed and a six-step guided
 **`/setup`** wizard connects Kea live, in the browser, with the same
 testing and retry the old terminal prompts used to do (see "First Login"
 in the README). An `--answers` file (below) can still supply any of those
-keys directly, skipping the matching `/setup` step entirely.
+keys directly. There is no per-step skipping: the wizard is a one-time
+redirect that fires only while Jen has no Kea API URL and no named subnet,
+so an answers file that supplies both means you are never sent to
+`/setup` — it stays reachable from Getting started.
 
 ### Method 1b — Scripted / unattended install
 
@@ -217,29 +220,41 @@ permissive umask — fix the one directory named and re-run.
 
 ```bash
 cd jen
-cp jen.config.example jen.config
-nano jen.config    # fill in all values
+cp .env.example .env
+nano .env          # JEN_DB_HOST/USER/PASS for Jen's own database, JEN_INITIAL_ADMIN_PASSWORD
 docker compose up -d
 ```
+
+`docker-compose.yml` reads `.env` (it is required — `env_file: .env`) and
+`run.py` turns the `JEN_*` values into `/etc/jen/jen.config` on the first
+start; the Kea side is connected afterwards in the `/setup` wizard, the same
+as a bare-metal install. `jen.config` is **not** mounted by default — to
+bring a hand-written one instead, uncomment the `./jen.config` mount in the
+compose file. `sudo ./install.sh --docker` writes `.env` for you.
 
 ### Method 3 — Docker (bundled MySQL)
 
 ```bash
 cd jen
-cp jen.config.example jen.config
-# Edit jen.config — set [jen_db] host = jen-mysql
-nano jen.config
 cp .env.example .env
-nano .env          # set MySQL passwords
+nano .env          # MYSQL_ROOT_PASSWORD, JEN_MYSQL_PASSWORD, JEN_INITIAL_ADMIN_PASSWORD
 docker compose -f docker-compose.mysql.yml up -d
 ```
+
+The compose file wires Jen's database to the `jen-mysql` container itself
+(`JEN_DB_HOST`, `JEN_DB_USER`, `JEN_DB_NAME` and `JEN_DB_PASS` come from its
+`environment:` block), so `.env` carries only `JEN_MYSQL_PASSWORD`, which both
+containers share, and `MYSQL_ROOT_PASSWORD`. Both containers carry
+`restart: unless-stopped`, which is also what makes **Save & Restart** in
+Settings work in Docker — Jen stops its own process and Docker starts it again.
 
 ### Method 4 — Manual bare metal
 
 For a distro `install.sh` doesn't recognize, an air-gapped host, or
-config management — the full step-by-step (packages, the `/opt/jen/venv`,
-every path and owner, service + sudoers + updater) is in
-[`manual-install.md`](manual-install.md).
+config management — the full step-by-step (packages, a per-release
+virtualenv, every path and owner, service + sudoers + updater) is in
+[`manual-install.md`](manual-install.md). Its commands are run, in order, by
+this project's own CI on every push.
 
 ---
 
@@ -248,18 +263,18 @@ every path and owner, service + sudoers + updater) is in
 Open `http://YOUR-SERVER-IP:5050` in your browser. Username is `admin`;
 the password is whichever one you set in the wizard (or gave as
 `JEN_INITIAL_ADMIN_PASSWORD`). If you left it blank, Jen generated one
-itself — it's printed once during install and saved to
-`/var/lib/jen/initial-admin-password` (readable by root only), and
-you'll be asked to change it on first login.
+itself — it's saved to `/var/lib/jen/initial-admin-password` (readable by
+root only; `sudo cat` it — the path follows `--data-dir` if you relocated),
+and you'll be asked to change it on first login.
 
 ---
 
 ## Post-Installation Steps
 
-1. **Change the admin password** — Users → Change My Password
-2. **Upload an SSL certificate** — Settings → SSL Certificate (enables HTTPS on port 8443)
-3. **Generate SSH key** — Settings → SSH Key Management (required for subnet editing)
-4. **Configure Telegram** — Settings → Telegram Alerts (optional)
+1. **Change the admin password** — your profile → Change Password
+2. **Upload an SSL certificate** — Settings → Security → SSL Certificate (enables HTTPS on port 8443)
+3. **Generate SSH key** — Settings → Kea → SSH Key Management (required for subnet editing)
+4. **Add a Telegram channel** — Settings → Alerts (optional)
 5. **Add additional users** — Users → Add User (optional)
 
 ---
@@ -274,7 +289,10 @@ cd jen
 sudo ./install.sh
 ```
 
-Select bare metal, then **Keep existing config**. Your configuration, certificates, SSH keys, and user accounts are preserved.
+Choose **Keep existing config** when asked (or run `sudo ./install.sh --upgrade` to skip every
+question). Your configuration, certificates, SSH keys, and user accounts are preserved. Once a box is
+running a release with the in-app updater, Settings → System → Updates does the same thing without the
+tarball — see [`upgrading.md`](upgrading.md).
 
 ---
 

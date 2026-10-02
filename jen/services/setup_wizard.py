@@ -680,9 +680,12 @@ def ha_peer_view(ha: dict | None, servers: list) -> dict | None:
     return {"mode": mode, "detected": len(peers), "managed": len(servers), "peers": peers}
 
 
+# v5.67.0-beta.10 (Q122) — what each hook's absence actually costs, and only that. `lease_cmds` is deliberately
+# NOT here: no `lease4-*`/`lease6-*` command is sent anywhere in jen/ (leases are read straight from Kea's
+# database), so there is nothing to lose without it, and saying "lease search and lease deletion are
+# unavailable" claimed a dependency the code does not have. host_cmds is what reservation add/edit/delete use.
 HOOK_LOSS = {
-    "host_cmds": "reservations are read-only",
-    "lease_cmds": "lease search and lease deletion are unavailable",
+    "host_cmds": "reservations can be listed but not added, edited or deleted",
     "ha_commands": "HA status and maintenance mode are unavailable",
 }
 HOOK_LABELS = {

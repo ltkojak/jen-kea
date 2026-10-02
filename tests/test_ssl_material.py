@@ -19,7 +19,6 @@ Certificates are generated with `cryptography` (a runtime dependency).
 
 import io
 import os
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -104,8 +103,9 @@ class TestUploadCertRoute:
         ssl_dir.mkdir()
         for attr in ("SSL_CERT", "SSL_KEY", "SSL_CA", "SSL_COMBINED"):
             monkeypatch.setattr(extensions, attr, str(ssl_dir / (attr.lower().replace("ssl_", "") + ".pem")))
-        # never actually schedule a restart from a test
-        monkeypatch.setattr("jen.routes.settings.security.threading.Thread", lambda *a, **k: MagicMock())
+        # never actually schedule a restart from a test (v5.67.0-beta.10, Q122: the restart is
+        # jen.services.runtime.restart_service() now, not a thread in the route)
+        monkeypatch.setattr("jen.services.runtime.restart_service", lambda *a, **k: "systemd")
         return ssl_dir
 
     def test_mismatched_pair_is_refused_and_nothing_is_written(self, logged_in_client, tmp_path, monkeypatch):
@@ -116,6 +116,19 @@ class TestUploadCertRoute:
         assert r.status_code == 200
         assert b"Certificate rejected" in r.data and b"does not match" in r.data
         assert list(ssl_dir.iterdir()) == []
+
+    def test_a_host_that_cannot_restart_itself_says_so_instead_of_claiming_a_restart(
+        self, logged_in_client, tmp_path, monkeypatch
+    ):
+        """v5.67.0-beta.10 (Q122) — the page said "Jen is restarting..." on a container (and a dev checkout) where
+        nothing restarted. restart_service() answering "none" must turn that into the by-hand instruction."""
+        self._point_ssl_at(monkeypatch, tmp_path)
+        monkeypatch.setattr("jen.services.runtime.restart_service", lambda *a, **k: "none")
+        cert, key = _pair(tmp_path, name="solo")
+        r = self._post(logged_in_client, cert, key)
+        assert b"validated and installed" in r.data
+        assert b"restart it yourself" in r.data
+        assert b"Jen is restarting" not in r.data
 
     def test_valid_pair_is_installed_atomically_and_previous_kept(self, logged_in_client, tmp_path, monkeypatch):
         ssl_dir = self._point_ssl_at(monkeypatch, tmp_path)

@@ -224,9 +224,12 @@ def _kea_ha_state(ctx) -> Check:
     return c
 
 
+# v5.67.0-beta.10 (Q122) — only what Jen actually sends. host_cmds carries reservation-add/-del (reservation
+# add, edit, delete and the CSV import); no lease4-*/lease6-* command is sent anywhere in jen/ — the leases
+# page reads Kea's database — so a missing libdhcp_lease_cmds.so used to FAIL this check for a dependency
+# that does not exist.
 _REQUIRED_HOOKS = {
-    "libdhcp_host_cmds.so": "reservation-add / reservation-del (reservations page, CSV import)",
-    "libdhcp_lease_cmds.so": "lease4-get-all / lease4-del (leases page, stale-lease cleanup)",
+    "libdhcp_host_cmds.so": "reservation-add / reservation-del (reservation add, edit and delete, CSV import)",
 }
 
 

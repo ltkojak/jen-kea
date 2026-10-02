@@ -284,5 +284,23 @@ PLUGIN_DIR_BUNDLED = os.path.join(JEN_ROOT, "plugins")  # shipped, read-only
 _INSTALL_ROOT = JEN_ROOT[: -len("/current/app")] if JEN_ROOT.endswith("/current/app") else "/opt/jen"
 PLUGIN_DIR_ROOT = os.path.join(_INSTALL_ROOT, "plugins-installed")
 PLUGIN_REGISTRY_URL = "https://raw.githubusercontent.com/ltkojak/jen-kea/main/plugins/registry.json"
+
+
+def layout() -> dict:
+    """The directories this install actually uses, for pages that show them (v5.67.0-beta.10, Q122).
+    Five templates printed a literal /opt/jen, /etc/jen or /var/lib/jen — wrong on any relocated install, and
+    `/opt/jen/backups/` was wrong on EVERY install since 5.13 (backups live under the data directory)."""
+    return {
+        "app_dir": _INSTALL_ROOT,
+        "config_dir": CONFIG_DIR,
+        "config_file": CONFIG_FILE,
+        "data_dir": CONTENT_DIR,
+        "backup_dir": CONTENT_BACKUP_DIR,
+        "plugin_dir": PLUGIN_DIR,
+        "plugin_dir_root": PLUGIN_DIR_ROOT,
+        "venv_dir": os.path.join(_INSTALL_ROOT, "current", "venv"),
+    }
+
+
 SSH_KEY_PATH = os.path.join(CONFIG_DIR, "ssh", "jen_rsa")
 SSH_KNOWN_HOSTS = os.path.join(CONFIG_DIR, "ssh", "known_hosts")

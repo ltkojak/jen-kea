@@ -223,7 +223,7 @@ kea_conf = {os.environ.get("JEN_KEA_CONF", "/etc/kea/kea-dhcp4.conf")}
 {subnet_lines}
 [ddns]
 log_path     = {os.environ.get("JEN_DDNS_LOG", "/var/log/kea/kea-ddns.log")}
-provider     = {os.environ.get("JEN_DDNS_PROVIDER", "none")}
+dns_provider = {os.environ.get("JEN_DDNS_PROVIDER", "none")}
 api_url      = {os.environ.get("JEN_DDNS_URL", "")}
 api_token    = {os.environ.get("JEN_DDNS_TOKEN", "")}
 forward_zone = {os.environ.get("JEN_DDNS_ZONE", "")}

@@ -1325,7 +1325,7 @@ kea_conf = ${KEA_CONF_PATH}
 $(echo -e "$SUBNET_LINES")
 [ddns]
 log_path    = ${DDNS_LOG}
-provider    = ${DDNS_PROVIDER}
+dns_provider = ${DDNS_PROVIDER}
 api_url     = ${DDNS_URL}
 api_token   = ${DDNS_TOKEN}
 forward_zone = ${DDNS_ZONE}

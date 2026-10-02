@@ -136,6 +136,11 @@ class TestKeaHooks:
         c = health._kea_hooks(_ctx(dhcp4_config=self._cfg(["libdhcp_host_cmds.so", "libdhcp_lease_cmds.so"])))
         assert c.status == "ok"
 
+    def test_lease_cmds_is_not_required(self):
+        """v5.67.0-beta.10 (Q122) — no lease4-*/lease6-* command is sent anywhere; leases are read from Kea's database."""
+        c = health._kea_hooks(_ctx(dhcp4_config=self._cfg(["libdhcp_host_cmds.so"])))
+        assert c.status == "ok", c.detail
+
     def test_missing_host_cmds_fails_naming_it(self):
         c = health._kea_hooks(_ctx(dhcp4_config=self._cfg(["libdhcp_lease_cmds.so"])))
         assert c.status == "fail" and "libdhcp_host_cmds.so" in c.detail

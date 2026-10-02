@@ -872,7 +872,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
     <div style="background:color-mix(in srgb, var(--warning) 18%, transparent);border:1px solid var(--warning);border-radius:var(--radius);
                 padding:10px 16px;margin-bottom:12px;font-size:13px;">
         {{ icon("triangle-alert") }} <strong>Python environment migration incomplete</strong> — Jen is running on the
-        system interpreter without its <code>/opt/jen/venv</code>. Run
+        system interpreter without its <code>{{ jen_layout.venv_dir }}</code>. Run
         <code>sudo ./install.sh --repair</code> on the host to finish it.
     </div>
     {% endif %}
@@ -880,7 +880,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
     <div style="background:color-mix(in srgb, var(--warning) 18%, transparent);border:1px solid var(--warning);border-radius:var(--radius);
                 padding:10px 16px;margin-bottom:12px;font-size:13px;">
         {{ icon("triangle-alert") }} <strong>Content directory not set up</strong> — Jen can't write to
-        <code>/var/lib/jen</code>, so database backups, custom icons and favicon uploads
+        <code>{{ jen_layout.data_dir }}</code>, so database backups, custom icons and favicon uploads
         will fail. Run <code>sudo ./install.sh</code> on the host to create it.
     </div>
     {% endif %}

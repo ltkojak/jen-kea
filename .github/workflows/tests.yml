@@ -1406,6 +1406,89 @@ jobs:
         if: failure()
         run: sudo journalctl -u jen -n 200 --no-pager || true
 
+  # v5.67.0-beta.10 (Q122) — docs/manual-install.md, RUN. The page's marked blocks
+  # (tools/doc_commands.py) become one script that builds a whole install by hand on a
+  # clean runner: packages, the versioned layout, a venv, the config, the unit rendered
+  # by `jen-update-root.py --render-unit`, sudoers, start. Where the page says to edit a
+  # file or paste SQL, a named stand-in (.github/scripts/manual-install-hooks.sh) does it.
+  # What the job then asserts is what an operator following the page would rely on: Jen
+  # answers at THIS tree's version, the unit has no unresolved placeholder and carries the
+  # deployment signal, and the first-boot admin password file exists.
+  manual-install:
+    name: manual-install.md, run (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    services:
+      database:
+        image: mariadb:11.4
+        env:
+          MYSQL_ROOT_PASSWORD: ci_root_pw
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mariadb-admin ping -h 127.0.0.1 -u root -pci_root_pw"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Harden /opt for this runner
+        # Same reason as the install job: the runner image ships /opt mode 777 and the layout
+        # check refuses a group/other-writable ancestor. A real host is already like this.
+        run: sudo chmod 755 /opt
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Extract the page's commands
+        run: |
+          { cat .github/scripts/manual-install-hooks.sh; python tools/doc_commands.py docs/manual-install.md; } > "$RUNNER_TEMP/manual-install.sh"
+          bash -n "$RUNNER_TEMP/manual-install.sh"
+          grep -c '^# --- ' "$RUNNER_TEMP/manual-install.sh"
+
+      - name: Follow the page
+        run: bash -eo pipefail "$RUNNER_TEMP/manual-install.sh"
+
+      - name: Jen is running this tree's version, with a unit the page rendered
+        run: |
+          source .github/scripts/ci-lib.sh
+          head_version=$(grep -oP 'JEN_VERSION\s*=\s*"\K[^"]+' jen/__init__.py)
+          up=
+          for _ in $(seq 60); do
+              if jen_version > /dev/null 2>&1; then up=1; break; fi
+              sleep 2
+          done
+          if [[ -z "$up" ]]; then
+              echo "::error::Jen never answered /api/v1/health after following the page"
+              exit 1
+          fi
+          expect_eq "$(jen_version)" "$head_version" "the version a hand-installed Jen reports"
+          unit=$(cat /etc/systemd/system/jen.service)
+          refuse '@@' "$unit" "the rendered unit still has a placeholder"
+          require 'JEN_SERVICE_MANAGER=systemd' "$unit" "the rendered unit lacks the deployment signal"
+          require "ExecStart=/opt/jen/current/venv/bin/python /opt/jen/current/app/run.py" "$unit" "the unit does not run the current release's venv"
+          [[ "$(readlink /opt/jen/current)" == "releases/$head_version" ]] || {
+              echo "::error::/opt/jen/current -> $(readlink /opt/jen/current), expected releases/$head_version (a beta's directory keeps its full version)"
+              exit 1
+          }
+          sudo test -f /var/lib/jen/initial-admin-password || {
+              echo "::error::first boot did not write /var/lib/jen/initial-admin-password"
+              exit 1
+          }
+          echo "a hand-installed Jen answers as v${head_version}"
+
+      - name: Jen service log on failure
+        if: failure()
+        run: sudo journalctl -u jen -n 200 --no-pager || true
+
   bandit:
     runs-on: ubuntu-latest
     steps:

@@ -10,7 +10,7 @@ Jen is a web-based management interface for ISC Kea DHCP Server. It gives you a 
 
 ### Why was Jen built instead of using Stork?
 
-ISC Stork is the official management UI for Kea, but it's designed for large enterprise and ISP deployments with multiple Kea servers, HA pairs, and teams of engineers. For a homelab or small infrastructure setup, it's overly complex, harder to navigate, and lacks some day-to-day conveniences like one-click lease conversion and CSV export. Jen was built to fill that gap.
+ISC Stork is ISC's own graphical tool for Kea and BIND 9: a Stork server plus an agent on every managed machine, with its own PostgreSQL database. Jen was built for an operator who wants a single process that connects out to Kea, and around day-to-day tasks such as one-click lease conversion and CSV export. The two are compared point by point, with ISC's pages cited, in [`about.md`](about.md#jen-compared-to-isc-stork).
 
 ### Does Jen replace Kea?
 

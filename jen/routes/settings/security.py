@@ -6,8 +6,6 @@ Session timeout, login rate limiting, SSL certificate upload.
 
 import logging
 import os
-import subprocess
-import threading
 
 from flask import flash, redirect, request, url_for
 from flask_login import login_required
@@ -17,6 +15,7 @@ import jen.models.db as __db
 import jen.models.user as __user
 import jen.services.auth as __auth
 import jen.services.oidc as __oidc
+import jen.services.runtime as __runtime
 from jen import extensions
 from jen.routes.settings import bp
 from jen.services.access import admin_required as _admin_required
@@ -170,16 +169,12 @@ def upload_cert():
         if ca_data:
             _write_atomically(extensions.SSL_CA, ca_data, 0o644)
         _write_atomically(extensions.SSL_COMBINED, combined, 0o644)
-        flash("Certificate validated and installed. Jen is restarting...", "success")
         __user.audit("UPLOAD_CERT", "settings", "SSL certificate uploaded")
-
-        def restart():
-            import time
-
-            time.sleep(2)
-            subprocess.run(["/usr/bin/sudo", "/usr/bin/systemctl", "restart", "jen"])
-
-        threading.Thread(target=restart, daemon=True).start()
+        # v5.67.0-beta.10 (Q122) — restart by deployment (systemd or Docker); say so when neither.
+        if __runtime.restart_service() == "none":
+            flash("Certificate validated and installed. " + __runtime.RESTART_BY_HAND, "warning")
+        else:
+            flash("Certificate validated and installed. Jen is restarting...", "success")
     except UnicodeDecodeError:
         flash("Certificate files must be PEM format (text), not DER (binary).", "error")
     except Exception as e:
@@ -195,15 +190,10 @@ def remove_cert():
     for f in [extensions.SSL_CERT, extensions.SSL_KEY, extensions.SSL_CA, extensions.SSL_COMBINED]:
         if os.path.exists(f):
             os.remove(f)
-    flash("Certificate removed. Restarting in HTTP mode...", "success")
-
-    def restart():
-        import time
-
-        time.sleep(2)
-        subprocess.run(["/usr/bin/sudo", "/usr/bin/systemctl", "restart", "jen"])
-
-    threading.Thread(target=restart, daemon=True).start()
+    if __runtime.restart_service() == "none":
+        flash("Certificate removed. " + __runtime.RESTART_BY_HAND, "warning")
+    else:
+        flash("Certificate removed. Restarting in HTTP mode...", "success")
     return redirect(url_for("settings.settings_security"))
 
 

@@ -597,6 +597,7 @@ def create_app() -> Flask:
             "venv_migration_incomplete": _VENV_MIGRATION_INCOMPLETE,
             "content_dir_incomplete": _CONTENT_DIR_INCOMPLETE,
             "ipv6_enabled": ipv6_enabled,
+            "jen_layout": extensions.layout(),
             "kea_legacy_hosts": kea_legacy_hosts,
             "csrf_token": lambda: csrf_svc.generate_csrf_token(app),
             "csp_nonce": getattr(g, "csp_nonce", ""),

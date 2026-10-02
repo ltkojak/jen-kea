@@ -66,7 +66,7 @@
         </a>
     </div>
     {% if is_systemd_host %}
-    <div class="form-hint u-d2c171">The updater stages the release, installs its dependencies into <code>/opt/jen/venv</code>, validates it, snapshots the current install, swaps, restarts, and rolls back on any failure. Progress: <code>sudo journalctl -u jen-update.service -f</code>.</div>
+    <div class="form-hint u-d2c171">The updater stages the release, installs its dependencies into the release's own virtualenv (<code>{{ jen_layout.app_dir }}/releases/&lt;version&gt;/venv</code>), validates it, snapshots the current install, swaps, restarts, and rolls back on any failure. Progress: <code>sudo journalctl -u jen-update.service -f</code>.</div>
     {% endif %}
 </div>
 

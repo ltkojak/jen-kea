@@ -231,9 +231,9 @@
     <p class="u-4e420a">Plugins are optional add-ins that extend Jen without touching the core install. Each has its own routes, templates, and database tables. Your data is preserved when a plugin is uninstalled — only the plugin files are removed.</p>
     <p class="u-4e420a">
     {% if is_systemd_host %}
-    A newly installed plugin is fetched and verified by a dedicated root-privileged service and lands read-only under <code>/opt/jen/plugins-installed/</code> — the running Jen process itself can never write there. A plugin marked "writable" was installed before this existed; use Reinstall to move it there.
+    A newly installed plugin is fetched and verified by a dedicated root-privileged service and lands read-only under <code>{{ jen_layout.plugin_dir_root }}/</code> — the running Jen process itself can never write there. A plugin marked "writable" was installed before this existed; use Reinstall to move it there.
     {% else %}
-    Installed plugins live in <code>/opt/jen/plugins/</code>.
+    Installed plugins live in <code>{{ jen_layout.plugin_dir }}/</code>.
     {% endif %}
     Enable/disable changes take effect after restarting Jen.</p>
     <p>Want to build a plugin? See the <a href="https://github.com/ltkojak/jen-kea/tree/main/plugins" target="_blank" class="u-dc2e42">plugin developer guide on GitHub</a>.</p>

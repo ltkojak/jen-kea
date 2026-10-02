@@ -119,3 +119,48 @@ class TestCompatibilityTableMatchesCI:
             if f"{label} {version}" not in table:
                 missing.append(image)
         assert not missing, f"CI tests {missing}, not mentioned in README's Compatibility table"
+
+
+def _table_row(label: str) -> str:
+    """The text of one row of the Compatibility table, by its bold first cell."""
+    for line in _compat_table_text().splitlines():
+        if line.startswith(f"| **{label}**"):
+            return line
+    raise AssertionError(f"README's Compatibility table has no '{label}' row")
+
+
+class TestCompatibilityTableClaimsNothingCIDoesNotRun:
+    """v5.67.0-beta.10 (Q122) — the other direction. The tests above fail when CI runs something the table
+    omits; the sentence above the table said "Generated from Jen's own CI … if a version isn't tested here,
+    it isn't claimed", which is only true if a version in the table that CI does NOT run fails too."""
+
+    def test_every_kea_version_in_the_table_is_one_the_compat_run_tests(self):
+        claimed = set(re.findall(r"\d+\.\d+\.\d+", _table_row("Kea")))
+        assert claimed, "the Kea row names no version"
+        extra = claimed - set(_kea_compat_versions())
+        assert not extra, f"README claims Kea {sorted(extra)}, which kea-compat.yml does not run"
+
+    def test_every_operating_system_in_the_table_is_one_the_install_job_runs_on(self):
+        claimed = set(re.findall(r"Ubuntu (\d+\.\d+)", _table_row("Operating system")))
+        assert claimed, "the OS row names no Ubuntu release"
+        tested = {os_.replace("ubuntu-", "") for os_ in _install_os_list()}
+        assert not (claimed - tested), f"README claims Ubuntu {sorted(claimed - tested)}; CI runs {sorted(tested)}"
+
+    def test_every_python_in_the_table_is_one_the_pytest_job_runs(self):
+        claimed = set(re.findall(r"\b3\.\d+\b", _table_row("Python")))
+        assert claimed, "the Python row names no version"
+        extra = claimed - set(_pytest_python_versions())
+        assert not extra, f"README claims Python {sorted(extra)}; the pytest job runs {_pytest_python_versions()}"
+
+    def test_every_database_in_the_table_is_one_ci_runs(self):
+        claimed = set(re.findall(r"(MariaDB|MySQL) (\d+(?:\.\d+)*)", _table_row("Database")))
+        assert claimed, "the Database row names no database"
+        tested = set()
+        for image in _tested_db_images():
+            engine, _, version = image.partition(":")
+            tested.add(({"mariadb": "MariaDB", "mysql": "MySQL"}.get(engine, engine), version))
+        assert not (claimed - tested), f"README claims {sorted(claimed - tested)}; CI runs {sorted(tested)}"
+
+    def test_the_sentence_above_the_table_says_it_is_hand_written_and_held_to_ci(self):
+        text = README.read_text(encoding="utf-8")
+        assert "Generated from Jen's own CI" not in text, "the table is hand-written; the test is what ties it to CI"

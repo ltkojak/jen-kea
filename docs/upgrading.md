@@ -42,8 +42,10 @@ installing the Kea host helper, capturing a config baseline, making a
 recovery point, and investigating your first client. An `--answers` file
 or `JEN_*` environment variable can still supply `JEN_KEA_API_URL`,
 `JEN_SUBNETS`, `JEN_KEA_SSH_HOST`, `JEN_DDNS_PROVIDER`, or any of their
-companions directly — doing so skips the matching `/setup` step, same as
-every other answers-file key already skips its own prompt. None of this
+companions directly. There is no per-step skipping: `/setup` is a one-time
+redirect that fires only while Jen has no Kea API URL and no named subnet, so
+supplying both means you are never sent there (it stays reachable from Getting
+started). None of this
 affects an existing install or an upgrade — it only changes what a fresh
 install's terminal session asks (5.67.0-beta.3).
 
@@ -52,9 +54,11 @@ install's terminal session asks (5.67.0-beta.3).
 The config file holding every DB password, API credential and DDNS
 token this install has moves from `0640` to `0600` — owner and group
 have been the same service user since v5.10.4, so the group-read bit
-never actually granted anyone anything. This happens automatically on
-your next config save (Settings, or the next `install.sh` run); nothing
-for you to do (5.67.0-beta.1).
+never actually granted anyone anything. A fresh install creates the file
+`0600`; an existing one is tightened the next time Jen writes it — any save
+under Settings. An upgrade on its own does not touch the mode, so if you want
+it now: `sudo chmod 600 /etc/jen/jen.config` (the path follows `--config-dir`
+on a relocated install). Nothing else for you to do (5.67.0-beta.1).
 
 ## Two bugs that only ever affected a genuinely fresh install
 
@@ -148,8 +152,12 @@ even though this box runs `install.sh`, not Docker — the relocatable
 install added in beta.2 made the rendered systemd unit set `JEN_ROOT`,
 which a detection check had relied on to mean "not systemd" since long
 before that. Fixed; since the hidden button was the normal way to reach
-this fix, a box stuck on one of the affected betas needs the one line
-it would have run itself: `sudo systemctl start jen-update.service`.
+this fix, a box stuck on one of the affected betas has two ways out. Either
+extract the newer release tarball and run `sudo ./install.sh --upgrade`, or let
+the updater do it: it offers a pre-release only to a box on the beta channel, so
+put `channel = beta` under `[updates]` in `jen.config` first, then run
+`sudo systemctl start jen-update.service` (on a stable-channel box that command
+finds nothing newer than the beta it is already on and does nothing).
 See `docs/troubleshooting.md` for the full detail. Nothing else about
 an affected install was wrong, and Docker/dev checkouts were never
 affected (5.67.0-beta.6).

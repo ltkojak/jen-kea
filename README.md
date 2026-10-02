@@ -120,17 +120,17 @@ Full detail, with the version each capability shipped in, is in [`docs/features.
 | Area | What Jen does | What it needs |
 |---|---|---|
 | Dashboard & monitoring | Live subnet utilization, recent leases, HA state, alerts, 7 built-in themes | — |
-| Leases & reservations | Browse/release/export leases; convert a dynamic lease to a reservation; bulk CSV import | `host_cmds` hook for write operations |
+| Leases & reservations | Browse/release/export leases; convert a dynamic lease to a reservation; bulk CSV import | `host_cmds` hook for adding, editing and deleting reservations (leases themselves are read from Kea's database) |
 | Subnets, pools & options | Edit pools, lease times, gateway/DNS, shared networks, DHCP options at every level, client classes, config history with restore | SSH + the [Kea host helper](#glossary) |
 | Import | From a Windows DHCP export or an ISC `dhcpd.conf`, reviewed and previewed before applying | SSH + the Kea host helper |
-| Diagnose | Investigate / Explain / Trace / Timeline for one client; Configuration Doctor; DNS↔DHCP reconcile | Trace needs the Kea host helper; fuller answers with `lease_cmds`/`host_cmds` |
+| Diagnose | Investigate / Explain / Trace / Timeline for one client; Configuration Doctor; DNS↔DHCP reconcile | Trace needs the Kea host helper |
 | Plan | Pool exhaustion forecast; Kea 3.2 readiness check | — |
 | High availability | Live HA state, a per-subnet lease comparison across the pair, and a guided maintenance stepper | the `libdhcp_ha` hook |
 | Packet health | Drops, parse failures and NAKs from Kea's own counters, with Kea 3.2's richer drop reasons | Kea 3.2+ for drop-reason detail |
 | Recovery | One encrypted bundle (Jen's database, config, keys, content); `install.sh --restore` puts it back | — |
 | IPv6 (DHCPv6) | Leases, Devices, Reservations, Subnets, Dashboard and Search in a v6 view; author a starting `kea-dhcp6.conf` | Off by default; Kea built with DHCPv6 |
 | Device management | Inventory with OUI fingerprinting, filter by type/subnet, custom icons | — |
-| Notifications | 7 channels (Pushover, Telegram, Slack, ntfy, Discord, Email, Webhook), 6 alert types | — |
+| Notifications | 7 channels (Pushover, Telegram, Slack, ntfy, Discord, Email, Webhook), 21 alert types | — |
 | Access control | 3 roles, per-subnet scope, TOTP/passkey MFA, SSO via OpenID Connect, full audit log | — |
 | Plugins | 7 bundled add-ins — network discovery, IPAM, host watchdog, DNS sync, switch-port locator, Wake-on-LAN, presence | Each opt-in; some need an extra host tool (`nmap`, `snmpbulkwalk`) |
 
@@ -138,8 +138,11 @@ Full detail, with the version each capability shipped in, is in [`docs/features.
 
 ## How Jen talks to Kea
 
-Jen is **agentless** — nothing runs on your Kea servers. One Flask
-process reaches out to each Kea box over three channels:
+Jen is **agentless** — no resident agent runs on your Kea servers. One
+Flask process reaches out to each Kea box over three channels, and the
+only thing it ever puts on a Kea host is the optional
+[Kea host helper](#glossary), a fixed-function script that runs only when
+Jen invokes it over SSH:
 
 | Channel | Used for | Direction |
 |---------|----------|-----------|
@@ -164,7 +167,9 @@ threat model.
 
 ## Compatibility
 
-Generated from Jen's own CI, not hand-maintained — if a version isn't
+Written by hand, then held to Jen's own CI by a test in both directions
+(`tests/test_readme_compat_table.py`): every version CI runs must be in this
+table and every version in this table must be one CI runs — if it isn't
 tested here, it isn't claimed.
 
 | | Tested |
@@ -177,6 +182,12 @@ tested here, it isn't claimed.
 Kea versions below 3.0 are not supported. Kea 3.2+ removed the Control
 Agent — Jen talks to each daemon's own control socket instead (Settings
 → Kea → "Set up direct socket"), set up automatically from v5.29.0.
+
+Which connection mode is tested against a real Kea: the weekly compat run
+drives **direct** mode (each daemon's own HTTP control socket) against real
+`kea-dhcp4` 3.0, 3.2 and 3.3. **Control Agent mode is not run against a real
+Control Agent** — it is covered by unit tests against a stub that speaks the
+same command format, so treat it as supported but not independently verified.
 
 ---
 
@@ -235,28 +246,27 @@ Jen supports optional plugins installable from **Settings → Plugins**.
 
 ## Jen compared to ISC Stork
 
-[ISC Stork](https://www.isc.org/stork/) is the official monitoring
-dashboard for Kea and BIND. It and Jen solve overlapping problems from
-opposite directions; every claim below is checked against ISC's own
-Stork documentation, not assumed.
+[ISC Stork](https://www.isc.org/stork/) is ISC's own graphical monitoring
+and management tool for Kea and BIND 9. It and Jen solve overlapping problems
+from opposite directions; every statement about Stork below is taken from ISC's
+own pages, and anything those pages do not say has been left out. Checked on 2026-10-02 against ISC's pages: <https://www.isc.org/stork/> (what Stork is, PostgreSQL, MPL 2.0, Prometheus/Grafana), <https://stork.readthedocs.io/en/latest/overview.html> (agent per machine, BIND 9 read-only, configuration capabilities not all available), <https://stork.readthedocs.io/en/latest/usage.html> (the three user groups), <https://stork.readthedocs.io/en/latest/dhcp.html> (subnet management needs the `subnet_cmds` or `cb_cmds` hook) and <https://stork.readthedocs.io/en/latest/install.html> (LDAP through a hook).
 
 | | **Jen** | **ISC Stork** |
 |---|---|---|
 | Architecture | Agentless — one process connects out to each server | An agent (`stork-agent`) installed on every managed server |
-| Primary focus | Day-to-day **management**: edit subnets/pools/reservations, manage leases and devices | **Monitoring** and metrics; config editing (subnets, reservations, options) added more recently, with some capabilities still unavailable |
-| Config changes | Validated SSH push to `kea-dhcp*.conf`, host-side backup, pre-flight across servers, config-history restore | A Kea config-management API (hooks or direct JSON) |
-| Scale target | Homelab to small business, a handful of servers | Built to centralize monitoring across a fleet |
-| Access control | Three roles + per-subnet scoping, local accounts, TOTP/passkey MFA or OpenID Connect SSO | Three roles (`super-admin`/`admin`/`read-only`), local accounts or LDAP |
+| Primary focus | Day-to-day **management** of Kea: edit subnets/pools/reservations, manage leases and devices | Monitoring of Kea and BIND 9, plus Kea configuration editing (subnets, shared networks, host reservations, global parameters); ISC's documentation says some configuration capabilities are not yet available |
+| Config changes | Validated SSH push to `kea-dhcp*.conf`, host-side backup, pre-flight across servers, config-history restore | Through Kea's own hook libraries (`subnet_cmds` or `cb_cmds` for subnets); ISC notes that editing a Kea server directly bypasses Stork's locking |
+| Shape | Kea only; one process, aimed at homelab to small business and a handful of servers | Kea and BIND 9; one Stork server with an agent on each managed machine |
+| Access control | Three roles + per-subnet scoping, local accounts, TOTP/passkey MFA or OpenID Connect SSO | Three groups (`super-admin`/`admin`/`read-only`), local accounts, LDAP through a hook |
 | Database | MySQL / MariaDB | PostgreSQL |
-| Extras | Device inventory & OUI fingerprinting, multi-channel alerting, plugin system, custom branding | Grafana/Prometheus export; BIND 9 monitoring (early stage, read-only) |
+| Extras | Device inventory & OUI fingerprinting, multi-channel alerting, plugin system, custom branding | The agent is a Prometheus exporter, for Grafana dashboards; BIND 9 support is read-only (zones and zone contents) |
 | License | GPL v3 | MPL 2.0 |
 
-If you run a fleet, want Prometheus/Grafana dashboards, or also manage
-BIND, use Stork. If you want a single-process console to *operate* a
-small number of Kea servers from any browser, that's what Jen is for.
-Where a fleet console shows what happened, Jen also answers why this client
-got this address, what is about to run out, what changed, and what to do
-before Kea 3.2.
+If you want Prometheus/Grafana dashboards or also manage BIND, use Stork.
+If you want a single-process console to *operate* a small number of Kea
+servers from any browser, that's what Jen is for — beyond editing, it answers
+why this client got this address, what is about to run out, what changed, and
+what to do before Kea 3.2.
 
 ---
 
