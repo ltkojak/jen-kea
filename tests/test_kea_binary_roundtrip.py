@@ -237,13 +237,13 @@ class TestAFileWrittenBeforeThisFix:
         refused = [r for r in results if r.startswith("❌")]
         assert len(refused) == 1 and "hosts.dhcp_identifier" in refused[0] and "row 2" in refused[0]
         snap = _snapshot(kea_tables)
-        assert snap["hosts"] == [], "the table with an undecodable value must be refused whole, not half-restored"
+        assert not snap["hosts"], "the table with an undecodable value must be refused whole, not half-restored"
         assert snap["dhcp4_options"][0]["val"] == "0A000001", "an unrelated table is still imported"
 
     def test_odd_length_hex_is_refused_too(self, kea_tables):
         content = self._old_file(2, [{"host_id": 1, "dhcp_identifier": "abc", "dhcp_identifier_type": 0}])
         assert any(r.startswith("❌") for r in dbexport.import_kea(content, "skip"))
-        assert _snapshot(kea_tables)["hosts"] == []
+        assert not _snapshot(kea_tables)["hosts"]
 
     def test_a_format3_file_with_a_bare_string_in_a_binary_column_is_refused(self, kea_tables):
         content = json.dumps(
@@ -254,7 +254,7 @@ class TestAFileWrittenBeforeThisFix:
         ).encode("utf-8")
         results = dbexport.import_kea(content, "skip")
         assert any(r.startswith("❌") and "tags every binary value" in r for r in results), results
-        assert _snapshot(kea_tables)["hosts"] == []
+        assert not _snapshot(kea_tables)["hosts"]
 
     def test_a_tagged_value_with_invalid_hex_is_refused(self, kea_tables):
         content = json.dumps(
