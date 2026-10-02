@@ -183,3 +183,35 @@ none need a manual step:
   after Kea's own side had already gone through — fixed; an existing
   odd name is preserved exactly as it was, or repaired automatically if
   it genuinely can't be stored, logged either way (5.67.0-beta.7).
+
+## The setup wizard's remaining fixes — one thing to check if you used it
+
+The first-hour wizard's remaining defects are fixed; `sudo ./install.sh`
+or the in-app updater picks all of it up with no manual step. One thing
+is worth a look if you ran **Connect** on an earlier beta: it saved a
+Kea daemon's own control socket as *Control Agent* mode (every Kea 3.2
+site, and any direct-mode install that re-submitted the form). Settings →
+Kea shows the mode that was saved; re-submitting **Connect**
+(`/setup/connect`) now identifies what answered and saves the right one,
+or **Probe** on the Settings page reports the same thing.
+
+What changed, for anyone who uses the wizard from here on:
+
+- Connect tries the URL exactly as typed (a custom port included),
+  guesses `:8004`/`:8006` only when you gave no port, and reports the
+  error for the URL you typed. A blank password field means "use the
+  saved one", for the test as well as the save.
+- A new optional `[kea_db] port` key (and `[kea6_db] port`, inheriting
+  it) sets the Kea database's TCP port; absent means 3306, as before.
+  Every connection the application makes honours it now — earlier
+  releases always dialled 3306.
+- "Manage IPv6 in Jen" merges into `[subnets6]` instead of replacing it,
+  and the DHCPv6 check requires a real kea-dhcp6 answer.
+- The Found step shows Kea's HA peers and the servers Jen manages as two
+  facts, with an **Add this peer to Jen** action; submitting it while Kea
+  is unreachable saves nothing and leaves it open.
+- A host Jen cannot reach over SSH is reported as a message (on
+  `/setup` and on Settings → Kea → SSH) naming the user, host and
+  reason; the recovery step offers **Continue** once the bundle has
+  downloaded. Getting started links a plain administrator only to pages
+  an administrator may open (5.67.0-beta.8).

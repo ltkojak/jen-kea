@@ -2,6 +2,89 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.67.0-beta.8] - 2026-10-02
+
+Beta channel. Stacked on 5.67.0-beta.7. The same audit that produced the
+previous beta also walked the first-hour setup wizard end to end and found
+what was still wrong with it; every item below was verified against the
+shipped code, and the connection-mode fix was written only after the three
+real Kea releases the compatibility job runs (3.0.3, 3.2.0 and 3.3.1) had
+been asked what they actually answer.
+
+**Connect saved every direct-mode Kea as Control Agent mode.** The step
+probed the URL you typed with a command carrying a `service` field and
+recorded "Control Agent" for any answer. A Kea daemon's own control socket
+answers such a command exactly as it answers one without — on all three
+versions — so the answer proved nothing, and a Kea 3.2 site (which has no
+Control Agent at all) that typed `http://kea:8004` was saved as Control Agent
+mode; after that the IPv6 and DDNS connections fell back to the DHCPv4
+socket, and an existing direct-mode install that merely re-submitted the
+form was flipped. The mode now comes from asking what answered — the
+Settings page's own daemon identification, which both places now share — and
+a Control Agent is accepted only once the DHCPv4 service behind it answers
+too. An answer that cannot be identified keeps the mode already saved for
+that URL, and says it could not tell.
+
+**The URL you typed is the one that is tried, and the one that is blamed.**
+A typed port is used as typed: Jen guesses the daemon's default port (8004,
+or 8006 for DHCPv6) only when you gave no port at all, where it used to
+replace `https://kea:9004` with `:8004`. Addresses are built so an IPv6
+literal stays bracketed — the old construction produced
+`http://2001:db8::1:8004`, which no client can parse. And when the
+connection fails, the message is the error for the URL you typed, with any
+guess as a second line; it used to show only the last attempt, so a wrong
+password read as "connection refused" on a port nobody had typed.
+
+**Connect now tests what it saves.** Clearing the client-certificate fields
+probed with the *saved* certificate (so the probe passed) and then saved the
+empty fields (so every later call failed); "no client certificate" is now
+said explicitly. A blank password field means "use the saved one" for the
+test as well as the save — saved passwords are never shown, so a revisit
+always starts blank. The Kea database test uses the port and TLS settings
+the application's own connection will use, the form has a port field, and
+a new `[kea_db] port` key (and `[kea6_db] port`, inheriting it) is honoured
+by every connection the application makes — before, it dialled 3306
+whatever was written. The connection pool is rebuilt when Connect saves,
+where it used to keep dialling the placeholders it was built with until a
+restart.
+
+**IPv6 enabling merges instead of replacing.** "Manage IPv6 in Jen" rewrote
+the whole `[subnets6]` section with generic names and no IPv4 pairing — the
+replacement the IPv4 side stopped doing a beta ago. It now keeps the name
+and pairing of every subnet whose ID and network match, lists whatever Jen
+has that Kea did not report with an unchecked "remove" box, and writes
+nothing else if the subnets are refused. The DHCPv6 check requires a real
+kea-dhcp6 answer — a `Dhcp6` section in its config — where any Kea endpoint
+used to pass and a missing section read as "0 subnets".
+
+**The Found step stopped telling half-truths.** "N peer(s) configured"
+counted Kea's high-availability peers, not the servers Jen manages, so two
+peers and one managed server read as if both were connected. The page now
+shows both numbers, and an **Add this peer to Jen** action for each peer Jen
+does not manage, which opens the additional-servers form with the name, URL
+and role filled in — and the credentials left for you. Submitting the step
+while Kea is unreachable used to drop the names you typed and mark the step
+done with no subnets; it now saves nothing, says why, and stays open. "Took
+N minutes" at the end of the wizard used to keep growing on every revisit;
+the finish time is stored when the last step resolves.
+
+**An SSH failure is a message, and the recovery step can finish.** "Skip"
+on the helper step followed by "Capture baseline", and "Install the helper"
+before the key is authorised (the normal first try), both let a connection
+exception escape as a server error. The connection is now opened inside the
+handled path, with a message naming the user, the host and the reason, an
+empty host is refused before anything dials it, and the Settings pages say
+the same. On the recovery step, a bundle download is a form submission whose
+response is a file, so the page never reloaded and **Continue** never
+appeared — the only way forward was "I will do this later". The page now
+notices the download finishing and offers Continue, and a passphrase
+mismatch keeps you in the wizard rather than sending you to Settings.
+
+Smaller fixes in the same pass: Getting started no longer links a plain
+administrator into pages only a superadmin may open, and its navigation
+count is kept per role and subnet scope instead of one number cached for
+whoever rendered first.
+
 ## [5.67.0-beta.7] - 2026-10-02
 
 Beta channel. Stacked on 5.67.0-beta.6. A security audit of the whole
