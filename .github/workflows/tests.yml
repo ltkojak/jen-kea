@@ -857,8 +857,16 @@ jobs:
       # does that, live, after first login); an answers file that leaves
       # all of those keys out must still produce a healthy install whose
       # first superadmin login lands on /setup instead of the dashboard.
-      - name: Clear the leftover layout record from the legs above
-        run: sudo rm -f /etc/jen-layout.conf
+      #
+      # v5.67.0-beta.9 (Q121, item c) — this leg now has to START FROM A BOX
+      # WITH NO CONFIG: the level-1 uninstalls above keep /etc/jen/jen.config
+      # (Kea configured, from the first leg), and install.sh now KEEPS an
+      # existing config on a reinstall instead of rewriting it from the answers
+      # file — which is the fix, and is what made this leg's premise (a Kea-less
+      # config) stop being true by accident. The Jen database, and so the admin
+      # account, are deliberately left alone.
+      - name: Clear the leftover layout record, config and content from the legs above
+        run: sudo rm -rf /etc/jen /var/lib/jen /etc/jen-layout.conf
 
       - name: Write an answers file with no Kea keys at all
         # v5.67.0 (Q115 step 3 fixup 6) — no JEN_INITIAL_ADMIN_PASSWORD
