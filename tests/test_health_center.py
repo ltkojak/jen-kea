@@ -533,12 +533,59 @@ class TestReportsForecastCard:
         body = r.data.decode()
         assert r.status_code == 200
         assert "reaches 90% in ~" in body and "Peak <strong>172/254</strong>" in body
-        assert "const FORECAST" in body and "Projected (trend)" in body
+        assert "const FORECAST" in body and "Projected total (trend of daily peaks)" in body
 
     def test_short_history_says_so(self, logged_in_client, db):
         self._seed(db, 1, [10, 20])
         body = logged_in_client.get("/reports?days=30").data.decode()
         assert "not enough history (2 of 7 days needed)" in body
+
+    # ── v5.67.0-beta.12 (Q124): the projection for every trend, and no struck-out legend entry ──
+
+    def _forecast_json(self, body):
+        import json
+        import re
+
+        m = re.search(r"const FORECAST = (\{.*?\});\n", body, re.S)
+        assert m, "the page no longer embeds FORECAST"
+        return json.loads(m.group(1))
+
+    def test_a_falling_subnet_gets_a_projection_and_the_card_says_where_it_is_heading(self, logged_in_client, db):
+        self._seed(db, 1, [200 - 9 * i for i in range(10)])  # falling ~9/day
+        body = logged_in_client.get("/reports?days=30").data.decode()
+        fc = self._forecast_json(body)["1"]
+        assert fc["trend"] == "falling" and len(fc["projection"]) == 31 and fc["days_to_90pct"] is None
+        assert "falling — about" in body and "in 30 days" in body
+        assert "No projection" not in body
+
+    def test_a_flat_subnet_says_it_is_holding(self, logged_in_client, db):
+        self._seed(db, 1, [80] * 10)
+        body = logged_in_client.get("/reports?days=30").data.decode()
+        assert "flat — holding near 80" in body
+
+    def test_no_history_enough_adds_no_projection_dataset_and_says_why(self, logged_in_client, db):
+        self._seed(db, 1, [10, 20])
+        body = logged_in_client.get("/reports?days=30").data.decode()
+        assert self._forecast_json(body)["1"]["projection"] == []
+        assert "No projection yet: 5 more day(s) of history needed." in body
+        # the dataset is only pushed when there IS a projection, and is never added hidden
+        assert "if (proj.length) {\n            datasets.push({" in body
+        assert "hidden: proj.length" not in body
+
+    def test_the_legend_labels_are_the_new_ones_and_the_old_one_is_gone(self, logged_in_client, db):
+        self._seed(db, 1, [100 + 8 * i for i in range(10)])
+        body = logged_in_client.get("/reports?days=30").data.decode()
+        assert "label: 'Total active'" in body
+        assert "label: 'Projected total (trend of daily peaks)'" in body
+        assert "'Projected (trend)'" not in body
+
+    def test_a_chart_with_a_projection_carries_no_note_under_it(self, logged_in_client, db):
+        self._seed(db, 1, [100 + 8 * i for i in range(10)])
+        assert "chart-note" not in logged_in_client.get("/reports?days=30").data.decode()
+
+    def test_the_tooltip_on_a_projected_point_says_projected(self, logged_in_client, db):
+        self._seed(db, 1, [100 + 8 * i for i in range(10)])
+        assert "Projected total:" in logged_in_client.get("/reports?days=30").data.decode()
 
 
 class TestLeaseSnapshotFresh:

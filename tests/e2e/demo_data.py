@@ -297,7 +297,9 @@ def lease_history_rows(rng: random.Random | None = None, days: int = 30) -> list
     """30 days x 4 subnets at the 30-minute snapshot interval Health/Reports
     read (jen.services.health.lease_history_window): a gentle daily sine plus
     seeded noise, IoT trending slowly upward so the pool-exhaustion forecast
-    (Q35) has a real rising trend to draw a dashed projection for."""
+    (Q35) has a real rising trend to draw a dashed projection for, and
+    Production trending downward (v5.67.0-beta.12, Q124) so the Reports page
+    also shows the projection a FALLING trend gets — Guest and Lab stay flat."""
     rng = rng or random.Random(20260921)
     now = datetime.now(timezone.utc)
     rows = []
@@ -307,12 +309,13 @@ def lease_history_rows(rng: random.Random | None = None, days: int = 30) -> list
         pool_size = hi - lo
         base_active = LEASE_COUNTS[sid]
         rising = sid == 30  # IoT
+        falling = sid == 10  # Production
         for day in range(days, 0, -1):
             for p in range(points_per_day):
                 ts = now - timedelta(days=day, minutes=(points_per_day - p) * 30)
                 hour = ts.hour + ts.minute / 60.0
                 daily = 1.0 + 0.35 * (0.5 - abs((hour - 12) / 24))  # busier at midday
-                trend = 1.0 + (0.5 * (days - day) / days if rising else 0.0)
+                trend = 1.0 + (0.5 * (days - day) / days if rising else -0.4 * (days - day) / days if falling else 0.0)
                 noise = rng.uniform(-1, 1)
                 active = max(1, int(base_active * daily * trend + noise))
                 active = min(active, pool_size - 2)

@@ -170,10 +170,10 @@ class TestDesktopScreenshots:
             f"return !!m && parseInt(m[1], 10) > 0 && ({NO_LOADING_JS}); }}",
             "reports",
         )
-        # Scroll to IoT's own chart card — the one demo_data.py gives a rising
-        # trend, so it's the only one with a dashed projection line to show.
-        # (Production, first in subnet order, has a flat trend and never draws
-        # one — framing on it would never satisfy "the dashed projection on IoT".)
+        # v5.67.0-beta.12 (Q124) — every chart now has a dashed projection (rising, flat or falling,
+        # whenever the history is long enough), continuing a thin "Total active" line, and none has a
+        # struck-out legend entry. Frame Production's card: demo_data.py gives it a FALLING trend, the
+        # case that used to draw nothing, with IoT's rising one just below it.
         # Chart.js keeps resizing/animating canvases for a while after the "N
         # data points" text this test already waited on is correct, which
         # shifts every card's height below it — two earlier attempts here each
@@ -184,9 +184,23 @@ class TestDesktopScreenshots:
         # one just made) immediately before the screenshot, with no Python
         # round trip in between to leave a gap for another resize to land in.
         desktop.wait_for_timeout(1500)
+        # the docs image must really show what Q124 is about: a projection on a falling chart, the thin
+        # Total active series it continues, and no dataset switched off (a hidden dataset is what drew the
+        # struck-out legend label)
+        legend = desktop.evaluate(
+            "() => Object.values(Chart.instances).map(c => ({"
+            "  labels: c.data.datasets.map(d => d.label),"
+            "  anyHidden: c.data.datasets.some(d => d.hidden === true)}))"
+        )
+        assert legend, "reports: no charts were built"
+        assert not any(c["anyHidden"] for c in legend), f"reports: a chart still carries a hidden dataset: {legend}"
+        assert all("Total active" in c["labels"] for c in legend), legend
+        assert all("Projected total (trend of daily peaks)" in c["labels"] for c in legend), (
+            f"reports: every demo subnet has 30 days of history, so every chart should draw a projection: {legend}"
+        )
         in_view = desktop.evaluate(
             "() => {"
-            "  const find = () => [...document.querySelectorAll('.card-title')].find(e => e.textContent.includes('IoT'));"
+            "  const find = () => [...document.querySelectorAll('.card-title')].find(e => e.textContent.includes('Production'));"
             "  let r = null;"
             "  for (let i = 0; i < 8; i++) {"
             "    const t = find();"
@@ -198,7 +212,7 @@ class TestDesktopScreenshots:
             "  return r ? (r.top >= 0 && r.top < 300) : false;"
             "}"
         )
-        assert in_view, "reports: IoT's chart card never settled near the top of the frame"
+        assert in_view, "reports: Production's chart card never settled near the top of the frame"
         _leak_guard(desktop, "reports")
         _save(desktop, "reports")
 

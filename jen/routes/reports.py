@@ -111,6 +111,7 @@ def reports():
             f = __capacity.forecast(rows)
             hw = __capacity.high_water(rows)
             f["line"] = __capacity.summary_line(f)
+            f["projection_note"] = __capacity.projection_note(f)
             f["high_water"] = {"peak": hw["peak"], "on": hw["on"].isoformat()} if hw else None
             forecast[subnet_id] = f
     except Exception as e:

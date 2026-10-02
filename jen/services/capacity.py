@@ -12,9 +12,16 @@ Method: daily peaks of `active_leases` over the last `window_days`
 day the line crosses 90 % and 100 % of the pool. A pool resize makes
 older peaks incomparable, so only rows carrying the *current* pool size
 are fitted. Fewer than `min_days` distinct days → "insufficient"; a
-slope at or below zero → "flat" / "falling"; a crossing more than
-`horizon_days` out is reported as beyond the horizon rather than as a
-date nobody should plan around.
+slope within ±0.05/day → "flat", below it → "falling"; a crossing more
+than `horizon_days` out is reported as beyond the horizon rather than as
+a date nobody should plan around.
+
+v5.67.0-beta.12 (Q124) — the dashed line on the Reports chart (`projection`)
+is built for EVERY trend that has a fit (rising, flat, falling), clamped to
+[0, pool]; only the exhaustion fields (days_to_90pct, date_90, …) stay
+rising-only, because a flat or falling pool has no exhaustion date. It used to
+be built for a rising trend alone, so on a typical install one subnet drew a
+projection and every other chart showed a struck-out legend entry.
 """
 
 from __future__ import annotations
@@ -118,8 +125,9 @@ def forecast(
     slope_per_day, r2, days (distinct days fitted), pool_size,
     latest_peak, pct_now, days_to_90pct, date_90, days_to_100pct,
     date_100 (None when not reached inside the horizon or not rising),
-    beyond_horizon (bool), projection ([[iso_date, value], …] for a
-    rising trend, empty otherwise)."""
+    beyond_horizon (bool), projection ([[iso_date, value], …] whenever the fit
+    exists — rising, flat or falling — each value clamped to [0, pool]; empty
+    for "insufficient" and "no-pool")."""
     today = today or date.today()
     pool = current_pool_size(rows)
     out = {
@@ -152,15 +160,21 @@ def forecast(
     slope, intercept, r2 = _fit(points)
     out["slope_per_day"] = round(slope, 3)
     out["r2"] = round(r2, 3)
+    x_today = (today - origin).days
     if slope > 0.05:
         out["trend"] = "rising"
-    elif slope < -0.05:
-        out["trend"] = "falling"
-        return out
     else:
-        out["trend"] = "flat"
+        out["trend"] = "falling" if slope < -0.05 else "flat"
+        # No exhaustion date for a pool that is not filling — but the line is still drawn, so the chart
+        # and the card sentence say where the trend is heading ("about N in 30 days", "holding near N").
+        out["projection"] = [
+            (
+                (today + timedelta(days=i)).isoformat(),
+                int(round(max(0.0, min(float(pool), intercept + slope * (x_today + i))))),
+            )
+            for i in range(projection_days + 1)
+        ]
         return out
-    x_today = (today - origin).days
     for key, frac in (("90", 0.9), ("100", 1.0)):
         target = frac * pool
         x_cross = (target - intercept) / slope
@@ -178,10 +192,27 @@ def forecast(
     x_full = (pool - intercept) / slope - x_today  # fractional days until the line hits the pool
     span = max(1, min(math.ceil(x_full) if x_full > 0 else 1, projection_days))
     out["projection"] = [
-        ((today + timedelta(days=i)).isoformat(), int(round(min(pool, intercept + slope * (x_today + i)))))
+        (
+            (today + timedelta(days=i)).isoformat(),
+            int(round(max(0.0, min(float(pool), intercept + slope * (x_today + i))))),
+        )
         for i in range(span + 1)
     ]
     return out
+
+
+def projection_note(f: dict, min_days: int = MIN_DAYS) -> str:
+    """The one muted line under a Reports chart that has NO dashed projection, saying why in plain words
+    (v5.67.0-beta.12, Q124). Empty when there is a projection — the chart then explains itself. The chart
+    adds no "projected" dataset at all in this case, so the legend never shows a struck-out entry."""
+    if f.get("projection"):
+        return ""
+    if f.get("trend") == "no-pool":
+        return "No projection: this subnet has no pool."
+    if f.get("trend") == "insufficient":
+        need = max(1, min_days - int(f.get("days") or 0))
+        return f"No projection yet: {need} more day(s) of history needed."
+    return ""
 
 
 def summary_line(f: dict) -> str:
@@ -191,10 +222,13 @@ def summary_line(f: dict) -> str:
     if f["trend"] == "insufficient":
         return f"not enough history ({f['days']} of {MIN_DAYS} days needed)"
     base = f"trend {f['slope_per_day']:+.2f}/day over {f['days']} days"
+    proj = f.get("projection") or []
+    horizon = len(proj) - 1  # the chart's dashed line spans exactly this many days (PROJECTION_DAYS by default)
     if f["trend"] == "flat":
-        return base + " — flat"
+        # v5.67.0-beta.12 (Q124) — the card agrees with the chart: where the dashed line ends
+        return base + (f" — flat — holding near {proj[-1][1]}" if proj else " — flat")
     if f["trend"] == "falling":
-        return base + " — falling"
+        return base + (f" — falling — about {proj[-1][1]} in {horizon} days" if proj else " — falling")
     if f["days_to_90pct"] is not None:
         if f["days_to_90pct"] == 0:
             return base + f" — already at or above 90% ({f['pct_now']}%)"

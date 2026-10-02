@@ -77,12 +77,11 @@ class TestForecast:
         assert proj[-1][1] == 254 and all(v <= 254 for _d, v in proj)
         assert proj[0][1] == 200  # intercept 100 + 10 * x_today(10)
 
-    def test_projection_is_capped_at_thirty_days_and_empty_when_not_rising(self):
+    def test_projection_is_capped_at_thirty_days_for_a_slow_rise(self):
         rows = _rows([10 + i // 10 for i in range(30)])
-        assert len(cap.forecast(rows, today=TODAY)["projection"]) == 31
-        assert cap.forecast(_rows([50] * 12), today=TODAY)["projection"] == []
+        assert len(cap.forecast(rows, today=TODAY)["projection"]) == cap.PROJECTION_DAYS + 1
 
-    def test_flat_and_falling(self):
+    def test_flat_and_falling_have_no_exhaustion_date(self):
         f = cap.forecast(_rows([50] * 12), today=TODAY)
         assert f["trend"] == "flat" and f["days_to_90pct"] is None
         assert "flat" in cap.summary_line(f)
@@ -127,3 +126,102 @@ class TestForecast:
     def test_garbage_rows_are_harmless(self, bad):
         f = cap.forecast(bad, today=TODAY)
         assert f["trend"] in ("no-pool", "insufficient")
+
+
+class TestProjectionForEveryTrend:
+    """v5.67.0-beta.12 (Q124) — the dashed line is drawn for rising, flat AND falling trends whenever the fit
+    exists; only the exhaustion fields stay rising-only. Before, a falling or flat subnet had an empty
+    projection, and the Reports chart struck "Projected (trend)" through in its legend."""
+
+    EXHAUSTION = ("days_to_90pct", "date_90", "days_to_100pct", "date_100")
+
+    def _assert_no_exhaustion(self, f):
+        assert all(f[k] is None for k in self.EXHAUSTION) and f["beyond_horizon"] is False
+
+    def test_a_falling_trend_has_a_full_clamped_projection_and_no_exhaustion(self):
+        f = cap.forecast(_rows(list(range(200, 80, -10))), today=TODAY)  # -10/day
+        assert f["trend"] == "falling"
+        proj = f["projection"]
+        assert len(proj) == cap.PROJECTION_DAYS + 1
+        assert (
+            proj[0][0] == TODAY.isoformat() and proj[-1][0] == (TODAY + timedelta(days=cap.PROJECTION_DAYS)).isoformat()
+        )
+        assert all(0 <= v <= 254 for _d, v in proj)
+        assert [v for _d, v in proj] == sorted((v for _d, v in proj), reverse=True)  # never rises
+        self._assert_no_exhaustion(f)
+
+    def test_a_falling_line_never_goes_below_zero(self):
+        f = cap.forecast(_rows(list(range(200, 80, -10))), today=TODAY)
+        # the fit reaches zero well inside 30 days: today's value is ~80, falling 10/day
+        assert min(v for _d, v in f["projection"]) == 0 and f["projection"][-1][1] == 0
+
+    def test_a_flat_trend_has_a_full_projection_holding_its_level(self):
+        f = cap.forecast(_rows([50] * 12), today=TODAY)
+        assert f["trend"] == "flat"
+        assert len(f["projection"]) == cap.PROJECTION_DAYS + 1
+        assert {v for _d, v in f["projection"]} == {50}
+        self._assert_no_exhaustion(f)
+
+    def test_a_flat_line_above_the_pool_is_clamped_to_it(self):
+        f = cap.forecast(_rows([300] * 12, pool_size=254), today=TODAY)
+        assert f["trend"] == "flat" and {v for _d, v in f["projection"]} == {254}
+
+    def test_projection_days_is_honoured(self):
+        f = cap.forecast(_rows([50] * 12), today=TODAY, projection_days=10)
+        assert len(f["projection"]) == 11
+
+    def test_a_rising_trend_is_unchanged_it_still_stops_the_day_it_reaches_the_pool(self):
+        f = cap.forecast(_rows(list(range(100, 200, 10))), today=TODAY)
+        assert f["trend"] == "rising" and f["days_to_90pct"] == 3
+        assert f["projection"][-1] == ((TODAY + timedelta(days=6)).isoformat(), 254)
+
+    @pytest.mark.parametrize(
+        "rows, trend", [(_rows([10, 20, 30]), "insufficient"), (_rows([10] * 10, pool_size=0), "no-pool")]
+    )
+    def test_no_fit_means_no_projection(self, rows, trend):
+        f = cap.forecast(rows, today=TODAY)
+        assert f["trend"] == trend and f["projection"] == []
+
+    def test_the_card_sentence_carries_the_horizon_for_falling_and_flat(self):
+        falling = cap.forecast(_rows(list(range(200, 80, -10))), today=TODAY)
+        assert cap.summary_line(falling).endswith(f"falling — about 0 in {cap.PROJECTION_DAYS} days")
+        slower = cap.forecast(_rows(list(range(120, 60, -5))), today=TODAY)  # -5/day: ~55 left at 12 days, 0 in 11
+        assert slower["trend"] == "falling"
+        last = slower["projection"][-1][1]
+        assert f"about {last} in {cap.PROJECTION_DAYS} days" in cap.summary_line(slower)
+        flat = cap.forecast(_rows([50] * 12), today=TODAY)
+        assert cap.summary_line(flat).endswith("flat — holding near 50")
+
+    def test_the_sentence_never_hard_codes_the_horizon(self):
+        f = cap.forecast(_rows([50] * 12), today=TODAY, projection_days=10)
+        assert cap.summary_line(
+            cap.forecast(_rows(list(range(200, 80, -10))), today=TODAY, projection_days=10)
+        ).endswith("in 10 days")
+        assert "holding near 50" in cap.summary_line(f)
+
+    def test_a_line_without_a_projection_falls_back_to_the_plain_words(self):
+        # callers that hand summary_line a dict with no projection key (older fakes) still get a sentence
+        f = {"trend": "falling", "slope_per_day": -1.0, "days": 10}
+        assert cap.summary_line(f).endswith("— falling")
+        assert cap.summary_line({**f, "trend": "flat"}).endswith("— flat")
+
+
+class TestProjectionNote:
+    """The one muted line under a chart that has no dashed projection — in words, so the legend never has to
+    carry a struck-out entry."""
+
+    def test_insufficient_says_how_many_more_days(self):
+        f = cap.forecast(_rows([10, 20, 30]), today=TODAY)
+        assert cap.projection_note(f) == "No projection yet: 4 more day(s) of history needed."
+
+    def test_one_day_short_is_still_a_positive_number(self):
+        f = cap.forecast(_rows([10, 20, 30, 40, 50, 60]), today=TODAY)
+        assert "1 more day(s)" in cap.projection_note(f)
+
+    def test_no_pool(self):
+        f = cap.forecast(_rows([10] * 10, pool_size=0), today=TODAY)
+        assert cap.projection_note(f) == "No projection: this subnet has no pool."
+
+    @pytest.mark.parametrize("series", [[50] * 12, list(range(200, 80, -10)), list(range(100, 200, 10))])
+    def test_a_chart_with_a_projection_needs_no_note(self, series):
+        assert cap.projection_note(cap.forecast(_rows(series), today=TODAY)) == ""

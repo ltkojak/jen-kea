@@ -299,18 +299,36 @@ the peak over the selected range, the pool size and free addresses.
 Below that is the forecast: the highest active-lease count in the last
 30 days and the day it happened, the trend in leases per day, and — when
 the trend is rising — roughly when it reaches 90 % of the pool, with the
-date. The chart draws that trend forward as a dashed *Projected (trend)*
-line from the last snapshot to the day the pool would fill (at most 30
-days ahead).
+date.
+
+**The chart.** Each chart draws three lease lines — *Dynamic Leases*,
+*Reserved*, and a thin *Total active* line that is their sum, which is the
+series the forecast is fitted on — and, when there is enough history, a
+dashed amber **Projected total (trend of daily peaks)** that continues the
+Total active line from its last point, 30 days ahead. The dashed line is a
+straight-line fit of each day's peak over the last 30 days, carried forward
+and kept between 0 and the pool size; a rising line stops the day it would
+fill the pool. It is drawn for a **rising, a flat and a falling** trend
+alike — a falling one slopes down toward zero, a flat one holds its level —
+and the card's sentence says where it ends: "falling — about 12 in 30
+days", "flat — holding near 80". Only a rising trend also gets an
+exhaustion date; a pool that is flat or emptying has none.
+
+With fewer than 7 days of snapshots, or no pool size recorded, there is
+nothing to fit: the chart then has no dashed line and says so in one
+sentence underneath ("No projection yet: 4 more day(s) of history needed",
+or "No projection: this subnet has no pool") rather than listing a legend
+entry that is not drawn.
 
 How it is worked out: the highest active-lease count of each day over the
 last 30 days, a straight line fitted through those daily peaks, extended
 forward. It needs 7 days of snapshots before it says anything, only uses
 snapshots taken since the pool was last resized, and reports a crossing
-more than a year out as "beyond the horizon" rather than a date. A flat
-or falling trend shows no date. The forecast line turns amber when 90 %
-is within 30 days and red within 7 — the same thresholds the **Pool
-exhaustion forecast** check on the Health page and the optional
+more than a year out as "beyond the horizon" rather than a date. It is a
+trend, not a guarantee: a line fitted to the past does not know about the
+new office or the Wi-Fi you are about to turn off. The forecast line turns
+amber when 90 % is within 30 days and red within 7 — the same thresholds
+the **Pool exhaustion forecast** check on the Health page and the optional
 **Pool exhaustion forecast** alert use.
 
 ---
