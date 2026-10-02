@@ -123,6 +123,15 @@ class TestVersionStringsInSync:
         readme = (REPO / "README.md").read_text(encoding="utf-8")
         assert "img.shields.io/github/v/release/ltkojak/jen-kea?label=Stable" in readme
         assert "releases/latest" in readme
+        # Q126 — GitHub lists one day's releases with the prerelease NUMBER compared as text (beta.9 before
+        # beta.12), and shields.io's default follows that list, so the "Latest beta" badge showed beta.9 while
+        # beta.12 was out. `sort=semver` makes the badge pick the highest version instead. BOTH badges carry
+        # it (the stable one is only right today because stable has no same-day siblings), and `?label=Stable`
+        # stays contiguous: the assertion above is on that exact substring.
+        badges = re.findall(r"img\.shields\.io/github/v/release/ltkojak/jen-kea\?[^)\s]+", readme)
+        assert len(badges) == 2, badges
+        assert all("sort=semver" in b for b in badges), badges
+        assert any("include_prereleases" in b for b in badges) and any("label=Stable" in b for b in badges)
         assert not re.search(r"Version-[0-9]+\.[0-9]+\.[0-9]+", readme), "hard-coded version badge is back"
         assert not re.search(r"jen-v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z]+\.[0-9]+)?\.tar\.gz", readme), (
             "README must not name a versioned tarball — a beta bump would put a beta on the front door"

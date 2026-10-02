@@ -6,8 +6,8 @@
 
 **Jen manages [ISC Kea DHCP Server](https://www.isc.org/kea/) from any browser — a self-hosted console built for a homelab to a small business, one to a handful of Kea servers.** Edit subnets and reservations, see why a client got the address it got, and recover from a bad config change, without touching a terminal on the Kea box itself. ([What Jen is, in detail →](docs/about.md))
 
-[![Latest stable release](https://img.shields.io/github/v/release/ltkojak/jen-kea?label=Stable&style=flat)](https://github.com/ltkojak/jen-kea/releases/latest)
-[![Latest beta](https://img.shields.io/github/v/release/ltkojak/jen-kea?include_prereleases&label=Beta&style=flat&color=orange)](https://github.com/ltkojak/jen-kea/releases)
+[![Latest stable release](https://img.shields.io/github/v/release/ltkojak/jen-kea?label=Stable&sort=semver&style=flat)](https://github.com/ltkojak/jen-kea/releases/latest)
+[![Latest beta](https://img.shields.io/github/v/release/ltkojak/jen-kea?include_prereleases&sort=semver&label=Beta&style=flat&color=orange)](https://github.com/ltkojak/jen-kea/releases)
 [![Kea compatibility](https://github.com/ltkojak/jen-kea/actions/workflows/kea-compat.yml/badge.svg)](https://github.com/ltkojak/jen-kea/actions/workflows/kea-compat.yml)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue?style=flat)](https://python.org)
 [![Flask](https://img.shields.io/badge/Flask-3.1+-green?style=flat)](https://flask.palletsprojects.com)

@@ -458,6 +458,8 @@ Check the two version numbers. A box on `5.33.0-beta.2` that is told it's curren
 
 **"No usable release found for the beta channel"** in `journalctl -u jen-update.service` means every release GitHub listed was a draft or had a tag outside Jen's version grammar (`X.Y.Z`, `X.Y.Z-beta.N`, `X.Y.Z-rc.N`). A mistyped tag is ignored on purpose rather than installed.
 
+**The Releases page on GitHub lists out of numerical order** — on a day with several betas, `beta.9` can appear above `beta.12`, because GitHub compares the number after `beta.` as text within a day's releases. Every date and id is in order, nothing is wrong with the releases, and the order is not something this project can change on github.com: the Tags page, the README's version badges (which sort by version) and the in-app updater (which keys on the parsed version, never on the list's order) are the ones in order.
+
 ## Locked Out (Rate Limiting)
 
 If you've locked yourself out and can't log in:
