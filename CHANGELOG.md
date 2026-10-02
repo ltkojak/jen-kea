@@ -2,6 +2,51 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.67.0-beta.12] - 2026-10-02
+
+Beta channel. Stacked on 5.67.0-beta.11. One report, from the maintainer's own
+install: on Management → Reports, "Projected (trend)" was crossed out in the
+legend of the Production, VLAN70 and Protected charts, and only IoT drew a
+projection — "why is it crossed out, why is IoT the only one?"
+
+**The projection was drawn for a rising trend alone.** The forecast has always
+fitted a straight line through each day's peak and read three things off it: the
+trend, the day the pool would reach 90 % and 100 %, and a dashed line for the
+chart. The dashed line was built only when the trend was rising, so on an install
+with one rising subnet exactly one chart drew it — while the cards for the falling
+and flat subnets (−0.53/day, −0.06/day, +0.00/day) had a perfectly good fit that
+was thrown away. The line is now built for rising, flat and falling trends
+whenever the fit exists: thirty days ahead, every value kept between zero and the
+pool size, so a falling line bottoms out at zero and a rising one still stops the
+day it would fill the pool. The exhaustion dates stay rising-only — a pool that is
+flat or emptying has none.
+
+**A hidden dataset is drawn struck through.** Where there was no projection the
+chart still added the dataset, marked hidden, and Chart.js draws a hidden dataset's
+legend label crossed out — its convention for "the viewer switched this off". An
+absent projection therefore looked like a disabled feature, and clicking the label
+toggled nothing into view. Now, when there is genuinely nothing to project (fewer
+than seven days of history, or no pool size recorded), the dataset is not added at
+all and one muted sentence under the chart says why — "No projection yet: 4 more
+day(s) of history needed", or "No projection: this subnet has no pool" — so the
+legend lists only what is drawn.
+
+**The dashed line began beside nothing.** The chart plots Dynamic and Reserved as
+two separate lines, but the forecast is fitted on their total, and the dashed line
+was anchored at that total: on the IoT chart the two lines sat near 40 and 21 and
+the projection started near 60. Each chart now carries a thin *Total active* line,
+the dashed line visibly continues it from its last point, its legend entry reads
+"Projected total (trend of daily peaks)", and the tooltip on a projected point says
+it is an estimate rather than a reading.
+
+The sentence on each card agrees with the chart — "falling — about 12 in 30 days",
+"flat — holding near 80" — with the number of days taken from the projection
+itself. The user guide says what the dashed line is (a straight-line fit of each
+day's peak over thirty days, carried thirty days forward) and what it is not (a
+guarantee). The docs-screenshot journey now asserts that every chart has a
+projection and no dataset hidden, and the demo dataset gives Production a falling
+trend so the Reports image shows one.
+
 ## [5.67.0-beta.11] - 2026-10-02
 
 Beta channel. Stacked on 5.67.0-beta.10. The first item is the most serious

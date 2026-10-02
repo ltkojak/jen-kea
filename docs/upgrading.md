@@ -331,3 +331,27 @@ this release still restore correctly: the importer now decodes the hex they hold
   (`sudo ./install.sh --restore <bundle> --lenient-plugins`); what it accepted is
   recorded in `restore-report.txt` beside the snapshot. A plugin that is not
   installed on the machine is still only a warning (5.67.0-beta.11).
+
+## Reports: every chart can show its projection, and none shows a crossed-out label
+
+Nothing to do; this is how the Reports page reads now. Each subnet's chart used
+to list "Projected (trend)" in its legend crossed out unless that subnet's trend
+was rising, so on most installs one chart drew a dashed line and the rest looked
+as if the feature were switched off. Now:
+
+- **The dashed line is drawn for a rising, a flat and a falling trend** whenever
+  there are at least 7 days of history, thirty days ahead and kept between zero and
+  the pool size. Only a rising trend also gets an exhaustion date, as before.
+- **A chart with nothing to project has no dashed line and no legend entry for it**;
+  one sentence under it says why ("No projection yet: 4 more day(s) of history
+  needed", or "No projection: this subnet has no pool").
+- **Each chart has a thin *Total active* line** (dynamic plus reserved, the series
+  the forecast is fitted on) that the dashed line continues; its legend entry is
+  *Projected total (trend of daily peaks)*.
+- **The card's sentence says where the trend is heading** for falling and flat
+  subnets too: "falling — about 12 in 30 days", "flat — holding near 80".
+
+The Health Center check and the optional alert are unchanged: they act on the
+exhaustion dates, which are still rising-only. The dashboard's forecast panel shows
+the same sentence as the card, so a falling or flat subnet's line there gains the
+same ending (5.67.0-beta.12).
