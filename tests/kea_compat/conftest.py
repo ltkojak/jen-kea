@@ -74,6 +74,8 @@ def pytest_runtest_logreport(report):
             data = json.load(fh)
     except (OSError, ValueError):
         data = {}
-    data[report.nodeid.split("::")[-1]] = report.outcome
+    # an expected failure (a `known_bug`) reports "skipped" with `wasxfail`; the summary table shows it as one
+    outcome = "xfailed" if hasattr(report, "wasxfail") and report.outcome == "skipped" else report.outcome
+    data[report.nodeid.split("::")[-1]] = outcome
     with open(RESULTS, "w") as fh:
         json.dump(data, fh)

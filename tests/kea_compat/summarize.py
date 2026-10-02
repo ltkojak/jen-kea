@@ -13,7 +13,7 @@ import json
 import os
 import sys
 
-MARK = {"passed": "✅", "failed": "❌", "skipped": "⏭️"}
+MARK = {"passed": "✅", "failed": "❌", "skipped": "⏭️", "xfailed": "🐞"}  # 🐞 = a known bug, expected to fail
 
 
 def render(results: dict) -> str:

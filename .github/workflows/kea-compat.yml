@@ -143,6 +143,16 @@ jobs:
           KEA_COMPAT_RESULTS: ${{ github.workspace }}/results/${{ matrix.kea }}.json
           KEA_COMPAT_PKT4_OUT: ${{ github.workspace }}/results/pkt4-${{ matrix.kea }}.json
           KEA_COMPAT_IDENT_OUT: ${{ github.workspace }}/results/ident-${{ matrix.kea }}.json
+          # v5.67.0-beta.13 (Q127) — the database half: Jen's imports, merges, migrations and the reservation
+          # export against the `kea-admin db-init`ed schema above (tests/kea_compat/test_db_moves.py), and
+          # the facts of ISC's real schema it records (unique keys, foreign-key rules, option scopes)
+          KEA_COMPAT_DB_HOST: 127.0.0.1
+          KEA_COMPAT_DB_PORT: '3306'
+          KEA_COMPAT_DB_USER: kea
+          KEA_COMPAT_DB_PASS: kea_pw
+          KEA_COMPAT_DB_NAME: kea
+          KEA_COMPAT_DB_ROOT_PASS: ci_root_pw
+          KEA_COMPAT_SCHEMA_OUT: ${{ github.workspace }}/results/schema-${{ matrix.kea }}.json
         run: python -m pytest tests/kea_compat -m kea_compat -v
 
       - name: Kea log
