@@ -290,3 +290,44 @@ was described:
   that page, nothing changes for you; the page no longer cuts a pre-release
   version down to its release number when it names the release directory
   (5.67.0-beta.10).
+
+## Kea reservations restored or migrated through Jen may need repair
+
+This one is older than the rest of this page: it is in every earlier release,
+5.66.0 included. Restoring a Kea backup, importing a Kea export file, or migrating
+the Kea database from the Databases page stored each reservation's identifier as
+the **text of its own hex** — a MAC `34:13:43:e6:0e:2a` came back as the twelve
+characters `341343e60e2a`. The row looks right in every listing; Kea never matches
+the client to it again. Jen's own database and the recovery bundle were never
+affected.
+
+**Who may be affected:** anyone who ever restored or migrated Kea reservations
+through Jen. Nothing is wrong if you only ever *exported* them, or never used
+those pages.
+
+**What to do:** nothing, unless you did. The Health Center now has a row,
+*Kea reservations have plausible identifiers*; if it is not `fail`, you are
+clear. If it fails, Settings → Databases → Import → **Check reservation
+identifiers** lists each damaged row with what is stored now and what it will
+become, and repairs the ones you tick. Per-host option values restored the same
+way cannot be recognised automatically — check them by hand. Backups made before
+this release still restore correctly: the importer now decodes the hex they hold
+(5.67.0-beta.11).
+
+## Backups and restores that now behave differently
+
+- **The scheduled and manual Kea backup now holds every reservation, IPv4 and
+  IPv6** (`hosts`, `dhcp4_options`, `dhcp6_options`, `ipv6_reservations`),
+  labelled *Kea host reservations (IPv4 and IPv6)* everywhere. It used to be the
+  first two tables only, under the name "Kea's database". It still contains no
+  leases, which are transient; export those separately if you want a snapshot.
+- **The Kea export is streamed**, so a large lease table no longer has to fit in
+  memory. Export files are format 3; an older file imports as before.
+- **A restore whose plugin data fails now stops and rolls back** instead of
+  printing a warning and exiting 0. For a plugin whose code is installed, a failed
+  migration replay, row import or consistency check is an error that names the
+  plugin and the table, and the whole restore is undone. If you would rather have
+  everything else and handle that plugin by hand, add `--lenient-plugins`
+  (`sudo ./install.sh --restore <bundle> --lenient-plugins`); what it accepted is
+  recorded in `restore-report.txt` beside the snapshot. A plugin that is not
+  installed on the machine is still only a warning (5.67.0-beta.11).

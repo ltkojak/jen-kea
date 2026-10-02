@@ -2,6 +2,80 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.67.0-beta.11] - 2026-10-02
+
+Beta channel. Stacked on 5.67.0-beta.10. The first item is the most serious
+thing an outside review of 5.67.0-beta.3 turned up, and it is not new to this
+round: **it is in the stable 5.66.0 release too.** The rest of the review's
+items were either fixed in earlier betas or are in this one.
+
+**Kea's binary columns came back as text.** An export wrote every binary value
+as a bare hex string, and nothing anywhere decoded it. A restore of any Kea
+backup, an import of a Kea export file, and a Kea database migration all
+stored that text: the six-byte MAC `34:13:43:e6:0e:2a` came back as the twelve
+bytes of the characters `341343e60e2a`. The reservation row still looked right
+in every listing — right address, right name — and Kea never matched the client
+to it again. It touched `hosts.dhcp_identifier`, `lease4.hwaddr` and
+`client_id`, and every per-host option value. Jen's own tables and the bundled
+plugins' have no binary column, so the Jen export and the recovery bundle were
+never affected.
+
+Export format 3 writes a binary value as `{"$bin": "<hex>"}` — a typed
+object, never a guess, so a string that merely looks like hex stays a string —
+and records which columns were binary. The importer decodes by the **target's
+own column types**: a tag is always decoded; a bare string bound for a binary
+column in an older file (what every existing backup holds) is decoded as hex; a
+value that is not valid hex refuses *that table*, naming the column and row,
+before its first insert — it never puts text into a binary column, and the
+rest of the file still imports. A migration no longer goes through the export
+format at all: one streaming copy hands the driver's own values across, bytes as
+bytes. The permanent test compares `HEX(original)` with `HEX(restored)` for
+every binary column against a real database — through export, wipe and import,
+and through a migration into a second database — including an option value that
+is not valid UTF-8, a hostname that looks like hex, and the IPv6 tables.
+
+**If you ever restored or migrated Kea reservations through Jen, check.** A new
+Health Center row, *Kea reservations have plausible identifiers*, flags `hosts`
+rows whose identifier is the text of its own hex, and a superadmin page under
+Settings → Databases → Import (*Check reservation identifiers*) previews each
+one — what is stored now, what it will become — and repairs exactly the rows
+you tick, each only if it still holds the bytes the preview showed. It
+recognises hardware addresses, DUIDs and client ids of plausible length;
+circuit ids and flex ids are never flagged, because hex text is legitimate
+there. Per-host option values cannot be told from intended ones, so they are
+not touched: check them by hand after a restore made before this release.
+
+**The scheduled "Kea's database" backup was two tables.** It saved `hosts` and
+`dhcp4_options` — no IPv6 reservation, no DHCPv6 option, no lease — while the
+setup page called the box "Kea's database". The backup is now the group
+*Kea host reservations (IPv4 and IPv6)* — `hosts`, `dhcp4_options`,
+`dhcp6_options`, `ipv6_reservations`, in foreign-key order, restored in that
+order whatever order a file lists them — and is named that everywhere a backup
+is named. Leases stay a separate, explicit export, with the reason on the page:
+they are transient, so they are never part of a backup.
+
+**The Kea export built whole tables in memory.** It assembled every row of every
+table into a dictionary, serialised it, and the backup routes parsed it again. It
+is now the Kea twin of the Jen export: a server-side cursor, one row at a time,
+the metadata last, written through the same publish-or-leave-nothing path, and
+the download streams a temporary file it removes afterwards.
+
+**A recovery that lost a plugin's data reported success.** A failed migration
+replay, a failed row import or a failed invariant check for a plugin were
+warning lines; the restore printed them, started Jen, passed the health wait and
+exited 0. For a plugin whose code is on the machine they are now errors that name
+the plugin and the table, and the restore takes the same rollback every failed
+apply gets — configuration, content and database back as they were. `--lenient-plugins`
+is the explicit escape; the failures it accepts are printed and recorded in a
+`restore-report.txt` beside the snapshot. A plugin whose code is absent stays a
+warning, since its data is still in the bundle. The import page shows the same
+failures as errors, not as a line among the successes. A restore drill, and the
+system suite's recovery scenario, now include the failing case.
+
+The pytest job grants the test user the right to create `jen_test_` scratch
+databases, which the migration tests need; those tests fail rather than skip if
+they cannot.
+
 ## [5.67.0-beta.10] - 2026-10-02
 
 Beta channel. Stacked on 5.67.0-beta.9. Two parts, from the same audit. The
