@@ -256,3 +256,37 @@ worth knowing if you script the installer:
 - `--upgrade` and `--repair` no longer need a terminal; the answers parser
   accepts spaces around `=`, quoted values and `export`; and a layout path
   under `/root` is refused (5.67.0-beta.9).
+
+## Things that now do what the pages said
+
+Nothing here needs a manual step; `sudo ./install.sh` or the in-app updater
+picks it up. Worth knowing because each used to behave differently from how it
+was described:
+
+- **The DDNS answer given at install time takes effect.** The installer and
+  the Docker start-up wrote the provider under a key the application never
+  read. A box installed with `JEN_DDNS_PROVIDER` set (an answers file, or the
+  Docker environment) has been running with none; check Settings → DDNS and
+  choose it there if that was you. Nothing already saved in the application
+  is changed.
+- **Save & Restart, the port change and the certificate upload and removal
+  restart Jen in Docker too.** They ran a systemd command that cannot work in a
+  container while the page said Jen was restarting. Under systemd they run the
+  same command as before; in Docker the process stops and Docker restarts it;
+  on a host that is neither, the page now tells you to restart it yourself.
+- **The Grafana dashboard download works from the Docker image**, which never
+  shipped the file.
+- **Pages show the directories your install actually uses.** The database page
+  named `/opt/jen/backups` — wrong on every install since 5.13, where backups
+  live under the data directory — and several others printed `/opt/jen`,
+  `/etc/jen` or `/var/lib/jen` on a relocated install.
+- **A missing `lease_cmds` hook is no longer reported as a problem.** Jen sends
+  no lease command to Kea; leases are read from Kea's database. `host_cmds`
+  is still what reservation add, edit and delete use, and Health still checks
+  for it.
+- **The manual install guide's commands are run on every build**, and it renders
+  the systemd unit with `jen-update-root.py --render-unit` instead of copying a
+  file that stopped shipping. If you installed by hand from an older copy of
+  that page, nothing changes for you; the page no longer cuts a pre-release
+  version down to its release number when it names the release directory
+  (5.67.0-beta.10).

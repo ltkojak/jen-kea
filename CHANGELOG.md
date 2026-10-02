@@ -2,6 +2,86 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.67.0-beta.10] - 2026-10-02
+
+Beta channel. Stacked on 5.67.0-beta.9. Two parts, from the same audit. The
+first is about CI: a handful of checks that could not fail, and one path
+nothing had ever run. The second is about statements — in the docs, the
+templates and the installer — that the code contradicted.
+
+**CI that can fail.** Every workflow now runs its steps under
+`bash -eo pipefail`; before, a pipeline's status was its last command's, so
+`sudo ./install.sh … | tee log` reported `tee`'s success whatever the installer
+did. Every `! grep -q …` assertion — bash exempts a negated command from
+`errexit`, so each one was a no-op — is an explicit failing check, and a test
+refuses a workflow that reintroduces either spelling (or `cmd | grep -q`, which
+under pipefail fails for the wrong reason when grep exits early). The "upgrade
+from the latest stable" leg used to run *after* HEAD's own install and a
+level-1 uninstall, so it started with HEAD's migrated database, markers and
+updater, fed a prompt script written for 5.66.0 to whatever "latest" was, and
+swallowed any failure of the stable installer with `|| echo`. It is its own job
+now, on a clean runner, with the stable version pinned in the workflow, the
+release signature checked against the key the repository pins (it used to be
+checked against the key inside the tarball being checked), the *value* of
+`jen_version` compared to HEAD's rather than its presence, and no mask. And the
+hop nothing ran — the stable release's own updater taking a box onto this
+release — now runs: `tools/ci_updater_hop.py` loads 5.66.0's own
+`jen-update-root.py`, drives its real `main()` with the download and signature
+steps stood in for (named as such), lands HEAD's tree through it, then runs
+HEAD's updater for a second hop and asserts the rendered unit and the Update and
+Restart controls. Its first runs found two defects in the new CI itself (the
+pytest jobs could not import PyYAML; a checksum was read through a redirect the
+unprivileged shell cannot open) and nothing in Jen.
+
+**The manual-install page is run.** `docs/manual-install.md` told an operator
+to copy a `jen.service` that stopped shipping in 5.67.0 and to append an
+`Environment=` line to the file that was not there; it cut `5.67.0-beta.N` down
+to `5.67.0` when naming the release directory (the updater would later remove
+that directory as stale, under the running service); it said two sudoers grants
+for three; and it never installed `jen-plugin-install.service`. It is rebuilt
+around a new `jen-update-root.py --render-unit`, the one renderer of the unit
+template — the function the in-app updater runs on every update — and its
+commands are extracted by `tools/doc_commands.py` and run, in order, by a new CI
+job on a clean runner, with named stand-ins only for what a person does by
+hand. The job's first run followed the whole page and then found Jen refusing to
+start: the page's "only `[jen_db]` has to be right" was false, because a missing
+`[kea]` section is fatal. The page now says what is true.
+
+**Statements the code contradicts.** No `lease4-*` or `lease6-*` command is sent
+anywhere, so the setup wizard, the Health check and the README no longer say a
+missing `lease_cmds` hook costs lease search or fails a check; `host_cmds` is
+what reservation add, edit and delete use, and the pages say that. The README
+and features page said six alert types where twenty-one are defined; "nothing
+runs on your Kea servers" sat above the paragraph describing the helper that
+does, and the about page named only a few of its nine operations (a new
+operation now fails a test until the page names it). The compatibility table's
+"generated from CI" was true in one direction only; a test now fails when the
+table claims a version CI does not run, and the page says plainly that Control
+Agent mode is covered by tests against a stub, not run against a real Control
+Agent. Every statement about ISC Stork was checked against ISC's own pages,
+which the README and the about page now cite; what no page says ("added more
+recently", "early stage", "built to centralize monitoring across a fleet") was
+removed, and the two documents describe it in the same words.
+
+**Found beside them.** The installer and `run.py` wrote `[ddns] provider`; the
+application reads `dns_provider`, so the DDNS answer given at install time never
+took effect. "Save & Restart", the port change and the certificate upload and
+removal ran `sudo systemctl restart jen` unconditionally: in Docker nothing
+restarted while the page said it was. One `runtime.restart_service()` chooses by
+deployment — the exact command the sudoers file grants under systemd, a stop of
+the gunicorn master under Docker (both compose files restart the container), and
+a plain instruction to restart by hand on a checkout — and the pages say which
+happened. The Docker image never copied `contrib/`, so the Grafana download
+errored there. Eight pages printed a literal `/opt/jen`, `/etc/jen` or
+`/var/lib/jen` — the database page's backup directory was wrong on every install
+since 5.13 — and now render the layout's directories. The installation,
+upgrading and troubleshooting guides lose the per-step `/setup` skipping that
+does not exist, the Docker methods that could not work, an 0600 tightening
+credited to an installer run that never reaches it, and a recovery command for a
+box stuck on an affected beta that does nothing unless the box is allowed to see
+pre-releases. `CONTRIBUTING.md` and `CLAUDE.md` say where configuration is read
+once `JEN_ROOT` is set.
+
 ## [5.67.0-beta.9] - 2026-10-02
 
 Beta channel. Stacked on 5.67.0-beta.8. The same audit that produced the last
