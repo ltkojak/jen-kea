@@ -386,10 +386,14 @@ class TestBackupsWriteTheReservationsGroup:
         root = pathlib.Path(__file__).resolve().parent.parent
         assert "Kea's database" not in (root / "templates/setup_recovery.html").read_text(encoding="utf-8")
         db_page = (root / "templates/database.html").read_text(encoding="utf-8")
-        schedule_tab = db_page.split("{% if active_tab == 'schedule' %}")[1].split("{% endif %}")[0]
-        backups_tab = db_page.split("{% if active_tab == 'backups' %}")[1].split("{% endif %}")[0]
-        for tab in (schedule_tab, backups_tab):
-            assert "Kea Database" not in tab and "Kea host reservations (IPv4 and IPv6)" in tab
+
+        def tab(name):  # from this tab's opening marker to the next tab's — never to the first {% endif %}
+            start = db_page.index("{% if active_tab == '" + name + "' %}")
+            nxt = db_page.find("{% if active_tab ==", start + 1)
+            return db_page[start : nxt if nxt != -1 else len(db_page)]
+
+        for t in (tab("schedule"), tab("backups")):
+            assert "Kea Database" not in t and "Kea host reservations (IPv4 and IPv6)" in t
 
 
 class TestAFileWrittenBeforeThisFix:
@@ -505,7 +509,7 @@ class TestMigration:
             scratch,
             group="reservations",
         )
-        assert any("hosts: 6 rows" in r for r in results), results
+        assert any("hosts: 7 rows" in r for r in results), results
         tgt = self._target(scratch)
         try:
             with tgt.cursor() as cur:
@@ -741,7 +745,7 @@ class TestHealthCheck:
             )
         kea_tables.commit()
         c = health._kea_identifiers({"unrestricted": True})
-        assert c.status == "fail" and "1 of 7" in c.detail
+        assert c.status == "fail" and "1 of 8" in c.detail  # seven seeded hosts + the damaged one
         assert c.fix_url == "/database/kea-identifiers"
 
     def test_a_restricted_caller_never_sees_the_fleet_wide_count(self, kea_tables):
