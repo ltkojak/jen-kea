@@ -71,6 +71,7 @@ import sys
 import requests
 
 from jen import extensions
+from jen.services import runtime
 
 logger = logging.getLogger(__name__)
 
@@ -524,11 +525,16 @@ def _safe_extract(zf, dest_dir: str) -> None:
 
 
 def is_systemd_host() -> bool:
-    """Same detection jen/__init__.py's venv-migration check already
-    uses. On a systemd host, install/uninstall become root-privileged
-    requests; everywhere else — Docker, a dev/CI checkout — they still
-    run in-process, unchanged."""
-    return not os.path.exists("/.dockerenv") and "JEN_ROOT" not in os.environ
+    """v5.67.0-beta.6 (Q118) — a one-line wrapper kept for the plugin
+    API's own naming; the real answer lives in
+    jen.services.runtime.deployment(), which replaced the JEN_ROOT-based
+    heuristic this function used to BE (broken the moment a relocated —
+    or even default — systemd install also started setting JEN_ROOT, in
+    the rendered unit's own Environment= line — see runtime.py's
+    docstring). On a systemd host, install/uninstall become
+    root-privileged requests; everywhere else — Docker, a dev/CI
+    checkout — they still run in-process, unchanged."""
+    return runtime.deployment() == "systemd"
 
 
 def _request_marker_path(plugin_id: str, action: str) -> str:

@@ -493,6 +493,47 @@ jobs:
           [[ "$code" =~ ^3 ]]
           echo "logged in as admin with the answers file's own password"
 
+      # v5.67.0-beta.6 (Q118) — jen.services.runtime.deployment()'s
+      # fallback signal for "this is systemd" when the new explicit
+      # JEN_SERVICE_MANAGER= line isn't there to read (a unit rendered
+      # before this release, or a hand-written one from
+      # docs/manual-install.md): systemd sets INVOCATION_ID for every
+      # unit it starts. Verify that's actually true on a real run.py ->
+      # gunicorn exec chain before trusting it anywhere else below.
+      - name: Verify INVOCATION_ID survives run.py's exec into gunicorn
+        run: |
+          set -e
+          pid=$(systemctl show jen -p MainPID --value)
+          [[ "$pid" != "0" ]]
+          sudo tr '\0' '\n' < "/proc/$pid/environ" | grep -q '^INVOCATION_ID='
+          echo "INVOCATION_ID present in the running gunicorn worker's own environment"
+
+      # v5.67.0-beta.6 (Q118) — the install CI job never opened a single
+      # page before this: every unit test monkeypatches is_systemd_host(),
+      # so nothing ever proved the REAL rendered page, on a REAL systemd
+      # host, actually shows the systemd controls rather than the Docker
+      # wording Q114's own JEN_ROOT=... unit line had been silently
+      # triggering since 5.67.0-beta.2.
+      - name: Assert Settings -> System and the plugin manager know this is systemd
+        run: |
+          set -e
+          cookie="$RUNNER_TEMP/cookies.txt"
+          system_page=$(curl -sb "$cookie" -c "$cookie" http://127.0.0.1:5050/settings/system)
+          grep -q 'Update Now' <<< "$system_page"
+          grep -q 'data-confirm="Restart Jen now?"' <<< "$system_page"
+          ! grep -q "container image.s job" <<< "$system_page"
+          ! grep -q 'Restart the container to restart Jen' <<< "$system_page"
+          echo "Settings -> System shows the real Update/Restart controls, no Docker wording"
+
+          plugins_page=$(curl -sb "$cookie" -c "$cookie" http://127.0.0.1:5050/plugins)
+          grep -q 'root-privileged service' <<< "$plugins_page"
+          ! grep -q 'Installed plugins live in' <<< "$plugins_page"
+          echo "plugin manager shows the root-managed install path"
+
+          curl -sb "$cookie" -c "$cookie" http://127.0.0.1:5050/settings/infrastructure/update-status \
+              | grep -q 'active_state'
+          echo "update-status endpoint answers"
+
       - name: Uninstall (interim reset before the stable jump)
         working-directory: ${{ runner.temp }}/install-head/jen
         run: printf 'y\n1\n' | sudo ./uninstall.sh
@@ -634,6 +675,24 @@ jobs:
           sudo grep -q '10.99.0.0/24' /etc/jen/jen.config
           echo "the config from before the upgrade is still there"
 
+      # v5.67.0-beta.6 (Q118) — same assertion as the fresh-install leg
+      # above, now against a box that went through install.sh's UPGRADE
+      # path rather than a fresh install — the two code paths render the
+      # unit differently enough (render_jen_service() is called from both
+      # install_files() and here) that it's worth proving independently,
+      # not assuming the fresh-install leg's pass covers it.
+      - name: Assert Settings -> System still knows this is systemd after the upgrade
+        run: |
+          set -e
+          cookie="$RUNNER_TEMP/cookies-upgrade.txt"
+          csrf=$(curl -sc "$cookie" http://127.0.0.1:5050/login | grep -oP 'name="csrf_token" value="\K[^"]+' | head -1)
+          curl -sb "$cookie" -c "$cookie" -X POST http://127.0.0.1:5050/login \
+            -d "username=admin&password=ci-test-passw0rd-!&csrf_token=$csrf" -o /dev/null
+          system_page=$(curl -sb "$cookie" -c "$cookie" http://127.0.0.1:5050/settings/system)
+          grep -q 'Update Now' <<< "$system_page"
+          ! grep -q "container image.s job" <<< "$system_page"
+          echo "post-upgrade: Settings -> System still shows the real Update control, no Docker wording"
+
       - name: Uninstall
         working-directory: ${{ runner.temp }}/install-head/jen
         run: printf 'y\n1\n' | sudo ./uninstall.sh
@@ -701,10 +760,33 @@ jobs:
           grep -q 'JEN_CONFIG_DIR=/srv/jen/etc' <<< "$env"
           grep -q 'JEN_CONTENT_DIR=/srv/jen/data' <<< "$env"
           grep -q 'JEN_ROOT=/srv/jen/app/current/app' <<< "$env"
+          # v5.67.0-beta.6 (Q118) — JEN_ROOT above is set here on a
+          # relocated install exactly like it is on the default layout,
+          # which is the whole reason jen.services.runtime.deployment()
+          # cannot read it; JEN_SERVICE_MANAGER is the explicit signal
+          # that survives rendering regardless of where app_dir lives.
+          grep -q 'JEN_SERVICE_MANAGER=systemd' <<< "$env"
           echo "rendered unit's Environment= matches the relocated layout"
 
           [[ ! -e /opt/jen ]]
           echo "nothing landed at the historical default app_dir"
+
+      # v5.67.0-beta.6 (Q118) — the relocated-layout leg is the one most
+      # likely to have been affected by the bug this Q fixes (it sets
+      # JEN_ROOT to a path that doesn't even look like the historical
+      # default), so it gets its own page-level proof too, not just the
+      # Environment= grep above.
+      - name: Assert Settings -> System knows this is systemd on a relocated install
+        run: |
+          set -e
+          cookie="$RUNNER_TEMP/cookies-relocated.txt"
+          csrf=$(curl -sc "$cookie" http://127.0.0.1:5050/login | grep -oP 'name="csrf_token" value="\K[^"]+' | head -1)
+          curl -sb "$cookie" -c "$cookie" -X POST http://127.0.0.1:5050/login \
+            -d "username=admin&password=ci-test-passw0rd-!&csrf_token=$csrf" -o /dev/null
+          system_page=$(curl -sb "$cookie" -c "$cookie" http://127.0.0.1:5050/settings/system)
+          grep -q 'Update Now' <<< "$system_page"
+          ! grep -q "container image.s job" <<< "$system_page"
+          echo "relocated install: Settings -> System shows the real Update control, no Docker wording"
 
       # v5.67.0-beta.5 (Q117, item d) — the behavioral half of the fix:
       # install.sh's [kea_ssh] key_path and its SSL-summary check, plus

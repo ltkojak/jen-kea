@@ -431,9 +431,28 @@ class TestContentDirIncompleteBanner:
     def test_dev_checkout_is_never_flagged(self, monkeypatch):
         from jen.services import content
 
+        # v5.67.0-beta.6 (Q118) — content_dir_incomplete() now asks
+        # runtime.deployment() rather than reading JEN_ROOT itself (a
+        # relocated systemd install sets JEN_ROOT too); pinning deployment()
+        # directly isolates this test from the real CI environment's own
+        # ambient signals (INVOCATION_ID, /.dockerenv), which deployment()'s
+        # own test suite (test_runtime.py) covers without pinning it.
         monkeypatch.setattr(content, "_CONTENT_DIR_WRITABLE", False)
-        monkeypatch.setenv("JEN_ROOT", "/x")
+        monkeypatch.setattr(content.runtime, "deployment", lambda: "dev")
         assert content.content_dir_incomplete() is False
+
+    def test_flagged_on_a_real_systemd_host_even_with_jen_root_set(self, monkeypatch):
+        """v5.67.0-beta.6 (Q118) — the bug this guards: Q114's rendered unit
+        sets JEN_ROOT on every production install (relocated or not), so
+        the OLD "JEN_ROOT or JEN_CONTENT_DIR set -> never flagged" check
+        could never fire on a real systemd host at all. deployment()
+        returning "systemd" is what matters now, not JEN_ROOT."""
+        from jen.services import content
+
+        monkeypatch.setattr(content, "_CONTENT_DIR_WRITABLE", False)
+        monkeypatch.setattr(content.runtime, "deployment", lambda: "systemd")
+        monkeypatch.setenv("JEN_ROOT", "/opt/jen/current/app")
+        assert content.content_dir_incomplete() is True
 
     def test_base_html_has_the_banner(self):
         base = (pathlib.Path(__file__).resolve().parent.parent / "templates" / "base.html").read_text(encoding="utf-8")

@@ -784,6 +784,31 @@ exact fix:
   isn't, you likely have `/etc/jen-layout.conf` pointing somewhere it
   shouldn't — check it before doing anything destructive by hand.
 
+**A native install shows Docker wording — no Update button, no Restart
+button (v5.67.0-beta.2 through beta.5 only).** Settings → System says
+"Updates are the container image's job" and the Restart card talks
+about `docker compose restart jen`, even though this box was installed
+with `install.sh`, not Docker. The bug: `jen/services/plugins.py`'s
+`is_systemd_host()` used to answer "is this systemd" by checking
+whether `JEN_ROOT` was set in the environment — and the relocatable
+install added in v5.67.0-beta.2 made the rendered systemd unit set
+`JEN_ROOT` too, so every native install from that release through
+v5.67.0-beta.5 answered "not systemd," exactly like a container or a
+dev checkout. Fixed in v5.67.0-beta.6
+(`jen/services/runtime.py::deployment()` is the one place that question
+is answered now, and it never reads `JEN_ROOT`). The button this bug
+hides is the only way to reach the fix, so updating a box stuck on one
+of the affected betas needs the one line the button itself would have
+run:
+```bash
+sudo systemctl start jen-update.service
+journalctl -u jen-update -f
+```
+Nothing else about the box is wrong — Jen itself, the plugin manager's
+root-managed install path, and the data-directory check all silently
+fell back to their Docker/dev behavior on the same bug, and all three
+are fixed by the same update.
+
 ---
 
 ## Log Locations

@@ -57,6 +57,35 @@ with app.app_context():
     for r in rows:
         assert r.get("ok") and r.get("version"), f"the helper is not answering on {r['server']}: {r}"
 
+    # v5.67.0-beta.6 (Q118) — the mirror of the install CI job's own new
+    # assertion: this stack IS a container, so
+    # jen.services.runtime.deployment() must say so, and every page whose
+    # content depends on it must show the Docker wording, not the
+    # systemd-only Update/Restart controls. Q114's rendered-unit JEN_ROOT
+    # never applies here at all (no systemd unit exists in this container),
+    # so this scenario could never have caught the bug the install job's
+    # own new leg exists for — it proves the other half still works,
+    # deliberately, the two together covering both answers.
+    out, _p = st.jen_py(
+        """
+from jen.services import runtime
+with app.app_context():
+    emit({"deployment": runtime.deployment()})
+"""
+    )
+    assert emitted(out)["deployment"] == "docker", "INVARIANT: this stack is a container, not systemd"
+
+    web = st.Web().login()
+    system_page = web.get("/settings/system").text
+    assert "container image's job" in system_page, "INVARIANT: Docker wording shown for updates"
+    assert "Update Now" not in system_page, "INVARIANT: no systemd Update control in a container"
+    assert "Restart the container to restart Jen" in system_page, "INVARIANT: Docker wording shown for restart"
+    assert 'data-confirm="Restart Jen now?"' not in system_page, "INVARIANT: no systemd Restart control in a container"
+
+    plugins_page = web.get("/plugins").text
+    assert "Installed plugins live in" in plugins_page, "INVARIANT: Docker wording shown for plugin installs"
+    assert "root-privileged service" not in plugins_page, "INVARIANT: no root-managed plugin wording in a container"
+
 
 # ── 1. restore.py, MariaDB dies mid-import ────────────────────────────────────
 

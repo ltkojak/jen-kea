@@ -30,6 +30,13 @@ Environment=PYTHONUNBUFFERED=1
 Environment=JEN_ROOT=@@APP_DIR@@/current/app
 Environment=JEN_CONFIG_DIR=@@CONFIG_DIR@@
 Environment=JEN_CONTENT_DIR=@@DATA_DIR@@
+# v5.67.0-beta.6 (Q118) — the explicit signal jen.services.runtime.deployment()
+# looks for first to tell a real systemd host apart from Docker/dev, now that
+# JEN_ROOT above is set here too and can no longer be used for that (systemd's
+# own INVOCATION_ID is deployment()'s fallback, covering a unit rendered
+# before this release or a hand-written one — this line exists for clarity
+# and so neither has to be relied on alone).
+Environment=JEN_SERVICE_MANAGER=systemd
 
 # v5.5.0 — run.py launches gunicorn (directly via exec when there's no
 # SSL, or as a child alongside the HTTP->HTTPS redirect when there is).

@@ -5,8 +5,8 @@ Check for a new release; trigger the in-app self-update.
 """
 
 import io
-import json
 import logging
+import os
 import subprocess
 
 from flask import flash, jsonify, redirect, request, url_for
@@ -260,11 +260,19 @@ def self_update():
 
     if do_db_backup:
         try:
+            # v5.67.0-beta.6 (Q118) — found beside the deployment-detection
+            # fix: this was still the whole-database-in-memory path
+            # (export_jen() -> json.loads -> _write_backup) Q106/Q108
+            # retired everywhere else, streaming instead through
+            # publish_backup()+write_jen_export() (one row at a time, a
+            # failure mid-write leaves no final file at all) — the exact
+            # pattern database.py's own manual-backup route already uses.
             from jen.services import dbexport as _dbexport
 
-            content, fname = _dbexport.export_jen()
-            payload = json.loads(content.decode("utf-8"))
-            backup_path = _dbexport._write_backup(payload, "jen-pre-update.json.gz")
+            os.makedirs(_dbexport.BACKUP_DIR, exist_ok=True)
+            backup_path = os.path.join(_dbexport.BACKUP_DIR, "jen-pre-update.json.gz")
+            meta = _dbexport.publish_backup(backup_path, lambda f: _dbexport.write_jen_export(f))
+            _dbexport._write_meta_sidecar(backup_path, meta)
             flash(f"Database backed up to {backup_path}", "success")
         except Exception as e:
             logger.error(f"Pre-update database backup failed: {e}")

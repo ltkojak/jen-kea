@@ -142,7 +142,7 @@ class TestSelfUpdateRedirectsToTheOverlayPage:
 
     def test_backup_failure_redirects_to_system_page(self, logged_in_client):
         with (
-            patch("jen.services.dbexport.export_jen", side_effect=RuntimeError("disk full")),
+            patch("jen.services.dbexport.publish_backup", side_effect=RuntimeError("disk full")),
             patch("jen.routes.settings.updates.subprocess.run") as mock_run,
         ):
             r = logged_in_client.post(
@@ -162,19 +162,27 @@ class TestSelfUpdateOptionalDbBackup:
     about re-verifying backup behavior."""
 
     def test_backup_requested_calls_export_before_triggering_update(self, logged_in_client):
+        # v5.67.0-beta.6 (Q118) — the backup now streams through
+        # publish_backup()+write_jen_export(), the same pattern
+        # database.py's own manual-backup route uses, instead of holding
+        # the whole export in memory as a dict.
         calls = []
 
-        def fake_export_jen():
-            calls.append("export_jen")
-            return b'{"tables": {}}', "jen-backup.json.gz"
+        def fake_publish_backup(path, write_fn):
+            calls.append("publish_backup")
+            write_fn(MagicMock())  # the route's own lambda, calling write_jen_export below
+            return {"database": "jen", "tables": []}
 
-        def fake_write_backup(payload, fname):
-            calls.append("write_backup")
-            return f"/opt/jen/backups/{fname}"
+        def fake_write_jen_export(f):
+            calls.append("write_jen_export")
+
+        def fake_write_meta_sidecar(path, meta):
+            calls.append("write_meta_sidecar")
 
         with (
-            patch("jen.services.dbexport.export_jen", side_effect=fake_export_jen),
-            patch("jen.services.dbexport._write_backup", side_effect=fake_write_backup),
+            patch("jen.services.dbexport.publish_backup", side_effect=fake_publish_backup),
+            patch("jen.services.dbexport.write_jen_export", side_effect=fake_write_jen_export),
+            patch("jen.services.dbexport._write_meta_sidecar", side_effect=fake_write_meta_sidecar),
             patch("jen.routes.settings.updates.subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0, stderr="")
@@ -183,12 +191,12 @@ class TestSelfUpdateOptionalDbBackup:
             )
 
         assert r.status_code == 200
-        assert calls == ["export_jen", "write_backup"]
+        assert calls == ["publish_backup", "write_jen_export", "write_meta_sidecar"]
         assert mock_run.called, "update must still be triggered after a successful backup"
 
     def test_backup_failure_aborts_before_triggering_update(self, logged_in_client):
         with (
-            patch("jen.services.dbexport.export_jen", side_effect=RuntimeError("disk full")),
+            patch("jen.services.dbexport.publish_backup", side_effect=RuntimeError("disk full")),
             patch("jen.routes.settings.updates.subprocess.run") as mock_run,
         ):
             r = logged_in_client.post(
@@ -202,11 +210,11 @@ class TestSelfUpdateOptionalDbBackup:
 
     def test_backup_not_requested_skips_export_entirely(self, logged_in_client):
         with (
-            patch("jen.services.dbexport.export_jen") as mock_export,
+            patch("jen.services.dbexport.publish_backup") as mock_publish,
             patch("jen.routes.settings.updates.subprocess.run") as mock_run,
         ):
             mock_run.return_value = MagicMock(returncode=0, stderr="")
             logged_in_client.post(
                 "/settings/infrastructure/self-update", data={"db_backup": "0"}, follow_redirects=True
             )
-        mock_export.assert_not_called()
+        mock_publish.assert_not_called()

@@ -190,9 +190,15 @@ _active_server_cache: dict = {"server": None, "ts": 0}
 # v5.67.0 (Q114) — CONFIG_DIR is the /etc/jen equivalent, relocatable the
 # same way JEN_ROOT/CONTENT_DIR already are: JEN_CONFIG_DIR env override
 # (set by jen.service's rendered Environment= line — see
-# jen.service.template) wins; else, in a dev/CI checkout (JEN_ROOT set),
-# $JEN_ROOT/etc; else the historical /etc/jen. Every file below it is
-# derived from this one constant instead of repeating the literal.
+# jen.service.template) wins; else, when JEN_ROOT is set, $JEN_ROOT/etc;
+# else the historical /etc/jen. Every file below it is derived from this
+# one constant instead of repeating the literal.
+#
+# v5.67.0-beta.6 (Q118) — JEN_ROOT here is a PATH default ONLY: a
+# relocated production install run under systemd sets it too (via the
+# rendered unit), same as a dev/CI checkout does. It says nothing about
+# whether this process is systemd, Docker, or dev — that question
+# belongs to jen.services.runtime.deployment(), never to this variable.
 CONFIG_DIR = os.environ.get("JEN_CONFIG_DIR") or (
     os.path.join(JEN_ROOT, "etc") if "JEN_ROOT" in os.environ else "/etc/jen"
 )
@@ -220,8 +226,11 @@ ICONS_BUNDLED_DIR = os.path.join(JEN_ROOT, "static", "icons", "brands")
 # upgrade and (as of 5.13.0) is root-owned and read-only to the service
 # user; CONTENT_DIR is service-user-owned and never touched by an upgrade.
 #   JEN_CONTENT_DIR env override → that
-#   else JEN_ROOT set (a dev / CI checkout) → $JEN_ROOT/var
+#   else JEN_ROOT set → $JEN_ROOT/var
 #   else → /var/lib/jen
+# v5.67.0-beta.6 (Q118) — JEN_ROOT here, same as CONFIG_DIR above, is a
+# PATH default only and says nothing about deployment: a relocated
+# systemd install sets it too. See jen.services.runtime.deployment().
 CONTENT_DIR = os.environ.get("JEN_CONTENT_DIR") or (
     os.path.join(JEN_ROOT, "var") if "JEN_ROOT" in os.environ else "/var/lib/jen"
 )

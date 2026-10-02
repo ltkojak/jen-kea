@@ -154,7 +154,11 @@ class TestVenvMigrationBanner:
     def test_not_flagged_in_a_dev_checkout(self):
         import jen
 
-        # JEN_ROOT is set for the test suite → dev/CI → never flagged
+        # JEN_ROOT is set for the test suite, and nothing here sets a
+        # systemd/Docker signal → runtime.deployment() is "dev" → never
+        # flagged (v5.67.0-beta.6, Q118 — this no longer reads JEN_ROOT
+        # directly, but the real ambient test environment still resolves
+        # the same way).
         assert jen._venv_migration_incomplete() is False
 
     def test_not_flagged_when_running_inside_a_venv(self, monkeypatch):
@@ -166,7 +170,14 @@ class TestVenvMigrationBanner:
     def test_flagged_for_a_bare_metal_install_with_no_venv(self, monkeypatch):
         import jen
 
+        # v5.67.0-beta.6 (Q118) — a real production box is identified by
+        # INVOCATION_ID (systemd sets it for every unit it starts), not by
+        # JEN_ROOT being absent; deleting JEN_ROOT alone used to be enough
+        # to simulate "a real install" under the old heuristic, but
+        # deployment() falls back to "dev" without an explicit systemd
+        # signal, so this test needs to supply one directly now.
         monkeypatch.setattr(sys, "base_prefix", sys.prefix)  # not in a venv
+        monkeypatch.setenv("INVOCATION_ID", "abc123")
         monkeypatch.delenv("JEN_ROOT", raising=False)
         monkeypatch.setattr(jen.os.path, "exists", lambda p: p == "/opt/jen/run.py")
         monkeypatch.setattr(jen.os.path, "isfile", lambda p: p == "/opt/jen/run.py")

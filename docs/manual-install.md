@@ -87,6 +87,13 @@ the main install guide.
 ```bash
 # The shipped external files live inside the release now.
 sudo cp "$REL/app/jen.service"        /etc/systemd/system/jen.service
+# v5.67.0-beta.6 — the explicit signal Jen's own deployment() check
+# (jen/services/runtime.py) looks for first to tell a real systemd host
+# apart from Docker/dev. Not strictly required here — systemd already
+# sets INVOCATION_ID for every unit it starts, which deployment() falls
+# back to — but install.sh's own rendered unit carries it, so a
+# hand-copied one should too.
+echo "Environment=JEN_SERVICE_MANAGER=systemd" | sudo tee -a /etc/systemd/system/jen.service >/dev/null
 sudo cp "$REL/app/jen-sudoers"        /etc/sudoers.d/jen
 sudo chmod 440                        /etc/sudoers.d/jen
 sudo visudo -cf /etc/sudoers.d/jen    # sanity-check before it takes effect

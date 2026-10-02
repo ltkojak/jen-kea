@@ -1918,6 +1918,27 @@ background workers itself). This is a safety net so the console never
 goes dark on a bad update; it is not a supported way to run in
 production, and it says so, loudly, in the log on every start.
 
+**Telling systemd apart from Docker and a dev checkout (v5.67.0-beta.6,
+Q118).** `jen/services/runtime.py::deployment() -> "systemd" | "docker"
+| "dev"` is the single place that question is ever answered —
+`/.dockerenv` for a container; otherwise the rendered unit's own
+`Environment=JEN_SERVICE_MANAGER=systemd` line, or (its fallback,
+covering a unit rendered before this release or a hand-written one from
+`docs/manual-install.md`) `INVOCATION_ID`, which systemd sets for every
+unit it starts, for systemd; dev otherwise. It deliberately never reads
+`JEN_ROOT`: v5.67.0-beta.2's relocatable install made the rendered unit
+set `JEN_ROOT` on every production install too, which broke the three
+places that used to infer deployment from it —
+`jen.services.plugins.is_systemd_host()` (now a one-line wrapper around
+`deployment()`), `jen.services.content.content_dir_incomplete()`, and
+`jen/__init__.py`'s venv-migration check — each silently treating a real
+systemd host as a dev/Docker checkout from v5.67.0-beta.2 through
+beta.5: no Update or Restart control on Settings → System, plugin
+installs routed onto the in-process path meant for Docker, and a
+genuinely incomplete data directory never flagged. See
+`docs/troubleshooting.md`'s entry for the affected betas and the manual
+way out for a box already stuck on one of them.
+
 **venv + transactional self-update (v5.8.0).** Two paired changes to how
 Jen's code and dependencies land on bare metal.
 

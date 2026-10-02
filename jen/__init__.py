@@ -22,6 +22,7 @@ from jen.config import app_config, ssl_configured
 from jen.models.user import User, get_global_setting
 from jen.services import csp as csp_svc
 from jen.services import csrf as csrf_svc
+from jen.services.runtime import deployment
 
 logger = logging.getLogger(__name__)
 
@@ -58,14 +59,22 @@ def _venv_migration_incomplete() -> bool:
     checks app_root/current/venv rather than a literal /opt/jen; the
     install-root derivation is the same one extensions.PLUGIN_DIR_ROOT
     uses (strip the versioned layout's /current/app suffix, else the
-    historical /opt/jen default)."""
+    historical /opt/jen default).
+
+    v5.67.0-beta.6 (Q118) — "JEN_ROOT set, not ending in /current/app" was
+    this function's own stand-in for "a dev/CI checkout," which happened
+    to be accurate only because nothing else that sets JEN_ROOT also ran
+    under systemd — not true in general, and the exact assumption that
+    broke is_systemd_host() and content_dir_incomplete() the same way.
+    runtime.deployment() is the real answer, never derived from JEN_ROOT."""
     import sys
 
     if sys.prefix != sys.base_prefix:
         return False  # already running inside a venv
-    if os.path.exists("/.dockerenv"):
+    dep = deployment()
+    if dep == "docker":
         return False  # container
-    if os.environ.get("JEN_ROOT") and not extensions.JEN_ROOT.endswith("/current/app"):
+    if dep == "dev":
         return False  # a raw dev/CI checkout, not a relocated versioned install
     install_root = extensions._INSTALL_ROOT
     if os.path.exists(os.path.join(install_root, "current", "venv", "bin", "python")):

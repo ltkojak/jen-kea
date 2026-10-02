@@ -25,6 +25,7 @@ import os
 import shutil
 
 from jen import extensions
+from jen.services import runtime
 
 logger = logging.getLogger(__name__)
 
@@ -76,9 +77,15 @@ def ensure_content_dirs() -> None:
 
 def content_dir_incomplete() -> bool:
     """True when CONTENT_DIR is missing or unwritable — an admin needs to
-    run `sudo ./install.sh`. Never flagged for a dev checkout / Docker
-    (those set JEN_CONTENT_DIR or a writable $JEN_ROOT/var)."""
-    if os.environ.get("JEN_ROOT") or os.environ.get("JEN_CONTENT_DIR") or os.path.exists("/.dockerenv"):
+    run `sudo ./install.sh`. Never flagged for a dev checkout / Docker.
+
+    v5.67.0-beta.6 (Q118) — this used to skip whenever JEN_ROOT or
+    JEN_CONTENT_DIR was set in the environment, which the rendered
+    systemd unit sets on EVERY production install (relocated or not)
+    since Q114 — meaning a genuinely incomplete data directory on a real
+    systemd host could never be reported. runtime.deployment() is the
+    real "is this systemd" answer; only docker/dev skip the check now."""
+    if runtime.deployment() != "systemd":
         return False
     return not _CONTENT_DIR_WRITABLE
 
