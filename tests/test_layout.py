@@ -319,6 +319,45 @@ class TestLayoutKv:
         assert r.stdout.strip() == "/etc/jen"
 
 
+class TestUninstallPicksTheRightChecker:
+    """v5.67.0-beta.9 (Q121, item d). uninstall.sh needs root, so its behaviour is proved by the install CI job
+    (a 5.66-style updater stub installed, the uninstall run from the tarball); this is the source half: the copy
+    beside the script comes first, the installed copy only if it answers `--check-layout --help`, and level 3
+    removes the updater and both oneshot units."""
+
+    # the level-3 block's first two lines, joined with a real newline
+    _LEVEL3 = 'if [[ "$REMOVAL_LEVEL" == "3" ]]; then' + chr(10) + "    rm -rf"
+
+    def _text(self) -> str:
+        return _UNINSTALL_SH.read_text(encoding="utf-8")
+
+    def test_the_copy_beside_the_script_is_preferred(self):
+        text = self._text()
+        beside = text.index('if [[ -f "$SCRIPT_DIR/jen-update-root.py" ]]')
+        installed = text.index('elif [[ -f "$INSTALLED_UPDATER" ]]')
+        assert beside < installed < text.index("--check-layout --for uninstall 2>&1")
+
+    def test_the_installed_copy_must_answer_help(self):
+        text = self._text()
+        assert '"$INSTALLED_UPDATER" --check-layout --help' in text
+
+    def test_a_stale_installed_copy_with_nothing_beside_is_a_clear_refusal(self):
+        text = self._text()
+        assert "predates --check-layout" in text and "run uninstall.sh from the extracted release tarball" in text
+
+    def test_level_3_removes_the_updater_and_both_units(self):
+        text = self._text()
+        level3 = text[text.index(self._LEVEL3) :]
+        for needle in ("jen-update.service", "jen-plugin-install.service", '"$INSTALLED_UPDATER"'):
+            assert needle in level3, needle
+        assert "daemon-reload" in level3
+
+    def test_levels_1_and_2_do_not_touch_the_updater(self):
+        text = self._text()
+        before_level3 = text[: text.index(self._LEVEL3)]
+        assert 'rm -f "$INSTALLED_UPDATER"' not in before_level3
+
+
 class TestNoDuplicateValidationLogic:
     """v5.67.0-beta.5 (Q117) — the whole point of ONE implementation is
     that there's exactly one; a second bash copy (even a partial one)

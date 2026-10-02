@@ -113,9 +113,11 @@ class TestSqlQuote:
 
 class TestRequiredValue:
     def test_a_missing_required_secret_is_fatal_and_names_the_variable(self, tmp_path):
-        r = _run(tmp_path, 'HAVE_TTY=false; MODE_UNATTENDED=true; _ask_secret JEN_DB_PASS "Password" required')
+        r = _run(
+            tmp_path, 'HAVE_TTY=false; MODE_UNATTENDED=true; _ask_secret JEN_Q121_NO_SUCH_SECRET "Password" required'
+        )
         assert r.returncode != 0
-        assert "JEN_DB_PASS" in r.stdout
+        assert "JEN_Q121_NO_SUCH_SECRET" in r.stdout
 
     def test_an_explicitly_empty_value_satisfies_it(self, tmp_path):
         r = _run(
@@ -131,3 +133,54 @@ class TestRequiredValue:
     def test_optional_secrets_stay_optional(self, tmp_path):
         r = _run(tmp_path, 'HAVE_TTY=false; v=$(_ask_secret JEN_OTHER "Password"); echo "[$v]"')
         assert r.returncode == 0 and r.stdout.strip() == "[]"
+
+
+class TestPreUpgradeBackup:
+    """v5.67.0-beta.9 (Q121, item g) — the summary says what was and was not written. `runuser` is stubbed with a
+    shell function that prints what the python snippet would, so this tests the reporting and the return code;
+    the snippet itself is the app's own primitives, exercised for real by the install CI job's upgrade leg."""
+
+    def _run_backup(self, tmp_path, stub_output: str, stub_rc: int = 0):
+        stub = f"runuser() {{ printf '%s\n' {__import__('shlex').quote(stub_output)}; return {stub_rc}; }}"
+        return _run(
+            tmp_path,
+            f"""
+            set +e
+            {stub}
+            MODE_UNATTENDED=true
+            _preupgrade_backup; echo "RC=$?"
+            """,
+        )
+
+    def test_a_written_backup_is_reported_with_its_path_and_what_it_leaves_out(self, tmp_path):
+        r = self._run_backup(tmp_path, "JEN_BACKUP_OK /var/lib/jen/backups/jen-pre-upgrade-1-2.json.gz")
+        assert "RC=0" in r.stdout
+        assert "/var/lib/jen/backups/jen-pre-upgrade-1-2.json.gz" in r.stdout
+        assert "Kea's own database" in r.stdout and "Not included" in r.stdout
+
+    def test_a_failed_backup_says_nothing_was_written_and_returns_nonzero(self, tmp_path):
+        r = self._run_backup(tmp_path, 'JEN_BACKUP_FAILED OperationalError: (2003, "Can\'t connect")', stub_rc=1)
+        assert "RC=1" in r.stdout
+        assert "NO backup was written" in r.stdout and "OperationalError" in r.stdout
+        assert "saved" not in r.stdout.lower().replace("not saved", "")
+
+    def test_an_install_without_the_primitive_says_so(self, tmp_path):
+        r = self._run_backup(
+            tmp_path, "JEN_BACKUP_UNAVAILABLE ImportError: cannot import name 'publish_backup'", stub_rc=3
+        )
+        assert "RC=1" in r.stdout
+        assert "predates the backup tool" in r.stdout and "publish_backup" in r.stdout
+
+    def test_no_result_at_all_is_a_failure_not_a_success(self, tmp_path):
+        r = self._run_backup(tmp_path, "Traceback (most recent call last): boom", stub_rc=1)
+        assert "RC=1" in r.stdout and "NO backup was written" in r.stdout
+        assert "boom" in r.stdout
+
+    def test_the_old_implementation_is_gone(self):
+        raw = (pathlib.Path(__file__).resolve().parent.parent / "install.sh").read_text(encoding="utf-8")
+        # code only, not the comments that explain the change
+        text = chr(10).join(ln for ln in raw.splitlines() if not ln.lstrip().startswith("#"))
+        for gone in ("/tmp/jen_backup_err", "fetchall()", "Pre-upgrade backups saved", "configparser.ConfigParser()"):
+            assert gone not in text, gone
+        for there in ("publish_backup", "write_jen_export", "_write_meta_sidecar", 'runuser -u "$JEN_USER"'):
+            assert there in text, there

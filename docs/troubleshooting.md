@@ -763,15 +763,27 @@ exact fix:
   is exactly the attack the ancestor check above also exists to close.
 - **"... already exists, is not empty, and does not carry Jen's own
   marker"** — a *fresh install* target must be absent, empty, or
-  already marked as Jen's own (`.jen-directory` inside it). If this is
-  genuinely a pre-Q117 Jen directory being upgraded rather than a fresh
-  install, you're running `install.sh` without an existing
-  `/etc/jen-layout.conf` present yet — the installer should detect the
-  existing content automatically and take the upgrade path instead;
-  if it doesn't, check that the directory really does contain what
-  Jen's own content (`jen.config` for config_dir, `releases/` or
-  `run.py` for app_dir, `icons`/`branding`/`backups`/`keys` for
-  data_dir) looks like.
+  already marked as Jen's own (`.jen-directory` inside it). The checker
+  decides install versus upgrade itself: a recorded layout file, a
+  marker, or Jen's own content in the app directory (`releases/`,
+  `run.py` or `jen.py`) means an upgrade; an empty directory you
+  pre-created is a fresh install, and a directory holding somebody
+  else's files is refused — and left exactly as it was (5.67.0-beta.8
+  and earlier treated it as an upgrade, then changed its ownership and
+  stamped it). A *config* or *data* directory with Jen's content
+  (`jen.config`; `icons`, `branding`, `backups` or `keys`) is accepted as
+  a reinstall target without a marker. If this is genuinely your Jen
+  directory and was refused, check it really contains that content.
+- **"... must not live under /root"** (5.67.0-beta.9) — the service runs
+  with `ProtectHome=yes`, which hides `/root` (and `/home`) from it, so
+  nothing under either can work. Choose a path under `/srv`, `/opt` or
+  a dedicated volume.
+- **`uninstall.sh`: "The installed /usr/local/sbin/jen-update-root.py
+  predates --check-layout and there is no jen-update-root.py beside
+  this script"** (5.67.0-beta.9) — the installed updater is from a release
+  that does not know the layout check (a 5.66.0 box, or one rolled back to
+  it). Run `uninstall.sh` from the extracted release tarball, which carries
+  its own copy and is preferred over the installed one.
 - **"This install's <role> is already <path> — relocating an existing
   install is a runbook (docs/runbooks.md), not a flag"** — see
   `docs/runbooks.md` §5.

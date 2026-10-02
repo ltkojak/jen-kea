@@ -315,7 +315,7 @@ jobs:
   install:
     name: install.sh (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    timeout-minutes: 60
 
     strategy:
       fail-fast: false
@@ -1061,6 +1061,186 @@ jobs:
           echo "config and data were recognised by content and re-stamped"
           printf 'y\n1\n' | sudo ./uninstall.sh
           sudo rm -rf /etc/jen /var/lib/jen /etc/jen-layout.conf
+
+      # (d) — which checker uninstall.sh asks, and what level 3 removes. The
+      # INSTALLED updater used to be preferred, and a 5.66.0 copy (or a rollback
+      # to one) rejects --check-layout with "unrecognized arguments": the stub
+      # below behaves exactly that way.
+      - name: Q121 (d) — fresh install, then an installed updater that predates --check-layout
+        run: |
+          set -e
+          sudo rm -rf /etc/jen /var/lib/jen /opt/jen /etc/jen-layout.conf
+          cd "$RUNNER_TEMP/install-head/jen"
+          sudo TERM=linux ./install.sh --answers "$RUNNER_TEMP/answers.env" --unattended
+          cat > "$RUNNER_TEMP/old-updater.py" << 'EOF'
+          #!/usr/bin/env python3
+          import sys
+          print("ERROR: unrecognized arguments %r - refusing." % (sys.argv[1:],))
+          sys.exit(1)
+          EOF
+          sudo install -m 700 -o root -g root "$RUNNER_TEMP/old-updater.py" /usr/local/sbin/jen-update-root.py
+          # (`! cmd` is exempt from set -e in bash, so the negation is spelled out)
+          if sudo python3 /usr/local/sbin/jen-update-root.py --check-layout --help; then
+            echo "::error::the stub updater accepted --check-layout --help"; exit 1
+          fi
+          echo "the installed updater now rejects --check-layout, as a 5.66.0 one does"
+
+      - name: Q121 (d) — uninstall from the tarball uses the copy beside the script
+        run: |
+          set -e
+          cd "$RUNNER_TEMP/install-head/jen"
+          printf 'y\n1\n' | sudo ./uninstall.sh
+          sudo test ! -e /opt/jen
+          echo "uninstalled with the stale updater still installed"
+
+      - name: Q121 (d) — a lone uninstall.sh with only a stale updater refuses clearly and removes nothing
+        run: |
+          set -e
+          cd "$RUNNER_TEMP/install-head/jen"
+          sudo TERM=linux ./install.sh --unattended
+          sudo install -m 700 -o root -g root "$RUNNER_TEMP/old-updater.py" /usr/local/sbin/jen-update-root.py
+          mkdir -p "$RUNNER_TEMP/lone"
+          cp uninstall.sh "$RUNNER_TEMP/lone/"
+          set +e
+          out=$(printf 'y\n1\n' | sudo "$RUNNER_TEMP/lone/uninstall.sh" 2>&1)
+          rc=$?
+          set -e
+          echo "$out" | tail -4
+          [[ $rc -ne 0 ]]
+          echo "$out" | grep -q "predates --check-layout"
+          sudo test -d /opt/jen
+          echo "refused with a clear message; nothing was removed"
+
+      - name: Q121 (d) — a lone uninstall.sh with a current installed updater works, and level 3 removes it and both units
+        run: |
+          set -e
+          sudo install -m 700 -o root -g root "$RUNNER_TEMP/install-head/jen/jen-update-root.py" /usr/local/sbin/jen-update-root.py
+          sudo python3 /usr/local/sbin/jen-update-root.py --check-layout --help | grep -q -- '--check-layout'
+          sudo test -f /etc/systemd/system/jen-update.service
+          sudo test -f /etc/systemd/system/jen-plugin-install.service
+          printf 'y\n3\nDELETE\n' | sudo "$RUNNER_TEMP/lone/uninstall.sh"
+          sudo test ! -e /opt/jen
+          sudo test ! -e /etc/jen
+          sudo test ! -e /var/lib/jen
+          sudo test ! -e /etc/jen-layout.conf
+          sudo test ! -e /usr/local/sbin/jen-update-root.py
+          sudo test ! -e /etc/systemd/system/jen-update.service
+          sudo test ! -e /etc/systemd/system/jen-plugin-install.service
+          echo "level 3 removed the app, config, content, layout record, the root updater and both oneshot units"
+
+      # The whole life cycle on a relocated layout — fresh install, an
+      # INTERACTIVE in-place upgrade (with the pre-upgrade backup), --repair, and
+      # uninstall.sh at every level — asserting at each step that NOTHING was
+      # created under /opt/jen, /etc/jen or /var/lib/jen. Every path in the
+      # rendered unit, the SSH key directory and the backup directory must be
+      # under the layout that was chosen.
+      - name: Q121 life cycle — a clean box, then a fresh relocated install
+        run: |
+          set -e
+          sudo rm -rf /etc/jen /var/lib/jen /opt/jen /srv/q121 /etc/jen-layout.conf
+          [[ ! -e /opt/jen && ! -e /etc/jen && ! -e /var/lib/jen ]]
+          cd "$RUNNER_TEMP/install-head/jen"
+          sudo TERM=linux ./install.sh --answers "$RUNNER_TEMP/answers.env" --unattended \
+            --app-dir /srv/q121/life/app --config-dir /srv/q121/life/etc --data-dir /srv/q121/life/data
+
+      - name: Q121 life cycle — everything is under the chosen layout
+        run: |
+          set -e
+          systemctl is-active --quiet jen
+          curl -sf http://127.0.0.1:5050/api/v1/health | grep -q jen_version
+          sudo test -f /srv/q121/life/app/current/app/run.py
+          sudo test -f /srv/q121/life/etc/jen.config
+          sudo test -d /srv/q121/life/etc/ssh
+          sudo test -d /srv/q121/life/etc/ssl
+          sudo test -d /srv/q121/life/data/backups
+          unit=$(cat /etc/systemd/system/jen.service)
+          grep -q '/srv/q121/life/app' <<< "$unit"
+          grep -q '/srv/q121/life/etc' <<< "$unit"
+          grep -q '/srv/q121/life/data' <<< "$unit"
+          [[ ! -e /opt/jen && ! -e /etc/jen && ! -e /var/lib/jen ]]
+          echo "app, config, SSH/SSL directories, backup directory and every unit path are under the chosen layout; nothing at the defaults"
+
+      - name: Q121 life cycle — an interactive in-place upgrade writes a real pre-upgrade backup
+        run: |
+          set -e
+          cd "$RUNNER_TEMP/install-head/jen"
+          # the prompts, in order: "Upgrade to ...?", "Create a database backup ...?", "Existing config found" -> 1
+          printf 'y\ny\n1\n' > "$RUNNER_TEMP/upgrade-input.txt"
+          # no `| tee`: this step's shell has no pipefail, so a failed install would be masked by it
+          script -qec "sudo TERM=linux ./install.sh" /dev/null < "$RUNNER_TEMP/upgrade-input.txt" > "$RUNNER_TEMP/upgrade.log"
+          cat "$RUNNER_TEMP/upgrade.log"
+          grep -q "Jen's database backed up" "$RUNNER_TEMP/upgrade.log"
+          if grep -q "NO backup was written" "$RUNNER_TEMP/upgrade.log"; then
+            echo "::error::the upgrade reported that no backup was written"; exit 1
+          fi
+          backup=$(sudo sh -c 'ls /srv/q121/life/data/backups/jen-pre-upgrade-*.json.gz | head -1')
+          [[ -n "$backup" ]]
+          sudo test -f "${backup%.json.gz}.meta.json"
+          [[ "$(sudo stat -c '%U:%a' "$backup")" == "www-data:600" ]]
+          sudo python3 - "$backup" << 'EOF'
+          import gzip, json, sys
+          doc = json.load(gzip.open(sys.argv[1], "rt", encoding="utf-8"))
+          assert "users" in doc["data"] and doc["data"]["users"], "the users table is in the backup and not empty"
+          assert doc["_meta"]["database"] == "jen"
+          assert "users" in doc["_meta"]["tables"]
+          print("backup is a valid Jen export with", len(doc["data"]), "tables")
+          EOF
+          systemctl is-active --quiet jen
+          [[ ! -e /opt/jen && ! -e /etc/jen && ! -e /var/lib/jen ]]
+
+      - name: Q121 life cycle — --repair
+        run: |
+          set -e
+          cd "$RUNNER_TEMP/install-head/jen"
+          sudo TERM=linux ./install.sh --repair
+          systemctl is-active --quiet jen
+          curl -sf http://127.0.0.1:5050/api/v1/health | grep -q jen_version
+          [[ ! -e /opt/jen && ! -e /etc/jen && ! -e /var/lib/jen ]]
+
+      - name: Q121 life cycle — uninstall level 1, then a reinstall onto the kept layout and config
+        run: |
+          set -e
+          cd "$RUNNER_TEMP/install-head/jen"
+          printf 'y\n1\n' | sudo ./uninstall.sh
+          sudo test ! -e /srv/q121/life/app
+          sudo test -f /srv/q121/life/etc/jen.config
+          sudo test -d /srv/q121/life/data
+          sudo test -f /etc/jen-layout.conf
+          [[ ! -e /opt/jen && ! -e /etc/jen && ! -e /var/lib/jen ]]
+          sudo TERM=linux ./install.sh --unattended
+          systemctl is-active --quiet jen
+          sudo grep -q '^app_dir = /srv/q121/life/app$' /etc/jen-layout.conf
+          [[ ! -e /opt/jen && ! -e /etc/jen && ! -e /var/lib/jen ]]
+
+      - name: Q121 life cycle — uninstall level 2 keeps certs, keys and content, removes jen.config
+        run: |
+          set -e
+          cd "$RUNNER_TEMP/install-head/jen"
+          printf 'y\n2\n' | sudo ./uninstall.sh
+          sudo test ! -e /srv/q121/life/app
+          sudo test ! -e /srv/q121/life/etc/jen.config
+          sudo sh -c 'ls /srv/q121/life/etc/jen.config.removed.*' >/dev/null
+          sudo test -d /srv/q121/life/etc/ssh
+          sudo test -d /srv/q121/life/etc/ssl
+          sudo test -d /srv/q121/life/data/backups
+          [[ ! -e /opt/jen && ! -e /etc/jen && ! -e /var/lib/jen ]]
+
+      - name: Q121 life cycle — reinstall from the answers file (no config left), then level 3
+        run: |
+          set -e
+          cd "$RUNNER_TEMP/install-head/jen"
+          sudo TERM=linux ./install.sh --answers "$RUNNER_TEMP/answers.env" --unattended
+          systemctl is-active --quiet jen
+          sudo test -f /srv/q121/life/etc/jen.config
+          [[ ! -e /opt/jen && ! -e /etc/jen && ! -e /var/lib/jen ]]
+          printf 'y\n3\nDELETE\n' | sudo ./uninstall.sh
+          sudo test ! -e /srv/q121/life/app
+          sudo test ! -e /srv/q121/life/etc
+          sudo test ! -e /srv/q121/life/data
+          sudo test ! -e /etc/jen-layout.conf
+          [[ ! -e /opt/jen && ! -e /etc/jen && ! -e /var/lib/jen ]]
+          echo "the whole life cycle ran on /srv/q121/life and never created anything under the default paths"
+          sudo rm -rf /srv/q121
 
       - name: Kea log on failure
         if: failure()

@@ -2374,49 +2374,92 @@ _confirm_upgrade_or_exit() {
         { info "Upgrade canceled."; exit 0; }
     blank
     if [[ "$(prompt_yn "Create a database backup before upgrading?" "y")" == "y" ]]; then
-        spinner_start "Backing up Jen and Kea databases..."
-        mkdir -p "$CONTENT_DIR/backups"
-        # $PYBIN is the venv python on a 5.8.x→ upgrade, else system
-        # python3 (which a pre-5.8.0 install populated with pymysql).
-        if "$PYBIN" -c "
-import sys, json, gzip, datetime, pymysql, pymysql.cursors, configparser
-cfg = configparser.ConfigParser()
-cfg.read('$CONFIG_FILE')
-ts = datetime.datetime.utcnow().strftime('%Y-%m-%d-%H%M%S')
-errors = []
-for which in ['jen','kea']:
-    try:
-        h = cfg.get(which+'_db' if which=='jen' else 'kea_db','host',fallback='')
-        u = cfg.get(which+'_db' if which=='jen' else 'kea_db','user',fallback='')
-        p = cfg.get(which+'_db' if which=='jen' else 'kea_db','password',fallback='')
-        d = cfg.get(which+'_db' if which=='jen' else 'kea_db','database',fallback=which)
-        conn = pymysql.connect(host=h,user=u,password=p,database=d,cursorclass=pymysql.cursors.DictCursor,connect_timeout=5)
-        with conn.cursor() as cur:
-            cur.execute('SHOW TABLES')
-            tables = [list(r.values())[0] for r in cur.fetchall()]
-        data = {}
-        for tbl in tables:
-            with conn.cursor() as cur:
-                cur.execute(f'SELECT * FROM \`{tbl}\`')
-                rows = cur.fetchall()
-            data[tbl] = [{k: str(v) if hasattr(v,'isoformat') else v for k,v in r.items()} for r in rows]
-        conn.close()
-        payload = {'_meta':{'database':which,'exported_at':ts,'jen_export_version':1,'tables':tables},'data':data}
-        fname = f'$CONTENT_DIR/backups/{which}-pre-upgrade-${JEN_VERSION}-{ts}.json.gz'
-        with gzip.open(fname,'wt',encoding='utf-8') as f:
-            json.dump(payload,f,default=str)
-        import os; os.chmod(fname,0o600)
-        print(f'ok:{which}:{fname}')
-    except Exception as e:
-        print(f'fail:{which}:{e}', file=sys.stderr)
-" 2>/tmp/jen_backup_err; then
+        spinner_start "Backing up Jen's database..."
+        if _preupgrade_backup; then
             spinner_stop
-            ok "Pre-upgrade backups saved to $CONTENT_DIR/backups/"
         else
             spinner_stop
-            warn "Pre-upgrade backup failed (non-fatal) — check /tmp/jen_backup_err"
+            # A backup that did not happen is said so, and the operator decides —
+            # the old code printed "Pre-upgrade backups saved" whatever had
+            # actually been written, and carried on.
+            if [[ "$(prompt_yn "No backup was written. Continue the upgrade without one?" "n")" == "n" ]]; then
+                info "Upgrade canceled — nothing was changed."; exit 0
+            fi
         fi
     fi
+}
+
+# v5.67.0-beta.9 (Q121, item g + the 2026-10-02 addition) — the pre-upgrade
+# backup is the app's OWN backup primitive, not a second implementation of one:
+# dbexport.write_jen_export() (a server-side cursor, one row at a time, every
+# table export_tables() knows — plugin tables included — through the pool's own
+# TLS settings) published by dbexport.publish_backup() (a 0600 temp file in the
+# same directory, fsync'd, renamed into place: a failure mid-write leaves no
+# final file at all) with its .meta.json sidecar — exactly what Settings'
+# "back up before updating" and the manual/scheduled backups write.
+#
+# What this replaces held WHOLE databases in memory (fetchall() per table), read
+# jen.config through a ConfigParser WITH interpolation (so a `%` in a password
+# failed it), ran as ROOT, and wrote every failure to a stderr file while the
+# summary printed "Pre-upgrade backups saved" regardless.
+#
+# It runs as the service user, like every other snippet here that imports Jen's
+# code, with all three layout variables (the backup directory is
+# $JEN_CONTENT_DIR/backups; tests/test_install_python_env.py scans for this).
+# It imports the INSTALLED release's code — the one that is about to be replaced
+# — so an install old enough to lack the primitive says so, instead of a
+# second implementation quietly standing in for it.
+#
+# Returns 0 only when a backup file was written. Says exactly what was and was
+# not backed up either way: Kea's own database is never part of it (Jen does
+# not own that schema; the app's own backups do not include it by default
+# either) — it is Kea's own tooling's to back up.
+_preupgrade_backup() {
+    local out rc=0 status detail
+    out=$(runuser -u "$JEN_USER" -- env JEN_ROOT="$(app_pyroot)" JEN_CONFIG_DIR="$CONFIG_DIR" JEN_CONTENT_DIR="$CONTENT_DIR" "$PYBIN" -c "
+import os, sys
+sys.path.insert(0, '$(app_pyroot)')
+try:
+    from jen.config import app_config
+    from jen.services import dbexport
+    publish_backup = dbexport.publish_backup
+    write_jen_export = dbexport.write_jen_export
+    write_meta_sidecar = dbexport._write_meta_sidecar
+    backup_dir = dbexport.BACKUP_DIR
+except Exception as e:
+    print('JEN_BACKUP_UNAVAILABLE ' + type(e).__name__ + ': ' + str(e))
+    sys.exit(3)
+try:
+    from datetime import datetime, timezone
+    app_config.reload()
+    ts = datetime.now(timezone.utc).strftime('%Y-%m-%d-%H%M%S')
+    path = os.path.join(backup_dir, 'jen-pre-upgrade-${JEN_VERSION}-' + ts + '.json.gz')
+    meta = publish_backup(path, lambda f: write_jen_export(f))
+    write_meta_sidecar(path, meta)
+    print('JEN_BACKUP_OK ' + path)
+except Exception as e:
+    print('JEN_BACKUP_FAILED ' + type(e).__name__ + ': ' + str(e))
+    sys.exit(1)
+" 2>&1) || rc=$?
+    status=$(printf '%s\n' "$out" | grep -m1 '^JEN_BACKUP_' || true)
+    detail="${status#JEN_BACKUP_* }"
+    case "$status" in
+        JEN_BACKUP_OK*)
+            ok "Jen's database backed up  ${DIM}(${detail})${NC}"
+            info "Not included: Kea's own database (Jen does not own it — back it up with Kea's own tools)."
+            return 0 ;;
+        JEN_BACKUP_UNAVAILABLE*)
+            warn "NO backup was written: the installed Jen predates the backup tool this step uses (${detail})."
+            ;;
+        JEN_BACKUP_FAILED*)
+            warn "NO backup was written: ${detail}"
+            ;;
+        *)
+            warn "NO backup was written: the backup step produced no result (exit ${rc})."
+            [[ -n "$out" ]] && echo "$out" | tail -5
+            ;;
+    esac
+    return 1
 }
 
 main() {

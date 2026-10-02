@@ -107,11 +107,21 @@ Same `JEN_*` names `.env.example` and the Docker path already use — see
 that file for the full list, including the optional SSH and DDNS
 settings. The file is parsed as plain `KEY=value` lines, never sourced
 as a shell script, and refused unless it's a regular file not writable
-by group or other. Anything the file leaves out still prompts if a
+by group or other. A value may have spaces around the `=`, may be
+wrapped in one matching pair of quotes (stripped), and the line may
+start with `export` — none of that becomes part of the value
+(5.67.0-beta.9). Anything the file leaves out still prompts if a
 terminal is attached; without one, a missing required value is a fatal
-error naming it. `JEN_*` values also work as plain environment
-variables with no file at all, taking the same priority order (file,
-then environment, then a prompt or a default).
+error naming it (the Jen database password is the one value with no
+default; an empty `JEN_DB_PASS=` on its own line counts as given). `JEN_*`
+values also work as plain environment variables with no file at all, taking
+the same priority order (file, then environment, then a prompt or a
+default).
+
+If a `jen.config` already exists — a reinstall onto the config an
+app-only `uninstall.sh` kept — the installer **keeps it**, and an answers
+file does not rewrite it: it only feeds a *new* config. Run
+`sudo ./install.sh --configure` to rewrite one on purpose (5.67.0-beta.9).
 
 ### Method 1c — Relocating app/config/data (v5.67.0)
 
@@ -134,7 +144,10 @@ policy) without moving the application itself. Each flag stands alone;
 any left unset keeps its default. The same three values are also
 `JEN_APP_DIR` / `JEN_CONFIG_DIR` / `JEN_DATA_DIR` in `--answers` or the
 plain environment, following the same resolution order as every other
-setting in Method 1b.
+setting in Method 1b — the answers file is read *before* the layout is
+resolved, so these three keys count there exactly as the flags do
+(5.67.0-beta.8 and earlier ignored them in an answers file and installed
+to the defaults).
 
 The chosen layout is recorded root-owned in `/etc/jen-layout.conf` (see
 `docs/ARCHITECTURE.md` §3.1 and §6.1 for why that file lives outside
@@ -165,7 +178,15 @@ package writes to:
   arguments.
 - **A fresh target must be absent, an empty directory, or already
   carry Jen's own marker.** A directory with real, unrelated content
-  is never silently reused.
+  is never silently reused. An empty directory you created beforehand is
+  fine — whether this is an install or an upgrade is decided by the
+  layout checker from the recorded layout file, a marker, or Jen's own
+  content, never by whether the directory merely exists
+  (5.67.0-beta.9). A config or data directory a previous install left
+  behind is recognised by its content (`jen.config`; `icons`, `branding`,
+  `backups` or `keys`) and stamped once the new install completes.
+- **Not under `/root`** — nothing under it can work, because the service
+  runs with `ProtectHome=yes`.
 
 If any of this refuses a candidate you believe should work, the
 message says exactly which rule and why — there's no way to override
@@ -263,4 +284,6 @@ Select bare metal, then **Keep existing config**. Your configuration, certificat
 sudo ./uninstall.sh
 ```
 
-This removes the application files and service. Configuration files and data are preserved by default — you'll be asked separately if you want a full wipe.
+This removes the application files and service. Configuration files and data are preserved by default — you'll be asked separately if you want a full wipe. A reinstall onto what level 1 kept (`sudo ./install.sh`) finds your config and keeps it.
+
+The three levels: **1** removes the app and the service (keeps config, certificates, SSH keys, uploads and backups), **2** also removes `jen.config` (a dated copy is kept beside it), and **3** removes everything — the config and data directories, the layout record, and the root self-updater with its two oneshot units (`jen-update.service`, `jen-plugin-install.service`), which levels 1 and 2 leave in place. `uninstall.sh` asks the checker copy that ships beside it; run it from the extracted release tarball. An installed updater from an older release is only used when the script has no copy beside it *and* the installed one answers `--check-layout --help` (5.67.0-beta.9).

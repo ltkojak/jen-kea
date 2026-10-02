@@ -936,7 +936,8 @@ class TestQ121CheckerAdditions:
             {"app_dir": str(app), "config_dir": str(tmp_path / "c"), "data_dir": str(tmp_path / "d")},
         )
         monkeypatch.setattr(jen_update_root, "_write_layout_check_cache", lambda ok, result: None)
-        rc = jen_update_root.check_layout_cli(["--for", "auto"])
+        with patch("os.fchown"), patch("os.fchmod"):  # the retroactive marker write needs real root
+            rc = jen_update_root.check_layout_cli(["--for", "auto"])
         assert rc == 0
         assert capsys.readouterr().out.splitlines()[0] == "mode=upgrade"
 

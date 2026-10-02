@@ -44,9 +44,28 @@ divider() { echo -e "  ${DIM}${R}$(printf '─%.0s' {1..54})${NC}"; }
 # This is destructive, so a missing checker, an invalid/untrusted
 # $LAYOUT_FILE, or an unmarked and unrecognizable directory are all hard
 # refusals here — never a silent fallback to the historical defaults.
-UPDATER_PY="/usr/local/sbin/jen-update-root.py"
-[[ -f "$UPDATER_PY" ]] || UPDATER_PY="$SCRIPT_DIR/jen-update-root.py"
-[[ -f "$UPDATER_PY" ]] || fatal "jen-update-root.py not found at /usr/local/sbin/ or beside this script — cannot safely resolve this install's layout for a destructive uninstall."
+#
+# v5.67.0-beta.9 (Q121, item d) — which copy of the checker: the one BESIDE this
+# script first (it ships in the same tarball, so it is always the version that
+# understands --check-layout). The INSTALLED copy at /usr/local/sbin used to be
+# preferred, and on a 5.66.0 box — or after a rollback to one — it rejects
+# --check-layout with "unrecognized arguments", which stopped every uninstall
+# there. The installed copy is now only used when this script has no copy
+# beside it AND the installed one answers `--check-layout --help` (a copy that
+# predates the mode does not).
+INSTALLED_UPDATER="/usr/local/sbin/jen-update-root.py"
+UPDATER_PY=""
+if [[ -f "$SCRIPT_DIR/jen-update-root.py" ]]; then
+    UPDATER_PY="$SCRIPT_DIR/jen-update-root.py"
+elif [[ -f "$INSTALLED_UPDATER" ]] && python3 "$INSTALLED_UPDATER" --check-layout --help >/dev/null 2>&1; then
+    UPDATER_PY="$INSTALLED_UPDATER"
+fi
+if [[ -z "$UPDATER_PY" ]]; then
+    if [[ -f "$INSTALLED_UPDATER" ]]; then
+        fatal "The installed $INSTALLED_UPDATER predates --check-layout and there is no jen-update-root.py beside this script — run uninstall.sh from the extracted release tarball (it carries its own copy), so this install's layout can be resolved safely for a destructive uninstall."
+    fi
+    fatal "jen-update-root.py not found beside this script or at $INSTALLED_UPDATER — cannot safely resolve this install's layout for a destructive uninstall."
+fi
 LAYOUT_OUT=$(python3 "$UPDATER_PY" --check-layout --for uninstall 2>&1) || fatal "$LAYOUT_OUT"
 INSTALL_DIR=$(printf '%s\n' "$LAYOUT_OUT" | sed -n 's/^app_dir=//p')
 CONFIG_DIR=$(printf '%s\n' "$LAYOUT_OUT" | sed -n 's/^config_dir=//p')
@@ -209,6 +228,23 @@ if [[ "$REMOVAL_LEVEL" == "3" ]]; then
         rm -f "$LAYOUT_FILE"
         ok "Removed layout record  ${DIM}(${LAYOUT_FILE})${NC}"
     fi
+    # v5.67.0-beta.9 (Q121, item d) — "everything" includes the root-privileged
+    # self-updater and its two oneshot units, which this level used to leave
+    # behind: a root-owned 0700 script and two unit files that name an
+    # application that is no longer there. Nothing else here removes them
+    # (levels 1 and 2 keep them, as they keep the config a reinstall expects).
+    for unit in jen-update.service jen-plugin-install.service; do
+        systemctl stop "$unit" 2>/dev/null || true
+        if [[ -f "/etc/systemd/system/$unit" ]]; then
+            rm -f "/etc/systemd/system/$unit"
+            ok "Removed $unit"
+        fi
+    done
+    if [[ -f "$INSTALLED_UPDATER" ]]; then
+        rm -f "$INSTALLED_UPDATER"
+        ok "Removed the root self-updater  ${DIM}(${INSTALLED_UPDATER})${NC}"
+    fi
+    systemctl daemon-reload 2>/dev/null || true
 fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────
