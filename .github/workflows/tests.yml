@@ -103,7 +103,7 @@ jobs:
         # Runtime pins come from requirements.txt (the single source of
         # truth, shared with install.sh and Dockerfile). Never re-list
         # packages here — tests/test_dependency_consistency.py enforces it.
-        run: pip install -q -r requirements.txt pytest
+        run: pip install -q -r requirements.txt pytest pyyaml
 
       - name: Provision /etc/jen
         # init_jen_db() unconditionally does os.makedirs("/etc/jen/ssl")
@@ -173,7 +173,7 @@ jobs:
         # Same single-source-of-truth rule as the pytest job above, plus
         # the two e2e-only packages (requirements-dev.txt, not a runtime
         # pin — test_dependency_consistency.py only governs requirements.txt).
-        run: pip install -q -r requirements.txt pytest playwright pytest-playwright
+        run: pip install -q -r requirements.txt pytest pyyaml playwright pytest-playwright
 
       - name: Install Chromium
         run: python -m playwright install --with-deps chromium
@@ -1270,7 +1270,7 @@ jobs:
           sudo grep -q '10.99.0.0/24' /etc/jen/jen.config
           # the updater on disk is the stable release's own, byte for byte
           tar xzf "$RUNNER_TEMP/stable/jen-v${JEN_STABLE_VERSION}.tar.gz" -C "$RUNNER_TEMP" jen/jen-update-root.py
-          expect_eq "$(sudo sha256sum < /usr/local/sbin/jen-update-root.py)" "$(sha256sum < "$RUNNER_TEMP/jen/jen-update-root.py")" "the installed updater"
+          expect_eq "$(sha_of /usr/local/sbin/jen-update-root.py)" "$(sha_of "$RUNNER_TEMP/jen/jen-update-root.py")" "the installed updater"
           echo "stable baseline: v$(jen_version), subnet config present, its own updater installed"
 
       # v5.66.0's own admin-password seeding discards a typed password (the bug
@@ -1353,7 +1353,7 @@ jobs:
           expect_eq "$(jen_version)" "$HEAD_VERSION" "the running version after hop 1"
           expect_eq "$(readlink /opt/jen/current)" "releases/$HEAD_VERSION" "where current points"
           # the stable updater's install_self_update_files() put HEAD's updater in place
-          expect_eq "$(sudo sha256sum < /usr/local/sbin/jen-update-root.py)" "$(sha256sum < jen-update-root.py)" "the updater after hop 1"
+          expect_eq "$(sha_of /usr/local/sbin/jen-update-root.py)" "$(sha_of jen-update-root.py)" "the updater after hop 1"
           sudo grep -q '10.99.0.0/24' /etc/jen/jen.config
           cookie="$RUNNER_TEMP/cookies-hop1.txt"
           jen_login "$cookie" "$ADMIN_PASSWORD"

@@ -40,6 +40,12 @@ require() {
     fi
 }
 
+# sha_of FILE — the file's sha256, read with sudo (the redirect form `sudo sha256sum < FILE` opens FILE as
+# the UNPRIVILEGED shell, which cannot read a root-only 0700 script).
+sha_of() {
+    sudo sha256sum "$1" | cut -d' ' -f1
+}
+
 # jen_login COOKIEJAR PASSWORD — a real login as admin through the form.
 jen_login() {
     local cookie="$1" pass="$2" csrf

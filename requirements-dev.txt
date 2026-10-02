@@ -8,6 +8,8 @@
 -r requirements.txt
 
 pytest
+# tests/test_workflow_hygiene.py parses the CI workflows (v5.67.0-beta.10, Q122)
+pyyaml
 bandit
 pip-audit
 ruff==0.16.6
