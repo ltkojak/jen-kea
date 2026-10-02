@@ -79,6 +79,63 @@ class TestAppConfig:
         with pytest.raises(ValueError, match="64 characters"):
             write_subnets_config({2: {"name": "x" * 65, "cidr": "10.0.50.0/24"}})
 
+    def _inject_raw_subnets_line(self, path, sid, raw_value):
+        """Write a raw `[subnets]` line directly, bypassing write_subnets()
+        entirely — simulates a pre-Q117 legacy name (or a comma-corrupted
+        one) that could never have been written through the validated API
+        in the first place."""
+        cfg = configparser.ConfigParser(interpolation=None)
+        cfg.read(path)
+        cfg.set("subnets", str(sid), raw_value)
+        with open(path, "w") as f:
+            cfg.write(f)
+        app_config.reload()
+
+    def test_write_subnets_tolerates_an_untouched_legacy_name_with_forbidden_chars(self, isolated_config):
+        """v5.67.0-beta.7 (Q119, item g) — a name with '=', '[' or ']' was
+        legal before Q117's validator existed and still parses fine
+        (only a comma breaks the stored line's own format) — write_subnets()
+        used to re-validate it on EVERY later write regardless, raising
+        ValueError for a subnet this write never touched at all."""
+        self._inject_raw_subnets_line(isolated_config, 1, "Rack[A]=East, 192.168.1.0/24")
+        assert extensions.SUBNET_MAP[1]["name"] == "Rack[A]=East"  # confirms it's genuinely legal to derive_subnet_map
+
+        new_map = dict(extensions.SUBNET_MAP)
+        new_map[2] = {"name": "IoT", "cidr": "10.0.50.0/24"}
+        write_subnets_config(new_map)  # must not raise
+
+        assert extensions.SUBNET_MAP[1]["name"] == "Rack[A]=East"  # written back exactly as it was
+        assert extensions.SUBNET_MAP[2]["name"] == "IoT"
+
+    def test_write_subnets_still_refuses_a_legacy_name_that_is_actively_changed(self, isolated_config):
+        """The tolerance is for an UNTOUCHED name only — renaming a legacy
+        bad name to another bad one is a new write of that name and goes
+        through the real validator, same as any other change."""
+        self._inject_raw_subnets_line(isolated_config, 1, "Rack[A]=East, 192.168.1.0/24")
+        new_map = dict(extensions.SUBNET_MAP)
+        new_map[1] = {"name": new_map[1]["name"] + "=West", "cidr": new_map[1]["cidr"]}
+        with pytest.raises(ValueError, match=r"\["):
+            write_subnets_config(new_map)
+
+    def test_write_subnets_repairs_and_restores_a_comma_corrupted_orphan(self, isolated_config):
+        """v5.67.0-beta.7 (Q119, item g) — a name with a comma breaks
+        derive_subnet_map()'s own "name, cidr" split (treated as
+        malformed, silently dropped) — meaning it's invisible to
+        SUBNET_MAP and would otherwise vanish outright (not just stay
+        unchanged) the next time ANY unrelated write rebuilds the
+        section from subnet_dict, which never heard of it. Recovered
+        instead: comma replaced with a space, restored, visible again."""
+        self._inject_raw_subnets_line(isolated_config, 9, "Office, Building A, 10.9.0.0/24")
+        assert 9 not in extensions.SUBNET_MAP  # confirms it's genuinely invisible before the fix applies
+
+        new_map = dict(extensions.SUBNET_MAP)
+        new_map[2] = {"name": "IoT", "cidr": "10.0.50.0/24"}
+        write_subnets_config(new_map)  # must not raise, and must not silently drop subnet 9
+
+        assert extensions.SUBNET_MAP[9] == {"name": "Office  Building A", "cidr": "10.9.0.0/24"}
+        assert extensions.SUBNET_MAP[2]["name"] == "IoT"
+        assert extensions.SUBNET_MAP[1]["name"] == "LAN"  # the original untouched entry still survives too
+
     def test_mutate_rederives_kea_servers(self, isolated_config):
         def add_server(p):
             p.add_section("kea_server_2")

@@ -14,7 +14,9 @@ Jen supports two Docker deployment modes. **Both are configured through
 | **Bundled** (`docker-compose.mysql.yml`) | a MariaDB container Docker manages | a server you already run |
 
 The Kea database **always** connects to your external Kea server — Docker
-never manages that.
+never manages that. The whole **Kea** section is optional: leave it blank
+and connect Kea afterward, live in the browser, from the `/setup` wizard
+that greets a fresh superadmin's first login.
 
 ---
 
@@ -55,9 +57,12 @@ cp .env.example .env
 
 Fill in:
 
-- the **Kea** section (`JEN_KEA_API_*`, `JEN_KEA_DB_*`)
+- the **Kea** section (`JEN_KEA_API_*`, `JEN_KEA_DB_*`) — **optional**:
+  leave every `JEN_KEA_*` line blank to connect Kea afterward, live in
+  the browser, from the `/setup` wizard a fresh superadmin lands on
 - **`JEN_DB_HOST` / `JEN_DB_USER` / `JEN_DB_PASS` / `JEN_DB_NAME`** — your
-  server
+  server (this one is not optional — Jen can't boot without its own
+  database)
 - **`JEN_DATABASE_MODE`** — `external` here
 - **`JEN_INITIAL_ADMIN_PASSWORD`** — the first-login `admin` password.
   Leave it blank and Jen generates one at first boot: find it with
@@ -80,7 +85,8 @@ cd jen
 cp .env.example .env
 ```
 
-Fill in the **Kea** section, plus:
+Fill in the **Kea** section (optional — same as Mode 1, leave every
+`JEN_KEA_*` line blank to connect Kea afterward from `/setup`), plus:
 
 - **`MYSQL_ROOT_PASSWORD`** and **`JEN_MYSQL_PASSWORD`** (any strong
   values; compose refuses to start if either is blank)

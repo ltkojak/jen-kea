@@ -6,6 +6,8 @@ builds a gunicorn command line. These test the command-line
 construction (pure) and the SSL/non-SSL branching decisions.
 """
 
+import configparser
+import os
 import sys
 
 import run
@@ -85,3 +87,67 @@ class TestGunicornChdir:
     def test_chdir_present_with_and_without_tls(self):
         for kw in ({}, {"certfile": "/c.crt", "keyfile": "/c.key"}):
             assert "--chdir" in run.gunicorn_argv("x", 8, **kw)
+
+
+class TestBuildConfigFromEnv:
+    """v5.67.0-beta.7 (Q119, item e) — the README's own advertised "leave
+    Kea blank, connect it later from /setup" path used to never write a
+    jen.config at all when JEN_KEA_API_URL was unset — AppConfig.load()
+    then raises FileNotFoundError and a blank-Kea container crash-loops
+    forever. The real precondition is Jen's own database, the one thing
+    AppConfig.load() genuinely can't run without."""
+
+    def _clear_jen_env(self, monkeypatch):
+        for key in list(os.environ):
+            if key.startswith("JEN_"):
+                monkeypatch.delenv(key, raising=False)
+
+    def test_no_jen_db_host_writes_nothing(self, tmp_path, monkeypatch):
+        self._clear_jen_env(monkeypatch)
+        monkeypatch.setattr(run.extensions, "CONFIG_DIR", str(tmp_path))
+        run._build_config_from_env()
+        assert not (tmp_path / "jen.config").exists()
+
+    def test_jen_db_present_with_no_kea_still_writes_a_config(self, tmp_path, monkeypatch):
+        self._clear_jen_env(monkeypatch)
+        monkeypatch.setenv("JEN_DB_HOST", "mysql")
+        monkeypatch.setattr(run.extensions, "CONFIG_DIR", str(tmp_path))
+        run._build_config_from_env()
+        config_path = tmp_path / "jen.config"
+        assert config_path.exists()
+        cfg = configparser.ConfigParser(interpolation=None)
+        cfg.read(config_path)
+        assert cfg.get("jen_db", "host") == "mysql"
+        assert cfg.get("kea", "api_url") == ""
+
+    def test_never_overwrites_an_existing_config_even_with_blank_kea(self, tmp_path, monkeypatch):
+        self._clear_jen_env(monkeypatch)
+        monkeypatch.setenv("JEN_DB_HOST", "mysql")
+        monkeypatch.setattr(run.extensions, "CONFIG_DIR", str(tmp_path))
+        config_path = tmp_path / "jen.config"
+        config_path.write_text("# configured by hand, kea set up via /setup\n[kea]\napi_url = http://real-kea:8000\n")
+        run._build_config_from_env()
+        assert "real-kea" in config_path.read_text()
+
+    def test_a_shipped_placeholder_value_is_written_as_blank(self, tmp_path, monkeypatch):
+        """An old .env carried over from before this Q blanked the
+        shipped placeholders must not write a literal 'YOUR-KEA-SERVER'
+        into a fresh container's config."""
+        self._clear_jen_env(monkeypatch)
+        monkeypatch.setenv("JEN_DB_HOST", "mysql")
+        monkeypatch.setenv("JEN_KEA_API_URL", "http://YOUR-KEA-SERVER:8000")
+        monkeypatch.setenv("JEN_KEA_DB_HOST", "YOUR-KEA-SERVER")
+        monkeypatch.setattr(run.extensions, "CONFIG_DIR", str(tmp_path))
+        run._build_config_from_env()
+        content = (tmp_path / "jen.config").read_text()
+        assert "YOUR-KEA-SERVER" not in content
+
+    def test_a_real_kea_value_passes_through_unchanged(self, tmp_path, monkeypatch):
+        self._clear_jen_env(monkeypatch)
+        monkeypatch.setenv("JEN_DB_HOST", "mysql")
+        monkeypatch.setenv("JEN_KEA_API_URL", "http://10.0.0.5:8000")
+        monkeypatch.setattr(run.extensions, "CONFIG_DIR", str(tmp_path))
+        run._build_config_from_env()
+        cfg = configparser.ConfigParser(interpolation=None)
+        cfg.read(tmp_path / "jen.config")
+        assert cfg.get("kea", "api_url") == "http://10.0.0.5:8000"

@@ -469,7 +469,15 @@ def add_subnet_post():
     # Register the new subnet with Jen only after Kea accepted it
     new_map = dict(extensions.SUBNET_MAP)
     new_map[new_id] = {"name": new_name, "cidr": new_cidr}
-    __config.write_subnets_config(new_map)
+    try:
+        __config.write_subnets_config(new_map)
+    except ValueError as e:
+        # v5.67.0-beta.7 (Q119, item g) — Kea already has the real
+        # change by this point; a flash here, not a 500, even though
+        # new_name was already validated above (write_subnets_config
+        # still validates every OTHER new/changed name in the map).
+        flash(f"Subnet {new_id} was created in Kea, but Jen's own record could not be saved: {e}", "error")
+        return redirect(url_for("subnets.subnets"))
 
     _net_note = f" network={shared_network}" if shared_network else ""
     __user.audit("ADD_SUBNET", str(new_id), f"name={new_name} cidr={new_cidr} pool={new_pool}{_net_note}")
@@ -530,7 +538,13 @@ def delete_subnet(subnet_id):
     # Remove from Jen's own subnet map now that Kea no longer has it
     new_map = dict(extensions.SUBNET_MAP)
     new_map.pop(subnet_id, None)
-    __config.write_subnets_config(new_map)
+    try:
+        __config.write_subnets_config(new_map)
+    except ValueError as e:
+        # v5.67.0-beta.7 (Q119, item g) — Kea already dropped the subnet
+        # by this point; a flash here, not a 500.
+        flash(f"Subnet {subnet_id} was removed from Kea, but Jen's own record could not be saved: {e}", "error")
+        return redirect(url_for("subnets.subnets"))
 
     __user.audit("DELETE_SUBNET", str(subnet_id), f"name={subnet_name}")
     return redirect(url_for("subnets.subnets"))
@@ -2249,8 +2263,16 @@ def _finish_windows_import(token, entry):
     if subnets_to_declare:
         new_map = dict(extensions.SUBNET_MAP)
         new_map.update(subnets_to_declare)
-        __config.write_subnets_config(new_map)
-        report.append(f"{len(subnets_to_declare)} subnet(s) registered with Jen.")
+        try:
+            __config.write_subnets_config(new_map)
+            report.append(f"{len(subnets_to_declare)} subnet(s) registered with Jen.")
+        except ValueError as e:
+            # v5.67.0-beta.7 (Q119, item g) — Kea already has the real
+            # subnets/reservations by this point (win_dhcp_import's own
+            # _sanitize_subnet_name should make this unreachable for the
+            # names THIS import introduces, but write_subnets_config
+            # still validates every other new/changed name in the map).
+            report.append(f"Subnets were added to Kea, but Jen's own record could not be saved: {e}")
 
     entry["state"] = "complete"  # v5.28.1 (Q26, B1) — moot, the plan is popped next, but explicit
     _WIN_IMPORT_PLANS.pop(token, None)

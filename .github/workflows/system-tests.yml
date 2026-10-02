@@ -155,3 +155,54 @@ jobs:
       - name: Tear down
         if: always()
         run: docker compose -f docker-compose.mysql.yml down -v || true
+
+      # v5.67.0-beta.7 (Q119, item e) — the README's own first command
+      # ("leave the Kea section blank to connect it later from /setup")
+      # used to crash-loop: _build_config_from_env() wrote NO config at
+      # all without JEN_KEA_API_URL set, so AppConfig.load() raised
+      # FileNotFoundError on every boot. This leg is that exact path —
+      # no JEN_KEA_* vars at all, just Jen's own bundled database.
+      - name: Write a blank-Kea .env, the way the README's own first command does
+        run: |
+          cat > .env <<'ENVEOF'
+          JEN_DATABASE_MODE=bundled
+          JEN_INITIAL_ADMIN_PASSWORD=probe-Adm1n-Pass!
+          MYSQL_ROOT_PASSWORD=probe-root-pw
+          JEN_MYSQL_PASSWORD=probe-jen-pw
+          ENVEOF
+
+      - name: docker compose up (blank Kea)
+        run: docker compose -f docker-compose.mysql.yml up -d --build
+
+      - name: Jen answers on its health endpoint (blank Kea)
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf -m 3 http://127.0.0.1:5050/api/v1/health | grep -q jen_version; then
+              echo "Jen answered after ~$((i * 3))s"; exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::Jen never answered /api/v1/health after docker compose up with no Kea configured"
+          exit 1
+
+      - name: A fresh superadmin lands on /setup with no Kea configured
+        run: |
+          set -e
+          cookie=$(mktemp)
+          csrf=$(curl -sc "$cookie" http://127.0.0.1:5050/login | grep -oP 'name="csrf_token" value="\K[^"]+' | head -1)
+          [[ -n "$csrf" ]]
+          login_location=$(curl -sb "$cookie" -c "$cookie" -X POST http://127.0.0.1:5050/login \
+            -d "username=admin&password=probe-Adm1n-Pass!&csrf_token=$csrf" \
+            -o /dev/null -w '%{redirect_url}')
+          dashboard_location=$(curl -sb "$cookie" -c "$cookie" "$login_location" -o /dev/null -w '%{redirect_url}')
+          echo "dashboard redirected to: $dashboard_location"
+          [[ "$dashboard_location" == *"/setup"* ]]
+          echo "a fresh, blank-Kea superadmin lands on /setup"
+
+      - name: Container logs (blank Kea)
+        if: always()
+        run: docker compose -f docker-compose.mysql.yml logs --no-color --tail 80 jen || true
+
+      - name: Tear down (blank Kea)
+        if: always()
+        run: docker compose -f docker-compose.mysql.yml down -v || true

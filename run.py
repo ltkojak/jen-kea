@@ -123,38 +123,59 @@ logger = logging.getLogger("jen.launch")
 _TLS_CIPHERS = "ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20:!aNULL:!MD5:!DSS"
 
 
+# v5.67.0-beta.7 (Q119, item e) — a value still equal to a placeholder
+# .env.example shipped before this same Q blanked them is treated as
+# unset, same rule and same reason as install.sh's own
+# _blank_if_placeholder (Q113): an old .env carried over from before
+# this fix must not write a literal "YOUR-KEA-SERVER" into a fresh
+# container's config — Jen's own Health/Getting-started pages already
+# know how to say "not configured" for a truly blank value.
+_ENV_PLACEHOLDERS = {
+    "http://YOUR-KEA-SERVER:8000",
+    "YOUR-KEA-SERVER",
+    "YOUR-DB-SERVER",
+    "your-kea-api-password",
+    "your-kea-db-password",
+    "your-jen-db-password",
+}
+
+
+def _env_or_blank(key, default=""):
+    v = os.environ.get(key, default)
+    return "" if v in _ENV_PLACEHOLDERS else v
+
+
 def _build_config_from_env():
     """
-    If JEN_KEA_API_URL is set, write <config_dir>/jen.config from environment
-    variables. This allows Docker deployments without a mounted config file.
-    Skips if <config_dir>/jen.config already exists and contains a valid api_url.
+    Write <config_dir>/jen.config from environment variables the first
+    time Jen ever boots in this container, so a Docker deployment with no
+    mounted config file still gets one. Skips entirely once a config file
+    exists AT ALL, whatever it says — once anything has been configured
+    (Kea via /setup, subnets, users...), a container restart must never
+    regenerate it out from under that.
 
     v5.67.0 (Q114) — config_path/key_path use extensions.CONFIG_DIR
     directly (JEN_CONFIG_DIR env override, same as everywhere else) so
     a relocated install's container still writes/finds its
     auto-generated config in the right place.
+
+    v5.67.0-beta.7 (Q119, item e) — this used to require JEN_KEA_API_URL
+    to be set before writing anything at all, which meant the README's
+    own advertised "leave Kea blank, connect it later from /setup" path
+    booted with no jen.config whatsoever — AppConfig.load() raises
+    FileNotFoundError, and `restart: unless-stopped` crash-loops forever.
+    The real precondition is Jen's OWN database, the one thing
+    AppConfig.load() genuinely cannot run without; Kea is optional here
+    the same way it already is everywhere else since Q115.
     """
     config_dir = extensions.CONFIG_DIR
     config_path = os.path.join(config_dir, "jen.config")
 
-    # Check if we have env vars
-    if not os.environ.get("JEN_KEA_API_URL"):
-        return  # No env config — rely on mounted jen.config
+    if not os.environ.get("JEN_DB_HOST"):
+        return  # nothing to generate from — rely on a mounted jen.config
 
-    # Check if a valid config already exists
     if os.path.exists(config_path):
-        try:
-            import configparser
-
-            # interpolation=None — same reason as AppConfig.load(): a DB/API
-            # password can legitimately contain a literal '%', which default
-            # BasicInterpolation chokes on when reading the value back.
-            cfg = configparser.ConfigParser(interpolation=None)
-            cfg.read(config_path)
-            if cfg.get("kea", "api_url", fallback="").strip():
-                return  # Valid config exists, don't overwrite
-        except Exception:
-            pass
+        return  # already configured, by an earlier boot or by hand — never overwrite
 
     # Parse subnet env var: "1=Production,10.0.0.0/24;30=IoT,10.30.0.0/24"
     subnets_raw = os.environ.get("JEN_SUBNETS", "")
@@ -169,23 +190,23 @@ def _build_config_from_env():
     os.makedirs(config_dir, exist_ok=True)
     config_content = f"""# Jen - auto-generated from environment variables
 [kea]
-api_url  = {os.environ.get("JEN_KEA_API_URL", "")}
+api_url  = {_env_or_blank("JEN_KEA_API_URL")}
 api_user = {os.environ.get("JEN_KEA_API_USER", "")}
-api_pass = {os.environ.get("JEN_KEA_API_PASS", "")}
+api_pass = {_env_or_blank("JEN_KEA_API_PASS")}
 name     = {os.environ.get("JEN_KEA_NAME", "Kea Server 1")}
 role     = {os.environ.get("JEN_KEA_ROLE", "primary")}
 ha_mode  = {os.environ.get("JEN_HA_MODE", "")}
 
 [kea_db]
-host     = {os.environ.get("JEN_KEA_DB_HOST", "")}
+host     = {_env_or_blank("JEN_KEA_DB_HOST")}
 user     = {os.environ.get("JEN_KEA_DB_USER", "")}
-password = {os.environ.get("JEN_KEA_DB_PASS", "")}
+password = {_env_or_blank("JEN_KEA_DB_PASS")}
 database = {os.environ.get("JEN_KEA_DB_NAME", "kea")}
 
 [jen_db]
-host     = {os.environ.get("JEN_DB_HOST", "")}
+host     = {_env_or_blank("JEN_DB_HOST")}
 user     = {os.environ.get("JEN_DB_USER", "")}
-password = {os.environ.get("JEN_DB_PASS", "")}
+password = {_env_or_blank("JEN_DB_PASS")}
 database = {os.environ.get("JEN_DB_NAME", "jen")}
 
 [server]

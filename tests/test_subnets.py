@@ -468,6 +468,27 @@ class TestSubnetApplyViaHostClient:
         assert [s["id"] for s in applied] == [42]
         assert fake.payload_for("service") == {"service": "dhcp4", "action": "restart"}
 
+    def test_add_subnet_config_write_failure_flashes_not_500s(self, logged_in_client, monkeypatch, mock_kea):
+        """v5.67.0-beta.7 (Q119, item g) — Kea already has the real
+        change by the time write_subnets_config() runs; a ValueError
+        from it (an unrelated entry elsewhere in the map, in the worst
+        case) must flash and redirect, never 500, since the alternative
+        leaves Kea changed with no way back to the page at all."""
+        self._wire(monkeypatch)
+        monkeypatch.setattr("jen.routes.subnets._get_kea_subnet_ids", lambda: set())
+
+        def _boom(m):
+            raise ValueError("subnet 2: Name must be at most 64 characters")
+
+        monkeypatch.setattr("jen.config.write_subnets_config", _boom)
+        r = logged_in_client.post(
+            "/subnets/add",
+            data={"subnet_id": "42", "name": "New", "cidr": "10.9.42.0/24", "pool": "10.9.42.10-10.9.42.200"},
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        assert b"could not be saved" in r.data
+
     def test_add_subnet_preflight_failure_does_not_write_subnets_config(self, logged_in_client, monkeypatch, mock_kea):
         """v5.28.0 (Q24, C1/C2) — a failed test-config aborts the whole
         change set before any write, so add_subnet_post must never
@@ -501,6 +522,25 @@ class TestSubnetApplyViaHostClient:
         assert r.status_code == 200
         assert fake.payload_for("apply-config")["config"]["Dhcp4"]["subnet4"] == []
         assert "service" in fake.ops()
+
+    def test_delete_subnet_config_write_failure_flashes_not_500s(self, logged_in_client, monkeypatch, mock_kea, db):
+        """v5.67.0-beta.7 (Q119, item g) — same reasoning as the add-subnet
+        case: Kea has already dropped the subnet by the time
+        write_subnets_config() runs."""
+        fake = self._wire(monkeypatch, subnet4=[{"id": 1, "subnet": "10.0.0.0/24"}])
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4 WHERE subnet_id=1")
+            cur.execute("DELETE FROM hosts WHERE dhcp4_subnet_id=1")
+        db.commit()
+
+        def _boom(m):
+            raise ValueError("subnet 2: Name must be at most 64 characters")
+
+        monkeypatch.setattr("jen.config.write_subnets_config", _boom)
+        r = logged_in_client.post("/subnets/delete/1", follow_redirects=True)
+        assert r.status_code == 200
+        assert b"could not be saved" in r.data
+        assert fake.payload_for("apply-config")["config"]["Dhcp4"]["subnet4"] == []  # Kea's own side still went through
 
     def test_delete_subnet_notfound_everywhere_still_removes_from_map(
         self, logged_in_client, monkeypatch, mock_kea, db

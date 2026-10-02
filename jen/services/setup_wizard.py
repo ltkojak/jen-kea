@@ -52,10 +52,35 @@ def get_state() -> dict:
     return {k: v for k, v in data.items() if k in STEPS and v in ("done", "skipped")}
 
 
-def _utcnow_iso() -> str:
+def utc_iso() -> str:
+    """The one way this module (and any caller outside it that stores a
+    timestamp meant to compare against the wizard's own clock —
+    routes/database.py's recovery_bundle() is the other one) writes a UTC
+    timestamp: always timezone-AWARE, so two stored timestamps can always
+    be compared without raising. v5.67.0-beta.7 (Q119, item f) — before
+    this, _STARTED_KEY was written aware (datetime.now(timezone.utc)) but
+    last_recovery_bundle_at was written naive (datetime.utcnow()) by a
+    different module; comparing an aware and a naive datetime raises
+    TypeError, not ValueError, so the try/except around that comparison
+    never caught it."""
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).isoformat()
+
+
+def parse_utc(value: str):
+    """Parse an ISO timestamp as UTC, whether or not it carries a tzinfo
+    offset — a value stored before this fix (naive) must still compare
+    safely against one stored after it (aware). Raises ValueError for
+    genuinely unparseable text, same as datetime.fromisoformat always
+    has — callers that already guard with try/except ValueError need no
+    change."""
+    from datetime import datetime, timezone
+
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def mark_started() -> None:
@@ -67,13 +92,13 @@ def mark_started() -> None:
     from jen.models.user import get_global_setting, set_global_setting
 
     if not get_global_setting(_STARTED_KEY, ""):
-        set_global_setting(_STARTED_KEY, _utcnow_iso())
+        set_global_setting(_STARTED_KEY, utc_iso())
 
 
 def elapsed_seconds() -> int | None:
     """How long ago mark_started() first ran — None if /setup hasn't been
     opened yet this install."""
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     from jen.models.user import get_global_setting
 
@@ -81,9 +106,8 @@ def elapsed_seconds() -> int | None:
     if not started:
         return None
     try:
-        start = datetime.fromisoformat(started)
-        now = datetime.fromisoformat(_utcnow_iso())
-        return max(0, int((now - start).total_seconds()))
+        start = parse_utc(started)
+        return max(0, int((datetime.now(timezone.utc) - start).total_seconds()))
     except ValueError:
         return None
 
@@ -538,8 +562,6 @@ def recovery_bundle_status() -> dict:
     setup run that never made a new one.
     Returns {"exists", "at", "size", "excluded_audit_history", "fresh"}.
     """
-    from datetime import datetime
-
     from jen.models.user import get_global_setting
 
     at = get_global_setting("last_recovery_bundle_at", "")
@@ -552,8 +574,16 @@ def recovery_bundle_status() -> dict:
     fresh = False
     started = get_global_setting(_STARTED_KEY, "")
     if started:
+        # v5.67.0-beta.7 (Q119, item f) — parse_utc(), not a bare
+        # datetime.fromisoformat(): `at` may still be a NAIVE timestamp
+        # stored before this fix, which fromisoformat() alone would
+        # compare against `started`'s aware value and raise TypeError —
+        # not caught by the ValueError guard this comparison has always
+        # had (reproduced: this is exactly what made /setup/recovery,
+        # its "done" POST, and /getting-started 500 for every admin once
+        # a bundle had actually been downloaded).
         try:
-            fresh = datetime.fromisoformat(at) >= datetime.fromisoformat(started)
+            fresh = parse_utc(at) >= parse_utc(started)
         except ValueError:
             fresh = False
 

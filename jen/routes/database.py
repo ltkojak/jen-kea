@@ -447,8 +447,15 @@ def recovery_bundle():
                     os.remove(tmp_path)
                 if sent_fully:
                     from jen.models.user import set_global_setting
+                    from jen.services.setup_wizard import utc_iso
 
-                    set_global_setting("last_recovery_bundle_at", datetime.utcnow().isoformat())
+                    # v5.67.0-beta.7 (Q119, item f) — utc_iso(), not a
+                    # bare datetime.utcnow().isoformat(): the latter is
+                    # NAIVE, but setup_wizard's own _STARTED_KEY is
+                    # timezone-AWARE — comparing the two in
+                    # recovery_bundle_status() raised TypeError, not the
+                    # ValueError its try/except actually catches.
+                    set_global_setting("last_recovery_bundle_at", utc_iso())
                     set_global_setting("last_recovery_bundle_size", str(size))
                     set_global_setting(
                         "last_recovery_bundle_excluded_audit", "true" if without_audit_history else "false"

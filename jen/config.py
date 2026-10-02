@@ -75,28 +75,88 @@ def _parse_trusted_proxies(raw: str) -> list:
 # `name = x` value fine today, but a name containing them is one format
 # change away from the same silent-corruption class.
 SUBNET_NAME_MAX_LEN = 64
-_SUBNET_NAME_FORBIDDEN_CHARS = ",=[]"
+SUBNET_NAME_FORBIDDEN_CHARS = ",=[]"
 
 
 def invalid_subnet_name_reason(name: str) -> str | None:
     """None if `name` is safe to store, else a short, user-facing reason.
-    write_subnets()/write_subnets6() call this for every name before
-    writing anything, so nothing bypasses it — a bad name always raises
-    ValueError there at minimum. routes/subnets.py's add-subnet form
-    also calls it directly first, for an inline refusal before Kea's
-    own config is ever touched, rather than only finding out from the
-    choke point after the fact; /setup's Found step relies on the choke
-    point alone (jen.services.setup_wizard.save_subnets catches the
-    ValueError and turns it into a flash message)."""
+    write_subnets()/write_subnets6() call this for a NEW or CHANGED name
+    before writing anything (v5.67.0-beta.7, Q119, item g — an untouched
+    legacy name is never re-validated; see _reconcile_subnet_names()),
+    so nothing bypasses it for the names that actually matter — a bad
+    one always raises ValueError there at minimum. routes/subnets.py's
+    add-subnet form also calls it directly first, for an inline refusal
+    before Kea's own config is ever touched, rather than only finding
+    out from the choke point after the fact; /setup's Found step relies
+    on the choke point alone (jen.services.setup_wizard.save_subnets
+    catches the ValueError and turns it into a flash message)."""
     if not name:
         return "Name is required"
     if len(name) > SUBNET_NAME_MAX_LEN:
         return f"Name must be at most {SUBNET_NAME_MAX_LEN} characters"
-    if any(c in name for c in _SUBNET_NAME_FORBIDDEN_CHARS):
+    if any(c in name for c in SUBNET_NAME_FORBIDDEN_CHARS):
         return "Name must not contain a comma, =, [ or ]"
     if any(ord(c) < 0x20 or ord(c) == 0x7F for c in name):
         return "Name must not contain a control character"
     return None
+
+
+def _reconcile_subnet_names(subnet_dict: dict, stored: dict, raw_section: dict) -> dict:
+    """v5.67.0-beta.7 (Q119, item g) — since Q117, write_subnets()/
+    write_subnets6() validated EVERY name in the whole map on every
+    write, including names that predate the validator and were never
+    touched by this write at all: a single legacy name with an `=` or
+    over 64 characters made every later add/delete/import raise
+    ValueError — after Kea's own config had already been changed, since
+    every caller writes Jen's map AFTER applying the real change.
+
+    Refuses only a name that is NEW (`sid` not in `stored`) or CHANGED
+    (`stored[sid]["name"] != info["name"]`) relative to what's already
+    on disk — an untouched legacy name is written back exactly as it
+    was, no re-validation.
+
+    `raw_section` ({str(sid): raw stored value}) covers a sharper case:
+    a comma in a name doesn't just make it "stored oddly," it corrupts
+    the `"name, cidr"` line's own format — derive_subnet_map() splits on
+    comma and discards such an entry as malformed, so it's invisible to
+    `stored` (and to the running app's SUBNET_MAP) even though it's
+    still physically sitting in the file. Without this, the very next
+    unrelated write (rebuilding the section from `subnet_dict`, which
+    never heard of an entry SUBNET_MAP never loaded) would silently
+    DELETE it outright. Recovered here instead: the comma is replaced
+    with a space (logged) and the repaired entry rejoins the map, where
+    it's visible — and manageable — again from the next page load on.
+
+    Returns a new dict in `subnet_dict`'s own shape (safe to write
+    as-is); raises ValueError on the first new/changed name that fails
+    validation, same as before — nothing is mutated or logged for a
+    dict that ends up not being written at all."""
+    reconciled = {}
+    for sid, info in subnet_dict.items():
+        name = info["name"]
+        existing = stored.get(sid)
+        if existing is None or existing["name"] != name:
+            reason = invalid_subnet_name_reason(name)
+            if reason:
+                raise ValueError(f"subnet {sid}: {reason}")
+        reconciled[sid] = dict(info)
+
+    for key, raw in raw_section.items():
+        try:
+            sid = int(key)
+        except ValueError:
+            continue
+        if sid in stored or sid in reconciled:
+            continue  # cleanly parsed already, or this write already handles it
+        parts = [p.strip() for p in raw.split(",")]
+        if len(parts) < 2:
+            continue  # genuinely unparseable — nothing left to recover
+        *name_parts, cidr = parts
+        name = ", ".join(name_parts)
+        fixed = name.replace(",", " ")
+        logger.warning(f"subnet {sid}: repairing a comma in its stored name ({name!r} -> {fixed!r})")
+        reconciled[sid] = {"name": fixed, "cidr": cidr}
+    return reconciled
 
 
 class AppConfig:
@@ -332,18 +392,20 @@ class AppConfig:
     def write_subnets(self, subnet_dict: dict, reload: bool = True) -> None:
         """Rewrite the [subnets] section entirely, then reload.
 
-        v5.67.0-beta.5 (Q117, item h) — every name is validated BEFORE
-        anything is written (never a partial write): a bad one raises
-        ValueError rather than silently corrupting the stored line."""
-        for sid, info in subnet_dict.items():
-            reason = invalid_subnet_name_reason(info["name"])
-            if reason:
-                raise ValueError(f"subnet {sid}: {reason}")
+        v5.67.0-beta.5 (Q117, item h) — every NEW or CHANGED name is
+        validated BEFORE anything is written (never a partial write): a
+        bad one raises ValueError rather than silently corrupting the
+        stored line. v5.67.0-beta.7 (Q119, item g) — an untouched legacy
+        name is no longer re-validated on every write; see
+        _reconcile_subnet_names()."""
         parser = self._read_parser()
+        stored = self.derive_subnet_map(parser, "subnets")
+        raw_section = dict(parser.items("subnets")) if parser.has_section("subnets") else {}
+        reconciled = _reconcile_subnet_names(subnet_dict, stored, raw_section)
         if parser.has_section("subnets"):
             parser.remove_section("subnets")
         parser.add_section("subnets")
-        for sid, info in subnet_dict.items():
+        for sid, info in reconciled.items():
             parser.set("subnets", str(sid), f"{info['name']}, {info['cidr']}")
         self._write_parser(parser)
         if reload:
@@ -351,17 +413,17 @@ class AppConfig:
 
     def write_subnets6(self, subnet_dict: dict, reload: bool = True) -> None:
         """Rewrite the [subnets6] section entirely, then reload. Mirrors
-        write_subnets() above; includes the optional paired_subnet4_id
-        third field when an entry has one set."""
-        for sid, info in subnet_dict.items():
-            reason = invalid_subnet_name_reason(info["name"])
-            if reason:
-                raise ValueError(f"subnet {sid}: {reason}")
+        write_subnets() above (including the v5.67.0-beta.7, Q119, item g
+        new-or-changed-only validation); includes the optional
+        paired_subnet4_id third field when an entry has one set."""
         parser = self._read_parser()
+        stored = self.derive_subnet_map(parser, "subnets6")
+        raw_section = dict(parser.items("subnets6")) if parser.has_section("subnets6") else {}
+        reconciled = _reconcile_subnet_names(subnet_dict, stored, raw_section)
         if parser.has_section("subnets6"):
             parser.remove_section("subnets6")
         parser.add_section("subnets6")
-        for sid, info in subnet_dict.items():
+        for sid, info in reconciled.items():
             paired = info.get("paired_subnet4_id")
             line = f"{info['name']}, {info['cidr']}"
             if paired is not None:

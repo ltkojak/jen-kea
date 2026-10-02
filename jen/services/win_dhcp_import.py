@@ -45,6 +45,7 @@ from dataclasses import dataclass, field
 
 import defusedxml.ElementTree as _ET
 
+from jen.config import SUBNET_NAME_FORBIDDEN_CHARS, SUBNET_NAME_MAX_LEN
 from jen.services import auth as _auth
 from jen.services import dhcp_options as _opts
 from jen.services import kea_classes as _classes
@@ -357,6 +358,22 @@ def _sanitize_hostname(name: str) -> str:
     sanitized = re.sub(r"[^A-Za-z0-9.-]+", "-", name)
     sanitized = re.sub(r"-{2,}", "-", sanitized)
     return sanitized.strip("-.")
+
+
+def _sanitize_subnet_name(name: str, fallback_id) -> str:
+    """v5.67.0-beta.7 (Q119, item g) — a Windows DHCP scope's own display
+    name is free text too, and can carry a comma Jen's subnet-name store
+    can't hold (jen.config.invalid_subnet_name_reason would refuse it
+    outright). By the time this runs, Kea's real config has already been
+    changed — refusing the subnet registration now, mid-import, would be
+    worse than an adjusted name the operator can rename later from the
+    Subnets page, so this repairs rather than refuses, the same choice
+    jen.config._reconcile_subnet_names() makes for an untouched legacy
+    name with the same problem."""
+    sanitized = "".join(" " if c in SUBNET_NAME_FORBIDDEN_CHARS else c for c in name)
+    sanitized = re.sub(r"[\x00-\x1f\x7f]", " ", sanitized)
+    sanitized = " ".join(sanitized.split())[:SUBNET_NAME_MAX_LEN].strip()
+    return sanitized or f"Subnet{fallback_id}"
 
 
 def _parse_reservations(elem, context: str) -> tuple[list[Reservation], list[str]]:
@@ -932,6 +949,10 @@ def to_kea(plan: Plan, existing_dhcp4_cfg: dict | None, subnet_names: dict, sele
         if jen_id is None:
             report.append(f"scope {scope.name}: no subnet id chosen — skipped")
             continue
+        sanitized_name = _sanitize_subnet_name(friendly_name, jen_id)
+        if sanitized_name != friendly_name:
+            report.append(f"scope {scope.name}: name {friendly_name!r} adjusted to {sanitized_name!r} for storage")
+        friendly_name = sanitized_name
 
         mapped = scope_to_subnet(scope, jen_id)
         report.extend(mapped.warnings)

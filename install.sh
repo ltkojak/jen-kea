@@ -2084,11 +2084,41 @@ _docker_pick_compose_and_run() {
     spinner_start "Starting Jen container..."
     docker compose -f "$compose_file" up -d
     spinner_stop
-    sleep 5
 
     docker ps | grep -q "jen" \
-        && ok "Jen container running" \
         || { err "Container failed to start"; docker compose -f "$compose_file" logs --tail=20; exit 1; }
+
+    # v5.67.0-beta.7 (Q119, item e) — `docker ps` lists a crash-looping
+    # container too (Docker keeps recreating it, so it's "there" between
+    # restarts even though it never stays up) — the old check above never
+    # actually proved Jen booted, only that something named "jen" exists.
+    # A blank-Kea container hitting the _build_config_from_env() bug this
+    # same Q fixes (or any other boot failure) printed "Installation
+    # complete!" over a dead container. Wait for the real signal instead.
+    local http_port
+    http_port=$(sed -n "s/^HTTP_PORT=['\"]\\?\\([0-9]*\\).*/\\1/p" ./.env 2>/dev/null | head -1)
+    http_port="${http_port:-5050}"
+    spinner_start "Waiting for Jen to answer on :${http_port}..."
+    local waited=0 healthy=false
+    while [[ $waited -lt 60 ]]; do
+        if command -v curl &>/dev/null \
+            && curl -sf -m 3 "http://127.0.0.1:${http_port}/api/v1/health" 2>/dev/null | grep -q jen_version; then
+            healthy=true
+            break
+        fi
+        sleep 2
+        waited=$((waited + 2))
+    done
+    spinner_stop
+    if [[ "$healthy" == "true" ]]; then
+        ok "Jen is healthy and answering"
+    elif ! command -v curl &>/dev/null; then
+        warn "curl not found — could not verify Jen actually answers; check 'docker compose logs jen'"
+    else
+        err "Jen did not answer /api/v1/health after ${waited}s"
+        docker compose -f "$compose_file" logs --tail=40
+        exit 1
+    fi
 
     local server_ip login_line
     server_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "your-server")

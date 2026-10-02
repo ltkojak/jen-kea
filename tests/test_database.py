@@ -456,6 +456,34 @@ class TestRecoveryBundleRoute:
         assert get_global_setting("last_recovery_bundle_size", "") == str(len(body))
         assert get_global_setting("last_recovery_bundle_excluded_audit", "") == "false"
 
+    def test_recovery_bundle_status_is_fresh_through_the_real_writers_not_a_typeerror(
+        self, logged_in_client, db, mock_kea
+    ):
+        """v5.67.0-beta.7 (Q119, item f) — setup_wizard_started_at
+        (mark_started(), timezone-AWARE) and last_recovery_bundle_at
+        (this route's own _stream(), used to be NAIVE) compared with a
+        bare datetime.fromisoformat() raised TypeError — not the
+        ValueError recovery_bundle_status()'s own try/except actually
+        catches, so it propagated as a 500. Exercised here through both
+        REAL writers, never a hand-built naive string, which is exactly
+        what let the bug through the test suite the first time: 500s on
+        GET /setup/recovery, its "done" POST, and /getting-started, for
+        every admin, from the moment a bundle had actually been
+        downloaded."""
+        from jen.services import setup_wizard
+
+        setup_wizard.mark_started()
+        r = logged_in_client.post(
+            "/settings/databases/recovery-bundle",
+            data={"passphrase": self.PASSPHRASE, "passphrase_confirm": self.PASSPHRASE},
+        )
+        assert r.status_code == 200
+        _ = r.data  # force the streamed body through fully
+
+        status = setup_wizard.recovery_bundle_status()  # must not raise
+        assert status["exists"] is True
+        assert status["fresh"] is True
+
 
 class TestRecoveryBundleKeys:
     """v5.49.0-beta.2 (audit B) - the fallback secret/MFA keys ride as

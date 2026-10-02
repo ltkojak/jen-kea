@@ -56,6 +56,37 @@ class TestParseDuration:
         assert warnings
 
 
+# ── subnet-name sanitizing ───────────────────────────────────────────────────
+
+
+class TestSanitizeSubnetName:
+    """v5.67.0-beta.7 (Q119, item g) — a Windows DHCP scope's display name
+    is free text and can carry a comma (or the other characters
+    jen.config.invalid_subnet_name_reason refuses), which would otherwise
+    raise ValueError deep inside write_subnets_config() AFTER Kea's real
+    config has already been changed. Repaired before it ever gets there."""
+
+    def test_a_clean_name_passes_through_unchanged(self):
+        assert w._sanitize_subnet_name("Office LAN", 5) == "Office LAN"
+
+    def test_a_comma_becomes_a_space(self):
+        assert w._sanitize_subnet_name("Office, Building A", 5) == "Office Building A"
+
+    def test_forbidden_chars_become_spaces_and_collapse(self):
+        assert w._sanitize_subnet_name("Rack[A]=East", 5) == "Rack A East"
+
+    def test_overlong_name_is_truncated(self):
+        name = "x" * 100
+        result = w._sanitize_subnet_name(name, 5)
+        assert len(result) <= 64
+
+    def test_a_name_that_sanitizes_to_nothing_falls_back_to_a_default(self):
+        assert w._sanitize_subnet_name(",,,", 5) == "Subnet5"
+
+    def test_control_characters_are_stripped(self):
+        assert w._sanitize_subnet_name("Office\x07LAN", 5) == "Office LAN"
+
+
 # ── RFC 3442 classless-static-route decoding ────────────────────────────────
 
 

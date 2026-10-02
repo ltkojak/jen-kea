@@ -593,6 +593,59 @@ class TestRecoveryBundleStatus:
         assert status["exists"] is True
         assert status["fresh"] is False
 
+    def test_an_aware_started_against_a_naive_bundle_time_does_not_raise(self, monkeypatch):
+        """v5.67.0-beta.7 (Q119, item f) — the real-world shape: _STARTED_KEY
+        is always written aware (utc_iso()), but a value stored before
+        this fix (or written by code this fix didn't reach) could still be
+        naive. A bare datetime.fromisoformat() comparison between the two
+        raises TypeError, which the try/except here only ever caught as
+        ValueError — this is the exact mismatch that was reproduced as a
+        500 on every admin's /setup/recovery, its "done" POST, and
+        /getting-started."""
+        self._mock_settings(
+            monkeypatch,
+            {
+                setup_wizard._STARTED_KEY: setup_wizard.utc_iso(),
+                "last_recovery_bundle_at": "2099-01-01T00:00:00",  # naive, in the future relative to "now"
+            },
+        )
+        status = setup_wizard.recovery_bundle_status()  # must not raise
+        assert status["exists"] is True
+        assert status["fresh"] is True
+
+
+class TestUtcIsoAndParseUtc:
+    """v5.67.0-beta.7 (Q119, item f) — the one aware-UTC pair every
+    caller that needs to compare against the wizard's own clock uses,
+    replacing the old _utcnow_iso() (which had no matching parser, so
+    every caller rolled its own datetime.fromisoformat() and none of
+    them normalized a naive value to UTC first)."""
+
+    def test_utc_iso_round_trips_through_parse_utc(self):
+        parsed = setup_wizard.parse_utc(setup_wizard.utc_iso())
+        assert parsed.tzinfo is not None
+
+    def test_parse_utc_treats_a_naive_value_as_utc(self):
+        from datetime import timezone
+
+        parsed = setup_wizard.parse_utc("2026-10-01T10:00:00")
+        assert parsed.tzinfo == timezone.utc
+
+    def test_parse_utc_preserves_a_non_utc_aware_offset(self):
+        parsed = setup_wizard.parse_utc("2026-10-01T10:00:00+05:00")
+        assert parsed.utcoffset().total_seconds() == 5 * 3600
+
+    def test_an_aware_and_a_naive_timestamp_compare_without_raising(self):
+        aware = setup_wizard.parse_utc(setup_wizard.utc_iso())
+        naive = setup_wizard.parse_utc("2099-01-01T00:00:00")
+        assert naive > aware  # must not raise TypeError
+
+    def test_parse_utc_still_raises_valueerror_for_genuine_garbage(self):
+        import pytest
+
+        with pytest.raises(ValueError):
+            setup_wizard.parse_utc("not-a-timestamp")
+
 
 # ── the wizard's own clock ───────────────────────────────────────────────────
 

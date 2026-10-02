@@ -57,7 +57,8 @@ Or by hand — **external** database (Jen's own DB lives on a server you run):
 
 ```bash
 cd jen
-cp .env.example .env      # fill in JEN_* (Kea + Jen DB + JEN_INITIAL_ADMIN_PASSWORD)
+cp .env.example .env      # fill in Jen DB + JEN_INITIAL_ADMIN_PASSWORD
+                          # (Kea is optional — leave it blank to connect from /setup)
 docker compose up -d
 ```
 
@@ -65,9 +66,9 @@ docker compose up -d
 
 ```bash
 cd jen
-cp .env.example .env      # fill in the Kea section, MYSQL_ROOT_PASSWORD,
-                          # JEN_MYSQL_PASSWORD, JEN_INITIAL_ADMIN_PASSWORD
-                          # (leave the JEN_DB_* lines blank)
+cp .env.example .env      # fill in MYSQL_ROOT_PASSWORD, JEN_MYSQL_PASSWORD,
+                          # JEN_INITIAL_ADMIN_PASSWORD (leave the JEN_DB_*
+                          # lines blank — Kea is optional too, same as above)
 docker compose -f docker-compose.mysql.yml up -d
 ```
 
