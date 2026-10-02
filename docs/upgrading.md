@@ -215,3 +215,36 @@ What changed, for anyone who uses the wizard from here on:
   reason; the recovery step offers **Continue** once the bundle has
   downloaded. Getting started links a plain administrator only to pages
   an administrator may open (5.67.0-beta.8).
+
+## The installer and uninstaller: what behaves differently
+
+`sudo ./install.sh` (fresh, `--upgrade`, `--repair`) and the in-app
+updater pick all of this up automatically. Nothing needs a manual step,
+but several behaviours that were documented and did not hold now do —
+worth knowing if you script the installer:
+
+- **`JEN_APP_DIR` / `JEN_CONFIG_DIR` / `JEN_DATA_DIR` in an `--answers`
+  file now take effect.** They were silently ignored: an install that asked
+  for a relocated layout through the file alone went to `/opt/jen`. If an
+  answers file of yours carries those keys and you were relying on them
+  being ignored, drop them.
+- **A reinstall keeps the `jen.config` that is already there.** After
+  `uninstall.sh` level 1, `sudo ./install.sh` finds your config and does not
+  rewrite it from the answers file or blank Kea sections; `--configure`
+  rewrites it on purpose. A config or data directory an older uninstall left
+  without a marker is recognised by its content.
+- **`install.sh` decides install versus upgrade from Jen's own record and
+  content, not from whether the directory exists.** A pre-created empty
+  `--app-dir` is a fresh install; a directory holding somebody else's files
+  is refused and left untouched.
+- **`uninstall.sh` uses the checker that ships beside it**, so it works on a
+  box whose installed updater is older (run it from the extracted release
+  tarball). Level 3 now also removes `/usr/local/sbin/jen-update-root.py` and
+  the `jen-update` and `jen-plugin-install` units.
+- **The pre-upgrade backup is the application's own** (the same file the
+  Settings page and the scheduled backup write, into `<data dir>/backups`),
+  says plainly whether it was written, and asks whether to continue if it
+  was not. Kea's own database is not part of it.
+- `--upgrade` and `--repair` no longer need a terminal; the answers parser
+  accepts spaces around `=`, quoted values and `export`; and a layout path
+  under `/root` is refused (5.67.0-beta.9).

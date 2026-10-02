@@ -2,6 +2,92 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.67.0-beta.9] - 2026-10-02
+
+Beta channel. Stacked on 5.67.0-beta.8. The same audit that produced the last
+two betas read the installer and the uninstaller against what they claim to do;
+everything below is something they documented and did not do, or did without
+saying so. Each one is now exercised by the install job against the real
+script, on both Ubuntu releases.
+
+**Layout keys in an answers file were silently ignored.** `install.sh`'s
+header, `--help` and the installation guide all say `JEN_APP_DIR`,
+`JEN_CONFIG_DIR` and `JEN_DATA_DIR` work in an `--answers` file, and they did
+not: the layout was resolved at the top of the script, before the answers file
+had been read, so an install that asked for `/srv/jen/app` went to `/opt/jen`
+and recorded the defaults. The paths now derive from a function that runs
+after the flags, the answers file and the root check, in that order — and not
+at all for `--docker`, which has no layout. (The layout check also used to run
+before the root check; it no longer does.)
+
+**Install versus upgrade was "does the directory exist".** A pre-created empty
+`--app-dir`, which the layout contract allows, was refused as an attempt to
+relocate an existing install; and a directory with somebody else's files in it
+and no layout record was treated as an upgrade, tolerated, then re-owned and
+stamped as Jen's. The decision is the layout checker's now, by the same rule
+the rest of the contract uses: a recorded layout, a marker, or Jen's own
+content. An empty directory is a fresh install; a directory holding anything
+else is refused and left exactly as it was.
+
+**A reinstall rewrote the config it was told it would find.** `uninstall.sh`'s
+first level keeps the config and says a reinstall will detect it. On a box
+whose uninstall predated markers the installer refused its own config
+directory as "not empty and unmarked"; on a marked box it rewrote
+`jen.config` from blank Kea sections. Config and data directories are now
+recognised by their content and stamped when the install completes, and an
+existing `jen.config` is kept unless `--configure` is given — an answers file
+only feeds a *new* config, and says so.
+
+**The uninstaller asked the wrong checker.** It preferred the installed
+updater, which on a 5.66.0 box (or after a rollback to one) answers
+"unrecognized arguments" and stopped every uninstall there. It now uses the
+copy that ships beside it, falls back to the installed one only if that
+answers `--check-layout --help`, and otherwise refuses with a message saying
+what to run — having removed nothing. The third level, "remove everything",
+also removes the root self-updater and its two oneshot units, which it used to
+leave behind.
+
+**`--restore` and `--rollback` ran with half an environment.** They exported
+the application root alone; with only that, the configuration directory is
+derived under it, so every restore printed a reload warning, its sizing pass
+and the rollback snapshot used whatever database the *bundle's* own config
+named, and a legacy writable plugin read as missing. All three directory
+variables are exported on both, and a source test now checks every launch of
+Jen's own code in the installer for the same three together.
+
+**A failed verification skipped the rollback, and a failed fresh install left
+its layout record.** The verification step's three failure exits are now real
+fatals, which is what rolls an upgrade back; and a fresh install writes its
+layout file last, so one that failed halfway cannot make a retry with
+different directories look like a relocation.
+
+**The pre-upgrade backup said "saved" whatever happened.** It was an
+installer-only second implementation: whole databases held in memory, the
+config read with interpolation (a `%` in a password failed it), run as root,
+failures written to a temporary file while the summary printed success. It is
+now the application's own backup primitive — the streamed export with plugin
+tables included and the connection's TLS settings, published atomically with
+its sidecar — run as the service user. It reports exactly what was and was not
+written (Kea's own database is never part of it), a failed backup asks whether
+to continue without one, and an install too old to have the primitive says so
+instead of a second copy quietly standing in for it.
+
+**Smaller, from the same pass.** An answers file may now put spaces around the
+`=`, quote a value, or start a line with `export`, none of which becomes part
+of the value; the database the installer offers to create quotes the password
+as SQL and feeds it on standard input; the admin password reaches the seeding
+step the same way, so it is no longer in a process listing; `umask 022` is set
+so a hardened sudo umask cannot make the virtualenv unreadable to the service
+user; a missing Jen database password in a non-interactive run is a fatal
+error naming it (an explicitly empty one still counts as given); the layout
+grammar is anchored so a trailing newline no longer passes it; and a path
+under `/root` is refused, since the service's home protection hides it.
+
+The install job now also runs a relocated install through its whole life —
+fresh install, an interactive upgrade that must produce a real backup,
+`--repair`, and the uninstaller at every level — asserting at each step that
+nothing was created under the default paths.
+
 ## [5.67.0-beta.8] - 2026-10-02
 
 Beta channel. Stacked on 5.67.0-beta.7. The same audit that produced the
