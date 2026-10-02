@@ -129,6 +129,7 @@ def _direct_kea_conn():
 
     return pymysql.connect(
         host=extensions.KEA_DB_HOST,
+        port=extensions.KEA_DB_PORT,
         user=extensions.KEA_DB_USER,
         password=extensions.KEA_DB_PASS,
         database=extensions.KEA_DB_NAME,
@@ -139,7 +140,12 @@ def _direct_kea_conn():
     )
 
 
-def _direct_conn(host, port, user, password, database):
+def _direct_conn(host, port, user, password, database, ssl_ca=""):
+    """`ssl_ca` (v5.67.0-beta.8, Q120, item g) — empty (every migration target, as before) passes no ssl
+    kwarg at all; the setup wizard's Connect test passes [kea_db] ssl_ca so it tests the connection the
+    pool will actually make."""
+    from jen.models.db import _ssl_kwargs
+
     return pymysql.connect(
         host=host,
         port=int(port),
@@ -149,6 +155,7 @@ def _direct_conn(host, port, user, password, database):
         cursorclass=pymysql.cursors.DictCursor,
         connect_timeout=10,
         charset="utf8mb4",
+        **_ssl_kwargs(ssl_ca),
     )
 
 
@@ -869,10 +876,10 @@ def import_kea(file_bytes, duplicate_mode="skip"):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_connection(host, port, user, password, database):
+def test_connection(host, port, user, password, database, ssl_ca=""):
     """Test a DB connection. Returns (True, info_dict) or (False, error_str)."""
     try:
-        conn = _direct_conn(host, port, user, password, database)
+        conn = _direct_conn(host, port, user, password, database, ssl_ca)
         with conn.cursor() as cur:
             cur.execute("SELECT VERSION() as v")
             ver = cur.fetchone()["v"]

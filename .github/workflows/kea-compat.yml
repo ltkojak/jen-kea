@@ -137,6 +137,7 @@ jobs:
           KEA_COMPAT_VERSION: ${{ matrix.kea }}
           KEA_COMPAT_RESULTS: ${{ github.workspace }}/results/${{ matrix.kea }}.json
           KEA_COMPAT_PKT4_OUT: ${{ github.workspace }}/results/pkt4-${{ matrix.kea }}.json
+          KEA_COMPAT_IDENT_OUT: ${{ github.workspace }}/results/ident-${{ matrix.kea }}.json
         run: python -m pytest tests/kea_compat -m kea_compat -v
 
       - name: Kea log

@@ -674,6 +674,10 @@ def check_kea_helper(server_id):
     res = __host.check_helper(server)
     if res.get("version"):
         flash(f"{server.get('name', server_id)}: jen-kea-helper v{res['version']}.", "success")
+    elif res.get("code") == "unreachable":
+        # v5.67.0-beta.8 (Q120, item a) — Jen never reached the host, so it cannot say whether
+        # the helper is installed; the legacy-path warning below would be a guess.
+        flash(f"{server.get('name', server_id)}: {res['detail']}", "error")
     else:
         flash(
             f"{server.get('name', server_id)}: the helper did not answer — it isn't installed, "
@@ -742,7 +746,15 @@ def install_kea_helper(server_id):
             "you can remove the legacy /etc/sudoers.d/jen-kea (the python3 = root grant).",
             "success",
         )
-    elif res["code"] in ("no-path", "stale", "no-signature", "bad-signature", "no-ssh-keygen", "symlink"):
+    elif res["code"] in (
+        "no-path",
+        "stale",
+        "no-signature",
+        "bad-signature",
+        "no-ssh-keygen",
+        "symlink",
+        "unreachable",
+    ):
         flash(f"{name}: {res['detail']}", "error")
     elif res["code"] == "not-newer":
         # v5.66.0 (Q103) — a benign race (the recorded version was stale), not a real failure.

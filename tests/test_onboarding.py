@@ -46,9 +46,9 @@ def _ctx(**over):
 
 @pytest.fixture(autouse=True)
 def _reset_pill_cache():
-    onboarding._pill_cache[:] = [0.0, (0, 0)]
+    onboarding._pill_cache.clear()
     yield
-    onboarding._pill_cache[:] = [0.0, (0, 0)]
+    onboarding._pill_cache.clear()
 
 
 # ── checklist() — pure ───────────────────────────────────────────────────────
@@ -184,6 +184,28 @@ class TestSetupWizardLinks:
         assert by_title["Kea is reachable"]["link"] == "/setup/connect"
 
 
+class TestSetupLinksAreRoleAware:
+    """v5.67.0-beta.8 (Q120, item h) — /setup/* is superadmin-only; a plain admin was sent to a 403."""
+
+    def test_an_admin_keeps_every_settings_target_while_every_step_is_open(self):
+        summary = onboarding.checklist(_ctx(is_superadmin=False, wizard_state={}))
+        by_title = {r["title"]: r for r in summary["rows"]}
+        assert by_title["Kea is reachable"]["link"] == "/servers"
+        assert by_title["Every subnet is named"]["link"] == "/settings/kea"
+        assert by_title["SSH and the Kea host helper are current"]["link"] == "/settings/kea"
+        assert by_title["A backup exists or is scheduled"]["link"] == "/settings/databases?tab=backups"
+        assert by_title["A recovery bundle exists"]["link"] == "/settings/databases?tab=recovery"
+
+    def test_no_row_an_admin_sees_links_into_setup(self):
+        summary = onboarding.checklist(_ctx(is_superadmin=False, wizard_state={}))
+        assert not [r for r in summary["rows"] if r["link"].startswith("/setup")]
+
+    def test_a_superadmin_still_goes_to_the_open_step(self):
+        summary = onboarding.checklist(_ctx(is_superadmin=True, wizard_state={}))
+        by_title = {r["title"]: r for r in summary["rows"]}
+        assert by_title["Kea is reachable"]["link"] == "/setup/connect"
+
+
 # ── dismiss flag ──────────────────────────────────────────────────────────────
 
 
@@ -232,6 +254,81 @@ class TestCachedPill:
         onboarding.cached_pill(user=object(), is_superadmin=True)
         onboarding.cached_pill(user=object(), is_superadmin=True)
         assert calls["n"] == 1
+
+
+class _U:
+    """The two attributes cached_pill() reads off a user."""
+
+    def __init__(self, role, scope=None):
+        self.role = role
+        self.subnet_access_list = scope
+
+
+class TestPillIsCachedPerRoleAndScope:
+    """v5.67.0-beta.8 (Q120, item o) — one process-wide slot meant whichever user rendered first set
+    everyone's count for the TTL."""
+
+    def _setup(self, monkeypatch):
+        calls = []
+
+        def build(user, is_superadmin):
+            calls.append((user.role, user.subnet_access_list, is_superadmin))
+            ctx = _ctx(is_superadmin=is_superadmin)
+            ctx["checks"]["kea_reachable"] = _check("kea_reachable", "fail")
+            if is_superadmin:  # a superadmin's list carries two more rows, both failing here
+                ctx.update(ssl_configured=False, current_user_has_mfa=False)
+            return ctx
+
+        monkeypatch.setattr(onboarding, "is_dismissed", lambda: False)
+        monkeypatch.setattr(onboarding, "build_ctx", build)
+        return calls
+
+    def test_an_admin_does_not_see_a_superadmins_count_or_the_reverse(self, monkeypatch):
+        self._setup(monkeypatch)
+        sup = onboarding.cached_pill(_U("superadmin"), True)
+        adm = onboarding.cached_pill(_U("admin"), False)
+        assert sup["total"] > adm["total"]
+        assert (sup["total"] - sup["done"]) > (adm["total"] - adm["done"])
+        # and the order does not matter: the admin first, then the superadmin
+        onboarding._pill_cache.clear()
+        adm2 = onboarding.cached_pill(_U("admin"), False)
+        sup2 = onboarding.cached_pill(_U("superadmin"), True)
+        assert (adm2, sup2) == (adm, sup)
+
+    def test_each_scope_is_computed_once_within_the_ttl(self, monkeypatch):
+        calls = self._setup(monkeypatch)
+        for _ in range(3):
+            onboarding.cached_pill(_U("admin"), False)
+            onboarding.cached_pill(_U("superadmin"), True)
+            onboarding.cached_pill(_U("admin", [3, 1]), False)
+        assert len(calls) == 3
+
+    def test_two_users_with_the_same_role_and_scope_share_an_entry(self, monkeypatch):
+        calls = self._setup(monkeypatch)
+        onboarding.cached_pill(_U("admin", [1, 2]), False)
+        onboarding.cached_pill(_U("admin", [2, 1]), False)  # the same set in a different order
+        assert len(calls) == 1
+
+    def test_a_different_subnet_scope_is_a_different_entry(self, monkeypatch):
+        calls = self._setup(monkeypatch)
+        onboarding.cached_pill(_U("admin", [1]), False)
+        onboarding.cached_pill(_U("admin", [2]), False)
+        onboarding.cached_pill(_U("admin", None), False)
+        assert len(calls) == 3
+
+    def test_an_expired_entry_is_recomputed(self, monkeypatch):
+        calls = self._setup(monkeypatch)
+        onboarding.cached_pill(_U("admin"), False)
+        for key, (ts, result) in list(onboarding._pill_cache.items()):
+            onboarding._pill_cache[key] = (ts - onboarding._PILL_CACHE_TTL - 1, result)
+        onboarding.cached_pill(_U("admin"), False)
+        assert len(calls) == 2
+
+    def test_the_cache_is_bounded(self, monkeypatch):
+        self._setup(monkeypatch)
+        for n in range(onboarding._PILL_CACHE_MAX + 20):
+            onboarding.cached_pill(_U("admin", [n]), False)
+        assert len(onboarding._pill_cache) <= onboarding._PILL_CACHE_MAX
 
 
 # ── route ─────────────────────────────────────────────────────────────────────

@@ -1844,3 +1844,170 @@ class TestTailLogHelperOnly:
         monkeypatch.setattr(kea_host, "_legacy_ssh", lambda s, cmd, timeout=30: ("l1\nl2", "", 0))
         res = kea_host.tail_log({"id": 1}, "/var/log/kea/x.log", 200)
         assert res["ok"] is True and res["via"] == "legacy"
+
+
+# ── v5.67.0-beta.8 (Q120, item a) — an SSH connect that fails is a handled failure ────────────
+#
+# Against a REAL local SSH server (paramiko's own, on an ephemeral port, refusing every key) and a
+# closed port, through the real kea6._connect_ssh() — CLAUDE.md "Probe, redirect and TLS behavior is
+# tested against real local servers". The only seam is paramiko's connect() being pointed at the
+# ephemeral port, because Jen always dials 22.
+
+
+class _RefuseEveryKey:
+    """A paramiko ServerInterface that offers publickey and refuses every key — the state of a
+    Kea host whose authorized_keys does not yet hold Jen's key (the normal first try)."""
+
+    @staticmethod
+    def build():
+        import paramiko
+
+        class Refuse(paramiko.ServerInterface):
+            def get_allowed_auths(self, username):
+                return "publickey"
+
+            def check_auth_publickey(self, username, key):
+                return paramiko.AUTH_FAILED
+
+            def check_auth_password(self, username, password):
+                return paramiko.AUTH_FAILED
+
+        return Refuse()
+
+
+@pytest.fixture(scope="module")
+def _rsa_key():
+    paramiko = pytest.importorskip("paramiko")
+    return paramiko.RSAKey.generate(2048)
+
+
+@pytest.fixture
+def local_ssh(monkeypatch, tmp_path, _rsa_key):
+    """Point the real _connect_ssh() at (a) a paramiko server that refuses every key, or (b) a
+    closed port. Returns a small controller: `.refuse()` / `.closed()`."""
+    import socket
+    import threading
+
+    import paramiko
+
+    from jen import extensions
+
+    key_path = tmp_path / "jen_rsa"
+    _rsa_key.write_private_key_file(str(key_path))
+    monkeypatch.setattr(extensions, "SSH_KEY_PATH", str(key_path))
+    monkeypatch.setattr(extensions, "SSH_KNOWN_HOSTS", str(tmp_path / "known_hosts"))
+
+    state = {"port": None, "stop": threading.Event(), "sock": None, "threads": []}
+    real_connect = paramiko.SSHClient.connect
+
+    def connect_to_local(self, hostname, *args, **kwargs):
+        kwargs["port"] = state["port"]
+        return real_connect(self, "127.0.0.1", *args, **kwargs)
+
+    monkeypatch.setattr(paramiko.SSHClient, "connect", connect_to_local)
+
+    class Controller:
+        def refuse(self):
+            sock = socket.socket()
+            sock.bind(("127.0.0.1", 0))
+            sock.listen(5)
+            sock.settimeout(0.2)
+            state["sock"], state["port"] = sock, sock.getsockname()[1]
+
+            def one(client):
+                transport = paramiko.Transport(client)
+                transport.add_server_key(_rsa_key)
+                try:
+                    transport.start_server(server=_RefuseEveryKey.build())
+                    transport.join(timeout=10)
+                except Exception:
+                    pass
+                finally:
+                    transport.close()
+
+            def serve():
+                while not state["stop"].is_set():
+                    try:
+                        client, _addr = sock.accept()
+                    except OSError:
+                        continue
+                    t = threading.Thread(target=one, args=(client,), daemon=True)
+                    t.start()
+                    state["threads"].append(t)
+
+            threading.Thread(target=serve, daemon=True).start()
+
+        def closed(self):
+            sock = socket.socket()
+            sock.bind(("127.0.0.1", 0))
+            state["port"] = sock.getsockname()[1]
+            sock.close()
+
+    yield Controller()
+    state["stop"].set()
+    if state["sock"] is not None:
+        state["sock"].close()
+
+
+class TestAnSshConnectFailureIsAHandledFailure:
+    def test_helper_call_names_who_and_where_and_why(self, local_ssh):
+        local_ssh.refuse()
+        with pytest.raises(kea_host.HelperUnreachable) as exc:
+            kea_host.helper_call(SERVER, "version", {})
+        msg = str(exc.value)
+        assert "SSH to kea@10.0.0.5 failed" in msg
+        # paramiko reports a refused key as whichever of its key-type attempts failed last, so the
+        # exception's own name varies; the hint is what carries the meaning
+        assert "SSHException" in msg or "AuthenticationException" in msg
+        assert "authorized_keys" in msg
+        assert isinstance(exc.value, kea_host.HelperError)
+
+    def test_a_closed_port_is_the_same_kind_of_failure(self, local_ssh):
+        local_ssh.closed()
+        with pytest.raises(kea_host.HelperUnreachable) as exc:
+            kea_host.helper_call(SERVER, "version", {})
+        assert "SSH to kea@10.0.0.5 failed" in str(exc.value)
+        assert "authorized_keys" not in str(exc.value)
+
+    def test_read_config_versioned_returns_nothing_instead_of_raising(self, local_ssh, quiet_status):
+        local_ssh.refuse()
+        assert kea_host.read_config_versioned(SERVER, "dhcp4") == (None, None)
+        assert kea_host.read_config(SERVER, "dhcp4") is None
+
+    def test_read_config_explains_why_when_asked(self, local_ssh, quiet_status):
+        local_ssh.refuse()
+        why = []
+        assert kea_host.read_config_versioned(SERVER, "dhcp4", errors=why) == (None, None)
+        assert len(why) == 1 and why[0].startswith("SSH to kea@10.0.0.5 failed")
+
+    def test_check_helper_says_unreachable_and_does_not_claim_the_helper_is_absent(self, local_ssh, monkeypatch):
+        local_ssh.refuse()
+        recorded = []
+        monkeypatch.setattr(kea_host, "record_helper_status", lambda *a, **k: recorded.append(a))
+        res = kea_host.check_helper(SERVER)
+        assert res["ok"] is False and res["code"] == "unreachable"
+        assert "SSH to kea@10.0.0.5 failed" in res["detail"]
+        assert recorded == [], "a host Jen never reached must not be recorded as having no helper"
+
+    def test_install_helper_reports_the_connection_not_the_sudo_grant(self, local_ssh, monkeypatch):
+        local_ssh.refuse()
+        monkeypatch.setattr(kea_host, "_helper_source", lambda: "HELPER_VERSION = 7\nHELPER_BUILD = 9\n")
+        monkeypatch.setattr(kea_host, "record_helper_status", lambda *a, **k: None)
+        res = kea_host.install_helper(SERVER)
+        assert res["ok"] is False and res["code"] == "unreachable"
+        assert "SSH to kea@10.0.0.5 failed" in res["detail"]
+        assert "legacy" not in res["detail"]
+
+    def test_no_ssh_host_is_refused_before_paramiko_is_asked_to_connect(self, monkeypatch):
+        def never(server):
+            raise AssertionError("an empty host resolves to this very machine — never dial it")
+
+        monkeypatch.setattr(getattr(kea_host, "__kea6"), "_connect_ssh", never)
+        for host in ("", "   ", None):
+            with pytest.raises(kea_host.HelperUnreachable) as exc:
+                kea_host.helper_call({"id": 1, "name": "kea-a", "ssh_host": host}, "version", {})
+            assert "no SSH host configured" in str(exc.value)
+
+    def test_every_caller_that_catches_helper_error_now_catches_this_too(self):
+        assert issubclass(kea_host.HelperUnreachable, kea_host.HelperError)
+        assert not issubclass(kea_host.HelperUnreachable, kea_host.HelperMissing)

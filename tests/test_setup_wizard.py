@@ -512,7 +512,19 @@ class TestHelperWrappers:
     def test_install_helper_step_passes_through_install_helper(self, monkeypatch):
         sentinel = {"ok": False, "version": None, "code": "sudoerror", "detail": "no dice"}
         monkeypatch.setattr("jen.services.kea_host.install_helper", lambda server: sentinel)
-        assert setup_wizard.install_helper_step({"id": 1}) is sentinel
+        assert setup_wizard.install_helper_step(_SSH_SERVER) is sentinel
+
+    def test_install_helper_step_refuses_without_an_ssh_target(self, monkeypatch):
+        """v5.67.0-beta.8 (Q120, item a) — nothing to connect to, so nothing is attempted."""
+
+        def never(server):
+            raise AssertionError("must not reach kea_host without an SSH host and user")
+
+        monkeypatch.setattr("jen.services.kea_host.install_helper", never)
+        for server in ({"id": 1}, {"id": 1, "ssh_host": "kea.lan"}, {"id": 1, "ssh_user": "jen"}):
+            result = setup_wizard.install_helper_step(server)
+            assert result["ok"] is False and result["code"] == "no-ssh"
+            assert result["detail"] == setup_wizard.NO_SSH_TARGET
 
     def test_helper_download_command_passes_through(self, monkeypatch):
         monkeypatch.setattr("jen.services.kea_host._helper_download_command", lambda: "curl ... | sudo bash")
@@ -522,19 +534,42 @@ class TestHelperWrappers:
 # ── step 4: baseline — mocked ────────────────────────────────────────────────
 
 
+_SSH_SERVER = {"id": 1, "name": "kea-a", "ssh_host": "kea.lan", "ssh_user": "jen"}
+
+
 class TestCaptureBaseline:
     def test_unreadable_config_is_reported_not_raised(self, monkeypatch):
-        monkeypatch.setattr("jen.services.kea_host.read_config", lambda server, service: None)
-        result = setup_wizard.capture_baseline({"id": 1}, "dhcp4")
-        assert result == {"ok": False, "revision": None}
+        monkeypatch.setattr("jen.services.kea_host.read_config", lambda server, service, errors=None: None)
+        result = setup_wizard.capture_baseline(_SSH_SERVER, "dhcp4")
+        assert result["ok"] is False and result["revision"] is None
+        assert "SSH" in result["detail"]
+
+    def test_the_transports_own_reason_is_what_the_operator_reads(self, monkeypatch):
+        def read(server, service, errors=None):
+            errors.append("SSH to jen@kea.lan failed — OSError: refused")
+
+        monkeypatch.setattr("jen.services.kea_host.read_config", read)
+        result = setup_wizard.capture_baseline(_SSH_SERVER, "dhcp4")
+        assert result["detail"] == "SSH to jen@kea.lan failed — OSError: refused"
 
     def test_a_readable_config_returns_the_latest_revision(self, monkeypatch):
-        monkeypatch.setattr("jen.services.kea_host.read_config", lambda server, service: {"Dhcp4": {}})
+        monkeypatch.setattr("jen.services.kea_host.read_config", lambda server, service, errors=None: {"Dhcp4": {}})
         monkeypatch.setattr(
             "jen.services.config_revisions.latest", lambda server_id, service: {"id": 1, "source": "baseline"}
         )
-        result = setup_wizard.capture_baseline({"id": 1}, "dhcp4")
-        assert result == {"ok": True, "revision": {"id": 1, "source": "baseline"}}
+        result = setup_wizard.capture_baseline(_SSH_SERVER, "dhcp4")
+        assert result == {"ok": True, "revision": {"id": 1, "source": "baseline"}, "detail": ""}
+
+    def test_refuses_early_without_an_ssh_host(self, monkeypatch):
+        """v5.67.0-beta.8 (Q120, item a) — "Skip" on the helper step, then "Capture baseline"."""
+
+        def never(server, service, errors=None):
+            raise AssertionError("must not read a config with no SSH host to read it from")
+
+        monkeypatch.setattr("jen.services.kea_host.read_config", never)
+        result = setup_wizard.capture_baseline({"id": 1, "ssh_host": "", "ssh_user": ""}, "dhcp4")
+        assert result["ok"] is False
+        assert result["detail"] == setup_wizard.NO_SSH_TARGET
 
 
 # ── step 5: recovery point ───────────────────────────────────────────────────
@@ -664,6 +699,57 @@ class TestWizardClock:
         monkeypatch.setattr("jen.models.user.get_global_setting", lambda key, default="": "")
         assert setup_wizard.elapsed_seconds() is None
 
+    def _store(self, monkeypatch, seed=None):
+        store = dict(seed or {})
+        monkeypatch.setattr("jen.models.user.get_global_setting", lambda key, default="": store.get(key, default))
+        monkeypatch.setattr("jen.models.user.set_global_setting", lambda key, value: store.__setitem__(key, value))
+        return store
+
+    def test_the_completion_time_is_stored_when_the_last_step_resolves(self, monkeypatch):
+        """v5.67.0-beta.8 (Q120, item j)."""
+        store = self._store(monkeypatch)
+        for step in setup_wizard.STEPS[:-1]:
+            setup_wizard.set_step(step, "done")
+        assert setup_wizard._COMPLETED_KEY not in store
+        setup_wizard.set_step(setup_wizard.STEPS[-1], "skipped")
+        assert setup_wizard.parse_utc(store[setup_wizard._COMPLETED_KEY])
+
+    def test_a_later_revisit_does_not_move_the_completion_time(self, monkeypatch):
+        store = self._store(monkeypatch)
+        for step in setup_wizard.STEPS:
+            setup_wizard.set_step(step, "done")
+        first = store[setup_wizard._COMPLETED_KEY]
+        setup_wizard.set_step(setup_wizard.STEPS[0], "skipped")
+        assert store[setup_wizard._COMPLETED_KEY] == first
+
+    def test_a_finished_wizard_reports_its_own_duration_not_the_time_since(self, monkeypatch):
+        """The bug: "took N minutes" grew forever, measured to now."""
+        self._store(
+            monkeypatch,
+            {
+                setup_wizard._STARTED_KEY: "2026-01-01T10:00:00+00:00",
+                setup_wizard._COMPLETED_KEY: "2026-01-01T10:42:30+00:00",
+            },
+        )
+        assert setup_wizard.elapsed_seconds() == 42 * 60 + 30
+
+    def test_an_unfinished_wizard_still_measures_to_now(self, monkeypatch):
+        from datetime import datetime, timedelta, timezone
+
+        started = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+        self._store(monkeypatch, {setup_wizard._STARTED_KEY: started})
+        assert 5 * 60 <= setup_wizard.elapsed_seconds() < 5 * 60 + 30
+
+    def test_an_unreadable_completion_time_falls_back_to_now(self, monkeypatch):
+        from datetime import datetime, timedelta, timezone
+
+        started = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+        self._store(
+            monkeypatch,
+            {setup_wizard._STARTED_KEY: started, setup_wizard._COMPLETED_KEY: "not a time"},
+        )
+        assert 2 * 60 <= setup_wizard.elapsed_seconds() < 2 * 60 + 30
+
     def test_get_state_never_starts_the_clock(self, monkeypatch):
         """get_state() is called by onboarding.checklist() on every page
         load — it must never have the side effect mark_started() has."""
@@ -751,6 +837,53 @@ class TestInvestigateVisitRedirect:
         assert r.status_code == 302
         assert "/setup/investigate" in r.headers["Location"]
         assert "/client" not in r.headers["Location"]
+
+
+class TestSshFailuresAreNotA500:
+    """v5.67.0-beta.8 (Q120, item a) — "Skip" on the helper step, then "Capture baseline" (no SSH host), and
+    "Install the helper" before the key is authorised (the normal first try) both used to propagate a
+    paramiko or socket exception out of the route."""
+
+    def _server(self, monkeypatch, **over):
+        server = {"id": 1, "name": "kea-a", "ssh_host": "", "ssh_user": "", **over}
+        monkeypatch.setattr(setup_wizard, "primary_server", lambda: server)
+        return server
+
+    def test_capture_baseline_with_no_ssh_host_says_so(self, logged_in_client, db, monkeypatch):
+        self._server(monkeypatch)
+        r = logged_in_client.post("/setup/baseline", data={}, follow_redirects=True)
+        assert r.status_code == 200
+        assert b"Set the SSH host and user" in r.data
+
+    def test_capture_baseline_over_a_refused_connection_names_the_connection(self, logged_in_client, db, monkeypatch):
+        self._server(monkeypatch, ssh_host="kea.lan", ssh_user="jen")
+
+        def refused(server):
+            raise OSError("Connection refused")
+
+        monkeypatch.setattr("jen.services.kea6._connect_ssh", refused)
+        r = logged_in_client.post("/setup/baseline", data={}, follow_redirects=True)
+        assert r.status_code == 200
+        assert b"SSH to jen@kea.lan failed" in r.data
+
+    def test_install_the_helper_before_the_key_is_authorised_is_a_message_not_a_500(
+        self, logged_in_client, db, monkeypatch
+    ):
+        self._server(monkeypatch, ssh_host="kea.lan", ssh_user="jen")
+
+        def refused(server):
+            raise OSError("Authentication failed.")
+
+        monkeypatch.setattr("jen.services.kea6._connect_ssh", refused)
+        r = logged_in_client.post("/setup/helper", data={"action": "install"}, follow_redirects=True)
+        assert r.status_code == 200
+        assert b"SSH to jen@kea.lan failed" in r.data
+
+    def test_install_the_helper_with_no_ssh_target_says_so(self, logged_in_client, db, monkeypatch):
+        self._server(monkeypatch)
+        r = logged_in_client.post("/setup/helper", data={"action": "install"}, follow_redirects=True)
+        assert r.status_code == 200
+        assert b"Set the SSH host and user" in r.data
 
 
 # ── the one-time entry redirect ─────────────────────────────────────────────

@@ -76,6 +76,7 @@ KEA_DB_HOST: str = ""
 KEA_DB_USER: str = ""
 KEA_DB_PASS: str = ""
 KEA_DB_NAME: str = "kea"
+KEA_DB_PORT: int = 3306  # v5.67.0-beta.8 (Q120, item g) — [kea_db] port; the pool used to dial 3306 whatever was typed
 KEA_DB_SSL_CA: str = ""  # v4.4.5 — path to CA cert; empty = plaintext (unchanged default)
 
 JEN_DB_HOST: str = ""
@@ -126,6 +127,7 @@ KEA6_DB_HOST: str = ""
 KEA6_DB_USER: str = ""
 KEA6_DB_PASS: str = ""
 KEA6_DB_NAME: str = ""
+KEA6_DB_PORT: int = 3306
 KEA6_DB_SSL_CA: str = ""
 
 # ── D2 / kea-dhcp-ddns control socket (v5.23.0, Q19) ──────────────────────────

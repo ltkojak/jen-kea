@@ -17,6 +17,7 @@ not a new table, since six small booleans don't need one.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 from urllib.parse import urlparse
@@ -28,6 +29,7 @@ STEPS = ("connect", "found", "helper", "baseline", "recovery", "investigate")
 _STATE_KEY = "setup_wizard_state"
 _REDIRECT_SHOWN_KEY = "setup_wizard_redirect_shown"
 _STARTED_KEY = "setup_wizard_started_at"
+_COMPLETED_KEY = "setup_wizard_completed_at"
 
 
 # ── step state ────────────────────────────────────────────────────────────────
@@ -96,8 +98,13 @@ def mark_started() -> None:
 
 
 def elapsed_seconds() -> int | None:
-    """How long ago mark_started() first ran — None if /setup hasn't been
-    opened yet this install."""
+    """How long the first hour took: from mark_started() to the moment the
+    LAST step resolved (set_step() stores that), or — while a step is still
+    open — to now. None if /setup hasn't been opened yet this install.
+
+    v5.67.0-beta.8 (Q120, item j) — this used to measure to "now" always, so
+    a finished wizard's "took N minutes" grew every time the page was
+    revisited, a week later reading "took 10080 minutes"."""
     from datetime import datetime, timezone
 
     from jen.models.user import get_global_setting
@@ -107,9 +114,15 @@ def elapsed_seconds() -> int | None:
         return None
     try:
         start = parse_utc(started)
-        return max(0, int((datetime.now(timezone.utc) - start).total_seconds()))
     except ValueError:
         return None
+    end = datetime.now(timezone.utc)
+    completed = get_global_setting(_COMPLETED_KEY, "")
+    if completed:
+        # an unreadable stored time falls back to measuring to now, as before
+        with contextlib.suppress(ValueError):
+            end = parse_utc(completed)
+    return max(0, int((end - start).total_seconds()))
 
 
 def set_step(step: str, status: str) -> None:
@@ -122,9 +135,15 @@ def set_step(step: str, status: str) -> None:
         raise ValueError(f"unknown setup step: {step!r}")
     if status not in ("done", "skipped"):
         raise ValueError(f"unknown setup status: {status!r}")
+    from jen.models.user import get_global_setting
+
     state = get_state()
     state[step] = status
     set_global_setting(_STATE_KEY, json.dumps(state))
+    # v5.67.0-beta.8 (Q120, item j) — the moment the last step resolves is the end of the first hour;
+    # stored once, never overwritten by a later revisit.
+    if all(name in state for name in STEPS) and not get_global_setting(_COMPLETED_KEY, ""):
+        set_global_setting(_COMPLETED_KEY, utc_iso())
 
 
 def current_step() -> str:
@@ -469,6 +488,9 @@ def ssh_target_ready(server: dict) -> bool:
     return bool(server.get("ssh_host") and server.get("ssh_user"))
 
 
+NO_SSH_TARGET = "Set the SSH host and user for this Kea server first (the helper step) — Jen has nowhere to connect."
+
+
 def save_ssh_target(host: str, user: str) -> tuple[bool, str]:
     """Validate and write [kea_ssh] host/user — the same validators and
     the same app_config.write_values choke point
@@ -513,9 +535,17 @@ def install_helper_step(server: dict) -> dict:
     the legacy-sudo-grant bootstrap, a stale sudoers override, and the
     by-hand fallback command on its own), so the route surfaces it
     verbatim rather than re-deriving kea_host.install_helper()'s many
-    branches here."""
+    branches here.
+
+    v5.67.0-beta.8 (Q120, item a) — refused up front without an SSH host
+    and user (the step's own "save target" form is what sets them), and a
+    connection that cannot be opened (the key not yet authorised — the
+    normal first try) comes back as code "unreachable" with the transport's
+    own wording, never as an exception out of the route."""
     from jen.services import kea_host as __kea_host
 
+    if not ssh_target_ready(server):
+        return {"ok": False, "version": None, "code": "no-ssh", "detail": NO_SSH_TARGET}
     return __kea_host.install_helper(server)
 
 
@@ -536,14 +566,27 @@ def capture_baseline(server: dict, service: str = "dhcp4") -> dict:
     """Reading a live config IS how Jen records a baseline revision
     (kea_host.read_config -> _capture_baseline_or_external_change) —
     there's no separate "create baseline" action to call. Returns
-    {"ok": bool, "revision": dict|None}."""
+    {"ok": bool, "revision": dict|None, "detail": str}.
+
+    v5.67.0-beta.8 (Q120, item a) — refuses early without an SSH host and
+    user: "Skip" on the helper step, then "Capture baseline", used to reach
+    an SSH connect with nothing to connect to."""
     from jen.services import config_revisions as __rev
     from jen.services import kea_host as __kea_host
 
-    cfg = __kea_host.read_config(server, service)
+    if not ssh_target_ready(server):
+        return {"ok": False, "revision": None, "detail": NO_SSH_TARGET}
+    why: list[str] = []
+    cfg = __kea_host.read_config(server, service, errors=why)
     if cfg is None:
-        return {"ok": False, "revision": None}
-    return {"ok": True, "revision": __rev.latest(server.get("id"), service)}
+        return {
+            "ok": False,
+            "revision": None,
+            "detail": why[0]
+            if why
+            else "Could not read Kea's config over SSH — check the helper step above (host, user, and the helper itself).",
+        }
+    return {"ok": True, "revision": __rev.latest(server.get("id"), service), "detail": ""}
 
 
 # ── step 5: recovery point ───────────────────────────────────────────────────

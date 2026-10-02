@@ -37,6 +37,23 @@ from jen import extensions
 logger = logging.getLogger(__name__)
 
 
+def _db_port(cfg, section: str, default: int) -> int:
+    """`[kea_db] port` / `[kea6_db] port` → a TCP port (v5.67.0-beta.8, Q120, item g). Absent → `default`;
+    a value that is not 1-65535 is logged and ignored rather than raised — apply() must not raise on a
+    working config, and a typo here must not stop the app booting."""
+    raw = cfg.get(section, "port", fallback="").strip()
+    if not raw:
+        return default
+    try:
+        port = int(raw)
+    except ValueError:
+        port = 0
+    if not 1 <= port <= 65535:
+        logger.warning(f"[{section}] port: {raw!r} is not a valid port — using {default}")
+        return default
+    return port
+
+
 def _parse_update_channel(raw: str) -> str:
     """`[updates] channel` → "stable" | "beta". Unknown → "stable" with a
     warning (v5.32.0, Q38)."""
@@ -240,6 +257,7 @@ class AppConfig:
         extensions.KEA_DB_USER = cfg.get("kea_db", "user")
         extensions.KEA_DB_PASS = cfg.get("kea_db", "password")
         extensions.KEA_DB_NAME = cfg.get("kea_db", "database", fallback="kea")
+        extensions.KEA_DB_PORT = _db_port(cfg, "kea_db", 3306)
         extensions.KEA_DB_SSL_CA = cfg.get("kea_db", "ssl_ca", fallback="")
 
         extensions.JEN_DB_HOST = cfg.get("jen_db", "host")
@@ -298,6 +316,7 @@ class AppConfig:
         extensions.KEA6_DB_USER = cfg.get("kea6_db", "user", fallback=extensions.KEA_DB_USER)
         extensions.KEA6_DB_PASS = cfg.get("kea6_db", "password", fallback=extensions.KEA_DB_PASS)
         extensions.KEA6_DB_NAME = cfg.get("kea6_db", "database", fallback=extensions.KEA_DB_NAME)
+        extensions.KEA6_DB_PORT = _db_port(cfg, "kea6_db", extensions.KEA_DB_PORT)
         extensions.KEA6_DB_SSL_CA = cfg.get("kea6_db", "ssl_ca", fallback=extensions.KEA_DB_SSL_CA)
 
         # v5.23.0 (Q19) — D2's own control socket, same ca/direct fallback

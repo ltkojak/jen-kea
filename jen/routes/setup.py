@@ -359,7 +359,7 @@ def setup_baseline():
         flash(f"Baseline captured{v6_note}.", "success")
         __setup.set_step("baseline", "done")
         return redirect(url_for("setup.setup_recovery"))
-    flash("Could not read Kea's config — check the helper step above.", "error")
+    flash(result["detail"], "error")
     return redirect(url_for("setup.setup_baseline"))
 
 

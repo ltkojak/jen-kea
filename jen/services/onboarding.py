@@ -15,7 +15,11 @@ import time
 
 _DISMISSED_KEY = "getting_started_dismissed"
 _PILL_CACHE_TTL = 300  # seconds — the nav pill must never trigger a Kea round trip per page load.
-_pill_cache: list = [0.0, (0, 0)]
+_PILL_CACHE_MAX = 64  # distinct (role, scope) keys kept — a handful in practice; the bound is only a ceiling.
+# v5.67.0-beta.8 (Q120, item o) — {(role, is_superadmin, subnet scope): (computed_at, (done, total))}. This
+# used to be ONE process-wide slot, filled by whichever user rendered first, so an admin saw a superadmin's
+# count (the superadmin-only HTTPS and MFA rows are in it) — or the reverse — for the whole TTL.
+_pill_cache: dict = {}
 
 
 def _from_check(rows: list, checks: dict, check_id: str, title: str, link: str, ok_statuses=("ok",)) -> None:
@@ -60,8 +64,12 @@ def checklist(ctx: dict) -> dict:
     # page it would otherwise land on; once that step is resolved the link
     # reverts to its usual target. wizard_open() is pure (get_state() does
     # one settings read, no side effect), safe to call on every page load.
+    # v5.67.0-beta.8 (Q120, item h) — /setup/* is superadmin-only (routes/setup.py), so a plain admin
+    # is only ever sent to the Settings page the row would have linked to anyway.
     def _link(step: str, fallback: str) -> str:
-        return fallback if step in ctx.get("wizard_state", {}) else f"/setup/{step}"
+        if not ctx.get("is_superadmin") or step in ctx.get("wizard_state", {}):
+            return fallback
+        return f"/setup/{step}"
 
     _from_check(rows, checks, "kea_reachable", "Kea is reachable", _link("connect", "/servers"))
     _from_check(rows, checks, "kea_subnets_declared", "Every subnet is named", _link("found", "/settings/kea"))
@@ -206,20 +214,36 @@ def dismiss() -> None:
     set_global_setting(_DISMISSED_KEY, "true")
 
 
+def _pill_key(user, is_superadmin: bool) -> tuple:
+    """What a pill's number depends on: the role (a superadmin's list has the HTTPS and MFA rows, an
+    admin's does not), and the subnet scope (the checks it counts are filtered through the user's own
+    subnet access). Two users with the same role and the same scope see the same number."""
+    scope = getattr(user, "subnet_access_list", None)
+    if scope is not None:
+        try:
+            scope = tuple(sorted(int(s) for s in scope))
+        except (TypeError, ValueError):
+            scope = (-1,)
+    return (str(getattr(user, "role", "")), bool(is_superadmin), scope)
+
+
 def cached_pill(user, is_superadmin: bool) -> dict | None:
     """`{"done": n, "total": m}` for the nav pill, or None when dismissed
     or complete. Refreshed at most once per `_PILL_CACHE_TTL` seconds per
-    process — the page itself (build_ctx + checklist) always recomputes."""
+    process *per role and subnet scope* (`_pill_key`) — the page itself
+    (build_ctx + checklist) always recomputes."""
     if is_dismissed():
         return None
     now = time.time()
-    ts, result = _pill_cache
-    if now - ts > _PILL_CACHE_TTL:
+    key = _pill_key(user, is_superadmin)
+    hit = _pill_cache.get(key)
+    if hit is None or now - hit[0] > _PILL_CACHE_TTL:
         summary = checklist(build_ctx(user, is_superadmin))
-        result = (summary["done"], summary["total"])
-        _pill_cache[0] = now
-        _pill_cache[1] = result
-    done, total = result
+        hit = (now, (summary["done"], summary["total"]))
+        if key not in _pill_cache and len(_pill_cache) >= _PILL_CACHE_MAX:
+            _pill_cache.pop(min(_pill_cache, key=lambda k: _pill_cache[k][0]))
+        _pill_cache[key] = hit
+    done, total = hit[1]
     if total == 0 or done >= total:
         return None
     return {"done": done, "total": total}

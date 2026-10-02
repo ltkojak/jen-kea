@@ -78,6 +78,56 @@ def test_ha_heartbeat_on_a_non_ha_server_is_an_error():
     assert reply.get("text"), reply
 
 
+def _daemon_probe(command, **kwargs):
+    """One command against the daemon's own control socket, never raising:
+    (result code or None, the reply's top-level argument keys, text)."""
+    url = os.environ["KEA_COMPAT_URL"]
+    user = os.environ.get("KEA_COMPAT_USER", "")
+    pwd = os.environ.get("KEA_COMPAT_PASS", "")
+    # probe_command() folds a non-zero result into (None, text); the reply's
+    # own code is what this probe records, so it posts directly.
+    resp = __kea.http.post(
+        url,
+        json={"command": command, **kwargs},
+        auth=(user, pwd),
+        timeout=8,
+    )
+    data = resp.json()
+    reply = data[0] if isinstance(data, list) else data
+    return {
+        "http": resp.status_code,
+        "result": reply.get("result"),
+        "argument_keys": sorted(reply.get("arguments") or {}),
+        "text": (reply.get("text") or "")[:120],
+    }
+
+
+def test_a_daemon_identifies_itself_with_or_without_a_service_field():
+    """Q120 (b), verify-first — the setup wizard recorded any answer to a
+    command carrying `service: ["dhcp4"]` as Control Agent mode, so a
+    daemon's own control socket (Kea 3.2 has no Control Agent at all) was
+    saved as "ca". The wizard now decides the mode the way Settings does:
+    a direct-style config-get (no `service`) and the reply's single
+    top-level key — "Dhcp4" for a daemon, "Control-agent" for a CA. This
+    records what each version really answers to the four shapes the
+    decision rests on (results/ident-<version>.json) and asserts only the
+    one the decision depends on."""
+    seen = {
+        "version_get_with_service": _daemon_probe("version-get", service=["dhcp4"]),
+        "config_get_with_service": _daemon_probe("config-get", service=["dhcp4"]),
+        "config_get_without_service": _daemon_probe("config-get"),
+        "version_get_service_names_another_daemon": _daemon_probe("version-get", service=["dhcp6"]),
+        "list_commands_without_service": _daemon_probe("list-commands"),
+    }
+    out = os.environ.get("KEA_COMPAT_IDENT_OUT")
+    if out:
+        with open(out, "w") as fh:
+            json.dump(seen, fh, indent=2)
+    bare = seen["config_get_without_service"]
+    assert bare["result"] == 0, seen
+    assert "Dhcp4" in bare["argument_keys"], seen
+
+
 def test_derived_capabilities_match_the_real_daemon():
     """v5.64.0 (Q83) — jen.services.capabilities derives what a server can do
     from what it reports; here the derivation is checked against the

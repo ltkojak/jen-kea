@@ -82,6 +82,7 @@ def _make_kea_pool():
         blocking=True,
         ping=1,
         host=extensions.KEA_DB_HOST,
+        port=extensions.KEA_DB_PORT,
         user=extensions.KEA_DB_USER,
         password=extensions.KEA_DB_PASS,
         database=extensions.KEA_DB_NAME,
@@ -136,6 +137,7 @@ def get_kea_db() -> pymysql.connections.Connection:
                     logger.warning(f"Kea DB pool failed, using direct connections: {e}")
                     return pymysql.connect(
                         host=extensions.KEA_DB_HOST,
+                        port=extensions.KEA_DB_PORT,
                         user=extensions.KEA_DB_USER,
                         password=extensions.KEA_DB_PASS,
                         database=extensions.KEA_DB_NAME,
@@ -164,6 +166,7 @@ def _kea6_targets_same_db() -> bool:
     case per Phase 0 research (theelders would run both on one server)."""
     return (
         extensions.KEA6_DB_HOST == extensions.KEA_DB_HOST
+        and extensions.KEA6_DB_PORT == extensions.KEA_DB_PORT
         and extensions.KEA6_DB_USER == extensions.KEA_DB_USER
         and extensions.KEA6_DB_PASS == extensions.KEA_DB_PASS
         and extensions.KEA6_DB_NAME == extensions.KEA_DB_NAME
@@ -183,6 +186,7 @@ def _make_kea6_pool():
         blocking=True,
         ping=1,
         host=extensions.KEA6_DB_HOST,
+        port=extensions.KEA6_DB_PORT,
         user=extensions.KEA6_DB_USER,
         password=extensions.KEA6_DB_PASS,
         database=extensions.KEA6_DB_NAME,
@@ -214,6 +218,7 @@ def get_kea6_db() -> pymysql.connections.Connection:
                     logger.warning(f"Kea6 DB pool failed, using direct connections: {e}")
                     return pymysql.connect(
                         host=extensions.KEA6_DB_HOST,
+                        port=extensions.KEA6_DB_PORT,
                         user=extensions.KEA6_DB_USER,
                         password=extensions.KEA6_DB_PASS,
                         database=extensions.KEA6_DB_NAME,
@@ -289,25 +294,46 @@ def kea6_db():
         db.close()
 
 
+def _drop_pool(pool) -> None:
+    """Close a pool's idle connections (PooledDB.close()), falling back to forgetting them. The
+    original reset only cleared `_idle_cache`, which drops the references without closing the
+    sockets — the server saw them idle until its own timeout."""
+    with suppress(Exception):
+        pool.close()
+        return
+    with suppress(Exception):
+        pool._idle_cache.clear()
+
+
+def reset_kea_pools() -> None:
+    """Tear down the Kea (and Kea6) pools only, so the next kea_db()/kea6_db() dials whatever
+    extensions.KEA_DB_* / KEA6_DB_* now say — host, port, credentials and ssl_ca alike. v5.67.0-beta.8
+    (Q120, item g) — the setup wizard's Connect step saves new Kea database settings through
+    app_config.write_values(), which re-derives the extensions globals but does not touch a pool that
+    already exists; a pool created while the config still held placeholders kept dialling them until a
+    restart. Jen's own pool is left alone: this changes nothing about it."""
+    global _kea_pool, _kea6_pool
+    with _pool_lock:
+        if _kea_pool is not None:
+            _drop_pool(_kea_pool)
+            _kea_pool = None
+        if _kea6_pool is not None:
+            _drop_pool(_kea6_pool)
+            _kea6_pool = None
+    logger.info("Kea DB connection pools reset")
+
+
 def reset_pools() -> None:
     """
     Tear down and recreate all connection pools (jen, kea, kea6).
     Called after config changes that update DB credentials or host.
     """
-    global _jen_pool, _kea_pool, _kea6_pool
+    global _jen_pool
     with _pool_lock:
         if _jen_pool is not None:
-            with suppress(Exception):
-                _jen_pool._idle_cache.clear()
+            _drop_pool(_jen_pool)
             _jen_pool = None
-        if _kea_pool is not None:
-            with suppress(Exception):
-                _kea_pool._idle_cache.clear()
-            _kea_pool = None
-        if _kea6_pool is not None:
-            with suppress(Exception):
-                _kea6_pool._idle_cache.clear()
-            _kea6_pool = None
+    reset_kea_pools()
     logger.info("DB connection pools reset")
 
 

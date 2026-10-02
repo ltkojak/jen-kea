@@ -77,6 +77,51 @@ class HelperError(Exception):
     """The helper ran but returned nothing usable."""
 
 
+class HelperUnreachable(HelperError):
+    """No SSH session could be opened to the host at all (v5.67.0-beta.8, Q120, item a) — a
+    HelperError, so every caller that already treats "the helper gave nothing usable" as a
+    handled failure (read_config_versioned, check_helper, the apply paths) now handles this too;
+    a subclass, so the few that can say something better (the setup wizard, Settings) tell
+    "we never reached the host" from "the host answered badly". Its text is already a complete
+    sentence naming who Jen tried to be and where."""
+
+
+def _open_ssh(server: dict):
+    """The one place a kea_host call opens its SSH session. v5.67.0-beta.8 (Q120, item a) —
+    helper_call() used to call `_connect_ssh()` OUTSIDE its try, and read_config_versioned()
+    and check_helper() catch only HelperMissing/HelperError, so a paramiko or socket exception
+    (the key not yet authorised — the normal first try — or no SSH host at all) propagated
+    straight out of /setup's "Capture baseline" and "Install the helper" as a 500. Any failure
+    here is now a HelperUnreachable worded like Q102's legacy-grant probe: `user@host`, then the
+    transport's own exception. An empty host is refused BEFORE paramiko is asked to connect —
+    "" resolves to this very machine on some systems, and Jen would be SSHing to itself."""
+    host = (server.get("ssh_host") or "").strip()
+    name = server.get("name") or "this server"
+    if not host:
+        raise HelperUnreachable(
+            f"{name} has no SSH host configured — set one (Settings → Kea → SSH, or the setup wizard's helper step)."
+        )
+    user_at_host = f"{effective_ssh_user(server)}@{host}"
+    try:
+        return __kea6._connect_ssh(server)
+    except Exception as e:
+        hint = ""
+        # A plain "SSHException" is on the list on purpose: paramiko's key-file loop remembers
+        # only the LAST exception it saw, so a refused key reads as whichever of its remaining
+        # key-type loads failed ("encountered RSA key, expected OPENSSH key") — in practice the
+        # same first-try cause as a refusal, and the wording alone would send the operator
+        # hunting a key-format problem that does not exist.
+        if type(e).__name__ in (
+            "AuthenticationException",
+            "BadAuthenticationType",
+            "PasswordRequiredException",
+            "SSHException",
+        ):
+            hint = " — is Jen's public key in that user's authorized_keys on the host?"
+        logger.warning(f"SSH to {user_at_host} failed: {type(e).__name__}: {e}")
+        raise HelperUnreachable(f"SSH to {user_at_host} failed — {type(e).__name__}: {e}{hint}") from e
+
+
 # ── low-level transport ─────────────────────────────────────────────────────
 
 
@@ -84,11 +129,13 @@ def helper_call(server: dict, op: str, payload: dict | None = None, timeout: int
     """One SSH round trip: `sudo -n jen-kea-helper <op>` with a JSON
     object on stdin, a JSON object back on stdout. Returns the parsed
     object (whatever its exit code). Raises HelperMissing when the helper
-    or its sudoers grant is absent, HelperError on any other garbage.
+    or its sudoers grant is absent, HelperError on any other garbage —
+    and HelperUnreachable (a HelperError) when no SSH session could be
+    opened at all (v5.67.0-beta.8, Q120, item a).
 
     `sudo -n` is load-bearing: without it, a missing sudoers rule blocks
     on the password prompt instead of failing fast."""
-    ssh = __kea6._connect_ssh(server)
+    ssh = _open_ssh(server)
     try:
         stdin, stdout, stderr = ssh.exec_command(f"sudo -n {HELPER_PATH} {shlex.quote(op)}", timeout=timeout)
         try:
@@ -437,8 +484,13 @@ def _canonical_sentinel(cfg: dict) -> str:
     return _CANONICAL_SENTINEL_PREFIX + hashlib.sha256(_rev.canonical(cfg).encode()).hexdigest()
 
 
-def read_config_versioned(server: dict, service: str) -> tuple[dict | None, str | None]:
+def read_config_versioned(server: dict, service: str, *, errors: list | None = None) -> tuple[dict | None, str | None]:
     """(parsed config, sha256-of-raw-bytes or a canonical sentinel).
+
+    `errors` (v5.67.0-beta.8, Q120, item a) — pass a list and the reason a read came back
+    (None, None) is appended to it as a sentence ("SSH to kea@host failed — ...", "the helper
+    answered badly: ..."), for the one caller that shows it (the setup wizard) without every
+    other caller learning a new return shape.
 
     v5.28.0 (Q24, B2) — a v1 helper or the legacy path returns no raw
     sha; this used to return `None` for it, which meant a caller's
@@ -471,14 +523,27 @@ def read_config_versioned(server: dict, service: str) -> tuple[dict | None, str 
             sha = resp.get("sha256")
     except HelperMissing:
         _flag_legacy(server)
-        ssh = __kea6._connect_ssh(server)
+        try:
+            ssh = _open_ssh(server)
+        except HelperUnreachable as e:
+            logger.warning(f"read-config legacy fallback could not connect to {server.get('name')}: {e}")
+            if errors is not None:
+                errors.append(str(e))
+            return None, None
         try:
             cfg = __authoring.read_remote_json(ssh, path)
         finally:
             with contextlib.suppress(Exception):
                 ssh.close()
+    except HelperUnreachable as e:
+        logger.warning(f"read-config could not connect to {server.get('name')}: {e}")
+        if errors is not None:
+            errors.append(str(e))
+        return None, None
     except HelperError as e:
         logger.warning(f"read-config helper error on {server.get('name')}: {e}")
+        if errors is not None:
+            errors.append(f"the helper on {server.get('name') or 'the host'} answered badly: {e}")
         return None, None
 
     if cfg is None:
@@ -492,10 +557,10 @@ def read_config_versioned(server: dict, service: str) -> tuple[dict | None, str 
     return cfg, sha
 
 
-def read_config(server: dict, service: str) -> dict | None:
+def read_config(server: dict, service: str, *, errors: list | None = None) -> dict | None:
     """The parsed Kea config for `service` on `server`, or None if it's
     missing or unreadable. Thin wrapper over read_config_versioned()."""
-    return read_config_versioned(server, service)[0]
+    return read_config_versioned(server, service, errors=errors)[0]
 
 
 def _capture_baseline_or_external_change(server_id, service: str, cfg: dict, sha: str | None) -> None:
@@ -954,6 +1019,11 @@ def check_helper(server: dict) -> dict:
     except HelperMissing:
         record_helper_status(server.get("id"), None, legacy_grant=grant)
         return {"ok": False, "version": None, "code": "missing"}
+    except HelperUnreachable as e:
+        # v5.67.0-beta.8 (Q120, item a) — "we never reached the host" is NOT "the helper is
+        # not installed": the status is left as it was (recording None here would claim the
+        # host has no helper when Jen simply could not ask), and the code says why.
+        return {"ok": False, "version": None, "code": "unreachable", "detail": str(e)}
     except HelperError as e:
         record_helper_status(server.get("id"), None, legacy_grant=grant)
         return {"ok": False, "version": None, "code": "error", "detail": str(e)}
@@ -1472,6 +1542,11 @@ def install_helper(server: dict) -> dict:
     target_build = _source_build(source)
 
     chk = check_helper(server)
+    if chk.get("code") == "unreachable":
+        # v5.67.0-beta.8 (Q120, item a) — nothing below can work without an SSH session, and
+        # its own wording ("no legacy python3 grant to install through") would blame sudo for
+        # what is a refused or unauthorised connection. Say the connection failure itself.
+        return {"ok": False, "version": None, "code": "unreachable", "detail": chk["detail"]}
     current = chk.get("version")
     current_build = chk.get("build")
     # v5.66.0-beta.2 (Q104) — compare builds too when the host actually reports one (v7+):
