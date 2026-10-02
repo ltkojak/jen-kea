@@ -181,7 +181,9 @@ class TestScheduledBackupRetentionIsPerKind:
             cur.execute("SELECT last_status FROM backup_schedule WHERE id=1")
             status = cur.fetchone()["last_status"]
         assert "Jen: FAILED" in status
-        assert "Kea:" in status and "FAILED" not in status.split("Kea:")[1]
+        # v5.67.0-beta.11 (Q123) — the Kea half is labelled for what it holds, never "Kea:" / "Kea's database"
+        label = dbexport.KEA_BACKUP_LABEL
+        assert f"{label}:" in status and "FAILED" not in status.split(f"{label}:")[1]
 
     def test_seven_good_backups_plus_one_failed_run_leaves_seven(self, db, monkeypatch, tmp_path):
         """The exact property named in the spec: seven good backups + one failed run

@@ -45,7 +45,7 @@ def _conn(database=None):
 @pytest.fixture
 def kea_tables(db):
     """The Kea-side tables, emptied before AND after: these tests own whatever is in them."""
-    tables = ["hosts", "dhcp4_options", "lease4"]
+    tables = ["hosts", "dhcp4_options", "dhcp6_options", "ipv6_reservations", "lease4"]
 
     def wipe():
         db.commit()
@@ -91,6 +91,21 @@ def _seed(db):
                 (167772302, MAC2, b"\xde\xad\xbe\xef", 3600, 1, "c"),
             ],
         )
+        # v6 (Q123 step 2): a DHCPv6 reservation by DUID, its address, and a v6 option whose value is not UTF-8
+        cur.execute(
+            "INSERT INTO hosts (host_id, dhcp_identifier, dhcp_identifier_type, dhcp6_subnet_id, hostname) "
+            "VALUES (7, %s, 1, 2, 'v6host')",
+            (bytes.fromhex("0001000127e4aa00") + MAC2,),
+        )
+        cur.execute(
+            "INSERT INTO ipv6_reservations (reservation_id, address, prefix_len, type, dhcp6_iaid, host_id) "
+            "VALUES (1, '2001:db8::10', 128, 0, 7, 7), (2, '2001:db8:1::', 56, 2, NULL, 7)"
+        )
+        cur.execute(
+            "INSERT INTO dhcp6_options (option_id, code, value, formatted_value, space, host_id) "
+            "VALUES (1, 23, %s, NULL, 'dhcp6', 7), (2, 24, NULL, 'example.org', 'dhcp6', 7)",
+            (NOT_UTF8 + bytes([0]),),
+        )
     db.commit()
 
 
@@ -114,7 +129,22 @@ def _snapshot(db):
             "hostname FROM lease4 ORDER BY address"
         )
         out["lease4"] = cur.fetchall()
+        cur.execute(
+            "SELECT option_id, code, HEX(value) AS val, formatted_value AS fv, space, host_id FROM dhcp6_options "
+            "ORDER BY option_id"
+        )
+        out["dhcp6_options"] = cur.fetchall()
+        cur.execute(
+            "SELECT reservation_id, address, prefix_len, type, dhcp6_iaid, host_id FROM ipv6_reservations "
+            "ORDER BY reservation_id"
+        )
+        out["ipv6_reservations"] = cur.fetchall()
     return out
+
+
+def _read_gz(path) -> str:
+    with gzip.open(path, "rt", encoding="utf-8") as f:
+        return f.read()
 
 
 def _payload(content: bytes) -> dict:
@@ -144,14 +174,14 @@ class TestExportFormat3:
 
 
 class TestRoundTripThroughExportAndImport:
-    @pytest.mark.parametrize("group", ["reservations", "leases"])
+    @pytest.mark.parametrize("group", ["reservations", "reservations_all", "leases"])
     def test_hex_of_every_binary_column_is_identical_after_wipe_and_import(self, kea_tables, group):
         _seed(kea_tables)
         before = _snapshot(kea_tables)
         content, _ = dbexport.export_kea(group)
         kea_tables.commit()
         with kea_tables.cursor() as cur:
-            for t in ("hosts", "dhcp4_options", "lease4"):
+            for t in ("hosts", "dhcp4_options", "dhcp6_options", "ipv6_reservations", "lease4"):
                 cur.execute(f"DELETE FROM `{t}`")
         kea_tables.commit()
 
@@ -159,11 +189,15 @@ class TestRoundTripThroughExportAndImport:
 
         assert not any(r.startswith("❌") for r in results), results
         after = _snapshot(kea_tables)
-        tables = {"reservations": ["hosts", "dhcp4_options"], "leases": ["lease4"]}[group]
+        tables = {
+            "reservations": ["hosts", "dhcp4_options"],
+            "reservations_all": ["hosts", "dhcp4_options", "dhcp6_options", "ipv6_reservations"],
+            "leases": ["lease4"],
+        }[group]
         for t in tables:
             assert after[t] == before[t], f"{t} did not survive the round trip byte for byte"
         # the specific shape of the original bug: the MAC must be SIX bytes, not twelve characters of text
-        if group == "reservations":
+        if group != "leases":
             row = next(r for r in after["hosts"] if r["host_id"] == 1)
             assert row["ident"] == MAC.hex().upper()
             with kea_tables.cursor() as cur:
@@ -189,6 +223,173 @@ class TestRoundTripThroughExportAndImport:
         content, _ = dbexport.export_kea("reservations")
         dbexport.import_kea(content, "skip")
         assert _snapshot(kea_tables) == before
+
+
+class TestTheBackupGroupIsEveryReservationV4AndV6:
+    """Q123 (b): the scheduled and manual 'Kea' backup was two tables and no IPv6 at all."""
+
+    def test_the_group_names_all_four_tables_in_foreign_key_order(self):
+        grp = dbexport.KEA_EXPORT_GROUPS[dbexport.KEA_BACKUP_GROUP]
+        assert dbexport.KEA_BACKUP_GROUP == "reservations_all"
+        assert grp["tables"] == ["hosts", "dhcp4_options", "dhcp6_options", "ipv6_reservations"]
+        assert grp["label"] == "Kea host reservations (IPv4 and IPv6)"
+        assert "lease4" not in grp["tables"], "leases are transient and never part of a backup"
+        assert "Kea's database" not in grp["label"] + grp["description"]
+
+    def test_the_export_carries_v6_reservations_and_options(self, kea_tables):
+        _seed(kea_tables)
+        payload = _payload(dbexport.export_kea("reservations_all")[0])
+        assert payload["_meta"]["tables"] == ["hosts", "dhcp4_options", "dhcp6_options", "ipv6_reservations"]
+        assert payload["_meta"]["row_counts"]["ipv6_reservations"] == 2
+        assert payload["_meta"]["row_counts"]["dhcp6_options"] == 2
+        v6 = next(r for r in payload["data"]["hosts"] if r["host_id"] == 7)
+        assert v6["dhcp_identifier"]["$bin"] == (bytes.fromhex("0001000127e4aa00") + MAC2).hex()
+        assert "value" in payload["_meta"]["binary_columns"]["dhcp6_options"]
+
+    def test_a_table_missing_on_this_kea_is_left_out_not_exported_empty(self, kea_tables):
+        _seed(kea_tables)
+        with kea_tables.cursor() as cur:
+            cur.execute("RENAME TABLE dhcp6_options TO q123_gone")
+        try:
+            payload = _payload(dbexport.export_kea("reservations_all")[0])
+        finally:
+            with kea_tables.cursor() as cur:
+                cur.execute("RENAME TABLE q123_gone TO dhcp6_options")
+        assert "dhcp6_options" not in payload["data"] and "dhcp6_options" not in payload["_meta"]["tables"]
+        assert "ipv6_reservations" in payload["data"]
+
+    def test_an_import_restores_parents_before_the_rows_that_point_at_them(self, kea_tables):
+        content = json.dumps(
+            {
+                "_meta": {"database": "kea", "jen_export_version": 1, "format": 3},
+                "data": {  # deliberately in the WRONG order
+                    "ipv6_reservations": [{"reservation_id": 1, "address": "2001:db8::1", "host_id": 7}],
+                    "dhcp6_options": [{"option_id": 1, "code": 23, "value": {"$bin": "00ff"}, "host_id": 7}],
+                    "hosts": [{"host_id": 7, "dhcp_identifier": {"$bin": MAC2.hex()}, "dhcp_identifier_type": 1}],
+                },
+            }
+        ).encode("utf-8")
+        results = dbexport.import_kea(content, "skip")
+        tables = [r.split(":")[0].split()[-1] for r in results]
+        assert tables == ["hosts", "dhcp6_options", "ipv6_reservations"]
+
+    def test_migrate_kea_carries_the_v6_tables_by_default(self):
+        import inspect
+
+        assert inspect.signature(dbexport.migrate_kea).parameters["group"].default == "reservations_all"
+
+
+class TestTheKeaExportIsStreamed:
+    """Q123 (c): write_kea_export is the Kea twin of write_jen_export — rows one at a time, `_meta` last."""
+
+    def test_writes_a_readable_gzip_document_with_meta_after_data(self, kea_tables, tmp_path):
+        _seed(kea_tables)
+        path = tmp_path / "kea.json.gz"
+        meta = dbexport.write_kea_export(str(path), "reservations_all")
+        raw = _read_gz(path)
+        assert raw.index('"_meta"') > raw.index('"data"'), "_meta is written last, after every row"
+        doc = json.loads(raw)
+        assert doc["_meta"]["row_counts"] == meta["row_counts"]
+        assert doc["_meta"]["format"] == 3
+        assert meta["uncompressed_bytes"] == len(raw.encode("utf-8"))
+        assert meta["row_counts"]["hosts"] == 7
+
+    def test_the_file_is_0600(self, kea_tables, tmp_path):
+        path = tmp_path / "kea.json.gz"
+        dbexport.write_kea_export(str(path), "reservations_all")
+        if os.name == "posix":
+            assert oct(os.stat(path).st_mode & 0o777) == "0o600"
+
+    def test_export_kea_is_a_thin_wrapper_that_still_returns_uncompressed_json_bytes(self, kea_tables):
+        _seed(kea_tables)
+        content, filename = dbexport.export_kea("reservations")
+        assert filename.startswith("kea-reservations-export-") and filename.endswith(".json.gz")
+        assert json.loads(content)["_meta"]["group"] == "reservations"
+
+    def test_an_unknown_group_is_refused(self, tmp_path):
+        with pytest.raises(ValueError):
+            dbexport.write_kea_export(str(tmp_path / "x.json.gz"), "nope")
+
+    def test_the_export_never_materialises_the_table_dict_again(self):
+        import inspect
+
+        src = inspect.getsource(dbexport.export_kea) + inspect.getsource(dbexport.write_kea_export)
+        assert "_dump_table" not in src and 'payload["data"]' not in src
+
+    def test_the_download_route_streams_and_leaves_no_tmp_file(
+        self, logged_in_client, kea_tables, tmp_path, monkeypatch
+    ):
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "CONTENT_TMP_DIR", str(tmp_path))
+        _seed(kea_tables)
+        r = logged_in_client.post("/database/export/kea", data={"group": "reservations_all"})
+        assert r.status_code == 200 and r.headers["Cache-Control"] == "no-store"
+        doc = json.loads(gzip.decompress(r.data))
+        assert doc["_meta"]["tables"] == ["hosts", "dhcp4_options", "dhcp6_options", "ipv6_reservations"]
+        assert list(tmp_path.iterdir()) == [], "the streamed download must remove its temp file"
+
+
+class TestBackupsWriteTheReservationsGroup:
+    def _schedule(self, db):
+        with db.cursor() as cur:
+            cur.execute(
+                "REPLACE INTO backup_schedule (id, enabled, frequency, hour, keep_count, include_jen, include_kea) "
+                "VALUES (1, 1, 'daily', 3, 7, 0, 1)"
+            )
+        db.commit()
+
+    def test_the_scheduled_backup_is_the_v4_and_v6_group_with_a_sidecar_and_the_right_label(
+        self, kea_tables, monkeypatch, tmp_path
+    ):
+        monkeypatch.setattr(dbexport, "BACKUP_DIR", str(tmp_path))
+        _seed(kea_tables)
+        self._schedule(kea_tables)
+        dbexport.run_scheduled_backup()
+        backup = next(tmp_path.glob("kea-scheduled-*.json.gz"))
+        doc = json.loads(_read_gz(backup))
+        assert doc["_meta"]["group"] == "reservations_all"
+        assert doc["data"]["ipv6_reservations"], "the v6 reservations are in the scheduled backup now"
+        with open(dbexport._sidecar_path(str(backup)), encoding="utf-8") as f:
+            side = json.load(f)
+        assert side["database"] == "kea" and side["uncompressed_bytes"] > 0
+        assert side["tables"] == ["hosts", "dhcp4_options", "dhcp6_options", "ipv6_reservations"]
+        kea_tables.commit()
+        with kea_tables.cursor() as cur:
+            cur.execute("SELECT last_status FROM backup_schedule WHERE id=1")
+            assert dbexport.KEA_BACKUP_LABEL in cur.fetchone()["last_status"]
+
+    def test_a_failing_kea_backup_leaves_no_file(self, kea_tables, monkeypatch, tmp_path):
+        monkeypatch.setattr(dbexport, "BACKUP_DIR", str(tmp_path))
+        self._schedule(kea_tables)
+
+        def boom(*a, **k):
+            raise RuntimeError("simulated")
+
+        monkeypatch.setattr(dbexport, "write_kea_export", boom)
+        dbexport.run_scheduled_backup()
+        assert list(tmp_path.glob("kea-scheduled-*")) == [] and not list(tmp_path.glob(".part-*"))
+
+    def test_the_manual_backup_writes_the_same_group(self, logged_in_client, kea_tables, monkeypatch, tmp_path):
+        monkeypatch.setattr(dbexport, "BACKUP_DIR", str(tmp_path))
+        _seed(kea_tables)
+        r = logged_in_client.post("/database/backup/now", data={"include": ["kea"]}, follow_redirects=True)
+        assert r.status_code == 200
+        backup = next(tmp_path.glob("kea-manual-*.json.gz"))
+        assert json.loads(_read_gz(backup))["_meta"]["group"] == "reservations_all"
+        assert b"Kea host reservations (IPv4 and IPv6)" in r.data
+        assert next(tmp_path.glob("kea-manual-*.meta.json")).is_file()
+
+    def test_no_backup_label_says_kea_database(self):
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        assert "Kea's database" not in (root / "templates/setup_recovery.html").read_text(encoding="utf-8")
+        db_page = (root / "templates/database.html").read_text(encoding="utf-8")
+        schedule_tab = db_page.split("{% if active_tab == 'schedule' %}")[1].split("{% endif %}")[0]
+        backups_tab = db_page.split("{% if active_tab == 'backups' %}")[1].split("{% endif %}")[0]
+        for tab in (schedule_tab, backups_tab):
+            assert "Kea Database" not in tab and "Kea host reservations (IPv4 and IPv6)" in tab
 
 
 class TestAFileWrittenBeforeThisFix:

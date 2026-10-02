@@ -53,7 +53,7 @@
             </div>
         </div>
         <label><input type="checkbox" name="include_jen" value="1" {{ "checked" if schedule.include_jen is not defined or schedule.include_jen }}> Jen's own database</label>
-        <label><input type="checkbox" name="include_kea" value="1" {{ "checked" if schedule.include_kea }}> Kea's database</label>
+        <label><input type="checkbox" name="include_kea" value="1" {{ "checked" if schedule.include_kea }}> Kea host reservations (IPv4 and IPv6)</label>
         <button type="submit" class="btn btn-secondary">Save schedule</button>
     </form>
 

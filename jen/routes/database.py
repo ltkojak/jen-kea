@@ -177,19 +177,39 @@ def export_jen():
 @login_required
 @_superadmin_required
 def export_kea():
-    group = request.form.get("group", "reservations")
+    group = request.form.get("group", dbexport.KEA_BACKUP_GROUP)
     if group not in dbexport.KEA_EXPORT_GROUPS:
         flash("Invalid export group.", "error")
         return redirect(url_for("database.database", tab="export"))
+    tmp_path = None
     try:
-        content, filename = dbexport.export_kea(group)
+        # v5.67.0-beta.11 (Q123) — streamed from a tempfile through dbexport.write_kea_export(), the way the
+        # Jen export is: no whole-table dict, no second in-memory gzip copy of it.
+        os.makedirs(extensions.CONTENT_TMP_DIR, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(dir=extensions.CONTENT_TMP_DIR, suffix=".kea-export.json.gz")
+        os.close(fd)
+        dbexport.write_kea_export(tmp_path, group)
+        filename = f"kea-{group}-export-{datetime.utcnow().strftime('%Y-%m-%d-%H%M%S')}.json.gz"
         __user.audit("DB_EXPORT", "kea", f"Exported group: {group}")
+
+        def _stream():
+            try:
+                with open(tmp_path, "rb") as f:
+                    while chunk := f.read(1024 * 1024):
+                        yield chunk
+            finally:
+                with contextlib.suppress(OSError):
+                    os.remove(tmp_path)
+
         return Response(
-            gzip.compress(content),
+            stream_with_context(_stream()),
             mimetype="application/gzip",
             headers={"Content-Disposition": f"attachment; filename={filename}", "Cache-Control": "no-store"},
         )
     except Exception as e:
+        if tmp_path:
+            with contextlib.suppress(OSError):
+                os.remove(tmp_path)
         logger.error(f"Kea DB export failed: {e}")
         flash("Kea export failed. Check server logs for details.", "error")
         return redirect(url_for("database.database", tab="export"))
@@ -565,13 +585,16 @@ def backup_now():
             results.append((False, f"Jen backup failed: {e}"))
     if "kea" in include:
         try:
-            content, _ = dbexport.export_kea("reservations")
-            payload = json.loads(content.decode("utf-8"))
-            path = dbexport._write_backup(payload, f"kea-manual-{ts}.json.gz")
-            results.append((True, f"Kea backup saved: {os.path.basename(path)}"))
+            # v5.67.0-beta.11 (Q123) — the reservations_all group (IPv4 and IPv6), streamed through
+            # publish_backup like the Jen half above.
+            os.makedirs(dbexport.BACKUP_DIR, exist_ok=True)
+            path = os.path.join(dbexport.BACKUP_DIR, f"kea-manual-{ts}.json.gz")
+            meta = dbexport.publish_backup(path, lambda f: dbexport.write_kea_export(f, dbexport.KEA_BACKUP_GROUP))
+            dbexport._write_meta_sidecar(path, meta)
+            results.append((True, f"{dbexport.KEA_BACKUP_LABEL} backup saved: {os.path.basename(path)}"))
             __user.audit("DB_BACKUP_MANUAL", "kea", path)
         except Exception as e:
-            results.append((False, f"Kea backup failed: {e}"))
+            results.append((False, f"{dbexport.KEA_BACKUP_LABEL} backup failed: {e}"))
     for ok, msg in results:
         flash(msg, "success" if ok else "error")
     return redirect(url_for("database.database", tab="backups"))
@@ -827,7 +850,7 @@ def migrate_run():
     pw = request.form.get("password", "")
     db = request.form.get("database", "").strip()
     tables = request.form.getlist("tables") or None
-    kea_grp = request.form.get("kea_group", "reservations")
+    kea_grp = request.form.get("kea_group", dbexport.KEA_BACKUP_GROUP)
 
     q = queue.Queue()
 

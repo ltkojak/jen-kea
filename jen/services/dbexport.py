@@ -87,20 +87,35 @@ JEN_TABLES = {
 }
 
 # ── Kea tables available for export ──────────────────────────────────────────
+# v5.67.0-beta.11 (Q123, item b) — the scheduled and manual "Kea" backup used to be TWO tables (hosts and
+# dhcp4_options): no IPv6 reservation, no v6 option, no lease — yet the setup page called the box "Kea's
+# database". The backup group is now `reservations_all` and is labelled for what it holds, everywhere. Tables
+# are listed in FOREIGN-KEY order (hosts before the option and v6 rows that point at it); the importer
+# restores in this order whatever order a file lists them in. A table that does not exist on this Kea is
+# left out of the export (never an empty stand-in).
+KEA_BACKUP_GROUP = "reservations_all"
+KEA_BACKUP_LABEL = "Kea host reservations (IPv4 and IPv6)"
 KEA_EXPORT_GROUPS = {
+    "reservations_all": {
+        "label": KEA_BACKUP_LABEL,
+        "description": "Every permanent host reservation, IPv4 and IPv6, with its per-host options: hosts, dhcp4_options, dhcp6_options, ipv6_reservations. This is what the scheduled and manual backups save, and what you want to migrate. It is not Kea's leases and not Kea's configuration.",
+        "tables": ["hosts", "dhcp4_options", "dhcp6_options", "ipv6_reservations"],
+    },
     "reservations": {
-        "label": "Reservations (hosts + per-host DHCP options)",
-        "description": "Permanent host reservations — MAC-to-IP assignments, hostnames, per-host options. This is what you want to migrate or back up.",
+        "label": "Kea host reservations — IPv4 only",
+        "description": "The IPv4 half of the group above (hosts + per-host DHCP options), kept for exports that predate it.",
         "tables": ["hosts", "dhcp4_options"],
     },
     "leases": {
         "label": "Active Leases (lease4)",
-        "description": "Dynamic leases currently active. These are transient — they expire and renew automatically. Only export if you need a point-in-time snapshot.",
+        "description": "Dynamic leases currently active. These are transient — they expire and renew automatically — so they are never part of a backup. Only export if you need a point-in-time snapshot.",
         "tables": ["lease4"],
     },
 }
 
 KEA_ALL_TABLES = {t for grp in KEA_EXPORT_GROUPS.values() for t in grp["tables"]}
+# the order an import restores in: parents before the rows that reference them
+KEA_RESTORE_ORDER = ["hosts", "dhcp4_options", "dhcp6_options", "ipv6_reservations", "lease4"]
 
 
 def _validate_tables(requested, known):
@@ -175,9 +190,8 @@ def _direct_conn(host, port, user, password, database, ssl_ca=""):
 
 
 def _clean_row(row):
-    """One row, datetimes ISO-formatted and binary values written as a TAGGED object — the same cleanup
-    _dump_table and write_jen_export's streaming path both need, factored out so the
-    row-by-row streamer isn't duplicating it (v5.66.0-beta.4, Q106). Until v5.67.0-beta.11 (Q123) a
+    """One row, datetimes ISO-formatted and binary values written as a TAGGED object — the cleanup
+    every streamed export (_stream_table_rows) applies to a row (v5.66.0-beta.4, Q106). Until v5.67.0-beta.11 (Q123) a
     binary value became a bare hex string here, which nothing ever decoded (see EXPORT_FORMAT above);
     it is `{"$bin": "<hex>"}` now. Used for EXPORT only: a database-to-database migration copies the
     driver's own values (bytes as bytes) and never goes through this."""
@@ -254,14 +268,6 @@ def _decode_import_rows(table, rows, cols, binary_cols, fmt):
                 vals.append(v)
         out.append(vals)
     return out
-
-
-def _dump_table(conn, table):
-    """Return all rows from table as a list of dicts, with datetime serialized."""
-    with conn.cursor() as cur:
-        cur.execute(f"SELECT * FROM `{table}`")
-        rows = cur.fetchall()
-    return [_clean_row(row) for row in rows]
 
 
 def _table_exists(conn, table):
@@ -468,6 +474,29 @@ def export_table_groups(conn=None) -> dict[str, list[str]]:
             conn.close()
 
 
+def _stream_table_rows(conn, tbl, f) -> int:
+    """Write one table's rows to `f` as the inside of a JSON array, one at a time from a server-side
+    cursor — never the whole table in memory. Returns the row count. The one loop write_jen_export and
+    write_kea_export share (v5.67.0-beta.11, Q123): the Kea export used to build `payload["data"][tbl] =
+    _dump_table(...)` and json.dumps the lot, and the callers then json.loads it again — a large lease4 was
+    the case that bit."""
+    count = 0
+    with conn.cursor(pymysql.cursors.SSDictCursor) as cur:
+        cur.execute(f"SELECT * FROM `{tbl}`")
+        first_row = True
+        while True:
+            rows = cur.fetchmany(1000)
+            if not rows:
+                break
+            for row in rows:
+                if not first_row:
+                    f.write(", ")
+                first_row = False
+                f.write(json.dumps(_clean_row(row), default=str))
+                count += 1
+    return count
+
+
 def write_jen_export(path, tables=None):
     """Write the exact same JSON document export_jen() returns — `{"data": {...},
     "_meta": {...}}` (key order is free: data first here, _meta with its row_counts last) —
@@ -512,21 +541,7 @@ def write_jen_export(path, tables=None):
                     f.write(", ")
                 f.write(json.dumps(tbl))
                 f.write(": [")
-                count = 0
-                if _table_exists(conn, tbl):
-                    with conn.cursor(pymysql.cursors.SSDictCursor) as cur:
-                        cur.execute(f"SELECT * FROM `{tbl}`")
-                        first_row = True
-                        while True:
-                            rows = cur.fetchmany(1000)
-                            if not rows:
-                                break
-                            for row in rows:
-                                if not first_row:
-                                    f.write(", ")
-                                first_row = False
-                                f.write(json.dumps(_clean_row(row), default=str))
-                                count += 1
+                count = _stream_table_rows(conn, tbl, f) if _table_exists(conn, tbl) else 0
                 f.write("]")
                 row_counts[tbl] = count
             meta = _make_metadata("jen", selected)
@@ -599,32 +614,67 @@ def export_jen(tables=None):
     return content, filename
 
 
-def export_kea(group="reservations"):
+def write_kea_export(path, group=KEA_BACKUP_GROUP):
+    """The Kea twin of write_jen_export (v5.67.0-beta.11, Q123, item c): the group's tables straight to `path`
+    as gzip text, one row at a time from a server-side cursor, `_meta` last — through `publish_backup()` for
+    a backup (so a failure leaves no file) or to a temp file for a download. Tables that do not exist on
+    this Kea are left out of both `data` and `_meta.tables`. `_meta` carries `format: 3` and
+    `binary_columns` (see EXPORT_FORMAT). Returns the `_meta` dict plus `uncompressed_bytes` (known only
+    once writing is done; the backup sidecar reads it, the file itself does not carry it). Written 0600
+    when `path` is an actual path."""
+    if group not in KEA_EXPORT_GROUPS:
+        raise ValueError(f"Unknown export group: {group}")
+    wanted = KEA_EXPORT_GROUPS[group]["tables"]
+    conn = _direct_kea_conn()
+    row_counts = {}
+    try:
+        present = [t for t in wanted if _table_exists(conn, t)]
+        with gzip.open(path, "wt", encoding="utf-8") as f:
+            f.write('{"data": {')
+            for i, tbl in enumerate(present):
+                if i:
+                    f.write(", ")
+                f.write(json.dumps(tbl))
+                f.write(": [")
+                row_counts[tbl] = _stream_table_rows(conn, tbl, f)
+                f.write("]")
+            meta = _make_metadata("kea", present, {"group": group})
+            meta["row_counts"] = row_counts
+            meta["format"] = EXPORT_FORMAT
+            meta["binary_columns"] = _binary_columns(conn, present)
+            f.write('}, "_meta": ')
+            f.write(json.dumps(meta, default=str))
+            f.write("}")
+            uncompressed_bytes = f.tell()
+    finally:
+        conn.close()
+    if isinstance(path, (str, os.PathLike)):
+        os.chmod(path, 0o600)
+    result = dict(meta)
+    result["uncompressed_bytes"] = uncompressed_bytes
+    return result
+
+
+def export_kea(group=KEA_BACKUP_GROUP):
     """
     Export Kea DB data.
-    group: 'reservations' or 'leases'
-    Returns (json_bytes, filename).
+    group: any key of KEA_EXPORT_GROUPS.
+    Returns (json_bytes, filename) — a thin wrapper over write_kea_export (v5.67.0-beta.11, Q123), for
+    the callers that genuinely want bytes back; the download and both backup paths stream instead.
     """
     if group not in KEA_EXPORT_GROUPS:
         raise ValueError(f"Unknown export group: {group}")
-    grp_cfg = KEA_EXPORT_GROUPS[group]
-    tables = grp_cfg["tables"]
-    conn = _direct_kea_conn()
-    payload = {"_meta": _make_metadata("kea", tables, {"group": group}), "data": {}}
-    try:
-        for tbl in tables:
-            if _table_exists(conn, tbl):
-                payload["data"][tbl] = _dump_table(conn, tbl)
-            else:
-                payload["data"][tbl] = []
-        payload["_meta"]["row_counts"] = {t: len(payload["data"][t]) for t in tables}
-        payload["_meta"]["format"] = EXPORT_FORMAT
-        payload["_meta"]["binary_columns"] = _binary_columns(conn, tables)
-    finally:
-        conn.close()
     ts = datetime.utcnow().strftime("%Y-%m-%d-%H%M%S")
     filename = f"kea-{group}-export-{ts}.json.gz"
-    content = json.dumps(payload, default=str).encode("utf-8")
+    fd, tmp_path = tempfile.mkstemp(suffix=".json.gz")
+    os.close(fd)
+    try:
+        write_kea_export(tmp_path, group)
+        with gzip.open(tmp_path, "rt", encoding="utf-8") as f:
+            content = f.read().encode("utf-8")
+    finally:
+        with contextlib.suppress(OSError):
+            os.remove(tmp_path)
     return content, filename
 
 
@@ -921,7 +971,9 @@ def import_kea(file_bytes, duplicate_mode="skip"):
     conn = _direct_kea_conn()
     try:
         conn.begin()
-        for tbl in data:
+        # parents before the rows that point at them, whatever order the file lists them in
+        order = {t: i for i, t in enumerate(KEA_RESTORE_ORDER)}
+        for tbl in sorted(data, key=lambda t: (order.get(t, len(order)), t)):
             if tbl not in KEA_ALL_TABLES:
                 results.append(f"⚠️ {tbl}: not a recognized Kea table — skipped")
                 continue
@@ -991,7 +1043,7 @@ def test_connection(host, port, user, password, database, ssl_ca=""):
 
 def _copy_table_rows(src, dst, tbl, batch=1000) -> int:
     """Copy every row of `tbl` from `src` to `dst` — the driver's own values straight across, bytes as
-    bytes (v5.67.0-beta.11, Q123). migrate_jen/migrate_kea used to copy `_dump_table()`'s output, which is
+    bytes (v5.67.0-beta.11, Q123). migrate_jen/migrate_kea used to copy the JSON export's cleaned rows, which is
     the JSON export's cleaned form: every binary value had been turned into hex text on the way, and the
     target stored that text — a migrated Kea database held reservations Kea could no longer match. A
     migration is a copy between two live databases, so there is no JSON in the middle to clean for.
@@ -1123,7 +1175,7 @@ def migrate_jen(target_host, target_port, target_user, target_password, target_d
 
 
 def migrate_kea(
-    target_host, target_port, target_user, target_password, target_db, group="reservations", progress_cb=None
+    target_host, target_port, target_user, target_password, target_db, group=KEA_BACKUP_GROUP, progress_cb=None
 ):
     """
     Migrate Kea reservations (or leases) to a new DB server.
@@ -1358,13 +1410,15 @@ def run_scheduled_backup():
             results.append(f"Jen: FAILED — {e}")
     if sched.get("include_kea"):
         try:
-            content, fname = export_kea("reservations")
-            payload = json.loads(content.decode("utf-8"))
-            path = _write_backup(payload, f"kea-scheduled-{ts}.json.gz")
-            results.append(f"Kea: {path}")
+            # v5.67.0-beta.11 (Q123) — the reservations_all group (IPv4 AND IPv6), streamed row by row
+            # through publish_backup like the Jen half: no whole-table dict, no dumps/loads round trip.
+            path = os.path.join(BACKUP_DIR, f"kea-scheduled-{ts}.json.gz")
+            meta = publish_backup(path, lambda f: write_kea_export(f, KEA_BACKUP_GROUP))
+            _write_meta_sidecar(path, meta)
+            results.append(f"{KEA_BACKUP_LABEL}: {path}")
             _prune_backups(keep, "kea")
         except Exception as e:
-            results.append(f"Kea: FAILED — {e}")
+            results.append(f"{KEA_BACKUP_LABEL}: FAILED — {e}")
 
     # Update last_run
     from jen.models.db import jen_db
