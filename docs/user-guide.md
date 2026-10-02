@@ -18,7 +18,16 @@ skipped, or still open.
    verify," and a client certificate/key pair — the same four settings
    and the same validation as Settings → Kea Server, so a site with a
    private CA or Kea's default mutual-TLS control socket connects here
-   just as it would there (v5.67.0-beta.5).
+   just as it would there (v5.67.0-beta.5). The URL is tried exactly as
+   typed, a custom port included; Jen guesses `:8004` (`:8006` for
+   DHCPv6) only when you gave no port. It then asks what answered —
+   the Control Agent or a daemon's own control socket — and saves
+   Control Agent or direct mode accordingly, so a Kea 3.2 site that
+   types `http://kea:8004` is saved as direct mode. A blank password
+   field means "use the saved one", for the test as well as the save, and
+   the database is tested the way the app will connect: its port, and
+   `[kea_db] ssl_ca` when set. A failed connection reports the error for
+   the URL you typed first (v5.67.0-beta.8).
 2. **What Jen found** — Kea's version, loaded hooks, HA status, and the
    subnets it reports. A subnet Jen already knows by the same ID and
    CIDR keeps the name you already gave it; only a genuinely new
@@ -34,10 +43,24 @@ skipped, or still open.
    answers for v6; if it does, **Manage IPv6 in Jen** saves the
    endpoint, proposes a `[subnets6]` map, and turns on Jen's own IPv6
    management — nothing v6-related ever runs unless you press that
-   button yourself.
+   button yourself. The check needs a real kea-dhcp6 answer (a
+   `Dhcp6` section in its config), and enabling it **merges** into the
+   `[subnets6]` you already have: names and IPv4 pairings are kept when
+   the ID and network match, and anything Kea did not report is listed
+   with an unchecked "remove" box (v5.67.0-beta.8). With Kea's HA hook
+   configured, the page shows two separate facts — the HA peers Kea
+   reports, and the servers Jen manages — and an **Add this peer to
+   Jen** action for any peer Jen does not manage yet; it opens the
+   additional-servers form with the name, URL and role filled in, and
+   leaves the credentials and SSH details to you. If Kea does not answer
+   when you submit the step, nothing is saved and the step stays open.
 3. **Kea host helper** — installs/updates `jen-kea-helper` over SSH,
    the root-owned script Jen uses for config pushes and service
-   control on the Kea host (`docs/ARCHITECTURE.md` §3.3).
+   control on the Kea host (`docs/ARCHITECTURE.md` §3.3). A host Jen
+   cannot reach over SSH — no host set, or the key not authorised yet,
+   which is the normal first try — is reported as a message naming the
+   user, the host and the reason, here and on Settings → Kea → SSH
+   (v5.67.0-beta.8).
 4. **Baseline** — reads Kea's live config once, recording it as the
    first revision Jen can diff against later. Once IPv6 is actually
    being managed in Jen (step 2), this captures a dhcp6 baseline too.
@@ -45,7 +68,10 @@ skipped, or still open.
    → Databases → Recovery has the same control). This step only marks
    itself done once a bundle from *this* setup run has actually
    finished downloading — not just because a button was clicked
-   (v5.67.0-beta.5). You can also schedule standing backups here.
+   (v5.67.0-beta.5); the page notices the download finishing and offers
+   **Continue** without a reload, and a passphrase mismatch keeps you in
+   the wizard (v5.67.0-beta.8). You can also schedule standing backups
+   here.
 6. **Investigate a client** — pick a recent lease and open its full
    Investigation page (Overview, Explain, Trace, Timeline, DNS, Config
    — the same page `/client?q=...` always opens) to see why that

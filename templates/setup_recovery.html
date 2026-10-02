@@ -10,11 +10,10 @@
 
 <div class="card u-d53a7a">
     <h3 class="u-d46224">Download a recovery bundle</h3>
-    {% if recovery.fresh %}
-    <p>{{ icon('circle-check') }} Downloaded {{ recovery.size }} bytes at {{ recovery.at }}{% if recovery.excluded_audit_history %} (audit history excluded){% endif %}.</p>
-    {% endif %}
-    <form method="POST" action="/settings/databases/recovery-bundle" autocomplete="off" data-download>
+    <p id="recovery-done-note"{% if not recovery.fresh %} hidden{% endif %}>{{ icon('circle-check') }} <span id="recovery-done-text">Downloaded {{ recovery.size }} bytes at {{ recovery.at }}{% if recovery.excluded_audit_history %} (audit history excluded){% endif %}.</span></p>
+    <form id="recovery-bundle-form" method="POST" action="/settings/databases/recovery-bundle" autocomplete="off" data-download data-initial-at="{{ recovery.at }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="next" value="setup">
         <div class="form-row">
             <div class="form-group">
                 <label>Passphrase</label>
@@ -59,19 +58,63 @@
     </form>
 
     <div class="u-1b0f49">
-        {% if recovery.fresh %}
-        <form method="POST" action="/setup/recovery" class="u-cccfa4">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="action" value="done">
-            <button type="submit" class="btn btn-primary">Continue</button>
-        </form>
-        {% else %}
-        <form method="POST" action="/setup/recovery" class="u-cccfa4">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="action" value="skip">
-            <button type="submit" class="btn btn-secondary">I will do this later</button>
-        </form>
-        {% endif %}
+        {# Both are always rendered; the page swaps them when a download finishes (see the script below). #}
+        <div id="recovery-continue"{% if not recovery.fresh %} hidden{% endif %}>
+            <form method="POST" action="/setup/recovery">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="action" value="done">
+                <button type="submit" class="btn btn-primary">Continue</button>
+            </form>
+        </div>
+        <div id="recovery-later"{% if recovery.fresh %} hidden{% endif %}>
+            <form method="POST" action="/setup/recovery">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="action" value="skip">
+                <button type="submit" class="btn btn-secondary">I will do this later</button>
+            </form>
+        </div>
     </div>
 </div>
+
+<script nonce="{{ csp_nonce }}">
+// v5.67.0-beta.8 (Q120, item i) — a bundle download is a form POST whose response is a FILE, so this page
+// never reloads and could not learn that the download finished: Continue never appeared and the only way
+// forward was "I will do this later". After the download starts, ask the status endpoint every two seconds
+// (for up to three minutes) until it reports a bundle newer than the one this page already knew about.
+(function () {
+    var form = document.getElementById('recovery-bundle-form');
+    if (!form) return;
+    var knownAt = form.getAttribute('data-initial-at') || '';
+    var timer = null;
+    var tries = 0;
+    function show(status) {
+        document.getElementById('recovery-done-text').textContent =
+            'Downloaded ' + status.size + ' bytes at ' + status.at + '.';
+        document.getElementById('recovery-done-note').hidden = false;
+        document.getElementById('recovery-continue').hidden = false;
+        document.getElementById('recovery-later').hidden = true;
+    }
+    function poll() {
+        tries += 1;
+        fetch('/setup/recovery/status', {credentials: 'same-origin', headers: {'Accept': 'application/json'}})
+            .then(function (r) { return r.ok ? r.json() : null; })
+            .then(function (status) {
+                if (status && status.fresh && status.at && status.at !== knownAt) {
+                    clearInterval(timer);
+                    knownAt = status.at;
+                    show(status);
+                } else if (tries >= 90) {
+                    clearInterval(timer);
+                }
+            })
+            .catch(function () {});
+    }
+    form.addEventListener('submit', function (e) {
+        if (e.defaultPrevented) return;
+        if (timer) clearInterval(timer);
+        tries = 0;
+        timer = setInterval(poll, 2000);
+    });
+})();
+</script>
 {% endblock %}

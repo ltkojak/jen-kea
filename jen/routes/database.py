@@ -363,6 +363,22 @@ def _recovery_members(tmp_dir: str, without_audit_history: bool = False) -> tupl
     return members, db_export_path
 
 
+# v5.67.0-beta.8 (Q120, item i) — where a refused bundle request goes back to. The setup wizard's recovery
+# step posts here too, and a passphrase mismatch used to throw its operator out of the wizard into
+# Settings -> Databases. `next` is a fixed choice between the two known pages — never a URL taken from the
+# request, so it cannot become an open redirect.
+_BUNDLE_RETURN_PAGES = ("setup", "databases")
+
+
+def _bundle_return_target() -> str:
+    nxt = request.form.get("next", "databases")
+    if nxt not in _BUNDLE_RETURN_PAGES:
+        nxt = "databases"
+    if nxt == "setup":
+        return url_for("setup.setup_recovery")
+    return url_for("database.database", tab="recovery")
+
+
 @bp.route("/settings/databases/recovery-bundle", methods=["POST"])
 @login_required
 @_superadmin_required
@@ -377,10 +393,10 @@ def recovery_bundle():
     confirm = request.form.get("passphrase_confirm", "")
     if len(passphrase) < recovery.MIN_PASSPHRASE_LEN:
         flash(f"Passphrase must be at least {recovery.MIN_PASSPHRASE_LEN} characters.", "error")
-        return redirect(url_for("database.database", tab="recovery"))
+        return redirect(_bundle_return_target())
     if passphrase != confirm:
         flash("Passphrases did not match.", "error")
-        return redirect(url_for("database.database", tab="recovery"))
+        return redirect(_bundle_return_target())
 
     hostname = socket.gethostname() or "jen"
     ts = datetime.utcnow().strftime("%Y-%m-%d-%H%M%S")
@@ -417,13 +433,13 @@ def recovery_bundle():
             "check server logs for the exact size.",
             "error",
         )
-        return redirect(url_for("database.database", tab="recovery"))
+        return redirect(_bundle_return_target())
     except Exception as e:
         # anything that fails BEFORE streaming starts leaves no file behind
         _discard()
         logger.error(f"recovery bundle build failed: {e}")
         flash("Could not build the recovery bundle — see server logs.", "error")
-        return redirect(url_for("database.database", tab="recovery"))
+        return redirect(_bundle_return_target())
 
     try:
         __user.audit("RECOVERY_BUNDLE_EXPORT", "settings", f"{filename} ({size} bytes, {len(members)} members)")
@@ -474,7 +490,7 @@ def recovery_bundle():
         _discard()
         logger.error(f"recovery bundle write failed: {e}")
         flash("Could not build the recovery bundle — see server logs.", "error")
-        return redirect(url_for("database.database", tab="recovery"))
+        return redirect(_bundle_return_target())
 
 
 # ── Backup download / delete ───────────────────────────────────────────────────

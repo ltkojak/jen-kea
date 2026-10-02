@@ -20,7 +20,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-from urllib.parse import urlparse
+from urllib.parse import urlsplit, urlunsplit
 
 logger = logging.getLogger(__name__)
 
@@ -194,65 +194,138 @@ def mark_entry_redirect_shown() -> None:
 # ── step 1: connect ──────────────────────────────────────────────────────────
 
 
-def test_kea_connection(url: str, user: str, password: str, *, service: str = "dhcp4", verify=None, cert=None) -> dict:
-    """Try `url` as given (Control Agent style, with a "service" field);
-    if nothing answers, retry the same host on the daemon's own default
-    direct-socket port (8004/8006) — the same two-step fallback
-    jen.routes.settings.infrastructure.probe_kea() uses for an already-
-    configured connection, run here against a connection that hasn't
-    been saved yet. Returns
-    {"ok", "mode": "ca"|"direct"|None, "url", "version", "version_text", "attempts"}.
+def _direct_guess(url: str, service: str) -> str | None:
+    """The same host on the daemon's own default control-socket port (8004 for dhcp4, 8006 for dhcp6) —
+    but ONLY when the typed URL named no port at all (v5.67.0-beta.8, Q120, item k). A typed port is the
+    operator's answer; guessing another one on top of it answered the wrong question and put the wrong
+    error on screen. Built with urlsplit/urlunsplit and an IPv6 literal re-bracketed (item l):
+    `urlparse(url).hostname` strips the brackets, and `f"{scheme}://{host}:{port}"` of the bare
+    `2001:db8::1` is `http://2001:db8::1:8004`, which no HTTP client can parse."""
+    parts = urlsplit(url)
+    try:
+        port = parts.port
+    except ValueError:
+        return None  # a malformed port: nothing to guess from
+    host = parts.hostname
+    if port is not None or not host:
+        return None
+    netloc = f"[{host}]" if ":" in host else host
+    return urlunsplit((parts.scheme or "http", f"{netloc}:{8006 if service == 'dhcp6' else 8004}", "", "", ""))
 
-    v5.67.0-beta.5 (Q117, item f) — `verify`/`cert` let the Connect
-    step's own Advanced TLS fields (not yet saved) override the
-    currently-configured material, the same way Settings' own https
-    setup flow probes a candidate before adopting it. Both attempts
-    below go through kea.test_connection(), the one shared TLS-aware
-    probe primitive — this function used to keep its own copy that
-    never looked at TLS settings at all."""
+
+# What each answer to an identification config-get means for the connection mode.
+_DAEMON_KEYS = {"Dhcp4": "dhcp4", "Dhcp6": "dhcp6", "D2": "d2"}
+
+
+def test_kea_connection(
+    url: str,
+    user: str,
+    password: str,
+    *,
+    service: str = "dhcp4",
+    verify=None,
+    cert=None,
+    default_mode: str = "ca",
+) -> dict:
+    """Probe the URL the operator typed — and decide what answered. Returns
+    {"ok", "mode": "ca"|"direct"|None, "url", "version", "version_text", "identified", "attempts"};
+    each attempt is {"url", "typed", "mode" (the probe's style), "error" ("" when it answered)}.
+
+    v5.67.0-beta.8 (Q120, items b, e, k, l):
+    - The typed URL is tried FIRST, in direct style (no `service` field): a Control Agent answers that
+      with its own version, a daemon with its own, so reachability does not depend on the daemon behind
+      a Control Agent being up. Only a typed URL with NO port also gets the `:8004`/`:8006` guess.
+    - The mode comes from kea.identify_daemon() — the one Settings uses — never from "it answered a
+      command with a `service` field": verified against real Kea 3.0.3/3.2.0/3.3.1 (tests/kea_compat),
+      a daemon answers such a command exactly as it answers one without, so every daemon was being
+      saved as Control Agent mode (after which [kea6] and [d2] fell back to the dhcp4 socket, and an
+      existing direct-mode install that re-submitted Connect was flipped). "Control-agent" -> ca,
+      after confirming the dhcp4 service behind it answers too; a daemon key -> direct; an answer that
+      cannot be identified -> `default_mode` (the route passes the CURRENTLY saved mode when the URL is
+      the saved one, so a transient identification failure never flips it).
+
+    `verify`/`cert` let the Connect step's own Advanced TLS fields (not yet saved) override the
+    configured material (Q117, item f); pass kea.NO_CLIENT_CERT for "no client certificate at all"."""
+    from jen.services import kea as __kea
     from jen.services.kea import parse_kea_version
-    from jen.services.kea import test_connection as _probe
 
-    attempts = []
-    version_text, err = _probe(url, user, password, service=service, omit_service=False, verify=verify, cert=cert)
-    attempts.append({"url": url, "mode": "ca", "error": err})
-    if version_text:
-        v = parse_kea_version(version_text)
+    def _version_of(text: str) -> str:
+        v = parse_kea_version(text)
+        return ".".join(str(n) for n in v) if v else ""
+
+    attempts: list[dict] = []
+    candidates = [(url, True)]
+    guess = _direct_guess(url, service)
+    if guess:
+        candidates.append((guess, False))
+
+    for cand_url, typed in candidates:
+        text, err = __kea.test_connection(
+            cand_url, user, password, service=service, omit_service=True, verify=verify, cert=cert
+        )
+        attempt = {"url": cand_url, "typed": typed, "mode": "direct", "error": err}
+        attempts.append(attempt)
+        if not text:
+            continue
+
+        key = __kea.identify_daemon(cand_url, user, password, verify=verify, cert=cert)
+        if key in _DAEMON_KEYS and _DAEMON_KEYS[key] != service:
+            attempt["error"] = f"{cand_url} is kea-{_DAEMON_KEYS[key]}'s control socket, not kea-{service}'s."
+            continue
+        if key in _DAEMON_KEYS:
+            mode = "direct"
+        elif key == "Control-agent":
+            mode = "ca"
+            # Jen will send every command to a Control Agent with a `service` field, so the daemon
+            # behind it has to answer THAT way before this counts as connected.
+            text2, err2 = __kea.test_connection(
+                cand_url, user, password, service=service, omit_service=False, verify=verify, cert=cert
+            )
+            attempts.append({"url": cand_url, "typed": typed, "mode": "ca", "error": err2})
+            if not text2:
+                continue
+            text = text2
+        else:
+            mode = default_mode if default_mode in ("ca", "direct") else "ca"
         return {
             "ok": True,
-            "mode": "ca",
-            "url": url,
-            "version": ".".join(str(n) for n in v) if v else "",
-            "version_text": version_text,
+            "mode": mode,
+            "url": cand_url,
+            "version": _version_of(text),
+            "version_text": text,
+            "identified": key,
             "attempts": attempts,
         }
 
-    host = urlparse(url).hostname
-    scheme = urlparse(url).scheme or "http"
-    if host:
-        alt = f"{scheme}://{host}:{8006 if service == 'dhcp6' else 8004}"
-        version_text2, err2 = _probe(alt, user, password, service=service, omit_service=True, verify=verify, cert=cert)
-        attempts.append({"url": alt, "mode": "direct", "error": err2})
-        if version_text2:
-            v = parse_kea_version(version_text2)
-            return {
-                "ok": True,
-                "mode": "direct",
-                "url": alt,
-                "version": ".".join(str(n) for n in v) if v else "",
-                "version_text": version_text2,
-                "attempts": attempts,
-            }
-
-    return {"ok": False, "mode": None, "url": None, "version": "", "version_text": "", "attempts": attempts}
+    return {
+        "ok": False,
+        "mode": None,
+        "url": None,
+        "version": "",
+        "version_text": "",
+        "identified": None,
+        "attempts": attempts,
+    }
 
 
-def test_kea_db(host: str, user: str, password: str, database: str, port: int = 3306):
+def test_kea_db(host: str, user: str, password: str, database: str, port: int | None = None, ssl_ca: str | None = None):
     """(ok, info_or_error) — jen.services.dbexport.test_connection() is
-    the one DB-connectivity tester this codebase already has."""
+    the one DB-connectivity tester this codebase already has.
+
+    v5.67.0-beta.8 (Q120, item g) — tests with the port and the `[kea_db] ssl_ca` the pool will use:
+    this used to dial 3306 in plaintext whatever was configured, so a database that needs TLS (or
+    listens elsewhere) failed here, or worse passed here and failed in the app."""
+    from jen import extensions
     from jen.services import dbexport
 
-    return dbexport.test_connection(host, port, user, password, database)
+    return dbexport.test_connection(
+        host,
+        extensions.KEA_DB_PORT if port is None else port,
+        user,
+        password,
+        database,
+        extensions.KEA_DB_SSL_CA if ssl_ca is None else ssl_ca,
+    )
 
 
 def save_connection(
@@ -265,6 +338,7 @@ def save_connection(
     kea_db_user,
     kea_db_pass,
     kea_db_name,
+    kea_db_port=None,
     api_ca="",
     api_tls_verify=True,
     api_client_cert="",
@@ -278,8 +352,15 @@ def save_connection(
     save_infra_kea's own writes: always written (not conditional like
     the password fields) since an unchecked expander means "no TLS
     material", which must actively clear any value a previous save left
-    behind, not silently keep it."""
+    behind, not silently keep it.
+
+    v5.67.0-beta.8 (Q120, item g) — the Kea database pools are reset after the write
+    (models.db.reset_kea_pools): write_values() re-derives the extensions globals but not a pool that
+    already exists, and a pool built while the config still held placeholders kept dialling them until a
+    restart — so the very next step's lease query failed against settings the operator had just fixed.
+    `kea_db_port` is written only when given."""
     from jen.config import app_config
+    from jen.models import db as __db
 
     items = [
         ("kea", "api_url", api_url),
@@ -293,11 +374,14 @@ def save_connection(
         ("kea_db", "user", kea_db_user),
         ("kea_db", "database", kea_db_name),
     ]
+    if kea_db_port is not None:
+        items.append(("kea_db", "port", str(int(kea_db_port))))
     if api_pass:
         items.append(("kea", "api_pass", api_pass))
     if kea_db_pass:
         items.append(("kea_db", "password", kea_db_pass))
     app_config.write_values(items)
+    __db.reset_kea_pools()
 
 
 # ── step 2: what Jen found ──────────────────────────────────────────────────
@@ -352,6 +436,7 @@ def discover() -> dict:
             "ddns": caps.ddns,
         },
         "ha": ha,
+        "ha_view": ha_peer_view(ha, extensions.KEA_SERVERS),
         "ipv6_enabled": _ipv6_enabled(),
         "proposed_subnets": proposed,
         "orphaned_subnets": orphaned,
@@ -389,6 +474,37 @@ def save_subnets(renamed: dict, remove_ids: set = frozenset()) -> tuple[dict, st
     return merged, None
 
 
+def _same_network(a: str, b: str) -> bool:
+    """Two CIDR strings naming the same network ("2001:db8::/64" vs "2001:DB8:0::/64"); plain text equality
+    when either does not parse."""
+    import ipaddress
+
+    try:
+        return ipaddress.ip_network(a, strict=False) == ipaddress.ip_network(b, strict=False)
+    except ValueError:
+        return a == b
+
+
+def merge_subnets6(live: dict, known: dict) -> tuple[dict, dict]:
+    """(proposed, orphaned) for Jen's `[subnets6]` — the v6 twin of what discover() does for v4
+    (Q117, item h), which "Manage IPv6 in Jen" did not do: it replaced the whole section with
+    `Subnet<id>` names and no pairing (v5.67.0-beta.8, Q120, item c).
+
+    `live` is `{id: cidr}` from the daemon; `known` is Jen's current SUBNET6_MAP. A subnet Jen already
+    has under the SAME id and network keeps its own entry — name AND paired_subnet4_id; a new id, or a
+    reused id on a different network, is proposed as `Subnet<id>` (there is no name to keep). `orphaned`
+    is what Jen has that the daemon did not report: offered for removal, never dropped by omission."""
+    proposed: dict = {}
+    for sid, cidr in sorted(live.items()):
+        existing = known.get(sid)
+        if existing and _same_network(existing.get("cidr", ""), cidr):
+            proposed[sid] = dict(existing)
+        else:
+            proposed[sid] = {"name": f"Subnet{sid}", "cidr": cidr, "paired_subnet4_id": None}
+    orphaned = {sid: dict(info) for sid, info in known.items() if sid not in live}
+    return proposed, orphaned
+
+
 def probe_v6(url: str, user: str, password: str, *, omit_service: bool) -> dict:
     """Explicit, superadmin-pressed check for whether Kea's dhcp6 daemon
     answers at all (v5.67.0-beta.5, Q117, item g) — never run
@@ -403,59 +519,165 @@ def probe_v6(url: str, user: str, password: str, *, omit_service: bool) -> dict:
     with service=["dhcp6"]; direct mode needs its own per-daemon socket
     URL, since Kea has no way to infer one daemon's control socket from
     another's. Returns {"ok", "version", "version_text",
-    "subnet6_count", "proposed_subnets6", "error"} — never raises; a
-    failed probe just reports ok: False, same contract as every other
-    live-Kea read in this codebase."""
+    "subnet6_count", "proposed_subnets6", "orphaned_subnets6", "error"} —
+    never raises; a failed probe just reports ok: False, same contract as
+    every other live-Kea read in this codebase.
+
+    v5.67.0-beta.8 (Q120, item d) — "answered" now means a kea-dhcp6 answered: `config-get` must succeed
+    AND carry a `Dhcp6` section. Before, any Kea endpoint passed (a dhcp4 socket pasted into the v6 box
+    answers version-get), and a missing `Dhcp6` key read as "0 subnets"; a daemon answering
+    `config-get` with an error also still read as ok, so "Manage IPv6 in Jen" could be offered, and
+    pressed, with nothing known about what it would write (item c)."""
+    from jen import extensions
     from jen.services import kea_config_view as _view
     from jen.services.kea import parse_kea_version
     from jen.services.kea import probe_command as _probe_cmd
 
+    empty = {"version": "", "version_text": "", "subnet6_count": 0, "proposed_subnets6": {}, "orphaned_subnets6": {}}
+
     version_result, err = _probe_cmd(url, user, password, "version-get", service="dhcp6", omit_service=omit_service)
     if version_result is None:
-        return {
-            "ok": False,
-            "error": err,
-            "version": "",
-            "version_text": "",
-            "subnet6_count": 0,
-            "proposed_subnets6": {},
-        }
+        return {"ok": False, "error": err, **empty}
 
     version_text = (version_result.get("arguments", {}).get("extended", "") or version_result.get("text", "")).strip()
     v = parse_kea_version(version_text)
+    version = ".".join(str(n) for n in v) if v else ""
+    known = {"version": version, "version_text": version_text}
 
-    proposed6 = {}
-    cfg_result, _cfg_err = _probe_cmd(url, user, password, "config-get", service="dhcp6", omit_service=omit_service)
-    if cfg_result is not None:
-        dhcp6_cfg = cfg_result.get("arguments", {}).get("Dhcp6", {})
-        for s, _sn in sorted(_view.iter_subnet6(dhcp6_cfg), key=lambda pair: pair[0]["id"]):
-            proposed6[s["id"]] = {"name": f"Subnet{s['id']}", "cidr": s.get("subnet", "")}
+    cfg_result, cfg_err = _probe_cmd(url, user, password, "config-get", service="dhcp6", omit_service=omit_service)
+    if cfg_result is None:
+        return {"ok": False, "error": f"config-get failed: {cfg_err}", **empty, **known}
+    arguments = cfg_result.get("arguments") or {}
+    dhcp6_cfg = arguments.get("Dhcp6")
+    if not isinstance(dhcp6_cfg, dict):
+        found = next((k for k in arguments if k != "hash"), None)
+        return {
+            "ok": False,
+            "error": (
+                "that endpoint answered, but it is not kea-dhcp6 — its config-get has no Dhcp6 section"
+                + (f" (it is {found})" if found else "")
+            ),
+            **empty,
+            **known,
+        }
+
+    live = {s["id"]: s.get("subnet", "") for s, _sn in _view.iter_subnet6(dhcp6_cfg) if s.get("id") is not None}
+    proposed6, orphaned6 = merge_subnets6(live, extensions.SUBNET6_MAP)
 
     return {
         "ok": True,
         "error": "",
-        "version": ".".join(str(n) for n in v) if v else "",
+        "version": version,
         "version_text": version_text,
         "subnet6_count": len(proposed6),
         "proposed_subnets6": proposed6,
+        "orphaned_subnets6": orphaned6,
     }
 
 
-def enable_v6(url: str, subnets6: dict) -> None:
+def enable_v6(url: str, subnets6: dict, remove_ids: set = frozenset()) -> str | None:
     """ "Manage IPv6 in Jen" — called only after probe_v6() has already
-    confirmed dhcp6 answers. Flips Jen's own display flag, saves the
+    confirmed dhcp6 answered. Flips Jen's own display flag, saves the
     confirmed dhcp6 endpoint (so later reads use it instead of inheriting
-    v4's), and proposes the subnet6 map. Deliberately NOT toggle_ipv6()
+    v4's), and merges the proposed subnet6 map into what Jen already has.
+    Deliberately NOT toggle_ipv6()
     (routes/settings/infrastructure.py): that route's job is
     starting/stopping kea-dhcp6-server over SSH on a server that isn't
     running it yet — here it already IS running and already answered,
-    so there's nothing to start."""
+    so there's nothing to start.
+
+    v5.67.0-beta.8 (Q120, item c) — a MERGE, never `write_subnets6(proposed)`: `subnets6` is
+    probe_v6()'s proposal (which already keeps the name and pairing of every subnet whose id and network
+    match), laid over Jen's current map; whatever Jen has that the daemon did not report stays unless its
+    id is in `remove_ids` (the superadmin's explicit, unchecked-by-default choice). The subnets are
+    written FIRST: a name the writer refuses comes back as the error text (None on success) before
+    anything else has changed, so a failure leaves Jen exactly as it was — no half-enabled IPv6."""
+    from jen import extensions
     from jen.config import app_config
     from jen.models.user import set_global_setting
 
+    merged = dict(extensions.SUBNET6_MAP)
+    merged.update(subnets6)
+    for sid in remove_ids:
+        merged.pop(sid, None)
+    try:
+        app_config.write_subnets6(merged)
+    except ValueError as e:
+        return str(e)
     app_config.write_values([("kea6", "api_url", url)])
-    app_config.write_subnets6(subnets6)
     set_global_setting("ipv6_enabled", "true")
+    return None
+
+
+# ── HA peers (what Kea says) vs servers (what Jen manages) ──────────────────
+
+
+def _origin(url: str) -> str:
+    """`scheme://host[:port]` of a URL — the path dropped, an IPv6 literal re-bracketed. "" if it has no host."""
+    parts = urlsplit(url or "")
+    host = parts.hostname
+    if not host:
+        return ""
+    netloc = f"[{host}]" if ":" in host else host
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    if port is not None:
+        netloc += f":{port}"
+    return urlunsplit((parts.scheme or "http", netloc, "", "", ""))
+
+
+def _host_of(url: str) -> str:
+    return (urlsplit(url or "").hostname or "").lower()
+
+
+def ha_peer_view(ha: dict | None, servers: list) -> dict | None:
+    """Two different facts the Found step used to print as one (v5.67.0-beta.8, Q120, item m): how many HA
+    peers KEA says it has (`ha.peers`), and how many servers JEN manages (`extensions.KEA_SERVERS`). With
+    two Kea peers and one Jen-managed server the page read as if both were connected.
+
+    Returns None without an HA hook, else {"mode", "detected", "managed", "peers": [{"name", "url",
+    "role", "managed", "add_url", "add_role"}]}. A peer is "managed" when it is this very server, or when
+    its URL's host or its name matches a server Jen manages; every other peer carries `add_url` — its
+    origin, for the "Add this peer to Jen" action to prefill on the Servers form. It never carries
+    credentials: Jen cannot know them, and does not invent them."""
+    if not ha:
+        return None
+    this_name = (ha.get("this_server_name") or "").lower()
+    managed_hosts = {_host_of(s.get("api_url", "")) for s in servers} - {""}
+    managed_names = {(s.get("name") or "").lower() for s in servers} - {""}
+    mode = ha.get("mode") or ""
+
+    def _jen_role(kea_role: str) -> str:
+        if kea_role == "primary":
+            return "primary"
+        if kea_role == "secondary":
+            return "peer" if mode == "load-balancing" else "standby"
+        return "standby"
+
+    peers = []
+    for peer in ha.get("peers") or []:
+        if not isinstance(peer, dict):
+            continue
+        name = peer.get("name") or ""
+        url = peer.get("url") or ""
+        managed = (
+            name.lower() == this_name
+            or (name.lower() in managed_names)
+            or (_host_of(url) in managed_hosts and _host_of(url) != "")
+        )
+        peers.append(
+            {
+                "name": name,
+                "url": url,
+                "role": peer.get("role") or "",
+                "managed": managed,
+                "add_url": "" if managed else _origin(url),
+                "add_role": _jen_role(peer.get("role") or ""),
+            }
+        )
+    return {"mode": mode, "detected": len(peers), "managed": len(servers), "peers": peers}
 
 
 HOOK_LOSS = {

@@ -72,10 +72,13 @@ def setup_connect():
             kea_db_host=extensions.KEA_DB_HOST,
             kea_db_user=extensions.KEA_DB_USER,
             kea_db_name=extensions.KEA_DB_NAME,
+            kea_db_port=extensions.KEA_DB_PORT,
             api_ca=extensions.KEA_API_CA,
             api_tls_verify=extensions.KEA_API_TLS_VERIFY,
             api_client_cert=extensions.KEA_API_CLIENT_CERT,
             api_client_key=extensions.KEA_API_CLIENT_KEY,
+            api_pass_saved=bool(extensions.KEA_API_PASS),
+            kea_db_pass_saved=bool(extensions.KEA_DB_PASS),
         )
 
     api_url = request.form.get("api_url", "").strip()
@@ -85,6 +88,7 @@ def setup_connect():
     kea_db_user = request.form.get("kea_db_user", "").strip()
     kea_db_pass = request.form.get("kea_db_pass", "")
     kea_db_name = request.form.get("kea_db_name", "").strip() or "kea"
+    kea_db_port_raw = request.form.get("kea_db_port", "").strip()
     # v5.67.0-beta.5 (Q117, item f) — Advanced TLS, same four fields and
     # same validation as Settings' own save_infra_kea.
     api_ca = request.form.get("api_ca", "").strip()
@@ -101,11 +105,24 @@ def setup_connect():
         "kea_db_host": kea_db_host,
         "kea_db_user": kea_db_user,
         "kea_db_name": kea_db_name,
+        "kea_db_port": kea_db_port_raw or extensions.KEA_DB_PORT,
         "api_ca": api_ca,
         "api_tls_verify": api_tls_verify,
         "api_client_cert": api_client_cert,
         "api_client_key": api_client_key,
+        "api_pass_saved": bool(extensions.KEA_API_PASS),
+        "kea_db_pass_saved": bool(extensions.KEA_DB_PASS),
     }
+    # v5.67.0-beta.8 (Q120, item g) — the Kea database port; blank keeps the saved one.
+    kea_db_port = extensions.KEA_DB_PORT
+    if kea_db_port_raw:
+        try:
+            kea_db_port = int(kea_db_port_raw)
+        except ValueError:
+            kea_db_port = 0
+        if not 1 <= kea_db_port <= 65535:
+            flash("Enter a valid database port (1–65535).", "error")
+            return render_template("setup_connect.html", progress=_progress(), **retry_ctx)
     if not api_url or not __auth.valid_api_url(api_url, require_port=False):
         flash("Enter a valid Kea API URL (http:// or https://).", "error")
         return render_template("setup_connect.html", progress=_progress(), **retry_ctx)
@@ -131,15 +148,41 @@ def setup_connect():
     # probe must override what's currently configured rather than fall
     # back to it (the same reasoning Settings' own https setup flow
     # already uses for a socket Jen hasn't adopted yet).
+    # v5.67.0-beta.8 (Q120, item f) — "no client certificate" is said out loud (kea.NO_CLIENT_CERT), not
+    # passed as None: None means "nothing given, use the SAVED certificate", so a form that cleared the
+    # fields probed WITH the saved certificate (and passed), then saved the empty fields (and every later
+    # call failed).
     probe_verify = api_ca or api_tls_verify
-    probe_cert = (api_client_cert, api_client_key) if api_client_cert and api_client_key else None
-    kea_result = __setup.test_kea_connection(api_url, api_user, api_pass, verify=probe_verify, cert=probe_cert)
-    db_ok, db_info = __setup.test_kea_db(kea_db_host, kea_db_user, kea_db_pass, kea_db_name)
+    probe_cert = (api_client_cert, api_client_key) if api_client_cert and api_client_key else __kea.NO_CLIENT_CERT
+    # v5.67.0-beta.8 (Q120, item n) — saved passwords are never rendered, so a revisit shows blank
+    # fields; save_connection() keeps the stored value for a blank one, and the TEST now does the same
+    # instead of failing with an empty password the save would never have written.
+    test_api_pass = api_pass or extensions.KEA_API_PASS
+    test_db_pass = kea_db_pass or extensions.KEA_DB_PASS
+    # An answer that cannot be identified keeps the mode already saved for THIS url (Q120, item b).
+    saved_url = (extensions.KEA_API_URL or "").rstrip("/")
+    default_mode = extensions.KEA_CONNECTION_MODE if saved_url and api_url.rstrip("/") == saved_url else "ca"
+    kea_result = __setup.test_kea_connection(
+        api_url, api_user, test_api_pass, verify=probe_verify, cert=probe_cert, default_mode=default_mode
+    )
+    db_ok, db_info = __setup.test_kea_db(kea_db_host, kea_db_user, test_db_pass, kea_db_name, port=kea_db_port)
 
     if not kea_result["ok"] or not db_ok:
         if not kea_result["ok"]:
-            last = kea_result["attempts"][-1] if kea_result["attempts"] else {}
-            flash(f"Could not reach Kea's API: {last.get('error', 'no response')}.", "error")
+            # v5.67.0-beta.8 (Q120, item e) — the error for the URL the operator TYPED, first; whatever
+            # was guessed on top of it (the :8004/:8006 fallback) as a second line. This used to flash
+            # attempts[-1], always the guess, so a wrong password read "connection refused" on a port
+            # nobody had typed.
+            attempts = kea_result["attempts"]
+            typed = [a for a in attempts if a.get("typed") and a.get("error")]
+            guessed = [a for a in attempts if not a.get("typed") and a.get("error")]
+            first = typed[-1] if typed else (attempts[0] if attempts else {})
+            flash(
+                f"Could not reach Kea's API at {first.get('url', api_url)}: {first.get('error') or 'no response'}.",
+                "error",
+            )
+            for a in guessed:
+                flash(f"Also tried {a['url']} (a control socket's default port): {a['error']}.", "error")
         if not db_ok:
             flash(f"Could not reach Kea's database: {db_info}.", "error")
         return render_template("setup_connect.html", progress=_progress(), **retry_ctx)
@@ -153,6 +196,7 @@ def setup_connect():
         kea_db_user=kea_db_user,
         kea_db_pass=kea_db_pass,
         kea_db_name=kea_db_name,
+        kea_db_port=kea_db_port,
         api_ca=api_ca,
         api_tls_verify=api_tls_verify,
         api_client_cert=api_client_cert,
@@ -160,6 +204,13 @@ def setup_connect():
     )
     __user.audit("SETUP_WIZARD", "connect", f"url={kea_result['url']} mode={kea_result['mode']}")
     flash(f"Connected — Kea {kea_result['version'] or 'unknown version'}, {kea_result['mode']} mode.", "success")
+    if kea_result["identified"] is None:
+        flash(
+            f"Jen could not tell whether {kea_result['url']} is the Control Agent or a daemon's own control "
+            f"socket (it would not answer config-get), so it kept {kea_result['mode']} mode — check "
+            "Settings → Kea if that is wrong.",
+            "warning",
+        )
     __setup.set_step("connect", "done")
     return redirect(url_for("setup.setup_found"))
 
@@ -243,11 +294,45 @@ def setup_found():
                 v6_url=v6_url,
             )
 
-        # action == "enable_v6"
-        __setup.enable_v6(v6_url, v6_probe["proposed_subnets6"])
-        __user.audit("SETUP_WIZARD", "enable_v6", f"url={v6_url} subnets={v6_probe['subnet6_count']}")
+        # action == "enable_v6" — v5.67.0-beta.8 (Q120, item c): a merge; whatever Jen already has under
+        # [subnets6] that this daemon did not report stays unless the superadmin ticked its "remove" box.
+        remove6 = {sid for sid in v6_probe["orphaned_subnets6"] if request.form.get(f"remove6_{sid}", "") == "1"}
+        error = __setup.enable_v6(v6_url, v6_probe["proposed_subnets6"], remove6)
+        if error:
+            flash(f"IPv6 was not enabled: {error}.", "error")
+            return render_template(
+                "setup_found.html",
+                progress=_progress(),
+                found=found,
+                hook_loss=__setup.HOOK_LOSS,
+                hook_labels=__setup.HOOK_LABELS,
+                v6_probe=v6_probe,
+                v6_url=v6_url,
+            )
+        __user.audit(
+            "SETUP_WIZARD",
+            "enable_v6",
+            f"url={v6_url} subnets={v6_probe['subnet6_count']} removed={len(remove6)}",
+        )
         flash(f"IPv6 is now managed in Jen — Kea {v6_probe['version'] or 'unknown version'}.", "success")
         return redirect(url_for("setup.setup_found"))
+
+    # v5.67.0-beta.8 (Q120, item j) — with Kea unreachable the proposal above is empty and the typed names
+    # have nothing to attach to: this used to drop them silently and mark the step done with subnets=0.
+    # Say so, save nothing, leave the step open (Skip is still there).
+    if not found["reachable"]:
+        flash(
+            "Kea did not answer, so nothing was saved and this step is not done — check the connection "
+            "(step 1) and try again, or skip it for now.",
+            "error",
+        )
+        return render_template(
+            "setup_found.html",
+            progress=_progress(),
+            found=found,
+            hook_loss=__setup.HOOK_LOSS,
+            hook_labels=__setup.HOOK_LABELS,
+        )
 
     subnets = {}
     for sid, info in found["proposed_subnets"].items():
@@ -424,6 +509,21 @@ def setup_recovery():
         return redirect(url_for("setup.setup_investigate"))
 
     return redirect(url_for("setup.setup_recovery"))
+
+
+@bp.route("/recovery/status")
+@login_required
+@_superadmin_required
+def setup_recovery_status():
+    """v5.67.0-beta.8 (Q120, item i) — what the recovery page polls after a download starts. A bundle
+    download is a form POST whose response is a file, so the page never reloads and could never learn that
+    the bundle finished; "Continue" (rendered only for a fresh bundle) never appeared and the only way
+    forward was "I will do this later". `at` lets the page tell a NEW bundle from one it already knew
+    about."""
+    status = __setup.recovery_bundle_status()
+    response = jsonify({"fresh": status["fresh"], "at": status["at"], "size": status["size"]})
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 # ── step 6: investigate ──────────────────────────────────────────────────────

@@ -11,6 +11,10 @@
 <div class="card u-834fcd">
     {% if not found.reachable %}
     <p class="u-5872de">Kea didn't answer this time — <a href="/setup/connect">go back and check the connection</a>.</p>
+    <form method="POST" action="/setup/found">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" name="action" value="skip" class="btn btn-secondary">Skip for now</button>
+    </form>
     {% else %}
     <h3 class="u-d46224">Kea {{ found.kea_version or "unknown version" }} &middot; {{ found.connection_mode }} mode</h3>
 
@@ -29,8 +33,19 @@
 
     <h4>High availability</h4>
     {% if found.ha %}
-    <p>Mode <code>{{ found.ha.mode }}</code>, {{ found.ha.peers|length }} peer(s) configured
-       {% if found.ha.peers|length < 2 %}— <a href="/servers">add a second server</a> to pair with it{% endif %}.</p>
+    {# Two different facts: what Kea says about its pair, and what Jen manages (Q120, item m). #}
+    <p>Mode <code>{{ found.ha.mode }}</code>.</p>
+    <ul>
+        <li>Kea HA peers detected: <strong>{{ found.ha_view.detected }}</strong></li>
+        <li>Servers Jen manages: <strong>{{ found.ha_view.managed }}</strong></li>
+    </ul>
+    {% for peer in found.ha_view.peers if not peer.managed %}
+    <p class="u-865c33">
+        Kea's pair includes <strong>{{ peer.name or peer.url }}</strong>{% if peer.url %} (<code>{{ peer.url }}</code>){% endif %}, which Jen does not manage yet.
+        <a class="btn btn-sm btn-secondary" href="{{ url_for('settings.settings_kea', add_server_name=peer.name, add_server_url=peer.add_url, add_server_role=peer.add_role) }}#extra-servers-list">Add this peer to Jen</a>
+        — it still needs that server's API credentials and SSH details.
+    </p>
+    {% endfor %}
     {% else %}
     <p class="u-865c33">No HA hook configured — one server only, for now.</p>
     {% endif %}
@@ -44,6 +59,22 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="action" value="enable_v6">
         {% if v6_url %}<input type="hidden" name="v6_url" value="{{ v6_url }}">{% endif %}
+        {% if v6_probe.orphaned_subnets6 %}
+        <p class="u-865c33">Jen already lists these IPv6 subnets, which this daemon did not report. They stay unless you tick "remove".</p>
+        <table class="table">
+            <thead><tr><th>ID</th><th>Name</th><th>CIDR</th><th>Remove</th></tr></thead>
+            <tbody>
+                {% for sid, info in v6_probe.orphaned_subnets6.items() %}
+                <tr>
+                    <td>{{ sid }}</td>
+                    <td>{{ info.name }}</td>
+                    <td><code>{{ info.cidr }}</code></td>
+                    <td><input type="checkbox" name="remove6_{{ sid }}" value="1"></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
         <button type="submit" class="btn btn-primary">Manage IPv6 in Jen</button>
     </form>
     {% else %}

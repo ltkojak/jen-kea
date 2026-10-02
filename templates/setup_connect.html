@@ -25,7 +25,7 @@
             </div>
             <div class="form-group">
                 <label>API Password</label>
-                <input type="password" name="api_pass" placeholder="(leave blank for none)">
+                <input type="password" name="api_pass" placeholder="{{ '(saved — leave blank to keep it)' if api_pass_saved else '(leave blank for none)' }}">
             </div>
         </div>
         <details class="u-56f435"{% if api_ca or api_client_cert %} open{% endif %}>
@@ -71,11 +71,15 @@
         <div class="form-row">
             <div class="form-group">
                 <label>Database password</label>
-                <input type="password" name="kea_db_pass" placeholder="(leave blank for none)">
+                <input type="password" name="kea_db_pass" placeholder="{{ '(saved — leave blank to keep it)' if kea_db_pass_saved else '(leave blank for none)' }}">
             </div>
             <div class="form-group">
                 <label>Database name</label>
                 <input type="text" name="kea_db_name" value="{{ kea_db_name or 'kea' }}">
+            </div>
+            <div class="form-group">
+                <label>Database port</label>
+                <input type="number" name="kea_db_port" min="1" max="65535" value="{{ kea_db_port or 3306 }}">
             </div>
         </div>
         <button type="submit" class="btn btn-primary">Test &amp; Connect</button>

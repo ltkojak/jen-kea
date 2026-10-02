@@ -283,6 +283,44 @@ class TestSetupWizardHonorsTheSameTlsMaterial:
         assert result["version"] == "3.2.0"
 
 
+class TestNoClientCertificateIsSaidOutLoud:
+    """v5.67.0-beta.8 (Q120, item f) — `cert=None` means "nothing given, use the SAVED client certificate".
+    The Connect step probed with None when its form had cleared the certificate fields, so the probe passed
+    WITH the saved certificate, then saved the empty fields — and every later call failed. The explicit
+    sentinel means none at all. Same real mTLS server as above."""
+
+    def _saved_cert(self, monkeypatch, mtls_server):
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "KEA_API_CLIENT_CERT", mtls_server["client_cert"])
+        monkeypatch.setattr(extensions, "KEA_API_CLIENT_KEY", mtls_server["client_key"])
+
+    def test_none_still_falls_back_to_the_saved_certificate(self, mtls_server, monkeypatch):
+        self._saved_cert(monkeypatch, mtls_server)
+        version_text, err = kea_service.test_connection(mtls_server["url"], "u", "p", verify=mtls_server["ca_path"])
+        assert version_text == "3.2.0", err
+
+    def test_the_sentinel_means_no_certificate_even_when_one_is_saved(self, mtls_server, monkeypatch):
+        self._saved_cert(monkeypatch, mtls_server)
+        version_text, err = kea_service.test_connection(
+            mtls_server["url"], "u", "p", verify=mtls_server["ca_path"], cert=kea_service.NO_CLIENT_CERT
+        )
+        assert version_text == ""
+        assert err
+
+    def test_the_connect_step_fails_when_the_form_cleared_the_certificate(self, mtls_server, monkeypatch):
+        """The end-to-end shape of the bug: saved cert present, form cleared it -> must NOT pass."""
+        self._saved_cert(monkeypatch, mtls_server)
+        result = setup_wizard.test_kea_connection(
+            mtls_server["url"], "u", "p", verify=mtls_server["ca_path"], cert=kea_service.NO_CLIENT_CERT
+        )
+        assert result["ok"] is False
+
+    def test_the_sentinel_is_falsy_and_readable(self):
+        assert not kea_service.NO_CLIENT_CERT
+        assert repr(kea_service.NO_CLIENT_CERT) == "NO_CLIENT_CERT"
+
+
 class TestProbeV6AgainstARealServer:
     """probe_v6() (item g — "Check for DHCPv6") has no verify/cert
     parameters of its own: by the time the Found step runs, Connect has
@@ -300,7 +338,9 @@ class TestProbeV6AgainstARealServer:
         assert result["ok"] is True
         assert result["version"] == "3.2.0"
         assert result["subnet6_count"] == 1
-        assert result["proposed_subnets6"] == {1: {"name": "Subnet1", "cidr": "2001:db8::/64"}}
+        assert result["proposed_subnets6"] == {
+            1: {"name": "Subnet1", "cidr": "2001:db8::/64", "paired_subnet4_id": None}
+        }
 
     def test_fails_without_the_ca_override(self, dhcp6_server, monkeypatch):
         from jen import extensions

@@ -655,24 +655,11 @@ def _identify_daemon(url, user, pwd, service, verify=None, cert=None):
     Returns the reply's single top-level config key ("Dhcp4",
     "Control-agent", ...), or None on any failure — advisory only, this
     never raises and never changes whether the probe as a whole
-    succeeded. `verify`/`cert` as in _probe_once (v5.29.0)."""
-    try:
-        resp = __kea.http.post(
-            url,
-            json={"command": "config-get"},
-            auth=(user, pwd),
-            timeout=8,
-            verify=verify if verify is not None else (extensions.KEA_API_CA or extensions.KEA_API_TLS_VERIFY),
-            cert=cert if cert is not None else __kea._tls_client_cert(),
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        d = data[0] if isinstance(data, list) else data
-        if d.get("result") != 0:
-            return None
-        return next(iter(d.get("arguments") or {}), None)
-    except Exception:
-        return None
+    succeeded. `verify`/`cert` as in _probe_once (v5.29.0).
+
+    v5.67.0-beta.8 (Q120, item b) — the implementation is kea.identify_daemon(),
+    shared with the setup wizard so both decide a connection mode the same way."""
+    return __kea.identify_daemon(url, user, pwd, verify=verify, cert=cert)
 
 
 @bp.route("/settings/infrastructure/probe-kea", methods=["POST"])

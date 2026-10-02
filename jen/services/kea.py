@@ -120,6 +120,30 @@ def validate_client_tls_material(cert_path: str, key_path: str, ca_path: str) ->
     return None
 
 
+class _NoClientCert:
+    """The type of NO_CLIENT_CERT — a sentinel with a readable repr."""
+
+    def __repr__(self):
+        return "NO_CLIENT_CERT"
+
+    def __bool__(self):
+        return False
+
+
+# v5.67.0-beta.8 (Q120, item f) — "probe with NO client certificate at all". `cert=None` has always meant
+# "nothing given, fall back to the SAVED [kea] client certificate", which is right for a caller with no
+# opinion and wrong for the setup wizard's Connect step: a form that cleared the certificate fields was
+# probed WITH the saved certificate (so the probe passed), then saved the empty fields (so every later call
+# failed). A caller that means "none" passes this.
+NO_CLIENT_CERT = _NoClientCert()
+
+
+def _resolve_cert(cert):
+    if cert is NO_CLIENT_CERT:
+        return None
+    return cert if cert is not None else _tls_client_cert()
+
+
 def test_connection(
     url: str,
     user: str,
@@ -195,7 +219,7 @@ def probe_command(
             auth=(user, password),
             timeout=timeout,
             verify=verify if verify is not None else _tls_verify(),
-            cert=cert if cert is not None else _tls_client_cert(),
+            cert=_resolve_cert(cert),
         )
         resp.raise_for_status()
         data = resp.json()
@@ -205,6 +229,37 @@ def probe_command(
         return d, ""
     except Exception as e:
         return None, str(e)
+
+
+# The top-level key a daemon (or the Control Agent) answers a direct-style `config-get` with.
+_DAEMON_CONFIG_KEYS = ("Dhcp4", "Dhcp6", "D2", "Control-agent")
+
+
+def identify_daemon(url: str, user: str, password: str, *, verify=None, cert=None, timeout: int = 8):
+    """WHICH process answered at `url`: the reply's top-level config key to a direct-style `config-get`
+    (no `service` field) — "Dhcp4"/"Dhcp6"/"D2" for a daemon's own control socket, "Control-agent" for a
+    Control Agent — or None on any failure. Advisory only: never raises, and never changes whether a
+    probe as a whole succeeded.
+
+    v5.28.1 (Q26, D2) introduced this for Settings' probe-kea (a Control Agent left listening on :8000
+    answers `version-get` identically to a real control socket); v5.67.0-beta.8 (Q120, item b) moved it
+    here so the setup wizard decides its connection mode the SAME way. It is the only reliable test:
+    verified against real kea-dhcp4 3.0.3, 3.2.0 and 3.3.1 (tests/kea_compat), a daemon answers a command
+    carrying `service: ["dhcp4"]` exactly as it answers one without, so "it answered a service-style
+    probe" says nothing about whether a Control Agent is there.
+
+    A real reply is `{"Dhcp4": {...}, "hash": "..."}` — the known daemon keys are looked for first so the
+    trailing `hash` is never mistaken for the answer."""
+    result, _err = probe_command(
+        url, user, password, "config-get", omit_service=True, verify=verify, cert=cert, timeout=timeout
+    )
+    if result is None:
+        return None
+    args = result.get("arguments") or {}
+    for key in _DAEMON_CONFIG_KEYS:
+        if key in args:
+            return key
+    return next((k for k in args if k != "hash"), None)
 
 
 def _endpoint_for(server: dict, service: str):

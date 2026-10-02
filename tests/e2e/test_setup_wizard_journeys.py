@@ -90,14 +90,22 @@ class TestSetupWizardJourney:
             page.get_by_role("button", name="Capture baseline").click()
             page.wait_for_url("**/setup/recovery", timeout=10000)
 
-            # Step 5: recovery point — confirm without actually downloading
-            # a bundle (that form posts to the existing, already-tested
-            # /settings/databases/recovery-bundle route unchanged). No
-            # bundle was downloaded this run, so recovery.fresh is False
-            # and the button reads "I will do this later" (v5.67.0-beta.5,
-            # Q117 item i — the step no longer marks itself done on a bare
-            # click).
-            page.get_by_role("button", name="I will do this later").click()
+            # Step 5: recovery point — v5.67.0-beta.8 (Q120, item i): the bundle is downloaded for REAL.
+            # It used to be skipped here ("I will do this later"), which is how the page's real defect
+            # went unseen: a bundle download is a form POST whose response is a FILE, so the page never
+            # reloaded and "Continue" (rendered only for a fresh bundle) never appeared. The page now
+            # polls /setup/recovery/status after the download starts and swaps Continue in.
+            assert page.get_by_role("button", name="I will do this later").is_visible()
+            assert not page.get_by_role("button", name="Continue").is_visible()
+            passphrase = "correct horse battery staple"
+            page.fill('input[name="passphrase"]', passphrase)
+            page.fill('input[name="passphrase_confirm"]', passphrase)
+            with page.expect_download(timeout=30000) as download_info:
+                page.get_by_role("button", name="Download recovery bundle").click()
+            assert download_info.value.suggested_filename.startswith("jen-recovery-")
+            page.get_by_role("button", name="Continue").wait_for(state="visible", timeout=20000)
+            assert not page.get_by_role("button", name="I will do this later").is_visible()
+            page.get_by_role("button", name="Continue").click()
             page.wait_for_url("**/setup/investigate", timeout=10000)
 
             # Step 6: investigate — whichever branch this session's shared
@@ -126,6 +134,8 @@ class TestSetupWizardJourney:
             with jen_db() as db, db.cursor() as cur:
                 cur.execute(
                     "DELETE FROM settings WHERE setting_key IN "
-                    "('setup_wizard_state', 'setup_wizard_redirect_shown', 'setup_wizard_started_at')"
+                    "('setup_wizard_state', 'setup_wizard_redirect_shown', 'setup_wizard_started_at', "
+                    "'setup_wizard_completed_at', 'last_recovery_bundle_at', 'last_recovery_bundle_size', "
+                    "'last_recovery_bundle_excluded_audit')"
                 )
             jen_user._settings_cache_ts = 0

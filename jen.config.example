@@ -51,6 +51,9 @@ host     = YOUR-KEA-SERVER
 user     = kea
 password = your-kea-db-password
 database = kea
+# port = 3306   # optional, v5.67.0-beta.8+ — the MariaDB/MySQL TCP port. Absent
+#   means 3306 (every earlier release dialled 3306 whatever you wrote).
+#   [kea6_db] inherits it unless it sets its own.
 # ssl_ca = /etc/jen/ssl/mariadb-ca.pem   # optional, v4.4.5+ — enables TLS
 #   for this connection and verifies the server cert against this CA.
 #   Leave commented/blank for plaintext (unchanged default). Needed if

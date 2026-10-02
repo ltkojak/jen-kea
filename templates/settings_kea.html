@@ -661,6 +661,33 @@ document.getElementById('extra-servers-list').addEventListener('click', function
     }
 });
 
+// v5.67.0-beta.8 (Q120, item m) — "Add this peer to Jen" on the setup wizard's Found step links here with the
+// peer's name, URL and role. Open a new, EMPTY additional-server row and fill in only those three: the
+// credentials and SSH details are the operator's to type — nothing is invented, and nothing is saved until
+// "Save Additional Servers". Values are assigned with .value / textContent, never as markup.
+(function () {
+    var params = new URLSearchParams(window.location.search);
+    var peerUrl = params.get('add_server_url');
+    if (!peerUrl) return;
+    addServerRow();
+    var rows = document.querySelectorAll('.extra-server-row');
+    var row = rows[rows.length - 1];
+    function fill(field, value) {
+        var el = row.querySelector('[name="' + field + '"]');
+        if (el && value) el.value = value;
+    }
+    fill('extra_name[]', params.get('add_server_name'));
+    fill('extra_api_url[]', peerUrl);
+    fill('extra_role[]', params.get('add_server_role'));
+    var note = document.createElement('div');
+    note.className = 'form-hint';
+    note.textContent = 'Prefilled from Kea\'s HA peer list — add this server\'s API credentials and SSH details, then Save Additional Servers.';
+    row.insertBefore(note, row.children[1] || null);
+    row.scrollIntoView({block: 'center'});
+    var userField = row.querySelector('[name="extra_api_user[]"]');
+    if (userField) userField.focus();
+})();
+
 async function probeKea() {
     var btn = document.getElementById('probe-kea-btn');
     var out = document.getElementById('probe-kea-results');

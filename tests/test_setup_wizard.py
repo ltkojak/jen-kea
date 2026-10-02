@@ -111,57 +111,9 @@ def _kea_response(version_text="2.7.5"):
     return resp
 
 
-class TestTestKeaConnection:
-    def test_control_agent_style_url_answers_directly(self, monkeypatch):
-        monkeypatch.setattr("requests.post", lambda *a, **k: _kea_response("2.7.5"))
-        result = setup_wizard.test_kea_connection("http://kea:8000", "u", "p")
-        assert result["ok"] is True
-        assert result["mode"] == "ca"
-        assert result["version"] == "2.7.5"
-        assert len(result["attempts"]) == 1
-
-    def test_falls_back_to_the_direct_socket_port(self, monkeypatch):
-        calls = []
-
-        def fake_post(url, **kw):
-            calls.append(url)
-            if url == "http://kea:8000":
-                raise ConnectionError("refused")
-            return _kea_response("3.1.0")
-
-        monkeypatch.setattr("requests.post", fake_post)
-        result = setup_wizard.test_kea_connection("http://kea:8000", "u", "p")
-        assert result["ok"] is True
-        assert result["mode"] == "direct"
-        assert result["url"] == "http://kea:8004"
-        assert calls == ["http://kea:8000", "http://kea:8004"]
-
-    def test_dhcp6_falls_back_to_8006(self, monkeypatch):
-        def fake_post(url, **kw):
-            if url.endswith(":8000"):
-                raise ConnectionError("refused")
-            return _kea_response("2.7.5")
-
-        monkeypatch.setattr("requests.post", fake_post)
-        result = setup_wizard.test_kea_connection("http://kea:8000", "u", "p", service="dhcp6")
-        assert result["ok"] is True
-        assert result["url"] == "http://kea:8006"
-
-    def test_nothing_answers_is_a_clean_failure(self, monkeypatch):
-        monkeypatch.setattr("requests.post", lambda *a, **k: (_ for _ in ()).throw(ConnectionError("refused")))
-        result = setup_wizard.test_kea_connection("http://kea:8000", "u", "p")
-        assert result["ok"] is False
-        assert result["mode"] is None
-        assert len(result["attempts"]) == 2  # ca attempt, then the direct fallback
-
-    def test_a_kea_error_result_is_not_a_transport_failure(self, monkeypatch):
-        resp = MagicMock()
-        resp.raise_for_status.return_value = None
-        resp.json.return_value = {"result": 1, "text": "unauthorized"}
-        monkeypatch.setattr("requests.post", lambda *a, **k: resp)
-        result = setup_wizard.test_kea_connection("http://kea:8000", "u", "p")
-        assert result["ok"] is False
-        assert result["attempts"][0]["error"] == "unauthorized"
+# test_kea_connection() is tested against real local servers in tests/test_setup_connection_modes.py
+# (v5.67.0-beta.8, Q120) — the mocked-requests.post tests that used to live here asserted the very
+# behaviour that was the bug (any answer to a service-style probe is "ca").
 
 
 # ── save_connection() — pure, write_values mocked ───────────────────────────
@@ -224,36 +176,115 @@ class TestSaveConnection:
         assert items["api_client_key"] == "/etc/jen/ssl/client.key"
 
 
+class TestSaveConnectionPortAndPools:
+    """v5.67.0-beta.8 (Q120, item g)."""
+
+    def _save(self, monkeypatch, **over):
+        calls, resets = [], []
+        monkeypatch.setattr("jen.config.app_config.write_values", lambda items: calls.append(items))
+        monkeypatch.setattr("jen.models.db.reset_kea_pools", lambda: resets.append(True))
+        kwargs = {
+            "api_url": "http://kea:8000",
+            "api_user": "u",
+            "api_pass": "",
+            "mode": "ca",
+            "kea_db_host": "kea-db",
+            "kea_db_user": "kea",
+            "kea_db_pass": "",
+            "kea_db_name": "kea",
+        }
+        kwargs.update(over)
+        setup_wizard.save_connection(**kwargs)
+        return calls, resets
+
+    def test_the_kea_pools_are_reset_after_the_write(self, monkeypatch):
+        order = []
+        monkeypatch.setattr("jen.config.app_config.write_values", lambda items: order.append("write"))
+        monkeypatch.setattr("jen.models.db.reset_kea_pools", lambda: order.append("reset"))
+        setup_wizard.save_connection(
+            api_url="http://kea:8000",
+            api_user="u",
+            api_pass="",
+            mode="ca",
+            kea_db_host="h",
+            kea_db_user="u",
+            kea_db_pass="",
+            kea_db_name="kea",
+        )
+        assert order == ["write", "reset"], "the pool must be rebuilt AFTER the new settings are in place"
+
+    def test_the_port_is_written_only_when_given(self, monkeypatch):
+        calls, _ = self._save(monkeypatch)
+        assert not [i for i in calls[0] if i[1] == "port"]
+        calls, _ = self._save(monkeypatch, kea_db_port=3307)
+        assert ("kea_db", "port", "3307") in calls[0]
+
+    def test_a_blank_password_is_never_written(self, monkeypatch):
+        calls, _ = self._save(monkeypatch)
+        assert not [i for i in calls[0] if i[1] in ("api_pass", "password")]
+        calls, _ = self._save(monkeypatch, api_pass="a", kea_db_pass="b")
+        assert ("kea", "api_pass", "a") in calls[0] and ("kea_db", "password", "b") in calls[0]
+
+
+class TestTestKeaDb:
+    def test_it_tests_with_the_port_and_ca_the_pool_will_use(self, monkeypatch):
+        from jen import extensions
+
+        seen = []
+        monkeypatch.setattr("jen.services.dbexport.test_connection", lambda *a: seen.append(a) or (True, {}))
+        monkeypatch.setattr(extensions, "KEA_DB_PORT", 3307)
+        monkeypatch.setattr(extensions, "KEA_DB_SSL_CA", "/etc/jen/ssl/db-ca.pem")
+        setup_wizard.test_kea_db("h", "u", "p", "kea")
+        assert seen == [("h", 3307, "u", "p", "kea", "/etc/jen/ssl/db-ca.pem")]
+
+    def test_a_typed_port_wins_over_the_saved_one(self, monkeypatch):
+        from jen import extensions
+
+        seen = []
+        monkeypatch.setattr("jen.services.dbexport.test_connection", lambda *a: seen.append(a) or (True, {}))
+        monkeypatch.setattr(extensions, "KEA_DB_PORT", 3307)
+        monkeypatch.setattr(extensions, "KEA_DB_SSL_CA", "")
+        setup_wizard.test_kea_db("h", "u", "p", "kea", port=3310)
+        assert seen[0][1] == 3310
+
+
 # ── probe_v6() / enable_v6() — mocked kea.probe_command, no real Kea ────────
 
 
-class TestProbeV6:
-    def test_ok_shape_with_subnets(self, monkeypatch):
-        def fake_probe_command(url, user, pwd, command, **kw):
-            if command == "version-get":
-                return {"result": 0, "arguments": {"extended": "3.2.0"}, "text": ""}, ""
-            assert command == "config-get"
-            return (
-                {
-                    "result": 0,
-                    "arguments": {
-                        "Dhcp6": {
-                            "subnet6": [{"id": 1, "subnet": "2001:db8::/64"}, {"id": 2, "subnet": "2001:db8:1::/64"}]
-                        }
-                    },
-                },
-                "",
-            )
+def _v6_replies(arguments=None, version="3.2.0", config_error=None):
+    """A fake kea.probe_command: version-get answers, config-get answers `arguments` (or fails)."""
 
-        monkeypatch.setattr("jen.services.kea.probe_command", fake_probe_command)
+    def fake(url, user, pwd, command, **kw):
+        if command == "version-get":
+            return {"result": 0, "arguments": {"extended": version}, "text": ""}, ""
+        assert command == "config-get"
+        if config_error:
+            return None, config_error
+        return {"result": 0, "arguments": arguments}, ""
+
+    return fake
+
+
+@pytest.fixture
+def no_known_v6(monkeypatch):
+    from jen import extensions
+
+    monkeypatch.setattr(extensions, "SUBNET6_MAP", {})
+
+
+class TestProbeV6:
+    def test_ok_shape_with_subnets(self, monkeypatch, no_known_v6):
+        args = {"Dhcp6": {"subnet6": [{"id": 1, "subnet": "2001:db8::/64"}, {"id": 2, "subnet": "2001:db8:1::/64"}]}}
+        monkeypatch.setattr("jen.services.kea.probe_command", _v6_replies(args))
         result = setup_wizard.probe_v6("http://kea:8000", "u", "p", omit_service=False)
         assert result["ok"] is True
         assert result["version"] == "3.2.0"
         assert result["subnet6_count"] == 2
         assert result["proposed_subnets6"] == {
-            1: {"name": "Subnet1", "cidr": "2001:db8::/64"},
-            2: {"name": "Subnet2", "cidr": "2001:db8:1::/64"},
+            1: {"name": "Subnet1", "cidr": "2001:db8::/64", "paired_subnet4_id": None},
+            2: {"name": "Subnet2", "cidr": "2001:db8:1::/64", "paired_subnet4_id": None},
         }
+        assert result["orphaned_subnets6"] == {}
 
     def test_unreachable_is_a_clean_failure(self, monkeypatch):
         monkeypatch.setattr("jen.services.kea.probe_command", lambda *a, **kw: (None, "connection refused"))
@@ -263,33 +294,172 @@ class TestProbeV6:
         assert result["subnet6_count"] == 0
         assert result["proposed_subnets6"] == {}
 
-    def test_config_get_failure_still_reports_the_version(self, monkeypatch):
-        def fake_probe_command(url, user, pwd, command, **kw):
-            if command == "version-get":
-                return {"result": 0, "arguments": {"extended": "3.2.0"}, "text": ""}, ""
-            return None, "config-get not permitted"
-
-        monkeypatch.setattr("jen.services.kea.probe_command", fake_probe_command)
+    def test_a_failed_config_get_is_not_an_answer(self, monkeypatch):
+        """Item c/d — this used to read as ok with 0 subnets, and "Manage IPv6 in Jen" would replace
+        [subnets6] with nothing. The version is still reported; nothing is proposed."""
+        monkeypatch.setattr("jen.services.kea.probe_command", _v6_replies(config_error="config-get not permitted"))
         result = setup_wizard.probe_v6("http://kea:8000", "u", "p", omit_service=False)
-        assert result["ok"] is True
+        assert result["ok"] is False
+        assert "config-get failed: config-get not permitted" in result["error"]
         assert result["version"] == "3.2.0"
-        assert result["subnet6_count"] == 0
         assert result["proposed_subnets6"] == {}
+
+    def test_a_dhcp4_endpoint_is_not_a_dhcp6_answer(self, monkeypatch):
+        """Item d — any Kea endpoint used to pass: a dhcp4 control socket answers version-get."""
+        monkeypatch.setattr("jen.services.kea.probe_command", _v6_replies({"Dhcp4": {"subnet4": []}, "hash": "abc"}))
+        result = setup_wizard.probe_v6("http://kea:8004", "u", "p", omit_service=True)
+        assert result["ok"] is False
+        assert "not kea-dhcp6" in result["error"] and "Dhcp4" in result["error"]
+        assert result["subnet6_count"] == 0
+
+    def test_a_missing_dhcp6_key_is_not_zero_subnets(self, monkeypatch):
+        monkeypatch.setattr("jen.services.kea.probe_command", _v6_replies({}))
+        result = setup_wizard.probe_v6("http://kea:8000", "u", "p", omit_service=False)
+        assert result["ok"] is False and "not kea-dhcp6" in result["error"]
+
+    def test_a_dhcp6_with_no_subnets_is_a_real_answer(self, monkeypatch, no_known_v6):
+        monkeypatch.setattr("jen.services.kea.probe_command", _v6_replies({"Dhcp6": {}}))
+        result = setup_wizard.probe_v6("http://kea:8000", "u", "p", omit_service=False)
+        assert result["ok"] is True and result["subnet6_count"] == 0
+
+    def test_a_known_subnet_keeps_its_name_and_pairing(self, monkeypatch):
+        from jen import extensions
+
+        monkeypatch.setattr(
+            extensions,
+            "SUBNET6_MAP",
+            {
+                1: {"name": "Office v6", "cidr": "2001:db8::/64", "paired_subnet4_id": 10},
+                9: {"name": "Gone", "cidr": "2001:db8:9::/64", "paired_subnet4_id": None},
+            },
+        )
+        args = {"Dhcp6": {"subnet6": [{"id": 1, "subnet": "2001:db8::/64"}, {"id": 2, "subnet": "2001:db8:2::/64"}]}}
+        monkeypatch.setattr("jen.services.kea.probe_command", _v6_replies(args))
+        result = setup_wizard.probe_v6("http://kea:8000", "u", "p", omit_service=False)
+        assert result["proposed_subnets6"][1] == {"name": "Office v6", "cidr": "2001:db8::/64", "paired_subnet4_id": 10}
+        assert result["proposed_subnets6"][2]["name"] == "Subnet2"
+        assert result["orphaned_subnets6"] == {
+            9: {"name": "Gone", "cidr": "2001:db8:9::/64", "paired_subnet4_id": None}
+        }
+
+
+class TestMergeSubnets6:
+    def test_same_id_and_network_keeps_the_entry(self):
+        known = {1: {"name": "Office", "cidr": "2001:db8::/64", "paired_subnet4_id": 4}}
+        proposed, orphaned = setup_wizard.merge_subnets6(
+            {1: "2001:DB8:0::/64"}, known
+        )  # same network, spelled differently
+        assert proposed == {1: known[1]}
+        assert orphaned == {}
+
+    def test_a_reused_id_on_a_different_network_gets_a_default_name_and_no_pairing(self):
+        known = {1: {"name": "Office", "cidr": "2001:db8::/64", "paired_subnet4_id": 4}}
+        proposed, orphaned = setup_wizard.merge_subnets6({1: "2001:db8:ffff::/64"}, known)
+        assert proposed == {1: {"name": "Subnet1", "cidr": "2001:db8:ffff::/64", "paired_subnet4_id": None}}
+        assert orphaned == {}
+
+    def test_what_the_daemon_did_not_report_is_orphaned_never_dropped(self):
+        known = {5: {"name": "Old", "cidr": "2001:db8:5::/64", "paired_subnet4_id": None}}
+        proposed, orphaned = setup_wizard.merge_subnets6({}, known)
+        assert proposed == {} and orphaned == known
 
 
 class TestEnableV6:
+    """v5.67.0-beta.8 (Q120, item c) — a merge into what Jen already has, not a replace."""
+
+    def _run(self, monkeypatch, known, proposed, remove=frozenset(), write_error=None):
+        from jen import extensions
+
+        calls = {"subnets6": [], "values": [], "flag": []}
+        monkeypatch.setattr(extensions, "SUBNET6_MAP", known)
+
+        def write_subnets6(subnets):
+            if write_error:
+                raise ValueError(write_error)
+            calls["subnets6"].append(subnets)
+
+        monkeypatch.setattr("jen.config.app_config.write_values", lambda items: calls["values"].append(items))
+        monkeypatch.setattr("jen.config.app_config.write_subnets6", write_subnets6)
+        monkeypatch.setattr("jen.models.user.set_global_setting", lambda key, value: calls["flag"].append((key, value)))
+        error = setup_wizard.enable_v6("http://kea:8006", proposed, remove)
+        return error, calls
+
     def test_writes_endpoint_subnets_and_the_flag(self, monkeypatch):
-        values_calls = []
-        subnets6_calls = []
-        flag_calls = []
-        monkeypatch.setattr("jen.config.app_config.write_values", lambda items: values_calls.append(items))
-        monkeypatch.setattr("jen.config.app_config.write_subnets6", lambda subnets: subnets6_calls.append(subnets))
-        monkeypatch.setattr("jen.models.user.set_global_setting", lambda key, value: flag_calls.append((key, value)))
-        subnets6 = {1: {"name": "Subnet1", "cidr": "2001:db8::/64"}}
-        setup_wizard.enable_v6("http://kea:8006", subnets6)
-        assert values_calls == [[("kea6", "api_url", "http://kea:8006")]]
-        assert subnets6_calls == [subnets6]
-        assert flag_calls == [("ipv6_enabled", "true")]
+        proposed = {1: {"name": "Subnet1", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
+        error, calls = self._run(monkeypatch, {}, proposed)
+        assert error is None
+        assert calls["values"] == [[("kea6", "api_url", "http://kea:8006")]]
+        assert calls["subnets6"] == [proposed]
+        assert calls["flag"] == [("ipv6_enabled", "true")]
+
+    def test_what_jen_already_has_survives_unless_it_was_ticked_for_removal(self, monkeypatch):
+        known = {
+            1: {"name": "Office v6", "cidr": "2001:db8::/64", "paired_subnet4_id": 10},
+            9: {"name": "Gone", "cidr": "2001:db8:9::/64", "paired_subnet4_id": None},
+            8: {"name": "Other", "cidr": "2001:db8:8::/64", "paired_subnet4_id": 3},
+        }
+        proposed = {1: dict(known[1]), 2: {"name": "Subnet2", "cidr": "2001:db8:2::/64", "paired_subnet4_id": None}}
+        _error, calls = self._run(monkeypatch, known, proposed, remove={9})
+        written = calls["subnets6"][0]
+        assert set(written) == {1, 2, 8}, "9 was removed on purpose; 8 was not reported but nobody asked to drop it"
+        assert written[1]["paired_subnet4_id"] == 10 and written[1]["name"] == "Office v6"
+
+    def test_a_refused_name_changes_nothing_else(self, monkeypatch):
+        """The subnets are written first: a ValueError leaves no URL, no flag — no half-enabled IPv6."""
+        proposed = {1: {"name": "Bad=Name", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
+        error, calls = self._run(monkeypatch, {}, proposed, write_error="name contains a forbidden character")
+        assert error == "name contains a forbidden character"
+        assert calls["values"] == [] and calls["flag"] == []
+
+
+class TestHaPeerView:
+    """v5.67.0-beta.8 (Q120, item m) — Kea's HA peers and the servers Jen manages are two facts."""
+
+    HA = {
+        "this_server_name": "server1",
+        "mode": "hot-standby",
+        "peers": [
+            {"name": "server1", "url": "http://192.0.2.1:8000/", "role": "primary"},
+            {"name": "server2", "url": "http://192.0.2.2:8000/", "role": "standby"},
+        ],
+    }
+
+    def test_two_peers_and_one_managed_server_read_as_two_facts(self):
+        view = setup_wizard.ha_peer_view(
+            self.HA, [{"id": 1, "name": "Kea Server 1", "api_url": "http://192.0.2.1:8000"}]
+        )
+        assert (view["detected"], view["managed"]) == (2, 1)
+        by_name = {p["name"]: p for p in view["peers"]}
+        assert by_name["server1"]["managed"] is True and by_name["server1"]["add_url"] == ""
+        assert by_name["server2"]["managed"] is False
+        assert by_name["server2"]["add_url"] == "http://192.0.2.2:8000"
+        assert by_name["server2"]["add_role"] == "standby"
+
+    def test_a_peer_already_managed_by_host_or_by_name_is_not_offered(self):
+        servers = [
+            {"id": 1, "name": "Kea Server 1", "api_url": "http://192.0.2.1:8000"},
+            {"id": 2, "name": "x", "api_url": "http://192.0.2.2:8004"},
+        ]
+        view = setup_wizard.ha_peer_view(self.HA, servers)
+        assert (view["detected"], view["managed"]) == (2, 2)
+        assert all(p["managed"] for p in view["peers"])
+        by_name = setup_wizard.ha_peer_view(self.HA, [{"id": 7, "name": "Server2", "api_url": "http://other:8000"}])
+        assert {p["name"]: p["managed"] for p in by_name["peers"]}["server2"] is True
+
+    def test_no_ha_hook_is_none(self):
+        assert setup_wizard.ha_peer_view(None, []) is None
+
+    def test_roles_map_to_jens_own(self):
+        lb = dict(self.HA, mode="load-balancing", peers=[{"name": "a", "url": "http://a:1", "role": "secondary"}])
+        assert setup_wizard.ha_peer_view(lb, [])["peers"][0]["add_role"] == "peer"
+        hs = dict(self.HA, peers=[{"name": "a", "url": "http://a:1", "role": "primary"}])
+        assert setup_wizard.ha_peer_view(hs, [])["peers"][0]["add_role"] == "primary"
+
+    def test_an_ipv6_peer_url_stays_bracketed_and_carries_no_credentials(self):
+        ha = dict(self.HA, peers=[{"name": "p", "url": "http://user:pw@[2001:db8::2]:8000/x", "role": "standby"}])
+        peer = setup_wizard.ha_peer_view(ha, [])["peers"][0]
+        assert peer["add_url"] == "http://[2001:db8::2]:8000"
+        assert "pw" not in peer["add_url"]
 
 
 # ── discover() — service layer mocked, no real Kea ──────────────────────────
@@ -955,3 +1125,291 @@ class TestEntryRedirectOnDashboard:
         )
         assert r.status_code == 302
         assert "/setup" not in r.headers["Location"]
+
+
+# ── v5.67.0-beta.8 (Q120) — the wizard's routes ─────────────────────────────
+
+
+_CONNECTED = {
+    "ok": True,
+    "mode": "direct",
+    "url": "http://kea.test:8000",
+    "version": "3.2.0",
+    "version_text": "3.2.0",
+    "identified": "Dhcp4",
+    "attempts": [{"url": "http://kea.test:8000", "typed": True, "mode": "direct", "error": ""}],
+}
+
+
+class TestConnectRoute:
+    FORM = {
+        "api_url": "http://kea.test:8000",
+        "api_user": "u",
+        "api_pass": "",
+        "kea_db_host": "dbhost",
+        "kea_db_user": "kea",
+        "kea_db_pass": "",
+        "kea_db_name": "kea",
+    }
+
+    def _capture(self, monkeypatch, connection=None, db_result=(True, {})):
+        seen = {"conn": [], "db": [], "save": [], "steps": []}
+
+        def fake_conn(url, user, password, **kw):
+            seen["conn"].append({"url": url, "user": user, "password": password, **kw})
+            return connection or _CONNECTED
+
+        def fake_db(host, user, password, database, **kw):
+            seen["db"].append({"host": host, "password": password, "database": database, **kw})
+            return db_result
+
+        monkeypatch.setattr(setup_wizard, "test_kea_connection", fake_conn)
+        monkeypatch.setattr(setup_wizard, "test_kea_db", fake_db)
+        monkeypatch.setattr(setup_wizard, "save_connection", lambda **kw: seen["save"].append(kw))
+        monkeypatch.setattr(setup_wizard, "set_step", lambda *a: seen["steps"].append(a))
+        return seen
+
+    def test_a_blank_password_tests_with_the_stored_credential(self, logged_in_client, monkeypatch):
+        """Item n — saved passwords are never rendered, so a revisit shows blank fields."""
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "KEA_API_PASS", "stored-api")
+        monkeypatch.setattr(extensions, "KEA_DB_PASS", "stored-db")
+        seen = self._capture(monkeypatch)
+        r = logged_in_client.post("/setup/connect", data=self.FORM)
+        assert r.status_code == 302 and r.headers["Location"].endswith("/setup/found")
+        assert seen["conn"][0]["password"] == "stored-api"
+        assert seen["db"][0]["password"] == "stored-db"
+        # and the SAVE keeps the stored value: it is handed the blank one, which it never writes
+        assert seen["save"][0]["api_pass"] == "" and seen["save"][0]["kea_db_pass"] == ""
+
+    def test_a_typed_password_is_what_gets_tested(self, logged_in_client, monkeypatch):
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "KEA_API_PASS", "stored-api")
+        seen = self._capture(monkeypatch)
+        logged_in_client.post("/setup/connect", data=dict(self.FORM, api_pass="typed", kea_db_pass="typed-db"))
+        assert seen["conn"][0]["password"] == "typed" and seen["db"][0]["password"] == "typed-db"
+
+    def test_a_form_with_no_client_certificate_probes_with_none_not_the_saved_one(self, logged_in_client, monkeypatch):
+        """Item f."""
+        from jen.services import kea
+
+        seen = self._capture(monkeypatch)
+        logged_in_client.post("/setup/connect", data=self.FORM)
+        assert seen["conn"][0]["cert"] is kea.NO_CLIENT_CERT
+
+    def test_an_unidentifiable_answer_keeps_the_mode_already_saved_for_that_url(self, logged_in_client, monkeypatch):
+        """Item b — re-submitting Connect must not flip an existing direct-mode install."""
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "KEA_API_URL", "http://kea.test:8000/")
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
+        seen = self._capture(monkeypatch)
+        logged_in_client.post("/setup/connect", data=self.FORM)
+        assert seen["conn"][0]["default_mode"] == "direct"
+        # a DIFFERENT url has no saved mode to keep
+        logged_in_client.post("/setup/connect", data=dict(self.FORM, api_url="http://other.test:8000"))
+        assert seen["conn"][1]["default_mode"] == "ca"
+
+    def test_the_error_for_the_typed_url_comes_first_and_the_guess_second(self, logged_in_client, monkeypatch):
+        """Item e — this used to flash attempts[-1], always the :8004 guess."""
+        failed = {
+            "ok": False,
+            "mode": None,
+            "url": None,
+            "version": "",
+            "version_text": "",
+            "identified": None,
+            "attempts": [
+                {"url": "http://kea.test", "typed": True, "mode": "direct", "error": "401 Unauthorized"},
+                {"url": "http://kea.test:8004", "typed": False, "mode": "direct", "error": "connection refused"},
+            ],
+        }
+        self._capture(monkeypatch, connection=failed)
+        r = logged_in_client.post("/setup/connect", data=dict(self.FORM, api_url="http://kea.test"))
+        page = r.data.decode()
+        assert "at http://kea.test: 401 Unauthorized" in page
+        assert "Also tried http://kea.test:8004" in page
+        assert page.index("401 Unauthorized") < page.index("Also tried")
+
+    def test_a_bad_database_port_is_refused_before_anything_is_tested(self, logged_in_client, monkeypatch):
+        seen = self._capture(monkeypatch)
+        for bad in ("abc", "0", "70000"):
+            r = logged_in_client.post("/setup/connect", data=dict(self.FORM, kea_db_port=bad))
+            assert r.status_code == 200 and b"valid database port" in r.data
+        assert seen["conn"] == [] and seen["save"] == []
+
+    def test_the_typed_database_port_is_tested_and_saved(self, logged_in_client, monkeypatch):
+        seen = self._capture(monkeypatch)
+        logged_in_client.post("/setup/connect", data=dict(self.FORM, kea_db_port="3307"))
+        assert seen["db"][0]["port"] == 3307
+        assert seen["save"][0]["kea_db_port"] == 3307
+
+    def test_an_answer_that_could_not_be_identified_says_so(self, logged_in_client, monkeypatch):
+        self._capture(monkeypatch, connection=dict(_CONNECTED, identified=None, mode="ca"))
+        r = logged_in_client.post("/setup/connect", data=self.FORM, follow_redirects=True)
+        assert b"could not tell whether" in r.data
+
+    def test_a_blank_form_renders_the_saved_password_hint_and_the_port(self, logged_in_client, monkeypatch):
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "KEA_API_PASS", "stored-api")
+        monkeypatch.setattr(extensions, "KEA_DB_PASS", "")
+        r = logged_in_client.get("/setup/connect")
+        assert b"leave blank to keep it" in r.data
+        assert b'name="kea_db_port"' in r.data
+
+
+class TestFoundRoute:
+    def _found(self, **over):
+        base = {
+            "reachable": True,
+            "kea_version": "3.2.0",
+            "connection_mode": "direct",
+            "hooks": {"host_cmds": True, "lease_cmds": True, "ha_commands": False, "ddns": False},
+            "ha": None,
+            "ha_view": None,
+            "ipv6_enabled": False,
+            "proposed_subnets": {1: {"name": "Subnet1", "cidr": "10.0.0.0/24"}},
+            "orphaned_subnets": {},
+        }
+        base.update(over)
+        return base
+
+    def test_kea_unreachable_at_post_saves_nothing_and_leaves_the_step_open(self, logged_in_client, monkeypatch):
+        """Item j — the typed names were dropped and the step marked done with subnets=0."""
+        steps, saved = [], []
+        monkeypatch.setattr(setup_wizard, "discover", lambda: self._found(reachable=False, proposed_subnets={}))
+        monkeypatch.setattr(setup_wizard, "set_step", lambda *a: steps.append(a))
+        monkeypatch.setattr(setup_wizard, "save_subnets", lambda *a: saved.append(a) or ({}, None))
+        r = logged_in_client.post("/setup/found", data={"name_1": "Office"})
+        assert r.status_code == 200
+        assert b"Kea did not answer" in r.data
+        assert steps == [] and saved == []
+
+    def test_skipping_is_still_possible_when_kea_is_down(self, logged_in_client, monkeypatch):
+        steps = []
+        monkeypatch.setattr(setup_wizard, "discover", lambda: self._found(reachable=False, proposed_subnets={}))
+        monkeypatch.setattr(setup_wizard, "set_step", lambda *a: steps.append(a))
+        r = logged_in_client.post("/setup/found", data={"action": "skip"})
+        assert r.status_code == 302 and steps == [("found", "skipped")]
+        page = logged_in_client.get("/setup/found")
+        assert b'value="skip"' in page.data, "an unreachable Kea must not leave the step with no way out"
+
+    def test_the_page_shows_two_facts_and_an_add_this_peer_action(self, logged_in_client, monkeypatch):
+        """Item m."""
+        ha = {
+            "this_server_name": "s1",
+            "mode": "hot-standby",
+            "peers": [
+                {"name": "s1", "url": "http://192.0.2.1:8000/", "role": "primary"},
+                {"name": "s2", "url": "http://192.0.2.2:8000/", "role": "standby"},
+            ],
+        }
+        view = setup_wizard.ha_peer_view(ha, [{"id": 1, "name": "Kea Server 1", "api_url": "http://192.0.2.1:8000"}])
+        monkeypatch.setattr(setup_wizard, "discover", lambda: self._found(ha=ha, ha_view=view))
+        r = logged_in_client.get("/setup/found")
+        page = r.data.decode()
+        assert "Kea HA peers detected" in page and "Servers Jen manages" in page
+        assert "Add this peer to Jen" in page
+        assert "add_server_url=http%3A%2F%2F192.0.2.2%3A8000" in page
+        assert "s1</strong>" not in page, "this very server is managed; only the other peer is offered"
+
+    def test_enabling_ipv6_passes_the_ticked_removals_through(self, logged_in_client, monkeypatch):
+        from jen.services import capabilities
+
+        monkeypatch.setattr(setup_wizard, "discover", lambda: self._found())
+        monkeypatch.setattr(capabilities, "is_direct", lambda: False)
+        probe = {
+            "ok": True,
+            "error": "",
+            "version": "3.2.0",
+            "version_text": "3.2.0",
+            "subnet6_count": 1,
+            "proposed_subnets6": {1: {"name": "Subnet1", "cidr": "2001:db8::/64", "paired_subnet4_id": None}},
+            "orphaned_subnets6": {
+                8: {"name": "Old8", "cidr": "2001:db8:8::/64", "paired_subnet4_id": None},
+                9: {"name": "Old9", "cidr": "2001:db8:9::/64", "paired_subnet4_id": None},
+            },
+        }
+        monkeypatch.setattr(setup_wizard, "probe_v6", lambda *a, **kw: probe)
+        calls = []
+        monkeypatch.setattr(setup_wizard, "enable_v6", lambda url, proposed, remove: calls.append((url, remove)))
+        r = logged_in_client.post("/setup/found", data={"action": "enable_v6", "remove6_9": "1"})
+        assert r.status_code == 302
+        assert calls and calls[0][1] == {9}, "only the ticked orphan, never 8"
+
+    def test_a_refused_v6_name_is_shown_and_enables_nothing(self, logged_in_client, monkeypatch):
+        from jen.services import capabilities
+
+        monkeypatch.setattr(setup_wizard, "discover", lambda: self._found())
+        monkeypatch.setattr(capabilities, "is_direct", lambda: False)
+        probe = {
+            "ok": True,
+            "error": "",
+            "version": "3.2.0",
+            "version_text": "",
+            "subnet6_count": 0,
+            "proposed_subnets6": {},
+            "orphaned_subnets6": {},
+        }
+        monkeypatch.setattr(setup_wizard, "probe_v6", lambda *a, **kw: probe)
+        monkeypatch.setattr(setup_wizard, "enable_v6", lambda *a: "name contains a forbidden character")
+        r = logged_in_client.post("/setup/found", data={"action": "enable_v6"})
+        assert r.status_code == 200 and b"IPv6 was not enabled" in r.data
+
+
+class TestRecoveryStatusAndNext:
+    def test_the_status_endpoint_reports_freshness_without_caching(self, logged_in_client, monkeypatch):
+        status = {
+            "exists": True,
+            "at": "2026-10-02T10:00:00+00:00",
+            "size": 99,
+            "excluded_audit_history": False,
+            "fresh": True,
+        }
+        monkeypatch.setattr(setup_wizard, "recovery_bundle_status", lambda: status)
+        r = logged_in_client.get("/setup/recovery/status")
+        assert r.status_code == 200
+        assert r.get_json() == {"fresh": True, "at": "2026-10-02T10:00:00+00:00", "size": 99}
+        assert "no-store" in r.headers["Cache-Control"]
+
+    def test_the_status_endpoint_is_superadmin_only(self, client, db):
+        from tests.conftest import restricted_client
+
+        c, _ = restricted_client(client, db, allowed_subnets=[1], role="admin", username="status_admin")
+        assert c.get("/setup/recovery/status").status_code != 200
+
+    def test_the_status_endpoint_needs_a_login(self, client):
+        r = client.get("/setup/recovery/status")
+        assert r.status_code in (301, 302, 401)
+
+    def test_the_wizard_page_posts_next_and_carries_the_poll_script(self, logged_in_client):
+        r = logged_in_client.get("/setup/recovery")
+        assert b'name="next" value="setup"' in r.data
+        assert b"/setup/recovery/status" in r.data and b'id="recovery-continue"' in r.data
+
+    def test_a_refused_bundle_from_the_wizard_returns_to_the_wizard(self, logged_in_client):
+        r = logged_in_client.post(
+            "/settings/databases/recovery-bundle",
+            data={"passphrase": "short", "passphrase_confirm": "short", "next": "setup"},
+        )
+        assert r.status_code == 302 and r.headers["Location"].endswith("/setup/recovery")
+        mismatch = logged_in_client.post(
+            "/settings/databases/recovery-bundle",
+            data={"passphrase": "correct horse battery staple", "passphrase_confirm": "nope", "next": "setup"},
+        )
+        assert mismatch.headers["Location"].endswith("/setup/recovery")
+
+    @pytest.mark.parametrize(
+        "nxt", [None, "databases", "", "https://evil.example/", "//evil.example", "/setup/recovery"]
+    )
+    def test_anything_but_the_two_known_pages_goes_to_settings(self, logged_in_client, nxt):
+        data = {"passphrase": "short", "passphrase_confirm": "short"}
+        if nxt is not None:
+            data["next"] = nxt
+        r = logged_in_client.post("/settings/databases/recovery-bundle", data=data)
+        assert r.status_code == 302
+        assert "evil.example" not in r.headers["Location"]
+        assert "/settings/databases" in r.headers["Location"] and "tab=recovery" in r.headers["Location"]
