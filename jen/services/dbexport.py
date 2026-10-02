@@ -10,6 +10,7 @@ import gzip
 import json
 import logging
 import os
+import re
 import tempfile
 from datetime import datetime
 
@@ -22,6 +23,20 @@ logger = logging.getLogger(__name__)
 
 BACKUP_DIR = extensions.CONTENT_BACKUP_DIR
 SCHEMA_VERSION = 1  # bump when export format changes
+
+# v5.67.0-beta.11 (Q123) — export FORMAT 3 (`_meta.format`, separate from SCHEMA_VERSION above, which gates
+# "is this file from a newer Jen"). Formats 1 and 2 wrote a binary column's bytes as a bare hex STRING, and
+# nothing anywhere decoded it: Kea's hosts.dhcp_identifier, lease4.hwaddr, dhcp4_options.value and the v6
+# duid/hwaddr came back from an import, a restore or a migration as the ASCII of their own hex — the
+# six-byte MAC 34:13:43:e6:0e:2a restored as the twelve bytes of the text "341343e60e2a", and Kea no longer
+# matched the client. Format 3 writes a binary value as {"$bin": "<hex>"}: a typed, self-describing
+# object, so a plain string that merely LOOKS like hex stays a string. `_meta.binary_columns` records which
+# columns information_schema called binary/varbinary/blob at export time (for a human and for a test — the
+# importer decodes by the TARGET's own schema, never by trusting this).
+EXPORT_FORMAT = 3
+BIN_TAG = "$bin"
+_BINARY_DATA_TYPES = ("binary", "varbinary", "tinyblob", "blob", "mediumblob", "longblob")
+_HEX_PAIRS = re.compile(r"^(?:[0-9A-Fa-f]{2})*$")
 
 # ── Jen tables available for export ──────────────────────────────────────────
 JEN_TABLES = {
@@ -160,18 +175,85 @@ def _direct_conn(host, port, user, password, database, ssl_ca=""):
 
 
 def _clean_row(row):
-    """One row, datetimes ISO-formatted and binary columns hex-encoded — the same cleanup
+    """One row, datetimes ISO-formatted and binary values written as a TAGGED object — the same cleanup
     _dump_table and write_jen_export's streaming path both need, factored out so the
-    row-by-row streamer isn't duplicating it (v5.66.0-beta.4, Q106)."""
+    row-by-row streamer isn't duplicating it (v5.66.0-beta.4, Q106). Until v5.67.0-beta.11 (Q123) a
+    binary value became a bare hex string here, which nothing ever decoded (see EXPORT_FORMAT above);
+    it is `{"$bin": "<hex>"}` now. Used for EXPORT only: a database-to-database migration copies the
+    driver's own values (bytes as bytes) and never goes through this."""
     clean = {}
     for k, v in row.items():
         if isinstance(v, (datetime,)):
             clean[k] = v.isoformat() if v else None
         elif isinstance(v, (bytes, bytearray)):
-            clean[k] = v.hex()
+            clean[k] = {BIN_TAG: bytes(v).hex()}
         else:
             clean[k] = v
     return clean
+
+
+def _binary_columns(conn, tables) -> dict[str, list[str]]:
+    """{table: [column, ...]} — every column of the given tables that information_schema says is
+    binary/varbinary/blob in the CURRENT database. Only tables with at least one are returned."""
+    tables = list(tables)
+    if not tables:
+        return {}
+    placeholders = ", ".join(["%s"] * len(tables))
+    types = ", ".join(f"'{t}'" for t in _BINARY_DATA_TYPES)
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT table_name AS tbl, column_name AS col FROM information_schema.columns "
+            f"WHERE table_schema = DATABASE() AND table_name IN ({placeholders}) "
+            f"AND data_type IN ({types}) ORDER BY table_name, ordinal_position",
+            tables,
+        )
+        found: dict[str, list[str]] = {}
+        for r in cur.fetchall():
+            found.setdefault(r["tbl"], []).append(r["col"])
+    return found
+
+
+class BinaryValueError(ValueError):
+    """A value bound for a binary column that cannot be decoded safely. Names the table and column so the
+    result line tells the operator exactly what to look at; never raised for a value that decodes."""
+
+
+def _target_binary_columns(conn, table) -> set[str]:
+    """The columns of `table` that the TARGET database says are binary — the importer's only source of
+    truth for what a bare string in an older export must be decoded as."""
+    return set(_binary_columns(conn, [table]).get(table, []))
+
+
+def _decode_import_rows(table, rows, cols, binary_cols, fmt):
+    """The rows' values for `cols`, ready to bind: a `{"$bin": hex}` object becomes bytes (in ANY column — the
+    tag is self-describing); a bare string bound for a column the target says is binary is decoded as hex in a
+    format-1/2 file (that is what those formats wrote) and REFUSED in a format-3 file (which tags every
+    binary value, so a bare string there is a hand-edited file). Anything not valid hex raises
+    BinaryValueError naming the column — text is never inserted into a binary column. A string bound for a
+    non-binary column is never touched, whatever it looks like."""
+    out = []
+    for n, row in enumerate(rows, 1):
+        vals = []
+        for c in cols:
+            v = row.get(c)
+            if isinstance(v, dict) and set(v) == {BIN_TAG}:
+                h = v[BIN_TAG]
+                if not isinstance(h, str) or not _HEX_PAIRS.match(h):
+                    raise BinaryValueError(f"{table}.{c} (row {n}): the tagged binary value is not valid hex")
+                vals.append(bytes.fromhex(h))
+            elif c in binary_cols and isinstance(v, str):
+                if fmt >= 3:
+                    raise BinaryValueError(
+                        f"{table}.{c} (row {n}): a format-{fmt} export tags every binary value, "
+                        f"but this one is a bare string"
+                    )
+                if not _HEX_PAIRS.match(v):
+                    raise BinaryValueError(f"{table}.{c} (row {n}): {v[:24]!r} is not valid hex for a binary column")
+                vals.append(bytes.fromhex(v))
+            else:
+                vals.append(v)
+        out.append(vals)
+    return out
 
 
 def _dump_table(conn, table):
@@ -449,7 +531,8 @@ def write_jen_export(path, tables=None):
                 row_counts[tbl] = count
             meta = _make_metadata("jen", selected)
             meta["row_counts"] = row_counts
-            meta["format"] = 2
+            meta["format"] = EXPORT_FORMAT
+            meta["binary_columns"] = _binary_columns(conn, selected)
             plugin_versions = {}
             with conn.cursor() as cur:
                 cur.execute("SELECT id, version FROM plugins")
@@ -535,6 +618,8 @@ def export_kea(group="reservations"):
             else:
                 payload["data"][tbl] = []
         payload["_meta"]["row_counts"] = {t: len(payload["data"][t]) for t in tables}
+        payload["_meta"]["format"] = EXPORT_FORMAT
+        payload["_meta"]["binary_columns"] = _binary_columns(conn, tables)
     finally:
         conn.close()
     ts = datetime.utcnow().strftime("%Y-%m-%d-%H%M%S")
@@ -735,9 +820,13 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True):
                     return
                 col_str = ", ".join(f"`{c}`" for c in cols)
                 ph_str = ", ".join(["%s"] * len(cols))
+                # v5.67.0-beta.11 (Q123) — decoded by the target's own schema (Jen's own tables have no
+                # binary column today; a plugin's might). A value that cannot be decoded raises, which the
+                # callers already turn into a rolled-back import.
+                params = _decode_import_rows(tbl, rows, cols, _target_binary_columns(conn, tbl), fmt)
                 cur.executemany(
                     f"INSERT IGNORE INTO `{tbl}` ({col_str}) VALUES ({ph_str})",
-                    [[r.get(c) for c in cols] for r in rows],
+                    params,
                 )
         results.append(f"✅ {tbl}: {len(rows)} rows restored")
 
@@ -827,6 +916,7 @@ def import_kea(file_bytes, duplicate_mode="skip"):
     if meta.get("database") != "kea":
         raise ValueError(f"This export is for '{meta.get('database')}' — expected 'kea'. Wrong file?")
 
+    fmt = meta.get("format", 1)
     results = []
     conn = _direct_kea_conn()
     try:
@@ -851,10 +941,18 @@ def import_kea(file_bytes, duplicate_mode="skip"):
             col_str = ", ".join(f"`{c}`" for c in cols)
             ph_str = ", ".join(["%s"] * len(cols))
             verb = "REPLACE" if duplicate_mode == "overwrite" else "INSERT IGNORE"
+            # v5.67.0-beta.11 (Q123) — every row of the table is decoded BEFORE the first INSERT, by the
+            # target's own column types: a table with one undecodable binary value is refused whole (and
+            # named), never half-restored and never fed text in a binary column.
+            try:
+                params = _decode_import_rows(tbl, rows, cols, _target_binary_columns(conn, tbl), fmt)
+            except BinaryValueError as e:
+                results.append(f"❌ {tbl}: refused — {e}. Nothing was imported into this table.")
+                continue
             with conn.cursor() as cur:
-                for row in rows:
+                for vals in params:
                     try:
-                        cur.execute(f"{verb} INTO `{tbl}` ({col_str}) VALUES ({ph_str})", [row.get(c) for c in cols])
+                        cur.execute(f"{verb} INTO `{tbl}` ({col_str}) VALUES ({ph_str})", vals)
                         if cur.rowcount > 0:
                             inserted += 1
                         else:
@@ -889,6 +987,34 @@ def test_connection(host, port, user, password, database, ssl_ca=""):
         return True, {"version": ver, "table_count": table_count, "database": database, "host": host}
     except Exception as e:
         return False, str(e)
+
+
+def _copy_table_rows(src, dst, tbl, batch=1000) -> int:
+    """Copy every row of `tbl` from `src` to `dst` — the driver's own values straight across, bytes as
+    bytes (v5.67.0-beta.11, Q123). migrate_jen/migrate_kea used to copy `_dump_table()`'s output, which is
+    the JSON export's cleaned form: every binary value had been turned into hex text on the way, and the
+    target stored that text — a migrated Kea database held reservations Kea could no longer match. A
+    migration is a copy between two live databases, so there is no JSON in the middle to clean for.
+    Streams the source with a server-side cursor in `batch`-row slices, so a large lease4 is never held
+    whole. Returns the number of rows copied."""
+    count = 0
+    sql = None
+    cols = None
+    with src.cursor(pymysql.cursors.SSDictCursor) as scur:
+        scur.execute(f"SELECT * FROM `{tbl}`")
+        while True:
+            rows = scur.fetchmany(batch)
+            if not rows:
+                break
+            if cols is None:
+                cols = list(rows[0].keys())
+                col_str = ", ".join(f"`{c}`" for c in cols)
+                ph_str = ", ".join(["%s"] * len(cols))
+                sql = f"INSERT IGNORE INTO `{tbl}` ({col_str}) VALUES ({ph_str})"
+            with dst.cursor() as dcur:
+                dcur.executemany(sql, [[r.get(c) for c in cols] for r in rows])
+            count += len(rows)
+    return count
 
 
 def migrate_jen(target_host, target_port, target_user, target_password, target_db, tables=None, progress_cb=None):
@@ -952,20 +1078,11 @@ def migrate_jen(target_host, target_port, target_user, target_password, target_d
         # Copy data table by table
         _cb("Copying data...")
         for tbl in created_tables:
-            rows = _dump_table(src, tbl)
-            count = len(rows)
+            count = _copy_table_rows(src, dst, tbl)
             if count == 0:
                 _cb(f"  ℹ️ {tbl}: empty — skipped")
                 results.append(f"ℹ️ {tbl}: 0 rows")
                 continue
-            cols = list(rows[0].keys())
-            col_str = ", ".join(f"`{c}`" for c in cols)
-            ph_str = ", ".join(["%s"] * len(cols))
-            with dst.cursor() as cur:
-                cur.executemany(
-                    f"INSERT IGNORE INTO `{tbl}` ({col_str}) VALUES ({ph_str})",
-                    [[r.get(c) for c in cols] for r in rows],
-                )
             _cb(f"  ✅ {tbl}: {count} rows copied")
             results.append(f"✅ {tbl}: {count} rows")
 
@@ -1053,20 +1170,11 @@ def migrate_kea(
             _cb(f"  ✅ Created table: {tbl}")
 
         for tbl in created_tables:
-            rows = _dump_table(src, tbl)
-            count = len(rows)
+            count = _copy_table_rows(src, dst, tbl)
             if count == 0:
                 _cb(f"  ℹ️ {tbl}: empty")
                 results.append(f"ℹ️ {tbl}: 0 rows")
                 continue
-            cols = list(rows[0].keys())
-            col_str = ", ".join(f"`{c}`" for c in cols)
-            ph_str = ", ".join(["%s"] * len(cols))
-            with dst.cursor() as cur:
-                cur.executemany(
-                    f"INSERT IGNORE INTO `{tbl}` ({col_str}) VALUES ({ph_str})",
-                    [[r.get(c) for c in cols] for r in rows],
-                )
             _cb(f"  ✅ {tbl}: {count} rows copied")
             results.append(f"✅ {tbl}: {count} rows")
 

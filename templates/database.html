@@ -171,6 +171,10 @@
         <button type="submit" class="btn btn-secondary u-8a77e5">{{ icon("search") }} Inspect File &amp; Continue</button>
     </form>
 </div>
+<div class="card">
+    <div class="card-header"><h3>Restored Kea reservations before 5.67.0-beta.11?</h3></div>
+    <p>An older restore or migration of Kea data stored reservation identifiers as text, so Kea no longer matches those clients. <a href="{{ url_for('database.kea_identifiers') }}">Check reservation identifiers</a> shows exactly which rows are affected and repairs them only when you press the button.</p>
+</div>
 {% endif %}
 
 <!-- ══════════════════════════════════════════════════════════════════════════ -->

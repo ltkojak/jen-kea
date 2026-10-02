@@ -694,11 +694,65 @@ def import_confirm():
             return redirect(url_for("database.database", tab="import"))
         for r in results:
             ok, msg = _split_mark(r)
-            flash(msg, "success" if ok else "warning")
+            flash(msg, "success" if ok else ("error" if r.startswith(_ERR_MARK) else "warning"))
     except Exception as e:
         logger.error(f"DB import failed: {e}")
         flash("Import failed. Check server logs for details.", "error")
     return redirect(url_for("database.database", tab="import"))
+
+
+# ── Reservation identifiers (v5.67.0-beta.11, Q123) ──────────────────────────
+_ERR_MARK = chr(0x274C)  # the refused/failed glyph dbexport prefixes a refused table's line with
+
+
+# The damage a pre-fix restore/migration already did to Kea's hosts table: GET is the dry run (read-only,
+# before/after for every row), POST repairs exactly the rows the operator ticked.
+def _identifier_page(results=None):
+    from jen.models.db import kea_db
+    from jen.services import kea_identifiers as __ident
+
+    damaged, total, error = [], 0, None
+    try:
+        with kea_db() as db:
+            total = __ident.count_checked(db)
+            damaged = __ident.find_damaged(db)
+    except Exception as e:
+        logger.error(f"Kea identifier check failed: {e}")
+        error = "Could not read Kea's database. Check server logs for details."
+    return render_template(
+        "database_kea_identifiers.html", damaged=damaged, total=total, error=error, results=results or []
+    )
+
+
+@bp.route("/database/kea-identifiers")
+@login_required
+@_superadmin_required
+def kea_identifiers():
+    return _identifier_page()
+
+
+@bp.route("/database/kea-identifiers/repair", methods=["POST"])
+@login_required
+@_superadmin_required
+def kea_identifiers_repair():
+    from jen.models.db import kea_db
+    from jen.services import kea_identifiers as __ident
+
+    ids = [i for i in request.form.getlist("host_id") if i.isdigit()]
+    if not ids:
+        flash("No reservations were selected.", "warning")
+        return redirect(url_for("database.kea_identifiers"))
+    try:
+        with kea_db() as db:
+            results = __ident.repair(db, ids)
+    except Exception as e:
+        logger.error(f"Kea identifier repair failed: {e}")
+        flash("Repair failed. Check server logs for details.", "error")
+        return redirect(url_for("database.kea_identifiers"))
+    fixed = sum(1 for r in results if r["status"] == "repaired")
+    __user.audit("KEA_IDENTIFIER_REPAIR", "kea", f"repaired={fixed} skipped={len(results) - fixed} hosts={ids}")
+    flash(f"{fixed} reservation identifier(s) repaired, {len(results) - fixed} left unchanged.", "success")
+    return _identifier_page(results)
 
 
 # ── Schedule ──────────────────────────────────────────────────────────────────

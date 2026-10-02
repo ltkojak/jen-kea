@@ -18,8 +18,8 @@ Groups and check ids are stable (tests and the JSON twin key off them):
   capacity  pool_utilization · lease_snapshot_fresh
   ddns      d2_reachable · d2_errors · dns_reconcile
   jen       cert_expiry · db_jen · db_kea · schema_current ·
-            helper_installed · background_workers · update_available ·
-            layout_trusted
+            kea_identifiers · helper_installed · background_workers ·
+            update_available · layout_trusted
 """
 
 from __future__ import annotations
@@ -829,6 +829,43 @@ def _db_kea(ctx) -> Check:
     return _db_roundtrip(__db.kea_db, "db_kea", "Kea database")
 
 
+def _kea_identifiers(ctx) -> Check:
+    """v5.67.0-beta.11 (Q123) — a one-shot look for the damage the binary-column bug already did: `hosts` rows
+    whose identifier is the ASCII text of its own hex (a restore or migration through Jen before this
+    release stored a MAC as the twelve characters of "341343e60e2a"). Read-only, one indexed table, cheap
+    enough for the page. A subnet-restricted caller skips it: the count is fleet-wide."""
+    from jen.services import kea_identifiers as __ident
+
+    c = Check(
+        "kea_identifiers",
+        "Kea reservations have plausible identifiers",
+        "jen",
+        fix_url="/database/kea-identifiers",
+    )
+    if not ctx.get("unrestricted", True):
+        c.status, c.detail = "skip", "fleet-wide summary is for unrestricted accounts"
+        return c
+    try:
+        with __db.kea_db() as db:
+            total = __ident.count_checked(db)
+            damaged = __ident.find_damaged(db)
+    except Exception as e:
+        _log_err("kea_identifiers", e)
+        c.status, c.detail = "skip", "Kea database unreachable — see the Kea database check"
+        return c
+    if damaged:
+        c.status = "fail"
+        c.detail = (
+            f"{len(damaged)} of {total} reservation identifier(s) are the text of their own hex — a restore or "
+            f"migration made before 5.67.0-beta.11 wrote them that way, and those clients no longer match "
+            f"their reservation."
+        )
+        c.fix_hint = "A superadmin can preview and repair exactly those rows: Settings → Databases → the repair page."
+    else:
+        c.status, c.detail = "ok", f"{total} reservation(s) checked, none look like the hex text of themselves"
+    return c
+
+
 def _schema_current(ctx) -> Check:
     c = Check("schema_current", "Database schema current", "jen")
     try:
@@ -1249,6 +1286,7 @@ _CHECKS = [
     _kea_tls_expiry,
     _db_jen,
     _db_kea,
+    _kea_identifiers,
     _schema_current,
     _helper_installed,
     _background_workers,
@@ -1283,6 +1321,7 @@ _CHECK_META = {
     "kea_tls_expiry": ("Kea mTLS certificates", "jen"),
     "db_jen": ("Jen database", "jen"),
     "db_kea": ("Kea database", "jen"),
+    "kea_identifiers": ("Kea reservations have plausible identifiers", "jen"),
     "schema_current": ("Database schema current", "jen"),
     "helper_installed": ("Kea host helper installed", "jen"),
     "background_workers": ("Background workers running", "jen"),

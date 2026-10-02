@@ -117,6 +117,20 @@ _KEA_SCHEMA_TABLES = [
         state INT UNSIGNED DEFAULT 0,
         user_context TEXT
     )""",
+    # v5.67.0-beta.11 (Q123) — dhcp6_options, columns from Kea's real dhcpdb_create.mysql: the v6 twin of
+    # dhcp4_options (value BLOB, dhcp6_subnet_id, host_id), which the Kea reservations backup now carries.
+    """CREATE TABLE IF NOT EXISTS dhcp6_options (
+        option_id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        code SMALLINT UNSIGNED NOT NULL,
+        value BLOB,
+        formatted_value TEXT,
+        space VARCHAR(128),
+        persistent TINYINT(1) NOT NULL DEFAULT 0,
+        dhcp_client_class VARCHAR(128) DEFAULT NULL,
+        dhcp6_subnet_id INT UNSIGNED DEFAULT NULL,
+        host_id INT UNSIGNED DEFAULT NULL,
+        scope_id TINYINT UNSIGNED NOT NULL DEFAULT 0
+    )""",
     # ipv6_reservations is a real one-to-many junction table off hosts —
     # type 0=IA_NA (address), 2=IA_PD (delegated prefix); prefix_len is 128
     # for a plain address reservation, less than 128 for a delegated prefix.

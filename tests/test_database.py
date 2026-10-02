@@ -39,6 +39,8 @@ _DATABASE_ROUTES = [
     ("GET", "/settings/databases/migrate", {}),
     ("POST", "/database/migrate/test", {}),
     ("POST", "/settings/databases/recovery-bundle", {}),  # v5.44.0 (Q45)
+    ("GET", "/database/kea-identifiers", {}),  # v5.67.0-beta.11 (Q123)
+    ("POST", "/database/kea-identifiers/repair", {}),
     # /database/migrate/run deliberately excluded — it spawns a background
     # thread and streams SSE; the auth decorator runs before any of that,
     # so it's covered adequately by the same pattern, but exercising it

@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Kea reservation identifiers{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>{{ icon("wrench", "ico-lg") }} Kea reservation identifiers</h1>
+    <p>Finds and repairs reservations whose identifier was stored as text by an older Jen restore or migration. Nothing changes until you press Repair.</p>
+</div>
+
+<div class="card">
+    <div class="card-header"><h3>What this looks for</h3></div>
+    <div class="card-body">
+        <p>Before 5.67.0-beta.11, restoring a Kea backup or import file, or migrating the Kea database, wrote a reservation's identifier as the text of its own hex: the six-byte MAC <code>34:13:43:e6:0e:2a</code> became the twelve characters <code>341343e60e2a</code>. The row looks right but Kea never matches the client to it again.</p>
+        <p class="form-hint">Only <code>hosts.dhcp_identifier</code> of type hw-address, DUID or client-id is recognised, and only when it is an even number of hex-digit characters of a plausible length. Circuit-id and flex-id are never flagged — ASCII hex is legitimate there. Per-host option values cannot be told from intended ones and are not touched; check them by hand after a restore made before this release. Only the <code>hosts</code> table changes, only the identifier column, only rows listed below that still hold exactly what is shown.</p>
+    </div>
+</div>
+
+{% if error %}
+<div class="alert alert-danger">{{ icon("triangle-alert") }} {{ error }}</div>
+{% elif not damaged %}
+<div class="alert alert-success">{{ icon("circle-check") }} {{ total }} reservation(s) checked — none look like the hex text of themselves. Nothing to repair.</div>
+{% else %}
+<form method="POST" action="{{ url_for('database.kea_identifiers_repair') }}" data-confirm="Rewrite the selected reservation identifiers in Kea's hosts table?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<div class="card">
+    <div class="card-header"><h3>{{ damaged|length }} of {{ total }} reservation(s) need repair</h3></div>
+    <table class="table">
+        <thead><tr><th></th><th>Host</th><th>Address</th><th>Type</th><th>Stored now (text)</th><th>Will become (bytes)</th></tr></thead>
+        <tbody>
+        {% for d in damaged %}
+        <tr>
+            <td><input type="checkbox" name="host_id" value="{{ d.host_id }}" checked aria-label="Repair host {{ d.host_id }}"></td>
+            <td>{{ d.hostname or ('#' ~ d.host_id) }}</td>
+            <td class="mono">{{ d.ipv4 or '—' }}</td>
+            <td>{{ d.type_name }}</td>
+            <td class="mono">{{ d.stored_text }}</td>
+            <td class="mono">{{ d.repaired }} <span class="form-hint">({{ d.repaired_bytes }} bytes)</span></td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+<p class="form-hint">If the correct identifier already exists on another reservation (you re-created it by hand), that row is skipped and left as it is — delete the damaged one from Reservations instead.</p>
+<button type="submit" class="btn btn-primary">{{ icon("wrench") }} Repair selected</button>
+</form>
+{% endif %}
+
+{% if results %}
+<div class="card">
+    <div class="card-header"><h3>Result</h3></div>
+    <table class="table">
+        <thead><tr><th>Host</th><th>Outcome</th><th>Detail</th></tr></thead>
+        <tbody>
+        {% for r in results %}
+        <tr><td>#{{ r.host_id }}</td><td>{{ r.status }}</td><td class="mono">{{ r.detail }}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<p><a href="{{ url_for('database.database', tab='import') }}">{{ icon("arrow-left") }} Back to Databases</a></p>
+{% endblock %}

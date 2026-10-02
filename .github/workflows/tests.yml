@@ -117,6 +117,14 @@ jobs:
           sudo mkdir -p /etc/jen/ssl /etc/jen/ssh
           sudo chown -R "$(whoami)" /etc/jen
 
+      - name: Let the test user create scratch databases
+        # v5.67.0-beta.11 (Q123) — the Kea/Jen migration tests copy into a SECOND database on the same server,
+        # and the service container's MYSQL_USER only owns jen_test. The grant covers names that start with
+        # jen_test_ and nothing else; tests/test_kea_binary_roundtrip.py FAILS (never skips) under CI if it
+        # cannot create one, so this step cannot be quietly dropped.
+        run: |
+          mysql -h 127.0.0.1 -u root -pci_root_pw -e 'GRANT ALL PRIVILEGES ON `jen\_test\_%`.* TO "jen"@"%"; FLUSH PRIVILEGES;'
+
       - name: Run test suite
         env:
           JEN_DB_HOST: 127.0.0.1

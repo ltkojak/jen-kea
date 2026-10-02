@@ -159,7 +159,7 @@ class TestFullPluginRestoreLifecycle:
 
         path = tmp_path / "full-export.json.gz"
         meta = dbexport.write_jen_export(str(path))
-        assert meta["format"] == 2
+        assert meta["format"] == 3  # v5.67.0-beta.11 (Q123): export format 3 tags binary values
         assert set(meta["plugin_tables"].keys()) == set(BUNDLED_IDS)
 
         _wipe_plugin_schema(db, BUNDLED_IDS, ALL_20)
