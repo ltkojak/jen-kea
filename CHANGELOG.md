@@ -2,6 +2,65 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.67.0-beta.6] - 2026-10-02
+
+Beta channel. Stacked on 5.67.0-beta.5. A native install running since
+5.67.0-beta.2 has been silently misdiagnosed as a container.
+
+**The bug.** `jen/services/plugins.py`'s `is_systemd_host()` answered
+"is this a systemd-managed install" by checking whether `JEN_ROOT` was
+set in the environment — accurate since v5.3.3, when `JEN_ROOT` meant
+exactly "a dev or CI checkout." 5.67.0-beta.2's relocatable install made
+the rendered systemd unit set `JEN_ROOT` too
+(`Environment=JEN_ROOT=<app_dir>/current/app`), so from that release a
+real native install answered "not systemd," indistinguishably from a
+container. The visible symptom: Settings → System shows "Updates are
+the container image's job" instead of an Update button, and the Restart
+card talks about `docker compose restart jen` — on a box installed with
+`install.sh`, never Docker. The same wrong answer silently routed
+plugin installs onto the in-process path meant for Docker, and stopped
+`content_dir_incomplete()` (jen/services/content.py) and the
+venv-migration check (jen/__init__.py) from ever firing on a real
+production box, for the identical reason.
+
+**The fix.** `jen/services/runtime.py::deployment()` is now the one
+place that question is ever answered, and it never reads `JEN_ROOT`:
+`/.dockerenv` for a container; otherwise the rendered unit's own new
+`Environment=JEN_SERVICE_MANAGER=systemd` line, or — covering a unit
+rendered before this release, or a hand-written one from
+`docs/manual-install.md` — `INVOCATION_ID`, which systemd sets for
+every unit it starts. `is_systemd_host()` is kept as a one-line wrapper
+around it. A source-guard test refuses `JEN_ROOT` as a deployment
+condition anywhere outside `jen/extensions.py` (a legitimate path
+default) and `runtime.py` itself, so the bug class can't come back
+quietly a second time.
+
+**Affected betas: 5.67.0-beta.2 through 5.67.0-beta.5.** The button this
+bug hides is the only normal way to reach the fix, so a box stuck on one
+of them needs the one line the button itself would have run:
+
+```bash
+sudo systemctl start jen-update.service
+journalctl -u jen-update -f
+```
+
+Nothing else about an affected install was wrong — this is a pure
+detection bug, not data loss or a security issue — and nothing here
+changes behavior on Docker or a dev checkout, which both still identify
+themselves correctly.
+
+**Found beside it.** The pre-update database backup
+(`jen/routes/settings/updates.py::self_update()`) was still the
+whole-database-in-memory path (`export_jen()` → `json.loads` →
+`_write_backup()`) that the recovery bundle and the manual/scheduled
+backups already moved away from — streamed instead through
+`publish_backup()` + `write_jen_export()`, the identical pattern
+`database.py`'s own manual-backup route uses.
+
+`docs/troubleshooting.md` and `docs/ARCHITECTURE.md` §6 carry the full
+detail and the affected-beta list for anyone who lands here from a
+search engine rather than this page.
+
 ## [5.67.0-beta.5] - 2026-10-01
 
 Beta channel. Stacked on 5.67.0-beta.4. A ChatGPT review of the layout

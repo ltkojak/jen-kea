@@ -138,3 +138,18 @@ none of them affect an existing install or an in-place upgrade:
   bundle exists" row, separate from the existing backup row.
 - **Investigate a client** opens the full six-tab Investigation page
   now, not just the narrow Explain tab (5.67.0-beta.5).
+
+## A native install is no longer misdiagnosed as a container
+
+If you installed or upgraded to 5.67.0-beta.2 through 5.67.0-beta.5,
+Settings → System may have shown "Updates are the container image's
+job" and a Restart card talking about `docker compose restart jen`,
+even though this box runs `install.sh`, not Docker — the relocatable
+install added in beta.2 made the rendered systemd unit set `JEN_ROOT`,
+which a detection check had relied on to mean "not systemd" since long
+before that. Fixed; since the hidden button was the normal way to reach
+this fix, a box stuck on one of the affected betas needs the one line
+it would have run itself: `sudo systemctl start jen-update.service`.
+See `docs/troubleshooting.md` for the full detail. Nothing else about
+an affected install was wrong, and Docker/dev checkouts were never
+affected (5.67.0-beta.6).
