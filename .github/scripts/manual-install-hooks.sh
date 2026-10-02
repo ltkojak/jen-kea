@@ -13,17 +13,29 @@ ci_hook() {
             cd "$GITHUB_WORKSPACE"
             ;;
         edit-config)
-            # "Edit it … only [jen_db] has to be right to start."
-            sudo tee /etc/jen/jen.config > /dev/null <<'CONF'
-[jen_db]
-host     = 127.0.0.1
-user     = jen
-password = jen_pw
-database = jen
-[server]
-http_port  = 5050
-https_port = 8443
-CONF
+            # "Edit it … only the [jen_db] values have to be real: leave the Kea values blank."
+            # Edits the copy the page just made (the example's own sections stay), so the page's
+            # claim is tested against the real file shape, not a hand-written minimal one.
+            sudo sed -i \
+                -e 's|^host     = YOUR-DB-SERVER|host     = 127.0.0.1|' \
+                -e 's|^password = your-jen-db-password|password = jen_pw|' \
+                -e 's|^api_url  = http://YOUR-KEA-SERVER:8000|api_url  =|' \
+                -e 's|^api_pass = your-kea-api-password|api_pass =|' \
+                -e 's|^host     = YOUR-KEA-SERVER|host     =|' \
+                -e 's|^password = your-kea-db-password|password =|' \
+                -e 's|^user     = your-ssh-user|user     =|' \
+                -e 's|^dns_provider = technitium|dns_provider = none|' \
+                -e 's|^api_url      = https://your-technitium-server/api|api_url      =|' \
+                -e 's|^api_token    = your-technitium-api-token|api_token    =|' \
+                -e 's|^forward_zone = your.domain.com|forward_zone =|' \
+                /etc/jen/jen.config
+            # a placeholder left behind (outside a comment) is a hook that quietly did less than the page
+            # tells a human to do
+            if grep -q '^[^#]*\(YOUR-\|your-\|your\.\)' /etc/jen/jen.config; then
+                echo "::error::the stand-in left a placeholder in jen.config:"
+                grep -n '^[^#]*\(YOUR-\|your-\|your\.\)' /etc/jen/jen.config
+                exit 1
+            fi
             ;;
         create-db)
             # The page's SQL block, with this job's password.

@@ -154,10 +154,10 @@ which a detection check had relied on to mean "not systemd" since long
 before that. Fixed; since the hidden button was the normal way to reach
 this fix, a box stuck on one of the affected betas has two ways out. Either
 extract the newer release tarball and run `sudo ./install.sh --upgrade`, or let
-the updater do it: it offers a pre-release only to a box on the beta channel, so
-put `channel = beta` under `[updates]` in `jen.config` first, then run
-`sudo systemctl start jen-update.service` (on a stable-channel box that command
-finds nothing newer than the beta it is already on and does nothing).
+the updater do it: it offers a pre-release only when `[updates]` in `jen.config`
+says `channel = beta`, so set that first, then run
+`sudo systemctl start jen-update.service` (with the default `channel = stable`
+that command finds nothing newer than the beta it is already on and does nothing).
 See `docs/troubleshooting.md` for the full detail. Nothing else about
 an affected install was wrong, and Docker/dev checkouts were never
 affected (5.67.0-beta.6).

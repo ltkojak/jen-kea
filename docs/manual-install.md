@@ -96,9 +96,10 @@ still-flat box also works.
 sudo cp "$REL/app/jen.config.example" /etc/jen/jen.config
 ```
 
-Edit it — Kea API, `kea_db`, `jen_db`, SSH, subnets, ports. (Or leave the Kea
-sections for the `/setup` wizard to fill in once Jen is running; only
-`[jen_db]` has to be right to start.)
+Edit it — Kea API, `kea_db`, `jen_db`, SSH, subnets, ports. Every section has
+to be *present* (Jen refuses to start without `[kea]`), but only the `[jen_db]`
+values have to be real: leave the Kea values blank and the `/setup` wizard
+fills them in once Jen is running.
 
 <!-- ci:hook edit-config -->
 ```bash
