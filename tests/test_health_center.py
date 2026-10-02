@@ -851,6 +851,32 @@ class TestUpdateAvailable:
         assert c.status == "skip"
 
 
+class TestLayoutTrusted:
+    """v5.67.0-beta.7 (Q119, item d) — jen-update-root.py is root:root
+    0700, so this reads its cached result rather than exec'ing it."""
+
+    def test_no_cache_file_yet_skips(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(extensions, "CONTENT_DIR", str(tmp_path))
+        c = health._layout_trusted(_ctx())
+        assert c.status == "skip"
+
+    def test_ok_cache_is_ok(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(extensions, "CONTENT_DIR", str(tmp_path))
+        (tmp_path / ".layout-check-result").write_text("ok\n")
+        c = health._layout_trusted(_ctx())
+        assert c.status == "ok"
+
+    def test_error_cache_is_a_fail_with_the_real_refusal_text(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(extensions, "CONTENT_DIR", str(tmp_path))
+        (tmp_path / ".layout-check-result").write_text(
+            "error: app_dir (/opt/jen) existing parent /opt is writable by group or other\n"
+        )
+        c = health._layout_trusted(_ctx())
+        assert c.status == "fail"
+        assert c.detail == "app_dir (/opt/jen) existing parent /opt is writable by group or other"
+        assert "error:" not in c.detail, "the 'error: ' prefix is for the cache file, not the operator-facing detail"
+
+
 # ── run_checks resilience ──────────────────────────────────────────────────
 
 

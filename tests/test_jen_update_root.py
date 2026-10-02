@@ -26,6 +26,7 @@ import json
 import os
 import pathlib
 import re
+import stat
 import sys
 import tarfile
 import zipfile
@@ -260,15 +261,51 @@ class TestLayoutPathOkSharedRootsAndGrammar:
 class TestLayoutMarker:
     """v5.67.0-beta.5 (Q117) — the .jen-directory marker: a plain "key =
     value" file (never sourced), root:root 0644. write_layout_marker's
-    os.chown needs real root, so it's mocked here the same way
-    TestInstallSelfUpdateFiles mocks it for install_self_update_files."""
+    os.fchown needs real root, so it's mocked here the same way
+    TestInstallSelfUpdateFiles mocks it for install_self_update_files.
 
-    @pytest.mark.skipif(os.name != "posix", reason="os.chown requires POSIX")
+    v5.67.0-beta.7 (Q119, item b) — the write itself moved onto mkstemp +
+    fchown/fchmod (on the descriptor) + os.replace, so a symlink planted
+    at the marker's name is never opened or chowned through; only the
+    fd-based calls need mocking now (mkstemp/os.replace are real
+    filesystem operations tmp_path's owning user can do unprivileged)."""
+
+    @pytest.mark.skipif(os.name != "posix", reason="os.fchown requires POSIX")
     def test_write_then_read_round_trips(self, jen_update_root, tmp_path):
-        with patch("os.chown"), patch("os.chmod"):
+        with patch("os.fchown"), patch("os.fchmod"):
             jen_update_root.write_layout_marker(str(tmp_path), "app_dir", "5.67.0-beta.5")
         marker = jen_update_root._read_layout_marker(str(tmp_path))
         assert marker == {"role": "app_dir", "version": "5.67.0-beta.5"}
+
+    @pytest.mark.skipif(os.name != "posix", reason="os.fchown requires POSIX")
+    def test_rewriting_an_existing_marker_replaces_it_atomically(self, jen_update_root, tmp_path):
+        with patch("os.fchown"), patch("os.fchmod"):
+            jen_update_root.write_layout_marker(str(tmp_path), "app_dir", "1.0.0")
+            jen_update_root.write_layout_marker(str(tmp_path), "app_dir", "2.0.0")
+        marker = jen_update_root._read_layout_marker(str(tmp_path))
+        assert marker == {"role": "app_dir", "version": "2.0.0"}
+        # no leftover .jen-directory.* mkstemp temp files beside the real one
+        assert sorted(p.name for p in tmp_path.iterdir()) == [".jen-directory"]
+
+    @pytest.mark.skipif(os.name != "posix", reason="symlink creation requires POSIX/elevated Windows privilege")
+    def test_refuses_to_write_through_a_symlinked_marker(self, jen_update_root, tmp_path):
+        target = tmp_path / "attacker-target"
+        target.write_text("untouched")
+        d = tmp_path / "d"
+        d.mkdir()
+        (d / ".jen-directory").symlink_to(target)
+        with patch("os.fchown"), patch("os.fchmod"), pytest.raises(OSError):
+            jen_update_root.write_layout_marker(str(d), "app_dir", "5.67.0-beta.7")
+        assert target.read_text() == "untouched"
+        assert os.path.islink(str(d / ".jen-directory")), "the symlink itself must be left alone, not replaced silently"
+
+    @pytest.mark.skipif(os.name != "posix", reason="os.fchown requires POSIX")
+    def test_refuses_to_write_through_a_fifo(self, jen_update_root, tmp_path):
+        marker_path = tmp_path / ".jen-directory"
+        os.mkfifo(marker_path)
+        with patch("os.fchown"), patch("os.fchmod"), pytest.raises(OSError):
+            jen_update_root.write_layout_marker(str(tmp_path), "app_dir", "5.67.0-beta.7")
+        assert stat.S_ISFIFO(os.lstat(marker_path).st_mode), "the FIFO itself must be left alone"
 
     def test_absent_marker_reads_as_none(self, jen_update_root, tmp_path):
         assert jen_update_root._read_layout_marker(str(tmp_path)) is None
@@ -324,9 +361,9 @@ class TestLayoutTargetOkForInstall:
     def test_empty_existing_directory_is_fine(self, jen_update_root, tmp_path):
         assert jen_update_root._layout_target_ok_for_install("app_dir", str(tmp_path)) is None
 
-    @pytest.mark.skipif(os.name != "posix", reason="os.chown requires POSIX")
+    @pytest.mark.skipif(os.name != "posix", reason="os.fchown requires POSIX")
     def test_marked_directory_is_reused(self, jen_update_root, tmp_path):
-        with patch("os.chown"), patch("os.chmod"):
+        with patch("os.fchown"), patch("os.fchmod"):
             jen_update_root.write_layout_marker(str(tmp_path), "app_dir", "5.67.0-beta.5")
         assert jen_update_root._layout_target_ok_for_install("app_dir", str(tmp_path)) is None
 
@@ -534,7 +571,7 @@ class TestCheckLayout:
         monkeypatch.setattr(
             jen_update_root, "_DEFAULT_LAYOUT", {"app_dir": str(app), "config_dir": str(config), "data_dir": str(data)}
         )
-        with patch("os.chown"), patch("os.chmod"):
+        with patch("os.fchown"), patch("os.fchmod"):
             ok, result = jen_update_root.check_layout("upgrade")
         assert ok, result
         assert jen_update_root._read_layout_marker(str(app)) is not None
@@ -590,9 +627,90 @@ class TestCheckLayout:
         monkeypatch.setattr(
             jen_update_root, "_DEFAULT_LAYOUT", {"app_dir": str(app), "config_dir": str(config), "data_dir": str(data)}
         )
-        with patch("os.chown"), patch("os.chmod"):
+        with patch("os.fchown"), patch("os.fchmod"):
             ok, result = jen_update_root.check_layout("uninstall")
         assert ok, result
+
+    def test_a_malformed_layout_file_is_a_refusal_not_a_crash(
+        self, jen_update_root, _bypass_ownership, monkeypatch, tmp_path
+    ):
+        """v5.67.0-beta.7 (Q119, item d) — _validate_layout_file only
+        checks ownership/permissions/symlink-ness, never parseability: a
+        root-owned, correctly-permissioned file with no [layout] section
+        at all used to raise configparser.Error straight out of
+        check_layout(), uncaught, crashing whichever privileged entry
+        point called it instead of refusing cleanly like every other bad-
+        layout case."""
+        layout_file = tmp_path / "jen-layout.conf"
+        layout_file.write_text("not an ini file at all\njust text\n")
+        monkeypatch.setattr(jen_update_root, "LAYOUT_FILE", str(layout_file))
+        monkeypatch.setattr(jen_update_root, "_validate_layout_file", lambda p: None)
+        ok, result = jen_update_root.check_layout("upgrade")
+        assert not ok
+        assert "could not be parsed" in result
+
+
+class TestUpdateModeIsTheOneBothPrivilegedEntryPointsRun:
+    """v5.67.0-beta.7 (Q119, item d) — check_layout() had exactly one
+    caller, the --check-layout CLI; main() and process_plugin_requests()
+    gated only on LAYOUT_ERROR (file trust/grammar/nesting from
+    load_layout()), never the ancestor-ownership or app-dir-itself
+    checks — despite four documents saying they did. "update" is a valid
+    for_mode (not exposed via the CLI's --for flag, which still only
+    accepts install/upgrade/uninstall) used internally by those two
+    entry points."""
+
+    pytestmark = pytest.mark.skipif(os.name != "posix", reason="POSIX path semantics required")
+
+    @pytest.fixture(autouse=False)
+    def _bypass_ownership(self, jen_update_root, monkeypatch):
+        monkeypatch.setattr(jen_update_root, "_layout_ancestors_ok", lambda name, path: None)
+        monkeypatch.setattr(jen_update_root, "_layout_appdir_itself_ok", lambda path: None)
+        monkeypatch.setattr(jen_update_root, "_LAYOUT_FORBIDDEN_PREFIXES", ())
+
+    def test_update_mode_behaves_like_upgrade_for_a_good_layout(self, jen_update_root, _bypass_ownership, monkeypatch):
+        monkeypatch.setattr(jen_update_root, "LAYOUT_FILE", "/does/not/exist/jen-layout.conf")
+        ok, result = jen_update_root.check_layout("update")
+        assert ok, result
+        assert result == dict(jen_update_root._DEFAULT_LAYOUT)
+
+    def test_update_mode_refuses_the_same_way_upgrade_does(self, jen_update_root, monkeypatch, tmp_path):
+        bad_ancestor = tmp_path / "bad"
+        bad_ancestor.mkdir()
+        monkeypatch.setattr(jen_update_root, "LAYOUT_FILE", "/does/not/exist/jen-layout.conf")
+        monkeypatch.setattr(
+            jen_update_root,
+            "_DEFAULT_LAYOUT",
+            {
+                "app_dir": str(bad_ancestor / "app"),
+                "config_dir": str(bad_ancestor / "etc"),
+                "data_dir": str(bad_ancestor / "data"),
+            },
+        )
+        monkeypatch.setattr(jen_update_root, "_LAYOUT_FORBIDDEN_PREFIXES", ())
+
+        def fake_ancestors_ok(name, path):
+            return f"{path} is writable by group or other" if name == "app_dir" else None
+
+        monkeypatch.setattr(jen_update_root, "_layout_ancestors_ok", fake_ancestors_ok)
+        ok, result = jen_update_root.check_layout("update")
+        assert not ok
+        assert "writable by group or other" in result
+
+    def test_cache_written_on_success_and_failure(self, jen_update_root, monkeypatch, tmp_path):
+        cache = tmp_path / ".layout-check-result"
+        monkeypatch.setattr(jen_update_root, "LAYOUT_CHECK_CACHE", str(cache))
+        jen_update_root._write_layout_check_cache(True, {"app_dir": "/x"})
+        assert cache.read_text() == "ok\n"
+        jen_update_root._write_layout_check_cache(False, "some refusal text")
+        assert cache.read_text() == "error: some refusal text\n"
+
+    def test_cache_write_failure_is_swallowed(self, jen_update_root, monkeypatch):
+        """Advisory only — a cache write that can't happen (e.g. the
+        directory vanished) must never be allowed to break the real
+        check_layout() call around it."""
+        monkeypatch.setattr(jen_update_root, "LAYOUT_CHECK_CACHE", "/does/not/exist/nested/path/.cache")
+        jen_update_root._write_layout_check_cache(True, {})  # must not raise
 
 
 class TestCheckLayoutCli:
@@ -654,13 +772,13 @@ class TestWriteLayoutMarkersCli:
         assert rc == 1
         assert "unrecognized argument" in capsys.readouterr().err
 
-    @pytest.mark.skipif(os.name != "posix", reason="os.chown requires POSIX")
+    @pytest.mark.skipif(os.name != "posix", reason="os.fchown requires POSIX")
     def test_success_marks_all_three(self, jen_update_root, tmp_path):
         app, config, data = tmp_path / "app", tmp_path / "etc", tmp_path / "data"
         app.mkdir()
         config.mkdir()
         data.mkdir()
-        with patch("os.chown"), patch("os.chmod"):
+        with patch("os.fchown"), patch("os.fchmod"):
             rc = jen_update_root.write_layout_markers_cli(
                 [
                     "--app-dir",
@@ -678,15 +796,15 @@ class TestWriteLayoutMarkersCli:
             marker = jen_update_root._read_layout_marker(str(d))
             assert marker is not None and marker["version"] == "5.67.0-beta.5"
 
-    @pytest.mark.skipif(os.name != "posix", reason="os.chown requires POSIX")
+    @pytest.mark.skipif(os.name != "posix", reason="os.fchown requires POSIX")
     def test_write_failure_is_reported_and_refused(self, jen_update_root, capsys, tmp_path):
-        # app_dir doesn't exist — writing its marker file fails with
-        # ENOENT, which must be reported, not crash the whole call.
+        # app_dir doesn't exist — mkstemp(dir=...) fails with ENOENT,
+        # which must be reported, not crash the whole call.
         missing = tmp_path / "does-not-exist"
         config, data = tmp_path / "etc", tmp_path / "data"
         config.mkdir()
         data.mkdir()
-        with patch("os.chown"), patch("os.chmod"):
+        with patch("os.fchown"), patch("os.fchmod"):
             rc = jen_update_root.write_layout_markers_cli(
                 ["--app-dir", str(missing), "--config-dir", str(config), "--data-dir", str(data), "--version", "1.0.0"]
             )
@@ -1792,6 +1910,15 @@ class TestMainSourceShape:
     by inspecting main()'s source for the ordering guarantees that
     matter, the same way the pre-5.14 suite did."""
 
+    @pytest.fixture(autouse=True)
+    def _bypass_layout_check(self, jen_update_root, monkeypatch):
+        """v5.67.0-beta.7 (Q119, item d) — main() now calls
+        check_layout("update") first; most tests here only inspect
+        main()'s source and never execute it, but the few that do
+        (e.g. test_beta_channel_picks_the_prerelease_and_stable_channel_does_not)
+        need this the same way TestProcessPluginRequests does."""
+        monkeypatch.setattr(jen_update_root, "check_layout", lambda *a, **k: (True, {}))
+
     def _main(self, jen_update_root):
         import inspect
 
@@ -2207,6 +2334,17 @@ class TestProcessPluginRequests:
 
     v5.28.0 (Q24, A2) — result filenames are now `<id>.<action>.result`
     (was `<id>.result`); every assertion below was updated to match."""
+
+    @pytest.fixture(autouse=True)
+    def _bypass_layout_check(self, jen_update_root, monkeypatch):
+        """v5.67.0-beta.7 (Q119, item d) — process_plugin_requests() now
+        calls check_layout("update") first; these tests are about plugin
+        request processing, not layout validation, and this dev/CI box's
+        real layout paths would fail the ancestor-ownership check anyway
+        (not root, and the default /opt/jen etc. don't necessarily even
+        exist here) — the same bypass TestUpdateModeIsTheOneBothPrivilegedEntryPointsRun
+        exists to test for real."""
+        monkeypatch.setattr(jen_update_root, "check_layout", lambda *a, **k: (True, {}))
 
     def test_happy_path_lands_root_owned_and_writes_ok(self, jen_update_root, tmp_path):
         zip_bytes = _make_plugin_zip("test-plugin")
@@ -2807,6 +2945,13 @@ class TestArgvDispatch:
     """v5.27.0 (Q23) — main()'s one safe exception to "no caller input
     at all": --plugins, and only that exact single argument."""
 
+    @pytest.fixture(autouse=True)
+    def _bypass_layout_check(self, jen_update_root, monkeypatch):
+        """v5.67.0-beta.7 (Q119, item d) — main() now calls
+        check_layout("update") before its argv dispatch; see the
+        identical fixture on TestProcessPluginRequests for why."""
+        monkeypatch.setattr(jen_update_root, "check_layout", lambda *a, **k: (True, {}))
+
     def test_plugins_flag_calls_process_plugin_requests(self, jen_update_root):
         with (
             patch.object(jen_update_root, "process_plugin_requests", return_value=0) as mock_process,
@@ -2835,6 +2980,12 @@ class TestPluginDepsRequests:
     control: nothing a registry entry (or anything www-data can write)
     says can make this script install a package it didn't already agree
     to. apt itself is always patched here — no test ever runs it."""
+
+    @pytest.fixture(autouse=True)
+    def _bypass_layout_check(self, jen_update_root, monkeypatch):
+        """v5.67.0-beta.7 (Q119, item d) — see the identical fixture on
+        TestProcessPluginRequests."""
+        monkeypatch.setattr(jen_update_root, "check_layout", lambda *a, **k: (True, {}))
 
     def _run(self, jen_update_root, tmp_path, entries, marker="nd.deps"):
         port, stop = _serve_registry(entries, {})

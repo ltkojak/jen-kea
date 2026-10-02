@@ -18,12 +18,14 @@ Groups and check ids are stable (tests and the JSON twin key off them):
   capacity  pool_utilization · lease_snapshot_fresh
   ddns      d2_reachable · d2_errors · dns_reconcile
   jen       cert_expiry · db_jen · db_kea · schema_current ·
-            helper_installed · background_workers · update_available
+            helper_installed · background_workers · update_available ·
+            layout_trusted
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -943,6 +945,34 @@ def _update_available(ctx) -> Check:
     return c
 
 
+def _layout_trusted(ctx) -> Check:
+    """v5.67.0-beta.7 (Q119, item d) — jen-update-root.py is root:root
+    mode 0700, so Jen's own www-data process cannot exec it to run
+    --check-layout itself; this reads the cached result the root script
+    leaves behind (world-readable, written on every real --check-layout
+    run — install.sh's own upgrade/uninstall calls and every self-update
+    or plugin-install trigger) rather than duplicating its validation
+    logic here. Advisory only: the file lives under CONTENT_DIR, which
+    the service account owns, so this can never be more trustworthy than
+    "what root last reported" — the REAL enforcement is check_layout()
+    itself, run by root, on every privileged entry point."""
+    c = Check("layout_trusted", "Install path is trusted", "jen")
+    cache_path = os.path.join(extensions.CONTENT_DIR, ".layout-check-result")
+    try:
+        with open(cache_path, encoding="utf-8") as f:
+            line = f.readline().strip()
+    except OSError:
+        c.status = "skip"
+        c.detail = "not checked yet — runs automatically on the next update or plugin install"
+        return c
+    if line == "ok":
+        c.status, c.detail = "ok", "app/config/data directories pass every layout check"
+    else:
+        c.status = "fail"
+        c.detail = line[len("error: ") :] if line.startswith("error: ") else line
+    return c
+
+
 # ── helpers ────────────────────────────────────────────────────────────────
 
 _STATUS_RANK = {"ok": 0, "skip": 1, "warn": 2, "fail": 3}
@@ -1220,6 +1250,7 @@ _CHECKS = [
     _helper_installed,
     _background_workers,
     _update_available,
+    _layout_trusted,
     _kea32_control_transport,
     _kea32_helper_version,
     _kea32_removed_keys,
@@ -1253,6 +1284,7 @@ _CHECK_META = {
     "helper_installed": ("Kea host helper installed", "jen"),
     "background_workers": ("Background workers running", "jen"),
     "update_available": ("Jen up to date", "jen"),
+    "layout_trusted": ("Install path is trusted", "jen"),
     "kea32_control_transport": ("Control transport ready for 3.2", "readiness"),
     "kea32_helper_version": ("Kea host helper current for 3.2", "readiness"),
     "kea32_removed_keys": ("No removed config keys", "readiness"),

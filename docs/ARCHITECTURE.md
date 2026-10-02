@@ -330,6 +330,26 @@ any file `www-data` can write — a plugin marker's filename (which
 plugin id, which action) is the only thing read from it, never its
 bytes.
 
+**Stated invariant (v5.67.0-beta.7, Q119): root never imports the `jen`
+package.** `install.sh`'s own `verify_install()` used to call
+`"$PYBIN" -c "from jen import create_app; …"` unwrapped, as root, to
+syntax-check templates and modules — but `create_app()` calls
+`load_plugins()`, which imports every enabled plugin out of
+`$CONTENT_DIR/plugins`, a directory the *service user* owns. A
+compromised service account that planted a plugin there got it imported
+as uid 0 on the next `install.sh` run (upgrade, `--unattended`,
+`--repair` all reach `verify_install()`). Fixed: both checks run through
+`runuser -u "$JEN_USER"`, exactly like the existing DB-seeding step that
+already called `create_app()` correctly. The only Python `install.sh`/
+`uninstall.sh` ever run directly as root is `jen-update-root.py` itself
+— a dedicated, pure-stdlib script that never imports `jen` at all — and
+`jen.tools.restore` (invoked by `sudo ./install.sh --restore`/
+`--rollback`), which genuinely needs root for `os.chown`/`systemctl` and
+is its own, separately-reasoned-about trust boundary (§6.2), not an
+inline snippet. `tests/test_no_root_jen_imports.py` scans every inline
+`-c "..."` python invocation in both scripts and refuses one that
+imports `jen` (statically or via `__import__`) without `runuser`.
+
 `jen-update-root.py` must never derive a decision from `sys.argv`
 reachable via the sudoers grant above beyond the fixed `--plugins`
 dispatch (`tests/test_jen_update_root.py` pins this). `--check-layout`
@@ -468,6 +488,25 @@ future change" above. The contract this one checker enforces:
   upgrade` rather than `--for install`, since the latter's absent/
   empty/marked rule exists only to stop a *fresh* install from silently
   reusing unrelated content.
+
+  **What the marker is for, and what it is not (v5.67.0-beta.7,
+  Q119).** It defends against an *operator's own mistake* — pointing a
+  fresh install at a directory that happens to already hold unrelated
+  content, or at the wrong pre-existing Jen directory during a recovery.
+  It is **not** a defense against the *service account*: `config_dir`
+  and `data_dir` are deliberately `www-data`-owned (so Jen itself can
+  write `jen.config`/user content there), which means `www-data` can
+  always delete or recreate `.jen-directory` outright. What the marker's
+  write path (`write_layout_marker()`) *does* defend against is a
+  narrower, sharper attack: a compromised service account planting
+  `.jen-directory` as a *symlink* to a root-owned file elsewhere
+  (`/etc/sudoers.d/jen`, `/etc/shadow`) so that the next privileged
+  write through that name corrupts the symlink's target instead of the
+  marker itself. `write_layout_marker()` refuses outright if anything
+  already at that name isn't a plain regular file, and writes through a
+  sibling `tempfile.mkstemp()` + `os.replace()` rather than opening the
+  marker's own path directly, so even a symlink planted in the TOCTOU
+  window between that check and the write is replaced, never followed.
 
 `tests/test_layout.py` exercises `install.sh`'s own glue (argument-
 building, key=value parsing, refusal pass-through) against a stubbed

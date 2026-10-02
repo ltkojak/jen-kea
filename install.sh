@@ -481,6 +481,17 @@ SERVICE_FILE="/etc/systemd/system/jen.service"
 SUDOERS_FILE="/etc/sudoers.d/jen"
 CONFIG_FILE="$CONFIG_DIR/jen.config"
 BACKUP_DIR="$CONFIG_DIR/backups"    # jen.config backups (NOT the DB backups — those are $CONTENT_DIR/backups)
+# v5.67.0-beta.7 (Q119, item c) — the external-files rollback snapshot
+# (jen-sudoers, the systemd units, jen-update-root.py itself) is NOT a
+# config backup and must never live under $CONFIG_DIR: that directory is
+# service-user-owned (§6.1), so a compromised service account could edit
+# a snapshotted copy of jen-update-root.py or a unit file and wait for
+# ANY later rollback to have root restore its payload straight into
+# /usr/local/sbin or /etc/systemd/system. $INSTALL_DIR is root-owned
+# throughout (install_files's own chown -R root:root covers this
+# subdirectory too, on every run), so that's where root's own rollback
+# material belongs.
+ROOT_ROLLBACK_DIR="$INSTALL_DIR/.rollback"
 
 # v5.14.0 — versioned release directories. Each release is built whole
 # under releases/<X.Y.Z>/{app,venv}; `current` is a relative symlink to
@@ -1374,8 +1385,15 @@ _EXTERNAL_FILES=(
 snapshot_external_files() {
     [[ "$IS_UPGRADE" == "false" ]] && return
 
+    # v5.67.0-beta.7 (Q119, item c) — a pre-fix install may still have
+    # snapshot directories sitting under the OLD, service-owned location;
+    # they're not trustworthy (the whole point of this fix) and not
+    # needed (nothing references them — $ROLLBACK_EXT is only ever this
+    # run's own fresh snapshot), so they're removed rather than migrated.
+    rm -rf "${BACKUP_DIR:?}"/ext.* 2>/dev/null || true
+
     local ts; ts=$(date +%Y%m%d_%H%M%S)
-    local dir="${BACKUP_DIR}/ext.${ts}"
+    local dir="${ROOT_ROLLBACK_DIR}/ext.${ts}"
     local f found=false
     for f in "${_EXTERNAL_FILES[@]}"; do
         if [[ -f "$f" ]]; then
@@ -1385,6 +1403,8 @@ snapshot_external_files() {
         fi
     done
     if [[ "$found" == "true" ]]; then
+        chown -R root:root "$ROOT_ROLLBACK_DIR"
+        chmod -R go-rwx "$ROOT_ROLLBACK_DIR"
         ROLLBACK_EXT="$dir"
         export ROLLBACK_EXT
     fi
@@ -1524,6 +1544,13 @@ migrate_content() {
 
     chown -R "$JEN_USER:$JEN_USER" "$CONTENT_DIR"
     chmod 750 "$CONTENT_DIR"
+    # v5.67.0-beta.7 (Q119, item b) — on an UPGRADE, _resolve_layout_dirs
+    # above (--for upgrade) may have just retroactively stamped a pre-Q117
+    # install's marker, root:root — before this recursive chown ran. Don't
+    # let it silently re-own that marker to the service user; -h so a
+    # symlink there (which should never happen post-fix, but might on a
+    # TOCTOU race) is never followed.
+    [[ -e "$CONTENT_DIR/.jen-directory" ]] && chown -h root:root "$CONTENT_DIR/.jen-directory"
     ok "User content is under $CONTENT_DIR"
 }
 
@@ -1643,6 +1670,10 @@ install_files() {
     chown -R root:root "$INSTALL_DIR"
     chmod -R a+rX,go-w "$INSTALL_DIR"
     chown -R "$JEN_USER:$JEN_USER" "$CONFIG_DIR"
+    # v5.67.0-beta.7 (Q119, item b) — same reasoning as migrate_content's
+    # own guard above: don't let this chown re-own an upgrade's own
+    # already-stamped, root:root marker to the service user.
+    [[ -e "$CONFIG_DIR/.jen-directory" ]] && chown -h root:root "$CONFIG_DIR/.jen-directory"
     spinner_stop
     ok "Permissions set  ${DIM}(app tree: root, content: ${JEN_USER})${NC}"
     blank
@@ -1772,8 +1803,15 @@ verify_install() {
     # list to drift again) and the standard `cmd && ok=0 || ok=$?` idiom
     # so a genuine failure is reported instead of silently killing the
     # installer.
+    # v5.67.0-beta.7 (Q119, item a) — this snippet calls create_app(),
+    # which load_plugins()s every enabled plugin out of $CONTENT_DIR/plugins
+    # — a directory the SERVICE USER owns. Running it unwrapped, as root
+    # (the bug: every verify_install() call did, until this fix), means a
+    # compromised service account that planted a plugin there gets it
+    # imported as uid 0 on the very next install.sh run. runuser, exactly
+    # like _seed_jen_db above (which already calls create_app() safely).
     local tpl_result tpl_status
-    tpl_result=$(env JEN_ROOT="$(app_pyroot)" JEN_CONFIG_DIR="$CONFIG_DIR" JEN_CONTENT_DIR="$CONTENT_DIR" "$PYBIN" -c "
+    tpl_result=$(runuser -u "$JEN_USER" -- env JEN_ROOT="$(app_pyroot)" JEN_CONFIG_DIR="$CONFIG_DIR" JEN_CONTENT_DIR="$CONTENT_DIR" "$PYBIN" -c "
 import os, sys
 sys.path.insert(0, '$(app_pyroot)')
 from jen import create_app
@@ -1800,8 +1838,11 @@ print(len([f for f in os.listdir('$(app_pyroot)/templates') if f.endswith('.html
 
     # Modules
     if [[ -d "$(app_pyroot)/jen" ]]; then
+        # v5.67.0-beta.7 (Q119, item a) — same reasoning as the template
+        # check above: this imports real jen.* modules, so it runs as the
+        # service user, never root.
         local mod_result mod_status
-        mod_result=$(env JEN_ROOT="$(app_pyroot)" JEN_CONFIG_DIR="$CONFIG_DIR" JEN_CONTENT_DIR="$CONTENT_DIR" "$PYBIN" -c "
+        mod_result=$(runuser -u "$JEN_USER" -- env JEN_ROOT="$(app_pyroot)" JEN_CONFIG_DIR="$CONFIG_DIR" JEN_CONTENT_DIR="$CONTENT_DIR" "$PYBIN" -c "
 import sys; sys.path.insert(0, '$(app_pyroot)')
 errors = []
 for m in ['jen.extensions','jen.config','jen.models.db','jen.models.user',

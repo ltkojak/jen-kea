@@ -322,7 +322,13 @@ def load_layout(layout_file=LAYOUT_FILE):
 try:
     _layout = load_layout()
     LAYOUT_ERROR = None
-except RuntimeError as _e:
+except (RuntimeError, configparser.Error) as _e:
+    # v5.67.0-beta.7 (Q119, item d) — a present-but-malformed layout file
+    # (e.g. no [layout] section at all — truncated, hand-edited, a
+    # corrupted write) raises configparser.Error from cp.get() above, not
+    # RuntimeError; uncaught, that crashed the WHOLE script at import
+    # time, before main()/process_plugin_requests() ever got a chance to
+    # see LAYOUT_ERROR and refuse cleanly.
     _layout = dict(_DEFAULT_LAYOUT)
     LAYOUT_ERROR = str(_e)
 
@@ -350,6 +356,32 @@ CONTENT_DIR = _layout["data_dir"]
 # run; a real, checked collision, not a hypothetical one.
 PLUGIN_REQUESTS_DIR = os.path.join(CONTENT_DIR, "plugin-requests")
 ROOT_PLUGIN_DIR = os.path.join(INSTALL_DIR, "plugins-installed")
+
+# v5.67.0-beta.7 (Q119, item d) — the Health Center's "install path is
+# trusted" row (jen/services/health.py::_layout_trusted) reads this file
+# directly: www-data has no permission to exec this root:root 0700
+# script itself, so a cached, world-readable result is the only way that
+# row can show anything beyond "not checked yet." Refreshed on every
+# real check_layout() run against the box's OWN already-resolved layout
+# (the "update"/"upgrade"/"uninstall" for_modes — never "install", which
+# validates a brand-new CANDIDATE path that may not match this global
+# CONTENT_DIR at all). Advisory only, never a trust decision: CONTENT_DIR
+# is service-owned, so a compromised www-data could edit this file to
+# always say "ok" — the real enforcement is check_layout() itself running
+# for real on every privileged entry point, exactly as it did before this
+# cache existed.
+LAYOUT_CHECK_CACHE = os.path.join(CONTENT_DIR, ".layout-check-result")
+
+
+def _write_layout_check_cache(ok, result):
+    try:
+        with open(LAYOUT_CHECK_CACHE, "w", encoding="utf-8") as f:
+            f.write("ok\n" if ok else f"error: {result}\n")
+        os.chmod(LAYOUT_CHECK_CACHE, 0o644)
+    except OSError:
+        pass  # advisory cache — never let a write failure block the real check
+
+
 # Mirrors jen/services/plugins.py::_PLUGIN_ID_RE — duplicated, not
 # imported, since this script can't import the jen package. Slightly
 # stricter (no leading hyphen) than the original; every real registry
@@ -995,14 +1027,45 @@ def write_layout_marker(path, role, version):
     directory actually exists (this module's own --for install check runs
     BEFORE anything is created, so it never writes one itself), and by
     check_layout() below to retroactively mark a pre-Q117 install the
-    first time it's recognized by its own content."""
+    first time it's recognized by its own content.
+
+    v5.67.0-beta.7 (Q119, item b) — `config_dir`/`data_dir` are owned by
+    the SERVICE user (by design — §6.1), so a compromised service account
+    could plant `.jen-directory` as a symlink to a root-owned file
+    elsewhere (`/etc/sudoers.d/jen`, `/etc/shadow`). The old `open(marker,
+    "w")` + `os.chown(marker, ...)` followed that symlink on both calls,
+    truncating and re-owning whatever it pointed at, as root, on the next
+    install/upgrade. Refuse outright if something already there isn't a
+    plain regular file (a symlink, FIFO, device — anything unexpected IS
+    the attack signal, not something to silently paper over); otherwise
+    write to a sibling `mkstemp` file (a brand-new inode, nothing can
+    pre-exist as a symlink under ITS name), `fchown`/`fchmod` the
+    descriptor directly (never the marker's own path — immune to a
+    symlink swapped in after the check above), then `os.replace()` it
+    over the marker's name — replacing a directory entry is never
+    "follow the symlink and write through it", even for the TOCTOU
+    window between the check and this call."""
     marker = _layout_marker_path(path)
-    with open(marker, "w", encoding="utf-8") as f:
-        f.write(
-            f"# Written by jen-update-root.py --check-layout. Do not edit or remove.\nrole = {role}\nversion = {version}\n"
-        )
-    os.chown(marker, 0, 0)
-    os.chmod(marker, 0o644)
+    try:
+        st = os.lstat(marker)
+    except FileNotFoundError:
+        pass
+    else:
+        if not stat.S_ISREG(st.st_mode):
+            raise OSError(f"{marker} exists and is not a regular file — refusing to touch it")
+    fd, tmp_path = tempfile.mkstemp(prefix=".jen-directory.", dir=path)
+    try:
+        os.fchown(fd, 0, 0)
+        os.fchmod(fd, 0o644)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(
+                f"# Written by jen-update-root.py --check-layout. Do not edit or remove.\nrole = {role}\nversion = {version}\n"
+            )
+        os.replace(tmp_path, marker)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.remove(tmp_path)
+        raise
 
 
 def _recognized_by_content(path, role):
@@ -1109,14 +1172,24 @@ def check_layout(for_mode, app_dir=None, config_dir=None, data_dir=None):
             err = _validate_layout_file(LAYOUT_FILE)
             if err:
                 return False, err
-            cp = configparser.ConfigParser(interpolation=None)
-            cp.read(LAYOUT_FILE)
-            values = {}
-            for key in _LAYOUT_ROLES:
-                v = cp.get("layout", key, fallback="").strip()
-                if not v:
-                    return False, f"{LAYOUT_FILE} is missing {key}"
-                values[key] = v
+            # v5.67.0-beta.7 (Q119, item d) — _validate_layout_file above
+            # only checks ownership/permissions/symlink-ness, never
+            # parseability: a root-owned, correctly-permissioned but
+            # MALFORMED file (no [layout] section at all) raised
+            # configparser.Error uncaught here, crashing whichever
+            # privileged entry point called this instead of refusing
+            # cleanly like every other bad-layout case in this function.
+            try:
+                cp = configparser.ConfigParser(interpolation=None)
+                cp.read(LAYOUT_FILE)
+                values = {}
+                for key in _LAYOUT_ROLES:
+                    v = cp.get("layout", key, fallback="").strip()
+                    if not v:
+                        return False, f"{LAYOUT_FILE} is missing {key}"
+                    values[key] = v
+            except configparser.Error as e:
+                return False, f"{LAYOUT_FILE} could not be parsed: {e}"
         else:
             values = dict(_DEFAULT_LAYOUT)
         for key, flag in (("app_dir", app_dir), ("config_dir", config_dir), ("data_dir", data_dir)):
@@ -1250,6 +1323,12 @@ def check_layout_cli(argv):
         return 1
 
     ok, result = check_layout(for_mode, app_dir=app_dir, config_dir=config_dir, data_dir=data_dir)
+    if for_mode != "install":
+        # "install" validates a brand-new candidate path, not this box's
+        # real, already-resolved layout — see LAYOUT_CHECK_CACHE's own
+        # comment above for why only upgrade/uninstall (and "update",
+        # written separately in main()/process_plugin_requests()) do.
+        _write_layout_check_cache(ok, result)
     if not ok:
         print(result, file=sys.stderr)
         return 1
@@ -1944,9 +2023,22 @@ def process_plugin_requests(
     v5.67.0 (Q114) — refuses outright, before touching anything, if
     LAYOUT_FILE was present but failed validation (see load_layout()):
     never silently falls back to the module's default constants.
+
+    v5.67.0-beta.7 (Q119, item d) — LAYOUT_ERROR above only ever covered
+    file trust/grammar/nesting (load_layout()'s own checks). The fuller
+    contract — every existing ancestor root-owned and not group/other-
+    writable, app_dir itself re-checked every run — lived ONLY behind the
+    `--check-layout` CLI install.sh/uninstall.sh call; this privileged
+    entry point never ran it at all, despite four documents claiming it
+    did.
     """
     if LAYOUT_ERROR:
         log(f"ERROR: {LAYOUT_ERROR} — refusing to run.")
+        return 1
+    _ok, _result = check_layout("update")
+    _write_layout_check_cache(_ok, _result)
+    if not _ok:
+        log(f"ERROR: {_result} — refusing to run.")
         return 1
     try:
         st = os.lstat(requests_dir)
@@ -2202,6 +2294,20 @@ def main():
     # above): never silently falls back to the module's default constants.
     if LAYOUT_ERROR:
         log(f"ERROR: {LAYOUT_ERROR} — refusing to run.")
+        return 1
+
+    # v5.67.0-beta.7 (Q119, item d) — same reasoning as
+    # process_plugin_requests()'s own identical gate: LAYOUT_ERROR alone
+    # never covered the ancestor-ownership/app-dir-itself checks, so
+    # neither privileged entry point ever actually ran the full contract
+    # despite docs claiming it did. Redundant with the check inside
+    # process_plugin_requests() for the --plugins dispatch below, same as
+    # LAYOUT_ERROR already is — cheap, and each function stays correct in
+    # isolation.
+    _ok, _result = check_layout("update")
+    _write_layout_check_cache(_ok, _result)
+    if not _ok:
+        log(f"ERROR: {_result} — refusing to run.")
         return 1
 
     # v5.27.0 (Q23) — the other argv this script accepts via the
