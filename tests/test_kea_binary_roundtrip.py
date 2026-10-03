@@ -437,7 +437,17 @@ class TestAFileWrittenBeforeThisFix:
                 {"host_id": 1, "dhcp_identifier": MAC.hex(), "dhcp_identifier_type": 0},
                 {"host_id": 2, "dhcp_identifier": "zz11", "dhcp_identifier_type": 0},
             ],
-            [{"option_id": 1, "code": 3, "value": "0a000001", "space": "dhcp4", "host_id": 1}],
+            [
+                {
+                    "option_id": 1,
+                    "code": 3,
+                    "value": "0a000001",
+                    "space": "dhcp4",
+                    "host_id": 1,
+                    "scope_id": 3,
+                    "client_classes": "",
+                }
+            ],
         )
         results = dbexport.import_kea(content, "skip")
         refused = [r for r in results if r.startswith("❌")]
@@ -473,7 +483,8 @@ class TestAFileWrittenBeforeThisFix:
 
 
 class TestMigration:
-    """A migration is a copy between two live databases: bytes as bytes, nothing through JSON."""
+    """A migration is a copy between two live databases: bytes as bytes, nothing through JSON. (The Kea
+    migration — which needs an INITIALISED Kea target since Q127 — is in tests/test_migrate_contract.py.)"""
 
     @pytest.fixture
     def scratch(self):
@@ -498,58 +509,6 @@ class TestMigration:
 
     def _target(self, name):
         return _conn(name)
-
-    def test_migrate_kea_copies_every_binary_column_byte_for_byte(self, kea_tables, scratch):
-        _seed(kea_tables)
-        before = _snapshot(kea_tables)
-        results = dbexport.migrate_kea(
-            TEST_DB["host"],
-            int(os.environ.get("JEN_DB_PORT", 3306)),
-            TEST_DB["user"],
-            TEST_DB["password"],
-            scratch,
-            group="reservations",
-        )
-        assert any("hosts: 7 rows" in r for r in results), results
-        tgt = self._target(scratch)
-        try:
-            with tgt.cursor() as cur:
-                cur.execute(
-                    "SELECT host_id, HEX(dhcp_identifier) AS ident, dhcp_identifier_type AS t, "
-                    "dhcp4_subnet_id AS s, ipv4_address AS ip, hostname FROM hosts ORDER BY host_id"
-                )
-                assert cur.fetchall() == before["hosts"]
-                cur.execute(
-                    "SELECT option_id, code, HEX(value) AS val, formatted_value AS fv, space, host_id "
-                    "FROM dhcp4_options ORDER BY option_id"
-                )
-                assert cur.fetchall() == before["dhcp4_options"]
-                cur.execute("SELECT LENGTH(dhcp_identifier) AS n FROM hosts WHERE host_id = 1")
-                assert cur.fetchone()["n"] == 6
-        finally:
-            tgt.close()
-
-    def test_migrate_kea_copies_the_leases_group_too(self, kea_tables, scratch):
-        _seed(kea_tables)
-        before = _snapshot(kea_tables)
-        dbexport.migrate_kea(
-            TEST_DB["host"],
-            int(os.environ.get("JEN_DB_PORT", 3306)),
-            TEST_DB["user"],
-            TEST_DB["password"],
-            scratch,
-            group="leases",
-        )
-        tgt = self._target(scratch)
-        try:
-            with tgt.cursor() as cur:
-                cur.execute(
-                    "SELECT address, HEX(hwaddr) AS hw, HEX(client_id) AS cid, valid_lifetime AS vl, "
-                    "subnet_id AS s, hostname FROM lease4 ORDER BY address"
-                )
-                assert cur.fetchall() == before["lease4"]
-        finally:
-            tgt.close()
 
     def test_copy_table_rows_keeps_bytes_datetimes_and_decimals_exact(self, db, scratch):
         ddl = "CREATE TABLE q123_copy (id INT PRIMARY KEY, b BLOB, ts DATETIME(6), n DECIMAL(10,2), t VARCHAR(20))"
@@ -644,7 +603,7 @@ class TestRecognisingDamage:
         with kea_tables.cursor() as cur:
             cur.execute(
                 "INSERT INTO hosts (host_id, dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, hostname) "
-                "VALUES (20, %s, 0, 1, 'damaged'), (21, %s, 1, 1, 'damaged-duid')",
+                "VALUES (20, %s, 0, 1, 'damaged'), (21, %s, 1, 3, 'damaged-duid')",
                 (MAC2.hex().encode(), DUID.hex().encode()),
             )
         kea_tables.commit()

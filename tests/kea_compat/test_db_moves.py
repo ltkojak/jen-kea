@@ -95,6 +95,7 @@ def kea():
 def _clean(c):
     """Remove exactly what this module creates (children before parents: Kea's own foreign keys say so)."""
     with c.cursor() as cur:
+        cur.execute("SET @disable_audit = 1")  # global/subnet/class rows fire the config-backend audit trigger
         cur.execute("SELECT host_id FROM hosts WHERE HEX(dhcp_identifier) LIKE '0271%'")
         ids = [r["host_id"] for r in cur.fetchall()]
         for tbl in ("dhcp4_options", "dhcp6_options"):
@@ -152,6 +153,10 @@ def add_option(c, table, host_id, code, value: bytes, *, scope=3, tag="q127", **
         cols["client_classes"] = ""
     cols.update(extra)
     with c.cursor() as cur:
+        if host_id is None:
+            # a global/subnet/class option fires Kea's config-backend audit trigger, which needs a revision the
+            # session has not opened; Kea's own tooling sets this session variable to write such rows directly
+            cur.execute("SET @disable_audit = 1")
         cur.execute(
             f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))})", list(cols.values())
         )
