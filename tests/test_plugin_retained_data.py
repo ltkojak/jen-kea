@@ -112,7 +112,7 @@ class TestOwnershipIsRecorded:
     def test_an_invalid_plugin_id_is_never_recorded(self, db, plugin_world):
         plugins_svc.record_owned_tables({"id": "../x", "version": "1", "db_migrations": _manifest()["db_migrations"]})
         plugins_svc.mark_plugin_uninstalled("../x")
-        assert _q(db, "SELECT 1 FROM plugin_tables WHERE plugin_id LIKE '%x'") == []
+        assert _q(db, "SELECT 1 FROM plugin_tables WHERE plugin_id LIKE '%%x'") == []
 
     def test_plugin_tables_is_itself_in_every_backup(self):
         assert "plugin_tables" in dbexport.JEN_TABLES and "plugin_tables" in dbexport.export_tables()
