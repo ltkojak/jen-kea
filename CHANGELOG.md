@@ -2,6 +2,67 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.67.0-beta.15] - 2026-10-03
+
+Beta channel. Stacked on 5.67.0-beta.14. The smaller findings of the same two
+reviews of beta.12 — each too small for a release of its own, each a place where
+Jen proposed, claimed or silently did something the operator would not have
+agreed to. Everything here but the Podman and CA fields is in stable 5.66.0 or
+only a few releases old.
+
+**The identifier repair could rewrite a legitimate client-id.** The repair page
+(added in beta.11) offered, and ticked by default, every client-id that was an even
+number of hex characters. A client-id is option 61 and is opaque: embedded clients
+that send their MAC address as ASCII text (`001122334455`) exist, and for them the
+text is exactly what Kea must match. A client-id is now offered ticked only with
+corroboration from the lease table — a lease whose client-id is the decoded bytes,
+or, for a twelve-character text, whose hardware address is. With no lease to say it
+is listed as ambiguous and unticked, showing that no lease matches either form; when
+a lease shows the client sending exactly the stored text it is listed as left alone,
+without a checkbox, and is never repaired even if someone posts its id. Hardware
+addresses stay as they were, and a DUID must also decode to a DUID type word (1 to 4).
+The Health Center check fails only on a row certain enough to be ticked and mentions
+the ambiguous ones without failing.
+
+**Option values restored as hex text are now listed.** The repair only ever looked at
+the identifier. A conservative detector now looks at host-scoped DHCPv4 option values
+of fixed-width codes — subnet mask, routers, the server lists, time offset, MTU,
+broadcast address, the lease, renew and rebind times, the server identifier — for a
+value that is exactly twice the code's width, all hex digits, and decodes to something
+plausible (a real address, a contiguous mask, a lease time up to ten years). They are
+listed in a second table, unticked, for you to review and repair. Text options and the
+DHCPv6 tables are never listed, and the page says why.
+
+**A Podman container was treated as a development checkout.** Podman writes
+`/run/.containerenv`, not `/.dockerenv`, so a Podman box answered "dev": "Save &
+Restart", a port change and a certificate change said "restart by hand" and nothing
+restarted. Both markers now mean a container, with the same Update/Restart behaviour
+as Docker; the restart signals the server process and relies on the container's
+restart policy, which the Docker notes now say to set.
+
+**Two CA fields were missing.** The database migration page never passed a CA for the
+target, so a target that requires TLS refused the connection and one that merely
+allows TLS received the password in clear; the setup wizard's Connect step could not
+set `[kea_db] ssl_ca` at all (it used one already in the file). Each has an optional
+CA bundle field, carried through the connection test and the save, checked like the
+Kea API CA (a file on the Jen host, refused before anything connects), and the
+`[kea_db]` reference in the admin guide now lists `port` and `ssl_ca`.
+
+**A backup schedule could back up nothing and count as protection.** An enabled
+schedule with neither the Jen database nor the Kea reservations ticked was accepted,
+recorded a "run" every night with nothing in it, and satisfied the Getting started
+checklist. It is now refused, the checklist counts a schedule only when it is enabled
+and has a target, and a row saved that way earlier says "Nothing was backed up — no
+target is selected" as its status.
+
+**Three sentences now say what is true.** The restore warning for a plugin whose
+code is not on the machine said "its database row is kept", which reads as "its data
+is kept"; it now says the data is not restored by that run, stays inside the bundle,
+and returns when the plugin is reinstalled and the restore run again. The Reports
+point tooltip printed a "Total active" that was dynamic leases plus the number of
+reservations; it prints the active leases. The lenient restore report no longer
+indents "(none)" twice.
+
 ## [5.67.0-beta.14] - 2026-10-03
 
 Beta channel. Stacked on 5.67.0-beta.13. The same two reviews of beta.12 that

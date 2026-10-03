@@ -51,7 +51,7 @@
 
 set -euo pipefail
 
-JEN_VERSION="5.67.0-beta.14"
+JEN_VERSION="5.67.0-beta.15"
 
 JEN_USER="www-data"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

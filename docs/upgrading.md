@@ -423,3 +423,31 @@ first start; there is nothing to do, but a few things behave differently.
   in the backup until the plugin is installed and the restore is run again.
 
 Existing backups still import (5.67.0-beta.14).
+
+## Smaller things that now behave differently
+
+Nothing here needs doing on upgrade (5.67.0-beta.15); each is something you might
+notice.
+
+- **The reservation identifier repair is more careful about client-ids.** If you used
+  Settings → Databases → Import → **Check reservation identifiers**, a client-id that is
+  only hex digits is now ticked for repair only when a lease confirms it; with no
+  lease it is listed unticked as *ambiguous*, and when a lease shows the client sends
+  that exact text it is left alone. Per-host option values of a few fixed-width codes
+  (addresses, masks, times) that were restored as hex text are listed in a second
+  table, unticked, for you to review.
+- **A Podman container restarts itself.** Jen now recognises Podman (`/run/.containerenv`)
+  as a container like Docker. "Save & Restart", a port change and a certificate change
+  stop Jen's process and rely on the container's restart policy, so run it with one
+  (`--restart=unless-stopped`, or a systemd unit or Quadlet that restarts it).
+- **The migration page and the setup Connect step have a CA bundle field.** Both are
+  optional; leave them empty and nothing changes. Set one to connect to a database over
+  verified TLS. On the Connect step an empty field clears a `[kea_db] ssl_ca` that was
+  already saved, so leave the pre-filled value alone if you use one.
+- **A backup schedule must back up something.** An enabled schedule with neither the Jen
+  database nor the Kea reservations ticked is refused when saved, and one saved that way
+  earlier no longer counts as protection on the Getting started checklist; its last
+  status says nothing was backed up until you tick a target.
+- **The restore warning for a plugin that is not installed is plainer:** its data is not
+  restored by that run, it stays inside the bundle, and you reinstall the plugin and
+  run the restore again.
