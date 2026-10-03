@@ -849,7 +849,9 @@ def migrate_run():
     user = request.form.get("user", "").strip()
     pw = request.form.get("password", "")
     db = request.form.get("database", "").strip()
-    tables = request.form.getlist("tables") or None
+    # v5.67.0-beta.13 (Q127) — the Jen selection is exactly what was ticked: nothing ticked is refused by
+    # migrate_jen (it used to turn an empty list into "everything"); None would mean everything
+    tables = request.form.getlist("tables") if which == "jen" else None
     kea_grp = request.form.get("kea_group", dbexport.KEA_BACKUP_GROUP)
 
     q = queue.Queue()

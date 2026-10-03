@@ -3,7 +3,7 @@
 {% block content %}
 <div class="page-header">
     <h1>{{ icon("shuffle", "ico-lg") }} Database Migration Wizard</h1>
-    <p>Copy a database to a new server. Source is never modified. Target is rolled back if anything fails.</p>
+    <p>Copy a database to a new server. The source is never modified. If anything fails, what this migration wrote is removed and what was already on the target is left exactly as it was.</p>
 </div>
 
 <!-- Step 1: Choose DB -->
@@ -116,7 +116,9 @@
     <div id="migration-summary" class="u-87c136"></div>
     <div class="alert alert-warning u-87c136">
         {{ icon("triangle-alert") }} This will copy data to the target database. The source (<strong>{{ jen_db_host }}</strong> / <strong>{{ kea_db_host }}</strong>) is never touched.
-        If the migration fails at any point, the target is rolled back and left completely clean.
+        If the migration fails at any point, what it wrote to the target is removed and nothing that was already there is touched.
+        <br><strong>Jen database:</strong> the target must not already have the tables being copied — the migration creates them, and refuses to replace or merge into one that exists (use an empty database).
+        <br><strong>Kea database:</strong> the target must already be an initialised Kea database (<code>kea-admin db-init</code>) of the same schema major version. Jen copies data only; it never creates or changes Kea's tables.
     </div>
     <div style="display:flex;gap:10px;margin-bottom:16px;">
         <button class="btn btn-secondary" id="step3-back-btn">← Back</button>
@@ -248,7 +250,7 @@ function runMigration() {
                         if (line.startsWith('event: error')) {
                             document.getElementById('migration-result').style.display = '';
                             document.getElementById('migration-result').innerHTML =
-                                '<div class="alert alert-danger"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> Migration failed — target database was rolled back and left clean. See log above.</div>';
+                                '<div class="alert alert-danger"><svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg> Migration failed — nothing was changed on the target (what the run wrote was removed). See log above.</div>';
                         }
                     });
                     return pump();

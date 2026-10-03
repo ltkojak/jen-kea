@@ -1079,14 +1079,79 @@ def test_connection(host, port, user, password, database, ssl_ca=""):
         return False, str(e)
 
 
-def _copy_table_rows(src, dst, tbl, batch=1000) -> int:
+class MigrationRefused(RuntimeError):
+    """A migration refused BEFORE it wrote anything: its target is not what the migration needs it to be, or
+    nothing was asked for. Nothing was created, copied or removed (v5.67.0-beta.13, Q127)."""
+
+
+def _pk_columns(conn, table) -> list[str]:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT column_name AS col FROM information_schema.columns "
+            "WHERE table_schema = DATABASE() AND table_name = %s AND column_key = 'PRI' ORDER BY ordinal_position",
+            (table,),
+        )
+        return [r["col"] for r in cur.fetchall()]
+
+
+def _norm_key(v):
+    return bytes(v).hex() if isinstance(v, (bytes, bytearray)) else v
+
+
+def _pk_sample(conn, table, pk_cols, n=100) -> list[tuple]:
+    """The first and last `n` primary keys of `table` (the whole table when it is smaller than 2n)."""
+    cols = ", ".join(f"`{c}`" for c in pk_cols)
+    out = []
+    with conn.cursor() as cur:
+        for direction in ("ASC", "DESC"):
+            order = ", ".join(f"`{c}` {direction}" for c in pk_cols)
+            cur.execute(f"SELECT {cols} FROM `{table}` ORDER BY {order} LIMIT {int(n)}")
+            out.extend(tuple(r[c] for c in pk_cols) for r in cur.fetchall())
+    return sorted(set(out), key=lambda k: tuple(str(x) for x in k))
+
+
+def _pks_missing(conn, table, pk_cols, keys) -> list[tuple]:
+    """Which of `keys` (primary-key tuples) are NOT in `table`."""
+    missing = []
+    cols = ", ".join(f"`{c}`" for c in pk_cols)
+    with conn.cursor() as cur:
+        for i in range(0, len(keys), 200):
+            chunk = keys[i : i + 200]
+            if len(pk_cols) == 1:
+                cur.execute(
+                    f"SELECT {cols} FROM `{table}` WHERE `{pk_cols[0]}` IN ({', '.join(['%s'] * len(chunk))})",
+                    [k[0] for k in chunk],
+                )
+            else:
+                tup = "(" + ", ".join(["%s"] * len(pk_cols)) + ")"
+                cur.execute(
+                    f"SELECT {cols} FROM `{table}` WHERE ({cols}) IN ({', '.join([tup] * len(chunk))})",
+                    [v for k in chunk for v in k],
+                )
+            found = {tuple(_norm_key(r[c]) for c in pk_cols) for r in cur.fetchall()}
+            missing.extend(k for k in chunk if tuple(_norm_key(v) for v in k) not in found)
+    return missing
+
+
+def _kea_schema_version(conn):
+    """(version, minor) from Kea's own `schema_version` row, or None when this is not an initialised Kea
+    database (`kea-admin db-init` creates the table and its row)."""
+    if not _table_exists(conn, "schema_version"):
+        return None
+    with conn.cursor() as cur:
+        cur.execute("SELECT version, minor FROM schema_version ORDER BY version DESC LIMIT 1")
+        r = cur.fetchone()
+    return (int(r["version"]), int(r["minor"] or 0)) if r else None
+
+
+def _copy_table_rows(src, dst, tbl, batch=1000, track=None, pk_cols=None) -> int:
     """Copy every row of `tbl` from `src` to `dst` — the driver's own values straight across, bytes as
-    bytes (v5.67.0-beta.11, Q123). migrate_jen/migrate_kea used to copy the JSON export's cleaned rows, which is
-    the JSON export's cleaned form: every binary value had been turned into hex text on the way, and the
-    target stored that text — a migrated Kea database held reservations Kea could no longer match. A
-    migration is a copy between two live databases, so there is no JSON in the middle to clean for.
-    Streams the source with a server-side cursor in `batch`-row slices, so a large lease4 is never held
-    whole. Returns the number of rows copied."""
+    bytes (v5.67.0-beta.11, Q123: a migration is a copy between two live databases, so there is no JSON in the
+    middle to clean for) — with a PLAIN INSERT (v5.67.0-beta.13, Q127): a collision is an error, never a row
+    silently left out, and the count is what the server says it inserted (`executemany`'s row count), checked
+    against the batch. `track`, when given (a list), receives the primary key of every row inserted, so a
+    failed run can delete exactly those rows and no others. Streams the source with a server-side cursor in
+    `batch`-row slices, so a large lease4 is never held whole. Returns the number of rows inserted."""
     count = 0
     sql = None
     cols = None
@@ -1100,17 +1165,67 @@ def _copy_table_rows(src, dst, tbl, batch=1000) -> int:
                 cols = list(rows[0].keys())
                 col_str = ", ".join(f"`{c}`" for c in cols)
                 ph_str = ", ".join(["%s"] * len(cols))
-                sql = f"INSERT IGNORE INTO `{tbl}` ({col_str}) VALUES ({ph_str})"
+                sql = f"INSERT INTO `{tbl}` ({col_str}) VALUES ({ph_str})"
             with dst.cursor() as dcur:
-                dcur.executemany(sql, [[r.get(c) for c in cols] for r in rows])
+                affected = dcur.executemany(sql, [[r.get(c) for c in cols] for r in rows])
+            if affected != len(rows):
+                raise RuntimeError(f"{tbl}: {len(rows)} rows were sent but the server reports {affected} inserted")
+            if track is not None and pk_cols:
+                track.extend(tuple(r[c] for c in pk_cols) for r in rows)
             count += len(rows)
     return count
+
+
+def _verify_copy(src, dst, tbl, dst_before, pk_cols):
+    """Per table: the target holds exactly `dst_before` + what the source has, AND a sample of the source's
+    primary keys (the first and last hundred) is present in the target."""
+    sc, dc = _row_count(src, tbl), _row_count(dst, tbl)
+    if dc - dst_before != sc:
+        raise RuntimeError(f"Row count mismatch on {tbl}: source {sc}, target gained {dc - dst_before}")
+    if pk_cols:
+        missing = _pks_missing(dst, tbl, pk_cols, _pk_sample(src, tbl, pk_cols))
+        if missing:
+            raise RuntimeError(
+                f"{tbl}: {len(missing)} sampled primary key(s) are missing from the target, e.g. {missing[0]}"
+            )
+
+
+def _delete_tracked(conn, order, pk_by_table, inserted):
+    """Delete exactly the rows a failed run inserted — by primary key, children before parents (`order` is the
+    copy order, reversed here). Used only when a rollback could not be confirmed; a rollback is the normal undo."""
+    with conn.cursor() as cur:
+        for tbl in reversed(order):
+            keys, pk = inserted.get(tbl) or [], pk_by_table.get(tbl)
+            if not keys or not pk:
+                continue
+            for i in range(0, len(keys), 200):
+                chunk = keys[i : i + 200]
+                if len(pk) == 1:
+                    cur.execute(
+                        f"DELETE FROM `{tbl}` WHERE `{pk[0]}` IN ({', '.join(['%s'] * len(chunk))})",
+                        [k[0] for k in chunk],
+                    )
+                else:
+                    cols = ", ".join(f"`{c}`" for c in pk)
+                    tup = "(" + ", ".join(["%s"] * len(pk)) + ")"
+                    cur.execute(
+                        f"DELETE FROM `{tbl}` WHERE ({cols}) IN ({', '.join([tup] * len(chunk))})",
+                        [v for k in chunk for v in k],
+                    )
+    conn.commit()
 
 
 def migrate_jen(target_host, target_port, target_user, target_password, target_db, tables=None, progress_cb=None):
     """
     Migrate Jen DB to a new server.
-    Runs in a transaction on the target — rolls back on failure.
+
+    The target contract (v5.67.0-beta.13, Q127) is checked BEFORE anything is written: every table being
+    migrated must be ABSENT on the target — this creates tables, it never replaces or merges into one — and
+    something must have been selected: `tables=None` means everything, but an empty list, or names that are
+    none of Jen's, is refused rather than quietly widened to everything. A failure drops only the tables THIS run
+    created (existence is checked before each CREATE), never one that was there; the data is copied in one
+    transaction with plain INSERTs, counted from what the server reports and verified per table against the
+    source (counts and a sample of primary keys).
     progress_cb(message): called with progress updates.
     Returns list of result strings.
     """
@@ -1128,10 +1243,19 @@ def migrate_jen(target_host, target_port, target_user, target_password, target_d
     # every currently-installed plugin's tables that actually exist on the SOURCE, so a plugin
     # table is never silently left off a migrated-to-a-new-server Jen either.
     universe = export_tables(src)
-    if tables:
-        selected = _validate_tables(tables, universe) or universe
-    else:
+    if tables is None:
         selected = universe
+    else:
+        selected = _validate_tables(tables, universe)
+        if not selected:
+            src.close()
+            raise MigrationRefused(
+                "No table was selected, or none of the names given is one Jen can migrate — nothing was copied."
+            )
+    selected = [t for t in selected if _table_exists(src, t)]
+    if not selected:
+        src.close()
+        raise MigrationRefused("None of the selected tables exists on the source — nothing was copied.")
     _cb(f"Connecting to target ({target_host}/{target_db})...")
     try:
         dst = _direct_conn(target_host, target_port, target_user, target_password, target_db)
@@ -1139,36 +1263,38 @@ def migrate_jen(target_host, target_port, target_user, target_password, target_d
         src.close()
         raise RuntimeError(f"Cannot connect to target DB: {e}") from e
 
-    try:
-        # Get source schema DDL for selected tables and recreate on target
-        _cb("Reading source schema...")
-        dst.cursor().execute("SET FOREIGN_KEY_CHECKS=0")
-        dst.begin()
+    present = [t for t in selected if _table_exists(dst, t)]
+    if present:
+        src.close()
+        dst.close()
+        raise MigrationRefused(
+            f"The target database already has {', '.join(present)}. A migration creates tables and never replaces "
+            f"or merges into one that exists — point it at an empty database (or drop those tables yourself first). "
+            f"Nothing was changed."
+        )
 
-        created_tables = []
+    created_tables: list[str] = []
+    try:
+        dst.cursor().execute("SET FOREIGN_KEY_CHECKS=0")
+        _cb("Reading source schema...")
         for tbl in selected:
-            if not _table_exists(src, tbl):
-                _cb(f"  ⚠️ {tbl}: not in source — skipping")
-                continue
+            if _table_exists(dst, tbl):  # checked again, at the moment of the CREATE
+                raise MigrationRefused(f"{tbl} appeared on the target while the migration was starting — stopped.")
             with src.cursor() as cur:
                 cur.execute(f"SHOW CREATE TABLE `{tbl}`")
                 row = cur.fetchone()
-                ddl_key = [k for k in row if "Create" in k][0]
-                ddl = row[ddl_key]
-                # Ensure IF NOT EXISTS and strip AUTO_INCREMENT value
-                ddl = ddl.replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS")
-                import re
-
+                ddl = row[[k for k in row if "Create" in k][0]]
                 ddl = re.sub(r" AUTO_INCREMENT=\d+", "", ddl)
             with dst.cursor() as cur:
                 cur.execute(ddl)
-            created_tables.append(tbl)
+            created_tables.append(tbl)  # only now is it ours to drop
             _cb(f"  ✅ Created table: {tbl}")
 
-        # Copy data table by table
         _cb("Copying data...")
+        dst.begin()
+        pk_by_table = {t: _pk_columns(src, t) for t in created_tables}
         for tbl in created_tables:
-            count = _copy_table_rows(src, dst, tbl)
+            count = _copy_table_rows(src, dst, tbl, pk_cols=pk_by_table[tbl])
             if count == 0:
                 _cb(f"  ℹ️ {tbl}: empty — skipped")
                 results.append(f"ℹ️ {tbl}: 0 rows")
@@ -1176,36 +1302,33 @@ def migrate_jen(target_host, target_port, target_user, target_password, target_d
             _cb(f"  ✅ {tbl}: {count} rows copied")
             results.append(f"✅ {tbl}: {count} rows")
 
-        # Verify row counts match
-        _cb("Verifying row counts...")
-        mismatches = []
+        _cb("Verifying...")
         for tbl in created_tables:
-            src_count = _row_count(src, tbl)
-            dst_count = _row_count(dst, tbl)
-            if src_count != dst_count:
-                mismatches.append(f"{tbl} (source: {src_count}, target: {dst_count})")
-        if mismatches:
-            raise RuntimeError(f"Row count mismatch after copy — rolled back. Tables: {', '.join(mismatches)}")
+            _verify_copy(src, dst, tbl, 0, pk_by_table[tbl])
 
-        dst.cursor().execute("SET FOREIGN_KEY_CHECKS=1")
         dst.commit()
-        _cb("✅ Migration complete — all row counts verified.")
+        dst.cursor().execute("SET FOREIGN_KEY_CHECKS=1")
+        _cb("✅ Migration complete — every table's row count and a sample of its primary keys verified.")
 
     except Exception as e:
-        try:
+        # the rows are one transaction: undone by the rollback; the tables are DDL (auto-committed), so they are
+        # dropped — only the ones this run created
+        with contextlib.suppress(Exception):
             dst.rollback()
-            # Drop the tables we created so the target is left clean
-            with dst.cursor() as cur:
-                cur.execute("SET FOREIGN_KEY_CHECKS=0")
-                for tbl in created_tables:
-                    cur.execute(f"DROP TABLE IF EXISTS `{tbl}`")
-                cur.execute("SET FOREIGN_KEY_CHECKS=1")
+        with contextlib.suppress(Exception), dst.cursor() as cur:
+            cur.execute("SET FOREIGN_KEY_CHECKS=0")
+            for tbl in reversed(created_tables):
+                cur.execute(f"DROP TABLE IF EXISTS `{tbl}`")
+            cur.execute("SET FOREIGN_KEY_CHECKS=1")
             dst.commit()
-        except Exception:
-            pass
         src.close()
         dst.close()
-        raise RuntimeError(f"Migration failed — target DB rolled back and cleaned up. Error: {e}") from e
+        if isinstance(e, MigrationRefused):
+            raise
+        raise RuntimeError(
+            f"Migration failed — the tables it created on the target were removed and nothing that was there was "
+            f"touched. Error: {e}"
+        ) from e
 
     src.close()
     dst.close()
@@ -1216,7 +1339,16 @@ def migrate_kea(
     target_host, target_port, target_user, target_password, target_db, group=KEA_BACKUP_GROUP, progress_cb=None
 ):
     """
-    Migrate Kea reservations (or leases) to a new DB server.
+    Migrate Kea reservations (or leases) into another Kea database.
+
+    DATA ONLY (v5.67.0-beta.13, Q127): Jen never creates or alters Kea's schema (CLAUDE.md "Databases"). The
+    target must already be an INITIALISED Kea database — `kea-admin db-init` — with a `schema_version` row whose
+    major version equals the source's and every table of the group that exists on the source; anything else is
+    refused before a row is written, naming what is wrong. Rows are copied in one transaction with plain INSERTs
+    (a primary-key or unique-key collision is an error, not a skipped row), counted from what the server
+    reports, and verified per table. On any failure the transaction is rolled back; if the rollback cannot be
+    confirmed, exactly the rows this run inserted (tracked by primary key) are deleted, children first — never
+    a table, never a row that was there.
     """
 
     def _cb(msg):
@@ -1226,7 +1358,6 @@ def migrate_kea(
 
     if group not in KEA_EXPORT_GROUPS:
         raise ValueError(f"Unknown migration group: {group}")
-    tables = KEA_EXPORT_GROUPS[group]["tables"]
     results = []
 
     _cb(f"Connecting to source Kea DB ({extensions.KEA_DB_HOST}/{extensions.KEA_DB_NAME})...")
@@ -1238,63 +1369,73 @@ def migrate_kea(
         src.close()
         raise RuntimeError(f"Cannot connect to target DB: {e}") from e
 
-    created_tables = []
+    def _refuse(message):
+        src.close()
+        dst.close()
+        raise MigrationRefused(message + " Nothing was changed.")
+
+    sv_src, sv_dst = _kea_schema_version(src), _kea_schema_version(dst)
+    if sv_src is None:
+        _refuse("The source is not an initialised Kea database (it has no schema_version row).")
+    if sv_dst is None:
+        _refuse(
+            f"The target ({target_db}) is not an initialised Kea database — it has no schema_version row. "
+            f"Run `kea-admin db-init mysql` on it first: Jen copies data only and never creates Kea's tables."
+        )
+    if sv_dst[0] != sv_src[0]:
+        _refuse(
+            f"The target's Kea schema is version {sv_dst[0]}.{sv_dst[1]} and the source's is "
+            f"{sv_src[0]}.{sv_src[1]}: the major versions must match (upgrade the target with kea-admin, "
+            f"or migrate between the same Kea major)."
+        )
+    tables = [t for t in KEA_EXPORT_GROUPS[group]["tables"] if _table_exists(src, t)]
+    missing = [t for t in tables if not _table_exists(dst, t)]
+    if missing:
+        _refuse(f"The target is missing {', '.join(missing)}, which the source has.")
+    if not tables:
+        _refuse("None of this group's tables exists on the source.")
+
+    pk_by_table = {t: _pk_columns(dst, t) for t in tables}
+    before = {t: _row_count(dst, t) for t in tables}
+    inserted: dict[str, list] = {t: [] for t in tables}
     try:
-        dst.cursor().execute("SET FOREIGN_KEY_CHECKS=0")
         dst.begin()
-        import re
-
         for tbl in tables:
-            if not _table_exists(src, tbl):
-                _cb(f"  ⚠️ {tbl}: not in source Kea DB — skipping")
-                continue
-            with src.cursor() as cur:
-                cur.execute(f"SHOW CREATE TABLE `{tbl}`")
-                row = cur.fetchone()
-                ddl_key = [k for k in row if "Create" in k][0]
-                ddl = row[ddl_key].replace("CREATE TABLE", "CREATE TABLE IF NOT EXISTS")
-                ddl = re.sub(r" AUTO_INCREMENT=\d+", "", ddl)
-            with dst.cursor() as cur:
-                cur.execute(ddl)
-            created_tables.append(tbl)
-            _cb(f"  ✅ Created table: {tbl}")
-
-        for tbl in created_tables:
-            count = _copy_table_rows(src, dst, tbl)
+            count = _copy_table_rows(src, dst, tbl, track=inserted[tbl], pk_cols=pk_by_table[tbl])
             if count == 0:
                 _cb(f"  ℹ️ {tbl}: empty")
                 results.append(f"ℹ️ {tbl}: 0 rows")
                 continue
             _cb(f"  ✅ {tbl}: {count} rows copied")
             results.append(f"✅ {tbl}: {count} rows")
-
-        # Verify
-        for tbl in created_tables:
-            sc = _row_count(src, tbl)
-            dc = _row_count(dst, tbl)
-            if sc != dc:
-                raise RuntimeError(f"Row count mismatch on {tbl} (src={sc} dst={dc})")
-
-        dst.cursor().execute("SET FOREIGN_KEY_CHECKS=1")
+        _cb("Verifying...")
+        for tbl in tables:
+            _verify_copy(src, dst, tbl, before[tbl], pk_by_table[tbl])
         dst.commit()
         _cb("✅ Kea migration complete.")
     except Exception as e:
+        rolled_back = True
         try:
             dst.rollback()
-            with dst.cursor() as cur:
-                cur.execute("SET FOREIGN_KEY_CHECKS=0")
-                for tbl in created_tables:
-                    cur.execute(f"DROP TABLE IF EXISTS `{tbl}`")
-                cur.execute("SET FOREIGN_KEY_CHECKS=1")
-            dst.commit()
         except Exception:
-            pass
-        dst.close()
+            rolled_back = False
+        if not rolled_back:
+            # the rollback could not be confirmed (the connection is gone): delete exactly what this run
+            # inserted, by primary key, on a fresh connection
+            with contextlib.suppress(Exception):
+                fresh = _direct_conn(target_host, target_port, target_user, target_password, target_db)
+                try:
+                    _delete_tracked(fresh, tables, pk_by_table, inserted)
+                finally:
+                    fresh.close()
+        with contextlib.suppress(Exception):
+            dst.close()
         src.close()
-        raise RuntimeError(f"Kea migration failed — rolled back. Error: {e}") from e
+        raise RuntimeError(
+            f"Kea migration failed — the target was rolled back and nothing that was there was touched. Error: {e}"
+        ) from e
 
     dst.close()
-
     src.close()
     return results
 

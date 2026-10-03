@@ -309,7 +309,7 @@
 <div class="card">
     <div class="card-header"><h3>{{ icon("shuffle") }} Migrate to New Server</h3></div>
     <div class="alert alert-warning u-905d8b">
-        {{ icon("triangle-alert") }} Migration copies data to a new database server. The source is never modified. If migration fails at any point, the target is rolled back and left clean. Progress is shown in real-time below.
+        {{ icon("triangle-alert") }} Migration copies data to a new database server. The source is never modified. If migration fails at any point, what it wrote is removed and nothing already on the target is touched. A Jen migration needs a target without those tables; a Kea migration needs an initialised Kea database. Progress is shown in real-time below.
     </div>
     <a href="/settings/databases/migrate" class="btn btn-primary">{{ icon("shuffle") }} Open Migration Wizard</a>
 </div>

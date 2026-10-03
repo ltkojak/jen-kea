@@ -510,9 +510,6 @@ def test_a_migration_into_an_initialised_empty_target_copies_every_row_byte_for_
     tgt.close()
 
 
-@known_bug(
-    "migrate_kea runs CREATE TABLE IF NOT EXISTS from the SOURCE and, on any failure, DROPs every table it 'created' — including the target's own (Q127 a)"
-)
 def test_a_failed_migration_leaves_a_populated_target_byte_for_byte_as_it_was(kea, scratch):
     h = add_host(kea, 9, hostname="q127-source-host")
     add_option(kea, "dhcp4_options", h, 6, bytes([9, 9, 9, 9]), tag="q127-source-opt")
@@ -531,9 +528,6 @@ def test_a_failed_migration_leaves_a_populated_target_byte_for_byte_as_it_was(ke
     tgt.close()
 
 
-@known_bug(
-    "migrate_kea creates whatever tables the target lacks from the source's DDL; an uninitialised target must be refused (Q127 a)"
-)
 def test_a_target_that_is_not_an_initialised_kea_database_is_refused_and_left_empty(kea, scratch):
     add_host(kea, 10)
     refused = False
@@ -547,7 +541,6 @@ def test_a_target_that_is_not_an_initialised_kea_database_is_refused_and_left_em
     assert refused and left == [], f"refused={refused}, tables created in the target: {left}"
 
 
-@known_bug("migrate_kea does not compare schema versions (Q127 a)")
 def test_a_target_with_an_incompatible_schema_major_is_refused(kea, scratch):
     add_host(kea, 11)
     tgt = initialise(scratch)
