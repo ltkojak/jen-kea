@@ -398,6 +398,16 @@ def _complete_v6_address(text: str):
         return None
 
 
+def _address_spellings(text) -> list[str]:
+    """The compressed and the expanded (`2001:0db8:0000:…`) lowercase spelling of an IPv6 address given as text — what a
+    fragment search is matched against. Python's `exploded` is lowercase already."""
+    text = text or ""
+    spellings = [text.lower()]
+    with contextlib.suppress(ValueError):
+        spellings.append(ipaddress.IPv6Address(text).exploded)
+    return spellings
+
+
 def _lease6_search_filter(search: str):
     """A predicate over a lease6 row (as selected by list_lease6) for a search that is not a whole address: a
     case-insensitive substring of the address text (compressed or expanded), the hostname, or the DUID hex (a
@@ -406,17 +416,29 @@ def _lease6_search_filter(search: str):
     duid_needle = needle.replace(":", "")
 
     def match(row) -> bool:
-        text = _addr_text(row["address"]) or ""
-        spellings = [text.lower()]
-        with contextlib.suppress(ValueError):
-            spellings.append(ipaddress.IPv6Address(text).exploded)
         return (
-            any(needle in s for s in spellings)
+            any(needle in s for s in _address_spellings(_addr_text(row["address"])))
             or needle in (row["hostname"] or "").lower()
             or (bool(duid_needle) and duid_needle in (row["duid_hex"] or "").lower())
         )
 
     return match
+
+
+def _reservation6_matches(host: dict, needle: str) -> bool:
+    """Does a get_ipv6_reservations() host match a search? (v5.67.0-beta.17, Q131 — the one predicate global search
+    applies to EVERY reservation of a subnet before it caps the list.) A case-insensitive substring of the hostname,
+    of the DUID hex (a typed colon is ignored, as the lease filter does), or of ANY of its reservations' addresses in
+    the compressed or the expanded spelling — so `2001:0db8` finds a reservation stored as `2001:db8::10`."""
+    n = (needle or "").strip().lower()
+    if not n:
+        return False
+    duid_n = n.replace(":", "")
+    return (
+        n in (host.get("hostname") or "").lower()
+        or (bool(duid_n) and duid_n in (host.get("duid_hex") or "").lower())
+        or any(n in s for r in host.get("reservations", []) for s in _address_spellings(r.get("address")))
+    )
 
 
 def get_ipv6_reservations(subnet_id: int = None) -> list:

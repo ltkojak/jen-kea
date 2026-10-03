@@ -253,3 +253,38 @@ class TestReservationsComeBackAsAddresses:
         assert by_type["IA_PD"]["excluded_prefix"] == "2001:db8:1000:ff00::"
         assert by_type["IA_PD"]["excluded_prefix_len"] == 64
         assert all(isinstance(r["address"], str) for r in host["reservations"])
+
+
+class TestReservationSearchPredicate:
+    """v5.67.0-beta.17 (Q131) — one predicate for the global search over a v6 subnet's reservations."""
+
+    HOST = {
+        "hostname": "Printer-One",
+        "duid_hex": "00030001AABBCCDDEEFF",
+        "reservations": [{"address": "2001:db8::10"}, {"address": "2001:db8:1000::"}],
+    }
+
+    def match(self, needle, host=None):
+        return kea6._reservation6_matches(host or self.HOST, needle)
+
+    def test_hostname_duid_and_addresses_in_both_spellings(self):
+        assert self.match("printer") and self.match("ONE")
+        assert self.match("aabbcc") and self.match("00:03:00:01"), "a typed colon is ignored in the DUID"
+        assert self.match("2001:db8::10") and self.match("db8:1000")
+        assert self.match("2001:0db8") and self.match("0000:0000:0010"), "the expanded spelling"
+        assert self.match("2001:0DB8:0000:0000:0000:0000:0000:0010"), "case-insensitive"
+
+    def test_every_reservation_of_the_host_counts(self):
+        assert self.match("1000::") and self.match("2001:0db8:1000")
+
+    def test_non_matches_and_an_empty_search(self):
+        assert not self.match("scanner") and not self.match("ffff0000") and not self.match("2002:db8")
+        assert not self.match("") and not self.match("   ") and not self.match(None)
+
+    def test_a_host_with_no_reservations_still_matches_by_hostname(self):
+        host = {"hostname": "bare", "duid_hex": "", "reservations": []}
+        assert self.match("bar", host) and not self.match("2001", host)
+
+    def test_missing_fields_never_raise(self):
+        assert not self.match("x", {})
+        assert not self.match("x", {"hostname": None, "duid_hex": None, "reservations": [{"address": None}]})

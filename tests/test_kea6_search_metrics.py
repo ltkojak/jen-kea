@@ -159,6 +159,80 @@ class TestGlobalSearchV6:
             set_global_setting("ipv6_enabled", "false")
 
 
+class TestGlobalSearchV6ReservationsFilterBeforeTheyCap:
+    """v5.67.0-beta.17 (Q131) — global search took the first 20 hosts of a v6 subnet and only THEN tested them, so a
+    matching reservation that was the 21st host of its subnet was never found (the lease branch above it filtered in
+    the reader and capped last). One kea6 predicate now filters every reservation of the subnet, then the list is
+    capped at 20."""
+
+    def _seed(self, db, count=25, hostname=lambda i: f"res-host-{i:02d}"):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM ipv6_reservations")
+            cur.execute("DELETE FROM hosts WHERE dhcp6_subnet_id IS NOT NULL")
+            for i in range(count):
+                cur.execute(
+                    "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp6_subnet_id, hostname) "
+                    "VALUES (%s, 1, 1, %s)",
+                    (bytes.fromhex("00030001aabbccdd") + bytes([0, i]), hostname(i)),
+                )
+                host_id = cur.lastrowid
+                cur.execute(
+                    "INSERT INTO ipv6_reservations (address, prefix_len, type, dhcp6_iaid, host_id) "
+                    "VALUES (INET6_ATON(%s), 128, 0, 1, %s)",
+                    (f"2001:db8::{i + 1:x}", host_id),
+                )
+        db.commit()
+
+    def _search(self, logged_in_client, monkeypatch, q):
+        from jen.models.user import _invalidate_settings_cache, set_global_setting
+
+        set_global_setting("ipv6_enabled", "true")
+        monkeypatch.setattr(
+            extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
+        )
+        try:
+            _invalidate_settings_cache()
+            resp = logged_in_client.get("/search", query_string={"q": q})
+            assert resp.status_code == 200
+            return resp.data
+        finally:
+            set_global_setting("ipv6_enabled", "false")
+
+    def test_the_25th_host_of_a_subnet_is_found_by_its_hostname(self, logged_in_client, monkeypatch, db):
+        self._seed(db)
+        page = self._search(logged_in_client, monkeypatch, "res-host-24")
+        assert b"res-host-24" in page, "a matching reservation past the first 20 hosts must be found"
+        assert b"res-host-23" not in page
+
+    def test_the_25th_host_is_found_by_its_address_and_by_its_duid(self, logged_in_client, monkeypatch, db):
+        self._seed(db)
+        assert b"res-host-24" in self._search(logged_in_client, monkeypatch, "2001:db8::19")  # 25 == 0x19
+        assert b"res-host-24" in self._search(logged_in_client, monkeypatch, "aabbccdd0018")  # DUID ends 00 18 (24)
+
+    def test_a_search_that_matches_everything_still_shows_at_most_twenty(self, logged_in_client, monkeypatch, db):
+        self._seed(db)
+        page = self._search(logged_in_client, monkeypatch, "res-host")
+        assert b"res-host-19" in page and b"res-host-20" not in page and b"res-host-24" not in page
+        assert page.count(b"res-host-") == 20
+
+    def test_the_expanded_spelling_finds_a_reservation_stored_compressed(self, logged_in_client, monkeypatch, db):
+        self._seed(db, count=3)
+        page = self._search(logged_in_client, monkeypatch, "2001:0db8:0000:0000:0000:0000:0000:0002")
+        assert b"res-host-01" in page and b"res-host-00" not in page and b"res-host-02" not in page
+        page = self._search(logged_in_client, monkeypatch, "2001:0db8")
+        assert b"res-host-00" in page and b"res-host-02" in page
+
+    def test_the_route_filters_through_the_kea6_predicate_before_it_caps(self):
+        import inspect
+
+        from jen.routes import search
+
+        src = inspect.getsource(search)
+        assert "__kea6._reservation6_matches(h, q)" in src
+        assert "get_ipv6_reservations(subnet_id=sid)[:20]" not in src
+        assert "matching[:20]" in src
+
+
 class TestPrometheusMetricsV6:
     @pytest.fixture
     def metrics_open(self, monkeypatch):

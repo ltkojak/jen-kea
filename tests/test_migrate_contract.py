@@ -89,8 +89,8 @@ def tables_of(conn):
         return sorted(next(iter(r.values())) for r in cur.fetchall())
 
 
-def snapshot(conn, tables):
-    """{table: rows with bytes as hex} — or "<missing>" for a table that is not there."""
+def snapshot(conn, tables, where=None):
+    """{table: rows with bytes as hex} — or "<missing>" for a table that is not there. `where` limits the rows."""
     out = {}
     for t in tables:
         with conn.cursor() as cur:
@@ -98,7 +98,7 @@ def snapshot(conn, tables):
             if not cur.fetchone():
                 out[t] = "<missing>"
                 continue
-            cur.execute(f"SELECT * FROM `{t}`")
+            cur.execute(f"SELECT * FROM `{t}`" + (f" WHERE {where}" if where else ""))
             rows = [
                 {k: (bytes(v).hex() if isinstance(v, (bytes, bytearray)) else v) for k, v in r.items()}
                 for r in cur.fetchall()
@@ -245,6 +245,30 @@ def add_option(conn, option_id, host_id, value):
         )
 
 
+def add_config_backend_options(conn):
+    """What a source that uses Kea's config backend holds besides a reservation's own options (Q131): a GLOBAL option
+    (scope 0, no host) and a SUBNET-scoped one that names a dhcp4_subnet_id/dhcp6_subnet_id. Neither belongs to a
+    reservation move; on the REAL schema the second one's foreign key into dhcp4_subnet (empty on a freshly
+    initialised target) is what failed the whole migration."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO dhcp4_options (option_id, code, value, formatted_value, space, host_id, scope_id, "
+            "client_classes) VALUES (201, 3, %s, 'q131-global', 'dhcp4', NULL, 0, '')",
+            (bytes([10, 0, 0, 1]),),
+        )
+        cur.execute(
+            "INSERT INTO dhcp4_options (option_id, code, value, formatted_value, space, host_id, scope_id, "
+            "dhcp4_subnet_id, client_classes) VALUES (202, 6, %s, 'q131-subnet', 'dhcp4', NULL, 1, 9999, '')",
+            (bytes([10, 0, 0, 53]),),
+        )
+        cur.execute(
+            "INSERT INTO dhcp6_options (option_id, code, value, formatted_value, space, host_id, scope_id, "
+            "client_classes) VALUES (301, 23, %s, 'q131-global6', 'dhcp6', NULL, 0, '')",
+            (bytes(16),),
+        )
+    conn.commit()
+
+
 @pytest.fixture
 def kea_source(db):
     """Three reservations in the source (the unit database), two with options, one with an IPv6 reservation."""
@@ -305,6 +329,39 @@ class TestMigrateKeaTargetContract:
         for t in KEA_DATA_TABLES:
             assert snapshot(tgt, [t]) == snapshot(db, [t]), f"{t} did not copy exactly"
         tgt.close()
+
+    def test_only_a_reservations_own_options_are_copied_never_the_config_backends(self, db, scratch, kea_source):
+        """Q131 — the migration used to SELECT * the options tables: the global and subnet rows travelled by their
+        option_ids (and, on the real schema, the subnet row's foreign key failed the whole migration)."""
+        add_config_backend_options(db)
+        tgt = initialise_kea_target(db)
+        results = migrate_kea()
+        db.commit()
+        host_scoped = "host_id IS NOT NULL AND scope_id = 3"
+        for t in ("dhcp4_options", "dhcp6_options"):
+            src_rows = snapshot(db, [t], where=host_scoped)[t]
+            assert snapshot(tgt, [t])[t] == src_rows, f"{t}: exactly the host-scoped rows, byte for byte"
+        assert [r["option_id"] for r in snapshot(tgt, ["dhcp4_options"])["dhcp4_options"]] == [101, 102]
+        assert snapshot(tgt, ["dhcp6_options"])["dhcp6_options"] == []
+        for t in ("hosts", "ipv6_reservations"):
+            assert snapshot(tgt, [t]) == snapshot(db, [t]), f"{t} did not copy exactly"
+        # the source is never modified: its config-backend rows are still there
+        assert len(snapshot(db, ["dhcp4_options"])["dhcp4_options"]) == 4
+        assert any(
+            r == "✅ dhcp4_options: 2 host-scoped option rows (a reservation's own options; global, subnet, pool and "
+            "class options are not part of a reservation move)"
+            for r in results
+        ), results
+        assert any(r.startswith("ℹ️ dhcp4_options: 2 option row(s) of Kea's config backend") for r in results), results
+        assert any(r.startswith("ℹ️ dhcp6_options: 0 host-scoped option rows") for r in results), results
+        assert any(r.startswith("ℹ️ dhcp6_options: 1 option row(s) of Kea's config backend") for r in results), results
+        tgt.close()
+
+    def test_no_left_behind_line_when_there_is_nothing_left_behind(self, db, scratch, kea_source):
+        initialise_kea_target(db).close()
+        results = migrate_kea()
+        assert any(r.startswith("✅ dhcp4_options: 2 host-scoped option rows") for r in results)
+        assert not any("left behind" in r for r in results), results
 
     def test_the_leases_group_copies_hwaddr_and_client_id_byte_for_byte(self, db, scratch, kea_source):
         with db.cursor() as cur:
@@ -396,6 +453,66 @@ class TestTheCopyHelpers:
             assert [r["host_id"] for r in cur.fetchall()] == [700]
             cur.execute("SELECT option_id FROM dhcp4_options")
             assert [r["option_id"] for r in cur.fetchall()] == [701]
+        tgt.close()
+
+    def test_copy_table_rows_with_a_query_copies_exactly_what_it_selects(self, db, scratch, kea_source):
+        add_config_backend_options(db)
+        tgt = initialise_kea_target(db)
+        dbexport._copy_table_rows(db, tgt, "hosts")
+        track = []
+        n = dbexport._copy_table_rows(
+            db, tgt, "dhcp4_options", pk_cols=["option_id"], track=track, sql=dbexport.KEA_EXPORT_SQL["dhcp4_options"]
+        )
+        assert n == 2 and sorted(track) == [(101,), (102,)]
+        with tgt.cursor() as cur:
+            cur.execute("SELECT option_id FROM dhcp4_options ORDER BY option_id")
+            assert [r["option_id"] for r in cur.fetchall()] == [101, 102]
+        # no query: every row, as before
+        with tgt.cursor() as cur:
+            cur.execute("DELETE FROM dhcp4_options")
+        assert dbexport._copy_table_rows(db, tgt, "dhcp4_options") == 4
+        tgt.close()
+
+    def test_row_count_and_pk_sample_apply_the_predicate_to_the_side_they_are_given(self, db, scratch, kea_source):
+        add_config_backend_options(db)
+        where = dbexport.KEA_TABLE_WHERE["dhcp4_options"]
+        assert dbexport._row_count(db, "dhcp4_options") == 4
+        assert dbexport._row_count(db, "dhcp4_options", where) == 2
+        assert dbexport._pk_sample(db, "dhcp4_options", ["option_id"]) == [(101,), (102,), (201,), (202,)]
+        assert dbexport._pk_sample(db, "dhcp4_options", ["option_id"], where=where) == [(101,), (102,)]
+
+    def test_verify_copy_with_the_predicate_passes_a_correct_copy_and_without_it_fails_it(
+        self, db, scratch, kea_source
+    ):
+        add_config_backend_options(db)
+        tgt = initialise_kea_target(db)
+        dbexport._copy_table_rows(db, tgt, "hosts")
+        dbexport._copy_table_rows(db, tgt, "dhcp4_options", sql=dbexport.KEA_EXPORT_SQL["dhcp4_options"])
+        where = dbexport.KEA_TABLE_WHERE["dhcp4_options"]
+        dbexport._verify_copy(db, tgt, "dhcp4_options", 0, ["option_id"], where=where)  # does not raise
+        with pytest.raises(RuntimeError, match="Row count mismatch on dhcp4_options: source 4, target gained 2"):
+            dbexport._verify_copy(db, tgt, "dhcp4_options", 0, ["option_id"])
+        # the target's side is never filtered: rows that were already there are subtracted, not hidden
+        add_host(tgt, 500, bytes.fromhex("02bb00000500"), "q131-already-there")
+        add_option(tgt, 900, 500, bytes([9]))
+        dbexport._verify_copy(db, tgt, "dhcp4_options", 1, ["option_id"], where=where)
+        tgt.close()
+
+    def test_a_sampled_key_missing_from_the_target_is_still_caught_with_the_predicate(self, db, scratch, kea_source):
+        tgt = initialise_kea_target(db)
+        dbexport._copy_table_rows(db, tgt, "hosts")
+        dbexport._copy_table_rows(db, tgt, "dhcp4_options", sql=dbexport.KEA_EXPORT_SQL["dhcp4_options"])
+        with tgt.cursor() as cur:
+            cur.execute("DELETE FROM dhcp4_options WHERE option_id = 101")
+            cur.execute(
+                "INSERT INTO dhcp4_options (option_id, code, value, formatted_value, space, host_id, scope_id, "
+                "client_classes) VALUES (777, 6, %s, 'x', 'dhcp4', 12, 3, '')",
+                (bytes([1]),),
+            )
+        with pytest.raises(RuntimeError, match="sampled primary key"):
+            dbexport._verify_copy(
+                db, tgt, "dhcp4_options", 0, ["option_id"], where=dbexport.KEA_TABLE_WHERE["dhcp4_options"]
+            )
         tgt.close()
 
     def test_pk_sample_and_missing(self, db, scratch, kea_source):

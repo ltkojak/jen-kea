@@ -126,17 +126,25 @@ KEA_HOST_OPTION_SCOPE = 3
 
 # One fixed query per exportable table — never `SELECT *` over a table that holds more than the group is about.
 # The options tables also hold the global, subnet, class, shared-network and pool options of Kea's config
-# backend; a RESERVATION backup carries the options set on a reservation only (host_id set AND the host scope),
-# because restoring the rest by their auto-increment ids would write them over whatever options the target has.
-# hosts, ipv6_reservations and lease4 are wholly what their group says they are. tests/test_kea_export_queries.py
-# refuses an unfiltered options query and a table with no entry here.
-KEA_EXPORT_SQL = {
-    "hosts": "SELECT * FROM `hosts`",  # nosec B608 - a fixed per-table query: the table is a literal and the one interpolated value is a module constant
-    "dhcp4_options": f"SELECT * FROM `dhcp4_options` WHERE host_id IS NOT NULL AND scope_id = {KEA_HOST_OPTION_SCOPE}",  # nosec B608 - a fixed per-table query: the table is a literal and the one interpolated value is a module constant
-    "dhcp6_options": f"SELECT * FROM `dhcp6_options` WHERE host_id IS NOT NULL AND scope_id = {KEA_HOST_OPTION_SCOPE}",  # nosec B608 - a fixed per-table query: the table is a literal and the one interpolated value is a module constant
-    "ipv6_reservations": "SELECT * FROM `ipv6_reservations`",  # nosec B608 - a fixed per-table query: the table is a literal and the one interpolated value is a module constant
-    "lease4": "SELECT * FROM `lease4`",  # nosec B608 - a fixed per-table query: the table is a literal and the one interpolated value is a module constant
+# backend; a RESERVATION move carries the options set on a reservation only (host_id set AND the host scope),
+# because restoring or copying the rest by their auto-increment ids would write them over whatever options the
+# target has — and, on a source that really uses the config backend, would hit the real schema's foreign keys into
+# dhcp4_subnet / dhcp4_shared_network / dhcp4_pool / dhcp4_client_class, which are empty on a freshly initialised
+# target. hosts, ipv6_reservations and lease4 are wholly what their group says they are (absent here = no filter).
+#
+# v5.67.0-beta.17 (Q131) — KEA_TABLE_WHERE is the ONE place that says so, and KEA_EXPORT_SQL is built from it, so the
+# export (`_stream_table_rows`) and the migration (`_copy_table_rows`, and the count/sample verification, which
+# apply the same predicate on the SOURCE side) can never disagree about what a reservation move is. The migration
+# used to `SELECT *` the options tables: a source with a config backend failed with a foreign-key error after the
+# hosts were copied, and one without wrote its global options into the target by the source's option_ids.
+# tests/test_kea_export_queries.py refuses an unfiltered options query and a table with no entry in the dict.
+KEA_TABLE_WHERE = {
+    "dhcp4_options": f"host_id IS NOT NULL AND scope_id = {KEA_HOST_OPTION_SCOPE}",
+    "dhcp6_options": f"host_id IS NOT NULL AND scope_id = {KEA_HOST_OPTION_SCOPE}",
 }
+KEA_EXPORT_SQL = {
+    t: f"SELECT * FROM `{t}`" + (f" WHERE {KEA_TABLE_WHERE[t]}" if t in KEA_TABLE_WHERE else "") for t in KEA_ALL_TABLES
+}  # nosec B608 - a fixed per-table query: the table is one of Jen's literal Kea table names and the predicate is a module constant, never request data
 
 
 def _validate_tables(requested, known):
@@ -310,11 +318,14 @@ def _get_table_columns(conn, table):
         return {row["Field"] for row in cur.fetchall()}
 
 
-def _row_count(conn, table):
+def _row_count(conn, table, where=None):
+    """Rows in `table`, or — with `where`, a predicate from KEA_TABLE_WHERE (never request data) — the rows that
+    predicate selects (v5.67.0-beta.17, Q131: how many rows of a Kea options table a reservation move carries)."""
     if not _table_exists(conn, table):
         return 0
     with conn.cursor() as cur:
-        cur.execute(f"SELECT COUNT(*) as cnt FROM `{table}`")
+        sql = f"SELECT COUNT(*) as cnt FROM `{table}`" + (f" WHERE {where}" if where else "")  # nosec B608 - a fixed per-table query: the table is a name from Jen's own lists and the predicate is a module constant from KEA_TABLE_WHERE, never request data
+        cur.execute(sql)
         return cur.fetchone()["cnt"]
 
 
@@ -1685,14 +1696,20 @@ def _norm_key(v):
     return bytes(v).hex() if isinstance(v, (bytes, bytearray)) else v
 
 
-def _pk_sample(conn, table, pk_cols, n=100) -> list[tuple]:
-    """The first and last `n` primary keys of `table` (the whole table when it is smaller than 2n)."""
+def _pk_sample(conn, table, pk_cols, n=100, where=None) -> list[tuple]:
+    """The first and last `n` primary keys of `table` (the whole table when it is smaller than 2n), of the rows
+    `where` selects when it is given (a KEA_TABLE_WHERE predicate — v5.67.0-beta.17, Q131)."""
     cols = ", ".join(f"`{c}`" for c in pk_cols)
     out = []
     with conn.cursor() as cur:
         for direction in ("ASC", "DESC"):
             order = ", ".join(f"`{c}` {direction}" for c in pk_cols)
-            cur.execute(f"SELECT {cols} FROM `{table}` ORDER BY {order} LIMIT {int(n)}")
+            sql = (
+                f"SELECT {cols} FROM `{table}`"
+                + (f" WHERE {where}" if where else "")
+                + f" ORDER BY {order} LIMIT {int(n)}"
+            )  # nosec B608 - a fixed per-table query: the table is a name from Jen's own lists and the predicate is a module constant from KEA_TABLE_WHERE, never request data
+            cur.execute(sql)
             out.extend(tuple(r[c] for c in pk_cols) for r in cur.fetchall())
     return sorted(set(out), key=lambda k: tuple(str(x) for x in k))
 
@@ -1731,8 +1748,9 @@ def _kea_schema_version(conn):
     return (int(r["version"]), int(r["minor"] or 0)) if r else None
 
 
-def _copy_table_rows(src, dst, tbl, batch=1000, track=None, pk_cols=None) -> int:
-    """Copy every row of `tbl` from `src` to `dst` — the driver's own values straight across, bytes as
+def _copy_table_rows(src, dst, tbl, batch=1000, track=None, pk_cols=None, sql=None) -> int:
+    """Copy the rows of `tbl` from `src` to `dst` — every row, or (v5.67.0-beta.17, Q131) exactly the rows `sql` selects,
+    one of KEA_EXPORT_SQL's fixed queries, the same argument `_stream_table_rows` takes. The driver's own values straight across, bytes as
     bytes (v5.67.0-beta.11, Q123: a migration is a copy between two live databases, so there is no JSON in the
     middle to clean for) — with a PLAIN INSERT (v5.67.0-beta.13, Q127): a collision is an error, never a row
     silently left out, and the count is what the server says it inserted (`executemany`'s row count), checked
@@ -1740,10 +1758,10 @@ def _copy_table_rows(src, dst, tbl, batch=1000, track=None, pk_cols=None) -> int
     failed run can delete exactly those rows and no others. Streams the source with a server-side cursor in
     `batch`-row slices, so a large lease4 is never held whole. Returns the number of rows inserted."""
     count = 0
-    sql = None
+    insert_sql = None
     cols = None
     with src.cursor(pymysql.cursors.SSDictCursor) as scur:
-        scur.execute(f"SELECT * FROM `{tbl}`")
+        scur.execute(sql or f"SELECT * FROM `{tbl}`")  # nosec B608 - `sql` is one of KEA_EXPORT_SQL's fixed queries, or `tbl` is a name from Jen's own table lists; never request data
         while True:
             rows = scur.fetchmany(batch)
             if not rows:
@@ -1752,9 +1770,9 @@ def _copy_table_rows(src, dst, tbl, batch=1000, track=None, pk_cols=None) -> int
                 cols = list(rows[0].keys())
                 col_str = ", ".join(f"`{c}`" for c in cols)
                 ph_str = ", ".join(["%s"] * len(cols))
-                sql = f"INSERT INTO `{tbl}` ({col_str}) VALUES ({ph_str})"  # nosec B608 - table/column names come from the source database's own schema and Jen's fixed table lists, never request data; the values are bound parameters
+                insert_sql = f"INSERT INTO `{tbl}` ({col_str}) VALUES ({ph_str})"  # nosec B608 - table/column names come from the source database's own schema and Jen's fixed table lists, never request data; the values are bound parameters
             with dst.cursor() as dcur:
-                affected = dcur.executemany(sql, [[r.get(c) for c in cols] for r in rows])
+                affected = dcur.executemany(insert_sql, [[r.get(c) for c in cols] for r in rows])
             if affected != len(rows):
                 raise RuntimeError(f"{tbl}: {len(rows)} rows were sent but the server reports {affected} inserted")
             if track is not None and pk_cols:
@@ -1763,14 +1781,17 @@ def _copy_table_rows(src, dst, tbl, batch=1000, track=None, pk_cols=None) -> int
     return count
 
 
-def _verify_copy(src, dst, tbl, dst_before, pk_cols):
+def _verify_copy(src, dst, tbl, dst_before, pk_cols, where=None):
     """Per table: the target holds exactly `dst_before` + what the source has, AND a sample of the source's
-    primary keys (the first and last hundred) is present in the target."""
-    sc, dc = _row_count(src, tbl), _row_count(dst, tbl)
+    primary keys (the first and last hundred) is present in the target. `where` (v5.67.0-beta.17, Q131) is the
+    predicate the copy used: it applies to the SOURCE side only — the target gained exactly the rows it selects,
+    and the target's own count stays the whole table minus `dst_before` — otherwise the sample would include rows
+    that were deliberately left behind and fail a correct copy."""
+    sc, dc = _row_count(src, tbl, where), _row_count(dst, tbl)
     if dc - dst_before != sc:
         raise RuntimeError(f"Row count mismatch on {tbl}: source {sc}, target gained {dc - dst_before}")
     if pk_cols:
-        missing = _pks_missing(dst, tbl, pk_cols, _pk_sample(src, tbl, pk_cols))
+        missing = _pks_missing(dst, tbl, pk_cols, _pk_sample(src, tbl, pk_cols, where=where))
         if missing:
             raise RuntimeError(
                 f"{tbl}: {len(missing)} sampled primary key(s) are missing from the target, e.g. {missing[0]}"
@@ -2006,7 +2027,25 @@ def migrate_kea(
     try:
         dst.begin()
         for tbl in tables:
-            count = _copy_table_rows(src, dst, tbl, track=inserted[tbl], pk_cols=pk_by_table[tbl])
+            # the SAME fixed query the export uses (Q131): a reservation's own options, never the config backend's
+            count = _copy_table_rows(
+                src, dst, tbl, track=inserted[tbl], pk_cols=pk_by_table[tbl], sql=KEA_EXPORT_SQL[tbl]
+            )
+            scoped = tbl in KEA_TABLE_WHERE
+            if scoped:
+                what = f"{count} host-scoped option rows" if count else "0 host-scoped option rows"
+                note = " (a reservation's own options; global, subnet, pool and class options are not part of a reservation move)"
+                _cb(f"  {'✅' if count else 'ℹ️'} {tbl}: {what} copied")
+                results.append(f"{'✅' if count else 'ℹ️'} {tbl}: {what}{note}")
+                left_behind = _row_count(src, tbl) - _row_count(src, tbl, KEA_TABLE_WHERE[tbl])
+                if left_behind > 0:
+                    line = (
+                        f"ℹ️ {tbl}: {left_behind} option row(s) of Kea's config backend (global, subnet, shared-network, "
+                        f"pool or class options) were left behind — the target's own are untouched"
+                    )
+                    _cb("  " + line)
+                    results.append(line)
+                continue
             if count == 0:
                 _cb(f"  ℹ️ {tbl}: empty")
                 results.append(f"ℹ️ {tbl}: 0 rows")
@@ -2015,7 +2054,7 @@ def migrate_kea(
             results.append(f"✅ {tbl}: {count} rows")
         _cb("Verifying...")
         for tbl in tables:
-            _verify_copy(src, dst, tbl, before[tbl], pk_by_table[tbl])
+            _verify_copy(src, dst, tbl, before[tbl], pk_by_table[tbl], where=KEA_TABLE_WHERE.get(tbl))
         dst.commit()
         _cb("✅ Kea migration complete.")
     except Exception as e:

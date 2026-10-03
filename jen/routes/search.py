@@ -179,21 +179,22 @@ def global_search():
                             pass
                     for sid in searchable_v6_ids:
                         try:
-                            for h in __kea6.get_ipv6_reservations(subnet_id=sid)[:20]:
-                                ql = q.lower()
-                                if (
-                                    ql in (h["hostname"] or "").lower()
-                                    or ql in (h["duid_hex"] or "").lower()
-                                    or any(ql in (r["address"] or "").lower() for r in h["reservations"])
-                                ):
-                                    results["reservations6"].append(
-                                        {
-                                            "hostname": h["hostname"],
-                                            "duid_hex": h["duid_hex"],
-                                            "subnet_id": h["subnet_id"],
-                                            "addresses": [r["address"] for r in h["reservations"]],
-                                        }
-                                    )
+                            # filter EVERY reservation of the subnet through the one predicate, THEN cap
+                            # (v5.67.0-beta.17, Q131): capping first never found the 21st host of a subnet
+                            matching = [
+                                h
+                                for h in __kea6.get_ipv6_reservations(subnet_id=sid)
+                                if __kea6._reservation6_matches(h, q)
+                            ]
+                            for h in matching[:20]:
+                                results["reservations6"].append(
+                                    {
+                                        "hostname": h["hostname"],
+                                        "duid_hex": h["duid_hex"],
+                                        "subnet_id": h["subnet_id"],
+                                        "addresses": [r["address"] for r in h["reservations"]],
+                                    }
+                                )
                         except Exception:
                             pass
 

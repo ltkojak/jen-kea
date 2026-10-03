@@ -505,15 +505,52 @@ def migrate(name, group="reservations_all"):
 
 
 def test_a_migration_into_an_initialised_empty_target_copies_every_row_byte_for_byte(kea, scratch):
+    """Q131 — what a reservation move copies is the group's own rows: the hosts, their IPv6 reservations and the
+    HOST-SCOPED options. The source also holds a global option and a subnet-scoped one that names a dhcp4_subnet_id
+    with no dhcp4_subnet row behind it (what a config-backend source looks like to the target, whose dhcp4_subnet is
+    empty): before this fix the migration `SELECT *`ed the options table, so the subnet row's real foreign key failed
+    the whole migration after the hosts were copied, and the global row would have been written into the target's
+    config backend by its source option_id. Neither may reach the target, and the migration must succeed."""
     h = add_host(kea, 8, sub6=72)
     add_option(kea, "dhcp4_options", h, 6, bytes([0xFF, 0xFE, 0x00, 0x80]), tag="q127-bin")
     add_v6(kea, h, "2001:db8:71::8")
+    add_option(kea, "dhcp4_options", None, 6, bytes([2, 2, 2, 2]), tag="q127-q131-global", scope=0)
+    with kea.cursor() as cur:  # a subnet id with no subnet row: the foreign key is switched off for this one insert
+        cur.execute("SET FOREIGN_KEY_CHECKS=0")
+    try:
+        add_option(
+            kea, "dhcp4_options", None, 6, bytes([3, 3, 3, 3]), tag="q127-q131-subnet", scope=1, dhcp4_subnet_id=9999
+        )
+    finally:
+        with kea.cursor() as cur:
+            cur.execute("SET FOREIGN_KEY_CHECKS=1")
     tgt = initialise(scratch)
-    migrate(scratch)
+    results = migrate(scratch)
+
+    def move_rows(conn, table):
+        found = list(snapshot(conn, [table])[table])
+        if table.endswith("_options"):  # exactly KEA_TABLE_WHERE: host_id IS NOT NULL AND scope_id = 3
+            found = [r for r in found if r["host_id"] is not None and r["scope_id"] == dbexport.KEA_HOST_OPTION_SCOPE]
+        return found
+
     for t in ("hosts", "dhcp4_options", "ipv6_reservations"):
-        src_rows = list(snapshot(kea, [t])[t])
-        dst_rows = snapshot(tgt, [t])[t]
-        assert dst_rows == src_rows, f"{t} did not copy exactly"
+        assert snapshot(tgt, [t])[t] == move_rows(kea, t), f"{t} did not copy exactly"
+    left_out = [
+        r
+        for r in snapshot(tgt, ["dhcp4_options"])["dhcp4_options"]
+        if str(r["formatted_value"]).startswith("q127-q131")
+    ]
+    assert left_out == [], f"a config-backend option reached the target: {left_out}"
+    assert any(line.startswith("✅ dhcp4_options:") and "host-scoped option rows" in line for line in results), results
+    behind = [line for line in results if line.startswith("ℹ️ dhcp4_options:") and "left behind" in line]
+    assert behind and int(behind[0].split()[2]) >= 2, (
+        f"the two config-backend rows are counted as left behind: {results}"
+    )
+    # the source is untouched: both rows are still there
+    assert {r["formatted_value"] for r in snapshot(kea, ["dhcp4_options"])["dhcp4_options"]} >= {
+        "q127-q131-global",
+        "q127-q131-subnet",
+    }
     tgt.close()
 
 

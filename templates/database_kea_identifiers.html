@@ -73,7 +73,7 @@
 {% if options %}
 <div class="card">
     <div class="card-header"><h3>{{ options|length }} option value(s) to review</h3></div>
-    <div class="card-body"><p class="form-hint">Host-scoped option values of a fixed-width code (an address, a mask, a time) whose stored value is exactly the hex text of a plausible value. A genuine value of these codes is binary, so this is most likely the same damage — but it cannot be proven, so nothing is ticked.</p></div>
+    <div class="card-body"><p class="form-hint">Host-scoped option values of a fixed-width code (an address, a mask, a time) whose stored value is exactly the hex text of a plausible value. A genuine value of these codes is binary, so this is most likely the same damage — but it cannot be proven, so nothing is ticked. Text-typed DHCPv4 options (domain name, boot file, …) are never listed: check those by hand after a restore made before 5.67.0-beta.11. The DHCPv6 option table and the IPv6 reservations cannot carry this damage — no Jen before 5.67.0-beta.11 wrote them.</p></div>
     <table class="table">
         <thead><tr><th></th><th>Host</th><th>Option</th><th>Stored now (text)</th><th>Would become</th></tr></thead>
         <tbody>
