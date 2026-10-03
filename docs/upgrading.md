@@ -451,3 +451,15 @@ notice.
 - **The restore warning for a plugin that is not installed is plainer:** its data is not
   restored by that run, it stays inside the bundle, and you reinstall the plugin and
   run the restore again.
+
+## IPv6 addresses show as addresses (only if you turned IPv6 management on)
+
+Like the sections above, this is older than the rest of this page, and it matters only
+if IPv6 management is on (it is off by default; an IPv4-only install is untouched).
+Kea 3.x stores the address columns of its IPv6 tables as raw bytes, and Jen printed those
+bytes where an address belongs — the IPv6 Leases, Reservations, Devices and search
+results — and could not search a lease by address. From 5.67.0-beta.16 they show as
+addresses (`2001:db8::10`) and sort in address order. Nothing in Kea's database changed
+and there is nothing to do. One search detail differs: typing a **whole** address finds
+exactly that address (not the longer addresses it begins), while a fragment such as
+`2001:db8` still finds everything containing it.

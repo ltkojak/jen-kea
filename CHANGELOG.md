@@ -2,6 +2,48 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.67.0-beta.16] - 2026-10-03
+
+Beta channel. Stacked on 5.67.0-beta.15. The last item of the beta.12 reviews, and
+the only one that is IPv6-only: Kea 3.x stores the address columns of its IPv6
+tables as sixteen raw bytes, and Jen read them as text.
+
+**IPv6 addresses were printed as raw bytes, and could not be searched.** The IPv6
+code in Jen was written from research that said `lease6.address` is `VARCHAR(39)`.
+Read from `SHOW CREATE TABLE` against the database Kea's own installer creates, it is
+`BINARY(16)` — and so are `ipv6_reservations.address` and `excluded_prefix` — on every
+Kea Jen supports (3.0.3, 3.2.0 and 3.3.1; the kea-compat job now records the column
+types for each version and a test asserts them, so a future Kea that changes one is
+noticed first). With IPv6 management turned on, the IPv6 leases, reservations, devices
+and search results showed a run of unprintable characters where an address belongs,
+and searching leases for an address found nothing, because the search compared the
+text to a binary column. IPv6 management is off by default and Jen never writes these
+columns (reservations go through Kea's own `host_cmds` commands, which take text), so
+installs that only use IPv4 were never affected, and nothing in Kea's database was
+ever changed.
+
+Every IPv6 reader now converts the column through one function: sixteen bytes become
+the compressed address text, text is returned unchanged, and an empty value stays
+empty. The conversion is done in Python rather than in the query, so one code path
+serves MariaDB 10.11 and 11.4 and MySQL 8.0 alike. The reservation reader now also
+returns the excluded prefix of a delegated prefix. Lease rows come back in numeric
+address order, where the text order used to put `::10` and `::100` before `::2`.
+
+The lease search is worded differently because a binary column cannot be matched with
+`LIKE`. A search that is a whole IPv6 address, in any spelling, is an exact match on the
+address (it no longer also finds the longer addresses it is the start of); a fragment
+such as `2001:db8` or `db8:1` is matched in Python against the converted address, the
+hostname and the DUID of the rows the subnet, type and state filters leave, which at the
+size of an IPv6 lease table costs nothing.
+
+The tests that hid it were part of the problem. The unit suite's IPv6 tables
+were text columns, so every test that seeded an address seeded text and nothing could
+see the bug. They are binary now, as Kea's are, the system stack's database script
+matches, a test refuses a text literal in either column, every seeding statement stores
+bytes, and kea-compat reads rows stored the way Kea's schema stores them back through
+Jen's readers on each supported Kea (there is no DHCPv6 daemon in that matrix, so the
+rows are inserted directly).
+
 ## [5.67.0-beta.15] - 2026-10-03
 
 Beta channel. Stacked on 5.67.0-beta.14. The smaller findings of the same two
