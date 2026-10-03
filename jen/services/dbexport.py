@@ -1165,7 +1165,7 @@ def _copy_table_rows(src, dst, tbl, batch=1000, track=None, pk_cols=None) -> int
                 cols = list(rows[0].keys())
                 col_str = ", ".join(f"`{c}`" for c in cols)
                 ph_str = ", ".join(["%s"] * len(cols))
-                sql = f"INSERT INTO `{tbl}` ({col_str}) VALUES ({ph_str})"
+                sql = f"INSERT INTO `{tbl}` ({col_str}) VALUES ({ph_str})"  # nosec B608 - table/column names come from the source database's own schema and Jen's fixed table lists, never request data; the values are bound parameters
             with dst.cursor() as dcur:
                 affected = dcur.executemany(sql, [[r.get(c) for c in cols] for r in rows])
             if affected != len(rows):
