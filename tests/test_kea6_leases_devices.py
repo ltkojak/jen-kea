@@ -6,6 +6,8 @@ DHCPv6 leases and devices: DUID/MAC extraction, list_lease6(), the v6 Leases/Dev
 Split out of the monolithic tests/test_kea6.py in v5.6.1.
 """
 
+import ipaddress
+
 import pytest
 
 from jen import extensions
@@ -87,6 +89,7 @@ class TestListLease6:
             "state": 0,
         }
         row.update(overrides)
+        row["address"] = ipaddress.IPv6Address(row["address"]).packed  # the column is BINARY(16), as in Kea
         with db.cursor() as cur:
             cur.execute(
                 """
@@ -190,6 +193,7 @@ class TestLease6ByHwaddrMac:
             "state": 0,
         }
         row.update(overrides)
+        row["address"] = ipaddress.IPv6Address(row["address"]).packed  # the column is BINARY(16), as in Kea
         with db.cursor() as cur:
             cur.execute(
                 """
@@ -252,6 +256,7 @@ class TestLease6DevicesWithoutHwaddr:
             "state": 0,
         }
         row.update(overrides)
+        row["address"] = ipaddress.IPv6Address(row["address"]).packed  # the column is BINARY(16), as in Kea
         with db.cursor() as cur:
             cur.execute(
                 """
@@ -311,6 +316,7 @@ class TestListLease6Devices:
             "state": 0,
         }
         row.update(overrides)
+        row["address"] = ipaddress.IPv6Address(row["address"]).packed  # the column is BINARY(16), as in Kea
         with db.cursor() as cur:
             cur.execute(
                 """
@@ -456,7 +462,7 @@ class TestLeasesV6View:
                 INSERT INTO lease6 (address, duid, valid_lifetime, expire,
                     subnet_id, pref_lifetime, lease_type, iaid, prefix_len,
                     hostname, hwaddr, state)
-                VALUES ('2001:db8::10', %s, 3600, '2026-08-15 00:00:00',
+                VALUES (INET6_ATON('2001:db8::10'), %s, 3600, '2026-08-15 00:00:00',
                     1, 1800, 0, 1, 128, 'v6-host', NULL, 0)
             """,
                 (bytes.fromhex("00030001001a2b3c4d5e"),),
@@ -510,7 +516,7 @@ class TestDevicesV6View:
                 INSERT INTO lease6 (address, duid, valid_lifetime, expire,
                     subnet_id, pref_lifetime, lease_type, iaid, prefix_len,
                     hostname, hwaddr, state)
-                VALUES ('2001:db8::10', %s, 3600, '2026-08-15 00:00:00',
+                VALUES (INET6_ATON('2001:db8::10'), %s, 3600, '2026-08-15 00:00:00',
                     1, 1800, 0, 1, 128, 'my-phone', NULL, 0)
             """,
                 (bytes.fromhex("00030001001a2b3c4d5e"),),
@@ -554,7 +560,7 @@ class TestDevicesV4V6Join:
                     INSERT INTO lease6 (address, duid, valid_lifetime, expire,
                         subnet_id, pref_lifetime, lease_type, iaid, prefix_len,
                         hostname, hwaddr, state)
-                    VALUES ('2001:db8:1::5', %s, 3600, '2026-08-15 00:00:00',
+                    VALUES (INET6_ATON('2001:db8:1::5'), %s, 3600, '2026-08-15 00:00:00',
                         1, 1800, 0, 1, 128, '', %s, 0)
                 """,
                     (bytes.fromhex("00030001001a2b3c4d5e"), bytes.fromhex("aabbccddee01")),
@@ -583,7 +589,7 @@ class TestDevicesV4V6Join:
                     INSERT INTO lease6 (address, duid, valid_lifetime, expire,
                         subnet_id, pref_lifetime, lease_type, iaid, prefix_len,
                         hostname, hwaddr, state)
-                    VALUES ('2001:db8::20', %s, 3600, '2026-08-15 00:00:00',
+                    VALUES (INET6_ATON('2001:db8::20'), %s, 3600, '2026-08-15 00:00:00',
                         1, 1800, 0, 1, 128, 'iot-bulb', NULL, 0)
                 """,
                     (bytes.fromhex("0002" + "0000abcd" + "deadbeef"),),  # DUID-EN — no embedded MAC at all
@@ -654,7 +660,7 @@ class TestDashboardV6Summary:
                     INSERT INTO lease6 (address, duid, valid_lifetime, expire,
                         subnet_id, pref_lifetime, lease_type, iaid, prefix_len,
                         hostname, hwaddr, state)
-                    VALUES ('2001:db8:9::1', %s, 3600, '2026-08-15 00:00:00',
+                    VALUES (INET6_ATON('2001:db8:9::1'), %s, 3600, '2026-08-15 00:00:00',
                         9, 1800, 0, 1, 128, '', NULL, 0)
                 """,
                     (bytes.fromhex("00030001001a2b3c4d5e"),),
@@ -752,7 +758,7 @@ class TestDashboardMergedV4V6Grid:
                     INSERT INTO lease6 (address, duid, valid_lifetime, expire,
                         subnet_id, pref_lifetime, lease_type, iaid, prefix_len,
                         hostname, hwaddr, state)
-                    VALUES ('2001:db8:7::1', %s, 3600, '2026-08-15 00:00:00',
+                    VALUES (INET6_ATON('2001:db8:7::1'), %s, 3600, '2026-08-15 00:00:00',
                         7, 1800, 0, 1, 128, '', NULL, 0)
                 """,
                     (bytes.fromhex("00030001001a2b3c4d5e"),),

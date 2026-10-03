@@ -6,6 +6,8 @@ DHCPv6 host reservations: get_ipv6_reservations(), DUID normalization, the add/d
 Split out of the monolithic tests/test_kea6.py in v5.6.1.
 """
 
+import ipaddress
+
 import pytest
 
 from jen import extensions
@@ -32,7 +34,7 @@ class TestGetIpv6Reservations:
                         dhcp6_iaid, host_id)
                     VALUES (%(address)s, %(prefix_len)s, %(type)s, %(iaid)s, %(host_id)s)
                 """,
-                    {**res, "host_id": host_id},
+                    {**res, "address": ipaddress.IPv6Address(res["address"]).packed, "host_id": host_id},
                 )
         db.commit()
         return host_id
@@ -447,7 +449,7 @@ class TestReservationsV6View:
                         dhcp6_iaid, host_id)
                     VALUES (%(address)s, %(prefix_len)s, %(type)s, %(iaid)s, %(host_id)s)
                 """,
-                    {**res, "host_id": host_id},
+                    {**res, "address": ipaddress.IPv6Address(res["address"]).packed, "host_id": host_id},
                 )
         db.commit()
         return host_id

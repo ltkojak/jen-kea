@@ -23,6 +23,7 @@ Settings -> Infrastructure toggle.
 """
 
 import contextlib
+import ipaddress
 import logging
 import shlex
 
@@ -200,14 +201,19 @@ def set_ipv6_service_state(enable: bool) -> list:
 # ── lease6/hosts/ipv6_reservations read layer (Phase 1, backend only) ──────
 #
 # Jen doesn't own any of these tables — same relationship it already has to
-# lease4/hosts. Everything here is a read query built from the real schema
-# confirmed against isc-projects/kea's dhcpdb_create.mysql during Phase 0/1
-# research, not guessed: lease6.address is VARCHAR(39) (NOT the INET_ATON
-# INT lease4 uses), duid is VARBINARY like hwaddr, hwaddr/hwtype/
-# hwaddr_source were added in a later ALTER so are nullable, and
-# ipv6_reservations is a genuine one-to-many junction table off hosts
-# (type 0=IA_NA address, 2=IA_PD delegated prefix; prefix_len is 128 for a
-# plain address reservation).
+# lease4/hosts. Everything here is a read query built from the real schema.
+#
+# v5.67.0-beta.16 (Q130) — CORRECTED. This block used to say, from Phase 0/1 "research", that lease6.address is
+# VARCHAR(39). It is BINARY(16) — sixteen raw bytes — and so is ipv6_reservations.address (and its
+# excluded_prefix): read from `SHOW CREATE TABLE` against the database `kea-admin db-init mysql` creates for
+# Kea 3.0.3 (schema 30.0), 3.2.0 and 3.3.1 (35.0), recorded by tests/kea_compat/test_db_moves.py
+# (schema_facts()["address_columns"], kea-compat.yml artifacts schema-<version>.json) and asserted per version by
+# test_the_v6_address_columns_are_binary_sixteen. lease4.address is an unsigned INT, duid is VARBINARY(130),
+# hosts.dhcp_identifier VARBINARY(255); hwaddr/hwtype/hwaddr_source were added in a later ALTER so are nullable,
+# and ipv6_reservations is a genuine one-to-many junction table off hosts (type 0=IA_NA address, 2=IA_PD
+# delegated prefix; prefix_len is 128 for a plain address reservation). Every address a reader here returns goes
+# through _addr_text(); a value that is already text passes through unchanged, so a database that really does
+# hold text (an older schema) is read the same way.
 #
 # No route/template calls any of this yet — that's Phase 2. These exist now
 # so Phase 2's Leases/Devices/Reservations pages have a tested layer to
@@ -216,6 +222,23 @@ def set_ipv6_service_state(enable: bool) -> list:
 
 LEASE6_TYPE_NAMES = {0: "IA_NA", 1: "IA_TA", 2: "IA_PD"}
 IPV6_RESERVATION_TYPE_NAMES = {0: "IA_NA", 2: "IA_PD"}
+
+
+def _addr_text(value):
+    """The text of an IPv6 address column (v5.67.0-beta.16, Q130): Kea 3.x stores lease6.address and
+    ipv6_reservations.address/excluded_prefix as BINARY(16), which the driver hands back as sixteen raw bytes —
+    and the IPv6 pages printed that blob where an address belongs. 16 bytes become the canonical compressed text
+    (`2001:db8::10`); a str is returned unchanged (a text-era schema, or a driver that already decoded it);
+    None stays None. Done here in Python, not with INET6_NTOA in the query, so ONE code path serves MariaDB
+    10.11/11.4, MySQL 8.0 and a text column alike."""
+    if value is None:
+        return None
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        raw = bytes(value)
+        if len(raw) == 16:
+            return str(ipaddress.IPv6Address(raw))
+        return raw.decode("ascii", "replace")  # not an address's width: somebody's text in a byte column
+    return value
 
 
 def _hex_to_colon_mac(hex_str: str) -> str:
@@ -280,8 +303,15 @@ def list_lease6(subnet_id: int = None, lease_type: int = None, search: str = Non
     Read lease6 rows, optionally filtered by subnet/type/search. Mirrors
     the shape jen/routes/leases.py's lease4 query builds, adapted for v6's
     real columns — IA_NA/IA_TA/IA_PD via lease_type, DUID instead of MAC,
-    IAID as an extra identity dimension, no INET_NTOA (address is already
-    a string).
+    IAID as an extra identity dimension. `address` is returned as text (_addr_text:
+    the column is BINARY(16)).
+
+    Search (v5.67.0-beta.16, Q130): the address column is binary, so `address LIKE` matched nothing. A search that
+    is a COMPLETE IPv6 address is an exact `address = INET6_ATON(...)` (alongside the hostname and DUID matches, still
+    in SQL); any other search — a fragment like `2001:db8` — is applied in Python to the converted text, the
+    hostname and the DUID hex, over the rows the other filters (subnet, type, state) leave. IPv6 tables at Jen's scale
+    are small (a lease table of a few thousand rows at most), so the full read is cheap and one code path serves
+    every supported database; a fragment matches the compressed and the expanded spelling of an address.
 
     Each dict: address, duid_hex, mac (best-effort, see get_lease6_mac),
     valid_lifetime, expire, obtained, subnet_id, pref_lifetime,
@@ -300,10 +330,15 @@ def list_lease6(subnet_id: int = None, lease_type: int = None, search: str = Non
     if lease_type is not None:
         where.append("lease_type=%s")
         params.append(lease_type)
+    python_filter = None
     if search:
-        where.append("(address LIKE %s OR hostname LIKE %s OR HEX(duid) LIKE %s)")
-        s = f"%{search}%"
-        params += [s, s, s.replace(":", "")]
+        exact = _complete_v6_address(search)
+        if exact is not None:
+            where.append("(address = INET6_ATON(%s) OR hostname LIKE %s OR HEX(duid) LIKE %s)")
+            s = f"%{search}%"
+            params += [exact, s, s.replace(":", "")]
+        else:
+            python_filter = _lease6_search_filter(search)
     where_str = " AND ".join(where) if where else "1=1"
 
     results = []
@@ -321,6 +356,8 @@ def list_lease6(subnet_id: int = None, lease_type: int = None, search: str = Non
             params,
         )
         for row in cur.fetchall():
+            if python_filter is not None and not python_filter(row):
+                continue
             mac = get_lease6_mac(row["hwaddr_hex"], row["duid_hex"]) or ""
             # v5.45.0 (Q46) — which of the two sources actually produced
             # `mac` matters to callers deciding whether it's safe to join
@@ -332,7 +369,7 @@ def list_lease6(subnet_id: int = None, lease_type: int = None, search: str = Non
             mac_source = "hwaddr" if row["hwaddr_hex"] else ("duid" if mac else "")
             results.append(
                 {
-                    "address": row["address"],
+                    "address": _addr_text(row["address"]),
                     "duid_hex": row["duid_hex"] or "",
                     "mac": mac,
                     "mac_source": mac_source,
@@ -351,6 +388,35 @@ def list_lease6(subnet_id: int = None, lease_type: int = None, search: str = Non
                 }
             )
     return results
+
+
+def _complete_v6_address(text: str):
+    """The canonical text of `text` when it is a whole IPv6 address (the exact-search path), else None."""
+    try:
+        return str(ipaddress.IPv6Address(text.strip()))
+    except ValueError:
+        return None
+
+
+def _lease6_search_filter(search: str):
+    """A predicate over a lease6 row (as selected by list_lease6) for a search that is not a whole address: a
+    case-insensitive substring of the address text (compressed or expanded), the hostname, or the DUID hex (a
+    typed colon is ignored there, as before)."""
+    needle = search.strip().lower()
+    duid_needle = needle.replace(":", "")
+
+    def match(row) -> bool:
+        text = _addr_text(row["address"]) or ""
+        spellings = [text.lower()]
+        with contextlib.suppress(ValueError):
+            spellings.append(ipaddress.IPv6Address(text).exploded)
+        return (
+            any(needle in s for s in spellings)
+            or needle in (row["hostname"] or "").lower()
+            or (bool(duid_needle) and duid_needle in (row["duid_hex"] or "").lower())
+        )
+
+    return match
 
 
 def get_ipv6_reservations(subnet_id: int = None) -> list:
@@ -405,7 +471,7 @@ def get_ipv6_reservations(subnet_id: int = None) -> list:
             cur.execute(
                 f"""
                     SELECT reservation_id, address, prefix_len, type,
-                           dhcp6_iaid, host_id
+                           dhcp6_iaid, host_id, excluded_prefix, excluded_prefix_len
                     FROM ipv6_reservations WHERE host_id IN ({placeholders})
                 """,
                 list(hosts_by_id.keys()),
@@ -417,7 +483,9 @@ def get_ipv6_reservations(subnet_id: int = None) -> list:
                 host["reservations"].append(
                     {
                         "reservation_id": row["reservation_id"],
-                        "address": row["address"],
+                        "address": _addr_text(row["address"]),
+                        "excluded_prefix": _addr_text(row["excluded_prefix"]) or "",
+                        "excluded_prefix_len": row["excluded_prefix_len"] or 0,
                         "prefix_len": row["prefix_len"],
                         "type": row["type"],
                         "type_name": IPV6_RESERVATION_TYPE_NAMES.get(row["type"], "?"),

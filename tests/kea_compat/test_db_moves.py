@@ -582,6 +582,55 @@ def test_the_v6_address_columns_are_binary_sixteen(kea):
     assert packed["h"].upper() == "20010DB8000000000000000000000010" and packed["t"] == "2001:db8::10"
 
 
+def test_jens_ipv6_readers_return_addresses_from_iscs_binary_columns(kea, monkeypatch):
+    """Q130 — the read check against the REAL schema. Rows are written the way Kea's own schema stores them
+    (INET6_ATON into binary(16)) and Jen's readers must return TEXT: before this fix the IPv6 pages showed sixteen
+    raw bytes and an address search on lease6 matched nothing. kea-compat runs kea-dhcp4 only (there is no
+    kea-dhcp6 in the matrix), so the reservation and the lease are inserted directly rather than created through
+    `reservation-add` / a real DHCPv6 exchange."""
+    import jen.models.db as db_mod
+    from jen.services import kea6
+
+    monkeypatch.setattr(db_mod, "get_kea6_db", lambda: kea)
+    monkeypatch.setattr(kea, "close", lambda: None)
+    h = add_host(kea, 61, itype=1, sub4=None, sub6=71, hostname="q130-v6")
+    with kea.cursor() as cur:
+        cur.execute(
+            "INSERT INTO ipv6_reservations (address, prefix_len, type, dhcp6_iaid, host_id) "
+            "VALUES (INET6_ATON('2001:db8:71::10'), 128, 0, 1, %s)",
+            (h,),
+        )
+        cur.execute(
+            "INSERT INTO ipv6_reservations (address, prefix_len, type, dhcp6_iaid, host_id, excluded_prefix, "
+            "excluded_prefix_len) VALUES (INET6_ATON('2001:db8:71:1000::'), 56, 2, 2, %s, "
+            "INET6_ATON('2001:db8:71:10ff::'), 64)",
+            (h,),
+        )
+        cur.execute("DELETE FROM lease6 WHERE hostname LIKE 'q130%'")
+        cur.execute(
+            "INSERT INTO lease6 (address, duid, valid_lifetime, expire, subnet_id, pref_lifetime, lease_type, iaid, "
+            "prefix_len, hostname, state) VALUES (INET6_ATON('2001:db8:71::5'), %s, 3600, "
+            "DATE_ADD(NOW(), INTERVAL 1 HOUR), 71, 1800, 0, 1, 128, 'q130-lease', 0)",
+            (bytes.fromhex("00030001001a2b3c4d5e"),),
+        )
+    try:
+        host = next(x for x in kea6.get_ipv6_reservations(subnet_id=71) if x["host_id"] == h)
+        by_type = {r["type_name"]: r for r in host["reservations"]}
+        assert by_type["IA_NA"]["address"] == "2001:db8:71::10", by_type
+        assert by_type["IA_PD"]["address"] == "2001:db8:71:1000::", by_type
+        assert by_type["IA_PD"]["excluded_prefix"] == "2001:db8:71:10ff::", by_type
+
+        found = [r for r in kea6.list_lease6(subnet_id=71) if r["hostname"] == "q130-lease"]
+        assert [r["address"] for r in found] == ["2001:db8:71::5"], found
+        # the exact search (INET6_ATON) and a fragment (filtered in Python) both find it; a neighbour does not
+        assert [r["address"] for r in kea6.list_lease6(search="2001:db8:71::5")] == ["2001:db8:71::5"]
+        assert [r["address"] for r in kea6.list_lease6(search="db8:71")] == ["2001:db8:71::5"]
+        assert kea6.list_lease6(search="2001:db8:71::50") == []
+    finally:
+        with kea.cursor() as cur:
+            cur.execute("DELETE FROM lease6 WHERE hostname LIKE 'q130%'")
+
+
 def test_the_real_unique_keys_and_foreign_keys_are_what_the_import_has_to_survive(kea):
     """Not a bug check — the facts, asserted loosely so a schema change in a future Kea shows up here first."""
     facts = schema_facts(kea)

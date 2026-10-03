@@ -81,7 +81,7 @@ class TestSubnetsV6View:
                     INSERT INTO lease6 (address, duid, valid_lifetime, expire,
                         subnet_id, pref_lifetime, lease_type, iaid, prefix_len,
                         hostname, hwaddr, state)
-                    VALUES ('2001:db8:7::1', %s, 3600, '2026-08-15 00:00:00',
+                    VALUES (INET6_ATON('2001:db8:7::1'), %s, 3600, '2026-08-15 00:00:00',
                         7, 1800, 0, 1, 128, '', NULL, 0)
                 """,
                     (bytes.fromhex("00030001001a2b3c4d5e"),),

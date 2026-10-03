@@ -14,6 +14,7 @@ ISC's real schema in tests/kea_compat/test_db_moves.py.
 DB-backed (needs the real MariaDB/MySQL, like every test that touches the Kea tables).
 """
 
+import ipaddress
 import json
 
 import pymysql
@@ -68,7 +69,7 @@ def v6res(conn, host_id, address):
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO ipv6_reservations (address, prefix_len, type, host_id) VALUES (%s, 128, 0, %s)",
-            (address, host_id),
+            (ipaddress.IPv6Address(address).packed, host_id),  # the column is BINARY(16), as in Kea
         )
     conn.commit()
 
@@ -206,9 +207,10 @@ class TestOverwriteUpdatesInPlace:
         assert [
             r["formatted_value"] for r in q(kea, "SELECT formatted_value FROM dhcp4_options WHERE host_id=%s", h)
         ] == ["new-v4-dns"]
-        assert [r["address"] for r in q(kea, "SELECT address FROM ipv6_reservations WHERE host_id=%s", h)] == [
-            "2001:db8::1"
-        ]
+        assert [
+            str(ipaddress.IPv6Address(bytes(r["address"])))
+            for r in q(kea, "SELECT address FROM ipv6_reservations WHERE host_id=%s", h)
+        ] == ["2001:db8::1"]
         assert [
             r["formatted_value"] for r in q(kea, "SELECT formatted_value FROM dhcp6_options WHERE host_id=%s", h)
         ] == ["old-v6-dns"]

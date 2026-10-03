@@ -42,7 +42,7 @@ class TestGlobalSearchV6:
                     INSERT INTO lease6 (address, duid, valid_lifetime, expire,
                         subnet_id, pref_lifetime, lease_type, iaid, prefix_len,
                         hostname, hwaddr, state)
-                    VALUES ('2001:db8::99', %s, 3600, '2026-08-15 00:00:00',
+                    VALUES (INET6_ATON('2001:db8::99'), %s, 3600, '2026-08-15 00:00:00',
                         1, 1800, 0, 1, 128, 'findable-host', NULL, 0)
                 """,
                     (bytes.fromhex("00030001001a2b3c4d5e"),),
@@ -78,7 +78,7 @@ class TestGlobalSearchV6:
                 cur.execute(
                     """
                     INSERT INTO ipv6_reservations (address, prefix_len, type, dhcp6_iaid, host_id)
-                    VALUES ('2001:db8::50', 128, 0, 1, %s)
+                    VALUES (INET6_ATON('2001:db8::50'), 128, 0, 1, %s)
                 """,
                     (host_id,),
                 )
@@ -110,7 +110,7 @@ class TestGlobalSearchV6:
                     INSERT INTO lease6 (address, duid, valid_lifetime, expire,
                         subnet_id, pref_lifetime, lease_type, iaid, prefix_len,
                         hostname, hwaddr, state)
-                    VALUES ('2001:db8:5::1', %s, 3600, '2026-08-15 00:00:00',
+                    VALUES (INET6_ATON('2001:db8:5::1'), %s, 3600, '2026-08-15 00:00:00',
                         5, 1800, 0, 1, 128, 'v6onlyresult', NULL, 0)
                 """,
                     (bytes.fromhex("00030001001a2b3c4d5e"),),
@@ -144,7 +144,7 @@ class TestGlobalSearchV6:
                     INSERT INTO lease6 (address, duid, valid_lifetime, expire,
                         subnet_id, pref_lifetime, lease_type, iaid, prefix_len,
                         hostname, hwaddr, state)
-                    VALUES ('2001:db8:1::1', %s, 3600, '2026-08-15 00:00:00',
+                    VALUES (INET6_ATON('2001:db8:1::1'), %s, 3600, '2026-08-15 00:00:00',
                         1, 1800, 0, 1, 128, 'paired-visible', NULL, 0)
                 """,
                     (bytes.fromhex("00030001001a2b3c4d5e"),),
@@ -223,7 +223,7 @@ class TestPrometheusMetricsV6:
                     INSERT INTO lease6 (address, duid, valid_lifetime, expire,
                         subnet_id, pref_lifetime, lease_type, iaid, prefix_len,
                         hostname, hwaddr, state)
-                    VALUES ('2001:db8::1', %s, 3600, '2026-08-15 00:00:00',
+                    VALUES (INET6_ATON('2001:db8::1'), %s, 3600, '2026-08-15 00:00:00',
                         1, 1800, 0, 1, 128, '', NULL, 0)
                 """,
                     (bytes.fromhex("00030001001a2b3c4d5e"),),

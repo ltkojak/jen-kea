@@ -16,6 +16,7 @@ test that cannot create its scratch database FAILS under CI (never skips) so the
 """
 
 import gzip
+import ipaddress
 import json
 import os
 
@@ -100,7 +101,7 @@ def _seed(db):
         )
         cur.execute(
             "INSERT INTO ipv6_reservations (reservation_id, address, prefix_len, type, dhcp6_iaid, host_id) "
-            "VALUES (1, '2001:db8::10', 128, 0, 7, 7), (2, '2001:db8:1::', 56, 2, NULL, 7)"
+            "VALUES (1, INET6_ATON('2001:db8::10'), 128, 0, 7, 7), (2, INET6_ATON('2001:db8:1::'), 56, 2, NULL, 7)"
         )
         cur.execute(
             "INSERT INTO dhcp6_options (option_id, code, value, formatted_value, space, host_id, scope_id, "
@@ -298,7 +299,13 @@ class TestTheBackupGroupIsEveryReservationV4AndV6:
             {
                 "_meta": {"database": "kea", "jen_export_version": 1, "format": 3},
                 "data": {  # deliberately in the WRONG order
-                    "ipv6_reservations": [{"reservation_id": 1, "address": "2001:db8::1", "host_id": 7}],
+                    "ipv6_reservations": [
+                        {
+                            "reservation_id": 1,
+                            "address": {"$bin": ipaddress.IPv6Address("2001:db8::1").packed.hex()},
+                            "host_id": 7,
+                        }
+                    ],
                     "dhcp6_options": [{"option_id": 1, "code": 23, "value": {"$bin": "00ff"}, "host_id": 7}],
                     "hosts": [{"host_id": 7, "dhcp_identifier": {"$bin": MAC2.hex()}, "dhcp_identifier_type": 1}],
                 },

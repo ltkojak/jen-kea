@@ -508,6 +508,12 @@ These are refusals, not failures: nothing was written, and each message says wha
 
 ---
 
+## IPv6 pages show strange characters instead of addresses (fixed in 5.67.0-beta.16)
+
+**Symptom.** With IPv6 management enabled on a Kea 3.x database, the IPv6 leases, reservations, devices and search results showed something like `�� � ...` or a long run of escape characters where an address belongs, and searching leases for an IPv6 address found nothing. **Cause (present in every release that has IPv6 management, stable 5.66.0 included).** Kea 3.x stores `lease6.address` and `ipv6_reservations.address` as sixteen raw bytes (`BINARY(16)`); Jen read them as text. IPv6 is off by default, so an install that only ever used IPv4 was never affected. **Fix.** Upgrade; Jen converts the bytes to the address text everywhere it reads them. Nothing in Kea's database was ever changed. **Searching leases:** type a whole address (`2001:db8::10`, in any spelling) for an exact match, or a fragment (`2001:db8`, `db8:1`) to find everything containing it; a whole address no longer also matches the longer addresses it is the start of (`::10` and `::100`).
+
+---
+
 ## Reservations restored by an older Jen never match their client
 
 **Symptom.** After restoring a Kea backup or import file through Jen, or migrating the Kea database from the Databases page, a reservation is listed with the right IP and name but the client keeps getting a dynamic address. **Cause (fixed in 5.67.0-beta.11, present in every release before it, stable included).** The export wrote a binary column — a reservation's identifier — as hex text, nothing decoded it, and the restore stored that text: the six-byte MAC `34:13:43:e6:0e:2a` came back as the twelve characters `341343e60e2a`. The row looks right in every listing; Kea simply never matches it.

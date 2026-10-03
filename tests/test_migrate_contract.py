@@ -260,7 +260,7 @@ def kea_source(db):
     with db.cursor() as cur:
         cur.execute(
             "INSERT INTO ipv6_reservations (reservation_id, address, prefix_len, type, host_id) "
-            "VALUES (1, '2001:db8::11', 128, 0, 11)"
+            "VALUES (1, INET6_ATON('2001:db8::11'), 128, 0, 11)"
         )
     db.commit()
     yield

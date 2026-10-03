@@ -96,3 +96,42 @@ class TestTheFactsOfTheRealSchemaThisSuiteExistsToExpose:
             ("ipv6_reservations", "hosts"),
         ):
             assert names.index(parent) < names.index(child), (parent, child)
+
+
+class TestTheIpv6ColumnsAreBinaryLikeTheRealOnes:
+    """v5.67.0-beta.16 (Q130) — lease6.address, ipv6_reservations.address and excluded_prefix are BINARY(16) in every
+    Kea 3.x (tests/kea_compat/test_db_moves.py::test_the_v6_address_columns_are_binary_sixteen asserts it against
+    ISC's own schema on each version in the matrix). This suite's tables were VARCHAR(39), so every test that seeded
+    a text address hid the bug Jen's readers had. They are binary here now, and a test that seeds an address seeds
+    bytes."""
+
+    def test_lease6(self):
+        sql = _create("lease6")
+        assert "address BINARY(16) PRIMARY KEY NOT NULL" in sql
+        assert "duid VARBINARY(130)" in sql  # 130 in every 3.x, not the 128 it used to say here
+        assert "VARCHAR(39)" not in sql
+
+    def test_ipv6_reservations(self):
+        sql = _create("ipv6_reservations")
+        assert "address BINARY(16) NOT NULL" in sql
+        assert "excluded_prefix BINARY(16)" in sql
+        assert "VARCHAR(39)" not in sql
+
+    def test_nothing_in_the_unit_suite_still_says_the_address_is_text(self):
+        src = (ROOT / "tests" / "conftest.py").read_text(encoding="utf-8")
+        assert "VARCHAR(39)" not in src.replace("VARCHAR(39) —", "")  # the explanatory comment names the old type
+
+    def test_no_test_seeds_a_text_literal_into_an_ipv6_address_column(self):
+        """`VALUES ('2001:db8::10', ...)` into a BINARY(16) column pads the text with NULs instead of storing an
+        address: every seeding statement uses INET6_ATON(...) or a packed bytes parameter."""
+        offenders = []
+        pattern = re.compile(
+            r"INTO (?:lease6|ipv6_reservations)\s*\([^)]*\)\s*VALUES\s*\(\s*(?:\d+\s*,\s*)?'[0-9a-fA-F:]+'"
+        )
+        for path in sorted((ROOT / "tests").glob("test_*.py")):
+            if path.name == "test_kea_test_schema.py":
+                continue
+            text = path.read_text(encoding="utf-8")
+            for m in pattern.finditer(text):
+                offenders.append(f"{path.name}: {m.group(0)[-60:]!r}")
+        assert not offenders, offenders

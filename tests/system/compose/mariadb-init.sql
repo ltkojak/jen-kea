@@ -135,8 +135,8 @@ CREATE TABLE IF NOT EXISTS dhcp6_options (
     ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS lease6 (
-        address VARCHAR(39) PRIMARY KEY NOT NULL,
-        duid VARBINARY(128),
+        address BINARY(16) PRIMARY KEY NOT NULL,
+        duid VARBINARY(130),
         valid_lifetime INT UNSIGNED,
         expire TIMESTAMP NULL,
         subnet_id INT UNSIGNED,
@@ -156,7 +156,7 @@ CREATE TABLE IF NOT EXISTS lease6 (
 
 CREATE TABLE IF NOT EXISTS ipv6_reservations (
         reservation_id INT UNSIGNED NOT NULL AUTO_INCREMENT,
-        address VARCHAR(39) NOT NULL,
+        address BINARY(16) NOT NULL,
         prefix_len TINYINT UNSIGNED NOT NULL DEFAULT 128,
         type TINYINT UNSIGNED NOT NULL DEFAULT 0,
         dhcp6_iaid INT UNSIGNED DEFAULT NULL,

@@ -1811,11 +1811,24 @@ an error dict.
   reservation read/write path in Jen represents this directly (a device
   row with a list of reservations), not retrofitted from a
   one-reservation-per-device assumption inherited from the v4 code.
-- **`lease6`** columns were confirmed directly against Kea's own
-  `dhcpdb_create.mysql` (not assumed from the v4 schema): `address` is
-  `VARCHAR(39)`, not the `INET_ATON` integer v4 uses; `duid` is
-  `VARBINARY` like `hwaddr`; `hwaddr`/`hwtype`/`hwaddr_source` were added
-  in a later Kea schema version so are nullable. MAC display for a v6
+- **`lease6`** columns are read from `SHOW CREATE TABLE` against the
+  database `kea-admin db-init` creates for each supported Kea (3.0.3, 3.2.0,
+  3.3.1 — recorded in the kea-compat artifacts and asserted by
+  `tests/kea_compat/test_db_moves.py`), not assumed from the v4 schema:
+  `address` is **`BINARY(16)`** — sixteen raw bytes, not the `INET_ATON`
+  integer v4 uses and not the `VARCHAR(39)` text this note used to claim
+  (v5.67.0-beta.16, Q130); `ipv6_reservations.address` and `excluded_prefix`
+  are `BINARY(16)` too; `duid` is `VARBINARY(130)` like `hwaddr`;
+  `hwaddr`/`hwtype`/`hwaddr_source` were added in a later Kea schema
+  version so are nullable. **Every IPv6 reader goes through
+  `kea6._addr_text()`** (16 bytes → the compressed text, a `str` unchanged,
+  `None` unchanged), in Python rather than `INET6_NTOA`, so one path serves
+  MariaDB 10.11/11.4 and MySQL 8.0. A lease6 search for a *whole* address is
+  an exact `address = INET6_ATON(…)`; any partial search (a fragment) is
+  filtered in Python over the converted text, hostname and DUID of the rows
+  the subnet/type/state filters leave — IPv6 tables at this scale are small.
+  Jen never writes these columns: reservations go through Kea's `host_cmds`
+  hook, which takes text. MAC display for a v6
   lease prefers Kea's own populated `hwaddr` when present, falling back
   to manual DUID-LL/DUID-LLT parsing (`jen/services/kea6.py`,
   `extract_mac_from_duid()`) only when it isn't — and returns nothing

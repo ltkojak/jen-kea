@@ -55,8 +55,10 @@ TEST_DB = _get_test_db_config()
 #   * no collation clause (MariaDB's utf8mb4_uca1400_ai_ci does not exist on the MySQL 8 leg);
 #   * no foreign key into the config-backend tables (dhcp4_client_class, dhcp4_pool, dhcp4_shared_network,
 #     dhcp4_subnet): this suite does not create those tables, and no reservation test touches them;
-#   * ipv6_reservations.address stays VARCHAR(39) — the real column is binary(16) in every 3.x, and Jen's
-#     IPv6 reader still assumes text (tracked separately; kea6.py).
+#   (v5.67.0-beta.16, Q130: a FOURTH departure was removed — ipv6_reservations.address and lease6.address are
+#   BINARY(16) here, as in every real 3.x, so a test that seeds an IPv6 address seeds sixteen bytes
+#   (`ipaddress.IPv6Address(x).packed`, or INET6_ATON in SQL) and Jen's readers have to convert them, exactly as
+#   they do against Kea. lease6.duid is VARBINARY(130) like the real one.)
 # What matters for Q127 is all here: the UNIQUE keys on hosts, the options and IPv6 reservations' foreign keys
 # to hosts (Kea declares BOTH an ON DELETE CASCADE and a legacy NO ACTION constraint on the options), the
 # lookup tables with their rows, `schema_version`, and `client_classes longtext NOT NULL` — which has no
@@ -176,10 +178,10 @@ _KEA_SCHEMA_TABLES = [
         CONSTRAINT fk_options_host10 FOREIGN KEY (host_id) REFERENCES hosts (host_id)
             ON DELETE NO ACTION ON UPDATE NO ACTION
     ) ENGINE=InnoDB""",
-    # v5.0 Phase 1 — lease6, trimmed (Jen only reads it); duid is VARBINARY like hwaddr.
+    # v5.0 Phase 1 — lease6, trimmed (Jen only reads it); address BINARY(16) and duid VARBINARY(130) as in Kea.
     """CREATE TABLE IF NOT EXISTS lease6 (
-        address VARCHAR(39) PRIMARY KEY NOT NULL,
-        duid VARBINARY(128),
+        address BINARY(16) PRIMARY KEY NOT NULL,
+        duid VARBINARY(130),
         valid_lifetime INT UNSIGNED,
         expire TIMESTAMP NULL,
         subnet_id INT UNSIGNED,
@@ -198,10 +200,10 @@ _KEA_SCHEMA_TABLES = [
     )""",
     # ipv6_reservations is a real one-to-many junction table off hosts — type 0=IA_NA (address), 2=IA_PD
     # (delegated prefix); prefix_len is 128 for a plain address reservation, less for a delegated prefix.
-    # `address` is VARCHAR(39) here, binary(16) in every real 3.x (see the departures above).
+    # `address` is BINARY(16), as in every real 3.x (Q130).
     """CREATE TABLE IF NOT EXISTS ipv6_reservations (
         reservation_id INT UNSIGNED NOT NULL AUTO_INCREMENT,
-        address VARCHAR(39) NOT NULL,
+        address BINARY(16) NOT NULL,
         prefix_len TINYINT UNSIGNED NOT NULL DEFAULT 128,
         type TINYINT UNSIGNED NOT NULL DEFAULT 0,
         dhcp6_iaid INT UNSIGNED DEFAULT NULL,
