@@ -142,9 +142,14 @@ KEA_TABLE_WHERE = {
     "dhcp4_options": f"host_id IS NOT NULL AND scope_id = {KEA_HOST_OPTION_SCOPE}",
     "dhcp6_options": f"host_id IS NOT NULL AND scope_id = {KEA_HOST_OPTION_SCOPE}",
 }
-KEA_EXPORT_SQL = {
-    t: f"SELECT * FROM `{t}`" + (f" WHERE {KEA_TABLE_WHERE[t]}" if t in KEA_TABLE_WHERE else "") for t in KEA_ALL_TABLES
-}  # nosec B608 - a fixed per-table query: the table is one of Jen's literal Kea table names and the predicate is a module constant, never request data
+
+
+def _kea_select(table: str) -> str:
+    where = KEA_TABLE_WHERE.get(table)
+    return f"SELECT * FROM `{table}`" + (f" WHERE {where}" if where else "")  # nosec B608 - a fixed per-table query: the table is one of Jen's literal Kea table names and the predicate is a module constant, never request data
+
+
+KEA_EXPORT_SQL = {t: _kea_select(t) for t in KEA_ALL_TABLES}
 
 
 def _validate_tables(requested, known):
@@ -1704,11 +1709,8 @@ def _pk_sample(conn, table, pk_cols, n=100, where=None) -> list[tuple]:
     with conn.cursor() as cur:
         for direction in ("ASC", "DESC"):
             order = ", ".join(f"`{c}` {direction}" for c in pk_cols)
-            sql = (
-                f"SELECT {cols} FROM `{table}`"
-                + (f" WHERE {where}" if where else "")
-                + f" ORDER BY {order} LIMIT {int(n)}"
-            )  # nosec B608 - a fixed per-table query: the table is a name from Jen's own lists and the predicate is a module constant from KEA_TABLE_WHERE, never request data
+            where_sql = f" WHERE {where}" if where else ""
+            sql = f"SELECT {cols} FROM `{table}`{where_sql} ORDER BY {order} LIMIT {int(n)}"  # nosec B608 - the table is a name from Jen's own lists and the predicate is a module constant from KEA_TABLE_WHERE, never request data
             cur.execute(sql)
             out.extend(tuple(r[c] for c in pk_cols) for r in cur.fetchall())
     return sorted(set(out), key=lambda k: tuple(str(x) for x in k))
