@@ -431,30 +431,27 @@ class TestAFileWrittenBeforeThisFix:
         assert snap["dhcp4_options"][0]["val"] == NOT_UTF8.hex().upper()
 
     def test_a_value_that_is_not_valid_hex_refuses_that_table_by_name_and_inserts_nothing(self, kea_tables):
-        content = self._old_file(
-            2,
-            [
-                {"host_id": 1, "dhcp_identifier": MAC.hex(), "dhcp_identifier_type": 0},
-                {"host_id": 2, "dhcp_identifier": "zz11", "dhcp_identifier_type": 0},
-            ],
-            [
-                {
-                    "option_id": 1,
-                    "code": 3,
-                    "value": "0a000001",
-                    "space": "dhcp4",
-                    "host_id": 1,
-                    "scope_id": 3,
-                    "client_classes": "",
-                }
-            ],
-        )
+        # an unrelated table in the same file: leases (a hex string for the binary column, as format 2 wrote it).
+        # (An options row cannot be that table: under Kea's real foreign key an option whose host was refused
+        # has nothing to attach to — which is correct, and is what step 3 of Q127 makes the importer say.)
+        content = json.dumps(
+            {
+                "_meta": {"database": "kea", "jen_export_version": 1, "format": 2, "tables": ["hosts", "lease4"]},
+                "data": {
+                    "hosts": [
+                        {"host_id": 1, "dhcp_identifier": MAC.hex(), "dhcp_identifier_type": 0},
+                        {"host_id": 2, "dhcp_identifier": "zz11", "dhcp_identifier_type": 0},
+                    ],
+                    "lease4": [{"address": 3232236300, "hwaddr": MAC2.hex(), "client_id": None, "subnet_id": 1}],
+                },
+            }
+        ).encode("utf-8")
         results = dbexport.import_kea(content, "skip")
         refused = [r for r in results if r.startswith("❌")]
         assert len(refused) == 1 and "hosts.dhcp_identifier" in refused[0] and "row 2" in refused[0]
         snap = _snapshot(kea_tables)
         assert not snap["hosts"], "the table with an undecodable value must be refused whole, not half-restored"
-        assert snap["dhcp4_options"][0]["val"] == "0A000001", "an unrelated table is still imported"
+        assert snap["lease4"][0]["hw"] == MAC2.hex().upper(), "an unrelated table is still imported"
 
     def test_odd_length_hex_is_refused_too(self, kea_tables):
         content = self._old_file(2, [{"host_id": 1, "dhcp_identifier": "abc", "dhcp_identifier_type": 0}])
