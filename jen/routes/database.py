@@ -763,16 +763,26 @@ def _identifier_page(results=None):
     from jen.models.db import kea_db
     from jen.services import kea_identifiers as __ident
 
-    damaged, total, error = [], 0, None
+    found, options, total, error = [], [], 0, None
     try:
         with kea_db() as db:
             total = __ident.count_checked(db)
-            damaged = __ident.find_damaged(db)
+            found = __ident.find_damaged(db)
+            options = __ident.find_option_candidates(db)
     except Exception as e:
         logger.error(f"Kea identifier check failed: {e}")
         error = "Could not read Kea's database. Check server logs for details."
+    # v5.67.0-beta.15 (Q129) — three groups: certain enough to tick, ambiguous (listed, unticked) and proven
+    # legitimate by a lease (listed for the record, no checkbox)
     return render_template(
-        "database_kea_identifiers.html", damaged=damaged, total=total, error=error, results=results or []
+        "database_kea_identifiers.html",
+        damaged=[d for d in found if d["confidence"] == "damaged"],
+        ambiguous=[d for d in found if d["confidence"] == "ambiguous"],
+        legitimate=[d for d in found if d["confidence"] == "legitimate"],
+        options=options,
+        total=total,
+        error=error,
+        results=results or [],
     )
 
 
@@ -791,19 +801,26 @@ def kea_identifiers_repair():
     from jen.services import kea_identifiers as __ident
 
     ids = [i for i in request.form.getlist("host_id") if i.isdigit()]
-    if not ids:
-        flash("No reservations were selected.", "warning")
+    option_ids = [i for i in request.form.getlist("option_id") if i.isdigit()]
+    if not ids and not option_ids:
+        flash("Nothing was selected.", "warning")
         return redirect(url_for("database.kea_identifiers"))
     try:
         with kea_db() as db:
-            results = __ident.repair(db, ids)
+            results = __ident.repair(db, ids) if ids else []
+            for r in __ident.repair_options(db, option_ids) if option_ids else []:
+                results.append({"host_id": f"option {r['option_id']}", "status": r["status"], "detail": r["detail"]})
     except Exception as e:
         logger.error(f"Kea identifier repair failed: {e}")
         flash("Repair failed. Check server logs for details.", "error")
         return redirect(url_for("database.kea_identifiers"))
     fixed = sum(1 for r in results if r["status"] == "repaired")
-    __user.audit("KEA_IDENTIFIER_REPAIR", "kea", f"repaired={fixed} skipped={len(results) - fixed} hosts={ids}")
-    flash(f"{fixed} reservation identifier(s) repaired, {len(results) - fixed} left unchanged.", "success")
+    __user.audit(
+        "KEA_IDENTIFIER_REPAIR",
+        "kea",
+        f"repaired={fixed} skipped={len(results) - fixed} hosts={ids} options={option_ids}",
+    )
+    flash(f"{fixed} value(s) repaired, {len(results) - fixed} left unchanged.", "success")
     return _identifier_page(results)
 
 
@@ -852,6 +869,16 @@ def migrate_page():
     )
 
 
+def _migrate_target_ca():
+    """(ca_path, error) — the optional CA bundle for the migration TARGET (v5.67.0-beta.15, Q129). The same path
+    check as the Kea API CA: a file that exists on the Jen host. Without it a target that requires TLS refused the
+    connection, and one that merely allows TLS got the credentials in clear."""
+    ca = request.form.get("ssl_ca", "").strip()
+    if ca and not os.path.isfile(ca):
+        return "", f"CA bundle path not found on the Jen host: {ca}"
+    return ca, None
+
+
 @bp.route("/database/migrate/test", methods=["POST"])
 @login_required
 @_superadmin_required
@@ -861,7 +888,10 @@ def migrate_test():
     user = request.form.get("user", "").strip()
     pw = request.form.get("password", "")
     db = request.form.get("database", "").strip()
-    ok, info = dbexport.test_connection(host, port, user, pw, db)
+    ca, ca_err = _migrate_target_ca()
+    if ca_err:
+        return {"ok": False, "error": ca_err}
+    ok, info = dbexport.test_connection(host, port, user, pw, db, ca)
     if ok:
         return {"ok": True, "info": info}
     return {"ok": False, "error": info}
@@ -882,6 +912,9 @@ def migrate_run():
     # migrate_jen (it used to turn an empty list into "everything"); None would mean everything
     tables = request.form.getlist("tables") if which == "jen" else None
     kea_grp = request.form.get("kea_group", dbexport.KEA_BACKUP_GROUP)
+    ca, ca_err = _migrate_target_ca()
+    if ca_err:
+        return Response(f"event: error\ndata: {ca_err}\n\n", mimetype="text/event-stream")
 
     q = queue.Queue()
 
@@ -891,9 +924,9 @@ def migrate_run():
     def _run():
         try:
             if which == "jen":
-                results = dbexport.migrate_jen(host, port, user, pw, db, tables, _progress)
+                results = dbexport.migrate_jen(host, port, user, pw, db, tables, _progress, target_ssl_ca=ca)
             else:
-                results = dbexport.migrate_kea(host, port, user, pw, db, kea_grp, _progress)
+                results = dbexport.migrate_kea(host, port, user, pw, db, kea_grp, _progress, target_ssl_ca=ca)
             q.put(("done", results))
             __user.audit("DB_MIGRATE", which, f"target={host}/{db} tables={tables or 'all'}")
         except Exception as e:

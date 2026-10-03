@@ -99,6 +99,13 @@
             <input type="text" id="t-db" placeholder="jen" class="u-72126d">
         </div>
     </div>
+    <div class="form-row">
+        <div class="form-group">
+            <label>CA bundle (optional)</label>
+            <input type="text" id="t-ca" placeholder="{{ jen_layout.config_dir }}/ssl/db-ca.pem" class="u-72126d">
+            <div class="form-hint">A file on the Jen host. Set it to connect to the target over TLS, verified against this CA — needed when the target requires TLS, and the only way to keep the password off the wire when it merely allows it. Left empty, the connection is plain.</div>
+        </div>
+    </div>
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
         <button class="btn btn-secondary" id="test-conn-btn">{{ icon("plug") }} Test Connection</button>
         <span id="conn-result" class="u-5e0faa"></span>
@@ -185,6 +192,7 @@ function testConn() {
     var fd = new FormData();
     fd.append('host',host); fd.append('port',port); fd.append('user',user);
     fd.append('password',pw); fd.append('database',db);
+    fd.append('ssl_ca', document.getElementById('t-ca').value.trim());
     jenFetch('/database/migrate/test', {method:'POST', headers: {'X-CSRFToken': '{{ csrf_token() }}'}, body:fd})
         .then(function(r){return r.json();})
         .then(function(d){
@@ -216,6 +224,7 @@ function runMigration() {
     fd.append('user',  document.getElementById('t-user').value);
     fd.append('password', document.getElementById('t-pass').value);
     fd.append('database', document.getElementById('t-db').value);
+    fd.append('ssl_ca', document.getElementById('t-ca').value.trim());
 
     if (_which === 'jen') {
         document.querySelectorAll('.jen-tbl:checked').forEach(function(cb) { fd.append('tables', cb.value); });

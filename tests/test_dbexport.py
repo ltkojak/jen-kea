@@ -8,6 +8,10 @@ These tests exercise the pure validation logic directly — no DB connection
 needed, since _validate_tables() takes plain lists/sets.
 """
 
+import pytest
+
+from jen.services import dbexport
+
 
 class TestValidateTables:
     def test_drops_unknown_table_names(self):
@@ -565,3 +569,94 @@ class TestValidateSchedule:
         values, errors = validate_schedule({"frequency": "monthly", "hour": "99", "keep_count": "0"})
         assert len(errors) == 3
         assert values == {"enabled": 0, "include_jen": 0, "include_kea": 0}
+
+
+class TestAScheduleMustBackUpSomething:
+    """v5.67.0-beta.15 (Q129, item e) — an enabled schedule with neither half ticked was saved, "ran" every night
+    and backed up nothing, and onboarding counted it as protection."""
+
+    def test_enabled_with_neither_target_is_refused(self):
+        from jen.services.dbexport import validate_schedule
+
+        values, errors = validate_schedule({"enabled": "1", "include_jen": "", "include_kea": ""})
+        assert errors == [
+            "An enabled schedule must back up at least one thing — tick the Jen database, the Kea reservations, "
+            "or both (or untick Enable)."
+        ]
+
+    @pytest.mark.parametrize(
+        "form", [{"include_jen": "1"}, {"include_kea": "1"}, {"include_jen": "1", "include_kea": "1"}]
+    )
+    def test_enabled_with_any_target_is_fine(self, form):
+        from jen.services.dbexport import validate_schedule
+
+        assert validate_schedule({"enabled": "1", **form})[1] == []
+
+    def test_disabled_with_neither_target_is_fine(self):
+        from jen.services.dbexport import validate_schedule
+
+        assert validate_schedule({"include_jen": "", "include_kea": ""})[1] == []
+
+    def test_the_schedule_page_refuses_it_and_saves_nothing(self, logged_in_client, monkeypatch):
+        saved = []
+        monkeypatch.setattr("jen.services.dbexport.save_schedule", lambda *a: saved.append(a))
+        r = logged_in_client.post("/database/schedule", data={"enabled": "1", "frequency": "daily", "hour": "2"})
+        assert r.status_code == 400 and b"must back up at least one thing" in r.data
+        assert saved == []
+
+    def test_the_setup_recovery_step_refuses_it_too(self, logged_in_client, monkeypatch):
+        saved = []
+        monkeypatch.setattr("jen.services.dbexport.save_schedule", lambda *a: saved.append(a))
+        r = logged_in_client.post("/setup/recovery", data={"action": "schedule", "enabled": "1"})
+        assert b"must back up at least one thing" in r.data
+        assert saved == []
+
+    def test_a_legacy_row_with_no_target_says_so_instead_of_recording_an_empty_run(self, db, monkeypatch, tmp_path):
+        monkeypatch.setattr(dbexport, "BACKUP_DIR", str(tmp_path))
+        with db.cursor() as cur:
+            cur.execute(
+                "REPLACE INTO backup_schedule (id, enabled, frequency, hour, keep_count, include_jen, include_kea) "
+                "VALUES (1, 1, 'daily', 3, 7, 0, 0)"
+            )
+        db.commit()
+        dbexport.run_scheduled_backup()
+        db.commit()
+        with db.cursor() as cur:
+            cur.execute("SELECT last_status FROM backup_schedule WHERE id=1")
+            assert "Nothing was backed up" in cur.fetchone()["last_status"]
+        assert list(tmp_path.glob("*.json.gz")) == []
+
+    @pytest.mark.parametrize(
+        "enabled,jen,kea,counts",
+        [(1, 0, 0, False), (0, 1, 1, False), (1, 1, 0, True), (1, 0, 1, True), (1, 1, 1, True)],
+    )
+    def test_onboarding_counts_only_an_enabled_schedule_that_targets_something(
+        self, monkeypatch, enabled, jen, kea, counts
+    ):
+        from types import SimpleNamespace
+
+        from jen.services import dbexport as _dbexport
+        from jen.services import health, onboarding
+
+        monkeypatch.setattr(health, "run_checks", lambda ctx: [])
+        monkeypatch.setattr(_dbexport, "backup_count", lambda: 0)
+        monkeypatch.setattr(
+            _dbexport, "get_schedule", lambda: {"enabled": enabled, "include_jen": jen, "include_kea": kea}
+        )
+        user = SimpleNamespace(id=1, can_access_subnet=lambda s: True)
+        ctx = onboarding.build_ctx(user, True)
+        assert ctx["backup_schedule_enabled"] is counts
+        row = next(r for r in onboarding.checklist(ctx)["rows"] if "backup" in r["title"].lower())
+        assert row["done"] is counts
+
+    def test_no_schedule_row_at_all_is_not_protection(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from jen.services import dbexport as _dbexport
+        from jen.services import health, onboarding
+
+        monkeypatch.setattr(health, "run_checks", lambda ctx: [])
+        monkeypatch.setattr(_dbexport, "backup_count", lambda: 0)
+        monkeypatch.setattr(_dbexport, "get_schedule", dict)
+        ctx = onboarding.build_ctx(SimpleNamespace(id=1, can_access_subnet=lambda s: True), True)
+        assert ctx["backup_schedule_enabled"] is False

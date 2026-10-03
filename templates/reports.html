@@ -252,7 +252,7 @@ function buildCharts() {
                                     const ppct = pool > 0 ? Math.round(v / pool * 100) : 0;
                                     return [`Projected total: ${v} (an estimate from the trend)`, pool > 0 ? `Utilization: ${ppct}%` : ''];
                                 }
-                                const sum = (dynamic[idx] || 0) + (reserved[idx] || 0);
+                                const sum = total[idx] || 0;  // active_leases — `reserved` is a count of reservations, not of active leases
                                 const pct = pool > 0 ? Math.round(sum / pool * 100) : 0;
                                 return [`Total active: ${sum}`, pool > 0 ? `Utilization: ${pct}%` : ''];
                             }

@@ -194,7 +194,10 @@ def build_ctx(user, is_superadmin: bool) -> dict:
         "current_user_has_mfa": mfa.user_has_mfa(user.id),
         "alert_channels_enabled": channels,
         "backup_count": dbexport.backup_count(),
-        "backup_schedule_enabled": bool(schedule.get("enabled")) if schedule else False,
+        # enabled AND targeting something (v5.67.0-beta.15, Q129): a schedule with neither half ticked backs nothing up
+        "backup_schedule_enabled": bool(
+            schedule and schedule.get("enabled") and (schedule.get("include_jen") or schedule.get("include_kea"))
+        ),
         "last_recovery_bundle_at": __setup_wizard.recovery_bundle_status()["at"],
         "ha_mode": bool(extensions.cfg.get("kea", "ha_mode", fallback="")),
         "server_count": len(extensions.KEA_SERVERS),

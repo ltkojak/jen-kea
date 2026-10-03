@@ -646,6 +646,14 @@ class TestAPluginThatLostItsDataIsNotARecovery:
         out = capsys.readouterr().out
         assert "(none occurred)" in out
 
+    def test_the_report_lists_none_with_a_single_indent(self, dbworld, capsys):
+        """v5.67.0-beta.15 (Q129): the report indented "(none)" twice (the writer's own two spaces plus the two in
+        the placeholder)."""
+        w = dbworld
+        assert _run(w, lenient_plugins=True) == 0
+        report = (_snapshot_dirs(w)[0] / "restore-report.txt").read_text(encoding="utf-8").splitlines()
+        assert report[report.index("accepted plugin failures:") + 1] == "  (none)"
+
     def test_the_flag_reaches_run_from_the_command_line(self, world, monkeypatch):
         seen = {}
         monkeypatch.setattr(restore.getpass, "getpass", lambda prompt="": PASS)
@@ -697,7 +705,9 @@ class TestPluginsInTheManifest:
         _make_bundle(world, manifest={"plugins": [{"id": "no-such-plugin", "version": "9.9.9"}]})
         assert _run(world) == 0
         err = capsys.readouterr().err
-        assert "no-such-plugin" in err and "database row is kept" in err
+        assert "no-such-plugin" in err and "database row is kept" not in err
+        assert "will NOT be restored by this run" in err and "still inside the bundle" in err
+        assert "run the restore again" in err
 
     def test_a_bundled_plugin_does_not_warn(self, world, capsys, monkeypatch):
         import pathlib

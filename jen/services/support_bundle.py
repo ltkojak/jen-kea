@@ -36,6 +36,7 @@ import zipfile
 from datetime import datetime, timezone
 
 from jen import extensions
+from jen.services import runtime
 
 logger = logging.getLogger(__name__)
 
@@ -255,7 +256,7 @@ def _collect_jen() -> dict:
         "jen_root": extensions.JEN_ROOT,
         "content_dir": extensions.CONTENT_DIR,
         "config_file": extensions.CONFIG_FILE,
-        "docker": os.path.exists("/.dockerenv"),
+        "docker": runtime.in_container(),
         "http_port": extensions.HTTP_PORT,
         "https_port": extensions.HTTPS_PORT,
         "worker_threads": extensions.WORKER_THREADS,

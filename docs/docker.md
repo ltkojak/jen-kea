@@ -159,6 +159,8 @@ the plugin installer allow-lists on a real host. The Plugins page's `apt install
 container; rebuild the image instead. **Updates and restarts are the container's job:** the Update and Restart
 buttons are hidden here, because they drive the `jen` systemd service that a container does not have.
 
+**Podman is a container too (v5.67.0-beta.15).** Jen recognises a container by `/.dockerenv` (Docker) or `/run/.containerenv` (Podman), so under Podman it behaves exactly as above — and "Save & Restart", a port change and a certificate change really restart it: Jen stops its own process and the container's restart policy brings it back. Give the container one (`podman run --restart=unless-stopped …`, or a systemd unit or Quadlet that restarts it); without a restart policy the container stays stopped after the change.
+
 `/etc/jen/jen.config` lives in the `jen-config` volume. To change
 configuration, edit `.env` and re-run `docker compose ... up -d` — on the
 next start `run.py` only regenerates the config if it's missing or has no

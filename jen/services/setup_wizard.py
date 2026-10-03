@@ -339,6 +339,7 @@ def save_connection(
     kea_db_pass,
     kea_db_name,
     kea_db_port=None,
+    kea_db_ssl_ca=None,
     api_ca="",
     api_tls_verify=True,
     api_client_cert="",
@@ -358,7 +359,12 @@ def save_connection(
     (models.db.reset_kea_pools): write_values() re-derives the extensions globals but not a pool that
     already exists, and a pool built while the config still held placeholders kept dialling them until a
     restart — so the very next step's lease query failed against settings the operator had just fixed.
-    `kea_db_port` is written only when given."""
+    `kea_db_port` is written only when given.
+
+    v5.67.0-beta.15 (Q129, item d) — `kea_db_ssl_ca` is `[kea_db] ssl_ca`: this step could not SET it (it honoured
+    one already in jen.config), so a database that requires TLS could only be reached by hand-editing the file. It
+    is written whenever the form supplied it — an empty value clears it, like the Kea API CA beside it — and
+    left alone when None."""
     from jen.config import app_config
     from jen.models import db as __db
 
@@ -376,6 +382,8 @@ def save_connection(
     ]
     if kea_db_port is not None:
         items.append(("kea_db", "port", str(int(kea_db_port))))
+    if kea_db_ssl_ca is not None:
+        items.append(("kea_db", "ssl_ca", kea_db_ssl_ca))
     if api_pass:
         items.append(("kea", "api_pass", api_pass))
     if kea_db_pass:

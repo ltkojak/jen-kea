@@ -417,14 +417,17 @@ def unknown_files(root: Path, owned: set[str], exclude: tuple[str, ...] = ()) ->
 
 def check_plugins(manifest: dict, plugin_dirs) -> list[str]:
     """Warnings (never refusals) for plugins the manifest recorded whose code
-    is not present on this machine — their database rows are restored anyway."""
+    is not present on this machine. Their data is NOT restored by this run (a table is only ever created by
+    the plugin's own code, never from a file) — it stays inside the bundle (v5.67.0-beta.15, Q129: the warning
+    used to talk about a retained row, which reads as retained data)."""
     out = []
     for p in manifest.get("plugins") or []:
         pid = p.get("id") if isinstance(p, dict) else None
         if pid and not any((Path(d) / pid).is_dir() for d in plugin_dirs):
             out.append(
                 f"plugin {pid!r} is in the bundle but its code is not on this machine — "
-                "reinstall it from Settings → Plugins (its database row is kept)"
+                "its data will NOT be restored by this run, but it is still inside the bundle — keep the bundle, "
+                "reinstall the plugin from Settings → Plugins, then run the restore again"
             )
     return out
 
@@ -714,7 +717,7 @@ def _write_report(snap: Path, bundle_path: str, lenient_plugins: bool, accepted_
     ]
     if lenient_plugins:
         lines.append("accepted plugin failures:")
-        lines.extend(f"  {line}" for line in accepted_failures or ["  (none)"])
+        lines.extend(f"  {line}" for line in accepted_failures or ["(none)"])
     with contextlib.suppress(OSError):
         (snap / "restore-report.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 

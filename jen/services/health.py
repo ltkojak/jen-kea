@@ -848,11 +848,15 @@ def _kea_identifiers(ctx) -> Check:
     try:
         with __db.kea_db() as db:
             total = __ident.count_checked(db)
-            damaged = __ident.find_damaged(db)
+            found = __ident.find_damaged(db)
     except Exception as e:
         _log_err("kea_identifiers", e)
         c.status, c.detail = "skip", "Kea database unreachable — see the Kea database check"
         return c
+    # only a row certain enough to be offered ticked fails the check; an ambiguous client-id is for a human to
+    # review on the page, and one a lease proves legitimate is nothing at all (v5.67.0-beta.15, Q129)
+    damaged = [d for d in found if d["confidence"] == "damaged"]
+    ambiguous = [d for d in found if d["confidence"] == "ambiguous"]
     if damaged:
         c.status = "fail"
         c.detail = (
@@ -863,6 +867,11 @@ def _kea_identifiers(ctx) -> Check:
         c.fix_hint = "A superadmin can preview and repair exactly those rows: Settings → Databases → the repair page."
     else:
         c.status, c.detail = "ok", f"{total} reservation(s) checked, none look like the hex text of themselves"
+        if ambiguous:
+            c.detail += (
+                f" ({len(ambiguous)} client-id(s) are hex text with no lease to say which way — review them on the "
+                f"repair page)"
+            )
     return c
 
 

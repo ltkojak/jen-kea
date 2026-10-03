@@ -73,6 +73,7 @@ def setup_connect():
             kea_db_user=extensions.KEA_DB_USER,
             kea_db_name=extensions.KEA_DB_NAME,
             kea_db_port=extensions.KEA_DB_PORT,
+            kea_db_ssl_ca=extensions.KEA_DB_SSL_CA,
             api_ca=extensions.KEA_API_CA,
             api_tls_verify=extensions.KEA_API_TLS_VERIFY,
             api_client_cert=extensions.KEA_API_CLIENT_CERT,
@@ -89,6 +90,9 @@ def setup_connect():
     kea_db_pass = request.form.get("kea_db_pass", "")
     kea_db_name = request.form.get("kea_db_name", "").strip() or "kea"
     kea_db_port_raw = request.form.get("kea_db_port", "").strip()
+    # v5.67.0-beta.15 (Q129, item d) — the CA bundle for the Kea DATABASE connection; the form value is the
+    # whole truth (it is pre-filled with the saved one), so an empty field clears it.
+    kea_db_ssl_ca = request.form.get("kea_db_ssl_ca", "").strip()
     # v5.67.0-beta.5 (Q117, item f) — Advanced TLS, same four fields and
     # same validation as Settings' own save_infra_kea.
     api_ca = request.form.get("api_ca", "").strip()
@@ -107,6 +111,7 @@ def setup_connect():
         "kea_db_user": kea_db_user,
         "kea_db_name": kea_db_name,
         "kea_db_port": kea_db_port_raw or extensions.KEA_DB_PORT,
+        "kea_db_ssl_ca": kea_db_ssl_ca,
         "api_ca": api_ca,
         "api_tls_verify": api_tls_verify,
         "api_client_cert": api_client_cert,
@@ -132,6 +137,9 @@ def setup_connect():
         return render_template("setup_connect.html", progress=_progress(), **retry_ctx)
     if api_ca and not os.path.isfile(api_ca):
         flash(f"CA bundle path not found on the Jen host: {api_ca}", "error")
+        return render_template("setup_connect.html", progress=_progress(), **retry_ctx)
+    if kea_db_ssl_ca and not os.path.isfile(kea_db_ssl_ca):
+        flash(f"Database CA bundle path not found on the Jen host: {kea_db_ssl_ca}", "error")
         return render_template("setup_connect.html", progress=_progress(), **retry_ctx)
     if bool(api_client_cert) != bool(api_client_key):
         flash("Set both the client certificate and key, or neither.", "error")
@@ -167,7 +175,9 @@ def setup_connect():
     kea_result = __setup.test_kea_connection(
         api_url, api_user, test_api_pass, verify=probe_verify, cert=probe_cert, default_mode=default_mode
     )
-    db_ok, db_info = __setup.test_kea_db(kea_db_host, kea_db_user, test_db_pass, kea_db_name, port=kea_db_port)
+    db_ok, db_info = __setup.test_kea_db(
+        kea_db_host, kea_db_user, test_db_pass, kea_db_name, port=kea_db_port, ssl_ca=kea_db_ssl_ca
+    )
 
     if not kea_result["ok"] or not db_ok:
         if not kea_result["ok"]:
@@ -199,6 +209,7 @@ def setup_connect():
         kea_db_pass=kea_db_pass,
         kea_db_name=kea_db_name,
         kea_db_port=kea_db_port,
+        kea_db_ssl_ca=kea_db_ssl_ca,
         api_ca=api_ca,
         api_tls_verify=api_tls_verify,
         api_client_cert=api_client_cert,

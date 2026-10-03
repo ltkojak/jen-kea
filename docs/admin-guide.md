@@ -399,6 +399,8 @@ On each **Kea host**: `ca.crt`, `server.crt`, `server.key` in
 | `user` | MySQL username for Kea database | `kea` |
 | `password` | MySQL password | `your-password` |
 | `database` | Kea database name | `kea` |
+| `port` | MySQL port (v5.67.0-beta.8); blank or absent means 3306 | `3306` |
+| `ssl_ca` | Path to a CA bundle on the Jen host. When set, Jen connects to Kea's database over TLS, verified against it; empty means a plain connection. The setup wizard's Connect step has a field for it (v5.67.0-beta.15) | `/etc/jen/ssl/kea-db-ca.pem` |
 
 ### [jen_db] section
 
@@ -1401,6 +1403,8 @@ The Kea export is streamed to disk one row at a time, like the Jen export, so a 
 
 **Migrating a Kea database (v5.67.0-beta.13): into an initialised Kea database, data only.** Jen never creates or changes Kea's tables. The target must already be a Kea database that `kea-admin db-init mysql` has initialised — it has Kea's `schema_version` row, with the **same major version** as the source's, and every table of the group being migrated. Anything else is refused before a row is written, naming what is wrong. The rows are copied in one transaction with plain inserts (a primary-key or unique-key collision is an error, not a silently skipped row), counted from what the database reports, and verified per table. If anything fails the transaction is rolled back and nothing that was on the target is touched. Before this release a failed migration dropped whatever tables it believed it had created — including a freshly initialised target's own.
 
+**A CA bundle for the target (v5.67.0-beta.15).** The migration page has an optional **CA bundle** field, used by the connection test and by both migrations: a path to a file on the Jen host, and the connection to the target is then TLS verified against it. Without it the connection is plain, which fails against a target that requires TLS and sends the password in clear to one that merely allows it. A path that is not a file on the Jen host is refused before anything connects.
+
 **Migrating Jen's own database** creates tables, so every table being migrated must be **absent** from the target (use an empty database). A table that already exists refuses the migration, and nothing is replaced or merged; nothing ticked on the page is refused rather than meaning "everything". A failure drops only the tables that migration created.
 
 > **If you restored or migrated Kea reservations through Jen before 5.67.0-beta.11** every identifier on those rows was stored as the text of its own hex (a MAC stored as the twelve characters `341343e60e2a`), and those clients never matched their reservation again. The Health Center's **Kea reservations have plausible identifiers** check finds them, and **Settings → Databases → Import → Check reservation identifiers** shows exactly which rows, with before and after, and repairs the ones you tick. See [Troubleshooting](troubleshooting.md#reservations-restored-by-an-older-jen-never-match-their-client).
@@ -1419,6 +1423,8 @@ The Kea export is streamed to disk one row at a time, like the Jen export, so a 
 **Restoring onto a new machine** (`sudo ./install.sh --restore`, see below) is strict about the core tables as well as the plugins: a table that is missing, a file whose rows have no column this schema knows, a count the database does not confirm, or a skipped row stops the restore and rolls everything back. `--lenient-plugins` relaxes only the plugin half.
 
 **What happens to a plugin's data when you uninstall it.** Uninstalling removes the plugin's files and nothing else: its tables and rows stay in the database, **and in every backup** — the scheduled and manual backups, the recovery bundle, the pre-restore and pre-import snapshots and a Jen database migration. Jen records which tables each plugin owns (`plugin_tables`, written whenever the plugin's migrations run) so the answer no longer depends on the plugin's code being on disk. Reinstalling reconnects them: the plugin finds its tables where it left them. Restoring a backup onto a **new** machine without the plugin installed cannot recreate its tables (a table is only ever created by the plugin's own code, never from a file), so that plugin's data is named in the restore output and stays inside the backup; install the plugin and restore again to bring it back. A plugin uninstalled **before** 5.67.0-beta.14 was not recorded: its data is still in the database but not in a backup until you reinstall and uninstall it once more.
+
+**Backup schedule (v5.67.0-beta.15).** An enabled schedule must back up at least one thing: tick the Jen database, the Kea reservations, or both, or leave the schedule disabled. A schedule with neither ticked used to be accepted, to record a "run" every night with nothing in it, and to count as protection on the Getting started checklist; the page now refuses it and the checklist counts a schedule only when it is enabled and has a target. A schedule saved that way by an older Jen shows "Nothing was backed up — no target is selected" as its last status until you tick something.
 
 ## Recovery Bundle (v5.44.0)
 
@@ -1449,7 +1455,7 @@ You'll be prompted for the passphrase (never pass it as a command-line argument 
 
 1. **Stop** — if `jen` is a running systemd service it is stopped, so nothing is writing to the config, content or database while they are replaced.
 2. **Snapshot** — everything about to be overwritten is saved to `<content dir>/backups/pre-restore-<UTC timestamp>/` (mode 0700): a tar of `/etc/jen`, a tar of the content directory (without `backups/` and `tmp/`), and a fresh export of the Jen database. If the snapshot cannot be taken, nothing is changed.
-3. **Apply** — `/etc/jen/*`, the content directory and the database are replaced from the bundle. Files the bundle carries overwrite; files already on disk that it does not carry are **left in place, never deleted**, and named in the output ("left in place (not in the bundle) under …"). A plugin the bundle recorded whose code is not on this machine produces a warning — its database row is kept; reinstall it from Settings → Plugins.
+3. **Apply** — `/etc/jen/*`, the content directory and the database are replaced from the bundle. Files the bundle carries overwrite; files already on disk that it does not carry are **left in place, never deleted**, and named in the output ("left in place (not in the bundle) under …"). A plugin the bundle recorded whose code is not on this machine produces a warning — its data is **not** restored by this run (a table is only ever created by the plugin's own code), but it is still inside the bundle: keep the bundle, reinstall the plugin from Settings → Plugins, then run the restore again.
 4. **Start and health-check** — Jen is started again (only if it was running before, or you passed `--start`) and `/api/v1/health` is polled for up to 60 seconds on the restored `[server] http_port`.
 5. **Roll back on failure** — if anything raises during the apply, or Jen does not come up healthy, the snapshot is put back (config, content, database), Jen is started again, and the command exits non-zero naming the snapshot directory.
 

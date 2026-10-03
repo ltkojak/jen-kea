@@ -13,15 +13,19 @@ import os
 import pathlib
 import re
 
+import pytest
+
 from jen.services import runtime
 
 
-def _patch_dockerenv(monkeypatch, present: bool):
+def _patch_dockerenv(monkeypatch, present: bool, marker: str = "/.dockerenv"):
+    """Both container markers are faked: `marker` answers `present`, the other one is absent — so a test can say
+    "a Docker box", "a Podman box" or (present=False) neither, whatever the machine running the suite is."""
     real_exists = os.path.exists
 
     def fake(path):
-        if path == "/.dockerenv":
-            return present
+        if path in runtime.CONTAINER_MARKERS:
+            return present if path == marker else False
         return real_exists(path)
 
     monkeypatch.setattr(os.path, "exists", fake)
@@ -223,3 +227,65 @@ class TestRestartService:
             text = (repo / name).read_text(encoding="utf-8")
             jen_block = text.split("  jen:\n", 1)[1].split("\n  jen-mysql:", 1)[0]
             assert "restart: unless-stopped" in jen_block, name
+
+
+class TestPodman:
+    """v5.67.0-beta.15 (Q129) — Podman writes /run/.containerenv, not /.dockerenv. A Podman box used to answer
+    "dev": the Update/Restart controls were right by luck, but restart_service() returned "none" and every "Save &
+    Restart" said "restart by hand" while nothing restarted. One test per permutation of the two markers and the
+    systemd signals."""
+
+    @pytest.mark.parametrize(
+        "docker,podman,systemd,expected",
+        [
+            (False, False, False, "dev"),
+            (True, False, False, "docker"),
+            (False, True, False, "docker"),
+            (True, True, False, "docker"),
+            (False, False, True, "systemd"),
+            (True, False, True, "docker"),  # a container wins over a stray systemd signal
+            (False, True, True, "docker"),
+            (True, True, True, "docker"),
+        ],
+    )
+    def test_every_permutation(self, monkeypatch, docker, podman, systemd, expected):
+        _clear_signals(monkeypatch)
+        real_exists = os.path.exists
+        present = {"/.dockerenv": docker, "/run/.containerenv": podman}
+        monkeypatch.setattr(os.path, "exists", lambda p: present[p] if p in present else real_exists(p))
+        if systemd:
+            monkeypatch.setenv("INVOCATION_ID", "abc")
+        assert runtime.deployment() == expected
+        assert runtime.in_container() == (docker or podman)
+
+    def test_the_helper_fakes_the_marker_it_is_told_to(self, monkeypatch):
+        _patch_dockerenv(monkeypatch, True, marker="/run/.containerenv")
+        assert os.path.exists("/run/.containerenv") and not os.path.exists("/.dockerenv")
+        _patch_dockerenv(monkeypatch, False)
+        assert not os.path.exists("/run/.containerenv") and not os.path.exists("/.dockerenv")
+
+    def test_podman_restarts_by_signalling_the_gunicorn_master(self, monkeypatch):
+        import threading
+
+        _clear_signals(monkeypatch)
+        _patch_dockerenv(monkeypatch, True, marker="/run/.containerenv")
+        done, sent = threading.Event(), []
+        monkeypatch.setattr(runtime.os, "getppid", lambda: 4242)
+        monkeypatch.setattr(runtime.os, "kill", lambda pid, sig: (sent.append((pid, sig)), done.set()))
+        monkeypatch.setattr(
+            runtime.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no sudo in a container"))
+        )
+        assert runtime.restart_service(delay=0) == "docker"
+        assert done.wait(5), "the restart never ran"
+        assert sent == [(4242, runtime.signal.SIGTERM)]
+
+    def test_the_support_bundle_reports_a_podman_container_as_one(self, monkeypatch):
+        import inspect
+
+        from jen.services import support_bundle
+
+        assert "runtime.in_container()" in inspect.getsource(support_bundle)
+        assert '"/.dockerenv"' not in inspect.getsource(support_bundle)
+
+    def test_the_marker_list_is_exactly_the_two_runtimes(self):
+        assert runtime.CONTAINER_MARKERS == ("/.dockerenv", "/run/.containerenv")

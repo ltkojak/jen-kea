@@ -82,6 +82,13 @@
                 <input type="number" name="kea_db_port" min="1" max="65535" value="{{ kea_db_port or 3306 }}">
             </div>
         </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Database CA bundle (optional)</label>
+                <input type="text" name="kea_db_ssl_ca" value="{{ kea_db_ssl_ca or '' }}" placeholder="{{ jen_layout.config_dir }}/ssl/kea-db-ca.pem">
+                <div class="form-hint">A file on the Jen host. Set it to connect to Kea's database over TLS, verified against this CA; empty means a plain connection. It is saved as <code>[kea_db] ssl_ca</code> and used for the test below, so a database that requires TLS can be reached from here.</div>
+            </div>
+        </div>
         <button type="submit" class="btn btn-primary">Test &amp; Connect</button>
     </form>
 </div>

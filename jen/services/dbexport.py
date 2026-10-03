@@ -1802,7 +1802,16 @@ def _delete_tracked(conn, order, pk_by_table, inserted):
     conn.commit()
 
 
-def migrate_jen(target_host, target_port, target_user, target_password, target_db, tables=None, progress_cb=None):
+def migrate_jen(
+    target_host,
+    target_port,
+    target_user,
+    target_password,
+    target_db,
+    tables=None,
+    progress_cb=None,
+    target_ssl_ca="",
+):
     """
     Migrate Jen DB to a new server.
 
@@ -1814,6 +1823,8 @@ def migrate_jen(target_host, target_port, target_user, target_password, target_d
     transaction with plain INSERTs, counted from what the server reports and verified per table against the
     source (counts and a sample of primary keys).
     progress_cb(message): called with progress updates.
+    target_ssl_ca: (v5.67.0-beta.15, Q129) a CA bundle path on this host; the target connection is TLS, verified
+    against it, when given (empty keeps the plain connection every earlier release made).
     Returns list of result strings.
     """
 
@@ -1845,7 +1856,7 @@ def migrate_jen(target_host, target_port, target_user, target_password, target_d
         raise MigrationRefused("None of the selected tables exists on the source — nothing was copied.")
     _cb(f"Connecting to target ({target_host}/{target_db})...")
     try:
-        dst = _direct_conn(target_host, target_port, target_user, target_password, target_db)
+        dst = _direct_conn(target_host, target_port, target_user, target_password, target_db, target_ssl_ca)
     except Exception as e:
         src.close()
         raise RuntimeError(f"Cannot connect to target DB: {e}") from e
@@ -1923,7 +1934,14 @@ def migrate_jen(target_host, target_port, target_user, target_password, target_d
 
 
 def migrate_kea(
-    target_host, target_port, target_user, target_password, target_db, group=KEA_BACKUP_GROUP, progress_cb=None
+    target_host,
+    target_port,
+    target_user,
+    target_password,
+    target_db,
+    group=KEA_BACKUP_GROUP,
+    progress_cb=None,
+    target_ssl_ca="",
 ):
     """
     Migrate Kea reservations (or leases) into another Kea database.
@@ -1951,7 +1969,7 @@ def migrate_kea(
     src = _direct_kea_conn()
     _cb(f"Connecting to target ({target_host}/{target_db})...")
     try:
-        dst = _direct_conn(target_host, target_port, target_user, target_password, target_db)
+        dst = _direct_conn(target_host, target_port, target_user, target_password, target_db, target_ssl_ca)
     except Exception as e:
         src.close()
         raise RuntimeError(f"Cannot connect to target DB: {e}") from e
@@ -2010,7 +2028,7 @@ def migrate_kea(
             # the rollback could not be confirmed (the connection is gone): delete exactly what this run
             # inserted, by primary key, on a fresh connection
             with contextlib.suppress(Exception):
-                fresh = _direct_conn(target_host, target_port, target_user, target_password, target_db)
+                fresh = _direct_conn(target_host, target_port, target_user, target_password, target_db, target_ssl_ca)
                 try:
                     _delete_tracked(fresh, tables, pk_by_table, inserted)
                 finally:
@@ -2097,6 +2115,15 @@ def validate_schedule(form) -> tuple[dict, list[str]]:
     except (TypeError, ValueError):
         errors.append("Keep must be a whole number from 1 to 30.")
 
+    # v5.67.0-beta.15 (Q129, item e) — an enabled schedule must back SOMETHING up. With neither half ticked it was
+    # saved, "ran" every night (writing last_run) and backed up nothing, and the onboarding checklist counted it as
+    # protection.
+    if values["enabled"] and not (values["include_jen"] or values["include_kea"]):
+        errors.append(
+            "An enabled schedule must back up at least one thing — tick the Jen database, the Kea reservations, "
+            "or both (or untick Enable)."
+        )
+
     return values, errors
 
 
@@ -2162,6 +2189,9 @@ def run_scheduled_backup():
     ts = datetime.utcnow().strftime("%Y-%m-%d-%H%M%S")
     keep = int(sched.get("keep_count", 7))
     results = []
+    if not (sched.get("include_jen") or sched.get("include_kea")):
+        # a row saved before Jen refused this: say so in the status instead of recording an empty "run"
+        results.append("Nothing was backed up — no target is selected (tick the Jen database and/or Kea reservations)")
     if sched.get("include_jen"):
         try:
             # v5.66.0-beta.6 (Q108) — publish_backup(): a failure mid-write leaves no final

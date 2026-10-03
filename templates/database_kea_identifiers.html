@@ -10,16 +10,17 @@
     <div class="card-header"><h3>What this looks for</h3></div>
     <div class="card-body">
         <p>Before 5.67.0-beta.11, restoring a Kea backup or import file, or migrating the Kea database, wrote a reservation's identifier as the text of its own hex: the six-byte MAC <code>34:13:43:e6:0e:2a</code> became the twelve characters <code>341343e60e2a</code>. The row looks right but Kea never matches the client to it again.</p>
-        <p class="form-hint">Only <code>hosts.dhcp_identifier</code> of type hw-address, DUID or client-id is recognised, and only when it is an even number of hex-digit characters of a plausible length. Circuit-id and flex-id are never flagged — ASCII hex is legitimate there. Per-host option values cannot be told from intended ones and are not touched; check them by hand after a restore made before this release. Only the <code>hosts</code> table changes, only the identifier column, only rows listed below that still hold exactly what is shown.</p>
+        <p class="form-hint">A hw-address of 12, 16 or 40 hex-digit characters, or a DUID whose decoded type is 1 to 4, is offered ticked. A client-id is different: some embedded clients really do send their MAC as ASCII text, so a client-id is offered ticked only when a lease shows the client using the decoded bytes; with no lease to say, it is listed unticked as ambiguous, and when a lease shows the client sending exactly the text it is left alone. Circuit-id and flex-id are never flagged — ASCII hex is legitimate there. Per-host option values of a few fixed-width codes (addresses, masks, times) are listed separately, unticked, for you to review; text options are never listed because their text may be anything. Only rows you tick change, only the identifier or option value, and only if it still holds exactly what is shown.</p>
     </div>
 </div>
 
 {% if error %}
 <div class="alert alert-danger">{{ icon("triangle-alert") }} {{ error }}</div>
-{% elif not damaged %}
+{% elif not damaged and not ambiguous and not legitimate and not options %}
 <div class="alert alert-success">{{ icon("circle-check") }} {{ total }} reservation(s) checked — none look like the hex text of themselves. Nothing to repair.</div>
 {% else %}
-<form method="POST" action="{{ url_for('database.kea_identifiers_repair') }}" data-confirm="Rewrite the selected reservation identifiers in Kea's hosts table?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<form method="POST" action="{{ url_for('database.kea_identifiers_repair') }}" data-confirm="Rewrite the selected values in Kea's tables?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+{% if damaged %}
 <div class="card">
     <div class="card-header"><h3>{{ damaged|length }} of {{ total }} reservation(s) need repair</h3></div>
     <table class="table">
@@ -34,12 +35,74 @@
             <td class="mono">{{ d.stored_text }}</td>
             <td class="mono">{{ d.repaired }} <span class="form-hint">({{ d.repaired_bytes }} bytes)</span></td>
         </tr>
+        {% for e in d.evidence %}
+        <tr><td></td><td colspan="5" class="form-hint">Lease {{ e.address or '—' }}: client-id <span class="mono">{{ e.client_id or '—' }}</span>, hardware address <span class="mono">{{ e.hwaddr or '—' }}</span> — {% if 'decoded' in e.matches %}the client-id is the repaired bytes{% elif 'hwaddr' in e.matches %}the hardware address is the repaired bytes{% endif %}</td></tr>
+        {% endfor %}
         {% endfor %}
         </tbody>
     </table>
 </div>
+{% endif %}
+
+{% if ambiguous %}
+<div class="card">
+    <div class="card-header"><h3>{{ ambiguous|length }} client-id(s) — ambiguous, review by hand</h3></div>
+    <div class="card-body"><p class="form-hint">These client-ids are made only of hex digits. A damaged restore produces exactly this, but so does a client that sends its MAC as text, and no lease shows which. Nothing is ticked; tick one only if you know the client sends the binary form.</p></div>
+    <table class="table">
+        <thead><tr><th></th><th>Host</th><th>Address</th><th>Stored now (text)</th><th>Would become (bytes)</th></tr></thead>
+        <tbody>
+        {% for d in ambiguous %}
+        <tr>
+            <td><input type="checkbox" name="host_id" value="{{ d.host_id }}" aria-label="Repair host {{ d.host_id }}"></td>
+            <td>{{ d.hostname or ('#' ~ d.host_id) }}</td>
+            <td class="mono">{{ d.ipv4 or '—' }}</td>
+            <td class="mono">{{ d.stored_text }}</td>
+            <td class="mono">{{ d.repaired }} <span class="form-hint">({{ d.repaired_bytes }} bytes)</span></td>
+        </tr>
+        {% for e in d.evidence %}
+        <tr><td></td><td colspan="4" class="form-hint">Lease {{ e.address or '—' }}: client-id <span class="mono">{{ e.client_id or '—' }}</span> — {% if 'text' in e.matches and 'decoded' in e.matches %}matches both forms{% elif 'text' in e.matches %}the client sends the text{% elif 'decoded' in e.matches %}the client sends the bytes{% else %}no match{% endif %}</td></tr>
+        {% else %}
+        <tr><td></td><td colspan="4" class="form-hint">No lease matches either form.</td></tr>
+        {% endfor %}
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+{% if options %}
+<div class="card">
+    <div class="card-header"><h3>{{ options|length }} option value(s) to review</h3></div>
+    <div class="card-body"><p class="form-hint">Host-scoped option values of a fixed-width code (an address, a mask, a time) whose stored value is exactly the hex text of a plausible value. A genuine value of these codes is binary, so this is most likely the same damage — but it cannot be proven, so nothing is ticked.</p></div>
+    <table class="table">
+        <thead><tr><th></th><th>Host</th><th>Option</th><th>Stored now (text)</th><th>Would become</th></tr></thead>
+        <tbody>
+        {% for o in options %}
+        <tr>
+            <td><input type="checkbox" name="option_id" value="{{ o.option_id }}" aria-label="Repair option {{ o.option_id }}"></td>
+            <td>{{ o.hostname or ('#' ~ o.host_id) }}</td>
+            <td>{{ o.code }} <span class="form-hint">({{ o.name }})</span></td>
+            <td class="mono">{{ o.stored_text }}</td>
+            <td class="mono">{{ o.repaired }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+{% if legitimate %}
+<div class="card">
+    <div class="card-header"><h3>{{ legitimate|length }} client-id(s) left alone</h3></div>
+    <div class="card-body"><p class="form-hint">A lease shows each of these clients sending exactly the stored text as its client-id, so the text is correct. They are not offered for repair.</p>
+    <ul>{% for d in legitimate %}<li>{{ d.hostname or ('#' ~ d.host_id) }} — <span class="mono">{{ d.stored_text }}</span></li>{% endfor %}</ul></div>
+</div>
+{% endif %}
+
+{% if damaged or ambiguous or options %}
 <p class="form-hint">If the correct identifier already exists on another reservation (you re-created it by hand), that row is skipped and left as it is — delete the damaged one from Reservations instead.</p>
 <button type="submit" class="btn btn-primary">{{ icon("wrench") }} Repair selected</button>
+{% endif %}
 </form>
 {% endif %}
 
@@ -50,7 +113,7 @@
         <thead><tr><th>Host</th><th>Outcome</th><th>Detail</th></tr></thead>
         <tbody>
         {% for r in results %}
-        <tr><td>#{{ r.host_id }}</td><td>{{ r.status }}</td><td class="mono">{{ r.detail }}</td></tr>
+        <tr><td>{{ r.host_id if r.host_id is string else '#' ~ r.host_id }}</td><td>{{ r.status }}</td><td class="mono">{{ r.detail }}</td></tr>
         {% endfor %}
         </tbody>
     </table>
