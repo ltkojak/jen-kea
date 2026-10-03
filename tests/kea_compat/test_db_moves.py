@@ -402,7 +402,7 @@ def test_a_foreign_key_failure_aborts_the_import_and_rolls_everything_back(kea):
         raised = e
     assert raised is not None, "an FK violation is an error, not a 'skipped' row"
     left = rows(kea, "SELECT hostname FROM hosts WHERE hostname LIKE 'q127-%%'")
-    assert left == [], f"the import must roll back whole, the good row too: {left}"
+    assert not left, f"the import must roll back whole, the good row too: {left}"
 
 
 def test_a_duplicate_in_skip_mode_is_skipped_and_counted_not_an_error(kea):
