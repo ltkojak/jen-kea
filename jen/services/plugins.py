@@ -784,6 +784,8 @@ def _apply_plugin_result(plugin_id: str, action: str, ok: bool, raw_detail: str)
         detail = f"the built-in copy of '{plugin_id}' is active again"
     else:
         disable_plugin(plugin_id)
+        if _plugin_dir(plugin_id) is None:
+            mark_plugin_uninstalled(plugin_id)  # the code is gone; its tables and data stay (Q128)
         detail = "removed"
     set_global_setting("restart_pending", "true")
     return detail, "PLUGIN_UNINSTALL", detail
@@ -1058,6 +1060,8 @@ def uninstall_plugin(plugin_id: str) -> tuple[bool, str]:
     try:
         shutil.rmtree(path)
         _loaded_plugins.pop(plugin_id, None)
+        if _plugin_dir(plugin_id) is None:  # no shipped or root-owned copy left either
+            mark_plugin_uninstalled(plugin_id)
         logger.info(f"Plugin '{plugin_id}' uninstalled")
         return True, f"Plugin '{plugin_id}' uninstalled. Restart Jen to fully remove."
     except Exception as e:
@@ -1223,6 +1227,7 @@ def run_plugin_migrations(manifest: dict) -> tuple[bool, str, int]:
             logger.error(msg)
             return False, msg, count
 
+    record_owned_tables(manifest)
     return True, "", count
 
 
@@ -1386,6 +1391,59 @@ def all_owned_tables() -> dict[str, list[str]]:
             kept.append(t)
         result[plugin_id] = kept
     return result
+
+
+# ── Persisted ownership (v5.67.0-beta.14, Q128) ─────────────────────────────
+#
+# owned_tables() above answers from plugin CODE, so it stops answering the moment the code is removed. The
+# `plugin_tables` table (migration 29) keeps the answer: the migration runner records what a plugin owns every
+# time it runs, an uninstall marks the rows retained, and dbexport.export_tables() includes every recorded table
+# that still exists — the uninstalled plugin's data stays in every backup, and a reinstall simply finds its
+# tables again (CREATE TABLE IF NOT EXISTS) and flips the rows back.
+
+
+def record_owned_tables(manifest: dict) -> None:
+    """Record every table `manifest`'s plugin owns (derived the Q107 way) as installed and not retained. Called by
+    run_plugin_migrations() whenever it completes, so an install, an upgrade, a restore's replay and every start
+    keep the record current, and a reinstall reconnects the retained rows. Never raises: a failure to record
+    must not fail a migration (it is logged, and the next run records it)."""
+    plugin_id = manifest.get("id") or ""
+    if not valid_plugin_id(plugin_id):
+        return
+    try:
+        tables = owned_tables(plugin_id, manifest)
+        if not tables:
+            return
+        version = str(manifest.get("version") or "")[:50] or None
+        from jen.models.db import jen_db
+
+        with jen_db() as db, db.cursor() as cur:
+            for t in tables:
+                cur.execute(
+                    "INSERT INTO plugin_tables (plugin_id, table_name, first_seen_version, code_installed, retained) "
+                    "VALUES (%s, %s, %s, 1, 0) "
+                    "ON DUPLICATE KEY UPDATE code_installed = 1, retained = 0",
+                    (plugin_id, t, version),
+                )
+            db.commit()
+    except Exception as e:
+        logger.error(f"Could not record the tables plugin '{plugin_id}' owns: {e}")
+
+
+def mark_plugin_uninstalled(plugin_id: str) -> None:
+    """The plugin's code is gone but its tables and data are kept: mark every recorded table of it retained.
+    Called by both uninstall paths once NO copy of the plugin's code is left anywhere (a shipped copy that takes
+    over again is still code). Never raises."""
+    if not valid_plugin_id(plugin_id or ""):
+        return
+    try:
+        from jen.models.db import jen_db
+
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("UPDATE plugin_tables SET code_installed = 0, retained = 1 WHERE plugin_id = %s", (plugin_id,))
+            db.commit()
+    except Exception as e:
+        logger.error(f"Could not mark plugin '{plugin_id}' as uninstalled in plugin_tables: {e}")
 
 
 def _table_exists_now(table: str) -> bool:

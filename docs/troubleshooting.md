@@ -496,6 +496,18 @@ These are refusals, not failures: nothing was written, and each message says wha
 
 ---
 
+## A Jen import is refused, fails or rolls back (v5.67.0-beta.14)
+
+- **"Cannot read file: not a Jen export: …"** — the upload is not a Jen export, and the sentence says why (the top level is not an object, a table is not a list, `format` is newer than this Jen reads, …). Nothing was touched. Re-export from Settings → Databases → Export; a file edited by hand or produced by a script must keep the `{"data": {…}, "_meta": {…}}` shape. gzip and plain JSON are both accepted.
+- **"Replacing users on its own would leave … pointing at records that no longer exist"** — a replace restore of a parent table needs its dependents ticked (multi-factor, passkeys, saved searches, dashboard layouts, API keys for `users`). Tick them, or restore the whole file. Nothing was changed.
+- **"The import failed and was rolled back"** — a table refused a row, or a plugin could not migrate or load its data. The database was put back from the snapshot taken first; the server log names the table. Fix the cause (a file from a much older or newer Jen, a plugin out of date) and import again.
+- **"…putting the database back did not complete"** — a replace import failed and so did the automatic rollback. The message names a `pre-import-<time>` folder under the backups directory; its `jen_db.json.gz` is a full export taken just before the import. Fix what the server log names, then import that file with Replace.
+- **"Could not take the safety snapshot"** — replace mode will not run without one. Check that the backups directory is writable and has free space roughly the size of the Jen database.
+- **A merge result says `N added, M skipped`** — M rows were left out because the same key was already in the table (or the database refused them). The file's row count is not what merge reports.
+- **A plugin's data is not on the new box after a restore** — the plugin's code was not installed when you restored, and Jen never creates a table from a file. The restore output names the plugin; its data is still in the backup. Install the plugin (Settings → Plugins), then restore again.
+
+---
+
 ## Reservations restored by an older Jen never match their client
 
 **Symptom.** After restoring a Kea backup or import file through Jen, or migrating the Kea database from the Databases page, a reservation is listed with the right IP and name but the client keeps getting a dynamic address. **Cause (fixed in 5.67.0-beta.11, present in every release before it, stable included).** The export wrote a binary column — a reservation's identifier — as hex text, nothing decoded it, and the restore stored that text: the six-byte MAC `34:13:43:e6:0e:2a` came back as the twelve characters `341343e60e2a`. The row looks right in every listing; Kea simply never matches it.

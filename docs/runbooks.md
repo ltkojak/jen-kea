@@ -270,6 +270,21 @@ a throwaway VM, never against a live box, before you need it for real.
    the pre-restore snapshot directory. A plugin whose code is simply not on
    the VM stays a warning, as before — its data is still in the bundle.
 
+8. **Exact, or not at all (v5.67.0-beta.14).** The restore inserts each
+   table with a plain `INSERT` and counts what the database says it
+   inserted; before this release it used `INSERT IGNORE` and printed the
+   file's row count, so a row the database refused — or a row the fresh
+   install had already created, such as the first admin — could be kept
+   or mangled and still be counted. Now a missing table, a file whose rows
+   have no recognised column, a count that is not the file's, or a skipped
+   row fails the restore, which rolls back as in step 7. In the drill, a
+   restore that completes has put back every row the bundle carried.
+   Plugins the bundle names but whose code is not on the VM stay a
+   warning, and their data — including the data of a plugin that had been
+   **uninstalled** on the source box, which is in every bundle since this
+   release — stays inside the bundle until the plugin is installed and the
+   restore is run again.
+
 **What a wrong passphrase looks like, verified against the real
 `jen.tools.restore`:**
 ```

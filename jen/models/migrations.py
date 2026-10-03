@@ -1057,6 +1057,33 @@ def _m027_events(db):
     logger.info("Migration 27: events table")
 
 
+def _m029_plugin_tables(db):
+    """
+    v5.67.0-beta.14 (Q128) — which database tables each plugin owns, kept in the database. Ownership used to be
+    answered only by parsing the migration DDL of plugin CODE that is on disk right now
+    (`plugins.all_owned_tables()`), so uninstalling a plugin — which removes the code and, as the Plugins page
+    promises, keeps its tables and data — also removed its tables from every later backup, bundle, snapshot and
+    migration: the data stayed in the live database until the box was lost. The plugin migration runner now
+    records what a plugin owns here each time it runs; an uninstall flips `code_installed` to 0 and `retained` to
+    1; the export set includes every recorded table that still exists. Idempotent (CREATE TABLE IF NOT EXISTS);
+    nothing is backfilled here — a plugin's rows are written the next time its migrations run (every start).
+    """
+    with db.cursor() as cur:
+        cur.execute(
+            """CREATE TABLE IF NOT EXISTS plugin_tables (
+                plugin_id VARCHAR(100) NOT NULL,
+                table_name VARCHAR(64) NOT NULL,
+                first_seen_version VARCHAR(50) NULL,
+                code_installed TINYINT(1) NOT NULL DEFAULT 1,
+                retained TINYINT(1) NOT NULL DEFAULT 0,
+                recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (plugin_id, table_name),
+                KEY idx_table (table_name)
+            )"""
+        )
+    logger.info("Migration 29: plugin_tables table")
+
+
 MIGRATIONS = [
     (1, "Baseline schema (all tables, current definitions)", _m001_baseline),
     (2, "users.avatar_url column", _m002_users_avatar),
@@ -1106,6 +1133,7 @@ MIGRATIONS = [
         "dashboard_prefs.widgets VARCHAR(512) -> VARCHAR(4000) for prefs v2 (v5.54.0, Q61)",
         _m028_dashboard_prefs_widgets_widen,
     ),
+    (29, "plugin_tables: persisted plugin table ownership (v5.67.0-beta.14, Q128)", _m029_plugin_tables),
 ]
 
 # Registry sanity: strictly increasing versions, never reordered

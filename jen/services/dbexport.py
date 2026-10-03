@@ -73,6 +73,7 @@ JEN_TABLES = {
     "mfa_attempts": "MFA brute-force throttling log",
     "plugins": "Installed plugin records (id, version, enabled state)",
     "plugin_schema_migrations": "Per-plugin schema migration tracking",
+    "plugin_tables": "Which database tables each plugin owns (so an uninstalled plugin's data stays in every backup)",
     "kea_config_revisions": (
         "Kea config history Jen has pushed or noticed — config bodies are encrypted at rest; "
         "the key lives in the config directory, NOT in this export"
@@ -453,11 +454,35 @@ def read_legacy_backup_details(filename: str) -> dict | None:
 def _existing_owned_tables(conn) -> dict[str, list[str]]:
     """plugins.all_owned_tables(), filtered to the tables that actually exist right now — a
     plugin whose migrations haven't run yet (or ran partway) never contributes a table nobody
-    could actually export rows from (v5.66.0-beta.5, Q107)."""
+    could actually export rows from (v5.66.0-beta.5, Q107).
+
+    v5.67.0-beta.14 (Q128, item c) — plus every table the `plugin_tables` record says a plugin owns that is not
+    already counted and still exists: a plugin whose code has been uninstalled keeps its tables and data (the
+    Plugins page promises it), and they now stay in every backup, bundle, snapshot and migration instead of
+    leaving at the next one. A recorded name must still be a plain table name and never a core table's."""
     from jen.services import plugins as _plugins
 
     owned = _plugins.all_owned_tables()
-    return {pid: [t for t in tables if _table_exists(conn, t)] for pid, tables in owned.items()}
+    result = {pid: [t for t in tables if _table_exists(conn, t)] for pid, tables in owned.items()}
+    claimed = {t for tables in owned.values() for t in tables}
+    if not _table_exists(conn, "plugin_tables"):
+        return result
+    with conn.cursor() as cur:
+        cur.execute("SELECT plugin_id, table_name FROM plugin_tables ORDER BY plugin_id, table_name")
+        recorded = list(cur.fetchall())
+    for row in recorded:
+        pid, tbl = row["plugin_id"], row["table_name"]
+        if (
+            tbl in claimed
+            or tbl in JEN_TABLES
+            or not _plugins._TABLE_NAME_RE.match(tbl)
+            or not _plugins.valid_plugin_id(pid)
+            or not _table_exists(conn, tbl)
+        ):
+            continue
+        claimed.add(tbl)
+        result.setdefault(pid, []).append(tbl)
+    return result
 
 
 def export_tables(conn=None) -> list[str]:

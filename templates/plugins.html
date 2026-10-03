@@ -121,7 +121,7 @@
                     </form>
                     {% endif %}
                     <form method="POST" action="/settings/plugins/uninstall/{{ p.id }}"
-                          data-confirm="Uninstall {{ p.name }}? The plugin files will be removed. Your database tables and data will be preserved."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                          data-confirm="Uninstall {{ p.name }}? The plugin files will be removed. Its database tables and data are kept in the database and in every backup, and shown again when the plugin is reinstalled."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit" class="btn-act btn-act-del" title="Uninstall plugin" aria-label="Uninstall plugin">{{ icon_trash() }}</button>
                     </form>
                 </div>
@@ -228,7 +228,7 @@
 <!-- About -->
 <div class="card" style="background:var(--surface2);font-size:12px;color:var(--text-muted);">
     <div class="u-6f3b9b">About Plugins</div>
-    <p class="u-4e420a">Plugins are optional add-ins that extend Jen without touching the core install. Each has its own routes, templates, and database tables. Your data is preserved when a plugin is uninstalled — only the plugin files are removed.</p>
+    <p class="u-4e420a">Plugins are optional add-ins that extend Jen without touching the core install. Each has its own routes, templates, and database tables. When a plugin is uninstalled only its files are removed: its database tables and data are kept in the database and in every backup, and shown again when the plugin is reinstalled.</p>
     <p class="u-4e420a">
     {% if is_systemd_host %}
     A newly installed plugin is fetched and verified by a dedicated root-privileged service and lands read-only under <code>{{ jen_layout.plugin_dir_root }}/</code> — the running Jen process itself can never write there. A plugin marked "writable" was installed before this existed; use Reinstall to move it there.

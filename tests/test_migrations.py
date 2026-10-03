@@ -504,6 +504,41 @@ class TestMigration27Events:
             db.commit()
 
 
+class TestMigration29PluginTables:
+    """v5.67.0-beta.14 (Q128) — persisted plugin table ownership, so an uninstalled plugin's tables stay in every
+    backup."""
+
+    def test_migration_recorded(self):
+        assert 29 in applied_versions()
+
+    def test_table_shape(self):
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("SHOW COLUMNS FROM plugin_tables")
+            cols = {c["Field"]: c for c in cur.fetchall()}
+        assert set(cols) == {
+            "plugin_id",
+            "table_name",
+            "first_seen_version",
+            "code_installed",
+            "retained",
+            "recorded_at",
+        }
+        assert cols["plugin_id"]["Key"] == "PRI" and cols["table_name"]["Key"] == "PRI"
+        assert cols["first_seen_version"]["Null"] == "YES"
+        assert cols["code_installed"]["Default"] == "1" and cols["retained"]["Default"] == "0"
+        assert "varchar(64)" in cols["table_name"]["Type"].lower()
+
+    def test_rerun_is_idempotent(self):
+        from jen.models.migrations import _m029_plugin_tables
+
+        with jen_db() as db:
+            _m029_plugin_tables(db)  # must not raise when the table already exists
+            db.commit()
+
+    def test_it_is_a_new_numbered_migration_and_the_last_one(self):
+        assert MIGRATIONS[-1][0] == 29 and MIGRATIONS[-1][2].__name__ == "_m029_plugin_tables"
+
+
 class TestMigration28DashboardPrefsWiden:
     """v5.54.0 (Q61) — dashboard_prefs.widgets widened for the v2 prefs
     shape (panel widths + subnet order/pinned/hidden), same VARCHAR-not-TEXT
