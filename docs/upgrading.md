@@ -463,3 +463,17 @@ addresses (`2001:db8::10`) and sort in address order. Nothing in Kea's database 
 and there is nothing to do. One search detail differs: typing a **whole** address finds
 exactly that address (not the longer addresses it begins), while a fragment such as
 `2001:db8` still finds everything containing it.
+
+## A Kea migration moves a reservation's own options, and says what it left behind
+
+Older than the rest of this page, and only for someone who migrates the Kea database from
+Settings → Databases. The migration page describes the group as reservations with their
+host-scoped options; the copy itself moved every row of Kea's options tables. If your Kea
+uses its configuration backend (subnet, pool, class or global options stored in the
+database), that either failed the whole migration on the target's empty subnet tables (rolled
+back, nothing damaged) or wrote the global options into the target's config backend. From
+5.67.0-beta.17 the migration copies a reservation's own options only — exactly what the
+backup holds — and its result says how many rows of the config backend it left behind.
+Nothing to do on upgrade; if you had to work around the failure by hand, the migration now
+completes. Global search also finds an IPv6 reservation that is more than twenty hosts into
+its subnet (IPv6 management only).

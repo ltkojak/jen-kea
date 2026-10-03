@@ -2,6 +2,57 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.67.0-beta.17] - 2026-10-03
+
+Beta channel. Stacked on 5.67.0-beta.16. An audit of beta.13 to beta.16 found one
+real defect in a tool that release 13 was meant to have fixed, one instruction that
+sent operators to check tables that cannot hold the damage, and one search that
+looked at the wrong end of a list. All three are old; none needs anything done on
+upgrade.
+
+**The Kea migration copied the config backend's options.** Beta.13 gave the
+reservation backup a fixed query per table, so a backup carries a reservation's own
+options (host-scoped, Kea's scope 3) and not the global, subnet, shared-network, pool
+and class options that live in the same two tables when Kea uses its configuration
+backend. The migration did not use it: it copied every row of the options tables by
+`SELECT *`, while the migration page described the group as host-scoped options only.
+On a source that uses the config backend those rows name subnets, pools and classes the
+freshly initialised target does not have, the real schema's foreign keys refused them,
+and the whole migration failed after the hosts had been copied (and was rolled back, so
+nothing was damaged — but a reservation move could not be completed). On a source
+without those references the global options were written into the target's own config
+backend under the source's option ids, which is what the backup was changed to avoid.
+No test saw it because the real-schema test compared the entire options table (pinning
+the wrong behaviour) and its seeded rows named no subnet or class, so no foreign key ever
+fired.
+
+There is now one place that says what a reservation move carries, and both the export and
+the migration are built from it. The migration copies the host-scoped options only, its
+count and sample verification apply the same filter to the source (without that a correct
+copy would have looked incomplete), and Jen's own database migration is unchanged. The
+result says how many host-scoped option rows were copied and, when the source had any,
+how many rows of the config backend it left behind, so an empty config backend on the
+target is expected rather than surprising. The real-schema test now seeds a global option
+and a subnet option that names a subnet with nothing behind it — the row that fails
+without the fix — and asserts that neither reaches the target.
+
+**An instruction named tables that cannot carry the damage.** The notes for the
+identifier repair told operators to check the DHCPv6 option tables by hand after a
+restore made before beta.11. Before that release the Kea backup held only `hosts` and
+`dhcp4_options`; the DHCPv6 option table and the IPv6 reservations joined it in beta.11,
+with tagged bytes. No Jen ever wrote either as hex text, so there is nothing to check. The
+instruction now says to check the text-typed DHCPv4 options (domain name, boot file and the
+like) by hand, and that the DHCPv6 option table and the IPv6 reservations need no check; the
+repair page says the same under its option-values list.
+
+**Global search found only the first twenty IPv6 hosts of a subnet.** It took the first
+twenty reservations and then tested them, so a matching reservation that was the
+twenty-first host of its subnet was never found, and its address test matched only the
+compressed spelling of an address. One predicate — hostname, DUID, and every address of the
+host in its compressed and expanded spelling — now filters all of a subnet's reservations
+before the list is capped at twenty. IPv6 is off by default, so only installs that turned it
+on were affected.
+
 ## [5.67.0-beta.16] - 2026-10-03
 
 Beta channel. Stacked on 5.67.0-beta.15. The last item of the beta.12 reviews, and
