@@ -386,3 +386,40 @@ or merged a Kea export into a Kea database that already had reservations.
   anywhere, and the result line counts them.
 
 Existing backups still import. Nothing needs doing on upgrade (5.67.0-beta.13).
+
+## Restores and imports that now keep their word, and what an uninstall leaves behind
+
+Like the section above, this is older than the rest of this page: it is in every
+earlier release, 5.66.0 included. Migration 29 (one small table) runs by itself on the
+first start; there is nothing to do, but a few things behave differently.
+
+- **A restore is exact or it stops.** Replace mode, `sudo ./install.sh --restore` and
+  the rollback that undoes a failed restore used to insert with `INSERT IGNORE` and
+  report the file's row count, so a row the database refused could be stored mangled
+  and still be counted. They now insert plainly, report what the database says it
+  inserted, and fail — rolling back — on a missing table, a file with no column this
+  schema knows, a count that does not match, or a skipped row. A restore that used to
+  finish and now stops names the table; the cause is a row the database never
+  accepted. `--lenient-plugins` still relaxes only the plugin half.
+- **The Databases import page's Replace mode saves a snapshot first and puts it back
+  if anything fails**, including a plugin. It needs free room in the backups directory
+  about the size of your Jen database for the length of the import (a
+  `pre-import-<time>` folder, removed afterwards; kept and named if the rollback
+  itself fails). **Merge mode takes no snapshot**: core tables commit together, then
+  each plugin's tables one plugin at a time, and its result lines now say `N added, M
+  skipped` rather than the file's row count.
+- **Replacing `users` on its own is refused** unless the tables that point at it
+  (multi-factor, passkeys, saved searches, dashboard layouts, API keys) are ticked
+  too, or you restore the whole file.
+- **An uploaded file that is not a Jen export gets a message, not an error page**, and
+  a plain-JSON export is accepted as well as a gzip one.
+- **An uninstalled plugin's data now stays in every backup**, as the Plugins page
+  always said it would: the recovery bundle, scheduled and manual backups, snapshots
+  and a Jen database migration all carry it, and reinstalling the plugin reconnects
+  it. A plugin you uninstalled **before** this version was never recorded: its data is
+  still in your database, but a backup will not include it until you reinstall that
+  plugin and uninstall it once more. Restoring onto a new machine without the plugin
+  installed cannot recreate its tables; the output names the plugin, and its data stays
+  in the backup until the plugin is installed and the restore is run again.
+
+Existing backups still import (5.67.0-beta.14).

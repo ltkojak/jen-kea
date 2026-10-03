@@ -2,6 +2,87 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.67.0-beta.14] - 2026-10-03
+
+Beta channel. Stacked on 5.67.0-beta.13. The same two reviews of beta.12 that
+produced the last release found that Jen's own restore and import said
+"restored" and "rolls back completely" about things they did not guarantee.
+Every item here is old — all of it is in stable 5.66.0 — and each one was a
+sentence on a page, in a result line or in a promise next to the Uninstall
+button that the code did not keep.
+
+**A restore inserted with `INSERT IGNORE` and counted every row.** Replace mode,
+the recovery restore and the rollback that undoes a failed restore all went
+through one importer that used `INSERT IGNORE` whether or not it had just emptied
+the table, and reported the file's row count as restored. `IGNORE` turns a missing
+value in a required column, a foreign-key failure or a value that does not fit into
+a warning with a coerced value, so a mangled row was stored and counted, and a key
+that appeared twice in a file was dropped while both rows were reported. Replace
+mode is now a plain insert after the delete: any row the database refuses fails the
+table and the whole core transaction rolls back, and the number reported is what
+the database says it inserted, which must equal the file's. The importer also gains
+a strict mode, which `jen.tools.restore` always uses: a table missing here, a file
+whose rows have no column this schema knows, a table the restore was asked for but
+the file does not carry, a count the database does not confirm or (in merge mode) a
+skipped row stops the restore. `--lenient-plugins` still relaxes only the plugin
+half. A table whose rows have no recognised column is now checked before it is
+emptied, so a restore that cannot insert anything no longer empties the table first.
+Merge mode keeps `IGNORE` — existing rows win — but reports what it did: "3 added, 1
+skipped", never every row.
+
+**A scoped restore of `users` left rows pointing at nobody.** A restore runs with
+foreign keys switched off, so deleting a parent table's rows never cascades. Replacing
+only `users` left multi-factor methods, backup codes, trusted devices, passkeys,
+saved searches, dashboard layouts and API keys pointing at accounts that no longer
+exist. A scoped replace of a parent whose dependents the file carries but the
+selection omits is now refused before anything changes, naming them; a test compares
+the dependency list with the live schema's foreign keys so it cannot drift.
+
+**The import page promised a rollback it did not perform.** The confirmation page
+said "if anything fails it rolls back completely". The core tables did commit
+together, but each plugin's migration records, schema changes (which commit on their
+own in MySQL and MariaDB) and rows committed separately, so a failure in the sixth
+plugin left the core tables and the first five plugins restored. The restore tool
+always compensated with a snapshot; the page did not. Replace mode now takes the
+same kind of snapshot first — an ordinary export of the whole Jen database, in a
+private `pre-import-<time>` folder — and on any failure puts it back: every table,
+the plugin migration records exactly as they were, and any plugin table the failed
+import created. If the snapshot cannot be taken, nothing is imported; if putting it
+back also fails, the folder is kept and named. Merge mode takes no snapshot, and the
+page now states its real boundary instead: core tables commit together, then each
+plugin's tables one plugin at a time, and a failure stops there.
+
+**An uninstalled plugin's data left every backup.** The Plugins page said
+uninstalling keeps a plugin's tables and data. It did, in the live database, until the
+next backup: which tables belong to a plugin was answered only by reading the
+migration code of plugins whose files are on disk, and the one table list that every
+backup, recovery bundle, restore snapshot and database migration use was built from
+that answer. Uninstalling removes the files, so the tables dropped out of the very
+next backup while the page said they were preserved. Ownership is now persisted: a new
+table, `plugin_tables` (migration 29), is written by the plugin migration runner each
+time it completes, an uninstall marks the plugin's tables retained once no copy of its
+code is left, the table list includes every recorded table that still exists, and a
+reinstall reconnects them. The Plugins page now says "kept in the database and in
+every backup, and shown again when the plugin is reinstalled". A plugin uninstalled
+before this release was never recorded; its data is in the database but not yet in a
+backup until the plugin is reinstalled and uninstalled once more. Restoring onto a new
+machine without the plugin installed still cannot recreate its tables — a table is
+only ever created by the plugin's own code, never from a file — so the restore names
+the plugin and leaves its data in the backup.
+
+**An export's envelope was used before it was checked.** The parser guarded only
+decompression and JSON, so a file whose top level was a list, whose `_meta` was a
+string, whose table was not a list or whose row was not an object raised from the
+confirmation page and returned a server error, and `format` was unbounded (a format
+9 file was treated as "at least 3"). One validator now checks the shape and the few
+numeric fields the importers compare, bounds `format` by what this Jen reads, requires
+a real plugin id wherever a file names one (an id becomes a directory name), and
+returns "not a Jen export: <reason>" — the parser's own sentence, never part of the
+file. The upload route recognises gzip by its first two bytes instead of by trying it:
+a plain-JSON export, which the parser has always accepted, is no longer refused as
+"not a valid gzip export", goes through the same size cap and memory check, and a
+truncated gzip is a message rather than an unhandled error.
+
 ## [5.67.0-beta.13] - 2026-10-03
 
 Beta channel. Stacked on 5.67.0-beta.12. Two independent reviews of beta.12 found
