@@ -471,7 +471,9 @@ def restore_jen_db(bundle_dir: Path, config_file: Path, lenient_plugins: bool = 
     db_file = bundle_dir / "jen_db.json.gz"
     if not db_file.is_file():
         return ["no jen_db.json.gz in bundle — database not restored"]
-    return dbexport.import_jen(db_file.read_bytes(), strict_plugins=not lenient_plugins)
+    # strict about core tables always (v5.67.0-beta.14, Q128): a missing table, a count that is not the file's
+    # or a skipped row fails the restore; --lenient-plugins relaxes only the plugin half
+    return dbexport.import_jen(db_file.read_bytes(), strict=True, strict_plugins=not lenient_plugins)
 
 
 # ── lifecycle: quiesce → snapshot → apply → start → health-check → roll back ──

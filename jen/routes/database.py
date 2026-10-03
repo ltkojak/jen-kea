@@ -718,6 +718,9 @@ def import_confirm():
         for r in results:
             ok, msg = _split_mark(r)
             flash(msg, "success" if ok else ("error" if r.startswith(_ERR_MARK) else "warning"))
+    except dbexport.ScopeRefused as e:
+        # refused before anything was touched (v5.67.0-beta.14, Q128)
+        flash(f"{e.public} Nothing was changed.", "error")
     except dbexport.ImportAborted as e:
         # v5.67.0-beta.13 (Q127) — an error that names the table and row (never a value): the whole import was
         # rolled back, and the page says so instead of the generic line

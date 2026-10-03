@@ -800,6 +800,48 @@ def _plugin_invariant_violations(conn) -> list[tuple[str, str]]:
     return violations
 
 
+# v5.67.0-beta.14 (Q128, item e) — a restore runs with FOREIGN_KEY_CHECKS=0, so deleting a parent table's rows
+# never cascades: replacing `users` alone leaves the mfa, passkey, saved-search, dashboard and api-key rows
+# pointing at accounts that no longer exist. A SCOPED replace restore of a parent therefore needs its dependents
+# in the selection too. Keyed by parent; every dependent below has a foreign key to it (migration 23).
+# tests/test_restore_exact.py compares this map with the live schema's own foreign keys, so a new dependent
+# cannot be added without this list moving with it.
+JEN_DEPENDENTS = {
+    "users": (
+        "mfa_methods",
+        "mfa_backup_codes",
+        "mfa_trusted_devices",
+        "mfa_attempts",
+        "webauthn_credentials",
+        "saved_searches",
+        "dashboard_prefs",
+        "api_keys",
+    ),
+}
+
+
+class ScopeRefused(ValueError):
+    """A scoped restore that would leave rows pointing at a parent that was just replaced. Raised before anything
+    is touched; `public` is the operator-facing sentence (it names tables, never a value)."""
+
+    def __init__(self, public):
+        self.public = public
+        super().__init__(public)
+
+
+def _missing_dependents(selected, in_file) -> dict[str, list[str]]:
+    """{parent: [dependent tables the FILE carries that are not in the selection]} for every selected parent. A
+    dependent the file does not carry cannot be selected, so it is not demanded."""
+    out = {}
+    for parent, deps in JEN_DEPENDENTS.items():
+        if parent not in selected:
+            continue
+        absent = [d for d in deps if d in in_file and d not in selected]
+        if absent:
+            out[parent] = absent
+    return out
+
+
 class PluginRestoreError(RuntimeError):
     """A plugin whose CODE IS PRESENT on this machine lost data in a restore (v5.67.0-beta.11, Q123, item d).
     Raised by import_jen(strict_plugins=True) after every plugin has been tried, so the message names ALL of
@@ -815,18 +857,25 @@ class PluginRestoreError(RuntimeError):
         super().__init__(f"plugin data was NOT fully restored — {named}")
 
 
-def import_jen(file_bytes, tables_to_restore=None, truncate=True, strict_plugins=False):
+def import_jen(file_bytes, tables_to_restore=None, truncate=True, strict=False, strict_plugins=None):
     """
     Restore Jen DB tables from export bytes.
     tables_to_restore: list of table names to restore, or None for all in file.
     truncate: if True, clears existing rows before inserting (replace mode).
+    strict: (v5.67.0-beta.14, Q128, item a) a core table the restore cannot restore EXACTLY is fatal: the table
+        is missing here, no column of the file's rows is one this schema has, the file carries no rows for a
+        table it was asked to restore, the server reports a different number of inserted rows than the file
+        has, or (merge mode) a row was skipped. Fatal means the core transaction rolls back and this raises.
+        Without it the same cases are "⚠️" lines. Replace mode is exact either way: it uses a PLAIN INSERT (an
+        error is an error, never a coerced value counted as restored) and a count that is not the file's raises.
     strict_plugins: (v5.67.0-beta.11, Q123, item d) for a plugin whose code is present here, a failed
         migration replay, a failed row import or a failed invariant check RAISES PluginRestoreError (after
-        every plugin was tried) instead of being a line in the result list. jen.tools.restore runs strict by
-        default and turns the error into a rollback — a recovery that lost plugin data used to print
-        "restored", start Jen and exit 0. The Databases import page stays non-strict (the operator is
-        watching, and chose a file) but the same failures are now "❌" lines it shows as ERRORS, never a "⚠️"
-        among successes.
+        every plugin was tried) instead of being a line in the result list. Defaults to `strict`.
+        jen.tools.restore runs strict by default and turns the error into a rollback — a recovery that lost
+        plugin data used to print "restored", start Jen and exit 0 (`--lenient-plugins` passes
+        strict_plugins=False with strict=True). The Databases import page's replace mode is strict and
+        restores a snapshot on any failure; the same failures are "❌" lines it shows as ERRORS, never a
+        "⚠️" among successes.
     Returns list of result strings.
 
     v5.66.0-beta.5 (Q107) — plugin-owned tables restore in a fixed order, never blindly
@@ -849,6 +898,8 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True, strict_plugins
     next start regardless of what this function does)."""
     from jen.services import plugins as _plugins
 
+    if strict_plugins is None:
+        strict_plugins = strict
     meta, data, err = parse_import_file(file_bytes)
     if err:
         raise ValueError(err)
@@ -873,9 +924,20 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True, strict_plugins
         else:
             known.extend(owned.get(pid, []))
 
+    if not tables_to_restore:
+        tables_to_restore = None  # nothing ticked means the whole file, here and in the plugin-repair choice below
     selected_raw = tables_to_restore if tables_to_restore else list(data.keys())
     selected = _validate_tables(selected_raw, known)
     selected_set = set(selected)
+    if tables_to_restore is not None and truncate:
+        missing = _missing_dependents(selected_set, set(data))
+        if missing:
+            parent, absent = next(iter(missing.items()))
+            raise ScopeRefused(
+                f"Replacing {parent} on its own would leave {', '.join(absent)} pointing at records that no longer "
+                f"exist (the database's cascade does not run during a restore). Tick {', '.join(absent)} as well, "
+                f"or restore the whole file."
+            )
     results = []
     failures = []  # (plugin_id, [tables], reason) — a plugin whose code is HERE and whose data did not come back
 
@@ -896,31 +958,58 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True, strict_plugins
             & set(plugin_tables_meta.get(pid, {}).get("tables", []) if plugin_tables_meta else owned.get(pid, []))
         ]
 
+    def _unrestorable(message):
+        # a table that cannot be restored exactly: fatal when strict (the caller rolls back), else a "⚠️" line
+        if strict:
+            raise RuntimeError(message)
+        results.append(f"⚠️ {message}")
+
     def _import_rows(conn, tbl):
-        rows = data.get(tbl, [])
-        if not _table_exists(conn, tbl):
-            results.append(f"⚠️ {tbl}: table does not exist in current schema — skipped")
+        # v5.67.0-beta.14 (Q128, item a) — replace mode is a PLAIN INSERT after the DELETE: INSERT IGNORE turned a
+        # NOT NULL, foreign-key or conversion error into a warning with a coerced value and the row was still
+        # counted as restored. The count reported is what the server says it inserted, and it must be the
+        # file's. Merge mode keeps IGNORE (existing rows win) and reports what it really did.
+        if tbl not in data:
+            _unrestorable(f"{tbl}: this file carries no rows for it — left unchanged")
             return
+        rows = data[tbl]
+        if not _table_exists(conn, tbl):
+            _unrestorable(f"{tbl}: table does not exist in current schema — skipped")
+            return
+        cols = []
+        if rows:
+            real_cols = _get_table_columns(conn, tbl)
+            cols = [c for c in rows[0] if c in real_cols]
+            if not cols:
+                # checked BEFORE the DELETE: a table must never be emptied by a restore that then inserts nothing
+                _unrestorable(f"{tbl}: no recognized columns in import data — skipped, left unchanged")
+                return
+        inserted = 0
         with conn.cursor() as cur:
             if truncate:
                 cur.execute(f"DELETE FROM `{tbl}`")
             if rows:
-                real_cols = _get_table_columns(conn, tbl)
-                cols = [c for c in rows[0] if c in real_cols]
-                if not cols:
-                    results.append(f"⚠️ {tbl}: no recognized columns in import data — skipped")
-                    return
                 col_str = ", ".join(f"`{c}`" for c in cols)
                 ph_str = ", ".join(["%s"] * len(cols))
+                verb = "INSERT" if truncate else "INSERT IGNORE"
+                sql = f"{verb} INTO `{tbl}` ({col_str}) VALUES ({ph_str})"  # nosec B608 - the table is a name from Jen's own lists (validated above) and the columns are filtered to the live schema's; the values are bound parameters
                 # v5.67.0-beta.11 (Q123) — decoded by the target's own schema (Jen's own tables have no
                 # binary column today; a plugin's might). A value that cannot be decoded raises, which the
                 # callers already turn into a rolled-back import.
                 params = _decode_import_rows(tbl, rows, cols, _target_binary_columns(conn, tbl), fmt)
-                cur.executemany(
-                    f"INSERT IGNORE INTO `{tbl}` ({col_str}) VALUES ({ph_str})",
-                    params,
-                )
-        results.append(f"✅ {tbl}: {len(rows)} rows restored")
+                inserted = cur.executemany(sql, params) or 0
+        if truncate:
+            if inserted != len(rows):
+                raise RuntimeError(f"{tbl}: the file has {len(rows)} rows but the server reports {inserted} inserted")
+            results.append(f"✅ {tbl}: {inserted} rows restored")
+            return
+        skipped = len(rows) - inserted
+        if skipped:
+            _unrestorable(
+                f"{tbl}: {inserted} added, {skipped} skipped (the same key was already there, or the database refused the row)"
+            )
+        else:
+            results.append(f"✅ {tbl}: {inserted} rows added")
 
     # ── (1) core tables, EXCEPT plugin_schema_migrations ───────────────────────────────
     core_selected = [t for t in selected if t in JEN_TABLES and t != "plugin_schema_migrations"]
