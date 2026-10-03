@@ -110,9 +110,16 @@ def _seed(db):
     db.commit()
 
 
-def _snapshot(db):
-    """Every column that matters, binary ones through HEX() so the comparison is on stored bytes."""
+def _snapshot(db, ids=True):
+    """Every column that matters, binary ones through HEX() so the comparison is on stored bytes.
+
+    `ids=False` (v5.67.0-beta.13, Q127) leaves out host_id / option_id / reservation_id and identifies each child
+    row by its HOST'S IDENTIFIER instead: an import no longer carries ids (a host_id in a file is never an
+    identity — the target assigns its own and the children follow it), so a round trip is equal by what a row
+    IS, not by the number it had."""
     db.commit()  # end the connection's read snapshot — another connection wrote since
+    if not ids:
+        return _snapshot_by_identity(db)
     out = {}
     with db.cursor() as cur:
         cur.execute(
@@ -148,6 +155,33 @@ def _read_gz(path) -> str:
         return f.read()
 
 
+def _snapshot_by_identity(db):
+    out = {}
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT HEX(dhcp_identifier) AS ident, dhcp_identifier_type AS t, dhcp4_subnet_id AS s, "
+            "dhcp6_subnet_id AS s6, ipv4_address AS ip, hostname FROM hosts ORDER BY ident, t"
+        )
+        out["hosts"] = cur.fetchall()
+        for tbl in ("dhcp4_options", "dhcp6_options"):
+            cur.execute(
+                f"SELECT HEX(h.dhcp_identifier) AS host_ident, o.code, HEX(o.value) AS val, o.formatted_value AS fv, "
+                f"o.space, o.scope_id FROM {tbl} o JOIN hosts h ON h.host_id = o.host_id ORDER BY host_ident, o.code, val"
+            )
+            out[tbl] = cur.fetchall()
+        cur.execute(
+            "SELECT HEX(h.dhcp_identifier) AS host_ident, r.address, r.prefix_len, r.type, r.dhcp6_iaid "
+            "FROM ipv6_reservations r JOIN hosts h ON h.host_id = r.host_id ORDER BY host_ident, r.address"
+        )
+        out["ipv6_reservations"] = cur.fetchall()
+        cur.execute(
+            "SELECT address, HEX(hwaddr) AS hw, HEX(client_id) AS cid, valid_lifetime AS vl, subnet_id AS s, "
+            "hostname FROM lease4 ORDER BY address"
+        )
+        out["lease4"] = cur.fetchall()
+    return out
+
+
 def _payload(content: bytes) -> dict:
     return json.loads(gzip.decompress(content).decode("utf-8") if content[:2] == b"\x1f\x8b" else content)
 
@@ -178,7 +212,7 @@ class TestRoundTripThroughExportAndImport:
     @pytest.mark.parametrize("group", ["reservations", "reservations_all", "leases"])
     def test_hex_of_every_binary_column_is_identical_after_wipe_and_import(self, kea_tables, group):
         _seed(kea_tables)
-        before = _snapshot(kea_tables)
+        before = _snapshot(kea_tables, ids=False)
         content, _ = dbexport.export_kea(group)
         kea_tables.commit()
         with kea_tables.cursor() as cur:
@@ -189,7 +223,7 @@ class TestRoundTripThroughExportAndImport:
         results = dbexport.import_kea(content, "skip")
 
         assert not any(r.startswith("❌") for r in results), results
-        after = _snapshot(kea_tables)
+        after = _snapshot(kea_tables, ids=False)
         tables = {
             "reservations": ["hosts", "dhcp4_options"],
             "reservations_all": ["hosts", "dhcp4_options", "dhcp6_options", "ipv6_reservations"],
@@ -199,10 +233,10 @@ class TestRoundTripThroughExportAndImport:
             assert after[t] == before[t], f"{t} did not survive the round trip byte for byte"
         # the specific shape of the original bug: the MAC must be SIX bytes, not twelve characters of text
         if group != "leases":
-            row = next(r for r in after["hosts"] if r["host_id"] == 1)
-            assert row["ident"] == MAC.hex().upper()
+            row = next(r for r in after["hosts"] if r["ident"] == MAC.hex().upper())
+            assert row["hostname"] == "printer"
             with kea_tables.cursor() as cur:
-                cur.execute("SELECT LENGTH(dhcp_identifier) AS n FROM hosts WHERE host_id = 1")
+                cur.execute("SELECT LENGTH(dhcp_identifier) AS n FROM hosts WHERE hostname = 'printer'")
                 assert cur.fetchone()["n"] == 6
 
     def test_a_blob_that_is_not_valid_utf8_survives(self, kea_tables):
@@ -215,7 +249,7 @@ class TestRoundTripThroughExportAndImport:
         dbexport.import_kea(content, "skip")
         kea_tables.commit()
         with kea_tables.cursor() as cur:
-            cur.execute("SELECT value FROM dhcp4_options WHERE option_id = 1")
+            cur.execute("SELECT value FROM dhcp4_options WHERE code = 6")
             assert cur.fetchone()["value"] == NOT_UTF8
 
     def test_importing_over_existing_rows_in_skip_mode_changes_nothing(self, kea_tables):
@@ -431,9 +465,7 @@ class TestAFileWrittenBeforeThisFix:
         assert snap["dhcp4_options"][0]["val"] == NOT_UTF8.hex().upper()
 
     def test_a_value_that_is_not_valid_hex_refuses_that_table_by_name_and_inserts_nothing(self, kea_tables):
-        # an unrelated table in the same file: leases (a hex string for the binary column, as format 2 wrote it).
-        # (An options row cannot be that table: under Kea's real foreign key an option whose host was refused
-        # has nothing to attach to — which is correct, and is what step 3 of Q127 makes the importer say.)
+        # an unrelated table in the same file: leases (a hex string for the binary column, as format 2 wrote it)
         content = json.dumps(
             {
                 "_meta": {"database": "kea", "jen_export_version": 1, "format": 2, "tables": ["hosts", "lease4"]},

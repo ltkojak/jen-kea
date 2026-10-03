@@ -12,9 +12,11 @@ every option's `formatted_value` starting "q127") and, for migrations, a scratch
 the real one. Nothing is ever sent to the daemon except the one reservation-add that discovers which
 `scope_id` Kea itself gives a host's options.
 
-Cases the CURRENT code gets wrong are marked `known_bug` (xfail, strict, raises=AssertionError): they read
-"known bug" in the summary, setup mistakes still fail loudly (a non-assertion error is not an xfail), and a
-marker goes red the day its bug is fixed — which is when it must be deleted.
+When this module was written (Q127 step 1) the cases the code of that day got wrong were held as `known_bug`
+(xfail, strict, raises=AssertionError — a setup mistake still failed loudly) and showed as a known bug in the
+summary table; they came off, one step at a time, as the migration contract (step 2) and the import / export
+fixes (step 3) landed, and none remain: every test here passes on Kea 3.0.3, 3.2.0 and 3.3.1. A new real-schema
+case that exposes a bug in the code should be added the same way — marked, then unmarked by its fix.
 
 Every test skips unless KEA_COMPAT_URL AND KEA_COMPAT_DB_HOST are set (kea-compat.yml sets both).
 """
@@ -43,10 +45,6 @@ pytestmark = [
     pytest.mark.kea_compat,
     pytest.mark.skipif(not DB_HOST, reason="KEA_COMPAT_DB_HOST not set - the database half of the real-Kea suite"),
 ]
-
-
-def known_bug(reason):
-    return pytest.mark.xfail(strict=True, raises=AssertionError, reason="KNOWN BUG: " + reason)
 
 
 # ── connections, the schema the daemon's database really has ───────────────────────────────────────
@@ -340,9 +338,6 @@ def test_schema_facts_and_the_scope_kea_gives_a_hosts_options(kea):
 # ── (b) a merge attaches reservations to the wrong host ──────────────────────────────────────────
 
 
-@known_bug(
-    "import_kea inserts hosts with the FILE's host_id and the options by that same id, so a colliding id attaches the file's options to the TARGET's host (Q127 b)"
-)
 def test_merge_never_attaches_a_reservation_to_a_different_host(kea):
     camera = add_host(kea, 1, hostname="q127-camera")
     add_option(kea, "dhcp4_options", camera, 6, bytes([10, 71, 0, 53]), tag="q127-camera-dns")
@@ -373,9 +368,6 @@ def test_merge_never_attaches_a_reservation_to_a_different_host(kea):
 # ── (c) overwrite is REPLACE INTO ────────────────────────────────────────────────────────────────────
 
 
-@known_bug(
-    "import_kea overwrite is REPLACE INTO hosts: it either deletes the host's IPv6 rows and options or hits the foreign key and says 'skipped' (Q127 c)"
-)
 def test_overwrite_updates_in_place_and_keeps_the_children_the_file_does_not_carry(kea):
     h = add_host(kea, 3, sub6=72, hostname="q127-old")
     add_option(kea, "dhcp4_options", h, 6, bytes([10, 71, 0, 1]), tag="q127-old-dns")
@@ -400,7 +392,6 @@ def test_overwrite_updates_in_place_and_keeps_the_children_the_file_does_not_car
 # ── (d) errors are not duplicates ─────────────────────────────────────────────────────────────────────
 
 
-@known_bug("import_kea counts ANY per-row exception as 'skipped' and commits the rest (Q127 d)")
 def test_a_foreign_key_failure_aborts_the_import_and_rolls_everything_back(kea):
     good = host_row(4, 7001, hostname="q127-good")
     bad = host_row(5, 7002, itype=99, hostname="q127-bad")  # no such row in host_identifier_type
@@ -426,9 +417,6 @@ def test_a_duplicate_in_skip_mode_is_skipped_and_counted_not_an_error(kea):
 # ── (e) the reservation backup carries host options only ───────────────────────────────────────────
 
 
-@known_bug(
-    "write_kea_export is SELECT * FROM dhcp4_options: global, subnet and class options ride along in a reservation backup (Q127 e)"
-)
 def test_the_backup_carries_host_scoped_options_only(kea):
     h = add_host(kea, 7)
     add_option(kea, "dhcp4_options", h, 6, bytes([1, 1, 1, 1]), tag="q127-host-scope", scope=3)

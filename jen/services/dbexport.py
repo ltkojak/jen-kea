@@ -98,7 +98,7 @@ KEA_BACKUP_LABEL = "Kea host reservations (IPv4 and IPv6)"
 KEA_EXPORT_GROUPS = {
     "reservations_all": {
         "label": KEA_BACKUP_LABEL,
-        "description": "Every permanent host reservation, IPv4 and IPv6, with its per-host options: hosts, dhcp4_options, dhcp6_options, ipv6_reservations. This is what the scheduled and manual backups save, and what you want to migrate. It is not Kea's leases and not Kea's configuration.",
+        "description": "Every permanent host reservation, IPv4 and IPv6, with its host-scoped options (the options set on a reservation — not global, subnet or class options): hosts, dhcp4_options, dhcp6_options, ipv6_reservations. This is what the scheduled and manual backups save, and what you want to migrate. It is not Kea's leases and not Kea's configuration.",
         "tables": ["hosts", "dhcp4_options", "dhcp6_options", "ipv6_reservations"],
     },
     "reservations": {
@@ -116,6 +116,25 @@ KEA_EXPORT_GROUPS = {
 KEA_ALL_TABLES = {t for grp in KEA_EXPORT_GROUPS.values() for t in grp["tables"]}
 # the order an import restores in: parents before the rows that reference them
 KEA_RESTORE_ORDER = ["hosts", "dhcp4_options", "dhcp6_options", "ipv6_reservations", "lease4"]
+
+# v5.67.0-beta.13 (Q127, item e) — Kea's dhcp_option_scope numbers a HOST's options 3 (0 global, 1 subnet,
+# 2 client-class, 3 host, 4 shared-network, 5 pool, 6 pd-pool). Read from the real table AND from the scope_id
+# Kea's own reservation-add writes, on 3.0.3, 3.2.0 and 3.3.1 (tests/kea_compat/test_db_moves.py).
+KEA_HOST_OPTION_SCOPE = 3
+
+# One fixed query per exportable table — never `SELECT *` over a table that holds more than the group is about.
+# The options tables also hold the global, subnet, class, shared-network and pool options of Kea's config
+# backend; a RESERVATION backup carries the options set on a reservation only (host_id set AND the host scope),
+# because restoring the rest by their auto-increment ids would write them over whatever options the target has.
+# hosts, ipv6_reservations and lease4 are wholly what their group says they are. tests/test_kea_export_queries.py
+# refuses an unfiltered options query and a table with no entry here.
+KEA_EXPORT_SQL = {
+    "hosts": "SELECT * FROM `hosts`",  # nosec B608 - a fixed per-table query: the table is a literal and the one interpolated value is a module constant
+    "dhcp4_options": f"SELECT * FROM `dhcp4_options` WHERE host_id IS NOT NULL AND scope_id = {KEA_HOST_OPTION_SCOPE}",  # nosec B608 - a fixed per-table query: the table is a literal and the one interpolated value is a module constant
+    "dhcp6_options": f"SELECT * FROM `dhcp6_options` WHERE host_id IS NOT NULL AND scope_id = {KEA_HOST_OPTION_SCOPE}",  # nosec B608 - a fixed per-table query: the table is a literal and the one interpolated value is a module constant
+    "ipv6_reservations": "SELECT * FROM `ipv6_reservations`",  # nosec B608 - a fixed per-table query: the table is a literal and the one interpolated value is a module constant
+    "lease4": "SELECT * FROM `lease4`",  # nosec B608 - a fixed per-table query: the table is a literal and the one interpolated value is a module constant
+}
 
 
 def _validate_tables(requested, known):
@@ -474,7 +493,7 @@ def export_table_groups(conn=None) -> dict[str, list[str]]:
             conn.close()
 
 
-def _stream_table_rows(conn, tbl, f) -> int:
+def _stream_table_rows(conn, tbl, f, sql=None) -> int:
     """Write one table's rows to `f` as the inside of a JSON array, one at a time from a server-side
     cursor — never the whole table in memory. Returns the row count. The one loop write_jen_export and
     write_kea_export share (v5.67.0-beta.11, Q123): the Kea export used to build `payload["data"][tbl] =
@@ -482,7 +501,7 @@ def _stream_table_rows(conn, tbl, f) -> int:
     the case that bit."""
     count = 0
     with conn.cursor(pymysql.cursors.SSDictCursor) as cur:
-        cur.execute(f"SELECT * FROM `{tbl}`")
+        cur.execute(sql or f"SELECT * FROM `{tbl}`")  # nosec B608 - `sql` is one of KEA_EXPORT_SQL's fixed queries or `tbl` is a name from Jen's own table lists; never request data
         first_row = True
         while True:
             rows = cur.fetchmany(1000)
@@ -636,7 +655,7 @@ def write_kea_export(path, group=KEA_BACKUP_GROUP):
                     f.write(", ")
                 f.write(json.dumps(tbl))
                 f.write(": [")
-                row_counts[tbl] = _stream_table_rows(conn, tbl, f)
+                row_counts[tbl] = _stream_table_rows(conn, tbl, f, KEA_EXPORT_SQL[tbl])
                 f.write("]")
             meta = _make_metadata("kea", present, {"group": group})
             meta["row_counts"] = row_counts
@@ -992,65 +1011,300 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True, strict_plugins
     return results
 
 
+class ImportAborted(RuntimeError):
+    """A Kea import hit something other than an allowed duplicate: the whole import was rolled back.
+    `public` is safe to show an operator (table, row and the kind of failure — never a value)."""
+
+    def __init__(self, public, detail=""):
+        self.public = public
+        super().__init__(f"Kea import failed and was rolled back — {public}" + (f" ({detail})" if detail else ""))
+
+
+_KEA_HOST_IDENTITY = ("dhcp_identifier", "dhcp_identifier_type", "dhcp4_subnet_id", "dhcp6_subnet_id")
+# a child row's own auto-increment id is never carried: it would collide with, or overwrite, the target's rows
+_KEA_CHILD_ID = {"dhcp4_options": "option_id", "dhcp6_options": "option_id", "ipv6_reservations": "reservation_id"}
+_NUMERIC_TYPES = {
+    "tinyint",
+    "smallint",
+    "mediumint",
+    "int",
+    "integer",
+    "bigint",
+    "decimal",
+    "numeric",
+    "float",
+    "double",
+}
+_BINARY_TYPES = set(_BINARY_DATA_TYPES)
+
+
+def _is_duplicate_key(e) -> bool:
+    return isinstance(e, pymysql.err.IntegrityError) and bool(e.args) and e.args[0] == 1062
+
+
+def _required_defaults(conn, table, present):
+    """The columns the TARGET requires — NOT NULL, no default, not auto-increment — that the file does not carry,
+    with the implicit default of their type (0, empty string, empty bytes). A backup made on an older Kea schema
+    lacks columns a newer one added: 3.x's `client_classes longtext NOT NULL` on both options tables is exactly
+    this. `INSERT IGNORE` used to paper over it with a warning; an import that treats errors as errors cannot."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT column_name AS col, data_type AS dt FROM information_schema.columns "
+            "WHERE table_schema = DATABASE() AND table_name = %s AND is_nullable = 'NO' "
+            "AND column_default IS NULL AND extra NOT LIKE %s",
+            (table, "%auto_increment%"),
+        )
+        found = cur.fetchall()
+    out = {}
+    for r in found:
+        if r["col"] in present:
+            continue
+        dt = (r["dt"] or "").lower()
+        out[r["col"]] = 0 if dt in _NUMERIC_TYPES else b"" if dt in _BINARY_TYPES else ""
+    return out
+
+
+def _insert_row(cur, table, cols, vals):
+    col_str = ", ".join(f"`{c}`" for c in cols)
+    cur.execute(f"INSERT INTO `{table}` ({col_str}) VALUES ({', '.join(['%s'] * len(cols))})", vals)
+    return cur.rowcount
+
+
 def import_kea(file_bytes, duplicate_mode="skip"):
     """
     Restore Kea reservations from export bytes.
     duplicate_mode: 'skip' or 'overwrite'.
     Returns list of result strings.
+
+    v5.67.0-beta.13 (Q127) — a host_id in a file is never an identity. The old import inserted `hosts` with the
+    file's host_id and then every child row by that same id, so a file host whose id collided with a DIFFERENT
+    target host was ignored while its options and IPv6 reservations attached to the target's host; overwrite was
+    a delete-and-reinsert (MySQL's replace-into), which deletes the host (Kea's options and IPv6 foreign keys either
+    cascade that delete or block it — on a real Kea the blocked delete was swallowed as 'skipped'); and any per-row exception was a
+    'skipped' row in a transaction that then committed. Now:
+
+      * each file host is matched to a target host by (identifier, type, dhcp4 subnet, dhcp6 subnet) — what Kea's
+        own unique keys mean by "the same reservation" — and inserted WITHOUT host_id when absent (the new id is
+        read back); the file's id -> the target's id is a map, and every child row's host_id goes through it;
+        option_id / reservation_id are never carried (auto-increment);
+      * skip: a host that already exists is left as it is and its children with it; overwrite: the matched host
+        is UPDATED IN PLACE (its host_id is stable), and for each child table THE FILE CONTAINS that host's rows
+        are replaced by the file's — a child table the file does not contain is never touched (an IPv4-only file
+        keeps the host's IPv6 reservations and options);
+      * options in the file that belong to no reservation in it (older files carried global, subnet and class
+        options) are not attached anywhere — counted and reported, never written by option_id;
+      * the ONLY thing counted as 'skipped' is MySQL error 1062 (duplicate key) in skip mode; anything else —
+        a foreign-key failure, a wrong type, a value too long — aborts the import, rolls the whole transaction
+        back and raises ImportAborted naming the table and row. Counts come from the server's row counts.
     """
     meta, data, err = parse_import_file(file_bytes)
     if err:
         raise ValueError(err)
     if meta.get("database") != "kea":
         raise ValueError(f"This export is for '{meta.get('database')}' — expected 'kea'. Wrong file?")
+    if duplicate_mode not in ("skip", "overwrite"):
+        raise ValueError(f"Unknown duplicate mode: {duplicate_mode!r}")
+    overwrite = duplicate_mode == "overwrite"
 
     fmt = meta.get("format", 1)
     results = []
     conn = _direct_kea_conn()
     try:
         conn.begin()
-        # parents before the rows that point at them, whatever order the file lists them in
         order = {t: i for i, t in enumerate(KEA_RESTORE_ORDER)}
+        decoded = {}  # table -> (cols, [row dict])
         for tbl in sorted(data, key=lambda t: (order.get(t, len(order)), t)):
             if tbl not in KEA_ALL_TABLES:
                 results.append(f"⚠️ {tbl}: not a recognized Kea table — skipped")
                 continue
-            rows = data.get(tbl, [])
-            if not rows:
-                results.append(f"ℹ️ {tbl}: no rows in export — skipped")
-                continue
+            rows = data.get(tbl) or []
             if not _table_exists(conn, tbl):
                 results.append(f"⚠️ {tbl}: table not found in Kea DB — skipped")
                 continue
-            inserted = skipped = 0
+            if not rows:
+                if tbl in _KEA_CHILD_ID:
+                    decoded[tbl] = ([], [])  # an empty child table IS content: overwrite replaces with nothing
+                results.append(f"ℹ️ {tbl}: no rows in export — skipped")
+                continue
             real_cols = _get_table_columns(conn, tbl)
             cols = [c for c in rows[0] if c in real_cols]
             if not cols:
                 results.append(f"⚠️ {tbl}: no recognized columns in import data — skipped")
                 continue
-            col_str = ", ".join(f"`{c}`" for c in cols)
-            ph_str = ", ".join(["%s"] * len(cols))
-            verb = "REPLACE" if duplicate_mode == "overwrite" else "INSERT IGNORE"
-            # v5.67.0-beta.11 (Q123) — every row of the table is decoded BEFORE the first INSERT, by the
-            # target's own column types: a table with one undecodable binary value is refused whole (and
-            # named), never half-restored and never fed text in a binary column.
+            # every row of the table is decoded BEFORE the first INSERT, by the target's own column types: a table
+            # with one undecodable binary value is refused whole (and named), never half-restored
             try:
-                params = _decode_import_rows(tbl, rows, cols, _target_binary_columns(conn, tbl), fmt)
+                vals = _decode_import_rows(tbl, rows, cols, _target_binary_columns(conn, tbl), fmt)
             except BinaryValueError as e:
                 results.append(f"❌ {tbl}: refused — {e}. Nothing was imported into this table.")
                 continue
+            decoded[tbl] = (cols, [dict(zip(cols, v, strict=True)) for v in vals])
+
+        host_map: dict = {}  # file host_id -> target host_id, or None when that host was skipped
+        updated_hosts: set = set()
+
+        # ── hosts ───────────────────────────────────────────────────────────────────────────────────────
+        if "hosts" in decoded:
+            cols, hrows = decoded["hosts"]
+            if "dhcp_identifier" not in cols or "dhcp_identifier_type" not in cols:
+                results.append(
+                    "❌ hosts: refused — the file's hosts carry no identifier. Nothing was imported into it."
+                )
+                decoded.pop("hosts")
+            else:
+                insert_cols = [c for c in cols if c != "host_id"]
+                extra = _required_defaults(conn, "hosts", set(insert_cols))
+                update_cols = [c for c in insert_cols if c not in _KEA_HOST_IDENTITY]
+                inserted = updated = skipped = 0
+                with conn.cursor() as cur:
+                    for n, h in enumerate(hrows, 1):
+                        where = " AND ".join(f"`{c}` <=> %s" for c in _KEA_HOST_IDENTITY if c in cols)
+                        cur.execute(
+                            f"SELECT host_id FROM `hosts` WHERE {where}",
+                            [h.get(c) for c in _KEA_HOST_IDENTITY if c in cols],
+                        )
+                        found = cur.fetchone()
+                        file_id = h.get("host_id")
+                        if found:
+                            if not overwrite:
+                                skipped += 1
+                                host_map[file_id] = None
+                                continue
+                            if update_cols:
+                                sets = ", ".join(f"`{c}` = %s" for c in update_cols)
+                                try:
+                                    cur.execute(
+                                        f"UPDATE `hosts` SET {sets} WHERE host_id = %s",
+                                        [h.get(c) for c in update_cols] + [found["host_id"]],
+                                    )
+                                except Exception as e:
+                                    raise ImportAborted(
+                                        f"hosts row {n}: the database refused the update", type(e).__name__
+                                    ) from e
+                            updated += 1
+                            host_map[file_id] = found["host_id"]
+                            updated_hosts.add(found["host_id"])
+                            continue
+                        try:
+                            _insert_row(
+                                cur,
+                                "hosts",
+                                insert_cols + list(extra),
+                                [h.get(c) for c in insert_cols] + list(extra.values()),
+                            )
+                        except Exception as e:
+                            if _is_duplicate_key(e) and not overwrite:
+                                skipped += 1  # another unique key of Kea's (the v4 address, say) already has it
+                                host_map[file_id] = None
+                                continue
+                            raise ImportAborted(
+                                f"hosts row {n}: the database refused the insert", type(e).__name__
+                            ) from e
+                        inserted += 1
+                        host_map[file_id] = cur.lastrowid
+                line = f"✅ hosts: {inserted} inserted"
+                if overwrite:
+                    line += f", {updated} existing updated in place"
+                results.append(line + f", {skipped} duplicates skipped")
+
+        # ── children, attached through the map ──────────────────────────────────────────────────────
+        for tbl in ("dhcp4_options", "dhcp6_options", "ipv6_reservations"):
+            if tbl not in decoded:
+                continue
+            cols, crows = decoded[tbl]
+            if "hosts" not in decoded:
+                if crows:
+                    results.append(
+                        f"⚠️ {tbl}: {len(crows)} rows skipped — the file's hosts were not imported, so there is nothing to attach them to"
+                    )
+                continue
+            if overwrite and updated_hosts:
+                with (
+                    conn.cursor() as cur
+                ):  # the file has this table: matched hosts get the file's rows, no more, no fewer
+                    marks = ", ".join(["%s"] * len(updated_hosts))
+                    cur.execute(f"DELETE FROM `{tbl}` WHERE host_id IN ({marks})", list(updated_hosts))
+            if not crows:
+                continue
+            auto = _KEA_CHILD_ID[tbl]
+            insert_cols = [c for c in cols if c not in (auto, "host_id")] + ["host_id"]
+            extra = _required_defaults(conn, tbl, set(insert_cols))
+            if "scope_id" in extra:  # a row attached to a host is a HOST's option, whatever an older file did not say
+                extra["scope_id"] = KEA_HOST_OPTION_SCOPE
+            inserted = dup = orphans = with_host = 0
             with conn.cursor() as cur:
-                for vals in params:
+                for n, r in enumerate(crows, 1):
+                    fid = r.get("host_id")
+                    if fid is None or fid not in host_map:
+                        orphans += 1
+                        continue
+                    target = host_map[fid]
+                    if target is None:
+                        with_host += 1
+                        continue
+                    row = dict(r, host_id=target)
                     try:
-                        cur.execute(f"{verb} INTO `{tbl}` ({col_str}) VALUES ({ph_str})", vals)
-                        if cur.rowcount > 0:
-                            inserted += 1
+                        _insert_row(
+                            cur,
+                            tbl,
+                            insert_cols + list(extra),
+                            [row.get(c) for c in insert_cols] + list(extra.values()),
+                        )
+                    except Exception as e:
+                        if _is_duplicate_key(e) and not overwrite:
+                            dup += 1
+                            continue
+                        raise ImportAborted(f"{tbl} row {n}: the database refused the insert", type(e).__name__) from e
+                    inserted += 1
+            line = f"✅ {tbl}: {inserted} inserted, {dup} duplicates skipped"
+            if with_host:
+                line += f", {with_host} skipped with their host"
+            if orphans:
+                line += f", {orphans} not attached to a reservation in this file (global, subnet or class options are not part of a reservation restore)"
+            results.append(line)
+
+        # ── leases (the leases group): the table's own primary key is the identity ──────────────────────
+        if "lease4" in decoded:
+            cols, lrows = decoded["lease4"]
+            pk = [c for c in _pk_columns(conn, "lease4") if c in cols]
+            extra = _required_defaults(conn, "lease4", set(cols))
+            insert_cols = cols + list(extra)
+            inserted = updated = dup = 0
+            with conn.cursor() as cur:
+                for n, r in enumerate(lrows, 1):
+                    vals = [r.get(c) for c in cols] + list(extra.values())
+                    try:
+                        if overwrite:
+                            sets = (
+                                ", ".join(f"`{c}` = VALUES(`{c}`)" for c in cols if c not in pk)
+                                or f"`{pk[0]}` = `{pk[0]}`"
+                            )
+                            col_str = ", ".join(f"`{c}`" for c in insert_cols)
+                            cur.execute(
+                                f"INSERT INTO `lease4` ({col_str}) VALUES ({', '.join(['%s'] * len(insert_cols))}) "
+                                f"ON DUPLICATE KEY UPDATE {sets}",
+                                vals,
+                            )
+                            if cur.rowcount == 1:
+                                inserted += 1
+                            else:
+                                updated += 1
                         else:
-                            skipped += 1
-                    except Exception:
-                        skipped += 1
-            results.append(f"✅ {tbl}: {inserted} inserted, {skipped} skipped")
+                            _insert_row(cur, "lease4", insert_cols, vals)
+                            inserted += 1
+                    except Exception as e:
+                        if _is_duplicate_key(e) and not overwrite:
+                            dup += 1
+                            continue
+                        raise ImportAborted(f"lease4 row {n}: the database refused the row", type(e).__name__) from e
+            line = f"✅ lease4: {inserted} inserted"
+            if overwrite:
+                line += f", {updated} updated in place"
+            results.append(line + f", {dup} duplicates skipped")
         conn.commit()
+    except ImportAborted:
+        conn.rollback()
+        raise
     except Exception as e:
         conn.rollback()
         raise RuntimeError(f"Kea import failed and was rolled back: {e}") from e

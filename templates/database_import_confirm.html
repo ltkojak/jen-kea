@@ -92,10 +92,10 @@
         <div class="form-group">
             <label>Duplicate Handling</label>
             <select name="duplicate_mode">
-                <option value="skip">Skip — keep existing rows if duplicate key (safe)</option>
-                <option value="overwrite">Overwrite — replace existing rows (REPLACE INTO)</option>
+                <option value="skip">Skip — keep a reservation that already exists, with its options (safe)</option>
+                <option value="overwrite">Overwrite — update a matching reservation in place and replace the option and IPv6 rows this file carries</option>
             </select>
-            <div class="form-hint">For reservations, "skip" is safest — it won't alter existing reservations that may have been modified since the export.</div>
+            <div class="form-hint">Reservations are matched by identifier, type and subnet — never by their id in the file. "Skip" is safest: it won't alter existing reservations that may have been modified since the export. "Overwrite" updates a matching reservation in place (nothing is deleted and re-created) and leaves any option or IPv6 table the file does not contain alone. A database error other than a duplicate aborts the whole import and rolls it back.</div>
         </div>
     </div>
     {% endif %}

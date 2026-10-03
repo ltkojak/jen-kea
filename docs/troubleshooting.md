@@ -482,6 +482,20 @@ Re-enable after logging in via Settings → Login Rate Limiting.
 
 ---
 
+## A database migration or a Kea import refuses (v5.67.0-beta.13)
+
+These are refusals, not failures: nothing was written, and each message says what to change.
+
+- **"The target database already has …"** (Jen migration) — a Jen migration creates tables and never replaces or merges into one that exists. Point it at an empty database, or drop those tables on the target yourself first.
+- **"No table was selected …"** (Jen migration) — nothing was ticked, or none of the names is one of Jen's. Select at least one table (nothing selected used to be treated as "everything").
+- **"The target (…) is not an initialised Kea database"** (Kea migration) — Jen copies data only and never creates Kea's schema. On the new server run `kea-admin db-init mysql -h … -u … -p … -n <database>`, then migrate.
+- **"… the major versions must match"** — the target's `schema_version` major differs from the source's. Initialise the target with the same Kea major as the source (or upgrade it with `kea-admin db-upgrade` first), then migrate.
+- **"The target is missing …"** — the target is initialised but lacks one of the tables being migrated; it is usually an older or partial schema. Re-run `kea-admin db-init` or `db-upgrade` on it.
+- **"Kea migration failed — the target was rolled back"** — usually a collision: the target already has a reservation with the same `host_id` (or the same identifier in the same subnet) as one being copied. Nothing on the target changed. Migrate into an empty initialised database, or export and import instead, which merges host by host.
+- **"Import aborted and rolled back — hosts row 12 …"** (Kea import) — row 12 of that table was refused by the database (a foreign-key or type error, or a value too long); the message never shows the value. Nothing was imported. A line that says "skipped" in an import summary now always means a duplicate in skip mode.
+
+---
+
 ## Reservations restored by an older Jen never match their client
 
 **Symptom.** After restoring a Kea backup or import file through Jen, or migrating the Kea database from the Databases page, a reservation is listed with the right IP and name but the client keeps getting a dynamic address. **Cause (fixed in 5.67.0-beta.11, present in every release before it, stable included).** The export wrote a binary column — a reservation's identifier — as hex text, nothing decoded it, and the restore stored that text: the six-byte MAC `34:13:43:e6:0e:2a` came back as the twelve characters `341343e60e2a`. The row looks right in every listing; Kea simply never matches it.
