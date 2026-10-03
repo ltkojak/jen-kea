@@ -355,3 +355,34 @@ The Health Center check and the optional alert are unchanged: they act on the
 exhaustion dates, which are still rising-only. The dashboard's forecast panel shows
 the same sentence as the card, so a falling or flat subnet's line there gains the
 same ending (5.67.0-beta.12).
+
+## Database tools that can no longer destroy what is already there
+
+This is older than the rest of this page: it is in every earlier release, 5.66.0
+included. It matters if you have ever migrated a database from Settings → Databases,
+or merged a Kea export into a Kea database that already had reservations.
+
+- **Migrating Kea now needs an initialised target and copies data only.** Run
+  `kea-admin db-init mysql` on the new server first (the same Kea major version as
+  the old one), then migrate. Jen no longer creates Kea's tables on the target and no
+  longer drops anything if the copy fails — before, a failed copy dropped whatever
+  tables it believed it had created, including a freshly initialised target's own.
+  If you migrated Kea into a non-empty target before and it failed, check that the
+  target's `hosts`, `dhcp4_options`, `dhcp6_options` and `ipv6_reservations` tables
+  are all still there.
+- **Migrating Jen's own database needs the target tables to be absent** (use an empty
+  database), and nothing ticked on the page is refused rather than meaning
+  "everything".
+- **Importing a Kea export matches reservations by identifier, type and subnet, never
+  by the id in the file.** Before, a file host whose id matched a different host in
+  your database was dropped while its options attached to the wrong one. If you
+  merged an export into a populated Kea database, look over the reservations that
+  existed before: their options are the rows that could have gained extras.
+  *Overwrite* now updates in place and no longer deletes anything; an import error
+  now aborts and rolls back with the table and row named, instead of reading
+  "skipped".
+- **The reservation backup carries host-scoped options only.** Older backups also
+  hold global, subnet and class options; importing one no longer writes those
+  anywhere, and the result line counts them.
+
+Existing backups still import. Nothing needs doing on upgrade (5.67.0-beta.13).

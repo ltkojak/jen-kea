@@ -2,6 +2,74 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.67.0-beta.13] - 2026-10-03
+
+Beta channel. Stacked on 5.67.0-beta.12. Two independent reviews of beta.12 found
+four ways Jen's own database tools could destroy or corrupt data that was already
+on the target, and a fifth way a backup could carry the wrong rows. Every one of
+them is old — they are in stable 5.66.0 too — and none could have been seen by
+Jen's unit suite, because that suite defined Kea's tables with no unique key, no
+foreign key and no lookup table. This release first teaches the tests the real
+schema, then fixes what the real schema shows.
+
+**The tests now run against Kea's real schema.** kea-compat already installs
+ISC's schema with `kea-admin db-init`; a new module drives Jen's import, merge,
+overwrite, migration and reservation export against it on Kea 3.0.3, 3.2.0 and
+3.3.1, records the schema's facts with each run, and the unit suite's Kea tables
+are now ISC's own definitions: the unique keys on `hosts` for the identifier,
+type and subnet, the foreign keys from the options and IPv6 reservations to
+`hosts`, the lookup tables, `schema_version`. The first runs measured things
+that had only been reasoned about: the options tables carry *both* an
+`ON DELETE CASCADE` and a legacy `NO ACTION` constraint on the host, so deleting
+a host that has options is blocked rather than cascaded; a host's options use
+scope 3; and the options tables require a `client_classes` value with no
+default, which an older backup does not have.
+
+**A failed migration dropped the target's own tables.** The migration created
+tables from the source's definitions with `IF NOT EXISTS`, recorded every table
+as created whether or not it was, copied with `INSERT IGNORE`, and on any failure
+dropped everything it had recorded. A failure is nearly certain on a target that
+already has rows, so the usual order — run `kea-admin db-init` on the new server,
+then migrate — dropped the new server's `hosts`, options and IPv6 tables. The
+target's condition is now checked before anything is written. A Kea migration
+copies **data only** into an initialised Kea database of the same schema major
+version (Jen never creates or changes Kea's tables), in one transaction with plain
+inserts, verified per table; if the rollback cannot be confirmed, exactly the rows
+it inserted are deleted by primary key. A Jen migration needs the tables to be
+absent from the target, refuses an empty or unknown selection instead of
+widening it to everything, and drops only tables it created.
+
+**An import attached reservations to the wrong host.** The importer inserted each
+host with the id written in the file and then every option and IPv6 reservation
+by that same id. A file host whose id collided with a different host already in
+the target was ignored, while its options landed on the target's host. A
+`host_id` in a file is no longer an identity: each reservation is matched by
+identifier, type and the two subnets (what Kea's unique keys mean by "the same
+reservation"), inserted without an id when absent, and everything that belongs to
+it follows the id the target assigned.
+
+**Overwrite deleted what it was meant to keep.** It was `REPLACE INTO`. On a real
+Kea the blocked delete was swallowed and counted as "skipped", so an overwrite
+quietly changed nothing. It now updates the matched reservation in place and
+replaces only the option and IPv6 tables the file contains: an IPv4-only file
+leaves a host's IPv6 reservations and options alone.
+
+**Every error was "skipped".** Any exception on a row was counted as a skipped
+duplicate and the transaction committed. Now only a duplicate key in skip mode is
+skipped; anything else aborts the import, rolls it back whole and names the table
+and row, never a value. A backup from before Kea 3.2 is still importable: the
+columns a newer schema requires are filled with their empty value.
+
+**The reservation backup carried global, subnet and class options.** It exported
+the whole options tables, and restored them by their auto-increment ids. It now
+exports exactly the options set on a reservation (host-scoped, Kea's scope 3),
+one fixed query per table, and a test refuses an unfiltered one.
+
+While reading the real schema one more thing turned up that this release does
+not change: Kea 3.x stores `ipv6_reservations.address` as 16 binary bytes, where
+Jen's IPv6 reader expects printable text. IPv6 is off by default; it is tracked on
+its own.
+
 ## [5.67.0-beta.12] - 2026-10-02
 
 Beta channel. Stacked on 5.67.0-beta.11. One report, from the maintainer's own
