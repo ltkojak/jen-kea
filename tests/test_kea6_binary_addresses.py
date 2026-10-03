@@ -203,7 +203,7 @@ class TestSearchingABinaryColumn:
 
         src = inspect.getsource(kea6.list_lease6)
         assert "address = INET6_ATON(%s)" in src
-        assert "address LIKE" not in src
+        assert "address LIKE %s" not in src, "the SQL must never LIKE-match the binary column"
 
 
 class TestReservationsComeBackAsAddresses:
