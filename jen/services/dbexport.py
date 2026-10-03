@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import tempfile
 from datetime import datetime
 
@@ -751,29 +752,106 @@ def admission_check(
         )
 
 
+GZIP_MAGIC = b"\x1f\x8b"
+
+
+def _is_whole_number(v) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _envelope_problem(payload) -> str | None:
+    """Why `payload` (the parsed JSON of an upload) is not a Jen export's envelope, or None when its SHAPE is
+    sound (v5.67.0-beta.14, Q128, item d). Every consumer downstream — the confirmation page, import_jen,
+    import_kea — indexes into these structures without looking, so a `[]` root, a `_meta` that is a string, a table
+    that is not a list or a row that is not an object used to be an uncaught exception and a 500. This checks
+    structure and the few numeric fields the importers compare; it does not look at a single value. Absent
+    optional fields are fine (an export from before format 2 has no `format`); wrong-typed ones are not."""
+    if not isinstance(payload, dict):
+        return "the top level is not an object"
+    meta, data = payload.get("_meta"), payload.get("data")
+    if not isinstance(meta, dict) or not meta:
+        return "it has no _meta object"
+    if not isinstance(data, dict):
+        return "it has no data object"
+    if not isinstance(meta.get("database"), str):
+        return "_meta names no database"
+    for key in ("jen_export_version", "format"):
+        if key in meta and (not _is_whole_number(meta[key]) or meta[key] < 0):
+            return f"_meta.{key} is not a whole number"
+    for key in ("exported_at", "jen_app_version", "group"):
+        if key in meta and meta[key] is not None and not isinstance(meta[key], str):
+            return f"_meta.{key} is not text"
+    if "tables" in meta and not (isinstance(meta["tables"], list) and all(isinstance(t, str) for t in meta["tables"])):
+        return "_meta.tables is not a list of table names"
+    counts = meta.get("row_counts")
+    if counts is not None and not (
+        isinstance(counts, dict) and all(isinstance(k, str) and _is_whole_number(v) for k, v in counts.items())
+    ):
+        return "_meta.row_counts is not a table-to-number map"
+    binary = meta.get("binary_columns")
+    if binary is not None and not (
+        isinstance(binary, dict)
+        and all(isinstance(v, list) and all(isinstance(c, str) for c in v) for v in binary.values())
+    ):
+        return "_meta.binary_columns is not a table-to-columns map"
+    plugins = meta.get("plugin_tables")
+    if plugins is not None and not (
+        isinstance(plugins, dict)
+        and all(
+            isinstance(v, dict)
+            and isinstance(v.get("tables", []), list)
+            and all(isinstance(t, str) for t in v.get("tables", []))
+            for v in plugins.values()
+        )
+    ):
+        return "_meta.plugin_tables is not a plugin-to-tables map"
+    if plugins:
+        # a plugin id becomes a directory name (the importer reads that plugin's manifest from disk), so it must
+        # be a real plugin id, never a path
+        from jen.services.plugins import valid_plugin_id
+
+        if not all(valid_plugin_id(pid) for pid in plugins):
+            return "_meta.plugin_tables names an invalid plugin id"
+    for table, rows in data.items():
+        if not isinstance(rows, list):
+            return f"data.{table} is not a list of rows"
+        for n, row in enumerate(rows, 1):
+            if not isinstance(row, dict):
+                return f"data.{table} row {n} is not an object"
+    return None
+
+
 def parse_import_file(file_bytes):
     """
     Parse an uploaded export file. Returns (meta, data, error).
     error is None on success.
+
+    v5.67.0-beta.14 (Q128, item d) — gzip is recognised by its magic bytes, not by trying it and falling back
+    (a plain-JSON export has always been accepted, and a corrupt gzip is now an error about the gzip, not a
+    silent attempt to read its bytes as text); the parsed structure is validated before anything uses it
+    (`_envelope_problem`); and `format` is bounded by what this Jen's importers understand — a format 9 file
+    used to be treated as "at least 3". Every message is the parser's own and carries no part of the file.
     """
     try:
-        try:
-            text = gzip.decompress(file_bytes).decode("utf-8")
-        except Exception:
-            text = file_bytes.decode("utf-8")
-        payload = json.loads(text)
-    except Exception as e:
-        return None, None, f"Could not parse file: {e}"
-
-    meta = payload.get("_meta", {})
-    data = payload.get("data", {})
-    if not meta or "database" not in meta:
-        return None, None, "File does not appear to be a Jen export (missing metadata)."
+        raw = gzip.decompress(file_bytes) if file_bytes[:2] == GZIP_MAGIC else file_bytes
+        payload = json.loads(raw.decode("utf-8"))
+    except Exception:
+        return None, None, "not a Jen export: the file is not valid gzip-compressed or plain JSON."
+    problem = _envelope_problem(payload)
+    if problem:
+        return None, None, f"not a Jen export: {problem}."
+    meta, data = payload["_meta"], payload["data"]
     if meta.get("jen_export_version", 0) > SCHEMA_VERSION:
         return (
             meta,
             data,
             f"Export schema version {meta['jen_export_version']} is newer than this Jen supports ({SCHEMA_VERSION}). Upgrade Jen first.",
+        )
+    if meta.get("format", 1) > EXPORT_FORMAT:
+        return (
+            meta,
+            data,
+            f"This export is format {meta['format']}; this Jen reads up to format {EXPORT_FORMAT}. Upgrade Jen first.",
         )
     return meta, data, None
 
@@ -1097,6 +1175,147 @@ def import_jen(file_bytes, tables_to_restore=None, truncate=True, strict=False, 
     if strict_plugins and failures:
         raise PluginRestoreError(failures)
 
+    return results
+
+
+# ── the import page's replace mode: a snapshot first, put back on any failure (v5.67.0-beta.14, Q128, item b) ──
+#
+# import_jen commits the core tables in one transaction and then each plugin's migration rows, DDL (which
+# auto-commits) and rows on their own, so a failure in plugin N left the core tables and plugins 1..N-1 restored
+# and the page said "if anything fails it rolls back completely". jen.tools.restore always compensated with a
+# snapshot; the page did not. import_jen_guarded gives it the same property: the whole Jen database is exported to
+# a private directory first, and ANY failure puts every table, the plugin migration rows and the plugin tables the
+# failed import created back as they were. The same code path is the restore tool's own `write_jen_export` /
+# `import_jen`; what is new is only the plugin_schema_migrations rows (an import never restores those as-is) and
+# the tables a failed import created.
+
+
+class GuardedImportError(RuntimeError):
+    """The replace-mode import did not complete. `public` is the sentence for the operator; `state` is one of
+    "unchanged" (nothing was written), "rolled_back" (the database was put back exactly) or "rollback_failed"
+    (it could NOT be put back; `snapshot` is the directory holding the pre-import export, kept for a by-hand
+    restore)."""
+
+    def __init__(self, public, state, snapshot=None):
+        self.public = public
+        self.state = state
+        self.snapshot = snapshot
+        super().__init__(public)
+
+
+def _all_table_names(conn) -> set[str]:
+    with conn.cursor() as cur:
+        cur.execute("SHOW TABLES")
+        return {next(iter(r.values())) for r in cur.fetchall()}
+
+
+def take_pre_import_snapshot() -> dict:
+    """`<backups>/pre-import-<UTC ts>/jen_db.json.gz` (0600 in a 0700 directory — it holds every secret the
+    database holds) plus what an export does not carry: the plugin migration rows and the set of tables that exist
+    now. Raises on any failure; the caller refuses the import rather than run without a way back."""
+    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    base = os.path.join(BACKUP_DIR, f"pre-import-{ts}")
+    folder, n = base, 1
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    while True:  # two imports in the same second must not collide
+        try:
+            os.mkdir(folder, 0o700)
+            break
+        except FileExistsError:
+            n += 1
+            folder = f"{base}-{n}"
+    os.chmod(folder, 0o700)
+    path = os.path.join(folder, "jen_db.json.gz")
+    try:
+        meta = write_jen_export(path)
+        conn = _direct_jen_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT plugin_id, version, description, applied_at FROM plugin_schema_migrations "
+                    "ORDER BY plugin_id, version"
+                )
+                migrations = list(cur.fetchall())
+            tables = _all_table_names(conn)
+        finally:
+            conn.close()
+    except Exception:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+    return {"dir": folder, "path": path, "migrations": migrations, "tables": tables, "row_counts": meta["row_counts"]}
+
+
+def _roll_back_to(snap: dict) -> None:
+    """Put the database back as `snap` found it: every table in the snapshot replaced from it (strictly — the
+    rollback must be exact too), the plugin migration rows exactly as they were, and any plugin table the failed
+    import created removed again."""
+    from jen.services import plugins as _plugins
+
+    with open(snap["path"], "rb") as f:
+        blob = f.read()
+    import_jen(blob, strict=True, strict_plugins=False)
+
+    conn = _direct_jen_conn()
+    try:
+        conn.begin()
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM plugin_schema_migrations")
+            if snap["migrations"]:
+                cur.executemany(
+                    "INSERT INTO plugin_schema_migrations (plugin_id, version, description, applied_at) "
+                    "VALUES (%s, %s, %s, %s)",
+                    [(m["plugin_id"], m["version"], m["description"], m["applied_at"]) for m in snap["migrations"]],
+                )
+        conn.commit()
+        # only a table a plugin's own migrations claim, and only one that did not exist before the import
+        owned = {t for tables in _plugins.all_owned_tables().values() for t in tables}
+        created = (_all_table_names(conn) - snap["tables"]) & owned
+        with conn.cursor() as cur:
+            for t in sorted(created):
+                cur.execute(f"DROP TABLE IF EXISTS `{t}`")
+    finally:
+        conn.close()
+
+
+def import_jen_guarded(file_bytes, tables_to_restore=None):
+    """The Databases import page's REPLACE mode: take a snapshot, import strictly (core tables and plugins), and on
+    ANY failure put the snapshot back, so "if anything fails the database is as it was" is true. Raises
+    GuardedImportError (state "unchanged", "rolled_back" or "rollback_failed"); ScopeRefused and a refused file
+    (ValueError) pass through untouched — they are raised before the first write, and nothing needs undoing."""
+    try:
+        snap = take_pre_import_snapshot()
+    except Exception as e:
+        logger.error(f"Could not take the pre-import snapshot: {e}")
+        raise GuardedImportError(
+            "Could not take the safety snapshot that a replace import needs, so nothing was imported. "
+            "Check that the backups directory is writable and has room, and see the server log.",
+            "unchanged",
+        ) from e
+    try:
+        results = import_jen(file_bytes, tables_to_restore, truncate=True, strict=True)
+    except Exception as e:
+        if type(e) in (ScopeRefused, ValueError):
+            shutil.rmtree(snap["dir"], ignore_errors=True)
+            raise
+        logger.error(f"Replace import failed, rolling back: {e}")
+        try:
+            _roll_back_to(snap)
+        except Exception as e2:
+            logger.error(f"Rollback after a failed import also failed: {e2}")
+            raise GuardedImportError(
+                f"The import failed, and putting the database back did not complete. A full export taken just before "
+                f"the import is kept in {snap['dir']} (jen_db.json.gz) — import it with Replace mode to restore "
+                f"it. See the server log.",
+                "rollback_failed",
+                snap["dir"],
+            ) from e2
+        shutil.rmtree(snap["dir"], ignore_errors=True)
+        raise GuardedImportError(
+            "The import failed and was rolled back: the database was put back exactly as it was before. "
+            "See the server log for the cause.",
+            "rolled_back",
+        ) from e
+    shutil.rmtree(snap["dir"], ignore_errors=True)
     return results
 
 

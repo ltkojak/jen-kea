@@ -646,16 +646,26 @@ def import_inspect():
                 return _abort(f"That file is over the {max_mb} MB import cap ([backups] max_import_mb in jen.config).")
             out.write(chunk)
 
+    # v5.67.0-beta.14 (Q128, item d) — a gzip file is recognised by its magic bytes and measured by streaming it
+    # through gzip; anything else is plain JSON (the parser has always accepted both) and is its own size. Both
+    # go through the same cap above and the same admission check below.
+    with open(tmp_path, "rb") as head:
+        is_gzip = head.read(2) == dbexport.GZIP_MAGIC
     uncompressed_size = 0
-    try:
-        with gzip.open(tmp_path, "rb") as gz:
-            while True:
-                chunk = gz.read(_IMPORT_READ_CHUNK)
-                if not chunk:
-                    break
-                uncompressed_size += len(chunk)
-    except OSError:
-        return _abort("Cannot read file: not a valid gzip export.")
+    if is_gzip:
+        import zlib
+
+        try:
+            with gzip.open(tmp_path, "rb") as gz:
+                while True:
+                    chunk = gz.read(_IMPORT_READ_CHUNK)
+                    if not chunk:
+                        break
+                    uncompressed_size += len(chunk)
+        except (OSError, EOFError, zlib.error):
+            return _abort("Cannot read file: not a valid gzip export.")
+    else:
+        uncompressed_size = compressed_size
 
     from jen.tools.restore import RESTORE_MEMORY_FACTOR, _mem_available_bytes
 
@@ -699,14 +709,22 @@ def import_confirm():
         file_bytes = f.read()
     os.unlink(tmp_path)
 
-    meta = dbexport.parse_import_file(file_bytes)[0]
+    meta, _data, parse_err = dbexport.parse_import_file(file_bytes)
+    if parse_err or not meta:
+        flash("Import session expired. Please re-upload.", "error")
+        return redirect(url_for("database.database", tab="import"))
     db = meta.get("database")
 
     try:
         if db == "jen":
             tables = request.form.getlist("tables") or None
             mode = request.form.get("mode", "replace")
-            results = dbexport.import_jen(file_bytes, tables, truncate=(mode == "replace"))
+            if mode == "replace":
+                # v5.67.0-beta.14 (Q128, item b) — a snapshot first, put back on any failure: the confirmation
+                # page's promise is true for this mode. Merge mode has no snapshot and says so on the page.
+                results = dbexport.import_jen_guarded(file_bytes, tables)
+            else:
+                results = dbexport.import_jen(file_bytes, tables, truncate=False)
             __user.audit("DB_IMPORT", "jen", f"tables={tables or 'all'} mode={mode}")
         elif db == "kea":
             dup = request.form.get("duplicate_mode", "skip")
@@ -718,6 +736,9 @@ def import_confirm():
         for r in results:
             ok, msg = _split_mark(r)
             flash(msg, "success" if ok else ("error" if r.startswith(_ERR_MARK) else "warning"))
+    except dbexport.GuardedImportError as e:
+        __user.audit("DB_IMPORT_FAILED", "jen", f"state={e.state}")
+        flash(e.public, "error")
     except dbexport.ScopeRefused as e:
         # refused before anything was touched (v5.67.0-beta.14, Q128)
         flash(f"{e.public} Nothing was changed.", "error")

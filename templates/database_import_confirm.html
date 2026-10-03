@@ -81,7 +81,7 @@
                 <option value="replace">Replace — clear table then insert (recommended)</option>
                 <option value="merge">Merge — insert only, skip duplicates</option>
             </select>
-            <div class="form-hint">Replace mode clears each selected table before inserting. Merge mode uses INSERT IGNORE — existing rows are kept.</div>
+            <div class="form-hint">Replace clears each selected table and inserts exactly the rows in the file — a row the database refuses fails the whole import, and the database is then put back from a snapshot taken first. Merge adds only rows whose key is not already there, keeps what exists, and tells you how many it skipped.</div>
         </div>
     </div>
 
@@ -100,9 +100,15 @@
     </div>
     {% endif %}
 
+    {% if meta.database == 'jen' %}
     <div class="alert alert-danger u-87c136">
-        {{ icon("ban") }} <strong>Final warning:</strong> Importing will modify live data. The operation runs in a transaction — if anything fails it rolls back completely. But if it succeeds, the change is permanent. Make sure you have a backup.
+        {{ icon("ban") }} <strong>Final warning:</strong> Importing will modify live data, and a successful import is permanent. <strong>Replace</strong> mode first saves a snapshot of the whole Jen database and puts it back if anything fails, so a failed replace leaves the database as it was (anything written to it between the snapshot and the failure is lost with the import). <strong>Merge</strong> mode takes no snapshot: the core tables are committed together, then each plugin's tables one plugin at a time, and a failure stops there — what was already committed stays. Make sure you have a backup.
     </div>
+    {% else %}
+    <div class="alert alert-danger u-87c136">
+        {{ icon("ban") }} <strong>Final warning:</strong> Importing will modify live data. The Kea import runs in a single transaction — if anything fails it rolls back completely and nothing is changed. If it succeeds, the change is permanent. Make sure you have a backup.
+    </div>
+    {% endif %}
 
     <div class="u-3efc98">
         <button type="submit" class="btn btn-danger"
