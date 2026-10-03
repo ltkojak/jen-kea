@@ -287,6 +287,25 @@ def schema_facts(c):
             "GROUP BY table_name, index_name, non_unique ORDER BY table_name, index_name",
         )
     ]
+    # v5.67.0-beta.16 (Q130) — the address and identifier columns Jen READS, as information_schema reports them
+    # for THIS Kea version: lease6.address (and ipv6_reservations.address / excluded_prefix) is what decides whether
+    # jen/services/kea6.py must convert 16 raw bytes to text, hosts.dhcp_identifier and lease6.duid are the
+    # varbinary identifiers, lease4.address the unsigned int. Recorded per version in the schema artifact, and
+    # asserted by test_the_v6_address_columns_are_binary_sixteen.
+    facts["address_columns"] = {
+        f"{r['tname']}.{r['cname']}": {"data_type": r["dtype"], "column_type": r["ctype"]}
+        for r in rows(
+            c,
+            "SELECT table_name AS tname, column_name AS cname, data_type AS dtype, column_type AS ctype "
+            "FROM information_schema.columns "
+            "WHERE table_schema = DATABASE() AND ("
+            "(table_name = 'lease6' AND column_name IN ('address', 'duid', 'hwaddr')) OR "
+            "(table_name = 'lease4' AND column_name IN ('address', 'hwaddr', 'client_id')) OR "
+            "(table_name = 'ipv6_reservations' AND column_name IN ('address', 'excluded_prefix')) OR "
+            "(table_name = 'hosts' AND column_name = 'dhcp_identifier')) "
+            "ORDER BY table_name, column_name",
+        )
+    }
     facts["option_scope"] = rows(c, "SELECT scope_id, scope_name FROM dhcp_option_scope ORDER BY scope_id")
     facts["host_identifier_type"] = rows(c, "SELECT type, name FROM host_identifier_type ORDER BY type")
     facts["schema_version"] = rows(c, "SELECT version, minor FROM schema_version")
@@ -543,6 +562,24 @@ def test_a_target_with_an_incompatible_schema_major_is_refused(kea, scratch):
     assert refused, "a target whose schema major differs from the source's must be refused"
     assert snapshot(tgt, MOVE_TABLES) == before
     tgt.close()
+
+
+def test_the_v6_address_columns_are_binary_sixteen(kea):
+    """Q130 — what Jen's IPv6 readers have to cope with, read from ISC's real schema for the Kea version under
+    test (never remembered): lease6.address and ipv6_reservations.address are BINARY(16) — sixteen raw bytes, not
+    the VARCHAR(39) text kea6.py's comments used to assume — and the database has INET6_ATON/INET6_NTOA. The columns
+    are recorded in the run's schema artifact (facts["address_columns"]). If a future Kea changes a type, THIS test
+    says so first, and the conversion in jen/services/kea6.py (which also passes text through unchanged) is the one
+    place to look."""
+    cols = schema_facts(kea)["address_columns"]
+    for key in ("lease6.address", "ipv6_reservations.address"):
+        assert cols[key]["column_type"].lower() == "binary(16)", (key, cols[key])
+    assert cols["ipv6_reservations.excluded_prefix"]["column_type"].lower() == "binary(16)"
+    assert cols["lease4.address"]["data_type"].lower() == "int"
+    assert cols["hosts.dhcp_identifier"]["column_type"].lower() == "varbinary(255)"
+    assert cols["lease6.duid"]["data_type"].lower() == "varbinary"
+    packed = rows(kea, "SELECT HEX(INET6_ATON('2001:db8::10')) AS h, INET6_NTOA(INET6_ATON('2001:db8::10')) AS t")[0]
+    assert packed["h"].upper() == "20010DB8000000000000000000000010" and packed["t"] == "2001:db8::10"
 
 
 def test_the_real_unique_keys_and_foreign_keys_are_what_the_import_has_to_survive(kea):
