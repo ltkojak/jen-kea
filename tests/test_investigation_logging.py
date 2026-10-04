@@ -390,3 +390,21 @@ class TestTheScheduler:
         assert (
             'id="jen_investigation_sweep"' in src and "IntervalTrigger(minutes=1)" in src and "max_instances=1" in src
         )
+
+
+class TestTheMacroSeesTheRequestContext:
+    """The controls macro prints a CSRF token. `csrf_token` is a context processor, not a Jinja global, and an imported macro does
+    not see the context unless it is imported `with context` - without it the Trace page was a 500 (found by the e2e journeys)."""
+
+    def test_every_template_that_imports_the_macro_imports_it_with_context(self):
+        import pathlib
+        import re
+
+        root = pathlib.Path(__file__).resolve().parent.parent / "templates"
+        importers = [p for p in root.glob("*.html") if "import investigation_controls" in p.read_text(encoding="utf-8")]
+        assert {p.name for p in importers} >= {"trace.html", "servers.html"}
+        for p in importers:
+            if p.name == "_investigation_logging.html":
+                continue
+            text = p.read_text(encoding="utf-8")
+            assert re.search(r"import investigation_controls with context %\}", text), p.name

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Client Trace{% endblock %}
-{% from '_investigation_logging.html' import investigation_controls %}
+{% from '_investigation_logging.html' import investigation_controls with context %}
 {% block content %}
 <div class="page-header">
     <h1>{{ icon("search-code", "ico-lg") }} Client trace</h1>
