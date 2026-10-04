@@ -162,7 +162,6 @@ def explain_page():
         subnet_id=subnet_id,
         chosen_how=chosen_how,
         result=result,
-        input_labels=INPUT_LABELS,
         form=None,
         link_q=client["mac"],
         **extra,
