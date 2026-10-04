@@ -60,7 +60,7 @@ def pytest_collection_modifyitems(config, items):
         return
     skip = pytest.mark.skip(reason="KEA_COMPAT_URL not set - real-Kea suite runs only in kea-compat.yml")
     for item in items:
-        if "kea_compat" in item.keywords:
+        if "kea_compat" in item.keywords or "kea_log" in item.keywords:
             item.add_marker(skip)
 
 

@@ -21,9 +21,21 @@ API_USER = "jen"
 API_PASS = "jen_api_pw"
 
 
-def build(db_host="127.0.0.1", db_name="kea", db_user="kea", db_pass="kea_pw", http_port=8004) -> dict:
+def build(
+    db_host="127.0.0.1",
+    db_name="kea",
+    db_user="kea",
+    db_pass="kea_pw",
+    http_port=8004,
+    severity="INFO",
+    debuglevel=None,
+    probe=False,
+) -> dict:
+    """`severity`/`debuglevel` set the kea-dhcp4 logger (the log-level probe, Q135, boots one daemon per level);
+    `probe=True` adds what that probe needs on top of the compat config: two client classes whose tests read the
+    vendor and user class options, and `store-extended-info` so the relay-agent options reach the lease row."""
     backend = {"type": "mysql", "host": db_host, "name": db_name, "user": db_user, "password": db_pass}
-    return {
+    cfg = {
         "Dhcp4": {
             # udp sockets + no hard failure when an interface can't be
             # opened: a CI runner's NICs are none of this job's business.
@@ -70,9 +82,24 @@ def build(db_host="127.0.0.1", db_name="kea", db_user="kea", db_pass="kea_pw", h
                     "option-data": [{"name": "routers", "data": "10.99.0.1"}],
                 }
             ],
-            "loggers": [{"name": "kea-dhcp4", "output-options": [{"output": "stdout"}], "severity": "INFO"}],
+            "loggers": [
+                {
+                    "name": "kea-dhcp4",
+                    "output-options": [{"output": "stdout"}],
+                    "severity": severity,
+                    **({"debuglevel": debuglevel} if debuglevel is not None else {}),
+                }
+            ],
         }
     }
+    if probe:
+        dhcp4 = cfg["Dhcp4"]
+        dhcp4["store-extended-info"] = True
+        dhcp4["client-classes"] = [
+            {"name": "jen-probe-vendor", "test": "substring(option[60].hex,0,9) == 'jen-probe'"},
+            {"name": "jen-probe-user", "test": "option[77].hex == 0x086a656e2d75736572"},
+        ]
+    return cfg
 
 
 if __name__ == "__main__":

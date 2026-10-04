@@ -155,6 +155,28 @@ jobs:
           KEA_COMPAT_SCHEMA_OUT: ${{ github.workspace }}/results/schema-${{ matrix.kea }}.json
         run: python -m pytest tests/kea_compat -m kea_compat -v
 
+      # v5.68.0-beta.2 (Q135) - what a real daemon writes about one client at each log level, and what it stores in the
+      # lease row (tests/kea_compat/test_log_levels.py). It restarts the daemon once per level, so it cannot share the
+      # suite above (-m kea_compat leaves it out); the findings are in results/log-levels-<version>.json and the raw logs
+      # in results/logs-<version>/.
+      - name: What Kea's log carries at each level
+        if: always()
+        env:
+          KEA_COMPAT_URL: http://127.0.0.1:8004/
+          KEA_COMPAT_USER: jen
+          KEA_COMPAT_PASS: jen_api_pw
+          KEA_COMPAT_VERSION: ${{ matrix.kea }}
+          KEA_COMPAT_IMAGE: ${{ env.IMAGE }}
+          KEA_COMPAT_CONF_DIR: ${{ github.workspace }}/kea-conf
+          KEA_COMPAT_LOG_DIR: ${{ github.workspace }}/results/logs-${{ matrix.kea }}
+          KEA_COMPAT_LOG_OUT: ${{ github.workspace }}/results/log-levels-${{ matrix.kea }}.json
+          KEA_COMPAT_DB_HOST: 127.0.0.1
+          KEA_COMPAT_DB_PORT: '3306'
+          KEA_COMPAT_DB_USER: kea
+          KEA_COMPAT_DB_PASS: kea_pw
+          KEA_COMPAT_DB_NAME: kea
+        run: python -m pytest tests/kea_compat/test_log_levels.py -m kea_log -v
+
       - name: Kea log
         if: always()
         run: docker logs kea > results/kea-${{ matrix.kea }}.log 2>&1 || true
