@@ -2,1239 +2,226 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
-## [5.67.0-beta.18] - 2026-10-03
-
-Beta channel. Stacked on 5.67.0-beta.17. The first fresh install of Jen ever done
-by someone who is not its author, on a new Ubuntu 24.04 machine with no database
-server on it, went like this: dependencies installed with a hundred and thirty
-lines of package-manager output scrolling through the progress spinner; the Jen
-database question was answered with the defaults and could not connect; the
-installer printed the SQL to create a database on a machine that had no database
-server to run it on; "Continue without it — I will finish in Jen" was chosen; and
-the shell prompt came back, with no service, no web page and no message. The
-installer had been run by nothing but a CI job that always has a database, so no
-path of it that fails had ever run.
-
-**"Continue without it" ended the installer without saying so.** The helper that
-blanks a placeholder value ended in a bare test-and-assign, which for a real
-host name is false, and a false test is the function's exit status — which, in a
-script that stops on any failure, ended the whole installer with no message. The
-same helper is on the path an unattended install takes when its database cannot
-be reached, so an answers file pointing at an unreachable database ended the same
-way. It now ends in an explicit success, and a test runs it in a real shell and
-scans the installer and uninstaller for any function that ends in the same
-construct, so it cannot come back.
-
-**The choice should not have existed.** Jen runs its schema migrations against its
-own database before it serves anything. With no reachable database the service
-exits, systemd starts it again five seconds later, and so on for ever: there is
-no login page and no first-run wizard to "finish in". Jen's own database is the one
-thing the installer cannot defer (Kea's API and database are different — Jen runs
-without them and the wizard connects them, so their prompts are unchanged). The
-Jen database menu is now retry, edit and try again, install MariaDB here, or quit;
-an unattended install whose Jen database does not answer stops, printing the SQL,
-what is likely wrong and what to do; and when the service does fail to start the
-installer names the database section of the configuration as the likeliest cause.
-
-**MariaDB on request.** A homelab install wants Jen's small database on the same
-machine, and a fresh machine has no server. When the database host is this machine
-and no server lets the installer in, it offers to install MariaDB, enable and start
-it, wait for it to answer, create the database and user and test them — with the
-prompt defaulting to no, never for a remote host, never silently, and for an
-unattended install only when the answers file (or environment) says
-`JEN_DB_INSTALL_LOCAL=yes`. A server that is installed but stopped is started, not
-reinstalled, and the uninstaller never removes MariaDB or Jen's database at any
-level; it now says so.
-
-**The package manager's output goes to a log.** Quieting apt does not quiet the
-package unpacker or the restart checker, and redirecting its errors to nowhere threw
-away the one thing an operator needs when it fails. Every `apt-get`, `pip`,
-virtualenv, `systemctl` and `mysql` call the installer makes now writes its output
-to `/var/log/jen-install.log` (root-only, appended per run), the screen keeps the
-progress line, apt is told not to prompt or print its epilogue, a failing step
-prints the last twenty lines of the log and its path, and the final summary names
-it. Commands whose arguments or input carry the database password record only what
-the step is.
-
-CI gains the two things that were missing: a step that points an unattended install
-at a database that does not answer and requires it to stop, non-zero, with the SQL
-and a reason and nothing installed; and a job on a machine with no database server
-that lets the installer install MariaDB, and proves the database, the user, a healthy
-Jen, the log, apt's silence on the screen, and that uninstalling Jen leaves the
-database server alone.
-
-## [5.67.0-beta.17] - 2026-10-03
-
-Beta channel. Stacked on 5.67.0-beta.16. An audit of beta.13 to beta.16 found one
-real defect in a tool that release 13 was meant to have fixed, one instruction that
-sent operators to check tables that cannot hold the damage, and one search that
-looked at the wrong end of a list. All three are old; none needs anything done on
-upgrade.
-
-**The Kea migration copied the config backend's options.** Beta.13 gave the
-reservation backup a fixed query per table, so a backup carries a reservation's own
-options (host-scoped, Kea's scope 3) and not the global, subnet, shared-network, pool
-and class options that live in the same two tables when Kea uses its configuration
-backend. The migration did not use it: it copied every row of the options tables by
-`SELECT *`, while the migration page described the group as host-scoped options only.
-On a source that uses the config backend those rows name subnets, pools and classes the
-freshly initialised target does not have, the real schema's foreign keys refused them,
-and the whole migration failed after the hosts had been copied (and was rolled back, so
-nothing was damaged — but a reservation move could not be completed). On a source
-without those references the global options were written into the target's own config
-backend under the source's option ids, which is what the backup was changed to avoid.
-No test saw it because the real-schema test compared the entire options table (pinning
-the wrong behaviour) and its seeded rows named no subnet or class, so no foreign key ever
-fired.
-
-There is now one place that says what a reservation move carries, and both the export and
-the migration are built from it. The migration copies the host-scoped options only, its
-count and sample verification apply the same filter to the source (without that a correct
-copy would have looked incomplete), and Jen's own database migration is unchanged. The
-result says how many host-scoped option rows were copied and, when the source had any,
-how many rows of the config backend it left behind, so an empty config backend on the
-target is expected rather than surprising. The real-schema test now seeds a global option
-and a subnet option that names a subnet with nothing behind it — the row that fails
-without the fix — and asserts that neither reaches the target.
-
-**An instruction named tables that cannot carry the damage.** The notes for the
-identifier repair told operators to check the DHCPv6 option tables by hand after a
-restore made before beta.11. Before that release the Kea backup held only `hosts` and
-`dhcp4_options`; the DHCPv6 option table and the IPv6 reservations joined it in beta.11,
-with tagged bytes. No Jen ever wrote either as hex text, so there is nothing to check. The
-instruction now says to check the text-typed DHCPv4 options (domain name, boot file and the
-like) by hand, and that the DHCPv6 option table and the IPv6 reservations need no check; the
-repair page says the same under its option-values list.
-
-**Global search found only the first twenty IPv6 hosts of a subnet.** It took the first
-twenty reservations and then tested them, so a matching reservation that was the
-twenty-first host of its subnet was never found, and its address test matched only the
-compressed spelling of an address. One predicate — hostname, DUID, and every address of the
-host in its compressed and expanded spelling — now filters all of a subnet's reservations
-before the list is capped at twenty. IPv6 is off by default, so only installs that turned it
-on were affected.
-
-## [5.67.0-beta.16] - 2026-10-03
-
-Beta channel. Stacked on 5.67.0-beta.15. The last item of the beta.12 reviews, and
-the only one that is IPv6-only: Kea 3.x stores the address columns of its IPv6
-tables as sixteen raw bytes, and Jen read them as text.
-
-**IPv6 addresses were printed as raw bytes, and could not be searched.** The IPv6
-code in Jen was written from research that said `lease6.address` is `VARCHAR(39)`.
-Read from `SHOW CREATE TABLE` against the database Kea's own installer creates, it is
-`BINARY(16)` — and so are `ipv6_reservations.address` and `excluded_prefix` — on every
-Kea Jen supports (3.0.3, 3.2.0 and 3.3.1; the kea-compat job now records the column
-types for each version and a test asserts them, so a future Kea that changes one is
-noticed first). With IPv6 management turned on, the IPv6 leases, reservations, devices
-and search results showed a run of unprintable characters where an address belongs,
-and searching leases for an address found nothing, because the search compared the
-text to a binary column. IPv6 management is off by default and Jen never writes these
-columns (reservations go through Kea's own `host_cmds` commands, which take text), so
-installs that only use IPv4 were never affected, and nothing in Kea's database was
-ever changed.
-
-Every IPv6 reader now converts the column through one function: sixteen bytes become
-the compressed address text, text is returned unchanged, and an empty value stays
-empty. The conversion is done in Python rather than in the query, so one code path
-serves MariaDB 10.11 and 11.4 and MySQL 8.0 alike. The reservation reader now also
-returns the excluded prefix of a delegated prefix. Lease rows come back in numeric
-address order, where the text order used to put `::10` and `::100` before `::2`.
-
-The lease search is worded differently because a binary column cannot be matched with
-`LIKE`. A search that is a whole IPv6 address, in any spelling, is an exact match on the
-address (it no longer also finds the longer addresses it is the start of); a fragment
-such as `2001:db8` or `db8:1` is matched in Python against the converted address, the
-hostname and the DUID of the rows the subnet, type and state filters leave, which at the
-size of an IPv6 lease table costs nothing.
-
-The tests that hid it were part of the problem. The unit suite's IPv6 tables
-were text columns, so every test that seeded an address seeded text and nothing could
-see the bug. They are binary now, as Kea's are, the system stack's database script
-matches, a test refuses a text literal in either column, every seeding statement stores
-bytes, and kea-compat reads rows stored the way Kea's schema stores them back through
-Jen's readers on each supported Kea (there is no DHCPv6 daemon in that matrix, so the
-rows are inserted directly).
-
-## [5.67.0-beta.15] - 2026-10-03
-
-Beta channel. Stacked on 5.67.0-beta.14. The smaller findings of the same two
-reviews of beta.12 — each too small for a release of its own, each a place where
-Jen proposed, claimed or silently did something the operator would not have
-agreed to. Everything here but the Podman and CA fields is in stable 5.66.0 or
-only a few releases old.
-
-**The identifier repair could rewrite a legitimate client-id.** The repair page
-(added in beta.11) offered, and ticked by default, every client-id that was an even
-number of hex characters. A client-id is option 61 and is opaque: embedded clients
-that send their MAC address as ASCII text (`001122334455`) exist, and for them the
-text is exactly what Kea must match. A client-id is now offered ticked only with
-corroboration from the lease table — a lease whose client-id is the decoded bytes,
-or, for a twelve-character text, whose hardware address is. With no lease to say it
-is listed as ambiguous and unticked, showing that no lease matches either form; when
-a lease shows the client sending exactly the stored text it is listed as left alone,
-without a checkbox, and is never repaired even if someone posts its id. Hardware
-addresses stay as they were, and a DUID must also decode to a DUID type word (1 to 4).
-The Health Center check fails only on a row certain enough to be ticked and mentions
-the ambiguous ones without failing.
-
-**Option values restored as hex text are now listed.** The repair only ever looked at
-the identifier. A conservative detector now looks at host-scoped DHCPv4 option values
-of fixed-width codes — subnet mask, routers, the server lists, time offset, MTU,
-broadcast address, the lease, renew and rebind times, the server identifier — for a
-value that is exactly twice the code's width, all hex digits, and decodes to something
-plausible (a real address, a contiguous mask, a lease time up to ten years). They are
-listed in a second table, unticked, for you to review and repair. Text options and the
-DHCPv6 tables are never listed, and the page says why.
-
-**A Podman container was treated as a development checkout.** Podman writes
-`/run/.containerenv`, not `/.dockerenv`, so a Podman box answered "dev": "Save &
-Restart", a port change and a certificate change said "restart by hand" and nothing
-restarted. Both markers now mean a container, with the same Update/Restart behaviour
-as Docker; the restart signals the server process and relies on the container's
-restart policy, which the Docker notes now say to set.
-
-**Two CA fields were missing.** The database migration page never passed a CA for the
-target, so a target that requires TLS refused the connection and one that merely
-allows TLS received the password in clear; the setup wizard's Connect step could not
-set `[kea_db] ssl_ca` at all (it used one already in the file). Each has an optional
-CA bundle field, carried through the connection test and the save, checked like the
-Kea API CA (a file on the Jen host, refused before anything connects), and the
-`[kea_db]` reference in the admin guide now lists `port` and `ssl_ca`.
-
-**A backup schedule could back up nothing and count as protection.** An enabled
-schedule with neither the Jen database nor the Kea reservations ticked was accepted,
-recorded a "run" every night with nothing in it, and satisfied the Getting started
-checklist. It is now refused, the checklist counts a schedule only when it is enabled
-and has a target, and a row saved that way earlier says "Nothing was backed up — no
-target is selected" as its status.
-
-**Three sentences now say what is true.** The restore warning for a plugin whose
-code is not on the machine said "its database row is kept", which reads as "its data
-is kept"; it now says the data is not restored by that run, stays inside the bundle,
-and returns when the plugin is reinstalled and the restore run again. The Reports
-point tooltip printed a "Total active" that was dynamic leases plus the number of
-reservations; it prints the active leases. The lenient restore report no longer
-indents "(none)" twice.
-
-## [5.67.0-beta.14] - 2026-10-03
-
-Beta channel. Stacked on 5.67.0-beta.13. The same two reviews of beta.12 that
-produced the last release found that Jen's own restore and import said
-"restored" and "rolls back completely" about things they did not guarantee.
-Every item here is old — all of it is in stable 5.66.0 — and each one was a
-sentence on a page, in a result line or in a promise next to the Uninstall
-button that the code did not keep.
-
-**A restore inserted with `INSERT IGNORE` and counted every row.** Replace mode,
-the recovery restore and the rollback that undoes a failed restore all went
-through one importer that used `INSERT IGNORE` whether or not it had just emptied
-the table, and reported the file's row count as restored. `IGNORE` turns a missing
-value in a required column, a foreign-key failure or a value that does not fit into
-a warning with a coerced value, so a mangled row was stored and counted, and a key
-that appeared twice in a file was dropped while both rows were reported. Replace
-mode is now a plain insert after the delete: any row the database refuses fails the
-table and the whole core transaction rolls back, and the number reported is what
-the database says it inserted, which must equal the file's. The importer also gains
-a strict mode, which `jen.tools.restore` always uses: a table missing here, a file
-whose rows have no column this schema knows, a table the restore was asked for but
-the file does not carry, a count the database does not confirm or (in merge mode) a
-skipped row stops the restore. `--lenient-plugins` still relaxes only the plugin
-half. A table whose rows have no recognised column is now checked before it is
-emptied, so a restore that cannot insert anything no longer empties the table first.
-Merge mode keeps `IGNORE` — existing rows win — but reports what it did: "3 added, 1
-skipped", never every row.
-
-**A scoped restore of `users` left rows pointing at nobody.** A restore runs with
-foreign keys switched off, so deleting a parent table's rows never cascades. Replacing
-only `users` left multi-factor methods, backup codes, trusted devices, passkeys,
-saved searches, dashboard layouts and API keys pointing at accounts that no longer
-exist. A scoped replace of a parent whose dependents the file carries but the
-selection omits is now refused before anything changes, naming them; a test compares
-the dependency list with the live schema's foreign keys so it cannot drift.
-
-**The import page promised a rollback it did not perform.** The confirmation page
-said "if anything fails it rolls back completely". The core tables did commit
-together, but each plugin's migration records, schema changes (which commit on their
-own in MySQL and MariaDB) and rows committed separately, so a failure in the sixth
-plugin left the core tables and the first five plugins restored. The restore tool
-always compensated with a snapshot; the page did not. Replace mode now takes the
-same kind of snapshot first — an ordinary export of the whole Jen database, in a
-private `pre-import-<time>` folder — and on any failure puts it back: every table,
-the plugin migration records exactly as they were, and any plugin table the failed
-import created. If the snapshot cannot be taken, nothing is imported; if putting it
-back also fails, the folder is kept and named. Merge mode takes no snapshot, and the
-page now states its real boundary instead: core tables commit together, then each
-plugin's tables one plugin at a time, and a failure stops there.
-
-**An uninstalled plugin's data left every backup.** The Plugins page said
-uninstalling keeps a plugin's tables and data. It did, in the live database, until the
-next backup: which tables belong to a plugin was answered only by reading the
-migration code of plugins whose files are on disk, and the one table list that every
-backup, recovery bundle, restore snapshot and database migration use was built from
-that answer. Uninstalling removes the files, so the tables dropped out of the very
-next backup while the page said they were preserved. Ownership is now persisted: a new
-table, `plugin_tables` (migration 29), is written by the plugin migration runner each
-time it completes, an uninstall marks the plugin's tables retained once no copy of its
-code is left, the table list includes every recorded table that still exists, and a
-reinstall reconnects them. The Plugins page now says "kept in the database and in
-every backup, and shown again when the plugin is reinstalled". A plugin uninstalled
-before this release was never recorded; its data is in the database but not yet in a
-backup until the plugin is reinstalled and uninstalled once more. Restoring onto a new
-machine without the plugin installed still cannot recreate its tables — a table is
-only ever created by the plugin's own code, never from a file — so the restore names
-the plugin and leaves its data in the backup.
-
-**An export's envelope was used before it was checked.** The parser guarded only
-decompression and JSON, so a file whose top level was a list, whose `_meta` was a
-string, whose table was not a list or whose row was not an object raised from the
-confirmation page and returned a server error, and `format` was unbounded (a format
-9 file was treated as "at least 3"). One validator now checks the shape and the few
-numeric fields the importers compare, bounds `format` by what this Jen reads, requires
-a real plugin id wherever a file names one (an id becomes a directory name), and
-returns "not a Jen export: <reason>" — the parser's own sentence, never part of the
-file. The upload route recognises gzip by its first two bytes instead of by trying it:
-a plain-JSON export, which the parser has always accepted, is no longer refused as
-"not a valid gzip export", goes through the same size cap and memory check, and a
-truncated gzip is a message rather than an unhandled error.
-
-## [5.67.0-beta.13] - 2026-10-03
-
-Beta channel. Stacked on 5.67.0-beta.12. Two independent reviews of beta.12 found
-four ways Jen's own database tools could destroy or corrupt data that was already
-on the target, and a fifth way a backup could carry the wrong rows. Every one of
-them is old — they are in stable 5.66.0 too — and none could have been seen by
-Jen's unit suite, because that suite defined Kea's tables with no unique key, no
-foreign key and no lookup table. This release first teaches the tests the real
-schema, then fixes what the real schema shows.
-
-**The tests now run against Kea's real schema.** kea-compat already installs
-ISC's schema with `kea-admin db-init`; a new module drives Jen's import, merge,
-overwrite, migration and reservation export against it on Kea 3.0.3, 3.2.0 and
-3.3.1, records the schema's facts with each run, and the unit suite's Kea tables
-are now ISC's own definitions: the unique keys on `hosts` for the identifier,
-type and subnet, the foreign keys from the options and IPv6 reservations to
-`hosts`, the lookup tables, `schema_version`. The first runs measured things
-that had only been reasoned about: the options tables carry *both* an
-`ON DELETE CASCADE` and a legacy `NO ACTION` constraint on the host, so deleting
-a host that has options is blocked rather than cascaded; a host's options use
-scope 3; and the options tables require a `client_classes` value with no
-default, which an older backup does not have.
-
-**A failed migration dropped the target's own tables.** The migration created
-tables from the source's definitions with `IF NOT EXISTS`, recorded every table
-as created whether or not it was, copied with `INSERT IGNORE`, and on any failure
-dropped everything it had recorded. A failure is nearly certain on a target that
-already has rows, so the usual order — run `kea-admin db-init` on the new server,
-then migrate — dropped the new server's `hosts`, options and IPv6 tables. The
-target's condition is now checked before anything is written. A Kea migration
-copies **data only** into an initialised Kea database of the same schema major
-version (Jen never creates or changes Kea's tables), in one transaction with plain
-inserts, verified per table; if the rollback cannot be confirmed, exactly the rows
-it inserted are deleted by primary key. A Jen migration needs the tables to be
-absent from the target, refuses an empty or unknown selection instead of
-widening it to everything, and drops only tables it created.
-
-**An import attached reservations to the wrong host.** The importer inserted each
-host with the id written in the file and then every option and IPv6 reservation
-by that same id. A file host whose id collided with a different host already in
-the target was ignored, while its options landed on the target's host. A
-`host_id` in a file is no longer an identity: each reservation is matched by
-identifier, type and the two subnets (what Kea's unique keys mean by "the same
-reservation"), inserted without an id when absent, and everything that belongs to
-it follows the id the target assigned.
-
-**Overwrite deleted what it was meant to keep.** It was `REPLACE INTO`. On a real
-Kea the blocked delete was swallowed and counted as "skipped", so an overwrite
-quietly changed nothing. It now updates the matched reservation in place and
-replaces only the option and IPv6 tables the file contains: an IPv4-only file
-leaves a host's IPv6 reservations and options alone.
-
-**Every error was "skipped".** Any exception on a row was counted as a skipped
-duplicate and the transaction committed. Now only a duplicate key in skip mode is
-skipped; anything else aborts the import, rolls it back whole and names the table
-and row, never a value. A backup from before Kea 3.2 is still importable: the
-columns a newer schema requires are filled with their empty value.
-
-**The reservation backup carried global, subnet and class options.** It exported
-the whole options tables, and restored them by their auto-increment ids. It now
-exports exactly the options set on a reservation (host-scoped, Kea's scope 3),
-one fixed query per table, and a test refuses an unfiltered one.
-
-While reading the real schema one more thing turned up that this release does
-not change: Kea 3.x stores `ipv6_reservations.address` as 16 binary bytes, where
-Jen's IPv6 reader expects printable text. IPv6 is off by default; it is tracked on
-its own.
-
-## [5.67.0-beta.12] - 2026-10-02
-
-Beta channel. Stacked on 5.67.0-beta.11. One report, from the maintainer's own
-install: on Management → Reports, "Projected (trend)" was crossed out in the
-legend of the Production, VLAN70 and Protected charts, and only IoT drew a
-projection — "why is it crossed out, why is IoT the only one?"
-
-**The projection was drawn for a rising trend alone.** The forecast has always
-fitted a straight line through each day's peak and read three things off it: the
-trend, the day the pool would reach 90 % and 100 %, and a dashed line for the
-chart. The dashed line was built only when the trend was rising, so on an install
-with one rising subnet exactly one chart drew it — while the cards for the falling
-and flat subnets (−0.53/day, −0.06/day, +0.00/day) had a perfectly good fit that
-was thrown away. The line is now built for rising, flat and falling trends
-whenever the fit exists: thirty days ahead, every value kept between zero and the
-pool size, so a falling line bottoms out at zero and a rising one still stops the
-day it would fill the pool. The exhaustion dates stay rising-only — a pool that is
-flat or emptying has none.
-
-**A hidden dataset is drawn struck through.** Where there was no projection the
-chart still added the dataset, marked hidden, and Chart.js draws a hidden dataset's
-legend label crossed out — its convention for "the viewer switched this off". An
-absent projection therefore looked like a disabled feature, and clicking the label
-toggled nothing into view. Now, when there is genuinely nothing to project (fewer
-than seven days of history, or no pool size recorded), the dataset is not added at
-all and one muted sentence under the chart says why — "No projection yet: 4 more
-day(s) of history needed", or "No projection: this subnet has no pool" — so the
-legend lists only what is drawn.
-
-**The dashed line began beside nothing.** The chart plots Dynamic and Reserved as
-two separate lines, but the forecast is fitted on their total, and the dashed line
-was anchored at that total: on the IoT chart the two lines sat near 40 and 21 and
-the projection started near 60. Each chart now carries a thin *Total active* line,
-the dashed line visibly continues it from its last point, its legend entry reads
-"Projected total (trend of daily peaks)", and the tooltip on a projected point says
-it is an estimate rather than a reading.
-
-The sentence on each card agrees with the chart — "falling — about 12 in 30 days",
-"flat — holding near 80" — with the number of days taken from the projection
-itself. The user guide says what the dashed line is (a straight-line fit of each
-day's peak over thirty days, carried thirty days forward) and what it is not (a
-guarantee). The docs-screenshot journey now asserts that every chart has a
-projection and no dataset hidden, and the demo dataset gives Production a falling
-trend so the Reports image shows one.
-
-## [5.67.0-beta.11] - 2026-10-02
-
-Beta channel. Stacked on 5.67.0-beta.10. The first item is the most serious
-thing an outside review of 5.67.0-beta.3 turned up, and it is not new to this
-round: **it is in the stable 5.66.0 release too.** The rest of the review's
-items were either fixed in earlier betas or are in this one.
-
-**Kea's binary columns came back as text.** An export wrote every binary value
-as a bare hex string, and nothing anywhere decoded it. A restore of any Kea
-backup, an import of a Kea export file, and a Kea database migration all
-stored that text: the six-byte MAC `34:13:43:e6:0e:2a` came back as the twelve
-bytes of the characters `341343e60e2a`. The reservation row still looked right
-in every listing — right address, right name — and Kea never matched the client
-to it again. It touched `hosts.dhcp_identifier`, `lease4.hwaddr` and
-`client_id`, and every per-host option value. Jen's own tables and the bundled
-plugins' have no binary column, so the Jen export and the recovery bundle were
-never affected.
-
-Export format 3 writes a binary value as `{"$bin": "<hex>"}` — a typed
-object, never a guess, so a string that merely looks like hex stays a string —
-and records which columns were binary. The importer decodes by the **target's
-own column types**: a tag is always decoded; a bare string bound for a binary
-column in an older file (what every existing backup holds) is decoded as hex; a
-value that is not valid hex refuses *that table*, naming the column and row,
-before its first insert — it never puts text into a binary column, and the
-rest of the file still imports. A migration no longer goes through the export
-format at all: one streaming copy hands the driver's own values across, bytes as
-bytes. The permanent test compares `HEX(original)` with `HEX(restored)` for
-every binary column against a real database — through export, wipe and import,
-and through a migration into a second database — including an option value that
-is not valid UTF-8, a hostname that looks like hex, and the IPv6 tables.
-
-**If you ever restored or migrated Kea reservations through Jen, check.** A new
-Health Center row, *Kea reservations have plausible identifiers*, flags `hosts`
-rows whose identifier is the text of its own hex, and a superadmin page under
-Settings → Databases → Import (*Check reservation identifiers*) previews each
-one — what is stored now, what it will become — and repairs exactly the rows
-you tick, each only if it still holds the bytes the preview showed. It
-recognises hardware addresses, DUIDs and client ids of plausible length;
-circuit ids and flex ids are never flagged, because hex text is legitimate
-there. Per-host option values cannot be told from intended ones, so they are
-not touched: check them by hand after a restore made before this release.
-
-**The scheduled "Kea's database" backup was two tables.** It saved `hosts` and
-`dhcp4_options` — no IPv6 reservation, no DHCPv6 option, no lease — while the
-setup page called the box "Kea's database". The backup is now the group
-*Kea host reservations (IPv4 and IPv6)* — `hosts`, `dhcp4_options`,
-`dhcp6_options`, `ipv6_reservations`, in foreign-key order, restored in that
-order whatever order a file lists them — and is named that everywhere a backup
-is named. Leases stay a separate, explicit export, with the reason on the page:
-they are transient, so they are never part of a backup.
-
-**The Kea export built whole tables in memory.** It assembled every row of every
-table into a dictionary, serialised it, and the backup routes parsed it again. It
-is now the Kea twin of the Jen export: a server-side cursor, one row at a time,
-the metadata last, written through the same publish-or-leave-nothing path, and
-the download streams a temporary file it removes afterwards.
-
-**A recovery that lost a plugin's data reported success.** A failed migration
-replay, a failed row import or a failed invariant check for a plugin were
-warning lines; the restore printed them, started Jen, passed the health wait and
-exited 0. For a plugin whose code is on the machine they are now errors that name
-the plugin and the table, and the restore takes the same rollback every failed
-apply gets — configuration, content and database back as they were. `--lenient-plugins`
-is the explicit escape; the failures it accepts are printed and recorded in a
-`restore-report.txt` beside the snapshot. A plugin whose code is absent stays a
-warning, since its data is still in the bundle. The import page shows the same
-failures as errors, not as a line among the successes. A restore drill, and the
-system suite's recovery scenario, now include the failing case.
-
-The pytest job grants the test user the right to create `jen_test_` scratch
-databases, which the migration tests need; those tests fail rather than skip if
-they cannot.
-
-## [5.67.0-beta.10] - 2026-10-02
-
-Beta channel. Stacked on 5.67.0-beta.9. Two parts, from the same audit. The
-first is about CI: a handful of checks that could not fail, and one path
-nothing had ever run. The second is about statements — in the docs, the
-templates and the installer — that the code contradicted.
-
-**CI that can fail.** Every workflow now runs its steps under
-`bash -eo pipefail`; before, a pipeline's status was its last command's, so
-`sudo ./install.sh … | tee log` reported `tee`'s success whatever the installer
-did. Every `! grep -q …` assertion — bash exempts a negated command from
-`errexit`, so each one was a no-op — is an explicit failing check, and a test
-refuses a workflow that reintroduces either spelling (or `cmd | grep -q`, which
-under pipefail fails for the wrong reason when grep exits early). The "upgrade
-from the latest stable" leg used to run *after* HEAD's own install and a
-level-1 uninstall, so it started with HEAD's migrated database, markers and
-updater, fed a prompt script written for 5.66.0 to whatever "latest" was, and
-swallowed any failure of the stable installer with `|| echo`. It is its own job
-now, on a clean runner, with the stable version pinned in the workflow, the
-release signature checked against the key the repository pins (it used to be
-checked against the key inside the tarball being checked), the *value* of
-`jen_version` compared to HEAD's rather than its presence, and no mask. And the
-hop nothing ran — the stable release's own updater taking a box onto this
-release — now runs: `tools/ci_updater_hop.py` loads 5.66.0's own
-`jen-update-root.py`, drives its real `main()` with the download and signature
-steps stood in for (named as such), lands HEAD's tree through it, then runs
-HEAD's updater for a second hop and asserts the rendered unit and the Update and
-Restart controls. Its first runs found two defects in the new CI itself (the
-pytest jobs could not import PyYAML; a checksum was read through a redirect the
-unprivileged shell cannot open) and nothing in Jen.
-
-**The manual-install page is run.** `docs/manual-install.md` told an operator
-to copy a `jen.service` that stopped shipping in 5.67.0 and to append an
-`Environment=` line to the file that was not there; it cut `5.67.0-beta.N` down
-to `5.67.0` when naming the release directory (the updater would later remove
-that directory as stale, under the running service); it said two sudoers grants
-for three; and it never installed `jen-plugin-install.service`. It is rebuilt
-around a new `jen-update-root.py --render-unit`, the one renderer of the unit
-template — the function the in-app updater runs on every update — and its
-commands are extracted by `tools/doc_commands.py` and run, in order, by a new CI
-job on a clean runner, with named stand-ins only for what a person does by
-hand. The job's first run followed the whole page and then found Jen refusing to
-start: the page's "only `[jen_db]` has to be right" was false, because a missing
-`[kea]` section is fatal. The page now says what is true.
-
-**Statements the code contradicts.** No `lease4-*` or `lease6-*` command is sent
-anywhere, so the setup wizard, the Health check and the README no longer say a
-missing `lease_cmds` hook costs lease search or fails a check; `host_cmds` is
-what reservation add, edit and delete use, and the pages say that. The README
-and features page said six alert types where twenty-one are defined; "nothing
-runs on your Kea servers" sat above the paragraph describing the helper that
-does, and the about page named only a few of its nine operations (a new
-operation now fails a test until the page names it). The compatibility table's
-"generated from CI" was true in one direction only; a test now fails when the
-table claims a version CI does not run, and the page says plainly that Control
-Agent mode is covered by tests against a stub, not run against a real Control
-Agent. Every statement about ISC Stork was checked against ISC's own pages,
-which the README and the about page now cite; what no page says ("added more
-recently", "early stage", "built to centralize monitoring across a fleet") was
-removed, and the two documents describe it in the same words.
-
-**Found beside them.** The installer and `run.py` wrote `[ddns] provider`; the
-application reads `dns_provider`, so the DDNS answer given at install time never
-took effect. "Save & Restart", the port change and the certificate upload and
-removal ran `sudo systemctl restart jen` unconditionally: in Docker nothing
-restarted while the page said it was. One `runtime.restart_service()` chooses by
-deployment — the exact command the sudoers file grants under systemd, a stop of
-the gunicorn master under Docker (both compose files restart the container), and
-a plain instruction to restart by hand on a checkout — and the pages say which
-happened. The Docker image never copied `contrib/`, so the Grafana download
-errored there. Eight pages printed a literal `/opt/jen`, `/etc/jen` or
-`/var/lib/jen` — the database page's backup directory was wrong on every install
-since 5.13 — and now render the layout's directories. The installation,
-upgrading and troubleshooting guides lose the per-step `/setup` skipping that
-does not exist, the Docker methods that could not work, an 0600 tightening
-credited to an installer run that never reaches it, and a recovery command for a
-box stuck on an affected beta that does nothing unless the box is allowed to see
-pre-releases. `CONTRIBUTING.md` and `CLAUDE.md` say where configuration is read
-once `JEN_ROOT` is set.
-
-## [5.67.0-beta.9] - 2026-10-02
-
-Beta channel. Stacked on 5.67.0-beta.8. The same audit that produced the last
-two betas read the installer and the uninstaller against what they claim to do;
-everything below is something they documented and did not do, or did without
-saying so. Each one is now exercised by the install job against the real
-script, on both Ubuntu releases.
-
-**Layout keys in an answers file were silently ignored.** `install.sh`'s
-header, `--help` and the installation guide all say `JEN_APP_DIR`,
-`JEN_CONFIG_DIR` and `JEN_DATA_DIR` work in an `--answers` file, and they did
-not: the layout was resolved at the top of the script, before the answers file
-had been read, so an install that asked for `/srv/jen/app` went to `/opt/jen`
-and recorded the defaults. The paths now derive from a function that runs
-after the flags, the answers file and the root check, in that order — and not
-at all for `--docker`, which has no layout. (The layout check also used to run
-before the root check; it no longer does.)
-
-**Install versus upgrade was "does the directory exist".** A pre-created empty
-`--app-dir`, which the layout contract allows, was refused as an attempt to
-relocate an existing install; and a directory with somebody else's files in it
-and no layout record was treated as an upgrade, tolerated, then re-owned and
-stamped as Jen's. The decision is the layout checker's now, by the same rule
-the rest of the contract uses: a recorded layout, a marker, or Jen's own
-content. An empty directory is a fresh install; a directory holding anything
-else is refused and left exactly as it was.
-
-**A reinstall rewrote the config it was told it would find.** `uninstall.sh`'s
-first level keeps the config and says a reinstall will detect it. On a box
-whose uninstall predated markers the installer refused its own config
-directory as "not empty and unmarked"; on a marked box it rewrote
-`jen.config` from blank Kea sections. Config and data directories are now
-recognised by their content and stamped when the install completes, and an
-existing `jen.config` is kept unless `--configure` is given — an answers file
-only feeds a *new* config, and says so.
-
-**The uninstaller asked the wrong checker.** It preferred the installed
-updater, which on a 5.66.0 box (or after a rollback to one) answers
-"unrecognized arguments" and stopped every uninstall there. It now uses the
-copy that ships beside it, falls back to the installed one only if that
-answers `--check-layout --help`, and otherwise refuses with a message saying
-what to run — having removed nothing. The third level, "remove everything",
-also removes the root self-updater and its two oneshot units, which it used to
-leave behind.
-
-**`--restore` and `--rollback` ran with half an environment.** They exported
-the application root alone; with only that, the configuration directory is
-derived under it, so every restore printed a reload warning, its sizing pass
-and the rollback snapshot used whatever database the *bundle's* own config
-named, and a legacy writable plugin read as missing. All three directory
-variables are exported on both, and a source test now checks every launch of
-Jen's own code in the installer for the same three together.
-
-**A failed verification skipped the rollback, and a failed fresh install left
-its layout record.** The verification step's three failure exits are now real
-fatals, which is what rolls an upgrade back; and a fresh install writes its
-layout file last, so one that failed halfway cannot make a retry with
-different directories look like a relocation.
-
-**The pre-upgrade backup said "saved" whatever happened.** It was an
-installer-only second implementation: whole databases held in memory, the
-config read with interpolation (a `%` in a password failed it), run as root,
-failures written to a temporary file while the summary printed success. It is
-now the application's own backup primitive — the streamed export with plugin
-tables included and the connection's TLS settings, published atomically with
-its sidecar — run as the service user. It reports exactly what was and was not
-written (Kea's own database is never part of it), a failed backup asks whether
-to continue without one, and an install too old to have the primitive says so
-instead of a second copy quietly standing in for it.
-
-**Smaller, from the same pass.** An answers file may now put spaces around the
-`=`, quote a value, or start a line with `export`, none of which becomes part
-of the value; the database the installer offers to create quotes the password
-as SQL and feeds it on standard input; the admin password reaches the seeding
-step the same way, so it is no longer in a process listing; `umask 022` is set
-so a hardened sudo umask cannot make the virtualenv unreadable to the service
-user; a missing Jen database password in a non-interactive run is a fatal
-error naming it (an explicitly empty one still counts as given); the layout
-grammar is anchored so a trailing newline no longer passes it; and a path
-under `/root` is refused, since the service's home protection hides it.
-
-The install job now also runs a relocated install through its whole life —
-fresh install, an interactive upgrade that must produce a real backup,
-`--repair`, and the uninstaller at every level — asserting at each step that
-nothing was created under the default paths.
-
-## [5.67.0-beta.8] - 2026-10-02
-
-Beta channel. Stacked on 5.67.0-beta.7. The same audit that produced the
-previous beta also walked the first-hour setup wizard end to end and found
-what was still wrong with it; every item below was verified against the
-shipped code, and the connection-mode fix was written only after the three
-real Kea releases the compatibility job runs (3.0.3, 3.2.0 and 3.3.1) had
-been asked what they actually answer.
-
-**Connect saved every direct-mode Kea as Control Agent mode.** The step
-probed the URL you typed with a command carrying a `service` field and
-recorded "Control Agent" for any answer. A Kea daemon's own control socket
-answers such a command exactly as it answers one without — on all three
-versions — so the answer proved nothing, and a Kea 3.2 site (which has no
-Control Agent at all) that typed `http://kea:8004` was saved as Control Agent
-mode; after that the IPv6 and DDNS connections fell back to the DHCPv4
-socket, and an existing direct-mode install that merely re-submitted the
-form was flipped. The mode now comes from asking what answered — the
-Settings page's own daemon identification, which both places now share — and
-a Control Agent is accepted only once the DHCPv4 service behind it answers
-too. An answer that cannot be identified keeps the mode already saved for
-that URL, and says it could not tell.
-
-**The URL you typed is the one that is tried, and the one that is blamed.**
-A typed port is used as typed: Jen guesses the daemon's default port (8004,
-or 8006 for DHCPv6) only when you gave no port at all, where it used to
-replace `https://kea:9004` with `:8004`. Addresses are built so an IPv6
-literal stays bracketed — the old construction produced
-`http://2001:db8::1:8004`, which no client can parse. And when the
-connection fails, the message is the error for the URL you typed, with any
-guess as a second line; it used to show only the last attempt, so a wrong
-password read as "connection refused" on a port nobody had typed.
-
-**Connect now tests what it saves.** Clearing the client-certificate fields
-probed with the *saved* certificate (so the probe passed) and then saved the
-empty fields (so every later call failed); "no client certificate" is now
-said explicitly. A blank password field means "use the saved one" for the
-test as well as the save — saved passwords are never shown, so a revisit
-always starts blank. The Kea database test uses the port and TLS settings
-the application's own connection will use, the form has a port field, and
-a new `[kea_db] port` key (and `[kea6_db] port`, inheriting it) is honoured
-by every connection the application makes — before, it dialled 3306
-whatever was written. The connection pool is rebuilt when Connect saves,
-where it used to keep dialling the placeholders it was built with until a
-restart.
-
-**IPv6 enabling merges instead of replacing.** "Manage IPv6 in Jen" rewrote
-the whole `[subnets6]` section with generic names and no IPv4 pairing — the
-replacement the IPv4 side stopped doing a beta ago. It now keeps the name
-and pairing of every subnet whose ID and network match, lists whatever Jen
-has that Kea did not report with an unchecked "remove" box, and writes
-nothing else if the subnets are refused. The DHCPv6 check requires a real
-kea-dhcp6 answer — a `Dhcp6` section in its config — where any Kea endpoint
-used to pass and a missing section read as "0 subnets".
-
-**The Found step stopped telling half-truths.** "N peer(s) configured"
-counted Kea's high-availability peers, not the servers Jen manages, so two
-peers and one managed server read as if both were connected. The page now
-shows both numbers, and an **Add this peer to Jen** action for each peer Jen
-does not manage, which opens the additional-servers form with the name, URL
-and role filled in — and the credentials left for you. Submitting the step
-while Kea is unreachable used to drop the names you typed and mark the step
-done with no subnets; it now saves nothing, says why, and stays open. "Took
-N minutes" at the end of the wizard used to keep growing on every revisit;
-the finish time is stored when the last step resolves.
-
-**An SSH failure is a message, and the recovery step can finish.** "Skip"
-on the helper step followed by "Capture baseline", and "Install the helper"
-before the key is authorised (the normal first try), both let a connection
-exception escape as a server error. The connection is now opened inside the
-handled path, with a message naming the user, the host and the reason, an
-empty host is refused before anything dials it, and the Settings pages say
-the same. On the recovery step, a bundle download is a form submission whose
-response is a file, so the page never reloaded and **Continue** never
-appeared — the only way forward was "I will do this later". The page now
-notices the download finishing and offers Continue, and a passphrase
-mismatch keeps you in the wizard rather than sending you to Settings.
-
-Smaller fixes in the same pass: Getting started no longer links a plain
-administrator into pages only a superadmin may open, and its navigation
-count is kept per role and subnet scope instead of one number cached for
-whoever rendered first.
-
-## [5.67.0-beta.7] - 2026-10-02
-
-Beta channel. Stacked on 5.67.0-beta.6. A security audit of the whole
-`v5.66.0..v5.67.0-beta.6` range — the layout/installer work, the setup
-wizard, deployment paths, and the CI claims made about all of it — found
-seven real problems, every one in already-shipped code.
-
-**The installer built the whole app as root.** `install.sh`'s own
-`verify_install()` ran two inline Python snippets — the template check
-and the module check — as root, unwrapped, where the existing DB-seeding
-step right above them correctly used `runuser`. Both call `create_app()`,
-which imports every enabled plugin out of the data directory the
-**service account** owns: a compromised service account that planted a
-plugin there got it imported as uid 0 on the very next `install.sh` run
-(an upgrade, `--unattended`, or `--repair`). Fixed: both snippets run as
-the service user now, exactly like the seed step. A new source-guard
-test scans every inline Python snippet in `install.sh`/`uninstall.sh`
-and refuses one that imports Jen's own code without `runuser` — the
-only Python this project ever runs directly as root is the dedicated
-self-updater script, pinned pure-stdlib.
-
-**A symlink in the wrong directory could get root to overwrite one of
-its own trusted files.** The root-owned `.jen-directory` layout marker
-lives inside directories the service account owns by design; the code
-that writes it opened the marker's path directly and `chown`/`chmod`'d
-it by path too, following a symlink planted there straight to, say, the
-sudoers file. Now refuses outright if anything unexpected already
-occupies that name, and writes through a disposable temporary file
-swapped into place atomically — a symlink is replaced, never walked
-through, even in the narrow window between the check and the write.
-
-**A pre-existing problem, since the very first versioned-release
-installer: an upgrade's own rollback snapshot of root's files — the
-sudoers grant, the systemd units, the self-updater script itself —
-lived in a directory the service account owns.** A compromised service
-account could edit the snapshot and simply wait for a future rollback to
-have root restore the tampered copy straight into place. Moved under
-the root-owned application directory, where it always should have
-lived.
-
-**The self-update service never actually ran the layout checks it was
-documented to run.** Four separate documents said the root-privileged
-updater re-validated the install's own directories — ownership, a
-writable ancestor, the dedicated-directory marker — on every run; the
-code only ever checked file trust and grammar. Both of its entry points
-now run the real check first. A present-but-corrupted layout file used
-to crash the whole process instead of refusing cleanly — fixed. Settings
-→ Health gains the "install path is trusted" row the test suite has
-referenced since the layout work first shipped but nothing actually
-built.
-
-**A Docker container with no Kea configured crash-looped forever.** This
-project's own README says to leave the Kea section blank and connect it
-afterward from the browser — but the container's config generator wrote
-nothing at all unless a Kea URL was present, so Jen had no config file
-to even start from. Fixed: a config is written whenever Jen's own
-database is configured, Kea or not, and is never regenerated once
-anything has actually been set up. `docker_install` now waits for a real
-health response instead of trusting that a container merely exists.
-
-**A recovery bundle's own freshness check could 500 the whole setup
-wizard.** Two different clocks — one written timezone-aware, one written
-timezone-naive — were compared directly the moment an operator actually
-finished downloading a bundle — raising a type error a nearby
-`except ValueError` was never going to catch. One shared, always-aware
-clock fixes it, verified through the real code paths that write both
-timestamps rather than a hand-built test case that happened to dodge the
-mismatch entirely.
-
-**A single oddly-named subnet could break every later subnet change.**
-Validating a subnet's name on every write — including names a previous
-release had already accepted without complaint — meant one old name
-alone could make a brand new, unrelated add, delete, or import fail
-after Kea's half of the change had already gone through. Now an
-untouched name is left exactly as it was; a name that genuinely can't be
-stored at all is repaired automatically and logged rather than
-discarded. A Windows DHCP import sanitizes a scope's own display name
-the same way before it ever reaches Jen's own store.
-
-`docs/ARCHITECTURE.md`, `docs/docker.md`, the README, and the usual
-`docs/upgrading.md` entry all reflect the above.
-
-## [5.67.0-beta.6] - 2026-10-02
-
-Beta channel. Stacked on 5.67.0-beta.5. A native install running since
-5.67.0-beta.2 has been silently misdiagnosed as a container.
-
-**The bug.** `jen/services/plugins.py`'s `is_systemd_host()` answered
-"is this a systemd-managed install" by checking whether `JEN_ROOT` was
-set in the environment — accurate since v5.3.3, when `JEN_ROOT` meant
-exactly "a dev or CI checkout." 5.67.0-beta.2's relocatable install made
-the rendered systemd unit set `JEN_ROOT` too
-(`Environment=JEN_ROOT=<app_dir>/current/app`), so from that release a
-real native install answered "not systemd," indistinguishably from a
-container. The visible symptom: Settings → System shows "Updates are
-the container image's job" instead of an Update button, and the Restart
-card talks about `docker compose restart jen` — on a box installed with
-`install.sh`, never Docker. The same wrong answer silently routed
-plugin installs onto the in-process path meant for Docker, and stopped
-`content_dir_incomplete()` (jen/services/content.py) and the
-venv-migration check (jen/__init__.py) from ever firing on a real
-production box, for the identical reason.
-
-**The fix.** `jen/services/runtime.py::deployment()` is now the one
-place that question is ever answered, and it never reads `JEN_ROOT`:
-`/.dockerenv` for a container; otherwise the rendered unit's own new
-`Environment=JEN_SERVICE_MANAGER=systemd` line, or — covering a unit
-rendered before this release, or a hand-written one from
-`docs/manual-install.md` — `INVOCATION_ID`, which systemd sets for
-every unit it starts. `is_systemd_host()` is kept as a one-line wrapper
-around it. A source-guard test refuses `JEN_ROOT` as a deployment
-condition anywhere outside `jen/extensions.py` (a legitimate path
-default) and `runtime.py` itself, so the bug class can't come back
-quietly a second time.
-
-**Affected betas: 5.67.0-beta.2 through 5.67.0-beta.5.** The button this
-bug hides is the only normal way to reach the fix, so a box stuck on one
-of them needs the one line the button itself would have run:
-
-```bash
-sudo systemctl start jen-update.service
-journalctl -u jen-update -f
-```
-
-Nothing else about an affected install was wrong — this is a pure
-detection bug, not data loss or a security issue — and nothing here
-changes behavior on Docker or a dev checkout, which both still identify
-themselves correctly.
-
-**Found beside it.** The pre-update database backup
-(`jen/routes/settings/updates.py::self_update()`) was still the
-whole-database-in-memory path (`export_jen()` → `json.loads` →
-`_write_backup()`) that the recovery bundle and the manual/scheduled
-backups already moved away from — streamed instead through
-`publish_backup()` + `write_jen_export()`, the identical pattern
-`database.py`'s own manual-backup route uses.
-
-`docs/troubleshooting.md` and `docs/ARCHITECTURE.md` §6 carry the full
-detail and the affected-beta list for anyone who lands here from a
-search engine rather than this page.
-
-## [5.67.0-beta.5] - 2026-10-01
-
-Beta channel. Stacked on 5.67.0-beta.4. A ChatGPT review of the layout
-and `/setup` work shipped in 5.67.0-beta.2 through beta.4 confirmed
-twelve findings; this release fixes all of them.
-
-**One layout contract, enforced the same way everywhere.** `jen-update-root.py`
-gains `check_layout()` — the single place `app_dir`/`config_dir`/`data_dir`
-are validated, called identically by `install.sh` (a fresh install or an
-upgrade), the in-app updater (every privileged run), and `uninstall.sh`.
-It refuses a shared system root outright (`/`, `/etc`, `/usr`, `/bin`,
-and the like), requires a fresh-install target to be absent, empty, or
-already carrying a root-owned `.jen-directory` marker, and now hard-stops
-when any *existing ancestor* of one of those directories is writable by
-group or other — a local user could otherwise rename the real directory
-aside and plant a symlink for the next privileged run to follow.
-`install.sh` and `uninstall.sh` were rewritten onto this one checker
-instead of each keeping its own copy of the same rules, and CI gained a
-dedicated negative leg (`install-layout-negative`) that chmods an
-ancestor permissive and asserts the install refuses. A genuinely latent
-bug came out of writing that leg: `chmod -R a+rX` only adds permission
-bits, so a world-writable directory left behind by a permissive umask
-was never actually fixed by it — `chmod -R a+rX,go-w` does.
-
-**A relocated install stops writing `/etc/jen` into itself.** `--app-dir`/
-`--config-dir`/`--data-dir` (5.67.0-beta.2) correctly derived every real
-path, but the generated `jen.config`, the rendered systemd unit, and a
-few updater log lines still hard-coded the historical defaults —
-cosmetic, since nothing actually read the wrong value, but confusing to
-read on a relocated box. Fixed, and now guarded by a CI step that greps
-the generated output of a relocated install for a stray `/etc/jen`,
-`/opt/jen`, or `/var/lib/jen` literal outside the one place each is
-allowed to appear.
-
-**`/setup`'s Connect step can reach what Settings can.** Kea behind a
-private CA or requiring a client certificate (Kea's own documented
-mutual-TLS control socket) could be configured from Settings but not
-from the first-run wizard, which only ever tried a bare HTTPS `GET`.
-`jen/services/kea.py` gains `test_connection()` and `probe_command()` —
-one shared, TLS-aware probing primitive now used by both Settings' probe
-route and `/setup`'s Connect step, with a new Advanced TLS expander
-(CA bundle, client cert/key, "do not verify") on the Connect form. Tested
-against real local `ThreadingHTTPServer` instances wrapped in `ssl`, with
-a private CA and client certificates generated through the `cryptography`
-library, per this project's own rule against mocking probe/TLS behavior.
-
-**IPv6 tells the truth about what it hasn't checked.** "What Jen found"
-used to report `ipv6_enabled` — Jen's own switch state — in a way that
-read as a claim about whether Kea itself had DHCPv6 configured, which
-nothing on that page had actually verified. A new, explicit "Check for
-DHCPv6" action probes the real `dhcp6` service (a `config-get`
-`subnet6` listing) before anything v6-related is reported or offered,
-and "Manage IPv6 in Jen" only becomes available once that probe
-succeeds — kept separate from the existing SSH-based `toggle_ipv6()`,
-since a service that already answered a probe doesn't need starting.
-
-**Subnet names survive a second run of Setup, and an export schedule
-can't 500.** "What Jen found" used to propose a fresh name for every
-subnet Kea reported, discarding whatever an operator had already
-renamed it to, and silently dropped any subnet Jen knew about that
-Kea's live report didn't include this time. It now keeps an existing
-name when the same subnet id still has the same CIDR, lists anything
-orphaned as an explicit, unchecked removal, and merges into the stored
-subnet map instead of replacing it outright. Subnet names are validated
-once, in one place (`jen.config.invalid_subnet_name_reason()`), before
-anything is written — both from the add-subnet form and from `/setup`.
-The recovery-point step only marks itself done once a bundle from that
-session has actually finished downloading, not merely because a button
-was clicked, and a new "A recovery bundle exists" row on Getting
-started tracks the same fact. The database export schedule form now
-validates its hour and retention fields through one shared function
-(`dbexport.validate_schedule()`) and re-renders with a 400 instead of
-letting a bad value either silently fall back or crash the route. And
-"Investigate a client," the wizard's last step, now opens the full
-six-tab Investigation page instead of only the narrow Explain tab.
-
-Every finding above has its own docs update: `docs/installation.md`
-(the dedicated-directory requirement and the path grammar),
-`docs/runbooks.md` §5 (relocating an existing install), `docs/ARCHITECTURE.md`
-§3.1/§6 (the layout contract as the one source of truth), `docs/troubleshooting.md`
-(every layout refusal and its fix), `docs/user-guide.md` (the first-hour
-wizard as it behaves now), and `docs/upgrading.md`.
-
-## [5.67.0-beta.4] - 2026-10-01
-
-Beta channel. Stacked on 5.67.0-beta.3. The README is rebuilt around
-one sentence of positioning instead of 374 lines where nothing said in
-one line what Jen is, for whom, or at what scale.
-
-**One sentence up top, a ten-minute path beside the native install.**
-"Jen manages ISC Kea DHCP from any browser — a self-hosted console
-built for a homelab to a small business, one to a handful of Kea
-servers." sits right under the title, linking to a new plain-language
-`docs/about.md` for an indexer or someone deciding whether to try it.
-"Try it in ten minutes" (Docker, bundled database, three commands) sits
-beside "Install natively" — both showcase last Q's own new capability
-directly: leave Kea blank and connect it afterward from `/setup`,
-no longer something either path needs up front.
-
-**A feature matrix and a compatibility table that cannot drift.** The
-150-line feature-by-feature prose wall moves to `docs/features.md` and
-is replaced in the README by one row per area — what Jen does, what it
-needs (hook, helper, HA, Kea version). A new Compatibility section
-states exactly what's tested: Kea versions, OS, database, Python —
-generated from the truth, not hand-maintained. `tests/test_readme_compat_table.py`
-reads `.github/workflows/kea-compat.yml`'s own matrix and `tests.yml`'s
-install/pytest job matrices directly (regex over the raw YAML text,
-scoped to each job's own line range — no new dependency for Jen's real
-`requirements.txt`, since the CI `pytest` job installs only that file
-plus bare `pytest`) and fails if the README disagrees. A version bumped
-in CI without a matching README edit is caught here instead of being
-wrong forever.
-
-**The Stork comparison, re-verified.** Every claim was checked against
-ISC's current Stork documentation before being written, not carried
-forward from memory: the agent architecture, PostgreSQL, MPL 2.0, the
-three-tier RBAC with local-or-LDAP auth, and that Stork's own docs
-describe monitoring as the core with config editing added more
-recently and still incomplete. The six `/setup` screenshots from last
-Q's own CI artifact are committed into `docs/images/` alongside the
-existing eight.
-
-**Repository metadata and a social preview.** `gh repo edit` sets the
-description to the same one sentence, the homepage to `docs/about.md`,
-and nine topics (`kea`, `dhcp`, `isc-kea`, `dhcp-server`, `ipam`,
-`network-management`, `homelab`, `self-hosted`, `flask`) — previously
-none of the above. A 1280×640 social-preview image (the logo over a
-darkened dashboard screenshot, built with Pillow) is generated into
-`docs/images/`; uploading it to GitHub's own repo settings is a click
-only the maintainer can make. An ISC listing-request draft (what Jen
-is, the licence, the Kea versions tested weekly against ISC's own
-images, the link) is ready for the maintainer to send from their own
-account — nothing is submitted by this release.
-
-## [5.67.0-beta.3] - 2026-10-01
-
-Beta channel. Stacked on 5.67.0-beta.2. A fresh install's first hour now
-has a guide: `/setup`, a six-step wizard a superadmin lands on once, the
-first time they log in with Kea not yet connected — connect Kea, see
-what it found, install the Kea host helper, capture a config baseline,
-make a recovery point, investigate a first client. Every step can be
-skipped and picked up again later from Getting started, which now links
-straight into whichever step is still open.
-
-**Connect, and see what Jen found.** The connect step tests Kea's API
-and database live, in the browser, with the same two-attempt
-Control-Agent-then-direct-socket fallback Settings already uses, and a
-real retry on failure rather than a terminal re-prompt. Once connected,
-the found step shows Kea's version, which hooks are loaded (and what's
-lost without each one), HA status, IPv6, and the subnets Kea itself
-reports — named `Subnet<id>` by default, same as `install.sh`'s own
-discovery, editable before confirming.
-
-**The Kea host helper, baseline, recovery, and your first client.** The
-helper step walks through authorizing Jen's SSH key (generating one on
-the spot if none exists yet) and installing `jen-kea-helper` — calling
-the existing `install_helper()`/`check_helper()` exactly as Settings
-does, with no new sudo string anywhere behind it. The baseline step is
-one call to the existing `read_config()`, which already records a
-baseline revision as a side effect. The recovery step reuses the
-existing recovery-bundle route unchanged, plus the backup-schedule
-toggle. The investigate step shows the most recent leases with a one-
-click hand-off to `/tools/explain`, and marks the wizard's own
-elapsed-time clock complete.
-
-**Kea connects after install now, not during it.** `install.sh` no
-longer asks about Kea's API, database, subnets, SSH access, or DDNS at
-all — it asks for exactly three things: Jen's own database, the ports,
-and an admin password. An `--answers` file or `JEN_*` environment
-variable can still supply any of the Kea keys directly, silently
-skipping the matching `/setup` step; a scripted install with none of
-them produces a healthy, Kea-less Jen whose first superadmin login lands
-on `/setup` — proven by a new install CI leg that runs exactly that
-answers file end to end. Finding this gap also surfaced a real one:
-`AppConfig.load()` had required Kea's API and database config to even
-boot since v4.0.0, which would have refused to start a genuinely
-Kea-less fresh install before a superadmin could ever reach `/setup` to
-fill them in — Jen's own database is the one thing it genuinely can't
-run without, so that's the only section still required.
-
-The one-time entry redirect lives in `dashboard()` itself, not the
-forced-password-change route — the page every successful login of every
-kind (a forced change, a normal login, OIDC, a passkey, an answers-file
-install with the admin password already set) actually reaches, so it
-fires regardless of how a superadmin got there.
-
-A six-step journey (`tests/e2e/test_setup_wizard_journeys.py`) walks the
-whole thing through a real browser against the shared e2e Kea double;
-since every step writes something real and persistent through the exact
-choke point an operator's own save would use, and the live e2e server is
-shared across the whole suite, it snapshots and restores the config file
-byte-for-byte afterward rather than re-deriving every field a current
-(or future) step might touch. The six step pages also feed the README's
-screenshot set (`JEN_E2E_DATASET=demo`), for Q116.
-
-## [5.67.0-beta.2] - 2026-09-30
-
-Beta channel. Stacked on 5.67.0-beta.1. The app tree, the `/etc/jen`
-equivalent, and the user-writable data directory can now each be put
-somewhere other than the historical `/opt/jen`/`/etc/jen`/`/var/lib/jen`
-at install time — the common case being a separate data volume for
-uploads, database backups, and plugins without moving the application
-itself.
-
-**Where things live is a choice now, not a given.** `sudo ./install.sh
---app-dir DIR --config-dir DIR --data-dir DIR` (any left unset keeps its
-default) relocates a fresh install. The choice is recorded root-owned
-0644 in `/etc/jen-layout.conf`, deliberately outside `/etc/jen` itself:
-`/etc/jen` is chowned to the service user, so a root-trusted "where do
-things live" file has to sit somewhere nothing but root can ever write.
-Every later `--upgrade`/`--repair`/`--configure` run reads that file
-back automatically; passing one of the three flags again with a
-different value is refused outright — relocating an *existing* install
-is a runbook (`docs/runbooks.md` §5: stop Jen, move the directory, edit
-one line, `--repair` to re-render and verify the unit, start, confirm),
-never a flag, since a partial move would leave root-owned state in two
-places at once.
-
-**The validation is shared, word for word, by both sides.** A chosen
-path must be absolute, normalized, not `/`, not under
-`/tmp`/`/run`/`/proc`/`/sys`/`/dev`/`/home`, and the three directories
-may not be nested inside one another. `install.sh` additionally checks
-that every existing ancestor of a fresh `app_dir` is root-owned (a
-non-root-OWNED ancestor is still a hard refusal; a merely
-group/other-writable one — found on GitHub's own CI runner, which ships
-`/opt` mode 777 for its tool-cache installers — is a warning, with the
-real redirect attack closed by refusing an `app_dir` that already exists
-as a symlink). `jen-update-root.py` carries the identical path-validation
-rules in its own `load_layout()`, read from the same fixed
-`/etc/jen-layout.conf` path every time (never an argument — the sudoers
-grant pins this script's invocation byte-for-byte, and a path is exactly
-the kind of input the service user must never be able to hand to root).
-A present-but-invalid layout file is a hard refusal on both sides, logged
-and non-fatal-to-nothing — never a silent fallback to the defaults.
-
-**The systemd unit is rendered, not shipped ready to use.**
-`jen.service.template` carries `@@APP_DIR@@`/`@@CONFIG_DIR@@`/
-`@@DATA_DIR@@` placeholders, filled in by `install.sh` at first install
-and by `jen-update-root.py`'s copy of the same renderer on every later
-in-app update — without the render-not-copy fix, the first automatic
-update of a relocated install would have silently overwritten its own
-correctly-rendered unit with one hardcoded back to the defaults.
-`systemd-analyze verify` checks the rendered result once `current`
-exists, both in the installer and in CI. The rendered unit sets
-`Environment=JEN_ROOT=... JEN_CONFIG_DIR=... JEN_CONTENT_DIR=...`, which
-is the entire app-side implementation: `jen/extensions.py`'s existing
-`JEN_ROOT`/`JEN_CONTENT_DIR` overrides already did the work, and a new
-`JEN_CONFIG_DIR` override (mirroring the same pattern) is all the app
-itself needed to learn.
-
-**Four real bugs, found by a new test that parses every shipped file
-with `ast` and fails on a hardcoded `/opt/jen`, `/etc/jen`, or
-`/var/lib/jen` outside a comment or docstring** — every one would have
-made a relocated install silently write to the wrong, default location
-at runtime: the app factory's own `os.makedirs()` calls for the SSL/SSH
-subdirectories, the SSH-key-generation route's matching `os.makedirs()`,
-the Kea-CA module's `SSL_DIR` constant, and the Flask session secret
-key's first fallback candidate. A relocated install exercises all of
-this for real now too — a new CI leg does a full fresh
-install/upgrade/uninstall cycle at `/srv/jen/{app,etc,data}`, asserting
-the layout file, the rendered unit's environment, and that nothing
-landed at the historical default.
-
-See `docs/installation.md` ("Method 1c"), `docs/admin-guide.md`
-("On-Disk Paths"), `docs/runbooks.md` (§5), and `docs/ARCHITECTURE.md`
-(§3.1, §6.1) for the full picture.
-
-## [5.67.0-beta.1] - 2026-09-30
-
-Beta channel. Stacked on 5.66.0. `install.sh` has never been run by
-anything since gunicorn made `shellcheck -S error` its only gate —
-CI hand-created `/opt/jen` and `/etc/jen` for the unit suite, and the
-system-test suite runs Jen in Docker. A new `install` job now runs the
-real script, on both `ubuntu-22.04` and `ubuntu-24.04`, against a real
-MariaDB and a real `kea-dhcp4`: a fresh install from an answers file,
-the upgrade every 5.66.0 operator is about to make, and uninstall —
-gating every push and release the same way the rest of the test suite
-does.
-
-**A fresh install can be scripted.** `sudo ./install.sh --answers
-<file> --unattended` drives the whole wizard from a `KEY=value` file
-in the same `JEN_*` vocabulary `.env.example` and the Docker path
-already use — no new names to learn. The file is parsed line by line,
-never sourced, and refused unless it's a regular file not writable by
-group or other. The same `JEN_*` names also work as plain environment
-variables with no file at all. With a TTY, anything the file leaves
-out is still asked; without one, a missing required value is a fatal
-error naming it.
-
-**A failed connection test is a real choice now, not a shrug.**
-Interactively, a failed Kea API or database test offers retry (same
-values), edit (re-prompt them), or continue without it — each choice
-echoed so it's visible in the transcript. A value still equal to its
-own placeholder default when the operator chooses to continue anyway
-is never written to `jen.config`; the key is left empty instead, so
-Jen's own Health and Getting started pages say what's actually
-missing rather than a URL that only looks configured. When the Kea
-API test passes, its own subnet list is read via `config-get` and
-offered for confirmation before the manual entry loop is even
-reached. When the Jen database is local and root can already connect
-without a password, the installer offers to create it — the SQL
-shown first either way. The SSH user no longer defaults to `ubuntu`
-when nothing else is available. The disk check now walks
-`$INSTALL_DIR`/`$CONFIG_DIR`/`$CONTENT_DIR` up to each one's nearest
-existing ancestor and reports whichever is tightest, instead of a
-hardcoded `df /opt` regardless of where anything actually lives.
-
-**Cleaner, without a rewrite.** `main`'s mode dispatch is a table now
-— `MODE_STEPS["standard"]`/`["repair"]` name every step in order, so
-"what does `--repair` actually do" is one line to read. `collect_config`
-is eight functions (Kea API, Kea DB, Jen DB, admin, subnets, SSH,
-DDNS, ports), each under 60 lines, instead of one 325-line one.
-`--help` exists and prints every flag `main()` actually parses — a
-test checks the flags the argument parser recognizes, the flags
-`--help` prints, and the flags the header comment mentions all agree.
-`shellcheck` is raised from `-S error` to `-S warning`, and both
-scripts are genuinely clean at that level.
-
-**Four real bugs, each invisible until `install.sh` had somewhere to
-actually run.** `clear`, the first thing both scripts' banners do,
-exits non-zero whenever it can't resolve `$TERM` through terminfo —
-which every real operator's SSH session always has and no CI runner
-does; under `set -e` that silently killed the whole script before a
-single line of output. `verify_install()`'s template check
-pre-registered three Jinja filter names to keep its syntax-only
-validation from false-failing, but the real app has registered five
-since before this release — any template using `relfmt` or `hostname`
-has been failing this check, silently, on every fresh install, for
-the same `set -e` reason. Fresh-install admin-password seeding ran a
-raw `UPDATE users ... WHERE username='admin'` before anything had
-ever called `create_app()` on the box, so the table it was updating
-didn't exist yet — whatever password an operator typed was thrown
-away every time, while the completion summary still claimed it had
-been set; it now calls `create_app()` itself, once, as the service
-user, reusing the same `JEN_INITIAL_ADMIN_PASSWORD` mechanism the
-Docker path already had rather than re-implementing password hashing
-in bash. And `[[ condition ]] || return` with no explicit code
-inherits the failed condition's own exit status as the function's
-return value — harmless when only ever used as an `if`/`while`
-condition, fatal under `set -e` when called as a bare statement,
-which is exactly how the new mode-dispatch functions call each other;
-found in the new upgrade-confirmation step and, auditing for the same
-shape, one pre-existing instance in the rollback path the `INT`/`TERM`
-trap depends on.
-
-`jen.config` is `0600`, not `0640`, for good — both `install.sh`'s own
-chmod and `AppConfig`'s writer (which re-applies the mode on every
-Settings save) agree now, since owner and group have been the same
-user since v5.10.4 and the group-read bit never granted anyone
-anything. `print_summary`'s generic "Next steps" advice list is gone;
-the URL already at the top of the same box is the one next step, and
-the four paths right above it (Config/App/Logs/Restart) are the ones
-an operator actually reaches for.
-
-Docs: `docs/installation.md` gains a "Scripted / unattended install"
-method, fixes a stale claim that first login is `admin`/`admin` (it
-hasn't been since v5.17.0), and notes that a value left at its
-placeholder is never written. `manual-install.md` and the README's
-installation section both point at `--answers` as the middle ground
-between the wizard and going fully by hand.
+## [5.67.0] - 2026-10-04
+
+*Stable. Everything below shipped beta-first between 2026-09-30 and 2026-10-04.*
+
+**Beta history:** 5.67.0-beta.1, 5.67.0-beta.2, 5.67.0-beta.3, 5.67.0-beta.4, 5.67.0-beta.5, 5.67.0-beta.6, 5.67.0-beta.7, 5.67.0-beta.8, 5.67.0-beta.9, 5.67.0-beta.10, 5.67.0-beta.11, 5.67.0-beta.12, 5.67.0-beta.13, 5.67.0-beta.14, 5.67.0-beta.15, 5.67.0-beta.16, 5.67.0-beta.17, 5.67.0-beta.18.
+
+An operator on 5.66.0 upgrades the normal way — `sudo ./install.sh` on the new
+tarball, or the in-app updater — with no manual step required. The upgrade runs
+one core migration, `plugin_tables` (migration 29), which is idempotent, backfills
+nothing, and runs by itself on the first start. `jen.config` is not re-moded by
+the upgrade itself: it becomes `0600` the next time Jen saves it (any Settings
+save), or now with `sudo chmod 600 /etc/jen/jen.config`. The layout check that
+runs on every privileged install and update now refuses an application directory
+whose existing parent is writable by group or world and names the directory
+(`sudo chmod go-w <it>`; Ubuntu's own `/opt` is `755`, so almost nobody sees
+this). Kea's API, database and hosts are no longer asked by `install.sh`; a fresh
+install connects them from `/setup` after first login, and an existing install
+has nothing to do. Two things are worth a look, because they are older than this
+release: if you ever restored or migrated Kea reservations through Jen — on 5.66.0
+or earlier — the Health Center row *Kea reservations have plausible identifiers*
+and the repair page under Settings → Databases → Import find any identifier that
+was stored as the text of its own hex; and take a fresh recovery bundle and a fresh Kea reservation
+backup once you are on this release, since they now carry what the older ones did
+not (the bundle: the new plugin-ownership record and an uninstalled plugin's tables;
+the Kea backup: IPv6 reservations, with binary values tagged). Older files still
+import. If you ran an earlier 5.67.0
+pre-release and used the setup wizard's Connect step, re-submit it once: it used to
+save a Kea daemon's own control socket as Control Agent mode. The long form, with
+every item, is `docs/upgrading.md`.
+
+### The first hour
+
+`/setup` is a six-step wizard a superadmin lands on once, the first time they log
+in with Kea not yet connected: connect Kea, see what it found, install the Kea
+host helper, capture a baseline, make a recovery point, investigate a first
+client. Every step can be skipped and picked up later from Getting started, and
+the wizard calls the same code Settings does — no new privileged path.
+
+The Connect step tests what it saves. It asks what answered (a Kea daemon's own
+control socket answers a command carrying a `service` field exactly as it answers
+one without, so every Kea 3.2 site had been saved as Control Agent mode) and keeps
+the mode already saved for a URL it cannot identify. The URL you typed is the one
+tried and the one blamed; ports are guessed only when none was given and IPv6
+literals stay bracketed. It shares one TLS-aware probe with Settings, so a private
+CA or a client certificate works here too, and the Kea database gets its own port
+and CA fields (`[kea_db] port` and `ssl_ca`, honoured by every connection the
+application makes). The connection pool is rebuilt when Connect saves.
+
+What Jen found is reported truthfully. DHCPv6 is checked against a real
+`kea-dhcp6` answer before anything v6 is offered, and enabling it merges into
+`[subnets6]` instead of replacing it. Subnet names survive a second run (an
+existing name is kept when the id and network still match, and anything Kea no
+longer reports is an explicit unchecked removal). High-availability peers and the
+servers Jen manages are two facts, with an **Add this peer to Jen** action. An SSH
+failure is a message naming the user, host and reason rather than a server error;
+the recovery step is done only once a bundle has really been downloaded, and
+offers **Continue** when it has. Getting started links an administrator only to
+pages an administrator may open.
+
+### The installer
+
+A fresh install can be scripted: `sudo ./install.sh --answers <file> --unattended`
+drives the wizard from a `KEY=value` file using the same `JEN_*` names as the
+Docker path (parsed, never sourced; spaces around `=`, quotes and `export` are
+accepted). A failed connection test is a real choice. **Jen's own database cannot
+be skipped**, because Jen runs its migrations against it before serving anything
+and a service without it restarts every five seconds for ever: the menu is retry,
+edit, install MariaDB on this machine, or quit, and an unattended install whose
+database does not answer stops with the SQL and a reason. With `y` at the prompt or
+`JEN_DB_INSTALL_LOCAL=yes`, and only for a local host, the installer installs
+MariaDB, starts it, creates the database and user and tests them; `uninstall.sh`
+never removes it. Everything the installer runs (`apt-get`, `pip`, the virtualenv,
+`systemctl`, `mysql`) writes to `/var/log/jen-install.log`, a failing step prints
+the last twenty lines, and apt no longer scrolls through the progress line.
+
+Where things live is a choice: `--app-dir`, `--config-dir` and `--data-dir` (or the
+matching answers-file keys) relocate a fresh install, recorded root-owned in
+`/etc/jen-layout.conf`. One checker in `jen-update-root.py` validates the layout
+for the installer, the in-app updater and the uninstaller; the systemd unit is
+rendered from a template with the chosen paths, and a relocated install no longer
+writes the default paths into its own config or pages. Install versus upgrade is the
+checker's decision (a recorded layout, a marker, or Jen's own content), an existing
+`jen.config` is kept unless `--configure` is given, and the uninstaller uses the
+checker that ships beside it and at its last level also removes the root updater and
+its two units. `--restore` and `--rollback` export the whole layout, a failed
+verification rolls an upgrade back, a fresh install writes its layout record last,
+the pre-upgrade backup is the application's own streamed primitive run as the
+service user and says exactly what it wrote, and the installer sets `umask 022` and
+takes secrets on standard input. `jen.config` is `0600` for good.
+
+### Deployment truth
+
+Whether Jen runs under systemd, in a container or from a checkout is answered in
+one place, `jen.services.runtime.deployment()`, never from `JEN_ROOT` (which the
+rendered unit sets too, so a native install had been diagnosed as a container: the
+Update button and the plugin install path were wrong). Docker and Podman both count
+as containers, and "Save & Restart", a port change and a certificate change restart
+by deployment — the exact command the sudoers file grants, a stop of the gunicorn
+master under a container, or an honest instruction to restart by hand. The
+root-privileged updater runs the real layout checks on both entry points and
+Settings → Health shows an "install path is trusted" row. A Docker container with no
+Kea configured now boots (a config is written whenever Jen's own database is
+configured). Eight pages that printed a literal `/opt/jen`, `/etc/jen` or
+`/var/lib/jen` render the layout's directories, the installer and `run.py` write the
+`[ddns] dns_provider` key the application reads, and the image ships `contrib/`.
+`docs/manual-install.md` is rebuilt around `jen-update-root.py --render-unit` and is
+run, command by command, by CI.
+
+### Kea data that survives
+
+Kea's binary columns used to come back as text — in every earlier release. An
+export wrote each binary value as a bare hex string and nothing decoded it, so a
+restore, an import or a migration stored the six-byte MAC `34:13:43:e6:0e:2a` as the
+twelve characters `341343e60e2a`; the row looked right and Kea never matched the
+client. Export format 3 writes `{"$bin": "<hex>"}` and the importer decodes by the
+target's own column types (older files still import: a bare string bound for a
+binary column is decoded as hex, and a value that is not hex refuses that table,
+naming the column and row). A migration copies the driver's own bytes. The Kea
+backup is now every reservation, IPv4 and IPv6, with its host-scoped options,
+streamed row by row; leases stay a separate explicit export.
+
+The repair for damage already done is a Health row and a superadmin page that
+preview and fix exactly the rows you tick. It is careful: a hardware address or
+DUID of plausible shape is offered ticked, a client-id (opaque; some clients really
+send their MAC as text) only with lease corroboration, else listed unticked or
+left alone, and fixed-width DHCPv4 option values that look like hex text are listed
+unticked for review; text options and the DHCPv6 tables cannot carry the damage and
+are never listed. Kea 3.x stores IPv6 addresses in `lease6` and `ipv6_reservations`
+as `binary(16)`, which the IPv6 pages printed as raw bytes and could not search;
+every reader now converts them (a whole address is an exact match, a fragment is
+filtered over both spellings), and global search filters every IPv6 reservation of a
+subnet before it caps the list.
+
+### Database moves that cannot destroy what was there
+
+A migration used to create tables with `IF NOT EXISTS`, record every table as
+created, and on failure drop them all, including a freshly initialised Kea target's
+own. A Jen migration now needs absent target tables and refuses an empty selection;
+a Kea migration copies data only into an initialised database of the same schema
+major version, in one transaction with plain inserts, verified per table, and copies
+a reservation's own host-scoped options only (never the config backend's global,
+subnet, pool or class options), saying how many it left behind. A Kea import matches
+reservations by identifier, type and subnet — never by the id in the file — inserts
+without ids, updates in place instead of `REPLACE`, replaces only the child tables
+the file contains, and treats only a duplicate key in skip mode as skipped; anything
+else aborts, rolls back and names the table and row, never a value. The reservation
+backup exports exactly the host-scoped options, one fixed query per table, shared by
+the export and the migration.
+
+### Restores that keep their word
+
+Replace mode restores with a plain `INSERT` and reports the count the server
+confirms, where `INSERT IGNORE` stored a coerced row and counted it; a strict mode
+(always on for `install.sh --restore`) fails on a missing table, a count mismatch or
+a skipped row, and a plugin whose code is present that loses data now fails the
+restore with a rollback unless `--lenient-plugins` is given. The Databases import
+page's replace mode takes a snapshot first and puts the database back on any
+failure, plugins included; merge mode takes none and says so. A scoped restore of a
+parent table takes its dependents or is refused. Which database tables each plugin
+owns is persisted (`plugin_tables`), so an uninstalled plugin's data stays in every
+backup, bundle, snapshot and migration and is reconnected on reinstall. An export's
+envelope is validated before use (`not a Jen export: <reason>`, `format` bounded,
+gzip detected by its first bytes, plain JSON accepted), and an enabled backup
+schedule must back up something. The restore messages say what is true: a plugin
+whose code is absent keeps its data in the bundle and returns when the plugin is
+reinstalled and the restore run again.
+
+### Reports
+
+A projection is drawn for every trend, rising, flat or falling, clamped between zero
+and the pool, as a dashed line that continues a thin *Total active* line; where
+there is nothing to project the dataset is not added (a hidden dataset's legend
+label is drawn struck through) and one sentence says why. The sentence on each card
+carries the horizon for falling and flat trends.
+
+### Security audit fixes
+
+An audit of the layout, installer and wizard work found seven problems, all in
+shipped code. The installer built the whole app as root through two inline snippets
+(a plugin planted by a compromised service account would have been imported as uid
+0; they now run as the service user and a test refuses any that do not); the
+root-owned layout marker was written by following a symlink in a service-owned
+directory (now written through an atomic swap that never walks a symlink); an
+upgrade's rollback snapshot of root's own files lived in a service-owned directory
+(moved under the root-owned tree); the updater never ran the layout checks four
+documents said it ran; a recovery bundle's freshness check compared an aware and a
+naive clock and could 500 the wizard; and one oddly named subnet could break every
+later subnet change (an untouched legacy name is left alone, an unstorable one is
+repaired and logged).
+
+### Tests and CI
+
+CI can fail now: every workflow step runs under `bash -eo pipefail`, negated and
+piped `grep` assertions that could not fail are explicit checks guarded by a test,
+and the upgrade from the latest stable is its own job on a clean runner with the
+stable version pinned, the signature checked against the repository's key, and the
+stable release's own updater driven through its real `main()` for the first hop. The
+install job runs the real installer on both Ubuntu releases against a real MariaDB
+and a real `kea-dhcp4` — fresh install, relocated life cycle, `--repair`, every
+uninstall level, a refused layout, an unreachable database that must stop loudly —
+and a separate job on a machine with no database server proves the installer can
+install MariaDB, create the database, keep apt off the screen and leave the server
+alone on uninstall. A kea-compat module drives Jen's import, merge, overwrite and
+migration against ISC's real schema on Kea 3.0.3, 3.2.0 and 3.3.1 and records the
+column types the IPv6 readers rely on; the unit suite's Kea tables are ISC's own
+definitions (unique keys, foreign keys, lookup tables, binary address columns). New
+system scenarios cover the failing restore, and a browser journey walks `/setup`.
+Source guards refuse a hardcoded layout path, root-run application code, a deployment
+decision read from `JEN_ROOT`, and an installer function that ends in a bare
+`[[ ]] &&`.
+
+### Docs
+
+`docs/upgrading.md` is the 5.66.0 to 5.67.0 page. The README is rebuilt around one
+sentence of positioning with a feature matrix and a compatibility table generated
+from CI and guarded by a test, ISC Stork claims checked against ISC's own pages,
+release badges sorted by version, and `docs/about.md` and `docs/features.md` for
+indexers and evaluators. The runbooks gain the relocation procedure, the
+administrator's guide the installer, import, restore and migration contracts, and
+troubleshooting every refusal and its fix.
 
 ## [5.66.0] - 2026-09-30
 
