@@ -193,6 +193,13 @@ def no_log(monkeypatch):
     return seen
 
 
+@pytest.fixture
+def needs_vendor_class(monkeypatch):
+    """A config with a class whose test reads option 60: with no vendor class supplied it is undecided, so something is MISSING."""
+    cfg = dict(CFG, **{"client-classes": [{"name": "windows", "test": "substring(option[60].hex,0,4) == 'MSFT'"}]})
+    monkeypatch.setattr("jen.routes.explain.dhcp4_config", lambda force=False: cfg)
+
+
 class TestInputsBySource:
     def test_the_lease_row_fills_the_client_id_hostname_and_relay_ids_and_says_so(
         self, logged_in_client, stub_config, mock_kea, lease_with_extras, no_log
@@ -252,7 +259,7 @@ class TestInputsBySource:
             assert secret not in page, f"{secret!r} leaked from a lease in a subnet the viewer cannot see"
 
     def test_the_embedded_result_carries_the_form_that_goes_back_to_the_investigation_page(
-        self, logged_in_client, stub_config, mock_kea, lease_with_extras, no_log
+        self, logged_in_client, mock_kea, lease_with_extras, no_log, needs_vendor_class
     ):
         r = logged_in_client.get(f"/tools/explain?mac={MAC2}&subnet=1&embed_q={MAC2}", headers={"HX-Request": "true"})
         page = r.get_data(as_text=True)
@@ -273,7 +280,7 @@ class TestInputsBySource:
         )
         assert "Explain again" not in page and "Inputs used" in page
 
-    def test_a_scoped_admin_is_told_who_may_read_kea_s_log(self, client, db, stub_config, mock_kea):
+    def test_a_scoped_admin_is_told_who_may_read_kea_s_log(self, client, db, mock_kea, needs_vendor_class):
         from tests.conftest import restricted_client
 
         c, _uid = restricted_client(client, db, allowed_subnets=[1], role="admin", username="_explain_hint_admin")
@@ -281,7 +288,7 @@ class TestInputsBySource:
         assert "needs an admin with access to every subnet" in page
 
     def test_an_admin_with_no_helper_is_told_to_type_what_is_missing(
-        self, logged_in_client, stub_config, mock_kea, no_log
+        self, logged_in_client, mock_kea, no_log, needs_vendor_class
     ):
         page = logged_in_client.get("/tools/explain?mac=aa:bb:cc:dd:ee:01&subnet=1").get_data(as_text=True)
         assert "needs the Kea host helper" in page and "Type what is missing below" in page
