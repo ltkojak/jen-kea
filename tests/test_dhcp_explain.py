@@ -533,3 +533,66 @@ class TestMissingInputsAndTheAnswerLine:
         assert blocked["summary"] == "Would be NAKed: no eligible pool — class guard iot_only blocks the only pool."
         undecided = ex.explain(guarded, _client(), subnet_id=9)
         assert undecided["summary"] == "Undecided: iot_only need vendor class (option 60)."
+
+
+# ── v5.68.0-beta.3 (Q138): Kea's list beside Jen's evaluation ────────────────────────────────────────────────
+
+
+class TestKeaAndJenDisagree:
+    def _classes(self, r):
+        return {c["name"]: c for c in r["classes"]}
+
+    def test_the_kea_list_is_shown_beside_jens_evaluation(self):
+        r = ex.explain(
+            CFG,
+            _client(vendor_class="HP JetDirect"),
+            subnet_id=1,
+            assigned_classes={"classes": ["ALL", "printers"], "at": "2026-10-04 15:10:39"},
+        )
+        step = _stage(r, "classes")
+        assert step["evidence"][0] == "Kea assigned (from its log at 2026-10-04 15:10:39): ALL, printers"
+        assert r["kea_assigned"] == {"classes": ["ALL", "printers"], "at": "2026-10-04 15:10:39"}
+
+    def test_agreement_is_not_a_verdict(self):
+        r = ex.explain(
+            CFG, _client(vendor_class="HP JetDirect"), subnet_id=1, assigned_classes={"classes": ["printers"], "at": ""}
+        )
+        assert "why_not" not in _stage(r, "classes") and not self._classes(r)["printers"].get("disagrees")
+
+    def test_jen_matched_it_and_kea_did_not_assign_it(self):
+        r = ex.explain(
+            CFG, _client(vendor_class="HP JetDirect"), subnet_id=1, assigned_classes={"classes": ["ALL"], "at": "T"}
+        )
+        step = _stage(r, "classes")
+        (why,) = [w for w in step["why_not"] if w["element"] == "class printers"]
+        assert why["kind"] == "disagreement"
+        assert why["text"].startswith("Jen evaluated class printers as matched; Kea did not assign it (its log, T)")
+        assert "may read an input Jen does not have, or the config has changed since" in why["text"]
+        assert "disagree with Kea" in step["verdict"]
+        assert (
+            self._classes(r)["printers"]["matched"] is True
+            and "Kea did not list it" in self._classes(r)["printers"]["reason"]
+        )
+
+    def test_jen_did_not_match_it_and_kea_assigned_it(self):
+        r = ex.explain(
+            CFG, _client(vendor_class="Linux"), subnet_id=1, assigned_classes={"classes": ["windows"], "at": ""}
+        )
+        (why,) = [w for w in _stage(r, "classes")["why_not"] if w["element"] == "class windows"]
+        assert "evaluated class windows as not matched; Kea assigned it" in why["text"]
+        assert self._classes(r)["windows"]["matched"] is True, "what Kea says is what happened"
+
+    def test_classes_jen_cannot_decide_are_not_called_disagreements(self):
+        r = ex.explain(CFG, _client(), subnet_id=1, assigned_classes={"classes": ["windows", "vip", "byres"], "at": ""})
+        elements = {w["element"] for w in _stage(r, "classes").get("why_not", [])}
+        assert "class windows" not in elements and "class vip" not in elements, (
+            "an undecided class has nothing to disagree with"
+        )
+
+    def test_an_only_in_additional_list_class_is_never_called_a_disagreement(self):
+        r = ex.explain(CFG, _client(), subnet_id=1, assigned_classes={"classes": ["late"], "at": ""})
+        assert "class late" not in {w["element"] for w in _stage(r, "classes").get("why_not", [])}
+
+    def test_without_a_kea_list_there_is_nothing_to_compare(self):
+        r = ex.explain(CFG, _client(vendor_class="HP JetDirect"), subnet_id=1)
+        assert "why_not" not in _stage(r, "classes") and r["kea_assigned"] is None

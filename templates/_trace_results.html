@@ -4,7 +4,7 @@
 {% elif groups is not none %}
 <div class="form-hint u-da12f2">{{ note }}
     See the <a href="https://kea.readthedocs.io/en/latest/arm/logging.html" target="_blank" rel="noopener">Kea logging section</a> to raise the level.
-    {% if watching %}<strong>Watching</strong> — refreshing every {{ watch_step }} s, stops after 60 s.{% endif %}
+    {% if watching %}<strong>Watching</strong> — refreshing every {{ watch_step }} s, stops after {{ watch_max // 60 }} minutes or when you leave the page; ask the device to renew and watch the exchange land.{% endif %}
 </div>
 
 {% if explained %}

@@ -38,8 +38,8 @@ bp = Blueprint("trace", __name__)
 # would just be silently truncated to this.
 MAX_LINES = 1000
 DEFAULT_LINES = 1000
-WATCH_STEP_S = 5
-WATCH_MAX_S = 60
+WATCH_STEP_S = 3
+WATCH_MAX_S = 600  # ten minutes (v5.68.0-beta.3, Q138: was 5 s for 60 s)
 # One tail must not hold a worker for the helper's 60 s default when the host hangs.
 TAIL_TIMEOUT_S = 15
 NEEDS_HELPER = "Trace needs the Kea host helper (Settings → Kea → SSH → Install helper)."
@@ -95,6 +95,7 @@ def trace_page():
         "watching": watching,
         "next_t": watched_s + WATCH_STEP_S,
         "watch_step": WATCH_STEP_S,
+        "watch_max": WATCH_MAX_S,
         "log_path": extensions.DHCP4_LOG,
         "error": "",
         "groups": None,
@@ -150,6 +151,11 @@ def trace_page():
                 ctx["groups"] = list(reversed(__trace.group_exchanges(events)))
                 ctx["total_events"] = len(events)
                 ctx["note"] = __trace.visibility_note(events, len(log_lines))
+                if not any(e["level"] == "DEBUG" for e in events) and str(server.get("id")) not in ctx["investigation"]:
+                    ctx["note"] += (
+                        f" Investigation logging on {server.get('name')} (the card above) adds the classes Kea assigned, subnet "
+                        "selection and each packet's options for a few minutes, and Jen puts the level back by itself."
+                    )
 
             chosen = next(iter(known_subnets & set(subnet_map)), None)
             if chosen is not None:

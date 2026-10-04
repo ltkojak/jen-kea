@@ -199,3 +199,38 @@ class TestWhatThePagesShow:
             and "/servers/1/investigation-logging/on" in page
         )
         assert 'name="back" value="trace"' in page
+
+
+class TestTheLiveWatch:
+    """v5.68.0-beta.3 (Q138): 'Watch this client' polls every 3 s for ten minutes (it was 5 s for 60 s)."""
+
+    def _page(self, client, monkeypatch, t, active=()):
+        from jen.services import investigation_logging as inv
+        from tests.test_kea_log_trace import EXCHANGE, MAC
+        from tests.test_trace_route import _ok, _stub_tail
+
+        monkeypatch.setattr(inv, "active", lambda now=None: list(active))
+        _stub_tail(monkeypatch, _ok(EXCHANGE))
+        return client.get(
+            "/tools/trace", query_string={"mac": MAC, "server": 1, "watch": 1, "t": t}, headers={"HX-Request": "true"}
+        ).data.decode()
+
+    def test_it_polls_every_three_seconds_and_says_for_how_long(self, logged_in_client, stubs, monkeypatch):
+        page = self._page(logged_in_client, monkeypatch, 0)
+        assert 'hx-trigger="every 3s"' in page and "&t=3" in page
+        assert "refreshing every 3 s, stops after 10 minutes or when you leave the page" in page
+
+    def test_the_server_stops_it_at_ten_minutes_whatever_the_page_does(self, logged_in_client, stubs, monkeypatch):
+        assert 'hx-trigger="every 3s"' in self._page(logged_in_client, monkeypatch, 597)
+        assert "hx-trigger" not in self._page(logged_in_client, monkeypatch, 600)
+
+    def test_the_button_says_ten_minutes(self, logged_in_client, stubs):
+        assert "Watch this client for 10 minutes" in logged_in_client.get("/tools/trace").data.decode()
+
+    def test_with_logging_off_the_note_says_what_turning_it_on_would_add(self, logged_in_client, stubs, monkeypatch):
+        page = self._page(logged_in_client, monkeypatch, 0)
+        assert "Investigation logging on kea-a" in page and "adds the classes Kea assigned" in page
+
+    def test_with_logging_on_it_does_not_say_it_again(self, logged_in_client, stubs, monkeypatch):
+        page = self._page(logged_in_client, monkeypatch, 0, active=[ON])
+        assert "adds the classes Kea assigned" not in page

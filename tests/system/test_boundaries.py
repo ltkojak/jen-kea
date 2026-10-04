@@ -1751,3 +1751,90 @@ def test_15_bundled_plugin_data_survives_a_full_recovery_restore(stack):
     _s15_verify_rows(restore_stdout)
     web2 = st.Web().login()
     _s15_verify_pages(web2)
+
+
+# ── 16. investigation logging: on, reloaded, watched, put back ───────────────
+
+S16_MAC = "02:50:00:00:16:01"
+S16_SEND = """
+import socket, struct
+mac = bytes.fromhex("025000001601")
+def opt(code, data):
+    return bytes([code, len(data)]) + data
+header = struct.pack("!BBBBIHH4s4s4s4s16s64s128s4s", 1, 1, 6, 1, 0x16000, 0, 0x8000, bytes(4), bytes(4), bytes(4),
+                     socket.inet_aton("10.99.0.1"), mac.ljust(16, b"\0"), bytes(64), bytes(128), b"\x63\x82\x53\x63")
+body = opt(53, b"\x01") + opt(61, b"\x01" + mac) + opt(12, b"s16-host") + opt(60, b"s16-vendor") + opt(55, bytes([1, 3, 6])) + b"\xff"
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.sendto(header + body, ("kea-a", 67))
+"""
+
+
+def _s16_discover():
+    st.dexec(st.JEN, "python3", "-", input=S16_SEND)
+    time.sleep(3)
+
+
+def _s16_count(needle):
+    out = st.dexec(st.KEA_A, "sh", "-c", f"grep -c {needle} {st.KEA_LOG} || true").stdout.strip()
+    return int(out or 0)
+
+
+def _s16_pids():
+    return st.dexec(st.KEA_A, "pgrep", "-x", "kea-dhcp4").stdout.split()
+
+
+def test_16_investigation_logging_turns_on_reloads_shows_the_classes_and_is_put_back(stack):
+    """Investigation logging: turned on for one server through apply_change it reaches the running daemon by
+    config-reload (same process, no restart), a real DISCOVER then shows its class assignments in Trace and its packet
+    options in Explain, and the sweep puts the level back after the deadline (the clock is the one stand-in: the
+    sweep is called with a time six minutes on instead of waiting them out)."""
+    web = st.Web().login()
+    pids = _s16_pids()
+    assert pids, "kea-dhcp4 is running on kea-a"
+    before_classes = _s16_count("DHCP4_CLASSES_ASSIGNED")
+
+    r = web.post("/servers/1/investigation-logging/on", data={"minutes": "5", "back": "servers"}, page="/servers")
+    assert r.status_code == 200
+    conf = st.kea_conf_bytes(st.KEA_A)
+    assert '"jen-investigation"' in conf and '"debuglevel": 55' in conf, (
+        f"INVARIANT: turning it on writes the DEBUG level and its restore record into the config: {conf[-600:]}"
+    )
+    assert _s16_pids() == pids, "INVARIANT: the new level reached the running daemon by config-reload, not by a restart"
+    assert "Investigation logging is on for kea-a" in web.get("/servers").text, (
+        "INVARIANT: the banner shows while it is on"
+    )
+
+    _s16_discover()
+    assert _s16_count("DHCP4_CLASSES_ASSIGNED") > before_classes, (
+        "INVARIANT: at DEBUG 55 Kea logs the class assignments"
+    )
+    trace = web.get(f"/tools/trace?mac={S16_MAC}&server=1").text
+    assert "DHCP4_CLASSES_ASSIGNED" in trace, "INVARIANT: Trace shows the class assignment Kea logged"
+    watch = web.get(f"/tools/trace?mac={S16_MAC}&server=1&watch=1&t=0", headers={"HX-Request": "true"}).text
+    assert 'hx-trigger="every 3s"' in watch, "INVARIANT: the live watch polls every 3 seconds"
+    explain = web.get(f"/tools/explain?mac={S16_MAC}&subnet=1").text
+    assert "s16-vendor" in explain and "packet dump" in explain, (
+        "INVARIANT: Explain's inputs come from the packet dump Kea logged"
+    )
+
+    out, _p = st.jen_py(
+        """
+from datetime import datetime, timedelta, timezone
+from jen.services import investigation_logging as inv
+with app.app_context():
+    emit(inv.sweep(now=datetime.now(timezone.utc) + timedelta(minutes=6)))
+"""
+    )
+    swept = emitted(out)
+    assert swept["restored"] == ["kea-a"], f"INVARIANT: the sweep restores an expired entry: {swept}"
+    conf = st.kea_conf_bytes(st.KEA_A)
+    assert '"jen-investigation"' not in conf and '"debuglevel": 55' not in conf and '"severity": "INFO"' in conf, (
+        f"INVARIANT: the restore puts the previous level back and removes the marker: {conf[-600:]}"
+    )
+    assert _s16_pids() == pids, "INVARIANT: the restore is a reload too"
+    after_restore = _s16_count("DHCP4_CLASSES_ASSIGNED")
+    _s16_discover()
+    assert _s16_count("DHCP4_CLASSES_ASSIGNED") == after_restore, (
+        "INVARIANT: after the restore Kea no longer logs at DEBUG"
+    )
+    assert "Investigation logging is on" not in web.get("/servers").text

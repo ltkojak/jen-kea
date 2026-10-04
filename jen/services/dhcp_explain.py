@@ -569,6 +569,7 @@ def explain(
         additional_lists |= set(res.get("classes") or [])
     kea_said = {str(c) for c in (assigned_classes or {}).get("classes", [])}
     kea_when = (assigned_classes or {}).get("at")
+    disagreements: list[dict] = []
     for c in dhcp4_cfg.get("client-classes") or []:
         if not isinstance(c, dict) or not c.get("name"):
             continue
@@ -614,25 +615,55 @@ def explain(
                     )
                 else:
                     row["reason"] = "expression matched" if v else "expression did not match"
+        decided_by_jen = row["matched"] if row["evaluable"] and test and not additional_only else None
+        if kea_said and decided_by_jen is not None and (name in kea_said) != decided_by_jen:
+            # v5.68.0-beta.3 (Q138): Jen worked this class out from the inputs it has and Kea's own list says otherwise. Both are
+            # shown, and the difference is a verdict - not a silent override - because it means Jen is missing an input the test
+            # reads, or the config changed since that packet.
+            said = "assigned it" if name in kea_said else "did not assign it"
+            row["disagrees"] = True
+            disagreements.append(
+                {
+                    "text": f"Jen evaluated class {name} as {'matched' if decided_by_jen else 'not matched'}; Kea {said}"
+                    + (f" (its log, {kea_when})" if kea_when else "")
+                    + " - the test may read an input Jen does not have, or the config has changed since.",
+                    "element": f"class {name}",
+                    "kind": "disagreement",
+                }
+            )
         if name in kea_said and row["matched"] is not True:
             # what Kea itself logged for this client outranks what Jen could work out: it is what happened
             row["matched"] = True
             row["reason"] = "assigned by Kea" + (f" at {kea_when}" if kea_when else "") + " (its own log)"
             row["from_kea"] = True
+        elif name not in kea_said and kea_said and decided_by_jen is True:
+            row["reason"] += " (Jen's reading - Kea did not list it)"
         members[name] = row["matched"]
         class_rows.append(row)
     matched_names = [r["name"] for r in class_rows if r["matched"] is True]
-    steps.append(
-        {
-            "stage": "classes",
-            "verdict": f"{len(matched_names)} matched",
-            "detail": ("Matched: " + ", ".join(matched_names)) if matched_names else "No client class matched.",
-            "evidence": [
-                f"{r['name']}: {'matched' if r['matched'] else ('did not match' if r['matched'] is False else 'undecided')} — {r['reason']}"
-                for r in class_rows
-            ],
-        }
-    )
+    classes_step = {
+        "stage": "classes",
+        "verdict": f"{len(matched_names)} matched"
+        + (f", {len(disagreements)} disagree with Kea" if disagreements else ""),
+        "detail": ("Matched: " + ", ".join(matched_names)) if matched_names else "No client class matched.",
+        "evidence": (
+            [
+                "Kea assigned"
+                + (f" (from its log at {kea_when})" if kea_when else "")
+                + ": "
+                + ", ".join(sorted(kea_said))
+            ]
+            if kea_said
+            else []
+        )
+        + [
+            f"{r['name']}: {'matched' if r['matched'] else ('did not match' if r['matched'] is False else 'undecided')} — {r['reason']}"
+            for r in class_rows
+        ],
+    }
+    if disagreements:
+        classes_step["why_not"] = disagreements
+    steps.append(classes_step)
 
     # 4. subnet guards
     def _guard_state(container):
@@ -876,6 +907,7 @@ def explain(
             "not_evaluable": [r["name"] for r in class_rows if not r["evaluable"]],
         },
         "subnet_element": chosen_element,
+        "kea_assigned": {"classes": sorted(kea_said), "at": kea_when} if kea_said else None,
     }
     result["summary"] = answer_line(result)
     return result

@@ -1243,6 +1243,19 @@ warns *"No atomic guard on <host>"* once per request, and does **not**
 capture out-of-band changes as revisions (no SHA to compare). Upgrade
 the helper to close that gap.
 
+### Investigation logging — the one logger entry Jen touches (v5.68.0-beta.3)
+
+Jen can put a Kea server's `kea-dhcp4` logger at DEBUG, debuglevel 55, for 5, 15 or 60 minutes (Trace and Servers, admins with access to every subnet) and puts it back itself. It touches **one thing**: the `Dhcp4.loggers` entry named `kea-dhcp4`. It sets `severity` and `debuglevel` and adds a `user-context` marker:
+
+```json
+"user-context": { "jen-investigation": { "until": "2026-10-04T12:15:00+00:00",
+                  "restore": { "severity": "INFO", "debuglevel": "absent" } } }
+```
+
+`restore` is exactly what was there before (`"absent"` removes the key again; `{"created": true}` means Jen created the entry and removes it). The entry's `output-options`, every other logger and every other `user-context` key are left alone. The marker lives in the config on purpose: it survives a Jen restart, a restored database or a second Jen, and a person reading the file can see what is on and how to undo it. By hand, setting `severity`/`debuglevel` back to `restore` and deleting the `jen-investigation` key is the whole undo.
+
+It is applied like every Kea edit (`kea-dhcp4 -t` first, the sha guard, revert on failure, a config revision with source `jen`) and the daemon is told with `config-reload` instead of a restart; a Kea that lacks `config-reload` or refuses it is restarted and the flash says so. One server at a time per Jen; there is no API route for it and `install.sh --unattended` never touches it. A more specific logger entry of your own (`kea-dhcp4.packets`, say) with its own `severity` keeps overriding the root one for that component, so a log that still lacks the packet dump after turning it on is usually that.
+
 ### Legacy grant (pre-5.11.0 — `python3` is root)
 
 A Kea host that does not have the helper yet falls back to the old path:
@@ -1589,6 +1602,7 @@ same run as JSON for scripting (`?partial=1` returns the HTML fragment).
 | **HA state healthy** | each server's HA state — `hot-standby`/`load-balancing` is ok, `partner-down`/`waiting`/`syncing` warn, `terminated` fails | Servers page; the Kea HA config |
 | **Kea hooks loaded** | `libdhcp_host_cmds.so` (reservations), `libdhcp_lease_cmds.so` (leases), and `libdhcp_ha.so` when HA is configured | add the hook to `kea-dhcp4.conf` and reload |
 | **Kea clock in sync** | the `Date` header Kea returns vs Jen's clock — warns > 30 s, fails > 5 min (HA and lease timers assume synced clocks) | NTP on the Kea host and the Jen host |
+| **DEBUG logging left on** (v5.68.0-beta.3) | Fails when a server's investigation logging should have ended and Jen's sweep has not been able to put the log level back (two minutes' grace). Reads Jen's own index, never SSH at render time. | Turn it off from Trace or Servers; see Troubleshooting → "DEBUG logging left on" |
 | **Subnet map matches Kea** | `check_config_drift()` — Jen's `[subnets]` list vs Kea's live config | Settings → Kea → `[subnets]` |
 | **Every Kea subnet is named** | every subnet id in Kea's config has a name in Jen's `[subnets]`, and vice-versa | Settings → Kea → `[subnets]` |
 | **Configuration Doctor** (v5.40.0) | `jen/services/config_doctor.py`'s sixteen semantic checks on the live config — see "Configuration Doctor" below | Network → Doctor |

@@ -880,6 +880,15 @@ are fixed by the same update.
 
 ---
 
+## "DEBUG logging left on" (v5.68.0-beta.3)
+
+Investigation logging (Trace or Servers) puts a Kea server's logger at DEBUG for 5, 15 or 60 minutes and Jen's sweep restores it every minute. The Health Center row **DEBUG logging left on** fails when a server's time is up and the restore has not happened — Kea is then writing a packet dump for every client.
+
+1. **Press *Turn it off now*** on Trace or Servers. It is the same restore with no waiting; the flash line says whether the daemon took it by `config-reload` or a restart, and what failed if it did not.
+2. **If the button fails too**, the cause is the same one the sweep keeps hitting — usually SSH to the host or the Kea host helper (Settings → Kea → SSH), or a config that changed under it. The banner and the Health row quote the error.
+3. **By hand**, on the Kea host: in `kea-dhcp4.conf`, find the `kea-dhcp4` entry in `loggers`, set `severity`/`debuglevel` back to what its `user-context.jen-investigation.restore` says (`"absent"` means delete the key; `{"created": true}` means delete the whole entry), delete the `jen-investigation` key, and `config-reload` (or restart) Kea. The sweep adopts nothing from a hand edit that removed the marker.
+4. A log that still has no packet dump after turning it on usually has a more specific logger entry of its own (`kea-dhcp4.packets`) with its own severity; that one wins for its component.
+
 ## Log Locations
 
 | Log | Location | How to view |

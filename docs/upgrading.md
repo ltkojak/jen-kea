@@ -79,3 +79,15 @@ does not match. An admin with access to every subnet gets a link from each to th
 Investigation page's Changes tab, filtered to the config element the verdict is about. The
 Investigation page's Overview carries one sentence of what Kea would do with the client.
 Nothing is stored and nothing runs until a page that needs it is opened.
+
+## Investigation logging: DEBUG on a Kea server for a bounded time, and a live watch
+
+Nothing to do (5.68.0-beta.3). Trace and every Servers card gain *5 min / 15 min / 60 min* controls for admins with access to every
+subnet: Jen puts that one server's `kea-dhcp4` logger at DEBUG, debuglevel 55, records what to put back in the Kea config itself
+(a `user-context` on the logger entry), tells the running daemon with `config-reload` (a restart only if the daemon lacks or refuses
+it) and puts the level back itself when the time is up; a banner shows the time left. It writes through the same checked config
+change as every Kea edit, adds no helper op and no sudo line, and is not in the API. The Health Center gains a row, **DEBUG logging
+left on**, that fails if a server's time is up and the restore has not happened. Trace's watch now re-reads the log every 3 seconds
+for ten minutes (it was every 5 seconds for one minute), and Explain shows the classes Kea assigned beside its own evaluation and
+says when they disagree. If you already keep a Kea logger at DEBUG on purpose, nothing changes until you press a button, and the
+restore puts back exactly what was there.

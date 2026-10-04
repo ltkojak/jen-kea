@@ -866,6 +866,15 @@ The Jen side of this same "www-data writes a root-run file" problem was
 fixed in v5.2.6 (§3.1, §6); v5.11.0 closes the Kea side for hosts that
 have adopted the helper.
 
+**Investigation logging rides on the helper that is already there (v5.68.0-beta.3, Q138).** Turning a Kea
+server's `kea-dhcp4` logger up to DEBUG for a bounded time adds NO helper op and NO sudo string: the
+change is `kea_changeset.apply_change` (`apply-config` with the sha guard, `kea-dhcp4 -t` preflight,
+revert on failure, an audit row and a config revision), the daemon learns of it through `config-reload` on
+the control channel Jen already uses (restart through the existing `service` op only when the daemon lacks
+or refuses it), and the log is read through `tail-log`. The only thing the helper sees is a config whose
+`kea-dhcp4` logger entry carries a `user-context` marker saying what to restore; `docs/admin-guide.md`
+names the one logger entry Jen touches.
+
 ### 3.4 API key scope
 
 Originally API keys were deliberately global-scope (integration
@@ -2109,6 +2118,15 @@ from 5.14.0 onward is the atomic-symlink path.
 configured by the installer. Terminating TLS in nginx/caddy and running
 gunicorn HTTP-only behind it is a valid deployment, just not the
 default — the default keeps the "one `install.sh` and done" story.
+
+**The investigation-logging sweep (v5.68.0-beta.3, Q138).** One APScheduler job
+(`jen_investigation_sweep`, every minute, `max_instances=1`, started with the other two by
+`scheduler.start_scheduler()` and so single-process like them) restores any expired investigation-logging
+marker. Its cheap path reads only a settings index of what this Jen knows is on; every tenth run it also reads
+every SSH server's config (the helper's `read-config`) to restore an expired marker nobody indexed — the marker
+lives in the Kea config itself, so a restored database or a second Jen leaves nothing stranded — and to adopt a
+live one so the banners show it. A restore that fails stays indexed with its error (the Health row reads that,
+never SSH at render time) and is retried the next minute.
 
 ### 6.1 On-disk layout (v5.13.0, extended in v5.14.0, relocatable since v5.67.0)
 

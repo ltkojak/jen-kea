@@ -92,7 +92,7 @@
     </ul>
     {% endif %}
     {% for w in step.why_not %}
-    <p class="u-865c33"><strong>Why not:</strong> {{ w.text }}
+    <p class="u-865c33"><strong>{{ 'Kea disagrees' if w.kind == 'disagreement' else 'Why not' }}:</strong> {{ w.text }}
         {% if can_changes and link_q and w.element %} · <a href="{{ url_for('client.client_page', q=link_q, tab='changes', element=w.element) }}">config changes to this</a>{% endif %}
         {% if w.investigate %} · {{ investigate_link(w.investigate, "button") }}{% endif %}</p>
     {% endfor %}
