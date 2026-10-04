@@ -24,6 +24,10 @@ below cover that.
 sudo journalctl -u jen -n 50 --no-pager
 ```
 
+### The installer stopped after the database question, or Jen restarts every five seconds (v5.67.0-beta.18)
+
+**Symptom.** `sudo ./install.sh` printed "Could not reach Jen database", you chose to continue (older installers offered that), and the script ended with no service — or the service is installed but `systemctl status jen` shows it restarting every five seconds. **Cause.** Jen runs its schema migrations against the database in `[jen_db]` before it serves anything; if that database does not answer, the process exits and systemd (`Restart=always`, `RestartSec=5`) starts it again, for ever. There is no page to log in to, so there is nothing to "finish in Jen". **Fix.** Make `[jen_db]` in `jen.config` (host, user, password, database) match a MariaDB/MySQL database that answers, then `sudo systemctl restart jen`. On a machine with no database server, run the installer again and answer `y` to "Install MariaDB on this machine and create the database now?" (or set `JEN_DB_INSTALL_LOCAL=yes` for an unattended install); it installs MariaDB, creates the database and user, and tests them. What the installer ran, and what failed, is in `/var/log/jen-install.log`.
+
 ### SyntaxError on start
 
 The application tree is corrupted or incompatible with your Python
@@ -881,6 +885,7 @@ are fixed by the same update.
 | Log | Location | How to view |
 |---|---|---|
 | Jen application | systemd journal | `sudo journalctl -u jen -f` |
+| The installer (apt, pip, venv, systemctl, mysql output) | File | `sudo less /var/log/jen-install.log` (v5.67.0-beta.18) |
 | Kea DHCP | systemd journal | `sudo journalctl -u isc-kea-dhcp4-server -f` |
 | Kea Control Agent | systemd journal | `sudo journalctl -u isc-kea-ctrl-agent -f` |
 | DDNS updates | File | `tail -f /var/log/kea/kea-ddns-technitium.log` |

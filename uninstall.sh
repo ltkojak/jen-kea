@@ -123,6 +123,7 @@ info "Config file:   ${CONFIG_DIR}/jen.config"
 info "SSL certs:     ${CONFIG_DIR}/ssl/"
 info "SSH keys:      ${CONFIG_DIR}/ssh/"
 info "User content:  ${CONTENT_DIR}/  ${DIM}(uploads, DB backups, plugins)${NC}"
+info "Databases:     ${DIM}MariaDB/MySQL and Jen's database in it — no level below removes them (they are yours)${NC}"
 blank
 echo -e "  ${DIM}These are kept so you can reinstall without losing your setup.${NC}"
 echo -e "  ${DIM}You can optionally remove them too — you'll be asked below.${NC}"
@@ -157,6 +158,7 @@ blank
 echo -e "    ${B}1)${NC}  Remove app only  ${DIM}(keep config, certs, keys, uploads, backups)${NC}  ${G}← recommended${NC}"
 echo -e "    ${B}2)${NC}  Remove app + config  ${DIM}(keep certs, keys, uploads, backups)${NC}"
 echo -e "    ${B}3)${NC}  Remove everything  ${R}(wipe all Jen data, uploads, and backups — irreversible)${NC}"
+echo -e "  ${DIM}No level removes MariaDB or Jen's database: if the installer installed MariaDB for you, it is your database now.${NC}"
 blank
 printf "  ${Y}  ▸${NC} Choice [1]: "
 read -r REMOVAL_LEVEL

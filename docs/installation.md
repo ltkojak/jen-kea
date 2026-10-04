@@ -9,7 +9,9 @@
 - Ubuntu 22.04 or 24.04
 - Python 3.10 or newer
 - Network access to your Kea server (ports 8000 for API, 3306 for MySQL)
-- MySQL/MariaDB server accessible for the Jen database
+- A MySQL/MariaDB database for Jen's own data. If this machine has no database server, the installer can
+  install MariaDB here and create the database for you — when you ask it to (below); you do not have to install
+  one first
 
 ### Docker
 
@@ -68,10 +70,30 @@ The installer will:
 1. Run pre-flight checks (OS, Python, disk space on the real targets, dependencies)
 2. Ask: bare metal or Docker
 3. Ask only for Jen's own database, the HTTP/HTTPS ports, and an admin
-   password — testing Jen's database as you go and offering to create it
-   itself when MariaDB is local and root can already connect
+   password — testing Jen's database as you go. Jen cannot start without
+   its own database, so there is no "continue without it": if it does not
+   answer you can **retry**, **edit** the values, **install MariaDB on this
+   machine** and create the database (offered only when the host is this
+   machine), or **quit**; and when MariaDB is already local and root can
+   connect, the installer offers to create the database itself
 4. Install files, set permissions, enable service
 5. Start Jen and verify it responds
+
+Everything the installer runs — `apt-get`, `pip`, the virtualenv, `systemctl`,
+`mysql` — writes its output to **`/var/log/jen-install.log`** (root-only,
+appended per run) instead of scrolling past the progress line; if a step fails
+the installer prints the last 20 lines and the path, and the summary names the
+log. The log never contains the database password.
+
+**A database server on a fresh machine (v5.67.0-beta.18).** Answer `y` to
+"Install MariaDB on this machine and create the database now?" (or choose `i`
+from the failure menu) and the installer runs `apt-get install mariadb-server`,
+enables and starts the service, waits for it to answer, creates Jen's database
+and user, and tests the connection. It is only ever offered for `localhost`,
+`127.0.0.1` or `::1`, never installs anything unless you say so (the prompt
+defaults to no), starts an already-installed server instead of reinstalling it,
+and `uninstall.sh` never removes it — at any level, MariaDB and Jen's database in it are
+yours from then on. Debian and Ubuntu only, like the installer.
 
 From v5.67.0, Kea's API, database, subnets, SSH access, and DDNS are no
 longer asked here at all — log in once installed and a six-step guided
@@ -108,7 +130,11 @@ sudo ./install.sh --answers answers.env --unattended
 
 Same `JEN_*` names `.env.example` and the Docker path already use — see
 that file for the full list, including the optional SSH and DDNS
-settings. The file is parsed as plain `KEY=value` lines, never sourced
+settings. **An unattended install whose Jen database does not answer stops** (it
+prints the SQL to create it and the reason, and exits non-zero) rather than
+installing a service that would restart every five seconds; to let the
+installer install MariaDB on this machine and create the database, add
+`JEN_DB_INSTALL_LOCAL=yes` (honoured only for a local `JEN_DB_HOST`). The file is parsed as plain `KEY=value` lines, never sourced
 as a shell script, and refused unless it's a regular file not writable
 by group or other. A value may have spaces around the `=`, may be
 wrapped in one matching pair of quotes (stripped), and the line may

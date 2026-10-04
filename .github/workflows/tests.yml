@@ -1123,6 +1123,123 @@ jobs:
         if: failure()
         run: sudo journalctl -u jen -n 200 --no-pager || true
 
+  # v5.67.0-beta.18 (Q132) — the installer on a machine that has NO database server: the first-ever fresh install on a
+  # new Ubuntu box ended at "Continue without it" with nothing installed and nothing said. This leg has no MariaDB
+  # service container (every other install leg gets one), takes the opt-in the answers file offers
+  # (JEN_DB_INSTALL_LOCAL=yes), and proves the installer installs MariaDB itself, creates Jen's database and user,
+  # starts Jen against it, keeps apt's noise off the screen and in /var/log/jen-install.log — and that uninstalling Jen
+  # leaves the database server alone.
+  install-local-db:
+    name: install.sh, no database server yet (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      # see the install job: this hosted image ships /opt mode 777
+      - name: Harden /opt for this runner
+        run: sudo chmod 755 /opt
+
+      # The hosted image ships a stopped MySQL server and client. A fresh box has neither, and mariadb-server conflicts
+      # with mysql-server: purge them so this leg starts where the maintainer's box did — no server, no client.
+      - name: Make this runner a box with no database server
+        run: |
+          set -e
+          sudo systemctl stop mysql || true
+          sudo apt-get purge -y 'mysql-server*' 'mysql-client*' 'mysql-common' 'mariadb-*' || true
+          sudo apt-get autoremove -y
+          listeners=$(ss -ltnH 'sport = :3306')
+          [[ -z "$listeners" ]]
+          if dpkg -s mariadb-server >/dev/null 2>&1; then echo "mariadb-server is installed before the installer ran"; exit 1; fi
+          if command -v mysql >/dev/null; then echo "a mysql client is still installed"; exit 1; fi
+          echo "no database server, no listener on 3306, no mysql client"
+
+      - name: Build this commit's tarball
+        run: |
+          mkdir -p dist
+          git archive --format=tar --prefix=jen/ HEAD | gzip -9 > dist/jen-head.tar.gz
+
+      - name: Write the answers file (a LOCAL Jen database, the opt-in, no Kea)
+        run: |
+          umask 077
+          cat > "$RUNNER_TEMP/answers-local-db.env" << 'EOF'
+          JEN_DB_HOST=127.0.0.1
+          JEN_DB_USER=jen
+          JEN_DB_PASS=jen_pw
+          JEN_DB_NAME=jen
+          JEN_DB_INSTALL_LOCAL=yes
+          JEN_INITIAL_ADMIN_PASSWORD=ci-test-passw0rd-!
+          JEN_HTTP_PORT=5050
+          JEN_HTTPS_PORT=8443
+          EOF
+
+      - name: Install — the installer installs MariaDB itself
+        run: |
+          mkdir -p "$RUNNER_TEMP/install-head"
+          tar xzf dist/jen-head.tar.gz -C "$RUNNER_TEMP/install-head"
+          cd "$RUNNER_TEMP/install-head/jen"
+          sudo TERM=linux ./install.sh --answers "$RUNNER_TEMP/answers-local-db.env" --unattended 2>&1 | tee "$RUNNER_TEMP/install-local-db.out"
+
+      - name: Assert MariaDB, the database, Jen and the install log are real
+        run: |
+          set -e
+          dpkg -s mariadb-server >/dev/null
+          systemctl is-active --quiet mariadb
+          systemctl is-enabled --quiet mariadb
+          echo "mariadb-server installed by the installer, running and enabled"
+
+          schemata=$(sudo mysql -N -e "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name='jen'")
+          [[ "$schemata" == "1" ]]
+          users=$(sudo mysql -N -e "SELECT COUNT(*) FROM mysql.user WHERE user='jen'")
+          [[ "$users" -ge 1 ]]
+          mysql -h127.0.0.1 -ujen -pjen_pw jen -e 'SELECT 1' >/dev/null
+          echo "database and user exist, and the user connects over TCP"
+
+          tables=$(sudo mysql -N -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='jen' AND table_name='users'")
+          [[ "$tables" == "1" ]]
+          echo "Jen migrated its own schema into it"
+
+          systemctl is-active --quiet jen
+          grep -q jen_version < <(curl -sf http://127.0.0.1:5050/api/v1/health)
+          echo "Jen is healthy against the database the installer made"
+
+          [[ "$(sudo stat -c '%a %U:%G' /var/log/jen-install.log)" == "600 root:root" ]]
+          sudo grep -q 'apt-get install mariadb-server' /var/log/jen-install.log
+          sudo grep -q 'Setting up mariadb-server' /var/log/jen-install.log
+          echo "/var/log/jen-install.log is root:root 0600 and holds the apt run"
+
+          if sudo grep -q 'jen_pw' /var/log/jen-install.log; then echo "the database password reached the install log"; exit 1; fi
+          echo "the password is not in the log"
+
+          if grep -q 'Selecting previously unselected package' "$RUNNER_TEMP/install-local-db.out"; then
+            echo "::error::dpkg's unpack/setup lines scrolled through the installer's output"; exit 1
+          fi
+          grep -q 'MariaDB installed' "$RUNNER_TEMP/install-local-db.out"
+          grep -q 'jen-install.log' "$RUNNER_TEMP/install-local-db.out"
+          echo "apt's output stayed off the screen, and the summary names the log"
+
+      - name: Uninstall Jen at level 3 — the database server and Jen's database stay
+        working-directory: ${{ runner.temp }}/install-head/jen
+        run: |
+          set -e
+          printf 'y\n3\nDELETE\n' | sudo ./uninstall.sh
+          [[ ! -d /opt/jen ]]
+          dpkg -s mariadb-server >/dev/null
+          systemctl is-active --quiet mariadb
+          schemata=$(sudo mysql -N -e "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name='jen'")
+          [[ "$schemata" == "1" ]]
+          echo "Jen is gone; MariaDB and Jen's database are exactly where they were"
+
+      - name: Installer log and Jen service log on failure
+        if: failure()
+        run: |
+          sudo tail -n 120 /var/log/jen-install.log || true
+          sudo journalctl -u jen -n 100 --no-pager || true
+
   # v5.67.0-beta.10 (Q122) — the upgrade every operator is about to make, as
   # its own job on a CLEAN runner. It used to be a leg of the install job,
   # running AFTER HEAD's own fresh install and a level-1 uninstall: it started

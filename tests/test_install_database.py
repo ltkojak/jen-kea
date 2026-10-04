@@ -157,9 +157,9 @@ class TestTheJenDatabaseFailureChoice:
 
     def test_the_interactive_menu_for_the_jen_database_has_no_continue(self):
         body = "\n".join(_functions(_text(INSTALL))["_connection_failure_choice"])
-        required_branch = body.split('if [[ "$required" == "required" ]]; then\n            echo', 1)[1].split(
-            "else", 1
-        )[0]
+        required_branch = body.split('if [[ "$required" == "required" ]]; then\n            [[ "$offer_local"', 1)[
+            1
+        ].split("else", 1)[0]
         assert "Quit — Jen cannot start without its own database" in required_branch
         assert "Continue without it" not in required_branch
         assert "Continue without it — I will finish in Jen" in body.split(required_branch, 1)[1], (
@@ -372,3 +372,224 @@ class TestTheCiProvesTheFailurePath:
         assert "answers-unreachable.env" in step and "[[ $rc -ne 0 ]]" in step
         assert "CREATE DATABASE" in step and "Jen does not start without it" in step
         assert "! systemctl" not in step, "a negated command is ignored by errexit and would assert nothing"
+
+
+def _stubs(tmp_path, bodies):
+    """A directory of tiny `sh` stubs, returned as a bash `export PATH=...` line."""
+    bindir = tmp_path / "stubs"
+    bindir.mkdir(exist_ok=True)
+    for name, body in bodies.items():
+        p = bindir / name
+        p.write_text("#!/bin/sh\n" + body + "\n", encoding="utf-8")
+        p.chmod(p.stat().st_mode | stat.S_IEXEC)
+    return f'export PATH="{bindir}:$PATH"'
+
+
+class TestInstallingMariaDbHereOnRequest:
+    """v5.67.0-beta.18 (Q132, item c) — a local database on request. Opt-in only (the operator's y, or
+    JEN_DB_INSTALL_LOCAL=yes with no one to ask), local host only, never silently, and Jen never removes it."""
+
+    @pytest.mark.parametrize(
+        "value,expected",
+        [("yes", 0), ("YES", 0), ("y", 0), ("true", 0), ("1", 0), ("no", 1), ("", 1), ("maybe", 1)],
+    )
+    def test_the_opt_in_values(self, tmp_path, value, expected):
+        r = _run(
+            tmp_path,
+            f'ANSWERS[JEN_DB_INSTALL_LOCAL]="{value}"\n_jen_db_install_local_opted_in && echo rc=0 || echo rc=1',
+        )
+        assert f"rc={expected}" in r.stdout, r.stdout + r.stderr
+
+    def test_the_opt_in_is_also_read_from_the_environment_and_absent_means_no(self, tmp_path):
+        r = _run(tmp_path, "JEN_DB_INSTALL_LOCAL=yes\n_jen_db_install_local_opted_in && echo rc=0 || echo rc=1")
+        assert "rc=0" in r.stdout
+        r = _run(tmp_path, "unset JEN_DB_INSTALL_LOCAL\n_jen_db_install_local_opted_in && echo rc=0 || echo rc=1")
+        assert "rc=1" in r.stdout
+
+    @pytest.mark.parametrize(
+        "host,local",
+        [
+            ("localhost", 0),
+            ("127.0.0.1", 0),
+            ("::1", 0),
+            ("db.example.net", 1),
+            ("10.0.0.5", 1),
+            ("127.0.0.2", 1),
+            ("", 1),
+        ],
+    )
+    def test_what_counts_as_local(self, tmp_path, host, local):
+        r = _run(tmp_path, f'_is_local_host "{host}" && echo rc=0 || echo rc=1')
+        assert f"rc={local}" in r.stdout
+
+    def _offer(self, tmp_path, host, answers="", can_self_create=False, apt_ok=True, mysql_ok=True):
+        apt_tail = "exit 0" if apt_ok else 'echo "E: broken" >&2; exit 100'
+        mysql_tail = "exit 0" if mysql_ok else "echo 'ERROR 2002' >&2; exit 1"
+        path = _stubs(
+            tmp_path,
+            {
+                "apt-get": 'echo "apt-get $*" >> "$STUB_CALLS"; ' + apt_tail,
+                "dpkg": "exit 1",  # mariadb-server is not installed
+                "systemctl": 'echo "systemctl $*" >> "$STUB_CALLS"; touch "$STUB_STARTED"; exit 0',
+                # no server answers until `systemctl enable --now` has run (the stub marks it started)
+                "mysql": '[ -f "$STUB_STARTED" ] || exit 1; cat >> "$STUB_SQL"; ' + mysql_tail,
+                "sleep": "exit 0",
+                "seq": "echo 1",
+            },
+        )
+        calls, sql = tmp_path / "calls", tmp_path / "sql"
+        calls.write_text("", encoding="utf-8")
+        sql.write_text("", encoding="utf-8")
+        log = tmp_path / "i.log"
+        override = "_jen_db_can_self_create() { return 0; }" if can_self_create else ""
+        if can_self_create:
+            (tmp_path / "started").write_text("", encoding="utf-8")  # a server already runs
+        r = _run(
+            tmp_path,
+            textwrap.dedent(f"""
+                {path}
+                export STUB_CALLS="{calls}" STUB_SQL="{sql}" STUB_STARTED="{tmp_path}/started"
+                INSTALL_LOG="{log}"
+                MODE_UNATTENDED=true; HAVE_TTY=false
+                JEN_DB_HOST="{host}"; JEN_DB_NAME=jen; JEN_DB_USER=jen; JEN_DB_PASS="pa'ss"
+                {answers}
+                {override}
+                _jen_db_offer_create && echo "offer-rc=0" || echo "offer-rc=1"
+            """),
+        )
+        return r, calls.read_text(encoding="utf-8"), sql.read_text(encoding="utf-8"), log
+
+    def test_unattended_without_the_opt_in_never_installs_and_shows_the_sql(self, tmp_path):
+        r, calls, sql, _log = self._offer(tmp_path, "localhost")
+        assert "offer-rc=1" in r.stdout and "CREATE DATABASE `jen`" in r.stdout
+        assert calls == "" and sql == "", "nothing was installed, started or created"
+
+    def test_unattended_with_the_opt_in_installs_starts_and_creates(self, tmp_path):
+        r, calls, sql, log = self._offer(tmp_path, "127.0.0.1", answers='ANSWERS[JEN_DB_INSTALL_LOCAL]="yes"')
+        assert "offer-rc=0" in r.stdout, r.stdout + r.stderr
+        assert "apt-get install -y mariadb-server" in calls
+        assert "systemctl enable --now mariadb" in calls
+        assert "CREATE DATABASE IF NOT EXISTS `jen`" in sql and "IDENTIFIED BY 'pa''ss'" in sql, "quoted by _sql_quote"
+        text = log.read_text(encoding="utf-8")
+        assert "apt-get install mariadb-server" in text
+        assert "pa''ss" not in text and "IDENTIFIED BY" not in text, "the password never reaches the log"
+
+    def test_a_remote_host_is_never_installed_for_even_with_the_opt_in(self, tmp_path):
+        r, calls, sql, _log = self._offer(tmp_path, "db.example.net", answers='ANSWERS[JEN_DB_INSTALL_LOCAL]="yes"')
+        assert "offer-rc=1" in r.stdout and "CREATE DATABASE `jen`" in r.stdout
+        assert calls == "" and sql == ""
+
+    def test_an_installed_but_stopped_server_is_started_not_reinstalled(self, tmp_path):
+        path = _stubs(
+            tmp_path,
+            {
+                "dpkg": "exit 0",  # mariadb-server IS installed
+                "apt-get": 'echo "apt-get $*" >> "$STUB_CALLS"; exit 0',
+                "systemctl": 'echo "systemctl $*" >> "$STUB_CALLS"; exit 0',
+                "mysql": "exit 0",
+                "sleep": "exit 0",
+                "seq": "echo 1",
+            },
+        )
+        calls = tmp_path / "calls"
+        calls.write_text("", encoding="utf-8")
+        r = _run(
+            tmp_path,
+            f'{path}\nexport STUB_CALLS="{calls}"\nINSTALL_LOG="{tmp_path}/i.log"\n_jen_db_install_local && echo rc=0 || echo rc=1',
+        )
+        text = calls.read_text(encoding="utf-8")
+        assert "rc=0" in r.stdout and "already installed" in r.stdout, r.stdout + r.stderr
+        assert "apt-get" not in text and "systemctl enable --now mariadb" in text
+
+    def test_a_server_that_already_lets_root_in_is_not_installed_but_the_database_is_created(self, tmp_path):
+        r, calls, sql, _log = self._offer(
+            tmp_path, "localhost", answers='ANSWERS[JEN_DB_INSTALL_LOCAL]="yes"', can_self_create=True
+        )
+        assert "offer-rc=0" in r.stdout
+        assert "apt-get" not in calls and "CREATE USER IF NOT EXISTS 'jen'@'%'" in sql
+
+    def test_a_failed_apt_falls_back_to_the_sql_with_the_error_shown(self, tmp_path):
+        r, calls, sql, _log = self._offer(
+            tmp_path, "localhost", answers='ANSWERS[JEN_DB_INSTALL_LOCAL]="yes"', apt_ok=False
+        )
+        out = r.stdout + r.stderr
+        assert "offer-rc=1" in out and "E: broken" in out and "falling back to the SQL" in out
+        assert "CREATE DATABASE `jen`" in out and sql == ""
+
+    def test_a_server_that_never_answers_is_reported_after_the_wait(self, tmp_path):
+        r, calls, sql, _log = self._offer(
+            tmp_path, "localhost", answers='ANSWERS[JEN_DB_INSTALL_LOCAL]="yes"', mysql_ok=False
+        )
+        out = r.stdout + r.stderr
+        assert "offer-rc=1" in out and "did not accept a root-socket connection within 30 seconds" in out
+
+    def test_the_menu_offers_install_only_for_a_local_database(self):
+        body = "\n".join(_functions(_text(INSTALL))["_connection_failure_choice"])
+        assert 'if [[ "$required" == "required" ]] && _is_local_host "$_h"; then offer_local=true; fi' in body
+        assert (
+            '[[ "$offer_local" == "true" ]] && echo -e "    ${B}i)${NC}  Install MariaDB on this machine and create '
+            'the database now"' in body
+        )
+        assert 'i) if [[ "$offer_local" == "true" ]]; then _RETRY_ACTION="install"' in body
+
+    def test_the_prompt_defaults_to_no_so_nothing_is_installed_by_pressing_enter(self):
+        body = "\n".join(_functions(_text(INSTALL))["_jen_db_offer_create"])
+        assert 'prompt_yn "Install MariaDB on this machine and create the database now?" "n"' in body
+
+    def test_the_section_opens_with_the_one_sentence(self):
+        body = "\n".join(_functions(_text(INSTALL))["_configure_jen_db"])
+        assert (
+            "Jen needs its own MariaDB/MySQL database. If this machine has none, the installer can install MariaDB "
+            "here and create it." in body
+        )
+
+    def test_the_unattended_hint_names_the_opt_in_for_a_local_host(self, tmp_path):
+        r = _run(
+            tmp_path,
+            textwrap.dedent("""
+                MODE_UNATTENDED=true; HAVE_TTY=false
+                _jen_db_can_self_create() { return 1; }
+                _connection_failure_choice "Jen database" "jen@localhost/jen" required
+            """),
+        )
+        assert "JEN_DB_INSTALL_LOCAL=yes" in r.stdout and r.returncode != 0
+
+
+class TestUninstallLeavesTheDatabaseAlone:
+    def test_it_says_so_and_never_touches_mariadb(self):
+        text = _text(UNINSTALL)
+        assert "no level below removes them" in text and "No level removes MariaDB or Jen's database" in text
+        for code in (line.split("#", 1)[0] for line in text.splitlines()):
+            assert not re.search(r"apt(-get)?\s+(remove|purge|autoremove)", code), code
+            assert not re.search(r"systemctl\s+(stop|disable|mask)\s+(mariadb|mysql)", code), code
+            assert not re.search(r"DROP\s+(DATABASE|USER)", code, re.I), code
+
+
+class TestTheCiLeavesNoDatabaseServerUntilTheInstallerMakesOne:
+    def _job(self):
+        wf = _text(ROOT / ".github" / "workflows" / "tests.yml")
+        job = wf.split("\n  install-local-db:\n", 1)[1]
+        return job.split("\n  # v5.67.0-beta.10 (Q122)", 1)[0]
+
+    def test_the_leg_has_no_service_container_and_takes_the_opt_in(self):
+        job = self._job()
+        assert "services:" not in job, "every other install leg gets a MariaDB container; this one must have none"
+        assert "JEN_DB_INSTALL_LOCAL=yes" in job and "JEN_DB_HOST=127.0.0.1" in job
+        assert "runs-on: ubuntu-24.04" in job
+
+    def test_it_proves_the_install_the_database_the_log_and_the_uninstall(self):
+        job = self._job()
+        for needle in (
+            "dpkg -s mariadb-server",
+            "systemctl is-active --quiet mariadb",
+            "information_schema.schemata WHERE schema_name='jen'",
+            "/var/log/jen-install.log",
+            "600 root:root",
+            "Selecting previously unselected package",
+            "printf 'y\\n3\\nDELETE\\n' | sudo ./uninstall.sh",
+        ):
+            assert needle in job, needle
+
+    def test_it_starts_from_a_box_with_no_database_server_or_client(self):
+        job = self._job()
+        assert "apt-get purge" in job and "ss -ltnH 'sport = :3306'" in job and "command -v mysql" in job

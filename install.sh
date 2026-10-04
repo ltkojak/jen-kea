@@ -982,12 +982,18 @@ _blank_if_placeholder() {
 # warn-and-continue is unchanged.
 _connection_failure_choice() {
     local what="$1" detail="$2" required="${3:-}"
+    # `i)` is offered only for a database on THIS machine (never a remote host)
+    local offer_local=false _h="${detail#*@}"
+    _h="${_h%%/*}"
+    if [[ "$required" == "required" ]] && _is_local_host "$_h"; then offer_local=true; fi
     if [[ "$HAVE_TTY" != "true" || "$MODE_UNATTENDED" == "true" ]]; then
         if [[ "$required" == "required" ]]; then
             err "Could not reach $what ($detail)"
             local host="${detail#*@}"; host="${host%%/*}"
             if _jen_db_can_self_create "$host"; then
                 info "A MariaDB on this machine accepts root over its socket: run the SQL above as root, or run this installer interactively and let it create the database."
+            elif _is_local_host "$host"; then
+                info "No database server on this machine lets the installer in. Set JEN_DB_INSTALL_LOCAL=yes (answers file or environment) to have it install MariaDB here and create the database, or install and start MariaDB or MySQL yourself, run the SQL above, and run the installer again."
             else
                 info "No usable database answered at $host. Install and start MariaDB or MySQL there (or point JEN_DB_HOST at a server that answers), run the SQL above, then run the installer again."
             fi
@@ -1003,6 +1009,7 @@ _connection_failure_choice() {
         echo -e "    ${B}r)${NC}  Retry with the same values"
         echo -e "    ${B}e)${NC}  Edit and try again"
         if [[ "$required" == "required" ]]; then
+            [[ "$offer_local" == "true" ]] && echo -e "    ${B}i)${NC}  Install MariaDB on this machine and create the database now"
             echo -e "    ${B}q)${NC}  Quit — Jen cannot start without its own database"
         else
             echo -e "    ${B}c)${NC}  Continue without it — I will finish in Jen"
@@ -1016,6 +1023,8 @@ _connection_failure_choice() {
         case "${choice,,}" in
             r) ok "Retrying $what"; _RETRY_ACTION="retry"; return 0 ;;
             e) ok "Editing $what"; _RETRY_ACTION="edit"; return 0 ;;
+            i) if [[ "$offer_local" == "true" ]]; then _RETRY_ACTION="install"; return 0; fi
+               echo -e "  ${R}  Please enter one of the letters shown.${NC}" > /dev/tty ;;
             c) if [[ "$required" != "required" ]]; then
                    ok "Continuing without $what — configure it later in Jen"; _RETRY_ACTION="continue"; return 0
                fi
@@ -1035,11 +1044,67 @@ _connection_failure_choice() {
 # with working root-socket auth, offer to create it instead of just
 # printing SQL for the operator to run by hand afterward. Never attempted
 # for a remote host — this only ever touches a database on THIS box.
+_is_local_host() {
+    [[ "$1" == "localhost" || "$1" == "127.0.0.1" || "$1" == "::1" ]]
+}
+
 _jen_db_can_self_create() {
     local host="$1"
-    [[ "$host" == "localhost" || "$host" == "127.0.0.1" || "$host" == "::1" ]] || return 1
+    _is_local_host "$host" || return 1
     command -v mysql &>/dev/null || return 1
     _run_logged_noargs "mysql root-socket probe" mysql -u root -e "SELECT 1;"
+}
+
+# v5.67.0-beta.18 (Q132) — a local database on request. A homelab install wants Jen's small database on the same
+# machine, and a fresh box has no server: the installer used to print `CREATE DATABASE ...` for a server that does not
+# exist. Opt-in ONLY: the operator's `y` (the prompt, or the `i)` choice of the failure menu) or, with no one to ask,
+# JEN_DB_INSTALL_LOCAL=yes in the answers file / environment. Never for a remote host, never silently.
+_jen_db_install_local_opted_in() {
+    local v
+    v="$(_cfgval "JEN_DB_INSTALL_LOCAL")"
+    case "${v,,}" in
+        yes|y|true|1) return 0 ;;
+    esac
+    return 1
+}
+
+# Install MariaDB's server on THIS machine (Debian/Ubuntu, as the installer already is), start it, and wait for the
+# socket. A server that is already installed is started, never reinstalled. Output goes to the install log. Returns
+# 0 when a root-socket connection works afterwards (Ubuntu's MariaDB authenticates root over the unix socket, which is
+# what the existing self-create below relies on), 1 with the log tail printed otherwise.
+_jen_db_install_local() {
+    if ! command -v mariadbd &>/dev/null && ! dpkg -s mariadb-server &>/dev/null; then
+        spinner_start "Installing MariaDB (mariadb-server) on this machine..."
+        if ! _apt_get "apt-get install mariadb-server" install -y mariadb-server; then
+            spinner_stop
+            _install_log_tail
+            err "Could not install mariadb-server — the output above is from $INSTALL_LOG"
+            return 1
+        fi
+        spinner_stop
+        ok "MariaDB installed"
+    else
+        ok "MariaDB is already installed on this machine"
+    fi
+    spinner_start "Starting MariaDB..."
+    if ! _run_logged "systemctl enable --now mariadb" systemctl enable --now mariadb; then
+        spinner_stop
+        _install_log_tail
+        err "Could not start the mariadb service — the output above is from $INSTALL_LOG"
+        return 1
+    fi
+    for _ in $(seq 1 30); do
+        if mysql -u root -e "SELECT 1;" >> "$INSTALL_LOG" 2>&1; then
+            spinner_stop
+            ok "MariaDB is running  ${DIM}(root connects over its unix socket)${NC}"
+            return 0
+        fi
+        sleep 1
+    done
+    spinner_stop
+    _install_log_tail
+    err "MariaDB did not accept a root-socket connection within 30 seconds — the output above is from $INSTALL_LOG"
+    return 1
 }
 
 # v5.67.0-beta.9 (Q121, item h) — a SQL string literal for MySQL/MariaDB:
@@ -1054,6 +1119,40 @@ _sql_quote() {
 }
 
 _jen_db_offer_create() {
+    # v5.67.0-beta.18 (Q132) — before the SQL: when the host is THIS machine and no local server lets root in, offer
+    # to install MariaDB here (opt-in only — see _jen_db_install_local_opted_in). After a successful install the
+    # existing self-create below does the rest.
+    local installed_now=false interactive=false
+    if [[ "$HAVE_TTY" == "true" && "$MODE_UNATTENDED" == "false" ]]; then interactive=true; fi
+    if _is_local_host "$JEN_DB_HOST" && ! _jen_db_can_self_create "$JEN_DB_HOST"; then
+        local want=false
+        if [[ "$interactive" == "true" ]]; then
+            blank
+            info "No database server on this machine lets the installer in — Jen needs its own MariaDB/MySQL database."
+            [[ "$(prompt_yn "Install MariaDB on this machine and create the database now?" "n")" == "y" ]] && want=true
+        elif _jen_db_install_local_opted_in; then
+            want=true
+            info "JEN_DB_INSTALL_LOCAL=yes — installing MariaDB on this machine"
+        fi
+        if [[ "$want" == "true" ]]; then
+            if _jen_db_install_local; then
+                installed_now=true
+            else
+                warn "MariaDB could not be installed and started here — falling back to the SQL to run by hand"
+            fi
+        fi
+    fi
+    if [[ "$installed_now" != "true" && "$interactive" == "false" ]] && _is_local_host "$JEN_DB_HOST" \
+        && _jen_db_install_local_opted_in && _jen_db_can_self_create "$JEN_DB_HOST"; then
+        # nobody to ask, the opt-in is given, and a local server already lets root in: create the database
+        installed_now=true
+    fi
+    if [[ "$installed_now" == "true" ]]; then
+        if _jen_db_create_now; then
+            return 0
+        fi
+        return 1
+    fi
     blank
     warn "Could not connect to Jen database. The SQL to create it:"
     blank
@@ -1063,30 +1162,33 @@ _jen_db_offer_create() {
     echo -e "    ${C}FLUSH PRIVILEGES;${NC}"
     blank
     if [[ "$HAVE_TTY" == "true" && "$MODE_UNATTENDED" == "false" ]] && _jen_db_can_self_create "$JEN_DB_HOST"; then
-        # Identifiers (the database and user names) are interpolated, never
-        # quoted — so only names that cannot carry SQL are accepted; the
-        # password goes through _sql_quote. The statement is fed on stdin, so
-        # the password never appears in a process listing.
-        if [[ ! "$JEN_DB_NAME" =~ ^[A-Za-z0-9_.-]+$ || ! "$JEN_DB_USER" =~ ^[A-Za-z0-9_.-]+$ ]]; then
-            warn "Not creating it for you: the database or user name has characters this installer will not put into SQL — use the statements above by hand."
-            return 1
-        fi
         if [[ "$(prompt_yn "MariaDB is local and root can connect without a password — create it now?" "y")" == "y" ]]; then
-            local create_sql
-            create_sql="CREATE DATABASE IF NOT EXISTS \`${JEN_DB_NAME}\`;
+            _jen_db_create_now && return 0
+        fi
+    fi
+    return 1
+}
+
+# Create the database and user through the root socket (the statement is fed on stdin, so the password never appears in
+# a process listing, and never in the log: only the command's OUTPUT is logged). Identifiers (the database and user
+# names) are interpolated, never quoted — so only names that cannot carry SQL are accepted; the password goes through
+# _sql_quote.
+_jen_db_create_now() {
+    if [[ ! "$JEN_DB_NAME" =~ ^[A-Za-z0-9_.-]+$ || ! "$JEN_DB_USER" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+        warn "Not creating it for you: the database or user name has characters this installer will not put into SQL — use the statements by hand."
+        return 1
+    fi
+    local create_sql
+    create_sql="CREATE DATABASE IF NOT EXISTS \`${JEN_DB_NAME}\`;
 CREATE USER IF NOT EXISTS '${JEN_DB_USER}'@'%' IDENTIFIED BY $(_sql_quote "$JEN_DB_PASS");
 GRANT ALL PRIVILEGES ON \`${JEN_DB_NAME}\`.* TO '${JEN_DB_USER}'@'%';
 FLUSH PRIVILEGES;"
-            # the statement carries the password, so only the command's OUTPUT is logged, never the statement
-            if printf '%s\n' "$create_sql" | _run_logged_noargs "create the Jen database and user (mysql, root socket)" mysql -u root; then
-                ok "Database and user created"
-                return 0
-            else
-                _install_log_tail
-                err "Could not create the database — the output above is from $INSTALL_LOG; check the MariaDB error log too"
-            fi
-        fi
+    if printf '%s\n' "$create_sql" | _run_logged_noargs "create the Jen database and user (mysql, root socket)" mysql -u root; then
+        ok "Database and user created"
+        return 0
     fi
+    _install_log_tail
+    err "Could not create the database — the output above is from $INSTALL_LOG; check the MariaDB error log too"
     return 1
 }
 
@@ -1236,9 +1338,13 @@ _configure_jen_db() {
     blank
     echo -e "  ${B}Jen MySQL Database${NC}  ${DIM}(users, audit log, settings)${NC}"
     blank
-    local _edit=false
+    info "Jen needs its own MariaDB/MySQL database. If this machine has none, the installer can install MariaDB here and create it."
+    blank
+    local _edit=false _reuse=false
     while true; do
-        if [[ "$_edit" == "true" ]]; then
+        if [[ "$_reuse" == "true" ]]; then
+            _reuse=false    # the database was just created or started: test the SAME values, do not ask again
+        elif [[ "$_edit" == "true" ]]; then
             JEN_DB_HOST=$(prompt_input  "Host"     "$JEN_DB_HOST")
             JEN_DB_USER=$(prompt_input  "Username" "$JEN_DB_USER")
             JEN_DB_PASS=$(prompt_secret "Password")
@@ -1259,13 +1365,19 @@ _configure_jen_db() {
         fi
         spinner_stop
         if _jen_db_offer_create; then
+            _reuse=true
             continue
         fi
         _connection_failure_choice "Jen database" "${JEN_DB_USER}@${JEN_DB_HOST}/${JEN_DB_NAME}" required
         case "$_RETRY_ACTION" in
             retry) continue ;;
             edit) _edit=true; continue ;;
-            quit) fatal "Installation stopped: Jen needs its own database. Create it with the SQL above, then run this installer again." ;;
+            install)
+                if _jen_db_install_local && _jen_db_create_now; then
+                    _reuse=true
+                fi
+                continue ;;
+            quit) fatal "Installation stopped: Jen needs its own database. Create it with the SQL above (or let this installer install MariaDB here), then run it again." ;;
         esac
     done
 }
