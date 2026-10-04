@@ -130,6 +130,7 @@ nothing new lives behind it, and importing it does no work:
 | Alert types (v5.57.0) | `register_alert_type(plugin_id, type_id, *, label, icon, default_template)` |
 | Row actions (v5.57.0) | `register_row_action(plugin_id, surface, *, label, icon, href, method="GET", roles=(…), confirm=None, when=None)` |
 | Search (v5.57.0) | `register_search_provider(plugin_id, *, title, fn)` |
+| Investigation (v5.68.0-beta.4) | `register_investigation_provider(plugin_id, *, title, fn)` — `fn(subject, accessible_subnet_ids, all_subnets) -> card | None` |
 | Plugin API routes (v5.57.0) | `api_key_required(write=False)`, `filter_subnet_ids(key_row, subnet_ids)` |
 | Secrets (v5.57.0) | `encrypt_secret(plaintext)`, `decrypt_secret(stored)` |
 | Helpers (v5.65.10) | `json_object_body()`, `str_field(body, name, max_len)`, `normalize_mac(raw)`, `like_pattern(text)`, `in_placeholders(values)`, `subnet_for_ip(ip)`, `search_scope(ids, all_subnets, column)`, `require_write()`, `subnet_or_404(subnet_id)`; `assert_subnet_access(subnet_id, *, notify=True)` — see "Helpers every plugin used to copy" below |
@@ -183,6 +184,9 @@ declare the version it was written against:
 ```json
 "plugin_api": 3
 ```
+
+`register_investigation_provider` (v5.68.0-beta.4) is additive: `PLUGIN_API_VERSION` stays 3, and a plugin that uses it sets
+`requires_jen` to `5.68.0` (a 5.68.0 beta satisfies it).
 
 Jen refuses to load a plugin whose `plugin_api` is newer than what it
 offers — the Plugins page shows *needs plugin API vN* instead of the
@@ -303,6 +307,45 @@ def _search(query, accessible_subnet_ids, all_subnets):
 
 register_search_provider("watchdog", title="Host Watchdog", fn=_search)
 ```
+
+### Telling the Investigation page what you know about a client — `register_investigation_provider(...)` (v5.68.0-beta.4)
+
+The Investigation page (`/client`) lays out what the core knows about one client. A plugin that knows a fact the core cannot — the
+switch port a MAC sits on, whether a host answers a ping, which DNS records carry its name — adds ONE card under **What else Jen
+knows** on the Overview, after the core facts. `fn` is handed the client Jen has already resolved, never a typed identifier:
+
+```python
+from jen.plugin_api import register_investigation_provider
+
+
+def _investigate(subject, accessible_subnet_ids, all_subnets):
+    row = find_port(subject.mac)  # your own lookup, scoped like a search provider's
+    if not row:
+        return None  # nothing to say: no card, no heading
+    return {
+        "summary": f"On {row.switch} port {row.port}",
+        "status": "ok",  # "ok" | "warn" | "none"; warn also puts the summary in the page's one-line answer
+        "href": f"/plugin/switchport/mac/{subject.mac}",  # your own page for this client
+        "rows": [{"label": "Switch", "value": row.switch, "href": f"/plugin/switchport/switch/{row.switch_id}"}],
+    }
+
+
+register_investigation_provider("switchport", title="Switch Port Locator", fn=_investigate)
+```
+
+* `subject` is a read-only copy of the caller's authorized view of the client (`mac`, `ip`, `hostname`, `duid`, `subnet_ids`,
+  `leases4`, `reservations`, `leases6`, `reservations6`, `device`). Editing it changes nothing anyone else sees. A provider never
+  resolves the client itself.
+* **Scope is yours and Jen's.** Jen only asks about a client the caller may see, and hands you the caller's own
+  `accessible_subnet_ids` and `all_subnets` — put them in your own query (`search_scope()`, `can_access_subnet()`) exactly as a
+  search provider does, and answer `None` rather than a row from a subnet outside them. A client the caller cannot place in a
+  subnet is the page's ordinary "No client matched" answer and no provider is called at all.
+* The card is `{"summary": one sentence, "rows": [{"label", "value", "href"?}], "href", "status"}`. Jen validates and trims it:
+  text is length-capped, at most 20 rows, an unknown `status` reads as `ok`, and any `href` that is not a single-slash path inside
+  Jen is dropped. A card with neither summary nor rows is the same as `None`.
+* Providers run in registration order, in the request, with an advisory 1.0 s budget each (over-budget is logged; the card still
+  shows). One that raises — or answers something that is not a card — shows "unavailable" and is logged; it never breaks the page.
+* Same cache rule as a search provider: do your own `LIMIT` after your own scope filter. Registered once, in `register(app)`.
 
 ### Subnet checks — `can_access_subnet` / `api_key_can_access_subnet` (v5.65.2)
 

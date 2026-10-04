@@ -91,6 +91,7 @@
         · <a href="/search?q={{ q|urlencode }}&list=1">Search results for this</a>
     </div>
     {% if explain_line %}<div class="u-865c33 u-8a77e5"><strong>What Kea would do:</strong> {{ explain_line }} <a href="/client?q={{ q|urlencode }}&tab=explain">Why?</a></div>{% endif %}
+    {% if plugin_warnings %}<div class="u-865c33 u-8a77e5"><strong>Worth a look:</strong>{% for w in plugin_warnings %} {{ w.title }} — {{ w.summary }}{% if not loop.last %};{% endif %}{% endfor %}</div>{% endif %}
 </div>
 
 {% if tab == "overview" %}
@@ -169,6 +170,31 @@
     <p class="u-5872de">No IPv6 reservation.</p>
     {% endif %}
 </div>
+
+{% if plugin_cards %}
+<h2 class="u-865c33" id="what-else-jen-knows">What else Jen knows</h2>
+{% for pc in plugin_cards %}
+<div class="card" data-plugin-card="{{ pc.plugin_id }}" data-status="{{ pc.card.status if pc.card else 'unavailable' }}">
+    <div class="card-header"><span class="card-title">{{ pc.title }}</span>
+        {% if pc.card and pc.card.href %}<span class="u-865c33"><a href="{{ pc.card.href }}">Open</a></span>{% endif %}
+    </div>
+    {% if pc.unavailable %}
+    <p class="u-5872de">{{ pc.title }} is unavailable right now.</p>
+    {% else %}
+    {% if pc.card.summary %}<p class="u-865c33">{% if pc.card.status == 'warn' %}<strong>Needs a look:</strong> {% endif %}{{ pc.card.summary }}</p>{% endif %}
+    {% if pc.card.rows %}
+    <table class="rowlist">
+        <tbody>
+        {% for row in pc.card.rows %}
+        <tr><td>{{ row.label }}</td><td>{% if row.href %}<a href="{{ row.href }}">{{ row.value or row.label }}</a>{% else %}{{ row.value }}{% endif %}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+    {% endif %}
+</div>
+{% endfor %}
+{% endif %}
 
 {% elif tab == "changes" %}
 {% if not changes or not changes.groups %}

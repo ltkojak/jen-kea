@@ -89,6 +89,9 @@ from jen.services.events import emit, subscribe, unsubscribe  # noqa: E402
 # ── Device fingerprinting ────────────────────────────────────────────────────
 from jen.services.fingerprint import classify_device  # noqa: E402
 
+# ── Investigation providers (v5.68.0-beta.4, Q139) ────────────────────────────
+from jen.services.investigation_providers import register_investigation_provider  # noqa: E402
+
 # ── Small helpers every plugin copied by hand (v5.65.10, Q99 l) ──────────────────
 from jen.services.plugin_helpers import (  # noqa: E402
     in_placeholders,
@@ -206,6 +209,7 @@ __all__ = [
     "normalize_mac",
     "periodic_jobs",
     "register_alert_type",
+    "register_investigation_provider",
     "register_periodic",
     "register_row_action",
     "register_search_provider",

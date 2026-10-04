@@ -36,6 +36,7 @@ from jen.services import client_subject as __subject
 from jen.services import config_revisions as __rev
 from jen.services import dns_reconcile as __reconcile
 from jen.services import explain_context as __ctx
+from jen.services import investigation_providers as __providers
 from jen.services.access import diagnostic_surface, get_accessible_subnet_map
 from jen.services.subnet_context import dhcp4_config
 
@@ -317,6 +318,17 @@ def client_page():
         if tab == "overview":
             explain_line = _overview_line(view)
 
+    # v5.68.0-beta.4 (Q139): what each plugin knows about this client, one card per plugin. The view handed to them is the one
+    # `authorize` already judged for this caller, and a client the caller cannot place in a subnet never got this far (the
+    # `names_a_subnet` gate above), so a provider sees only what the caller may and an outside client is not an existence oracle.
+    plugin_cards: list = []
+    plugin_warnings: list = []
+    if view and tab == "overview" and not view.candidates and view.found:
+        plugin_cards = __providers.run_investigation_providers(
+            view, set(get_accessible_subnet_map()), current_user.all_subnets
+        )
+        plugin_warnings = __providers.warnings_line(plugin_cards)
+
     element = (request.args.get("element") or "").strip()[:200]
     changes = None
     if view and not view.candidates and tab == "changes" and changes_allowed:
@@ -339,6 +351,8 @@ def client_page():
         element=element,
         explain_qs=explain_qs,
         explain_line=explain_line,
+        plugin_cards=plugin_cards,
+        plugin_warnings=plugin_warnings,
         subject=subject,
         view=view,
         unsupported=unsupported,

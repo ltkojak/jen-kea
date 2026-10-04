@@ -286,6 +286,20 @@ What it can see depends on the server's log level. At Kea's default (INFO) the l
 
 Only the last 1000 lines are scanned (the helper's own limit), so on a busy server an older exchange may already be out of the window. Trace needs the **Kea host helper** on the server (Settings → Kea → SSH → Install helper): it reads the log through the helper's bounded `tail-log`, never through the old `tail -200` sudo grant, which could not serve 1000 lines. Without the helper the page says so instead of showing a partial log. If your Kea writes its log somewhere other than `/var/log/kea/kea-dhcp4.log`, set `[kea] dhcp4_log_path`. The log can contain other clients' data — and Kea's log has no per-line subnet boundary Jen can trust, so a client's earlier activity in another subnet can sit in the last 1000 lines whatever its current lease says. Trace is therefore admin-only **and needs access to all subnets**: a subnet-restricted admin gets a refusal for every MAC, and the *Trace in Kea log* links are hidden from them. It is never part of the support bundle.
 
+### What else Jen knows (v5.68.0-beta.4)
+
+Under the core facts on the Overview, **What else Jen knows** carries one card per plugin that has something to say about this client — a plugin that has nothing to say about it adds nothing, and the heading is absent when no plugin does. The seven bundled plugins each contribute:
+
+- **Switch Port Locator** — the switch and port the client's MAC was last seen on, its VLAN, and whether it moved.
+- **Presence** — its state (online or offline), when it was last seen, and the sink it is published to.
+- **Network Discovery** — what the newest finished scan saw: open ports, vendor, the hostname it answered with.
+- **IPAM Lite** — whether the client's address is designated, and to what; the next free address when the subnet is unmanaged.
+- **Host Watchdog** — whether the host answers, since when, and how many checks in a row have failed.
+- **DNS Sync** — the records that carry its name on each DNS target, and whether they match its lease or reservation.
+- **Wake & Actions** — whether it is a favourite, whether a SecureOn password is set, and when it was last woken.
+
+A card whose subject needs a look (a host that is down, a record that does not match) says **Needs a look**, and its one sentence is also added to the line at the top of the page under **Worth a look**. A plugin that cannot answer right now shows "unavailable" for its card and nothing else on the page changes. What a card shows follows the same rule as the rest of the page: a user restricted to some subnets sees a plugin's card only for a client in a subnet they may see, and a client outside them is the ordinary "No client matched" answer.
+
 ### Seeing what Kea did: investigation logging (v5.68.0-beta.3)
 
 What Trace and Explain can read out of Kea's log depends on its level, which was measured on Kea 3.0.3, 3.2.0 and 3.3.1: at the default INFO it names the client on packets, offers, allocations, releases, declines and errors, and nothing of the decision; at **debuglevel 45** it adds the classes Kea assigned and which subnet it selected; at **debuglevel 55** it dumps every packet's options (hostname, vendor class, user class, client id, the relay agent's circuit and remote ids). A production DHCP server should not sit at 55, so Jen turns it on for you and turns it off itself.

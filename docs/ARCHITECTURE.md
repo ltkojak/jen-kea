@@ -199,6 +199,16 @@ type lives in (`jen/services/alerts.py`), so a registered type is
 selectable, templatable and sendable exactly like a core one, with no
 separate code path to keep in sync.
 
+**Investigation providers (v5.68.0-beta.4, Q139).** `register_investigation_provider` runs on the same terms as the search
+provider above — with the caller's own session, in the request — and adds a second place a plugin's own tables meet a restricted
+caller. The seam is narrower here: the provider is handed the `ClientSubject` that `client_subject.authorize` already judged for
+this caller (a deep copy, so it cannot edit what the page or the next provider sees), `/client` only asks providers at all for a
+client the caller can place in a subnet they may see (the same `names_a_subnet` gate that makes a denial the same answer as
+not-found), and `jen/services/investigation_providers.py` validates what comes back (length caps, a row cap, every `href` a
+single-slash path inside Jen) rather than trusting the plugin. What a plugin looks up inside its own tables remains its own scope
+duty, exactly as for a search provider, and every bundled provider is covered by the plugin authorization matrix
+(`tests/test_authz_matrix_plugins.py`).
+
 **One identity, one place to resolve it (v5.63.0, Q82).**
 `jen.services.client_subject.resolve()` is now the only place a typed
 identifier (MAC in any separator style, IPv4, IPv6, DUID, or a hostname —
