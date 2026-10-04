@@ -54,6 +54,10 @@ set -euo pipefail
 JEN_VERSION="5.67.0-beta.17"
 
 JEN_USER="www-data"
+# v5.67.0-beta.18 (Q132) — every apt-get / pip / venv / systemctl / mysql call's stdout AND stderr goes here
+# (root:root 0600, appended per run) instead of scrolling through the spinner or into /dev/null; the last 20 lines
+# are printed when one of them fails. See _init_install_log / _run_logged below.
+INSTALL_LOG="/var/log/jen-install.log"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROLLBACK_JEN=""
 ROLLBACK_PKG=""
@@ -773,6 +777,56 @@ preflight_checks() {
 }
 
 # ── Install dependencies ──────────────────────────────────────────────────────
+# ── Install log (v5.67.0-beta.18, Q132) ──────────────────────────────────────
+# `apt-get -qq` quiets apt, not dpkg ("Selecting previously unselected package…", "Unpacking…", "Setting up…") nor
+# needrestart's epilogue: ~130 lines interleaved with the spinner frames, while `2>/dev/null` threw away the one
+# stream an operator needs when apt FAILS. Every command that can be noisy or can fail now writes stdout AND stderr
+# to $INSTALL_LOG; the screen keeps the spinner line, and a failure prints the last 20 lines and the path.
+# These helpers deliberately end in an explicit `return`: a function whose last statement is a bare
+# `[[ ... ]] && ...` returns 1 when the test is false, which is fatal under `set -e` (tests/test_install_database.py
+# scans install.sh for the pattern).
+_init_install_log() {
+    local dir
+    dir="$(dirname "$INSTALL_LOG")"
+    if ! { mkdir -p "$dir" && ( umask 077; : >> "$INSTALL_LOG" ) && chmod 0600 "$INSTALL_LOG" && chown root:root "$INSTALL_LOG"; } 2>/dev/null; then
+        warn "Could not open $INSTALL_LOG — the output of the commands this installer runs will not be kept"
+        INSTALL_LOG="/dev/null"
+        return 0
+    fi
+    printf '\n══ Jen installer %s — %s ══\n' "$JEN_VERSION" "$(date '+%Y-%m-%d %H:%M:%S %z')" >> "$INSTALL_LOG"
+    return 0
+}
+
+# _run_logged "what" cmd args... — runs the command with stdout+stderr appended to the log, after a header that
+# records what it is and its argv; returns the command's own status.
+_run_logged() {
+    local what="$1"; shift
+    printf '\n── %s — %s\n$ %s\n' "$(date '+%H:%M:%S')" "$what" "$*" >> "$INSTALL_LOG" 2>/dev/null || true
+    "$@" >> "$INSTALL_LOG" 2>&1
+}
+
+# The same, but the header records only `what`, never the argv: for a command whose arguments carry a password
+# (mysql -p...). stdin passes through, so `printf sql | _run_logged_noargs ...` works.
+_run_logged_noargs() {
+    local what="$1"; shift
+    printf '\n── %s — %s\n' "$(date '+%H:%M:%S')" "$what" >> "$INSTALL_LOG" 2>/dev/null || true
+    "$@" >> "$INSTALL_LOG" 2>&1
+}
+
+# apt without a prompt or an epilogue: DEBIAN_FRONTEND keeps debconf from asking, NEEDRESTART_MODE=l makes
+# needrestart list instead of prompting or printing "Running kernel seems to be up-to-date".
+_apt_get() {
+    local what="$1"; shift
+    _run_logged "$what" env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l apt-get "$@"
+}
+
+_install_log_tail() {
+    [[ "$INSTALL_LOG" == "/dev/null" ]] && return 0
+    err "The last 20 lines of $INSTALL_LOG:"
+    tail -n 20 "$INSTALL_LOG" 2>/dev/null | sed 's/^/        /'
+    return 0
+}
+
 install_dependencies() {
     blank
     echo -e "  ${B}${C}DEPENDENCIES${NC}"
@@ -783,7 +837,11 @@ install_dependencies() {
     # are already present and apt-get update just adds unnecessary delay
     if [[ "$IS_UPGRADE" == "false" ]]; then
         spinner_start "Updating package lists..."
-        apt-get update -qq 2>/dev/null
+        if ! _apt_get "apt-get update" update; then
+            spinner_stop
+            _install_log_tail
+            fatal "apt-get update failed — the output above is from $INSTALL_LOG"
+        fi
         spinner_stop
         ok "Package lists updated"
     else
@@ -800,7 +858,11 @@ install_dependencies() {
 
     if [[ ${#pkgs[@]} -gt 0 ]]; then
         spinner_start "Installing system packages: ${pkgs[*]}"
-        apt-get install -y -qq "${pkgs[@]}" 2>/dev/null
+        if ! _apt_get "apt-get install ${pkgs[*]}" install -y "${pkgs[@]}"; then
+            spinner_stop
+            _install_log_tail
+            fatal "Could not install ${pkgs[*]} — the output above is from $INSTALL_LOG"
+        fi
         spinner_stop
         ok "System packages installed: ${pkgs[*]}"
     else
@@ -834,26 +896,28 @@ setup_venv() {
 
     if [[ -x "$VENV_PY" ]] && "$VENV_PY" -c '' 2>/dev/null; then
         spinner_start "Refreshing virtualenv ($VENV_DIR)..."
-        python3 -m venv --upgrade "$VENV_DIR" 2>/dev/null || true
+        _run_logged "python3 -m venv --upgrade" python3 -m venv --upgrade "$VENV_DIR" || true
     else
         [[ -e "$VENV_DIR" ]] && rm -rf "$VENV_DIR"
         spinner_start "Creating virtualenv ($VENV_DIR)..."
-        if ! python3 -m venv "$VENV_DIR"; then
+        if ! _run_logged "python3 -m venv" python3 -m venv "$VENV_DIR"; then
             spinner_stop
+            _install_log_tail
             fatal "Could not create $VENV_DIR — is python3-venv installed?"
         fi
     fi
-    "$VENV_PY" -m pip install -q --upgrade pip >/dev/null 2>&1 || true
+    _run_logged "pip install --upgrade pip" "$VENV_PY" -m pip install -q --upgrade pip || true
     spinner_stop
     ok "Virtualenv ready  ${DIM}($("$VENV_PY" --version 2>&1))${NC}"
 
     spinner_start "Installing Python dependencies into the venv..."
-    if "$VENV_PY" -m pip install -q -r "$req_file"; then
+    if _run_logged "pip install -r requirements.txt" "$VENV_PY" -m pip install -q -r "$req_file"; then
         spinner_stop
         ok "Python dependencies installed"
     else
         spinner_stop
-        fatal "pip install into the venv failed — see output above"
+        _install_log_tail
+        fatal "pip install into the venv failed — the output above is from $INSTALL_LOG"
     fi
 
     # Byte-compile now, as root — the venv is not writable by www-data, so
@@ -884,7 +948,8 @@ test_kea_api() {
 test_mysql() {
     local host="$1" user="$2" pass="$3" db="$4"
     command -v mysql &>/dev/null || return 1
-    mysql -h"$host" -u"$user" -p"$pass" "$db" -e "SELECT 1;" &>/dev/null 2>&1
+    # the password is in argv (as it always was) but never in the log's header: _run_logged_noargs
+    _run_logged_noargs "mysql connection test ${user}@${host}/${db}" mysql -h"$host" -u"$user" -p"$pass" "$db" -e "SELECT 1;"
 }
 
 # v5.67.0 (Q113) — a value still equal to the placeholder default it was
@@ -894,6 +959,7 @@ test_mysql() {
 _blank_if_placeholder() {
     local -n _ref="$1"
     [[ "$_ref" == "$2" ]] && _ref=""
+    return 0    # the line above is a bare `[[ ]] && ...`: with a value that is NOT the placeholder it is false, which would be this function's status, and under set -e that exited the whole installer silently (Q132) — the same hazard _set_paths already guards against
 }
 
 # v5.67.0 (Q113) — what collect_config does after a connection test fails.
@@ -903,28 +969,61 @@ _blank_if_placeholder() {
 # Interactive: a real choice, explicitly recorded in the transcript
 # (never a silent fall-through) — retry the same values, edit and try
 # again, or continue without it. Sets _RETRY_ACTION to retry|edit|continue.
+#
+# v5.67.0-beta.18 (Q132) — `required` is for the one database the installer cannot defer: Jen's OWN. create_app()
+# runs the migrations against [jen_db] before it serves anything, so without a reachable database the gunicorn
+# worker dies and systemd restarts it every five seconds for ever — there is no page to log in to and no /setup to
+# "finish in". For it the menu has no "continue" (retry / edit / quit), and a non-interactive run is FATAL: nobody is
+# there to ask, and a config that points at a database that does not answer produces exactly that crash loop.
+# Kea's API and database stay optional (Jen runs without them and /setup really does connect them): their
+# warn-and-continue is unchanged.
 _connection_failure_choice() {
-    local what="$1" detail="$2"
+    local what="$1" detail="$2" required="${3:-}"
     if [[ "$HAVE_TTY" != "true" || "$MODE_UNATTENDED" == "true" ]]; then
+        if [[ "$required" == "required" ]]; then
+            err "Could not reach $what ($detail)"
+            local host="${detail#*@}"; host="${host%%/*}"
+            if _jen_db_can_self_create "$host"; then
+                info "A MariaDB on this machine accepts root over its socket: run the SQL above as root, or run this installer interactively and let it create the database."
+            else
+                info "No usable database answered at $host. Install and start MariaDB or MySQL there (or point JEN_DB_HOST at a server that answers), run the SQL above, then run the installer again."
+            fi
+            fatal "$what is required: Jen does not start without it (its service would restart every 5 seconds). Nothing was installed beyond the packages."
+        fi
         warn "Could not reach $what ($detail) — continuing; configure it later in Jen"
         _RETRY_ACTION="continue"
-        return
+        return 0
     fi
     warn "Could not reach $what ($detail)"
     blank
     while true; do
         echo -e "    ${B}r)${NC}  Retry with the same values"
         echo -e "    ${B}e)${NC}  Edit and try again"
-        echo -e "    ${B}c)${NC}  Continue without it — I will finish in Jen"
+        if [[ "$required" == "required" ]]; then
+            echo -e "    ${B}q)${NC}  Quit — Jen cannot start without its own database"
+        else
+            echo -e "    ${B}c)${NC}  Continue without it — I will finish in Jen"
+        fi
         blank
-        printf "  ${Y}  ▸${NC} Choice [${C}c${NC}]: " > /dev/tty
+        local default="c"
+        [[ "$required" == "required" ]] && default="r"
+        printf "  ${Y}  ▸${NC} Choice [${C}%s${NC}]: " "$default" > /dev/tty
         local choice; read -r choice < /dev/tty
-        choice="${choice:-c}"
+        choice="${choice:-$default}"
         case "${choice,,}" in
-            r) ok "Retrying $what"; _RETRY_ACTION="retry"; return ;;
-            e) ok "Editing $what"; _RETRY_ACTION="edit"; return ;;
-            c) ok "Continuing without $what — configure it later in Jen"; _RETRY_ACTION="continue"; return ;;
-            *) echo -e "  ${R}  Please enter r, e or c.${NC}" > /dev/tty ;;
+            r) ok "Retrying $what"; _RETRY_ACTION="retry"; return 0 ;;
+            e) ok "Editing $what"; _RETRY_ACTION="edit"; return 0 ;;
+            c) if [[ "$required" != "required" ]]; then
+                   ok "Continuing without $what — configure it later in Jen"; _RETRY_ACTION="continue"; return 0
+               fi
+               echo -e "  ${R}  Jen cannot start without its own database — please enter r, e or q.${NC}" > /dev/tty ;;
+            q) if [[ "$required" == "required" ]]; then _RETRY_ACTION="quit"; return 0; fi
+               echo -e "  ${R}  Please enter r, e or c.${NC}" > /dev/tty ;;
+            *) if [[ "$required" == "required" ]]; then
+                   echo -e "  ${R}  Please enter r, e or q.${NC}" > /dev/tty
+               else
+                   echo -e "  ${R}  Please enter r, e or c.${NC}" > /dev/tty
+               fi ;;
         esac
     done
 }
@@ -937,7 +1036,7 @@ _jen_db_can_self_create() {
     local host="$1"
     [[ "$host" == "localhost" || "$host" == "127.0.0.1" || "$host" == "::1" ]] || return 1
     command -v mysql &>/dev/null || return 1
-    mysql -u root -e "SELECT 1;" &>/dev/null 2>&1
+    _run_logged_noargs "mysql root-socket probe" mysql -u root -e "SELECT 1;"
 }
 
 # v5.67.0-beta.9 (Q121, item h) — a SQL string literal for MySQL/MariaDB:
@@ -975,11 +1074,13 @@ _jen_db_offer_create() {
 CREATE USER IF NOT EXISTS '${JEN_DB_USER}'@'%' IDENTIFIED BY $(_sql_quote "$JEN_DB_PASS");
 GRANT ALL PRIVILEGES ON \`${JEN_DB_NAME}\`.* TO '${JEN_DB_USER}'@'%';
 FLUSH PRIVILEGES;"
-            if printf '%s\n' "$create_sql" | mysql -u root 2>/dev/null; then
+            # the statement carries the password, so only the command's OUTPUT is logged, never the statement
+            if printf '%s\n' "$create_sql" | _run_logged_noargs "create the Jen database and user (mysql, root socket)" mysql -u root; then
                 ok "Database and user created"
                 return 0
             else
-                err "Could not create the database — check the MariaDB error log"
+                _install_log_tail
+                err "Could not create the database — the output above is from $INSTALL_LOG; check the MariaDB error log too"
             fi
         fi
     fi
@@ -1157,11 +1258,11 @@ _configure_jen_db() {
         if _jen_db_offer_create; then
             continue
         fi
-        _connection_failure_choice "Jen database" "${JEN_DB_USER}@${JEN_DB_HOST}/${JEN_DB_NAME}"
+        _connection_failure_choice "Jen database" "${JEN_DB_USER}@${JEN_DB_HOST}/${JEN_DB_NAME}" required
         case "$_RETRY_ACTION" in
             retry) continue ;;
             edit) _edit=true; continue ;;
-            continue) _blank_if_placeholder JEN_DB_HOST "YOUR-KEA-SERVER"; return ;;
+            quit) fatal "Installation stopped: Jen needs its own database. Create it with the SQL above, then run this installer again." ;;
         esac
     done
 }
@@ -1556,8 +1657,8 @@ rollback() {
             warn "Rolling back to release $prev..."
             ln -sfn "releases/$prev" "$CURRENT_LINK.tmp" && mv -T "$CURRENT_LINK.tmp" "$CURRENT_LINK"
             _restore_external_files
-            systemctl daemon-reload
-            systemctl restart jen 2>/dev/null || true
+            _run_logged "systemctl daemon-reload (rollback)" systemctl daemon-reload || true
+            _run_logged "systemctl restart jen (rollback)" systemctl restart jen || true
             warn "Rollback complete — release $prev restored"
             return
         fi
@@ -1572,8 +1673,8 @@ rollback() {
             cp -r "$ROLLBACK_PKG" "$INSTALL_DIR/jen"
         fi
         _restore_external_files
-        systemctl daemon-reload
-        systemctl restart jen 2>/dev/null || true
+        _run_logged "systemctl daemon-reload (rollback)" systemctl daemon-reload || true
+        _run_logged "systemctl restart jen (rollback)" systemctl restart jen || true
         warn "Rollback complete — previous version restored"
     fi
 }
@@ -1823,17 +1924,17 @@ start_service() {
     divider
     blank
 
-    systemctl daemon-reload
+    _run_logged "systemctl daemon-reload" systemctl daemon-reload
 
     if [[ "$IS_UPGRADE" == "true" || "$MODE_REPAIR" == "true" ]]; then
         warn "Jen web UI will be briefly unreachable during restart (~3s)"
         blank
         spinner_start "Restarting Jen service..."
-        systemctl restart jen
+        _run_logged "systemctl restart jen" systemctl restart jen || { spinner_stop; _install_log_tail; fatal "systemctl restart jen failed — the output above is from $INSTALL_LOG"; }
     else
         spinner_start "Enabling and starting Jen service..."
-        systemctl enable jen
-        systemctl start jen
+        _run_logged "systemctl enable jen" systemctl enable jen || { spinner_stop; _install_log_tail; fatal "systemctl enable jen failed — the output above is from $INSTALL_LOG"; }
+        _run_logged "systemctl start jen" systemctl start jen || { spinner_stop; _install_log_tail; fatal "systemctl start jen failed — the output above is from $INSTALL_LOG"; }
     fi
     sleep 3
     spinner_stop
@@ -1845,6 +1946,11 @@ start_service() {
         blank
         journalctl -u jen -n 30 --no-pager
         blank
+        # v5.67.0-beta.18 (Q132) — name the likeliest cause: Jen runs the schema migrations against [jen_db] before
+        # it serves anything, so a database that does not answer makes the service die and restart every 5 seconds
+        if grep -q '^\[jen_db\]' "$CONFIG_FILE" 2>/dev/null; then
+            warn "The likeliest cause is Jen's own database: check that the database in $CONFIG_FILE [jen_db] answers — Jen does not start without it"
+        fi
         fatal "Installation failed — see logs above"
     fi
     blank
@@ -2028,6 +2134,7 @@ print_summary() {
     _box_line "  ${DIM}Config:   ${CONFIG_FILE}${NC}"
     _box_line "  ${DIM}App:      ${INSTALL_DIR}${NC}"
     _box_line "  ${DIM}Logs:     sudo journalctl -u jen -f${NC}"
+    _box_line "  ${DIM}Install:  ${INSTALL_LOG}${NC}"
     _box_line "  ${DIM}Restart:  sudo systemctl restart jen${NC}"
     _box_line ""
     echo -e "  ${C}╚══════════════════════════════════════════════════════╝${NC}"
@@ -2488,6 +2595,7 @@ main() {
     #     level, before this ran);
     #  4. the layout — except for --docker, which has no layout at all.
     umask 022
+    _init_install_log
     [[ -n "$ANSWERS_FILE" ]] && _load_answers_file "$ANSWERS_FILE"
     if [[ "$MODE_DOCKER" != "true" ]]; then
         _resolve_layout_dirs

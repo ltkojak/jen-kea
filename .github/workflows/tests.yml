@@ -437,6 +437,38 @@ jobs:
           JEN_HTTPS_PORT=8443
           EOF
 
+      # v5.67.0-beta.18 (Q132) — an unattended install whose Jen database does not answer must STOP, loudly, with the SQL
+      # to create it: nobody is there to ask, and a config pointing at a database that does not answer produces a
+      # service that restarts every five seconds for ever. Until this release `c) Continue without it` exited the
+      # script SILENTLY (a bare `[[ ]] && ...` that was false), and no CI leg took a failure path at all. Run BEFORE the
+      # fresh install: nothing is installed or configured yet, so it also proves the failed run left no service behind.
+      - name: A Jen database that does not answer stops an unattended install, with the SQL, never silently
+        run: |
+          mkdir -p "$RUNNER_TEMP/install-head"
+          tar xzf dist/jen-head.tar.gz -C "$RUNNER_TEMP/install-head"
+          cd "$RUNNER_TEMP/install-head/jen"
+          umask 077
+          cat > "$RUNNER_TEMP/answers-unreachable.env" << 'EOF'
+          JEN_DB_HOST=127.0.0.1
+          JEN_DB_USER=nosuchuser
+          JEN_DB_PASS=wrong-password
+          JEN_DB_NAME=nosuchdb
+          JEN_INITIAL_ADMIN_PASSWORD=ci-test-passw0rd-!
+          EOF
+          set +e
+          out=$(sudo TERM=linux ./install.sh --answers "$RUNNER_TEMP/answers-unreachable.env" --unattended 2>&1)
+          rc=$?
+          set -e
+          echo "$out" | tail -40
+          echo "exit status: $rc"
+          [[ $rc -ne 0 ]]
+          grep -q 'CREATE DATABASE `nosuchdb`' <<<"$out"
+          grep -q 'Jen does not start without it' <<<"$out"
+          # (not `! cmd`: bash's errexit ignores a negated command, so that form would assert nothing)
+          if systemctl is-active --quiet jen; then echo "a service is running after a refused install"; exit 1; fi
+          if [[ -f /etc/jen/jen.config ]]; then echo "a config was written by a refused install"; exit 1; fi
+          echo "stopped with the SQL and a reason; no service, no config"
+
       - name: Fresh install from the answers file
         run: |
           mkdir -p "$RUNNER_TEMP/install-head"
