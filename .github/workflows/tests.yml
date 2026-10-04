@@ -39,7 +39,7 @@ env:
   # old test means. Moved in the first release commit after a promotion
   # (CLAUDE.md "Release channels", step 4); tests/test_workflow_hygiene.py
   # checks its shape and that it is never newer than the tree.
-  JEN_STABLE_VERSION: '5.66.0'
+  JEN_STABLE_VERSION: '5.67.0'
 
 jobs:
   pytest:

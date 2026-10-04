@@ -192,7 +192,7 @@ class TestGlobalSearchV6ReservationsFilterBeforeTheyCap:
         )
         try:
             _invalidate_settings_cache()
-            resp = logged_in_client.get("/search", query_string={"q": q})
+            resp = logged_in_client.get("/search", query_string={"q": q, "list": "1"})
             assert resp.status_code == 200
             return resp.data
         finally:

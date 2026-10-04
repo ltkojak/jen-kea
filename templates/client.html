@@ -81,6 +81,7 @@
         Leases {{ view.fetched_at.get('leases')|utcfmt if view.fetched_at.get('leases') else '—' }} ·
         Reservations {{ view.fetched_at.get('reservations')|utcfmt if view.fetched_at.get('reservations') else '—' }}
         {% if config_sha %} · Config {{ config_sha[:8] }}…{% endif %}
+        · <a href="/search?q={{ q|urlencode }}&list=1">Search results for this</a>
     </div>
 </div>
 

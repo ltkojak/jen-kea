@@ -1,4 +1,5 @@
 {% from '_icons.html' import icon_edit, icon_trash, icon_pin, icon_dots %}
+{% from '_investigate.html' import investigate_link %}
 {% from '_empty.html' import empty_state %}
 {% set colspan = (11 if current_user.role in ('superadmin','admin') else 10) + (1 if ipv6_enabled and subnet6_map else 0) %}
 {% for d in devices %}
@@ -62,7 +63,7 @@
                 <a href="/reservations/add?mac={{ d.mac|urlencode }}&ip={{ (d.last_ip or '')|urlencode }}&hostname={{ (d.last_hostname or '')|urlencode }}&subnet_id={{ (d.last_subnet_id or '')|urlencode }}" class="action-menu-item">{{ icon_pin() }}Create reservation</a>
                 {% endif %}
                 <a href="/timeline?mac={{ d.mac }}" class="action-menu-item">{{ icon("clock") }} Timeline</a>
-                <a href="/client?q={{ d.mac }}" class="action-menu-item">{{ icon("search") }} Investigate</a>
+                {{ investigate_link(d.mac) }}
                 {% if current_user.role in ('superadmin','admin') %}
                 <div class="action-menu-divider"></div>
                 <form method="POST" action="/devices/delete/{{ d.id }}" data-confirm="Remove {{ d.mac }} from inventory?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

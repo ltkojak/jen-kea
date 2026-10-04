@@ -2,6 +2,7 @@
 {% block title %}Logs{% endblock %}
 {% block content %}
 {% from '_settings_subtabs.html' import subtabs %}
+{% from '_investigate.html' import investigate_link %}
 <div class="page-header">
     <h1>{{ icon("scroll-text", "ico-lg") }} Logs</h1>
     <p>{% if tab == 'alerts' %}Alert deliveries — status and any errors from each channel.{% else %}{{ total }} audit event(s) recorded.{% endif %}</p>
@@ -24,6 +25,7 @@
             <th>Channel</th>
             <th>Status</th>
             <th>Error</th>
+            <th></th>
         </tr></thead>
         <tbody>
         {% for a in recent_alerts %}
@@ -39,6 +41,7 @@
                 {% endif %}
             </td>
             <td data-m="secondary" style="color:var(--danger);font-size:11px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ a.error or '' }}">{{ a.error or '' }}</td>
+            <td data-m="trailing">{{ investigate_link(a.client, "icon") }}</td>
         </tr>
         {% endfor %}
         </tbody>

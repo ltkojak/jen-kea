@@ -53,9 +53,10 @@ def _alert_status(mac: str, ip: str) -> dict | None:
     """The most recent alert_log row mentioning this client, or None — a
     lightweight status line for the Overview tab, not the full Timeline.
 
-    alert_log rows carry no subnet, so (docs/ARCHITECTURE.md §2: audit/alert matches are
-    unrestricted-only, as Timeline enforces) the caller only asks for a subnet-unrestricted
-    user. The SQL LIKE is a cheap prefilter; the decision is a word-boundary match in Python."""
+    alert_log rows carry no subnet (docs/ARCHITECTURE.md §2), so the CALLER decides whether this client's
+    alert may be shown at all: an unrestricted user always, a restricted one only for a client whose view names
+    a subnet they may see. Only type, status and time come back - never the message. The SQL LIKE is a cheap
+    prefilter; the decision is a word-boundary match in Python."""
     matcher = _alert_matcher(mac, ip)
     if matcher is None:
         return None
@@ -179,8 +180,13 @@ def client_page():
             if not view.candidates and not current_user.all_subnets and not __subject.names_a_subnet(view):
                 view = None
 
-    # alert_log rows carry no subnet: unrestricted callers only (docs/ARCHITECTURE.md §2)
-    alert = _alert_status(view.mac, view.ip) if view and current_user.all_subnets else None
+    # alert_log rows carry no subnet, so the match is judged on the CLIENT: shown to a caller who may see every
+    # subnet, and to a restricted one only when the resolved view names a subnet they may see (an alert about THEIR
+    # client). What is shown is the alert's type, status and time - never its message, which can name a subnet.
+    # (v5.68.0-beta.1, Q134; docs/ARCHITECTURE.md §2.)
+    alert = None
+    if view and not view.candidates and (current_user.all_subnets or __subject.names_a_subnet(view)):
+        alert = _alert_status(view.mac, view.ip)
 
     trace_allowed = bool(current_user.role in ("superadmin", "admin") and current_user.all_subnets)
 

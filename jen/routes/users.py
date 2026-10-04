@@ -13,6 +13,7 @@ from flask_login import current_user, login_required
 import jen.models.db as __db
 import jen.models.user as __user
 import jen.services.auth as __auth
+import jen.services.client_subject as __client_subject
 import jen.services.kea as __kea
 import jen.services.mfa as __mfa
 from jen import extensions
@@ -54,10 +55,16 @@ def audit_log():
         try:
             with __db.jen_db() as db, db.cursor() as cur:
                 cur.execute(
-                    "SELECT alert_type, channel_type, status, error, sent_at FROM alert_log "
+                    "SELECT alert_type, channel_type, status, error, sent_at, message FROM alert_log "
                     "ORDER BY sent_at DESC LIMIT 100"
                 )
                 recent_alerts = cur.fetchall()
+            # v5.68.0-beta.1 (Q134) - an Investigate link on every row whose message names a client. The message is
+            # never shown on this page, and it can name a subnet, so the link is for callers who may see every subnet.
+            for a in recent_alerts:
+                a["client"] = (
+                    __client_subject.identifier_in_text(a.pop("message", "")) if current_user.all_subnets else ""
+                )
         except Exception as e:
             logger.error(f"Could not load alert log: {e}")
             flash("Could not load the alert log. Check server logs for details.", "error")

@@ -11,6 +11,7 @@ from flask_login import current_user, login_required
 
 import jen.models.db as __db
 import jen.services.auth as __auth
+import jen.services.client_subject as __subject
 import jen.services.kea6 as __kea6
 from jen import extensions
 from jen.services.access import diagnostic_surface
@@ -25,6 +26,10 @@ def _JEN_VERSION():
     return JEN_VERSION
 
 
+# the kinds of identifier jen.services.client_subject.detect_kind names that the search box hands to /client
+_GOES_TO_CLIENT_PAGE = frozenset({"mac", "ipv4"})
+
+
 def __ip_to_int(ip):
     parts = ip.split(".")
     return sum(int(p) << (8 * (3 - i)) for i, p in enumerate(parts))
@@ -34,7 +39,14 @@ def __ip_to_int(ip):
 @login_required
 @diagnostic_surface(subject="client")
 def global_search():
-    q = __auth.sanitize_search(request.args.get("q", "").strip())
+    typed = request.args.get("q", "").strip()
+    # v5.68.0-beta.1 (Q134) - one whole identifier (a MAC or an IPv4 address) is a question about ONE client, and the
+    # Investigation page is the answer to it, so the search box goes straight there instead of to a list with an
+    # Investigate button on every row. `list=1` is the way back to the list (the Investigation page links to it).
+    # Anything that is not exactly one identifier - a hostname, a fragment, a partial MAC - still searches.
+    if request.args.get("list") != "1" and __subject.detect_kind(typed)[0] in _GOES_TO_CLIENT_PAGE:
+        return redirect(url_for("client.client_page", q=typed))
+    q = __auth.sanitize_search(typed)
     results = {"leases": [], "reservations": [], "devices": [], "leases6": [], "reservations6": []}
     if len(q) >= 2:
         try:

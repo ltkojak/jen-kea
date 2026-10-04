@@ -109,6 +109,13 @@ def seeded(db, mock_kea, monkeypatch):
             "('telegram', 'new_lease', %s, 'sent')",
             (f"{B_HOST} {B_MAC} {B_LEASE_IP} {B_NAME}",),
         )
+        # v5.68.0-beta.1 (Q134): an alert about the client in A whose MESSAGE also names B - the Overview of the A
+        # client shows the alert's type and time to a caller scoped to A, and must never show the message
+        cur.execute(
+            "INSERT INTO alert_log (channel_type, alert_type, message, status) VALUES "
+            "('telegram', 'stale_reservation', %s, 'sent')",
+            (f"alpha-host {A_MAC} moved here from {B_NAME} {B_MAC} {B_LEASE_IP}",),
+        )
         cur.execute(
             "INSERT INTO audit_log (action, entity, details, username) VALUES ('NOTE', %s, %s, 'admin')",
             (B_HOST, f"{B_MAC} {B_LEASE_IP} {B_NAME}"),
@@ -405,6 +412,34 @@ SURFACES = [
         None,
         {"viewer_A": {200}, "admin_A": {200}, "admin_all": {200}, "superadmin": {200}},
         (SHARED_HOST,),
+    ),
+    (
+        # v5.68.0-beta.1 (Q134 d): the alert strip is judged on the client - the A client's alert is shown to
+        # a caller scoped to A (type and time), its message (which names B) never
+        "client overview by A mac (an alert names it and B)",
+        "GET",
+        f"/client?q={A_MAC}&tab=overview",
+        None,
+        {"viewer_A": {200}, "admin_A": {200}, "admin_all": {200}, "superadmin": {200}},
+        (A_MAC,),
+    ),
+    (
+        # v5.68.0-beta.1 (Q134 c): the Changes tab reads config revisions - for an unrestricted admin only; a
+        # scoped caller must not get the tab (nor a revision's text, which names B)
+        "client changes tab by B mac",
+        "GET",
+        f"/client?q={B_MAC}&tab=changes",
+        None,
+        {"viewer_A": {200}, "admin_A": {200}, "admin_all": {200}, "superadmin": {200}},
+        (B_MAC,),
+    ),
+    (
+        "client changes tab by A mac (revisions name B)",
+        "GET",
+        f"/client?q={A_MAC}&tab=changes",
+        None,
+        {"viewer_A": {200}, "admin_A": {200}, "admin_all": {200}, "superadmin": {200}},
+        (A_MAC,),
     ),
     (
         "client timeline tab by B ip",

@@ -14,6 +14,7 @@ from flask_login import current_user, login_required
 
 import jen.models.db as __db
 import jen.services.alerts as __alerts
+import jen.services.client_subject as __client_subject
 import jen.services.dashboard_catalog as __dcatalog
 import jen.services.dashboard_prefs as __dprefs
 import jen.services.fingerprint as __fp
@@ -685,6 +686,9 @@ def api_alert_summary():
                     "icon": __alerts.ALERT_TYPE_ICONS.get(row["alert_type"], __alerts.DEFAULT_ALERT_ICON),
                     "channel": row["channel_type"],
                     "message": row["message"] if show_message else "",
+                    # the client the message names, for the strip's Investigate link (Q134) - from the
+                    # message, so it follows the message's own rule: unrestricted callers only
+                    "client": __client_subject.identifier_in_text(row["message"]) if show_message else "",
                     "status": row["status"],
                     "error": row["error"] or "" if show_message else "",
                     "sent_at": row["sent_at"].strftime("%Y-%m-%d %H:%M UTC") if row["sent_at"] else "",

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from '_investigate.html' import investigate_link %}
 {% block title %}Timeline{% endblock %}
 {% block content %}
 
@@ -33,6 +34,7 @@
         <span class="u-865c33">
             {% if result.mac %}<a href="/tools/explain?mac={{ result.mac }}" class="mono">{{ icon("compass") }} Explain</a>{% endif %}
             {% if result.mac %} · <a href="/reservations?search={{ result.mac }}">{{ icon("pin") }} Reservations</a>{% endif %}
+            · {{ investigate_link(result.mac or result.ip, "button") }}
         </span>
     </div>
     <div class="u-260fab">

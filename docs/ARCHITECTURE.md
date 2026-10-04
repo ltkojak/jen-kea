@@ -254,8 +254,13 @@ caller cannot see hides its holder and everything found through it, a global
 and Explain already shows it), and the page renders only `view.candidates`,
 each candidate resolved and judged like a subject of its own; a denial and a
 not-found are one message, so the page is not an existence oracle. Alert rows
-carry no subnet, so the Overview's "last alert" is unrestricted-only and matches
-on whole tokens (`10.0.0.5` no longer matches `10.0.0.50`). The Config and
+carry no subnet, so the Overview's "last alert" is judged on the CLIENT, not the row
+(v5.68.0-beta.1, Q134): it is shown to a caller who may see every subnet, and to a restricted
+one only when the resolved view names a subnet they may see (`client_subject.names_a_subnet`) —
+an alert about THEIR client — and what is shown is the alert's type, status and time, never its
+message, which can name a subnet. Matching is on whole tokens (`10.0.0.5` no longer matches
+`10.0.0.50`). The Alerts log and the dashboard's alert strip offer an Investigate link only to
+unrestricted callers, because the identifier is read out of the message they are not shown. The Config and
 Explain tabs evaluate only a subnet a lease, a reservation or an explicit
 `?subnet=` fixes — otherwise they show a picker of the caller's subnets — and
 capabilities are CONFIRMED (§3.14), never assumed. The second seam: the

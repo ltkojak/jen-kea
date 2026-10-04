@@ -87,6 +87,33 @@ def detect_kind(identifier: str) -> tuple[str, str]:
     return "unknown", raw
 
 
+# A MAC (colon or hyphen separated, one separator throughout) and a dotted IPv4 address as they appear in free text -
+# an alert message, an event's detail. The boundaries are what keep `10.0.0.5` from matching inside `10.0.0.50`, a
+# CIDR (`10.0.0.0/24`) from reading as an address, and a MAC from matching inside a longer hex string.
+_MAC_IN_TEXT = re.compile(
+    r"(?<![0-9A-Fa-f:\-])[0-9A-Fa-f]{2}([:\-])(?:[0-9A-Fa-f]{2}\1){4}[0-9A-Fa-f]{2}(?![0-9A-Fa-f:\-])"
+)
+_IPV4_IN_TEXT = re.compile(r"(?<![0-9.])(?:\d{1,3}\.){3}\d{1,3}(?!\d|\.\d|/\d)")
+
+
+def identifier_in_text(text: str) -> str:
+    """The client a piece of free text names, as an identifier `/client?q=` accepts: the first MAC in it (normalised to
+    `aa:bb:cc:dd:ee:ff`), else the first valid IPv4 address, else "". Pure. (v5.68.0-beta.1, Q134 - the rule the Alerts
+    log and the dashboard's alert strip use to offer an Investigate link: an alert row carries no client column, only the
+    message Jen rendered, so the message is where the client is named.)"""
+    text = text or ""
+    for m in _MAC_IN_TEXT.finditer(text):
+        body = _SEPARATORS_RE.sub("", m.group(0))
+        return ":".join(body[i : i + 2] for i in range(0, 12, 2)).lower()
+    for m in _IPV4_IN_TEXT.finditer(text):
+        try:
+            ipaddress.IPv4Address(m.group(0))
+        except ValueError:
+            continue
+        return m.group(0)
+    return ""
+
+
 def mac_hex(mac: str) -> str:
     return mac.replace(":", "").upper()
 

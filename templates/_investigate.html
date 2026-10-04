@@ -1,0 +1,23 @@
+{# The one Investigate link (v5.68.0-beta.1, Q134).
+
+   Every row that names a client carries this action, so a new page cannot forget it:
+       {% from '_investigate.html' import investigate_link %}
+       {{ investigate_link(row.mac) }}                 an entry in a row's action menu (the default)
+       {{ investigate_link(row.mac, "button") }}       a button beside a row's other buttons
+       {{ investigate_link(row.mac, "icon") }}         the icon alone, for a table cell with no room for the word
+
+   `who` is whatever identifies the client: a MAC, an IPv4 or IPv6 address, a DUID or a hostname. Nothing is
+   rendered when it is empty, so a row with no identifier shows no dead link. tests/test_investigate_links.py
+   scans every template that prints a MAC and refuses one that neither imports this macro nor is on its list
+   of pages that are themselves part of the investigation. #}
+{% macro investigate_link(who, kind="menu") -%}
+{%- if who -%}
+{%- if kind == "icon" -%}
+<a href="/client?q={{ who|urlencode }}" class="btn btn-sm btn-secondary" title="Investigate {{ who }}">{{ icon("search", "", "Investigate") }}</a>
+{%- elif kind == "button" -%}
+<a href="/client?q={{ who|urlencode }}" class="btn btn-sm btn-secondary">{{ icon("search") }} Investigate</a>
+{%- else -%}
+<a href="/client?q={{ who|urlencode }}" class="action-menu-item">{{ icon("search") }} Investigate</a>
+{%- endif -%}
+{%- endif -%}
+{%- endmacro %}

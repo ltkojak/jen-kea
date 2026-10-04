@@ -314,7 +314,7 @@ class TestUnplacedDevices:
         self._unplaced(db)
         try:
             c = _restricted(client, db, "moved_search_restricted1")
-            body = c.get("/search?q=aa:bb:cc:55:00:01").data.decode()
+            body = c.get("/search?q=aa:bb:cc:55:00:01&list=1").data.decode()
             assert "10.99.7.7" not in body and "Moved device" not in body
         finally:
             _clean(db)
@@ -323,14 +323,14 @@ class TestUnplacedDevices:
         self._unplaced(db)
         try:
             c = _restricted(client, db, "moved_search_nosubnets1", subnets=())
-            assert "10.99.7.7" not in c.get("/search?q=aa:bb:cc:55:00:01").data.decode()
+            assert "10.99.7.7" not in c.get("/search?q=aa:bb:cc:55:00:01&list=1").data.decode()
         finally:
             _clean(db)
 
     def test_search_still_shows_it_to_an_unrestricted_user(self, logged_in_client, db):
         self._unplaced(db)
         try:
-            assert "10.99.7.7" in logged_in_client.get("/search?q=aa:bb:cc:55:00:01").data.decode()
+            assert "10.99.7.7" in logged_in_client.get("/search?q=aa:bb:cc:55:00:01&list=1").data.decode()
         finally:
             _clean(db)
 

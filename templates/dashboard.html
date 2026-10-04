@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from '_device_badge.html' import device_badge %}
+{% from '_investigate.html' import investigate_link %}
 {% block title %}Dashboard{% endblock %}
 {% block content %}
 <div class="page-header" style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
@@ -253,7 +254,7 @@
                     {{ l.hostname | hostname or '—' }}
                     {{ device_badge(device_info, l.mac, get_manufacturer_icon_url, device_type_display) }}
                 </td>
-                <td class="mono">{{ l.mac }}</td>
+                <td class="mono">{{ l.mac }} {{ investigate_link(l.mac, "icon") }}</td>
                 <td><span class="badge badge-{{ l.subnet_name|lower|replace(' ','') }}">{{ l.subnet_name }}</span></td>
                 <td class="mono u-5872de">{{ l.obtained|utctime }}</td>
             </tr>
@@ -597,7 +598,7 @@ function loadTopDevices() {
                 var lastSeen = d.last_seen ? d.last_seen.replace('T', ' ').slice(0, 16) + ' UTC' : '—';
                 var mfr = d.manufacturer ? '<span class="u-5872de">' + escapeHtml(d.manufacturer) + '</span>' : '—';
                 html += '<tr>'
-                    + '<td><strong>' + icon + escapeHtml(name) + '</strong>' + badge
+                    + '<td><strong>' + icon + escapeHtml(name) + '</strong>' + badge + ' ' + investigateLink(d.mac)
                     + (d.hostname && d.hostname !== name
                         ? '<br><span style="color:var(--text-muted);font-size:10px;font-family:monospace;">' + escapeHtml(d.hostname.replace(/\.$/, '')) + '</span>'
                         : '')
@@ -672,6 +673,14 @@ function loadRecentLeases() {
         .catch(function() { body.style.opacity = '1'; });
 }
 
+// ── Investigate link (the JS twin of templates/_investigate.html's icon kind; Q134) ─────────
+// `who` is a MAC or an address from the server; encoded for the URL and escaped for the attribute.
+function investigateLink(who) {
+    if (!who) return '';
+    return '<a href="/client?q=' + encodeURIComponent(who) + '" class="btn btn-sm btn-secondary" title="Investigate ' + escapeHtml(who) + '">' +
+        '<svg class="ico" role="img" aria-label="Investigate"><use href="#i-search"></use></svg></a>';
+}
+
 // ── Alert summary ─────────────────────────────────────────────────────────────
 function loadAlertSummary() {
     var body = document.getElementById('alert-summary-body');
@@ -715,6 +724,7 @@ function loadAlertSummary() {
                     '<td class="as-time-cell">' + (a.sent_at || '') + '</td>' +
                     '<td class="as-type-cell">' + (a.type || '').replace(/_/g,' ') + '</td>' +
                     '<td class="as-status-cell">' + statusCell + '</td>' +
+                    '<td class="as-status-cell">' + investigateLink(a.client) + '</td>' +
                     '</tr>';
             });
             html += '</table>';
@@ -788,7 +798,7 @@ function loadEventsFeed() {
             // is unchanged (kind_icon null, kind_label == kind).
             var kindHtml = (r.kind_icon === 'puzzle' ? ICO_PUZZLE + ' ' : '') + escapeHtml(r.kind_label || r.kind);
             return '<tr><td data-m="primary">' + kindHtml + '</td>' +
-                '<td data-m="secondary">' + escapeHtml(who) + '</td>' +
+                '<td data-m="secondary">' + escapeHtml(who) + ' ' + investigateLink(r.mac || r.ip) + '</td>' +
                 '<td data-m="secondary">' + escapeHtml(r.ts || '') + '</td></tr>';
         }).join('') + '</tbody></table>';
     });
