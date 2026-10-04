@@ -788,11 +788,14 @@ preflight_checks() {
 _init_install_log() {
     local dir
     dir="$(dirname "$INSTALL_LOG")"
-    if ! { mkdir -p "$dir" && ( umask 077; : >> "$INSTALL_LOG" ) && chmod 0600 "$INSTALL_LOG" && chown root:root "$INSTALL_LOG"; } 2>/dev/null; then
+    if ! { mkdir -p "$dir" && ( umask 077; : >> "$INSTALL_LOG" ) && chmod 0600 "$INSTALL_LOG"; } 2>/dev/null; then
         warn "Could not open $INSTALL_LOG — the output of the commands this installer runs will not be kept"
         INSTALL_LOG="/dev/null"
         return 0
     fi
+    # root:root is what the installer (always root) creates anyway; asking for it is best-effort so that sourcing
+    # these helpers as an unprivileged user (the test suite) does not read as "could not open the log"
+    chown root:root "$INSTALL_LOG" 2>/dev/null || true
     printf '\n══ Jen installer %s — %s ══\n' "$JEN_VERSION" "$(date '+%Y-%m-%d %H:%M:%S %z')" >> "$INSTALL_LOG"
     return 0
 }
