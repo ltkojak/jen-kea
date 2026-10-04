@@ -1357,67 +1357,39 @@ jobs:
           sha256sum -c --ignore-missing SHA256SUMS
           echo "v${JEN_STABLE_VERSION} verified."
 
-      # v5.66.0 is immutable, already-tagged code that predates --answers
-      # entirely, and --unattended there only resolves prompts to their
-      # DEFAULTS (useless placeholder hosts, not this job's real services). So
-      # this leg drives the full original wizard through a real pty, answering
-      # every prompt in the order v5.66.0's collect_config() asks them
-      # (confirmed against `git show v5.66.0:install.sh`): install type, Kea API
-      # URL/user/pass, Kea DB host/user/pass/name, Jen DB host/user/pass/name,
-      # admin password (+ confirm), one subnet (id/name/CIDR) then Enter, SSH
-      # y/n, DDNS y/n, HTTP/HTTPS ports. TERM=linux sidesteps the clear/terminfo
-      # bug that same code has.
+      # The pinned stable release's OWN installer, driven the way an operator scripts one: `--answers FILE
+      # --unattended` (v5.67.0 is the first release that has them, which is also why this leg could not keep
+      # feeding a prompt script to the stable installer once the pin moved off v5.66.0: v5.67.0 asks three
+      # questions, not the twenty the old wizard did, and the first run from the new pin read the old script's
+      # answers as replies to a menu it never asked, and looped on "Please enter r, e or q"). The keys are the
+      # install job's own; Kea's are supplied here, so nothing is left for /setup.
       #
-      # NOTHING IS MASKED. v5.66.0's verify_install() carries a bug fixed since
-      # (a stale Jinja filter list, then a `$?` after an assignment under
-      # set -e), so its installer exits non-zero AFTER the service is up and the
-      # config is written, right after printing "Config file present". That
-      # exact shape — and only that — is accepted below; any other failure, or
-      # that failure without the service running, fails the job.
+      # NOTHING IS MASKED: the stable installer must exit 0. (v5.66.0's verify_install() bug, the one failure
+      # this step used to accept by its exact shape, was fixed before v5.67.0 shipped.)
       - name: Fresh install of the pinned stable release
         run: |
           mkdir -p "$RUNNER_TEMP/install-stable"
           tar xzf "$RUNNER_TEMP/stable/jen-v${JEN_STABLE_VERSION}.tar.gz" -C "$RUNNER_TEMP/install-stable"
           cd "$RUNNER_TEMP/install-stable/jen"
-          cat > "$RUNNER_TEMP/stable-wizard-input.txt" << 'WIZARD'
-          1
-          http://127.0.0.1:8004
-          jen
-          jen_api_pw
-          127.0.0.1
-          kea
-          kea_pw
-          kea
-          127.0.0.1
-          jen
-          jen_pw
-          jen
-          ci-test-passw0rd-!
-          ci-test-passw0rd-!
-          1
-          Test
-          10.99.0.0/24
-
-          n
-          n
-          5050
-          8443
-          WIZARD
-          set +e
-          script -qec "sudo TERM=linux ./install.sh" /dev/null < "$RUNNER_TEMP/stable-wizard-input.txt" > "$RUNNER_TEMP/stable-install.log"
-          rc=$?
-          set -e
-          tail -25 "$RUNNER_TEMP/stable-install.log"
-          if [[ $rc -ne 0 ]]; then
-            # the one known shape: died right after "Config file present", with no FATAL/FAIL line anywhere
-            if grep -q "FATAL\|FAIL" "$RUNNER_TEMP/stable-install.log"; then
-              echo "::error::the stable installer failed (rc=$rc) with an error line — not its known verify_install bug"; exit 1
-            fi
-            if [[ "$(grep -v '^\s*$' "$RUNNER_TEMP/stable-install.log" | tail -1 | sed 's/\x1b\[[0-9;]*[A-Za-z]//g; s/\r//g')" != *"Config file present"* ]]; then
-              echo "::error::the stable installer failed (rc=$rc) somewhere other than its known verify_install bug"; exit 1
-            fi
-            echo "::notice::v${JEN_STABLE_VERSION}'s own verify_install() died after 'Config file present' (a bug fixed since); the real outcome is asserted next"
-          fi
+          umask 077
+          cat > "$RUNNER_TEMP/stable-answers.env" << 'EOF'
+          JEN_KEA_API_URL=http://127.0.0.1:8004
+          JEN_KEA_API_USER=jen
+          JEN_KEA_API_PASS=jen_api_pw
+          JEN_KEA_DB_HOST=127.0.0.1
+          JEN_KEA_DB_USER=kea
+          JEN_KEA_DB_PASS=kea_pw
+          JEN_KEA_DB_NAME=kea
+          JEN_DB_HOST=127.0.0.1
+          JEN_DB_USER=jen
+          JEN_DB_PASS=jen_pw
+          JEN_DB_NAME=jen
+          JEN_INITIAL_ADMIN_PASSWORD=ci-test-passw0rd-!
+          JEN_SUBNETS=1=Test,10.99.0.0/24
+          JEN_HTTP_PORT=5050
+          JEN_HTTPS_PORT=8443
+          EOF
+          sudo TERM=linux ./install.sh --answers "$RUNNER_TEMP/stable-answers.env" --unattended
 
       - name: Assert the stable baseline is the pinned version, healthy, with its data
         run: |
@@ -1429,42 +1401,6 @@ jobs:
           tar xzf "$RUNNER_TEMP/stable/jen-v${JEN_STABLE_VERSION}.tar.gz" -C "$RUNNER_TEMP" jen/jen-update-root.py
           expect_eq "$(sha_of /usr/local/sbin/jen-update-root.py)" "$(sha_of "$RUNNER_TEMP/jen/jen-update-root.py")" "the installed updater"
           echo "stable baseline: v$(jen_version), subnet config present, its own updater installed"
-
-      # v5.66.0's own admin-password seeding discards a typed password (the bug
-      # Q113 fixed: it never called create_app()), so on a clean box the admin's
-      # password is Jen's generated token behind a forced change. Set it the way
-      # the app itself would — with the STABLE release's own hasher — so the
-      # assertions after the upgrade can log in, which also proves the account
-      # survived it.
-      - name: Give the stable box's admin a known password
-        run: |
-          sudo runuser -u www-data -- env JEN_ROOT=/opt/jen/current/app JEN_CONFIG_DIR=/etc/jen JEN_CONTENT_DIR=/var/lib/jen \
-            ADMIN_PASSWORD="$ADMIN_PASSWORD" /opt/jen/current/venv/bin/python - << 'EOF'
-          import os, sys
-          sys.path.insert(0, "/opt/jen/current/app")
-          from jen import create_app
-          create_app()
-          from jen.models.db import jen_db
-          from jen.models.user import hash_password
-          with jen_db() as db, db.cursor() as cur:
-              cur.execute(
-                  "UPDATE users SET password=%s, must_change_password=0 WHERE username='admin'",
-                  (hash_password(os.environ["ADMIN_PASSWORD"]),),
-              )
-              assert cur.rowcount == 1, "no admin row to update"
-          print("admin password set")
-          EOF
-
-      # v5.67.0-beta.5 (Q117) — v5.66.0's own install_files() left app_dir
-      # group/other-writable on THIS runner (an additive `chmod -R a+rX` never
-      # clears a write bit mkdir/cp set under whatever umask was in effect —
-      # fixed since with `go-w`, but the stable release just installed above
-      # predates that fix). HEAD's own _layout_appdir_itself_ok correctly
-      # refuses to trust that before upgrading it: the hard stop
-      # docs/troubleshooting.md describes, with its one-line fix. This step is
-      # that fix, standing in for the operator the Health row would have told.
-      - name: Fix the stable baseline's own permissive app_dir
-        run: sudo chmod go-w /opt/jen
 
       # ── via installer ────────────────────────────────────────────────────
       - name: Upgrade with HEAD's install.sh
@@ -1515,10 +1451,9 @@ jobs:
           cookie="$RUNNER_TEMP/cookies-hop1.txt"
           jen_login "$cookie" "$ADMIN_PASSWORD"
           system_page=$(curl -sb "$cookie" -c "$cookie" "$JEN_URL/settings/system")
-          # the stable updater copies a jen.service only if the new tree ships
-          # one (HEAD ships a template), so the unit is still the stable box's
-          # own — the deployment fallback (INVOCATION_ID) is what keeps the
-          # controls right until the second hop renders the new one
+          # the stable (v5.67.0) updater renders the jen.service template HEAD ships
+          # (Q114) itself, so the controls must already be right after this hop;
+          # hop 2 below proves HEAD's own updater renders it too
           require 'Update Now' "$system_page" "Settings -> System has no Update control after hop 1"
           refuse "container image.s job" "$system_page" "Settings -> System shows Docker wording after hop 1"
           echo "hop 1: v${JEN_STABLE_VERSION} -> v${HEAD_VERSION} by the stable release's own updater"

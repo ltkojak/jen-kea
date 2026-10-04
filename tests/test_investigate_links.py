@@ -226,13 +226,14 @@ def _restricted_admin(client, db, name):
 class TestRouteRecentLeasesWidget:
     def test_an_unrestricted_caller_gets_a_link_for_every_row(self, logged_in_client, two_clients):
         body = logged_in_client.get("/api/recent-leases?hours=1").data.decode()
-        assert _href(A_MAC) in body and _href(B_MAC) in body
+        # the widget prints Kea's own HEX() of the address, upper case; the Investigation page accepts either
+        assert _href(A_MAC.upper()) in body and _href(B_MAC.upper()) in body
 
     def test_a_restricted_admin_gets_a_link_only_for_a_client_in_their_subnets(self, client, db, two_clients):
         c = _restricted_admin(client, db, "_inv_recent")
         body = c.get("/api/recent-leases?hours=1").data.decode()
-        assert _href(A_MAC) in body
-        assert _href(B_MAC) not in body and B_MAC not in body and B_IP not in body
+        assert _href(A_MAC.upper()) in body
+        assert B_MAC.upper() not in body.upper() and B_IP not in body
 
 
 class TestRouteTimelineHeader:

@@ -171,8 +171,12 @@ class TestNavAndRowLinks:
         import pathlib
 
         repo = pathlib.Path(__file__).resolve().parent.parent
+        # v5.68.0-beta.1 (Q134): the link is written by ONE macro (templates/_investigate.html), which each row
+        # template imports and calls; tests/test_investigate_links.py guards every template that prints a MAC
+        assert "/client?q=" in (repo / "templates" / "_investigate.html").read_text(encoding="utf-8")
         for name in ("_lease_rows.html", "_reservation_row.html", "_device_rows.html"):
-            assert "/client?q=" in (repo / "templates" / name).read_text(encoding="utf-8"), name
+            text = (repo / "templates" / name).read_text(encoding="utf-8")
+            assert "import investigate_link" in text and "investigate_link(" in text, name
 
 
 # ── v5.65.2 (Q91) ────────────────────────────────────────────────────────────
@@ -336,7 +340,7 @@ class TestAlertLine:
 
         assert _alert_matcher("", "") is None
 
-    def test_a_scoped_caller_gets_no_alert_line_and_an_unrestricted_one_does(self, client, db, seeded):
+    def test_the_alert_line_is_judged_on_the_client_and_never_shows_the_message(self, client, db, seeded):
         from tests.conftest import restricted_client
 
         with db.cursor() as cur:
@@ -348,8 +352,16 @@ class TestAlertLine:
             )
         db.commit()
         try:
+            # v5.68.0-beta.1 (Q134 d): alert_log rows carry no subnet, so the line is judged on the CLIENT. A caller
+            # scoped to the client's own subnet sees the alert about their client (type, status, time) - not its message
             restricted_client(client, db, allowed_subnets=[1], role="viewer", username="_client_alert_viewer")
-            assert b"zz_marker_alert" not in client.get(f"/client?q={MAC}").data
+            scoped = client.get(f"/client?q={MAC}").data
+            assert b"zz_marker_alert" in scoped and b"zz_neighbour_alert" not in scoped
+            assert f"lease {IP} renewed".encode() not in scoped
+            # a caller with no access to the client's subnet gets no client at all, so no alert line either
+            nobody = client.application.test_client()
+            restricted_client(nobody, db, allowed_subnets=[999], role="viewer", username="_client_alert_nobody")
+            assert b"zz_marker_alert" not in nobody.get(f"/client?q={MAC}").data
             admin = client.application.test_client()
             restricted_client(admin, db, allowed_subnets=None, role="admin", username="_client_alert_admin")
             body = admin.get(f"/client?q={MAC}").data
