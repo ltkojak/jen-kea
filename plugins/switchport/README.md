@@ -6,7 +6,7 @@ Answers the one question [Jen](https://github.com/ltkojak/jen-kea)'s own Client 
 
 ## Requirements
 
-- [Jen](https://github.com/ltkojak/jen-kea) v5.65.10 or later
+- [Jen](https://github.com/ltkojak/jen-kea) v5.68.0 or later
 - `snmpbulkwalk` (package `snmp`) on the Jen host — Settings → Plugins offers an **Install** button on a systemd host
 - Switches that answer SNMPv2c and implement standard BRIDGE-MIB / Q-BRIDGE-MIB / IF-MIB (almost every managed switch does; SNMPv3 with auth/priv is a later release, not this one)
 
@@ -26,6 +26,7 @@ Every OID this plugin uses is quoted in `plugin.py`'s own module docstring again
 - **Locate page** (nav Network → Switch Ports): search a MAC to see its switch, port, alias, VLAN, and when it was last seen; a per-switch port table shows live MAC counts and the uplink override
 - **"Find switch port"** row action on lease, reservation, and device rows — jumps straight to the locate page for that MAC
 - Discovered in Jen's global search by MAC or port name
+- **On the Investigation page** (Jen 5.68.0): a card under "What else Jen knows" with the client's switch, port, VLAN and last-seen time, and whether it has moved or sits behind an uplink
 - **JSON API**: `GET /api/v1/plugins/switchport/locate/<mac>` (read key), scoped to the calling key's accessible subnets
 - Respects Jen's subnet access control the same way Client Investigation does: a MAC is shown only if its *current* lease, reservation, or device placement is on a subnet the caller can see — never its port-table history, which has no subnet of its own. A switch belongs to the subnet its management address is in: a subnet-scoped account sees and changes only switches addressed inside its own subnets, and a switch addressed by hostname (or by an address in no Kea subnet) is for accounts that can see every subnet. A MAC with no attributable subnet is likewise for unrestricted callers and keys only. Adding, pausing, and removing switches, and overriding a port's uplink classification, all need admin — viewers are read-only
 - **The SNMPv2c community is visible in `ps`** on the Jen host while a walk runs: net-snmp takes it as a command-line argument and has no alternative for v2c. Use a read-only community that opens nothing else

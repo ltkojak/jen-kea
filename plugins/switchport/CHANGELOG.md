@@ -1,5 +1,23 @@
 # Switch Port Locator Plugin — Changelog
 
+## [1.1.0] - 2026-10-04
+
+Requires Jen 5.68.0 (a 5.68.0 beta satisfies it): this release registers an **investigation provider**.
+
+### Added: the switch and port, on Jen's Investigation page
+
+Jen's Investigation page (`/client`) now has a "What else Jen knows" section on its Overview, and this plugin
+contributes one card to it: the switch and port the client's MAC was last stored on, the VLAN, when it was last seen
+there and since when it has been on that switch. Where the MAC has stored positions on more than one switch, the card
+says it has moved and names the older position, which clears when that switch is next polled. A port that is now
+treated as an uplink — pinned by hand after the MAC was stored, or past the MAC-count threshold — makes the card a
+"Needs a look" one, because the real position is further out than the port the MAC is stored on. A MAC the plugin has
+never located adds no card.
+
+It answers only for a client the caller may see: Jen hands the provider the caller's own subnet scope, the MAC's
+subnet is Jen's one precedence (`client_subnet_for_mac`), and a client in no subnet — or one outside a restricted
+caller's — gets nothing, never a card. `requires_jen` moves to 5.68.0 because the hook does not exist before it.
+
 ## [1.0.4] - 2026-09-27
 
 Jen's Q100 sweep: onto Jen 5.65.10's shared helpers, plus three findings from the same audit.

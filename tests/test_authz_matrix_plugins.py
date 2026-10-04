@@ -98,8 +98,11 @@ def plugin_app():
     with jen_db() as db, db.cursor() as cur:
         cur.execute("SHOW TABLES")
         tables_before = {next(iter(r.values())) for r in cur.fetchall()}
+    from jen.services import investigation_providers as inv_svc
+
     saved_loaded = dict(plugins_svc._loaded_plugins)
     saved_surfaces = list(access.DIAGNOSTIC_SURFACES)
+    saved_inv = dict(inv_svc._PROVIDERS)
     plugins_svc._loaded_plugins.clear()
 
     # create_app() re-applies jen.config, overwriting the globals the test session patched
@@ -116,6 +119,8 @@ def plugin_app():
         plugins_svc._loaded_plugins.clear()
         plugins_svc._loaded_plugins.update(saved_loaded)
         access.DIAGNOSTIC_SURFACES[:] = saved_surfaces
+        inv_svc._PROVIDERS.clear()
+        inv_svc._PROVIDERS.update(saved_inv)
         with jen_db() as db, db.cursor() as cur:
             cur.execute("SHOW TABLES")
             tables_after = {next(iter(r.values())) for r in cur.fetchall()}
@@ -1325,3 +1330,147 @@ class TestEveryPluginMutationRouteHasARow:
     def test_the_dedicated_tests_named_above_exist(self):
         for name in set(COVERED_ELSEWHERE.values()):
             assert name in globals(), f"{name} is named in COVERED_ELSEWHERE but does not exist"
+
+
+# ── v5.68.0-beta.4 (Q139): the Investigation page's plugin cards ───────────────────────────────────────────────────────────
+INV_A_IP = (
+    "10.98.1.10"  # the control client in subnet A (seeded by tests/test_authz_matrix.py: lease, hostname alpha-host)
+)
+INV_TAG = "ZZ-INV-A"  # printed by every card the A client may see
+INV_HIDDEN = "ZZ-INV-HIDDEN"  # printed by a row keyed to the SAME client but stored in subnet B
+INV_WD, INV_WD_HIDDEN = 9111, 9112
+INV_SW, INV_DS, INV_JOB, INV_JOB_HIDDEN = 9411, 9211, 9701, 9702
+
+
+def _inv_clean(cur):
+    cur.execute("DELETE FROM wd_state WHERE target_id IN (%s, %s)", (INV_WD, INV_WD_HIDDEN))
+    cur.execute("DELETE FROM wd_targets WHERE id IN (%s, %s)", (INV_WD, INV_WD_HIDDEN))
+    cur.execute("DELETE FROM wol_hosts WHERE mac=%s", (A_MAC,))
+    cur.execute("DELETE FROM pr_state WHERE mac=%s", (A_MAC,))
+    cur.execute("DELETE FROM pr_tracked WHERE mac=%s", (A_MAC,))
+    cur.execute("DELETE FROM sp_mac_ports WHERE switch_id=%s", (INV_SW,))
+    cur.execute("DELETE FROM sp_ports WHERE switch_id=%s", (INV_SW,))
+    cur.execute("DELETE FROM sp_switches WHERE id=%s", (INV_SW,))
+    cur.execute("DELETE FROM ds_records WHERE target_id IN (%s, %s)", (INV_DS, DS_B))
+    cur.execute("DELETE FROM ds_targets WHERE id=%s", (INV_DS,))
+    cur.execute("DELETE FROM ipam_static_entries WHERE label IN (%s, %s)", (INV_TAG + "-ipam", INV_HIDDEN + "-ipam"))
+    cur.execute("DELETE FROM nd_scan_results WHERE job_id IN (%s, %s)", (INV_JOB, INV_JOB_HIDDEN))
+    cur.execute("DELETE FROM nd_scan_jobs WHERE id IN (%s, %s)", (INV_JOB, INV_JOB_HIDDEN))
+
+
+@pytest.fixture
+def investigated(plugin_app, db, plugin_data):
+    """The control client in subnet A with a row in EVERY bundled plugin, each printing INV_TAG - plus, for the plugins that
+    can hold a second row keyed to the same client, one stored in subnet B that prints INV_HIDDEN."""
+    with db.cursor() as cur:
+        _inv_clean(cur)
+        cur.execute("DELETE FROM nd_scan_jobs WHERE subnet_id IN (1, 2)")
+        cur.execute(
+            "INSERT INTO wd_targets (id, ip, mac, subnet_id, label, source, probe) VALUES "
+            "(%s, %s, %s, 1, %s, 'manual', 'ping'), (%s, '10.77.0.99', %s, 2, %s, 'manual', 'ping')",
+            (INV_WD, INV_A_IP, A_MAC, INV_TAG + "-wd", INV_WD_HIDDEN, A_MAC, INV_HIDDEN + "-wd"),
+        )
+        cur.execute(
+            "INSERT INTO wd_state (target_id, state, since, consecutive_fails) VALUES (%s, 'down', NOW(), 3)", (INV_WD,)
+        )
+        cur.execute(
+            "INSERT INTO wol_hosts (mac, ip, subnet_id, label) VALUES (%s, %s, 1, %s)",
+            (A_MAC, INV_A_IP, INV_TAG + "-wol"),
+        )
+        cur.execute(
+            "INSERT INTO pr_tracked (mac, label, subnet_id, added_by) VALUES (%s, %s, 1, 'seed')",
+            (A_MAC, INV_TAG + "-pr"),
+        )
+        cur.execute("INSERT INTO pr_state (mac, online, since, last_seen) VALUES (%s, 1, NOW(), NOW())", (A_MAC,))
+        cur.execute(
+            "INSERT INTO sp_switches (id, name, host, community) VALUES (%s, %s, '10.98.1.2', 'x')",
+            (INV_SW, INV_TAG + "-sw"),
+        )
+        cur.execute("INSERT INTO sp_ports (switch_id, ifindex, ifname) VALUES (%s, 1, 'Gi0/7')", (INV_SW,))
+        cur.execute("INSERT INTO sp_mac_ports (mac, switch_id, ifindex, vlan) VALUES (%s, %s, 1, 30)", (A_MAC, INV_SW))
+        cur.execute(
+            "INSERT INTO ds_targets (id, name, kind, url, domain, sources, subnet_ids, enabled, previewed_at) VALUES "
+            "(%s, %s, 'pihole', 'http://10.98.1.53', 'lan', 'leases,reservations', '[1]', 1, NOW())",
+            (INV_DS, INV_TAG + "-ds"),
+        )
+        cur.execute(
+            "INSERT INTO ds_records (target_id, name, ip, source) VALUES (%s, 'alpha-host', %s, 'lease'), "
+            "(%s, 'alpha-host', %s, 'lease')",
+            (INV_DS, INV_A_IP, DS_B, INV_A_IP),
+        )
+        cur.execute(
+            "INSERT INTO ipam_static_entries (ip, subnet_id, subnet_kind, label, entry_status, is_static) VALUES "
+            "(%s, 1, 'kea', %s, 'static', 1), (%s, 2, 'kea', %s, 'static', 1)",
+            (INV_A_IP, INV_TAG + "-ipam", INV_A_IP, INV_HIDDEN + "-ipam"),
+        )
+        for job_id, subnet, tag in ((INV_JOB, 1, INV_TAG), (INV_JOB_HIDDEN, 2, INV_HIDDEN)):
+            cur.execute(
+                "INSERT INTO nd_scan_jobs (id, subnet_id, status, finished_at) VALUES (%s, %s, 'done', NOW())",
+                (job_id, subnet),
+            )
+            cur.execute(
+                "INSERT INTO nd_scan_results (job_id, ip, mac, hostname, status, label) VALUES (%s, %s, %s, '', 'lease', %s)",
+                (job_id, INV_A_IP, A_MAC, tag + "-nd"),
+            )
+    db.commit()
+    yield
+    with db.cursor() as cur:
+        _inv_clean(cur)
+    db.commit()
+
+
+class TestInvestigationProviderCards:
+    """v5.68.0-beta.4 (Q139). One row per bundled provider, driven through the REAL /client page with every bundled plugin
+    enabled: a caller scoped to subnet A investigating the client in A sees each plugin's card, and none of what the same plugins
+    hold under subnet B for that client (a second row keyed to the same MAC, or a target that is not theirs); investigating the
+    client in B shows them nothing at all - the same "No client matched" as a client that does not exist, so the page is still
+    not an existence oracle; an unrestricted caller sees both."""
+
+    CARDS = ("-wd", "-wol", "-pr", "-sw", "-ds", "-ipam", "-nd")
+
+    def _page(self, pclient, db, role, mac):
+        _caller(pclient, db, role)
+        return pclient.get(f"/client?q={mac}").data.decode("utf-8", "replace")
+
+    def test_a_scoped_caller_sees_every_plugins_card_for_a_client_in_their_subnet(self, pclient, db, investigated):
+        body = self._page(pclient, db, "admin_A", A_MAC)
+        assert "What else Jen knows" in body
+        for suffix in self.CARDS:
+            assert INV_TAG + suffix in body, f"the {suffix} plugin's card is missing from the scoped caller's Overview"
+        for title in (
+            "Host Watchdog",
+            "Wake &amp; Actions",
+            "Presence",
+            "Switch Port Locator",
+            "Local DNS Sync",
+            "IPAM Lite",
+            "Network Discovery",
+        ):
+            assert title in body, f"no card titled {title}"
+
+    def test_what_a_plugin_holds_under_subnet_b_for_the_same_client_stays_hidden(self, pclient, db, investigated):
+        body = self._page(pclient, db, "admin_A", A_MAC)
+        assert INV_HIDDEN not in body
+        assert_no_marker(body)
+
+    def test_an_unrestricted_caller_sees_what_the_scoped_one_cannot(self, pclient, db, investigated):
+        body = self._page(pclient, db, "admin_all", A_MAC)
+        assert INV_HIDDEN + "-wd" in body and INV_HIDDEN + "-ipam" in body and INV_HIDDEN + "-nd" in body, (
+            "the hidden rows exist and an unrestricted caller reads them - so their absence above is the scope, not a seeding slip"
+        )
+
+    def test_a_down_target_and_an_ipam_conflict_reach_the_one_line_answer(self, pclient, db, investigated):
+        body = self._page(pclient, db, "admin_A", A_MAC)
+        assert "Worth a look:" in body and "Host Watchdog" in body.split("Worth a look:")[1].split("</div>")[0]
+        assert "Needs a look:" in body
+
+    @pytest.mark.parametrize("role", ["viewer_A", "admin_A"])
+    def test_a_client_in_subnet_b_shows_nothing_and_no_plugin_is_asked(self, pclient, db, plugin_data, role):
+        body = self._page(pclient, db, role, B_MAC)
+        assert "No client matched that identifier" in body
+        assert "What else Jen knows" not in body
+        assert_no_marker(body, ignore=(B_MAC,))
+
+    def test_presence_names_the_sinks_to_an_admin_only(self, pclient, db, investigated):
+        assert "matrix-sink" in self._page(pclient, db, "admin_A", A_MAC)
+        assert "matrix-sink" not in self._page(pclient, db, "viewer_A", A_MAC)

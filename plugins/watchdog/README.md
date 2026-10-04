@@ -6,7 +6,7 @@ Probes chosen hosts on a schedule and alerts when one stops answering, and again
 
 ## Requirements
 
-- [Jen](https://github.com/ltkojak/jen-kea) v5.65.10 or later
+- [Jen](https://github.com/ltkojak/jen-kea) v5.68.0 or later
 - `ping` on the Jen host for ICMP targets — Ubuntu's `/usr/bin/ping` (package `iputils-ping`) carries `cap_net_raw`, so a single unprivileged `ping -c 1` works the same way Network Discovery's neighbour-table read does; Settings → Plugins offers an **Install** button on a systemd host (through Jen's root-run plugin service)
 
 ## Why ping works unprivileged
@@ -22,6 +22,7 @@ Jen runs as an unprivileged service user. Sending a raw ICMP echo request normal
 - **7-day uptime %** and per-target history (last 50 checks, with RTT) on every row
 - **"Watch this host"** row action on Jen's Reservations page
 - Discovered in Jen's global search by label or IP
+- **On the Investigation page** (Jen 5.68.0): a card under "What else Jen knows" for a client a target watches — does it answer, since when, how many checks in a row have failed; a down target also appears in the page's one-line answer
 - **JSON API**: `GET /api/v1/plugins/watchdog/targets` (read key), `POST …/targets` (write key), both scoped to the calling key's accessible subnets
 - Respects Jen subnet access control: a target on an address inside a Kea subnet is visible only to users who can see that subnet; a target on an address in *no* Kea subnet at all (an unmanaged network) is visible only to unrestricted users, the same rule IPAM Lite's own unmanaged subnets use. Every route judges the target's own stored subnet (never a `subnet_id` the caller typed): history, pause/resume and delete included, and a target the caller cannot see is answered like one that does not exist. Adding, pausing, resuming and deleting targets all need admin — viewers are read-only
 

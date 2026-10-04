@@ -572,6 +572,125 @@ def _watchdog_search(query, accessible_subnet_ids, all_subnets):
     return out
 
 
+# ── Investigation provider (v1.1.0, Jen 5.68.0) ──────────────────────────────
+
+_INVESTIGATION_MAX_TARGETS = 5
+
+
+def _when(value):
+    if hasattr(value, "strftime"):
+        return value.strftime("%Y-%m-%d %H:%M UTC")
+    return str(value) if value else ""
+
+
+def subject_addresses(subject):
+    """Pure: the IPv4 addresses this client is known by - the one the page was opened on, its active leases and its
+    reservations - each validated, de-duplicated and capped. A watchdog target is an address, so this is what finds it."""
+    seen = []
+    candidates = [getattr(subject, "ip", "")]
+    candidates += [row.get("ip") for row in (getattr(subject, "leases4", None) or []) if isinstance(row, dict)]
+    candidates += [row.get("ip") for row in (getattr(subject, "reservations", None) or []) if isinstance(row, dict)]
+    for raw in candidates:
+        try:
+            addr = str(ipaddress.IPv4Address(str(raw).strip()))
+        except ValueError:
+            continue
+        if addr not in seen:
+            seen.append(addr)
+    return seen[:6]
+
+
+def _target_line(t):
+    name = t.get("label") or t.get("ip")
+    state = t.get("state") or "unknown"
+    if not t.get("enabled", 1):
+        return f"{name} is paused"
+    if state == "down":
+        fails = t.get("consecutive_fails") or 0
+        since = f" since {_when(t['since'])}" if t.get("since") else ""
+        return f"{name} is down{since} ({fails} failed check{'s' if fails != 1 else ''} in a row)"
+    if state == "up":
+        return f"{name} is answering" + (f" (up since {_when(t['since'])})" if t.get("since") else "")
+    return f"{name} has no result yet"
+
+
+def investigation_card(targets):
+    """Pure: the Investigation page's card from the watchdog targets that match this client (its MAC or any of its
+    addresses), or None when there are none. A target that is down makes it a warn card - the one sentence then also joins
+    the page's one-line answer - and down targets are listed first."""
+    if not targets:
+        return None
+    order = {"down": 0, "unknown": 1, "up": 2}
+    shown = sorted(
+        targets, key=lambda t: (order.get(t.get("state") or "unknown", 1), t.get("label") or t.get("ip") or "")
+    )
+    shown = shown[:_INVESTIGATION_MAX_TARGETS]
+    rows = []
+    for t in shown:
+        state = t.get("state") or "unknown"
+        rows.append(
+            {
+                "label": t.get("label") or t["ip"],
+                "value": f"{t['ip']} - {state}" + (" (paused)" if not t.get("enabled", 1) else ""),
+            }
+        )
+        if t.get("last_ok_at"):
+            rows.append({"label": "Last answered", "value": _when(t["last_ok_at"])})
+        if state == "down" and t.get("last_fail_at"):
+            rows.append({"label": "Last failed", "value": _when(t["last_fail_at"])})
+        if state == "down" and t.get("last_error"):
+            rows.append({"label": "Last error", "value": str(t["last_error"])})
+        rows.append({"label": "Probe", "value": t.get("probe") or "ping"})
+    down = any((t.get("state") == "down") and t.get("enabled", 1) for t in shown)
+    return {"summary": "; ".join(_target_line(t) for t in shown), "status": "warn" if down else "ok", "rows": rows}
+
+
+def _targets_for_client(mac, addresses, accessible_subnet_ids, all_subnets):
+    """The targets whose stored MAC or address is this client's, inside the caller's own subnet scope - in the query,
+    before its LIMIT. A target in no Kea subnet is for an unrestricted caller only (a NULL never matches `IN (...)`)."""
+    from jen.plugin_api import in_placeholders, search_scope
+
+    scope = search_scope(accessible_subnet_ids, all_subnets, "t.subnet_id")
+    if scope is None:
+        return []
+    scope_clause, scope_params = scope
+    identity, identity_params = [], []
+    if mac:
+        identity.append("t.mac=%s")
+        identity_params.append(mac)
+    if addresses:
+        identity.append(f"t.ip IN ({in_placeholders(addresses)})")
+        identity_params.extend(addresses)
+    if not identity:
+        return []
+    db = None
+    try:
+        db = _get_db()
+        with db.cursor() as cur:
+            cur.execute(
+                f"SELECT t.id, t.ip, t.mac, t.label, t.subnet_id, t.probe, t.enabled, s.state, s.since, s.last_ok_at, "
+                f"s.last_fail_at, s.consecutive_fails, s.last_error FROM wd_targets t "
+                f"LEFT JOIN wd_state s ON s.target_id = t.id "
+                f"WHERE {scope_clause} AND ({' OR '.join(identity)}) ORDER BY t.label, t.ip LIMIT {_INVESTIGATION_MAX_TARGETS}",  # nosec B608 - scope_clause and the identity terms are fixed fragments with %s placeholders; every value is bound below
+                (*scope_params, *identity_params),
+            )
+            return list(cur.fetchall())
+    finally:
+        if db:
+            db.close()
+
+
+def _investigate(subject, accessible_subnet_ids, all_subnets):
+    """The Investigation page's card for the client Jen resolved: the watchdog targets on its MAC or its addresses. Each
+    target is judged on its OWN stored subnet, in the query, so a restricted caller never gets one from a subnet outside
+    the set they were given."""
+    mac = _normalize_mac(getattr(subject, "mac", "") or "")
+    card = investigation_card(_targets_for_client(mac, subject_addresses(subject), accessible_subnet_ids, all_subnets))
+    if card is not None:
+        card["href"] = "/network/watchdog"
+    return card
+
+
 # ── Routes: page ────────────────────────────────────────────────────────────
 
 
@@ -924,6 +1043,7 @@ def register(app):
     from jen.plugin_api import (
         api_key_required,
         register_alert_type,
+        register_investigation_provider,
         register_periodic,
         register_row_action,
         register_search_provider,
@@ -965,6 +1085,7 @@ def register(app):
         method="POST",
     )
     register_search_provider(PLUGIN_ID, title="Host Watchdog", fn=_watchdog_search)
+    register_investigation_provider(PLUGIN_ID, title="Host Watchdog", fn=_investigate)
     register_periodic(PLUGIN_ID, "probe-tick", _tick, _tick_every)
 
     logger.info("Host Watchdog plugin registered")

@@ -753,6 +753,98 @@ def _switchport_search(query, accessible_subnet_ids, all_subnets):
     return out
 
 
+# ── Investigation provider (v1.1.0, Jen 5.68.0) ──────────────────────────────
+
+
+def in_scope(subnet_id, accessible_subnet_ids, all_subnets):
+    """Pure: may a caller with this scope see something whose subnet is `subnet_id`? An unrestricted caller may; a
+    restricted one only for a subnet in its own set - and a subnet of None ("no attributable subnet") is for unrestricted
+    callers only, never read as allow."""
+    if all_subnets:
+        return True
+    return subnet_id is not None and subnet_id in set(accessible_subnet_ids or ())
+
+
+def _when(value):
+    if hasattr(value, "strftime"):
+        return value.strftime("%Y-%m-%d %H:%M UTC")
+    return str(value) if value else ""
+
+
+def investigation_card(positions):
+    """Pure: the Investigation page's card from this MAC's stored positions (newest first, at most a few), or None when it
+    was never located. A MAC that has stored positions on more than one switch has moved - the older entry is still there
+    only until that switch is next polled; a port that is NOW treated as an uplink (pinned by hand after the MAC was
+    stored, or crossed the MAC-count threshold) is a position behind which the real one hides, and says so."""
+    if not positions:
+        return None
+    here = positions[0]
+    port = here.get("ifname") or "?"
+    alias = here.get("ifalias") or ""
+    uplink = port_is_uplink(here.get("is_uplink"), here.get("mac_count"))
+    summary = f"On {here['switch_name']}, port {port}"
+    if here.get("vlan"):
+        summary += f" (VLAN {here['vlan']})"
+    status = "ok"
+    rows = [
+        {"label": "Switch", "value": here["switch_name"]},
+        {"label": "Port", "value": f"{port} - {alias}" if alias else port},
+    ]
+    if here.get("vlan"):
+        rows.append({"label": "VLAN", "value": str(here["vlan"])})
+    if here.get("last_seen"):
+        rows.append({"label": "Last seen on this port", "value": _when(here["last_seen"])})
+    if here.get("first_seen"):
+        rows.append({"label": "On this switch since", "value": _when(here["first_seen"])})
+    if len(positions) > 1:
+        older = positions[1]
+        summary += f"; it was also on {older['switch_name']}, port {older.get('ifname') or '?'}, so it has moved"
+        rows.append(
+            {
+                "label": "Also stored on",
+                "value": f"{older['switch_name']} port {older.get('ifname') or '?'} (cleared when that switch is next polled)",
+            }
+        )
+    if uplink:
+        status = "warn"
+        summary += " - that port is now treated as an uplink, so the device is really further out"
+        rows.append({"label": "Port role", "value": "uplink"})
+    return {"summary": summary, "status": status, "rows": rows}
+
+
+def _positions_for_mac(mac):
+    db = None
+    try:
+        db = _get_db()
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT s.name AS switch_name, mp.ifindex, p.ifname, p.ifalias, p.is_uplink, p.mac_count, "
+                "mp.vlan, mp.first_seen, mp.last_seen FROM sp_mac_ports mp "
+                "JOIN sp_switches s ON s.id = mp.switch_id "
+                "LEFT JOIN sp_ports p ON p.switch_id = mp.switch_id AND p.ifindex = mp.ifindex "
+                "WHERE mp.mac=%s ORDER BY mp.last_seen DESC LIMIT 5",
+                (mac,),
+            )
+            return list(cur.fetchall())
+    finally:
+        if db:
+            db.close()
+
+
+def _investigate(subject, accessible_subnet_ids, all_subnets):
+    """The Investigation page's card for the client Jen resolved. A MAC's subnet is Jen's one precedence
+    (`client_subnet_for_mac`); a client outside the caller's scope - or in none, for a restricted caller - gets nothing."""
+    mac = _normalize_mac(getattr(subject, "mac", "") or "")
+    if not mac:
+        return None
+    if not in_scope(_current_subnet_for_mac(mac), accessible_subnet_ids, all_subnets):
+        return None
+    card = investigation_card(_positions_for_mac(mac))
+    if card is not None:
+        card["href"] = f"/network/switchport?mac={mac}"
+    return card
+
+
 # ── Routes: page ────────────────────────────────────────────────────────────
 
 
@@ -996,6 +1088,7 @@ def register(app):
     from jen.plugin_api import (
         api_key_required,
         register_alert_type,
+        register_investigation_provider,
         register_periodic,
         register_row_action,
         register_search_provider,
@@ -1022,6 +1115,7 @@ def register(app):
         default_template=_MOVED_TEMPLATE,
     )
     register_search_provider(PLUGIN_ID, title="Switch Ports", fn=_switchport_search)
+    register_investigation_provider(PLUGIN_ID, title="Switch Port Locator", fn=_investigate)
     register_periodic(PLUGIN_ID, "poll", _tick, 10)
 
     logger.info("Switch Port Locator plugin registered")

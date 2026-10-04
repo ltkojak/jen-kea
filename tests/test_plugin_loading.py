@@ -52,13 +52,17 @@ def test_every_bundled_plugin_registers(app, monkeypatch, tmp_path, caplog):
         cur.execute("SHOW TABLES")
         tables_before = {next(iter(r.values())) for r in cur.fetchall()}
 
+    from jen.services import investigation_providers as inv
+
     saved_loaded = dict(plugins_svc._loaded_plugins)
+    saved_providers = dict(inv._PROVIDERS)
     plugins_svc._loaded_plugins.clear()
+    inv._PROVIDERS.clear()
     try:
         import jen as jen_pkg
 
         with caplog.at_level(logging.WARNING, logger="jen.services.plugins"):
-            jen_pkg.create_app()
+            built = jen_pkg.create_app()
 
         loaded_ids = set(plugins_svc._loaded_plugins)
         assert loaded_ids == shipped, (
@@ -67,7 +71,34 @@ def test_every_bundled_plugin_registers(app, monkeypatch, tmp_path, caplog):
 
         failed = [r.message for r in caplog.records if "Failed to load plugin" in r.message]
         assert not failed, f"plugin(s) logged a load failure: {failed}"
+
+        # v5.68.0-beta.4 (Q139): every bundled plugin contributes exactly one investigation provider (the registry is keyed by
+        # plugin id, so "exactly one" is "one key per plugin and no key that is not a plugin"), and each one really RUNS against
+        # the freshly migrated tables - a typo in a provider's SQL would surface as an "unavailable" card, not as a failure
+        # anywhere else, which is the way a plugin's register() once shipped dead without a test noticing.
+        assert set(inv._PROVIDERS) == shipped, (
+            f"every bundled plugin must register one investigation provider - registered {sorted(inv._PROVIDERS)}, "
+            f"bundled {sorted(shipped)}"
+        )
+        for plugin_id, entry in inv._PROVIDERS.items():
+            assert entry["title"] and callable(entry["fn"]), plugin_id
+        from jen.services.client_subject import ClientSubject
+
+        subject = ClientSubject(
+            kind="mac",
+            identifier="de:ad:be:ef:09:01",
+            mac="de:ad:be:ef:09:01",
+            ip="10.99.9.9",
+            hostname="contract-host",
+        )
+        with built.test_request_context("/client"):
+            results = inv.run_investigation_providers(subject, set(), True)
+        assert [r["plugin_id"] for r in results if r["unavailable"]] == [], (
+            "a bundled plugin's investigation provider raised against the real tables"
+        )
     finally:
+        inv._PROVIDERS.clear()
+        inv._PROVIDERS.update(saved_providers)
         plugins_svc._loaded_plugins.clear()
         plugins_svc._loaded_plugins.update(saved_loaded)
         with jen_db() as db, db.cursor() as cur:

@@ -1,5 +1,21 @@
 # Host Watchdog Plugin — Changelog
 
+## [1.1.0] - 2026-10-04
+
+Requires Jen 5.68.0 (a 5.68.0 beta satisfies it): this release registers an **investigation provider**.
+
+### Added: does it answer, and since when, on Jen's Investigation page
+
+Jen's Investigation page (`/client`) now has a "What else Jen knows" section on its Overview, and this plugin
+contributes one card to it when a watchdog target matches the client by its MAC or by any of its addresses (the one the
+page was opened on, its active leases, its reservations): whether the host answers, since when, how many checks in a row
+have failed, the last time it answered, and the probe. A target that is down makes it a "Needs a look" card, and its
+sentence also joins the Investigation page's one-line answer at the top. A client with no target adds no card.
+
+Each target is judged on its own stored subnet and the caller's scope is in the query, before its limit, so a
+restricted caller never receives a target from a subnet outside the set Jen handed over; a target in no Kea subnet is
+for an unrestricted caller only. `requires_jen` moves to 5.68.0 because the hook does not exist before it.
+
 ## [1.0.5] - 2026-09-30
 
 ### Fixed
