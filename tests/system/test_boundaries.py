@@ -1756,7 +1756,7 @@ def test_15_bundled_plugin_data_survives_a_full_recovery_restore(stack):
 # ── 16. investigation logging: on, reloaded, watched, put back ───────────────
 
 S16_MAC = "02:50:00:00:16:01"
-S16_SEND = """
+S16_SEND = r"""
 import socket, struct
 mac = bytes.fromhex("025000001601")
 def opt(code, data):

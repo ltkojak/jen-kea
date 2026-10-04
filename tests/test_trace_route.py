@@ -147,14 +147,14 @@ class TestTraceRoute:
         r = client.get("/tools/trace", query_string={"mac": MAC})
         assert r.status_code == 403
 
-    def test_watch_arms_htmx_polling_and_stops_at_sixty_seconds(self, logged_in_client, db, monkeypatch):
+    def test_watch_arms_htmx_polling_and_stops_at_ten_minutes(self, logged_in_client, db, monkeypatch):
         _servers(monkeypatch)
         _stub_tail(monkeypatch, _ok(EXCHANGE))
         _clean(db)
         first = logged_in_client.get("/tools/trace", query_string={"mac": MAC, "watch": "1"})
-        assert b'hx-trigger="every 5s"' in first.data
-        assert b"t=5" in first.data
-        last = logged_in_client.get("/tools/trace", query_string={"mac": MAC, "watch": "1", "t": "60"})
+        assert b'hx-trigger="every 3s"' in first.data  # v5.68.0-beta.3 (Q138): 3 s for ten minutes, was 5 s for 60 s
+        assert b"t=3" in first.data
+        last = logged_in_client.get("/tools/trace", query_string={"mac": MAC, "watch": "1", "t": "600"})
         assert b"hx-trigger" not in last.data
 
     def test_htmx_request_returns_only_the_results_partial(self, logged_in_client, db, monkeypatch):

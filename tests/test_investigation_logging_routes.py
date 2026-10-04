@@ -65,7 +65,7 @@ class TestWhoMayPressIt:
             "/servers/1/investigation-logging/on", data={"minutes": "5", "back": "trace", "mac": "AA:BB:CC:DD:EE:01"}
         )
         location = r.headers["Location"]
-        assert "/tools/trace" in location and "mac=aa%3Abb%3Acc%3Add%3Aee%3A01" in location and "server=1" in location
+        assert "/tools/trace" in location and "mac=aa:bb:cc:dd:ee:01" in location and "server=1" in location
 
     def test_back_is_an_allowlist_never_a_url(self, logged_in_client, stubs):
         r = logged_in_client.post(
