@@ -151,7 +151,9 @@ class TestSearchToInvestigate:
         # base.html's own nav also carries a search box named "q" (desktop
         # + mobile drawer) — scope to this page's own form, not the global
         # nav search, to avoid a Playwright strict-mode ambiguity.
-        q_input = 'form[action="/client"] input[name="q"]'
+        # (v5.68.0-beta.2: the Explain tab's own 'Explain again' form goes back to /client with the identifier in a
+        # HIDDEN q, so the page's typed field is the one that is not hidden)
+        q_input = 'form[action="/client"] input[name="q"]:not([type="hidden"])'
         assert "aa:bb:cc:dd:ee:01" in page.locator(q_input).input_value().lower()
 
         for tab in ("Explain", "Trace", "Timeline", "Dns", "Config", "Overview"):
