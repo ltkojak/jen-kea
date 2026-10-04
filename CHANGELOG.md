@@ -2,6 +2,67 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.67.0-beta.18] - 2026-10-03
+
+Beta channel. Stacked on 5.67.0-beta.17. The first fresh install of Jen ever done
+by someone who is not its author, on a new Ubuntu 24.04 machine with no database
+server on it, went like this: dependencies installed with a hundred and thirty
+lines of package-manager output scrolling through the progress spinner; the Jen
+database question was answered with the defaults and could not connect; the
+installer printed the SQL to create a database on a machine that had no database
+server to run it on; "Continue without it — I will finish in Jen" was chosen; and
+the shell prompt came back, with no service, no web page and no message. The
+installer had been run by nothing but a CI job that always has a database, so no
+path of it that fails had ever run.
+
+**"Continue without it" ended the installer without saying so.** The helper that
+blanks a placeholder value ended in a bare test-and-assign, which for a real
+host name is false, and a false test is the function's exit status — which, in a
+script that stops on any failure, ended the whole installer with no message. The
+same helper is on the path an unattended install takes when its database cannot
+be reached, so an answers file pointing at an unreachable database ended the same
+way. It now ends in an explicit success, and a test runs it in a real shell and
+scans the installer and uninstaller for any function that ends in the same
+construct, so it cannot come back.
+
+**The choice should not have existed.** Jen runs its schema migrations against its
+own database before it serves anything. With no reachable database the service
+exits, systemd starts it again five seconds later, and so on for ever: there is
+no login page and no first-run wizard to "finish in". Jen's own database is the one
+thing the installer cannot defer (Kea's API and database are different — Jen runs
+without them and the wizard connects them, so their prompts are unchanged). The
+Jen database menu is now retry, edit and try again, install MariaDB here, or quit;
+an unattended install whose Jen database does not answer stops, printing the SQL,
+what is likely wrong and what to do; and when the service does fail to start the
+installer names the database section of the configuration as the likeliest cause.
+
+**MariaDB on request.** A homelab install wants Jen's small database on the same
+machine, and a fresh machine has no server. When the database host is this machine
+and no server lets the installer in, it offers to install MariaDB, enable and start
+it, wait for it to answer, create the database and user and test them — with the
+prompt defaulting to no, never for a remote host, never silently, and for an
+unattended install only when the answers file (or environment) says
+`JEN_DB_INSTALL_LOCAL=yes`. A server that is installed but stopped is started, not
+reinstalled, and the uninstaller never removes MariaDB or Jen's database at any
+level; it now says so.
+
+**The package manager's output goes to a log.** Quieting apt does not quiet the
+package unpacker or the restart checker, and redirecting its errors to nowhere threw
+away the one thing an operator needs when it fails. Every `apt-get`, `pip`,
+virtualenv, `systemctl` and `mysql` call the installer makes now writes its output
+to `/var/log/jen-install.log` (root-only, appended per run), the screen keeps the
+progress line, apt is told not to prompt or print its epilogue, a failing step
+prints the last twenty lines of the log and its path, and the final summary names
+it. Commands whose arguments or input carry the database password record only what
+the step is.
+
+CI gains the two things that were missing: a step that points an unattended install
+at a database that does not answer and requires it to stop, non-zero, with the SQL
+and a reason and nothing installed; and a job on a machine with no database server
+that lets the installer install MariaDB, and proves the database, the user, a healthy
+Jen, the log, apt's silence on the screen, and that uninstalling Jen leaves the
+database server alone.
+
 ## [5.67.0-beta.17] - 2026-10-03
 
 Beta channel. Stacked on 5.67.0-beta.16. An audit of beta.13 to beta.16 found one

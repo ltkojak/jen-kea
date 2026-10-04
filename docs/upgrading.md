@@ -477,3 +477,21 @@ backup holds — and its result says how many rows of the config backend it left
 Nothing to do on upgrade; if you had to work around the failure by hand, the migration now
 completes. Global search also finds an IPv6 reservation that is more than twenty hosts into
 its subnet (IPv6 management only).
+
+## The installer: Jen's database cannot be skipped, MariaDB can be installed for you, and there is a log
+
+Only for a **fresh install** or a **reinstall that asks for new configuration**; an
+upgrade of an installed Jen keeps its configuration and none of this appears. From
+5.67.0-beta.18 `sudo ./install.sh` has no "continue without it" for Jen's own database:
+Jen cannot start without it, and an installer that "continued" ended without installing
+anything. If the database does not answer you can retry, edit the values, **install
+MariaDB on this machine and create the database** (offered only when the host is this
+machine, never without your `y`), or quit. An unattended install (`--unattended` or an
+answers file) whose Jen database does not answer now **stops with a non-zero status and the
+SQL to create it** instead of ending silently; add `JEN_DB_INSTALL_LOCAL=yes` to the answers
+file to let it install MariaDB locally and create the database. Everything the installer
+runs — `apt-get`, `pip`, the virtualenv, `systemctl`, `mysql` — now writes its output to
+`/var/log/jen-install.log` (root-only) and the screen shows only the progress line. If you
+script the installer and relied on it carrying on past an unreachable Jen database, point
+`JEN_DB_HOST` at a reachable one or set the opt-in. `uninstall.sh` still never removes the
+database server or Jen's database.
