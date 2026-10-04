@@ -18,6 +18,11 @@ docs/release-history/upgrading-5.56.3-to-5.66.0.md. The floor here moves to
 the first beta after that promotion (5.67.0-beta.1) in the same commit —
 CLAUDE.md's "Release channels" step 4 names this as standard from here on.
 
+v5.68.0-beta.1 (Q134) — the first release after the 5.67.0 promotion starts a fresh "Upgrading from 5.67.0" page, the old
+one moved to docs/release-history/upgrading-5.66.0-to-5.67.0.md, and the floor moves to 5.68.0-beta.1 in the same commit
+(5.67.0 itself is the baseline; its eighteen beta headings are folded onto the 5.67.0 entry's Beta history line and are
+no longer asked of this page).
+
 Also covers docs/runbooks.md (Q105 b): it exists and is linked from the two
 places an operator would actually go looking for it.
 """
@@ -36,7 +41,7 @@ _CHANGELOG = _ROOT / "CHANGELOG.md"
 _ADMIN_GUIDE = _ROOT / "docs" / "admin-guide.md"
 _SECURITY = _ROOT / "SECURITY.md"
 
-_FLOOR = "5.67.0-beta.1"  # the oldest heading upgrading.md must cover — 5.66.0 itself is the baseline
+_FLOOR = "5.68.0-beta.1"  # the oldest heading upgrading.md must cover — 5.67.0 itself is the baseline
 
 
 def _beta_history_versions() -> list[str]:

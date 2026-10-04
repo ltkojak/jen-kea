@@ -74,6 +74,10 @@ docker compose -f docker-compose.mysql.yml up -d
 
 ---
 
+![Investigating a client: one page for its lease, reservation, device, last alert and every diagnostic](docs/images/investigate-client.png)
+
+*One page for one client — its lease, reservation and device, the last alert about it, and Explain, Trace, Timeline, DNS, Config and the config changes that touched it, reachable from every row that names a client and from the search box.*
+
 ![Jen dashboard](docs/images/dashboard.png)
 
 <details>
@@ -123,7 +127,7 @@ Full detail, with the version each capability shipped in, is in [`docs/features.
 | Leases & reservations | Browse/release/export leases; convert a dynamic lease to a reservation; bulk CSV import | `host_cmds` hook for adding, editing and deleting reservations (leases themselves are read from Kea's database) |
 | Subnets, pools & options | Edit pools, lease times, gateway/DNS, shared networks, DHCP options at every level, client classes, config history with restore | SSH + the [Kea host helper](#glossary) |
 | Import | From a Windows DHCP export or an ISC `dhcpd.conf`, reviewed and previewed before applying | SSH + the Kea host helper |
-| Diagnose | Investigate / Explain / Trace / Timeline for one client; Configuration Doctor; DNS↔DHCP reconcile | Trace needs the Kea host helper |
+| Diagnose | **Investigate a client** — a MAC, IPv4/IPv6 address, DUID or hostname resolved once, with Explain, Trace, Timeline, DNS, Config and a Changes tab (the config revisions that touched this client), one click from every row that names a client; Configuration Doctor; DNS↔DHCP reconcile | Trace needs the Kea host helper; IPv6 and DUID subjects need IPv6 turned on |
 | Plan | Pool exhaustion forecast; Kea 3.2 readiness check | — |
 | High availability | Live HA state, a per-subnet lease comparison across the pair, and a guided maintenance stepper | the `libdhcp_ha` hook |
 | Packet health | Drops, parse failures and NAKs from Kea's own counters, with Kea 3.2's richer drop reasons | Kea 3.2+ for drop-reason detail |

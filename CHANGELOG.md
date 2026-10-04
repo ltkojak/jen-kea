@@ -2,6 +2,83 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.68.0-beta.1] - 2026-10-04
+
+Beta channel. Stacked on 5.67.0, the first release after that promotion. The
+Investigation page (`/client`, 5.63.0) has been the product's best idea since it
+shipped — one identifier resolved once, with Explain, Trace, Timeline, DNS and
+Config onto it — and nobody who had not read the code knew it was there. This
+release makes it the front door.
+
+**It is one click from everywhere a client is named.** Every row that names a
+client carries the same *Investigate* action, written by exactly one macro
+(`templates/_investigate.html`, with a JavaScript twin for the three dashboard
+widgets that are built in the browser) so the next page cannot forget it. It was
+already on lease, reservation and device rows and in search results; it is new on the
+dashboard's recent-leases table, events feed, top-devices table and alert strip,
+on the Alerts log (for an alert whose message names a client — read out of the
+message, so offered only to a caller who may see every subnet, since the message is
+what a restricted caller is not shown), and in the Timeline page's own header. A
+scan test refuses any core template that prints a MAC without importing the macro
+unless it is on a short list of pages that are themselves part of the
+investigation, each with its reason. The Reports page draws charts, not client rows,
+so it has nothing to link. The search box now goes straight to the client for one
+whole identifier — a MAC, an IPv4 address, or (with IPv6 on) an IPv6 address or a
+DUID — and a hostname, a fragment or a partial MAC still searches; the Investigation
+page links back to the list (`/search?q=…&list=1`) for anyone who wanted it.
+
+**IPv6 addresses and DUIDs are accepted.** The page used to answer "IPv6 and DUID
+lookups are not supported yet". An address now resolves through the lease table (or
+a v6 reservation of it) to the DUID that holds it, and a DUID goes straight to its
+leases and its reservation, delegated prefixes and excluded prefixes included. The
+MAC — the hardware address Kea captured on a lease, else the one a DUID-LL or
+DUID-LLT embeds — carries the subject on into everything keyed by MAC, so the
+device, the IPv4 leases and reservations and the Timeline show for the same
+client, and the page says which of the two the MAC is: *captured by Kea*, or *read
+from the DUID*, which is Jen's own inference. Explain, Trace and Config are DHCPv4
+engines and say so in one line on the tab; a client Jen can find no MAC for says it
+has no IPv4 identity Jen can see. All of it is gated on `ipv6_enabled` (with it off,
+the page says IPv6 is off and looks nothing up), and a v6 object is judged on its v6
+subnet's paired v4 subnet — the rule Devices and global search already apply, an
+unpaired v6 subnet being for callers who may see every subnet. A subject found only
+through objects the caller may not see loses its MAC, DUID, device and v4 side
+together; the one thing kept is the MAC inside a DUID the caller typed themselves.
+
+**A seventh tab: Changes.** For the newest 50 config revisions of each Kea server, Jen
+compares each revision with the one before it over only the parts of the config that
+decide what this client gets — its subnet (by id or by CIDR, so a renumbered subnet is
+still found), the shared network it sits in, the pools its addresses fall in, the
+classes that guard that path or that it matches, and its own reservation with any
+option on it — and lists the revisions where something there moved: the lines that
+moved, who changed it, when, the summary, and whether it was Jen's or someone editing
+the file on the host. A change to a neighbour's reservation, to a pool it is not in or to a
+global option is not on the client's path and is not shown. Values are masked as on
+the history page; revisions follow that page's access rule, so the tab is offered only
+to an admin who may see every subnet. A reservation kept in Kea's host database is not
+part of the config file, so a change to one cannot appear here, and the tab says so.
+The cost is measured in the module's docstring and re-measured by a test on every run
+(about 0.2 s per server for 51 revisions of a 200-subnet config).
+
+**The alert line is judged on the client.** The Overview's "last alert" was
+unrestricted-only because `alert_log` rows carry no subnet. It is now shown to a
+restricted caller when the client they are looking at is in a subnet they may see —
+an alert about *their* client — as its type, status and time, never its message. The
+authorization matrix gains the rows, and `docs/ARCHITECTURE.md` section 2 says
+exactly that.
+
+The first run of the upgrade-from-stable CI job from the newly promoted 5.67.0 caught
+its own script: the job installed the pinned stable release by feeding the 5.66.0
+wizard's twenty answers to that release's installer, and 5.67.0's installer asks three
+questions, so the old answers landed on a menu it never expected and the job looped on
+"Please enter r, e or q". It now installs the stable release the way an operator
+scripts one (`--answers` and `--unattended`), accepts none of the failures the older
+release was allowed, and drops the two steps that existed only for its bugs; nothing in
+Jen changed for it.
+
+Docs: a rewritten "Investigating a client" section of the user guide, the features page,
+`docs/ARCHITECTURE.md`, and a screenshot of the page on the demo dataset as the
+README's first image.
+
 ## [5.67.0] - 2026-10-04
 
 *Stable. Everything below shipped beta-first between 2026-09-30 and 2026-10-04.*
