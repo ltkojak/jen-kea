@@ -365,7 +365,11 @@ class TestTheHealthRow:
         inv.turn_on(world.servers[0], 5)
         monkeypatch.setattr(inv, "_now", lambda: NOW + timedelta(minutes=30))
         c = self._check()
-        assert c.status == "fail" and "should have ended" in c.detail and "turn logging off from Trace or Servers" in c.fix_hint
+        assert (
+            c.status == "fail"
+            and "should have ended" in c.detail
+            and "turn logging off from Trace or Servers" in c.fix_hint
+        )
         assert c.fix_url == "/tools/trace"
 
     def test_it_is_registered_in_the_kea_group_in_step_with_the_runner(self):
