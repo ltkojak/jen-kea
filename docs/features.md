@@ -64,10 +64,13 @@ capability shipped in.
   can't evaluate instead of guessing (v5.35.0)
 
 ## Diagnose and plan
-- **Investigate a client** — one identifier (a MAC, an IPv4 address or a
-  hostname) resolved once, with Overview, Explain, Trace, Timeline, DNS and
-  Config tabs onto it, every result stamped with when it was read, and the
-  same subnet-access rules on every tab (v5.63.0)
+- **Investigate a client** — one identifier (a MAC, an IPv4 or IPv6
+  address, a DUID or a hostname) resolved once, with Overview, Explain,
+  Trace, Timeline, DNS, Config and Changes tabs onto it, every result
+  stamped with when it was read, and the same subnet-access rules on every
+  tab (v5.63.0). One click from every row that names a client and from the
+  search box; IPv6 and DUID subjects, and a Changes tab of the config
+  revisions that touched the client's path (v5.68.0)
 - **Getting started** — a first-hour checklist with a nav reminder until
   it's done (v5.39.0), plus a guided `/setup` wizard a fresh install lands
   on once (v5.67.0)

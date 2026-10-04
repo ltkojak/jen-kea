@@ -203,6 +203,13 @@ def active_leases(rng: random.Random | None = None) -> list[dict]:
     return rows
 
 
+def featured_client() -> dict:
+    """The one client the Investigation screenshot (docs/images/investigate-client.png, the README's first image) is of:
+    the first Production lease, which seed() ALSO gives a reservation and the first new-lease alert names — so its
+    Overview shows a lease, a reservation, a device and a last alert at once."""
+    return next(lease for lease in active_leases(random.Random(20260921)) if lease["subnet_id"] == 10)
+
+
 def reservations(rng: random.Random | None = None, count: int = 30) -> list[dict]:
     """~30 reservations, spread across subnets in proportion to their lease
     counts, about a dozen carrying a `notes` value."""
@@ -353,12 +360,18 @@ def alert_log_rows(rng: random.Random | None = None) -> list[dict]:
         "daily_summary",
     )
     rows = []
+    named = False
     for i, kind in enumerate(kinds):
+        message = f"{kind.replace('_', ' ').title()} alert"
+        if kind == "new_lease" and not named:
+            named = True
+            featured = featured_client()
+            message = f"IP: {featured['ip']}\nMAC: {featured['mac']}\nHostname: {featured['hostname']}"
         rows.append(
             {
                 "channel_type": "telegram",
                 "alert_type": kind,
-                "message": f"{kind.replace('_', ' ').title()} alert",
+                "message": message,
                 "status": "ok",
                 "error": "",
                 "sent_at": now - timedelta(minutes=rng.randint(5, 1400) + i),
@@ -441,6 +454,13 @@ def seed(conn) -> None:
                     "INSERT INTO reservation_notes (host_id, notes) VALUES (LAST_INSERT_ID(), %s)",
                     (res["notes"],),
                 )
+        # the featured client (see featured_client) is also reserved at the address it holds
+        featured = featured_client()
+        cur.execute(
+            "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
+            "VALUES (UNHEX(%s), 0, %s, INET_ATON(%s), %s)",
+            (_hex(featured["mac"]), featured["subnet_id"], featured["ip"], featured["hostname"]),
+        )
         for dev in devices(random.Random(20260921)):
             cur.execute(
                 "INSERT INTO devices (mac, device_name, last_ip, last_hostname, last_subnet_id, "

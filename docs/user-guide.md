@@ -210,18 +210,31 @@ Duplicate IPs are skipped automatically. Any rows with validation errors are rep
 
 **Getting started** (admins; the nav pill, or `/getting-started`) is the first-hour checklist: each row is one thing worth having in place — SSH and the Kea host helper current, HTTPS, MFA on your account, an alert channel, a backup, a second server for HA — with a **Fix** link on any that isn't. The pill in the top bar shows `done/total` until everything is green. A superadmin can hide the pill for the whole install with **Dismiss the nav reminder**; the page itself stays available.
 
-## Investigate a client (v5.63.0)
+## Investigating a client (v5.63.0, front door in v5.68.0)
 
-**Network → Investigate**, or *Investigate* in the action menu of any lease, reservation or device inventory row, or from a search result. Give it a MAC, an IP, or a hostname and Jen resolves it once — the same identity every tab below reads — then lays out six tabs onto it:
+The Investigation page is where every question about one client ends up, so it is one click from everywhere a client is named:
 
-- **Overview** — the device, its active lease(s) and reservation(s), an IPv6 address if it has one, the most recent alert that mentioned it, and a freshness line showing exactly when the device/lease/reservation data on screen was read.
+- **The search box** (top bar, or the Search page): type one whole MAC, IPv4 address, IPv6 address or DUID and it goes straight to the client; a hostname, a fragment or a partial MAC still lists results (the Investigation page links back to that list).
+- **Every row that names a client** has an *Investigate* action — the action menu of a lease, reservation or device row, a search result, the dashboard's recent leases, events and top devices, the Alerts log (for alerts whose message names a client), the dashboard's alert strip, and the header of the Timeline page.
+- **Network → Investigate** opens the empty form.
+
+Give it a MAC, an IPv4 or IPv6 address, a DUID (`duid:00030001…`, or bare hex), or a hostname. Jen resolves it once — the same identity every tab below reads — then lays out seven tabs onto it:
+
+- **Overview** — the device, its active lease(s) and reservation(s), its IPv6 leases and reservation (with any delegated prefix and excluded prefix) when IPv6 is on, the most recent alert that mentioned it, and a freshness line showing exactly when the data on screen was read.
 - **Explain** — the same step-by-step decision Kea would make for this client (see below).
 - **Trace** — the same tail-of-the-Kea-log view (see below); admin-only and needs access to every subnet, same as the standalone page.
 - **Timeline** — the same merged event/audit/alert history (see below).
 - **DNS** — checks just this client's own reservation/lease name against DNS, the same forward/reverse verification the DDNS Reconcile tab runs fleet-wide.
 - **Config** — the effective subnet, pool, options and classes from the same Explain evaluation, plus the live configuration's SHA so you can tell at a glance whether it's changed since you last looked.
+- **Changes** — which Kea config changes touched *this client*. For the newest 50 revisions of each server's history, Jen compares each revision with the one before it over only the parts of the config that decide what this client gets: its subnet (by id or by CIDR), the shared network the subnet sits in, the pools its addresses fall in, the classes that guard that path or that it matches, and its own reservation with any option on it. A revision that changed none of those is not listed; one that did shows the lines that moved in the matching part, who made the change, when, its summary, and whether it was Jen's (`jen`, `restore`) or someone editing the file on the host (`external`). Each revision links to the full diff on the config history page. This tab needs what that page needs — an admin who may see every subnet — and is not offered to anyone else. A reservation kept in Kea's host database is not part of the config file, so a change to one does not show here.
 
-A hostname that more than one client currently uses shows every match instead of guessing which one you meant. Every tab is subnet-restricted exactly the way the page it draws from already is; a client outside subnets you can access says so rather than showing anything about it. The identifier and the active tab both live in the URL, so a tab is always a page you can reload, bookmark, or send to someone else with access.
+### IPv6 addresses and DUIDs
+
+With IPv6 turned on (Settings → Kea), an IPv6 address resolves through the lease table (or a reservation of it) to the DUID that holds it, and a DUID goes straight to its leases and its reservation. The MAC then carries the page on to everything keyed by MAC: the device record, the IPv4 leases and reservations, the Timeline. Where the MAC came from is on the page: *captured by Kea* is the hardware address Kea recorded on a lease; *read from the DUID* is Jen's own reading of a DUID-LL or DUID-LLT (which embeds a link-layer address) and is only as good as the DUID. A client Jen can find no MAC for (a DUID-EN or DUID-UUID, with no captured address) is shown as the IPv6 client it is: Explain, Trace, Config and Timeline are DHCPv4 tools, and say so in one line instead of guessing. With IPv6 off, an IPv6 address or DUID says so rather than looking anything up.
+
+### What a restricted user sees
+
+A hostname that more than one client currently uses shows every match you may see instead of guessing which one you meant. Every tab is subnet-restricted exactly the way the page it draws from already is: a client outside the subnets you can access says "No client matched" — the same answer as for one that does not exist. An IPv6 lease or reservation is judged on the IPv4 subnet its IPv6 subnet is paired with (an unpaired IPv6 subnet is for users with access to every subnet). The *last alert* line is shown to you when it is about a client you may see, with its type and time but never its message, because alert messages can name a subnet. The identifier and the active tab both live in the URL, so a tab is always a page you can reload, bookmark, or send to someone else with access.
 
 ### Why did this client get this? (v5.35.0)
 

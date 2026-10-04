@@ -19,17 +19,23 @@
 </div>
 {% endmacro %}
 
+{% macro v4_note(view) %}
+{% if view.kind in ('ipv6', 'duid') %}
+<p class="u-865c33">{% if view.mac %}This tab evaluates DHCPv4, for the MAC {{ view.mac }}{% if view.mac_source == 'duid' %} (read out of the DUID by Jen — the hardware address Kea itself captured is not on any of its leases){% endif %}.{% else %}This tab evaluates the DHCPv4 decision; this client has no IPv4 identity Jen can see.{% endif %}</p>
+{% endif %}
+{% endmacro %}
+
 <div class="page-header">
     <h1>{{ icon("search", "ico-lg") }} Investigate a client</h1>
-    <p>One identifier — a MAC, an IPv4 address or a hostname — resolved once, with every diagnostic view onto it in one place.</p>
+    <p>One identifier — a MAC, an IPv4 or IPv6 address, a DUID or a hostname — resolved once, with every diagnostic view onto it in one place.</p>
 </div>
 
 <div class="card">
     <form method="GET" action="/client" autocomplete="off">
         <div class="form-row u-f0e9d3">
             <div class="form-group u-116966">
-                <label>MAC, IPv4 address or hostname</label>
-                <input type="text" name="q" class="mono" value="{{ q }}" placeholder="aa:bb:cc:dd:ee:ff, 10.0.0.50 or a hostname" autofocus>
+                <label>MAC, IP address, DUID or hostname</label>
+                <input type="text" name="q" class="mono" value="{{ q }}" placeholder="aa:bb:cc:dd:ee:ff, 10.0.0.50, 2001:db8::50, a DUID or a hostname" autofocus>
             </div>
         </div>
         <div class="u-012c80">
@@ -70,7 +76,8 @@
         <span class="u-865c33 mono" title="investigation {{ investigation_id }}">{{ investigation_id }}</span>
     </div>
     <div class="u-260fab">
-        {% if view.mac %}<div><div class="stat-label">MAC</div><div class="mono">{{ view.mac }}</div></div>{% endif %}
+        {% if view.mac %}<div><div class="stat-label">MAC{% if view.mac_source == 'duid' %} (read from the DUID){% elif view.mac_source == 'hwaddr' %} (captured by Kea){% endif %}</div><div class="mono">{{ view.mac }}</div></div>{% endif %}
+        {% if view.duid %}<div><div class="stat-label">DUID</div><div class="mono">{{ view.duid }}</div></div>{% endif %}
         {% if view.ip %}<div><div class="stat-label">IP</div><div class="mono">{{ view.ip }}</div></div>{% endif %}
         {% if view.hostname %}<div><div class="stat-label">Hostname</div><div class="mono">{{ view.hostname }}</div></div>{% endif %}
         {% if view.device %}<div><div class="stat-label">Last seen</div><div class="mono">{{ view.device.last_seen|utcfmt if view.device.last_seen else '—' }}</div></div>{% endif %}
@@ -118,13 +125,15 @@
     {% endif %}
     {% if view.leases6 %}
     <table class="rowlist">
-        <thead><tr><th>IPv6 address</th><th>Subnet</th></tr></thead>
+        <thead><tr><th>IPv6 address</th><th>Type</th><th>Subnet</th><th>Hostname</th><th>Expires</th></tr></thead>
         <tbody>
         {% for a in view.leases6 %}
-        <tr><td class="mono">{{ a.address }}{% if a.type_name == 'IA_PD' %}/{{ a.prefix_len }}{% endif %}</td><td>{{ a.subnet_id }}</td></tr>
+        <tr><td class="mono">{{ a.address }}{% if a.type_name == 'IA_PD' %}/{{ a.prefix_len }}{% endif %}</td><td>{{ a.type_name or '—' }}</td><td>{{ a.subnet_id }}</td><td>{{ a.hostname or '—' }}</td><td>{{ a.expire|utcfmt if a.expire else '—' }}</td></tr>
         {% endfor %}
         </tbody>
     </table>
+    {% elif view.kind in ('ipv6', 'duid') %}
+    <p class="u-5872de">No active IPv6 lease.</p>
     {% endif %}
 </div>
 <div class="card">
@@ -141,9 +150,60 @@
     {% else %}
     <p class="u-5872de">No reservation.</p>
     {% endif %}
+    {% if view.reservations6 %}
+    <table class="rowlist">
+        <thead><tr><th>IPv6 identifier</th><th>Subnet</th><th>Hostname</th><th>Reserved</th></tr></thead>
+        <tbody>
+        {% for h in view.reservations6 %}
+        <tr>
+            <td class="mono">{{ h.duid_hex or '—' }}</td>
+            <td>{{ h.subnet_id }}</td>
+            <td>{{ h.hostname or '—' }}</td>
+            <td class="mono">{% for r in h.reservations %}{{ r.address }}{% if r.type_name == 'IA_PD' %}/{{ r.prefix_len }}{% if r.excluded_prefix %} (excluding {{ r.excluded_prefix }}/{{ r.excluded_prefix_len }}){% endif %}{% endif %}{% if not loop.last %}<br>{% endif %}{% else %}—{% endfor %}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% elif view.kind in ('ipv6', 'duid') %}
+    <p class="u-5872de">No IPv6 reservation.</p>
+    {% endif %}
 </div>
 
+{% elif tab == "changes" %}
+{% if not changes or not changes.groups %}
+<div class="card"><p class="u-5872de">Jen has no Kea server to read config history from, or this client has nothing yet that a config could name.</p></div>
+{% else %}
+<div class="card">
+    <p class="u-865c33">Config revisions that touched this client's path — its subnet, shared network, pools, classes, and its own reservation — newest first, comparing each with the one before it. The newest {{ changes.newest }} revisions of each server are read. A reservation kept in Kea's host database is not part of the config, so a change to one is not shown here.</p>
+</div>
+{% for g in changes.groups %}
+<div class="card">
+    <div class="card-header"><span class="card-title">{{ g.server_name }} · <code>{{ g.service }}</code></span>
+        <span class="u-865c33">{{ g.scanned }} revision{{ '' if g.scanned == 1 else 's' }} compared · <a href="{{ url_for('servers.config_history', server_id=g.server_id, service=g.service) }}">full history</a></span>
+    </div>
+    {% if g.error %}
+    <p class="u-5872de">{{ g.error }}</p>
+    {% elif not g.revisions %}
+    <p class="u-5872de">{% if g.scanned %}None of those revisions changed anything on this client's path.{% else %}No earlier revision to compare against yet — the first config Jen recorded is the starting point, not a change.{% endif %}</p>
+    {% else %}
+    {% for r in g.revisions %}
+    <div class="u-8bfeea">
+        <p><a href="{{ url_for('servers.config_history_detail', server_id=g.server_id, rev_id=r.id) }}">Revision #{{ r.id }}</a> · {{ r.created_at|utcfmt if r.created_at else '—' }}{% if r.username %} · {{ r.username }}{% endif %} · <span class="badge badge-dynamic">{{ r.source or 'jen' }}</span>{% if r.summary %} — {{ r.summary }}{% endif %}</p>
+        {% for c in r.changes %}
+        <p class="u-865c33"><strong>{{ c.label }}</strong> — {{ c.kind }}</p>
+        <pre class="u-6dc1d1"><code>{% for line in c.lines %}{{ line }}
+{% endfor %}{% if c.more %}… {{ c.more }} more line{{ '' if c.more == 1 else 's' }}
+{% endif %}</code></pre>
+        {% endfor %}
+    </div>
+    {% endfor %}
+    {% endif %}
+</div>
+{% endfor %}
+{% endif %}
+
 {% elif tab == "explain" %}
+{{ v4_note(view) }}
 {% if view.mac and chosen_subnet is none %}
 {{ subnet_picker(q, 'explain', subnet_choices) }}
 {% elif view.mac %}
@@ -152,14 +212,15 @@
 </div>
 <div class="u-865c33">Evaluated against subnet {{ chosen_subnet }} ({{ chosen_how }}).</div>
 {% else %}
-<div class="card"><p class="u-5872de">Explain needs a MAC — this identifier didn't resolve to one.</p></div>
+{% if view.kind not in ('ipv6', 'duid') %}<div class="card"><p class="u-5872de">Explain needs a MAC — this identifier didn't resolve to one.</p></div>{% endif %}
 {% endif %}
 
 {% elif tab == "trace" %}
+{{ v4_note(view) }}
 {% if not trace_allowed %}
 <div class="card"><p class="u-5872de">Trace needs admin access to every subnet (docs/ARCHITECTURE.md §2).</p></div>
 {% elif not view.mac %}
-<div class="card"><p class="u-5872de">Trace needs a MAC — this identifier didn't resolve to one.</p></div>
+{% if view.kind not in ('ipv6', 'duid') %}<div class="card"><p class="u-5872de">Trace needs a MAC — this identifier didn't resolve to one.</p></div>{% endif %}
 {% else %}
 <div hx-get="/tools/trace?mac={{ view.mac|urlencode }}" hx-trigger="load" hx-target="this" hx-swap="innerHTML">
     <p class="u-5872de">Loading…</p>
@@ -167,9 +228,13 @@
 {% endif %}
 
 {% elif tab == "timeline" %}
+{% if view.kind in ('ipv6', 'duid') and not view.mac %}
+<div class="card"><p class="u-5872de">The Timeline follows a MAC or an IPv4 address; this client has neither that Jen can see, so there is nothing to put on it yet.</p></div>
+{% else %}
 <div hx-get="/timeline?mac={{ view.mac|urlencode if view.mac else '' }}{% if not view.mac and view.ip %}&ip={{ view.ip|urlencode }}{% endif %}" hx-trigger="load" hx-target="this" hx-swap="innerHTML">
     <p class="u-5872de">Loading…</p>
 </div>
+{% endif %}
 
 {% elif tab == "dns" %}
 <div class="card">
@@ -191,6 +256,7 @@
 </div>
 
 {% elif tab == "config" %}
+{{ v4_note(view) }}
 {% if view.mac and chosen_subnet is none %}
 {{ subnet_picker(q, 'config', subnet_choices) }}
 {% elif config_result %}
@@ -244,7 +310,7 @@
 </div>
 {% endif %}
 {% if chosen_how %}<div class="u-865c33">Subnet {{ chosen_subnet }} — {{ chosen_how }}.</div>{% endif %}
-{% else %}
+{% elif view.mac %}
 <div class="card"><p class="u-5872de">Could not read the effective configuration for this client — see the Explain tab.</p></div>
 {% endif %}
 

@@ -3,17 +3,20 @@ jen/routes/client.py
 ──────────────────────
 v5.63.0 (Q82) — GET /client?q=<identifier>&tab=<name>: the Investigation
 page. One identifier, resolved once through jen.services.client_subject,
-with six tabs onto it: Overview (the subject itself, freshness stamps),
+with seven tabs onto it: Overview (the subject itself, freshness stamps),
 Explain, Trace and Timeline (each embedded via htmx from the existing
 page's own HX-partial branch — the identical result, not a re-derived
 one), DNS (dns_reconcile.reconcile over just this subject's own names),
 Config (the same Explain evaluation, presented as effective subnet/pool/
-options/classes, plus the config SHA).
+options/classes, plus the config SHA) and, since v5.68.0-beta.1 (Q134),
+Changes (the config revisions that touched this client's path —
+jen.services.client_changes — for an admin who may see every subnet).
+An IPv6 address or a DUID is a subject too (client_subject._resolve_v6).
 
 Tabs are real query-string state (`?tab=`), not a client-side fragment —
 each is independently linkable, reloadable, and (Explain/Trace/Timeline)
 loads its own htmx fetch only when it's the active tab, so a page load
-never pays for six tabs' worth of work when the caller looked at one.
+never pays for seven tabs' worth of work when the caller looked at one.
 """
 
 import hashlib
@@ -25,6 +28,9 @@ from datetime import datetime, timezone
 from flask import Blueprint, render_template, request
 from flask_login import current_user, login_required
 
+import jen.services.kea6 as __kea6
+from jen import extensions
+from jen.services import client_changes as __changes
 from jen.services import client_subject as __subject
 from jen.services import config_revisions as __rev
 from jen.services import dns_reconcile as __reconcile
@@ -35,21 +41,28 @@ from jen.services.subnet_context import dhcp4_config
 logger = logging.getLogger(__name__)
 bp = Blueprint("client", __name__)
 
-TABS = ("overview", "explain", "trace", "timeline", "dns", "config")
+TABS = ("overview", "explain", "trace", "timeline", "dns", "config", "changes")
 
 
-def _alert_matcher(mac: str, ip: str):
-    """A compiled pattern that finds this client's MAC or IP in alert text as a WHOLE token:
-    `10.0.0.5` must not match `10.0.0.50` (v5.65.2, Q91 c')."""
+_ALERT_TOKEN_SLOTS = 6  # the LIKE slots of _alert_status's one fixed statement
+
+
+def _alert_matcher(mac: str, ip: str, addresses=()):
+    """A compiled pattern that finds this client's MAC or an address of it in alert text as a WHOLE token:
+    `10.0.0.5` must not match `10.0.0.50` (v5.65.2, Q91 c'), nor `2001:db8::1` match inside `2001:db8::10`
+    (v5.68.0-beta.1, Q134: IPv6 addresses are tokens too, bounded by hex digits and colons)."""
     parts = []
     if mac:
         parts.append(r"(?<![0-9a-f:])" + re.escape(mac.lower()) + r"(?![0-9a-f:])")
-    if ip:
-        parts.append(r"(?<![0-9.])" + re.escape(ip) + r"(?![0-9.])")
+    for token in dict.fromkeys(a for a in (ip, *addresses) if a):
+        if ":" in token:
+            parts.append(r"(?<![0-9a-f:])" + re.escape(token.lower()) + r"(?![0-9a-f:])")
+        else:
+            parts.append(r"(?<![0-9.])" + re.escape(token) + r"(?![0-9.])")
     return re.compile("|".join(parts), re.IGNORECASE) if parts else None
 
 
-def _alert_status(mac: str, ip: str) -> dict | None:
+def _alert_status(mac: str, ip: str, addresses=()) -> dict | None:
     """The most recent alert_log row mentioning this client, or None — a
     lightweight status line for the Overview tab, not the full Timeline.
 
@@ -57,19 +70,22 @@ def _alert_status(mac: str, ip: str) -> dict | None:
     alert may be shown at all: an unrestricted user always, a restricted one only for a client whose view names
     a subnet they may see. Only type, status and time come back - never the message. The SQL LIKE is a cheap
     prefilter; the decision is a word-boundary match in Python."""
-    matcher = _alert_matcher(mac, ip)
+    matcher = _alert_matcher(mac, ip, addresses)
     if matcher is None:
         return None
     import jen.models.db as __db
 
-    mac_pat = f"%{mac}%" if mac else "\x00\x00\x00"
-    ip_pat = f"%{ip}%" if ip else "\x00\x00\x00"
+    # one LIKE per token (the MAC, an address, up to four more) — a cheap prefilter over ONE fixed statement (no
+    # SQL is built from the tokens); an unused slot is a pattern that matches nothing. The decision is `matcher`.
+    tokens = list(dict.fromkeys(t for t in (mac, ip, *addresses) if t))[:_ALERT_TOKEN_SLOTS]
+    patterns = [f"%{t}%" for t in tokens] + ["\x00\x00\x00"] * (_ALERT_TOKEN_SLOTS - len(tokens))
     try:
         with __db.jen_db() as db, db.cursor() as cur:
             cur.execute(
                 "SELECT sent_at, alert_type, status, message FROM alert_log WHERE message LIKE %s OR message LIKE %s "
+                "OR message LIKE %s OR message LIKE %s OR message LIKE %s OR message LIKE %s "
                 "ORDER BY sent_at DESC LIMIT 200",
-                (mac_pat, ip_pat),
+                tuple(patterns),
             )
             for row in cur.fetchall():
                 if matcher.search(row.get("message") or ""):
@@ -147,13 +163,36 @@ def _dns_tab(view):
         return [], "Could not check DNS. Check server logs for details."
 
 
+def _matched_classes(view) -> list[str]:
+    """The client classes the Explain evaluation says this client matches, for the Changes tab's path (a class it matches
+    belongs to its path whether or not any subnet names it). Never raises: no Kea answer, no subnet fixed or no MAC is
+    simply no classes."""
+    if not view.mac:
+        return []
+    try:
+        client, subnet_id, _how = _explain_inputs(view)
+        cfg = dhcp4_config() if subnet_id is not None else None
+        if not cfg:
+            return []
+        result = explain(cfg, client, subnet_id=subnet_id, reservations=view.reservations, lease=view.lease)
+        return [c["name"] for c in (result.get("classes") or []) if c.get("matched") is True]
+    except Exception as e:
+        logger.warning(f"client: matched-class lookup for the Changes tab failed: {e}")
+        return []
+
+
 @bp.route("/client")
 @login_required
 @diagnostic_surface(subject="client")
 def client_page():
     q = (request.args.get("q") or "").strip()
+    # v5.68.0-beta.1 (Q134 c): the Changes tab reads config revisions, which are admin content under
+    # /servers/<id>/config-history (an admin who may see every subnet) - the tab follows that rule and is not even
+    # offered to anyone else
+    changes_allowed = bool(current_user.role in ("superadmin", "admin") and current_user.all_subnets)
+    tabs = tuple(t for t in TABS if t != "changes" or changes_allowed)
     tab = request.args.get("tab", "overview")
-    if tab not in TABS:
+    if tab not in tabs:
         tab = "overview"
 
     investigation_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ-") + secrets.token_hex(3)
@@ -164,9 +203,12 @@ def client_page():
     if q:
         accessible_ids = None if current_user.all_subnets else set(get_accessible_subnet_map())
         subject = __subject.resolve(q, accessible_ids=accessible_ids, all_subnets=current_user.all_subnets)
-        if subject.kind in ("ipv6", "duid"):
-            unsupported = "IPv6 and DUID lookups are not supported yet — search by the client's MAC."
-        elif subject.kind in ("mac", "ipv4", "hostname") and subject.found:
+        if subject.kind in ("ipv6", "duid") and not __kea6.is_ipv6_enabled():
+            unsupported = (
+                "IPv6 is turned off in Jen, so an IPv6 address or a DUID cannot be looked up. "
+                "Turn it on under Settings → Kea, or search by the client's MAC."
+            )
+        elif subject.kind in ("mac", "ipv4", "hostname", "ipv6", "duid") and subject.found:
             view = __subject.authorize(subject, rule="per_object", accessible_ids=accessible_ids)
             # v5.63.0 (Q82) — `view.found` alone isn't the right signal here:
             # a blanked device dict (placement fields None, bookends kept)
@@ -186,7 +228,7 @@ def client_page():
     # (v5.68.0-beta.1, Q134; docs/ARCHITECTURE.md §2.)
     alert = None
     if view and not view.candidates and (current_user.all_subnets or __subject.names_a_subnet(view)):
-        alert = _alert_status(view.mac, view.ip)
+        alert = _alert_status(view.mac, view.ip, [a["address"] for a in view.leases6])
 
     trace_allowed = bool(current_user.role in ("superadmin", "admin") and current_user.all_subnets)
 
@@ -204,11 +246,23 @@ def client_page():
         if tab == "dns":
             dns_results, dns_error = _dns_tab(view)
 
+    changes = None
+    if view and not view.candidates and tab == "changes" and changes_allowed:
+        changes = __changes.for_view(
+            view,
+            extensions.KEA_SERVERS,
+            subnet_map=extensions.SUBNET_MAP,
+            subnet6_map=extensions.SUBNET6_MAP,
+            ipv6_on=__kea6.is_ipv6_enabled(),
+            classes=_matched_classes(view),
+        )
+
     return render_template(
         "client.html",
         q=q,
         tab=tab,
-        tabs=TABS,
+        tabs=tabs,
+        changes=changes,
         subject=subject,
         view=view,
         unsupported=unsupported,

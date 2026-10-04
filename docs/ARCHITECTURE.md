@@ -213,6 +213,27 @@ the Investigation page's tabs for those three embed the SAME already-tested
 route's own result (via `hx-get` and each route's existing HX-partial
 branch), never a second, re-derived copy of the same decision.
 
+**IPv6 and DUID subjects, and the Changes tab (v5.68.0-beta.1, Q134).** `resolve()`
+now takes an IPv6 address (through lease6, or a v6 reservation of it, to the DUID
+that holds it) or a DUID (straight to its leases and reservation), gated on
+`ipv6_enabled` like every v6 path. The MAC — the hardware address Kea captured on a
+lease, else the one a DUID-LL/LLT embeds, labelled `mac_source` so the page says
+which — carries the subject on into everything keyed by MAC, and Explain, Trace and
+Config stay DHCPv4 engines that say so. `authorize()` judges a v6 lease or
+reservation on its OWN v6 subnet's `paired_subnet4_id` (the rule Devices and global
+search already apply; an unpaired v6 subnet is unrestricted-only), recomputes the MAC
+from what survived (`mac_from_v6`, the one rule `resolve()` and `authorize()` share —
+a MAC that only a hidden lease supplied is never handed on), and, when a v6 subject
+was found only through objects the caller cannot see, drops its MAC, DUID, device and
+v4 side exactly as a typed IPv4 address held through a hidden lease already does; the
+one thing kept is the MAC embedded in a DUID the caller typed themselves.
+The Changes tab (`jen/services/client_changes.py`) reads `kea_config_revisions`,
+which is admin content, so it follows `/servers/<id>/config-history`'s own gate (an
+admin with access to every subnet) and is not offered to anyone else; it compares
+each of the newest 50 revisions of each server with the one before it over the
+client's path only (subnet by id or CIDR, shared network, the pools its addresses fall
+in, classes, its own config-file reservation) and shows masked values.
+
 **Doctor and Trace are read-only views over data Jen already holds.** Doctor
 (`jen/services/config_doctor.py`) is pure analysis of the config Jen already
 reads from Kea. Trace (`jen/routes/trace.py`) reads the tail of the Kea log

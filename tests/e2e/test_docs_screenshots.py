@@ -217,6 +217,31 @@ class TestDesktopScreenshots:
         _save(desktop, "reports")
 
 
+class TestInvestigationScreenshot:
+    """v5.68.0-beta.1 (Q134) — the Investigation page on the demo data: the README's FIRST image, because it is the page
+    the product is for. The featured client (demo_data.featured_client) has a lease, a reservation, a device record and a
+    new-lease alert, so the Overview shows all four and the tab strip shows the whole workspace, Changes included."""
+
+    def test_investigate_client(self, desktop, base_url):
+        featured = demo_data.featured_client()
+        desktop.goto(f"{base_url}/client?q={featured['mac']}", wait_until="load")
+        desktop.wait_for_selector("h1", timeout=15000)
+        _wait_rendered(
+            desktop,
+            "() => { const t = document.body.innerText; "
+            f"return t.includes({featured['mac']!r}) && t.includes('Last alert') && t.includes('Reservations') "
+            f"&& ({NO_LOADING_JS}); }}",
+            "investigate-client",
+        )
+        # the workspace the tab strip promises: seven tabs, Changes among them (this is an unrestricted admin)
+        tabs = desktop.evaluate(
+            "() => [...document.querySelectorAll('a[href*=\"tab=\"]')].map(a => a.textContent.trim())"
+        )
+        assert {"Overview", "Explain", "Trace", "Timeline", "DNS", "Config", "Changes"} <= set(tabs), tabs
+        _leak_guard(desktop, "investigate-client")
+        _save(desktop, "investigate-client")
+
+
 class TestSetupWizardScreenshots:
     """v5.67.0 (Q115) — the six /setup steps, feeding Q116's front-door work.
     Superadmin-only pages a fresh install would show empty; the demo

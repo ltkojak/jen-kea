@@ -28,6 +28,7 @@ def _JEN_VERSION():
 
 # the kinds of identifier jen.services.client_subject.detect_kind names that the search box hands to /client
 _GOES_TO_CLIENT_PAGE = frozenset({"mac", "ipv4"})
+_GOES_WHEN_V6_IS_ON = frozenset({"ipv6", "duid"})
 
 
 def __ip_to_int(ip):
@@ -44,8 +45,12 @@ def global_search():
     # Investigation page is the answer to it, so the search box goes straight there instead of to a list with an
     # Investigate button on every row. `list=1` is the way back to the list (the Investigation page links to it).
     # Anything that is not exactly one identifier - a hostname, a fragment, a partial MAC - still searches.
-    if request.args.get("list") != "1" and __subject.detect_kind(typed)[0] in _GOES_TO_CLIENT_PAGE:
-        return redirect(url_for("client.client_page", q=typed))
+    # An IPv6 address or a DUID goes the same way once IPv6 is on (the page resolves them through lease6 and the v6
+    # reservations); with it off the results page is what the box has always shown.
+    if request.args.get("list") != "1":
+        kind = __subject.detect_kind(typed)[0]
+        if kind in _GOES_TO_CLIENT_PAGE or (kind in _GOES_WHEN_V6_IS_ON and __kea6.is_ipv6_enabled()):
+            return redirect(url_for("client.client_page", q=typed))
     q = __auth.sanitize_search(typed)
     results = {"leases": [], "reservations": [], "devices": [], "leases6": [], "reservations6": []}
     if len(q) >= 2:

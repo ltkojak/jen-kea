@@ -296,6 +296,10 @@ for anything inside an htmx-swapped partial). `style-src` still allows `'unsafe-
 deliberately — 1,200+ inline `style=` attributes would need a real redesign to remove.
 Partial templates are `_`-prefixed and returned for HTMX swaps; none of the ones actually
 route-rendered for a swap may contain a `<script>` tag (`tests/test_csp.py` enforces it).
+A row that names a client carries the Investigate action, written ONLY by the `investigate_link`
+macro in `templates/_investigate.html` (the dashboard's browser-built widgets use its JS twin);
+`tests/test_investigate_links.py` scans every core template that prints a MAC and refuses one
+that neither imports the macro nor is on its short list of pages that are part of the investigation.
 
 - A value placed in a **JS context** — inside a `<script>` block or an `on*=` attribute —
   goes through `|tojson`, never bare `{{ }}`. HTML autoescaping is not JS escaping.

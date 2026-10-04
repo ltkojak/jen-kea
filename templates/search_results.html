@@ -121,7 +121,7 @@
             <td>{{ l.hostname or '—' }}</td>
             <td class="mono hide-mobile">{{ l.duid_hex }}</td>
             <td>{{ subnet6_names.get(l.subnet_id, 'Subnet ' ~ l.subnet_id) }}</td>
-            <td><a href="/leases?view=v6&search={{ l.address }}" class="btn btn-sm btn-secondary">View</a></td>
+            <td><a href="/leases?view=v6&search={{ l.address }}" class="btn btn-sm btn-secondary">View</a> {{ investigate_link('duid:' ~ l.duid_hex if l.duid_hex else l.address, "button") }}</td>
         </tr>
         {% endfor %}
         </tbody>
@@ -149,7 +149,7 @@
             <td class="mono hide-mobile">{{ r.duid_hex }}</td>
             <td class="mono">{{ r.addresses|join(', ') }}</td>
             <td>{{ subnet6_names.get(r.subnet_id, 'Subnet ' ~ r.subnet_id) }}</td>
-            <td><a href="/reservations?view=v6&search={{ r.duid_hex }}" class="btn btn-sm btn-secondary">View</a></td>
+            <td><a href="/reservations?view=v6&search={{ r.duid_hex }}" class="btn btn-sm btn-secondary">View</a> {{ investigate_link('duid:' ~ r.duid_hex if r.duid_hex else '', "button") }}</td>
         </tr>
         {% endfor %}
         </tbody>

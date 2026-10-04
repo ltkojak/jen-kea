@@ -147,6 +147,10 @@ class ClientSubject:
     candidates: list = field(default_factory=list)  # ambiguous hostname lookups
     fetched_at: dict = field(default_factory=dict)
     config_sha: str = ""
+    # where `mac` came from for an IPv6 or DUID subject (v5.68.0-beta.1, Q134): "hwaddr" = the hardware address Kea
+    # itself captured on a lease, "duid" = read out of a DUID-LL/DUID-LLT by Jen (an inference, labelled as one),
+    # "" = the MAC was typed or there is none
+    mac_source: str = ""
 
     @property
     def lease(self) -> dict | None:
@@ -161,7 +165,9 @@ class ClientSubject:
 
     @property
     def found(self) -> bool:
-        return bool(self.device or self.leases4 or self.reservations or self.candidates)
+        return bool(
+            self.device or self.leases4 or self.reservations or self.candidates or self.leases6 or self.reservations6
+        )
 
     def with_fetched(self, **stamps) -> "ClientSubject":
         """A copy with `fetched_at` merged (frozen dataclass — callers
@@ -367,6 +373,117 @@ def load_leases6(mac: str, accessible_v4_ids=None) -> list[dict]:
         return []
 
 
+def _canonical_v6(text: str) -> str:
+    """The compressed lowercase text of an IPv6 address, or "" when `text` is not one."""
+    try:
+        return str(ipaddress.IPv6Address((text or "").strip()))
+    except ValueError:
+        return ""
+
+
+def _v6_enabled() -> bool:
+    """IPv6 management is on (the `ipv6_enabled` setting) - every v6 path checks it before it touches anything."""
+    try:
+        from jen.services import kea6 as __kea6
+
+        return __kea6.is_ipv6_enabled()
+    except Exception:
+        return False
+
+
+def _paired_v4_subnet(subnet6_id):
+    """The v4 subnet id a v6 subnet is paired to, or None (an unpaired v6 subnet has no v4 subnet to inherit access from)."""
+    from jen import extensions
+
+    info = extensions.SUBNET6_MAP.get(subnet6_id)
+    return info.get("paired_subnet4_id") if info else None
+
+
+def _v6_visible(subnet6_id, ids) -> bool:
+    """May a caller whose v4 subnet ids are `ids` see something in this v6 subnet? Only through the v4 subnet it is paired
+    to - the rule Devices and global search already apply (an unpaired v6 subnet is for unrestricted callers only)."""
+    paired = _paired_v4_subnet(subnet6_id)
+    return paired is not None and _subnet_ok(paired, ids)
+
+
+def load_leases6_for(duid_hex: str = "", address: str = "") -> list[dict]:
+    """The ACTIVE v6 leases of one DUID or one address (exact, any spelling), in the shape the Investigation page shows -
+    address, type_name (IA_NA/IA_PD), prefix_len, subnet_id, hostname, expire - plus the DUID and the MAC Kea or the DUID
+    gave (`mac`, `mac_source`). Empty when IPv6 is off. (v5.68.0-beta.1, Q134.)"""
+    if not (duid_hex or address) or not _v6_enabled():
+        return []
+    try:
+        from jen.services import kea6 as __kea6
+
+        rows = __kea6.list_lease6(show_expired=False, duid_hex=duid_hex or None, address=address or None)
+    except Exception as e:
+        logger.error(f"client_subject: v6 lease lookup failed for duid={duid_hex!r} address={address!r}: {e}")
+        return []
+    return [
+        {
+            "address": r["address"],
+            "type_name": r["lease_type_name"],
+            "prefix_len": r["prefix_len"],
+            "subnet_id": r["subnet_id"],
+            "duid_hex": (r["duid_hex"] or "").lower(),
+            "hostname": r["hostname"],
+            "mac": r["mac"],
+            "mac_source": r["mac_source"],
+            "expire": r["expire"],
+            "valid_lifetime": r["valid_lifetime"],
+            "iaid": r["iaid"],
+        }
+        for r in rows
+    ]
+
+
+def load_reservations6(duid_hex: str = "", mac: str = "", addresses=()) -> list[dict]:
+    """Every v6 reservation (`kea6.get_ipv6_reservations()` hosts, excluded prefixes included) that is this client's: by
+    DUID, by hw-address (a v6 reservation may be keyed by the MAC), or because it reserves one of `addresses`. Empty when
+    IPv6 is off. (v5.68.0-beta.1, Q134.)"""
+    want_duid = (duid_hex or "").replace(":", "").lower()
+    want_mac = mac_hex(mac).lower() if mac else ""
+    want_addrs = set()
+    for a in addresses or ():
+        try:
+            want_addrs.add(str(ipaddress.IPv6Address(a)))
+        except ValueError:
+            continue
+    if not (want_duid or want_mac or want_addrs) or not _v6_enabled():
+        return []
+    try:
+        from jen.services import kea6 as __kea6
+
+        hosts = __kea6.get_ipv6_reservations()
+    except Exception as e:
+        logger.error(f"client_subject: v6 reservation lookup failed for duid={duid_hex!r} mac={mac!r}: {e}")
+        return []
+    out = []
+    for h in hosts:
+        identifier = (h.get("duid_hex") or "").lower()
+        kind = h.get("dhcp_identifier_type")  # Kea's host identifier types: 0 hw-address, 1 duid
+        by_identifier = (kind == 1 and want_duid and identifier == want_duid) or (
+            kind == 0 and want_mac and identifier == want_mac
+        )
+        if by_identifier or any(r.get("address") in want_addrs for r in h.get("reservations", [])):
+            out.append(h)
+    return out
+
+
+def mac_from_v6(leases6, duid_hex: str) -> tuple[str, str]:
+    """(mac, source) for an IPv6 or DUID subject: the hardware address Kea captured on one of its leases ("hwaddr"),
+    else the link-layer address inside a DUID-LL/DUID-LLT ("duid" - Jen's own reading, which the page labels as such),
+    else ("", ""). Pure; the one rule resolve() and authorize() share, so a caller who may see only some of the leases is
+    never handed a MAC that came from one they may not."""
+    for lease in leases6:
+        if lease.get("mac_source") == "hwaddr" and lease.get("mac"):
+            return lease["mac"], "hwaddr"
+    from jen.services import kea6 as __kea6
+
+    mac = __kea6.extract_mac_from_duid(duid_hex) if duid_hex else None
+    return (mac, "duid") if mac else ("", "")
+
+
 def mac_from_ip(ip: str) -> str:
     """The active lease's MAC for this IP, or '' — who currently holds
     this address (an IP subject's `holder_mac`)."""
@@ -449,6 +566,77 @@ def macs_for_hostname(hostname: str, accessible_ids=None) -> set[str]:
 
 
 # ── resolve() ────────────────────────────────────────────────────────────────
+
+
+def _resolve_v6(kind: str, normalized: str, identifier: str, now) -> ClientSubject:
+    """An IPv6 address or a DUID (v5.68.0-beta.1, Q134). An address is resolved through lease6 (or a v6 reservation of it)
+    to the DUID that holds it; a DUID goes straight to its leases and its reservation. The MAC (the hardware address Kea
+    captured, else the one a DUID-LL/LLT embeds) then carries the subject on into everything keyed by MAC - the device,
+    the v4 leases and reservations - so Overview, Timeline and the Dhcp4 tabs work for the same client. With IPv6 off the
+    subject is honestly empty (the page says why). Visibility is `authorize()`'s job, as for every kind."""
+    stamps = {"device": now, "leases": now, "reservations": now}
+    typed_v6 = _canonical_v6(normalized) if kind == "ipv6" else ""
+    empty = ClientSubject(
+        kind=kind,
+        identifier=identifier,
+        ip=typed_v6,
+        duid=normalized if kind == "duid" else "",
+        fetched_at=stamps,
+    )
+    if not _v6_enabled():
+        return empty
+
+    duid = normalized.lower() if kind == "duid" else ""
+    if kind == "ipv6":
+        holders = load_leases6_for(address=typed_v6)
+        duid = holders[0]["duid_hex"] if holders else ""
+        if not duid:
+            # a reserved address nobody holds: the reservation names the DUID
+            for host in load_reservations6(addresses=(typed_v6,)):
+                if host.get("dhcp_identifier_type") == 1 and host.get("duid_hex"):
+                    duid = host["duid_hex"].lower()
+                    break
+    t_leases = datetime.now(timezone.utc)
+    leases6 = load_leases6_for(duid_hex=duid) if duid else []
+    mac, mac_source = mac_from_v6(leases6, duid)
+    reservations6 = load_reservations6(duid_hex=duid, mac=mac, addresses=(typed_v6,) if typed_v6 else ())
+    t_res6 = datetime.now(timezone.utc)
+
+    device = load_device(mac) if mac else None
+    t_device = datetime.now(timezone.utc)
+    leases4 = load_leases4(mac) if mac else []
+    reservations = load_reservations4(mac_hex(mac)) if mac else []
+    subnet_ids = {
+        *([device["last_subnet_id"]] if device and device.get("last_subnet_id") else []),
+        *(row["subnet_id"] for row in leases4 if row.get("subnet_id")),
+        *(row["subnet_id"] for row in reservations if row.get("subnet_id")),
+        *(
+            paired
+            for paired in (_paired_v4_subnet(row.get("subnet_id")) for row in [*leases6, *reservations6])
+            if paired is not None
+        ),
+    }
+    hostname = (
+        (leases4[0]["hostname"] if leases4 else "")
+        or ((device or {}).get("last_hostname") or "")
+        or next((row["hostname"] for row in [*leases6, *reservations6] if row.get("hostname")), "")
+    )
+    return ClientSubject(
+        kind=kind,
+        identifier=identifier,
+        mac=mac,
+        ip=(leases4[0]["ip"] if leases4 else "") or ((device or {}).get("last_ip") or "") or typed_v6,
+        duid=duid,
+        hostname=hostname,
+        leases4=leases4,
+        leases6=leases6,
+        reservations=reservations,
+        reservations6=reservations6,
+        device=device,
+        subnet_ids=frozenset(subnet_ids),
+        mac_source=mac_source,
+        fetched_at={"device": t_device, "leases": t_leases, "reservations": t_res6},
+    )
 
 
 def resolve(identifier: str, *, accessible_ids=None, all_subnets: bool = True, now=None) -> ClientSubject:
@@ -545,10 +733,10 @@ def resolve(identifier: str, *, accessible_ids=None, all_subnets: bool = True, n
             fetched_at={"device": t_device, "leases": t_leases, "reservations": t_res},
         )
 
-    # ipv6 / duid / unknown — not yet backed by a real lookup; returned as
-    # an honestly-empty subject rather than guessing. The Investigation
-    # page (step 2) shows "nothing found" the same way it does for a MAC
-    # or IP that resolves to nothing.
+    if kind in ("ipv6", "duid"):
+        return _resolve_v6(kind, normalized, identifier, now)
+
+    # unknown — an honestly-empty subject rather than a guess; the page says nothing matched.
     return ClientSubject(
         kind=kind,
         identifier=identifier,
@@ -587,6 +775,10 @@ def names_a_subnet(view: "ClientSubject") -> bool:
     from jen.services.timeline import subnet_id_for
 
     if subnet_id_for(view.device, view.lease, view.reservation) is not None:
+        return True
+    if view.leases6 or view.reservations6:
+        # (Q134) what `authorize` left of a v6 lease or reservation was kept because its v6 subnet is paired to a v4
+        # subnet the caller may see - for an unrestricted caller nothing is judged, and this question is not asked
         return True
     return any(_is_global(row) for row in view.reservations)
 
@@ -631,7 +823,33 @@ def authorize(
 
             device = {**device, **dict.fromkeys(_DEVICE_PLACEMENT_FIELDS)}
         mac, holder_mac = subject.mac, subject.holder_mac
-        previous, leases6 = list(subject.previous_holders), subject.leases6
+        previous = list(subject.previous_holders)
+        # v6 objects are judged on their OWN v6 subnet's paired v4 subnet (Q134: the same rule Devices and search apply)
+        leases6 = [a for a in subject.leases6 if _v6_visible(a.get("subnet_id"), ids)]
+        reservations6 = [h for h in subject.reservations6 if _v6_visible(h.get("subnet_id"), ids)]
+        duid, mac_source = subject.duid, subject.mac_source
+        v6_kind = subject.kind in ("ipv6", "duid")
+        if v6_kind and not leases6 and not reservations6:
+            # the client was found through a v6 lease or reservation in a subnet the caller cannot see: its MAC, its
+            # device, its v4 leases and reservations, and (for a typed address) its DUID are all derived from that, so
+            # none of them may show - the identifier alone is what the caller typed. The one thing a caller can derive
+            # for themselves is the MAC a DUID-LL/LLT they typed embeds: when that is the MAC the subject resolved to,
+            # what is left of its v4 side (already judged object by object above) is theirs to see.
+            embedded = mac_from_v6([], subject.duid)[0] if subject.kind == "duid" else ""
+            if embedded and embedded == subject.mac:
+                mac, mac_source = embedded, "duid"
+            else:
+                mac = holder_mac = ""
+                mac_source = ""
+                device = None
+                leases4 = []
+                reservations = []
+                previous = []
+            if subject.kind == "ipv6":
+                duid = ""
+        elif v6_kind:
+            # something v6 survived: the MAC may only come from what survived
+            mac, mac_source = mac_from_v6(leases6, duid)
         if subject.kind == "ipv4" and not leases4:
             # v5.65.2 (Q91) - the client holding a typed address was found through a lease in a subnet
             # the caller cannot see. Its MAC, its device, its reservations, its v6 addresses and the
@@ -656,6 +874,10 @@ def authorize(
         ip = subject.ip
         if subject.kind == "mac":
             ip = (leases4[0].get("ip") if leases4 else "") or ((device or {}).get("last_ip") or "")
+        elif v6_kind:
+            typed_v6 = _canonical_v6(subject.identifier) if subject.kind == "ipv6" else ""
+            ip = (leases4[0].get("ip") if leases4 else "") or ((device or {}).get("last_ip") or "") or typed_v6
+            hostname = hostname or next((r["hostname"] for r in [*leases6, *reservations6] if r.get("hostname")), "")
         candidates = []
         if subject.candidates:
             resolve_fn = resolver or resolve
@@ -672,6 +894,9 @@ def authorize(
             device=device,
             leases4=leases4,
             leases6=leases6,
+            reservations6=reservations6,
+            duid=duid,
+            mac_source=mac_source,
             reservations=reservations,
             ip=ip,
             hostname=hostname,

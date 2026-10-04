@@ -152,6 +152,25 @@ def list_revisions(server_id: int, service: str, limit: int = 100) -> list[dict]
         return []
 
 
+def recent_with_config(server_id: int, service: str, limit: int) -> list[dict]:
+    """The newest `limit` revisions of one (server, service), newest first, each with its config DECRYPTED — for a caller
+    that diffs adjacent revisions in memory (the Investigation page's Changes tab) and so reads them in ONE query instead of
+    one `previous()` round trip per row. Raises SecretDecryptError exactly as `get()` does (the caller shows it as its own
+    condition); a database error is logged and returns []."""
+    try:
+        with _jen_db() as db, db.cursor() as cur:
+            cur.execute(
+                "SELECT id, server_id, service, sha256, config, summary, username, source, created_at "
+                "FROM kea_config_revisions WHERE server_id=%s AND service=%s ORDER BY id DESC LIMIT %s",
+                (server_id, service, max(1, min(int(limit), 500))),
+            )
+            rows = list(cur.fetchall())
+    except Exception as e:
+        logger.warning(f"config_revisions.recent_with_config failed: {e}")
+        return []
+    return [_decrypted(row) for row in rows]
+
+
 def count(server_id: int, service: str | None = None) -> int:
     """How many revisions are stored for a server (optionally one service).
     Used for the "Config history (N)" link on the /servers page."""

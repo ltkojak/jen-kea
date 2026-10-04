@@ -298,7 +298,14 @@ def get_lease6_mac(hwaddr_hex: str, duid_hex: str):
     return extract_mac_from_duid(duid_hex)
 
 
-def list_lease6(subnet_id: int = None, lease_type: int = None, search: str = None, show_expired: bool = False) -> list:
+def list_lease6(
+    subnet_id: int = None,
+    lease_type: int = None,
+    search: str = None,
+    show_expired: bool = False,
+    duid_hex: str = None,
+    address: str = None,
+) -> list:
     """
     Read lease6 rows, optionally filtered by subnet/type/search. Mirrors
     the shape jen/routes/leases.py's lease4 query builds, adapted for v6's
@@ -312,6 +319,10 @@ def list_lease6(subnet_id: int = None, lease_type: int = None, search: str = Non
     hostname and the DUID hex, over the rows the other filters (subnet, type, state) leave. IPv6 tables at Jen's scale
     are small (a lease table of a few thousand rows at most), so the full read is cheap and one code path serves
     every supported database; a fragment matches the compressed and the expanded spelling of an address.
+
+    `duid_hex` and `address` (v5.68.0-beta.1, Q134) are EXACT filters, for the Investigation page: the leases of one DUID
+    (`HEX(duid) = ...`, colons ignored) or of one address (`address = INET6_ATON(...)`, any spelling of it). An
+    `address` that is not a whole IPv6 address matches nothing rather than everything.
 
     Each dict: address, duid_hex, mac (best-effort, see get_lease6_mac),
     valid_lifetime, expire, obtained, subnet_id, pref_lifetime,
@@ -330,6 +341,15 @@ def list_lease6(subnet_id: int = None, lease_type: int = None, search: str = Non
     if lease_type is not None:
         where.append("lease_type=%s")
         params.append(lease_type)
+    if duid_hex:
+        where.append("HEX(duid) = %s")
+        params.append(duid_hex.replace(":", "").strip().upper())
+    if address:
+        canonical = _complete_v6_address(address)
+        if canonical is None:
+            return []
+        where.append("address = INET6_ATON(%s)")
+        params.append(canonical)
     python_filter = None
     if search:
         exact = _complete_v6_address(search)

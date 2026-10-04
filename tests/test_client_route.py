@@ -312,17 +312,18 @@ class TestNoSubnetGuess:
 
 
 class TestSearchBoxHonesty:
-    def test_the_box_says_ipv4_not_ip(self, logged_in_client):
+    def test_the_box_names_every_kind_of_identifier_it_takes(self, logged_in_client):
+        # v5.68.0-beta.1 (Q134 b): it takes IPv6 addresses and DUIDs now, so the label says so
         body = logged_in_client.get("/client").data.decode()
-        assert "MAC, IPv4 address or hostname" in body
+        assert "MAC, IP address, DUID or hostname" in body
 
-    def test_an_ipv6_address_is_answered_not_reported_as_no_match(self, logged_in_client):
+    def test_an_ipv6_address_with_ipv6_off_is_answered_not_reported_as_no_match(self, logged_in_client):
         body = logged_in_client.get("/client?q=2001:db8::10").data.decode()
-        assert "IPv6 and DUID lookups are not supported yet" in body and "No client matched" not in body
+        assert "IPv6 is turned off in Jen" in body and "No client matched" not in body
 
-    def test_a_duid_is_answered_too(self, logged_in_client):
+    def test_a_duid_with_ipv6_off_is_answered_too(self, logged_in_client):
         body = logged_in_client.get("/client?q=duid:00010001aabbccddeeff0011").data.decode()
-        assert "IPv6 and DUID lookups are not supported yet" in body
+        assert "IPv6 is turned off in Jen" in body and "No client matched" not in body
 
 
 class TestAlertLine:
