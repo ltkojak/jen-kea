@@ -1837,4 +1837,11 @@ with app.app_context():
     assert _s16_count("DHCP4_CLASSES_ASSIGNED") == after_restore, (
         "INVARIANT: after the restore Kea no longer logs at DEBUG"
     )
-    assert "Investigation logging is on" not in web.get("/servers").text
+    # The sweep above ran in a second process, so the web process's 30 s settings cache may still hold the old index for a moment
+    # (in the real app the scheduler and the web threads are one process and the write invalidates it) - the second stand-in.
+    for _ in range(45):
+        if "Investigation logging is on" not in web.get("/servers").text:
+            break
+        time.sleep(1)
+    else:
+        raise AssertionError("INVARIANT: once the sweep has restored it the banner goes away")
