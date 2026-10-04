@@ -73,12 +73,12 @@ def _save(page, name):
         assert f.read(8) == PNG_MAGIC, f"{name}.png is not a PNG"
 
 
-def _wait_rendered(page, predicate_js, what):
+def _wait_rendered(page, predicate_js, what, arg=None):
     with contextlib.suppress(Exception):
         # a lingering long-poll is not "still loading" — the predicate below is the real check
         page.wait_for_load_state("networkidle", timeout=15000)
     try:
-        page.wait_for_function(predicate_js, timeout=15000)
+        page.wait_for_function(predicate_js, arg=arg, timeout=15000)
     except Exception as e:
         raise AssertionError(f"{what}: page never showed real data (still 'Loading…' or empty) — {e}") from None
 
@@ -226,13 +226,24 @@ class TestInvestigationScreenshot:
         featured = demo_data.featured_client()
         desktop.goto(f"{base_url}/client?q={featured['mac']}", wait_until="load")
         desktop.wait_for_selector("h1", timeout=15000)
-        _wait_rendered(
-            desktop,
-            "() => { const t = document.body.innerText; "
-            f"return t.includes({featured['mac']!r}) && t.includes('Last alert') && t.includes('Reservations') "
-            f"&& ({NO_LOADING_JS}); }}",
-            "investigate-client",
-        )
+        wanted = {"the MAC": featured["mac"], "the last alert": "last alert", "the reservation card": "reservations"}
+        try:
+            _wait_rendered(
+                desktop,
+                # innerText applies text-transform (the stat labels are upper-cased), so compare lower-cased
+                "(wanted) => { const t = document.body.innerText.toLowerCase(); "
+                "return Object.values(wanted).every(w => t.includes(w)) && "
+                f"({NO_LOADING_JS}); }}",
+                "investigate-client",
+                arg=wanted,
+            )
+        except AssertionError:
+            seen = desktop.evaluate(
+                "(wanted) => Object.fromEntries(Object.entries(wanted).map(([k, w]) => "
+                "[k, document.body.innerText.toLowerCase().includes(w)]))",
+                wanted,
+            )
+            raise AssertionError(f"investigate-client: the page lacks part of what it should show: {seen}") from None
         # the workspace the tab strip promises: seven tabs, Changes among them (this is an unrestricted admin)
         tabs = desktop.evaluate(
             "() => [...document.querySelectorAll('a[href*=\"tab=\"]')].map(a => a.textContent.trim())"
