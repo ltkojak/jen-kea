@@ -2,6 +2,61 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.68.0-beta.2] - 2026-10-04
+
+Beta channel. Stacked on 5.68.0-beta.1. The Investigation page's Explain tab used to
+evaluate a client from its MAC alone, so every client class whose test reads the vendor
+class, the user class, the hostname, the client id or the relay agent's options came back
+"undecided — supply …" with nowhere on the page to supply them. It now evaluates the
+client Kea actually saw, says where each input came from, and says why not.
+
+**What Kea's log carries was measured, not assumed.** A new compatibility probe boots a
+throwaway kea-dhcp4 per log level, sends it one relayed DISCOVER and REQUEST carrying a
+vendor class, a user class, a client id, a hostname and a relay agent option, and records
+what the daemon logged and what it stored. The answer is the same on Kea 3.0.3, 3.2.0
+and 3.3.1. Every log line about a client carries its client id (`cid=[…]`) at any level,
+INFO included. At debuglevel 45 and up `DHCP4_CLASSES_ASSIGNED` lists the classes Kea
+assigned, and the built-in `VENDOR_CLASS_<option 60>` in that list is the vendor class.
+At 55 and up `DHCP4_QUERY_DATA` dumps the whole packet — hostname, vendor class, user
+class, client id, and the relay agent's circuit and remote ids. At INFO, and at DEBUG
+with a debuglevel of 0, 15 or 30, none of that is there. And with `store-extended-info`
+on, the lease row keeps the relay agent's options at any level. The probe now pins all of
+it on every run against the parsers Jen ships, which are also checked against the three
+versions' real log excerpts.
+
+**Inputs, each labelled by source.** Explain's client is built from the MAC, the lease
+row's client id and hostname, the lease's extended info, what Kea's log says, and what was
+typed — in that order of precedence — and an **Inputs used** card lists every input with
+where it came from. A class Kea listed as assigned is decided by what Kea said ("assigned
+by Kea at 15:10:39"), over Jen's own reading of its test. On the Investigation page's tab
+an inline form of the eight fields, pre-filled and marked by source, re-runs the evaluation
+with what you typed, and a hint names the log level that would let Jen read what is still
+missing — or says who may read the log, or that the Kea host helper is missing. Kea's log
+is read through the same helper-only `tail-log` Trace uses, for an admin with access to
+every subnet only (a log line has no subnet boundary Jen can trust), cached for thirty
+seconds and never for a host with no SSH; a lease in a subnet the caller may not see
+contributes nothing to the inputs. `?auto=0` is the old MAC-only behaviour. Nothing new
+runs as root and no sudo line changed.
+
+**Why not.** A full pool is a verdict — "pool X: eligible but FULL (254 of 254 addresses
+leased)" — with the next eligible pool and its free count as the answer, or "every
+eligible pool is full" when there is none. A reserved address held by a different client
+names the holder and when its lease ends (Kea offers the reservation only once that lease
+expires or is released) and links to the holder's own Investigation page; the holder is
+never named when its lease is in a subnet the caller cannot see. A reservation whose
+identifier type is not in `host-reservation-identifiers` is "never matched" instead of
+shown as honoured. A giaddr the subnet does not match makes the subnet-selection step
+"NOT selected". Each of these carries the config element it is about and, for an admin who
+may see every subnet, links to the Changes tab filtered to that element.
+
+**One sentence on the Overview.** "Would get 10.0.0.5 from the reservation", "Would be
+NAKed: every eligible pool is full", "Undecided: … need …" — computed from the
+lease-derived inputs and any Kea-log read already cached, so opening the Overview never
+costs a trip to the Kea host.
+
+Docs: the user guide's new "What Explain can and cannot know", with the measured levels;
+`docs/ARCHITECTURE.md`.
+
 ## [5.68.0-beta.1] - 2026-10-04
 
 Beta channel. Stacked on 5.67.0, the first release after that promotion. The

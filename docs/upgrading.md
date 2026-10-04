@@ -54,3 +54,28 @@ The Overview's *Last alert* line used to be shown only to users who may see ever
 subnet (5.68.0-beta.1). It is now shown to a restricted user as well, when the client
 they are looking at is in a subnet they may see — its type, status and time, never the
 message, which can name a subnet. Nothing changes for a user who may see every subnet.
+
+## Explain evaluates the client Kea actually saw, and says why not
+
+Nothing to do (5.68.0-beta.2). Explain, and the Investigation page's Explain and Config
+tabs, no longer start from the MAC alone: they fill in the client id and hostname from the
+client's lease, the relay agent's options from the lease when Kea runs with
+`store-extended-info`, and — for an admin with access to every subnet, through the Kea host
+helper you already have — the vendor class, user class, hostname and relay options from
+Kea's own log, each input labelled by where it came from. A class that Kea's log lists as
+assigned is decided by what Kea said. What the log carries depends on its level, and was
+measured on Kea 3.0.3, 3.2.0 and 3.3.1: the client id at any level; the assigned classes
+(and so the vendor class) at debuglevel 45 or higher; the whole packet at 55 or higher. If
+you want Explain to read those from Kea, set the `kea-dhcp4` logger to severity `DEBUG` with
+debuglevel 55 — a lot of log, so turn it back down afterwards; at Kea's default level Explain
+simply asks you to type what the log does not carry. `?auto=0` on the Explain page restores
+the MAC-and-typed-inputs-only behaviour.
+
+Explain also says what stands in the way: a pool that is full (with the free count of the
+next pool), a reserved address that a different client's lease currently holds (named, with
+a link to that client's Investigation page and the time its lease ends), a reservation whose
+identifier type is not in `host-reservation-identifiers`, and a relay (giaddr) the subnet
+does not match. An admin with access to every subnet gets a link from each to the
+Investigation page's Changes tab, filtered to the config element the verdict is about. The
+Investigation page's Overview carries one sentence of what Kea would do with the client.
+Nothing is stored and nothing runs until a page that needs it is opened.
