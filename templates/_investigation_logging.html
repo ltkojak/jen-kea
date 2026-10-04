@@ -1,0 +1,30 @@
+{# v5.68.0-beta.3 (Q138) - investigation logging controls, one macro for the Trace tab and both Servers cards.
+
+   {% from '_investigation_logging.html' import investigation_controls %}
+   {{ investigation_controls(server, active_entry, back, mac="") }}
+
+   `active_entry` is the matching row of investigation_logging.active() or none. The three durations are the only ones the route
+   accepts; 60 minutes names the disk in its confirm. Posting goes to /servers/<id>/investigation-logging/{on,off}, which needs an
+   admin with access to every subnet (the Trace rule: the log it turns on spans every client) - the callers only render this for such
+   a viewer. `back` is "servers" or "trace" (an allowlist, never a URL). #}
+{% macro investigation_controls(server, active_entry, back, mac="") -%}
+{%- if active_entry -%}
+<form method="POST" action="/servers/{{ server.id }}/investigation-logging/off" class="u-cccfa4">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="back" value="{{ back }}">
+    <input type="hidden" name="mac" value="{{ mac }}">
+    <span class="form-hint">{{ icon("eye") }} Investigation logging is ON for {{ server.name }} until {{ active_entry.until }} ({{ (active_entry.remaining_s // 60) }} min left).</span>
+    <button type="submit" class="btn btn-sm btn-secondary">{{ icon("eye-off") }} Turn it off now</button>
+</form>
+{%- else -%}
+{%- for minutes in (5, 15, 60) %}
+<form method="POST" action="/servers/{{ server.id }}/investigation-logging/on" class="u-cccfa4"{% if minutes == 60 %} data-confirm="Turn on DEBUG logging on {{ server.name }} for 60 minutes? Kea will write a packet dump for every client for an hour, which can fill the disk on a busy server. Jen puts the level back by itself."{% endif %}>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="back" value="{{ back }}">
+    <input type="hidden" name="mac" value="{{ mac }}">
+    <input type="hidden" name="minutes" value="{{ minutes }}">
+    <button type="submit" class="btn btn-sm btn-secondary">{{ icon("eye") }} {{ minutes }} min</button>
+</form>
+{%- endfor %}
+{%- endif -%}
+{%- endmacro %}

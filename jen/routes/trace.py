@@ -20,6 +20,7 @@ from flask_login import current_user, login_required
 
 import jen.services.auth as __auth
 import jen.services.capabilities as __caps
+import jen.services.investigation_logging as __inv
 import jen.services.kea_host as __host
 import jen.services.kea_log_trace as __trace
 from jen import extensions
@@ -101,6 +102,9 @@ def trace_page():
         "explained": None,
         "subnet_id": None,
         "total_events": 0,
+        # v5.68.0-beta.3 (Q138): what is on, for the control card and the "turning it on would add" note
+        "investigation": {e["server_id"]: e for e in __inv.active()},
+        "server": server,
     }
 
     if mac_raw:

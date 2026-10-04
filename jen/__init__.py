@@ -585,9 +585,28 @@ def create_app() -> Flask:
                         kea_legacy_hosts.append(s.get("name", f"Kea Server {s.get('id')}"))
             except Exception:
                 kea_legacy_hosts = []
+        # v5.68.0-beta.3 (Q138): a banner on Trace, Servers, the dashboard and the Investigation page while investigation logging
+        # (DEBUG on a production DHCP server) is on, with the time left. From Jen's own index only - never SSH at render time.
+        investigation_banner = []
+        if current_user and current_user.is_authenticated and current_user.role in ("admin", "superadmin"):
+            from flask import request as _request
+
+            if _request.endpoint in (
+                "trace.trace_page",
+                "servers.servers",
+                "dashboard.dashboard",
+                "client.client_page",
+            ):
+                try:
+                    from jen.services import investigation_logging as _inv
+
+                    investigation_banner = _inv.active()
+                except Exception:
+                    investigation_banner = []
         from flask import g
 
         return {
+            "investigation_banner": investigation_banner,
             "branding_name": "Jen",
             "branding_nav_color": get_global_setting("branding_nav_color", ""),
             "branding_nav_logo": nav_logo_url,

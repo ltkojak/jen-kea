@@ -14,6 +14,7 @@ from flask_login import current_user, login_required
 import jen.models.db as __db
 import jen.models.user as __user
 import jen.services.ha_maintenance as __maint
+import jen.services.investigation_logging as __inv
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
 import jen.services.kea_authoring as __authoring
@@ -256,6 +257,7 @@ def servers():
         ha_actions=__ha.HA_ACTIONS,
         compare_rows=compare_rows,
         changeset_attention=__changeset.attention(),
+        investigation={e["server_id"]: e for e in __inv.active()},
         packet_health_sparklines={
             s["server"]["id"]: s["packet_health"]["sparkline"] for s in statuses if s["packet_health"]
         },
@@ -277,6 +279,53 @@ def dismiss_changeset_attention():
             "; ".join(i.get("summary", "") for i in incidents)[:500],
         )
     return redirect(url_for("servers.servers"))
+
+
+@bp.route("/servers/<int:server_id>/investigation-logging/<action>", methods=["POST"])
+@login_required
+@_admin_required
+def investigation_logging(server_id, action):
+    """v5.68.0-beta.3 (Q138) - turn investigation logging (the kea-dhcp4 logger at DEBUG 55) on for 5, 15 or 60 minutes on ONE server,
+    or off now. Jen puts it back by itself when the time is up. Needs an admin with access to every subnet - the same rule as Trace and
+    config history: the log this turns on spans every client. Never reachable by API key or `--unattended`: this is a session POST."""
+    back = request.form.get("back")
+    mac = (request.form.get("mac") or "").strip().lower()[:17]
+    server = _find_server(server_id)
+
+    def done():
+        if back == "trace" and server:
+            return redirect(url_for("trace.trace_page", mac=mac, server=server["id"]))
+        return redirect(url_for("servers.servers"))
+
+    if action not in ("on", "off"):
+        abort(404)
+    if not current_user.all_subnets:
+        flash("Investigation logging needs access to all subnets: the log it turns on names every client.", "error")
+        return done()
+    if not server or not server.get("ssh_host"):
+        flash("Investigation logging needs a Kea server with SSH configured.", "error")
+        return done()
+    try:
+        if action == "on":
+            try:
+                minutes = int(request.form.get("minutes", ""))
+            except ValueError:
+                minutes = 0
+            result = __inv.turn_on(server, minutes, actor=current_user.username)
+        else:
+            result = __inv.turn_off(server, actor=current_user.username)
+    except Exception as e:
+        logger.error(f"investigation logging {action} on {server.get('name')} failed: {e}")
+        flash("Could not change the log level - check server logs for details.", "error")
+        return done()
+    for line in result["lines"]:
+        flash(line, "success" if result["ok"] else "error")
+    if result["ok"] and action == "on":
+        flash(
+            f"Investigation logging is on for {server['name']} until {result['until']}; Jen puts the log level back by itself.",
+            "success",
+        )
+    return done()
 
 
 @bp.route("/servers/restart/<int:server_id>", methods=["POST"])
