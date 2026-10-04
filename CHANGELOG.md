@@ -2,6 +2,72 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.68.0-beta.3] - 2026-10-04
+
+Beta channel. Stacked on 5.68.0-beta.2. Beta.2 measured what Kea's log carries at each
+level and found the decision itself — the classes Kea assigned, the packet's options —
+only appears at debuglevel 45 and 55, which no production DHCP server should sit at all
+day. This release lets an operator turn that on for one server, for five, fifteen or
+sixty minutes, from the page they are already investigating on, and guarantees it is
+turned off again.
+
+**One logger entry, with its undo written beside it.** Turning investigation logging on
+sets the `kea-dhcp4` logger to DEBUG, debuglevel 55, and adds a `user-context` marker to
+that same entry recording when it ends and exactly what to put back: the previous
+severity, the previous debuglevel (or that there was none), or that Jen created the
+entry and should remove it. Nothing else in the config is touched — not the output
+options, not any more specific logger, not any `user-context` key already there. The
+marker lives in the Kea config itself on purpose, so it survives a Jen restart, a
+restored database, a second Jen and a person reading the file with no Jen at all.
+Pressing the button again on a server already on only extends the time and keeps the
+original restore.
+
+**Applied like every Kea edit, and reloaded rather than restarted.** The change goes
+through the same checked path as every subnet or option edit — a `kea-dhcp4 -t`
+preflight, the sha guard, revert on failure, an audit row and a config revision — to one
+server at a time, never two. The daemon is then told with `config-reload` on the control
+channel Jen already uses. That was verified on real daemons first, not assumed: on Kea
+3.0.3, 3.2.0 and 3.3.1 alike it answers result 0, no process or container restarts,
+the new level takes effect on the next packet, leases survive, the `user-context` is
+preserved in `config-get`, a deliberately broken file is refused with result 1 while the
+daemon keeps answering, and restoring is the same two steps. A Kea that does not list
+`config-reload`, or refuses it, is restarted through the existing helper `service` op
+instead, and the result says which happened. No helper op and no sudo line were added.
+
+**A sweep that cannot forget.** A scheduler job runs every minute. Its cheap path reads
+only an index of what this Jen knows is on and restores whatever has expired. Every tenth
+run it reads each SSH server's config as well, to restore an expired marker nobody
+indexed and to adopt a live one so the banners show it. A restore that fails stays in the
+index with its error and is retried next minute. The Health Center gains **DEBUG logging
+left on**, which fails when a server is more than two minutes past its time; it reads
+the index, never SSH at render time.
+
+**Who, and where.** Admins with access to every subnet — the Trace and config-history
+rule, because the log names every client — see *5 / 15 / 60 min* on the Trace page and on
+every Servers card; the sixty-minute choice asks for confirmation and names the disk. A
+banner with the time left and *Turn it off now* shows on Trace, Servers, the dashboard
+and the Investigation page. The route is session and CSRF only: there is no API route
+for it and the unattended installer never touches it, and the page the person returns to
+is an allowlist, never a URL taken from the request.
+
+**The live watch, and Explain beside Kea.** Trace's *Watch this client* now re-reads the
+log every 3 seconds for ten minutes (it was every 5 seconds for one minute; the server
+stops it at ten minutes whatever the page does), so an operator can ask a device to renew
+and watch the exchange arrive. With logging off it says in one line what turning it on
+would add. Explain now shows the classes Kea assigned beside its own evaluation of each
+class, and where Jen worked a class out from the inputs it has and Kea's list says
+differently, the difference is a **Kea disagrees** verdict naming the class and what to
+suspect — an input Jen lacks, or a config that changed since that packet — rather than a
+silent override either way.
+
+**Tests.** Mutation tests for the marker (create, restore, extend, due-only clearing, an
+unreadable time counts as due); service tests for reload, the restart fallback and the
+sweep without a database; route tests for who may press the button, where they land and
+what each page shows; a compatibility test that `config-reload` really applies a log
+level on 3.0, 3.2 and 3.3; and a system scenario, 17, that runs the whole life against
+real Kea hosts — on, a packet dump appears, the sweep puts it back, no process was
+restarted — and joins the critical subset.
+
 ## [5.68.0-beta.2] - 2026-10-04
 
 Beta channel. Stacked on 5.68.0-beta.1. The Investigation page's Explain tab used to
