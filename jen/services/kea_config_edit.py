@@ -602,3 +602,122 @@ def remove_control_socket(cfg: dict, service: str):
         return cfg, "nochange"
     section["control-sockets"] = kept
     return cfg, "ok"
+
+
+# ── Investigation logging (v5.68.0-beta.3, Q138) ──────────────────────────────
+#
+# What Trace and Explain can read out of Kea's log depends on its level (measured on Kea 3.0.3, 3.2.0 and 3.3.1 by
+# tests/kea_compat/test_log_levels.py): at DEBUG with debuglevel 55 the packet dump and the class assignments are there. A
+# production DHCP server should not sit at that level, so Jen turns it on for a bounded time and puts it back itself. The
+# change is recorded IN the config - a `user-context` on the logger entry, `{"jen-investigation": {"until": …, "restore":
+# …}}` - so a Jen restart, a different Jen, or a person with a text editor can all see what is on and what undoes it, and the
+# sweep (jen/services/investigation_logging.py) needs no database to know. Only the `kea-dhcp4` logger entry is ever touched
+# (its `output-options` exactly as they were); an entry that did not exist is created and removed again.
+
+INVESTIGATION_KEY = "jen-investigation"
+INVESTIGATION_LOGGER = "kea-dhcp4"
+INVESTIGATION_SEVERITY = "DEBUG"
+INVESTIGATION_DEBUGLEVEL = 55
+
+
+def _dhcp4_loggers(cfg: dict, create: bool):
+    """(`Dhcp4` section, its `loggers` list) - or (None, None) when the config has no Dhcp4 block or `loggers` is not a list.
+    With `create`, a missing `loggers` becomes an empty list."""
+    section = cfg.get("Dhcp4")
+    if not isinstance(section, dict):
+        return None, None
+    loggers = section.get("loggers")
+    if loggers is None:
+        if not create:
+            return section, []
+        loggers = section["loggers"] = []
+    return (section, loggers) if isinstance(loggers, list) else (None, None)
+
+
+def _logger_entry(loggers: list):
+    return next((x for x in loggers if isinstance(x, dict) and x.get("name") == INVESTIGATION_LOGGER), None)
+
+
+def investigation_marker(cfg: dict) -> dict | None:
+    """The `jen-investigation` marker on the kea-dhcp4 logger - `{"until": iso, "restore": {…}}` - or None."""
+    _section, loggers = _dhcp4_loggers(cfg, create=False)
+    entry = _logger_entry(loggers or [])
+    marker = (entry.get("user-context") or {}).get(INVESTIGATION_KEY) if isinstance(entry, dict) else None
+    return marker if isinstance(marker, dict) else None
+
+
+def set_investigation_logging(cfg: dict, until_iso: str):
+    """Put the kea-dhcp4 logger at DEBUG, debuglevel 55, until `until_iso` (UTC ISO 8601), recording what to put back.
+    Returns (cfg, code): "ok", or "unsupported" (no `Dhcp4` block, or `loggers`/`user-context` is not the shape Kea
+    documents). Idempotent: when the marker is already there only `until` moves (the ORIGINAL restore is kept, so extending
+    never makes DEBUG the thing to "restore" to), and the entry's `output-options` are never touched."""
+    cfg = copy.deepcopy(cfg)
+    section, loggers = _dhcp4_loggers(cfg, create=True)
+    if section is None:
+        return cfg, "unsupported"
+    entry = _logger_entry(loggers)
+    created = entry is None
+    if created:
+        entry = {"name": INVESTIGATION_LOGGER}
+        loggers.append(entry)
+    context = entry.get("user-context", {})
+    if not isinstance(context, dict):
+        return cfg, "unsupported"
+    marker = context.get(INVESTIGATION_KEY)
+    if isinstance(marker, dict) and isinstance(marker.get("restore"), dict):
+        restore = marker["restore"]
+    elif created:
+        restore = {"created": True}
+    else:
+        restore = {
+            "severity": entry.get("severity", "absent"),
+            "debuglevel": entry.get("debuglevel", "absent"),
+        }
+    entry["severity"] = INVESTIGATION_SEVERITY
+    entry["debuglevel"] = INVESTIGATION_DEBUGLEVEL
+    context[INVESTIGATION_KEY] = {"until": until_iso, "restore": restore}
+    entry["user-context"] = context
+    return cfg, "ok"
+
+
+def _parse_until(text):
+    from datetime import datetime, timezone
+
+    try:
+        when = datetime.fromisoformat(str(text).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+
+
+def clear_investigation_logging(cfg: dict, now=None):
+    """Put the kea-dhcp4 logger back as `set_investigation_logging` found it. With `now` (a timezone-aware datetime) it does
+    so only when the marker's `until` has passed - the sweep's rule; an unreadable `until` counts as passed. With `now=None`
+    it restores unconditionally (the button). Returns (cfg, code): "ok" (restored), "nochange" (nothing marked, or not yet
+    due). An entry Jen created is removed again; one that existed gets exactly its old severity and debuglevel back (a key
+    that was absent is removed), and its `output-options` and any other `user-context` keys are left alone."""
+    cfg = copy.deepcopy(cfg)
+    _section, loggers = _dhcp4_loggers(cfg, create=False)
+    entry = _logger_entry(loggers or [])
+    context = entry.get("user-context") if isinstance(entry, dict) else None
+    marker = context.get(INVESTIGATION_KEY) if isinstance(context, dict) else None
+    if not isinstance(marker, dict):
+        return cfg, "nochange"
+    if now is not None:
+        due = _parse_until(marker.get("until"))
+        if due is not None and due > now:
+            return cfg, "nochange"
+    restore = marker.get("restore") if isinstance(marker.get("restore"), dict) else {}
+    if restore.get("created"):
+        loggers.remove(entry)
+        return cfg, "ok"
+    for key in ("severity", "debuglevel"):
+        old = restore.get(key, "absent")
+        if old == "absent":
+            entry.pop(key, None)
+        else:
+            entry[key] = old
+    del context[INVESTIGATION_KEY]
+    if not context:
+        del entry["user-context"]
+    return cfg, "ok"

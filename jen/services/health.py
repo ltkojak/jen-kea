@@ -278,6 +278,42 @@ def _kea_time_sync(ctx) -> Check:
     return c
 
 
+def _debug_logging_left_on(ctx) -> Check:
+    """v5.68.0-beta.3 (Q138) - investigation logging (DEBUG, debuglevel 55) is on for a bounded time and put back by Jen's own
+    every-minute sweep. This row fails when a server's time is up and the sweep has not been able to restore it: a production DHCP
+    server writing a packet dump per client until its disk fills. It reads Jen's index only (never SSH at render time); a server
+    whose marker Jen has not seen is found by the sweep's ten-minute full scan and then shows here."""
+    c = Check(
+        "debug_logging_left_on",
+        "DEBUG logging left on",
+        "kea",
+        fix_url="/tools/trace",
+        fix_hint="Turn investigation logging off from Trace or Servers.",
+    )
+    from jen.services import investigation_logging as __inv
+
+    entries = __inv.active()
+    if not entries:
+        c.status, c.detail = "ok", "no server is at investigation logging"
+        return c
+    overdue = [e for e in entries if e["overdue"] or (e["error"] and e["remaining_s"] == 0)]
+    if overdue:
+        c.status = "fail"
+        c.detail = "; ".join(
+            f"{e['name']}: DEBUG logging should have ended at {e['until']} and has not been put back"
+            + (f" ({e['error'][:160]})" if e["error"] else "")
+            for e in overdue
+        )
+        c.fix_hint = (
+            "The sweep retries every minute. If it keeps failing, turn logging off from Trace or Servers, or set the kea-dhcp4 logger's "
+            "severity back by hand and remove its jen-investigation user-context."
+        )
+        return c
+    c.status = "ok"
+    c.detail = "; ".join(f"{e['name']}: on until {e['until']}" for e in entries)
+    return c
+
+
 def _kea_config_drift(ctx) -> Check:
     c = Check("kea_config_drift", "Subnet map matches Kea", "kea", fix_url="/servers")
     try:
@@ -1280,6 +1316,7 @@ _CHECKS = [
     _kea_ha_state,
     _kea_hooks,
     _kea_time_sync,
+    _debug_logging_left_on,
     _kea_config_drift,
     _kea_subnets_declared,
     _config_doctor,
@@ -1315,6 +1352,7 @@ _CHECK_META = {
     "kea_ha_state": ("HA state healthy", "kea"),
     "kea_hooks": ("Kea hooks loaded", "kea"),
     "kea_time_sync": ("Kea clock in sync", "kea"),
+    "debug_logging_left_on": ("DEBUG logging left on", "kea"),
     "kea_config_drift": ("Subnet map matches Kea", "kea"),
     "kea_subnets_declared": ("Every Kea subnet is named", "kea"),
     "config_doctor": ("Configuration Doctor", "kea"),

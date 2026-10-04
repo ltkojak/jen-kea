@@ -286,3 +286,130 @@ def test_what_kea_logs_and_stores_at_this_level(findings, index, level):
 
 def cid_hex_colon(mac: str) -> str:
     return "01:" + mac
+
+
+# ── Q138: does `config-reload` apply a new log level without a restart? ───────────────────────────────────────────
+
+
+def _exchange(mac: str, requested: str, local: str, xid: int):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.bind(("0.0.0.0", 0))
+        sock.sendto(_packet(1, xid, mac), (local, 67))
+        time.sleep(2)
+        sock.sendto(_packet(3, xid + 1, mac, requested=requested, server=local), (local, 67))
+        time.sleep(3)
+    finally:
+        sock.close()
+
+
+def _daemon_log() -> list[str]:
+    log = _sh("docker", "logs", "kea", check=False)
+    return (log.stdout + log.stderr).splitlines()
+
+
+def _status() -> dict:
+    from jen.services import kea
+
+    reply = kea.kea_command("status-get")
+    args = reply.get("arguments") or {}
+    return {
+        "result": reply.get("result"),
+        "pid": args.get("pid"),
+        "uptime": args.get("uptime"),
+        "reload": args.get("reload"),
+    }
+
+
+def _started_at() -> str:
+    return _sh("docker", "inspect", "-f", "{{.State.StartedAt}}", "kea").stdout.strip()
+
+
+def test_config_reload_applies_the_investigation_log_level_without_a_restart(findings):
+    """v5.68.0-beta.3 (Q138, verify first) - Jen turns investigation logging on by writing the mutated config and asking the
+    daemon to `config-reload` instead of restarting it. This records, per Kea version, what that really does: the reply, whether the
+    process and the container survived, whether the new level takes effect and the lease survives, what `config-get` shows of the
+    logger's user-context, what happens when the file is broken, and that putting the level back works the same way."""
+    from jen.services import kea
+    from jen.services import kea_config_edit as ed
+
+    index = 30
+    mac, local = _mac_for(index), _local_address()
+    requested = f"10.99.0.{REQUESTED_BASE + index}"
+    with _db() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM lease4 WHERE hwaddr=%s", (bytes.fromhex(mac.replace(":", "")),))
+    _restart("INFO", None)
+    record = {}
+    findings["config_reload"] = record
+    conf_path = os.path.join(CONF_DIR, "kea-dhcp4.conf")
+
+    listed = kea.kea_command("list-commands")
+    record["lists_config_reload"] = "config-reload" in (listed.get("arguments") or [])
+    before = {"status": _status(), "started_at": _started_at()}
+    _exchange(mac, requested, local, 0x30000)
+    first = _daemon_log()
+    assert li_has(first, mac, "DHCP4_LEASE_ALLOC"), "the baseline exchange at INFO allocated a lease"
+    assert not li_has(first, mac, "DHCP4_QUERY_DATA"), "INFO carries no packet dump"
+
+    with open(conf_path) as fh:
+        conf = json.load(fh)
+    until = "2099-01-01T00:00:00+00:00"
+    mutated, code = ed.set_investigation_logging(conf, until)
+    assert code == "ok"
+    with open(conf_path, "w") as fh:
+        json.dump(mutated, fh, indent=2)
+    reply = kea.kea_command("config-reload")
+    record["reload_reply"] = {"result": reply.get("result"), "text": (reply.get("text") or "")[:200]}
+    time.sleep(1)
+    after = {"status": _status(), "started_at": _started_at()}
+    record["process_survived"] = (
+        before["status"]["pid"] is not None and before["status"]["pid"] == after["status"]["pid"]
+    )
+    record["container_survived"] = before["started_at"] == after["started_at"]
+    record["status_before"], record["status_after"] = before["status"], after["status"]
+
+    seen_before = len(_daemon_log())
+    _exchange(mac, requested, local, 0x30010)
+    second = _daemon_log()[seen_before:]
+    record["packet_dump_after_reload"] = li_has(second, mac, "DHCP4_QUERY_DATA")
+    record["classes_after_reload"] = li_has(second, mac, "DHCP4_CLASSES_ASSIGNED")
+    with _db() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT inet_ntoa(address) AS ip FROM lease4 WHERE hwaddr=%s AND state=0",
+            (bytes.fromhex(mac.replace(":", "")),),
+        )
+        record["lease_survived"] = (cur.fetchone() or {}).get("ip") == requested
+    shown = kea.kea_command("config-get").get("arguments", {}).get("Dhcp4", {}).get("loggers", [])
+    entry = next((x for x in shown if x.get("name") == "kea-dhcp4"), {})
+    record["config_get_logger"] = {k: entry.get(k) for k in ("severity", "debuglevel", "user-context")}
+
+    # a broken file: the reload must be refused and the daemon must keep running on what it had
+    with open(conf_path, "w") as fh:
+        fh.write('{ "Dhcp4": { "this is": not json')
+    broken = kea.kea_command("config-reload")
+    record["broken_file_reply"] = {"result": broken.get("result"), "text": (broken.get("text") or "")[:200]}
+    record["answers_after_broken_reload"] = kea.kea_command("version-get").get("result") == 0
+
+    # putting it back is the same two steps
+    restored, code = ed.clear_investigation_logging(mutated)
+    assert code == "ok"
+    with open(conf_path, "w") as fh:
+        json.dump(restored, fh, indent=2)
+    back = kea.kea_command("config-reload")
+    record["restore_reply"] = {"result": back.get("result"), "text": (back.get("text") or "")[:200]}
+    time.sleep(1)
+    seen_before = len(_daemon_log())
+    _exchange(mac, requested, local, 0x30020)
+    record["packet_dump_after_restore"] = li_has(_daemon_log()[seen_before:], mac, "DHCP4_QUERY_DATA")
+    record["process_survived_restore"] = _status()["pid"] == before["status"]["pid"]
+
+    assert reply.get("result") == 0, record
+    assert record["process_survived"] and record["container_survived"], record
+    assert record["packet_dump_after_reload"] and record["classes_after_reload"], record
+    assert record["lease_survived"], record
+    assert record["broken_file_reply"]["result"] != 0 and record["answers_after_broken_reload"], record
+    assert back.get("result") == 0 and not record["packet_dump_after_restore"], record
+
+
+def li_has(lines, mac: str, message_id: str) -> bool:
+    return any(message_id in line and mac.lower() in line.lower() for line in lines)

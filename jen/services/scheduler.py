@@ -19,6 +19,7 @@ def start_scheduler(app):
     try:
         from apscheduler.schedulers.background import BackgroundScheduler
         from apscheduler.triggers.cron import CronTrigger
+        from apscheduler.triggers.interval import IntervalTrigger
     except ImportError:
         logger.warning("APScheduler not installed — scheduled backups disabled")
         return
@@ -28,6 +29,16 @@ def start_scheduler(app):
     _scheduler.add_job(_run_backup_job, CronTrigger(minute=0), id="jen_backup", replace_existing=True, args=[app])
     _scheduler.add_job(
         _run_audit_cleanup, CronTrigger(hour=0, minute=5), id="jen_audit_cleanup", replace_existing=True, args=[app]
+    )
+    # v5.68.0-beta.3 (Q138): every minute, put back any investigation logging whose time is up
+    _scheduler.add_job(
+        _run_investigation_sweep,
+        IntervalTrigger(minutes=1),
+        id="jen_investigation_sweep",
+        replace_existing=True,
+        args=[app],
+        max_instances=1,
+        coalesce=True,
     )
     try:
         _scheduler.start()
@@ -68,6 +79,19 @@ def _run_backup_job(app):
             run_scheduled_backup()
         except Exception as e:
             logger.error(f"Scheduled backup error: {e}")
+
+
+def _run_investigation_sweep(app):
+    """Called every minute: restore any expired investigation logging on every server (jen.services.investigation_logging)."""
+    with app.app_context():
+        try:
+            from jen.services import investigation_logging
+
+            result = investigation_logging.run_sweep_job()
+            if result["restored"] or result["errors"]:
+                logger.info(f"investigation logging sweep: {result}")
+        except Exception as e:
+            logger.error(f"Investigation logging sweep error: {e}")
 
 
 def stop_scheduler():
