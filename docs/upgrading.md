@@ -91,3 +91,17 @@ left on**, that fails if a server's time is up and the restore has not happened.
 for ten minutes (it was every 5 seconds for one minute), and Explain shows the classes Kea assigned beside its own evaluation and
 says when they disagree. If you already keep a Kea logger at DEBUG on purpose, nothing changes until you press a button, and the
 restore puts back exactly what was there.
+
+## Plugins contribute to the Investigation page: seven plugin updates
+
+Nothing to do on Jen (5.68.0-beta.4). The Investigation page's Overview gains a **What else Jen knows** section with one card per plugin
+that has something to say about the client: the switch port, whether it answers a ping, the DNS records that carry its name, what the
+last scan saw, IPAM's entry for its address, whether it is a favourite, whether it is tracked. A card that needs a look is also summed up
+in the line at the top of the page. Each card follows the page's own rule for subnets: a user restricted to some subnets sees a card only
+for a client in a subnet they may see.
+
+The cards come from new plugin releases — IPAM Lite 1.7.0, Network Discovery 1.3.0, Host Watchdog 1.1.0, Local DNS Sync 1.1.0, Switch Port
+Locator 1.1.0, Wake & Actions 1.1.0 and Presence 1.1.0 — which need this Jen (they require 5.68.0). Settings → Plugins offers them as
+updates once this Jen is installed, and refuses them before it: upgrade Jen first, as with every plugin update that needs a newer Jen. A
+plugin that is not enabled adds no card; a plugin you install from elsewhere can add one through `register_investigation_provider`, documented
+in `plugins/README.md`.

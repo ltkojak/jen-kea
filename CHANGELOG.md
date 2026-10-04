@@ -2,6 +2,62 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.68.0-beta.4] - 2026-10-04
+
+Beta channel. Stacked on 5.68.0-beta.3. The Investigation page lays out what the core
+knows about a client, and each bundled plugin knows a fact about it the core cannot: the
+switch port its MAC sits on, whether it answers a ping, which DNS records carry its name,
+what the last scan saw, whether its address is designated, whether it is a favourite or a
+tracked device. None of that reached the page. This release gives plugins one way in and
+puts all seven bundled plugins through it.
+
+**The hook, mirrored on the search provider.** `register_investigation_provider(plugin_id,
+*, title, fn)` is exported from `jen.plugin_api` (the API version stays 3; adding a name
+is additive). `fn(subject, accessible_subnet_ids, all_subnets)` is handed the client Jen
+has already resolved and authorized — a deep copy of the view, so a provider can read it
+and cannot change what the page or the next provider sees — and answers a card (a
+sentence, rows with optional links, a link to its own page, a status of ok, warn or
+none) or `None` for "nothing to say", which renders nothing. Providers run in registration
+order in the request with a 1.0 s advisory budget each; one that raises, or answers
+something that is not a card, shows as "unavailable" and is logged, and never breaks the
+page. Jen does not take the card on trust: text is length-capped, rows are capped at
+twenty, an unknown status reads as ok, and every link must be a single-slash path inside
+Jen or it is dropped.
+
+**Scope is the plugin's duty and the page's check.** The Overview only asks providers
+about a client the caller can place in a subnet they may see — the same gate that makes a
+denial and a client that does not exist the same "No client matched" answer — and hands
+each provider the caller's own subnet scope to put in its own query, before its limit. A
+page for a client outside the caller's subnets therefore calls no provider at all, and a
+plugin's second row for an in-scope client that is stored in a subnet outside the scope
+stays out of the card. The authorization matrix gains a row per bundled provider, driven
+through the real page with every plugin enabled: a scoped admin sees all seven cards for
+the client in their subnet and none of what the same plugins hold under a different subnet,
+sees nothing for the client in that different subnet, and an unrestricted admin sees both.
+
+**What the Overview shows.** Under the core facts, a "What else Jen knows" section carries
+one card per plugin that has something to say, and none when none does. A card that needs
+a look says so, and its sentence is also added to the line at the top of the page under
+"Worth a look": a host that has stopped answering, a DNS record that points somewhere the
+client does not live, an address IPAM marks static that a DHCP client now holds, a host a
+scan found that nothing Jen knows accounts for.
+
+**Seven plugin releases.** Each is a new capability and so a minor version, requires Jen
+5.68.0 (a 5.68.0 beta satisfies it), and was released through its own repository's
+pipeline first — build, harness, CI, tag, tag CI — and is bundled here byte-identical to
+its tag with the registry re-pinned: IPAM Lite 1.7.0 (the entry for each address the client
+holds and whether it is the one it was designated for), Network Discovery 1.3.0 (what the
+newest scan of each subnet found on its MAC or addresses), Host Watchdog 1.1.0 (does it
+answer, since when, how many checks in a row have failed), Local DNS Sync 1.1.0 (the
+records pushed under its name or onto its addresses and whether they match), Switch Port
+Locator 1.1.0 (the switch, port and VLAN, and whether it has moved), Wake & Actions 1.1.0
+(favourite, whether a SecureOn password is set, last wake) and Presence 1.1.0 (state, last
+seen, and to an admin the sinks it publishes to). Two places differ from what was first
+sketched, on purpose: the scan stores what it found rather than the ports it probed, so
+Network Discovery shows no ports, and the next-free hint stays on IPAM's subnet page, which
+its card links to. A contract test now asserts that every bundled plugin registers exactly
+one provider and that each one runs against the freshly migrated tables without raising.
+
 ## [5.68.0-beta.3] - 2026-10-04
 
 Beta channel. Stacked on 5.68.0-beta.2. Beta.2 measured what Kea's log carries at each
