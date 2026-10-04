@@ -26,6 +26,14 @@ rather than guessing. A clause whose input the caller didn't supply is
 UNKNOWN (three-valued logic), and the page says which input would
 settle it.
 
+v5.68.0-beta.2 (Q135) — it also says WHY NOT. The caller may hand in three lookups (all optional, all read-only):
+`assigned_classes` (the classes Kea itself logged for this client — decided by what Kea said, labelled with when),
+`pool_used(subnet_id, pool_text)` (active leases inside a pool, so a full pool is a verdict, not a hope) and
+`holder_of(ip, mac)` (who holds an address a reservation names). With them a reserved address held by another client, a
+full pool, a reservation whose identifier type is not in `host-reservation-identifiers`, and a relay that does not match
+the subnet are each a named verdict — and carry the config element they are about (`why_not`), which the Investigation
+page's Changes tab can be filtered to. `answer_line()` is the one sentence of all this.
+
 Order of the decision (Kea ARM, "DHCPv4 server"):
   1. subnet selection (here: the operator's / the lease's subnet;
      giaddr, when given, is checked against relay addresses)
@@ -326,6 +334,20 @@ def _config_reservations(subnet: dict) -> list[dict]:
     return out
 
 
+_IDENTIFIER_NAMES = {0: "hw-address", "0": "hw-address", 3: "client-id", "3": "client-id"}
+
+
+def identifier_type_name(value) -> str:
+    """A reservation row's identifier type as Kea's config names it (`hw-address`, `client-id`)."""
+    return _IDENTIFIER_NAMES.get(value, str(value))
+
+
+def enabled_identifiers(dhcp4_cfg: dict) -> list[str] | None:
+    """`host-reservation-identifiers` from the config, or None when it is not set (Kea then uses every type)."""
+    raw = dhcp4_cfg.get("host-reservation-identifiers") if isinstance(dhcp4_cfg, dict) else None
+    return [str(x) for x in raw] if isinstance(raw, list) else None
+
+
 def match_reservation(
     client: dict, candidates: list[dict], subnet_id: int, flags: dict, db_rows: list[dict]
 ) -> dict | None:
@@ -359,6 +381,20 @@ def match_reservation(
 
 def _pools(subnet: dict) -> list[dict]:
     return [p for p in subnet.get("pools") or [] if isinstance(p, dict)]
+
+
+def pool_bounds(text) -> tuple[int, int] | None:
+    """(first, last) address of a Kea pool as integers - `a - b` or a CIDR - or None when it cannot be read."""
+    text = str(text or "").strip()
+    try:
+        if "/" in text:
+            net = ipaddress.IPv4Network(text, strict=False)
+            return int(net.network_address), int(net.broadcast_address)
+        lo, hi = (part.strip() for part in text.split("-", 1))
+        lo_i, hi_i = int(ipaddress.IPv4Address(lo)), int(ipaddress.IPv4Address(hi))
+    except ValueError:
+        return None
+    return (lo_i, hi_i) if lo_i <= hi_i else None
 
 
 def _lifetime(dhcp4_cfg, sn, subnet, matched_class_dicts):
@@ -399,7 +435,15 @@ def _merge_options(levels: list[tuple[str, list[dict]]]) -> list[dict]:
 
 
 def explain(
-    dhcp4_cfg: dict, client: dict, *, subnet_id: int, reservations: list[dict] | None = None, lease: dict | None = None
+    dhcp4_cfg: dict,
+    client: dict,
+    *,
+    subnet_id: int,
+    reservations: list[dict] | None = None,
+    lease: dict | None = None,
+    assigned_classes: dict | None = None,
+    pool_used=None,
+    holder_of=None,
 ) -> dict:
     """The decision path for `client` if it asked in `subnet_id`.
     `client`: {mac, client_id?, vendor_class?, user_class?, hostname?,
@@ -407,7 +451,12 @@ def explain(
     {subnet_id, identifier_type ('hw-address'|'client-id' or 0|3),
     identifier, ip, hostname, classes, options} for this client (the
     caller looks them up by identifier). `lease`: the current lease row
-    {ip, subnet_id, expires?} or None."""
+    {ip, subnet_id, expires?} or None.
+
+    v5.68.0-beta.2 (Q135), all optional: `assigned_classes` = {"classes": [names], "at": when} - the classes Kea itself
+    logged for this client, taken as members (and labelled with when); `pool_used(subnet_id, pool_text)` -> active leases
+    inside that pool, or None; `holder_of(ip, mac)` -> {"mac", "expire", "linkable"} for an active lease on `ip` held by a
+    DIFFERENT client, or None. Both callables are read-only lookups; one that raises is treated as "unknown"."""
     steps: list[dict] = []
     found = _view.subnet4_by_id(dhcp4_cfg, subnet_id)
     if found is None:
@@ -419,11 +468,13 @@ def explain(
     candidates = [s for s, name in _view.iter_subnet4(dhcp4_cfg) if name == sn_name] if sn_name else [subnet]
     # The operator's / lease's subnet first, then its siblings in config order.
     candidates = [subnet] + [s for s in candidates if s is not subnet]
+    subnet_element = f"subnet {subnet.get('id')} ({subnet.get('subnet')})"
 
     # 1. subnet selection
     how = "the subnet you chose" if not lease else "the subnet of the current lease"
     giaddr = str(client.get("giaddr") or "").strip()
     relay_note = ""
+    relay_mismatch = False
     if giaddr:
         try:
             g = ipaddress.IPv4Address(giaddr)
@@ -436,23 +487,34 @@ def explain(
             elif g in ipaddress.IPv4Network(subnet.get("subnet"), strict=False):
                 relay_note = f"giaddr {giaddr} lies inside {subnet.get('subnet')}"
             else:
+                relay_mismatch = True
                 relay_note = f"giaddr {giaddr} is neither a relay address of nor inside {subnet.get('subnet')} — Kea would NOT select this subnet for a relayed request"
         except ValueError:
             relay_note = f"giaddr {giaddr!r} is not an IPv4 address"
-    steps.append(
-        {
-            "stage": "subnet",
-            "verdict": "selected",
-            "detail": f"Subnet {subnet.get('id')} ({subnet.get('subnet')}) — {how}"
+    subnet_step = {
+        "stage": "subnet",
+        "verdict": "NOT selected" if relay_mismatch else "selected",
+        "detail": (
+            f"Subnet {subnet.get('id')} ({subnet.get('subnet')}) would NOT be selected: {relay_note}. "
+            "Everything below assumes it was."
+            if relay_mismatch
+            else f"Subnet {subnet.get('id')} ({subnet.get('subnet')}) — {how}"
             + (f", in shared network {sn_name!r} with {len(candidates) - 1} sibling subnet(s)" if sn_name else "")
-            + ". Kea picks the subnet from the receiving interface or the relay's giaddr; Jen can't see the interface.",
-            "evidence": [relay_note] if relay_note else [],
-        }
-    )
+            + ". Kea picks the subnet from the receiving interface or the relay's giaddr; Jen can't see the interface."
+        ),
+        "evidence": [relay_note] if relay_note else [],
+    }
+    if relay_mismatch:
+        subnet_step["why_not"] = [{"text": relay_note, "element": subnet_element}]
+    steps.append(subnet_step)
 
     # 2. reservation
     flags = reservation_flags(dhcp4_cfg, subnet)
     res = match_reservation(client, candidates, subnet.get("id"), flags, reservations or [])
+    enabled = enabled_identifiers(dhcp4_cfg)
+    res_ignored = None
+    if res and enabled is not None and identifier_type_name(res.get("identifier_type")) not in enabled:
+        res_ignored, res = res, None
     if res:
         steps.append(
             {
@@ -462,6 +524,25 @@ def explain(
                 + (f", hostname {res.get('hostname')!r}" if res.get("hostname") else "")
                 + f" ({res.get('source', 'host database')}). The client is KNOWN.",
                 "evidence": [f"reservations-in-subnet={flags['in_subnet']}, reservations-global={flags['global']}"],
+            }
+        )
+    elif res_ignored:
+        kind = identifier_type_name(res_ignored.get("identifier_type"))
+        text = (
+            f"A {res_ignored['scope']} reservation exists for this client by {kind} ({res_ignored.get('ip') or 'no fixed address'}), "
+            f"but {kind} is not in host-reservation-identifiers ({', '.join(enabled) or 'empty'}) — Kea never matches it. "
+            "The client is UNKNOWN."
+        )
+        steps.append(
+            {
+                "stage": "reservation",
+                "verdict": "never matched",
+                "detail": text,
+                "evidence": [
+                    f"reservations-in-subnet={flags['in_subnet']}, reservations-global={flags['global']}",
+                    f"host-reservation-identifiers = {', '.join(enabled) or '(empty)'}",
+                ],
+                "why_not": [{"text": text, "element": "reservation"}],
             }
         )
     else:
@@ -486,6 +567,8 @@ def explain(
     )
     if res:
         additional_lists |= set(res.get("classes") or [])
+    kea_said = {str(c) for c in (assigned_classes or {}).get("classes", [])}
+    kea_when = (assigned_classes or {}).get("at")
     for c in dhcp4_cfg.get("client-classes") or []:
         if not isinstance(c, dict) or not c.get("name"):
             continue
@@ -500,6 +583,7 @@ def explain(
             "reason": "",
             "only_additional": additional_only,
             "builtin": _classes.is_builtin(name),
+            "missing": [],
         }
         if additional_only and name not in additional_lists:
             row["matched"] = False
@@ -521,6 +605,7 @@ def explain(
                 missing: set[str] = set()
                 v = evaluate(ast, client, members, missing)
                 row["matched"] = v
+                row["missing"] = sorted(missing)
                 if v is None:
                     row["reason"] = (
                         "undecided — supply " + ", ".join(INPUT_LABELS.get(m, m) for m in sorted(missing))
@@ -529,6 +614,11 @@ def explain(
                     )
                 else:
                     row["reason"] = "expression matched" if v else "expression did not match"
+        if name in kea_said and row["matched"] is not True:
+            # what Kea itself logged for this client outranks what Jen could work out: it is what happened
+            row["matched"] = True
+            row["reason"] = "assigned by Kea" + (f" at {kea_when}" if kea_when else "") + " (its own log)"
+            row["from_kea"] = True
         members[name] = row["matched"]
         class_rows.append(row)
     matched_names = [r["name"] for r in class_rows if r["matched"] is True]
@@ -592,7 +682,17 @@ def explain(
             ],
         }
     )
+    if not selected and not any(s["eligible"] is None for s in subnet_states):
+        steps[-1]["why_not"] = [
+            {
+                "text": f"subnet {s['id']} ({s['subnet']}): guard class {', '.join(s['guards'] or sn_guards)} not satisfied",
+                "element": f"subnet {s['id']} ({s['subnet']})",
+            }
+            for s in subnet_states
+            if s["eligible"] is False
+        ]
     chosen = next((s for s in candidates if selected and s.get("id") == selected["id"]), subnet)
+    chosen_element = f"subnet {chosen.get('id')} ({chosen.get('subnet')})"
 
     # 5. pools + answer
     pool_rows = []
@@ -602,51 +702,112 @@ def explain(
         net = None
     for p in _pools(chosen):
         st, guards = _guard_state(p)
-        pool_rows.append({"pool": p.get("pool"), "eligible": st, "guards": guards})
-    first_pool = next((p for p in pool_rows if p["eligible"] is True), None)
+        bounds = pool_bounds(p.get("pool"))
+        size = (bounds[1] - bounds[0] + 1) if bounds else None
+        used = None
+        if size is not None and pool_used is not None:
+            try:
+                used = pool_used(chosen.get("id"), p.get("pool"))
+            except Exception:
+                used = None
+        pool_rows.append(
+            {
+                "pool": p.get("pool"),
+                "eligible": st,
+                "guards": guards,
+                "size": size,
+                "used": used,
+                "free": max(0, size - used) if size is not None and used is not None else None,
+            }
+        )
+    eligible_pools = [p for p in pool_rows if p["eligible"] is True]
+    first_pool = next((p for p in eligible_pools if p["free"] is None or p["free"] > 0), None)
+    full_pools = [p for p in eligible_pools if p["free"] == 0]
+    option_pool = first_pool or (eligible_pools[0] if eligible_pools else None)
+
+    holder = None
+    if res and res.get("ip") and holder_of is not None:
+        try:
+            holder = holder_of(res["ip"], client.get("mac"))
+        except Exception:
+            holder = None
+
     answer_ip, answer_how = None, ""
-    if res and res.get("ip"):
+    pools_verdict = "none"
+    why_not: list[dict] = []
+    if holder:
+        pools_verdict = "held"
+        answer_how = (
+            f"the reserved address {res['ip']} is held by {holder['mac']}"
+            + (f" until {holder['expire']}" if holder.get("expire") else "")
+            + " — Kea offers the reservation only once that lease expires or is released"
+        )
+        why_not.append(
+            {
+                "text": answer_how,
+                "element": "reservation",
+                "investigate": holder["mac"] if holder.get("linkable") else "",
+            }
+        )
+    elif res and res.get("ip"):
         answer_ip, answer_how = res["ip"], f"the {res['scope']} reservation's fixed address"
+        pools_verdict = "reserved"
     elif lease and int(lease.get("subnet_id") or 0) == chosen.get("id") and lease.get("ip"):
         answer_ip, answer_how = lease["ip"], "the current lease is renewed (same address while it holds)"
+        pools_verdict = "lease"
     elif first_pool:
-        answer_ip, answer_how = f"from pool {first_pool['pool']}", "the first pool whose guard classes are satisfied"
+        free_note = f" ({first_pool['free']} free)" if first_pool["free"] is not None else ""
+        answer_ip = f"from pool {first_pool['pool']}{free_note}"
+        answer_how = (
+            "the first eligible pool with room" if full_pools else "the first pool whose guard classes are satisfied"
+        )
+        pools_verdict = "pool"
+    elif eligible_pools and len(full_pools) == len(eligible_pools):
+        answer_how = "every eligible pool is full — Kea has no address to offer (it would NAK or stay silent)"
+        pools_verdict = "full"
     elif any(p["eligible"] is None for p in pool_rows):
         answer_how = "undecided — a pool guard depends on an input Jen doesn't have"
+        pools_verdict = "undecided"
     else:
         answer_how = "no eligible pool — Kea would NAK / not offer an address"
-    steps.append(
-        {
-            "stage": "pools",
-            "verdict": "reserved"
-            if res and res.get("ip")
-            else (
-                "lease"
-                if answer_how.startswith("the current")
-                else (
-                    "pool" if first_pool else ("undecided" if any(p["eligible"] is None for p in pool_rows) else "none")
+    if pools_verdict in ("pool", "full"):
+        for p in full_pools:
+            why_not.append(
+                {
+                    "text": f"pool {p['pool']}: eligible but FULL ({p['used']} of {p['size']} addresses leased)"
+                    + (" — Kea tries the next eligible pool" if first_pool else " — and no eligible pool has room"),
+                    "element": f"pool {p['pool']}",
+                }
+            )
+    if pools_verdict in ("none", "full"):
+        for p in pool_rows:
+            if p["eligible"] is False:
+                why_not.append(
+                    {
+                        "text": f"pool {p['pool']}: guard class {', '.join(p['guards'])} not satisfied — the pool is skipped",
+                        "element": f"pool {p['pool']}",
+                    }
                 )
-            ),
-            "detail": (f"Address: {answer_ip} — {answer_how}." if answer_ip else f"No address: {answer_how}."),
-            "evidence": [
-                f"pool {p['pool']}: "
-                + (
-                    "no guard"
-                    if not p["guards"]
-                    else f"guard {', '.join(p['guards'])} → "
-                    + ("eligible" if p["eligible"] else ("undecided" if p["eligible"] is None else "blocked"))
-                )
-                for p in pool_rows
-            ]
-            + (
-                [
-                    f"reserved address {res['ip']} is {'inside' if net and ipaddress.IPv4Address(res['ip']) in net else 'OUTSIDE'} {chosen.get('subnet')}"
-                ]
-                if res and res.get("ip") and net
-                else []
-            ),
-        }
-    )
+    detail = f"Address: {answer_ip} — {answer_how}." if answer_ip else f"No address: {answer_how}."
+    evidence = []
+    for p in pool_rows:
+        line = f"pool {p['pool']}: " + (
+            "no guard"
+            if not p["guards"]
+            else f"guard {', '.join(p['guards'])} → "
+            + ("eligible" if p["eligible"] else ("undecided" if p["eligible"] is None else "blocked"))
+        )
+        if p["free"] is not None:
+            line += f" — {p['free']} of {p['size']} free" + (" (FULL)" if p["free"] == 0 else "")
+        evidence.append(line)
+    if res and res.get("ip") and net:
+        evidence.append(
+            f"reserved address {res['ip']} is {'inside' if ipaddress.IPv4Address(res['ip']) in net else 'OUTSIDE'} {chosen.get('subnet')}"
+        )
+    pools_step = {"stage": "pools", "verdict": pools_verdict, "detail": detail, "evidence": evidence}
+    if why_not:
+        pools_step["why_not"] = why_not
+    steps.append(pools_step)
 
     # 6. options
     matched_class_dicts = [
@@ -658,8 +819,8 @@ def explain(
     if sn:
         levels.append((f"shared-network:{sn_name}", _opts._opts(sn)))
     levels.append(("subnet", _opts._opts(chosen)))
-    if first_pool:
-        pool_dict = next((p for p in _pools(chosen) if p.get("pool") == first_pool["pool"]), None)
+    if option_pool:
+        pool_dict = next((p for p in _pools(chosen) if p.get("pool") == option_pool["pool"]), None)
         levels.append(("pool", _opts._opts(pool_dict) if pool_dict else []))
     if res and res.get("options"):
         levels.append(("reservation", [o for o in res["options"] if isinstance(o, dict)]))
@@ -685,7 +846,7 @@ def explain(
         and r["reason"] != "no test expression (assigned by a reservation's client-classes, a hook, or never)"
     ]
     undecided = [r["name"] for r in class_rows if r["matched"] is None and r["evaluable"]]
-    return {
+    result = {
         "ok": True,
         "subnet": {
             "id": chosen.get("id"),
@@ -703,12 +864,61 @@ def explain(
             "lifetime": lifetime,
             "lifetime_from": lifetime_from,
             "hostname": (res or {}).get("hostname") or client.get("hostname") or "",
+            "holder": holder,
         },
         "steps": steps,
+        "why_not": [{**w, "stage": s["stage"]} for s in steps for w in s.get("why_not", [])],
+        "missing_inputs": sorted({m for r in class_rows if r["matched"] is None for m in r.get("missing", [])}),
         "confidence": {
             "classes_total": len(class_rows),
             "classes_evaluable": len(evaluable),
             "classes_undecided": undecided,
             "not_evaluable": [r["name"] for r in class_rows if not r["evaluable"]],
         },
+        "subnet_element": chosen_element,
     }
+    result["summary"] = answer_line(result)
+    return result
+
+
+def answer_line(result: dict) -> str:
+    """The one sentence of an Explain result - what Kea would do with this client - for the Investigation Overview.
+    Pure over `explain()`'s own return value; "" when there is no result."""
+    if not result or not result.get("ok"):
+        return ""
+    steps = {s["stage"]: s for s in result.get("steps", [])}
+    pools = steps.get("pools", {})
+    verdict = pools.get("verdict")
+    answer = result.get("answer", {})
+    prefix = ""
+    if steps.get("subnet", {}).get("verdict") == "NOT selected":
+        prefix = "Kea would not select this subnet for the relay in use; if it did: "
+    if verdict == "reserved":
+        return f"{prefix}Would get {answer['ip']} from the reservation."
+    if verdict == "held":
+        return f"{prefix}Would NOT get its reserved address yet: {answer['how']}."
+    if verdict == "lease":
+        return f"{prefix}Would keep its current lease, {answer['ip']}."
+    if verdict == "pool":
+        return f"{prefix}Would be offered an address {answer['ip']}."
+    if verdict == "full":
+        return f"{prefix}Would be NAKed: every eligible pool is full."
+    if verdict == "undecided":
+        classes = result.get("confidence", {}).get("classes_undecided", [])
+        needs = ", ".join(INPUT_LABELS.get(m, m) for m in result.get("missing_inputs", []))
+        return (
+            prefix
+            + "Undecided"
+            + (f": {', '.join(classes)}" if classes else "")
+            + (f" need {needs}" if needs else "")
+            + "."
+        )
+    # none: say what blocks it
+    blockers = [p for p in result.get("pools", []) if p["eligible"] is False]
+    guards = sorted({g for p in blockers for g in p["guards"]})
+    if blockers and len(blockers) == len(result.get("pools", [])):
+        where = "the only pool" if len(blockers) == 1 else "every pool"
+        return f"{prefix}Would be NAKed: no eligible pool — class guard {', '.join(guards)} blocks {where}."
+    if steps.get("subnet-guards", {}).get("verdict") == "blocked":
+        return f"{prefix}Would be NAKed: no subnet's guard classes are satisfied."
+    return f"{prefix}Would be NAKed: no eligible pool."

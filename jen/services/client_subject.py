@@ -277,19 +277,22 @@ def subnet_for_ip(ip) -> int | None:
 def load_leases4(mac: str, ip: str = "") -> list[dict]:
     """Every active (state=0) v4 lease for this identifier — MAC first, or
     the single lease at this address when only an IP is known — newest
-    first."""
+    first. Each row also carries `client_id` (hex, '' when the client sent none) and `user_context` (the JSON text Kea
+    stores - with store-extended-info, the relay agent's options) for Explain's inputs (v5.68.0-beta.2, Q135)."""
     try:
         with __db.kea_db() as db, db.cursor() as cur:
             if mac:
                 cur.execute(
                     "SELECT inet_ntoa(address) AS ip, subnet_id, IFNULL(hostname,'') AS hostname, expire, "
-                    "valid_lifetime FROM lease4 WHERE HEX(hwaddr)=%s AND state=0 ORDER BY expire DESC",
+                    "valid_lifetime, HEX(client_id) AS client_id, user_context "
+                    "FROM lease4 WHERE HEX(hwaddr)=%s AND state=0 ORDER BY expire DESC",
                     (mac_hex(mac),),
                 )
             else:
                 cur.execute(
                     "SELECT inet_ntoa(address) AS ip, subnet_id, IFNULL(hostname,'') AS hostname, expire, "
-                    "valid_lifetime FROM lease4 WHERE address=inet_aton(%s) AND state=0",
+                    "valid_lifetime, HEX(client_id) AS client_id, user_context "
+                    "FROM lease4 WHERE address=inet_aton(%s) AND state=0",
                     (ip,),
                 )
             return cur.fetchall()

@@ -50,7 +50,7 @@ USER_CLASS = b"jen-user"
 HOSTNAME = b"probe-host"
 CIRCUIT = b"eth0/1/7"
 REMOTE = bytes.fromhex("0a0b0c0d0e0f")
-REQUESTED = "10.99.0.150"
+REQUESTED_BASE = 150  # one address per level (10.99.0.15N): a lease the previous level made would NAK this one
 RELAY = "10.99.0.1"
 
 # what to look for in the daemon's output: the text a human would grep for, and the hex a packet dump would carry
@@ -178,7 +178,9 @@ def _probe(index: int, severity: str, debuglevel):
         sock.bind(("0.0.0.0", 0))
         sock.sendto(_packet(1, 0x10000 + index, mac), (local, 67))
         time.sleep(2)
-        sock.sendto(_packet(3, 0x20000 + index, mac, requested=REQUESTED, server=local), (local, 67))
+        sock.sendto(
+            _packet(3, 0x20000 + index, mac, requested=f"10.99.0.{REQUESTED_BASE + index}", server=local), (local, 67)
+        )
         time.sleep(3)
     finally:
         sock.close()
@@ -243,3 +245,44 @@ def test_what_kea_logs_and_stores_at_this_level(findings, index, level):
     }
     # the one thing every level must show for the product to work at all: the daemon took the packets and the lease exists
     assert lease is not None and lease["ip"], f"no lease was stored at {name}; the packets did not reach the daemon"
+
+    # ── what Jen's parsers (jen/services/kea_log_inputs.py) read from the REAL output, pinned per level ──────────────────
+    from jen.services import kea_log_inputs as li
+
+    lines = text.splitlines()
+    cid = li.client_id_from_log(lines, mac)
+    assert cid and cid["client_id"] == cid_hex_colon(mac), f"the client id is on every label, at {name} too: {cid}"
+
+    classes = li.latest_classes(lines, mac)
+    query = li.latest_query_data(lines, mac)
+    level = -1 if debuglevel is None else debuglevel  # INFO and DEBUG 0 are below every threshold
+    if level >= li.LEVEL_FOR_CLASSES:
+        assert classes and li.vendor_class_from(classes["classes"]) == "jen-probe-vendor", (name, classes)
+        assert "jen-probe-user" in classes["classes"], classes
+    else:
+        assert classes is None, f"a class list at {name}: {classes}"
+    if level >= li.LEVEL_FOR_PACKET:
+        assert query == {
+            **query,
+            "hostname": "probe-host",
+            "vendor_class": "jen-probe-vendor",
+            "user_class": "jen-user",
+            "circuit_id": "eth0/1/7",
+            "remote_id": "0a0b0c0d0e0f",
+            "client_id": cid_hex_colon(mac),
+        }, query
+    else:
+        assert query is None, f"a packet dump at {name}: {query}"
+
+    # the lease row, at every level: client id, hostname, and the relay agent's options (store-extended-info)
+    assert lease["client_id"].lower() == cid_hex, lease
+    assert lease["hostname"] == "probe-host", lease
+    assert li.relay_info_from_user_context(lease["user_context"]) == {
+        "circuit_id": "eth0/1/7",
+        "remote_id": "0a0b0c0d0e0f",
+    }, lease
+    findings["levels"][name]["parsed"] = {"client_id": cid, "classes": classes, "query": query}
+
+
+def cid_hex_colon(mac: str) -> str:
+    return "01:" + mac

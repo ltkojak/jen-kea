@@ -122,3 +122,282 @@ class TestLinks:
         )
         for name in ("_lease_rows.html", "_reservation_row.html"):
             assert "/tools/explain?mac=" in (REPO / "templates" / name).read_text(encoding="utf-8"), name
+
+
+# ── v5.68.0-beta.2 (Q135): inputs by source, and the why-not verdicts, through the route ─────────────────────────────
+
+MAC2 = "00:11:22:33:44:55"
+NO_LOG = {
+    "classes": None,
+    "query": None,
+    "cid": None,
+    "state": "no-helper",
+    "message": "Reading Kea's log needs the Kea host helper.",
+}
+KEA_LOG = {
+    "classes": {
+        "classes": ["ALL", "VENDOR_CLASS_Acme-1", "printers"],
+        "at": "2026-10-04 15:10:39",
+        "id": "x",
+        "message": "",
+    },
+    "query": {
+        "at": "2026-10-04 15:10:41",
+        "hostname": "packet-host",
+        "vendor_class": "Acme-1",
+        "client_id": "01:00:11:22:33:44:55",
+        "user_class": "",
+        "circuit_id": "eth0/1/7",
+        "remote_id": "",
+    },
+    "cid": {"client_id": "01:00:11:22:33:44:55", "at": "2026-10-04 15:10:41"},
+    "state": "ok",
+    "message": "",
+}
+RELAY_CONTEXT = '{ "ISC": { "relay-agent-info": { "remote-id": "0A0B0C0D0E0F", "sub-options": "0x010441424344" } } }'
+
+
+def _cleanup(db):
+    with db.cursor() as cur:
+        cur.execute(
+            "DELETE FROM lease4 WHERE HEX(hwaddr) IN ('001122334455', '00AAAAAAAA01', '00AAAAAAAA02', '00AAAAAAAA03')"
+        )
+        cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier) IN ('001122334455', '00AAAAAAAA02')")
+    db.commit()
+
+
+@pytest.fixture
+def lease_with_extras(db):
+    _cleanup(db)
+    with db.cursor() as cur:
+        cur.execute(
+            "INSERT INTO lease4 (address, hwaddr, client_id, subnet_id, state, expire, valid_lifetime, hostname, user_context) "
+            "VALUES (INET_ATON('192.168.1.150'), UNHEX('001122334455'), UNHEX('01001122334455'), 1, 0, "
+            "DATE_ADD(NOW(), INTERVAL 1 HOUR), 3600, 'lease-host', %s)",
+            (RELAY_CONTEXT,),
+        )
+    db.commit()
+    yield
+    _cleanup(db)
+
+
+@pytest.fixture
+def no_log(monkeypatch):
+    seen = []
+
+    def read_log(mac, *, allowed, fetch=True):
+        seen.append(allowed)
+        return NO_LOG
+
+    monkeypatch.setattr("jen.services.explain_context.read_log", read_log)
+    return seen
+
+
+class TestInputsBySource:
+    def test_the_lease_row_fills_the_client_id_hostname_and_relay_ids_and_says_so(
+        self, logged_in_client, stub_config, mock_kea, lease_with_extras, no_log
+    ):
+        page = logged_in_client.get(f"/tools/explain?mac={MAC2}").get_data(as_text=True)
+        assert "Inputs used" in page
+        assert "lease-host" in page and "01:00:11:22:33:44:55" in page and "ABCD" in page and "0a0b0c0d0e0f" in page
+        assert "the current lease" in page and "the lease&#39;s extended info" in page
+        assert "the MAC you asked about" in page
+
+    def test_what_was_typed_is_labelled_typed_and_wins(
+        self, logged_in_client, stub_config, mock_kea, lease_with_extras, no_log
+    ):
+        page = logged_in_client.get(
+            f"/tools/explain?mac={MAC2}&hostname=typed-host&vendor_class=HP+JetDirect"
+        ).get_data(as_text=True)
+        assert "typed-host" in page and "HP JetDirect" in page and "typed" in page
+        assert "lease-host" not in page, "the typed hostname replaced the lease's"
+
+    def test_auto_off_is_only_the_mac_and_what_was_typed(
+        self, logged_in_client, stub_config, mock_kea, lease_with_extras, no_log
+    ):
+        page = logged_in_client.get(f"/tools/explain?mac={MAC2}&auto=0").get_data(as_text=True)
+        assert "lease-host" not in page and "01:00:11:22:33:44:55" not in page and "Inputs used" in page
+
+    def test_kea_log_inputs_appear_for_an_admin_who_may_read_it(
+        self, logged_in_client, stub_config, mock_kea, lease_with_extras, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "jen.services.explain_context.read_log", lambda mac, *, allowed, fetch=True: KEA_LOG if allowed else NO_LOG
+        )
+        page = logged_in_client.get(f"/tools/explain?mac={MAC2}").get_data(as_text=True)
+        assert "packet-host" in page and "Acme-1" in page and "eth0/1/7" in page
+        assert "Kea&#39;s log (packet dump)" in page
+        assert "assigned by Kea at 2026-10-04 15:10:39" in page, (
+            "the printers class has a test Jen cannot settle; Kea's list decides it"
+        )
+
+    def test_a_restricted_caller_never_asks_for_the_log(
+        self, client, db, stub_config, mock_kea, lease_with_extras, no_log
+    ):
+        from tests.conftest import restricted_client
+
+        c, _uid = restricted_client(client, db, allowed_subnets=[1], role="admin", username="_explain_scoped_admin")
+        page = c.get(f"/tools/explain?mac={MAC2}").get_data(as_text=True)
+        assert no_log == [False], "a subnet-scoped admin may not read the Kea log, so it is not read for them"
+        assert "lease-host" in page, "their own subnet's lease still fills the form"
+
+    def test_a_lease_in_a_subnet_the_caller_cannot_see_contributes_nothing(
+        self, client, db, stub_config, mock_kea, lease_with_extras, no_log
+    ):
+        from tests.conftest import restricted_client
+
+        c, _uid = restricted_client(client, db, allowed_subnets=[999], role="viewer", username="_explain_blind_viewer")
+        page = c.get(f"/tools/explain?mac={MAC2}&subnet=999").get_data(as_text=True)
+        for secret in ("lease-host", "01:00:11:22:33:44:55", "0a0b0c0d0e0f", "ABCD"):
+            assert secret not in page, f"{secret!r} leaked from a lease in a subnet the viewer cannot see"
+
+    def test_the_embedded_result_carries_the_form_that_goes_back_to_the_investigation_page(
+        self, logged_in_client, stub_config, mock_kea, lease_with_extras, no_log
+    ):
+        r = logged_in_client.get(f"/tools/explain?mac={MAC2}&subnet=1&embed_q={MAC2}", headers={"HX-Request": "true"})
+        page = r.get_data(as_text=True)
+        assert 'action="/client"' in page and 'name="q" value="00:11:22:33:44:55"' in page
+        assert 'name="tab" value="explain"' in page
+        for field in ("client_id", "vendor_class", "user_class", "hostname", "circuit_id", "remote_id", "giaddr"):
+            assert f'name="{field}"' in page, field
+        assert "Explain again" in page
+        assert "needed to decide a class" in page, (
+            "an input a class test needs and nothing supplied is marked as needed"
+        )
+
+    def test_without_an_identifier_to_go_back_to_there_is_no_inline_form(
+        self, logged_in_client, stub_config, mock_kea, no_log
+    ):
+        page = logged_in_client.get(f"/tools/explain?mac={MAC2}&subnet=1", headers={"HX-Request": "true"}).get_data(
+            as_text=True
+        )
+        assert "Explain again" not in page and "Inputs used" in page
+
+    def test_a_scoped_admin_is_told_who_may_read_kea_s_log(self, client, db, stub_config, mock_kea):
+        from tests.conftest import restricted_client
+
+        c, _uid = restricted_client(client, db, allowed_subnets=[1], role="admin", username="_explain_hint_admin")
+        page = c.get("/tools/explain?mac=aa:bb:cc:dd:ee:01&subnet=1").get_data(as_text=True)
+        assert "needs an admin with access to every subnet" in page
+
+    def test_an_admin_with_no_helper_is_told_to_type_what_is_missing(
+        self, logged_in_client, stub_config, mock_kea, no_log
+    ):
+        page = logged_in_client.get("/tools/explain?mac=aa:bb:cc:dd:ee:01&subnet=1").get_data(as_text=True)
+        assert "needs the Kea host helper" in page and "Type what is missing below" in page
+
+
+SMALL_CFG = {
+    "subnet4": [
+        {
+            "id": 1,
+            "subnet": "192.168.1.0/24",
+            "pools": [{"pool": "192.168.1.10 - 192.168.1.11"}, {"pool": "192.168.1.100 - 192.168.1.110"}],
+        }
+    ]
+}
+
+
+def _lease(db, mac_hex, ip, subnet_id=1):
+    with db.cursor() as cur:
+        cur.execute(
+            "INSERT INTO lease4 (address, hwaddr, subnet_id, state, expire, valid_lifetime) VALUES "
+            "(INET_ATON(%s), UNHEX(%s), %s, 0, DATE_ADD(NOW(), INTERVAL 1 HOUR), 3600)",
+            (ip, mac_hex, subnet_id),
+        )
+    db.commit()
+
+
+class TestLeaseAwareVerdicts:
+    @pytest.fixture
+    def small(self, monkeypatch, db, no_log):
+        monkeypatch.setattr("jen.routes.explain.dhcp4_config", lambda force=False: SMALL_CFG)
+        _cleanup(db)
+        yield
+        _cleanup(db)
+
+    def test_a_full_pool_is_a_verdict_and_the_next_pool_is_the_answer(self, logged_in_client, db, small, mock_kea):
+        _lease(db, "00AAAAAAAA01", "192.168.1.10")
+        _lease(db, "00AAAAAAAA03", "192.168.1.11")
+        page = logged_in_client.get("/tools/explain?mac=aa:bb:cc:dd:ee:01&subnet=1").get_data(as_text=True)
+        assert "eligible but FULL (2 of 2 addresses leased)" in page
+        assert "from pool 192.168.1.100 - 192.168.1.110 (11 free)" in page
+        assert "(FULL)" in page
+
+    def test_a_reserved_address_held_by_another_client_names_the_holder_and_links_to_it(
+        self, logged_in_client, db, small, mock_kea
+    ):
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
+                "VALUES (UNHEX('00AAAAAAAA02'), 0, 1, INET_ATON('192.168.1.50'), 'wanted')"
+            )
+        db.commit()
+        _lease(db, "00AAAAAAAA01", "192.168.1.50")
+        page = logged_in_client.get("/tools/explain?mac=00:aa:aa:aa:aa:02&subnet=1&embed_q=00:aa:aa:aa:aa:02").get_data(
+            as_text=True
+        )
+        assert "is held by 00:aa:aa:aa:aa:01" in page and "only once that lease expires or is released" in page
+        assert "/client?q=00%3Aaa%3Aaa%3Aaa%3Aaa%3A01" in page, "the holder links to its own investigation"
+        assert "tab=changes" in page and "element=reservation" in page, (
+            "an admin may follow the why-not to the config changes"
+        )
+
+    def test_a_scoped_admin_does_not_get_the_changes_link(self, client, db, small, mock_kea):
+        from tests.conftest import restricted_client
+
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
+                "VALUES (UNHEX('00AAAAAAAA02'), 0, 1, INET_ATON('192.168.1.50'), 'wanted')"
+            )
+        db.commit()
+        _lease(db, "00AAAAAAAA01", "192.168.1.50")
+        c, _uid = restricted_client(client, db, allowed_subnets=[1], role="admin", username="_explain_holder_admin")
+        page = c.get(
+            "/tools/explain?mac=00:aa:aa:aa:aa:02&subnet=1&embed_q=00:aa:aa:aa:aa:02", headers={"HX-Request": "true"}
+        ).get_data(as_text=True)
+        assert "is held by 00:aa:aa:aa:aa:01" in page, "the holder is in a subnet they may see"
+        assert "tab=changes" not in page
+
+    def test_the_holder_of_an_address_in_a_subnet_the_caller_cannot_see_is_not_revealed(
+        self, client, db, small, mock_kea
+    ):
+        from tests.conftest import restricted_client
+
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
+                "VALUES (UNHEX('00AAAAAAAA02'), 0, 1, INET_ATON('192.168.1.50'), 'wanted')"
+            )
+        db.commit()
+        _lease(
+            db, "00AAAAAAAA01", "192.168.1.50", subnet_id=2
+        )  # the lease on that address sits in a subnet they cannot see
+        c, _uid = restricted_client(client, db, allowed_subnets=[1], role="viewer", username="_explain_scoped_viewer")
+        page = c.get("/tools/explain?mac=00:aa:aa:aa:aa:02&subnet=1").get_data(as_text=True)
+        assert "00:aa:aa:aa:aa:01" not in page and "is held by" not in page
+
+    def test_an_identifier_type_that_is_not_enabled_is_never_matched(
+        self, logged_in_client, db, monkeypatch, mock_kea, no_log
+    ):
+        cfg = dict(SMALL_CFG, **{"host-reservation-identifiers": ["circuit-id"]})
+        monkeypatch.setattr("jen.routes.explain.dhcp4_config", lambda force=False: cfg)
+        _cleanup(db)
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
+                "VALUES (UNHEX('00AAAAAAAA02'), 0, 1, INET_ATON('192.168.1.50'), 'wanted')"
+            )
+        db.commit()
+        try:
+            page = logged_in_client.get("/tools/explain?mac=00:aa:aa:aa:aa:02&subnet=1").get_data(as_text=True)
+            assert "never matched" in page and "hw-address is not in host-reservation-identifiers (circuit-id)" in page
+        finally:
+            _cleanup(db)
+
+    def test_a_relay_that_does_not_match_the_subnet_is_a_stage_verdict(self, logged_in_client, small, mock_kea):
+        page = logged_in_client.get("/tools/explain?mac=aa:bb:cc:dd:ee:01&subnet=1&giaddr=10.9.9.9").get_data(
+            as_text=True
+        )
+        assert "NOT selected" in page and "Everything below assumes it was" in page

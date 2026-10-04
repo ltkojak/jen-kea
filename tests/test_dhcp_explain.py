@@ -307,3 +307,229 @@ class TestExplain:
         r = ex.explain(cfg, _client(), subnet_id=5)
         assert r["answer"]["ip"] is None and "no eligible pool" in r["answer"]["how"]
         assert r["answer"]["lifetime"] == 7200 and r["answer"]["lifetime_from"] == "Kea default"
+
+
+# ── v5.68.0-beta.2 (Q135): the "why not" verdicts ────────────────────────────
+
+POOLS_CFG = {
+    "subnet4": [
+        {
+            "id": 7,
+            "subnet": "10.0.7.0/24",
+            "relay": {"ip-addresses": ["10.0.7.1"]},
+            "pools": [{"pool": "10.0.7.10 - 10.0.7.12"}, {"pool": "10.0.7.20 - 10.0.7.29"}],
+        }
+    ]
+}
+A_POOL, B_POOL = "10.0.7.10 - 10.0.7.12", "10.0.7.20 - 10.0.7.29"
+
+
+def _used(**by_pool):
+    return lambda subnet_id, pool: by_pool.get(pool)
+
+
+class TestPoolOccupancy:
+    def test_a_full_first_pool_is_skipped_and_named(self):
+        r = ex.explain(POOLS_CFG, _client(), subnet_id=7, pool_used=_used(**{A_POOL: 3, B_POOL: 4}))
+        pools = _stage(r, "pools")
+        assert pools["verdict"] == "pool"
+        assert r["answer"]["ip"] == f"from pool {B_POOL} (6 free)"
+        assert r["answer"]["how"] == "the first eligible pool with room"
+        assert [p["free"] for p in r["pools"]] == [0, 6]
+        why = pools["why_not"]
+        assert len(why) == 1 and why[0]["element"] == f"pool {A_POOL}"
+        assert "FULL (3 of 3 addresses leased)" in why[0]["text"] and "tries the next eligible pool" in why[0]["text"]
+        assert any("(FULL)" in line for line in pools["evidence"])
+
+    def test_every_eligible_pool_full_is_a_verdict_not_an_address(self):
+        r = ex.explain(POOLS_CFG, _client(), subnet_id=7, pool_used=_used(**{A_POOL: 3, B_POOL: 10}))
+        assert _stage(r, "pools")["verdict"] == "full"
+        assert r["answer"]["ip"] is None and "every eligible pool is full" in r["answer"]["how"]
+        assert r["summary"] == "Would be NAKed: every eligible pool is full."
+        assert {w["element"] for w in r["why_not"]} == {f"pool {A_POOL}", f"pool {B_POOL}"}
+        assert all(w["stage"] == "pools" for w in r["why_not"])
+
+    def test_free_counts_ride_along_when_nothing_is_full(self):
+        r = ex.explain(POOLS_CFG, _client(), subnet_id=7, pool_used=_used(**{A_POOL: 1, B_POOL: 0}))
+        assert r["answer"]["ip"] == f"from pool {A_POOL} (2 free)"
+        assert r["answer"]["how"] == "the first pool whose guard classes are satisfied"
+        assert "why_not" not in _stage(r, "pools")
+
+    def test_unknown_occupancy_changes_nothing(self):
+        def boom(subnet_id, pool):
+            raise RuntimeError("db down")
+
+        for lookup in (None, _used(), boom):
+            r = ex.explain(POOLS_CFG, _client(), subnet_id=7, pool_used=lookup)
+            assert r["answer"]["ip"] == f"from pool {A_POOL}"
+            assert all(p["free"] is None for p in r["pools"])
+
+    def test_pool_bounds_reads_ranges_and_cidrs(self):
+        assert ex.pool_bounds("10.0.0.1 - 10.0.0.3") == (167772161, 167772163)
+        assert ex.pool_bounds("10.0.0.0/30") == (167772160, 167772163)
+        for bad in ("", "x", "10.0.0.9 - 10.0.0.1", "10.0.0.1 - nope", None):
+            assert ex.pool_bounds(bad) is None
+
+    def test_a_blocked_pool_is_a_why_not_when_nothing_else_is_left(self):
+        cfg = {
+            "subnet4": [
+                {
+                    "id": 5,
+                    "subnet": "10.0.5.0/24",
+                    "pools": [{"pool": "10.0.5.10 - 10.0.5.20", "client-classes": ["KNOWN"]}],
+                }
+            ]
+        }
+        r = ex.explain(cfg, _client(), subnet_id=5)
+        why = _stage(r, "pools")["why_not"]
+        assert why[0]["element"] == "pool 10.0.5.10 - 10.0.5.20" and "guard class KNOWN" in why[0]["text"]
+        assert r["summary"] == "Would be NAKed: no eligible pool — class guard KNOWN blocks the only pool."
+
+
+RES_ROW = {
+    "subnet_id": 7,
+    "identifier_type": 0,
+    "identifier": "aabbccddee01",
+    "ip": "10.0.7.50",
+    "hostname": "res",
+    "classes": [],
+    "options": [],
+}
+HOLDER = {"mac": "11:22:33:44:55:66", "expire": "2026-10-05 12:00 UTC", "linkable": True}
+
+
+class TestReservedButHeld:
+    def test_a_reservation_held_by_another_client_is_named_with_its_holder(self):
+        seen = []
+
+        def holder(ip, mac):
+            seen.append((ip, mac))
+            return HOLDER
+
+        r = ex.explain(POOLS_CFG, _client(), subnet_id=7, reservations=[RES_ROW], holder_of=holder)
+        pools = _stage(r, "pools")
+        assert seen == [("10.0.7.50", MAC)]
+        assert pools["verdict"] == "held" and r["answer"]["ip"] is None
+        assert "held by 11:22:33:44:55:66 until 2026-10-05 12:00 UTC" in r["answer"]["how"]
+        assert "only once that lease expires or is released" in r["answer"]["how"]
+        (why,) = pools["why_not"]
+        assert why["element"] == "reservation" and why["investigate"] == "11:22:33:44:55:66"
+        assert r["summary"].startswith("Would NOT get its reserved address yet")
+
+    def test_an_unlinkable_holder_carries_no_link(self):
+        r = ex.explain(
+            POOLS_CFG,
+            _client(),
+            subnet_id=7,
+            reservations=[RES_ROW],
+            holder_of=lambda ip, mac: {**HOLDER, "linkable": False},
+        )
+        assert _stage(r, "pools")["why_not"][0]["investigate"] == ""
+
+    def test_nobody_holding_it_is_the_plain_reservation(self):
+        r = ex.explain(POOLS_CFG, _client(), subnet_id=7, reservations=[RES_ROW], holder_of=lambda ip, mac: None)
+        assert _stage(r, "pools")["verdict"] == "reserved" and r["answer"]["ip"] == "10.0.7.50"
+        assert r["summary"] == "Would get 10.0.7.50 from the reservation."
+
+    def test_a_lookup_that_fails_is_not_a_holder(self):
+        def boom(ip, mac):
+            raise RuntimeError("db down")
+
+        r = ex.explain(POOLS_CFG, _client(), subnet_id=7, reservations=[RES_ROW], holder_of=boom)
+        assert _stage(r, "pools")["verdict"] == "reserved"
+
+
+class TestHostReservationIdentifiers:
+    def _cfg(self, identifiers):
+        return dict(POOLS_CFG, **{"host-reservation-identifiers": identifiers})
+
+    def test_an_identifier_type_that_is_not_enabled_is_never_matched(self):
+        r = ex.explain(self._cfg(["circuit-id", "client-id"]), _client(), subnet_id=7, reservations=[RES_ROW])
+        step = _stage(r, "reservation")
+        assert step["verdict"] == "never matched" and r["reservation"] is None
+        assert "hw-address is not in host-reservation-identifiers (circuit-id, client-id)" in step["detail"]
+        assert "The client is UNKNOWN" in step["detail"]
+        assert step["why_not"][0]["element"] == "reservation"
+        assert _stage(r, "pools")["verdict"] == "pool", "so it gets a pool address, not 10.0.7.50"
+
+    def test_the_default_is_every_type(self):
+        for cfg in (POOLS_CFG, self._cfg(["hw-address"]), self._cfg(["circuit-id", "hw-address"])):
+            r = ex.explain(cfg, _client(), subnet_id=7, reservations=[RES_ROW])
+            assert _stage(r, "reservation")["verdict"] == "matched", cfg
+
+    def test_the_helpers(self):
+        assert ex.enabled_identifiers({"host-reservation-identifiers": ["hw-address"]}) == ["hw-address"]
+        assert ex.enabled_identifiers({}) is None and ex.enabled_identifiers(None) is None
+        assert ex.identifier_type_name(0) == "hw-address" and ex.identifier_type_name("3") == "client-id"
+
+
+class TestRelayMismatch:
+    def test_a_giaddr_the_subnet_does_not_match_is_a_stage_verdict(self):
+        r = ex.explain(POOLS_CFG, _client(giaddr="10.9.9.9"), subnet_id=7)
+        step = _stage(r, "subnet")
+        assert step["verdict"] == "NOT selected"
+        assert "would NOT be selected" in step["detail"] and "Everything below assumes it was" in step["detail"]
+        assert step["why_not"] == [{"text": step["evidence"][0], "element": "subnet 7 (10.0.7.0/24)"}]
+        assert r["summary"].startswith("Kea would not select this subnet for the relay in use; if it did: ")
+
+    def test_a_matching_giaddr_is_still_selected(self):
+        for giaddr in ("10.0.7.1", "10.0.7.77"):  # a relay address; inside the subnet
+            r = ex.explain(POOLS_CFG, _client(giaddr=giaddr), subnet_id=7)
+            assert _stage(r, "subnet")["verdict"] == "selected" and "why_not" not in _stage(r, "subnet")
+
+
+class TestClassesKeaAssigned:
+    def test_a_class_with_no_test_is_decided_by_what_kea_said(self):
+        assigned = {"classes": ["ALL", "UNKNOWN", "byres"], "at": "2026-10-04 15:10:39"}
+        r = ex.explain(CFG, _client(), subnet_id=1, assigned_classes=assigned)
+        by = {c["name"]: c for c in r["classes"]}
+        assert by["byres"]["matched"] is True
+        assert (
+            by["byres"]["reason"] == "assigned by Kea at 2026-10-04 15:10:39 (its own log)" and by["byres"]["from_kea"]
+        )
+        assert by["windows"]["matched"] is None and "supply" in by["windows"]["reason"]
+
+    def test_what_kea_listed_outranks_what_jen_could_work_out(self):
+        assigned = {"classes": ["windows"], "at": ""}
+        r = ex.explain(CFG, _client(vendor_class="Linux"), subnet_id=1, assigned_classes=assigned)
+        by = {c["name"]: c for c in r["classes"]}
+        assert by["windows"]["matched"] is True and by["windows"]["reason"] == "assigned by Kea (its own log)"
+
+    def test_a_later_member_test_sees_the_class_kea_assigned(self):
+        cfg = dict(CFG, **{"client-classes": [{"name": "a"}, {"name": "b", "test": "member('a')"}]})
+        r = ex.explain(cfg, _client(), subnet_id=1, assigned_classes={"classes": ["a"], "at": ""})
+        assert {c["name"]: c["matched"] for c in r["classes"]} == {"a": True, "b": True}
+
+    def test_no_list_changes_nothing(self):
+        plain = ex.explain(CFG, _client(), subnet_id=1)["classes"]
+        assert plain == ex.explain(CFG, _client(), subnet_id=1, assigned_classes=None)["classes"]
+
+
+class TestMissingInputsAndTheAnswerLine:
+    def test_what_would_settle_an_undecided_class_is_named(self):
+        r = ex.explain(CFG, _client(), subnet_id=1)
+        assert "hostname" in r["missing_inputs"] and set(r["missing_inputs"]) <= {"hostname", "vendor_class"}
+        full = ex.explain(CFG, _client(vendor_class="MSFT 5.0", hostname="boss-printer"), subnet_id=1)
+        assert full["missing_inputs"] == []
+
+    def test_the_lines(self):
+        assert ex.answer_line({}) == "" and ex.answer_line({"ok": False}) == ""
+        lease = {"ip": "10.0.1.150", "subnet_id": 1}
+        renewed = ex.explain(CFG, _client(mac="00:11:22:33:44:55"), subnet_id=1, lease=lease)
+        assert renewed["summary"] == "Would keep its current lease, 10.0.1.150."
+        pooled = ex.explain(POOLS_CFG, _client(), subnet_id=7, pool_used=_used(**{A_POOL: 1}))
+        assert pooled["summary"] == f"Would be offered an address from pool {A_POOL} (2 free)."
+        guarded = {
+            "client-classes": [{"name": "iot_only", "test": "option[60].hex == 'IOT'"}],
+            "subnet4": [
+                {
+                    "id": 9,
+                    "subnet": "10.0.9.0/24",
+                    "pools": [{"pool": "10.0.9.10 - 10.0.9.20", "client-classes": ["iot_only"]}],
+                }
+            ],
+        }
+        blocked = ex.explain(guarded, _client(vendor_class="MSFT"), subnet_id=9)
+        assert blocked["summary"] == "Would be NAKed: no eligible pool — class guard iot_only blocks the only pool."
+        undecided = ex.explain(guarded, _client(), subnet_id=9)
+        assert undecided["summary"] == "Undecided: iot_only need vendor class (option 60)."

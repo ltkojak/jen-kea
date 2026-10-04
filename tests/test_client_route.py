@@ -409,3 +409,72 @@ class TestAGlobalReservationOnlyClientIsFindable:
             assert self.G_MAC in r.get_data(as_text=True), "the client known only by a global reservation is shown"
         finally:
             self._clean(db)
+
+
+# ── v5.68.0-beta.2 (Q135): the Explain tab's inputs and the Overview's one line ───────────────────────────────────────
+
+
+class TestExplainTabInputs:
+    def test_the_embedded_explain_fetch_carries_the_identifier_and_what_was_typed(
+        self, logged_in_client, seeded, stub_config
+    ):
+        body = logged_in_client.get(f"/client?q={MAC}&tab=explain&hostname=h1&vendor_class=Acme&auto=0").data.decode()
+        assert "/tools/explain?" in body
+        for part in ("mac=", "subnet=1", "embed_q=", "hostname=h1", "vendor_class=Acme", "auto=0"):
+            assert part in body, part
+
+    def test_an_input_the_form_does_not_know_is_not_forwarded(self, logged_in_client, seeded, stub_config):
+        body = logged_in_client.get(f"/client?q={MAC}&tab=explain&bogus=1&hostname=h1").data.decode()
+        assert "bogus" not in body
+
+    def test_the_config_tab_evaluates_with_the_typed_inputs(self, logged_in_client, seeded, stub_config):
+        body = logged_in_client.get(f"/client?q={MAC}&tab=config&vendor_class=Acme").data.decode()
+        assert "Effective configuration" in body
+
+
+class TestTheOverviewLine:
+    def test_it_says_what_kea_would_do_and_links_to_why(self, logged_in_client, seeded, stub_config):
+        body = logged_in_client.get(f"/client?q={MAC}&tab=overview").data.decode()
+        assert "What Kea would do:" in body and "Would keep its current lease, 10.45.0.5." in body
+        assert "tab=explain" in body
+
+    def test_it_is_absent_when_kea_does_not_answer(self, logged_in_client, seeded, monkeypatch):
+        monkeypatch.setattr("jen.routes.client.dhcp4_config", lambda force=False: None)
+        assert "What Kea would do:" not in logged_in_client.get(f"/client?q={MAC}&tab=overview").data.decode()
+
+    def test_it_is_absent_when_no_subnet_is_fixed(self, logged_in_client, db, stub_config):
+        _clean(db)
+        with db.cursor() as cur:
+            cur.execute("INSERT INTO devices (mac, last_ip) VALUES (%s, %s)", (MAC, IP))
+        db.commit()
+        try:
+            assert "What Kea would do:" not in logged_in_client.get(f"/client?q={MAC}&tab=overview").data.decode()
+        finally:
+            _clean(db)
+
+    def test_a_failure_in_the_evaluation_never_breaks_the_page(
+        self, logged_in_client, seeded, stub_config, monkeypatch
+    ):
+        def boom(*a, **k):
+            raise RuntimeError("explain exploded")
+
+        monkeypatch.setattr("jen.routes.client._explain_run", boom)
+        r = logged_in_client.get(f"/client?q={MAC}&tab=overview")
+        assert r.status_code == 200 and "What Kea would do:" not in r.data.decode()
+
+    def test_a_scoped_user_gets_it_for_their_own_subnet(self, client, db, seeded, stub_config):
+        from tests.conftest import restricted_client
+
+        restricted_client(client, db, allowed_subnets=[1], role="viewer", username="_overview_line_viewer")
+        assert "What Kea would do:" in client.get(f"/client?q={MAC}&tab=overview").data.decode()
+
+    def test_the_overview_never_pays_for_a_log_round_trip(self, logged_in_client, seeded, stub_config, monkeypatch):
+        seen = []
+
+        def read_log(mac, *, allowed, fetch=True):
+            seen.append(fetch)
+            return {"classes": None, "query": None, "cid": None, "state": "not-fetched", "message": ""}
+
+        monkeypatch.setattr("jen.services.explain_context.read_log", read_log)
+        logged_in_client.get(f"/client?q={MAC}&tab=overview")
+        assert seen and not any(seen), "the Overview asks for a log read only if one is already cached"

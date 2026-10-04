@@ -291,7 +291,26 @@ def diff_paths(before: dict, after: dict, path: ClientPath) -> list[dict]:
     return changes
 
 
-def changes_for_revisions(rows: list[dict], path: ClientPath, limit: int = NEWEST) -> dict:
+_ELEMENT_KINDS = ("reservation", "pool", "class", "subnet", "shared network")
+
+
+def element_matches(label: str, element: str) -> bool:
+    """Is the change labelled `label` ("pool 10.0.0.100 - 10.0.0.200", "subnet 1 (10.0.0.0/24)", "reservation aa:bb:…",
+    "class voip", "shared network campus", "global reservation …") the config element `element` names? `element` is a whole
+    label, or just a kind ("reservation", "pool", …) meaning every element of that kind. Case-insensitive; an empty
+    `element` matches everything. (v5.68.0-beta.2, Q135 - an Explain verdict links here filtered to the element it is about.)"""
+    e = (element or "").strip().lower()
+    if not e:
+        return True
+    lab = (label or "").lower()
+    if lab == e:
+        return True
+    if e in _ELEMENT_KINDS:
+        return lab.startswith((e, "global " + e))
+    return lab.startswith(e + " ")
+
+
+def changes_for_revisions(rows: list[dict], path: ClientPath, limit: int = NEWEST, element: str = "") -> dict:
     """Walk revisions (newest first, each row's `config` already DECRYPTED text) and keep the ones that touched `path`.
     Pure but for the JSON parse. `rows` should hold up to limit + 1 revisions: the oldest has no predecessor in the window
     and is only the 'before' of the one above it. Returns {"scanned": n, "revisions": [...], "oldest_unpaired": bool}."""
@@ -313,7 +332,7 @@ def changes_for_revisions(rows: list[dict], path: ClientPath, limit: int = NEWES
         after, before = config_of(i), config_of(i + 1)
         if after is None or before is None:
             continue
-        changes = diff_paths(before, after, path)
+        changes = [c for c in diff_paths(before, after, path) if element_matches(c["label"], element)]
         if changes:
             row = rows[i]
             hits.append(
@@ -332,7 +351,7 @@ def changes_for_revisions(rows: list[dict], path: ClientPath, limit: int = NEWES
 # ── the impure edge ──────────────────────────────────────────────────────────
 
 
-def for_view(view, servers, *, subnet_map, subnet6_map, ipv6_on: bool, classes=()) -> dict:
+def for_view(view, servers, *, subnet_map, subnet6_map, ipv6_on: bool, classes=(), element: str = "") -> dict:
     """The Changes tab for an authorized view: one group per (server, service) that has revisions. Never raises — a server
     whose history cannot be read is a group with an `error`, not a broken page. `servers` is `extensions.KEA_SERVERS`."""
     from jen.services import config_revisions as rev
@@ -358,7 +377,7 @@ def for_view(view, servers, *, subnet_map, subnet6_map, ipv6_on: bool, classes=(
             }
             try:
                 rows = rev.recent_with_config(server["id"], service, NEWEST + 1)
-                group.update(changes_for_revisions(rows, path))
+                group.update(changes_for_revisions(rows, path, element=element))
                 group["has_history"] = bool(rows)
             except SecretDecryptError as exc:
                 group["error"] = str(exc)

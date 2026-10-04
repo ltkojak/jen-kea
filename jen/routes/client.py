@@ -24,6 +24,7 @@ import logging
 import re
 import secrets
 from datetime import datetime, timezone
+from urllib.parse import urlencode
 
 from flask import Blueprint, render_template, request
 from flask_login import current_user, login_required
@@ -34,8 +35,8 @@ from jen.services import client_changes as __changes
 from jen.services import client_subject as __subject
 from jen.services import config_revisions as __rev
 from jen.services import dns_reconcile as __reconcile
+from jen.services import explain_context as __ctx
 from jen.services.access import diagnostic_surface, get_accessible_subnet_map
-from jen.services.dhcp_explain import explain
 from jen.services.subnet_context import dhcp4_config
 
 logger = logging.getLogger(__name__)
@@ -121,6 +122,65 @@ def _explain_inputs(view) -> tuple[dict, int | None, str]:
     return client, subnet_id, chosen_how
 
 
+_TYPED_INPUTS = ("client_id", "vendor_class", "user_class", "hostname", "circuit_id", "remote_id", "giaddr")
+
+
+def _typed_inputs() -> dict:
+    """Explain inputs the person typed into the Explain tab's form (they ride the query string of /client)."""
+    return {f: (request.args.get(f) or "").strip()[:255] for f in _TYPED_INPUTS if (request.args.get(f) or "").strip()}
+
+
+def _may_read_kea_log() -> bool:
+    """Kea's log has no subnet boundary Jen can trust: only an admin with access to every subnet gets log-derived inputs
+    (the Trace rule, docs/ARCHITECTURE.md section 2)."""
+    return bool(current_user.role in ("superadmin", "admin") and current_user.all_subnets)
+
+
+def _built_inputs(view, *, fetch_log: bool = True) -> dict:
+    """The client Explain evaluates for this view (v5.68.0-beta.2, Q135): the MAC, the lease row's client id and hostname
+    (the view's lease was already judged by authorize()), what Kea's log said when the caller may read it, and what was
+    typed - each labelled by source. `fetch_log=False` uses only a log read already cached (the Overview must not pay an SSH
+    round trip for its one line). `?auto=0` turns every inferred source off."""
+    auto = request.args.get("auto") != "0"
+    log_view = __ctx.read_log(view.mac, allowed=_may_read_kea_log() and auto, fetch=fetch_log)
+    built = __ctx.build_inputs(view.mac, typed=_typed_inputs(), lease=view.lease, log=log_view, auto=auto)
+    built["log_view"] = log_view
+    return built
+
+
+def _explain_run(view, subnet_id, built):
+    """explain() for the view's own subnet, with the pool-occupancy and holder lookups bound to this caller's scope."""
+    cfg = dhcp4_config()
+    if not cfg:
+        return None
+    # view.reservations was judged by authorize() (global reservations kept for everyone)
+    return __ctx.run(
+        cfg,
+        built,
+        subnet_id=subnet_id,
+        lease=view.lease,
+        reservations=view.reservations,
+        accessible_ids=None if current_user.all_subnets else set(get_accessible_subnet_map()),
+    )
+
+
+def _overview_line(view) -> str:
+    """The one sentence of what Kea would do with this client (the Overview, Q135 c): Explain's own answer line for the
+    subnet its lease or reservation fixes, from the lease-derived inputs plus a Kea-log read that is already cached - never
+    a fresh SSH round trip. '' when there is no subnet to evaluate, no Kea answer, or anything fails."""
+    if not view.mac:
+        return ""
+    try:
+        _client, subnet_id, _how = _explain_inputs(view)
+        if subnet_id is None:
+            return ""
+        result = _explain_run(view, subnet_id, _built_inputs(view, fetch_log=False))
+        return (result or {}).get("summary", "") if result and result.get("ok") else ""
+    except Exception as e:
+        logger.warning(f"client: overview answer line failed: {e}")
+        return ""
+
+
 def _config_tab(view):
     """Config tab: the same Explain evaluation, read for its
     subnet/pool/options/classes rather than its step-by-step narrative,
@@ -132,10 +192,9 @@ def _config_tab(view):
     cfg = dhcp4_config()
     if not cfg:
         return None, ""
-    # view.reservations was judged by authorize() (global reservations kept for everyone)
-    result = explain(cfg, client, subnet_id=subnet_id, reservations=view.reservations, lease=view.lease)
+    result = _explain_run(view, subnet_id, _built_inputs(view))
     config_sha = hashlib.sha256(__rev.canonical(cfg).encode()).hexdigest()
-    return (result if result.get("ok") else None), config_sha
+    return (result if result and result.get("ok") else None), config_sha
 
 
 def _dns_tab(view):
@@ -170,11 +229,10 @@ def _matched_classes(view) -> list[str]:
     if not view.mac:
         return []
     try:
-        client, subnet_id, _how = _explain_inputs(view)
-        cfg = dhcp4_config() if subnet_id is not None else None
-        if not cfg:
+        _client, subnet_id, _how = _explain_inputs(view)
+        result = _explain_run(view, subnet_id, _built_inputs(view)) if subnet_id is not None else None
+        if not result:
             return []
-        result = explain(cfg, client, subnet_id=subnet_id, reservations=view.reservations, lease=view.lease)
         return [c["name"] for c in (result.get("classes") or []) if c.get("matched") is True]
     except Exception as e:
         logger.warning(f"client: matched-class lookup for the Changes tab failed: {e}")
@@ -246,6 +304,20 @@ def client_page():
         if tab == "dns":
             dns_results, dns_error = _dns_tab(view)
 
+    explain_qs = ""
+    explain_line = ""
+    if view and view.mac:
+        if tab == "explain" and chosen_subnet is not None:
+            # what the embedded Explain fetch is told: the MAC, the subnet, the identifier to go back to (so its form returns
+            # HERE), and whatever the person has typed into that form so far
+            params = {"mac": view.mac, "subnet": chosen_subnet, "embed_q": q, **_typed_inputs()}
+            if request.args.get("auto") == "0":
+                params["auto"] = "0"
+            explain_qs = urlencode(params)
+        if tab == "overview":
+            explain_line = _overview_line(view)
+
+    element = (request.args.get("element") or "").strip()[:200]
     changes = None
     if view and not view.candidates and tab == "changes" and changes_allowed:
         changes = __changes.for_view(
@@ -255,6 +327,7 @@ def client_page():
             subnet6_map=extensions.SUBNET6_MAP,
             ipv6_on=__kea6.is_ipv6_enabled(),
             classes=_matched_classes(view),
+            element=element,
         )
 
     return render_template(
@@ -263,6 +336,9 @@ def client_page():
         tab=tab,
         tabs=tabs,
         changes=changes,
+        element=element,
+        explain_qs=explain_qs,
+        explain_line=explain_line,
         subject=subject,
         view=view,
         unsupported=unsupported,

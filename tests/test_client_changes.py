@@ -410,3 +410,31 @@ class TestRouteTheChangesTab:
         r = logged_in_client.get(f"/client?q={MAC}&tab=changes")
         assert r.status_code == 200
         assert "alpha dns moved" not in r.data.decode()
+
+
+class TestRouteTheElementFilter:
+    """v5.68.0-beta.2 (Q135): an Explain verdict links here filtered to the config element it names."""
+
+    def test_the_subnet_the_revision_changed_shows_and_says_it_is_filtered(self, logged_in_client, three_revisions):
+        element = "subnet 1 (10.0.0.0/24)"
+        body = logged_in_client.get(
+            "/client", query_string={"q": MAC, "tab": "changes", "element": element}
+        ).data.decode()
+        assert "alpha dns moved" in body and "Showing only the changes to" in body
+
+    def test_an_element_nothing_changed_hides_the_revision(self, logged_in_client, three_revisions):
+        body = logged_in_client.get(
+            "/client", query_string={"q": MAC, "tab": "changes", "element": "pool 10.0.0.100 - 10.0.0.200"}
+        ).data.decode()
+        assert "alpha dns moved" not in body and "Showing only the changes to" in body
+        assert "None of those revisions changed anything" in body
+
+    def test_a_kind_alone_matches_every_element_of_it(self, logged_in_client, three_revisions):
+        body = logged_in_client.get(
+            "/client", query_string={"q": MAC, "tab": "changes", "element": "subnet"}
+        ).data.decode()
+        assert "alpha dns moved" in body
+
+    def test_no_filter_is_the_whole_path(self, logged_in_client, three_revisions):
+        body = logged_in_client.get("/client", query_string={"q": MAC, "tab": "changes"}).data.decode()
+        assert "alpha dns moved" in body and "Showing only the changes to" not in body

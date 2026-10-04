@@ -19,12 +19,13 @@ own mac-only lookups.
 import logging
 
 from flask import Blueprint, flash, render_template, request
-from flask_login import login_required
+from flask_login import current_user, login_required
 
 import jen.services.auth as __auth
 from jen.services import client_subject as __subject
+from jen.services import explain_context as __ctx
 from jen.services.access import diagnostic_surface, get_accessible_subnet_map
-from jen.services.dhcp_explain import INPUT_LABELS, explain
+from jen.services.dhcp_explain import INPUT_LABELS
 from jen.services.subnet_context import dhcp4_config
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,12 @@ FIELDS = ("mac", "client_id", "vendor_class", "user_class", "hostname", "circuit
 
 def _client_from_args(args) -> dict:
     return {f: (args.get(f) or "").strip()[:255] for f in FIELDS}
+
+
+def _may_read_kea_log() -> bool:
+    """The Kea log has no per-line subnet boundary Jen can trust, so, as for Trace, only an admin who may see every
+    subnet gets the inputs Explain can read out of it (docs/ARCHITECTURE.md section 2)."""
+    return bool(current_user.role in ("superadmin", "admin") and current_user.all_subnets)
 
 
 def _hex_identifier(value: str) -> str:
@@ -72,12 +79,26 @@ def explain_page():
         flash("That isn't a MAC address (expected aa:bb:cc:dd:ee:ff).", "error")
         client["mac"] = ""
 
+    typed = dict(client)
+    built = None
+    log_view = None
     if client["mac"]:
         client["mac"] = client["mac"].lower()
         mac_hex = _hex_identifier(client["mac"])
+        lease = _load_lease(mac_hex)
+        # v5.68.0-beta.2 (Q135): the client Explain evaluates is the MAC, the lease row's client id and hostname, what Kea's
+        # own log says (for a caller allowed to read it), and what was typed - each input labelled by where it came from.
+        # `auto=0` is the old behaviour: the MAC and what was typed, nothing inferred.
+        auto = request.args.get("auto") != "0"
+        log_view = __ctx.read_log(client["mac"], allowed=_may_read_kea_log() and auto)
+        # a lease in a subnet the caller may not see contributes nothing: its client id and hostname are that client's
+        usable_lease = (
+            lease if lease and (not lease.get("subnet_id") or int(lease["subnet_id"]) in subnet_map) else None
+        )
+        built = __ctx.build_inputs(client["mac"], typed=typed, lease=usable_lease, log=log_view, auto=auto)
+        client = built["client"]
         cid_hex = _hex_identifier(client["client_id"])
         reservations = _load_reservations(mac_hex, cid_hex)
-        lease = _load_lease(mac_hex)
         if raw_subnet.isdigit():
             subnet_id = int(raw_subnet)
             chosen_how = "chosen"
@@ -99,7 +120,14 @@ def explain_page():
         elif subnet_id is not None:
             # Only reservations in accessible subnets (or global ones) feed the decision.
             reservations = [r for r in reservations if r["subnet_id"] == 0 or r["subnet_id"] in subnet_map]
-            result = explain(cfg, client, subnet_id=subnet_id, reservations=reservations, lease=lease)
+            result = __ctx.run(
+                cfg,
+                built,
+                subnet_id=subnet_id,
+                lease=lease,
+                reservations=reservations,
+                accessible_ids=None if current_user.all_subnets else set(subnet_map),
+            )
             if not result.get("ok"):
                 flash(result.get("error", "Could not explain this client."), "error")
                 result = None
@@ -108,8 +136,25 @@ def explain_page():
     # exact result via htmx (the same result-only partial, no duplicated
     # subnet-selection/reservation-filtering logic), same pattern as
     # Trace's own HX-partial branch below.
+    extra = _result_context(built, log_view, result, subnet_id)
     if request.headers.get("HX-Request") == "true":
-        return render_template("_explain_result.html", client=client, chosen_how=chosen_how, result=result)
+        # the Investigation page's Explain tab: the same result, plus the form that re-runs it THERE (it names the
+        # identifier the person typed, so the form goes back to /client, not to this tool's own page)
+        embed_q = (request.args.get("embed_q") or "").strip()[:255]
+        form = (
+            {"action": "/client", "hidden": {"q": embed_q, "tab": "explain", "subnet": subnet_id or ""}}
+            if embed_q and client["mac"]
+            else None
+        )
+        return render_template(
+            "_explain_result.html",
+            client=client,
+            chosen_how=chosen_how,
+            result=result,
+            form=form,
+            link_q=embed_q,
+            **extra,
+        )
     return render_template(
         "explain.html",
         client=client,
@@ -118,4 +163,19 @@ def explain_page():
         chosen_how=chosen_how,
         result=result,
         input_labels=INPUT_LABELS,
+        form=None,
+        link_q=client["mac"],
+        **extra,
     )
+
+
+def _result_context(built, log_view, result, subnet_id) -> dict:
+    """What the result partial shows besides the decision: where each input came from, what is still missing and how to
+    unlock it, and whether the viewer may follow a why-not to the Changes tab (an admin who may see every subnet)."""
+    return {
+        "provenance": __ctx.provenance(built) if built else [],
+        "source_hint": __ctx.hint_for(result, log_view) if result else "",
+        "can_changes": _may_read_kea_log(),
+        "input_labels": INPUT_LABELS,
+        "form_fields": FIELDS[1:],
+    }

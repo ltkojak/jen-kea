@@ -1,0 +1,110 @@
+2026-10-04 15:10:33.363 INFO  [kea-dhcp4.dhcp4/1.140685544422200] DHCP4_QUERY_LABEL received query: [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x10006
+2026-10-04 15:10:33.363 DEBUG [kea-dhcp4.eval/1.140685544422200] EVAL_DEBUG_OPTION [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x10006: Pushing option 60 with value 0x6A656E2D70726F62652D76656E646F72
+2026-10-04 15:10:33.363 DEBUG [kea-dhcp4.eval/1.140685544422200] EVAL_DEBUG_STRING [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x10006: Pushing text string '0'
+2026-10-04 15:10:33.363 DEBUG [kea-dhcp4.eval/1.140685544422200] EVAL_DEBUG_STRING [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x10006: Pushing text string '9'
+2026-10-04 15:10:33.363 DEBUG [kea-dhcp4.eval/1.140685544422200] EVAL_DEBUG_SUBSTRING [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x10006: Popping length 9, start 0, string 0x6A656E2D70726F62652D76656E646F72 pushing result 0x6A656E2D70726F6265
+2026-10-04 15:10:33.363 DEBUG [kea-dhcp4.eval/1.140685544422200] EVAL_DEBUG_STRING [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x10006: Pushing text string 'jen-probe'
+2026-10-04 15:10:33.363 DEBUG [kea-dhcp4.eval/1.140685544422200] EVAL_DEBUG_EQUAL [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x10006: Popping 0x6A656E2D70726F6265 and 0x6A656E2D70726F6265 pushing result 'true'
+2026-10-04 15:10:33.363 DEBUG [kea-dhcp4.dhcpsrv/1.140685544422200] DHCPSRV_EVAL_RESULT [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x10006: Expression 'jen-probe-vendor' evaluated to true
+2026-10-04 15:10:33.363 DEBUG [kea-dhcp4.eval/1.140685544422200] EVAL_DEBUG_OPTION [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x10006: Pushing option 77 with value 0x086A656E2D75736572
+2026-10-04 15:10:33.363 DEBUG [kea-dhcp4.eval/1.140685544422200] EVAL_DEBUG_HEXSTRING [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x10006: Pushing hex string 0x086A656E2D75736572
+2026-10-04 15:10:33.363 DEBUG [kea-dhcp4.eval/1.140685544422200] EVAL_DEBUG_EQUAL [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x10006: Popping 0x086A656E2D75736572 and 0x086A656E2D75736572 pushing result 'true'
+2026-10-04 15:10:33.363 DEBUG [kea-dhcp4.dhcpsrv/1.140685544422200] DHCPSRV_EVAL_RESULT [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x10006: Expression 'jen-probe-user' evaluated to true
+2026-10-04 15:10:33.363 INFO  [kea-dhcp4.packets/1.140685544422200] DHCP4_PACKET_RECEIVED [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x10006: DHCPDISCOVER (type 1) received from 10.1.0.218 to 10.1.0.218 on interface eth0
+2026-10-04 15:10:33.364 DEBUG [kea-dhcp4.packets/1.140685544422200] DHCP4_QUERY_DATA [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x10006, packet details: local_address=10.1.0.218:67, remote_address=10.1.0.218:53960,
+msg_type=DHCPDISCOVER (1), trans_id=0x10006,
+options:
+  type=012, len=010: "probe-host" (string)
+  type=053, len=001: 1 (uint8)
+  type=055, len=006: 1(uint8) 3(uint8) 6(uint8) 15(uint8) 51(uint8) 54(uint8)
+  type=060, len=016: "jen-probe-vendor" (string)
+  type=061, len=007: 01:02:50:00:00:01:06
+  type=077, len=009: 08:6a:65:6e:2d:75:73:65:72
+  type=082, len=018:,
+options:
+    type=001, len=008: 65:74:68:30:2f:31:2f:37 'eth0/1/7'
+    type=002, len=006: 0a:0b:0c:0d:0e:0f
+2026-10-04 15:10:33.364 DEBUG [kea-dhcp4.packets/1.140685544422200] DHCP4_SUBNET_SELECTED [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x10006: the subnet with ID 1 was selected for client assignments
+2026-10-04 15:10:33.364 DEBUG [kea-dhcp4.packets/1.140685544422200] DHCP4_SUBNET_DATA [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x10006: the selected subnet details: 10.99.0.0/24
+2026-10-04 15:10:33.366 DEBUG [kea-dhcp4.dhcp4/1.140685544422200] DHCP4_CLASS_ASSIGNED [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x10006: client packet has been assigned to the following class: UNKNOWN
+2026-10-04 15:10:33.366 DEBUG [kea-dhcp4.dhcp4/1.140685544422200] DHCP4_CLASSES_ASSIGNED_AFTER_SUBNET_SELECTION [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x10006: client packet has been assigned to the following classes: ALL, VENDOR_CLASS_jen-probe-vendor, jen-probe-vendor, jen-probe-user, UNKNOWN
+2026-10-04 15:10:33.366 DEBUG [kea-dhcp4.leases/1.140685544422200] DHCP4_DISCOVER [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x10006: server is processing DHCPDISCOVER with hint=(no hint)
+2026-10-04 15:10:33.366 DEBUG [kea-dhcp4.ddns/1.140685544422200] DHCP4_CLIENT_HOSTNAME_PROCESS [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x10006: processing client's Hostname option
+2026-10-04 15:10:33.366 DEBUG [kea-dhcp4.ddns/1.140685544422200] DHCP4_CLIENT_HOSTNAME_DATA [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x10006: client sent Hostname option: probe-host
+2026-10-04 15:10:33.366 DEBUG [kea-dhcp4.ddns/1.140685544422200] DHCP4_CLIENT_HOSTNAME_DATA [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x10006: client sent Hostname option: probe-host
+2026-10-04 15:10:33.367 DEBUG [kea-dhcp4.ddns/1.140685544422200] DHCP4_RESPONSE_HOSTNAME_DATA [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x10006: including Hostname option in the server's response: probe-host
+2026-10-04 15:10:33.367 DEBUG [kea-dhcp4.mysql-lb-hooks/1.140685544422200] MYSQL_LB_GET_CLIENTID obtaining IPv4 leases for client ID 01:02:50:00:00:01:06
+2026-10-04 15:10:33.367 DEBUG [kea-dhcp4.mysql-lb-hooks/1.140685544422200] MYSQL_LB_GET_HWADDR obtaining IPv4 leases for hardware address hwtype=1 02:50:00:00:01:06
+2026-10-04 15:10:33.367 DEBUG [kea-dhcp4.alloc-engine/1.140685544422200] ALLOC_ENGINE_V4_OFFER_NEW_LEASE allocation engine will try to offer new lease to the client [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x10006
+2026-10-04 15:10:33.369 INFO  [kea-dhcp4.leases/1.140685544422200] DHCP4_LEASE_OFFER [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x10006: lease 10.99.0.100 will be offered
+2026-10-04 15:10:33.369 DEBUG [kea-dhcp4.dhcp4/1.140685544422200] DHCP4_CLASSES_ASSIGNED [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x10006: client packet has been assigned on DHCPDISCOVER message to the following classes: ALL, VENDOR_CLASS_jen-probe-vendor, jen-probe-vendor, jen-probe-user, UNKNOWN
+2026-10-04 15:10:33.369 DEBUG [kea-dhcp4.options/1.140685544422200] DHCP4_PACKET_PACK [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x10006: preparing on-wire format of the packet to be sent
+2026-10-04 15:10:33.369 INFO  [kea-dhcp4.packets/1.140685544422200] DHCP4_PACKET_SEND [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x10006: trying to send packet DHCPOFFER (type 2) from 10.1.0.218:67 to 10.99.0.1:67 on interface eth0
+2026-10-04 15:10:33.369 DEBUG [kea-dhcp4.packets/1.140685544422200] DHCP4_RESPONSE_DATA [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x10006: responding with packet DHCPOFFER (type 2), packet details: local_address=10.1.0.218:67, remote_address=10.99.0.1:67,
+msg_type=DHCPOFFER (2), trans_id=0x10006,
+options:
+  type=001, len=004: 4294967040 (uint32)
+  type=003, len=004: 10.99.0.1
+  type=012, len=010: "probe-host" (string)
+  type=051, len=004: 3600 (uint32)
+  type=053, len=001: 2 (uint8)
+  type=054, len=004: 10.1.0.218 (ipv4-address)
+  type=061, len=007: 01:02:50:00:00:01:06
+  type=082, len=018:,
+options:
+    type=001, len=008: 65:74:68:30:2f:31:2f:37 'eth0/1/7'
+    type=002, len=006: 0a:0b:0c:0d:0e:0f
+2026-10-04 15:10:35.363 INFO  [kea-dhcp4.dhcp4/1.140685544278840] DHCP4_QUERY_LABEL received query: [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x20006
+2026-10-04 15:10:35.363 DEBUG [kea-dhcp4.eval/1.140685544278840] EVAL_DEBUG_OPTION [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x20006: Pushing option 60 with value 0x6A656E2D70726F62652D76656E646F72
+2026-10-04 15:10:35.363 DEBUG [kea-dhcp4.eval/1.140685544278840] EVAL_DEBUG_STRING [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x20006: Pushing text string '0'
+2026-10-04 15:10:35.363 DEBUG [kea-dhcp4.eval/1.140685544278840] EVAL_DEBUG_STRING [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x20006: Pushing text string '9'
+2026-10-04 15:10:35.363 DEBUG [kea-dhcp4.eval/1.140685544278840] EVAL_DEBUG_SUBSTRING [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x20006: Popping length 9, start 0, string 0x6A656E2D70726F62652D76656E646F72 pushing result 0x6A656E2D70726F6265
+2026-10-04 15:10:35.363 DEBUG [kea-dhcp4.eval/1.140685544278840] EVAL_DEBUG_STRING [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x20006: Pushing text string 'jen-probe'
+2026-10-04 15:10:35.363 DEBUG [kea-dhcp4.eval/1.140685544278840] EVAL_DEBUG_EQUAL [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x20006: Popping 0x6A656E2D70726F6265 and 0x6A656E2D70726F6265 pushing result 'true'
+2026-10-04 15:10:35.363 DEBUG [kea-dhcp4.dhcpsrv/1.140685544278840] DHCPSRV_EVAL_RESULT [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x20006: Expression 'jen-probe-vendor' evaluated to true
+2026-10-04 15:10:35.364 DEBUG [kea-dhcp4.eval/1.140685544278840] EVAL_DEBUG_OPTION [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x20006: Pushing option 77 with value 0x086A656E2D75736572
+2026-10-04 15:10:35.364 DEBUG [kea-dhcp4.eval/1.140685544278840] EVAL_DEBUG_HEXSTRING [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x20006: Pushing hex string 0x086A656E2D75736572
+2026-10-04 15:10:35.364 DEBUG [kea-dhcp4.eval/1.140685544278840] EVAL_DEBUG_EQUAL [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x20006: Popping 0x086A656E2D75736572 and 0x086A656E2D75736572 pushing result 'true'
+2026-10-04 15:10:35.364 DEBUG [kea-dhcp4.dhcpsrv/1.140685544278840] DHCPSRV_EVAL_RESULT [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x20006: Expression 'jen-probe-user' evaluated to true
+2026-10-04 15:10:35.364 INFO  [kea-dhcp4.packets/1.140685544278840] DHCP4_PACKET_RECEIVED [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x20006: DHCPREQUEST (type 3) received from 10.1.0.218 to 10.1.0.218 on interface eth0
+2026-10-04 15:10:35.364 DEBUG [kea-dhcp4.packets/1.140685544278840] DHCP4_QUERY_DATA [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x20006, packet details: local_address=10.1.0.218:67, remote_address=10.1.0.218:53960,
+msg_type=DHCPREQUEST (3), trans_id=0x20006,
+options:
+  type=012, len=010: "probe-host" (string)
+  type=050, len=004: 10.99.0.150 (ipv4-address)
+  type=053, len=001: 3 (uint8)
+  type=054, len=004: 10.1.0.218 (ipv4-address)
+  type=055, len=006: 1(uint8) 3(uint8) 6(uint8) 15(uint8) 51(uint8) 54(uint8)
+  type=060, len=016: "jen-probe-vendor" (string)
+  type=061, len=007: 01:02:50:00:00:01:06
+  type=077, len=009: 08:6a:65:6e:2d:75:73:65:72
+  type=082, len=018:,
+options:
+    type=001, len=008: 65:74:68:30:2f:31:2f:37 'eth0/1/7'
+    type=002, len=006: 0a:0b:0c:0d:0e:0f
+2026-10-04 15:10:35.364 DEBUG [kea-dhcp4.packets/1.140685544278840] DHCP4_SUBNET_SELECTED [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x20006: the subnet with ID 1 was selected for client assignments
+2026-10-04 15:10:35.364 DEBUG [kea-dhcp4.packets/1.140685544278840] DHCP4_SUBNET_DATA [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x20006: the selected subnet details: 10.99.0.0/24
+2026-10-04 15:10:35.365 DEBUG [kea-dhcp4.dhcp4/1.140685544278840] DHCP4_CLASS_ASSIGNED [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x20006: client packet has been assigned to the following class: UNKNOWN
+2026-10-04 15:10:35.365 DEBUG [kea-dhcp4.dhcp4/1.140685544278840] DHCP4_CLASSES_ASSIGNED_AFTER_SUBNET_SELECTION [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x20006: client packet has been assigned to the following classes: ALL, VENDOR_CLASS_jen-probe-vendor, jen-probe-vendor, jen-probe-user, UNKNOWN
+2026-10-04 15:10:35.365 DEBUG [kea-dhcp4.leases/1.140685544278840] DHCP4_REQUEST [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x20006: server is processing DHCPREQUEST with hint=10.99.0.150
+2026-10-04 15:10:35.365 DEBUG [kea-dhcp4.ddns/1.140685544278840] DHCP4_CLIENT_HOSTNAME_PROCESS [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x20006: processing client's Hostname option
+2026-10-04 15:10:35.366 DEBUG [kea-dhcp4.ddns/1.140685544278840] DHCP4_CLIENT_HOSTNAME_DATA [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x20006: client sent Hostname option: probe-host
+2026-10-04 15:10:35.366 DEBUG [kea-dhcp4.ddns/1.140685544278840] DHCP4_CLIENT_HOSTNAME_DATA [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x20006: client sent Hostname option: probe-host
+2026-10-04 15:10:35.366 DEBUG [kea-dhcp4.ddns/1.140685544278840] DHCP4_RESPONSE_HOSTNAME_DATA [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x20006: including Hostname option in the server's response: probe-host
+2026-10-04 15:10:35.366 DEBUG [kea-dhcp4.mysql-lb-hooks/1.140685544278840] MYSQL_LB_GET_CLIENTID obtaining IPv4 leases for client ID 01:02:50:00:00:01:06
+2026-10-04 15:10:35.366 DEBUG [kea-dhcp4.mysql-lb-hooks/1.140685544278840] MYSQL_LB_GET_HWADDR obtaining IPv4 leases for hardware address hwtype=1 02:50:00:00:01:06
+2026-10-04 15:10:35.367 DEBUG [kea-dhcp4.alloc-engine/1.140685544278840] ALLOC_ENGINE_V4_REQUEST_IN_USE [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x20006: requested address 10.99.0.150 is in use
+2026-10-04 15:10:35.368 DEBUG [kea-dhcp4.bad-packets/1.140685544278840] DHCP4_PACKET_NAK_0004 [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x20006: failed to grant a lease, client sent ciaddr 0.0.0.0, requested-ip-address 10.99.0.150
+2026-10-04 15:10:35.368 DEBUG [kea-dhcp4.options/1.140685544278840] DHCP4_PACKET_PACK [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x20006: preparing on-wire format of the packet to be sent
+2026-10-04 15:10:35.368 INFO  [kea-dhcp4.packets/1.140685544278840] DHCP4_PACKET_SEND [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x20006: trying to send packet DHCPNAK (type 6) from 10.1.0.218:67 to 10.99.0.1:67 on interface eth0
+2026-10-04 15:10:35.368 DEBUG [kea-dhcp4.packets/1.140685544278840] DHCP4_RESPONSE_DATA [hwtype=1 02:50:00:00:01:06], cid=[01:02:50:00:00:01:06], tid=0x20006: responding with packet DHCPNAK (type 6), packet details: local_address=10.1.0.218:67, remote_address=10.99.0.1:67,
+msg_type=DHCPNAK (6), trans_id=0x20006,
+options:
+  type=053, len=001: 6 (uint8)
+  type=054, len=004: 10.1.0.218 (ipv4-address)
+  type=061, len=007: 01:02:50:00:00:01:06
+  type=082, len=018:,
+options:
+    type=001, len=008: 65:74:68:30:2f:31:2f:37 'eth0/1/7'
+    type=002, len=006: 0a:0b:0c:0d:0e:0f
+

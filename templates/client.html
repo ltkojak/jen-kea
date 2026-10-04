@@ -90,6 +90,7 @@
         {% if config_sha %} · Config {{ config_sha[:8] }}…{% endif %}
         · <a href="/search?q={{ q|urlencode }}&list=1">Search results for this</a>
     </div>
+    {% if explain_line %}<div class="u-865c33 u-8a77e5"><strong>What Kea would do:</strong> {{ explain_line }} <a href="/client?q={{ q|urlencode }}&tab=explain">Why?</a></div>{% endif %}
 </div>
 
 {% if tab == "overview" %}
@@ -173,6 +174,9 @@
 {% if not changes or not changes.groups %}
 <div class="card"><p class="u-5872de">Jen has no Kea server to read config history from, or this client has nothing yet that a config could name.</p></div>
 {% else %}
+{% if element %}
+<div class="card"><p class="u-865c33">Showing only the changes to <strong>{{ element }}</strong> — <a href="/client?q={{ q|urlencode }}&tab=changes">show every change on this client's path</a>.</p></div>
+{% endif %}
 <div class="card">
     <p class="u-865c33">Config revisions that touched this client's path — its subnet, shared network, pools, classes, and its own reservation — newest first, comparing each with the one before it. The newest {{ changes.newest }} revisions of each server are read. A reservation kept in Kea's host database is not part of the config, so a change to one is not shown here.</p>
 </div>
@@ -207,7 +211,7 @@
 {% if view.mac and chosen_subnet is none %}
 {{ subnet_picker(q, 'explain', subnet_choices) }}
 {% elif view.mac %}
-<div hx-get="/tools/explain?mac={{ view.mac|urlencode }}&subnet={{ chosen_subnet }}" hx-trigger="load" hx-target="this" hx-swap="innerHTML">
+<div hx-get="/tools/explain?{{ explain_qs }}" hx-trigger="load" hx-target="this" hx-swap="innerHTML">
     <p class="u-5872de">Loading…</p>
 </div>
 <div class="u-865c33">Evaluated against subnet {{ chosen_subnet }} ({{ chosen_how }}).</div>

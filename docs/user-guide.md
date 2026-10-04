@@ -249,6 +249,33 @@ Explain — reachable at **Network → Explain**, or as the Investigate page's E
 
 Kea has no dry-run, so this is a reconstruction from the configuration Jen holds; it cannot see which interface a request arrived on. Only subnets you can access are shown.
 
+### What Explain can and cannot know (v5.68.0-beta.2)
+
+Explain can only decide a client-class test over what it knows about the client. It starts from the MAC and fills in the rest from the best source there is, and the **Inputs used** card on the page lists every input with where it came from, so you can see what an answer rests on:
+
+| Input | Where Jen gets it |
+|---|---|
+| MAC | the one you asked about |
+| Client id, hostname | the client's current lease |
+| Circuit id, remote id | the lease's extended info — only when Kea runs with `store-extended-info: true`, which keeps the relay agent's options on the lease at any log level |
+| Client id | the `cid=[…]` label Kea puts on every log line about a client, at any log level |
+| Classes Kea assigned, and the vendor class | Kea's log at **debuglevel 45 or higher** — the `DHCP4_CLASSES_ASSIGNED` line lists them, and Kea's built-in `VENDOR_CLASS_<option 60>` class in that list *is* the vendor class |
+| Hostname, vendor class, user class, circuit id, remote id | Kea's log at **debuglevel 55 or higher** — the `DHCP4_QUERY_DATA` packet dump |
+| Anything | what you type into the form on the Explain tab (what you type wins) |
+
+Those log levels were measured against real Kea 3.0.3, 3.2.0 and 3.3.1 (the same on all three), not assumed. At Kea's default INFO level, and at DEBUG with a debuglevel of 15 or 30, the log carries the packets, the offers and the allocations — and the client id — but not the vendor class, user class, hostname or relay options of the packet. To let Explain read them from Kea itself, set the `kea-dhcp4` logger to severity `DEBUG` with `debuglevel` 55 (45 is enough for the assigned classes and the vendor class). That is a lot of log; turn it back down afterwards. A class Kea listed as assigned is shown as *assigned by Kea at <time>* and outranks Jen's own reading of its test; a class Kea did not list keeps whatever Jen could work out.
+
+Reading Kea's log needs the Kea host helper and an admin with access to every subnet (the same rule as Trace: a log line has no subnet boundary Jen can trust). Anyone else still gets the lease-derived inputs for a subnet they may see, and can type the rest. `?auto=0` on the Explain page turns every inferred input off, leaving the MAC and what you typed.
+
+**Why not.** Beyond the address, Explain now says what stands in the way:
+
+- **A full pool** is a verdict: *pool X: eligible but FULL (254 of 254 addresses leased)*, with the next eligible pool (and its free count) as the answer, or *every eligible pool is full* when there is none — Kea would NAK or stay silent.
+- **A reserved address held by another client** names the holder and when its lease ends — Kea offers the reservation only once that lease expires or is released — and links to the holder's own Investigation page. The holder is only named when its lease is in a subnet you may see.
+- **A reservation that is never matched**: if its identifier type (`hw-address`, `client-id`, …) is not in the config's `host-reservation-identifiers`, Explain says so instead of showing a reservation Kea will ignore.
+- **A relay that does not match**: with a giaddr that is neither a relay address of the subnet nor inside it, the *Subnet selection* step reads *NOT selected*.
+
+An admin who may see every subnet gets a *config changes to this* link beside each verdict, which opens the Changes tab filtered to the config element the verdict is about (a pool, the subnet, the reservation). The Overview carries the same engine's one sentence — *Would get 10.0.0.5 from the reservation*, *Would be NAKed: every eligible pool is full*, *Undecided: …* — computed from the lease-derived inputs and any Kea-log read already made, so opening the Overview never costs a trip to the Kea host.
+
 ### Trace a client (v5.48.0)
 
 Trace — reachable at **Network → Explain → "What Kea logged"**, or as the Investigate page's Trace tab. Explain predicts what Kea *should* do; Trace shows what it *did*: Jen reads the tail of the Kea server's `kea-dhcp4` log (through the same helper `tail-log` op the DDNS log tab uses — no packet capture, nothing installed), keeps the lines that name the client's MAC, and shows them in plain English grouped into exchanges — DISCOVER → offer → REQUEST → ACK, a NAK, a release or a decline. Lines are grouped when they are less than two seconds apart. Above the timeline, Explain's answer for the same client ("Jen expects subnet 3, 10.0.1.55") sits next to it so the two can be compared.

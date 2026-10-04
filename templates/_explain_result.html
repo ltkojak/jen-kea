@@ -1,6 +1,11 @@
+{% from '_investigate.html' import investigate_link %}
 {# v5.63.0 (Q82) — Explain's result rendering, extracted from explain.html so
    the Investigation page's Explain tab can render the identical output.
-   Context: result, client, chosen_how (chosen_how may be omitted/blank). #}
+   Context: result, client, chosen_how (chosen_how may be omitted/blank).
+   v5.68.0-beta.2 (Q135): provenance (each input and where it came from), source_hint (what would unlock the missing
+   ones), form (set only in the Investigation page's tab: where the 'Explain again' form goes back to), form_fields,
+   input_labels, link_q (the identifier a why-not's links investigate) and can_changes (an admin who may see every
+   subnet: the only viewer who may follow a why-not to the Changes tab). #}
 {% if result %}
 <!-- Answer -->
 <div class="card u-e25041">
@@ -38,6 +43,41 @@
     {% endif %}
 </div>
 
+<!-- Inputs: where each one came from, and the form to change them (the Investigation tab) -->
+{% if provenance or form %}
+<div class="card">
+    <div class="card-header"><span class="card-title">Inputs used</span>
+        <span class="u-865c33">each labelled by where Jen got it</span></div>
+    {% if form %}
+    <form method="GET" action="{{ form.action }}" autocomplete="off">
+        {% for k, v in form.hidden.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+        <table class="rowlist">
+            <tbody>
+            {% for f in form_fields %}
+            {% set src = (provenance|selectattr('field', 'equalto', f)|list|first) %}
+            <tr>
+                <td>{{ input_labels.get(f, 'giaddr (relay agent address)') }}</td>
+                <td><input type="text" name="{{ f }}" class="mono" value="{{ client[f] }}"></td>
+                <td class="u-865c33">{% if src %}{{ src.label }}{% if src.when %} {{ src.when }}{% endif %}{% elif f in result.missing_inputs %}needed to decide a class{% else %}not known{% endif %}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        <button type="submit" class="btn btn-sm btn-primary">{{ icon("compass") }} Explain again</button>
+    </form>
+    {% else %}
+    <table class="rowlist">
+        <tbody>
+        {% for p in provenance %}
+        <tr><td>{{ input_labels.get(p.field, 'giaddr (relay agent address)') }}</td><td class="mono">{{ p.value }}</td><td class="u-865c33">{{ p.label }}{% if p.when %} {{ p.when }}{% endif %}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+    {% if source_hint %}<p class="u-865c33">{{ source_hint }}</p>{% endif %}
+</div>
+{% endif %}
+
 <!-- Steps -->
 {% for step in result.steps %}
 <div class="card">
@@ -51,6 +91,11 @@
         {% for e in step.evidence %}<li class="mono" style="margin-bottom:2px;">{{ e }}</li>{% endfor %}
     </ul>
     {% endif %}
+    {% for w in step.why_not %}
+    <p class="u-865c33"><strong>Why not:</strong> {{ w.text }}
+        {% if can_changes and link_q and w.element %} · <a href="{{ url_for('client.client_page', q=link_q, tab='changes', element=w.element) }}">config changes to this</a>{% endif %}
+        {% if w.investigate %} · {{ investigate_link(w.investigate, "button") }}{% endif %}</p>
+    {% endfor %}
 </div>
 {% endfor %}
 

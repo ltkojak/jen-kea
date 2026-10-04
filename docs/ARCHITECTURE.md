@@ -234,6 +234,18 @@ each of the newest 50 revisions of each server with the one before it over the
 client's path only (subnet by id or CIDR, shared network, the pools its addresses fall
 in, classes, its own config-file reservation) and shows masked values.
 
+**What Explain evaluates, and why-not (v5.68.0-beta.2, Q135).** The Explain engine
+(`jen/services/dhcp_explain.py`) stays pure; `jen/services/explain_inputs.py` builds its client
+from the MAC, the lease row, Kea's own log and what was typed, each input labelled by source, and
+`jen/services/explain_context.py` is the one place that wires the read-only lookups the engine is
+handed (pool occupancy and the holder of a reserved address, both fixed statements over `lease4`).
+Two scope rules: a lease in a subnet the caller may not see contributes nothing to the inputs, and
+a holder lease in such a subnet is dropped, never blanked; and Kea's log — which has no per-line
+subnet boundary — is read only for an admin with access to every subnet, the Trace rule, through
+the same helper-only `tail-log` op (no new helper op, no new sudo string), cached 30 s. What the
+log carries at each level was measured on Kea 3.0.3, 3.2.0 and 3.3.1 by
+`tests/kea_compat/test_log_levels.py` and is written into the user guide.
+
 **Doctor and Trace are read-only views over data Jen already holds.** Doctor
 (`jen/services/config_doctor.py`) is pure analysis of the config Jen already
 reads from Kea. Trace (`jen/routes/trace.py`) reads the tail of the Kea log
