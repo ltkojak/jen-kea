@@ -302,7 +302,7 @@ def load_leases4(mac: str, ip: str = "") -> list[dict]:
                     f"FROM lease4 WHERE address=inet_aton(%s) AND {ACTIVE_LEASE4}",  # nosec B608 - a fixed constant
                     (ip,),
                 )
-            return cur.fetchall()
+            return list(cur.fetchall())
     except Exception as e:
         logger.error(f"client_subject: lease4 lookup failed for mac={mac!r} ip={ip!r}: {e}")
         return []
