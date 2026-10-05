@@ -17,7 +17,7 @@ Import decorators from here rather than defining them per-route-file.
 
 from functools import wraps
 
-from flask import flash, redirect, request, session, url_for
+from flask import abort, flash, redirect, request, session, url_for
 from flask_login import current_user
 
 # ── Role check helpers ────────────────────────────────────────────────────────
@@ -179,6 +179,89 @@ def assert_subnet_access(subnet_id, *, notify=True):
     if notify:
         flash("You do not have access to that subnet.", "error")
     return False
+
+
+# ── IPv6 subnet access: ONE rule (v5.68.0-beta.8, Q143) ───────────────────────
+#
+# A user's scope is a list of IPv4 subnet ids. A v6 subnet has no scope of its own: a decision about it can only be made through the
+# v4 subnet it is paired with (`[subnets6]`'s third field, `paired_subnet4_id`) - never by comparing the v6 subnet's OWN id with
+# that list (two numbering spaces; an id that happens to match means nothing). The policy, stated once and in docs/ARCHITECTURE.md §2:
+#
+#   * an unrestricted user (all_subnets: a superadmin, or no subnet list) sees every v6 subnet Jen knows;
+#   * a PAIRED v6 subnet is accessible exactly when its paired v4 subnet id is in the user's list;
+#   * an UNPAIRED v6 subnet has no v4 side to inherit access from: unrestricted users only.
+#
+# A subnet that is not in Jen's v6 map is accessible to no one (it has no pairing to judge). Everything below that touches the
+# pairing lives in THIS module; tests/test_ipv6_access.py refuses the string `paired_subnet4_id` anywhere else in jen/routes and
+# jen/services except the files that write or display the pairing (config.py, setup_wizard.py, settings/authoring.py).
+
+
+def paired_v4_id(subnet6_id):
+    """The v4 subnet id a v6 subnet is paired to, or None (unpaired, or not a known v6 subnet). For DISPLAY - nesting a v6 card
+    inside its v4 card; every ACCESS decision goes through `subnet6_visible` and the trio below."""
+    from jen import extensions
+
+    info = extensions.SUBNET6_MAP.get(_as_int(subnet6_id))
+    paired = info.get("paired_subnet4_id") if info else None
+    return _as_int(paired)
+
+
+def _as_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def subnet6_visible(subnet6_id, accessible_v4_ids, *, all_subnets: bool = False) -> bool:
+    """The policy as a pure function, for the services that stay Flask-free and are handed the caller's scope (`client_subject`,
+    `timeline`): may a caller who sees `accessible_v4_ids` (an iterable of v4 subnet ids) - or everything, when `all_subnets` -
+    see something in v6 subnet `subnet6_id`? A subnet not in the v6 map is False for everyone."""
+    from jen import extensions
+
+    sid = _as_int(subnet6_id)
+    info = extensions.SUBNET6_MAP.get(sid) if sid is not None else None
+    if info is None:
+        return False
+    if all_subnets:
+        return True
+    paired = _as_int(info.get("paired_subnet4_id"))
+    return paired is not None and paired in {
+        i for i in (_as_int(x) for x in (accessible_v4_ids or ())) if i is not None
+    }
+
+
+def can_access_subnet6(subnet6_id) -> bool:
+    """May the SESSION user see something in v6 subnet `subnet6_id`? See the policy above. Unknown subnet: False."""
+    from jen import extensions
+
+    if not current_user.is_authenticated:
+        return False
+    return subnet6_visible(
+        subnet6_id,
+        [] if current_user.all_subnets else current_user.accessible_subnet_ids(extensions.SUBNET_MAP),
+        all_subnets=current_user.all_subnets,
+    )
+
+
+def accessible_subnet6_map() -> dict:
+    """SUBNET6_MAP restricted to the v6 subnets the session user may see (the whole map for an unrestricted user). The only v6 map a
+    template, a loop or a query may be given - never `extensions.SUBNET6_MAP` itself, which names and numbers every subnet."""
+    from jen import extensions
+
+    if not current_user.is_authenticated:
+        return {}
+    if current_user.all_subnets:
+        return dict(extensions.SUBNET6_MAP)
+    ids = set(current_user.accessible_subnet_ids(extensions.SUBNET_MAP))
+    return {sid: info for sid, info in extensions.SUBNET6_MAP.items() if subnet6_visible(sid, ids)}
+
+
+def assert_subnet6_access(subnet6_id) -> None:
+    """Abort 404 unless the session user may see v6 subnet `subnet6_id` - the same answer for "no such subnet" and "not yours", so a
+    scoped user cannot probe which v6 subnet ids exist, and never a fallback to some wider view."""
+    if not can_access_subnet6(subnet6_id):
+        abort(404)
 
 
 # Device fields that describe WHERE a client is / what is recorded about it

@@ -127,6 +127,7 @@ nothing new lives behind it, and importing it does no work:
 | Devices | `classify_device(mac, hostname)` → (manufacturer, type, icon) |
 | Plugins | `installed_plugins()`, `is_systemd_host()` |
 | Jen | `jen_version()`, `PLUGIN_API_VERSION` |
+| IPv6 access (v5.68.0-beta.8) | `can_access_subnet6(subnet6_id)` — may the session user see something in this v6 subnet? A paired v6 subnet follows its v4 subnet; an unpaired one is for unrestricted users only. Every bundled plugin is IPv4-only today, so nothing calls it yet; a plugin that ever looks at a v6 subnet must ask this, never compare the v6 id with the user's v4 list |
 | Alert types (v5.57.0) | `register_alert_type(plugin_id, type_id, *, label, icon, default_template)` |
 | Row actions (v5.57.0) | `register_row_action(plugin_id, surface, *, label, icon, href, method="GET", roles=(…), confirm=None, when=None)` |
 | Search (v5.57.0) | `register_search_provider(plugin_id, *, title, fn)` |

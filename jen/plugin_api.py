@@ -42,6 +42,7 @@ from jen.models.user import audit, get_global_setting, set_global_setting  # noq
 from jen.services.access import (  # noqa: E402
     admin_required,
     assert_subnet_access,
+    can_access_subnet6,  # v5.68.0-beta.8 (Q143): IPv4-only plugins have no caller yet
     diagnostic_surface,
     get_accessible_subnet_map,
     is_admin_or_above,
@@ -180,6 +181,7 @@ __all__ = [
     "assert_subnet_access",
     "audit",
     "can_access_subnet",
+    "can_access_subnet6",
     "classify_address",
     "classify_device",
     "client_subnet_for_mac",

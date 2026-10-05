@@ -53,6 +53,7 @@ class TestSurface:
             "get_global_setting": _user.get_global_setting,
             "set_global_setting": _user.set_global_setting,
             "assert_subnet_access": access.assert_subnet_access,
+            "can_access_subnet6": access.can_access_subnet6,
             "get_accessible_subnet_map": access.get_accessible_subnet_map,
             "is_admin_or_above": access.is_admin_or_above,
             "is_superadmin": access.is_superadmin,
