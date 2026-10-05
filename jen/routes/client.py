@@ -37,7 +37,7 @@ from jen.services import config_revisions as __rev
 from jen.services import dns_reconcile as __reconcile
 from jen.services import explain_context as __ctx
 from jen.services import investigation_providers as __providers
-from jen.services.access import diagnostic_surface, get_accessible_subnet_map
+from jen.services.access import accessible_subnet6_map, diagnostic_surface, get_accessible_subnet_map
 from jen.services.subnet_context import dhcp4_config
 
 logger = logging.getLogger(__name__)
@@ -336,7 +336,7 @@ def client_page():
             view,
             extensions.KEA_SERVERS,
             subnet_map=extensions.SUBNET_MAP,
-            subnet6_map=extensions.SUBNET6_MAP,
+            subnet6_map=accessible_subnet6_map(),
             ipv6_on=__kea6.is_ipv6_enabled(),
             classes=_matched_classes(view),
             element=element,

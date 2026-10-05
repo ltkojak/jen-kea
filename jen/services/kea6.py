@@ -538,7 +538,7 @@ def get_ipv6_reservations(subnet_id: int = None) -> list:
     return [hosts_by_id[hid] for hid in order]
 
 
-def list_lease6_devices(subnet_id: int = None, search: str = None) -> list:
+def list_lease6_devices(subnet_id: int = None, search: str = None, allowed_subnet_ids=None) -> list:
     """
     v5.0 Phase 2 — Devices page IPv6 view. Groups list_lease6() rows by
     DUID into one device row each — a single device commonly holds both
@@ -560,6 +560,11 @@ def list_lease6_devices(subnet_id: int = None, search: str = None) -> list:
     from jen.services import fingerprint as __fp
 
     leases = list_lease6(subnet_id=subnet_id, search=search, show_expired=False)
+    if allowed_subnet_ids is not None:
+        # v5.68.0-beta.8 (Q143) — a caller's scope is applied to the LEASES, before they are grouped: one DUID commonly holds leases in
+        # several subnets, and filtering the grouped rows afterwards would still print a hidden subnet's addresses inside a visible row.
+        allowed = set(allowed_subnet_ids)
+        leases = [lease for lease in leases if lease["subnet_id"] in allowed]
     by_duid = {}
     order = []
     for lease in leases:

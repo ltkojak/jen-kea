@@ -14,7 +14,7 @@ import jen.services.auth as __auth
 import jen.services.client_subject as __subject
 import jen.services.kea6 as __kea6
 from jen import extensions
-from jen.services.access import diagnostic_surface
+from jen.services.access import accessible_subnet6_map, diagnostic_surface
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("search", __name__)
@@ -163,23 +163,10 @@ def global_search():
                 # v5.0 Phase 4 — IPv6 leases/reservations. Only searched
                 # when v6 is genuinely on (display gate, same as every
                 # other v6 code path) and there's something configured
-                # to search. Subnet restriction here follows the v6
-                # subnet's paired_subnet4_id where one exists (a paired
-                # v6 subnet IS the same network as its v4 counterpart,
-                # so a user with access to that v4 subnet should see
-                # its v6 side too); an UNPAIRED v6 subnet has no v4
-                # subnet to inherit access from, so it's restricted to
-                # all_subnets users only rather than guessing.
+                # to search. Subnet restriction is the one v6 rule
+                # (access.accessible_subnet6_map, v5.68.0-beta.8 / Q143).
                 if __kea6.is_ipv6_enabled() and extensions.SUBNET6_MAP:
-                    if current_user.all_subnets:
-                        searchable_v6_ids = list(extensions.SUBNET6_MAP.keys())
-                    else:
-                        accessible_v4_ids = set(current_user.accessible_subnet_ids(extensions.SUBNET_MAP))
-                        searchable_v6_ids = [
-                            sid
-                            for sid, info in extensions.SUBNET6_MAP.items()
-                            if info.get("paired_subnet4_id") in accessible_v4_ids
-                        ]
+                    searchable_v6_ids = list(accessible_subnet6_map())
                     for sid in searchable_v6_ids:
                         try:
                             for lease in __kea6.list_lease6(subnet_id=sid, search=q)[:20]:
@@ -221,7 +208,7 @@ def global_search():
 
     total = sum(len(v) for v in results.values())
     subnet_names = {sid: info["name"] for sid, info in current_user.filter_subnet_map(extensions.SUBNET_MAP).items()}
-    subnet6_names = {sid: info["name"] for sid, info in extensions.SUBNET6_MAP.items()}
+    subnet6_names = {sid: info["name"] for sid, info in accessible_subnet6_map().items()}
 
     # v5.57.0 (Q73) — one card per plugin search provider, after the core
     # sections. Same q>=2 gate as everything above; accessible_subnet_ids

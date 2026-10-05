@@ -29,6 +29,7 @@ import jen.services.kea_config_view as __view
 import jen.services.kea_host as __host
 import jen.services.win_dhcp_import as __win
 from jen import extensions
+from jen.services.access import accessible_subnet6_map, assert_subnet6_access, can_access_subnet6, paired_v4_id
 from jen.services.access import admin_required as _admin_required
 from jen.services.access import assert_subnet_access as _assert_subnet_access
 from jen.services.access import superadmin_required as _superadmin_required
@@ -232,9 +233,9 @@ def _get_subnets6_data() -> list:
     are still on disk — matching the "display gate checked before
     SUBNET6_MAP is ever populated" principle from Phase 1.
 
-    Each entry carries paired_subnet4_id (from config, see
-    AppConfig.derive_subnet_map) so the template can nest it as a second
-    block on the matching v4 card, or render it standalone when unpaired.
+    Each entry carries paired_v4_id (the config's pairing, read through access.paired_v4_id) so the template can nest it as a
+    second block on the matching v4 card, or render it standalone when unpaired. Only the CALLER's v6 subnets are listed
+    (access.accessible_subnet6_map, v5.68.0-beta.8 / Q143) - it used to be every one.
     No live Kea config-get here (unlike the v4 branch above) — Phase 2 is
     read-only against Jen's own DB layer; pool/lifetime detail for v6
     subnets is a Phase 3 write-support item once the v6 config-editing
@@ -243,7 +244,7 @@ def _get_subnets6_data() -> list:
     if not __kea6.is_ipv6_enabled() or not extensions.SUBNET6_MAP:
         return []
     result = []
-    for subnet_id, info in extensions.SUBNET6_MAP.items():
+    for subnet_id, info in accessible_subnet6_map().items():
         try:
             active = len(__kea6.list_lease6(subnet_id=subnet_id))
             reserved = len(__kea6.get_ipv6_reservations(subnet_id=subnet_id))
@@ -254,7 +255,7 @@ def _get_subnets6_data() -> list:
                 "id": subnet_id,
                 "name": info["name"],
                 "cidr": info["cidr"],
-                "paired_subnet4_id": info.get("paired_subnet4_id"),
+                "paired_v4_id": paired_v4_id(subnet_id),
                 "active": active,
                 "reserved": reserved,
             }
@@ -1732,9 +1733,7 @@ def _compute_subnet6_edit_diff(subnet_id, fields):
 @login_required
 @_admin_required
 def edit_subnet6(subnet_id):
-    if subnet_id not in extensions.SUBNET6_MAP:
-        flash("IPv6 subnet not found.", "error")
-        return redirect(url_for("subnets.subnets"))
+    assert_subnet6_access(subnet_id)
     kea_data = __kea6.get_subnet6_kea_data(subnet_id)
     kea_data["base_shas"] = _config_shas("dhcp6")
     return render_template(
@@ -1750,7 +1749,7 @@ def edit_subnet6_preview(subnet_id):
     preview endpoint: kea_host.test_config() `kea-dhcp6 -t`s the
     candidate on each server and never touches the live kea-dhcp6.conf
     under any outcome."""
-    if subnet_id not in extensions.SUBNET6_MAP:
+    if not can_access_subnet6(subnet_id):
         return jsonify({"ok": False, "error": "IPv6 subnet not found."}), 404
 
     fields, error = _parse_and_validate_subnet6_edit_form(request.form)
@@ -1815,9 +1814,7 @@ def edit_subnet6_preview(subnet_id):
 @login_required
 @_admin_required
 def edit_subnet6_post(subnet_id):
-    if subnet_id not in extensions.SUBNET6_MAP:
-        flash("IPv6 subnet not found.", "error")
-        return redirect(url_for("subnets.subnets"))
+    assert_subnet6_access(subnet_id)
 
     fields, error = _parse_and_validate_subnet6_edit_form(request.form)
     if error:

@@ -29,6 +29,7 @@ import jen.services.fingerprint as __fp
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
 from jen import extensions
+from jen.services.access import accessible_subnet6_map, assert_subnet6_access
 from jen.services.access import admin_required as _admin_required
 from jen.services.csv_safe import safe_row as _safe_row
 
@@ -223,7 +224,7 @@ def reservations():
         "get_manufacturer_icon_url": __fp.get_manufacturer_icon_url,
         "device_type_display": __fp.DEVICE_TYPE_DISPLAY,
         "view_mode": "v4",
-        "subnet6_map": extensions.SUBNET6_MAP,
+        "subnet6_map": accessible_subnet6_map(),
     }
     if request.headers.get("HX-Request") == "true":
         # v4.4.6 fix: previously hand-built just the <tr> rows HTML,
@@ -246,7 +247,8 @@ def _reservations_v6():
     same read-only pattern as the leases/devices/subnets v6 views.
     Write support (add/edit v6 reservations) is Phase 3.
     """
-    if not extensions.SUBNET6_MAP:
+    visible6 = accessible_subnet6_map()
+    if not visible6:
         flash("No IPv6 subnets are configured.", "error")
         return redirect(url_for("reservations.reservations"))
 
@@ -256,24 +258,15 @@ def _reservations_v6():
     if subnet_filter != "all":
         try:
             subnet_id = int(subnet_filter)
-            # v5.1.12 — same fix as leases_v6/devices_v6: checked
-            # SUBNET6_MAP membership only, never the user's own subnet
-            # access. Same paired-v4-subnet access rule as global search.
-            info = extensions.SUBNET6_MAP.get(subnet_id)
-            paired = info.get("paired_subnet4_id") if info else None
-            allowed = info is not None and (
-                current_user.all_subnets
-                or (paired is not None and paired in current_user.accessible_subnet_ids(extensions.SUBNET_MAP))
-            )
-            if not allowed:
-                subnet_filter = "all"
-                subnet_id = None
         except ValueError:
             subnet_filter = "all"
+        else:
+            # v5.68.0-beta.8 (Q143) — forbidden or unknown: 404, never a fallback to the (formerly unfiltered) "all" view.
+            assert_subnet6_access(subnet_id)
 
     hosts6 = []
     try:
-        hosts6 = __kea6.get_ipv6_reservations(subnet_id=subnet_id)
+        hosts6 = [h for h in __kea6.get_ipv6_reservations(subnet_id=subnet_id) if h["subnet_id"] in visible6]
         if search:
             s = search.lower()
             hosts6 = [
@@ -294,7 +287,7 @@ def _reservations_v6():
         "total": len(hosts6),
         "subnet_filter": subnet_filter,
         "search": search,
-        "subnet6_map": extensions.SUBNET6_MAP,
+        "subnet6_map": visible6,
         "view_mode": "v6",
     }
     if request.headers.get("HX-Request") == "true":
@@ -642,7 +635,8 @@ def delete_reservation(host_id):
 def add_reservation6():
     """v5.0 Phase 3 — add a v6 host reservation form. Superadmin/admin
     only, same gating as the v4 add flow."""
-    if not extensions.SUBNET6_MAP:
+    subnet6_map = accessible_subnet6_map()
+    if not subnet6_map:
         flash("No IPv6 subnets are configured.", "error")
         return redirect(url_for("reservations.reservations"))
     prefill = {
@@ -655,9 +649,7 @@ def add_reservation6():
         # opens the form on its placeholder option, the same as the v4 form.
         "subnet_id": request.args.get("subnet_id", ""),
     }
-    return render_template(
-        "add_reservation6.html", subnet6_map=current_user.filter_subnet_map(extensions.SUBNET6_MAP), prefill=prefill
-    )
+    return render_template("add_reservation6.html", subnet6_map=subnet6_map, prefill=prefill)
 
 
 @bp.route("/reservations/add6", methods=["POST"])
@@ -677,7 +669,7 @@ def add_reservation6_post():
     prefix = request.form.get("prefix", "").strip()
     prefix_len_raw = request.form.get("prefix_len", "").strip()
     raw_subnet = request.form.get("subnet_id", "").strip()
-    subnet6_map = current_user.filter_subnet_map(extensions.SUBNET6_MAP)
+    subnet6_map = accessible_subnet6_map()
 
     # v5.66.0-beta.8 (Q110) — every failure path re-renders with everything typed instead of a
     # blank redirect; HTTP 400 in place of the old 302 (the same treatment the v4 form got).
@@ -762,9 +754,9 @@ def delete_reservation6():
     except ValueError:
         flash("Invalid subnet.", "error")
         return redirect(url_for("reservations.reservations", view="v6"))
-    if subnet_id not in extensions.SUBNET6_MAP:
-        flash("Invalid IPv6 subnet.", "error")
-        return redirect(url_for("reservations.reservations", view="v6"))
+    # v5.68.0-beta.8 (Q143) — this only asked whether the subnet existed: a subnet-restricted admin could delete a reservation in a v6
+    # subnet they cannot see. Hidden and unknown are the same 404.
+    assert_subnet6_access(subnet_id)
     try:
         duid_norm = __kea6.normalize_duid(duid)
     except ValueError as e:

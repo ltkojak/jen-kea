@@ -65,7 +65,7 @@ def build_timeline(mac: str = "", ip: str = "", limit: int = 300, accessible_v4_
 
     `accessible_v4_ids` is `None` for an unrestricted caller, else the set of
     v4 subnet ids the caller may see: a v6 address is then kept only when its
-    v6 subnet is paired (`paired_subnet4_id`) to one of them — the Devices
+    v6 subnet is paired to one of them (access.subnet6_visible) — the Devices
     page's rule. The service stays Flask-free; the caller passes the set in."""
     mac = (mac or "").strip().lower()
     ip = (ip or "").strip()

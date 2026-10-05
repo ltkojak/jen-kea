@@ -88,6 +88,22 @@ devices, or anything else tied to a subnet: apply subnet restriction
 there too, even if it feels obviously admin-only. It's the checklist
 item that has actually mattered in practice.
 
+**IPv6 subnets have no scope of their own: one rule, one place (v5.68.0-beta.8 / Q143).** A user's scope is a list of
+*IPv4* subnet ids, and IPv6 subnet ids are a separate numbering space, so a v6 subnet can only be judged through the v4 subnet
+it is paired with (the third field of a `[subnets6]` line) — never by comparing its own id with that list, which is meaningless
+when the numbers happen to match. The policy is stated once, in `jen/services/access.py`: an unrestricted user (a superadmin,
+or an account with no subnet list) sees every v6 subnet Jen knows; a **paired** v6 subnet is accessible exactly when its
+v4 subnet is in the user's list; an **unpaired** v6 subnet has no v4 side to inherit from, so it is for unrestricted users
+only; a v6 subnet that is not in Jen's map is accessible to no one. Four names carry it — `subnet6_visible()` (pure, for the
+Flask-free services that are handed a scope), `can_access_subnet6()`, `accessible_subnet6_map()` (the only v6 map a template
+or loop may be given — never `extensions.SUBNET6_MAP`) and `assert_subnet6_access()` (404; "no such subnet" and "not yours" are
+the same answer, so a scoped user cannot probe which ids exist). A forbidden explicit `?subnet=` is a 404, never a fallback
+to an "all" view. `tests/test_ipv6_access.py` runs every v6 surface against one topology that includes the cases an id
+comparison gets wrong, and refuses the string `paired_subnet4_id` in `jen/routes` and `jen/services` except where the pairing
+is written or displayed as configuration. This is the same most-common-bug class as above: before beta.8 the v6 pages each
+carried a private copy of the rule, and the ones that carried none (delete-reservation, the three subnet-edit routes, the
+dashboard totals, the Subnets page) leaked.
+
 **Step-up auth (v5.17.0 / Q6).** A live session is not enough for the
 routes that manage a user's own MFA (enroll a second factor, regenerate
 backup codes, add/remove a trusted device, an admin's MFA reset).

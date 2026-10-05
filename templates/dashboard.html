@@ -102,7 +102,7 @@
             {% endif %}
         </div>
         {% endif %}
-        {% for s6 in subnets6 if s6.paired_subnet4_id == subnet_id %}
+        {% for s6 in subnets6 if s6.paired_v4_id == subnet_id %}
         <div class="stat-extra" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
             <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
                 <span class="badge badge-production u-41ccf8">v6</span>
@@ -113,7 +113,7 @@
         {% endfor %}
     </div>
     {% endfor %}
-    {% for s6 in subnets6 if not s6.paired_subnet4_id %}
+    {% for s6 in subnets6 if not s6.paired_v4_id %}
     <div class="stat-card u-3b6a3a" data-subnet-id="{{ s6.id }}" data-href="/devices?view=v6&subnet={{ s6.id }}"  title="View IPv6 devices for {{ s6.name }}">
         <div class="u-69957c">
             <div class="u-97445a">

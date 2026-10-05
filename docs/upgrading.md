@@ -127,3 +127,7 @@ Nothing to do (5.68.0-beta.7). Settings → Kea → SSH showed "v7 (build 7, bui
 button compared the helper's version alone and the helper releases since 5.66.0-beta.2 (builds 8, 9 and 10) changed the build and not the version. The button now
 appears when the host has no helper, or its version is below this Jen's, or the versions are equal and the host's build is below this Jen's (a helper that reports
 no build counts as below any build). If you could not press Update helper after upgrading to 5.68.0-beta.6, you can now: press it on each Kea host.
+
+## What a subnet-scoped account sees of IPv6 changed
+
+This changes what some accounts see (5.68.0-beta.8). An account limited to certain subnets now sees an IPv6 subnet only through the IPv4 subnet it is paired with, on every page that shows IPv6. A paired IPv6 subnet follows its IPv4 subnet; an IPv6 subnet with no pairing is visible only to accounts with no subnet restriction. Before this release several IPv6 pages applied the rule on some paths and left it off the rest: a hand-typed IPv6 subnet id the account could not see fell back to a list of every IPv6 lease, device or reservation, deleting an IPv6 reservation and editing an IPv6 subnet checked nothing about the account, and the Dashboard and Subnets pages counted and listed every IPv6 subnet. If a scoped account loses IPv6 rows it used to see, give the IPv6 subnet a pairing in `[subnets6]` (or lift the restriction); unrestricted accounts and superadmins see no change. Nothing to do on upgrade.

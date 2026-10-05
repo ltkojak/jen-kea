@@ -23,7 +23,7 @@ import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
 import jen.services.kea_config_view as __view
 from jen import extensions
-from jen.services.access import diagnostic_surface
+from jen.services.access import accessible_subnet6_map, diagnostic_surface, paired_v4_id, subnet6_visible
 from jen.services.fingerprint import DEVICE_TYPE_DISPLAY
 
 logger = logging.getLogger(__name__)
@@ -41,7 +41,7 @@ def __ip_to_int(ip):
     return sum(int(p) << (8 * (3 - i)) for i, p in enumerate(parts))
 
 
-def _get_ipv6_dashboard_summary():
+def _get_ipv6_dashboard_summary(visible6):
     """
     v5.0 Phase 2 — Dashboard's answer to "genuinely v6-aware stats OR an
     explicit v4-only label, never a silently-incomplete number" (plan
@@ -59,16 +59,19 @@ def _get_ipv6_dashboard_summary():
     NA/PD were kept as separate counts rather than summed into one
     "leases" figure.
     """
-    if not __kea6.is_ipv6_enabled() or not extensions.SUBNET6_MAP:
+    # v5.68.0-beta.8 (Q143) — `visible6` is the CALLER's v6 map (access.accessible_subnet6_map()). It was totalled over EVERY v6
+    # subnet for every caller, so a subnet-scoped user's "Active (v6)" and "+ N IPv6" counted (and so disclosed the size of)
+    # subnets they cannot see.
+    if not __kea6.is_ipv6_enabled() or not visible6:
         return None
     active = reserved = 0
     try:
-        for subnet_id in extensions.SUBNET6_MAP:
+        for subnet_id in visible6:
             active += len(__kea6.list_lease6(subnet_id=subnet_id))
             reserved += len(__kea6.get_ipv6_reservations(subnet_id=subnet_id))
     except Exception:
         return None
-    return {"active": active, "reserved": reserved, "subnet_count": len(extensions.SUBNET6_MAP)}
+    return {"active": active, "reserved": reserved, "subnet_count": len(visible6)}
 
 
 def _get_subnets6_data(accessible_v4_ids) -> list:
@@ -76,18 +79,13 @@ def _get_subnets6_data(accessible_v4_ids) -> list:
     v5.45.0 (Q46) — per-v6-subnet {active, reserved} counts for the
     dashboard's merged v4/v6 stat-grid: one card per v4 subnet, with a
     paired v6 subnet's numbers nested inside it (matched via
-    paired_subnet4_id — the same config-driven pairing
-    jen/routes/subnets.py's own _get_subnets6_data() and
-    jen/routes/devices.py's _devices_v6() already use, deliberately not
+    the v4 subnet it is paired with - the config-driven pairing, deliberately not
     name/VLAN-guessed), and any unpaired v6 subnet rendered as its own
     standalone card.
 
-    Unlike the Subnets page's sibling function (which shows every v6
-    subnet to any logged-in user today), this dashboard already
-    restricts every v4 card to accessible_v4_ids, so a v6 card is held
-    to the same bar: paired to an accessible v4 subnet, or — when
-    unpaired — visible only to an all_subnets user. Matches
-    jen/routes/devices.py::_devices_v6()'s access check exactly.
+    A v6 card is held to the one v6 access rule (access.subnet6_visible, v5.68.0-beta.8 / Q143): paired to an
+    accessible v4 subnet, or - when unpaired - visible only to an all_subnets user. The card's `paired_v4_id` is for
+    NESTING it in its v4 card, never a decision.
 
     Per-subnet exceptions are swallowed to a 0/0 row rather than
     aborting the whole list (unlike _get_ipv6_dashboard_summary()
@@ -99,9 +97,7 @@ def _get_subnets6_data(accessible_v4_ids) -> list:
         return []
     result = []
     for subnet_id, info in extensions.SUBNET6_MAP.items():
-        paired = info.get("paired_subnet4_id")
-        allowed = current_user.all_subnets or (paired is not None and paired in accessible_v4_ids)
-        if not allowed:
+        if not subnet6_visible(subnet_id, accessible_v4_ids, all_subnets=current_user.all_subnets):
             continue
         try:
             active = len(__kea6.list_lease6(subnet_id=subnet_id))
@@ -113,7 +109,7 @@ def _get_subnets6_data(accessible_v4_ids) -> list:
                 "id": subnet_id,
                 "name": info["name"],
                 "cidr": info["cidr"],
-                "paired_subnet4_id": paired,
+                "paired_v4_id": paired_v4_id(subnet_id),
                 "active": active,
                 "reserved": reserved,
             }
@@ -256,7 +252,7 @@ def dashboard():
         "device_info": device_info,
         "get_manufacturer_icon_url": __fp.get_manufacturer_icon_url,
         "device_type_display": __fp.DEVICE_TYPE_DISPLAY,
-        "ipv6_summary": _get_ipv6_dashboard_summary(),
+        "ipv6_summary": _get_ipv6_dashboard_summary(accessible_subnet6_map()),
         "subnets6": _get_subnets6_data(set(accessible_subnet_map.keys())),
         "kea_config_error": kea_config_error,
         "widget_catalog": __dprefs.WIDGET_CATALOG,

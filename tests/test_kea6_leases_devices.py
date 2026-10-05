@@ -474,12 +474,12 @@ class TestLeasesV6View:
         assert b"v6-host" in resp.data
 
     def test_v6_view_subnet_filter_rejects_v4_only_id(self, logged_in_client, monkeypatch, db):
-        """A subnet id that's valid in SUBNET_MAP but not SUBNET6_MAP must
-        fall back to 'all' rather than silently filtering to nothing."""
+        """A subnet id that's valid in SUBNET_MAP but not SUBNET6_MAP is a 404 (v5.68.0-beta.8, Q143) - it used to fall back to
+        'all', and a fallback is exactly where a scoped user's explicit-but-forbidden subnet leaked."""
         monkeypatch.setattr(extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64"}})
         monkeypatch.setattr(extensions, "SUBNET_MAP", {99: {"name": "V4LAN", "cidr": "192.168.1.0/24"}})
         resp = logged_in_client.get("/leases?view=v6&subnet=99")
-        assert resp.status_code == 200  # doesn't error, just falls back to all
+        assert resp.status_code == 404
 
     def test_v6_view_htmx_request_returns_partial_only(self, logged_in_client, monkeypatch, db):
         monkeypatch.setattr(extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64"}})
@@ -630,7 +630,7 @@ class TestDashboardV6Summary:
             extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
         )
         _invalidate_settings_cache()
-        assert dashboard_module._get_ipv6_dashboard_summary() is None
+        assert dashboard_module._get_ipv6_dashboard_summary(extensions.SUBNET6_MAP) is None
 
     def test_returns_none_when_no_v6_subnets(self, monkeypatch, db):
         import jen.routes.dashboard as dashboard_module
@@ -640,7 +640,7 @@ class TestDashboardV6Summary:
         monkeypatch.setattr(extensions, "SUBNET6_MAP", {})
         try:
             _invalidate_settings_cache()
-            assert dashboard_module._get_ipv6_dashboard_summary() is None
+            assert dashboard_module._get_ipv6_dashboard_summary(extensions.SUBNET6_MAP) is None
         finally:
             set_global_setting("ipv6_enabled", "false")
 
@@ -667,7 +667,7 @@ class TestDashboardV6Summary:
                 )
             db.commit()
             _invalidate_settings_cache()
-            summary = dashboard_module._get_ipv6_dashboard_summary()
+            summary = dashboard_module._get_ipv6_dashboard_summary(extensions.SUBNET6_MAP)
             assert summary == {"active": 1, "reserved": 0, "subnet_count": 1}
         finally:
             set_global_setting("ipv6_enabled", "false")
@@ -684,7 +684,7 @@ class TestDashboardV6Summary:
         monkeypatch.setattr(kea6_module, "list_lease6", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("db down")))
         try:
             _invalidate_settings_cache()
-            assert dashboard_module._get_ipv6_dashboard_summary() is None
+            assert dashboard_module._get_ipv6_dashboard_summary(extensions.SUBNET6_MAP) is None
         finally:
             set_global_setting("ipv6_enabled", "false")
 
@@ -809,7 +809,7 @@ class TestDashboardMergedV4V6Grid:
         try:
             data = dashboard_module._get_subnets6_data({1})
             assert len(data) == 1
-            assert data[0]["paired_subnet4_id"] == 1
+            assert data[0]["paired_v4_id"] == 1
         finally:
             set_global_setting("ipv6_enabled", "false")
 

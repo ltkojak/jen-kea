@@ -501,6 +501,8 @@ The ID must match the `id` field in your `kea-dhcp4.conf` subnet definition.
 | **Admin** | Full management on assigned subnets — Settings (except the Databases tools and user management). Can be restricted to specific subnets (**Settings → Access & Security → Users → subnet access**); unrestricted by default |
 | **Viewer** | Read-only access to Dashboard, Leases, Reservations, Subnets, DDNS, scoped to assigned subnets the same way as Admin |
 
+**What a subnet-scoped account sees of IPv6.** The subnet list of an account is a list of IPv4 subnets, so an IPv6 subnet is judged through the IPv4 subnet it is paired with (the third field of its `[subnets6]` line). A paired IPv6 subnet is visible to the accounts that can see its IPv4 subnet; an IPv6 subnet with no pairing is visible only to accounts with no subnet restriction. This holds for the IPv6 views of Leases, Devices and Reservations, the add and delete reservation forms, the Subnets page and its edit pages, the Dashboard's IPv6 numbers, global search and the Investigation page. Asking for an IPv6 subnet the account cannot see, by hand-typing its id, returns "not found", the same as an id that does not exist. If a scoped account is missing IPv6 data you expect it to have, check that the subnet has a pairing.
+
 ### Adding Users
 
 Go to **Settings → Access & Security → Users → Add User**. Enter a username, password (minimum 8 characters), and select a role.

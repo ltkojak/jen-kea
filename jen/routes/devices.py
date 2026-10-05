@@ -16,8 +16,8 @@ import jen.services.auth as __auth
 import jen.services.fingerprint as __fp
 import jen.services.kea6 as __kea6
 from jen import extensions
+from jen.services.access import accessible_subnet6_map, assert_subnet6_access, diagnostic_surface
 from jen.services.access import admin_required as _admin_required
-from jen.services.access import diagnostic_surface
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("devices", __name__)
@@ -183,27 +183,19 @@ def devices():
     # device row with the matching MAC; a lease6 with no hwaddr can't be
     # safely attributed to a v4 device at all, so it becomes its own
     # "DUID only" row instead, appended at the bottom, never merged.
-    # Access-filtered exactly like devices.py's own _devices_v6(): a v6
-    # subnet is visible only when paired to a v4 subnet this user can
-    # already access, or — unpaired — only for an all_subnets user.
+    # Access-filtered by the one v6 rule (access.accessible_subnet6_map, v5.68.0-beta.8 / Q143).
     v6_duid_only = []
     v6_by_mac = {}
-    if __kea6.is_ipv6_enabled() and extensions.SUBNET6_MAP:
-        accessible_v4_ids = set(accessible_subnet_map.keys())
+    visible6 = accessible_subnet6_map()
+    if __kea6.is_ipv6_enabled() and visible6:
         try:
             for mac, addrs in __kea6.lease6_by_hwaddr_mac().items():
-                allowed_addrs = []
-                for a in addrs:
-                    info = extensions.SUBNET6_MAP.get(a["subnet_id"])
-                    paired = info.get("paired_subnet4_id") if info else None
-                    if info and (current_user.all_subnets or (paired is not None and paired in accessible_v4_ids)):
-                        allowed_addrs.append(a)
+                allowed_addrs = [a for a in addrs if a["subnet_id"] in visible6]
                 if allowed_addrs:
                     v6_by_mac[mac] = allowed_addrs
             for dev in __kea6.lease6_devices_without_hwaddr():
-                info = extensions.SUBNET6_MAP.get(dev["subnet_id"])
-                paired = info.get("paired_subnet4_id") if info else None
-                if info and (current_user.all_subnets or (paired is not None and paired in accessible_v4_ids)):
+                info = visible6.get(dev["subnet_id"])
+                if info:
                     dev["subnet_name"] = info.get("name", "")
                     v6_duid_only.append(dev)
         except Exception as e:
@@ -241,7 +233,7 @@ def devices():
         "bundled_icons": bundled_icons,
         "custom_icons": custom_icons,
         "view_mode": "v4",
-        "subnet6_map": extensions.SUBNET6_MAP,
+        "subnet6_map": visible6,
         "v6_duid_only": v6_duid_only,
     }
     if request.headers.get("HX-Request") == "true":
@@ -267,7 +259,8 @@ def _devices_v6():
     from lease6 each time, not a persisted inventory. Read-only, matching
     every other Phase 2 v6 view.
     """
-    if not extensions.SUBNET6_MAP:
+    visible6 = accessible_subnet6_map()
+    if not visible6:
         flash("No IPv6 subnets are configured.", "error")
         return redirect(url_for("devices.devices"))
 
@@ -277,26 +270,17 @@ def _devices_v6():
     if subnet_filter != "all":
         try:
             subnet_id = int(subnet_filter)
-            # v5.1.12 — checked SUBNET6_MAP membership only, never the
-            # user's own subnet access, unlike the v4 devices route. Same
-            # paired-v4-subnet access rule as leases_v6/global search: an
-            # unpaired v6 subnet has no v4 side to inherit access from, so
-            # it's restricted to all_subnets users.
-            info = extensions.SUBNET6_MAP.get(subnet_id)
-            paired = info.get("paired_subnet4_id") if info else None
-            allowed = info is not None and (
-                current_user.all_subnets
-                or (paired is not None and paired in current_user.accessible_subnet_ids(extensions.SUBNET_MAP))
-            )
-            if not allowed:
-                subnet_filter = "all"
-                subnet_id = None
         except ValueError:
             subnet_filter = "all"
+        else:
+            # v5.68.0-beta.8 (Q143) — forbidden or unknown: 404, never a fallback to the (formerly unfiltered) "all" view.
+            assert_subnet6_access(subnet_id)
 
     devices_list = []
     try:
-        devices_list = __kea6.list_lease6_devices(subnet_id=subnet_id, search=search or None)
+        devices_list = __kea6.list_lease6_devices(
+            subnet_id=subnet_id, search=search or None, allowed_subnet_ids=set(visible6)
+        )
         for d in devices_list:
             d["subnet_name"] = extensions.SUBNET6_MAP.get(d["subnet_id"], {}).get("name", "")
     except Exception as e:
@@ -308,7 +292,7 @@ def _devices_v6():
         "total": len(devices_list),
         "subnet_filter": subnet_filter,
         "search": search,
-        "subnet6_map": extensions.SUBNET6_MAP,
+        "subnet6_map": visible6,
         "view_mode": "v6",
     }
     if request.headers.get("HX-Request") == "true":

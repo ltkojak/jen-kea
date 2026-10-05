@@ -17,6 +17,7 @@ import jen.services.fingerprint as __fp
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
 from jen import extensions
+from jen.services.access import accessible_subnet6_map, assert_subnet6_access
 from jen.services.access import admin_required as _admin_required
 
 logger = logging.getLogger(__name__)
@@ -178,7 +179,7 @@ def leases():
         "get_manufacturer_icon_url": __fp.get_manufacturer_icon_url,
         "device_type_display": __fp.DEVICE_TYPE_DISPLAY,
         "view_mode": "v4",
-        "subnet6_map": extensions.SUBNET6_MAP,
+        "subnet6_map": accessible_subnet6_map(),
     }
     if request.headers.get("HX-Request") == "true":
         # v4.4.6 fix: previously rendered only _lease_rows.html (the
@@ -209,7 +210,8 @@ def _leases_v6():
     explicitly read-only/basic per the plan; that polish is deferred
     rather than adding untested complexity here.
     """
-    if not extensions.SUBNET6_MAP:
+    visible6 = accessible_subnet6_map()
+    if not visible6:
         # Should be unreachable via the UI — the segmented control itself
         # is hidden whenever SUBNET6_MAP is empty (see leases.html) — but
         # guard directly in case of a stale bookmark or direct URL hit.
@@ -224,29 +226,18 @@ def _leases_v6():
     if subnet_filter != "all":
         try:
             subnet_id = int(subnet_filter)
-            # v5.1.12 — this checked SUBNET6_MAP membership but never the
-            # user's own subnet access at all, unlike every v4 filter route
-            # in this file. A subnet-restricted user could view any v6
-            # subnet's leases by id. Access follows the v6 subnet's
-            # paired_subnet4_id where one exists (same network as its v4
-            # counterpart) — an unpaired v6 subnet has no v4 side to
-            # inherit access from, so it's restricted to all_subnets users,
-            # matching the same rule global search already uses.
-            info = extensions.SUBNET6_MAP.get(subnet_id)
-            paired = info.get("paired_subnet4_id") if info else None
-            allowed = info is not None and (
-                current_user.all_subnets
-                or (paired is not None and paired in current_user.accessible_subnet_ids(extensions.SUBNET_MAP))
-            )
-            if not allowed:
-                subnet_filter = "all"
-                subnet_id = None
         except ValueError:
             subnet_filter = "all"
+        else:
+            # v5.68.0-beta.8 (Q143) — an explicit subnet the caller may not see (or that does not exist) is a 404, the same answer
+            # for both. It used to fall back to "all", and "all" was never filtered, so the fallback was the leak.
+            assert_subnet6_access(subnet_id)
 
     leases_list = []
     try:
         leases_list = __kea6.list_lease6(subnet_id=subnet_id, search=search or None, show_expired=show_expired)
+        # the "all" view reads every v6 subnet; keep only the ones this caller may see
+        leases_list = [lease for lease in leases_list if lease["subnet_id"] in visible6]
         for lease in leases_list:
             lease["subnet_name"] = extensions.SUBNET6_MAP.get(lease["subnet_id"], {}).get("name", "")
     except Exception as e:
@@ -259,7 +250,7 @@ def _leases_v6():
         "subnet_filter": subnet_filter,
         "search": search,
         "show_expired": show_expired,
-        "subnet6_map": extensions.SUBNET6_MAP,
+        "subnet6_map": visible6,
         "view_mode": "v6",
     }
     if request.headers.get("HX-Request") == "true":

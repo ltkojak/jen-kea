@@ -362,14 +362,9 @@ def load_leases6(mac: str, accessible_v4_ids=None) -> list[dict]:
             return []
         addrs = __kea6.lease6_by_hwaddr_mac().get(mac, [])
         if accessible_v4_ids is not None:
-            from jen import extensions
+            from jen.services.access import subnet6_visible
 
-            def visible(a):
-                info = extensions.SUBNET6_MAP.get(a.get("subnet_id"))
-                paired = info.get("paired_subnet4_id") if info else None
-                return paired is not None and paired in accessible_v4_ids
-
-            addrs = [a for a in addrs if visible(a)]
+            addrs = [a for a in addrs if subnet6_visible(a.get("subnet_id"), accessible_v4_ids)]
         return addrs
     except Exception as e:
         logger.error(f"client_subject: v6 lease lookup failed for mac={mac!r}: {e}")
@@ -396,17 +391,17 @@ def _v6_enabled() -> bool:
 
 def _paired_v4_subnet(subnet6_id):
     """The v4 subnet id a v6 subnet is paired to, or None (an unpaired v6 subnet has no v4 subnet to inherit access from)."""
-    from jen import extensions
+    from jen.services.access import paired_v4_id
 
-    info = extensions.SUBNET6_MAP.get(subnet6_id)
-    return info.get("paired_subnet4_id") if info else None
+    return paired_v4_id(subnet6_id)
 
 
 def _v6_visible(subnet6_id, ids) -> bool:
-    """May a caller whose v4 subnet ids are `ids` see something in this v6 subnet? Only through the v4 subnet it is paired
-    to - the rule Devices and global search already apply (an unpaired v6 subnet is for unrestricted callers only)."""
-    paired = _paired_v4_subnet(subnet6_id)
-    return paired is not None and _subnet_ok(paired, ids)
+    """May a caller whose v4 subnet ids are `ids` see something in this v6 subnet? The one v6 rule (access.subnet6_visible,
+    v5.68.0-beta.8 / Q143): only through the v4 subnet it is paired to; an unpaired v6 subnet is for unrestricted callers only."""
+    from jen.services.access import subnet6_visible
+
+    return subnet6_visible(subnet6_id, ids)
 
 
 def load_leases6_for(duid_hex: str = "", address: str = "") -> list[dict]:

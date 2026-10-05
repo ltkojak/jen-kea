@@ -94,7 +94,7 @@ document.addEventListener('click', function(e) {
             <span class="badge badge-{{ s.name|lower|replace(' ','') }}">{{ s.name }}</span>
             <span class="mono u-de0080">{{ s.cidr }}</span>
             {% if s.shared_network %}<span class="badge u-d6f005"  title="In shared network {{ s.shared_network }}">shared</span>{% endif %}
-            {% for s6 in subnets6 if s6.paired_subnet4_id == s.id %}
+            {% for s6 in subnets6 if s6.paired_v4_id == s.id %}
             <span class="badge badge-production" title="Paired IPv6 subnet">IPv6</span>
             {% endfor %}
         </div>
@@ -209,7 +209,7 @@ document.addEventListener('click', function(e) {
         </div>
         {% endif %}
     </div>
-    {% for s6 in subnets6 if s6.paired_subnet4_id == s.id %}
+    {% for s6 in subnets6 if s6.paired_v4_id == s.id %}
     <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border);">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;">
             <div class="u-95fd83">
@@ -270,7 +270,7 @@ document.addEventListener('click', function(e) {
 </details>
 {% endif %}
 
-{% for s6 in subnets6 if not s6.paired_subnet4_id %}
+{% for s6 in subnets6 if not s6.paired_v4_id %}
 <div class="card">
     <div class="card-header">
         <div class="u-95fd83">

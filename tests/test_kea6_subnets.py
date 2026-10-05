@@ -245,10 +245,11 @@ class TestEditSubnet6Route:
         resp = c.get("/subnets/edit6/1", follow_redirects=False)
         assert resp.status_code == 302
 
-    def test_not_found_redirects(self, logged_in_client, monkeypatch):
+    def test_not_found_is_a_404(self, logged_in_client, monkeypatch):
+        # v5.68.0-beta.8 (Q143): "no such subnet" and "not yours" are the same 404 (no existence oracle)
         monkeypatch.setattr(extensions, "SUBNET6_MAP", {})
         resp = logged_in_client.get("/subnets/edit6/1", follow_redirects=False)
-        assert resp.status_code == 302
+        assert resp.status_code == 404
 
     def test_renders_form_with_current_kea_data(self, logged_in_client, monkeypatch):
         import jen.services.kea6 as kea6_module
@@ -285,8 +286,8 @@ class TestEditSubnet6PostRoute:
 
     def test_not_found(self, logged_in_client, monkeypatch):
         monkeypatch.setattr(extensions, "SUBNET6_MAP", {})
-        resp = logged_in_client.post("/subnets/edit6/1", data={}, follow_redirects=True)
-        assert b"IPv6 subnet not found" in resp.data
+        resp = logged_in_client.post("/subnets/edit6/1", data={}, follow_redirects=False)
+        assert resp.status_code == 404  # v5.68.0-beta.8 (Q143): the same 404 for unknown and forbidden
 
     def test_validation_error_redirects_to_edit_form(self, logged_in_client, monkeypatch):
         monkeypatch.setattr(
