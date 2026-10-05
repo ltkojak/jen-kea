@@ -2,6 +2,60 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.68.0-beta.6] - 2026-10-05
+
+Beta channel. Stacked on 5.68.0-beta.5. **A bug fix for a defect that has been in every release since
+5.66.0-beta.2 — stable 5.66.0 and 5.67.0 included.** On a Kea host whose Kea came from ISC's own packages, no
+config change reached Kea through the helper at all, and Jen told the operator that Kea was not installed.
+
+**What was wrong.** From helper build 7 the helper resolves every binary it runs through a fixed list of
+directories and requires each to be `root:root` with no group or other write bit, so a planted file can never be
+run as root. That rule was applied to the Kea daemon binary as well. ISC's packages do not ship it that way:
+on a Kea 3.0.4 ISC deb (`3.0.4 isc20260728182757 deb`) `/usr/sbin/kea-dhcp4` is owned `_kea:_kea`, mode `0750`.
+Every operation that checks a config before writing it — and that is `test-config` and `apply-config`, so every
+subnet, option, class, DDNS and investigation-logging change — therefore answered `missingbinary`, which Jen
+worded "kea-dhcp4 is not installed on this server — install it and try again". The maintainer's host showed it the
+first time investigation logging was pressed: the binary was exactly where the helper looks, in a directory that
+passed, and the file was refused for its owner. A host still on the legacy `sudo python3` path (no helper
+installed) was never affected, because that path has no such check; a host that had been moved onto helper builds 7
+to 9 was.
+
+**How the test suite never saw it, said plainly.** The system suite's Kea node is ISC's own image, which ships the
+binary owned by its service account, and a fixup in the release that introduced the rule changed the image to
+`root:root` — under a comment asserting that "a real Ubuntu/apt install puts the BINARY under root:root". That
+was never checked against ISC's packages, which are the ones Jen targets (Kea 3.0 and later; Ubuntu's own package
+is 2.4). The test host was altered to fit the check. When a fixture has to change for a check to pass, the change
+is a claim about production, and it is verified against a real target before the check ships. The fixture is back
+to what ISC ships and the change is explained where the line used to be.
+
+**What changed.** Build 10 runs `kea-dhcpX -t` as the account the daemon runs as, which is what the daemon does on
+every start, and the trust rule now says who executes the file. A binary the helper runs as root is trusted exactly
+as before: `root:root`, no group or other write bit. The Kea daemon binary is run through the standard library's
+`user=`/`group=` as the unit's `User=`, else its own owner, and is trusted only when it is a regular file owned by
+exactly that account, a system account (a uid below 1000, never root), with no group or other write bit. A binary
+owned by anyone else, or writable by group or other, or a symlink, is still refused, and the Servers page now says
+why ("is owned by alice, not a system account and not the daemon's user") instead of "not installed". Because
+the helper, which is root, never executes a file an unprivileged account can replace, and the account that runs it
+can already do whatever the daemon can, nothing was loosened for root. The file the test reads is written
+mode 0644 explicitly rather than by the umask, and the helper's clean environment gains `HOME=/`.
+
+**What ISC's images record, measured on 3.0.3, 3.2.0 and 3.3.1.** A new compatibility check reads it from each
+image's running container and fails the day it changes: `/usr/sbin/kea-dhcp4` is owned by the service account `kea`
+(uid 100), mode `0754`, group `root` on 3.0.3 and `kea` on 3.2.0 and 3.3.1; the daemon's process runs as root;
+the image sets no user. The packaged deb is `_kea:_kea` `0750`. All of it satisfies the new rule. The comment in the
+helper that said "ISC's own packages run the daemons as root" was wrong and now says this.
+
+**Messages.** When the helper refuses a binary it found, the line on the page and the config-test results name the
+reason and the fix. A helper older than build 10 says nothing of the sort, so the line says that too: on a Kea
+from ISC's packages that helper cannot run the binary and reports it as not installed. Health Center's helper row
+warns "helper build < 10 on an ISC-packaged Kea cannot validate configs" for a host whose Kea version string shows
+the packaging.
+
+**What an operator must do.** Press **Update helper** on every Kea host after upgrading Jen: the fix is in the
+helper file on the Kea host, not in Jen, and Settings → Kea → SSH shows the host as "v7 (build 9, build 10
+available)" until it is done. The update is signed and needs no sudoers change. Hosts that were never affected need
+nothing.
+
 ## [5.68.0-beta.5] - 2026-10-05
 
 Beta channel. Stacked on 5.68.0-beta.4. An investigation used to start when a person already

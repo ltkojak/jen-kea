@@ -109,3 +109,14 @@ in `plugins/README.md`.
 ## The Problems inbox: which clients had DHCP trouble
 
 Nothing to do (5.68.0-beta.5). Migration 30 creates a table on the first start; a new core job reads each Kea server's log (the last 1000 lines, through the helper's existing `tail-log`) and the lease database every five minutes, and **Network → Problems** lists the clients that had a NAK, a decline, a failed DNS update, a declined lease or a held reservation, each with an Investigate button. The Servers page's NAK and Dropped counters link to it, the dashboard can show a **Clients with problems** widget (Customize), and a channel can opt into the new **Client had DHCP trouble** alert, which fires when one client has the same kind of trouble three times within an hour (change the number with the optional `[alerts] client_problem_threshold`) and at most once per client and kind per day. The packet-drop and subnet-selection kinds appear only while a server logs at DEBUG. Nothing is added to the helper or the sudoers files.
+
+## Press Update helper on every Kea host: a Kea from ISC's packages could not have its config validated
+
+**Do this after upgrading to 5.68.0-beta.6.** If your Kea came from ISC's own packages, `/usr/sbin/kea-dhcp4` is owned by the Kea service account
+(`ls -l /usr/sbin/kea-dhcp4` shows `_kea _kea`, mode `-rwxr-x---`), and the Kea host helper in builds 7 to 9 — shipped since 5.66.0-beta.2, so in stable
+5.66.0 and 5.67.0 too — refused it for not being `root:root` and answered that Kea was not installed. On such a host, every change that checks the
+config first (subnets, options, classes, DDNS, investigation logging) failed with "kea-dhcp4 is not installed on this server". A host with no helper
+installed (the legacy path) was not affected. Build 10 runs the config check as the daemon's own account and trusts the binary when that account owns it
+as a regular file nobody else can write; the fix is in the helper file on the Kea host, so **Settings → Kea → SSH → Update helper** on each host is what
+delivers it (the update is signed and needs no sudoers change). The Servers page now names the real reason when the helper refuses a binary it found,
+and Health Center warns about a host on an older build whose Kea version string shows ISC's packaging.
