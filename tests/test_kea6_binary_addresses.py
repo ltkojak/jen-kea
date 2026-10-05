@@ -103,7 +103,7 @@ def _lease(db, address, duid="00030001001a2b3c4d5e", hostname="", subnet_id=1, l
     with db.cursor() as cur:
         cur.execute(
             "INSERT INTO lease6 (address, duid, valid_lifetime, expire, subnet_id, pref_lifetime, lease_type, iaid, "
-            "prefix_len, hostname, hwaddr, state) VALUES (%s, %s, 3600, '2026-08-15 00:00:00', %s, 1800, %s, 1, %s, "
+            "prefix_len, hostname, hwaddr, state) VALUES (%s, %s, 3600, '2037-01-01 00:00:00', %s, 1800, %s, 1, %s, "
             "%s, NULL, %s)",
             (packed(address), bytes.fromhex(duid), subnet_id, lease_type, prefix_len, hostname, state),
         )

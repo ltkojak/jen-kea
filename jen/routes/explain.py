@@ -91,10 +91,14 @@ def explain_page():
         # `auto=0` is the old behaviour: the MAC and what was typed, nothing inferred.
         auto = request.args.get("auto") != "0"
         log_view = __ctx.read_log(client["mac"], allowed=_may_read_kea_log() and auto)
-        # a lease in a subnet the caller may not see contributes nothing: its client id and hostname are that client's
+        # a lease in a subnet the caller may not see contributes nothing: its client id and hostname are that client's.
+        # v5.68.0-beta.10 (Q145): and from here on it is not "the lease" at all - `usable_lease` is the ONLY lease this route knows,
+        # for the subnet it picks, for the engine and for the wording. (It used to be filtered for the inputs and then the
+        # unfiltered one chose the subnet, was refused, and still reached the engine.)
         usable_lease = (
             lease if lease and (not lease.get("subnet_id") or int(lease["subnet_id"]) in subnet_map) else None
         )
+        lease = usable_lease
         built = __ctx.build_inputs(client["mac"], typed=typed, lease=usable_lease, log=log_view, auto=auto)
         client = built["client"]
         cid_hex = _hex_identifier(client["client_id"])

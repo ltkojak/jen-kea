@@ -26,6 +26,7 @@ import time
 
 import jen.models.db as __db
 from jen import extensions
+from jen.services import client_subject as _cs
 from jen.services import dhcp_explain as _explain
 from jen.services import explain_inputs as _inputs
 from jen.services import kea_log_inputs as _li
@@ -47,7 +48,7 @@ def pool_used(subnet_id, pool_text) -> int | None:
     try:
         with __db.kea_db() as db, db.cursor() as cur:
             cur.execute(
-                "SELECT COUNT(*) AS n FROM lease4 WHERE subnet_id=%s AND state=0 AND expire > NOW() "
+                f"SELECT COUNT(*) AS n FROM lease4 WHERE subnet_id=%s AND {_cs.ACTIVE_LEASE4} "  # nosec B608 - a fixed constant
                 "AND address BETWEEN %s AND %s",
                 (int(subnet_id), bounds[0], bounds[1]),
             )
@@ -65,7 +66,7 @@ def holder_of(ip, mac, accessible_ids=None) -> dict | None:
         with __db.kea_db() as db, db.cursor() as cur:
             cur.execute(
                 "SELECT HEX(hwaddr) AS mac_hex, expire, subnet_id FROM lease4 "
-                "WHERE address=INET_ATON(%s) AND state=0 AND expire > NOW() LIMIT 1",
+                f"WHERE address=INET_ATON(%s) AND {_cs.ACTIVE_LEASE4} LIMIT 1",  # nosec B608 - a fixed constant
                 (str(ip),),
             )
             row = cur.fetchone()

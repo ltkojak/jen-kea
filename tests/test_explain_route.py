@@ -408,3 +408,54 @@ class TestLeaseAwareVerdicts:
             as_text=True
         )
         assert "NOT selected" in page and "Everything below assumes it was" in page
+
+
+class TestTheUsableLeaseIsTheOnlyLeaseTheRouteKnows:
+    """v5.68.0-beta.10 (Q145): the route filtered the lease for the INPUTS and then let the unfiltered one choose the subnet (refused:
+    "You do not have access"), reach the engine and word the page - so a client with a current lease in a subnet the caller cannot see
+    and a reservation in one they can got nothing, and the hidden lease still reached `run()`."""
+
+    HIDDEN_IP = "10.99.0.5"
+
+    @pytest.fixture
+    def split(self, monkeypatch, db, no_log):
+        from jen import extensions
+
+        monkeypatch.setattr("jen.routes.explain.dhcp4_config", lambda force=False: SMALL_CFG)
+        monkeypatch.setattr(
+            extensions,
+            "SUBNET_MAP",
+            {1: {"name": "NET-A", "cidr": "192.168.1.0/24"}, 2: {"name": "HIDDEN-NET-B", "cidr": "10.99.0.0/24"}},
+        )
+        _cleanup(db)
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4 WHERE address=INET_ATON(%s)", (self.HIDDEN_IP,))
+            cur.execute(
+                "INSERT INTO lease4 (address, hwaddr, client_id, subnet_id, state, expire, valid_lifetime, hostname) VALUES "
+                "(INET_ATON(%s), UNHEX('00AAAAAAAA02'), UNHEX('0100AAAAAAAA02'), 2, 0, DATE_ADD(NOW(), INTERVAL 1 HOUR), 3600, "
+                "'hidden-lease-host')",
+                (self.HIDDEN_IP,),
+            )
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
+                "VALUES (UNHEX('00AAAAAAAA02'), 0, 1, INET_ATON('192.168.1.50'), 'reserved-in-a')"
+            )
+        db.commit()
+        yield
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4 WHERE address=INET_ATON(%s)", (self.HIDDEN_IP,))
+        db.commit()
+        _cleanup(db)
+
+    def test_a_scoped_caller_is_explained_in_the_subnet_of_the_reservation_and_never_sees_the_hidden_lease(
+        self, client, db, split, mock_kea
+    ):
+        from tests.conftest import restricted_client
+
+        c, _uid = restricted_client(client, db, allowed_subnets=[1], role="admin", username="_explain_split_admin")
+        page = c.get("/tools/explain?mac=00:aa:aa:aa:aa:02").get_data(as_text=True)
+        assert "from a reservation" in page, "the subnet came from what the caller may see, not from the hidden lease"
+        assert "You do not have access to that subnet" not in page
+        assert "192.168.1.50" in page, "the engine ran in subnet A from the reservation"
+        for secret in (self.HIDDEN_IP, "hidden-lease-host", "HIDDEN-NET-B", "the current lease"):
+            assert secret not in page, f"{secret!r}: the hidden lease reached the page"

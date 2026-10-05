@@ -35,6 +35,13 @@ import jen.models.db as __db
 
 logger = logging.getLogger(__name__)
 
+#: v5.68.0-beta.10 (Q145) - what "this lease is current" means, once. Kea keeps a state-0 row past its `expire` until reclamation
+#: removes it, so `state = 0` alone calls an expired lease "the current lease" - who holds an IP, whose hostname resolves, what
+#: Explain's inputs are read from. Every query that asks for the CURRENT lease of a client, an address or a hostname uses this
+#: (the historical views - the Leases page with "show expired" - keep the rows). The IPv6 twin is `kea6.ACTIVE_LEASE6`;
+#: tests/test_active_lease.py refuses a "current lease" query that spells it any other way.
+ACTIVE_LEASE4 = "state = 0 AND expire > NOW()"
+
 # ── Identifier kind detection (pure) ────────────────────────────────────────────
 
 _SEPARATORS_RE = re.compile(r"[:\-. ]")
@@ -227,7 +234,7 @@ def client_subnet_for_mac(mac: str) -> int | None:
     try:
         with __db.kea_db() as db, db.cursor() as cur:
             cur.execute(
-                "SELECT subnet_id FROM lease4 WHERE HEX(hwaddr)=%s AND state=0 AND expire > NOW() "
+                f"SELECT subnet_id FROM lease4 WHERE HEX(hwaddr)=%s AND {ACTIVE_LEASE4} "  # nosec B608 - a fixed constant
                 "ORDER BY expire DESC LIMIT 1",
                 (hexed,),
             )
@@ -275,7 +282,7 @@ def subnet_for_ip(ip) -> int | None:
 
 
 def load_leases4(mac: str, ip: str = "") -> list[dict]:
-    """Every active (state=0) v4 lease for this identifier — MAC first, or
+    """Every ACTIVE (`ACTIVE_LEASE4`: state 0 and not past its expiry) v4 lease for this identifier — MAC first, or
     the single lease at this address when only an IP is known — newest
     first. Each row also carries `client_id` (hex, '' when the client sent none) and `user_context` (the JSON text Kea
     stores - with store-extended-info, the relay agent's options) for Explain's inputs (v5.68.0-beta.2, Q135)."""
@@ -285,14 +292,14 @@ def load_leases4(mac: str, ip: str = "") -> list[dict]:
                 cur.execute(
                     "SELECT inet_ntoa(address) AS ip, subnet_id, IFNULL(hostname,'') AS hostname, expire, "
                     "valid_lifetime, HEX(client_id) AS client_id, user_context "
-                    "FROM lease4 WHERE HEX(hwaddr)=%s AND state=0 ORDER BY expire DESC",
+                    f"FROM lease4 WHERE HEX(hwaddr)=%s AND {ACTIVE_LEASE4} ORDER BY expire DESC",  # nosec B608 - a fixed constant
                     (mac_hex(mac),),
                 )
             else:
                 cur.execute(
                     "SELECT inet_ntoa(address) AS ip, subnet_id, IFNULL(hostname,'') AS hostname, expire, "
                     "valid_lifetime, HEX(client_id) AS client_id, user_context "
-                    "FROM lease4 WHERE address=inet_aton(%s) AND state=0",
+                    f"FROM lease4 WHERE address=inet_aton(%s) AND {ACTIVE_LEASE4}",  # nosec B608 - a fixed constant
                     (ip,),
                 )
             return cur.fetchall()
@@ -484,10 +491,13 @@ def mac_from_v6(leases6, duid_hex: str) -> tuple[str, str]:
 
 def mac_from_ip(ip: str) -> str:
     """The active lease's MAC for this IP, or '' — who currently holds
-    this address (an IP subject's `holder_mac`)."""
+    this address (an IP subject's `holder_mac`). An expired lease holds nothing (`ACTIVE_LEASE4`)."""
     try:
         with __db.kea_db() as db, db.cursor() as cur:
-            cur.execute("SELECT HEX(hwaddr) AS mac_hex FROM lease4 WHERE address=inet_aton(%s) AND state=0", (ip,))
+            cur.execute(
+                f"SELECT HEX(hwaddr) AS mac_hex FROM lease4 WHERE address=inet_aton(%s) AND {ACTIVE_LEASE4}",  # nosec B608 - a fixed constant
+                (ip,),
+            )
             row = cur.fetchone()
     except Exception:
         return ""
@@ -536,7 +546,10 @@ def macs_for_hostname(hostname: str, accessible_ids=None) -> set[str]:
     macs: set[str] = set()
     try:
         with __db.kea_db() as db, db.cursor() as cur:
-            cur.execute("SELECT HEX(hwaddr) AS h, subnet_id FROM lease4 WHERE hostname=%s AND state=0", (hostname,))
+            cur.execute(
+                f"SELECT HEX(hwaddr) AS h, subnet_id FROM lease4 WHERE hostname=%s AND {ACTIVE_LEASE4}",  # nosec B608 - a fixed constant
+                (hostname,),
+            )
             macs |= {_hex_to_mac(r["h"]) for r in cur.fetchall() if r["h"] and keep(r["subnet_id"])}
             cur.execute(
                 "SELECT HEX(dhcp_identifier) AS h, dhcp4_subnet_id AS subnet_id FROM hosts "

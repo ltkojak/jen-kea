@@ -298,6 +298,12 @@ def get_lease6_mac(hwaddr_hex: str, duid_hex: str):
     return extract_mac_from_duid(duid_hex)
 
 
+#: v5.68.0-beta.10 (Q145) - the v6 twin of client_subject.ACTIVE_LEASE4: a lease6 row is ACTIVE when its state is 0 and it has
+#: not passed its expiry. `expired` on a row is the negation (state != 0 OR expire <= NOW()). A state-0 row past its `expire` lingers
+#: until Kea reclaims it and used to count as an active v6 lease.
+ACTIVE_LEASE6 = "state = 0 AND expire > NOW()"
+
+
 def list_lease6(
     subnet_id: int = None,
     lease_type: int = None,
@@ -327,14 +333,16 @@ def list_lease6(
     Each dict: address, duid_hex, mac (best-effort, see get_lease6_mac),
     valid_lifetime, expire, obtained, subnet_id, pref_lifetime,
     lease_type, lease_type_name, iaid, prefix_len, hostname, state,
-    expired.
+    expired (`state != 0 OR expire <= NOW()`: the negation of ACTIVE_LEASE6).
+
+    Without `show_expired` only ACTIVE rows are read: a state-0 row past its expiry is no longer "the lease".
     """
     from jen.models.db import kea6_db
 
     where = []
     params = []
     if not show_expired:
-        where.append("state=0")
+        where.append(ACTIVE_LEASE6)
     if subnet_id is not None:
         where.append("subnet_id=%s")
         params.append(subnet_id)
@@ -369,7 +377,7 @@ def list_lease6(
                        valid_lifetime, expire,
                        (expire - INTERVAL valid_lifetime SECOND) AS obtained,
                        subnet_id, pref_lifetime, lease_type, iaid, prefix_len,
-                       hostname, state
+                       hostname, state, (expire <= NOW()) AS past_expiry
                 FROM lease6 WHERE {where_str}
                 ORDER BY address
             """,
@@ -404,7 +412,7 @@ def list_lease6(
                     "prefix_len": row["prefix_len"],
                     "hostname": row["hostname"] or "",
                     "state": row["state"],
-                    "expired": (row["state"] or 0) != 0,
+                    "expired": (row["state"] or 0) != 0 or bool(row["past_expiry"]),
                 }
             )
     return results
