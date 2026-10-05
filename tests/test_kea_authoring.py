@@ -1521,7 +1521,16 @@ class TestKeaHelperTableUpgradeHint:
         monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-a", "ssh_host": "1.2.3.4"}])
         set_global_setting(
             "kea_helper_status",
-            json.dumps({"1": {"version": kea_host.JEN_HELPER_SHIPPED_VERSION, "checked": "2026-01-01"}}),
+            json.dumps(
+                {
+                    "1": {
+                        "version": kea_host.JEN_HELPER_SHIPPED_VERSION,
+                        # v5.68.0-beta.7 (Q142): "at shipped" now means the shipped BUILD too - a host that reports none is below it
+                        "build": kea_host.JEN_HELPER_SHIPPED_BUILD,
+                        "checked": "2026-01-01",
+                    }
+                }
+            ),
         )
         r = logged_in_client.get("/settings/kea")
         assert r.status_code == 200
@@ -1529,6 +1538,25 @@ class TestKeaHelperTableUpgradeHint:
         assert f"(v{kea_host.JEN_HELPER_SHIPPED_VERSION} available)".encode() not in r.data
         assert b"Update helper" not in r.data
         assert b"Install helper" not in r.data
+
+    def test_a_build_only_update_offers_the_button_and_says_which_build(
+        self, logged_in_client, monkeypatch, db, mock_kea
+    ):
+        """v5.68.0-beta.7 (Q142) - the version is current, the build is not: the label said "build N available" and the button was missing."""
+        import json
+
+        from jen.models.user import set_global_setting
+        from jen.services import kea_host
+
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-a", "ssh_host": "1.2.3.4"}])
+        set_global_setting(
+            "kea_helper_status",
+            json.dumps({"1": {"version": kea_host.JEN_HELPER_SHIPPED_VERSION, "build": 7, "checked": "2026-01-01"}}),
+        )
+        r = logged_in_client.get("/settings/kea")
+        assert r.status_code == 200
+        assert f"build {kea_host.JEN_HELPER_SHIPPED_BUILD} available".encode() in r.data
+        assert b"Update helper" in r.data and b"Install helper" not in r.data
 
 
 class TestRemoveLegacyGrantRoute:
