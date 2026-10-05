@@ -53,8 +53,15 @@ def prime(logs, server_id=1):
     cp.sweep(NOW - timedelta(minutes=10), servers=[SERVER_A if server_id == 1 else SERVER_B])
 
 
-def decline(second, ip="10.45.0.9", mac=MAC):
-    return _line(second, "DHCP4_DECLINE_LEASE", f"Received DHCPDECLINE for addr {ip} from client x.", mac)
+def decline(second, ip="10.45.0.9", mac=MAC, minute=0, hour=11):
+    return _line(
+        second,
+        "DHCP4_DECLINE_LEASE",
+        f"Received DHCPDECLINE for addr {ip} from client x.",
+        mac,
+        minute=minute,
+        hour=hour,
+    )
 
 
 @pytest.fixture
@@ -292,7 +299,8 @@ class TestTheAlert:
         with db.cursor() as cur:
             cur.execute("UPDATE client_problems SET alerted_at=%s", (NOW - timedelta(hours=25),))
         db.commit()
-        logs[1] = [nak(1), nak(2), nak(3), nak(4, minute=2)]
+        # three more inside the hour that ends at the next sweep (the window is now, not the newest line)
+        logs[1] = [nak(1), nak(2), nak(3), *[nak(i, minute=58) for i in (1, 2, 3)]]
         cp.sweep(NOW + timedelta(minutes=5), servers=[SERVER_A])
         assert len(calls["alerts"]) == 2
 
