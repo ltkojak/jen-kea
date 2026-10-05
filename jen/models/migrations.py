@@ -1084,6 +1084,39 @@ def _m029_plugin_tables(db):
     logger.info("Migration 29: plugin_tables table")
 
 
+def _m030_client_problems(db):
+    """
+    v5.68.0-beta.5 (Q140) - the Problems inbox: one row per (server, kind, client, address) that had trouble, written by the
+    five-minute sweep (jen/services/client_problems.py). `server_id` is 0 for the two kinds read from the lease database
+    rather than a server's log. `mac` and `ip` are NOT NULL with an empty-string default so the unique key really is unique
+    (MySQL treats NULLs as distinct) - a NAK whose line named no address and a declined lease whose hardware address Kea cleared
+    each get a stable key. `subnet_id` is NULL when no subnet can be attributed; such a row is for unrestricted callers only.
+    `resolved_at` is set when a kind has not recurred for 24 hours (and at once for the two database kinds when the state is gone);
+    `alerted_at` is the once-per-day rule for the client_problems alert. Idempotent (CREATE TABLE IF NOT EXISTS).
+    """
+    with db.cursor() as cur:
+        cur.execute(
+            """CREATE TABLE IF NOT EXISTS client_problems (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                server_id INT NOT NULL DEFAULT 0,
+                kind VARCHAR(32) NOT NULL,
+                mac VARCHAR(17) NOT NULL DEFAULT '',
+                ip VARCHAR(15) NOT NULL DEFAULT '',
+                subnet_id INT NULL,
+                first_seen DATETIME NOT NULL,
+                last_seen DATETIME NOT NULL,
+                `count` INT NOT NULL DEFAULT 1,
+                detail VARCHAR(255) NOT NULL DEFAULT '',
+                alerted_at DATETIME NULL,
+                resolved_at DATETIME NULL,
+                UNIQUE KEY uq_client_problem (server_id, kind, mac, ip),
+                KEY idx_problem_open (resolved_at, last_seen),
+                KEY idx_problem_mac (mac)
+            )"""
+        )
+    logger.info("Migration 30: client_problems table")
+
+
 MIGRATIONS = [
     (1, "Baseline schema (all tables, current definitions)", _m001_baseline),
     (2, "users.avatar_url column", _m002_users_avatar),
@@ -1134,6 +1167,7 @@ MIGRATIONS = [
         _m028_dashboard_prefs_widgets_widen,
     ),
     (29, "plugin_tables: persisted plugin table ownership (v5.67.0-beta.14, Q128)", _m029_plugin_tables),
+    (30, "client_problems: the Problems inbox (v5.68.0-beta.5, Q140)", _m030_client_problems),
 ]
 
 # Registry sanity: strictly increasing versions, never reordered

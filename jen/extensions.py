@@ -184,6 +184,9 @@ SUBNET6_MAP: dict = {}  # {subnet_id: {"name": str, "cidr": str}} — v5.0
 DDNS_LOG: str = "/var/log/kea/kea-ddns.log"
 # v5.48.0 (Q49) — kea-dhcp4's own log, tailed by the client trace page
 DHCP4_LOG: str = "/var/log/kea/kea-dhcp4.log"
+# v5.68.0-beta.5 (Q140) - [alerts] client_problem_threshold: how many times in an hour a client must have the same kind of DHCP
+# trouble before the client_problems alert fires (once per client and kind per day). Optional; 3 when absent or unreadable.
+CLIENT_PROBLEM_THRESHOLD: int = 3
 
 # ── Active server cache (TTL 10s) ────────────────────────────────────────────
 _active_server_cache: dict = {"server": None, "ts": 0}

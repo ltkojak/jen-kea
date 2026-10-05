@@ -81,6 +81,7 @@ JEN_TABLES = {
     "lease6_history": "Historical IPv6 lease count snapshots",
     "server_stats": "Packet health snapshots (statistic-get-all counters per server)",
     "events": "The event stream (lease/reservation/config/HA/drift/alert activity)",
+    "client_problems": "The Problems inbox: clients that had DHCP trouble, per server and kind (rebuilt by the sweep every five minutes; rows are kept 30 days)",
     # v5.49.0-beta.3 — schema_migrations travels with the data. Left out, a
     # restored database looked brand new to the migration runner and every
     # migration re-ran on the next boot (idempotent, but slow and noisy, and

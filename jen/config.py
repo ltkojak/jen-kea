@@ -67,6 +67,22 @@ def _parse_update_channel(raw: str) -> str:
     return "stable"
 
 
+def _parse_problem_threshold(raw: str) -> int:
+    """`[alerts] client_problem_threshold` -> a whole number of at least 1; anything else -> 3 with a warning (v5.68.0-beta.5,
+    Q140). Optional: the key's absence is the default and says nothing."""
+    text = (raw or "").strip()
+    if not text:
+        return 3
+    try:
+        value = int(text)
+    except ValueError:
+        value = 0
+    if value < 1:
+        logger.warning(f"[alerts] client_problem_threshold: {raw!r} is not a whole number of 1 or more - using 3")
+        return 3
+    return min(value, 1000)
+
+
 def _parse_trusted_proxies(raw: str) -> list:
     """Parse `[server] trusted_proxies` (comma list of IPs / CIDRs) into a
     list of ip_network objects. A single host is accepted bare (`10.0.0.1`
@@ -295,6 +311,9 @@ class AppConfig:
 
         extensions.DDNS_LOG = cfg.get("ddns", "log_path", fallback="/var/log/kea/kea-ddns.log")
         extensions.DHCP4_LOG = cfg.get("kea", "dhcp4_log_path", fallback="/var/log/kea/kea-dhcp4.log").strip()
+        extensions.CLIENT_PROBLEM_THRESHOLD = _parse_problem_threshold(
+            cfg.get("alerts", "client_problem_threshold", fallback="")
+        )
 
         # v5.0 Phase 1 — IPv6. Every [kea6]/[kea6_db] value falls back to its
         # v4 counterpart when absent, matching the common same-CA/same-DB Kea

@@ -535,8 +535,46 @@ class TestMigration29PluginTables:
             _m029_plugin_tables(db)  # must not raise when the table already exists
             db.commit()
 
-    def test_it_is_a_new_numbered_migration_and_the_last_one(self):
-        assert MIGRATIONS[-1][0] == 29 and MIGRATIONS[-1][2].__name__ == "_m029_plugin_tables"
+    def test_it_is_a_new_numbered_migration_not_an_edit_of_an_old_one(self):
+        by_version = {v: fn.__name__ for v, _d, fn in MIGRATIONS}
+        assert by_version[29] == "_m029_plugin_tables"
+
+
+class TestMigration30ClientProblems:
+    """v5.68.0-beta.5 (Q140) - the Problems inbox table, with the unique key the sweep's upsert depends on."""
+
+    def test_migration_recorded_and_it_is_the_newest(self):
+        assert 30 in applied_versions()
+        by_version = {v: fn.__name__ for v, _d, fn in MIGRATIONS}
+        assert by_version[30] == "_m030_client_problems" and MIGRATIONS[-1][0] >= 30
+
+    def test_table_shape(self):
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("SHOW COLUMNS FROM client_problems")
+            cols = {c["Field"]: c for c in cur.fetchall()}
+        assert set(cols) == {
+            "id", "server_id", "kind", "mac", "ip", "subnet_id", "first_seen", "last_seen", "count", "detail",
+            "alerted_at", "resolved_at",
+        }  # fmt: skip
+        # mac and ip are NOT NULL with an empty default: a NULL would make the unique key useless (MySQL treats NULLs as distinct)
+        assert cols["mac"]["Null"] == "NO" and cols["ip"]["Null"] == "NO"
+        assert cols["subnet_id"]["Null"] == "YES" and cols["resolved_at"]["Null"] == "YES"
+        assert cols["server_id"]["Default"] == "0"
+
+    def test_the_unique_key_is_server_kind_mac_ip(self):
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("SHOW INDEX FROM client_problems WHERE Key_name='uq_client_problem'")
+            parts = sorted((r["Seq_in_index"], r["Column_name"]) for r in cur.fetchall())
+            cur.execute("SHOW INDEX FROM client_problems WHERE Key_name='uq_client_problem' AND Non_unique=0")
+            unique = cur.fetchall()
+        assert [c for _s, c in parts] == ["server_id", "kind", "mac", "ip"] and unique
+
+    def test_rerun_is_idempotent(self):
+        from jen.models.migrations import _m030_client_problems
+
+        with jen_db() as db:
+            _m030_client_problems(db)  # must not raise when the table already exists
+            db.commit()
 
 
 class TestMigration28DashboardPrefsWiden:

@@ -40,6 +40,16 @@ def start_scheduler(app):
         max_instances=1,
         coalesce=True,
     )
+    # v5.68.0-beta.5 (Q140): every five minutes, read each Kea server's log and the lease database for clients that had DHCP trouble
+    _scheduler.add_job(
+        _run_client_problems_sweep,
+        IntervalTrigger(minutes=5),
+        id="jen_client_problems_sweep",
+        replace_existing=True,
+        args=[app],
+        max_instances=1,
+        coalesce=True,
+    )
     try:
         _scheduler.start()
         logger.info("Backup scheduler started")
@@ -94,6 +104,19 @@ def _run_investigation_sweep(app):
             logger.error(f"Investigation logging sweep error: {e}")
 
 
+def _run_client_problems_sweep(app):
+    """Called every five minutes: the Problems inbox sweep (jen.services.client_problems)."""
+    with app.app_context():
+        try:
+            from jen.services import client_problems
+
+            result = client_problems.run_sweep_job()
+            if result["events"] or result["alerts"] or result["errors"]:
+                logger.info(f"client problems sweep: {result}")
+        except Exception as e:
+            logger.error(f"Client problems sweep error: {e}")
+
+
 def stop_scheduler():
     if _scheduler and _scheduler.running:
         with contextlib.suppress(Exception):
@@ -103,6 +126,15 @@ def stop_scheduler():
 def _run_audit_cleanup(app):
     """Called at 00:05 daily — prune audit_log based on retention setting."""
     with app.app_context():
+        # v5.68.0-beta.5 (Q140): the Problems inbox keeps 30 days, whatever the audit retention below says (0 = keep forever)
+        try:
+            from jen.services import client_problems
+
+            pruned = client_problems.prune()
+            if pruned:
+                logger.info(f"Problems inbox cleanup: removed {pruned} rows not seen for 30 days")
+        except Exception as e:
+            logger.error(f"Problems inbox cleanup error: {e}")
         try:
             from jen.models import db as __db
             from jen.models import user as __user

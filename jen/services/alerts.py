@@ -144,6 +144,7 @@ ALERT_TYPE_ICONS = {
     "kea_config_changed": "info",
     "config_drift_detected": "triangle-alert",
     "config_drift_resolved": "circle-check",
+    "client_problems": "triangle-alert",
     "cert_expiring": "lock",
     "daily_summary": "chart-bar",
     "rogue_device": "siren",
@@ -169,6 +170,7 @@ DEFAULT_TEMPLATES = {
     "kea_config_changed": "ℹ️ <b>Kea Config Changed</b>\nSubnet {subnet} was modified via Jen\nChange: {details}",
     "config_drift_detected": "⚠️ <b>Config Drift Detected</b>\n{message}",
     "config_drift_resolved": "✅ <b>Config Drift Resolved</b>\n{message}",
+    "client_problems": "⚠️ <b>Client had DHCP trouble</b>\nClient: {mac} {ip}\nWhat: {kind}, {count} in the last hour\nServer: {server}\nInvestigate: {investigate}",
     "cert_expiring": "⚠️ <b>TLS Certificate Expiring</b>\nJen's HTTPS certificate expires in <b>{days_left}</b> day(s).",
     "daily_summary": "ℹ️ <b>Daily Summary</b>\n{summary}",
     "rogue_device": "🚨 <b>{subject}</b>\n{body}",
@@ -257,6 +259,7 @@ ALERT_TYPE_LABELS = {
     "kea_config_changed": "Kea config changed via Jen",
     "config_drift_detected": "Config drift detected (Jen's subnet map disagrees with Kea)",
     "config_drift_resolved": "Config drift resolved",
+    "client_problems": "Client had DHCP trouble",
     "cert_expiring": "TLS certificate expiring soon",
     "daily_summary": "Daily summary",
     # v5.57.1 (Q74) — legacy, kept in 5.x. Network Discovery 1.2.0 moved

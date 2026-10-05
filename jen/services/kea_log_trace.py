@@ -271,3 +271,113 @@ def visibility_note(events_seen: list[dict], lines_scanned: int) -> str:
         "the log shows packets received/sent, offers, allocations, releases, declines and errors, but not "
         "DISCOVER/REQUEST processing, subnet selection or most NAK reasons (those are DEBUG)."
     )
+
+
+# ── Problems across every client (v5.68.0-beta.5, Q140) ───────────────────────────────────────────────────────────────────
+#
+# parse_lines() above answers "what happened to THIS client". The Problems inbox asks the opposite question of the same lines -
+# "which clients had trouble?" - so the extractor below reads the problem messages and takes the client from each line's own
+# label ("[hwtype=1 aa:bb:cc:dd:ee:ff]") instead of from a MAC it was handed. Pure, like everything here.
+
+_LABEL_MAC_RE = re.compile(r"\[hwtype=\d+ (?P<mac>[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\]")
+_TID_RE = re.compile(r"\btid=(0x[0-9a-fA-F]+)")
+_REQ_IP_RE = re.compile(r"requested-ip-address (\d{1,3}(?:\.\d{1,3}){3})")
+
+# the five kinds Kea's own log can name a client for (the two database-derived kinds need no log)
+LOG_PROBLEM_KINDS = ("nak", "decline", "drop", "subnet-selection-failed", "ddns-failed")
+
+_PROBLEM_KIND_OF_ID = {
+    "DHCP4_PACKET_NAK_0001": "nak",
+    "DHCP4_PACKET_NAK_0002": "nak",
+    "DHCP4_PACKET_NAK_0003": "nak",
+    "DHCP4_PACKET_NAK_0004": "nak",
+    "DHCP4_DECLINE_LEASE": "decline",
+    "DHCP4_DECLINE_LEASE_MISMATCH": "decline",
+    "DHCP4_DECLINE_LEASE_NOT_FOUND": "decline",
+    "DHCP4_PACKET_DROP_0007": "drop",
+    "DHCP4_PACKET_DROP_0008": "drop",
+    "DHCP4_SUBNET_SELECTION_FAILED": "subnet-selection-failed",
+    "DHCP4_DDNS_REQUEST_SEND_FAILED": "ddns-failed",
+}
+
+
+def _client_ip(msg_id: str, rest: str) -> str:
+    """The CLIENT's address when the line names one (a requested or declined or allocated address) - never one of the
+    addresses on a "from 10.1.0.218:67 to 10.99.0.1:67" line, which are Kea's and its relay's."""
+    if msg_id == "DHCP4_PACKET_SEND":
+        return ""
+    for rx in (_REQ_IP_RE, _ADDR_RE, _LEASE_RE):
+        m = rx.search(rest)
+        if m:
+            return m.group(1)
+    return ""
+
+
+def problem_events(lines: list[str]) -> list[dict]:
+    """Every problem the log names a client for, in log order: `{ts, level, id, kind, mac, ip, detail, tid}`, `kind` one of
+    LOG_PROBLEM_KINDS. A NAK is visible at INFO as the DHCPNAK Kea sends (DHCP4_PACKET_SEND) and, at DEBUG, as its own
+    DHCP4_PACKET_NAK_000x line too - both carry the same transaction id, so a NAK is one event, keeping whichever line
+    named the requested address. A DHCP4_DDNS_REQUEST_SEND_FAILED line has no client label at all, so it is attached to the
+    client the same lines show being offered or allocated an address it mentions, and dropped when none does. The DEBUG-only
+    kinds (drop, subnet-selection-failed, the other NAK reasons) appear only while the server logs at DEBUG."""
+    parsed = []
+    for raw in lines:
+        m = _LINE_RE.match(raw.strip())
+        if m:
+            parsed.append((m, raw))
+    ip_to_mac: dict[str, str] = {}
+    for m, _raw in parsed:
+        if m.group("id") in ("DHCP4_LEASE_OFFER", "DHCP4_LEASE_ALLOC", "DHCP4_LEASE_REUSE"):
+            label = _LABEL_MAC_RE.search(m.group("rest"))
+            lease = _LEASE_RE.search(m.group("rest"))
+            if label and lease:
+                ip_to_mac[lease.group(1)] = norm_mac(label.group("mac"))
+    events: list[dict] = []
+    naks: dict[tuple[str, str], dict] = {}
+    for m, _raw in parsed:
+        msg_id, rest = m.group("id"), m.group("rest")
+        kind = _PROBLEM_KIND_OF_ID.get(msg_id)
+        if msg_id.startswith("DHCP4_PACKET_DROP") and kind is None:
+            kind = "drop"
+        if msg_id == "DHCP4_PACKET_SEND" and "DHCPNAK" in rest:
+            kind = "nak"
+        if kind is None:
+            continue
+        ts = _parse_ts(m.group("ts"))
+        if ts is None:
+            continue
+        label = _LABEL_MAC_RE.search(rest)
+        mac = norm_mac(label.group("mac")) if label else ""
+        ip = _client_ip(msg_id, rest)
+        if kind == "ddns-failed":
+            mac = next((ip_to_mac[a] for a in _IP_RE.findall(rest) if a in ip_to_mac), "")
+            ip = next((a for a in _IP_RE.findall(rest) if a in ip_to_mac), "")
+        if not mac:
+            continue
+        if msg_id == "DHCP4_PACKET_SEND":
+            detail = "Kea sent a DHCPNAK"
+        else:
+            detail = _summarize(msg_id, rest)[0]
+        tid_m = _TID_RE.search(rest)
+        event = {
+            "ts": ts,
+            "level": m.group("level"),
+            "id": msg_id,
+            "kind": kind,
+            "mac": mac,
+            "ip": ip,
+            "detail": detail[:200],
+            "tid": tid_m.group(1) if tid_m else "",
+        }
+        if kind == "nak" and event["tid"]:
+            seen = naks.get((mac, event["tid"]))
+            if seen is not None:
+                if ip and not seen["ip"]:
+                    seen["ip"] = ip
+                if msg_id != "DHCP4_PACKET_SEND":
+                    seen["detail"] = detail[:200]  # the NAK's own line says why; the send line only says that
+                continue
+            naks[(mac, event["tid"])] = event
+        events.append(event)
+    events.sort(key=lambda e: e["ts"])
+    return events
