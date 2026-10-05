@@ -153,6 +153,9 @@ jobs:
           KEA_COMPAT_DB_NAME: kea
           KEA_COMPAT_DB_ROOT_PASS: ci_root_pw
           KEA_COMPAT_SCHEMA_OUT: ${{ github.workspace }}/results/schema-${{ matrix.kea }}.json
+          # v5.68.0-beta.6 (Q141) - who owns ISC's kea-dhcp4 and who the daemon runs as on this image
+          # (tests/kea_compat/test_binary_facts.py): the helper's two-tier trust rule is written against it
+          KEA_COMPAT_BINARY_OUT: ${{ github.workspace }}/results/binary-${{ matrix.kea }}.json
         run: python -m pytest tests/kea_compat -m kea_compat -v
 
       # v5.68.0-beta.2 (Q135) - what a real daemon writes about one client at each log level, and what it stores in the
@@ -210,6 +213,21 @@ jobs:
             echo "## Jen against real Kea"
             echo
             python -m tests.kea_compat.summarize artifacts/*/[0-9]*.json
+            echo
+            echo "### The Kea daemon binary on ISC's images"
+            echo
+            echo "| image | owner:group | uid | mode | daemon runs as | image USER | helper would run it |"
+            echo "|---|---|---|---|---|---|---|"
+            for f in artifacts/*/binary-*.json; do
+              [ -e "$f" ] || continue
+              python - "$f" <<'PY'
+          import json, os, sys
+          d = json.load(open(sys.argv[1]))
+          v = os.path.basename(sys.argv[1])[len('binary-'):-len('.json')]
+          r = d.get('daemon_runs_as') or {}
+          print(f"| {v} | {d['owner']}:{d['group']} | {d['uid']} | {d['mode']} | {r.get('name')} ({r.get('uid')}) | {d['image_user']} | {d['helper_would_run_it']} |")
+          PY
+            done
             echo
             echo "3.3 is Kea's development line: a failure there is informational."
             echo "The pkt4-* statistic names each version reports are in the per-version artifacts."
