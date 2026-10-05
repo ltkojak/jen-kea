@@ -592,9 +592,11 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                             r["alerted_at"] is not None and (now - r["alerted_at"]) < ALERT_EVERY for r in rows
                         ):
                             continue
-                        # a delivery that keeps failing is retried, but not every sweep
+                        # a delivery that keeps failing is retried, but not every sweep (a row that DID deliver is the 24-hour rule's)
                         if any(
-                            r["alert_attempted_at"] is not None and (now - r["alert_attempted_at"]) < ALERT_RETRY_EVERY
+                            r["alerted_at"] is None
+                            and r["alert_attempted_at"] is not None
+                            and (now - r["alert_attempted_at"]) < ALERT_RETRY_EVERY
                             for r in rows
                         ):
                             continue

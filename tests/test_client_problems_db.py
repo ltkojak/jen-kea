@@ -406,8 +406,10 @@ class TestAnEventIsScopedByItsOwnEvidence:
         logs[1] = [decline(1, ip="10.45.0.9")]
         cp.sweep(NOW - timedelta(minutes=5), servers=[SERVER_A])
         assert rows(db)[0]["subnet_id"] == 1
+        db.commit()  # end the snapshot of the read above
         logs[1] = [decline(1, ip="10.45.0.9"), decline(2, ip="10.45.0.9", minute=1)]
         cp.sweep(NOW, servers=[SERVER_A])
+        db.commit()
         assert rows(db)[0]["subnet_id"] == 1 and rows(db)[0]["count"] == 2
 
 
@@ -526,6 +528,7 @@ class TestDeliveredIsNotAttempted:
             "bounded: not every sweep"
         )
         assert cp.sweep(NOW + timedelta(minutes=29), servers=[SERVER_A])["alerts_attempted"] == 0
+        db.commit()  # the test's connection holds a snapshot from the read above; end it so the next read sees the sweep's writes
         # half an hour after the try it goes again - with no new trouble from the client - and this time it lands
         monkeypatch.setattr(
             alerts,
@@ -536,6 +539,7 @@ class TestDeliveredIsNotAttempted:
         )
         out = cp.sweep(NOW + timedelta(minutes=31), servers=[SERVER_A])
         assert (out["alerts"], out["alerts_attempted"], out["alerts_failed"]) == (1, 1, 0)
+        db.commit()
         assert rows(db)[0]["alerted_at"] == NOW + timedelta(minutes=31)
 
     def test_a_delivered_alert_is_marked_and_then_silent_for_the_day(self, db, stack):
