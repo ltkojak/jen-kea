@@ -2,6 +2,50 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.68.0-beta.8] - 2026-10-05
+
+Beta channel. Stacked on 5.68.0-beta.7. **One rule for what a subnet-scoped account may see of IPv6, and every IPv6
+page on it.** This changes what some accounts see: a scoped account that could reach IPv6 data through a hole now
+gets "not found" or a shorter list, and an IPv6 subnet with no pairing is now invisible to it.
+
+**What was wrong.** A user's scope is a list of IPv4 subnets, and an IPv6 subnet has an id space of its own, so the
+only honest way to decide whether an account may see an IPv6 subnet is through the IPv4 subnet it is paired with (the
+third field of its `[subnets6]` line). The Leases, Devices and Reservations IPv6 views each carried a private copy of
+that rule, and they used it in the wrong place: it judged an explicit `?subnet=` and, when the answer was no, fell
+back to the "all" view, which read every IPv6 subnet and filtered nothing. Typing an IPv6 subnet id the account could
+not see therefore returned a list of every IPv6 lease, device or reservation. The paths that carried no copy at all were
+worse: deleting an IPv6 reservation checked only that the subnet existed, the three IPv6 subnet-edit routes checked
+nothing about the account, the add-reservation form compared IPv6 subnet ids with the account's IPv4 list, the
+Dashboard's "Active (v6)", "Reserved (v6)" and "+ N IPv6" totals were summed over every IPv6 subnet, and the Subnets page
+and the global search's subnet names were built from the whole map. All of it predates this round; none of it needed an
+unusual setup, only a scoped account and an IPv6 subnet it should not see.
+
+**The fix.** The policy is written once, in `jen/services/access.py`: an unrestricted account sees every IPv6 subnet; a
+paired IPv6 subnet is visible exactly when its IPv4 subnet is in the account's list; an unpaired IPv6 subnet is visible
+to unrestricted accounts only; a subnet that is not in Jen's map is visible to no one. `subnet6_visible()` is the pure
+form for the services that stay free of the web framework, `can_access_subnet6()` and `accessible_subnet6_map()` are
+the session forms (the second is the only IPv6 map a template or a loop is now given), and `assert_subnet6_access()`
+answers 404 for a hidden subnet and for one that does not exist alike, so an id cannot be probed. A forbidden explicit
+`?subnet=` is a 404 on all three lists. The "all" view is filtered after the read. A device that holds leases in two
+IPv6 subnets is grouped from the visible leases only, so a hidden subnet's address cannot ride along inside a visible
+row. The add form offers only visible subnets and its POST refuses a hidden one before anything is written; delete and
+the three edit routes ask first. The Dashboard totals and cards, the Subnets page, global search, the Investigation
+page and its timeline use the same functions, the Dashboard's IPv6 cards carry `paired_v4_id` for nesting only, and
+the private copies are gone. `can_access_subnet6` is re-exported from `jen.plugin_api` (no bundled plugin looks at an
+IPv6 subnet today, so nothing calls it yet).
+
+**How it is held.** `tests/test_ipv6_access.py` runs one topology against a scoped viewer, a scoped admin, an unrestricted
+admin and a superadmin: an IPv6 subnet whose id equals an allowed IPv4 id but is paired with a denied one (denied), one
+whose id equals a denied IPv4 id but is paired with an allowed one (allowed), and two unpaired subnets (denied), over every
+list, the add, delete and edit routes, the Dashboard, the Subnets page, search and the Investigation page, asserting that
+a hidden subnet's name, CIDR, addresses and hostnames appear in no page. A source test refuses the string
+`paired_subnet4_id` anywhere in the routes and services except where the pairing is written or shown as configuration.
+The first commit of the series carried the matrix against the unchanged callers and was red in 53 places (51 matrix rows and both source tests); the second moved
+the callers.
+
+**What an operator must do.** Nothing, unless a scoped account used to see IPv6 data it should not have: give each IPv6
+subnet it should see a pairing in `[subnets6]`. Unrestricted accounts and superadmins see no change.
+
 ## [5.68.0-beta.7] - 2026-10-05
 
 Beta channel. Stacked on 5.68.0-beta.6. **The Update helper button now appears for a build-only helper
