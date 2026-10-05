@@ -36,6 +36,22 @@
 </div>
 {% endif %}
 
+{% if history_allowed and investigation_orphans %}
+{# v5.68.0-beta.9 (Q144): a Kea server was removed from Jen while investigation logging was on there: Jen cannot reach it to put the level back #}
+<div class="alert alert-warning u-3bceda">
+    {% for o in investigation_orphans %}
+    <div>
+    {{ icon("siren") }} <strong>Investigation logging may still be on on {{ o.name }}, which was removed from Jen.</strong>
+    Jen can no longer reach it to put the log level back. Restore it by hand: {{ o.by_hand }}.
+    <form method="POST" action="/servers/investigation-logging/forget/{{ o.server_id }}" class="u-8a77e5">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-sm btn-secondary" data-confirm="Have you restored {{ o.name }} by hand? Jen will stop reporting it.">I restored it by hand</button>
+    </form>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
 {% if not single_server and ha_mode %}
 {% if ha_degraded %}
 <div class="alert alert-warning u-3bceda">

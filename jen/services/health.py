@@ -296,14 +296,29 @@ def _debug_logging_left_on(ctx) -> Check:
     if not entries:
         c.status, c.detail = "ok", "no server is at investigation logging"
         return c
-    overdue = [e for e in entries if e["overdue"] or (e["error"] and e["remaining_s"] == 0)]
-    if overdue:
+    orphaned = [e for e in entries if e["removed"]]
+    stuck = [e for e in entries if e["stuck"] and not e["removed"]]
+    overdue = [e for e in entries if not e["removed"] and (e["overdue"] or (e["error"] and e["remaining_s"] == 0))]
+    if orphaned or stuck or overdue:
         c.status = "fail"
-        c.detail = "; ".join(
+        parts = [
+            # v5.68.0-beta.9 (Q144): a server that was removed from Jen with its log level not restored - Jen cannot reach it, so a
+            # person has to, and the row says how
+            f"investigation logging may still be on on {e['name']} (removed from Jen) - restore it by hand: {__inv.by_hand(e)}"
+            for e in orphaned
+        ]
+        parts += [
+            f"{e['name']}: the config file is restored but Kea is still at DEBUG 55 - Jen keeps trying a reload or restart every minute"
+            + (f" ({e['error'][:160]})" if e["error"] else "")
+            for e in stuck
+        ]
+        parts += [
             f"{e['name']}: DEBUG logging should have ended at {e['until']} and has not been put back"
             + (f" ({e['error'][:160]})" if e["error"] else "")
             for e in overdue
-        )
+            if e not in stuck
+        ]
+        c.detail = "; ".join(parts)
         c.fix_hint = (
             "The sweep retries every minute. If it keeps failing, turn logging off from Trace or Servers, or set the kea-dhcp4 logger's "
             "severity back by hand and remove its jen-investigation user-context."

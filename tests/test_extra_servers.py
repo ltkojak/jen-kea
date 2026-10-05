@@ -382,3 +382,121 @@ class TestExtraServerIdentity:
         r = self._save(logged_in_client, form)
         assert b"form data was inconsistent" in r.data
         assert _on_disk(isolated_config).get("kea_server_2", "api_url") == "http://s2:8000"
+
+
+class TestRemovingAServerWithInvestigationLoggingOn:
+    """v5.68.0-beta.9 (Q144): a server that still has an investigation-logging entry (the log level on, or a restore not finished) cannot
+    be removed - or have its API URL or SSH host blanked - from this form until turn_off has succeeded: Jen would lose the only way it has
+    to put the level back."""
+
+    @staticmethod
+    def _entry_for(server_id, name="Standby"):
+        import json
+
+        from jen.models import user as _user
+
+        _user.set_global_setting(
+            "investigation_logging",
+            json.dumps(
+                {
+                    "servers": {
+                        str(server_id): {
+                            "name": name,
+                            "until": "2099-01-01T00:00:00+00:00",
+                            "file": "debug",
+                            "daemon": "debug",
+                            "pending": None,
+                            "ssh_host": "10.0.0.2",
+                        }
+                    }
+                }
+            ),
+        )
+
+    @staticmethod
+    def _clear():
+        from jen.models import user as _user
+
+        _user.set_global_setting("investigation_logging", "")
+
+    def test_removing_the_row_is_refused_and_the_section_stays(self, logged_in_client, db, mock_kea, isolated_config):
+        _seed((2, {"api_url": "http://s2:8000", "name": "Standby", "ssh_host": "10.0.0.2"}))
+        self._entry_for(2)
+        try:
+            r = logged_in_client.post(
+                "/settings/infrastructure/save-extra-servers", data=_rows(), follow_redirects=True
+            )
+            assert b"Investigation logging is on for Standby" in r.data and b"turn it off from Servers first" in r.data
+            assert _on_disk(isolated_config).has_section("kea_server_2"), "nothing was written"
+        finally:
+            self._clear()
+
+    def test_blanking_its_ssh_host_is_refused_too(self, logged_in_client, db, mock_kea, isolated_config):
+        _seed((2, {"api_url": "http://s2:8000", "name": "Standby", "ssh_host": "10.0.0.2"}))
+        self._entry_for(2)
+        try:
+            r = logged_in_client.post(
+                "/settings/infrastructure/save-extra-servers",
+                data=_rows({"extra_id[]": "2", "extra_ssh_host[]": ""}),
+                follow_redirects=True,
+            )
+            assert b"turn it off from Servers first" in r.data
+            assert _on_disk(isolated_config).get("kea_server_2", "ssh_host") == "10.0.0.2"
+        finally:
+            self._clear()
+
+    def test_editing_it_while_keeping_it_is_allowed(self, logged_in_client, db, mock_kea, isolated_config):
+        _seed((2, {"api_url": "http://s2:8000", "name": "Standby", "ssh_host": "10.0.0.2"}))
+        self._entry_for(2)
+        try:
+            logged_in_client.post(
+                "/settings/infrastructure/save-extra-servers",
+                data=_rows({"extra_id[]": "2", "extra_name[]": "Renamed", "extra_ssh_host[]": "10.0.0.2"}),
+                follow_redirects=True,
+            )
+            assert _on_disk(isolated_config).get("kea_server_2", "name") == "Renamed"
+        finally:
+            self._clear()
+
+    def test_after_turn_off_the_removal_goes_through(self, logged_in_client, db, mock_kea, isolated_config):
+        _seed((2, {"api_url": "http://s2:8000", "name": "Standby", "ssh_host": "10.0.0.2"}))
+        self._entry_for(2)
+        self._clear()  # what a successful turn_off leaves
+        logged_in_client.post("/settings/infrastructure/save-extra-servers", data=_rows(), follow_redirects=True)
+        assert not _on_disk(isolated_config).has_section("kea_server_2")
+
+    def test_another_servers_entry_does_not_block_removing_this_one(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        _seed((2, {"api_url": "http://s2:8000", "name": "Standby", "ssh_host": "10.0.0.2"}))
+        self._entry_for(5, name="Elsewhere")
+        try:
+            logged_in_client.post("/settings/infrastructure/save-extra-servers", data=_rows(), follow_redirects=True)
+            assert not _on_disk(isolated_config).has_section("kea_server_2")
+        finally:
+            self._clear()
+
+    def test_the_refusal_writes_an_audit_row(self, logged_in_client, db, mock_kea, isolated_config):
+        _seed((2, {"api_url": "http://s2:8000", "name": "Standby", "ssh_host": "10.0.0.2"}))
+        self._entry_for(2)
+        try:
+            logged_in_client.post("/settings/infrastructure/save-extra-servers", data=_rows(), follow_redirects=True)
+            with db.cursor() as cur:
+                cur.execute("SELECT COUNT(*) AS n FROM audit_log WHERE action='INVESTIGATION_LOGGING_REMOVAL_REFUSED'")
+                assert cur.fetchone()["n"] == 1
+        finally:
+            self._clear()
+
+    def test_the_primary_ssh_host_cannot_be_blanked_while_it_is_on(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        self._entry_for(1, name="Primary")
+        try:
+            r = logged_in_client.post(
+                "/settings/infrastructure/save-ssh",
+                data={"host": "", "user": "", "kea_conf": ""},
+                follow_redirects=True,
+            )
+            assert b"turn it off from Servers first" in r.data
+        finally:
+            self._clear()

@@ -21,6 +21,10 @@ survives a Jen restart, a restored database and a second Jen. The settings recor
 index of what THIS Jen knows is on, so the every-minute sweep can be cheap: it looks at that index, and only every
 `FULL_SCAN_EVERY`-th run (ten minutes) reads every server's config to find and restore an expired marker nobody indexed - "whether or
 not this Jen set it" - and to adopt a live one so the banners show it. One server at a time per Jen; there is no API for any of it.
+
+v5.68.0-beta.9 (Q144): each index entry carries the FILE state, the DAEMON state and what is still owed (see "the state machine" below),
+a server removed from Jen while an entry exists keeps it (the Health row says how to restore it by hand) and the settings routes refuse
+to remove a server that has one, and every adoption or refused removal writes an audit row.
 """
 
 from __future__ import annotations
@@ -91,12 +95,35 @@ def active(now: datetime | None = None) -> list[dict]:
                 "by": entry.get("by", ""),
                 "mode": entry.get("mode", ""),
                 "error": entry.get("error", ""),
+                # v5.68.0-beta.9 (Q144): the state machine's three fields, and what a person needs for a server Jen can no longer reach
+                "file": entry.get("file", "debug"),
+                "daemon": entry.get("daemon", "debug"),
+                "pending": entry.get("pending"),
+                "removed": bool(entry.get("removed")),
+                "ssh_host": entry.get("ssh_host", ""),
+                "kea_conf": entry.get("kea_conf", ""),
+                # a restore that cleaned the file but left the daemon at DEBUG 55 is the failure this module exists to prevent
+                "stuck": entry.get("file") == "restored" and entry.get("daemon") != "restored",
             }
         )
     return sorted(out, key=lambda e: e["until"])
 
 
 # ── applying a change to ONE server ──────────────────────────────────────────
+#
+# THE STATE MACHINE (v5.68.0-beta.9, Q144). Turning investigation logging on or off is two steps that can each fail on their own:
+# the FILE (the `loggers` entry and its marker, written through apply_change) and the DAEMON (which has to re-read the file:
+# `config-reload`, else a restart). An index entry therefore records both, and a third field says what is still owed:
+#
+#   file    "debug" | "restored"            what Jen last wrote successfully into the config file
+#   daemon  "debug" | "restored" | "unknown" what the running daemon is believed to be doing
+#   pending "reload" | "restart" | None      the daemon step still owed to make the daemon match the file
+#
+# An entry is dropped ONLY when file and daemon are both "restored". Nothing is inferred from "the file has no marker": a restore
+# whose daemon step failed leaves the file clean and the daemon at DEBUG 55, and the next minute's change set then finds no marker
+# and reports "nothing" - which used to read as "done" and forgot the daemon. Now a "nothing" with a daemon step still owed runs
+# that step. The enable side is the mirror: the entry is saved as soon as the file is written (writing it took responsibility for
+# it), before the daemon is asked, so a restart between the two activates DEBUG with an entry already indexed.
 
 
 def _supports_reload(server: dict) -> bool:
@@ -104,9 +131,9 @@ def _supports_reload(server: dict) -> bool:
     return reply.get("result") == 0 and "config-reload" in (reply.get("arguments") or [])
 
 
-def _apply(server: dict, mutate_fn, summary: str, unsupported: str) -> dict:
-    """Write one mutation to ONE server through apply_change and make the daemon take it - `config-reload` when it has it, a
-    restart otherwise (or when the reload is refused). Returns {"ok", "mode": "reload"|"restart"|"nothing"|"", "lines": [...]}."""
+def _change(server: dict, mutate_fn, summary: str, unsupported: str):
+    """Step 1: write one mutation to ONE server through apply_change - with a restart folded in when the daemon has no
+    `config-reload`. Returns (ChangeSetResult, use_reload)."""
     use_reload = _supports_reload(server)
     result = _changeset.apply_change(
         "dhcp4",
@@ -116,31 +143,40 @@ def _apply(server: dict, mutate_fn, summary: str, unsupported: str) -> dict:
         restart=not use_reload,
         code_messages={"unsupported": unsupported},
     )
-    lines = [text for _kind, text in result.lines]
-    if result.status == "nothing":
-        return {"ok": True, "mode": "nothing", "lines": lines}
-    if result.status != "ok":
-        return {"ok": False, "mode": "", "lines": lines}
-    if not use_reload:
-        return {"ok": True, "mode": "restart", "lines": lines + ["Kea has no config-reload here, so it was restarted."]}
-    reply = _kea.kea_command("config-reload", server=server)
-    if reply.get("result") == 0:
-        return {"ok": True, "mode": "reload", "lines": lines + ["Kea re-read its config without a restart."]}
-    refused = reply.get("text") or "refused"
+    return result, use_reload
+
+
+def _daemon_step(server: dict, use_reload: bool) -> dict:
+    """Step 2: make the daemon re-read its file - `config-reload` when the daemon has it, a restart otherwise or when the reload is
+    refused. Returns {"ok", "mode": "reload"|"restart"|"", "lines": [...]}."""
+    if use_reload:
+        reply = _kea.kea_command("config-reload", server=server)
+        if reply.get("result") == 0:
+            return {"ok": True, "mode": "reload", "lines": ["Kea re-read its config without a restart."]}
+        refused = reply.get("text") or "refused"
+        restarted = _host.service_action(server, "dhcp4", "restart")
+        if restarted.get("ok"):
+            return {
+                "ok": True,
+                "mode": "restart",
+                "lines": [f"config-reload was refused ({refused}), so Kea was restarted instead."],
+            }
+        return {
+            "ok": False,
+            "mode": "",
+            "lines": [
+                f"❌ The config was written but Kea did not take it: config-reload was refused ({refused}) and the restart failed "
+                f"({restarted.get('detail', 'no detail')}). The daemon is still running on its previous settings."
+            ],
+        }
     restarted = _host.service_action(server, "dhcp4", "restart")
     if restarted.get("ok"):
-        return {
-            "ok": True,
-            "mode": "restart",
-            "lines": lines + [f"config-reload was refused ({refused}), so Kea was restarted instead."],
-        }
+        return {"ok": True, "mode": "restart", "lines": ["Kea was restarted."]}
     return {
         "ok": False,
         "mode": "",
-        "lines": lines
-        + [
-            f"❌ The config was written but Kea did not take it: config-reload was refused ({refused}) and the restart failed "
-            f"({restarted.get('detail', 'no detail')}). The daemon is still running on its previous settings."
+        "lines": [
+            f"❌ Kea did not restart ({restarted.get('detail', 'no detail')}). The daemon is still running as it was."
         ],
     }
 
@@ -154,6 +190,49 @@ def _audit(action: str, server_name: str, detail: str) -> None:
         logger.debug(f"investigation_logging: audit failed: {e}")
 
 
+def _name(server: dict) -> str:
+    return server.get("name") or server.get("ssh_host") or f"Server {server.get('id')}"
+
+
+def _entry_for(server: dict, until: str, by: str = "") -> dict:
+    """A fresh index entry. It carries what Jen would need to tell a person how to restore the server by hand if the server is
+    ever removed from Jen: its name, its SSH host and its config path."""
+    return {
+        "name": _name(server),
+        "until": until,
+        "by": by,
+        "mode": "",
+        "ssh_host": server.get("ssh_host") or "",
+        "kea_conf": server.get("kea_conf") or "",
+        "file": "debug",
+        "daemon": "unknown",
+        "pending": None,
+    }
+
+
+def _put(record: dict, sid, entry: dict) -> None:
+    record["servers"][str(sid)] = entry
+    _save(record)
+
+
+def _drop(record: dict, sid) -> None:
+    if record["servers"].pop(str(sid), None) is not None:
+        _save(record)
+
+
+def _revert_file(server: dict, summary: str) -> tuple[bool, list[str]]:
+    """Put the file back WITHOUT touching the daemon (it never took the change). (restored, lines)."""
+    result = _changeset.apply_change(
+        "dhcp4",
+        lambda cfg: _edit.clear_investigation_logging(cfg),
+        summary,
+        servers=[server],
+        restart=False,
+        code_messages={},
+    )
+    return result.status in ("ok", "nothing"), [text for _kind, text in result.lines]
+
+
 # ── turn on / off ────────────────────────────────────────────────────────────
 
 
@@ -162,10 +241,11 @@ def turn_on(server: dict, minutes: int, actor: str = "") -> dict:
     it on (one at a time per Jen). Returns {"ok", "mode", "lines", "until"}."""
     if minutes not in DURATIONS:
         return {"ok": False, "mode": "", "lines": [f"Choose {', '.join(map(str, DURATIONS))} minutes."], "until": ""}
-    name = server.get("name") or server.get("ssh_host") or f"Server {server.get('id')}"
+    name = _name(server)
+    sid = str(server.get("id"))
     with _lock:
         record = _record()
-        others = [e["name"] for sid, e in record["servers"].items() if str(sid) != str(server.get("id"))]
+        others = [e["name"] for other, e in record["servers"].items() if other != sid]
         if others:
             return {
                 "ok": False,
@@ -176,36 +256,163 @@ def turn_on(server: dict, minutes: int, actor: str = "") -> dict:
                 "until": "",
             }
         until = _iso(_now() + timedelta(minutes=minutes))
-        outcome = _apply(
+        result, use_reload = _change(
             server,
             lambda cfg: _edit.set_investigation_logging(cfg, until),
             f"investigation logging on for {minutes} min",
             "this config has no Dhcp4 section to log from",
         )
-        if outcome["ok"] and outcome["mode"] != "nothing":
-            record["servers"][str(server.get("id"))] = {
-                "name": name,
+        lines = [text for _kind, text in result.lines]
+        entry = _entry_for(server, until, actor)
+
+        if result.status == "rollback_failed":
+            # the change set could not put the file back after a failed restart: the file may carry the marker and the daemon is
+            # in an unknown state - take responsibility for it rather than forgetting it
+            entry.update(daemon="unknown", pending="restart", error=(lines[-1] if lines else "rollback failed")[:300])
+            _put(record, sid, entry)
+            return {"ok": False, "mode": "", "lines": lines, "until": ""}
+        if result.status != "ok":
+            return {"ok": False, "mode": "", "lines": lines, "until": ""}
+
+        if not use_reload:  # the change set restarted the daemon: file and daemon moved together
+            entry.update(daemon="debug", pending=None, mode="restart")
+            _put(record, sid, entry)
+            _audit("INVESTIGATION_LOGGING_ON", name, f"DEBUG 55 until {until} (restart)")
+            return {
+                "ok": True,
+                "mode": "restart",
+                "lines": lines + ["Kea has no config-reload here, so it was restarted."],
                 "until": until,
-                "by": actor,
-                "mode": outcome["mode"],
             }
-            _save(record)
-            _audit("INVESTIGATION_LOGGING_ON", name, f"DEBUG 55 until {until} ({outcome['mode']})")
-        outcome["until"] = until if outcome["ok"] else ""
-        return outcome
+
+        # The file now carries DEBUG 55: Jen is responsible for it from this moment, so the entry is saved BEFORE the daemon is asked.
+        entry.update(daemon="unknown", pending="reload")
+        _put(record, sid, entry)
+        step = _daemon_step(server, use_reload=True)
+        if step["ok"]:
+            entry.update(daemon="debug", pending=None, mode=step["mode"])
+            _put(record, sid, entry)
+            _audit("INVESTIGATION_LOGGING_ON", name, f"DEBUG 55 until {until} ({step['mode']})")
+            return {"ok": True, "mode": step["mode"], "lines": lines + step["lines"], "until": until}
+        # the daemon did not take it: put the file straight back (the daemon never moved, so nothing else is owed)
+        restored, revert_lines = _revert_file(server, "investigation logging on failed: log level put back")
+        if restored:
+            _drop(record, sid)
+            return {"ok": False, "mode": "", "lines": lines + revert_lines + step["lines"], "until": ""}
+        note = "❌ The config file still carries the DEBUG marker and could not be put back; Jen keeps trying every minute."
+        entry.update(daemon="unknown", pending="reload", error=note[:300])
+        _put(record, sid, entry)
+        return {"ok": False, "mode": "", "lines": lines + revert_lines + step["lines"] + [note], "until": ""}
+
+
+def _restore(server: dict, record: dict, now: datetime | None, summary: str) -> dict:
+    """Put `server`'s logger back and make the daemon take it. `now=None` restores unconditionally (the button); a datetime
+    restores only what is due (the sweep). The entry is dropped only when the file AND the daemon are both restored. Returns
+    {"ok", "mode", "lines"}; caller holds the lock."""
+    sid = str(server.get("id"))
+    entry = record["servers"].get(sid)
+    result, use_reload = _change(server, lambda cfg: _edit.clear_investigation_logging(cfg, now=now), summary, "")
+    lines = [text for _kind, text in result.lines]
+    if result.status == "ok":
+        if not use_reload:  # the change set restarted the daemon: both steps done
+            _drop(record, sid)
+            return {
+                "ok": True,
+                "mode": "restart",
+                "lines": lines + ["Kea has no config-reload here, so it was restarted."],
+            }
+        # the file is clean, the daemon still at DEBUG: say so in the index before the daemon is asked
+        entry = entry or _entry_for(server, _iso(now or _now()))
+        entry.pop("error", None)
+        entry.update(file="restored", daemon="debug", pending="reload")
+        _put(record, sid, entry)
+    elif result.status == "nothing":
+        # no marker in the file: nothing to write. The daemon may still be at DEBUG - the very case a forgotten reload leaves.
+        if entry is None or entry.get("daemon") == "restored":
+            _drop(record, sid)
+            return {"ok": True, "mode": "nothing", "lines": lines}
+        entry.pop("error", None)
+        entry.update(file="restored", pending=entry.get("pending") or "reload")
+        _put(record, sid, entry)
+    else:
+        if entry is not None:
+            entry["error"] = (lines[-1] if lines else "restore failed")[:300]
+            _put(record, sid, entry)
+        return {"ok": False, "mode": "", "lines": lines}
+    step = _daemon_step(server, use_reload=entry.get("pending") != "restart" and _supports_reload(server))
+    if step["ok"]:
+        _drop(record, sid)
+        return {"ok": True, "mode": step["mode"], "lines": lines + step["lines"]}
+    entry.update(
+        daemon="debug", pending="reload" if _supports_reload(server) else "restart", error=step["lines"][-1][:300]
+    )
+    _put(record, sid, entry)
+    return {"ok": False, "mode": "", "lines": lines + step["lines"]}
 
 
 def turn_off(server: dict, actor: str = "", reason: str = "investigation logging off") -> dict:
-    """Put `server`'s logger back now. Returns {"ok", "mode", "lines"}; the index entry is dropped only when the restore worked."""
-    name = server.get("name") or server.get("ssh_host") or f"Server {server.get('id')}"
+    """Put `server`'s logger back now. Returns {"ok", "mode", "lines"}; the index entry is dropped only when the file AND the daemon
+    are restored, so a restore the daemon did not take is retried by the sweep."""
+    name = _name(server)
     with _lock:
-        outcome = _apply(server, lambda cfg: _edit.clear_investigation_logging(cfg), reason, "")
         record = _record()
+        outcome = _restore(server, record, None, reason)
         if outcome["ok"]:
-            if record["servers"].pop(str(server.get("id")), None) is not None:
-                _save(record)
             _audit("INVESTIGATION_LOGGING_OFF", name, f"{reason} ({outcome['mode']}) by {actor or 'the sweep'}")
         return outcome
+
+
+def blocking_removal(server_ids) -> list[dict]:
+    """The index entries of the servers in `server_ids` (ints or strings) - investigation logging is on there, or a restore is
+    still owed - for the settings routes that would stop Jen from reaching them. Removing such a server is refused until turn_off
+    succeeds: Jen would otherwise lose the only way it has to put the log level back."""
+    wanted = {str(i) for i in server_ids}
+    return [{"server_id": sid, **entry} for sid, entry in _record()["servers"].items() if sid in wanted]
+
+
+def removal_refusal(server_ids, actor: str = "") -> str:
+    """ "" when none of `server_ids` has an index entry, else the sentence a settings route flashes (and an audit row is written)."""
+    blocked = blocking_removal(server_ids)
+    if not blocked:
+        return ""
+    names = ", ".join(b.get("name") or f"Server {b['server_id']}" for b in blocked)
+    _audit(
+        "INVESTIGATION_LOGGING_REMOVAL_REFUSED",
+        names,
+        f"removal of a Kea server refused while investigation logging is on or owed a restore{' (by ' + actor + ')' if actor else ''}",
+    )
+    return (
+        f"Investigation logging is on for {names}, or its restore is not finished: turn it off from Servers first. Removing the "
+        "server now would leave its Kea at DEBUG with no way for Jen to put it back."
+    )
+
+
+def forget(server_id, actor: str = "") -> bool:
+    """Drop the index entry of a server that was removed from Jen, after a person restored it by hand. Refuses (False) an entry that is
+    not marked removed: a live server is put back with turn_off, never forgotten."""
+    with _lock:
+        record = _record()
+        entry = record["servers"].get(str(server_id))
+        if not entry or not entry.get("removed"):
+            return False
+        _drop(record, server_id)
+    _audit(
+        "INVESTIGATION_LOGGING_FORGOTTEN",
+        entry.get("name") or str(server_id),
+        f"restored by hand; entry dropped by {actor or 'an admin'}",
+    )
+    return True
+
+
+def by_hand(entry: dict) -> str:
+    """The two-line config edit that undoes investigation logging on a server Jen can no longer reach."""
+    where = entry.get("kea_conf") or "its kea-dhcp4.conf"
+    host = entry.get("ssh_host") or "the Kea host"
+    return (
+        f"on {host}, in {where}: in the `kea-dhcp4` entry of Dhcp4 → loggers set severity and debuglevel back to what the marker's "
+        "`restore` object under `user-context` → `jen-investigation` says (remove a key it records as absent, and remove the whole "
+        "entry when it says `created`), delete that `jen-investigation` user-context, then reload or restart Kea"
+    )
 
 
 # ── the sweep ────────────────────────────────────────────────────────────────
@@ -216,25 +423,36 @@ def _ssh_servers() -> list[dict]:
 
 
 def sweep(now: datetime | None = None, full: bool = False) -> dict:
-    """Restore every expired investigation marker. The cheap path looks only at the index; `full=True` also reads every SSH server's
-    config (so a marker this Jen did not index - another Jen, a restored database, a person - is restored when expired and indexed
-    when live). A failed restore keeps its index entry (with the error, which the Health row shows) and is retried next minute.
+    """Restore every expired investigation marker, and finish every restore that left the daemon behind. The cheap path looks only at
+    the index; `full=True` also reads every SSH server's config (so a marker this Jen did not index - another Jen, a restored
+    database, a person - is restored when expired and indexed when live). A failed restore keeps its index entry (with the error, which
+    the Health row shows) and is retried next minute. An entry whose server is no longer in Jen is KEPT, marked removed: Jen can no
+    longer reach it, and the Health row says how to restore it by hand.
     Returns {"restored": [names], "adopted": [names], "errors": [text]}."""
     now = now or _now()
     summary = {"restored": [], "adopted": [], "errors": []}
     with _lock:
         record = _record()
         known = {str(s.get("id")): s for s in _ssh_servers()}
-        changed = False
         due = [
             (sid, known[sid])
             for sid, entry in record["servers"].items()
-            if sid in known and (_edit._parse_until(entry.get("until")) or now) <= now
+            if sid in known
+            and (entry.get("file") == "restored" or (_edit._parse_until(entry.get("until")) or now) <= now)
         ]
-        gone = [sid for sid in record["servers"] if sid not in known]
-        for sid in gone:  # a server that was removed from Jen has nothing for Jen to restore
-            record["servers"].pop(sid)
-            changed = True
+        for sid, entry in record["servers"].items():
+            if sid not in known and not entry.get("removed"):
+                entry["removed"] = True
+                entry["error"] = (
+                    f"{entry.get('name') or 'This server'} was removed from Jen while investigation logging was on; "
+                    "Jen cannot put its log level back"
+                )
+                _audit(
+                    "INVESTIGATION_LOGGING_ORPHANED",
+                    entry.get("name") or sid,
+                    "its server was removed from Jen with the log level not restored",
+                )
+                _save(record)
         scanned = {sid for sid, _s in due}
         if full:
             for sid, server in known.items():
@@ -251,35 +469,31 @@ def sweep(now: datetime | None = None, full: bool = False) -> dict:
                 if (_edit._parse_until(marker.get("until")) or now) <= now:
                     due.append((sid, server))
                 elif sid not in record["servers"]:
-                    record["servers"][sid] = {
-                        "name": server.get("name") or f"Server {sid}",
-                        "until": marker["until"],
-                        "by": "",
-                        "mode": "adopted",
-                    }
-                    summary["adopted"].append(server.get("name") or sid)
-                    changed = True
+                    entry = _entry_for(server, marker["until"])
+                    entry["mode"] = "adopted"
+                    _put(record, sid, entry)
+                    summary["adopted"].append(_name(server))
+                    _audit(
+                        "INVESTIGATION_LOGGING_ADOPTED",
+                        _name(server),
+                        f"found a live investigation-logging marker (until {marker['until']}) that this Jen had not indexed",
+                    )
         for sid, server in due:
-            name = server.get("name") or f"Server {sid}"
-            outcome = _apply(
-                server,
-                lambda cfg: _edit.clear_investigation_logging(cfg, now=now),
-                "investigation logging expired: log level put back",
-                "",
-            )
+            name = _name(server)
+            outcome = _restore(server, record, now, "investigation logging expired: log level put back")
             if outcome["ok"]:
-                record["servers"].pop(sid, None)
                 summary["restored"].append(name)
                 _audit("INVESTIGATION_LOGGING_OFF", name, f"expired; restored by the sweep ({outcome['mode']})")
             else:
                 text = (outcome["lines"] or ["restore failed"])[-1]
-                record["servers"].setdefault(sid, {"name": name, "until": _iso(now), "by": "", "mode": ""})["error"] = (
-                    text[:300]
-                )
+                entry = record["servers"].get(sid)
+                if (
+                    entry is None
+                ):  # e.g. a marker found by the full scan whose restore failed: index it so the Health row sees it
+                    entry = _entry_for(server, _iso(now))
+                    entry["error"] = text[:300]
+                    _put(record, sid, entry)
                 summary["errors"].append(f"{name}: {text}")
-            changed = True
-        if changed:
-            _save(record)
     return summary
 
 

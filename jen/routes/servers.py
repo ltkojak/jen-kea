@@ -258,6 +258,7 @@ def servers():
         compare_rows=compare_rows,
         changeset_attention=__changeset.attention(),
         investigation={e["server_id"]: e for e in __inv.active()},
+        investigation_orphans=[{**e, "by_hand": __inv.by_hand(e)} for e in __inv.active() if e.get("removed")],
         packet_health_sparklines={
             s["server"]["id"]: s["packet_health"]["sparkline"] for s in statuses if s["packet_health"]
         },
@@ -326,6 +327,21 @@ def investigation_logging(server_id, action):
             "success",
         )
     return done()
+
+
+@bp.route("/servers/investigation-logging/forget/<int:server_id>", methods=["POST"])
+@login_required
+@_admin_required
+def investigation_logging_forget(server_id):
+    """v5.68.0-beta.9 (Q144) - an admin who restored a removed server's Kea by hand tells Jen to stop failing its Health row. Only an entry
+    already marked removed can be forgotten; a server Jen can reach is put back with the Turn it off button."""
+    if not current_user.all_subnets:
+        flash("Only an admin with access to all subnets can do this.", "error")
+    elif __inv.forget(server_id, actor=current_user.username):
+        flash("Forgotten. Jen no longer expects investigation logging to be on there.", "success")
+    else:
+        flash("Nothing to forget for that server.", "error")
+    return redirect(url_for("servers.servers"))
 
 
 @bp.route("/servers/restart/<int:server_id>", methods=["POST"])

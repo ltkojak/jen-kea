@@ -19,6 +19,7 @@ import jen.config as __config
 import jen.models.user as __user
 import jen.services.auth as __auth
 import jen.services.capabilities as __caps
+import jen.services.investigation_logging as __inv
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
 import jen.services.runtime as __runtime
@@ -1683,6 +1684,12 @@ def save_infra_ssh():
     if kea_conf and not __auth.valid_remote_path(kea_conf):
         flash("Invalid Kea config path — must be an absolute path with no special characters.", "error")
         return redirect(url_for("settings.settings_kea"))
+    if not host:
+        # v5.68.0-beta.9 (Q144): without an SSH host Jen cannot put a log level back on the primary
+        refusal = __inv.removal_refusal([1], actor=current_user.username)
+        if refusal:
+            flash(refusal, "error")
+            return redirect(url_for("settings.settings_kea"))
     items = [("kea_ssh", "host", host), ("kea_ssh", "user", user)]
     if kea_conf:
         items.append(("kea_ssh", "kea_conf", kea_conf))
@@ -1735,6 +1742,20 @@ def save_extra_servers():
         if u.strip() and not __auth.valid_api_url(u.strip(), require_port=_require_port):
             flash(f"Invalid IPv6 API URL: {u.strip()} (direct mode needs an explicit port)", "error")
             return redirect(url_for("settings.settings_kea"))
+
+    # v5.68.0-beta.9 (Q144): a server this form drops (its row removed, its API URL or its SSH host blanked) is one Jen can no longer put an
+    # investigation log level back on. Refuse until turn_off has succeeded, rather than lose the only way to restore it.
+    kept = {
+        int(i.strip())
+        for i, url, host in zip(ids, api_urls, ssh_hosts, strict=False)
+        if i.strip().isdigit() and url.strip() and host.strip()
+    }
+    refusal = __inv.removal_refusal(
+        [s["id"] for s in extensions.KEA_SERVERS if s["id"] != 1 and s["id"] not in kept], actor=current_user.username
+    )
+    if refusal:
+        flash(refusal, "error")
+        return redirect(url_for("settings.settings_kea"))
 
     def _rewrite_extra_servers(cfg):
         # v5.10.3 — snapshot every current [kea_server_N] so keys the form

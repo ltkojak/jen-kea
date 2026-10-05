@@ -137,17 +137,26 @@ class FakeKea:
         self.commands, self.reload_result, self.restart_ok = list(commands), reload_result, restart_ok
         self.calls = []
         self.writes = 0
+        self.loaded = copy.deepcopy(
+            cfg
+        )  # what the RUNNING daemon is configured with: only a reload or a restart moves it
+        self.fail_writes_after = None  # once this many writes have worked, every further change set fails
+        self.rollback_fails = False  # a failed restart cannot be rolled back either
 
     def kea_command(self, command, **kw):
         self.calls.append(command)
         if command == "list-commands":
             return {"result": 0, "arguments": self.commands}
         if command == "config-reload":
+            if not self.reload_result:
+                self.loaded = copy.deepcopy(self.file)
             return {"result": self.reload_result, "text": "reloaded" if not self.reload_result else "reload refused"}
         return {"result": 0}
 
     def service_action(self, server, service, action):
         self.calls.append(f"{action}:{service}")
+        if self.restart_ok:
+            self.loaded = copy.deepcopy(self.file)
         return {"ok": self.restart_ok, "detail": "" if self.restart_ok else "unit failed"}
 
     def apply_change(self, service, mutate_fn, summary, **kw):
@@ -159,8 +168,18 @@ class FakeKea:
             return ChangeSetResult("nothing", code, [("success", f"ℹ️ {code}")])
         if code != "ok":
             return ChangeSetResult("aborted", code, [("error", f"❌ {kw['code_messages'].get(code, code)}")])
+        if self.fail_writes_after is not None and self.writes >= self.fail_writes_after:
+            return ChangeSetResult("rolled_back", "error", [("error", "❌ the change could not be applied")])
+        before = self.file
         self.file = after
         self.writes += 1
+        if kw.get("restart", True):  # the real change set restarts the daemon inside apply_change
+            if self.restart_ok:
+                self.loaded = copy.deepcopy(self.file)
+            else:
+                self.file = after if self.rollback_fails else before
+                status = "rollback_failed" if self.rollback_fails else "rolled_back"
+                return ChangeSetResult(status, "restart-failed", [("error", "❌ the daemon did not restart")])
         return ChangeSetResult("ok", "ok", [("success", f"✅ {summary}")])
 
     def read_config_versioned(self, server, service):
@@ -324,11 +343,13 @@ class TestSweep:
         assert out["adopted"] == ["kea-b"] and [e["name"] for e in inv.active(NOW)] == ["kea-b"]
         assert ed.investigation_marker(world.daemons[2].file), "a live one is left on"
 
-    def test_an_entry_for_a_server_that_was_removed_is_dropped(self, world):
+    def test_an_entry_for_a_server_that_was_removed_is_kept_and_marked(self, world):
+        # v5.68.0-beta.9 (Q144): it used to be dropped as "nothing for Jen to restore" - the remote config kept DEBUG 55 forever
         self._on(world)
         world.servers.pop(0)
         inv.sweep(now=NOW)
-        assert not inv.active()
+        (entry,) = inv.active()
+        assert entry["removed"]
 
     def test_an_unreadable_server_is_an_error_line_not_a_crash(self, world, monkeypatch):
         def boom(server, service):
@@ -344,6 +365,189 @@ class TestSweep:
         for _ in range(11):
             inv.run_sweep_job()
         assert seen == [True] + [False] * 9 + [True]
+
+
+# ── v5.68.0-beta.9 (Q144): the state machine - a restore the daemon never took, an enable the daemon never took, a removed server ────
+
+
+def _level(cfg):
+    """(severity, debuglevel) of the kea-dhcp4 logger in `cfg`, or None when it has no such entry."""
+    entry = next((x for x in (cfg.get("Dhcp4", {}).get("loggers") or []) if x.get("name") == "kea-dhcp4"), None)
+    return (entry.get("severity"), entry.get("debuglevel")) if entry else None
+
+
+def _daemon_at_debug(fake):
+    return _level(fake.loaded) == ("DEBUG", 55)
+
+
+class TestARestoreTheDaemonNeverTookIsNotForgotten:
+    def _on(self, world):
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        assert _daemon_at_debug(world.daemons[1])
+
+    def test_two_failed_sweeps_keep_the_entry_and_the_third_finishes_the_job(self, world):
+        self._on(world)
+        kea = world.daemons[1]
+        kea.reload_result, kea.restart_ok = 1, False
+        for minute in (6, 7):
+            out = inv.sweep(now=NOW + timedelta(minutes=minute))
+            assert out["restored"] == [] and out["errors"], minute
+            assert ed.investigation_marker(kea.file) is None, "the FILE was put back on the first try"
+            assert _daemon_at_debug(kea), "and the daemon is still at DEBUG 55"
+            (entry,) = inv.active(now=NOW + timedelta(minutes=minute))
+            assert (entry["file"], entry["daemon"], entry["stuck"]) == ("restored", "debug", True)
+        kea.reload_result, kea.restart_ok = 0, True
+        calls_before = len(kea.calls)
+        out = inv.sweep(now=NOW + timedelta(minutes=8))
+        assert out["restored"] == ["kea-a"] and not inv.active()
+        assert not _daemon_at_debug(kea), "the third sweep ran the reload that the 'nothing' change set used to skip"
+        assert "config-reload" in kea.calls[calls_before:] and kea.writes == 2, (
+            "no second write: the file was already clean"
+        )
+
+    def test_a_nothing_change_set_with_the_daemon_step_still_owed_runs_it(self, world):
+        self._on(world)
+        kea = world.daemons[1]
+        clean, _ = ed.clear_investigation_logging(kea.file)
+        kea.file = clean  # a person removed the marker from the file; the daemon never heard
+        out = inv.turn_off(world.servers[0], actor="alice")
+        assert out["ok"] and not _daemon_at_debug(kea) and not inv.active()
+
+    def test_turn_off_with_nothing_marked_and_nothing_indexed_does_nothing(self, world):
+        kea = world.daemons[1]
+        out = inv.turn_off(world.servers[0])
+        assert out["ok"] and out["mode"] == "nothing" and "config-reload" not in kea.calls and not inv.active()
+
+    def test_a_failed_restore_after_turn_off_is_retried_by_the_sweep_even_though_the_time_is_not_up(self, world):
+        self._on(world)
+        kea = world.daemons[1]
+        kea.reload_result, kea.restart_ok = 1, False
+        out = inv.turn_off(world.servers[0], actor="alice")
+        assert not out["ok"] and len(inv.active()) == 1
+        kea.reload_result, kea.restart_ok = 0, True
+        swept = inv.sweep(now=NOW + timedelta(minutes=1))  # five-minute window: not expired
+        assert swept["restored"] == ["kea-a"] and not inv.active() and not _daemon_at_debug(kea)
+
+    def test_a_daemon_with_no_reload_is_restored_by_the_restart_inside_the_change_set(self, world):
+        world.daemons[1].commands = ["version-get"]
+        self._on(world)
+        out = inv.sweep(now=NOW + timedelta(minutes=6))
+        assert out["restored"] == ["kea-a"] and not _daemon_at_debug(world.daemons[1]) and not inv.active()
+
+
+class TestTurnOnTakesResponsibilityBeforeTheDaemonIsAsked:
+    def test_the_entry_is_saved_before_config_reload_is_sent(self, world):
+        seen = []
+        real = world.daemons[1].kea_command
+
+        def spy(command, **kw):
+            if command == "config-reload":
+                seen.append([e["name"] for e in inv.active()])
+            return real(command, **kw)
+
+        world.daemons[1].kea_command = spy
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        assert seen == [["kea-a"]], "an entry already existed when the daemon was asked"
+
+    def test_a_daemon_that_did_not_take_it_gets_the_file_put_straight_back(self, world):
+        original = copy.deepcopy(world.daemons[1].file)
+        world.daemons[1].reload_result, world.daemons[1].restart_ok = 1, False
+        out = inv.turn_on(world.servers[0], 5)
+        assert not out["ok"] and world.daemons[1].file == original and not inv.active()
+        assert "previous settings" in out["lines"][-1]
+
+    def test_when_even_the_revert_fails_the_entry_stays_and_the_sweep_finishes_it(self, world):
+        kea = world.daemons[1]
+        kea.reload_result, kea.restart_ok = 1, False
+        kea.fail_writes_after = 1  # the on write works, the revert does not
+        out = inv.turn_on(world.servers[0], 5)
+        assert not out["ok"] and ed.investigation_marker(kea.file), "the file still carries the marker"
+        (entry,) = inv.active()
+        assert entry["file"] == "debug" and entry["pending"] == "reload" and entry["error"]
+        # a restart before expiry would activate DEBUG: the entry exists, so the banner and the Health row know
+        kea.reload_result, kea.restart_ok, kea.fail_writes_after = 0, True, None
+        assert inv.sweep(now=NOW + timedelta(minutes=6))["restored"] == ["kea-a"]
+        assert not inv.active() and ed.investigation_marker(kea.file) is None and not _daemon_at_debug(kea)
+
+    def test_a_restart_that_could_not_be_rolled_back_is_indexed_not_forgotten(self, world):
+        kea = world.daemons[1]
+        kea.commands = ["version-get"]
+        kea.rollback_fails = True
+        kea.restart_ok = False
+        out = inv.turn_on(world.servers[0], 5)
+        assert not out["ok"]
+        (entry,) = inv.active()
+        assert entry["file"] == "debug" and entry["pending"] == "restart" and entry["error"]
+
+
+class TestAServerRemovedFromJenKeepsItsEntry:
+    def test_the_sweep_marks_the_entry_removed_and_audits_it_once(self, world):
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        world.servers.pop(0)
+        for _ in range(3):
+            assert inv.sweep(now=NOW + timedelta(minutes=10)) == {"restored": [], "adopted": [], "errors": []}
+        (entry,) = inv.active(NOW + timedelta(minutes=10))
+        assert entry["removed"] and entry["name"] == "kea-a" and entry["ssh_host"] == "10.0.0.1"
+        assert [a[0] for a in world.store["_audit"]].count("INVESTIGATION_LOGGING_ORPHANED") == 1
+
+    def test_the_health_row_fails_naming_the_server_and_the_by_hand_restore(self, world):
+        from jen.services import health
+
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        world.servers.pop(0)
+        inv.sweep(now=NOW)
+        c = health._debug_logging_left_on({})
+        assert c.status == "fail"
+        assert "kea-a" in c.detail and "removed from Jen" in c.detail and "restore it by hand" in c.detail
+        assert "10.0.0.1" in c.detail and "jen-investigation" in c.detail and "debuglevel" in c.detail
+
+    def test_removal_is_refused_while_an_entry_exists_and_allowed_after_turn_off(self, world):
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        refusal = inv.removal_refusal([1], actor="alice")
+        assert "kea-a" in refusal and "turn it off from Servers first" in refusal
+        assert world.store["_audit"][-1][0] == "INVESTIGATION_LOGGING_REMOVAL_REFUSED"
+        assert inv.removal_refusal([2]) == "", "a server without an entry is not blocked"
+        assert inv.turn_off(world.servers[0])["ok"]
+        assert inv.removal_refusal([1]) == ""
+
+    def test_a_half_finished_restore_also_blocks_removal(self, world):
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        world.daemons[1].reload_result, world.daemons[1].restart_ok = 1, False
+        assert not inv.turn_off(world.servers[0])["ok"]
+        assert inv.removal_refusal([1]) != ""
+
+    def test_forget_drops_only_a_removed_entry(self, world):
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        assert inv.forget(1, actor="alice") is False, "a live server is put back with turn_off, never forgotten"
+        world.servers.pop(0)
+        inv.sweep(now=NOW)
+        assert inv.forget(1, actor="alice") is True and not inv.active()
+        assert world.store["_audit"][-1][0] == "INVESTIGATION_LOGGING_FORGOTTEN"
+
+    def test_a_server_that_comes_back_is_restored_normally(self, world):
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        gone = world.servers.pop(0)
+        inv.sweep(now=NOW + timedelta(minutes=10))
+        world.servers.insert(0, gone)
+        out = inv.sweep(now=NOW + timedelta(minutes=11))
+        assert out["restored"] == ["kea-a"] and not inv.active()
+
+
+class TestAdoptionIsAuditedAndTheRowNamesTheServer:
+    def test_a_full_scan_that_adopts_a_live_marker_writes_an_audit_row(self, world):
+        live, _ = ed.set_investigation_logging(world.daemons[2].file, FUTURE)
+        world.daemons[2].file = live
+        inv.sweep(now=NOW, full=True)
+        assert world.store["_audit"][-1][0] == "INVESTIGATION_LOGGING_ADOPTED" and "kea-b" in world.store["_audit"][-1]
+
+    def test_the_health_row_names_the_server_when_a_restore_is_still_owed(self, world):
+        from jen.services import health
+
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        world.daemons[1].reload_result, world.daemons[1].restart_ok = 1, False
+        inv.sweep(now=NOW + timedelta(minutes=6))
+        c = health._debug_logging_left_on({})
+        assert c.status == "fail" and "kea-a" in c.detail and "still at DEBUG 55" in c.detail
 
 
 class TestTheHealthRow:

@@ -234,3 +234,61 @@ class TestTheLiveWatch:
     def test_with_logging_on_it_does_not_say_it_again(self, logged_in_client, stubs, monkeypatch):
         page = self._page(logged_in_client, monkeypatch, 0, active=[ON])
         assert "adds the classes Kea assigned" not in page
+
+
+class TestAServerRemovedFromJenWhileItWasOn:
+    """v5.68.0-beta.9 (Q144): the Servers page says so, with the by-hand restore, and an admin who did it can tell Jen to stop reporting it."""
+
+    ORPHAN = {
+        **ON,
+        "server_id": "7",
+        "name": "gone-kea",
+        "removed": True,
+        "ssh_host": "10.9.9.9",
+        "kea_conf": "/etc/kea/kea-dhcp4.conf",
+        "file": "debug",
+        "daemon": "debug",
+        "pending": None,
+        "stuck": False,
+    }
+
+    def _page(self, client, monkeypatch):
+        from jen.services import investigation_logging as inv
+        from jen.services import kea
+
+        entry = {"server": dict(SERVER), "up": True, "ha_state": None, "version": "3.0.3", "role": "primary"}
+        monkeypatch.setattr(kea, "get_all_server_status", lambda: [entry])
+        monkeypatch.setattr(inv, "active", lambda now=None: [self.ORPHAN])
+        return client.get("/servers").data.decode()
+
+    def test_the_page_names_the_server_and_the_by_hand_restore(self, logged_in_client, stubs, mock_kea, monkeypatch):
+        page = self._page(logged_in_client, monkeypatch)
+        assert "may still be on on gone-kea, which was removed from Jen" in page
+        assert "10.9.9.9" in page and "/etc/kea/kea-dhcp4.conf" in page and "jen-investigation" in page
+        assert "/servers/investigation-logging/forget/7" in page
+
+    def test_a_scoped_admin_is_not_shown_the_host_details(self, client, db, stubs, mock_kea, monkeypatch):
+        from tests.conftest import restricted_client
+
+        restricted_client(client, db, allowed_subnets=[1], role="admin", username="_inv_orphan_scoped")
+        assert "10.9.9.9" not in self._page(client, monkeypatch)
+
+    def test_forget_calls_the_service_and_lands_on_servers(self, logged_in_client, stubs, monkeypatch):
+        from jen.services import investigation_logging as inv
+
+        seen = []
+        monkeypatch.setattr(inv, "forget", lambda server_id, actor="": seen.append((server_id, actor)) or True)
+        r = logged_in_client.post("/servers/investigation-logging/forget/7")
+        assert r.status_code == 302 and r.headers["Location"].endswith("/servers") and seen == [(7, "admin")]
+
+    def test_a_viewer_and_a_scoped_admin_cannot_forget(self, client, db, stubs, monkeypatch):
+        from jen.services import investigation_logging as inv
+        from tests.conftest import restricted_client
+
+        seen = []
+        monkeypatch.setattr(inv, "forget", lambda server_id, actor="": seen.append(server_id) or True)
+        restricted_client(client, db, allowed_subnets=None, role="viewer", username="_inv_forget_viewer")
+        client.post("/servers/investigation-logging/forget/7")
+        restricted_client(client, db, allowed_subnets=[1], role="admin", username="_inv_forget_scoped")
+        client.post("/servers/investigation-logging/forget/7")
+        assert seen == []
