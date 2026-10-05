@@ -2,6 +2,58 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.68.0-beta.9] - 2026-10-05
+
+Beta channel. Stacked on 5.68.0-beta.8. **Investigation logging that cannot forget, and a Problems inbox that attributes, times
+and alerts truthfully.** Six defects in code that shipped earlier this round (investigation logging in beta.3, the Problems inbox
+in beta.5), found by an outside review of beta.7 and confirmed against the code. This release adds migration 31 (one nullable
+column, applied automatically).
+
+**A restore the daemon never took was forgotten the next minute.** Putting a Kea log level back is two steps that can each fail on
+their own: the config file, and the running daemon, which has to re-read it. When the reload was refused and the restart then failed,
+the file was already clean, so the next minute's change set found no marker, answered "nothing to change", and that was read as "done":
+the entry was dropped and the Health row went green while Kea was still writing a packet dump for every client. The enable side
+mirrored it: the file was written with the marker, the daemon never took it, and no entry was saved, so a restart in between turned
+DEBUG 55 on with nothing indexed. The index entry now says, separately, whether the file is back and whether the daemon has taken it,
+and what is still owed; it is dropped only when both are true. A "nothing" change set with a daemon step still owed runs the step,
+and a half-finished restore is retried every minute even before its time is up. Turning logging on saves the entry as soon as the file
+is written and before the daemon is asked, and when the daemon does not take it Jen puts the file straight back; if that fails too the
+entry stays and the sweep finishes it. The Health row names the server and says the file is restored but Kea is still at DEBUG.
+
+**A server removed from Jen took its marker with it.** The sweep dropped any entry whose server was no longer in Jen, as "nothing
+for Jen to restore", while the remote config kept DEBUG 55 and the marker for good. Now the settings forms refuse to remove a Kea server,
+or blank its SSH host or API URL, while it has an entry, until logging has been turned off. If a server vanishes some different way (a hand
+edit of the config file), its entry is kept and marked removed with its name, SSH host and config path; the Health row fails with
+the by-hand restore, the Servers page shows the same with an *I restored it by hand* button, and an adopted marker or a refused
+removal each write an audit row.
+
+**A problem was scoped by where the client is now.** A NAK at Kea's default level names no address, so the sweep placed it by the
+client's current subnet; a client refused in one subnet and since moved to another showed that event to the second subnet's users.
+A row's subnet is now what the event itself says: its address's subnet, else the subnet Kea selected for that very transaction (a
+DEBUG line), else none, and a row with none is for users who may see every subnet. The alert had the same hole from the other side: an
+alert with no subnet went to every channel whatever its subnet scope. The alert type is now marked as being about one client, and
+for such an alert a channel with a scope does not receive one that has no subnet (a channel with no scope still hears everything).
+
+**A DNS-update failure was blamed on whoever held the address last.** The map from address to client was built over the whole tail
+before the failures were read, so the newest allocation won, even when it came after the failure. The tail is now walked in order and
+a failure goes to the allocation nearest before it, preferring the same transaction when the line names one. The kea-compat probe now
+records what a real failure line carries on 3.0, 3.2 and 3.3.
+
+**Old events were stamped with the sweep's clock, and the alert window with the newest line.** Rows now carry their events' own
+times. Kea writes its log in its host's local time, so the sweep measures the host's offset from UTC against the lease database (the
+newest allocation lines of the tail against the lease rows' expiry, to the nearest quarter hour), remembers it per server, assumes UTC for a
+server that has shown it nothing, and the Problems page says which when you hover *Last seen*. The alert window is judged against now,
+and a server's first read sets its watermark and records what it finds without alerting: three NAKs from six hours ago, still inside
+the last thousand lines, are history and not an alert.
+
+**A failed alert was marked sent for a day.** The sweep discarded the sender's per-channel answers and set `alerted_at` whatever
+happened. Now `alerted_at` is set only when a channel took the alert, a new `alert_attempted_at` records every try, and a failing
+delivery is tried again after half an hour while the client's trouble is still in the window. The sweep's log line counts attempted,
+delivered and failed.
+
+**What an operator must do.** Nothing. A scoped user may see fewer Problems rows than before (a NAK that names no address is for users
+who may see every subnet), and a channel with a subnet scope no longer receives a Problems alert for a client Jen could not place.
+
 ## [5.68.0-beta.8] - 2026-10-05
 
 Beta channel. Stacked on 5.68.0-beta.7. **One rule for what a subnet-scoped account may see of IPv6, and every IPv6
