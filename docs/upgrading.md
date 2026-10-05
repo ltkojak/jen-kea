@@ -120,3 +120,10 @@ installed (the legacy path) was not affected. Build 10 runs the config check as 
 as a regular file nobody else can write; the fix is in the helper file on the Kea host, so **Settings → Kea → SSH → Update helper** on each host is what
 delivers it (the update is signed and needs no sudoers change). The Servers page now names the real reason when the helper refuses a binary it found,
 and Health Center warns about a host on an older build whose Kea version string shows ISC's packaging.
+
+## The Update helper button now appears for a build-only helper update
+
+Nothing to do (5.68.0-beta.7). Settings → Kea → SSH showed "v7 (build 7, build 10 available)" for a Kea host but offered no **Update helper** button, because the
+button compared the helper's version alone and the helper releases since 5.66.0-beta.2 (builds 8, 9 and 10) changed the build and not the version. The button now
+appears when the host has no helper, or its version is below this Jen's, or the versions are equal and the host's build is below this Jen's (a helper that reports
+no build counts as below any build). If you could not press Update helper after upgrading to 5.68.0-beta.6, you can now: press it on each Kea host.

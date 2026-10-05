@@ -2,6 +2,33 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.68.0-beta.7] - 2026-10-05
+
+Beta channel. Stacked on 5.68.0-beta.6. **The Update helper button now appears for a build-only helper
+update.** The previous release's own fix is delivered by pressing Update helper on each Kea host, and on the
+maintainer's host the page said "v7 (build 7, build 10 available)" with Check and Test legacy grant beside it and
+no Update helper button — the one control the message told the operator to use.
+
+**What was wrong.** The label in that cell had always known the build: it compares the host's reported build with
+the one this Jen ships and says "build 10 available" when it is behind. The button's condition, two lines below, compared
+the helper's version alone — "no helper, or a version below the shipped one" — and the route that fills the row
+never passed the build or the shipped build to the template at all. Every helper release that changed the build and
+not the version, which is builds 8, 9 and 10, was therefore invisible to the button; the same page had already lost
+its button once before for a different condition, and a test pins the shipped version to the helper file for exactly
+that reason without ever learning about the build.
+
+**The fix.** The row now carries the build the host last reported (nothing before helper v7, which reports none) and
+the shipped build. The button renders when there is no helper, or its version is below the shipped one, or the
+versions are equal and its build — counted as 0 when the host reports none — is below the shipped build, so a helper
+too old to say its build is below any build. The label stays "Update helper"; the cell for a version below the one this
+Jen wants now names the build when it knows it, so the text and the button agree. A test pins the shipped build to the
+helper file's, the twin of the version pin, and the SSH card's row is rendered for a build-only update (button),
+a current host (none), a host that reports no build (button), a version behind (button), no helper (Install helper)
+and a non-superadmin (none). One existing test, which recorded the shipped version and no build as "current", now
+records the build too: under the new rule a host reporting none is correctly offered the button.
+
+**What an operator must do.** If you could not press Update helper after upgrading to 5.68.0-beta.6, you can now: press it on each Kea host.
+
 ## [5.68.0-beta.6] - 2026-10-05
 
 Beta channel. Stacked on 5.68.0-beta.5. **A bug fix for a defect that has been in every release since
