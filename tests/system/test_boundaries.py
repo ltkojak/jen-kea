@@ -1851,25 +1851,23 @@ with app.app_context():
 S18_MAC = "02:50:00:00:18:01"
 S18_SEND = r"""
 import socket, struct, time
-mac = bytes.fromhex("025000001801")
 server = socket.inet_aton(socket.gethostbyname("kea-a"))
 def opt(code, data):
     return bytes([code, len(data)]) + data
-def packet(kind, xid, requested=None, with_server=False):
+def packet(mac_hex, kind, xid, requested):
+    mac = bytes.fromhex(mac_hex)
     header = struct.pack("!BBBBIHH4s4s4s4s16s64s128s4s", 1, 1, 6, 1, xid, 0, 0x8000, bytes(4), bytes(4), bytes(4),
                          socket.inet_aton("10.99.0.1"), mac.ljust(16, b"\0"), bytes(64), bytes(128), b"\x63\x82\x53\x63")
     body = opt(53, bytes([kind])) + opt(61, b"\x01" + mac) + opt(12, b"s18-host") + opt(55, bytes([1, 3, 6]))
-    if requested:
-        body += opt(50, socket.inet_aton(requested))
-    if with_server:
-        body += opt(54, server)
+    body += opt(50, socket.inet_aton(requested)) + opt(54, server)
     return header + body + b"\xff"
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+# a different client is granted 10.99.0.150 (a REQUEST that names the server and asks for a free pool address is ACKed) ...
+sock.sendto(packet("025000001802", 3, 0x18100, "10.99.0.150"), ("kea-a", 67))
+time.sleep(2)
+# ... so the same request from the client under test is NAKed, three times (three transaction ids)
 for i in range(3):
-    # a DISCOVER is offered the first address of the pool; a REQUEST that names the server and asks for a DIFFERENT address is NAKed
-    sock.sendto(packet(1, 0x18000 + i * 2), ("kea-a", 67))
-    time.sleep(1)
-    sock.sendto(packet(3, 0x18001 + i * 2, requested="10.99.0.199", with_server=True), ("kea-a", 67))
+    sock.sendto(packet("025000001801", 3, 0x18001 + i, "10.99.0.150"), ("kea-a", 67))
     time.sleep(1)
 """
 
@@ -1915,8 +1913,9 @@ def test_17_a_client_kea_naks_is_in_the_problems_inbox_within_one_sweep(stack):
         out, _p = st.jen_py(S18_SWEEP.replace("S18MAC", S18_MAC))
         got = emitted(out)
         naks = [r for r in got["rows1"] if r["kind"] == "nak" and r["server_id"] == 1]
+        seen = st.dexec(st.KEA_A, "sh", "-c", f"grep -i '{S18_MAC}' {st.KEA_LOG} | tail -12 || true").stdout
         assert naks and naks[0]["count"] >= 1 and naks[0]["resolved_at"] is None, (
-            f"INVARIANT: the NAK Kea sent is in the inbox after one sweep: {got}"
+            f"INVARIANT: the NAK Kea sent is in the inbox after one sweep: {got}\nwhat kea-a logged for the client:\n{seen}"
         )
         assert naks[0]["subnet_id"] == 1, (
             "INVARIANT: the row is attributed to the client's subnet (its device row; a NAK names no address)"
