@@ -221,7 +221,7 @@ def world(db, monkeypatch):
             cur.execute(
                 """INSERT INTO lease6 (address, duid, valid_lifetime, expire, subnet_id, pref_lifetime, lease_type, iaid,
                        prefix_len, hostname, hwaddr, state)
-                   VALUES (INET6_ATON(%s), %s, 3600, '2099-01-01 00:00:00', %s, 1800, 0, 1, 128, %s, NULL, 0)""",
+                   VALUES (INET6_ATON(%s), %s, 3600, '2037-01-01 00:00:00', %s, 1800, 0, 1, 128, %s, NULL, 0)""",
                 (_addr(sid), _duid(sid), sid, f"lease6-host-{sid}"),
             )
             cur.execute(
