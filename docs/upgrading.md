@@ -105,3 +105,7 @@ Locator 1.1.0, Wake & Actions 1.1.0 and Presence 1.1.0 — which need this Jen (
 updates once this Jen is installed, and refuses them before it: upgrade Jen first, as with every plugin update that needs a newer Jen. A
 plugin that is not enabled adds no card; a plugin you install from elsewhere can add one through `register_investigation_provider`, documented
 in `plugins/README.md`.
+
+## The Problems inbox: which clients had DHCP trouble
+
+Nothing to do (5.68.0-beta.5). Migration 30 creates a table on the first start; a new core job reads each Kea server's log (the last 1000 lines, through the helper's existing `tail-log`) and the lease database every five minutes, and **Network → Problems** lists the clients that had a NAK, a decline, a failed DNS update, a declined lease or a held reservation, each with an Investigate button. The Servers page's NAK and Dropped counters link to it, the dashboard can show a **Clients with problems** widget (Customize), and a channel can opt into the new **Client had DHCP trouble** alert, which fires when one client has the same kind of trouble three times within an hour (change the number with the optional `[alerts] client_problem_threshold`) and at most once per client and kind per day. The packet-drop and subnet-selection kinds appear only while a server logs at DEBUG. Nothing is added to the helper or the sudoers files.

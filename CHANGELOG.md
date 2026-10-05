@@ -2,6 +2,74 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.68.0-beta.5] - 2026-10-05
+
+Beta channel. Stacked on 5.68.0-beta.4. An investigation used to start when a person already
+had a MAC. Nothing in Jen said "these clients had trouble in the last hour", although the
+log names the client on every NAK and decline and the lease table records declines. This
+release joins them into a Problems inbox: a page, a dashboard widget and an alert, each row
+one click from its investigation.
+
+**The sweep and the table.** Migration 30 creates `client_problems`, one row per server,
+kind, client and address, with a unique key the upsert depends on (the hardware and IP
+address columns are NOT NULL with an empty default so the key is real: MySQL treats NULLs as
+distinct). A core scheduler job runs every five minutes beside the investigation-logging
+sweep. For each SSH-configured Kea server it tails the DHCPv4 log through the helper's
+existing bounded `tail-log` (no new helper op, no sudo line) and reads the problem lines for
+every client they name: a NAK, a decline, a dropped packet, a failed subnet selection, a failed
+DNS update. Two more kinds need no log and come from the lease database in one query each: a
+declined lease (a `lease4` row in state 1 that has not expired — Kea clears the declining
+client's hardware address, so that row is about an address) and a reservation whose fixed
+address is leased to a different client, which is Explain's "held" verdict computed
+fleet-wide. Those two are states, not events: they resolve the moment they are gone, where a
+log kind resolves after a day without a repeat. Resolved rows are kept 30 days and pruned by
+the daily audit cleanup whatever its retention.
+
+**What the log shows at each level, measured.** The NAK Kea sends is visible at Kea's default
+INFO level as a `DHCP4_PACKET_SEND` line carrying `DHCPNAK`, and at DEBUG the NAK's own message
+adds the requested address and the reason; the two lines share a transaction id, so a NAK is
+one event keeping whichever line named the address. The reader is pinned to the real log lines
+the compatibility probe captured on Kea 3.0.3, 3.2.0 and 3.3.1. The packet-drop and
+subnet-selection messages and the NAK reasons beyond the first are DEBUG-only, so they appear
+only while a server logs at DEBUG — the investigation logging of the previous release is how to
+see them on demand.
+
+**A line read twice is one event.** Each sweep reads the same last 1000 lines the previous one
+did, so a per-server watermark in the settings table records the newest time already counted
+and only newer lines are added. Log rotation between sweeps loses nothing that was counted;
+a server that writes more than 1000 lines between two sweeps loses the oldest, which is why
+the page calls itself a lead and not a ledger. A sweep that cannot read a server records
+nothing for it and the Health Center's server rows already say why.
+
+**The page, the widget, the links.** `/problems` lists open rows one entry per client, newest
+first, filtered by `add_subnet_restriction` on the row's own subnet: a user restricted to some
+subnets sees only rows in them, and a row Jen could not place in a subnet is shown only to a
+user who may see every subnet, the rule every unattributed row follows. A row's subnet is where
+its address is, else where its MAC is now. Each row has an Investigate button from the one
+macro and a Why? that computes the Investigation page's one-line answer only when asked,
+judged exactly as that page judges a client, so a client outside the caller's subnets is the
+same empty answer as one that does not exist. Both routes are diagnostic surfaces with rows in
+the authorization matrix, seeded with a problem in each of two subnets and an unattributed one.
+A "Clients with problems" dashboard widget (count by kind in the last hour, the five most
+recent) joins the picker, and the NAK and Dropped counters in the Servers page's packet-health
+block link to the inbox filtered to that server.
+
+**The alert.** A new core alert type, `client_problems`, is opt-in per channel like every
+type. It fires when one client has the same kind of trouble at least `[alerts]
+client_problem_threshold` times (an optional key, 3 by default) within an hour of the newest
+log line, at most once per client and kind per 24 hours, with the subnet id attached so a
+channel scoped to subnets filters it. A chattering client is one alert, not sixty; the two
+database kinds never alert.
+
+**Tests.** The log reader on the real fixtures and on lines built from ISC's message ids,
+including the NAK de-duplication; the watermark and the alert rule as pure functions; the sweep
+against the real database for each kind, resolution, recurrence as a fresh episode, pruning, an
+unreadable server and the once-a-day rule; the page and the widget by caller scope; migration
+30; and system scenario 18, in the critical subset, in which three requests for an address
+the server did not offer are NAKed by a real kea-dhcp4, one sweep puts the client in the inbox
+with its subnet, a second adds nothing, and the page, the lazy answer, the widget and the
+Investigate link resolve.
+
 ## [5.68.0-beta.4] - 2026-10-04
 
 Beta channel. Stacked on 5.68.0-beta.3. The Investigation page lays out what the core
