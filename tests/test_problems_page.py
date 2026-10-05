@@ -196,7 +196,7 @@ class TestTheLazyAnswer:
         calls = self._stub(monkeypatch)
         body = logged_in_client.get(f"/problems/answer?q={MAC_A}").data.decode()
         assert "would offer 10.45.0.60" in body and calls == [MAC_A]
-        assert f"/client?q={quote(MAC_A, safe='')}&tab=explain" in body
+        assert f"/client?q={quote(MAC_A, safe='')}&amp;tab=explain" in body  # the ampersand is escaped in an attribute
 
     def test_nothing_is_computed_until_a_row_is_expanded(self, logged_in_client, inbox, monkeypatch):
         calls = self._stub(monkeypatch)
