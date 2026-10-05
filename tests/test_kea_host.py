@@ -1604,6 +1604,81 @@ class TestTlsSupported:
         assert kea_host.JEN_HELPER_SHIPPED_VERSION >= kea_host.JEN_HELPER_WANT_VERSION
 
 
+class TestTheUpdateHelperButtonKnowsTheBuild:
+    """v5.68.0-beta.7 (Q142) - a helper release that changes the build and not the version (builds 8, 9, 10) was invisible to the Update helper
+    button, which compared versions alone while the label beside it said "build 10 available"."""
+
+    def test_the_shipped_build_is_the_helper_files_build(self):
+        import re
+
+        src = (_JEN.parent / "jen-kea-helper").read_text(encoding="utf-8")
+        file_build = int(re.search(r"^HELPER_BUILD = (\d+)$", src, re.M).group(1))
+        assert file_build == kea_host.JEN_HELPER_SHIPPED_BUILD, (
+            "JEN_HELPER_SHIPPED_BUILD must track the file: the button and the 'build N available' label both read it"
+        )
+
+    def _render(self, helper_version, helper_build, role="superadmin"):
+        """The SSH card's row for one host, rendered with the shipped numbers; True when the Update/Install helper form is there."""
+        import pathlib
+
+        from jinja2 import Environment, FileSystemLoader
+
+        env = Environment(
+            loader=FileSystemLoader(str(pathlib.Path(__file__).resolve().parent.parent / "templates")), autoescape=True
+        )
+        source = (pathlib.Path(__file__).resolve().parent.parent / "templates" / "settings_kea.html").read_text(
+            encoding="utf-8"
+        )
+        start = source.index("{% for s in ssh_servers %}")
+        end = source.index("{% endfor %}", source.index("Remove legacy grant", start)) + len("{% endfor %}")
+        row = env.from_string(source[start:end])
+        s = {
+            "id": 1, "name": "kea-a", "ssh_host": "10.0.0.5", "helper_version": helper_version, "helper_build": helper_build,
+            "helper_label": kea_host.helper_version_label(
+                helper_version, kea_host.JEN_HELPER_SHIPPED_VERSION, build=helper_build
+            ),
+            "helper_want": kea_host.JEN_HELPER_WANT_VERSION, "helper_shipped": kea_host.JEN_HELPER_SHIPPED_VERSION,
+            "helper_shipped_build": kea_host.JEN_HELPER_SHIPPED_BUILD, "helper_known": True, "legacy_grant": False,
+            "signed_update": True,
+        }  # fmt: skip
+        html = row.render(ssh_servers=[s], current_user={"role": role}, csrf_token=lambda: "t")
+        return "install-kea-helper/1" in html, html
+
+    def test_a_build_only_update_gets_the_button_and_the_label_agrees(self):
+        shown, html = self._render(kea_host.JEN_HELPER_SHIPPED_VERSION, kea_host.JEN_HELPER_SHIPPED_BUILD - 3)
+        assert shown and "Update helper" in html
+        assert f"build {kea_host.JEN_HELPER_SHIPPED_BUILD} available" in html
+
+    def test_a_current_host_has_no_button(self):
+        shown, _html = self._render(kea_host.JEN_HELPER_SHIPPED_VERSION, kea_host.JEN_HELPER_SHIPPED_BUILD)
+        assert not shown
+
+    def test_a_host_that_reports_no_build_is_below_any_build(self):
+        shown, html = self._render(kea_host.JEN_HELPER_SHIPPED_VERSION, None)
+        assert shown and "Update helper" in html
+
+    def test_a_version_below_shipped_still_gets_it(self):
+        assert self._render(kea_host.JEN_HELPER_SHIPPED_VERSION - 1, None)[0]
+
+    def test_no_helper_still_offers_the_install(self):
+        shown, html = self._render(None, None)
+        assert shown and "Install helper" in html
+
+    def test_only_a_superadmin_is_offered_it(self):
+        assert not self._render(kea_host.JEN_HELPER_SHIPPED_VERSION, 1, role="admin")[0]
+
+    def test_the_route_passes_the_build_and_the_shipped_build(self):
+        import pathlib
+
+        src = (
+            pathlib.Path(__file__).resolve().parent.parent / "jen" / "routes" / "settings" / "infrastructure.py"
+        ).read_text(encoding="utf-8")
+        assert (
+            '"helper_build": st.get("build")' in src
+            and '"helper_shipped_build": kea_host.JEN_HELPER_SHIPPED_BUILD' in src
+        )
+
+
 class TestRemoveLegacyGrant:
     """v5.49.0 (Q51) - the legacy grant removes itself; Jen never re-adds it."""
 

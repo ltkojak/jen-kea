@@ -114,6 +114,11 @@ def _kea_servers_with_helper_status():
                 # v5.29.1 — the Update helper button is offered below this
                 # (the shipped file's version), not just below WANT.
                 "helper_shipped": kea_host.JEN_HELPER_SHIPPED_VERSION,
+                # v5.68.0-beta.7 (Q142) - a helper release that changes the BUILD and not the version (builds 8, 9 and 10) was
+                # invisible to the button, which compared versions alone while the label beside it already said "build 10 available".
+                # `helper_build` is what the host last reported (None before v7, which reports none); the template treats that as 0.
+                "helper_build": st.get("build"),
+                "helper_shipped_build": kea_host.JEN_HELPER_SHIPPED_BUILD,
                 "helper_known": bool(st),
                 "helper_checked": st.get("checked", ""),
                 "legacy_grant": st.get("legacy_grant"),  # True, False, or None (never checked)

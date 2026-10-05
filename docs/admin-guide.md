@@ -1137,7 +1137,10 @@ previous helper rather than leaving a broken one in place. A
 helper-only fix like this one doesn't change the protocol, so it ships
 under a new `HELPER_BUILD` number rather than bumping `HELPER_VERSION`
 — Settings → Kea → SSH shows it as **"v7 (build 7)"** once a host has
-it, and still offers **Update helper** the same way it did for v6.
+it, and still offers **Update helper** the same way it did for v6. (v5.68.0-beta.7: the button
+appears for a build-only update too — a host on v7 whose build is below the one this Jen ships reads
+"v7 (build 7, build 10 available)" and has the button beside it; until then the button compared
+versions alone, so builds 8, 9 and 10 showed the text and no button.)
 None of this needs anything from you.
 
 **This release ships helper build 8 — the update op never installs with

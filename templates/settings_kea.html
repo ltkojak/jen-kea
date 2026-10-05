@@ -232,7 +232,7 @@
                 <td data-m="secondary" class="mono" style="padding:4px 8px;font-size:12px;">{{ s.ssh_host }}</td>
                 <td data-m="secondary" class="u-f26165">
                     {% if s.helper_version and s.helper_version >= s.helper_want %}<span class="u-5a4529">{{ s.helper_label }}</span>
-                    {% elif s.helper_version %}<span class="u-52df2b">v{{ s.helper_version }} — upgrade available (v{{ s.helper_want }})</span>
+                    {% elif s.helper_version %}<span class="u-52df2b">v{{ s.helper_version }}{% if s.helper_build %} (build {{ s.helper_build }}){% endif %} — upgrade available (v{{ s.helper_want }})</span>
                     {% elif s.helper_known %}<span class="u-52df2b">not installed — legacy path</span>
                     {% else %}<span class="u-5872de">unknown — check</span>{% endif %}
                     {% if s.legacy_grant %}<br><span class="badge u-5fdac8"  title="The old NOPASSWD: /usr/bin/python3 sudoers grant is still present on this host">legacy grant still present</span>{% endif %}
@@ -245,7 +245,10 @@
                     <form method="POST" action="/settings/infrastructure/test-legacy-grant/{{ s.id }}" class="u-cccfa4"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit" class="btn btn-sm btn-secondary" title="Probes the legacy sudo grant and shows exactly what sudo said, without installing anything">Test legacy grant</button>
                     </form>
-                    {% if current_user.role == 'superadmin' and (not s.helper_version or s.helper_version < s.helper_shipped) %}
+                    {# v5.68.0-beta.7 (Q142): offered when there is no helper, or its version is below the shipped one, or the versions are equal and its
+                   build (0 when the host reports none - a pre-v7 helper) is below the shipped build: a build-only release is an update too #}
+                    {% set helper_behind = (not s.helper_version) or s.helper_version < s.helper_shipped or (s.helper_version == s.helper_shipped and (s.helper_build or 0) < s.helper_shipped_build) %}
+                    {% if current_user.role == 'superadmin' and helper_behind %}
                     <form method="POST" action="/settings/infrastructure/install-kea-helper/{{ s.id }}" class="u-cccfa4"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit" class="btn btn-sm btn-secondary">{% if s.helper_version %}Update helper{% else %}Install helper{% endif %}</button>
                     </form>
