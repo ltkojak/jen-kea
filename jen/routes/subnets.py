@@ -217,14 +217,14 @@ def subnets():
         subnets=subnet_data,
         ssh_ready=ssh_ready,
         subnet_notes=subnet_notes,
-        subnets6=_get_subnets6_data(),
+        subnets6=_get_subnets6_data(accessible_subnet6_map()),
         shared_networks=shared_networks,
         can_manage_networks=current_user.all_subnets,
         kea_config_error=kea_config_error,
     )
 
 
-def _get_subnets6_data() -> list:
+def _get_subnets6_data(visible6) -> list:
     """
     v5.0 Phase 2 — read-only IPv6 subnet summary for the Subnets page.
     Deliberately gated on is_ipv6_enabled() rather than only checking
@@ -235,7 +235,7 @@ def _get_subnets6_data() -> list:
 
     Each entry carries paired_v4_id (the config's pairing, read through access.paired_v4_id) so the template can nest it as a
     second block on the matching v4 card, or render it standalone when unpaired. Only the CALLER's v6 subnets are listed
-    (access.accessible_subnet6_map, v5.68.0-beta.8 / Q143) - it used to be every one.
+    (`visible6` is access.accessible_subnet6_map(), v5.68.0-beta.8 / Q143) - it used to be every one.
     No live Kea config-get here (unlike the v4 branch above) — Phase 2 is
     read-only against Jen's own DB layer; pool/lifetime detail for v6
     subnets is a Phase 3 write-support item once the v6 config-editing
@@ -244,7 +244,7 @@ def _get_subnets6_data() -> list:
     if not __kea6.is_ipv6_enabled() or not extensions.SUBNET6_MAP:
         return []
     result = []
-    for subnet_id, info in accessible_subnet6_map().items():
+    for subnet_id, info in visible6.items():
         try:
             active = len(__kea6.list_lease6(subnet_id=subnet_id))
             reserved = len(__kea6.get_ipv6_reservations(subnet_id=subnet_id))

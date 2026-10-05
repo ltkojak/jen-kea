@@ -63,7 +63,7 @@ class TestSubnetsV6View:
         monkeypatch.setattr(
             extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
         )
-        assert subnets_module._get_subnets6_data() == []
+        assert subnets_module._get_subnets6_data(extensions.SUBNET6_MAP) == []
 
     def test_get_subnets6_data_counts_leases_and_reservations(self, monkeypatch, db):
         import jen.routes.subnets as subnets_module
@@ -87,7 +87,7 @@ class TestSubnetsV6View:
                     (bytes.fromhex("00030001001a2b3c4d5e"),),
                 )
             db.commit()
-            data = subnets_module._get_subnets6_data()
+            data = subnets_module._get_subnets6_data(extensions.SUBNET6_MAP)
             assert len(data) == 1
             assert data[0]["active"] == 1
         finally:

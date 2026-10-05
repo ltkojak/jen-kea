@@ -222,11 +222,11 @@ def world(db, monkeypatch):
                 """INSERT INTO lease6 (address, duid, valid_lifetime, expire, subnet_id, pref_lifetime, lease_type, iaid,
                        prefix_len, hostname, hwaddr, state)
                    VALUES (INET6_ATON(%s), %s, 3600, '2037-01-01 00:00:00', %s, 1800, 0, 1, 128, %s, NULL, 0)""",
-                (_addr(sid), _duid(sid), sid, f"lease6-host-{sid}"),
+                (_addr(sid), _duid(sid), sid, f"lease6-host-s{sid}e"),
             )
             cur.execute(
                 "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp6_subnet_id, hostname) VALUES (%s, 1, %s, %s)",
-                (_duid(sid), sid, f"res6-host-{sid}"),
+                (_duid(sid), sid, f"res6-host-s{sid}e"),
             )
             host_id = cur.lastrowid
             cur.execute(
@@ -266,7 +266,7 @@ def _assert_only(html, role, *, rows=True):
     for sid in V6:
         names = [V6[sid]["name"], V6[sid]["cidr"]]
         if rows:
-            names += [_addr(sid), f"lease6-host-{sid}", f"res6-host-{sid}"]
+            names += [_addr(sid), f"lease6-host-s{sid}e", f"res6-host-s{sid}e"]
         for n in names:
             if sid in visible:
                 continue
@@ -274,9 +274,9 @@ def _assert_only(html, role, *, rows=True):
 
 
 VIEWS = {
-    "leases": ("/leases", "lease6-host-{sid}"),
-    "devices": ("/devices", "lease6-host-{sid}"),
-    "reservations": ("/reservations", "res6-host-{sid}"),
+    "leases": ("/leases", "lease6-host-s{sid}e"),
+    "devices": ("/devices", "lease6-host-s{sid}e"),
+    "reservations": ("/reservations", "res6-host-s{sid}e"),
 }
 
 
@@ -306,7 +306,7 @@ class TestTheV6ListsShowOnlyWhatTheCallerMaySee:
                 assert V6[sid]["name"] in html
                 for other in V6:
                     if other != sid:
-                        assert _addr(other) not in html and f"lease6-host-{other}" not in html
+                        assert _addr(other) not in html and f"lease6-host-s{other}e" not in html
             else:
                 assert r.status_code == 404, f"{role} {view} subnet {sid}: {r.status_code}"
                 _assert_only(r.data.decode(), role)
@@ -363,11 +363,15 @@ class TestTheDashboardAndSubnetsPageTotalOnlyWhatTheCallerMaySee:
         assert len(re.findall(rf">{n}</div>", html)) >= 2, f"{role}: the v6 active/reserved totals are not {n}"
 
     @pytest.mark.parametrize("role", ROLES)
-    def test_the_subnets_page_lists_only_visible_v6_subnets(self, client, db, world, role):
+    def test_the_subnets_page_lists_only_visible_v6_subnets(self, client, db, world, mock_kea, role):
         html = _as(client, db, role).get("/subnets").data.decode()
         _assert_only(html, role, rows=False)
+        # a paired v6 subnet is a badge on its v4 card (no name); an unpaired one is its own card with its name
         for sid in _visible_for(role):
-            assert V6[sid]["name"] in html, f"{role}: visible v6 subnet {sid} is missing from the Subnets page"
+            if V6[sid]["paired_subnet4_id"] is None:
+                assert V6[sid]["name"] in html, (
+                    f"{role}: visible unpaired v6 subnet {sid} is missing from the Subnets page"
+                )
 
     @pytest.mark.parametrize("role", ROLES)
     def test_the_live_stats_poll_carries_only_visible_v6_subnets(self, client, db, world, role):
@@ -387,7 +391,7 @@ class TestGlobalSearch:
         for what in ("lease6-host", "res6-host"):
             html = c.get(f"/search?q={what}").data.decode()
             for sid in V6:
-                assert (f"{what}-{sid}" in html) is (sid in _visible_for(role)), f"{role} search {what}-{sid}"
+                assert (f"{what}-s{sid}e" in html) is (sid in _visible_for(role)), f"{role} search {what}-{sid}"
             _assert_only(html, role, rows=False)
 
 
@@ -515,7 +519,7 @@ class TestTheInvestigationAndTimelineFollowTheSameRule:
         from jen.services import client_subject
 
         html = _as(client, db, "viewer_scoped").get(f"/client?q={_addr(sid)}").data.decode()
-        assert (f"lease6-host-{sid}" in html) is (sid in ALLOWED6), f"v6 subnet {sid}"
+        assert (f"lease6-host-s{sid}e" in html) is (sid in ALLOWED6), f"v6 subnet {sid}"
         assert V6[sid]["name"] not in html or sid in ALLOWED6
         assert client_subject is not None
 
