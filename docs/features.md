@@ -130,7 +130,7 @@ capability shipped in.
 
 ## Notifications
 - Multi-channel alerts: Pushover, Telegram, Slack, ntfy, Discord, Email, Generic Webhook
-- 21 alert types — Kea up/down, HA failover, new lease, new device, reserved device's lease, utilization high/recovery, pool exhaustion and forecast, packet health, reservation added/deleted/stale, config changed and drift, certificate expiring, daily summary, and a legacy rogue-device type (plugins register more)
+- 22 alert types — Kea up/down, HA failover, new lease, new device, reserved device's lease, utilization high/recovery, pool exhaustion and forecast, packet health, a client with repeated DHCP trouble, reservation added/deleted/stale, config changed and drift, certificate expiring, daily summary, and a legacy rogue-device type (plugins register more)
 - Per-channel configuration and test
 
 ## Security & Access Control

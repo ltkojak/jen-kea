@@ -174,7 +174,7 @@ class TestTheLogKinds:
         logs, _c = stack
         logs[1] = {"ok": False, "code": "no-helper", "detail": "the Kea host helper is not installed"}
         out = cp.sweep(NOW, servers=[SERVER_A])
-        assert out["servers"] == 0 and "no-helper" in out["errors"][0] and rows(db) == []
+        assert out["servers"] == 0 and "no-helper" in out["errors"][0] and not rows(db)
 
     def test_a_server_without_ssh_is_not_a_log_source(self, db, stack, monkeypatch):
         logs, calls = stack
@@ -335,7 +335,7 @@ class TestTheDatabaseKinds:
                 "VALUES (INET_ATON('10.45.0.61'), NULL, 3600, DATE_SUB(NOW(), INTERVAL 1 HOUR), 1, 1)"
             )
         db.commit()
-        assert cp.sweep(NOW, servers=[])["state_rows"] == 0 and rows(db) == []
+        assert cp.sweep(NOW, servers=[])["state_rows"] == 0 and not rows(db)
 
     def test_a_state_does_not_count_up_each_sweep(self, db, stack):
         self._declined(db)
