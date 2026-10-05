@@ -2011,3 +2011,72 @@ class TestAnSshConnectFailureIsAHandledFailure:
     def test_every_caller_that_catches_helper_error_now_catches_this_too(self):
         assert issubclass(kea_host.HelperUnreachable, kea_host.HelperError)
         assert not issubclass(kea_host.HelperUnreachable, kea_host.HelperMissing)
+
+
+class TestMissingBinaryTellsTheRealReason:
+    """v5.68.0-beta.6 (Q141) - build 10 says WHY it will not run a Kea binary that is there; an older build says only "missingbinary",
+    which on a Kea from ISC's packages (daemon binary owned by its service account) is a binary that IS installed."""
+
+    def test_a_reason_from_the_helper_reaches_the_result(self, monkeypatch, quiet_status):
+        resp = {
+            "ok": False,
+            "error": "missingbinary",
+            "binary": "kea-dhcp4",
+            "detail": "is owned by alice, not the daemon's user",
+        }
+        _connect_seq(monkeypatch, [(json.dumps(resp), "")])
+        res = kea_host.apply_config(SERVER, "dhcp4", {"Dhcp4": {}})
+        assert res["code"] == "missingbinary" and res["reason"] == "is owned by alice, not the daemon's user"
+        assert res["detail"] == res["reason"] and "old_helper_build" not in res
+
+    def test_no_reason_from_a_build_7_helper_says_so(self, monkeypatch, quiet_status):
+        resp = {"ok": False, "error": "missingbinary", "binary": "kea-dhcp4", "helper_version": 7, "helper_build": 7}
+        _connect_seq(monkeypatch, [(json.dumps(resp), "")])
+        res = kea_host.apply_config(SERVER, "dhcp4", {"Dhcp4": {}})
+        assert res["reason"] == "" and res["old_helper_build"] == 7 and res["detail"] == "kea-dhcp4"
+
+    def test_a_build_10_helper_that_found_nothing_is_just_not_installed(self, monkeypatch, quiet_status):
+        resp = {"ok": False, "error": "missingbinary", "binary": "kea-dhcp4", "helper_version": 7, "helper_build": 10}
+        _connect_seq(monkeypatch, [(json.dumps(resp), "")])
+        res = kea_host.apply_config(SERVER, "dhcp4", {"Dhcp4": {}})
+        assert "old_helper_build" not in res and res["reason"] == ""
+
+    def test_the_sentence_when_the_helper_refused_a_binary_it_found(self):
+        text = kea_host.missing_binary_text(
+            {"binary": "kea-dhcp4", "reason": "is owned by alice, not the daemon's user"}
+        )
+        assert text == (
+            "kea-dhcp4 is present but the helper will not run it: is owned by alice, not the daemon's user \u2014 "
+            "update the helper (build 10 or later) / fix the ownership"
+        )
+
+    def test_the_sentence_when_nothing_was_found(self):
+        assert kea_host.missing_binary_text({"binary": "kea-dhcp4"}) == "kea-dhcp4 is not installed on this server"
+        assert kea_host.missing_binary_text({"binary": "kea-dhcp4"}, advice=True).endswith(
+            "\u2014 install it and try again"
+        )
+
+    def test_the_sentence_from_an_old_helper_names_the_caveat(self):
+        text = kea_host.missing_binary_text({"binary": "kea-dhcp4", "old_helper_build": 7})
+        assert "not installed on this server" in text and "ISC's packages" in text and "build 7" in text
+        assert "update the helper from Settings" in text
+
+    def test_the_page_line_carries_the_reason(self):
+        from jen.services import kea_changeset
+
+        res = {"code": "missingbinary", "binary": "kea-dhcp4", "reason": "is owned by alice, not the daemon's user"}
+        line = kea_changeset._failure_line("kea-a", res, "Kea")
+        assert line.startswith("\u274c kea-a: kea-dhcp4 is present but the helper will not run it: is owned by alice")
+        assert "not installed" not in line and line.endswith("fix the ownership.")
+
+    def test_the_page_line_is_the_old_one_when_the_helper_found_nothing(self):
+        from jen.services import kea_changeset
+
+        line = kea_changeset._failure_line("kea-a", {"code": "missingbinary", "binary": "kea-dhcp4"}, "Kea")
+        assert line == "\u274c kea-a: kea-dhcp4 is not installed on this server \u2014 install it and try again."
+
+    def test_the_shipped_build_is_the_files(self):
+        import re
+
+        src = (pathlib.Path(__file__).resolve().parent.parent / "jen-kea-helper").read_text(encoding="utf-8")
+        assert int(re.search(r"^HELPER_BUILD = (\d+)$", src, re.M).group(1)) == kea_host.JEN_HELPER_SHIPPED_BUILD == 10

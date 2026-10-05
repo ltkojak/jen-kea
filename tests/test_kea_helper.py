@@ -178,7 +178,7 @@ class TestVersion:
         assert code == 0
         assert out["ok"] is True
         assert out["helper_version"] == helper.HELPER_VERSION == 7
-        assert out["helper_build"] == helper.HELPER_BUILD == 9
+        assert out["helper_build"] == helper.HELPER_BUILD == 10
         assert out["python"].count(".") == 2
         assert err.startswith("jen-kea-helper: version ok")
 
@@ -517,6 +517,191 @@ class TestTestConfig:
         )
         assert out == {"ok": False, "error": "tlsmissing", "path": "/nope/cert.pem"}
         assert not os.path.exists(p + ".jen_tmp")
+
+
+@win
+class TestRunAsTheDaemonsOwnAccount:
+    """v5.68.0-beta.6 (Q141). ISC's own deb ships /usr/sbin/kea-dhcp4 as `_kea:_kea` 0750; build 7-9 required root:root of EVERY
+    binary the helper runs and so answered `missingbinary` ("not installed") for a Kea that was installed - every config push through
+    the helper failed on such a host. Build 10 runs `kea-dhcpX -t` as the account the daemon runs as and trusts the binary by who
+    executes it: root:root for a binary run as root (unchanged), a regular file owned by exactly that SYSTEM account with no
+    group/other write bit for the daemon's. The tests cannot become another user, so they fake what `lstat` and `pwd` report and
+    capture the arguments of the `subprocess.run` call (the stub binary is never exec'd as another account)."""
+
+    KEA_UID, KEA_GID = 105, 106
+
+    def _setup(self, helper, tmp_path, monkeypatch, uid=105, mode=0o750, unit=None, root_owned=False, regular=True):
+        import pwd
+        import types
+
+        monkeypatch.setattr(helper, "_ALLOWED_CONF_DIRS", (str(tmp_path),))
+        d = _fake_kea_bin(helper, monkeypatch, tmp_path, "kea-dhcp4", exit_code=0)
+        binary = os.path.join(d, "kea-dhcp4")
+        # the fake binaries are never really root-owned: _fake_kea_bin stubbed _bin_owner_ok True; this class chooses
+        monkeypatch.setattr(helper, "_bin_owner_ok", lambda path: root_owned)
+        real_lstat = os.lstat
+
+        def lstat(path, *a, **k):
+            if str(path) == binary:
+                kind = stat.S_IFREG if regular else stat.S_IFLNK
+                return types.SimpleNamespace(st_mode=kind | mode, st_uid=uid, st_gid=uid + 1)
+            return real_lstat(path, *a, **k)
+
+        monkeypatch.setattr(os, "lstat", lstat)
+        accounts = {
+            105: ("_kea", 106),
+            300: ("othersys", 301),
+            200: ("keauser", 201),
+            1001: ("alice", 1001),
+            0: ("root", 0),
+        }
+
+        def getpwuid(u):
+            if u not in accounts:
+                raise KeyError(u)
+            name, gid = accounts[u]
+            return types.SimpleNamespace(pw_name=name, pw_uid=u, pw_gid=gid)
+
+        monkeypatch.setattr(pwd, "getpwuid", getpwuid)
+        monkeypatch.setattr(helper, "_unit_account", lambda service: unit)
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append((cmd, kw))
+            seen = {}
+            if os.path.exists(cmd[-1]):
+                seen["mode"] = stat.S_IMODE(os.stat(cmd[-1]).st_mode)
+            calls[-1] = (cmd, {**kw, "_seen": seen})
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(helper.subprocess, "run", fake_run)
+        return str(tmp_path / "kea-dhcp4.conf"), binary, calls
+
+    def test_a_binary_owned_by_a_system_account_is_run_as_that_account(self, helper, tmp_path, monkeypatch):
+        p, binary, calls = self._setup(helper, tmp_path, monkeypatch)
+        _code, out, _ = _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}})
+        assert out == {"ok": True}
+        ((cmd, kw),) = calls
+        assert cmd == [binary, "-t", p + ".jen_tmp"]
+        assert (kw["user"], kw["group"], kw["extra_groups"]) == (105, 106, []), (
+            "the daemon's own account, no supplementary groups"
+        )
+        assert kw["env"]["HOME"] == "/" and kw["env"]["PATH"] == "/usr/sbin:/usr/bin:/sbin:/bin"
+
+    def test_apply_config_goes_through_the_same_run(self, helper, tmp_path, monkeypatch):
+        p, _binary, calls = self._setup(helper, tmp_path, monkeypatch)
+        _code, out, _ = _run(helper, "apply-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}})
+        assert out["ok"] is True and calls[0][1]["user"] == 105
+
+    def test_a_root_root_binary_is_run_as_root_exactly_as_before(self, helper, tmp_path, monkeypatch):
+        p, _binary, calls = self._setup(helper, tmp_path, monkeypatch, uid=0, mode=0o755, root_owned=True)
+        _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}})
+        ((_cmd, kw),) = calls
+        assert "user" not in kw and "group" not in kw and "extra_groups" not in kw
+
+    def test_a_binary_owned_by_an_ordinary_user_is_refused_with_the_reason(self, helper, tmp_path, monkeypatch):
+        p, _binary, calls = self._setup(helper, tmp_path, monkeypatch, uid=1001)
+        _code, out, _ = _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}})
+        assert out == {
+            "ok": False,
+            "error": "missingbinary",
+            "binary": "kea-dhcp4",
+            "detail": "is owned by alice, not a system account and not the daemon's user",
+        }
+        assert calls == [], "the binary was never run"
+
+    def test_a_group_writable_binary_is_refused_even_when_a_system_account_owns_it(self, helper, tmp_path, monkeypatch):
+        p, _binary, calls = self._setup(helper, tmp_path, monkeypatch, mode=0o770)
+        _code, out, _ = _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}})
+        assert out["error"] == "missingbinary" and out["detail"] == "is writable by its group or by everyone"
+        assert calls == []
+
+    def test_a_world_writable_binary_is_refused(self, helper, tmp_path, monkeypatch):
+        p, _binary, calls = self._setup(helper, tmp_path, monkeypatch, mode=0o757)
+        _code, out, _ = _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}})
+        assert out["detail"] == "is writable by its group or by everyone" and calls == []
+
+    def test_a_symlink_is_refused(self, helper, tmp_path, monkeypatch):
+        p, _binary, calls = self._setup(helper, tmp_path, monkeypatch, regular=False)
+        _code, out, _ = _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}})
+        assert out["detail"] == "is not a regular file" and calls == []
+
+    def test_a_root_owned_binary_that_is_not_root_root_is_not_run_as_root_or_as_anyone(
+        self, helper, tmp_path, monkeypatch
+    ):
+        p, _binary, calls = self._setup(helper, tmp_path, monkeypatch, uid=0, mode=0o755)
+        _code, out, _ = _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}})
+        assert out["error"] == "missingbinary" and "root but not root:root" in out["detail"] and calls == []
+
+    def test_the_units_user_is_the_account_it_runs_as(self, helper, tmp_path, monkeypatch):
+        p, _binary, calls = self._setup(helper, tmp_path, monkeypatch, uid=200, unit=("keauser", 200, 201))
+        _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}})
+        assert (calls[0][1]["user"], calls[0][1]["group"]) == (200, 201)
+
+    def test_a_binary_owned_by_a_different_system_account_than_the_units_user_is_refused(
+        self, helper, tmp_path, monkeypatch
+    ):
+        p, _binary, calls = self._setup(helper, tmp_path, monkeypatch, uid=300, unit=("keauser", 200, 201))
+        _code, out, _ = _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}})
+        assert out["detail"] == "is owned by othersys, not the daemon's user keauser" and calls == []
+
+    def test_a_nonexistent_binary_has_no_detail(self, helper, tmp_path, monkeypatch):
+        monkeypatch.setattr(helper, "_ALLOWED_CONF_DIRS", (str(tmp_path),))
+        monkeypatch.setattr(helper, "_BIN_DIRS", (str(tmp_path / "empty"),))
+        monkeypatch.setattr(helper, "_bin_dir_ok", lambda d: True)
+        (tmp_path / "empty").mkdir()
+        _code, out, _ = _run(
+            helper, "test-config", {"service": "dhcp4", "path": str(tmp_path / "kea-dhcp4.conf"), "config": {}}
+        )
+        assert out == {"ok": False, "error": "missingbinary", "binary": "kea-dhcp4"}
+
+    def test_the_temp_file_is_0644_whatever_the_umask(self, helper, tmp_path, monkeypatch):
+        p, _binary, calls = self._setup(helper, tmp_path, monkeypatch)
+        old = os.umask(0o077)
+        try:
+            _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}})
+        finally:
+            os.umask(old)
+        assert calls[0][1]["_seen"]["mode"] == 0o644, "the daemon's account must be able to read what -t reads"
+        assert not os.path.exists(p + ".jen_tmp")
+
+    def test_the_clean_environment_has_a_home(self, helper):
+        assert helper._CLEAN_ENV == {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8", "HOME": "/"}
+
+    def test_only_a_system_account_counts(self, helper, monkeypatch, tmp_path):
+        import types
+
+        f = tmp_path / "bin"
+        f.write_text("x")
+        for uid, expect in ((105, True), (999, True), (1000, False), (0, False)):
+            monkeypatch.setattr(
+                os,
+                "lstat",
+                lambda path, uid=uid, *a, **k: types.SimpleNamespace(
+                    st_mode=stat.S_IFREG | 0o750, st_uid=uid, st_gid=uid
+                ),
+            )
+            assert helper._daemon_bin_ok(str(f), uid) is expect, uid
+
+    def test_unit_account_reads_the_units_user_and_ignores_root_and_unknown_accounts(self, helper, monkeypatch):
+        import pwd
+        import types
+
+        monkeypatch.setattr(helper, "_resolve_unit", lambda service, action: "kea-dhcp4-server")
+        for answer, expect in (("_kea\n", ("_kea", 105, 106)), ("root\n", None), ("\n", None), ("ghost\n", None)):
+            monkeypatch.setattr(
+                helper, "_run_bin", lambda name, args, answer=answer, **kw: types.SimpleNamespace(stdout=answer)
+            )
+
+            def getpwnam(n):
+                if n == "_kea":
+                    return types.SimpleNamespace(pw_uid=105, pw_gid=106)
+                raise KeyError(n)
+
+            monkeypatch.setattr(pwd, "getpwnam", getpwnam)
+            assert helper._unit_account("dhcp4") == expect, answer
+        monkeypatch.setattr(helper, "_resolve_unit", lambda service, action: None)
+        assert helper._unit_account("dhcp4") is None
 
 
 @win

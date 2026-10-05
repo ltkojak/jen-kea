@@ -958,9 +958,20 @@ def _helper_installed(ctx) -> Check:
     behind = []  # (name, version)
     has_legacy_grant = []  # below v6: one more hop legitimately needs the grant
     has_legacy_grant_signed = []  # v6+: signed updates need no grant at all any more
+    isc_old_build = []  # v5.68.0-beta.6 (Q141): a build below 10 cannot run an ISC package's daemon binary
+    versions_by_server = {
+        (st.get("server") or {}).get("id"): str(st.get("version") or "") for st in (ctx.get("server_status") or [])
+    }
     for s in ssh_servers:
         entry = status.get(str(s.get("id")), {})
         v = entry.get("version")
+        build = entry.get("build")
+        if (
+            isinstance(build, int)
+            and build < kea_host.MISSINGBINARY_REASON_BUILD
+            and "isc" in versions_by_server.get(s.get("id"), "").lower()
+        ):
+            isc_old_build.append(_server_name(s))
         if not isinstance(v, int) or v < kea_host.JEN_HELPER_MIN_VERSION:
             legacy.append(_server_name(s))
         else:
@@ -986,6 +997,12 @@ def _helper_installed(ctx) -> Check:
         sentences.append(
             f"{names} on helper {vtext} — no atomic concurrency guard and no external-change capture; "
             "upgrade from Settings → Kea → SSH"
+        )
+    if isc_old_build:
+        sentences.append(
+            f"{', '.join(isc_old_build)}: helper build < {kea_host.MISSINGBINARY_REASON_BUILD} on an ISC-packaged Kea "
+            "cannot validate configs (the daemon binary is owned by the Kea service account, which that helper refuses, "
+            'and reports as "not installed") — Settings → Kea → SSH → Update helper'
         )
     if has_legacy_grant:
         sentences.append(

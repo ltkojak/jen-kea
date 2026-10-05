@@ -239,7 +239,10 @@ Kea → SSH (it refuses unless the helper's own sudoers file is valid), or run
 signature and never need this grant again — use the collapsed **Grant or
 revoke the legacy root path by hand** box on the same card only for a fresh
 install or the v5→v6 hop; Jen never grants itself root otherwise. Full
-details: **Admin Guide → Kea host helper**. (`/etc/sudoers.d/jen`, no `-kea`,
+details: **Admin Guide → Kea host helper**. A host still on this legacy path never
+had the ISC-package binary-ownership problem ("kea-dhcp4 is not installed on
+this server" although it is — see above); a helper build 7–9 does, and Update
+helper fixes it. (`/etc/sudoers.d/jen`, no `-kea`,
 is a DIFFERENT file — Jen's own self-update grant on the Jen box; removing it
 breaks self-update, not anything Kea-side.)
 
@@ -311,6 +314,19 @@ None of these except `rollback-failed` touch anything on disk beyond a
 verified, working helper — a host that fails a signed update for any
 other reason stays on its current, working version rather than silently
 reopening the `sudo python3` grant requirement.
+
+### "kea-dhcp4 is not installed on this server" although it is (helper build 7–9 on a Kea from ISC's packages, fixed in build 10)
+
+ISC's own deb packages install `/usr/sbin/kea-dhcp4` owned by the Kea service account (`ls -l /usr/sbin/kea-dhcp4` shows `_kea _kea`, mode
+`-rwxr-x---`), not `root:root`. Helper builds 7 through 9 required `root:root` of every binary they run, so on such a host the helper answered
+`missingbinary` and Jen worded it "…is not installed on this server — install it and try again". **Every operation that checks a config first failed
+that way: a subnet, option, class, DDNS or investigation-logging change; "Config test passed" never appeared** — from 5.66.0-beta.2, so stable 5.66.0 and
+5.67.0 are affected. A host with no helper at all (the legacy `sudo python3` path) was not. Fix: **Settings → Kea → SSH → Update helper** on that host
+(helper build 10 runs `kea-dhcpX -t` as the daemon's own account, and trusts the binary when that account owns it as a regular file nobody else can write).
+If it still refuses, the message now says why: *"kea-dhcp4 is present but the helper will not run it: is owned by alice, not a system account and not the
+daemon's user — update the helper (build 10 or later) / fix the ownership"* — the binary is writable by group or other, is a symlink, or is owned by an
+ordinary user; `sudo chown _kea:_kea /usr/sbin/kea-dhcp4 && sudo chmod 0750 /usr/sbin/kea-dhcp4` (the ownership the package ships) or `root:root 0755` are
+both accepted. Health Center's "Kea host helper installed" row names a host on an old build with an ISC-packaged Kea.
 
 ### Permission denied on kea-dhcp4.conf
 

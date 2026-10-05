@@ -741,7 +741,7 @@ def edit_subnet_preview(subnet_id):
                         "name": name,
                         "ok": False,
                         "missing_binary": res["binary"],
-                        "message": f"{res['binary']} is not installed on this server.",
+                        "message": f"{__host.missing_binary_text(res)}.",
                     }
                 )
             else:
@@ -1799,7 +1799,7 @@ def edit_subnet6_preview(subnet_id):
                         "name": name,
                         "ok": False,
                         "missing_binary": res["binary"],
-                        "message": f"{res['binary']} is not installed on this server.",
+                        "message": f"{__host.missing_binary_text(res)}.",
                     }
                 )
             else:

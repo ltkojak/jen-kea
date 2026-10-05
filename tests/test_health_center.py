@@ -885,6 +885,36 @@ class TestHelperInstalled:
         assert "kea-old" in c.detail and "no atomic concurrency guard" in c.detail
 
 
+class TestHelperBuildOnAnIscPackagedKea:
+    """v5.68.0-beta.6 (Q141) - a helper build below 10 on a Kea installed from ISC's packages cannot validate configs (its daemon binary
+    is owned by the service account, which that helper refuses and reports as "not installed"); the row says so when it can tell."""
+
+    ISC = "3.0.4 isc20260728182757 deb"
+
+    def _go(self, monkeypatch, build, version, helper_version=7):
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5"}])
+        monkeypatch.setattr(
+            "jen.services.kea_host.helper_status", lambda: {"1": {"version": helper_version, "build": build}}
+        )
+        status = {**_status(), "version": version}
+        return health._helper_installed(_ctx(server_status=[status]))
+
+    def test_an_old_build_on_an_isc_kea_warns_and_names_the_fix(self, monkeypatch):
+        c = self._go(monkeypatch, 7, self.ISC)
+        assert c.status == "warn" and "kea-a" in c.detail
+        assert "helper build < 10 on an ISC-packaged Kea cannot validate configs" in c.detail
+        assert "Update helper" in c.detail
+
+    def test_build_10_is_fine(self, monkeypatch):
+        assert "cannot validate configs" not in self._go(monkeypatch, 10, self.ISC).detail
+
+    def test_an_old_build_on_a_kea_that_is_not_isc_packaged_is_not_flagged(self, monkeypatch):
+        assert "cannot validate configs" not in self._go(monkeypatch, 7, "2.4.1").detail
+
+    def test_an_unrecorded_build_is_not_guessed_at(self, monkeypatch):
+        assert "cannot validate configs" not in self._go(monkeypatch, None, self.ISC).detail
+
+
 class TestBackgroundWorkers:
     def test_none_skips(self, monkeypatch):
         monkeypatch.setattr("jen.services.background.STARTED_AT", None)

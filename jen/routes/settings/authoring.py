@@ -506,7 +506,7 @@ def author_kea_config_preview(service):
                     {
                         "ok": False,
                         "missing_binary": res["binary"],
-                        "message": f"{res['binary']} is not installed on this server.",
+                        "message": f"{__host.missing_binary_text(res)}.",
                     }
                 )
             elif res["code"] == "tlsmissing":
@@ -557,7 +557,7 @@ def author_kea_config_post(service):
             elif res["code"] == "exists":
                 errors.append(f'{name}: {conf_path} already exists — check "overwrite" to replace it.')
             elif res["code"] == "missingbinary":
-                errors.append(f"{name}: {res['binary']} is not installed on this server — install it and try again.")
+                errors.append(f"{name}: {__host.missing_binary_text(res, advice=True)}.")
             elif res["code"] == "tlsmissing":
                 errors.append(f"{name}: TLS file not found on this server: {res['path']}")
             elif res["code"] == "testerror":

@@ -792,6 +792,24 @@ naming both `_SELF_PATH` and `.prev`, rather than the misleading
 one signed-update failure that is a genuine incident needing hands on the
 host. `tests/kea_helper_build.json` re-pinned to build 8.
 
+**Helper build 10 (v5.68.0-beta.6, Q141 — a build-only change; `HELPER_VERSION` stays 7): the two-tier trust rule.** Build 7's `_find_bin()` required
+every binary the helper runs to be `root:root`, and that was applied to the Kea daemon binary too. ISC's own packages do not ship it that way: a Kea 3.0.4
+ISC deb installs `/usr/sbin/kea-dhcp4` as `_kea:_kea` 0750 (and ISC's container image owns it by its service account the same way), so every op that
+validates a config (`_run_kea_test`, shared by `test-config` and `apply-config`) answered `missingbinary` for an installed Kea, from build 7 until this
+build. The test fixture had been altered to fit the check (the system suite's Kea node chowned the binary to `root:root` under a comment asserting that real
+packages do the same, never verified against the packages Jen targets); the lesson is that an altered fixture is a claim about production and is checked
+against a real target before the check ships. The rule is now explicit about WHO executes the file:
+- a binary the helper runs **as root** — `systemctl`, `apt-get`, `ssh-keygen`, and a `kea-dhcpX` that is `root:root` — must be `root:root` with no group/other
+  write bit, exactly as before;
+- the Kea **daemon** binary otherwise is run **as the account the daemon runs as** — `subprocess.run(..., user=, group=, extra_groups=[])`, the unit's `User=`
+  (the same `systemctl show` lookup `_daemon_group` uses), else the binary's own owner — and is trusted only when it is a regular file owned by exactly that
+  account, a system account (uid below 1000, never root), with no group/other write bit;
+- anything else is `missingbinary` with the reason in `detail`, which `kea_host` carries to the Servers page line and the Health row.
+Running `-t` as the daemon's own account is what the daemon does on every start, so a compromised `_kea`-owned binary gains nothing it did not already have, and
+root never executes a file an unprivileged account can replace. The temp file `-t` reads is written 0644 explicitly and `_CLEAN_ENV` gains `HOME=/`. The ops list
+above is unchanged; `tests/kea_helper_build.json` is re-pinned to build 10 and kea-compat records the binary's owner and run-as user per ISC image so the
+suite goes red the day ISC changes it.
+
 - `jen-config` mutation now happens **in Jen** (`jen/services/kea_config_edit.py`,
   pure functions) rather than inside a generated script. Read → mutate →
   apply is not a single atomic step on the Kea host, but since v5.16.0

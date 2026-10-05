@@ -124,7 +124,9 @@ def _failure_line(name: str, res: dict, daemon_label: str) -> str:
     this never sees a conflict result."""
     code = res.get("code")
     if code == "missingbinary":
-        return f"❌ {name}: {res.get('binary')} is not installed on this server — install it and try again."
+        from jen.services.kea_host import missing_binary_text
+
+        return f"❌ {name}: {missing_binary_text(res, advice=True)}."
     if code == "testerror":
         return (
             f"❌ {name}: config validation failed — {daemon_label} NOT restarted, "

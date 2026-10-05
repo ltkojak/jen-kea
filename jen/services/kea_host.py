@@ -251,12 +251,38 @@ JEN_HELPER_SHIPPED_VERSION = 7  # v7 (v5.66.0-beta.2, Q104): PATH hardening + pr
 # A helper below v7 never reports a build at all (record_helper_status's "build" stays
 # whatever it last was, usually None) — comparisons that matter fall back to version alone
 # in that case; see install_helper()'s already-check and helper_version_label() below.
-JEN_HELPER_SHIPPED_BUILD = 9  # v5.66.0-beta.7 (Q109): protocol/build checked independently, _bin_dir_ok
+JEN_HELPER_SHIPPED_BUILD = 10  # v5.68.0-beta.6 (Q141): kea-dhcpX -t runs as the daemon's own account
 # v5.66.0 (Q103) — the version whose "Update helper" click needs no legacy grant at all: at
 # or above this, install_helper() takes the signed path (helper_signature() + the `update`
 # op) instead of the pre-5.11.0 sudo-python3 engine. A host below this still gets one last
 # legacy-grant hop to reach v6 — after that, never again.
 SIGNED_UPDATE_HELPER_MIN_VERSION = 6
+
+
+# v5.68.0-beta.6 (Q141) - the first helper build that says why it will not run a Kea binary that is present
+MISSINGBINARY_REASON_BUILD = 10
+
+
+def missing_binary_text(res: dict, advice: bool = False) -> str:
+    """One sentence for a `missingbinary` result, without a trailing full stop: "is not installed" only when the helper really found
+    nothing; when the helper found the binary and refused it, the reason; and, from a helper older than build 10, the honest caveat
+    that such a helper also says "not installed" for a Kea from ISC's packages (v5.68.0-beta.6, Q141)."""
+    binary = res.get("binary") or "the Kea binary"
+    reason = (res.get("reason") or "").strip()
+    if reason:
+        return (
+            f"{binary} is present but the helper will not run it: {reason} — update the helper (build "
+            f"{MISSINGBINARY_REASON_BUILD} or later) / fix the ownership"
+        )
+    text = f"{binary} is not installed on this server"
+    old = res.get("old_helper_build")
+    if isinstance(old, int):
+        text += (
+            f" (or, on a Kea installed from ISC's packages, this helper - build {old} - cannot run it: builds before "
+            f"{MISSINGBINARY_REASON_BUILD} refuse a daemon binary owned by its service account; update the helper from "
+            "Settings → Kea → SSH)"
+        )
+    return text + (" — install it and try again" if advice else "")
 
 
 def helper_version_label(
@@ -443,7 +469,22 @@ def _from_helper_test(resp: dict, ok_code: str) -> dict:
         return {"ok": False, "code": "testerror", "detail": resp.get("detail", ""), "via": "helper"}
     if err == "missingbinary":
         b = resp.get("binary", "kea")
-        return {"ok": False, "code": "missingbinary", "binary": b, "detail": b, "via": "helper"}
+        # v5.68.0-beta.6 (Q141): build 10+ says WHY when the binary is there but the helper will not run it (`detail`); an older
+        # build says nothing, and on a Kea from ISC's packages (whose daemon binary is owned by its service account) it answers
+        # missingbinary for a binary that is installed - `old_helper_build` lets the message say so.
+        reason = (resp.get("detail") or "").strip()
+        out = {
+            "ok": False,
+            "code": "missingbinary",
+            "binary": b,
+            "detail": reason or b,
+            "reason": reason,
+            "via": "helper",
+        }
+        build = resp.get("helper_build")
+        if not reason and isinstance(build, int) and build < MISSINGBINARY_REASON_BUILD:
+            out["old_helper_build"] = build
+        return out
     if err == "tlsmissing":
         p = resp.get("path", "")
         return {"ok": False, "code": "tlsmissing", "path": p, "detail": p, "via": "helper"}

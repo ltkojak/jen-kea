@@ -8,16 +8,17 @@ FROM ${KEA_IMAGE}
 
 USER root
 
-# v5.66.0-beta.2 (Q104) - jen-kea-helper resolves EVERY binary it runs, including
-# kea-dhcp4 itself for config-test, through a root-owned _BIN_DIRS allowlist, never
-# $PATH. ISC's own image ships kea-dhcp4 owned by a dedicated "kea" service account
-# (0754 - no execute for "other"), defense-in-depth for the daemon's OWN running
-# process; a real Ubuntu/apt install puts the BINARY under root:root like any other
-# package-installed file (dpkg extracts as root; it's the daemon's RUNTIME data
-# directories that get a service-account owner, not /usr/sbin/kea-dhcp4 itself).
-# Match that here rather than weakening the helper's own trust check to fit one
-# container image's particular packaging choice.
-RUN chown root:root /usr/sbin/kea-dhcp4 && chmod 755 /usr/sbin/kea-dhcp4
+# v5.68.0-beta.6 (Q141) - the Kea binary keeps the ownership ISC's image gives it, ON PURPOSE.
+# Until now this file chowned /usr/sbin/kea-dhcp4 to root:root so the helper's "every binary it runs is
+# root-owned" check would pass, asserting that "a real Ubuntu/apt install puts the BINARY under root:root".
+# That was never checked against ISC's packages - the ones Jen targets (Kea 3.0+) - and it is not what
+# they ship: ISC's deb installs /usr/sbin/kea-dhcp4 as _kea:_kea 0750 (the maintainer's Kea 3.0.4 host),
+# and this image's own service account owns it the same way. The test host was altered to fit the check,
+# so the suite never saw that every config push through the helper failed on such a host
+# ("kea-dhcp4 is not installed") from helper build 7 (v5.66.0-beta.2) until build 10 runs `kea-dhcpX -t`
+# as the daemon's own account. When a fixture has to be changed for a check to pass, the change is a claim
+# about production: verify it against a real target first. tests/kea_compat records the owner and run-as
+# user per ISC image (`binary_facts`) so the suite goes red the day ISC changes it.
 
 # openssh-keygen: v5.66.0 (Q103) - the helper's own signed `update` op runs
 # `ssh-keygen -Y verify` on this host; Alpine's `openssh` meta-package doesn't

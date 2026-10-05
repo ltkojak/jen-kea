@@ -2,10 +2,14 @@
 # Q84 — the three systemctl calls jen-kea-helper makes, answered for a host
 # that runs kea-dhcp4 without systemd:
 #   systemctl show -p LoadState --value <unit>   -> "loaded"
+#   systemctl show -p User --value <unit>        -> nothing (no unit, so no User=)
 #   systemctl restart <unit>                     -> restart the daemon
 #   systemctl is-active <unit>                   -> "active" / "inactive"
 case "$1" in
   show)
+    # `show -p User --value <unit>` (the helper asks for the daemon's account; v5.68.0-beta.6, Q141): this node's daemon is
+    # started by keactl, not by a unit, so there is no User= to report - an empty answer, as a unit with none would give
+    if [ "$3" = "User" ]; then exit 0; fi
     echo loaded
     exit 0
     ;;

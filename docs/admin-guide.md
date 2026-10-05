@@ -1155,6 +1155,21 @@ installed path and its `.prev` backup — that one case genuinely needs
 you on the host by hand; see `docs/runbooks.md`. Settings → Kea → SSH
 shows this build as **"v7 (build 8)"**.
 
+**Helper build 10 (v5.68.0-beta.6) — a Kea installed from ISC's packages can have its config validated again. Press Update helper.**
+ISC's own deb packages install the daemon binary, `/usr/sbin/kea-dhcp4`, owned by the Kea service account (`_kea:_kea`, mode `0750`) — not
+`root:root`. From helper build 7 (v5.66.0-beta.2) through build 9 the helper required `root:root` of every binary it runs, **including that
+one**, so on such a host every operation that checks a config before writing it (`test-config` and `apply-config`: every subnet, option, class,
+DDNS and logging change) answered "kea-dhcp4 is not installed on this server" for a Kea that was installed, and nothing reached Kea through the
+helper. Releases 5.66.0 and 5.67.0 carry that. A host on the legacy `sudo python3` path (no helper) was never affected. Build 10 runs
+`kea-dhcpX -t` **as the account the daemon runs as** — the unit's `User=`, else the binary's own owner — which is what the daemon itself does on
+every start. Trust follows who executes the file: a binary the helper runs as root must still be `root:root` with no group or other write bit (nothing
+else the helper runs changed); the Kea daemon binary is trusted only when it is a regular file owned by exactly that account, a system account (a
+uid below 1000, never root), with no group or other write bit. Anything else is still refused, now with the reason on the Servers page ("is owned by
+alice, not a system account and not the daemon's user"). The helper (root) never executes a binary an unprivileged account can replace. The file the
+test reads is written mode `0644` explicitly and the helper's clean environment gains `HOME=/`. **Press Update helper on every Kea host after
+upgrading Jen** — Settings → Kea → SSH shows the host as "v7 (build 9, build 10 available)", and Health Center warns "helper build < 10 on an
+ISC-packaged Kea cannot validate configs" for a host whose Kea version string says so. No sudoers change: it is still the one `/usr/local/sbin/jen-kea-helper` line.
+
 **v5.20.0 — the legacy grant is now checked, not just used.** Every
 time Jen checks or installs the helper it also checks whether
 `/etc/sudoers.d/jen-kea` (below) is still present, and records that
@@ -1280,7 +1295,10 @@ Jen pipes a generated Python script over SSH into `sudo python3`. That
 needs the grant below — and **`NOPASSWD: /usr/bin/python3` is root**,
 full stop; the other lines only document what Jen runs, they don't
 narrow anything. Jen shows an admin banner for every host still on this
-path.
+path. (v5.68.0-beta.6: a host on this path was never affected by the
+ISC-package ownership problem described under Helper build 10 above — the
+generated script has no ownership check on the Kea binary — while the same
+host moved onto helper build 7–9 was; press Update helper to reach build 10.)
 
 The grant is needed for **one run** to install the helper, and — below
 helper v6 — for **one more run** to reach v6 (Update helper copies the
