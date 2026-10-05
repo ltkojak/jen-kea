@@ -437,7 +437,7 @@ class TestRemovingAServerWithInvestigationLoggingOn:
         try:
             r = logged_in_client.post(
                 "/settings/infrastructure/save-extra-servers",
-                data=_rows({"extra_id[]": "2", "extra_ssh_host[]": ""}),
+                data=_rows({"extra_id[]": "2", "extra_api_url[]": "http://s2:8000", "extra_ssh_host[]": ""}),
                 follow_redirects=True,
             )
             assert b"turn it off from Servers first" in r.data
@@ -451,7 +451,14 @@ class TestRemovingAServerWithInvestigationLoggingOn:
         try:
             logged_in_client.post(
                 "/settings/infrastructure/save-extra-servers",
-                data=_rows({"extra_id[]": "2", "extra_name[]": "Renamed", "extra_ssh_host[]": "10.0.0.2"}),
+                data=_rows(
+                    {
+                        "extra_id[]": "2",
+                        "extra_name[]": "Renamed",
+                        "extra_api_url[]": "http://s2:8000",
+                        "extra_ssh_host[]": "10.0.0.2",
+                    }
+                ),
                 follow_redirects=True,
             )
             assert _on_disk(isolated_config).get("kea_server_2", "name") == "Renamed"
