@@ -1845,3 +1845,105 @@ with app.app_context():
         time.sleep(1)
     else:
         raise AssertionError("INVARIANT: once the sweep has restored it the banner goes away")
+
+
+# ── 18. the Problems inbox: a client Kea NAKs is in the inbox within one sweep, and its Investigate link resolves ──────────────
+S18_MAC = "02:50:00:00:18:01"
+S18_SEND = r"""
+import socket, struct, time
+mac = bytes.fromhex("025000001801")
+server = socket.inet_aton(socket.gethostbyname("kea-a"))
+def opt(code, data):
+    return bytes([code, len(data)]) + data
+def packet(kind, xid, requested=None, with_server=False):
+    header = struct.pack("!BBBBIHH4s4s4s4s16s64s128s4s", 1, 1, 6, 1, xid, 0, 0x8000, bytes(4), bytes(4), bytes(4),
+                         socket.inet_aton("10.99.0.1"), mac.ljust(16, b"\0"), bytes(64), bytes(128), b"\x63\x82\x53\x63")
+    body = opt(53, bytes([kind])) + opt(61, b"\x01" + mac) + opt(12, b"s18-host") + opt(55, bytes([1, 3, 6]))
+    if requested:
+        body += opt(50, socket.inet_aton(requested))
+    if with_server:
+        body += opt(54, server)
+    return header + body + b"\xff"
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+for i in range(3):
+    # a DISCOVER is offered the first address of the pool; a REQUEST that names the server and asks for a DIFFERENT address is NAKed
+    sock.sendto(packet(1, 0x18000 + i * 2), ("kea-a", 67))
+    time.sleep(1)
+    sock.sendto(packet(3, 0x18001 + i * 2, requested="10.99.0.199", with_server=True), ("kea-a", 67))
+    time.sleep(1)
+"""
+
+S18_CLEAN = """
+from jen.models import db as d
+with app.app_context():
+    with d.jen_db() as db, db.cursor() as cur:
+        cur.execute("DELETE FROM client_problems")
+        cur.execute("DELETE FROM settings WHERE setting_key LIKE 'client_problems_wm:%'")
+        cur.execute("DELETE FROM devices WHERE mac=%s", ("S18MAC",))
+        S18_DEVICE
+"""
+
+S18_SWEEP = """
+from jen.models import db as d
+from jen.services import client_problems as cp
+def rows():
+    with d.jen_db() as db, db.cursor() as cur:
+        cur.execute("SELECT server_id, kind, `count`, subnet_id, resolved_at FROM client_problems WHERE mac=%s ORDER BY kind", ("S18MAC",))
+        return cur.fetchall()
+with app.app_context():
+    first = cp.sweep()
+    rows1 = rows()
+    second = cp.sweep()
+    emit({"first": first, "rows1": rows1, "second": second, "rows2": rows()})
+"""
+
+
+def test_17_a_client_kea_naks_is_in_the_problems_inbox_within_one_sweep(stack):
+    """Problems inbox (scenario 18): three relayed requests for an address the server did not offer are NAKed by the real kea-dhcp4
+    on kea-a; one sweep - the job the scheduler runs every five minutes, called directly (the one stand-in: nobody waits for the
+    timer) - reads the log over SSH through the helper and puts the client in the inbox with its subnet; a second sweep over the same
+    log adds nothing (the watermark); the page, the lazy answer, the dashboard widget and the Investigate link all resolve."""
+    web = st.Web().login()
+    device = (
+        'cur.execute("INSERT INTO devices (mac, last_ip, last_hostname, last_subnet_id, device_name, first_seen, last_seen) '
+        "VALUES (%s, '10.99.0.199', 's18-host', 1, 's18 device', NOW(), NOW())\", (\"S18MAC\",))"
+    )
+    st.jen_py(S18_CLEAN.replace("S18_DEVICE", device).replace("S18MAC", S18_MAC))
+    try:
+        st.dexec(st.JEN, "python3", "-", input=S18_SEND)
+        time.sleep(2)
+        out, _p = st.jen_py(S18_SWEEP.replace("S18MAC", S18_MAC))
+        got = emitted(out)
+        naks = [r for r in got["rows1"] if r["kind"] == "nak" and r["server_id"] == 1]
+        assert naks and naks[0]["count"] >= 1 and naks[0]["resolved_at"] is None, (
+            f"INVARIANT: the NAK Kea sent is in the inbox after one sweep: {got}"
+        )
+        assert naks[0]["subnet_id"] == 1, (
+            "INVARIANT: the row is attributed to the client's subnet (its device row; a NAK names no address)"
+        )
+        assert got["rows2"] == got["rows1"] and got["second"]["events"] == 0, (
+            f"INVARIANT: a second sweep over the same log adds nothing (the watermark): {got}"
+        )
+
+        page = web.get("/problems")
+        assert page.status_code == 200 and S18_MAC in page.text, "INVARIANT: the client is on the Problems page"
+        assert f"/client?q={S18_MAC.replace(':', '%3A')}" in page.text, "INVARIANT: its row links to its investigation"
+        assert web.get(f"/client?q={S18_MAC}").status_code == 200 and S18_MAC in web.get(f"/client?q={S18_MAC}").text, (
+            "INVARIANT: the Investigate link resolves to the client"
+        )
+        assert web.get(f"/problems/answer?q={S18_MAC}").status_code == 200, "INVARIANT: the lazy answer renders"
+        widget = web.get("/api/dashboard/catalog-data?widgets=problems").json()["problems"]
+        assert widget["total"] >= 1 and S18_MAC in [t["who"] for t in widget["top"]], (
+            f"INVARIANT: the dashboard widget lists it: {widget}"
+        )
+        filtered = web.get("/problems?server=1&kind=nak").text
+        assert S18_MAC in filtered and "kea-a" in filtered, (
+            "INVARIANT: the Servers page's link (server filter) finds it"
+        )
+    finally:
+        st.jen_py(
+            "from jen.models import db as d\nwith app.app_context():\n    with d.jen_db() as db, db.cursor() as cur:\n"
+            f"        cur.execute('DELETE FROM client_problems')\n        cur.execute(\"DELETE FROM devices WHERE mac='{S18_MAC}'\")\n"
+            "        cur.execute(\"DELETE FROM settings WHERE setting_key LIKE 'client_problems_wm:%'\")\n",
+            check=False,
+        )

@@ -107,6 +107,19 @@ def packet_health_widget(servers) -> list[dict]:
     return out
 
 
+def problems_widget(accessible_subnet_ids, all_subnets) -> dict:
+    """v5.68.0-beta.5 (Q140) - "Clients with problems": how many distinct clients had DHCP trouble in the last hour, by kind, and the
+    five most recent, from the Problems inbox (jen.services.client_problems). A caller restricted to some subnets sees only rows in
+    them; a row with no subnet is for callers who may see every one. Never raises: an unreadable table is an empty widget."""
+    from jen.services import client_problems as __problems
+
+    try:
+        return __problems.widget(accessible_subnet_ids, all_subnets)
+    except Exception as e:
+        logger.warning(f"dashboard problems widget: {e}")
+        return {"hours": 1, "total": 0, "counts": {}, "top": []}
+
+
 def readiness_widget(checks) -> dict | None:
     """The Kea 3.2 readiness group's one-liner + its rows — the same output
     Health Center's own readiness section shows. `checks` is the caller's

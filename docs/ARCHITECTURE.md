@@ -2138,6 +2138,16 @@ lives in the Kea config itself, so a restored database or a second Jen leaves no
 live one so the banners show it. A restore that fails stays indexed with its error (the Health row reads that,
 never SSH at render time) and is retried the next minute.
 
+**The Problems sweep (v5.68.0-beta.5, Q140).** The second core scheduler job this round added
+(`jen_client_problems_sweep`, every five minutes, `max_instances=1`, `coalesce`, single-process like the first two) reads each SSH server's
+DHCPv4 log through `kea_host.tail_log` with `helper_only=True` - the helper's bounded `tail-log`, never the legacy `sudo tail`, which
+cannot serve 1000 lines and would pass a partial log off as a complete one - and the lease database, and upserts `client_problems`.
+It adds no helper op and no sudo line. Because the sweep and the web threads are one process, its per-server watermark and its
+lock need no cross-process coordination; a second Jen against the same database would double-count lines and is not a supported
+shape. The page, the lazy answer and the dashboard widget are diagnostic surfaces (`@diagnostic_surface`, a row each in the
+authorization matrix): every read is filtered by `add_subnet_restriction` on the row's own `subnet_id`, so a row with no subnet is
+for callers who may see every subnet, as in section 2.
+
 ### 6.1 On-disk layout (v5.13.0, extended in v5.14.0, relocatable since v5.67.0)
 
 Through v5.12.x the application tree under `/opt/jen` held user-writable

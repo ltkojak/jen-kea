@@ -387,6 +387,8 @@ def dashboard_catalog_data():
             out["ha_state"] = __dcatalog.ha_state_widget(__kea.get_all_server_status())
         if "ddns_errors" in requested:
             out["ddns_errors"] = __dcatalog.ddns_errors_widget(checks)
+        if "problems" in requested:
+            out["problems"] = __dcatalog.problems_widget(accessible.keys(), current_user.all_subnets)
         if "getting_started" in requested:
             out["getting_started"] = __dcatalog.getting_started_widget(current_user, current_user.role == "superadmin")
     except Exception as e:

@@ -286,6 +286,22 @@ What it can see depends on the server's log level. At Kea's default (INFO) the l
 
 Only the last 1000 lines are scanned (the helper's own limit), so on a busy server an older exchange may already be out of the window. Trace needs the **Kea host helper** on the server (Settings → Kea → SSH → Install helper): it reads the log through the helper's bounded `tail-log`, never through the old `tail -200` sudo grant, which could not serve 1000 lines. Without the helper the page says so instead of showing a partial log. If your Kea writes its log somewhere other than `/var/log/kea/kea-dhcp4.log`, set `[kea] dhcp4_log_path`. The log can contain other clients' data — and Kea's log has no per-line subnet boundary Jen can trust, so a client's earlier activity in another subnet can sit in the last 1000 lines whatever its current lease says. Trace is therefore admin-only **and needs access to all subnets**: a subnet-restricted admin gets a refusal for every MAC, and the *Trace in Kea log* links are hidden from them. It is never part of the support bundle.
 
+### Problems: which clients had trouble (v5.68.0-beta.5)
+
+An investigation usually starts when someone already has a MAC. **Network → Problems** starts from the opposite end: the clients that had DHCP trouble lately, newest first, one row per client with what happened and how often, the server it happened on, when, and an **Investigate** button on every row. **Why?** on a row asks for the one-line answer the Investigation page gives (what Kea would do with this client) and shows it under the row; nothing is worked out until you ask. The filters narrow the list to one server or one kind, and the **NAK** and **Dropped** counters in a server's packet-health block on the Servers page link here, filtered to that server.
+
+What each kind means:
+
+- **NAK** — Kea answered the client's request with a DHCPNAK: it asked for an address it may not have. Visible at Kea's default INFO level (as the DHCPNAK Kea sends); at DEBUG the reason is added.
+- **Declined an address** — the client told Kea the address it was offered is already in use (a DHCPDECLINE). Kea keeps the address out of service for a while; INFO level.
+- **DNS update failed** — Kea could not hand the client's update to kea-dhcp-ddns. INFO level.
+- **Packet dropped** and **No subnet matched** — Kea dropped the client's packet, or could not pick a subnet for it. These are DEBUG messages: they appear only while a server logs at DEBUG, so turn on investigation logging (below) for a few minutes to see them.
+- **Declined lease** and **Reservation held by a different client** — read from the lease database, not the log, so they appear at any log level and clear the moment the state is gone. A declined lease is about an address (Kea clears the declining client's hardware address); a held reservation is about the client the address is reserved for, whose address is leased to a different client right now.
+
+Every five minutes Jen reads the last 1000 lines of each Kea server's log (the same bounded read Trace uses) and the lease database. A line read twice is counted once. A row whose kind has not come back for a day leaves the list; rows are kept 30 days. A server Jen cannot read adds nothing to the list — the Health Center's server rows say why — and on a very busy server the oldest lines between two reads can be missed, so the list is a lead to follow rather than a ledger.
+
+A user restricted to some subnets sees only rows in their subnets; a row Jen could not place in a subnet is shown only to a user who may see every subnet. The dashboard's **Clients with problems** widget (Customize → pick it) shows how many clients had trouble in the last hour, by kind, and the five most recent. A channel that has opted into the **Client had DHCP trouble** alert gets one message when a client has the same kind of trouble three times within an hour (the number is `[alerts] client_problem_threshold`), and at most one per client and kind per day.
+
 ### What else Jen knows (v5.68.0-beta.4)
 
 Under the core facts on the Overview, **What else Jen knows** carries one card per plugin that has something to say about this client — a plugin that has nothing to say about it adds nothing, and the heading is absent when no plugin does. The seven bundled plugins each contribute:

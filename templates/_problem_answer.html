@@ -1,0 +1,8 @@
+{# The lazy "why" for one row of the Problems inbox (v5.68.0-beta.5, Q140): the Investigation Overview's one-line answer. #}
+{% from '_investigate.html' import investigate_link %}
+{% if line %}
+{% set explain_href = "/client?q=" ~ (q|urlencode) ~ "&tab=explain" %}
+<p class="u-865c33"><strong>What Kea would do:</strong> {{ line }} <a href="{{ explain_href }}">Why?</a></p>
+{% else %}
+<p class="u-5872de">Jen has no answer for this client yet. {{ investigate_link(q, "button") }} shows everything Jen knows.</p>
+{% endif %}

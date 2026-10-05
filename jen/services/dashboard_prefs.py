@@ -39,6 +39,8 @@ WIDGET_CATALOG = {
     "ha_state": {"label": "HA State", "default_w": "third"},
     "ddns_errors": {"label": "DDNS Errors", "default_w": "third"},
     "getting_started": {"label": "Getting Started", "default_w": "third"},
+    # v5.68.0-beta.5 (Q140)
+    "problems": {"label": "Clients with problems", "default_w": "half"},
 }
 VALID_WIDGETS = frozenset(WIDGET_CATALOG)
 

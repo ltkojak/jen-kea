@@ -448,6 +448,14 @@ loopback / private network between it and the proxy (no cert needed in
 |---|---|---|
 | `channel` | Release channel this install follows: `stable` or `beta` — see "Release channels" under Upgrading Jen. Set from Settings → System → Updates; anything else is read as `stable`. | `stable` |
 
+### [alerts] section (v5.68.0-beta.5)
+
+| Key | Description | Default |
+|---|---|---|
+| `client_problem_threshold` | Optional. How many times within an hour one client must have the same kind of DHCP trouble (a NAK, a decline, a failed DNS update, …) before the **Client had DHCP trouble** alert fires — once per client and kind per 24 hours, whatever the count afterwards. A whole number of 1 or more; anything else is logged and read as the default. | `3` |
+
+Everything else about alerts is configured in Settings → Alerts & Integrations; this is the one alert setting that lives in `jen.config`, because the sweep that fires it runs in the background with no page to configure it from.
+
 ### [kea_ssh] section
 
 | Key | Description | Example |
@@ -797,6 +805,7 @@ Configure in **Settings → Alerts & Integrations**.
 | Kea down/up | Kea stops responding or recovers |
 | New device lease | A new dynamic lease is issued |
 | Utilization threshold | A subnet exceeds the configured pool percentage |
+| Client had DHCP trouble (v5.68.0-beta.5) | One client has the same kind of DHCP trouble (a NAK, a decline, a failed DNS update) at least three times within an hour — once per client and kind per day |
 
 ---
 
@@ -1255,6 +1264,14 @@ Jen can put a Kea server's `kea-dhcp4` logger at DEBUG, debuglevel 55, for 5, 15
 `restore` is exactly what was there before (`"absent"` removes the key again; `{"created": true}` means Jen created the entry and removes it). The entry's `output-options`, every other logger and every other `user-context` key are left alone. The marker lives in the config on purpose: it survives a Jen restart, a restored database or a second Jen, and a person reading the file can see what is on and how to undo it. By hand, setting `severity`/`debuglevel` back to `restore` and deleting the `jen-investigation` key is the whole undo.
 
 It is applied like every Kea edit (`kea-dhcp4 -t` first, the sha guard, revert on failure, a config revision with source `jen`) and the daemon is told with `config-reload` instead of a restart; a Kea that lacks `config-reload` or refuses it is restarted and the flash says so. One server at a time per Jen; there is no API route for it and `install.sh --unattended` never touches it. A more specific logger entry of your own (`kea-dhcp4.packets`, say) with its own `severity` keeps overriding the root one for that component, so a log that still lacks the packet dump after turning it on is usually that.
+
+### The Problems inbox (v5.68.0-beta.5)
+
+**Network → Problems** (`/problems`, every signed-in user, scoped by subnet) is fed by one core scheduler job, `jen_client_problems_sweep`, every five minutes, beside the investigation-logging sweep. For each SSH-configured Kea server it reads the last 1000 lines of the DHCPv4 log (`[kea] dhcp4_log_path`) through the helper's existing `tail-log` op — no new helper op, no sudo line — and writes one row per kind and client to the `client_problems` table (migration 30) for the messages `DHCP4_PACKET_NAK_0001`–`0004` (and the DHCPNAK Kea sends, visible at INFO), `DHCP4_DECLINE_LEASE` and its two failure forms, `DHCP4_PACKET_DROP_0007`/`0008`, `DHCP4_SUBNET_SELECTION_FAILED` and `DHCP4_DDNS_REQUEST_SEND_FAILED`. The packet-drop and subnet-selection messages and the NAK reasons beyond the first are DEBUG-level, so they appear only while a server logs at DEBUG; the DNS-update failure is an ERROR and is there at any level. Two more kinds need no log: a declined lease (a `lease4` row in state 1 that has not expired) and a reservation held by a different client, both read in one query from the lease database and resolved the moment the state is gone.
+
+A per-server watermark (a `client_problems_wm:<server id>` row in `settings`) is the newest log time already counted, so the same line read by two sweeps is one event; log rotation between sweeps loses nothing already counted, and a server that writes more than 1000 lines between two sweeps loses the oldest. A server that cannot be read — no helper, SSH down — records nothing and is named in the job's log line; the Health Center's server rows already say why. A row whose kind has not recurred for 24 hours is marked resolved and leaves the page; rows not seen for 30 days are deleted by the daily audit cleanup (whatever the audit retention setting, including keep-forever). A row's subnet is where its address is, else where the client's MAC is now (its lease, reservation or device row); with neither the row has no subnet and is shown only to users who may see every subnet.
+
+The alert type `client_problems` ("Client had DHCP trouble") is opt-in per channel like every alert type. It fires when one client has the same kind of trouble at least `[alerts] client_problem_threshold` times (3) within an hour of the newest log line, at most once per client and kind per 24 hours, with the subnet id attached so a channel scoped to subnets filters it. The two database kinds never alert: they are states, not events.
 
 ### Legacy grant (pre-5.11.0 — `python3` is root)
 

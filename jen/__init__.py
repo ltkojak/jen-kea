@@ -896,6 +896,7 @@ def _register_blueprints(app: Flask) -> None:
     from jen.routes.mfa_routes import bp as mfa_bp
     from jen.routes.onboarding import bp as onboarding_bp
     from jen.routes.plugins import bp as plugins_bp
+    from jen.routes.problems import bp as problems_bp
     from jen.routes.reports import bp as reports_bp
     from jen.routes.reservations import bp as reservations_bp
     from jen.routes.search import bp as search_bp
@@ -924,6 +925,7 @@ def _register_blueprints(app: Flask) -> None:
         mfa_bp,
         onboarding_bp,
         plugins_bp,
+        problems_bp,
         reports_bp,
         reservations_bp,
         search_bp,

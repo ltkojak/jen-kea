@@ -124,6 +124,16 @@ def seeded(db, mock_kea, monkeypatch):
             "INSERT INTO events (kind, mac, ip, subnet_id, hostname, detail) VALUES ('lease.new', %s, %s, 2, %s, %s)",
             (B_MAC, B_LEASE_IP, B_HOST, f"{B_HOST} in {B_NAME}"),
         )
+        # v5.68.0-beta.5 (Q140): the Problems inbox - a NAK for the client in B, one for the control client in A, and a row with NO
+        # subnet (the client could not be placed) that names B2: unattributed rows are for callers who may see every subnet
+        cur.execute("DELETE FROM client_problems")
+        cur.execute(
+            "INSERT INTO client_problems (server_id, kind, mac, ip, subnet_id, first_seen, last_seen, `count`, detail) VALUES "
+            "(1, 'nak', %s, %s, 2, NOW(), NOW(), 3, %s), "
+            "(1, 'nak', %s, '10.98.1.10', 1, NOW(), NOW(), 2, 'Kea sent a DHCPNAK'), "
+            "(1, 'drop', %s, '', NULL, NOW(), NOW(), 1, 'packet dropped')",
+            (B_MAC, B_LEASE_IP, f"Kea sent a DHCPNAK to {B_HOST}", A_MAC, B2_MAC),
+        )
     db.commit()
 
     from jen.models.user import set_global_setting
@@ -164,6 +174,7 @@ def seeded(db, mock_kea, monkeypatch):
         cur.execute("DELETE FROM lease4 WHERE HEX(hwaddr) IN (%s, %s)", (B_MAC_HEX, A_MAC_HEX))
         cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier) IN (%s, %s)", (B_MAC_HEX, A_MAC_HEX))
         cur.execute("DELETE FROM events")
+        cur.execute("DELETE FROM client_problems")
         cur.execute("DELETE FROM api_keys WHERE name LIKE '_authz_%%'")
     db.commit()
     _search_providers._PROVIDERS.pop("authz-fake", None)
@@ -312,6 +323,38 @@ SURFACES = [
         None,
         {"viewer_A": {200}, "admin_A": {200}, "admin_all": {200}, "superadmin": {200}},
         (),
+    ),
+    (
+        "problems inbox",
+        "GET",
+        "/problems",
+        None,
+        {"viewer_A": {200}, "admin_A": {200}, "admin_all": {200}, "superadmin": {200}},
+        (),
+    ),
+    (
+        "problems inbox filtered to the B server's kind",
+        "GET",
+        "/problems?server=1&kind=nak",
+        None,
+        {"viewer_A": {200}, "admin_A": {200}, "admin_all": {200}, "superadmin": {200}},
+        (),
+    ),
+    (
+        "problem answer for the B mac",
+        "GET",
+        f"/problems/answer?q={B_MAC}",
+        None,
+        {"viewer_A": {200}, "admin_A": {200}, "admin_all": {200}, "superadmin": {200}},
+        (B_MAC,),
+    ),
+    (
+        "problem answer for the unattributed row's mac",
+        "GET",
+        f"/problems/answer?q={B2_MAC}",
+        None,
+        {"viewer_A": {200}, "admin_A": {200}, "admin_all": {200}, "superadmin": {200}},
+        (B2_MAC,),
     ),
     (
         "devices page",
@@ -499,6 +542,16 @@ class TestFixtureIsReal:
         body = client.get("/search?q=secret-host").data.decode()
         assert B_HOST in body
 
+    def test_an_unrestricted_caller_sees_the_b_problem_and_the_unattributed_one(self, client, db, seeded):
+        _caller(client, db, "superadmin")
+        body = client.get("/problems").data.decode().lower()
+        assert B_MAC in body and B2_MAC in body
+
+    def test_a_scoped_caller_sees_only_the_problem_in_their_own_subnet(self, client, db, seeded):
+        _caller(client, db, "admin_A")
+        body = client.get("/problems").data.decode().lower()
+        assert A_MAC in body and B_MAC not in body and B2_MAC not in body
+
     def test_the_marker_helper_catches_a_leak(self):
         with pytest.raises(AssertionError):
             assert_no_marker(f"<p>{B_NAME}</p>")
@@ -662,7 +715,7 @@ class TestDiagnosticSurfaceScanner:
 # WITH A REASON. "It calls a service" is no longer an escape. Purely static (AST) - they need
 # no app and no database.
 
-DIAGNOSTIC_ROUTE_FILES = ("client", "explain", "trace", "timeline", "search", "devices", "doctor", "health")
+DIAGNOSTIC_ROUTE_FILES = ("client", "explain", "trace", "timeline", "search", "devices", "doctor", "health", "problems")
 
 # By endpoint ("blueprint.function"), for the files above. Routes already named in ROUTE_ALLOWLIST
 # (the devices CRUD) are not repeated here.

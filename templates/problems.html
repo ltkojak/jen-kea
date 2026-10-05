@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% from '_investigate.html' import investigate_link %}
+{% from '_empty.html' import empty_state %}
+{% block title %}Problems{% endblock %}
+{% block content %}
+
+<div class="page-header">
+    <h1>{{ icon("triangle-alert", "ico-lg") }} Problems</h1>
+    <p>Clients that had DHCP trouble lately — a NAK, a declined address, a dropped packet, a failed DNS update, a reservation held by a different client — newest first, each one click from its investigation.</p>
+</div>
+
+<div class="card">
+    <form method="GET" action="/problems" class="u-865c33">
+        <label>Server
+            <select name="server" data-submit>
+                <option value="">Every server</option>
+                {% for s in servers %}<option value="{{ s.id }}"{% if server == s.id %} selected{% endif %}>{{ s.name }}</option>{% endfor %}
+                <option value="0"{% if server == 0 %} selected{% endif %}>Lease database</option>
+            </select>
+        </label>
+        <label>What
+            <select name="kind" data-submit>
+                <option value="">Everything</option>
+                {% for k in kinds %}<option value="{{ k }}"{% if kind == k %} selected{% endif %}>{{ kind_labels[k] }}{% if counts.get(k) %} ({{ counts[k] }}){% endif %}</option>{% endfor %}
+            </select>
+        </label>
+        <noscript><button type="submit" class="btn btn-sm">Filter</button></noscript>
+        {% if server is not none or kind %}<a href="/problems" class="btn btn-sm btn-secondary">Clear</a>{% endif %}
+    </form>
+</div>
+
+{% if failed %}
+<div class="card"><p class="u-5872de">Jen could not read the Problems list just now. It is rebuilt every five minutes; try again shortly.</p></div>
+{% elif not clients %}
+<div class="card">
+    {{ empty_state(icon("circle-check"), "No client has had DHCP trouble that Jen has seen" ~ (" for this server" if server is not none else "") ~ (" of this kind" if kind else "") ~ ". The list is rebuilt every five minutes from Kea's log and the lease database; a row leaves it after a day without a repeat.") }}
+    {% if not has_log_source %}
+    <p class="u-865c33">Reading Kea's log needs SSH access to the Kea host (Settings → Kea). Without it only the two kinds read from the lease database — a declined lease and a held reservation — can appear.</p>
+    {% endif %}
+</div>
+{% else %}
+<div class="card">
+    <table class="rowlist">
+        <thead>
+            <tr><th>Client</th><th>What happened</th><th class="hide-mobile">Where</th><th>Last seen</th><th></th></tr>
+        </thead>
+        <tbody>
+        {% for c in clients %}
+        <tr>
+            <td data-m="primary" class="mono">{{ c.mac or c.ip }}{% if c.mac and c.ip %} <span class="muted">{{ c.ip }}</span>{% endif %}</td>
+            <td data-m="secondary">
+                {% for k in c.kinds %}
+                <span class="badge badge-dynamic" title="{{ kind_help[k.kind] }}">{{ k.label }}{% if k.count > 1 %} × {{ k.count }}{% endif %}</span>
+                {% endfor %}
+                <div class="u-865c33">{{ c.kinds[0].detail }}</div>
+            </td>
+            <td data-m="hide" class="hide-mobile">{% for sid in c.server_ids %}<a href="/problems?server={{ sid }}">{{ server_name(sid) }}</a>{% if not loop.last %}, {% endif %}{% endfor %}</td>
+            <td data-m="secondary" class="mono muted">{{ c.last_seen|utcfmt }}</td>
+            <td data-m="trailing">
+                <button type="button" class="btn btn-sm btn-secondary" hx-get="/problems/answer?q={{ c.who|urlencode }}" hx-trigger="click" hx-target="#why-{{ loop.index }}" hx-swap="innerHTML">Why?</button>
+                {{ investigate_link(c.who, "button") }}
+            </td>
+        </tr>
+        <tr><td colspan="5" class="u-865c33"><div id="why-{{ loop.index }}"></div></td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<details class="card">
+    <summary class="u-c5c798">What each kind means, and what Kea's log level shows</summary>
+    <table class="rowlist">
+        <tbody>
+        {% for k in kinds %}
+        <tr><td data-m="primary">{{ kind_labels[k] }}</td><td data-m="secondary">{{ kind_help[k] }}</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    <p class="u-865c33">At Kea's default INFO level the log names a client on the NAK Kea sends, a decline and a failed DNS update. The packet drops and the subnet-selection failures are DEBUG messages: they appear here only while a server logs at DEBUG — turn on <a href="/servers">investigation logging</a> for a few minutes to see them. The list reads the last 1000 lines of each log every five minutes, so on a very busy server the oldest lines between two reads can be missed.</p>
+</details>
+
+{% endblock %}

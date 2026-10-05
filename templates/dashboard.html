@@ -43,6 +43,7 @@
         <label class="u-fbdb05"><input type="checkbox" id="w-events_feed"> Recent Events</label>
         <label class="u-fbdb05"><input type="checkbox" id="w-ha_state"> HA State</label>
         <label class="u-fbdb05"><input type="checkbox" id="w-ddns_errors"> DDNS Errors</label>
+        <label class="u-fbdb05"><input type="checkbox" id="w-problems"> Clients with problems</label>
         <label class="u-fbdb05"><input type="checkbox" id="w-getting_started"> Getting Started</label>
     </div>
     <label class="u-fbdb05"><input type="checkbox" id="dash-compact-toggle"> Compact subnet cards</label>
@@ -409,6 +410,16 @@ body.dash-compact #dash-subnet_stats .util-bar { margin-top: 6px; }
         <div class="card-header">
             <span class="card-title">{{ icon("link") }} DDNS Errors</span>
             <a href="/ddns" class="btn btn-sm btn-secondary">DDNS</a>
+        </div>
+        <div class="dash-cat-body"><p class="u-6f1339">Loading...</p></div>
+    </div>
+</div>
+
+<div id="dash-problems" class="hidden">
+    <div class="card">
+        <div class="card-header">
+            <span class="card-title">{{ icon("triangle-alert") }} Clients with problems</span>
+            <a href="/problems" class="btn btn-sm btn-secondary">Problems</a>
         </div>
         <div class="dash-cat-body"><p class="u-6f1339">Loading...</p></div>
     </div>
@@ -830,6 +841,20 @@ function loadDdnsErrors() {
     });
 }
 
+function loadProblems() {
+    loadCatalogWidget('problems', function(d) {
+        if (!d || !d.total) return '<p class="u-6f1339">No client has had DHCP trouble in the last hour.</p>';
+        var kinds = Object.keys(d.counts).map(function(k) { return escapeHtml(k) + ' &times; ' + d.counts[k]; }).join(' &middot; ');
+        var html = '<p class="small">' + d.total + ' client' + (d.total === 1 ? '' : 's') + ' in the last hour: ' + kinds + '</p>';
+        html += '<table class="rowlist"><tbody>' + d.top.map(function(r) {
+            return '<tr><td data-m="primary" class="mono">' + escapeHtml(r.mac || r.ip) + ' ' + investigateLink(r.mac || r.ip) + '</td>' +
+                '<td data-m="secondary">' + escapeHtml(r.kinds.join(', ')) + '</td>' +
+                '<td data-m="secondary">' + escapeHtml(String(r.count)) + '</td></tr>';
+        }).join('') + '</tbody></table>';
+        return html;
+    });
+}
+
 function loadGettingStarted() {
     loadCatalogWidget('getting_started', function(d) {
         if (!d) return '<p class="u-6f1339">Nothing left to do, or dismissed. <a href="/getting-started">Open</a></p>';
@@ -958,6 +983,7 @@ var CATALOG_LOADERS = {
     events_feed: loadEventsFeed,
     ha_state: loadHaState,
     ddns_errors: loadDdnsErrors,
+    problems: loadProblems,
     getting_started: loadGettingStarted
 };
 var currentPrefs = null;   // the last prefs applied — what Cancel reverts to
