@@ -290,6 +290,7 @@ def test_what_kea_logs_and_stores_at_this_level(findings, index, level):
     assert lease["hostname"] == "probe-host", lease
     assert li.relay_info_from_user_context(lease["user_context"]) == {
         "circuit_id": "eth0/1/7",
+        "circuit_id_hex": "657468302f312f37",
         "remote_id": "0a0b0c0d0e0f",
     }, lease
     findings["levels"][name]["parsed"] = {"client_id": cid, "classes": classes, "query": query}
