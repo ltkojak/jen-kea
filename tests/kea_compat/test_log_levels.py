@@ -68,7 +68,15 @@ def _mac_for(index: int) -> str:
     return f"02:50:00:00:01:{index:02x}"
 
 
-def _packet(kind: int, xid: int, mac: str, requested: str = "", server: str = "") -> bytes:
+def _packet(
+    kind: int,
+    xid: int,
+    mac: str,
+    requested: str = "",
+    server: str = "",
+    user_class: str = "lp",
+    circuit: bytes = CIRCUIT,
+) -> bytes:
     mac_bytes = bytes.fromhex(mac.replace(":", ""))
     header = struct.pack(
         "!BBBBIHH4s4s4s4s16s64s128s4s",
@@ -93,8 +101,11 @@ def _packet(kind: int, xid: int, mac: str, requested: str = "", server: str = ""
         return bytes([code, len(data)]) + data
 
     options = opt(53, bytes([kind])) + opt(61, b"\x01" + mac_bytes) + opt(12, HOSTNAME) + opt(60, VENDOR)
-    options += opt(77, bytes([len(USER_CLASS)]) + USER_CLASS)
-    options += opt(82, opt(1, CIRCUIT) + opt(2, REMOTE))
+    if user_class == "lp":  # RFC 3004: each user class is length-prefixed (what Windows sends)
+        options += opt(77, bytes([len(USER_CLASS)]) + USER_CLASS)
+    elif user_class == "raw":  # the bare string (what dhclient's `send user-class` sends)
+        options += opt(77, USER_CLASS)
+    options += opt(82, opt(1, circuit) + opt(2, REMOTE))
     options += opt(55, bytes([1, 3, 6, 15, 51, 54]))
     if requested:
         options += opt(50, socket.inet_aton(requested))
@@ -116,10 +127,10 @@ def _sh(*args, check=True):
     return subprocess.run(args, check=check, capture_output=True, text=True, timeout=120)
 
 
-def _restart(severity, debuglevel, ddns=False):
+def _restart(severity, debuglevel, ddns=False, forms=False):
     from tests.kea_compat import kea_config
 
-    conf = kea_config.build(severity=severity, debuglevel=debuglevel, probe=True, ddns=ddns)
+    conf = kea_config.build(severity=severity, debuglevel=debuglevel, probe=True, ddns=ddns, forms=forms)
     with open(os.path.join(CONF_DIR, "kea-dhcp4.conf"), "w") as fh:
         json.dump(conf, fh, indent=2)
     _sh("docker", "rm", "-f", "kea", check=False)
@@ -448,6 +459,62 @@ def test_what_a_ddns_failure_line_carries(findings):
         assert cur.fetchone(), "the probe's exchange stored a lease"
     if failed:
         assert [e["mac"] for e in events if e["kind"] == "ddns-failed"] == [mac], findings["ddns_failed_line"]
+
+
+def _dump_rows(lines: list[str], mac: str) -> list[str]:
+    """The rows of the DHCP4_QUERY_DATA dump for `mac` that matter here: option 77 and the relay agent's circuit id, as Kea printed them."""
+    out, inside = [], False
+    for line in lines:
+        if "DHCP4_QUERY_DATA" in line and mac.lower() in line.lower():
+            inside = True
+            continue
+        if inside and re.match(r"^\d{4}-\d{2}-\d{2} ", line):
+            inside = False
+        if inside and ("type=077" in line or re.match(r"^\s+type=001, ", line)):
+            out.append(line.strip())
+    return out
+
+
+FORM_CASES = [
+    # name, user class form on the wire, circuit id bytes
+    ("lp-text-circuit", "lp", CIRCUIT),
+    ("raw-text-circuit", "raw", CIRCUIT),
+    ("lp-binary-circuit", "lp", bytes.fromhex("deadbeef")),
+]
+
+
+def test_which_option_77_and_circuit_id_forms_kea_matches(findings):
+    """v5.68.0-beta.10 (Q145, verify first). Explain evaluated `option[77].hex == '<text>'` against the typed TEXT, and a binary circuit id
+    as the ASCII of its hex, while real Kea compares BYTES: a length-prefixed client (Windows, RFC 3004) sends 08 'jen-user', a raw one
+    sends 'jen-user', and a class test written for one does not match the other. This boots ONE daemon with a class per spelling
+    (`forms=True`), sends a DISCOVER per case, and RECORDS which classes Kea assigned and what its packet dump printed for option 77 and
+    the circuit id - on 3.0.3, 3.2.0 and 3.3.1. Record-only: what Jen pins is decided from these findings."""
+    _restart("DEBUG", 55, forms=True)
+    local = _local_address()
+    from jen.services import kea_log_inputs as li
+
+    record = {}
+    findings["forms"] = record
+    for offset, (name, form, circuit) in enumerate(FORM_CASES):
+        mac = _mac_for(50 + offset)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.bind(("0.0.0.0", 0))
+            sock.sendto(_packet(1, 0x50000 + offset, mac, user_class=form, circuit=circuit), (local, 67))
+            time.sleep(2)
+        finally:
+            sock.close()
+        lines = _daemon_log()
+        tx = li.latest_transaction(lines, mac)
+        assigned = [c for c in ((tx or {}).get("classes") or {}).get("classes", []) if c.startswith("q145-")]
+        record[name] = {
+            "wire_user_class": form,
+            "wire_circuit_hex": circuit.hex(),
+            "assigned_q145_classes": sorted(assigned),
+            "dump_rows": _dump_rows(lines, mac),
+            "parsed_query": (tx or {}).get("query"),
+        }
+        assert tx is not None, f"the daemon never logged an exchange for {name}"
 
 
 def li_has(lines, mac: str, message_id: str) -> bool:

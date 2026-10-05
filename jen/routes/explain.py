@@ -175,7 +175,11 @@ def explain_page():
 def _result_context(built, log_view, result, subnet_id) -> dict:
     """What the result partial shows besides the decision: where each input came from, what is still missing and how to
     unlock it, and whether the viewer may follow a why-not to the Changes tab (an admin who may see every subnet)."""
+    transaction = (log_view or {}).get("transaction")
+    log_server = ((log_view or {}).get("server") or {}).get("name", "")
     return {
+        "exchange": {**transaction, "server": log_server} if transaction else None,
+        "log_server": log_server,
         "provenance": __ctx.provenance(built) if built else [],
         "source_hint": __ctx.hint_for(result, log_view) if result else "",
         "can_changes": _may_read_kea_log(),

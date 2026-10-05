@@ -459,3 +459,57 @@ class TestTheUsableLeaseIsTheOnlyLeaseTheRouteKnows:
         assert "192.168.1.50" in page, "the engine ran in subnet A from the reservation"
         for secret in (self.HIDDEN_IP, "hidden-lease-host", "HIDDEN-NET-B", "the current lease"):
             assert secret not in page, f"{secret!r}: the hidden lease reached the page"
+
+
+class TestTheTabNamesTheExchange:
+    """v5.68.0-beta.10 (Q145): what was read from Kea's log is one exchange on one server, and the tab says which."""
+
+    def _view(self, **tx):
+        return {
+            **KEA_LOG,
+            "server": {"id": 2, "name": "kea-b"},
+            "transaction": {"tid": "0x9", "first": "2026-10-04 15:10:39.100", "at": "2026-10-04 15:10:39.670", "complete": True,
+                            "before_config_change": False, **tx},
+        }  # fmt: skip
+
+    def test_it_says_which_exchange_and_which_server(
+        self, logged_in_client, stub_config, mock_kea, lease_with_extras, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "jen.services.explain_context.read_log",
+            lambda mac, *, allowed, fetch=True: self._view() if allowed else NO_LOG,
+        )
+        page = logged_in_client.get(f"/tools/explain?mac={MAC2}").get_data(as_text=True)
+        assert "the one at 2026-10-04 15:10:39.670, transaction 0x9, on kea-b" in page
+        assert "logged before the config last changed" not in page
+
+    def test_an_exchange_from_before_a_config_change_says_so(
+        self, logged_in_client, stub_config, mock_kea, lease_with_extras, monkeypatch
+    ):
+        monkeypatch.setattr(
+            "jen.services.explain_context.read_log",
+            lambda mac, *, allowed, fetch=True: self._view(before_config_change=True) if allowed else NO_LOG,
+        )
+        page = logged_in_client.get(f"/tools/explain?mac={MAC2}").get_data(as_text=True)
+        assert "logged before the config last changed, so Kea may decide differently now" in page
+
+    def test_a_log_that_never_names_the_client_says_so(
+        self, logged_in_client, stub_config, mock_kea, lease_with_extras, monkeypatch
+    ):
+        empty = {
+            "classes": None,
+            "query": None,
+            "cid": None,
+            "state": "ok",
+            "message": "",
+            "transaction": None,
+            "server": {"id": 1, "name": "kea-a"},
+        }
+        monkeypatch.setattr(
+            "jen.services.explain_context.read_log", lambda mac, *, allowed, fetch=True: empty if allowed else NO_LOG
+        )
+        page = logged_in_client.get(f"/tools/explain?mac={MAC2}").get_data(as_text=True)
+        assert (
+            "Kea&#39;s log on kea-a does not show this client" in page
+            or "Kea's log on kea-a does not show this client" in page
+        )

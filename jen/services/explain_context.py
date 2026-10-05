@@ -15,8 +15,18 @@ see is never reported (the holder is dropped, not blanked), whatever address it 
 
 The Kea log is the same tail Trace reads (helper op `tail-log`, 1000 lines, helper only) and carries the same restriction:
 a log line has no subnet boundary Jen can trust, so only a caller with access to EVERY subnet gets log-derived inputs
-(docs/ARCHITECTURE.md §2). Results are cached for `LOG_TTL_S` seconds per (server, MAC): the Explain tab, the Config tab and the
+(docs/ARCHITECTURE.md §2). Results are cached for `LOG_TTL_S` seconds per MAC: the Explain tab, the Config tab and the
 Overview all ask, and an SSH round trip per request would be a cost nobody asked for.
+
+v5.68.0-beta.10 (Q145). WHICH exchange and WHICH server the evidence comes from are decided here, and named on the tab:
+
+* the inputs come from ONE transaction (`kea_log_inputs.latest_transaction`: the newest exchange that has a class list or a packet dump),
+  never stitched from the newest of each kind;
+* the log is read from the server that handled the client, not from "server 0": `_evidence_servers()` puts the HA-ACTIVE server
+  first (the one whose HA state serves scopes, as the Servers page shows it), then every other configured server in order, and the
+  first one whose log holds an exchange for the MAC supplies it - an unreachable or helper-less server is skipped, with its reason
+  kept for the case where none can be read;
+* a class list observed BEFORE the live config's newest revision is labelled so - it is what Kea decided under an older config.
 """
 
 from __future__ import annotations
@@ -84,24 +94,107 @@ def holder_of(ip, mac, accessible_ids=None) -> dict | None:
     return {"mac": holder_mac, "expire": expire.strftime("%Y-%m-%d %H:%M UTC") if expire else "", "linkable": True}
 
 
-def _pick_server() -> dict | None:
-    servers = extensions.KEA_SERVERS or []
-    return servers[0] if servers else None
+HA_ACTIVE_STATES = ("hot-standby", "load-balancing", "partner-down")
+
+
+def _name(server: dict) -> str:
+    return server.get("name") or server.get("ssh_host") or f"Server {server.get('id')}"
+
+
+def _serves_clients(server: dict) -> bool:
+    """Does `server`'s HA state say it is answering clients right now (the Servers page's own reading, `kea_ha.ha_status`): it has a
+    local state that serves and holds scopes. A standby in hot-standby holds none until its partner is down."""
+    from jen.services import kea_ha as _ha
+
+    try:
+        status = _ha.ha_status(server)
+    except Exception as e:
+        logger.warning(f"explain_context: HA status for {_name(server)} failed: {type(e).__name__}")
+        return False
+    local = (status or {}).get("local") or {}
+    return bool(local.get("scopes")) and local.get("state") in HA_ACTIVE_STATES
+
+
+def _evidence_servers() -> list[dict]:
+    """The Kea servers whose log may hold the client's exchange, in the order to read them: the HA-ACTIVE server(s) first, then every
+    other configured server in order. With one server (the usual case) that is the server and no HA question is asked."""
+    servers = list(extensions.KEA_SERVERS or [])
+    if len(servers) < 2:
+        return servers
+    active = [s for s in servers if _serves_clients(s)]
+    return active + [s for s in servers if s not in active]
+
+
+def _clock_offset_s(server: dict) -> float | None:
+    """The Kea host's log-clock offset from UTC, in seconds, when the Problems sweep has measured it (Q144); else None."""
+    try:
+        from jen.services import client_problems as _cp
+
+        return _cp._clock_get(server.get("id"))
+    except Exception:
+        return None
+
+
+def _before_config_change(server: dict, at_text: str) -> bool:
+    """Was an exchange logged at `at_text` (the Kea host's own clock) BEFORE the newest config revision Jen holds for `server`? Only
+    answered when the host's clock offset is known (it is a comparison across two clocks); otherwise False - never a guess."""
+    offset = _clock_offset_s(server)
+    if offset is None:
+        return False
+    when = _li._when(at_text)
+    if when is None:
+        return False
+    try:
+        from datetime import timedelta
+
+        from jen.services import config_revisions as _rev
+
+        latest = _rev.latest(server.get("id"), "dhcp4")
+        created = (latest or {}).get("created_at")
+        return bool(created is not None and created > when - timedelta(seconds=offset) + timedelta(seconds=5))
+    except Exception as e:
+        logger.warning(f"explain_context: config revision lookup failed: {type(e).__name__}")
+        return False
+
+
+def _view_from(server: dict, tx: dict | None) -> dict:
+    """The log view for one server's tail: the inputs of the ONE exchange chosen, and where they came from."""
+    view = {"classes": None, "query": None, "cid": None, "state": "ok", "message": "", "transaction": None}
+    view["server"] = {"id": server.get("id"), "name": _name(server)}
+    if tx is None:
+        return view
+    old = _before_config_change(server, tx["last"])
+    classes = dict(tx["classes"], before_config_change=True) if tx["classes"] and old else tx["classes"]
+    view.update(
+        classes=classes,
+        query=tx["query"],
+        cid=tx["cid"],
+        transaction={
+            "tid": tx["tid"],
+            "first": tx["first"],
+            "at": tx["last"],
+            "complete": tx["complete"],
+            "before_config_change": old,
+        },
+    )
+    return view
 
 
 def read_log(mac: str, *, allowed: bool, fetch: bool = True) -> dict:
-    """What Kea's log says about `mac`: {"classes", "query", "cid", "state", "message"}. `state` is "ok", "not-allowed" (the
-    caller may not read the log), "no-server", "no-helper", "missing" (no log file), "error", or "not-fetched" (`fetch=False`
-    and nothing cached: the Overview asks without paying for the round trip)."""
-    empty = {"classes": None, "query": None, "cid": None}
+    """What Kea's log says about `mac`: {"classes", "query", "cid", "transaction", "server", "state", "message"}. The three inputs all
+    come from the ONE exchange `transaction` names ({"tid", "first", "at", "complete", "before_config_change"}), read from the
+    `server` ({"id", "name"}) that supplied it. `state` is "ok", "not-allowed" (the caller may not read the log), "no-server",
+    "no-helper", "missing" (no log file), "error", or "not-fetched" (`fetch=False` and nothing cached: the Overview asks without
+    paying for the round trip)."""
+    empty = {"classes": None, "query": None, "cid": None, "transaction": None, "server": None}
     if not allowed:
         return {**empty, "state": "not-allowed", "message": ""}
-    server = _pick_server()
-    if server is None:
+    servers = _evidence_servers()
+    if not servers:
         return {**empty, "state": "no-server", "message": "No Kea server is configured."}
-    if not server.get("ssh_host"):
+    if not any(s.get("ssh_host") for s in servers):
         return {**empty, "state": "no-helper", "message": "Reading Kea's log needs SSH access to the Kea host."}
-    key = (server.get("id"), (mac or "").lower())
+    key = ("log", (mac or "").lower())
     cached = _log_cache.get(key)
     if cached and time.monotonic() - cached[0] < LOG_TTL_S:
         return cached[1]
@@ -109,23 +202,47 @@ def read_log(mac: str, *, allowed: bool, fetch: bool = True) -> dict:
         return {**empty, "state": "not-fetched", "message": ""}
     from jen.services import kea_host as _host
 
-    res = _host.tail_log(server, extensions.DHCP4_LOG, TAIL_LINES, timeout=TAIL_TIMEOUT_S, helper_only=True)
-    if res.get("code") == "no-helper":
-        view = {**empty, "state": "no-helper", "message": "Reading Kea's log needs the Kea host helper."}
-    elif res.get("code") == "missing":
-        view = {**empty, "state": "missing", "message": f"Kea's log was not found at {extensions.DHCP4_LOG}."}
-    elif not res.get("ok"):
-        logger.error(f"explain_context: tail_log failed: {res.get('detail')}")
-        view = {**empty, "state": "error", "message": "Could not read Kea's log."}
-    else:
-        lines = res.get("lines", [])
-        view = {
-            "classes": _li.latest_classes(lines, mac),
-            "query": _li.latest_query_data(lines, mac),
-            "cid": _li.client_id_from_log(lines, mac),
-            "state": "ok",
-            "message": "",
-        }
+    view = None
+    first_ok = None  # a server whose log was read but never named the client
+    fallback = None  # an exchange that has no class list or packet dump (the client id only)
+    problem = None  # why the first server that could not be read could not be
+    for server in servers:
+        if not server.get("ssh_host"):
+            problem = problem or {
+                **empty,
+                "state": "no-helper",
+                "message": "Reading Kea's log needs SSH access to the Kea host.",
+            }
+            continue
+        res = _host.tail_log(server, extensions.DHCP4_LOG, TAIL_LINES, timeout=TAIL_TIMEOUT_S, helper_only=True)
+        if res.get("code") == "no-helper":
+            problem = problem or {
+                **empty,
+                "state": "no-helper",
+                "message": "Reading Kea's log needs the Kea host helper.",
+            }
+            continue
+        if res.get("code") == "missing":
+            problem = problem or {
+                **empty,
+                "state": "missing",
+                "message": f"Kea's log was not found at {extensions.DHCP4_LOG}.",
+            }
+            continue
+        if not res.get("ok"):
+            logger.error(f"explain_context: tail_log failed on {_name(server)}: {res.get('detail')}")
+            problem = problem or {**empty, "state": "error", "message": "Could not read Kea's log."}
+            continue
+        tx = _li.latest_transaction(res.get("lines", []), mac)
+        if tx is None:
+            first_ok = first_ok or _view_from(server, None)
+            continue
+        if tx["complete"]:
+            view = _view_from(server, tx)
+            break
+        fallback = fallback or _view_from(server, tx)
+    if view is None:
+        view = fallback or first_ok or problem or {**empty, "state": "error", "message": "Could not read Kea's log."}
     if len(_log_cache) > 256:
         _log_cache.clear()
     _log_cache[key] = (time.monotonic(), view)

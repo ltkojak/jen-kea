@@ -75,7 +75,12 @@ def build(
         classes = log.get("classes")
         if classes:
             assigned = {"classes": classes["classes"], "at": classes["at"]}
-            put("vendor_class", _li.vendor_class_from(classes["classes"]), "log-classes", classes["at"])
+            if classes.get("before_config_change"):
+                assigned["before_config_change"] = True
+            # v5.68.0-beta.10 (Q145): a class list logged before the live config's newest revision is what Kea decided under an OLDER
+            # config - labelled, not presented as the current decision
+            stale = " (observed before the config changed)" if classes.get("before_config_change") else ""
+            put("vendor_class", _li.vendor_class_from(classes["classes"]), "log-classes", classes["at"] + stale)
         if lease:
             put("client_id", _colon_hex(lease.get("client_id")), "lease")
             put("hostname", lease.get("hostname"), "lease")

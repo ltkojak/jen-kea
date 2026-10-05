@@ -569,6 +569,8 @@ def explain(
         additional_lists |= set(res.get("classes") or [])
     kea_said = {str(c) for c in (assigned_classes or {}).get("classes", [])}
     kea_when = (assigned_classes or {}).get("at")
+    # v5.68.0-beta.10 (Q145): a list Kea logged under an OLDER config is what it decided then, not now - said in the row
+    kea_old = " (observed before the config changed)" if (assigned_classes or {}).get("before_config_change") else ""
     disagreements: list[dict] = []
     for c in dhcp4_cfg.get("client-classes") or []:
         if not isinstance(c, dict) or not c.get("name"):
@@ -634,7 +636,7 @@ def explain(
         if name in kea_said and row["matched"] is not True:
             # what Kea itself logged for this client outranks what Jen could work out: it is what happened
             row["matched"] = True
-            row["reason"] = "assigned by Kea" + (f" at {kea_when}" if kea_when else "") + " (its own log)"
+            row["reason"] = "assigned by Kea" + (f" at {kea_when}" if kea_when else "") + kea_old + " (its own log)"
             row["from_kea"] = True
         elif name not in kea_said and kea_said and decided_by_jen is True:
             row["reason"] += " (Jen's reading - Kea did not list it)"

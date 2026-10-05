@@ -25,12 +25,18 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 
 _TS = r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?"
 _HEADER_RE = re.compile(rf"^(?P<ts>{_TS})\s+(?P<level>[A-Z]+)\s+\[[^\]]*\]\s+(?P<id>[A-Z0-9_]+)\s*(?P<rest>.*)$")
 _LABEL_RE = re.compile(r"\[hwtype=\d+ (?P<mac>[0-9a-fA-F:]{17})\],\s*cid=\[(?P<cid>[^\]]*)\]")
 _CLASSES_RE = re.compile(r"to the following classes?: (?P<classes>.+?)\s*$")
 _OPTION_RE = re.compile(r"^(?P<indent>\s*)type=(?P<code>\d+), len=\d+:\s*(?P<value>.*?)\s*$")
+
+_TID_RE = re.compile(r"\btid=(0x[0-9a-fA-F]+)")
+
+#: one transaction id (a client's xid) repeats over time; lines of one tid further apart than this are a different exchange
+TRANSACTION_GAP_S = 60
 
 #: the message ids that list the classes assigned to a client, newest-wins; the unsuffixed one is the final list
 CLASS_LIST_IDS = ("DHCP4_CLASSES_ASSIGNED", "DHCP4_CLASSES_ASSIGNED_AFTER_SUBNET_SELECTION")
@@ -97,6 +103,99 @@ def latest_classes(lines: list[str], mac: str) -> dict | None:
         on = re.search(r"assigned on (\w+) message", m.group("rest"))
         found = {"classes": names, "at": m.group("ts"), "id": m.group("id"), "message": on.group(1) if on else ""}
     return found
+
+
+def _when(text: str) -> datetime | None:
+    for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def transactions(lines: list[str], mac: str) -> list[dict]:
+    """Every exchange (one transaction id) the log shows for `mac`, oldest first. Each is
+    {"tid", "first", "last" (the timestamps of its first and last line, as the log wrote them), "cid" ({"client_id", "at"} or None),
+    "classes" (latest_classes' shape or None), "query" (latest_query_data's shape or None), "complete"}. `complete` means the exchange
+    has a class list or a packet dump - what the evidence is for. A tid is the client's own xid and repeats, so the same tid more
+    than TRANSACTION_GAP_S after its last line starts a new exchange.
+
+    v5.68.0-beta.10 (Q145): the newest cid, the newest class list and the newest packet dump used to be taken INDEPENDENTLY, so an
+    "observation" could be stitched from three different exchanges (a DISCOVER's classes, an old REQUEST's options, a later cid).
+    Everything Explain reads from the log now comes from ONE of these."""
+    needle = _norm_mac(mac)
+    if not needle:
+        return []
+    open_by_tid: dict[str, dict] = {}
+    done: list[dict] = []
+    order = 0
+    i = 0
+    while i < len(lines):
+        raw = lines[i]
+        m = _HEADER_RE.match(raw.strip())
+        label = _LABEL_RE.search(raw)
+        tid_m = _TID_RE.search(raw)
+        if not m or not label or not tid_m or _norm_mac(label.group("mac")) != needle:
+            i += 1
+            continue
+        tid, ts_text = tid_m.group(1), m.group("ts")
+        ts = _when(ts_text)
+        tx = open_by_tid.get(tid)
+        if (
+            tx is not None
+            and ts is not None
+            and tx["_last_dt"] is not None
+            and (ts - tx["_last_dt"]).total_seconds() > TRANSACTION_GAP_S
+        ):
+            done.append(open_by_tid.pop(tid))
+            tx = None
+        if tx is None:
+            tx = open_by_tid[tid] = {
+                "tid": tid, "first": ts_text, "last": ts_text, "cid": None, "classes": None, "query": None,
+                "_last_dt": ts, "_order": 0,
+            }  # fmt: skip
+        order += 1
+        tx["last"], tx["_last_dt"], tx["_order"] = ts_text, ts, order
+        cid = _hex_text(label.group("cid"))
+        if cid:
+            tx["cid"] = {"client_id": ":".join(cid[k : k + 2] for k in range(0, len(cid), 2)), "at": ts_text}
+        msg_id = m.group("id")
+        if msg_id in CLASS_LIST_IDS:
+            listed = _CLASSES_RE.search(m.group("rest"))
+            if listed:
+                names = [c.strip() for c in listed.group("classes").split(",") if c.strip()]
+                on = re.search(r"assigned on (\w+) message", m.group("rest"))
+                tx["classes"] = {"classes": names, "at": ts_text, "id": msg_id, "message": on.group(1) if on else ""}
+        elif msg_id == "DHCP4_QUERY_DATA":
+            block = []
+            j = i + 1
+            while j < len(lines) and not _HEADER_RE.match(lines[j].strip()):
+                block.append(lines[j].rstrip("\n"))
+                j += 1
+            tx["query"] = _read_dump(ts_text, block)
+            i = j
+            continue
+        i += 1
+    done.extend(open_by_tid.values())
+    done.sort(key=lambda t: t["_order"])
+    for tx in done:
+        tx["complete"] = bool(tx["classes"] or tx["query"])
+        tx.pop("_last_dt", None)
+        tx.pop("_order", None)
+    return done
+
+
+def latest_transaction(lines: list[str], mac: str) -> dict | None:
+    """The ONE exchange Explain reads the log from: the newest COMPLETE transaction for `mac` (one with a class list or a packet dump),
+    else - when the log shows the client but never at a level that lists anything - the newest exchange of any kind, which can
+    still say the client id. {"tid", "first", "last", "cid", "classes", "query", "complete"} or None when the log never names the
+    client. Its `cid`, `classes` and `query` are that exchange's own: nothing here is borrowed from another."""
+    seen = transactions(lines, mac)
+    if not seen:
+        return None
+    complete = [t for t in seen if t["complete"]]
+    return (complete or seen)[-1]
 
 
 def vendor_class_from(classes: list[str]) -> str:

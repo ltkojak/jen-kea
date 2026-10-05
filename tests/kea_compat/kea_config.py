@@ -31,6 +31,7 @@ def build(
     debuglevel=None,
     probe=False,
     ddns=False,
+    forms=False,
 ) -> dict:
     """`severity`/`debuglevel` set the kea-dhcp4 logger (the log-level probe, Q135, boots one daemon per level);
     `probe=True` adds what that probe needs on top of the compat config: two client classes whose tests read the
@@ -101,6 +102,21 @@ def build(
         dhcp4["client-classes"] = [
             {"name": "jen-probe-vendor", "test": "substring(option[60].hex,0,9) == 'jen-probe'"},
             {"name": "jen-probe-user", "test": "option[77].hex == 0x086a656e2d75736572"},
+        ]
+    if forms:
+        # v5.68.0-beta.10 (Q145, verify first): ONE class per way a person (or Jen's rule builder) could write a test on option 77 and on
+        # the relay's circuit id - so the probe can record which of them real Kea matches for a length-prefixed client, for a raw one,
+        # and for a circuit id that is not text.
+        cfg["Dhcp4"].setdefault("client-classes", [])
+        cfg["Dhcp4"]["client-classes"] += [
+            {"name": "q145-u77-text", "test": "option[77].hex == 'jen-user'"},
+            {"name": "q145-u77-lp", "test": "option[77].hex == 0x086a656e2d75736572"},
+            {"name": "q145-u77-raw-hex", "test": "option[77].hex == 0x6a656e2d75736572"},
+            {"name": "q145-u77-sub0", "test": "substring(option[77].hex,0,8) == 'jen-user'"},
+            {"name": "q145-u77-sub1", "test": "substring(option[77].hex,1,8) == 'jen-user'"},
+            {"name": "q145-circuit-text", "test": "relay4[1].hex == 'eth0/1/7'"},
+            {"name": "q145-circuit-hex", "test": "relay4[1].hex == 0x657468302f312f37"},
+            {"name": "q145-circuit-bin", "test": "relay4[1].hex == 0xdeadbeef"},
         ]
     if ddns:
         dhcp4 = cfg["Dhcp4"]
