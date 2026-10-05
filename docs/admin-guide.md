@@ -1030,7 +1030,7 @@ is your installed Jen version, shown on the About page; `7`/`9` are this
 release's `HELPER_VERSION`/`HELPER_BUILD`):
 
 ```bash
-d="$(mktemp -d)" && cd "$d" && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper.sig && printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && /usr/bin/python3 -I jen-kea-helper version </dev/null | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin);sys.exit(0 if d.get("ok") is True and d.get("helper_version")==7 and d.get("helper_build")==9 else 1)' && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
+d="$(mktemp -d)" && cd "$d" && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper.sig && printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && /usr/bin/python3 -I jen-kea-helper version </dev/null | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin);sys.exit(0 if d.get("ok") is True and d.get("helper_version")==7 and d.get("helper_build")==10 else 1)' && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
 ```
 
 then add the sudoers line above. **Settings → Kea → SSH** shows the
@@ -1049,7 +1049,7 @@ trust (`scp`, a USB drive), then run the same verify-then-install steps
 locally, in the directory holding both files:
 
 ```bash
-printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && /usr/bin/python3 -I jen-kea-helper version </dev/null | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin);sys.exit(0 if d.get("ok") is True and d.get("helper_version")==7 and d.get("helper_build")==9 else 1)' && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
+printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && /usr/bin/python3 -I jen-kea-helper version </dev/null | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin);sys.exit(0 if d.get("ok") is True and d.get("helper_version")==7 and d.get("helper_build")==10 else 1)' && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
 ```
 
 Never skip the verify step just because you trust the transport — it's

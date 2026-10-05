@@ -767,9 +767,10 @@ def _daemon_group(service):
     else root. v5.68.0-beta.6 (Q141): this used to say "ISC's own packages run the daemons as
     root" - never checked, and not what a real ISC deb shows: on Kea 3.0.4 from ISC's own
     packages `/usr/sbin/kea-dhcp4` is owned `_kea:_kea` (mode 0750), the account the daemon
-    is meant to run as. tests/kea_compat records the owner and the unit's/entrypoint's run-as
-    user on ISC's 3.0.3, 3.2.0 and 3.3.1 images (`binary_facts`); the fallback to root below is
-    only for a host where neither the unit nor `_kea` resolves."""
+    is meant to run as. ISC's container images (3.0.3, 3.2.0, 3.3.1, recorded by tests/kea_compat
+    `test_binary_facts`) ship it owned by their service account `kea` (uid 100, mode 0754) while the
+    daemon process itself runs as root; the fallback to root below is only for a host where neither
+    the unit nor `_kea` resolves."""
     user = ""
     unit = _resolve_unit(service, "status")
     if unit:
