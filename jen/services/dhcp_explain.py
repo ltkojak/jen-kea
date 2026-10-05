@@ -56,22 +56,28 @@ from jen.services import kea_config_view as _view
 
 # ── Expression grammar ────────────────────────────────────────────────────────
 
+# accessor -> (input the person types / the missing-input name, kind[, input that carries the BYTES Kea received]).
+# v5.68.0-beta.10 (Q145): option 77 and the relay circuit id are compared by Kea as BYTES. The third element names the input that holds
+# them (`user_class_bytes`, `circuit_id_hex` - Kea's own packet dump supplies them); a person who typed only the text gets that text encoded
+# (see `_candidates`).
 ACCESSORS = {
     "option[60].hex": ("vendor_class", "text"),
-    "option[77].hex": ("user_class", "text"),
+    "option[77].hex": ("user_class", "text", "user_class_bytes"),
     "option[12].text": ("hostname", "text"),
     "pkt4.mac": ("mac", "mac"),
     "option[61].hex": ("client_id", "hex"),
-    "relay4[1].hex": ("circuit_id", "text"),
+    "relay4[1].hex": ("circuit_id", "text", "circuit_id_hex"),
     "relay4[2].hex": ("remote_id", "hex"),
 }
 INPUT_LABELS = {
     "vendor_class": "vendor class (option 60)",
     "user_class": "user class (option 77)",
+    "user_class_bytes": "user class as sent (option 77 bytes, hex)",
     "hostname": "hostname (option 12)",
     "mac": "MAC address",
     "client_id": "client id (option 61)",
     "circuit_id": "relay circuit id",
+    "circuit_id_hex": "relay circuit id (bytes, hex)",
     "remote_id": "relay remote id",
 }
 
@@ -173,9 +179,7 @@ class _Parser:
             self.take("comma")
             length = int(self.take("num"))
             self.take("rpar")
-            if start != 0:
-                raise ExprError("substring with a non-zero start")
-            return ("substr", acc, length)
+            return ("substr", acc, start, length)
         return ("acc", self._accessor())
 
     def _accessor(self):
@@ -204,11 +208,38 @@ def parse_expression(text: str):
 # ── Evaluation (three-valued: True / False / None = unknown) ─────────────────
 
 
+def _candidates(client: dict, accessor: str):
+    """([bytes, ...] | None, input_name) - every byte string the accessor could be reading for this client; None when nothing is known.
+
+    Usually one. For option 77 with only the TEXT known, two: a client sends its user class either as the bare string (dhclient's
+    `send user-class`) or length-prefixed (RFC 3004, what Windows sends: one length byte, then the string), and the text does not say
+    which. The caller judges a test under every candidate and calls it decided only when they agree."""
+    if accessor not in ACCESSORS:
+        raise ExprError(f"accessor {accessor} is not one Jen knows")
+    spec = ACCESSORS[accessor]
+    field = spec[0]
+    if len(spec) == 3:
+        exact = re.sub(r"[:\-\s]", "", str(client.get(spec[2]) or ""))
+        if exact:
+            if not (re.fullmatch(r"[0-9A-Fa-f]+", exact) and len(exact) % 2 == 0):
+                return None, spec[2]
+            return [bytes.fromhex(exact)], spec[2]
+        text = str(client.get(field) or "").strip()
+        if not text:
+            return None, field
+        plain = text.encode()
+        if accessor == "option[77].hex" and len(plain) <= 255:
+            return [plain, bytes([len(plain)]) + plain], spec[2]
+        return [plain], field
+    val, name = _client_bytes(client, accessor)
+    return (None if val is None else [val]), name
+
+
 def _client_bytes(client: dict, accessor: str):
     """(bytes | None, input_name) — None when the caller didn't supply it."""
     if accessor not in ACCESSORS:
         raise ExprError(f"accessor {accessor} is not one Jen knows")
-    field, kind = ACCESSORS[accessor]
+    field, kind = ACCESSORS[accessor][:2]
     raw = client.get(field)
     if raw in (None, ""):
         return None, field
@@ -258,16 +289,19 @@ def evaluate(node, client: dict, members: dict, missing: set) -> bool | None:
         return members.get(node[1])  # unknown class or later class → None
     if kind == "eq":
         left, lit = node[1], node[2]
-        if left[0] == "acc":
-            val, field = _client_bytes(client, left[1])
-        else:
-            val, field = _client_bytes(client, left[1])
-            if val is not None:
-                val = val[: left[2]]
-        if val is None:
+        options, field = _candidates(client, left[1])
+        if options is None:
             missing.add(field)
             return None
-        return val == lit[1]
+        if left[0] == "substr":  # substring(<accessor>, start, length): Kea counts from the start of the payload
+            start, length = left[2], left[3]
+            options = [v[start : start + length] for v in options]
+        verdicts = {v == lit[1] for v in options}
+        if len(verdicts) > 1:
+            # the text alone fits two ways a client could have sent it and they disagree: say what would settle it
+            missing.add(field)
+            return None
+        return verdicts.pop()
     raise ExprError(f"unknown node {kind}")
 
 

@@ -118,6 +118,19 @@ def build(
             {"name": "q145-circuit-hex", "test": "relay4[1].hex == 0x657468302f312f37"},
             {"name": "q145-circuit-bin", "test": "relay4[1].hex == 0xdeadbeef"},
         ]
+        # ...and the same questions written by Jen's own rule builder (jen/services/kea_classes.py), so that the compat test can prove the
+        # builder, real Kea and Explain agree about every one of them
+        from jen.services import kea_classes
+
+        for name, field, op, value in (
+            ("q145-b-plain-eq", "user_class", "equals", "jen-user"),
+            ("q145-b-plain-sw", "user_class", "starts_with", "jen"),
+            ("q145-b-lp-eq", "user_class_lp", "equals", "jen-user"),
+            ("q145-b-lp-sw", "user_class_lp", "starts_with", "jen"),
+        ):
+            cfg["Dhcp4"]["client-classes"].append(
+                {"name": name, "test": kea_classes.build_expression([{"field": field, "op": op, "value": value}])}
+            )
     if ddns:
         dhcp4 = cfg["Dhcp4"]
         dhcp4["dhcp-ddns"] = {

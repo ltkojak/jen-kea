@@ -233,13 +233,17 @@ def latest_query_data(lines: list[str], mac: str) -> dict | None:
 
 
 def _read_dump(ts: str, block: list[str]) -> dict:
+    """One packet dump's options. v5.68.0-beta.10 (Q145): `user_class` and `circuit_id` are for DISPLAY (text when printable), and
+    `user_class_bytes` / `circuit_id_hex` are the bytes Kea actually received - what a class test compares, byte for byte."""
     out = {
         "at": ts,
         "hostname": "",
         "vendor_class": "",
         "client_id": "",
         "user_class": "",
+        "user_class_bytes": "",
         "circuit_id": "",
+        "circuit_id_hex": "",
         "remote_id": "",
     }
     in_relay = False
@@ -259,12 +263,17 @@ def _read_dump(ts: str, block: list[str]) -> dict:
             elif code == 61:
                 out["client_id"] = ":".join(re.findall(r"[0-9a-fA-F]{2}", value)).lower()
             elif code == 77:
-                out["user_class"] = _user_class_text(value)
+                # a raw client's row carries the printable text after the hex ("6a:65:6e 'jen'"); a length-prefixed one's does not
+                lead = re.match(r"^((?:[0-9a-fA-F]{2}:?)+)", value)
+                body = _hex_text(lead.group(1)) if lead else ""
+                out["user_class"] = _user_class_text(body)
+                out["user_class_bytes"] = body
         elif in_relay:
             hexed = re.match(r"^((?:[0-9a-fA-F]{2}:?)+)", value)
             raw = bytes.fromhex(_hex_text(hexed.group(1))) if hexed and _hex_text(hexed.group(1)) else b""
             if code == 1:
                 out["circuit_id"] = _printable(raw)
+                out["circuit_id_hex"] = raw.hex()
             elif code == 2:
                 out["remote_id"] = raw.hex()
     return out
@@ -283,10 +292,11 @@ def _user_class_text(value: str) -> str:
 
 
 def relay_info_from_user_context(user_context) -> dict:
-    """{"circuit_id", "remote_id"} (each '' when absent) from a lease row's `user_context` — the JSON text, or an already
+    """{"circuit_id", "circuit_id_hex", "remote_id"} (each '' when absent; `circuit_id` is the display text, `circuit_id_hex` the raw
+    bytes) from a lease row's `user_context` — the JSON text, or an already
     parsed dict — as written with `store-extended-info`: `ISC.relay-agent-info` holds `remote-id` (hex) and `sub-options`
     (`0x` + the raw TLVs: 01 <len> circuit-id, 02 <len> remote-id, …). Anything unreadable gives empty strings."""
-    out = {"circuit_id": "", "remote_id": ""}
+    out = {"circuit_id": "", "circuit_id_hex": "", "remote_id": ""}
     try:
         ctx = json.loads(user_context) if isinstance(user_context, (str, bytes)) and user_context else user_context
         info = (ctx or {}).get("ISC", {}).get("relay-agent-info", {}) if isinstance(ctx, dict) else {}
@@ -307,6 +317,7 @@ def relay_info_from_user_context(user_context) -> dict:
             break
         if code == 1 and not out["circuit_id"]:
             out["circuit_id"] = _printable(data)
+            out["circuit_id_hex"] = data.hex()
         elif code == 2 and not out["remote_id"]:
             out["remote_id"] = data.hex()
         pos += 2 + length

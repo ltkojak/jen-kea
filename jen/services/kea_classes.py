@@ -170,11 +170,20 @@ FIELDS = {
         "ops": ("equals", "starts_with"),
         "ui_label": "Vendor class (option 60)",
     },
+    # v5.68.0-beta.10 (Q145): a client sends option 77 in one of two forms and Kea compares the BYTES, so a test written for one does not
+    # match the other. "plain" is the bare string (dhclient's `send user-class`, most Linux clients); "length-prefixed" is RFC 3004's
+    # form - one length byte, then the string - which Windows sends. Explain shows which form a client really sent.
     "user_class": {
         "kea": "option[77].hex",
         "kind": "string",
         "ops": ("equals", "starts_with"),
-        "ui_label": "User class (option 77)",
+        "ui_label": "User class (option 77) - plain text (dhclient, most Linux clients)",
+    },
+    "user_class_lp": {
+        "kea": "option[77].hex",
+        "kind": "user-class-lp",
+        "ops": ("equals", "starts_with"),
+        "ui_label": "User class (option 77) - length-prefixed (Windows, RFC 3004)",
     },
     "hostname": {
         "kea": "option[12].text",
@@ -238,6 +247,15 @@ def _rule_expression(rule: dict) -> str:
         if op == "starts_with":
             return f"substring({kea},0,{len(stripped)}) == {lit}"
         return f"{kea} == {lit}"
+    if meta["kind"] == "user-class-lp":
+        stripped, lit = _stringify(value, field)
+        raw = stripped.encode()
+        if len(raw) > 255:
+            raise ValueError(f"{field}: a user class is at most 255 bytes")
+        if op == "starts_with":
+            # the length byte of a first entry is the whole entry's length, which a prefix cannot know: skip it
+            return f"substring({kea},1,{len(raw)}) == {lit}"
+        return f"{kea} == 0x{(bytes([len(raw)]) + raw).hex()}"
     if meta["kind"] == "mac":
         return f"{kea} == {_hexify(value, field, exact_bytes=6)}"
     if meta["kind"] == "oui":

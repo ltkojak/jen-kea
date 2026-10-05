@@ -65,6 +65,7 @@
                 </div>
                 <div id="rule-rows"></div>
                 <button type="button" id="add-rule-btn" class="btn btn-sm btn-secondary u-8a77e5">+ Add rule</button>
+                <p class="form-hint u-8a77e5" id="user-class-note">User class (option 77): a client sends it either as the bare string (dhclient with <span class="mono">send user-class</span> and most Linux clients) or, as RFC 3004 says and Windows does, with a length byte in front. Kea compares the bytes, so a rule written for one form does not match clients that send the second: pick <strong>plain text</strong> or <strong>length-prefixed</strong> to match the clients you mean. An Explain run on a client shows which form it really sent.</p>
             </div>
 
             <div id="advanced-panel" style="display:none;">

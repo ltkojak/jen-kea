@@ -929,6 +929,8 @@ Kea string literals are single-quoted with **no escape sequence** — a
 value containing `'` can't be expressed as a guided rule or a literal
 in Advanced mode.
 
+**User class (option 77) has two forms (v5.68.0-beta.10).** A client sends option 77 either as the bare string (`dhclient`'s `send user-class`, most Linux clients) or length-prefixed as RFC 3004 describes (Windows: one length byte, then the string), and Kea compares the bytes, so a rule written for one form does not match clients that send the second. The guided builder therefore offers two fields: **User class (option 77) - plain text** writes `option[77].hex == 'text'` (or `substring(option[77].hex,0,N) == 'text'` for *starts with*, exactly what it always wrote), and **User class (option 77) - length-prefixed** writes `option[77].hex == 0x<length byte><text>` (for *starts with*, `substring(option[77].hex,1,N) == 'text'`, which skips the length byte and so looks at the first user class only). Checked against real Kea 3.0.3, 3.2.0 and 3.3.1, which agreed on every case: each rule matches only the clients that send its form. A client that sends both forms, or several user classes in one option, needs an Advanced expression. Explain on the Investigation page shows which form a client actually sent, from Kea's packet dump.
+
 **Preview.** As you edit, Jen shows the expression it will write and
 runs it past Kea's own config test (`kea-dhcp4 -t`) with the candidate
 class inserted into a copy of the live config — nothing is written to

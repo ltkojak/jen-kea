@@ -123,7 +123,17 @@ def _explain_inputs(view) -> tuple[dict, int | None, str]:
     return client, subnet_id, chosen_how
 
 
-_TYPED_INPUTS = ("client_id", "vendor_class", "user_class", "hostname", "circuit_id", "remote_id", "giaddr")
+_TYPED_INPUTS = (
+    "client_id",
+    "vendor_class",
+    "user_class",
+    "user_class_bytes",
+    "hostname",
+    "circuit_id",
+    "circuit_id_hex",
+    "remote_id",
+    "giaddr",
+)
 
 
 def _typed_inputs() -> dict:

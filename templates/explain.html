@@ -30,6 +30,8 @@
             <div class="form-group u-116966">
                 <label>User class (option 77)</label>
                 <input type="text" name="user_class" value="{{ client.user_class }}" placeholder="iPXE">
+                <input type="text" name="user_class_bytes" class="mono" value="{{ client.user_class_bytes }}" placeholder="as sent, hex (08:69:50:58:45) - optional">
+                <div class="form-hint">Kea compares the bytes the client sent. A client sends the bare string or, like Windows, one length byte then the string; give the bytes when you know them.</div>
             </div>
             <div class="form-group u-116966">
                 <label>Hostname (option 12)</label>
@@ -43,6 +45,7 @@
                 <label>Relay circuit id / remote id</label>
                 <div class="u-49cd09">
                     <input type="text" name="circuit_id" class="mono" value="{{ client.circuit_id }}" placeholder="circuit id">
+                    <input type="text" name="circuit_id_hex" class="mono" value="{{ client.circuit_id_hex }}" placeholder="circuit id bytes (hex)">
                     <input type="text" name="remote_id" class="mono" value="{{ client.remote_id }}" placeholder="remote id (hex)">
                 </div>
             </div>

@@ -31,7 +31,18 @@ from jen.services.subnet_context import dhcp4_config
 logger = logging.getLogger(__name__)
 bp = Blueprint("explain", __name__)
 
-FIELDS = ("mac", "client_id", "vendor_class", "user_class", "hostname", "circuit_id", "remote_id", "giaddr")
+FIELDS = (
+    "mac",
+    "client_id",
+    "vendor_class",
+    "user_class",
+    "user_class_bytes",
+    "hostname",
+    "circuit_id",
+    "circuit_id_hex",
+    "remote_id",
+    "giaddr",
+)
 
 
 def _client_from_args(args) -> dict:

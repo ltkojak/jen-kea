@@ -25,7 +25,21 @@ from __future__ import annotations
 
 from jen.services import kea_log_inputs as _li
 
-FIELDS = ("mac", "client_id", "vendor_class", "user_class", "hostname", "circuit_id", "remote_id", "giaddr")
+# `user_class` and `circuit_id` are the DISPLAY forms (text when the bytes are printable); `user_class_bytes` and `circuit_id_hex` are the
+# bytes Kea received (v5.68.0-beta.10, Q145) - what a class test compares. A person may type either; Kea's own log supplies the bytes.
+FIELDS = (
+    "mac",
+    "client_id",
+    "vendor_class",
+    "user_class",
+    "user_class_bytes",
+    "hostname",
+    "circuit_id",
+    "circuit_id_hex",
+    "remote_id",
+    "giaddr",
+)
+HEX_FIELDS = ("client_id", "user_class_bytes", "circuit_id_hex", "remote_id")
 
 SOURCE_LABELS = {
     "mac": "the MAC you asked about",
@@ -86,17 +100,30 @@ def build(
             put("hostname", lease.get("hostname"), "lease")
             relay = _li.relay_info_from_user_context(lease.get("user_context"))
             put("circuit_id", relay["circuit_id"], "lease-relay")
+            put("circuit_id_hex", relay["circuit_id_hex"], "lease-relay")
             put("remote_id", relay["remote_id"], "lease-relay")
         cid = log.get("cid")
         if cid:
             put("client_id", cid["client_id"], "log-label", cid["at"])
         query = log.get("query")
         if query:
-            for field in ("hostname", "vendor_class", "client_id", "user_class", "circuit_id", "remote_id"):
+            for field in (
+                "hostname",
+                "vendor_class",
+                "client_id",
+                "user_class",
+                "user_class_bytes",
+                "circuit_id",
+                "circuit_id_hex",
+                "remote_id",
+            ):
                 put(field, query.get(field), "log-packet", query["at"])
     for field, value in (typed or {}).items():
         if field in FIELDS and field != "mac":
-            put(field, (value or "").strip(), "typed")
+            value = (value or "").strip()
+            put(
+                field, _colon_hex(value) or value if field in ("user_class_bytes", "circuit_id_hex") else value, "typed"
+            )
     return {"client": client, "sources": sources, "when": when, "assigned": assigned}
 
 

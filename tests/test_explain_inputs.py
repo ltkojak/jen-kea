@@ -99,7 +99,15 @@ class TestBuild:
     def test_provenance_lists_what_has_a_value_in_field_order(self):
         built = ei.build(MAC, lease=LEASE, typed={"vendor_class": "x"})
         rows = ei.provenance(built)
-        assert [r["field"] for r in rows] == ["mac", "client_id", "vendor_class", "hostname", "circuit_id", "remote_id"]
+        assert [r["field"] for r in rows] == [
+            "mac",
+            "client_id",
+            "vendor_class",
+            "hostname",
+            "circuit_id",
+            "circuit_id_hex",
+            "remote_id",
+        ]
         by = {r["field"]: r for r in rows}
         assert by["client_id"]["label"] == "the current lease" and by["vendor_class"]["label"] == "typed"
         assert by["mac"]["label"] == "the MAC you asked about"

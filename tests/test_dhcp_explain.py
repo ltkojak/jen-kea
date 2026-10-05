@@ -70,7 +70,7 @@ class TestParser:
             "ifelse(option[60].exists, 'a', 'b') == 'a'",
             "pkt4.transid == 0x01",
             "option[125].hex == 'x'",  # accessor outside the vocabulary
-            "substring(option[60].hex,2,3) == 'FT'",  # non-zero start
+            "substring(option[60].hex,-2,3) == 'FT'",  # a negative start is outside what the builder emits
             "option[60].hex == 'a' and",  # dangling
             "concat('a','b') == 'ab'",
             "vendor[4491].option[2].hex == 0x01",

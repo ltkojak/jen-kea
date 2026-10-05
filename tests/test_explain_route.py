@@ -513,3 +513,55 @@ class TestTheTabNamesTheExchange:
             "Kea&#39;s log on kea-a does not show this client" in page
             or "Kea's log on kea-a does not show this client" in page
         )
+
+
+class TestOption77AsBytesOnThePage:
+    """v5.68.0-beta.10 (Q145): the same two class tests - one written for a length-prefixed client, one for a plain-text client - are
+    undecided when only the text is known, and decided from the bytes when they are given (the values real Kea matched, kea-compat)."""
+
+    LP = "08:6a:65:6e:2d:75:73:65:72"
+
+    @pytest.fixture
+    def two_forms(self, monkeypatch):
+        cfg = dict(
+            SMALL_CFG,
+            **{
+                "client-classes": [
+                    {"name": "lp-class", "test": "option[77].hex == 0x086a656e2d75736572"},
+                    {"name": "plain-class", "test": "option[77].hex == 'jen-user'"},
+                ]
+            },
+        )
+        monkeypatch.setattr("jen.routes.explain.dhcp4_config", lambda force=False: cfg)
+
+    def _rows(self, page):
+        import re
+
+        out = {}
+        for name in ("lp-class", "plain-class"):
+            m = re.search(rf'<td class="mono">{name}</td>\s*<td[^>]*>\s*(\w+)\s*</td>', page)
+            out[name] = m.group(1) if m else None
+        return out
+
+    def test_text_only_leaves_both_undecided_and_names_the_bytes_as_what_would_settle_it(
+        self, logged_in_client, two_forms, mock_kea, no_log
+    ):
+        page = logged_in_client.get("/tools/explain?mac=00:11:22:33:44:55&subnet=1&user_class=jen-user").get_data(
+            as_text=True
+        )
+        assert self._rows(page) == {"lp-class": "undecided", "plain-class": "undecided"}
+        assert "supply user class as sent (option 77 bytes, hex)" in page
+
+    def test_length_prefixed_bytes_match_only_the_length_prefixed_test(
+        self, logged_in_client, two_forms, mock_kea, no_log
+    ):
+        page = logged_in_client.get(
+            f"/tools/explain?mac=00:11:22:33:44:55&subnet=1&user_class=jen-user&user_class_bytes={self.LP}"
+        ).get_data(as_text=True)
+        assert self._rows(page) == {"lp-class": "matched", "plain-class": "no"}
+
+    def test_raw_bytes_match_only_the_plain_test(self, logged_in_client, two_forms, mock_kea, no_log):
+        page = logged_in_client.get(
+            "/tools/explain?mac=00:11:22:33:44:55&subnet=1&user_class_bytes=6a:65:6e:2d:75:73:65:72"
+        ).get_data(as_text=True)
+        assert self._rows(page) == {"lp-class": "no", "plain-class": "matched"}

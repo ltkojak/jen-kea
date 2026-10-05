@@ -111,15 +111,23 @@ class TestTheLeasesExtendedInfo:
     )
 
     def test_the_circuit_and_remote_ids_are_read(self):
-        assert li.relay_info_from_user_context(self.REAL) == {"circuit_id": "eth0/1/7", "remote_id": "0a0b0c0d0e0f"}
+        assert li.relay_info_from_user_context(self.REAL) == {
+            "circuit_id": "eth0/1/7",
+            "circuit_id_hex": "657468302f312f37",
+            "remote_id": "0a0b0c0d0e0f",
+        }
 
     def test_a_dict_is_accepted_and_a_binary_circuit_id_comes_back_as_hex(self):
         ctx = {"ISC": {"relay-agent-info": {"sub-options": "0x0104deadbeef"}}}
-        assert li.relay_info_from_user_context(ctx) == {"circuit_id": "deadbeef", "remote_id": ""}
+        assert li.relay_info_from_user_context(ctx) == {
+            "circuit_id": "deadbeef",
+            "circuit_id_hex": "deadbeef",
+            "remote_id": "",
+        }
 
     @pytest.mark.parametrize("junk", [None, "", "{", "[]", '{"ISC": 3}', '{"ISC": {"relay-agent-info": "x"}}', 7])
     def test_anything_else_is_empty_not_an_error(self, junk):
-        assert li.relay_info_from_user_context(junk) == {"circuit_id": "", "remote_id": ""}
+        assert li.relay_info_from_user_context(junk) == {"circuit_id": "", "circuit_id_hex": "", "remote_id": ""}
 
     def test_a_truncated_tlv_stops_the_walk(self):
         ctx = {"ISC": {"relay-agent-info": {"sub-options": "0x010841"}}}

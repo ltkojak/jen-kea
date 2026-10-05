@@ -516,6 +516,50 @@ def test_which_option_77_and_circuit_id_forms_kea_matches(findings):
         }
         assert tx is not None, f"the daemon never logged an exchange for {name}"
 
+    # ── builder, real Kea and Explain must agree about every class, for every client form ─────────────────────────────────────
+    from jen.services import dhcp_explain as de
+    from jen.services import explain_inputs as ei
+    from tests.kea_compat import kea_config
+
+    classes = {
+        c["name"]: c["test"]
+        for c in kea_config.build(probe=True, forms=True)["Dhcp4"]["client-classes"]
+        if c["name"].startswith("q145-")
+    }
+    disagreements = []
+    for offset, (name, _form, _circuit) in enumerate(FORM_CASES):
+        mac = _mac_for(50 + offset)
+        tx = li.latest_transaction(_daemon_log(), mac)
+        client = ei.build(mac, log={"classes": tx["classes"], "query": tx["query"], "cid": tx["cid"]})["client"]
+        kea_said = set(record[name]["assigned_q145_classes"])
+        for cls, test in sorted(classes.items()):
+            explained = de.evaluate(de.parse_expression(test), client, {}, set())
+            if explained is not (cls in kea_said):
+                disagreements.append(
+                    {"case": name, "class": cls, "test": test, "kea": cls in kea_said, "explain": explained}
+                )
+    record["disagreements"] = disagreements
+
+    # ── what real Kea matched, pinned (3.0.3, 3.2.0 and 3.3.1 gave identical answers when this was measured, Q145) ────────────────
+    def assigned(case):
+        return set(record[case]["assigned_q145_classes"])
+
+    lp, raw, binary = assigned("lp-text-circuit"), assigned("raw-text-circuit"), assigned("lp-binary-circuit")
+    # a LENGTH-PREFIXED client (08 'jen-user'): only the length-byte literal and the substring that skips the length byte match
+    assert {"q145-u77-lp", "q145-u77-sub1", "q145-b-lp-eq", "q145-b-lp-sw"} <= lp
+    assert not ({"q145-u77-text", "q145-u77-raw-hex", "q145-u77-sub0", "q145-b-plain-eq", "q145-b-plain-sw"} & lp)
+    # a RAW client ('jen-user'): the string, its bare hex and the substring from 0 match - and nothing written for the length-prefixed form
+    assert {"q145-u77-text", "q145-u77-raw-hex", "q145-u77-sub0", "q145-b-plain-eq", "q145-b-plain-sw"} <= raw
+    assert not ({"q145-u77-lp", "q145-u77-sub1", "q145-b-lp-eq", "q145-b-lp-sw"} & raw)
+    # a circuit id is compared as BYTES: eth0/1/7 matches its text and its hex, DE AD BE EF matches 0xdeadbeef and NOT any text
+    assert {"q145-circuit-text", "q145-circuit-hex"} <= lp and "q145-circuit-bin" not in lp
+    assert "q145-circuit-bin" in binary and not ({"q145-circuit-text", "q145-circuit-hex"} & binary)
+    # what the dump prints for option 77: hex only when length-prefixed; hex then the quoted text when raw
+    assert record["lp-text-circuit"]["dump_rows"][0].startswith("type=077, len=009: 08:6a:65:6e:2d:75:73:65:72")
+    assert not record["lp-text-circuit"]["dump_rows"][0].rstrip().endswith("'")
+    assert record["raw-text-circuit"]["dump_rows"][0].endswith("'jen-user'")
+    assert not disagreements, f"Explain and real Kea disagree about: {disagreements}"
+
 
 def li_has(lines, mac: str, message_id: str) -> bool:
     return any(message_id in line and mac.lower() in line.lower() for line in lines)
