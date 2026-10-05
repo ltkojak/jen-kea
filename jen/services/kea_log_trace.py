@@ -313,8 +313,34 @@ def _client_ip(msg_id: str, rest: str) -> str:
     return ""
 
 
+def newest_ts(lines: list[str]) -> datetime | None:
+    """The newest timestamp on any DHCP4_ line of `lines`, in the log's own clock (None when there is none)."""
+    best = None
+    for raw in lines:
+        m = _LINE_RE.match(raw.strip())
+        ts = _parse_ts(m.group("ts")) if m else None
+        if ts is not None and (best is None or ts > best):
+            best = ts
+    return best
+
+
+def allocations(lines: list[str]) -> list[dict]:
+    """The lease allocations the log shows, in log order: `{ts, ip, seconds}` - `DHCP4_LEASE_ALLOC` / `DHCP4_LEASE_REUSE` lines
+    ("lease 10.0.0.5 has been allocated for 3600 seconds"). The Problems sweep matches them to the lease database's `expire` to
+    learn the Kea host's clock offset (jen.services.client_problems.clock_offset)."""
+    out = []
+    for raw in lines:
+        m = _LINE_RE.match(raw.strip())
+        if not m or m.group("id") not in ("DHCP4_LEASE_ALLOC", "DHCP4_LEASE_REUSE"):
+            continue
+        ts, lease, secs = _parse_ts(m.group("ts")), _LEASE_RE.search(m.group("rest")), _SECS_RE.search(m.group("rest"))
+        if ts is not None and lease and secs:
+            out.append({"ts": ts, "ip": lease.group(1), "seconds": int(secs.group(1))})
+    return out
+
+
 def problem_events(lines: list[str]) -> list[dict]:
-    """Every problem the log names a client for, in log order: `{ts, level, id, kind, mac, ip, detail, tid}`, `kind` one of
+    """Every problem the log names a client for, in log order: `{ts, level, id, kind, mac, ip, detail, tid, subnet_id}`, `kind` one of
     LOG_PROBLEM_KINDS. A NAK is visible at INFO as the DHCPNAK Kea sends (DHCP4_PACKET_SEND) and, at DEBUG, as its own
     DHCP4_PACKET_NAK_000x line too - both carry the same transaction id, so a NAK is one event, keeping whichever line
     named the requested address. A DHCP4_DDNS_REQUEST_SEND_FAILED line has no client label at all, so it is attached to the
@@ -325,17 +351,30 @@ def problem_events(lines: list[str]) -> list[dict]:
         m = _LINE_RE.match(raw.strip())
         if m:
             parsed.append((m, raw))
+    # v5.68.0-beta.9 (Q144): the walk is IN ORDER and keeps two maps as it goes - who was last given each address, and (for a
+    # transaction) which subnet Kea selected - so an event is attributed to what the log showed BEFORE it, never to whoever
+    # held the address or the client's subnet at the end of the tail.
     ip_to_mac: dict[str, str] = {}
-    for m, _raw in parsed:
-        if m.group("id") in ("DHCP4_LEASE_OFFER", "DHCP4_LEASE_ALLOC", "DHCP4_LEASE_REUSE"):
-            label = _LABEL_MAC_RE.search(m.group("rest"))
-            lease = _LEASE_RE.search(m.group("rest"))
-            if label and lease:
-                ip_to_mac[lease.group(1)] = norm_mac(label.group("mac"))
+    ip_tid_to_mac: dict[tuple[str, str], str] = {}
+    subnet_of_tx: dict[tuple[str, str], tuple[datetime, int]] = {}
     events: list[dict] = []
     naks: dict[tuple[str, str], dict] = {}
     for m, _raw in parsed:
         msg_id, rest = m.group("id"), m.group("rest")
+        if msg_id in ("DHCP4_LEASE_OFFER", "DHCP4_LEASE_ALLOC", "DHCP4_LEASE_REUSE"):
+            label = _LABEL_MAC_RE.search(rest)
+            lease = _LEASE_RE.search(rest)
+            if label and lease:
+                owner = norm_mac(label.group("mac"))
+                ip_to_mac[lease.group(1)] = owner
+                tid_here = _TID_RE.search(rest)
+                if tid_here:
+                    ip_tid_to_mac[(lease.group(1), tid_here.group(1))] = owner
+        if msg_id == "DHCP4_SUBNET_SELECTED":
+            label, tid_here, sel = _LABEL_MAC_RE.search(rest), _TID_RE.search(rest), _SUBNET_ID_RE.search(rest)
+            sel_ts = _parse_ts(m.group("ts"))
+            if label and tid_here and sel and sel_ts is not None:
+                subnet_of_tx[(norm_mac(label.group("mac")), tid_here.group(1))] = (sel_ts, int(sel.group(1)))
         kind = _PROBLEM_KIND_OF_ID.get(msg_id)
         if msg_id.startswith("DHCP4_PACKET_DROP") and kind is None:
             kind = "drop"
@@ -349,16 +388,22 @@ def problem_events(lines: list[str]) -> list[dict]:
         label = _LABEL_MAC_RE.search(rest)
         mac = norm_mac(label.group("mac")) if label else ""
         ip = _client_ip(msg_id, rest)
+        tid_m = _TID_RE.search(rest)
         if kind == "ddns-failed":
-            mac = next((ip_to_mac[a] for a in _IP_RE.findall(rest) if a in ip_to_mac), "")
-            ip = next((a for a in _IP_RE.findall(rest) if a in ip_to_mac), "")
+            # the nearest allocation BEFORE the failure (ip_to_mac is as of this line), preferring the one in the same transaction
+            # when the failure line names a transaction at all
+            named = [a for a in _IP_RE.findall(rest) if a in ip_to_mac]
+            if tid_m:
+                named.sort(key=lambda a: (a, tid_m.group(1)) not in ip_tid_to_mac)
+            ip = named[0] if named else ""
+            mac = (ip_tid_to_mac.get((ip, tid_m.group(1))) if tid_m else None) or (ip_to_mac.get(ip, "") if ip else "")
         if not mac:
             continue
         if msg_id == "DHCP4_PACKET_SEND":
             detail = "Kea sent a DHCPNAK"
         else:
             detail = _summarize(msg_id, rest)[0]
-        tid_m = _TID_RE.search(rest)
+        selected = subnet_of_tx.get((mac, tid_m.group(1))) if tid_m else None
         event = {
             "ts": ts,
             "level": m.group("level"),
@@ -368,12 +413,16 @@ def problem_events(lines: list[str]) -> list[dict]:
             "ip": ip,
             "detail": detail[:200],
             "tid": tid_m.group(1) if tid_m else "",
+            # the subnet Kea itself selected for this very transaction (DEBUG logging only), else None: never a later guess
+            "subnet_id": selected[1] if selected and 0 <= (ts - selected[0]).total_seconds() <= 60 else None,
         }
         if kind == "nak" and event["tid"]:
             seen = naks.get((mac, event["tid"]))
             if seen is not None:
                 if ip and not seen["ip"]:
                     seen["ip"] = ip
+                if event["subnet_id"] is not None and seen.get("subnet_id") is None:
+                    seen["subnet_id"] = event["subnet_id"]
                 if msg_id != "DHCP4_PACKET_SEND":
                     seen["detail"] = detail[:200]  # the NAK's own line says why; the send line only says that
                 continue

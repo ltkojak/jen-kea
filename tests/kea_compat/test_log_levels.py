@@ -116,10 +116,10 @@ def _sh(*args, check=True):
     return subprocess.run(args, check=check, capture_output=True, text=True, timeout=120)
 
 
-def _restart(severity, debuglevel):
+def _restart(severity, debuglevel, ddns=False):
     from tests.kea_compat import kea_config
 
-    conf = kea_config.build(severity=severity, debuglevel=debuglevel, probe=True)
+    conf = kea_config.build(severity=severity, debuglevel=debuglevel, probe=True, ddns=ddns)
     with open(os.path.join(CONF_DIR, "kea-dhcp4.conf"), "w") as fh:
         json.dump(conf, fh, indent=2)
     _sh("docker", "rm", "-f", "kea", check=False)
@@ -409,6 +409,45 @@ def test_config_reload_applies_the_investigation_log_level_without_a_restart(fin
     assert record["lease_survived"], record
     assert record["broken_file_reply"]["result"] != 0 and record["answers_after_broken_reload"], record
     assert back.get("result") == 0 and not record["packet_dump_after_restore"], record
+
+
+def test_what_a_ddns_failure_line_carries(findings):
+    """v5.68.0-beta.9 (Q144, verify first) - the Problems sweep attributes a DHCP4_DDNS_REQUEST_SEND_FAILED line to the client the
+    log showed getting the address it names, preferring the same transaction. Whether that line carries a transaction id (or a client
+    label) at INFO on 3.0 / 3.2 / 3.3 was not known: this turns DNS updates on towards a kea-dhcp-ddns that is not running, sends one
+    exchange, and RECORDS what the failure line looks like and whether its allocation line has a tid. It asserts only that a lease was
+    stored: the facts are the reference, and Jen's parser takes a tid when there is one and the nearest preceding allocation when not."""
+    index = 40
+    mac, local = _mac_for(index), _local_address()
+    requested = f"10.99.0.{REQUESTED_BASE + index}"
+    with _db() as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM lease4 WHERE hwaddr=%s", (bytes.fromhex(mac.replace(":", "")),))
+    _restart("INFO", None, ddns=True)
+    _exchange(mac, requested, local, 0x40000)
+    lines = _daemon_log()
+    ddns = [line for line in lines if "DDNS" in line]
+    failed = [line for line in ddns if "DHCP4_DDNS_REQUEST_SEND_FAILED" in line]
+    alloc = [line for line in lines if "DHCP4_LEASE_ALLOC" in line and mac.lower() in line.lower()]
+    from jen.services import kea_log_trace as klt
+
+    events = klt.problem_events(lines)
+    findings["ddns_failed_line"] = {
+        "reproduced": bool(failed),
+        "ddns_lines": [line[:400] for line in ddns[:8]],
+        "failed_lines": [line[:400] for line in failed[:3]],
+        "failed_line_has_tid": any("tid=" in line for line in failed),
+        "failed_line_has_client_label": any("hwtype=" in line for line in failed),
+        "alloc_lines": [line[:300] for line in alloc[:2]],
+        "alloc_line_has_tid": any("tid=" in line for line in alloc),
+        "attributed_to_the_probe_client": [e["mac"] for e in events if e["kind"] == "ddns-failed"],
+    }
+    with _db() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT inet_ntoa(address) AS ip FROM lease4 WHERE hwaddr=%s", (bytes.fromhex(mac.replace(":", "")),)
+        )
+        assert cur.fetchone(), "the probe's exchange stored a lease"
+    if failed:
+        assert [e["mac"] for e in events if e["kind"] == "ddns-failed"] == [mac], findings["ddns_failed_line"]
 
 
 def li_has(lines, mac: str, message_id: str) -> bool:

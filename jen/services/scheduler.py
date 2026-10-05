@@ -111,7 +111,7 @@ def _run_client_problems_sweep(app):
             from jen.services import client_problems
 
             result = client_problems.run_sweep_job()
-            if result["events"] or result["alerts"] or result["errors"]:
+            if result["events"] or result["alerts_attempted"] or result["errors"]:
                 logger.info(f"client problems sweep: {result}")
         except Exception as e:
             logger.error(f"Client problems sweep error: {e}")

@@ -2172,6 +2172,20 @@ lives in the Kea config itself, so a restored database or a second Jen leaves no
 live one so the banners show it. A restore that fails stays indexed with its error (the Health row reads that,
 never SSH at render time) and is retried the next minute.
 
+**Its state machine (v5.68.0-beta.9, Q144).** Putting a log level back is two steps that fail on their own: the FILE (the
+`loggers` entry and its marker, written through `apply_change`) and the DAEMON (which has to re-read it - `config-reload`, else a
+restart). An index entry carries `file` ("debug" | "restored"), `daemon` ("debug" | "restored" | "unknown") and `pending` (the daemon
+step still owed), and is dropped only when file AND daemon are both restored. That closes a hole the first version had: a restore whose
+reload was refused and whose restart failed had already cleaned the file, so the next minute's change set found no marker, reported
+"nothing" - which meant "done" - and forgot a daemon still at DEBUG 55. Now a "nothing" with a daemon step owed runs the step, and a
+half-finished restore is retried by the sweep even before its time is up. The enable side mirrors it: `turn_on` saves the entry as soon
+as the file is written (writing it took responsibility for it), BEFORE the daemon is asked, and on a failed daemon step puts the file
+straight back through the change set - or, if that fails too, keeps the entry so the sweep finishes it. A server removed from Jen while
+its entry exists is not dropped: the entry is kept (with the server's name, SSH host and config path) and marked removed, the Health
+row fails with the by-hand restore, and the settings forms that would stop Jen reaching a server refuse until `turn_off` has
+succeeded. An admin who restored such a server by hand tells Jen so with one button on the Servers page. Adopting a marker the sweep
+did not index, and a refused removal, each write an audit row.
+
 **The Problems sweep (v5.68.0-beta.5, Q140).** The second core scheduler job this round added
 (`jen_client_problems_sweep`, every five minutes, `max_instances=1`, `coalesce`, single-process like the first two) reads each SSH server's
 DHCPv4 log through `kea_host.tail_log` with `helper_only=True` - the helper's bounded `tail-log`, never the legacy `sudo tail`, which
@@ -2181,6 +2195,19 @@ lock need no cross-process coordination; a second Jen against the same database 
 shape. The page, the lazy answer and the dashboard widget are diagnostic surfaces (`@diagnostic_surface`, a row each in the
 authorization matrix): every read is filtered by `add_subnet_restriction` on the row's own `subnet_id`, so a row with no subnet is
 for callers who may see every subnet, as in section 2.
+
+**What the Problems sweep may and may not infer (v5.68.0-beta.9, Q144).** A log line is evidence about ONE moment, and the sweep
+reads it as that. A row's subnet is where the event itself says - the subnet its address is in, else the subnet Kea selected for the
+very transaction (a DEBUG line sharing the event's transaction id) - and never where the client is now, which would show a NAK from
+one subnet to a user of the subnet the client has since moved to; a row with no subnet is for callers who may see every subnet, and an
+alert about it (`alerts.SCOPED_ALERT_TYPES`) fails closed for a channel that has a subnet scope. A DNS-update failure, whose line names
+no client, is attributed to the allocation nearest BEFORE it in the log (the same transaction when the line carries one), never to
+whoever holds the address last. `first_seen` and `last_seen` are the events' own times: Kea writes its log in the host's local time, so
+the sweep measures the host's offset from UTC against the lease database (the newest allocation lines against the lease rows'
+`expire`, to the nearest quarter hour), remembers it per server, and assumes UTC for a server that has shown it nothing - the Problems
+page says which. The alert window is judged against now, a server's first read sets its watermark without alerting (a backlog is not
+news), and `alerted_at` is set only when a channel actually took the alert: `alert_attempted_at` (migration 31) records every try and a
+failing delivery is retried every half hour, not every five minutes and not never.
 
 ### 6.1 On-disk layout (v5.13.0, extended in v5.14.0, relocatable since v5.67.0)
 

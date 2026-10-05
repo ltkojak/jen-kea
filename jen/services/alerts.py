@@ -400,7 +400,13 @@ def channel_handles_alert(channel, alert_type):
         return False
 
 
-def channel_allows_subnet(channel, subnet_id):
+# v5.68.0-beta.9 (Q144): alert types about ONE CLIENT. For these an alert with no attributable subnet is not "not tied to a subnet" (the
+# kea_down kind of alert, which goes everywhere): it is a client Jen could not place, and a channel that is scoped to some subnets
+# must not receive it. The channel scope is the operator's statement of which clients they want to hear about.
+SCOPED_ALERT_TYPES = frozenset({"client_problems"})
+
+
+def channel_allows_subnet(channel, subnet_id, scoped=False):
     """v5.1.16 — per-channel subnet scoping for notifications. NULL/empty
     scope means unrestricted (every channel's existing default, and what
     every channel had implicitly before this existed). subnet_id=None
@@ -413,10 +419,13 @@ def channel_allows_subnet(channel, subnet_id):
     closed — this is a notification preference, not an access-control
     boundary, and silently going quiet on every alert because of a
     stored JSON typo is a worse outcome here than occasionally
-    over-notifying."""
-    if subnet_id is None:
-        return True
+    over-notifying.
+
+    `scoped=True` (v5.68.0-beta.9, Q144) is for an alert about one client: with no subnet_id it FAILS CLOSED for a channel that has a
+    scope (a channel with no scope still receives it). A malformed scope still fails open."""
     scope = channel.get("subnet_scope")
+    if subnet_id is None and not scoped:
+        return True
     if not scope:
         return True
     try:
@@ -425,6 +434,8 @@ def channel_allows_subnet(channel, subnet_id):
         allowed = json.loads(scope) if isinstance(scope, str) else scope
         if not allowed:
             return True
+        if subnet_id is None:
+            return False
         return int(subnet_id) in [int(s) for s in allowed]
     except Exception:
         return True
@@ -476,13 +487,18 @@ def encode_channel_config(config):
     return json.dumps(crypto.encrypt_secret(json.dumps(config)))
 
 
-def send_alert(alert_type, log_result=True, subnet_id=None, **kwargs):
+def send_alert(alert_type, log_result=True, subnet_id=None, scoped=False, **kwargs):
     """Send alert to all enabled channels that handle this alert type.
 
     subnet_id (v5.1.16): the raw subnet id an alert relates to, used
     only for per-channel subnet-scope filtering (channel_allows_subnet)
     — never passed into the message template itself. Leave as None for
-    alert types that aren't tied to one specific subnet."""
+    alert types that aren't tied to one specific subnet. For an alert about one client (SCOPED_ALERT_TYPES, or `scoped=True`) a
+    subnet_id of None means the client could not be placed, and a channel with a subnet scope does not receive it.
+
+    Returns [(channel_type, ok, error), ...] - one entry per channel that was ELIGIBLE (handles this type and allows this subnet),
+    so a caller can tell "delivered" from "nobody was eligible" from "every eligible channel failed"."""
+    scoped = scoped or alert_type in SCOPED_ALERT_TYPES
     template = get_alert_template(alert_type)
     message = render_template_str(template, **kwargs)
     channels = get_active_channels()
@@ -490,7 +506,7 @@ def send_alert(alert_type, log_result=True, subnet_id=None, **kwargs):
     for channel in channels:
         if not channel_handles_alert(channel, alert_type):
             continue
-        if not channel_allows_subnet(channel, subnet_id):
+        if not channel_allows_subnet(channel, subnet_id, scoped=scoped):
             continue
         ctype = channel["channel_type"]
         config = get_channel_config(channel)

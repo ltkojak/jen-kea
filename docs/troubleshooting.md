@@ -902,8 +902,10 @@ Investigation logging (Trace or Servers) puts a Kea server's logger at DEBUG for
 
 1. **Press *Turn it off now*** on Trace or Servers. It is the same restore with no waiting; the flash line says whether the daemon took it by `config-reload` or a restart, and what failed if it did not.
 2. **If the button fails too**, the cause is the same one the sweep keeps hitting — usually SSH to the host or the Kea host helper (Settings → Kea → SSH), or a config that changed under it. The banner and the Health row quote the error.
-3. **By hand**, on the Kea host: in `kea-dhcp4.conf`, find the `kea-dhcp4` entry in `loggers`, set `severity`/`debuglevel` back to what its `user-context.jen-investigation.restore` says (`"absent"` means delete the key; `{"created": true}` means delete the whole entry), delete the `jen-investigation` key, and `config-reload` (or restart) Kea. The sweep adopts nothing from a hand edit that removed the marker.
-4. A log that still has no packet dump after turning it on usually has a more specific logger entry of its own (`kea-dhcp4.packets`) with its own severity; that one wins for its component.
+3. **If the banner still shows after the config was fixed**, the file is clean but Kea has not taken it (v5.68.0-beta.9): a reload was refused and the restart failed. Jen keeps trying every minute; fix whatever stops Kea restarting (`systemctl status kea-dhcp4-server`, or `isc-kea-dhcp4-server` on older packages) and the next try finishes it.
+4. **A server that was removed from Jen** while its logging was on cannot be reached any more: the Health row says *investigation logging may still be on on &lt;name&gt; (removed from Jen)* and gives the host and the config path. Do the by-hand edit below on that host, then press **I restored it by hand** on the Servers page.
+5. **By hand**, on the Kea host: in `kea-dhcp4.conf`, find the `kea-dhcp4` entry in `loggers`, set `severity`/`debuglevel` back to what its `user-context.jen-investigation.restore` says (`"absent"` means delete the key; `{"created": true}` means delete the whole entry), delete the `jen-investigation` key, and `config-reload` (or restart) Kea. A hand edit that removed the marker is fine: the next restore finds nothing to change in the file and still reloads the daemon.
+6. A log that still has no packet dump after turning it on usually has a more specific logger entry of its own (`kea-dhcp4.packets`) with its own severity; that one wins for its component.
 
 ## Log Locations
 

@@ -30,10 +30,13 @@ def build(
     severity="INFO",
     debuglevel=None,
     probe=False,
+    ddns=False,
 ) -> dict:
     """`severity`/`debuglevel` set the kea-dhcp4 logger (the log-level probe, Q135, boots one daemon per level);
     `probe=True` adds what that probe needs on top of the compat config: two client classes whose tests read the
-    vendor and user class options, and `store-extended-info` so the relay-agent options reach the lease row."""
+    vendor and user class options, and `store-extended-info` so the relay-agent options reach the lease row.
+    `ddns=True` (v5.68.0-beta.9, Q144) turns DNS updates on towards a kea-dhcp-ddns that is NOT running, so the daemon logs its own
+    DHCP4_DDNS_REQUEST_SEND_FAILED line - the probe records what that line carries."""
     backend = {"type": "mysql", "host": db_host, "name": db_name, "user": db_user, "password": db_pass}
     cfg = {
         "Dhcp4": {
@@ -99,6 +102,21 @@ def build(
             {"name": "jen-probe-vendor", "test": "substring(option[60].hex,0,9) == 'jen-probe'"},
             {"name": "jen-probe-user", "test": "option[77].hex == 0x086a656e2d75736572"},
         ]
+    if ddns:
+        dhcp4 = cfg["Dhcp4"]
+        dhcp4["dhcp-ddns"] = {
+            "enable-updates": True,
+            "server-ip": "127.0.0.1",
+            "server-port": 53001,
+            "sender-ip": "127.0.0.1",
+            "sender-port": 0,
+            "max-queue-size": 1024,
+            "ncr-protocol": "UDP",
+            "ncr-format": "JSON",
+        }
+        dhcp4["ddns-send-updates"] = True
+        dhcp4["ddns-override-client-update"] = True
+        dhcp4["ddns-qualifying-suffix"] = "probe.example.org"
     return cfg
 
 

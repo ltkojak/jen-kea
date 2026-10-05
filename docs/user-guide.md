@@ -290,6 +290,8 @@ Only the last 1000 lines are scanned (the helper's own limit), so on a busy serv
 
 An investigation usually starts when someone already has a MAC. **Network → Problems** starts from the opposite end: the clients that had DHCP trouble lately, newest first, one row per client with what happened and how often, the server it happened on, when, and an **Investigate** button on every row. **Why?** on a row asks for the one-line answer the Investigation page gives (what Kea would do with this client) and shows it under the row; nothing is worked out until you ask. The filters narrow the list to one server or one kind, and the **NAK** and **Dropped** counters in a server's packet-health block on the Servers page link here, filtered to that server.
 
+The times in the list are the times of the events themselves, in UTC: Kea writes its log in its host's local time and Jen converts it, which the **Last seen** header spells out for each server when you hover it. A client that was refused in one subnet and has since moved appears only for people who can see every subnet (the log names no subnet for it that Jen can prove), and Jen never alerts about a backlog it reads for the first time on a server.
+
 What each kind means:
 
 - **NAK** — Kea answered the client's request with a DHCPNAK: it asked for an address it may not have. Visible at Kea's default INFO level (as the DHCPNAK Kea sends); at DEBUG the reason is added.

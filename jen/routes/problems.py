@@ -32,6 +32,22 @@ def _server_choices() -> list[dict]:
     ]
 
 
+def _clock_hover() -> str:
+    """The sentence behind the "Last seen" header: whose clock the times are, and how they were converted (v5.68.0-beta.9, Q144)."""
+    try:
+        notes = __cp.clock_notes()
+    except Exception as e:
+        logger.warning(f"problems: could not read the clock notes: {type(e).__name__}")
+        notes = []
+    text = (
+        "Times are UTC. A Kea host writes its log in its own local time; Jen converts each time with an offset it reads from the "
+        "lease records."
+    )
+    if notes:
+        text += " " + "; ".join(f"{n['name']}: {n['text']}" for n in notes) + "."
+    return text
+
+
 @bp.route("/problems")
 @login_required
 @diagnostic_surface(subject="client")
@@ -73,6 +89,7 @@ def problems_page():
         kinds=__cp.ALL_KINDS,
         server_name=__cp.server_name,
         has_log_source=any(s.get("ssh_host") for s in extensions.KEA_SERVERS or []),
+        clock_hover=_clock_hover(),
     )
 
 

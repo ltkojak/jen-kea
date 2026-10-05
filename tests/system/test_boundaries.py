@@ -1876,7 +1876,7 @@ from jen.models import db as d
 with app.app_context():
     with d.jen_db() as db, db.cursor() as cur:
         cur.execute("DELETE FROM client_problems")
-        cur.execute("DELETE FROM settings WHERE setting_key LIKE 'client_problems_wm:%'")
+        cur.execute("DELETE FROM settings WHERE setting_key LIKE 'client_problems_wm:%' OR setting_key LIKE 'client_problems_clock:%'")
         cur.execute("DELETE FROM devices WHERE mac=%s", ("S18MAC",))
         S18_DEVICE
 """
@@ -1917,8 +1917,9 @@ def test_17_a_client_kea_naks_is_in_the_problems_inbox_within_one_sweep(stack):
         assert naks and naks[0]["count"] >= 1 and naks[0]["resolved_at"] is None, (
             f"INVARIANT: the NAK Kea sent is in the inbox after one sweep: {got}\nwhat kea-a logged for the client:\n{seen}"
         )
-        assert naks[0]["subnet_id"] == 1, (
-            "INVARIANT: the row is attributed to the client's subnet (its device row; a NAK names no address)"
+        assert naks[0]["subnet_id"] is None, (
+            "INVARIANT: a NAK that names no address is NOT placed by where the client is now (v5.68.0-beta.9): the row is "
+            "unattributed, so it is for callers who may see every subnet"
         )
         assert got["rows2"] == got["rows1"] and got["second"]["events"] == 0, (
             f"INVARIANT: a second sweep over the same log adds nothing (the watermark): {got}"
@@ -1943,6 +1944,6 @@ def test_17_a_client_kea_naks_is_in_the_problems_inbox_within_one_sweep(stack):
         st.jen_py(
             "from jen.models import db as d\nwith app.app_context():\n    with d.jen_db() as db, db.cursor() as cur:\n"
             f"        cur.execute('DELETE FROM client_problems')\n        cur.execute(\"DELETE FROM devices WHERE mac='{S18_MAC}'\")\n"
-            "        cur.execute(\"DELETE FROM settings WHERE setting_key LIKE 'client_problems_wm:%'\")\n",
+            "        cur.execute(\"DELETE FROM settings WHERE setting_key LIKE 'client_problems_wm:%' OR setting_key LIKE 'client_problems_clock:%'\")\n",
             check=False,
         )

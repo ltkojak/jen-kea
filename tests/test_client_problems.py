@@ -188,8 +188,11 @@ class TestANakIsOneEvent:
         assert klt.problem_events([_line("10:00:00.100", "INFO", "DHCP4_PACKET_SEND", "packet DHCPACK (type 5)")]) == []
 
 
-def _ev(kind, mac, ts, ip="", detail="d"):
-    return {"kind": kind, "mac": mac, "ts": ts, "ip": ip, "detail": detail, "level": "INFO", "id": "X", "tid": ""}
+def _ev(kind, mac, ts, ip="", detail="d", subnet_id=None):
+    return {
+        "kind": kind, "mac": mac, "ts": ts, "ip": ip, "detail": detail, "level": "INFO", "id": "X", "tid": "",
+        "subnet_id": subnet_id,
+    }  # fmt: skip
 
 
 T0 = datetime(2026, 10, 4, 10, 0, 0)
@@ -401,3 +404,132 @@ class TestTheAlertType:
         from jen.services.icons import is_icon
 
         assert is_icon(alerts.ALERT_TYPE_ICONS["client_problems"])
+
+
+# ── v5.68.0-beta.9 (Q144): the events' own times, judged against now; the Kea host's clock; the scoped alert ───────────
+
+
+class TestTheEventsOwnTimes:
+    def test_a_group_carries_the_first_and_last_timestamps_of_its_own_events(self):
+        events = [_ev("nak", MAC, T0 + timedelta(minutes=m)) for m in (5, 1, 9)]
+        groups, _r, _wm = cp.collect(events, None)
+        g = groups[("nak", MAC, "")]
+        assert g["first_ts"] == T0 + timedelta(minutes=1) and g["last_ts"] == T0 + timedelta(minutes=9)
+
+    def test_the_converted_time_is_what_is_stored_while_the_watermark_stays_in_the_logs_clock(self):
+        now = T0 + timedelta(days=1)
+        events = cp.shift_events([_ev("nak", MAC, T0 + timedelta(minutes=m)) for m in (1, 2)], -18000, now)
+        groups, _r, wm = cp.collect(events, None, now=now)
+        g = groups[("nak", MAC, "")]
+        assert g["first_ts"] == T0 + timedelta(minutes=1, hours=5) and wm == T0 + timedelta(minutes=2)
+
+    def test_the_alert_window_is_judged_against_now_not_the_newest_line(self):
+        six_hours_ago = [_ev("nak", MAC, T0 + timedelta(seconds=i)) for i in range(3)]
+        _g, newest_anchored, _wm = cp.collect(six_hours_ago, None)
+        assert newest_anchored[("nak", MAC)] == 3, (
+            "anchored at the newest line (the pure default): three NAKs just happened"
+        )
+        _g, recent, _wm = cp.collect(six_hours_ago, None, now=T0 + timedelta(hours=6))
+        assert recent.get(("nak", MAC), 0) == 0, "judged against now they are six hours old and are no alert"
+
+    def test_a_group_keeps_the_newest_events_own_subnet(self):
+        events = [_ev("nak", MAC, T0, subnet_id=2), _ev("nak", MAC, T0 + timedelta(seconds=5), subnet_id=None)]
+        groups, _r, _wm = cp.collect(events, None)
+        assert groups[("nak", MAC, "")]["subnet_id"] is None, "the newest event named none: the row is unattributed"
+        events = [_ev("nak", MAC, T0, subnet_id=None), _ev("nak", MAC, T0 + timedelta(seconds=5), subnet_id=1)]
+        assert cp.collect(events, None)[0][("nak", MAC, "")]["subnet_id"] == 1
+
+    def test_a_converted_time_is_never_later_than_now(self):
+        now = T0 + timedelta(minutes=10)
+        (e,) = cp.shift_events([_ev("nak", MAC, T0 + timedelta(minutes=9))], -3600, now)
+        assert e["uts"] == now and e["ts"] == T0 + timedelta(minutes=9), "an offset not caught up with: clamp, keep ts"
+
+
+class TestTheKeaHostsClock:
+    ALLOC = datetime(2026, 10, 4, 7, 0, 0)  # the host's local clock, UTC-5: 12:00 UTC
+
+    def _alloc(self, ip, local=None, secs=3600):
+        return {"ts": local or self.ALLOC, "ip": ip, "seconds": secs}
+
+    def test_utc_minus_five_from_one_lease_that_lands_on_a_quarter_hour(self):
+        expiries = {"10.0.0.5": datetime(2026, 10, 4, 13, 0, 0)}  # 12:00 UTC + 3600 s
+        assert cp.clock_offset([self._alloc("10.0.0.5")], expiries) == -18000.0
+
+    def test_two_leases_that_agree_are_enough_even_when_each_is_a_few_minutes_off(self):
+        expiries = {"10.0.0.5": datetime(2026, 10, 4, 13, 3, 0), "10.0.0.6": datetime(2026, 10, 4, 13, 1, 0)}
+        got = cp.clock_offset([self._alloc("10.0.0.5"), self._alloc("10.0.0.6")], expiries)
+        assert got == -18000.0, "a few minutes of skew: to the nearest quarter hour it is still UTC-5"
+
+    def test_a_single_lease_that_is_not_near_a_quarter_hour_is_not_trusted(self):
+        expiries = {"10.0.0.5": datetime(2026, 10, 4, 13, 7, 0)}  # renewed later: 7 minutes from any quarter hour
+        assert cp.clock_offset([self._alloc("10.0.0.5")], expiries) is None
+
+    def test_two_leases_that_disagree_settle_nothing(self):
+        expiries = {"10.0.0.5": datetime(2026, 10, 4, 13, 0, 0), "10.0.0.6": datetime(2026, 10, 4, 14, 0, 0)}
+        assert cp.clock_offset([self._alloc("10.0.0.5"), self._alloc("10.0.0.6")], expiries) is None
+
+    def test_only_the_newest_allocation_of_an_address_counts(self):
+        later = self.ALLOC + timedelta(minutes=30)
+        allocs = [self._alloc("10.0.0.5"), self._alloc("10.0.0.5", local=later)]
+        expiries = {"10.0.0.5": datetime(2026, 10, 4, 13, 30, 0)}  # the renewal at 12:30 UTC
+        assert cp.clock_offset(allocs, expiries) == -18000.0
+
+    def test_no_lease_row_no_answer(self):
+        assert cp.clock_offset([self._alloc("10.0.0.5")], {}) is None and cp.clock_offset([], {"10.0.0.5": T0}) is None
+
+    def test_a_host_east_of_utc(self):
+        expiries = {"10.0.0.5": datetime(2026, 10, 4, 13, 0, 0)}
+        assert cp.clock_offset([self._alloc("10.0.0.5", local=datetime(2026, 10, 4, 14, 0, 0))], expiries) == 7200.0
+
+    def test_the_sentence_for_the_page(self):
+        assert cp.describe_offset(-18000.0, "measured") == "UTC-5 (from the lease records)"
+        assert cp.describe_offset(19800.0, "measured") == "UTC+5:30 (from the lease records)"
+        assert cp.describe_offset(0.0, "measured") == "UTC+0 (from the lease records)"
+        assert "assumed UTC" in cp.describe_offset(None, "assumed") and "assumed UTC" in cp.describe_offset(
+            0.0, "assumed"
+        )
+
+
+class TestAnAlertAboutAClientWithNoSubnetFailsClosedForAScopedChannel:
+    def test_the_channel_rule(self):
+        scoped = {"channel_type": "telegram", "subnet_scope": "[1, 2]"}
+        open_ = {"channel_type": "slack", "subnet_scope": None}
+        assert alerts.channel_allows_subnet(scoped, None) is True, "kea_down and friends: no subnet, goes everywhere"
+        assert alerts.channel_allows_subnet(scoped, None, scoped=True) is False
+        assert alerts.channel_allows_subnet(open_, None, scoped=True) is True, (
+            "a channel with no scope hears everything"
+        )
+        assert alerts.channel_allows_subnet(scoped, 1, scoped=True) is True
+        assert alerts.channel_allows_subnet(scoped, 3, scoped=True) is False
+        assert alerts.channel_allows_subnet({"subnet_scope": "[]"}, None, scoped=True) is True, (
+            "an empty scope is no scope"
+        )
+
+    def test_a_malformed_scope_still_fails_open(self):
+        assert alerts.channel_allows_subnet({"subnet_scope": "{not json"}, None, scoped=True) is True
+
+    def test_client_problems_is_a_scoped_alert_type_by_itself(self):
+        assert "client_problems" in alerts.SCOPED_ALERT_TYPES and "kea_down" not in alerts.SCOPED_ALERT_TYPES
+
+    def test_send_alert_reaches_the_open_channel_and_not_the_scoped_one(self, monkeypatch):
+        sent = []
+        channels = [
+            {"channel_type": "telegram", "subnet_scope": "[1]"},
+            {"channel_type": "slack", "subnet_scope": None},
+        ]
+        monkeypatch.setattr(alerts, "get_alert_template", lambda alert_type: "{{ server }}")  # no database in this file
+        monkeypatch.setattr(alerts, "get_active_channels", lambda: channels)
+        monkeypatch.setattr(alerts, "channel_handles_alert", lambda channel, alert_type: True)
+        monkeypatch.setattr(alerts, "get_channel_config", lambda channel: {})
+        monkeypatch.setattr(alerts, "_send_telegram_channel", lambda message, config: sent.append("telegram") or True)
+        monkeypatch.setattr(alerts, "_send_slack_channel", lambda message, config: sent.append("slack") or True)
+        monkeypatch.setattr(alerts, "__emit_event", lambda *a, **k: None)
+        kw = {"mac": MAC, "ip": "", "kind": "NAK", "count": 3, "server": "kea-a", "investigate": "/client?q=x"}
+        results = alerts.send_alert("client_problems", log_result=False, subnet_id=None, **kw)
+        assert sent == ["slack"] and results == [("slack", True, "")]
+        sent.clear()
+        alerts.send_alert("client_problems", log_result=False, subnet_id=1, **kw)
+        assert sorted(sent) == ["slack", "telegram"]
+        sent.clear()
+        alerts.send_alert("kea_down", log_result=False, subnet_id=None, server="kea-a")
+        assert sorted(sent) == ["slack", "telegram"], "an unscoped alert type is unchanged"

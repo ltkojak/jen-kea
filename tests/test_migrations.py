@@ -553,9 +553,20 @@ class TestMigration30ClientProblems:
             cur.execute("SHOW COLUMNS FROM client_problems")
             cols = {c["Field"]: c for c in cur.fetchall()}
         assert set(cols) == {
-            "id", "server_id", "kind", "mac", "ip", "subnet_id", "first_seen", "last_seen", "count", "detail",
-            "alerted_at", "resolved_at",
-        }  # fmt: skip
+            "id",
+            "server_id",
+            "kind",
+            "mac",
+            "ip",
+            "subnet_id",
+            "first_seen",
+            "last_seen",
+            "count",
+            "detail",
+            "alerted_at",
+            "alert_attempted_at",
+            "resolved_at",
+        }  # fmt: skip  (alert_attempted_at: migration 31, v5.68.0-beta.9)
         # mac and ip are NOT NULL with an empty default: a NULL would make the unique key useless (MySQL treats NULLs as distinct)
         assert cols["mac"]["Null"] == "NO" and cols["ip"]["Null"] == "NO"
         assert cols["subnet_id"]["Null"] == "YES" and cols["resolved_at"]["Null"] == "YES"
@@ -574,6 +585,48 @@ class TestMigration30ClientProblems:
 
         with jen_db() as db:
             _m030_client_problems(db)  # must not raise when the table already exists
+            db.commit()
+
+
+class TestMigration31ClientProblemsAlertAttempted:
+    """v5.68.0-beta.9 (Q144) - `alert_attempted_at`: when the sweep last TRIED to send a Problems alert, apart from `alerted_at` (when one
+    was DELIVERED). Additive: a new numbered migration, never an edit of migration 30."""
+
+    def test_migration_recorded_and_it_is_a_new_numbered_one(self):
+        assert 31 in applied_versions()
+        by_version = {v: fn.__name__ for v, _d, fn in MIGRATIONS}
+        assert by_version[31] == "_m031_client_problems_alert_attempted" and by_version[30] == "_m030_client_problems"
+        assert MIGRATIONS[-1][0] >= 31
+
+    def test_the_column_is_a_nullable_datetime_next_to_alerted_at(self):
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("SHOW COLUMNS FROM client_problems LIKE 'alert_attempted_at'")
+            col = cur.fetchone()
+        assert col is not None and col["Type"].lower().startswith("datetime") and col["Null"] == "YES"
+
+    def test_rerun_is_idempotent(self):
+        from jen.models.migrations import _m031_client_problems_alert_attempted
+
+        with jen_db() as db:
+            _m031_client_problems_alert_attempted(db)  # must not raise when the column already exists
+            db.commit()
+
+    def test_it_adds_the_column_to_a_table_that_lacks_it_and_keeps_the_rows(self):
+        from jen.models.migrations import _m031_client_problems_alert_attempted
+
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("DELETE FROM client_problems WHERE server_id=99")
+            cur.execute(
+                "INSERT INTO client_problems (server_id, kind, mac, ip, first_seen, last_seen) "
+                "VALUES (99, 'nak', 'aa:bb:cc:dd:ee:31', '', NOW(), NOW())"
+            )
+            cur.execute("ALTER TABLE client_problems DROP COLUMN alert_attempted_at")
+            db.commit()
+            _m031_client_problems_alert_attempted(db)
+            db.commit()
+            cur.execute("SELECT alert_attempted_at FROM client_problems WHERE server_id=99")
+            assert cur.fetchone() == {"alert_attempted_at": None}
+            cur.execute("DELETE FROM client_problems WHERE server_id=99")
             db.commit()
 
 

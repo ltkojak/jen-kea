@@ -1117,6 +1117,23 @@ def _m030_client_problems(db):
     logger.info("Migration 30: client_problems table")
 
 
+def _m031_client_problems_alert_attempted(db):
+    """
+    v5.68.0-beta.9 (Q144) - `alert_attempted_at` on client_problems: when the sweep last TRIED to send this row's alert, kept apart
+    from `alerted_at` (when one was DELIVERED). The once-a-day rule reads `alerted_at`, so a failed delivery no longer silences the
+    client for 24 hours; the retry (once per 30 minutes while it keeps failing) reads `alert_attempted_at`. Additive and idempotent
+    (the column is added only when it is absent).
+    """
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() "
+            "AND TABLE_NAME = 'client_problems' AND COLUMN_NAME = 'alert_attempted_at'"
+        )
+        if not cur.fetchone()["n"]:
+            cur.execute("ALTER TABLE client_problems ADD COLUMN alert_attempted_at DATETIME NULL AFTER alerted_at")
+    logger.info("Migration 31: client_problems.alert_attempted_at")
+
+
 MIGRATIONS = [
     (1, "Baseline schema (all tables, current definitions)", _m001_baseline),
     (2, "users.avatar_url column", _m002_users_avatar),
@@ -1168,6 +1185,11 @@ MIGRATIONS = [
     ),
     (29, "plugin_tables: persisted plugin table ownership (v5.67.0-beta.14, Q128)", _m029_plugin_tables),
     (30, "client_problems: the Problems inbox (v5.68.0-beta.5, Q140)", _m030_client_problems),
+    (
+        31,
+        "client_problems.alert_attempted_at: delivered vs attempted (v5.68.0-beta.9, Q144)",
+        _m031_client_problems_alert_attempted,
+    ),
 ]
 
 # Registry sanity: strictly increasing versions, never reordered

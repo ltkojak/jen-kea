@@ -203,3 +203,137 @@ class TestVisibilityNote:
     def test_debug_lines_seen_says_so(self):
         note = klt.visibility_note(klt.parse_lines(NAK, MAC), 10)
         assert "logs at DEBUG" in note
+
+
+# ── v5.68.0-beta.9 (Q144): attribution by what the log showed BEFORE the event ───────────────────────────────────────
+
+
+def _alloc(ts, mac, ip, tid, msg_id="DHCP4_LEASE_ALLOC", secs=3600):
+    return _line(ts, "INFO", msg_id, f"{_label(mac, tid)}: lease {ip} has been allocated for {secs} seconds")
+
+
+def _ddns_fail(ts, ip, tid=None):
+    label = f"[hwtype=1 {MAC}], tid=0x{tid}: " if tid else ""
+    return _line(
+        ts,
+        "ERROR",
+        "DHCP4_DDNS_REQUEST_SEND_FAILED",
+        f"{label}failed sending a request to kea-dhcp-ddns, error: connection refused, ncr: {{ ip-address : {ip} }}",
+        "ddns4-logger",
+    )
+
+
+class TestADdnsFailureIsBlamedOnTheNearestPrecedingAllocation:
+    def test_a_allocates_a_fails_b_reuses_the_failure_stays_with_a(self):
+        lines = [
+            _alloc("10:00:00.100", MAC, "10.0.1.55", "1"),
+            _ddns_fail("10:00:00.200", "10.0.1.55"),
+            _alloc("10:30:00.100", OTHER_MAC, "10.0.1.55", "2"),
+        ]
+        (event,) = klt.problem_events(lines)
+        assert event["kind"] == "ddns-failed" and event["mac"] == MAC and event["ip"] == "10.0.1.55"
+
+    def test_the_newest_allocation_before_the_failure_wins_not_the_newest_in_the_tail(self):
+        lines = [
+            _alloc("10:00:00.100", MAC, "10.0.1.55", "1"),
+            _alloc("10:10:00.100", OTHER_MAC, "10.0.1.55", "2"),
+            _ddns_fail("10:10:00.200", "10.0.1.55"),
+            _alloc("10:20:00.100", MAC, "10.0.1.55", "3"),
+        ]
+        (event,) = klt.problem_events(lines)
+        assert event["mac"] == OTHER_MAC
+
+    def test_a_failure_before_any_allocation_in_the_tail_is_dropped_not_given_to_a_later_holder(self):
+        lines = [_ddns_fail("10:00:00.200", "10.0.1.55"), _alloc("10:30:00.100", OTHER_MAC, "10.0.1.55", "2")]
+        assert klt.problem_events(lines) == []
+
+    def test_a_failure_that_names_a_transaction_prefers_the_allocation_in_that_transaction(self):
+        lines = [
+            _alloc("10:00:00.100", MAC, "10.0.1.55", "1"),
+            _alloc("10:00:00.150", OTHER_MAC, "10.0.1.55", "2"),
+            _ddns_fail("10:00:00.200", "10.0.1.55", tid="1"),
+        ]
+        (event,) = klt.problem_events(lines)
+        assert event["mac"] == MAC, "the failure's own transaction, though another client's allocation is nearer"
+
+    def test_a_transaction_that_matches_nothing_falls_back_to_the_nearest_preceding(self):
+        lines = [_alloc("10:00:00.100", MAC, "10.0.1.55", "1"), _ddns_fail("10:00:00.200", "10.0.1.55", tid="9")]
+        assert klt.problem_events(lines)[0]["mac"] == MAC
+
+
+class TestTheSubnetKeaSelectedForTheTransaction:
+    def _selected(self, ts, mac, tid, subnet):
+        return _line(
+            ts,
+            "DEBUG",
+            "DHCP4_SUBNET_SELECTED",
+            f"{_label(mac, tid)}: the subnet with ID {subnet} was selected for client assignments",
+            "packets",
+        )
+
+    def _nak_send(self, ts, mac, tid):
+        return _line(
+            ts,
+            "INFO",
+            "DHCP4_PACKET_SEND",
+            f"{_label(mac, tid)}: trying to send packet DHCPNAK (type 6) from 10.0.0.1:67 to 10.0.0.2:67 on interface eth0",
+            "packets",
+        )
+
+    def test_a_nak_carries_the_subnet_selected_in_its_own_transaction(self):
+        lines = [self._selected("10:00:00.100", MAC, "5", 2), self._nak_send("10:00:00.200", MAC, "5")]
+        (event,) = klt.problem_events(lines)
+        assert event["kind"] == "nak" and event["subnet_id"] == 2
+
+    def test_no_subnet_line_means_no_subnet_never_a_guess(self):
+        (event,) = klt.problem_events([self._nak_send("10:00:00.200", MAC, "5")])
+        assert event["subnet_id"] is None
+
+    def test_another_clients_or_another_transactions_selection_is_not_borrowed(self):
+        lines = [
+            self._selected("10:00:00.100", OTHER_MAC, "5", 2),
+            self._selected("10:00:00.110", MAC, "6", 3),
+            self._nak_send("10:00:00.200", MAC, "5"),
+        ]
+        assert klt.problem_events(lines)[0]["subnet_id"] is None
+
+    def test_a_selection_from_long_before_is_a_different_exchange(self):
+        lines = [self._selected("10:00:00.100", MAC, "5", 2), self._nak_send("10:05:00.200", MAC, "5")]
+        assert klt.problem_events(lines)[0]["subnet_id"] is None, (
+            "tids are the client's xid and repeat; a minute is the limit"
+        )
+
+    def test_the_two_lines_of_one_nak_keep_the_subnet(self):
+        lines = [
+            self._selected("10:00:00.100", MAC, "5", 2),
+            _line(
+                "10:00:00.150",
+                "DEBUG",
+                "DHCP4_PACKET_NAK_0004",
+                f"{_label(MAC, '5')}: failed to grant a lease, client sent ciaddr 0.0.0.0, requested-ip-address 10.0.0.9",
+                "bad-packets",
+            ),
+            self._nak_send("10:00:00.200", MAC, "5"),
+        ]
+        (event,) = klt.problem_events(lines)
+        assert event["subnet_id"] == 2 and event["ip"] == "10.0.0.9"
+
+
+class TestAllocationsAndTheNewestLine:
+    def test_allocation_and_reuse_lines_come_back_in_order_with_their_seconds(self):
+        lines = [
+            _alloc("10:00:00.100", MAC, "10.0.1.55", "1"),
+            _alloc("10:00:01.100", OTHER_MAC, "10.0.1.56", "2", msg_id="DHCP4_LEASE_REUSE", secs=600),
+            _line("10:00:02.000", "INFO", "DHCP4_LEASE_OFFER", f"{_label(MAC)}: lease 10.0.1.57 will be offered"),
+        ]
+        got = klt.allocations(lines)
+        assert [(a["ip"], a["seconds"]) for a in got] == [("10.0.1.55", 3600), ("10.0.1.56", 600)]
+        assert got[0]["ts"] < got[1]["ts"]
+
+    def test_the_newest_timestamp_of_any_dhcp4_line(self):
+        lines = [
+            _alloc("10:00:00.100", MAC, "10.0.1.55", "1"),
+            "not a log line",
+            _alloc("10:07:00.000", MAC, "10.0.1.56", "2"),
+        ]
+        assert klt.newest_ts(lines).strftime("%H:%M:%S") == "10:07:00" and klt.newest_ts(["nothing"]) is None

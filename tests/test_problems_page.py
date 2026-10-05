@@ -93,6 +93,13 @@ class TestThePage:
         body = logged_in_client.get("/problems").data.decode()
         assert f"/client?q={quote(MAC_A, safe='')}" in body and "/client?q=10.46.0.9" in body
 
+    def test_the_last_seen_header_says_whose_clock_the_times_are_and_how_they_were_converted(
+        self, logged_in_client, inbox, monkeypatch
+    ):
+        monkeypatch.setattr(cp, "clock_notes", lambda: [{"name": "kea-a", "text": "UTC-5 (from the lease records)"}])
+        body = logged_in_client.get("/problems").data.decode()
+        assert "Times are UTC." in body and "kea-a: UTC-5 (from the lease records)" in body
+
     def test_the_server_filter_keeps_that_servers_rows(self, logged_in_client, inbox):
         body = logged_in_client.get("/problems?server=1").data.decode()
         assert MAC_A in body and "10.46.0.9" not in body

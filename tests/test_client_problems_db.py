@@ -26,18 +26,31 @@ SERVER_A = {"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5"}
 SERVER_B = {"id": 2, "name": "kea-b", "ssh_host": "10.0.0.6"}
 
 
-def _line(second, msg_id, body, mac=MAC, tid=None, level="INFO", minute=0):
+def _line(second, msg_id, body, mac=MAC, tid=None, level="INFO", minute=0, hour=11, day=4):
     tid = tid or f"0x{second:x}{minute:x}"
     return (
-        f"2026-10-04 11:{minute:02d}:{second:02d}.100 {level:<5} [kea-dhcp4.test/1.1] {msg_id} "
+        f"2026-10-{day:02d} {hour:02d}:{minute:02d}:{second:02d}.100 {level:<5} [kea-dhcp4.test/1.1] {msg_id} "
         f"[hwtype=1 {mac}], cid=[01:{mac}], tid={tid}: {body}"
     )
 
 
-def nak(second, mac=MAC, minute=0):
+def nak(second, mac=MAC, minute=0, hour=11, day=4):
     return _line(
-        second, "DHCP4_PACKET_SEND", "trying to send packet DHCPNAK (type 6) from a:67 to b:67", mac, minute=minute
+        second,
+        "DHCP4_PACKET_SEND",
+        "trying to send packet DHCPNAK (type 6) from a:67 to b:67",
+        mac,
+        minute=minute,
+        hour=hour,
+        day=day,
     )
+
+
+def prime(logs, server_id=1):
+    """A server's FIRST read sets its watermark and never alerts (a backlog is not news). Do that read with one ordinary line, so the
+    next sweep - the one under test - is a normal one."""
+    logs[server_id] = [_line(1, "DHCP4_LEASE_OFFER", "lease 10.45.0.9 will be offered", hour=10)]
+    cp.sweep(NOW - timedelta(minutes=10), servers=[SERVER_A if server_id == 1 else SERVER_B])
 
 
 def decline(second, ip="10.45.0.9", mac=MAC):
@@ -66,7 +79,9 @@ def stack(db, monkeypatch):
     monkeypatch.setattr(
         alerts,
         "send_alert",
-        lambda alert_type, log_result=True, subnet_id=None, **kw: calls["alerts"].append((alert_type, subnet_id, kw)),
+        lambda alert_type, log_result=True, subnet_id=None, **kw: (
+            calls["alerts"].append((alert_type, subnet_id, kw)) or [("telegram", True, "")]
+        ),
     )
     _clean(db)
     yield logs, calls
@@ -76,9 +91,12 @@ def stack(db, monkeypatch):
 def _clean(db):
     with db.cursor() as cur:
         cur.execute("DELETE FROM client_problems")
-        cur.execute("DELETE FROM settings WHERE setting_key LIKE 'client_problems_wm:%'")
         cur.execute(
-            "DELETE FROM lease4 WHERE HEX(hwaddr) IN (%s, %s) OR address IN (INET_ATON('10.45.0.60'), INET_ATON('10.45.0.61'))",
+            "DELETE FROM settings WHERE setting_key LIKE 'client_problems_wm:%' OR setting_key LIKE 'client_problems_clock:%'"
+        )
+        cur.execute(
+            "DELETE FROM lease4 WHERE HEX(hwaddr) IN (%s, %s) OR address IN "
+            "(INET_ATON('10.45.0.60'), INET_ATON('10.45.0.61'), INET_ATON('10.45.0.70'))",
             (MAC_HEX, MAC2_HEX),
         )
         cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier) IN (%s, %s)", (MAC_HEX, MAC2_HEX))
@@ -112,7 +130,8 @@ class TestTheLogKinds:
         cp.sweep(NOW, servers=[SERVER_A])
         assert rows(db)[0]["subnet_id"] == 2
 
-    def test_a_row_with_no_address_takes_the_subnet_its_mac_is_in_now(self, db, stack):
+    def test_a_row_with_no_address_is_not_placed_by_where_its_mac_is_now(self, db, stack):
+        # v5.68.0-beta.9 (Q144): it used to take the client's CURRENT subnet - which showed a NAK from subnet B to a user of subnet A
         logs, _c = stack
         with db.cursor() as cur:
             cur.execute(
@@ -123,7 +142,7 @@ class TestTheLogKinds:
         db.commit()
         logs[1] = [nak(1)]
         cp.sweep(NOW, servers=[SERVER_A])
-        assert rows(db)[0]["subnet_id"] == 1
+        assert rows(db)[0]["subnet_id"] is None
 
     def test_a_row_whose_client_is_nowhere_has_no_subnet_and_is_for_unrestricted_callers_only(self, db, stack):
         logs, _c = stack
@@ -209,11 +228,11 @@ class TestResolution:
         logs[1] = [nak(1), nak(2)]
         cp.sweep(NOW, servers=[SERVER_A])
         cp.sweep(NOW + timedelta(hours=25), servers=[SERVER_A])
-        logs[1] = [nak(1, minute=30)]
+        logs[1] = [nak(1, minute=30, hour=13, day=5)]
         cp.sweep(NOW + timedelta(hours=26), servers=[SERVER_A])
         row = rows(db)[0]
         assert row["resolved_at"] is None and row["count"] == 1, "a new episode: the old count does not carry over"
-        assert row["first_seen"] == NOW + timedelta(hours=26)
+        assert row["first_seen"] == datetime(2026, 10, 5, 13, 30, 1)
 
     def test_rows_not_seen_for_thirty_days_are_pruned_and_younger_ones_kept(self, db, stack):
         logs, _c = stack
@@ -233,28 +252,32 @@ class TestResolution:
 class TestTheAlert:
     def test_three_in_an_hour_is_one_alert_carrying_the_subnet(self, db, stack):
         logs, calls = stack
-        with db.cursor() as cur:
-            cur.execute(
-                "INSERT INTO lease4 (address, hwaddr, valid_lifetime, expire, subnet_id, state) "
-                "VALUES (INET_ATON('10.45.0.60'), UNHEX(%s), 3600, DATE_ADD(NOW(), INTERVAL 1 HOUR), 1, 0)",
-                (MAC_HEX,),
-            )
-        db.commit()
-        logs[1] = [nak(1), nak(2), nak(3)]
+        prime(logs)
+        logs[1] = [decline(1), decline(2), decline(3)]  # a decline names the address, and the address names the subnet
         out = cp.sweep(NOW, servers=[SERVER_A])
         assert out["alerts"] == 1
         ((alert_type, subnet_id, kw),) = calls["alerts"]
         assert alert_type == "client_problems" and subnet_id == 1
-        assert kw["mac"] == MAC and kw["kind"] == "NAK" and kw["count"] == 3 and kw["investigate"] == f"/client?q={MAC}"
-        assert kw["server"] == "kea-a"
+        assert kw["mac"] == MAC and kw["kind"] == "Declined an address" and kw["count"] == 3
+        assert kw["investigate"] == f"/client?q={MAC}" and kw["server"] == "kea-a"
+
+    def test_a_client_with_no_attributable_subnet_alerts_with_none_which_a_scoped_channel_refuses(self, db, stack):
+        logs, calls = stack
+        prime(logs)
+        logs[1] = [nak(1), nak(2), nak(3)]
+        assert cp.sweep(NOW, servers=[SERVER_A])["alerts"] == 1
+        assert calls["alerts"][0][1] is None
+        assert alerts.channel_allows_subnet({"subnet_scope": "[1]"}, None, scoped=True) is False
 
     def test_two_is_not_enough(self, db, stack):
         logs, calls = stack
+        prime(logs)
         logs[1] = [nak(1), nak(2)]
         assert cp.sweep(NOW, servers=[SERVER_A])["alerts"] == 0 and calls["alerts"] == []
 
     def test_a_chattering_client_is_one_alert_not_sixty(self, db, stack):
         logs, calls = stack
+        prime(logs)
         logs[1] = [nak(i) for i in range(1, 11)]
         cp.sweep(NOW, servers=[SERVER_A])
         logs[1] = [nak(i) for i in range(1, 11)] + [nak(i, minute=1) for i in range(1, 51)]
@@ -263,6 +286,7 @@ class TestTheAlert:
 
     def test_it_alerts_again_after_a_day(self, db, stack):
         logs, calls = stack
+        prime(logs)
         logs[1] = [nak(1), nak(2), nak(3)]
         cp.sweep(NOW, servers=[SERVER_A])
         with db.cursor() as cur:
@@ -274,19 +298,22 @@ class TestTheAlert:
 
     def test_a_different_kind_for_the_same_client_is_its_own_alert(self, db, stack):
         logs, calls = stack
+        prime(logs)
         logs[1] = [nak(1), nak(2), nak(3), decline(4), decline(5), decline(6)]
         cp.sweep(NOW, servers=[SERVER_A])
         assert sorted(c[2]["kind"] for c in calls["alerts"]) == ["Declined an address", "NAK"]
 
     def test_the_threshold_key_is_honoured(self, db, stack, monkeypatch):
         logs, calls = stack
+        prime(logs)
         monkeypatch.setattr(extensions, "CLIENT_PROBLEM_THRESHOLD", 2)
         logs[1] = [nak(1), nak(2)]
         cp.sweep(NOW, servers=[SERVER_A])
         assert len(calls["alerts"]) == 1
 
-    def test_a_failing_sender_does_not_stop_the_sweep_and_still_marks_the_day(self, db, stack, monkeypatch):
+    def test_a_failing_sender_does_not_stop_the_sweep_and_is_not_marked_sent(self, db, stack, monkeypatch):
         logs, calls = stack
+        prime(logs)
 
         def boom(*a, **k):
             raise RuntimeError("telegram is down")
@@ -294,7 +321,7 @@ class TestTheAlert:
         monkeypatch.setattr(alerts, "send_alert", boom)
         logs[1] = [nak(1), nak(2), nak(3)]
         out = cp.sweep(NOW, servers=[SERVER_A])
-        assert out["errors"] == [] and rows(db)[0]["alerted_at"] is not None
+        assert out["errors"] == [] and rows(db)[0]["alerted_at"] is None and rows(db)[0]["alert_attempted_at"] == NOW
 
     def test_the_state_kinds_never_alert(self, db, stack):
         _l, calls = stack
@@ -307,6 +334,230 @@ class TestTheAlert:
         for i in range(5):
             cp.sweep(NOW + timedelta(minutes=5 * i), servers=[])
         assert calls["alerts"] == []
+
+
+# ── v5.68.0-beta.9 (Q144): scope by the event, honest times, a delivered alert is one that landed ────────────────────────
+
+
+def alloc(second, ip, mac=MAC, hour=11, minute=0, secs=3600):
+    return _line(
+        second, "DHCP4_LEASE_ALLOC", f"lease {ip} has been allocated for {secs} seconds", mac, hour=hour, minute=minute
+    )
+
+
+def ddns_failed(second, ip, hour=11, minute=0):
+    return (
+        f"2026-10-04 {hour:02d}:{minute:02d}:{second:02d}.100 ERROR [kea-dhcp4.ddns4-logger/1.1] DHCP4_DDNS_REQUEST_SEND_FAILED "
+        f"failed sending a request to kea-dhcp-ddns, error: connection refused, ncr: {{ ip-address : {ip} }}"
+    )
+
+
+class TestAnEventIsScopedByItsOwnEvidence:
+    def test_a_nak_for_a_client_now_in_another_subnet_is_not_shown_to_that_subnets_users(self, db, stack):
+        logs, calls = stack
+        prime(logs)
+        logs[1] = [nak(1), nak(2), nak(3)]  # NAKed in B's world: the lines name no address and no subnet
+        with db.cursor() as cur:  # ...and the client has since moved to A, where it holds a lease
+            cur.execute(
+                "INSERT INTO lease4 (address, hwaddr, valid_lifetime, expire, subnet_id, state) "
+                "VALUES (INET_ATON('10.45.0.60'), UNHEX(%s), 3600, DATE_ADD(NOW(), INTERVAL 1 HOUR), 1, 0)",
+                (MAC_HEX,),
+            )
+        db.commit()
+        out = cp.sweep(NOW, servers=[SERVER_A])
+        assert rows(db)[0]["subnet_id"] is None, "the row is NOT placed by where the client is now"
+        assert cp.widget([1], False, NOW)["total"] == 0, "the A-scoped user sees nothing"
+        assert cp.widget([], True, NOW)["total"] == 1, "an unrestricted caller sees it"
+        assert cp.fetch_open(["p.subnet_id IN (%s)"], [1]) == []
+        # and the alert is about a client Jen could not place: it carries no subnet, which the scoped-alert rule fails closed on
+        assert out["alerts"] == 1 and calls["alerts"][0][1] is None
+
+    def test_the_events_own_address_still_places_it(self, db, stack):
+        logs, _c = stack
+        logs[1] = [decline(1, ip="10.46.0.7")]
+        cp.sweep(NOW, servers=[SERVER_A])
+        assert rows(db)[0]["subnet_id"] == 2
+
+    def test_a_subnet_kea_selected_for_the_very_transaction_places_a_nak_with_no_address(self, db, stack):
+        logs, _c = stack
+        logs[1] = [
+            _line(
+                1,
+                "DHCP4_SUBNET_SELECTED",
+                "the subnet with ID 2 was selected for client assignments",
+                tid="0x77",
+                level="DEBUG",
+            ),
+            _line(1, "DHCP4_PACKET_SEND", "trying to send packet DHCPNAK (type 6) from a:67 to b:67", tid="0x77"),
+        ]
+        cp.sweep(NOW, servers=[SERVER_A])
+        assert rows(db)[0]["subnet_id"] == 2
+
+    def test_the_newest_event_decides_where_a_row_is(self, db, stack):
+        logs, _c = stack
+        logs[1] = [decline(1, ip="10.45.0.9")]
+        cp.sweep(NOW - timedelta(minutes=5), servers=[SERVER_A])
+        assert rows(db)[0]["subnet_id"] == 1
+        logs[1] = [decline(1, ip="10.45.0.9"), decline(2, ip="10.45.0.9", minute=1)]
+        cp.sweep(NOW, servers=[SERVER_A])
+        assert rows(db)[0]["subnet_id"] == 1 and rows(db)[0]["count"] == 2
+
+
+class TestADdnsFailureStaysWithTheClientThatHadTheAddress:
+    def test_a_allocates_a_fails_b_reuses_the_address(self, db, stack):
+        logs, _c = stack
+        logs[1] = [
+            alloc(1, "10.45.0.9", MAC),
+            ddns_failed(2, "10.45.0.9"),
+            alloc(5, "10.45.0.9", MAC2, minute=30),
+        ]
+        cp.sweep(NOW, servers=[SERVER_A])
+        (row,) = rows(db, "kind='ddns-failed'")
+        assert row["mac"] == MAC and row["ip"] == "10.45.0.9" and row["subnet_id"] == 1
+
+
+class TestTheEventsOwnTimesAreStored:
+    def test_a_row_carries_the_time_of_its_events_not_the_time_of_the_sweep(self, db, stack):
+        logs, _c = stack
+        logs[1] = [nak(1), nak(9)]
+        cp.sweep(NOW, servers=[SERVER_A])
+        row = rows(db)[0]
+        assert row["first_seen"] == datetime(2026, 10, 4, 11, 0, 1) and row["last_seen"] == datetime(
+            2026, 10, 4, 11, 0, 9
+        )
+
+    def test_a_log_in_a_timezone_west_of_utc_is_converted_with_the_offset_the_lease_records_show(self, db, stack):
+        import calendar
+
+        logs, _c = stack
+        expire_utc = calendar.timegm((NOW + timedelta(hours=1)).timetuple())  # allocated 12:00 UTC for an hour
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO lease4 (address, hwaddr, valid_lifetime, expire, subnet_id, state) "
+                "VALUES (INET_ATON('10.45.0.70'), UNHEX(%s), 3600, FROM_UNIXTIME(%s), 1, 0)",
+                (MAC2_HEX, expire_utc),
+            )
+        db.commit()
+        # the Kea host runs on UTC-5: its log says 07:00 for what was 12:00 UTC, and 06:59:50 for a NAK ten seconds before
+        logs[1] = [alloc(0, "10.45.0.70", MAC2, hour=7), nak(50, minute=59, hour=6)]
+        cp.sweep(NOW, servers=[SERVER_A])
+        row = rows(db, "kind='nak'")[0]
+        assert row["first_seen"] == datetime(2026, 10, 4, 11, 59, 50), "06:59:50 local, plus five hours"
+        with db.cursor() as cur:
+            cur.execute("SELECT setting_value FROM settings WHERE setting_key='client_problems_clock:1'")
+            assert float(cur.fetchone()["setting_value"]) == -18000.0
+        assert "UTC-5" in " ".join(n["text"] for n in cp.clock_notes() if n["name"] == "kea-a")
+
+    def test_a_server_that_has_shown_no_lease_evidence_is_read_as_utc_and_the_page_says_so(self, db, stack):
+        logs, _c = stack
+        logs[1] = [nak(1)]
+        cp.sweep(NOW, servers=[SERVER_A])
+        assert "assumed UTC" in " ".join(n["text"] for n in cp.clock_notes() if n["name"] == "kea-a")
+
+    def test_an_event_older_than_a_day_is_not_ingested(self, db, stack):
+        logs, _c = stack
+        logs[1] = [nak(1, hour=9)]
+        out = cp.sweep(NOW + timedelta(hours=40), servers=[SERVER_A])
+        assert out["events"] == 0 and not rows(db)
+
+
+class TestAStaleBacklogIsNotNews:
+    def test_three_naks_from_six_hours_ago_on_a_servers_first_sweep_are_recorded_with_their_own_time_and_never_alert(
+        self, db, stack
+    ):
+        logs, calls = stack
+        logs[1] = [nak(1, hour=6), nak(2, hour=6), nak(3, hour=6)]
+        out = cp.sweep(NOW, servers=[SERVER_A])
+        assert out["events"] == 3 and out["alerts"] == 0 and out["alerts_attempted"] == 0 and calls["alerts"] == []
+        row = rows(db)[0]
+        assert row["count"] == 3 and row["first_seen"] == datetime(2026, 10, 4, 6, 0, 1)
+
+    def test_the_second_sweep_with_one_new_nak_is_still_not_an_alert_the_window_is_now(self, db, stack):
+        logs, calls = stack
+        logs[1] = [nak(1, hour=6), nak(2, hour=6), nak(3, hour=6)]
+        cp.sweep(NOW, servers=[SERVER_A])
+        logs[1] = [nak(1, hour=6), nak(2, hour=6), nak(3, hour=6), nak(4, minute=55)]
+        out = cp.sweep(NOW, servers=[SERVER_A])
+        assert out["events"] == 1 and out["alerts"] == 0 and calls["alerts"] == [], (
+            "one NAK in the last hour is not three"
+        )
+
+    def test_a_first_read_that_found_nothing_but_ordinary_lines_still_sets_the_watermark(self, db, stack):
+        logs, calls = stack
+        prime(logs)
+        with db.cursor() as cur:
+            cur.execute("SELECT setting_value FROM settings WHERE setting_key='client_problems_wm:1'")
+            assert cur.fetchone() is not None
+        logs[1] = [nak(1), nak(2), nak(3)]
+        assert cp.sweep(NOW, servers=[SERVER_A])["alerts_attempted"] == 1
+
+
+class TestDeliveredIsNotAttempted:
+    def _three(self, logs):
+        # late in the hour, so that they are still inside the alert window half an hour later
+        logs[1] = [decline(1, minute=40), decline(2, minute=40), decline(3, minute=40)]
+
+    def test_a_failed_delivery_is_not_marked_sent_and_is_retried_every_half_hour_not_every_sweep(
+        self, db, stack, monkeypatch
+    ):
+        logs, calls = stack
+        prime(logs)
+        monkeypatch.setattr(
+            alerts,
+            "send_alert",
+            lambda alert_type, log_result=True, subnet_id=None, **kw: (
+                calls["alerts"].append((alert_type, subnet_id, kw)) or [("telegram", False, "429")]
+            ),
+        )
+        self._three(logs)
+        out = cp.sweep(NOW, servers=[SERVER_A])
+        assert (out["alerts"], out["alerts_attempted"], out["alerts_failed"]) == (0, 1, 1)
+        row = rows(db)[0]
+        assert row["alerted_at"] is None and row["alert_attempted_at"] == NOW
+        assert cp.sweep(NOW + timedelta(minutes=5), servers=[SERVER_A])["alerts_attempted"] == 0, (
+            "bounded: not every sweep"
+        )
+        assert cp.sweep(NOW + timedelta(minutes=29), servers=[SERVER_A])["alerts_attempted"] == 0
+        # half an hour after the try it goes again - with no new trouble from the client - and this time it lands
+        monkeypatch.setattr(
+            alerts,
+            "send_alert",
+            lambda alert_type, log_result=True, subnet_id=None, **kw: (
+                calls["alerts"].append((alert_type, subnet_id, kw)) or [("telegram", True, "")]
+            ),
+        )
+        out = cp.sweep(NOW + timedelta(minutes=31), servers=[SERVER_A])
+        assert (out["alerts"], out["alerts_attempted"], out["alerts_failed"]) == (1, 1, 0)
+        assert rows(db)[0]["alerted_at"] == NOW + timedelta(minutes=31)
+
+    def test_a_delivered_alert_is_marked_and_then_silent_for_the_day(self, db, stack):
+        logs, calls = stack
+        prime(logs)
+        self._three(logs)
+        out = cp.sweep(NOW, servers=[SERVER_A])
+        assert (out["alerts"], out["alerts_failed"]) == (1, 0) and rows(db)[0]["alerted_at"] == NOW
+        logs[1] = [*logs[1], decline(4, minute=2)]
+        assert cp.sweep(NOW + timedelta(minutes=5), servers=[SERVER_A])["alerts_attempted"] == 0
+
+    def test_no_eligible_channel_is_not_delivery(self, db, stack, monkeypatch):
+        logs, calls = stack
+        prime(logs)
+        monkeypatch.setattr(alerts, "send_alert", lambda *a, **k: [])
+        self._three(logs)
+        out = cp.sweep(NOW, servers=[SERVER_A])
+        assert (out["alerts"], out["alerts_failed"]) == (0, 1) and rows(db)[0]["alerted_at"] is None
+
+    def test_a_sender_that_raises_is_a_failed_attempt_and_the_sweep_goes_on(self, db, stack, monkeypatch):
+        logs, _c = stack
+        prime(logs)
+
+        def boom(*a, **k):
+            raise RuntimeError("telegram is down")
+
+        monkeypatch.setattr(alerts, "send_alert", boom)
+        self._three(logs)
+        out = cp.sweep(NOW, servers=[SERVER_A])
+        assert out["errors"] == [] and out["alerts_failed"] == 1 and rows(db)[0]["alerted_at"] is None
 
 
 class TestTheDatabaseKinds:
