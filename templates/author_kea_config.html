@@ -172,6 +172,17 @@ async function showPreview() {
             serversDiv.innerHTML = '<span class="u-5872de">No Kea servers with SSH configured.</span>';
             return;
         }
+        // v5.68.0-beta.15 (Q150): the file each server had when it was previewed travels with the form, so "overwrite" means
+        // "replace the file I previewed" - the write is refused if it has changed since. A server whose state could not be read
+        // carries nothing, and the write will not overwrite a file it has no preview of.
+        formEl.querySelectorAll('input[name^="base_sha_"]').forEach(function (old) { old.remove(); });
+        data.servers.forEach(function (s) {
+            if (typeof s.base_sha === 'string') {
+                var base = document.createElement('input');
+                base.type = 'hidden'; base.name = 'base_sha_' + s.id; base.value = s.base_sha;
+                formEl.appendChild(base);
+            }
+        });
         var multi = data.servers.length > 1;
         serversDiv.innerHTML = data.servers.map(function(s) {
             var icon = s.ok ? '<svg class="ico" aria-hidden="true"><use href="#i-circle-check"></use></svg>' : '<svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg>';

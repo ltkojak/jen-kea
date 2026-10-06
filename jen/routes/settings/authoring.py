@@ -18,6 +18,7 @@ import jen.services.auth as __auth
 import jen.services.capabilities as __caps
 import jen.services.kea6 as __kea6
 import jen.services.kea_authoring as __authoring
+import jen.services.kea_changeset as __changeset
 import jen.services.kea_host as __host
 from jen import extensions
 from jen.config import AppConfig
@@ -455,18 +456,19 @@ def _author_kea_config_for(service, server, common, subnets):
     return config, tls_paths, warning, None
 
 
-def _run_author_script(server, service, config, tls_paths, *, dry_run, allow_overwrite):
-    """Test or apply an authored config on `server` via
-    jen.services.kea_host — one helper op (`test-config` / `apply-config`,
-    with the TLS-file existence check inside it) or, on a host without the
-    helper, the legacy sudo-python3 engine. Returns (HostResult,
-    conf_path)."""
-    conf_path = __authoring.conf_path_for(server, service)
-    if dry_run:
-        res = __host.test_config(server, service, config, tls_paths=tls_paths)
-    else:
-        res = __host.apply_config(server, service, config, tls_paths=tls_paths, allow_overwrite=allow_overwrite)
-    return res, conf_path
+_BASE_SHA_RE = re.compile(r"^[0-9A-Za-z:_\-]{0,128}$")
+
+
+def _author_server_state(server, service):
+    """(exists, base_sha, error) for the config file on `server` as the PREVIEW shows it (v5.68.0-beta.15, Q150): `exists` False and
+    `base_sha` "" when the host answered and has no file - the state a first authoring expects - else the sha the commit is guarded
+    with (the helper's raw sha, or the canonical sentinel on a host without it). `error` is the reason a host could not be read
+    at all; such a host is not 'absent'."""
+    errors = []
+    cfg, sha = __host.read_config_versioned(server, service, errors=errors)
+    if cfg is None:
+        return False, "", (errors[0] if errors else None)
+    return True, sha or "", None
 
 
 @bp.route("/settings/infrastructure/author-kea/<service>/preview", methods=["POST"])
@@ -491,8 +493,18 @@ def author_kea_config_preview(service):
             server_results.append({"name": name, "ok": False, "message": cfg_err})
             continue
         try:
-            res, _ = _run_author_script(server, service, config, tls_paths, dry_run=True, allow_overwrite=False)
+            res = __host.test_config(server, service, config, tls_paths=tls_paths)
             row = {"name": name, "config": __authoring.redact_secrets(config)}
+            # v5.68.0-beta.15 (Q150): the preview records which file it is previewing. The form carries each server's `base_sha` back
+            # (`base_sha_<id>`): "overwrite" then means "replace the file I previewed", never "replace whatever is there".
+            exists, base_sha, read_error = _author_server_state(server, service)
+            row["id"] = server.get("id")
+            if read_error:
+                # the preview is about whether Kea accepts the config; a host whose file could not be READ simply carries no base sha
+                # (the commit reads it again itself and aborts on a host it cannot read, and will not overwrite an unpreviewed file)
+                row["exists"], row["base_sha"], row["state_error"] = None, None, read_error
+            else:
+                row["exists"], row["base_sha"] = exists, base_sha
             row["interfaces"] = common["interfaces_by_server"].get(server.get("id")) or common["interfaces"]
             bind = common["bind_addresses"].get(server.get("id"))
             if bind:
@@ -500,7 +512,19 @@ def author_kea_config_preview(service):
             if warning:
                 row["warning"] = warning
             if res["ok"]:
-                row.update({"ok": True, "message": "Config test passed"})
+                row.update(
+                    {
+                        "ok": True,
+                        "message": "Config test passed"
+                        + (
+                            " — could not check what is on the server now"
+                            if read_error
+                            else " — a config file already exists here: tick overwrite to replace THIS file"
+                            if exists
+                            else " — no config file here yet"
+                        ),
+                    }
+                )
             elif res["code"] == "missingbinary":
                 row.update(
                     {
@@ -539,42 +563,78 @@ def author_kea_config_post(service):
         return redirect(url_for("settings.author_kea_config", service=service))
 
     allow_overwrite = request.form.get("allow_overwrite", "") == "true"
-    errors, results = [], []
-    for server in extensions.KEA_SERVERS:
-        if not server.get("ssh_host"):
-            continue
+    servers = [s for s in extensions.KEA_SERVERS if s.get("ssh_host")]
+    if not servers:
+        flash("No Kea server has SSH configured.", "error")
+        return redirect(url_for("settings.settings_kea"))
+
+    # v5.68.0-beta.15 (Q150) - Author Kea Config is a change set like every other multi-server push (jen/services/kea_changeset.py):
+    # build EVERY server's candidate first (one that cannot be built stops the whole thing before a byte is written), preflight every
+    # target, commit with each server's previewed sha, put earlier targets back if a later one fails, and write Jen's own
+    # [subnets]/[subnets6] only when the whole change stood. This used to loop here, server by server, with none of that.
+    candidates, errors = {}, []
+    for server in servers:
         name = server.get("name", server["ssh_host"])
         config, tls_paths, _warning, cfg_err = _author_kea_config_for(service, server, common, subnets)
         if cfg_err:
             errors.append(f"{name}: {cfg_err}")
             continue
-        try:
-            res, conf_path = _run_author_script(
-                server, service, config, tls_paths, dry_run=False, allow_overwrite=allow_overwrite
-            )
-            if res["code"] == "ok":
-                results.append(f"{name}: {conf_path} written. Enable/restart the service to use it.")
-            elif res["code"] == "exists":
-                errors.append(f'{name}: {conf_path} already exists — check "overwrite" to replace it.')
-            elif res["code"] == "missingbinary":
-                errors.append(f"{name}: {__host.missing_binary_text(res, advice=True)}.")
-            elif res["code"] == "tlsmissing":
-                errors.append(f"{name}: TLS file not found on this server: {res['path']}")
-            elif res["code"] == "testerror":
-                errors.append(f"{name}: config test failed, nothing written. Error: {res['detail']}")
-            else:
-                errors.append(f"{name}: {res['detail']}")
-        except Exception as e:
-            errors.append(f"{name}: {str(e)}")
+        candidates[server.get("id")] = (config, tls_paths)
+    if errors:
+        for e in errors:
+            flash(e, "error")
+        flash("Nothing was written to any server.", "error")
+        __user.audit(
+            "AUTHOR_KEA_CONFIG", service, f"overwrite={allow_overwrite} servers={len(servers)} status=not-built"
+        )
+        return redirect(url_for("settings.settings_kea"))
 
-    # Persist the subnets used to author this config into Jen's own
-    # [subnets]/[subnets6] — only when at least one server genuinely
-    # wrote the file. This is what closes the loop this whole flow
-    # exists for: authoring a config from a blank slate must leave Jen
-    # actually able to see/edit those subnets afterward, not just Kea.
-    # Merges with (doesn't replace) any subnets Jen already knew about,
-    # so authoring never silently drops existing entries.
-    if results:
+    # the sha each server's file had when the form was PREVIEWED ("" = there was none); a value that is not shaped like one is
+    # ignored, which makes the write refuse rather than guard against something the user could have typed
+    base_shas = {}
+    for server in servers:
+        raw = request.form.get(f"base_sha_{server.get('id')}")
+        base_shas[server.get("id")] = raw if raw is not None and _BASE_SHA_RE.match(raw) else None
+
+    def candidate_for(server, cfg):
+        if cfg is not None:
+            if not allow_overwrite:
+                return None, "exists"
+            if base_shas.get(server.get("id")) is None:
+                return None, "needspreview"
+        return candidates[server.get("id")][0], "ok"
+
+    def expected_sha_for(server):
+        sha = base_shas.get(server.get("id"))
+        return "" if sha is None else sha
+
+    result = __changeset.apply_change(
+        service,
+        None,
+        f"authored a new {service} config",
+        servers=servers,
+        restart=False,  # authoring never restarts: "Enable/restart the service to use it"
+        candidate_for=candidate_for,
+        absent_is_expected=True,
+        expected_sha_for=expected_sha_for,
+        tls_paths_for=lambda server: candidates[server.get("id")][1],
+        conflict_phrase=lambda name: f"the config on {name} changed since you previewed it - nothing was written",
+        code_messages={
+            "exists": 'a config file already exists here - tick "overwrite" to replace the file you previewed',
+            "needspreview": "a config file already exists here - use Preview & Validate first, so Jen replaces the file you saw "
+            "and not whatever is there now",
+        },
+    )
+
+    categories = {"success": "success", "warning": "warning", "error": "error"}
+    if result.status == "ok":
+        written = {s.get("name") or s.get("ssh_host") or "?": __authoring.conf_path_for(s, service) for s in servers}
+        for name in result.covered:
+            flash(f"{name}: {written.get(name, '')} written. Enable/restart the service to use it.", "success")
+        # Persist the subnets used to author this config into Jen's own [subnets]/[subnets6] - only when the whole change
+        # stood. This is what closes the loop this whole flow exists for: authoring a config from a blank slate must leave Jen
+        # actually able to see/edit those subnets afterward, not just Kea. Merges with (doesn't replace) any subnets Jen already
+        # knew about, so authoring never silently drops existing entries.
         existing, _ = _author_kea_subnets_and_db(service)
         merged = dict(existing)
         merged.update(subnets)
@@ -584,17 +644,21 @@ def author_kea_config_post(service):
             else:
                 __config.write_subnets6_config(merged)
         except ValueError as e:
-            # v5.67.0-beta.5 (Q117, item h) — the config file(s) above are
-            # already written to the server(s); only Jen's own [subnets]
-            # record failed. Flashed, not raised, so the operator sees
-            # which subnet name to fix rather than a 500.
-            errors.append(f"Jen could not record the subnet(s) used: {e}")
-
-    for r in results:
-        flash(r, "success")
-    for e in errors:
-        flash(e, "error")
-    __user.audit("AUTHOR_KEA_CONFIG", service, f"overwrite={allow_overwrite} servers={len(results) + len(errors)}")
+            # v5.67.0-beta.5 (Q117, item h) - the config file(s) above are already written to the server(s); only Jen's own
+            # [subnets] record failed. Flashed, not raised, so the operator sees which subnet name to fix rather than a 500.
+            flash(f"Jen could not record the subnet(s) used: {e}", "error")
+    else:
+        # aborted / rolled_back / rollback_failed (a rollback_failed also lands on the Servers page as an incident): the lines say
+        # what happened server by server; Jen's own subnet record is left exactly as it was
+        for kind, text in result.lines:
+            flash(text, categories.get(kind, "error"))
+        if result.status == "noservers":
+            flash("No Kea server has SSH configured.", "error")
+    __user.audit(
+        "AUTHOR_KEA_CONFIG",
+        service,
+        f"overwrite={allow_overwrite} servers={len(servers)} status={result.status}",
+    )
     return redirect(url_for("settings.settings_kea"))
 
 

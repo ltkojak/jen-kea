@@ -34,6 +34,15 @@ failure in the preflight, the commit, the revert or the restart is a
 recorded failure, so a transport error can no longer skip the revert
 and leave the first server on the new config.
 
+v5.68.0-beta.15 (Q150) — Author Kea Config goes through here too. It used to loop `for server in KEA_SERVERS` in its route,
+calling `apply_config` per server with no expected sha, no preflight of the OTHER targets, no rollback, and Jen's own `[subnets]`
+written when ANY server succeeded; with "overwrite" ticked it replaced whatever was on each host at commit time, whatever the
+preview had shown. Two additions make the four phases fit it unchanged: a PER-TARGET CANDIDATE (`candidate_for(server, cfg)` -
+the authored config for THAT server) and an "ABSENT IS THE EXPECTED STATE" target (`absent_is_expected=True`: a host with no config
+file is a normal target whose expected sha is "" - what `apply_config`'s own `expect_sha256=""` already means - not a failure, and
+its write may never overwrite a file that appeared in the meantime). A target that was absent is rolled back by REMOVING the file
+Jen wrote (`kea_host.remove_config`, guarded by the sha Jen's own write produced), the only way "put it back as it was" is true.
+
 Pure orchestration over `kea_host` — no Flask imports. Callers build
 the flash lines from `ChangeSetResult.lines` themselves; this module
 never calls `flash()`.
@@ -65,6 +74,10 @@ class Target:
     code: str = "ok"
     applied_sha: str | None = None
     note: str = ""
+    # v5.68.0-beta.15 (Q150): an ABSENT target (before_cfg is None, expected sha "") may only ever create the file; its own
+    # tls material (an authored https control socket's cert/key/trust anchor) is per target, not one list for every server
+    allow_overwrite: bool = True
+    tls_paths: tuple = ()
 
 
 @dataclass
@@ -135,6 +148,23 @@ def _failure_line(name: str, res: dict, daemon_label: str) -> str:
     return f"❌ {name}: {res.get('detail', code)}"
 
 
+def _restore_target(t: Target, service: str, summary: str) -> dict:
+    """Put one already-committed target back as it was (v5.68.0-beta.15, Q150): the previous config re-applied, or - for a target that
+    had no config file before - the file Jen wrote removed again, guarded by the sha that write produced. A result dict like
+    `kea_host.apply_config`'s; never raises."""
+    if t.before_cfg is None:
+        return _safe(_host.remove_config, t.server, service, expect_sha256=t.applied_sha)
+    return _safe(
+        _host.apply_config,
+        t.server,
+        service,
+        t.before_cfg,
+        expect_sha256=t.applied_sha,
+        summary=f"rollback: {summary}",
+        source="rollback",
+    )
+
+
 def _run_change(
     service: str,
     mutate_fn,
@@ -148,6 +178,9 @@ def _run_change(
     conflict_phrase=None,
     daemon_label: str = "Kea",
     tls_paths=(),
+    candidate_for=None,
+    absent_is_expected: bool = False,
+    tls_paths_for=None,
 ) -> ChangeSetResult:
     """Push one config mutation to every SSH-configured Kea server for
     `service` ("dhcp4" | "dhcp6" | "d2"), preflighting all of them
@@ -191,6 +224,13 @@ def _run_change(
     restarted into a config it can't load. The rollback re-applies the
     pre-change config, which referenced none of them.
 
+    `candidate_for(server, cfg) -> (after_cfg, code)` (v5.68.0-beta.15, Q150) replaces `mutate_fn` when the config each target
+    receives is its OWN rather than one mutation of what it has: Author Kea Config builds a different file per server. `cfg` is the
+    config read from that host, or None when `absent_is_expected` and the host has no config file. `absent_is_expected=True` makes
+    a missing config file a normal target - expected sha "" (the helper's "must not exist"), `allow_overwrite=False` at commit, and
+    rolled back by removing what Jen wrote - while a host that cannot be READ at all (SSH down, a helper that answers badly) still
+    aborts: only a read that succeeded and found nothing is "absent". `tls_paths_for(server)` gives each target its own TLS files.
+
     Never raises — a per-server exception during planning aborts the
     whole change set with that exception's text as the line, matching
     every converted loop's existing `except Exception as e:
@@ -213,13 +253,23 @@ def _run_change(
     for server in ssh_servers:
         name = server.get("name") or server.get("ssh_host") or "?"
         try:
-            cfg, sha = _host.read_config_versioned(server, service)
+            read_errors: list[str] = []
+            cfg, sha = _host.read_config_versioned(server, service, errors=read_errors)
             if cfg is None:
-                conf_name = _CONF_FILENAMES.get(service, f"kea-{service}.conf")
-                lines.append(("error", f"❌ {name}: {conf_name} not found on this server"))
-                return ChangeSetResult("aborted", "notfound-conf", lines)
+                if absent_is_expected and not read_errors:
+                    cfg, sha = (
+                        None,
+                        "",
+                    )  # the host answered and has no config file: the expected state of a target to author
+                elif absent_is_expected:
+                    lines.append(("error", f"❌ {name}: could not read its config — {read_errors[0]}"))
+                    return ChangeSetResult("aborted", "error", lines)
+                else:
+                    conf_name = _CONF_FILENAMES.get(service, f"kea-{service}.conf")
+                    lines.append(("error", f"❌ {name}: {conf_name} not found on this server"))
+                    return ChangeSetResult("aborted", "notfound-conf", lines)
 
-            after_cfg, code = mutate_fn(cfg)
+            after_cfg, code = candidate_for(server, cfg) if candidate_for else mutate_fn(cfg)
             last_code = code
             if code == "ok":
                 # before_sha doubles as "the sha this target's write is
@@ -227,7 +277,18 @@ def _run_change(
                 # was actually just read (edit_subnet_post's form
                 # carries a sha from when the form was OPENED, not now).
                 expected = expected_sha_for(server) if expected_sha_for else sha
-                targets.append(Target(server, name, cfg, expected, after_cfg, code))
+                targets.append(
+                    Target(
+                        server,
+                        name,
+                        cfg,
+                        expected,
+                        after_cfg,
+                        code,
+                        allow_overwrite=cfg is not None,
+                        tls_paths=tuple(tls_paths_for(server)) if tls_paths_for else tuple(tls_paths or ()),
+                    )
+                )
                 continue
             if code in skip_codes:
                 lines.append(("success", f"ℹ️ {name}: {code_messages.get(code, code)}"))
@@ -245,7 +306,7 @@ def _run_change(
     # ── Phase 2: preflight every target before touching anything ─────
     preflight_failed = False
     for t in targets:
-        res = _safe(_host.test_config, t.server, service, t.after_cfg, tls_paths=tls_paths)
+        res = _safe(_host.test_config, t.server, service, t.after_cfg, tls_paths=t.tls_paths)
         if not res.get("ok"):
             preflight_failed = True
             if res.get("code") == "conflict":
@@ -264,7 +325,8 @@ def _run_change(
             t.server,
             service,
             t.after_cfg,
-            tls_paths=tls_paths,
+            tls_paths=t.tls_paths,
+            allow_overwrite=t.allow_overwrite,
             expect_sha256=t.before_sha,
             summary=summary,
         )
@@ -282,15 +344,7 @@ def _run_change(
         revert_failed = []  # the revert call itself failed: still on the NEW config
         restart_stuck = []  # the previous config is back but the daemon would not restart on it
         for done in reversed(committed):
-            rres = _safe(
-                _host.apply_config,
-                done.server,
-                service,
-                done.before_cfg,
-                expect_sha256=done.applied_sha,
-                summary=f"rollback: {summary}",
-                source="rollback",
-            )
+            rres = _restore_target(done, service, summary)
             if not rres.get("ok"):
                 revert_failed.append(done.name)
                 continue
@@ -373,15 +427,7 @@ def _run_change(
         )
     stuck: list[str] = []
     for t in reversed(targets):
-        rres = _safe(
-            _host.apply_config,
-            t.server,
-            service,
-            t.before_cfg,
-            expect_sha256=t.applied_sha,
-            summary=f"rollback: {summary}",
-            source="rollback",
-        )
+        rres = _restore_target(t, service, summary)
         if not rres.get("ok"):
             stuck.append(t.name)
             lines.append(

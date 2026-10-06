@@ -390,6 +390,25 @@ On each **Kea host**: `ca.crt`, `server.crt`, `server.key` in
   under each server's bind-address picker once more than one SSH server
   is configured; leave it blank to keep using the shared list for that
   server.
+- **Writing the authored config is all-or-nothing (v5.68.0-beta.15).** It
+  used to write server by server, so one server could end up with the new
+  file and another with none (or with its old one), and "overwrite" replaced
+  whatever happened to be on the host at that moment. It now goes through the
+  same change set as every other multi-server edit: every server's config is
+  built and checked (`kea-dhcpX -t`) before anything is written; each write is
+  guarded with the file **Preview & Validate showed you** (a server with no file
+  is guarded as "must not exist", so a file that appeared meanwhile is never
+  overwritten); if a later server fails, the earlier ones are put back - a file
+  Jen created is removed again, one it replaced is restored from what it read -
+  and Jen's own `[subnets]` is written only when every server succeeded. A server
+  whose file changed after the preview refuses with *changed since you
+  previewed it*, so run Preview again. **Overwrite** means "replace the file I
+  previewed"; an existing file is not replaced without the tick, and not at all
+  unless it was previewed. A rollback that cannot finish (a server that is
+  unreachable at that moment) is a banner on the Servers page, like any other
+  change set. Removing a file Jen created needs the host's helper on build 13 or
+  later (press **Update helper**); on an older one the banner tells you to delete
+  the file by hand.
 
 ### [kea_db] section
 

@@ -704,7 +704,8 @@ class TestAuthorKeaConfigPreviewRoute:
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["servers"][0]["ok"] is True
-        assert len(fake_ssh.calls) == 1
+        # the test-config round trip, and (v5.68.0-beta.15, Q150) the read that tells the preview which file it is previewing
+        assert len(fake_ssh.calls) == 2
 
     # ── v5.10.2 direct-mode authoring ──────────────────────────────────────
     def _direct_form(self, **over):
@@ -1711,6 +1712,9 @@ class TestAuthorKeaPreviewMissingBinary:
 
 
 class TestAuthorKeaConfigPostRoute:
+    """The write route is a change set since v5.68.0-beta.15 (Q150): see tests/test_author_config_changeset.py for the all-or-nothing, preview-sha
+    and rollback behaviour. These are the route's original expectations, driven against the stateful fake hosts of tests/_author_world.py."""
+
     def test_requires_superadmin(self, client, db):
         from tests.conftest import restricted_client
 
@@ -1719,143 +1723,54 @@ class TestAuthorKeaConfigPostRoute:
         assert resp.status_code == 302
 
     def test_refuses_to_overwrite_without_explicit_flag(self, logged_in_client, monkeypatch):
-        server = {"id": 1, "name": "theelders", "ssh_host": "1.2.3.4", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
-        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
-        monkeypatch.setattr(
-            extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
-        )
-        fake_ssh = FakeSSHClient([('{"ok": false, "error": "exists"}', "")])
-        import jen.services.kea6 as kea6_module
+        from tests._author_world import FORM, URL, World
 
-        monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: fake_ssh)
-        resp = logged_in_client.post(
-            "/settings/infrastructure/author-kea/dhcp6",
-            data={
-                "interfaces": "eth0",
-                "control_socket": "/run/kea6.sock",
-                "db_host": "h",
-                "db_user": "u",
-                "db_name": "kea",
-                "subnets": "1 = V6LAN, 2001:db8::/64",
-            },
-            follow_redirects=True,
-        )
+        world = World(monkeypatch)
+        world.put(1, {"Dhcp6": {"old": True}}, "sha-1")
+        resp = logged_in_client.post(URL, data=dict(FORM, base_sha_1="sha-1", base_sha_2=""), follow_redirects=True)
         assert resp.status_code == 200
         assert b"already exists" in resp.data
+        assert world.sha(1) == "sha-1" and world.calls("apply-config") == []
 
     def test_successful_write_persists_subnets_to_jen_config(self, logged_in_client, monkeypatch):
         """The actual fix: authoring a config with subnets Jen didn't
         already know about must leave them saved in Jen afterward, not
         just written into the Kea config file."""
-        server = {"id": 1, "name": "theelders", "ssh_host": "1.2.3.4", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
-        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
-        monkeypatch.setattr(extensions, "SUBNET6_MAP", {})  # nothing in Jen yet
-        fake_ssh = FakeSSHClient([('{"ok": true, "backup": null}', "")])
-        import jen.routes.settings as settings_module
-        import jen.services.kea6 as kea6_module
+        from tests._author_world import FORM, URL, World
 
-        monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: fake_ssh)
-        captured = {}
-        monkeypatch.setattr(
-            getattr(settings_module, "__config"), "write_subnets6_config", lambda d: captured.update(subnets=d)
-        )
-        resp = logged_in_client.post(
-            "/settings/infrastructure/author-kea/dhcp6",
-            data={
-                "interfaces": "eth0",
-                "control_socket": "/run/kea6.sock",
-                "db_host": "h",
-                "db_user": "u",
-                "db_name": "kea",
-                "subnets": "1 = V6LAN, 2001:db8::/64",
-            },
-            follow_redirects=True,
-        )
+        world = World(monkeypatch)  # nothing in Jen yet: SUBNET6_MAP is empty
+        resp = logged_in_client.post(URL, data=dict(FORM, base_sha_1="", base_sha_2=""), follow_redirects=True)
         assert resp.status_code == 200
-        assert captured["subnets"][1]["name"] == "V6LAN"
-        assert captured["subnets"][1]["cidr"] == "2001:db8::/64"
+        (captured,) = world.subnet_writes
+        assert captured[1]["name"] == "V6LAN"
+        assert captured[1]["cidr"] == "2001:db8::/64"
 
     def test_failed_write_does_not_persist_subnets(self, logged_in_client, monkeypatch):
-        server = {"id": 1, "name": "theelders", "ssh_host": "1.2.3.4", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
-        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
-        monkeypatch.setattr(extensions, "SUBNET6_MAP", {})
-        fake_ssh = FakeSSHClient([('{"ok": false, "error": "testerror", "detail": "bad"}', "")])
-        import jen.routes.settings as settings_module
-        import jen.services.kea6 as kea6_module
+        from tests._author_world import FORM, URL, World
 
-        monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: fake_ssh)
-        called = {"count": 0}
-        monkeypatch.setattr(
-            getattr(settings_module, "__config"),
-            "write_subnets6_config",
-            lambda d: called.__setitem__("count", called["count"] + 1),
-        )
-        logged_in_client.post(
-            "/settings/infrastructure/author-kea/dhcp6",
-            data={
-                "interfaces": "eth0",
-                "control_socket": "/run/kea6.sock",
-                "db_host": "h",
-                "db_user": "u",
-                "db_name": "kea",
-                "subnets": "1 = V6LAN, 2001:db8::/64",
-            },
-            follow_redirects=True,
-        )
-        assert called["count"] == 0
+        world = World(monkeypatch)
+        world.fail_apply.add(1)
+        logged_in_client.post(URL, data=dict(FORM, base_sha_1="", base_sha_2=""), follow_redirects=True)
+        assert world.subnet_writes == []
 
     def test_successful_write(self, logged_in_client, monkeypatch):
-        server = {"id": 1, "name": "theelders", "ssh_host": "1.2.3.4", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
-        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
-        monkeypatch.setattr(
-            extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
-        )
-        fake_ssh = FakeSSHClient([('{"ok": true, "backup": null}', "")])
-        import jen.routes.settings as settings_module
-        import jen.services.kea6 as kea6_module
+        from tests._author_world import FORM, URL, World
 
-        monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: fake_ssh)
-        monkeypatch.setattr(getattr(settings_module, "__config"), "write_subnets6_config", lambda d: None)
-        resp = logged_in_client.post(
-            "/settings/infrastructure/author-kea/dhcp6",
-            data={
-                "interfaces": "eth0",
-                "control_socket": "/run/kea6.sock",
-                "db_host": "h",
-                "db_user": "u",
-                "db_name": "kea",
-                "subnets": "1 = V6LAN, 2001:db8::/64",
-            },
-            follow_redirects=True,
-        )
+        world = World(monkeypatch)
+        resp = logged_in_client.post(URL, data=dict(FORM, base_sha_1="", base_sha_2=""), follow_redirects=True)
         assert resp.status_code == 200
-        assert b"written" in resp.data
+        assert b"written" in resp.data and world.has(1) and world.has(2)
 
     def test_config_test_failure_writes_nothing(self, logged_in_client, monkeypatch):
-        server = {"id": 1, "name": "theelders", "ssh_host": "1.2.3.4", "kea_conf": "/etc/kea/kea-dhcp4.conf"}
-        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
-        monkeypatch.setattr(
-            extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
-        )
-        fake_ssh = FakeSSHClient([('{"ok": false, "error": "testerror", "detail": "bad interface"}', "")])
-        import jen.services.kea6 as kea6_module
+        from tests._author_world import FORM, URL, World
 
-        monkeypatch.setattr(kea6_module, "_connect_ssh", lambda s: fake_ssh)
-        resp = logged_in_client.post(
-            "/settings/infrastructure/author-kea/dhcp6",
-            data={
-                "interfaces": "eth0",
-                "control_socket": "/run/kea6.sock",
-                "db_host": "h",
-                "db_user": "u",
-                "db_name": "kea",
-                "subnets": "1 = V6LAN, 2001:db8::/64",
-            },
-            follow_redirects=True,
-        )
+        world = World(monkeypatch)
+        world.fail_test.add(1)
+        resp = logged_in_client.post(URL, data=dict(FORM, base_sha_1="", base_sha_2=""), follow_redirects=True)
         assert resp.status_code == 200
-        assert b"config test failed, nothing written" in resp.data
+        assert b"config validation failed" in resp.data and b"nothing was changed" in resp.data
         assert b"bad interface" in resp.data
+        assert world.calls("apply-config") == [] and not world.has(1) and not world.has(2)
 
 
 class TestBuildControlSocket:

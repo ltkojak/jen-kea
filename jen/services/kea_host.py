@@ -844,6 +844,52 @@ def apply_config(
     return result
 
 
+def remove_config(server: dict, service: str, expect_sha256: str | None) -> dict:
+    """Remove the config file Jen ITSELF just wrote (v5.68.0-beta.15, Q150) - the rollback of an Author Kea Config target that had no
+    file before: "put it back as it was" is "no file". `expect_sha256` is the raw sha that write reported; the helper removes the file
+    only if it still hashes to exactly that, under the same `.jen_lock` an apply takes, so a file somebody else has since replaced is
+    never deleted. Only the helper can do it (helper build 13+): a host on the legacy path, an older helper, or a write that reported
+    only a canonical sentinel cannot be rolled back this way and the result says so - the caller turns that into a rollback_failed
+    incident with the by-hand step. Never raises."""
+    path = _conf_path(server, service)
+    if not expect_sha256 or expect_sha256.startswith(_CANONICAL_SENTINEL_PREFIX):
+        return {
+            "ok": False,
+            "code": "error",
+            "detail": f"the helper did not report a sha for the file it wrote, so removing {path} cannot be checked",
+        }
+    try:
+        resp = helper_call(server, "remove-config", {"service": service, "path": path, "expect_sha256": expect_sha256})
+        _record_from_resp(server.get("id"), resp)
+    except HelperMissing:
+        _flag_legacy(server)
+        return {
+            "ok": False,
+            "code": "error",
+            "detail": f"this host has no helper to remove {path} with - delete that file by hand",
+        }
+    except HelperError as e:
+        return {"ok": False, "code": "error", "detail": str(e), "via": "helper"}
+    if resp.get("ok"):
+        return {"ok": True, "code": "ok", "via": "helper"}
+    err = resp.get("error")
+    if err == "unknown-op":
+        return {
+            "ok": False,
+            "code": "error",
+            "detail": f"the helper on this host is too old to remove {path} (press Update helper), delete that file by hand",
+            "via": "helper",
+        }
+    if err == "conflict":
+        return {
+            "ok": False,
+            "code": "conflict",
+            "detail": f"{path} no longer is the file Jen wrote, so it was left alone",
+            "via": "helper",
+        }
+    return {"ok": False, "code": "error", "detail": resp.get("detail") or str(err), "via": "helper"}
+
+
 def _record_revision_after_apply(server, service, cfg, sha, summary, source):
     try:
         from jen.services import config_revisions as _rev

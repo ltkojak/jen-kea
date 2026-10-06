@@ -1565,12 +1565,37 @@ place; a concurrency conflict on B did too. `jen/services/kea_changeset.py`'s
    left. The pre-5.65.10 single-note shape is read as a list of one. Dismissing
    is an admin action and clears all of them.
 
-**What this does NOT cover.** `jen/services/settings/authoring.py`'s
-author-from-blank loops (a different flow: generating a brand-new
-config per server, not editing an existing one), `install_kea_binary`/
-`check_kea_binaries`, HA actions, and the Windows import wizard (which
-has its own single-primary-server preview==apply guarantee — see the
-wizard's own code) are unchanged by this module.
+**Author Kea Config is a change set too (v5.68.0-beta.15, Q150).**
+`routes/settings/authoring.py` used to loop `for server in KEA_SERVERS`
+calling `apply_config` per server: no preflight of the other targets, no
+expected sha (so "overwrite" replaced whatever was on each host at commit
+time, whatever the preview showed), no rollback, and Jen's own
+`[subnets]`/`[subnets6]` written when ANY server succeeded. Two additions let the
+four phases above apply to it unchanged. **A per-target candidate**
+(`candidate_for(server, cfg)`, with `tls_paths_for(server)`): the config each
+server gets is its own (its interfaces, its bind address, its TLS files), built
+for every server BEFORE the first write - a server whose candidate cannot be
+built stops the whole thing. **An absent-is-expected target**
+(`absent_is_expected=True`): a host that answers and has no config file is a normal
+target with expected sha `""` (the helper's own "must not exist") and
+`allow_overwrite=False` at commit, so a file that appeared in the meantime is never
+overwritten; a host that cannot be READ (SSH down, a helper that answers badly) is
+not "absent" and aborts. The preview reads each server's file state and the form
+carries it back as `base_sha_<id>` (`""` = no file): "overwrite" then means
+"replace the file I previewed", never "replace whatever is there", and an existing
+file with no previewed sha is refused. Rollback is the same phase 3 revert with one
+more case: a target that had NO file before is put back by REMOVING the file Jen
+wrote (`kea_host.remove_config` -> the helper's `remove-config` op, guarded by the
+sha Jen's own write reported and taken under the same `.jen_lock`, so a file
+someone else has since replaced is left alone); a host without that op (an older
+helper, the legacy path) cannot do it, which is a `rollback_failed` incident naming
+the file to delete by hand. `restart=False`: authoring never restarts the daemon.
+Jen's `[subnets]` is written only on `status == "ok"`. A source test refuses any
+route that calls `apply_config` inside a loop.
+
+**What this does NOT cover.** `install_kea_binary`/`check_kea_binaries`, HA
+actions, and the Windows import wizard (which has its own single-primary-server
+preview==apply guarantee — see the wizard's own code) are unchanged by this module.
 
 **Why a restart failure now reverts (v5.65.1).** The pre-5.65.1 design
 argued that reverting a valid config over a service problem throws away
