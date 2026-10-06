@@ -151,3 +151,15 @@ section that takes longer than one second shows *unavailable (over 1 s)* instead
 to the global DHCP settings every client inherits (global options, lifetimes and timers, reservation modes), and the DNS tab checks every
 reservation and lease the client has, with IPv6 addresses checked as AAAA records, instead of the first one. The device timestamp on the
 Overview reads *Device*, not *Config*.
+
+## Plugin pages, searches and APIs follow the subnet an object was stored in; Presence's subnet no longer follows the client
+
+Nothing to do on Jen (5.68.0-beta.12). Three plugin updates come with it, offered under Settings → Plugins: Wake & Actions 1.1.2, Switch Port
+Locator 1.1.2 and Presence 1.2.0. The rule the Investigation cards already followed now holds on every page, search and API of the three: a
+favourite, a tracked device or a switch position is shown to an account only if it may see the subnet the object was stored in (for a
+position, the subnet of its switch), whatever subnet the client is in now. A wake is the exception that follows the host: it is sent where the
+host is now, and it never uses the SecureOn password of a favourite the account may not see. Accounts with no subnet restriction see no change.
+For Presence this changes what the subnet of a tracked device means: it is the subnet the tracking belongs to, set when the device is tracked
+and changed only by the new *Move* button (an admin who can see both subnets; audited), and no longer follows the device when it moves to a different
+subnet. A device that had followed its client keeps the subnet it has; if a restricted account lost sight of a device it used to see,
+move the device to a subnet that account can see, or lift the restriction.

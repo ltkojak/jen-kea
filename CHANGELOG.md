@@ -2,6 +2,51 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.68.0-beta.12] - 2026-10-06
+
+Beta channel. Stacked on 5.68.0-beta.11. **The rule beta.11 stated for the Investigation cards, applied to every surface of the three plugins.**
+An outside review of beta.11 found that Wake & Actions, Switch Port Locator and Presence still judged stored data by where the client is now
+everywhere except the card. There is no migration and nothing to do on Jen; the three plugin updates are offered under Settings → Plugins.
+
+**Stored object versus live act.** beta.11 wrote down that a stored object (a favourite, a tracked device, a port a MAC was seen on) belongs
+to the subnet it was stored in, and that where the client is now never widens access. It applied that to the three Investigation cards. The
+plugins' own pages, their add, delete and move routes, their search providers and their JSON APIs kept the earlier habit, taken from the
+wake: judge the client's current subnet, with the stored one only as a fallback. A wake really is judged that way, because a wake acts on a
+live host and goes where the host is. Everything else is a stored object and is not. The plugins documentation and ARCHITECTURE §2 now
+draw the line in those words, and add the second half of it: a live act never borrows what a hidden stored object holds.
+
+**Wake & Actions 1.1.2.** The favourites list, *Add favourite* over an existing MAC, delete and the label were judged on the MAC's current
+subnet, so a favourite saved in subnet B (its label, whether a SecureOn password is set) listed for a caller scoped to A once the client
+moved to A, and that caller could rewrite its label, address and SecureOn password or delete it. All of them judge on the favourite's own
+stored subnet now; a favourite with no subnet is for an unrestricted caller only, and the list says where the host is now only to a caller
+who may see that subnet. The wake itself still goes where the host is now, and needs that subnet, but it no longer reads the stored favourite
+first: the wake from a row and the wake API used the SecureOn password of a favourite stored in B for a caller scoped to A waking a host in A,
+a secret crossing a subnet boundary. A favourite out of the caller's scope (the session's, or the API key's) now contributes nothing to a wake,
+neither its password nor its stored subnet as a fallback, so the wake goes ahead without it and a NIC that wants the password ignores the
+packet: the honest outcome, with no hint that a hidden favourite exists. A test records what reaches the packet builder.
+
+**Switch Port Locator 1.1.2.** A position (switch, port, alias, VLAN, time) belongs to its switch's subnet. The page and the JSON API judged
+the client's current subnet and then showed the client's newest position on any switch, so a caller scoped to A looking up a client now in A
+saw its newest position on a switch in B; the search provider reported the client's subnet as the result's `subnet_id`, so Jen's own
+defence-in-depth filter passed a result whose text named a switch in B. The page, the API, the search provider and the card now go through
+the one judgement, and each returns the newest position the caller may see. A client whose positions are all hidden reads as not located, the
+same answer as a MAC no switch has reported, for a scoped API key too (which used to be refused with 403 keyed on the MAC's own subnet, telling
+it which MACs exist elsewhere). When the newest position is hidden the page says *was last seen on* and does not say why.
+
+**Presence 1.2.0.** The plugin held two contradictory ideas about the subnet of a tracked device. The page, untrack and the card judged on
+`pr_tracked.subnet_id` as a stored subnet, while every lease event rewrote it to the client's current subnet, so a device tracked in B was
+handed to A by its next lease and its label and state showed to a caller scoped to A. The column now has one meaning, the owner subnet of the
+tracking: written when the device is tracked, and changed only by an explicit *Move* by an admin who can see both subnets, which is audited.
+A lease event updates state and nothing else. Where the device is now is derived when the page is read and shown only to a caller who may see
+that subnet. This is a changed contract (a minor release of the plugin, no schema change): a device that had followed a client under the
+earlier release keeps the subnet it has, and one that should belong elsewhere is moved by hand.
+
+**One fixture for the three.** The authorization matrix gained a shared moved-client fixture and a module per plugin: a client in A whose
+favourite (with a SecureOn password), tracked row and newest switch position are stored in B, and a client in B with everything stored in A,
+driven through the page, add, delete, move, search and API for a caller scoped to A, one scoped to B, one with no restriction and a scoped
+key. The few existing rows that modelled a favourite stored in A for a host in B with a leak marker as its MAC now use a client that is not a
+marker, because what is stored in A is the A caller's own data.
+
 ## [5.68.0-beta.11] - 2026-10-06
 
 Beta channel. Stacked on 5.68.0-beta.10. **The Investigation page's plugin cards, Changes tab and DNS tab, made to match what they
