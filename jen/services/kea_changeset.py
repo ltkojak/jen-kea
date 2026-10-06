@@ -254,7 +254,10 @@ def _run_change(
         name = server.get("name") or server.get("ssh_host") or "?"
         try:
             read_errors: list[str] = []
-            cfg, sha = _host.read_config_versioned(server, service, errors=read_errors)
+            if absent_is_expected:  # only here is "nothing came back" ambiguous: say WHY it did not (an unreachable host is not an absent file)
+                cfg, sha = _host.read_config_versioned(server, service, errors=read_errors)
+            else:
+                cfg, sha = _host.read_config_versioned(server, service)
             if cfg is None:
                 if absent_is_expected and not read_errors:
                     cfg, sha = (
