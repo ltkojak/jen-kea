@@ -1034,7 +1034,7 @@ is your installed Jen version, shown on the About page; `7`/`9` are this
 release's `HELPER_VERSION`/`HELPER_BUILD`):
 
 ```bash
-d="$(mktemp -d)" && cd "$d" && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper.sig && printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && /usr/bin/python3 -I jen-kea-helper version </dev/null | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin);sys.exit(0 if d.get("ok") is True and d.get("helper_version")==7 and d.get("helper_build")==11 else 1)' && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
+d="$(mktemp -d)" && cd "$d" && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper.sig && printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && /usr/bin/python3 -I jen-kea-helper version </dev/null | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin);sys.exit(0 if d.get("ok") is True and d.get("helper_version")==7 and d.get("helper_build")==12 else 1)' && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
 ```
 
 then add the sudoers line above. **Settings → Kea → SSH** shows the
@@ -1053,7 +1053,7 @@ trust (`scp`, a USB drive), then run the same verify-then-install steps
 locally, in the directory holding both files:
 
 ```bash
-printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && /usr/bin/python3 -I jen-kea-helper version </dev/null | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin);sys.exit(0 if d.get("ok") is True and d.get("helper_version")==7 and d.get("helper_build")==11 else 1)' && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
+printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && /usr/bin/python3 -I jen-kea-helper version </dev/null | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin);sys.exit(0 if d.get("ok") is True and d.get("helper_version")==7 and d.get("helper_build")==12 else 1)' && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
 ```
 
 Never skip the verify step just because you trust the transport — it's
@@ -1188,6 +1188,18 @@ runs the check with exactly that identity; a group the unit names that the host 
 (*"kea-dhcp4 is present but the helper will not run it: its unit names the group 'x', which does not exist on this host"*) instead of being guessed. The
 kea-compat job records `/etc/kea`'s owner and mode on each ISC image so the window build 11 closed is on record. No sudoers change.
 
+**Helper build 12 (v5.68.0-beta.14) — the config check runs as the account the unit names, whoever owns the binary. Press Update helper again.** Build 11
+looked at the unit's account only after it had decided the Kea binary was not `root:root`, so a binary owned by root (a hand install, or a package that does
+not give it to the service account) under a unit that says `User=_kea` was checked **as root**: the check could pass as root on a file or a key the real
+daemon, running as `_kea`, cannot read, and Jen would push a config that then failed to start. The order is now fixed: (1) the unit's identity is
+resolved first (`User=` by name **or by numeric uid**, `Group=`, `SupplementaryGroups=`); (2) the binary is verified second — `root:root` with no
+group/other write bit, or owned by exactly the unit's account — and a root-owned binary the unit's account cannot execute is refused; (3) the check runs as
+the unit's account whenever the unit names one, and as root only when it names none (or names root). A `User=` or `Group=` this host has no account for is
+refused with the reason (*"its unit runs as User=x, which is not an account on this host"*) and the check is never run as root instead. The supplementary
+groups are what systemd itself gives the daemon: the account's own `/etc/group` memberships plus the unit's `SupplementaryGroups=`, so TLS material readable
+because the account is in `ssl-cert` is readable to the check as it is to the daemon. No sudoers change. The by-hand install line shown in the flash and in
+this guide embeds the new build.
+
 **v5.20.0 — the legacy grant is now checked, not just used.** Every
 time Jen checks or installs the helper it also checks whether
 `/etc/sudoers.d/jen-kea` (below) is still present, and records that
@@ -1320,7 +1332,8 @@ ISC-package ownership problem described under Helper build 10 above — the
 generated script has no ownership check on the Kea binary — while the same
 host moved onto helper build 7–9 was; press Update helper to reach build 10. Build 11 (v5.68.0-beta.13) changes only how the helper validates a
 config on a host that has it — the validation copy is `0600`, owned by the account that runs the check, and runs with the unit's `Group=` and
-`SupplementaryGroups=` — and the generated script of this path is unchanged.)
+`SupplementaryGroups=` — and the generated script of this path is unchanged. Build 12 (v5.68.0-beta.14) only changes which account the
+helper validates as when the unit names one; the generated script of this path still runs no `-t` check of its own and is unchanged again.)
 
 The grant is needed for **one run** to install the helper, and — below
 helper v6 — for **one more run** to reach v6 (Update helper copies the

@@ -335,6 +335,12 @@ primary group with no supplementary groups. Press **Update helper**: build 11 ru
 lacks (`getent group x`): create it or fix the unit, and Jen will not guess. Build 11 also writes the check's copy of the config (it carries the database
 credentials) `0600`, owned by the account that runs it, where build 10 wrote it `0644`.
 
+**The config check passes but Kea will not start with the same config (fixed in helper build 12).** Build 11 checked a config as root whenever the Kea
+binary was owned by `root:root`, even when the unit says `User=_kea`: a certificate, key or directory only root could read made the check pass for a Kea
+that then failed as `_kea`. Press **Update helper**: build 12 resolves the unit's account first and runs the check as it (numeric `User=` included, with its
+`/etc/group` memberships and `SupplementaryGroups=`). If the Servers page now says *"its unit runs as User=x, which is not an account on this host"*,
+`getent passwd x` finds nothing: create the account or fix the unit — Jen will not run the check as root in its place.
+
 ### Permission denied on kea-dhcp4.conf
 
 ```
@@ -349,7 +355,8 @@ sudo cat /etc/sudoers.d/jen-kea          # the legacy fallback, if still present
 ```
 
 The complete line sets are in the **Admin Guide → Kea host helper**. (Helper build 11: the legacy `sudo python3` path never ran the
-helper's `-t` check and is unchanged; a host on the helper validates a config with a `0600` copy owned by the daemon's account.)
+helper's `-t` check and is unchanged, including at build 12; a host on the helper validates a config with a `0600` copy owned by the account the unit
+names.)
 Validate after editing:
 ```bash
 sudo visudo -c -f /etc/sudoers.d/jen-kea-helper

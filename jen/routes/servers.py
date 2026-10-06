@@ -259,6 +259,11 @@ def servers():
         changeset_attention=__changeset.attention(),
         investigation={e["server_id"]: e for e in __inv.active()},
         investigation_orphans=[{**e, "by_hand": __inv.by_hand(e)} for e in __inv.active() if e.get("removed")],
+        investigation_damaged=[
+            {**e, "by_hand": __inv.by_hand_damaged(e)}
+            for e in __inv.active()
+            if e.get("marker_invalid") and not e.get("removed")
+        ],
         packet_health_sparklines={
             s["server"]["id"]: s["packet_health"]["sparkline"] for s in statuses if s["packet_health"]
         },
@@ -334,13 +339,14 @@ def investigation_logging(server_id, action):
 @_admin_required
 def investigation_logging_forget(server_id):
     """v5.68.0-beta.9 (Q144) - an admin who restored a removed server's Kea by hand tells Jen to stop failing its Health row. Only an entry
-    already marked removed can be forgotten; a server Jen can reach is put back with the Turn it off button."""
+    marked removed, or one whose marker is damaged and whose config no longer carries it (v5.68.0-beta.14, Q149), can be forgotten; a
+    server Jen can reach with a readable marker is put back with the Turn it off button."""
     if not current_user.all_subnets:
         flash("Only an admin with access to all subnets can do this.", "error")
     elif __inv.forget(server_id, actor=current_user.username):
         flash("Forgotten. Jen no longer expects investigation logging to be on there.", "success")
     else:
-        flash("Nothing to forget for that server.", "error")
+        flash("Nothing to forget for that server, or its config still carries the damaged marker.", "error")
     return redirect(url_for("servers.servers"))
 
 

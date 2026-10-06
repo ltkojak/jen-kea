@@ -64,6 +64,34 @@ def helper_would_run_it(facts: dict) -> bool:
     return bool(facts["regular"]) and 0 < facts["uid"] < 1000 and not (int(facts["mode"], 8) & 0o022)
 
 
+def helper_runs_it_as(facts: dict, unit_user_uid=None) -> str:
+    """Who build 12 of jen-kea-helper runs `kea-dhcpX -t` as, on recorded facts (v5.68.0-beta.14, Q149) - the same decision as `_find_kea`, which
+    resolves the unit's identity FIRST and the binary SECOND. A unit that names an account: that account, whoever owns a root:root binary (build
+    11 ran a root-owned binary as ROOT whatever the unit said). No such unit (an image, a container): the file's own owner when it is a system
+    account, root only for a root:root binary. "refused" when neither holds. Pure."""
+    root_owned = facts["uid"] == 0 and facts["gid"] == 0 and not (int(facts["mode"], 8) & 0o022)
+    if unit_user_uid is not None:
+        return f"uid {unit_user_uid}" if root_owned or facts["uid"] == unit_user_uid else "refused"
+    if root_owned:
+        return "root"
+    return f"uid {facts['uid']}" if helper_would_run_it(facts) else "refused"
+
+
+class TestTheHelpersChoiceFollowsTheUnitFirst:
+    ROOT = {"uid": 0, "gid": 0, "mode": "0755", "regular": True}
+    KEA = {"uid": 105, "gid": 106, "mode": "0750", "regular": True}
+
+    def test_a_root_owned_binary_under_a_unit_user_runs_as_that_user_not_root(self):
+        assert helper_runs_it_as(self.ROOT, unit_user_uid=105) == "uid 105"
+
+    def test_no_unit_user_keeps_the_old_rule(self):
+        assert helper_runs_it_as(self.ROOT) == "root"
+        assert helper_runs_it_as(self.KEA) == "uid 105"
+
+    def test_a_binary_owned_by_somebody_else_than_the_units_user_is_refused(self):
+        assert helper_runs_it_as(self.KEA, unit_user_uid=300) == "refused"
+
+
 class TestParse:
     def test_the_real_shape(self):
         facts = parse_stat("_kea|_kea|105|106|750|regular file")
@@ -149,6 +177,9 @@ def test_binary_facts():
         "etc_kea_dhcp4_conf": path_facts("/etc/kea/kea-dhcp4.conf"),
         "etc_kea_as_mounted_in_ci": mounted_path_facts("/etc/kea"),
     }
+    # Q149: what build 12 would run `-t` as on this image, beside who the daemon really runs as. A container runs the daemon directly (no unit,
+    # so no User=): the recorded uid is whatever the container starts it as, and on a systemd host the unit's User= is what both follow.
+    record["helper_runs_check_as"] = helper_runs_it_as(facts)
     print(json.dumps(record, indent=2))
     if OUT:
         with open(OUT, "w", encoding="utf-8") as fh:
@@ -161,4 +192,14 @@ def test_binary_facts():
     assert helper_would_run_it(facts), (
         f"jen-kea-helper would refuse ISC's {BINARY} on this image (it must be owned by a system account, uid below 1000, with no group/other "
         f"write bit): {record}"
+    )
+    runs_as = record["daemon_runs_as"]["uid"]
+    if (
+        runs_as
+    ):  # the daemon runs as an unprivileged account on this image: the helper's check must be that account, never root
+        assert record["helper_runs_check_as"] == f"uid {runs_as}", (
+            f"the daemon runs as uid {runs_as} but jen-kea-helper would run its config check as {record['helper_runs_check_as']}: {record}"
+        )
+    assert record["helper_runs_check_as"] != "root" or facts["uid"] == 0, (
+        f"the helper would run a binary that is not root-owned as root: {record}"
     )

@@ -880,6 +880,18 @@ is `missingbinary` WITH the reason, never a guess. A unit with a group (TLS mate
 The ops list is unchanged and so is the sudoers line; `tests/kea_helper_build.json` is re-pinned to build 11 and kea-compat records `/etc/kea`'s owner and
 mode per ISC image so the exposure window this closed is on record.
 
+**Helper build 12 (v5.68.0-beta.14, Q149 — a build-only change; `HELPER_VERSION` stays 7): identity first, trust second.** Build 11 consulted
+`_unit_account` only after `_bin_owner_ok` had already decided a `root:root` binary was fine, and then returned "run as root": a root-owned binary under a
+unit with `User=_kea` was validated by root, so the check could pass on a certificate, key or directory the daemon (running as `_kea`) cannot read - the same
+class of mismatch Q141/Q148 had just closed for the other ownership. `_find_kea` now resolves the unit's identity FIRST (`User=` by name or numeric uid via
+`pwd.getpwuid`, `Group=`, `SupplementaryGroups=`; `extra_groups` = `os.getgrouplist(name, gid)` ∪ the unit's, deduplicated, primary left out), verifies the
+binary SECOND (`root:root` with no group/other write bit - which the unit's account must also be able to execute, via the other-execute bit or its group - or
+owned by exactly the unit's system account), and runs `-t` as the unit's identity whenever the unit names one. **What runs as root, and when:** `-t` runs as
+root only when the unit names no user, or root, and the binary is `root:root`; everything else drops to the unit's account, `setgroups` included. A user or
+group the unit names that the host does not resolve is `missingbinary` WITH the reason, never a fall-through to root. With no unit user (a bare container),
+the pre-5.68 rule is unchanged: the file's own system-account owner, or root for a `root:root` file. The ops list and the sudoers line are unchanged;
+`tests/kea_helper_build.json` is re-pinned to build 12, and kea-compat records, per ISC image, who the daemon runs as beside who the helper would run the check as.
+
 - `jen-config` mutation now happens **in Jen** (`jen/services/kea_config_edit.py`,
   pure functions) rather than inside a generated script. Read → mutate →
   apply is not a single atomic step on the Kea host, but since v5.16.0
@@ -978,7 +990,15 @@ write - returns `marker-invalid` with the logger and the marker left exactly as 
 the logger's severity and debuglevel were removed together with the marker). The change set aborts before any write, the index entry is KEPT and
 flagged, the sweep records it as the entry's error every minute, the Health row goes red naming the server with the by-hand text, and *Turn it
 off now* says the same; turning it on again over a damaged marker is refused too, since recording the current DEBUG values as "what to restore"
-would make DEBUG the thing to put back.
+would make DEBUG the thing to put back. **A damaged marker is judged when it is seen, not when it is due (v5.68.0-beta.14, Q149).** Beta.13 validated
+the marker only after its deadline check, so a damaged marker with a future `until` answered `nochange`, and the full scan adopted a live marker without reading
+its `restore` - Jen knew logging was on and did not know it had lost the way back until the deadline. `kea_config_edit.validate_investigation_marker(cfg)` is now a
+separate question (can the way back be trusted - a marker that is not even an object counts as damaged), asked first by `clear_investigation_logging`, by
+`set_investigation_logging` and by every full scan: the entry is marked `damaged` on the scan that reads it (Health red at once, audit row once, the DEBUG left
+exactly as it is, Turn on refused). The guidance no longer points at the damaged object: `by_hand_damaged` sends the operator to Servers → Config history, to the
+revision recorded just before the oldest consecutive "investigation logging on" one (linked when the server is still in Jen), then to restore the logger from
+that config or a backup, delete the `jen-investigation` user-context, validate, reload or restart, and press **Forget** - which Jen accepts for such an entry only
+after reading the config and finding no marker in it.
 
 ### 3.4 API key scope
 
@@ -2245,7 +2265,11 @@ straight back through the change set - or, if that fails too, keeps the entry so
 its entry exists is not dropped: the entry is kept (with the server's name, SSH host and config path) and marked removed, the Health
 row fails with the by-hand restore, and the settings forms that would stop Jen reaching a server refuse until `turn_off` has
 succeeded. An admin who restored such a server by hand tells Jen so with one button on the Servers page. Adopting a marker the sweep
-did not index, and a refused removal, each write an audit row.
+did not index, and a refused removal, each write an audit row. **The damaged state (v5.68.0-beta.14, Q149).** An entry whose marker lost its
+`restore` object carries `marker_invalid` (and the Config history revision to start from). It is set by whichever sees the marker first - the restore step
+when it is due, or the full scan (every tenth run) the minute it reads one, even with an hour to go - and cleared when a later scan finds the marker
+readable again. Nothing in this state writes to the Kea host: the DEBUG stays exactly as it is until a person puts it back and presses Forget, which
+re-reads the config and refuses while any `jen-investigation` marker is still in it.
 
 **The Problems sweep (v5.68.0-beta.5, Q140).** The second core scheduler job this round added
 (`jen_client_problems_sweep`, every five minutes, `max_instances=1`, `coalesce`, single-process like the first two) reads each SSH server's

@@ -652,6 +652,9 @@ def set_investigation_logging(cfg: dict, until_iso: str):
     documents). Idempotent: when the marker is already there only `until` moves (the ORIGINAL restore is kept, so extending
     never makes DEBUG the thing to "restore" to), and the entry's `output-options` are never touched."""
     cfg = copy.deepcopy(cfg)
+    if validate_investigation_marker(cfg):
+        # a marker that cannot be read is never overwritten with the logger's CURRENT (DEBUG) values
+        return cfg, "marker-invalid"
     section, loggers = _dhcp4_loggers(cfg, create=True)
     if section is None:
         return cfg, "unsupported"
@@ -720,6 +723,23 @@ def restore_problem(restore) -> str:
     return ""
 
 
+def validate_investigation_marker(cfg: dict) -> str:
+    """ "" when the kea-dhcp4 logger carries no `jen-investigation` marker, or one whose `restore` object says unambiguously how to put the
+    logger back; else a short reason (v5.68.0-beta.14, Q149). It answers ONE question - can the way back be trusted - and is separate from
+    "is it due": the restore step, the full scan and the turn-on all ask it first, so a damaged marker is found the minute a scan reads it, not
+    at its deadline. A marker that is not an object at all (a string, a list) is damaged too: `investigation_marker` cannot see it, and a
+    turn-on over it would record the logger's current DEBUG values as what to restore."""
+    _section, loggers = _dhcp4_loggers(cfg, create=False)
+    entry = _logger_entry(loggers or [])
+    context = entry.get("user-context") if isinstance(entry, dict) else None
+    if not isinstance(context, dict) or INVESTIGATION_KEY not in context:
+        return ""
+    marker = context[INVESTIGATION_KEY]
+    if not isinstance(marker, dict):
+        return "the marker is not an object"
+    return restore_problem(marker.get("restore"))
+
+
 def clear_investigation_logging(cfg: dict, now=None):
     """Put the kea-dhcp4 logger back as `set_investigation_logging` found it. With `now` (a timezone-aware datetime) it does
     so only when the marker's `until` has passed - the sweep's rule; an unreadable `until` counts as passed. With `now=None`
@@ -729,6 +749,9 @@ def clear_investigation_logging(cfg: dict, now=None):
     debuglevel together with it). An entry Jen created is removed again; one that existed gets exactly its old severity and
     debuglevel back (a key that was absent is removed), and its `output-options` and any other `user-context` keys are left alone."""
     cfg = copy.deepcopy(cfg)
+    if validate_investigation_marker(cfg):
+        # whatever the deadline: a damaged marker is reported when it is seen, not when it is due (Q149)
+        return cfg, "marker-invalid"
     _section, loggers = _dhcp4_loggers(cfg, create=False)
     entry = _logger_entry(loggers or [])
     context = entry.get("user-context") if isinstance(entry, dict) else None
@@ -739,8 +762,6 @@ def clear_investigation_logging(cfg: dict, now=None):
         due = _parse_until(marker.get("until"))
         if due is not None and due > now:
             return cfg, "nochange"
-    if restore_problem(marker.get("restore")):
-        return cfg, "marker-invalid"
     restore = marker["restore"]
     if restore.get("created"):
         loggers.remove(entry)

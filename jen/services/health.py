@@ -308,7 +308,7 @@ def _debug_logging_left_on(ctx) -> Check:
         c.status = "fail"
         parts = [
             # v5.68.0-beta.13 (Q148): the marker lost its restore object; Jen changed nothing and will not guess
-            f"the restore marker on {e['name']} is unreadable — restore by hand: {__inv.by_hand(e)}"
+            f"the investigation-logging marker on {e['name']} is damaged — {__inv.by_hand_damaged(e)}"
             for e in damaged
         ]
         parts += [

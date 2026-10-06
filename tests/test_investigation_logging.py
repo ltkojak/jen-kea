@@ -618,10 +618,32 @@ class TestADamagedMarkerIsNeverReadAsProofTheKeysNeverExisted:
         out, code = ed.clear_investigation_logging(on)
         assert code == "ok" and out["Dhcp4"]["loggers"] == []
 
-    def test_the_same_marker_is_not_due_yet_so_the_sweep_leaves_it_alone_before_judging_it(self):
+    def test_a_damaged_marker_is_judged_before_it_is_due_not_at_its_deadline(self):
+        """v5.68.0-beta.14 (Q149): beta.13 answered "nochange" for a damaged marker whose `until` was in the future, so Jen knew logging was
+        on and did not know it had lost the way back until the deadline. Whether the way back can be trusted is its own question."""
         on, _ = ed.set_investigation_logging(_cfg([{"name": "kea-dhcp4"}]), FUTURE)
         _entry(on)["user-context"]["jen-investigation"].pop("restore")
-        assert ed.clear_investigation_logging(on, now=NOW)[1] == "nochange"
+        before = copy.deepcopy(on)
+        out, code = ed.clear_investigation_logging(on, now=NOW)
+        assert code == "marker-invalid" and out == before, "damaged, whatever the deadline, and nothing is changed"
+
+    def test_a_marker_that_is_not_an_object_is_damaged_too(self):
+        on, _ = ed.set_investigation_logging(_cfg([{"name": "kea-dhcp4"}]), FUTURE)
+        _entry(on)["user-context"]["jen-investigation"] = "until the 7th"
+        assert ed.validate_investigation_marker(on) != ""
+        assert ed.clear_investigation_logging(on, now=NOW)[1] == "marker-invalid"
+        out, code = ed.set_investigation_logging(on, FUTURE)
+        assert code == "marker-invalid" and _entry(out)["user-context"]["jen-investigation"] == "until the 7th", (
+            "a turn-on never writes the logger's current DEBUG values over an unreadable marker"
+        )
+
+    def test_the_validator_is_separate_from_is_it_due(self):
+        assert ed.validate_investigation_marker(_cfg()) == "", "no logger, no marker: nothing to distrust"
+        assert ed.validate_investigation_marker({}) == "", "no Dhcp4 block either"
+        valid, _ = ed.set_investigation_logging(_cfg([{"name": "kea-dhcp4"}]), FUTURE)
+        assert ed.validate_investigation_marker(valid) == ""
+        _entry(valid)["user-context"]["jen-investigation"]["restore"] = {"severity": "INFO"}
+        assert "debuglevel" in ed.validate_investigation_marker(valid)
 
     def test_turning_it_on_again_never_records_debug_as_what_to_restore(self):
         damaged = self._on(lambda m: m.pop("restore"))
@@ -653,8 +675,9 @@ class TestADamagedMarkerIsSaidOutLoud:
         out = inv.turn_off(world.servers[0], actor="alice")
         assert out["ok"] is False and world.daemons[1].file == before and world.daemons[1].writes == writes
         text = out["lines"][-1]
-        assert "the restore marker on kea-a is unreadable" in text and "restore by hand" in text
+        assert "the investigation-logging marker on kea-a is damaged" in text and "Config history" in text
         assert "10.0.0.1" in text and "jen-investigation" in text and "debuglevel" in text
+        assert "`restore`" not in text and "restore object" not in text, "never points at the object that is damaged"
         (entry,) = inv.active()
         assert entry["marker_invalid"] and entry["error"], "the entry is kept so the Health row keeps saying so"
         assert world.daemons[1].calls.count("config-reload") == 1, (
@@ -665,7 +688,7 @@ class TestADamagedMarkerIsSaidOutLoud:
         before = self._damaged_world(world)
         for minute in (6, 7, 8):
             out = inv.sweep(now=NOW + timedelta(minutes=minute))
-            assert out["restored"] == [] and "unreadable" in out["errors"][0] and "kea-a" in out["errors"][0]
+            assert out["restored"] == [] and "damaged" in out["errors"][0] and "kea-a" in out["errors"][0]
         assert world.daemons[1].file == before
 
     def test_the_health_row_goes_red_naming_the_server_and_the_by_hand_text(self, world):
@@ -675,9 +698,99 @@ class TestADamagedMarkerIsSaidOutLoud:
         inv.sweep(now=NOW + timedelta(minutes=6))
         c = health._debug_logging_left_on({})
         assert c.status == "fail"
-        assert "the restore marker on kea-a is unreadable" in c.detail and "restore by hand" in c.detail
-        assert "10.0.0.1" in c.detail and "jen-investigation" in c.detail
+        assert "the investigation-logging marker on kea-a is damaged" in c.detail and "Config history" in c.detail
+        assert "10.0.0.1" in c.detail and "jen-investigation" in c.detail and "`restore`" not in c.detail
         assert "should have ended" not in c.detail and "still at DEBUG 55" not in c.detail, "said once, not three ways"
+
+    @pytest.mark.parametrize(
+        "damage",
+        [
+            lambda m: m.pop("restore"),
+            lambda m: m.__setitem__("restore", {"severity": "INFO"}),
+            lambda m: m.__setitem__("restore", {"created": False}),
+        ],
+        ids=["no-restore", "missing-debuglevel", "created-false"],
+    )
+    def test_the_guidance_for_each_damaged_shape_never_names_the_damaged_object(self, world, damage):
+        """v5.68.0-beta.14 (Q149): beta.13's by-hand text told the operator to read what the marker's `restore` object says - the very
+        object just declared unreadable. The guidance now goes to Config history, to the config as it was before the logging went on."""
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        damage(_entry(world.daemons[1].file)["user-context"]["jen-investigation"])
+        for text in (
+            inv.turn_off(world.servers[0])["lines"][-1],
+            inv.by_hand_damaged({"ssh_host": "10.0.0.1", "kea_conf": "/etc/kea/kea-dhcp4.conf"}),
+            inv.by_hand_damaged({"server_id": "1", "history_revision": 41}),
+        ):
+            assert "`restore`" not in text and "restore object" not in text, text
+            assert "Config history" in text and "jen-investigation" in text and "Forget" in text, text
+
+    def test_the_revision_before_the_logging_went_on_is_linked_when_the_server_is_still_in_jen(
+        self, world, monkeypatch
+    ):
+        from jen.services import config_revisions as rev
+
+        rows = [  # newest first, as list_revisions returns them
+            {"id": 45, "summary": "something later"},
+            {"id": 44, "summary": "investigation logging on for 15 min"},
+            {"id": 43, "summary": "investigation logging on for 5 min"},
+            {"id": 42, "summary": "the config as it was before"},
+        ]
+        monkeypatch.setattr(rev, "list_revisions", lambda server_id, service, limit=100: rows)
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        _entry(world.daemons[1].file)["user-context"]["jen-investigation"].pop("restore")
+        text = inv.turn_off(world.servers[0])["lines"][-1]
+        assert "revision 42" in text and "/servers/1/config-history/42" in text
+        assert inv.active()[0]["history_revision"] == 42, "the Servers page links it"
+
+    def test_a_damaged_marker_with_no_history_says_to_use_a_backup(self):
+        text = inv.by_hand_damaged({"server_id": "1", "history_revision": None})
+        assert "none is on record" in text and "backup" in text
+
+    def test_a_damaged_future_marker_is_unhealthy_on_the_next_full_scan_not_at_expiry(self, world):
+        """v5.68.0-beta.14 (Q149): beta.13 indexed a live marker without validating it, so Health stayed green until the deadline."""
+        from jen.services import health
+
+        assert inv.turn_on(world.servers[0], 60)["ok"]
+        before = None
+        _entry(world.daemons[1].file)["user-context"]["jen-investigation"].pop("restore")
+        before = copy.deepcopy(world.daemons[1].file)
+        writes = world.daemons[1].writes
+        assert health._debug_logging_left_on({}).status == "ok", "nothing has looked yet"
+        out = inv.sweep(now=NOW + timedelta(minutes=1), full=True)  # an hour from its deadline
+        assert out["restored"] == [] and "damaged" in out["errors"][0]
+        c = health._debug_logging_left_on({})
+        assert c.status == "fail" and "damaged" in c.detail and "Config history" in c.detail
+        assert world.daemons[1].file == before and world.daemons[1].writes == writes, (
+            "the DEBUG is left exactly as it is"
+        )
+        (entry,) = inv.active()
+        assert entry["marker_invalid"]
+        again = inv.sweep(now=NOW + timedelta(minutes=2), full=True)
+        assert again["errors"] == [], "said once"
+        refused = inv.turn_on(world.servers[0], 5)
+        assert refused["ok"] is False and world.daemons[1].file == before, "Turn On is refused over a damaged marker"
+
+    def test_forget_is_refused_while_the_file_still_carries_the_marker_and_accepted_once_it_does_not(self, world):
+        assert inv.turn_on(world.servers[0], 60)["ok"]
+        _entry(world.daemons[1].file)["user-context"]["jen-investigation"].pop("restore")
+        inv.sweep(now=NOW + timedelta(minutes=1), full=True)
+        assert inv.forget(1) is False and inv.active(), "Jen reads the file: 'I fixed it' is checked, not believed"
+        entry = _entry(world.daemons[1].file)
+        entry["severity"], entry["debuglevel"] = "INFO", 0
+        del entry["user-context"]
+        assert inv.forget(1, actor="alice") is True and not inv.active()
+
+    def test_a_marker_repaired_by_hand_stops_being_reported_damaged(self, world):
+        assert inv.turn_on(world.servers[0], 60)["ok"]
+        _entry(world.daemons[1].file)["user-context"]["jen-investigation"].pop("restore")
+        inv.sweep(now=NOW + timedelta(minutes=1), full=True)
+        _entry(world.daemons[1].file)["user-context"]["jen-investigation"]["restore"] = {
+            "severity": "INFO",
+            "debuglevel": "absent",
+        }
+        inv.sweep(now=NOW + timedelta(minutes=2), full=True)
+        (entry,) = inv.active()
+        assert not entry["marker_invalid"] and not entry["error"]
 
     def test_removing_the_server_stays_refused_while_it_is_unreadable(self, world):
         self._damaged_world(world)

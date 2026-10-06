@@ -230,6 +230,16 @@ readable through a group) started fine under systemd and failed Jen's `-t`. `_un
 `SupplementaryGroups` in one `systemctl show`; the gid is the unit's `Group=` when set (else the passwd primary), `extra_groups` are the
 unit's supplementary gids (resolved with `grp.getgrnam`), and a group the host does not have is `missingbinary` WITH the reason - never
 a guess. A change of behaviour inside the existing envelope: `HELPER_VERSION` stays 7.
+
+Build 12 (v5.68.0-beta.14, Q149) - build 11 consulted the unit's identity only AFTER it had decided the binary was not root:root, so a
+root-owned binary under a unit that says `User=_kea` (a layout some packages and every hand install produce) was run as ROOT, and a unit
+whose `User=` this host cannot resolve fell through to root as well. The order is now: (1) the unit's identity is resolved FIRST - `User=`
+by name or by numeric uid, `Group=`, `SupplementaryGroups=`; (2) the binary is verified SECOND - root:root with no group/other write bit
+(any unit), or owned by exactly the unit's own account (a system account, no group/other write bit); (3) `-t` runs as the unit's
+identity whenever the unit names one, and as root only when it names none (or names root). A `User=` or `Group=` the host cannot resolve
+is a refusal (`missingbinary` WITH the reason), never a run as root. The supplementary groups are what systemd itself gives the daemon:
+`os.getgrouplist(name, gid)` (the account's /etc/group memberships) plus the unit's `SupplementaryGroups=`. A change of behaviour inside
+the existing envelope: `HELPER_VERSION` stays 7.
 """
 
 from __future__ import annotations
@@ -249,7 +259,7 @@ import sys
 import tempfile
 
 HELPER_VERSION = 7
-HELPER_BUILD = 11
+HELPER_BUILD = 12
 # v5.66.0-beta.2 (Q104) — HELPER_BUILD is bumped on EVERY change to this file, never by
 # HELPER_VERSION alone; op_update's own _HELPER_BUILD_RE parses "^HELPER_BUILD = (\d+)$" out
 # of a candidate's raw bytes, so this line (like HELPER_VERSION's own, just above) must never
@@ -395,11 +405,11 @@ def _run_bin(name, args, **kw):
 
 def _unit_account(service):
     """The account the daemon's systemd unit runs as (v5.68.0-beta.6, Q141; groups since build 11, Q148): None when the unit sets no
-    `User=`, names root, or the account does not exist here; else `{"name", "uid", "gid", "extra_groups"}`, where `gid` is the unit's
-    `Group=` when it sets one (else the account's passwd primary group) and `extra_groups` are its `SupplementaryGroups=` as gids -
-    exactly the identity systemd gives the daemon, so what `-t` can read is what the daemon can read. A group the unit names that this
-    host does not have is `{"refused": reason}`, never a guess. Never raises: a host without systemd, `pwd` or `grp` simply has no
-    answer."""
+    `User=` or names root; else `{"name", "uid", "gid", "extra_groups"}`, where `gid` is the unit's `Group=` when it sets one (else the
+    account's passwd primary group) and `extra_groups` are the account's /etc/group memberships (`os.getgrouplist`) plus the unit's
+    `SupplementaryGroups=`, as gids - exactly the identity systemd gives the daemon, so what `-t` can read is what the daemon can read.
+    `User=` may be a name or a numeric uid (build 12, Q149). A user or group the unit names that this host does not have is
+    `{"refused": reason}`, never a guess and never root. Never raises: a host without systemd, `pwd` or `grp` simply has no answer."""
     unit = _resolve_unit(service, "status")
     if not unit:
         return None
@@ -423,9 +433,9 @@ def _unit_account(service):
     except ImportError:  # not a POSIX host (only ever the test harness)
         return None
     try:
-        pw = pwd.getpwnam(name)
+        pw = pwd.getpwuid(int(name)) if name.isdigit() else pwd.getpwnam(name)
     except KeyError:
-        return None
+        return {"refused": f"its unit runs as User={name}, which is not an account on this host"}
     if pw.pw_uid == 0:
         return None
 
@@ -440,7 +450,22 @@ def _unit_account(service):
         extra = [gid_of(g) for g in props.get("SupplementaryGroups", "").split() if g]
     except KeyError as e:
         return {"refused": f"its unit names the group {e.args[0]!r}, which does not exist on this host"}
-    return {"name": name, "uid": pw.pw_uid, "gid": gid, "extra_groups": extra}
+    return {"name": pw.pw_name, "uid": pw.pw_uid, "gid": gid, "extra_groups": _with_memberships(pw.pw_name, gid, extra)}
+
+
+def _with_memberships(name, gid, extra):
+    """`extra` plus the account's own /etc/group memberships, first-seen order, the primary `gid` left out (the call sets it separately).
+    systemd initialises a daemon's groups with initgroups(3) and then adds `SupplementaryGroups=`; `os.getgrouplist` is initgroups' list."""
+    try:
+        member = [g for g in os.getgrouplist(name, gid) if g != gid]
+    except (OSError, AttributeError):
+        member = []
+    seen, out = set(), []
+    for g in [*member, *extra]:
+        if g not in seen and g != gid:
+            seen.add(g)
+            out.append(g)
+    return out
 
 
 def _daemon_bin_ok(path, uid):
@@ -485,13 +510,18 @@ def _refusal_reason(path, unit_account):
 
 
 def _find_kea(service):
-    """Resolve the Kea daemon binary and WHO runs it (v5.68.0-beta.6, Q141). Returns None when no
-    candidate exists under _BIN_DIRS at all, else a dict: {"binary", "user", "group", "extra_groups"} on
-    success - user/group None means "run as root" (a root:root binary, the old rule, unchanged) - or
-    {"refused": reason} when a candidate exists but is not trusted (or the unit names a group this host
-    lacks). The identity is the unit's own (User, Group, SupplementaryGroups: build 11, Q148), else the
-    file's owner with its primary group. Candidates are looked at in _BIN_DIRS order in directories
-    that pass _bin_dir_ok; the first trusted one wins."""
+    """Resolve the Kea daemon binary and WHO runs it (v5.68.0-beta.6, Q141; identity first since build 12, Q149). Returns None when no
+    candidate exists under _BIN_DIRS at all, else a dict: {"binary", "user", "group", "extra_groups"} on success - user/group None means
+    "run as root" - or {"refused": reason} when a candidate exists but cannot be run safely as the daemon's own identity.
+
+    THE ORDER IS THE POINT. (1) The unit's identity is resolved first (`_unit_account`: User= by name or uid, Group=,
+    SupplementaryGroups= plus the account's /etc/group memberships); a user or group the host cannot resolve is a refusal, never root.
+    (2) The binary is verified second: root:root with no group/other write bit (any unit), or owned by exactly the unit's account.
+    (3) `-t` runs as the unit's identity whenever the unit names one - a root-owned binary under `User=_kea` runs as `_kea`, not root
+    (build 11 ran it as root, because the unit was consulted only after the root:root check had already succeeded). Root runs `-t`
+    only when the unit names no user, or root. With no unit user, the pre-5.68 rule holds: a root:root binary runs as root, a binary
+    owned by a system account runs as that account. Candidates are looked at in _BIN_DIRS order in directories that pass
+    _bin_dir_ok; the first trusted one wins."""
     name = _SERVICE_BINARY.get(service, "kea-dhcp6")
     refused = None
     unit_account = None
@@ -502,12 +532,25 @@ def _find_kea(service):
         cand = os.path.join(d, name)
         if not os.path.lexists(cand):
             continue
-        if _bin_owner_ok(cand) and os.access(cand, os.X_OK):
-            return {"binary": cand, "user": None, "group": None, "extra_groups": []}
         if not unit_looked:
             unit_account, unit_looked = _unit_account(service), True
         if unit_account is not None and "refused" in unit_account:
-            return {"refused": unit_account["refused"]}  # a group that does not exist is a refusal with its reason, not a guess
+            return {"refused": unit_account["refused"]}  # a user or group that does not exist is a refusal with its reason, not root
+        root_owned = _bin_owner_ok(cand) and os.access(cand, os.X_OK)
+        if root_owned and unit_account is None:
+            return {"binary": cand, "user": None, "group": None, "extra_groups": []}
+        if root_owned:
+            # a root-owned binary under a unit that names an account: validate as that account (it must be able to execute the file)
+            if os.stat(cand).st_mode & 0o001 or _group_may_exec(cand, unit_account):
+                return {
+                    "binary": cand,
+                    "user": unit_account["uid"],
+                    "group": unit_account["gid"],
+                    "extra_groups": unit_account["extra_groups"],
+                }
+            if refused is None:
+                refused = f"is root-owned and its mode does not let the daemon's user {unit_account['name']} execute it"
+            continue
         try:
             import pwd
 
@@ -521,11 +564,22 @@ def _find_kea(service):
             run_uid, run_gid, run_extra = None, None, []
         if run_uid is None and owner is not None:
             run_uid, run_gid = owner.pw_uid, owner.pw_gid
+            run_extra = _with_memberships(owner.pw_name, run_gid, [])
         if run_uid is not None and _daemon_bin_ok(cand, run_uid) and os.access(cand, os.X_OK):
             return {"binary": cand, "user": run_uid, "group": run_gid, "extra_groups": run_extra}
         if refused is None:
             refused = _refusal_reason(cand, unit_account)
     return {"refused": refused} if refused is not None else None
+
+
+def _group_may_exec(path, unit_account):
+    """True iff `path`'s group has the execute bit and the unit's identity is in that group (its primary, `Group=` or supplementary
+    ones). A root:root 0750 binary the daemon's account cannot execute would otherwise make `-t` die with a bare PermissionError."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return False
+    return bool(st.st_mode & 0o010) and st.st_gid in {unit_account["gid"], *unit_account["extra_groups"]}
 
 
 def _kea_binary(service):

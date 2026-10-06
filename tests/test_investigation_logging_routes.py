@@ -292,3 +292,47 @@ class TestAServerRemovedFromJenWhileItWasOn:
         restricted_client(client, db, allowed_subnets=[1], role="admin", username="_inv_forget_scoped")
         client.post("/servers/investigation-logging/forget/7")
         assert seen == []
+
+
+class TestADamagedMarkerOnAServerJenCanStillReach:
+    """v5.68.0-beta.14 (Q149): the marker that says how to put the log level back is itself damaged. The Servers page says so, links the
+    Config history revision to start from, and offers Forget - which the service only accepts once the file no longer carries the marker."""
+
+    DAMAGED = {
+        **ON,
+        "server_id": "7",
+        "name": "live-kea",
+        "removed": False,
+        "marker_invalid": True,
+        "history_revision": 41,
+        "ssh_host": "10.9.9.8",
+        "kea_conf": "/etc/kea/kea-dhcp4.conf",
+        "file": "debug",
+        "daemon": "debug",
+        "pending": None,
+        "stuck": False,
+    }
+
+    def _page(self, client, monkeypatch):
+        from jen.services import investigation_logging as inv
+        from jen.services import kea
+
+        entry = {"server": dict(SERVER), "up": True, "ha_state": None, "version": "3.0.3", "role": "primary"}
+        monkeypatch.setattr(kea, "get_all_server_status", lambda: [entry])
+        monkeypatch.setattr(inv, "active", lambda now=None: [self.DAMAGED])
+        return client.get("/servers").data.decode()
+
+    def test_the_page_names_the_server_links_the_revision_and_offers_forget(
+        self, logged_in_client, stubs, mock_kea, monkeypatch
+    ):
+        page = self._page(logged_in_client, monkeypatch)
+        assert "The investigation-logging marker on live-kea is damaged" in page
+        assert "/servers/7/config-history/41" in page and "Config history" in page
+        assert "/servers/investigation-logging/forget/7" in page
+        assert "`restore`" not in page, "the guidance never points at the damaged object"
+
+    def test_a_scoped_admin_is_not_shown_the_host_details(self, client, db, stubs, mock_kea, monkeypatch):
+        from tests.conftest import restricted_client
+
+        restricted_client(client, db, allowed_subnets=[1], role="admin", username="_inv_damaged_scoped")
+        assert "10.9.9.8" not in self._page(client, monkeypatch)

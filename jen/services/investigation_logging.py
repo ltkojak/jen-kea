@@ -97,6 +97,7 @@ def active(now: datetime | None = None) -> list[dict]:
                 "error": entry.get("error", ""),
                 # v5.68.0-beta.13 (Q148): the marker lost its restore object, so Jen refused to guess - a person restores it
                 "marker_invalid": bool(entry.get("marker_invalid")),
+                "history_revision": entry.get("history_revision"),
                 # v5.68.0-beta.9 (Q144): the state machine's three fields, and what a person needs for a server Jen can no longer reach
                 "file": entry.get("file", "debug"),
                 "daemon": entry.get("daemon", "debug"),
@@ -401,13 +402,25 @@ def removal_refusal(server_ids, actor: str = "") -> str:
 
 
 def forget(server_id, actor: str = "") -> bool:
-    """Drop the index entry of a server that was removed from Jen, after a person restored it by hand. Refuses (False) an entry that is
-    not marked removed: a live server is put back with turn_off, never forgotten."""
+    """Drop the index entry of a server that was removed from Jen, or whose marker was damaged, after a person put it back by hand.
+    Refuses (False) any other entry: a live server with a readable marker is put back with turn_off, never forgotten. A damaged one on
+    a server Jen can still reach is forgotten only once its config no longer carries a `jen-investigation` marker at all (v5.68.0-beta.14,
+    Q149) - Jen reads the file to find out, so "I fixed it" is checked, not believed."""
     with _lock:
         record = _record()
         entry = record["servers"].get(str(server_id))
-        if not entry or not entry.get("removed"):
+        if not entry or not (entry.get("removed") or entry.get("marker_invalid")):
             return False
+        if not entry.get("removed"):
+            server = next((s for s in _ssh_servers() if str(s.get("id")) == str(server_id)), None)
+            if server is None:
+                return False
+            try:
+                cfg, _sha = _host.read_config_versioned(server, "dhcp4")
+            except Exception:
+                return False
+            if not cfg or _edit.investigation_marker(cfg) is not None or _edit.validate_investigation_marker(cfg):
+                return False
         _drop(record, server_id)
     _audit(
         "INVESTIGATION_LOGGING_FORGOTTEN",
@@ -417,11 +430,55 @@ def forget(server_id, actor: str = "") -> bool:
     return True
 
 
+def _revision_before_on(server_id) -> int | None:
+    """The Config history revision a person starts from when the marker is damaged: the one recorded just BEFORE the oldest consecutive
+    "investigation logging on" revision - the config as it was before Jen touched the logger. None when there is no such revision."""
+    try:
+        from jen.services import config_revisions as _rev
+
+        rows = _rev.list_revisions(int(server_id), "dhcp4", limit=200)  # newest first
+    except Exception:
+        return None
+    on = "investigation logging on for"
+    i = next((n for n, r in enumerate(rows) if str(r.get("summary") or "").startswith(on)), None)
+    if i is None:
+        return None
+    while i + 1 < len(rows) and str(rows[i + 1].get("summary") or "").startswith(on):
+        i += 1
+    return rows[i + 1]["id"] if i + 1 < len(rows) else None
+
+
 def marker_invalid_text(server: dict, entry: dict) -> str:
-    """The sentence for a marker Jen will not guess at: shown by turn_off, recorded on the entry for the sweep, and the Health row."""
+    """The sentence for a marker Jen will not guess at: shown by turn_off, recorded on the entry for the sweep, and the Health row. It
+    finds the Config history revision to start from and keeps it on the entry (the Servers page links it)."""
+    entry.setdefault("server_id", str(server.get("id")))
+    if not entry.get("history_revision"):
+        entry["history_revision"] = _revision_before_on(server.get("id"))
     return (
-        f"the restore marker on {_name(server)} is unreadable (its `restore` object is missing or malformed, so Jen cannot tell what the "
-        f"logger was before and changed nothing) — restore by hand: {by_hand(entry)}"
+        f"the investigation-logging marker on {_name(server)} is damaged, so Jen cannot tell what the logger was before and changed "
+        f"nothing — {by_hand_damaged(entry)}"
+    )
+
+
+def by_hand_damaged(entry: dict) -> str:
+    """What a person does when the marker's own record of the old values is damaged. The marker cannot be the source - it is the thing
+    that is damaged - so the guidance goes to Servers -> Config history, to the config as it was before Jen turned the logging on."""
+    where = entry.get("kea_conf") or "its kea-dhcp4.conf"
+    host = entry.get("ssh_host") or "the Kea host"
+    revision = entry.get("history_revision")
+    server_id = entry.get("server_id")
+    found = (
+        f"revision {revision} (Servers → Config history → /servers/{server_id}/config-history/{revision})"
+        if revision and server_id
+        else "the revision recorded just before the one summarised “investigation logging on” (none is on record for this server — "
+        "use a backup of the file instead)"
+    )
+    return (
+        f"Jen no longer knows the logger's original settings. Open Servers → Config history and look at {found}: that is the config "
+        f"as it was before the logging went on. Then on {host}, in {where}: in the `kea-dhcp4` entry of Dhcp4 → loggers set severity and "
+        "debuglevel back to what that config has (remove a key it does not have; remove the whole entry if it had none), delete the "
+        "`jen-investigation` entry under that logger's `user-context`, check the file with Kea's own config test, reload or restart Kea, "
+        "then press Forget here"
     )
 
 
@@ -484,9 +541,34 @@ def sweep(now: datetime | None = None, full: bool = False) -> dict:
                 except Exception as e:
                     summary["errors"].append(f"{server.get('name')}: could not read its config ({type(e).__name__})")
                     continue
+                # v5.68.0-beta.14 (Q149): every marker the scan reads is validated NOW, not at its deadline. A damaged one is
+                # indexed (or its entry marked) damaged at once - Health red, the by-hand text, the DEBUG left exactly as it is
+                problem = _edit.validate_investigation_marker(cfg) if cfg else ""
+                if problem:
+                    entry = record["servers"].get(sid) or _entry_for(server, _iso(now))
+                    first_time = not entry.get("marker_invalid")
+                    entry["marker_invalid"] = True
+                    entry["error"] = marker_invalid_text(server, entry)[:900]
+                    _put(record, sid, entry)
+                    if first_time:
+                        summary["errors"].append(
+                            f"{_name(server)}: the investigation-logging marker is damaged ({problem})"
+                        )
+                        _audit(
+                            "INVESTIGATION_LOGGING_MARKER_DAMAGED",
+                            _name(server),
+                            f"the marker's own record of the old log level is unreadable ({problem}); Jen changed nothing",
+                        )
+                    continue
                 marker = _edit.investigation_marker(cfg) if cfg else None
                 if not marker:
                     continue
+                held = record["servers"].get(sid)
+                if held and held.get("marker_invalid"):
+                    # a person repaired the marker by hand: it reads again, so the entry stops saying it is damaged
+                    held.pop("marker_invalid", None)
+                    held.pop("error", None)
+                    _put(record, sid, held)
                 if (_edit._parse_until(marker.get("until")) or now) <= now:
                     due.append((sid, server))
                 elif sid not in record["servers"]:

@@ -52,6 +52,23 @@
 </div>
 {% endif %}
 
+{% if history_allowed and investigation_damaged %}
+{# v5.68.0-beta.14 (Q149): the marker that says how to put the log level back is itself damaged; Jen changed nothing and says where the old values are #}
+<div class="alert alert-warning u-3bceda">
+    {% for o in investigation_damaged %}
+    <div>
+    {{ icon("siren") }} <strong>The investigation-logging marker on {{ o.name }} is damaged.</strong>
+    {{ o.by_hand }}.
+    {% if o.history_revision %}<a href="/servers/{{ o.server_id }}/config-history/{{ o.history_revision }}">Open revision {{ o.history_revision }}</a>{% endif %}
+    <form method="POST" action="/servers/investigation-logging/forget/{{ o.server_id }}" class="u-8a77e5">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-sm btn-secondary" data-confirm="Have you put {{ o.name }} back by hand? Jen reads its config to check.">Forget</button>
+    </form>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
 {% if not single_server and ha_mode %}
 {% if ha_degraded %}
 <div class="alert alert-warning u-3bceda">
