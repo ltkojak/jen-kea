@@ -2,6 +2,55 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.68.0-beta.14] - 2026-10-07
+
+Beta channel. Stacked on 5.68.0-beta.13. **A Problems row that keeps its own subnet, existence checks that fail closed in two plugins, a Kea config check that
+runs as the account the unit names, a switch page that says the same thing with and without what you may not see, and a damaged logging marker reported the
+minute it is seen.** Eight findings from the review of beta.13, each confirmed against the code. Migration 33 runs on the first start and **empties the Problems
+inbox** (it refills from the logs within one sweep); the helper change reaches a Kea host when you press **Update helper**; three bundled plugins ship new versions.
+
+**A Problems row's subnet was reassigned by the newest event.** Beta.13 made the alert decision per (kind, client, subnet) but left the stored row keyed by
+(server, kind, client, address), so a client's NAKs that name no address in subnet B, B, and A were one row whose subnet the newest event rewrote while its count,
+times and alert state stayed: B's history, and a qualification B had earned and failed to deliver, ended up on an A row and was retried there. Migration 33 adds a
+`scope_key` (the subnet id, or -1 for "no attributable subnet", because a NULL cannot be part of a unique key) to the row's identity; the sweep groups by it and no
+upsert assigns the subnet on a duplicate, so the same client in two subnets is two rows with their own count, first and last time, alert state and resolution. The
+migration deletes the existing rows (they may already be mixed) and each server's log watermark, and keeps the clock offsets; the next sweep records what is still
+in the log tail, as the first read of a server always has, without alerting.
+
+**A delivered alert left its qualification behind.** A successful delivery set `alerted_at` but left `qualified_at` and `qualified_count`, the two fields a
+retry reads, for the 24-hour expiry to clear. It now clears them on that subnet's rows; a failed delivery keeps them for the retry.
+
+**A failing lookup was read as "no such record" in Wake & Actions and Presence.** Both plugins start a write by asking whether the MAC already has a favourite or
+a tracked row, and the answer decides whose it is. A SELECT that raised was treated as "not found", so with the database failing for that one statement the route
+carried on as if the MAC were new, judged it on the client's current subnet, and the upsert that followed could rewrite a row stored in a subnet the caller cannot
+see. The lookup now has three outcomes (found, not found, failed): on a failure the route says *Could not check the existing record — nothing was changed*, logs,
+writes nothing and audits nothing. Wake & Actions 1.1.3 (add favourite) and Presence 1.2.1 (track, track from a row, untrack, move subnet) carry it; the other
+bundled plugins were checked and have no such lookup. `plugins/README.md` and ARCHITECTURE section 2 state the rule, and both plugins' own descriptions of who may
+do what now say the stored-subnet contract (Presence's still said "the subnet its MAC is in now").
+
+**Switch Port Locator told a scoped caller that a newer position was hidden.** The page, the card and the API said "was last seen on" instead of "is on" only when
+the newest stored position was on a switch the caller may not see, which is information about a row they cannot see. Switch Port Locator 1.1.3 builds a scoped
+caller's output from the positions they may see alone, always says "Last seen on ... at <time>" to them, and computes no "newer hidden" state at all; an
+unrestricted caller still gets "On ..." when the newest position is theirs. A test shows the page, the card and the API identical with and without the hidden
+newer position.
+
+**The config check ran as root for a root-owned Kea binary.** Helper build 11 looked at the unit's account only after it had decided the binary was not
+`root:root`, so a binary owned by root under a unit that says `User=_kea` was checked as root: the check could pass on a certificate, a key or a directory the
+daemon, running as `_kea`, cannot read, and Jen would push a config that then failed to start. Build 12 resolves the unit's identity first (`User=` by name or by
+numeric uid, `Group=`, `SupplementaryGroups=`), verifies the binary second (root:root and executable by that account, or owned by exactly it), and runs the check as
+the unit's account whenever the unit names one; root only when it names none. A `User=` or `Group=` the host has no account for is refused with the reason and is
+never run as root in its place. The supplementary groups are now the account's own `/etc/group` memberships plus `SupplementaryGroups=`, which is what systemd gives
+the daemon. kea-compat records who the helper would run the check as beside who the daemon runs as on each of ISC's images. The by-hand install one-liner
+embeds build 12. No sudoers change.
+
+**A damaged marker was not reported until it was due.** A marker that lost its `restore` object was refused when the restore ran, which is at its deadline: with an
+hour to go the full scan indexed it as healthy and the Health row stayed green. The question "can the way back be trusted" is now asked separately from "is it
+due", and by everything that reads a marker: the restore step, the turn-on, and every full scan. A damaged marker is indexed (once, with an audit row), the Health
+row goes red on that scan, the log level is left exactly as it is, and turning logging on over it is refused. A marker that is not even an object is treated the
+same. **The guidance no longer points at the damaged object**: it sends you to Servers, Config history, to the revision recorded just before the logging went on
+(linked on the Servers page while the server is still in Jen), then to put the logger back from that config or a backup, delete the `jen-investigation` entry,
+check the file, reload or restart Kea, and press **Forget**. Forget now works for such an entry, after Jen reads the config and finds no marker in it.
+
 ## [5.68.0-beta.13] - 2026-10-06
 
 Beta channel. Stacked on 5.68.0-beta.12. **Problems alerts that respect the subnet boundary and survive log rotation, a Kea config check that runs with the
