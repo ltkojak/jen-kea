@@ -178,7 +178,7 @@ class TestVersion:
         assert code == 0
         assert out["ok"] is True
         assert out["helper_version"] == helper.HELPER_VERSION == 7
-        assert out["helper_build"] == helper.HELPER_BUILD == 10
+        assert out["helper_build"] == helper.HELPER_BUILD == 11
         assert out["python"].count(".") == 2
         assert err.startswith("jen-kea-helper: version ok")
 
@@ -564,6 +564,10 @@ class TestRunAsTheDaemonsOwnAccount:
 
         monkeypatch.setattr(pwd, "getpwuid", getpwuid)
         monkeypatch.setattr(helper, "_unit_account", lambda service: unit)
+        # the helper runs as root in production and chowns the validation copy to the account that runs -t; the tests run as
+        # whoever the CI runner is, so the call is recorded instead of made
+        self.chowns = []
+        monkeypatch.setattr(os, "fchown", lambda fd, uid, gid: self.chowns.append((uid, gid)))
         calls = []
 
         def fake_run(cmd, **kw):
@@ -634,14 +638,16 @@ class TestRunAsTheDaemonsOwnAccount:
         assert out["error"] == "missingbinary" and "root but not root:root" in out["detail"] and calls == []
 
     def test_the_units_user_is_the_account_it_runs_as(self, helper, tmp_path, monkeypatch):
-        p, _binary, calls = self._setup(helper, tmp_path, monkeypatch, uid=200, unit=("keauser", 200, 201))
+        unit = {"name": "keauser", "uid": 200, "gid": 201, "extra_groups": []}
+        p, _binary, calls = self._setup(helper, tmp_path, monkeypatch, uid=200, unit=unit)
         _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}})
         assert (calls[0][1]["user"], calls[0][1]["group"]) == (200, 201)
 
     def test_a_binary_owned_by_a_different_system_account_than_the_units_user_is_refused(
         self, helper, tmp_path, monkeypatch
     ):
-        p, _binary, calls = self._setup(helper, tmp_path, monkeypatch, uid=300, unit=("keauser", 200, 201))
+        unit = {"name": "keauser", "uid": 200, "gid": 201, "extra_groups": []}
+        p, _binary, calls = self._setup(helper, tmp_path, monkeypatch, uid=300, unit=unit)
         _code, out, _ = _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}})
         assert out["detail"] == "is owned by othersys, not the daemon's user keauser" and calls == []
 
@@ -655,15 +661,46 @@ class TestRunAsTheDaemonsOwnAccount:
         )
         assert out == {"ok": False, "error": "missingbinary", "binary": "kea-dhcp4"}
 
-    def test_the_temp_file_is_0644_whatever_the_umask(self, helper, tmp_path, monkeypatch):
+    @pytest.mark.parametrize("umask", [0o077, 0o022, 0o000])
+    def test_the_validation_copy_is_0600_and_the_daemon_accounts_own_when_it_runs_as_that_account(
+        self, helper, tmp_path, monkeypatch, umask
+    ):
+        """v5.68.0-beta.13 (Q148). The copy carries the database credentials. It used to be 0644 (so the daemon's account could read it),
+        which made another local account's access depend on /etc/kea's mode on the package in use; it is now the account's own and 0600,
+        whatever the umask - the minimum the validator needs."""
         p, _binary, calls = self._setup(helper, tmp_path, monkeypatch)
-        old = os.umask(0o077)
+        old = os.umask(umask)
         try:
             _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}})
         finally:
             os.umask(old)
-        assert calls[0][1]["_seen"]["mode"] == 0o644, "the daemon's account must be able to read what -t reads"
+        assert calls[0][1]["_seen"]["mode"] == 0o600, "nobody but the account that runs -t needs to read what -t reads"
+        assert self.chowns == [(self.KEA_UID, self.KEA_GID)], (
+            "owned by the account the validator runs as, and its group"
+        )
+        assert (calls[0][1]["user"], calls[0][1]["group"]) == (self.KEA_UID, self.KEA_GID)
         assert not os.path.exists(p + ".jen_tmp")
+
+    @pytest.mark.parametrize("umask", [0o077, 0o022])
+    def test_the_validation_copy_is_root_0600_when_it_runs_as_root(self, helper, tmp_path, monkeypatch, umask):
+        p, _binary, calls = self._setup(helper, tmp_path, monkeypatch, uid=0, mode=0o755, root_owned=True)
+        old = os.umask(umask)
+        try:
+            _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}})
+        finally:
+            os.umask(old)
+        assert calls[0][1]["_seen"]["mode"] == 0o600
+        assert self.chowns == [], "run as root: the file stays root's own (nobody needs to chown it)"
+        assert "user" not in calls[0][1]
+        assert not os.path.exists(p + ".jen_tmp")
+
+    def test_a_stale_copy_with_a_looser_mode_is_tightened_not_reused(self, helper, tmp_path, monkeypatch):
+        p, _binary, calls = self._setup(helper, tmp_path, monkeypatch)
+        stale = pathlib.Path(p + ".jen_tmp")
+        stale.write_text("old credentials")
+        os.chmod(stale, 0o666)
+        _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}})
+        assert calls[0][1]["_seen"]["mode"] == 0o600 and not stale.exists()
 
     def test_the_clean_environment_has_a_home(self, helper):
         assert helper._CLEAN_ENV == {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8", "HOME": "/"}
@@ -688,7 +725,13 @@ class TestRunAsTheDaemonsOwnAccount:
         import types
 
         monkeypatch.setattr(helper, "_resolve_unit", lambda service, action: "kea-dhcp4-server")
-        for answer, expect in (("_kea\n", ("_kea", 105, 106)), ("root\n", None), ("\n", None), ("ghost\n", None)):
+        kea = {"name": "_kea", "uid": 105, "gid": 106, "extra_groups": []}
+        for answer, expect in (
+            ("User=_kea\nGroup=\nSupplementaryGroups=\n", kea),
+            ("User=root\nGroup=\nSupplementaryGroups=\n", None),
+            ("User=\nGroup=\nSupplementaryGroups=\n", None),
+            ("User=ghost\nGroup=\nSupplementaryGroups=\n", None),
+        ):
             monkeypatch.setattr(
                 helper, "_run_bin", lambda name, args, answer=answer, **kw: types.SimpleNamespace(stdout=answer)
             )
@@ -702,6 +745,113 @@ class TestRunAsTheDaemonsOwnAccount:
             assert helper._unit_account("dhcp4") == expect, answer
         monkeypatch.setattr(helper, "_resolve_unit", lambda service, action: None)
         assert helper._unit_account("dhcp4") is None
+
+
+@win
+class TestTheUnitsOwnIdentityIsWhatValidationRunsAs:
+    """v5.68.0-beta.13 (Q148). A unit with `Group=` or `SupplementaryGroups=` (TLS material readable through a group) starts fine under
+    systemd and used to fail Jen's `-t`, which ran as the account's primary group with no supplementary groups. `_unit_account` reads
+    `User`, `Group` and `SupplementaryGroups` in ONE `systemctl show`, the gid is the unit's `Group=` when set, `extra_groups` are the
+    supplementary gids, and a group the host lacks is refused with the reason - never guessed. systemctl is a stub (the system suite's
+    compose nodes have no systemd - stand-in named here, per CLAUDE.md - so the harness stands in for a scenario that cannot run there)."""
+
+    GROUPS = {"keacerts": 301, "ssl-cert": 302, "kea": 106}
+
+    def _systemd(self, helper, monkeypatch, show_output):
+        import grp
+        import pwd
+        import types
+
+        asked = []
+        monkeypatch.setattr(helper, "_resolve_unit", lambda service, action: "kea-dhcp4-server")
+
+        def run_bin(name, args, **kw):
+            asked.append((name, list(args)))
+            return types.SimpleNamespace(stdout=show_output)
+
+        monkeypatch.setattr(helper, "_run_bin", run_bin)
+        monkeypatch.setattr(
+            pwd,
+            "getpwnam",
+            lambda n: (
+                types.SimpleNamespace(pw_uid=105, pw_gid=106) if n == "_kea" else (_ for _ in ()).throw(KeyError(n))
+            ),
+        )
+
+        def getgrnam(n):
+            if n not in self.GROUPS:
+                raise KeyError(n)
+            return types.SimpleNamespace(gr_gid=self.GROUPS[n])
+
+        monkeypatch.setattr(grp, "getgrnam", getgrnam)
+        return asked
+
+    def test_user_only_runs_as_the_account_with_its_primary_group_and_nothing_else(self, helper, monkeypatch):
+        asked = self._systemd(helper, monkeypatch, "User=_kea\nGroup=\nSupplementaryGroups=\n")
+        assert helper._unit_account("dhcp4") == {"name": "_kea", "uid": 105, "gid": 106, "extra_groups": []}
+        assert asked == [
+            ("systemctl", ["show", "-p", "User", "-p", "Group", "-p", "SupplementaryGroups", "kea-dhcp4-server"])
+        ]
+
+    def test_user_and_group_take_the_units_group_not_the_passwd_primary(self, helper, monkeypatch):
+        self._systemd(helper, monkeypatch, "User=_kea\nGroup=keacerts\nSupplementaryGroups=\n")
+        assert helper._unit_account("dhcp4") == {"name": "_kea", "uid": 105, "gid": 301, "extra_groups": []}
+        self._systemd(helper, monkeypatch, "User=_kea\nGroup=4242\nSupplementaryGroups=\n")
+        assert helper._unit_account("dhcp4")["gid"] == 4242, "a numeric Group= is a gid"
+
+    def test_user_and_supplementary_groups_are_all_passed_as_extra_groups(self, helper, monkeypatch):
+        self._systemd(helper, monkeypatch, "User=_kea\nGroup=\nSupplementaryGroups=keacerts ssl-cert 9001\n")
+        assert helper._unit_account("dhcp4") == {
+            "name": "_kea",
+            "uid": 105,
+            "gid": 106,
+            "extra_groups": [301, 302, 9001],
+        }
+
+    def test_an_unknown_group_is_refused_with_the_reason_never_guessed(self, helper, monkeypatch):
+        self._systemd(helper, monkeypatch, "User=_kea\nGroup=\nSupplementaryGroups=keacerts nosuchgroup\n")
+        out = helper._unit_account("dhcp4")
+        assert out == {"refused": "its unit names the group 'nosuchgroup', which does not exist on this host"}
+        self._systemd(helper, monkeypatch, "User=_kea\nGroup=gone\nSupplementaryGroups=\n")
+        assert "'gone'" in helper._unit_account("dhcp4")["refused"]
+
+    def test_the_whole_identity_reaches_the_validator_and_an_unknown_group_never_runs_it(
+        self, helper, tmp_path, monkeypatch
+    ):
+        import types
+
+        monkeypatch.setattr(helper, "_ALLOWED_CONF_DIRS", (str(tmp_path),))
+        d = _fake_kea_bin(helper, monkeypatch, tmp_path, "kea-dhcp4", exit_code=0)
+        binary = os.path.join(d, "kea-dhcp4")
+        monkeypatch.setattr(helper, "_bin_owner_ok", lambda path: False)
+        monkeypatch.setattr(helper, "_daemon_bin_ok", lambda path, uid: True)
+        monkeypatch.setattr(os, "fchown", lambda fd, uid, gid: None)
+        real_lstat = os.lstat
+        monkeypatch.setattr(
+            os,
+            "lstat",
+            lambda path, *a, **k: (
+                types.SimpleNamespace(st_mode=stat.S_IFREG | 0o750, st_uid=105, st_gid=106)
+                if str(path) == binary
+                else real_lstat(path, *a, **k)
+            ),
+        )
+        ran = []
+        monkeypatch.setattr(
+            helper.subprocess,
+            "run",
+            lambda cmd, **kw: ran.append((cmd, kw)) or types.SimpleNamespace(returncode=0, stdout="", stderr=""),
+        )
+        p = str(tmp_path / "kea-dhcp4.conf")
+        self._systemd(helper, monkeypatch, "User=_kea\nGroup=keacerts\nSupplementaryGroups=ssl-cert 9001\n")
+        _code, out, _ = _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}})
+        assert out == {"ok": True}
+        ((cmd, kw),) = ran
+        assert (kw["user"], kw["group"], kw["extra_groups"]) == (105, 301, [302, 9001])
+        ran.clear()
+        self._systemd(helper, monkeypatch, "User=_kea\nGroup=\nSupplementaryGroups=nosuchgroup\n")
+        _code, out, _ = _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}})
+        assert out["error"] == "missingbinary" and "nosuchgroup" in out["detail"] and ran == []
 
 
 @win

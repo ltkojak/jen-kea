@@ -856,6 +856,18 @@ root never executes a file an unprivileged account can replace. The temp file `-
 above is unchanged; `tests/kea_helper_build.json` is re-pinned to build 10 and kea-compat records the binary's owner and run-as user per ISC image so the
 suite goes red the day ISC changes it.
 
+**Helper build 11 (v5.68.0-beta.13, Q148 — a build-only change; `HELPER_VERSION` stays 7): the validation run's credentials and its file.** The temp copy
+`<conf>.jen_tmp` that `-t` reads is the whole Kea config, database credentials included, and was written 0644 so the daemon's account could read it; that
+made another local account's reach depend on `/etc/kea`'s mode on whichever package was installed. It is now created with `os.open(..., 0o600)` (a stale
+file of that name is truncated and re-moded, and a symlink is not followed) and `fchown`/`fchmod`ed on the descriptor — **owned by the
+account that runs `-t`** (the daemon's own account when the binary is run as that account, root's own when it is `root:root` and run as root), **mode 0600**
+either way — and removed on every exit path as before, so the minimum the validator needs is all that exists. The validation identity is also now the unit's
+own: `_unit_account` reads `User`, `Group` and `SupplementaryGroups` in one `systemctl show -p User -p Group -p SupplementaryGroups`, the gid is the unit's
+`Group=` when set (else the passwd primary), `extra_groups` are the supplementary gids (`grp.getgrnam`, or a numeric gid), and a group the host lacks
+is `missingbinary` WITH the reason, never a guess. A unit with a group (TLS material readable through it) used to start under systemd and fail Jen's `-t`.
+The ops list is unchanged and so is the sudoers line; `tests/kea_helper_build.json` is re-pinned to build 11 and kea-compat records `/etc/kea`'s owner and
+mode per ISC image so the exposure window this closed is on record.
+
 - `jen-config` mutation now happens **in Jen** (`jen/services/kea_config_edit.py`,
   pure functions) rather than inside a generated script. Read → mutate →
   apply is not a single atomic step on the Kea host, but since v5.16.0
@@ -947,7 +959,14 @@ revert on failure, an audit row and a config revision), the daemon learns of it 
 the control channel Jen already uses (restart through the existing `service` op only when the daemon lacks
 or refuses it), and the log is read through `tail-log`. The only thing the helper sees is a config whose
 `kea-dhcp4` logger entry carries a `user-context` marker saying what to restore; `docs/admin-guide.md`
-names the one logger entry Jen touches.
+names the one logger entry Jen touches. **A marker that has lost its `restore` object is never read as "these keys never existed"
+(v5.68.0-beta.13, Q148).** `kea_config_edit.clear_investigation_logging` validates the marker before it mutates anything: `restore` must be
+`{"created": true}` or carry BOTH `severity` and `debuglevel`, each the literal `"absent"` or a real value. Anything else - a hand edit, a partial
+write - returns `marker-invalid` with the logger and the marker left exactly as they were (it used to read as `{}`, so every key was "absent" and
+the logger's severity and debuglevel were removed together with the marker). The change set aborts before any write, the index entry is KEPT and
+flagged, the sweep records it as the entry's error every minute, the Health row goes red naming the server with the by-hand text, and *Turn it
+off now* says the same; turning it on again over a damaged marker is refused too, since recording the current DEBUG values as "what to restore"
+would make DEBUG the thing to put back.
 
 ### 3.4 API key scope
 

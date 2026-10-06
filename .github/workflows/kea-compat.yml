@@ -229,6 +229,23 @@ jobs:
           PY
             done
             echo
+            echo
+            echo "### /etc/kea on ISC's images (what the helper's 0644 validation copy used to depend on)"
+            echo
+            echo "| image | /etc/kea owner:group | mode | any account can enter | kea-dhcp4.conf owner:group | mode |"
+            echo "|---|---|---|---|---|---|"
+            for f in artifacts/*/binary-*.json; do
+              [ -e "$f" ] || continue
+              python - "$f" <<'PY'
+          import json, os, sys
+          d = json.load(open(sys.argv[1]))
+          v = os.path.basename(sys.argv[1])[len('binary-'):-len('.json')]
+          e = d.get('etc_kea') or {}
+          c = d.get('etc_kea_dhcp4_conf') or {}
+          print(f"| {v} | {e.get('owner')}:{e.get('group')} | {e.get('mode')} | {e.get('world_traversable')} | {c.get('owner')}:{c.get('group')} | {c.get('mode')} |")
+          PY
+            done
+            echo
             echo "3.3 is Kea's development line: a failure there is informational."
             echo "The pkt4-* statistic names each version reports are in the per-version artifacts."
           } >> "$GITHUB_STEP_SUMMARY"

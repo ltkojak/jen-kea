@@ -328,6 +328,13 @@ daemon's user — update the helper (build 10 or later) / fix the ownership"* �
 ordinary user; `sudo chown _kea:_kea /usr/sbin/kea-dhcp4 && sudo chmod 0750 /usr/sbin/kea-dhcp4` (the ownership the package ships) or `root:root 0755` are
 both accepted. Health Center's "Kea host helper installed" row names a host on an old build with an ISC-packaged Kea.
 
+**The config check fails for a unit with `Group=` or `SupplementaryGroups=` (fixed in helper build 11).** A Kea whose systemd unit sets a group (the
+usual reason is TLS material readable through a group) started fine and still failed Jen's *Config test*: build 10 ran the check as the account's
+primary group with no supplementary groups. Press **Update helper**: build 11 runs it with the unit's own `User=`, `Group=` and
+`SupplementaryGroups=`. If the message says *"its unit names the group 'x', which does not exist on this host"*, the unit refers to a group the host
+lacks (`getent group x`): create it or fix the unit, and Jen will not guess. Build 11 also writes the check's copy of the config (it carries the database
+credentials) `0600`, owned by the account that runs it, where build 10 wrote it `0644`.
+
 ### Permission denied on kea-dhcp4.conf
 
 ```
@@ -341,7 +348,8 @@ sudo cat /etc/sudoers.d/jen-kea-helper   # the one-line helper grant
 sudo cat /etc/sudoers.d/jen-kea          # the legacy fallback, if still present
 ```
 
-The complete line sets are in the **Admin Guide → Kea host helper**.
+The complete line sets are in the **Admin Guide → Kea host helper**. (Helper build 11: the legacy `sudo python3` path never ran the
+helper's `-t` check and is unchanged; a host on the helper validates a config with a `0600` copy owned by the daemon's account.)
 Validate after editing:
 ```bash
 sudo visudo -c -f /etc/sudoers.d/jen-kea-helper
@@ -905,6 +913,7 @@ Investigation logging (Trace or Servers) puts a Kea server's logger at DEBUG for
 3. **If the banner still shows after the config was fixed**, the file is clean but Kea has not taken it (v5.68.0-beta.9): a reload was refused and the restart failed. Jen keeps trying every minute; fix whatever stops Kea restarting (`systemctl status kea-dhcp4-server`, or `isc-kea-dhcp4-server` on older packages) and the next try finishes it.
 4. **A server that was removed from Jen** while its logging was on cannot be reached any more: the Health row says *investigation logging may still be on on &lt;name&gt; (removed from Jen)* and gives the host and the config path. Do the by-hand edit below on that host, then press **I restored it by hand** on the Servers page.
 5. **By hand**, on the Kea host: in `kea-dhcp4.conf`, find the `kea-dhcp4` entry in `loggers`, set `severity`/`debuglevel` back to what its `user-context.jen-investigation.restore` says (`"absent"` means delete the key; `{"created": true}` means delete the whole entry), delete the `jen-investigation` key, and `config-reload` (or restart) Kea. A hand edit that removed the marker is fine: the next restore finds nothing to change in the file and still reloads the daemon.
+   **The restore marker is unreadable (v5.68.0-beta.13).** If the Health row says *the restore marker on &lt;name&gt; is unreadable — restore by hand*, the `jen-investigation` marker lost its `restore` object (a hand edit or a partial write). Jen changed nothing and will not guess what the logger was before. In `kea-dhcp4.conf` set the `kea-dhcp4` logger's `severity`/`debuglevel` to what you want (usually your old level; remove `debuglevel` if it had none), delete the `jen-investigation` key, and `config-reload` (or restart) Kea; or repair the marker's `restore` object and Jen restores it itself within a minute.
 6. A log that still has no packet dump after turning it on usually has a more specific logger entry of its own (`kea-dhcp4.packets`) with its own severity; that one wins for its component.
 
 ## Log Locations

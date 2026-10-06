@@ -219,6 +219,17 @@ so a compromised `_kea`-owned binary gains nothing it did not already have, and 
 explicitly (it used to rely on the umask) and `_CLEAN_ENV` gains `HOME=/` for the
 dropped-privilege run. A change of behaviour inside the existing envelope, not a contract
 change: `HELPER_VERSION` stays 7.
+
+Build 11 (v5.68.0-beta.13, Q148) - two things build 10 got only partly right about the validation run. (1) The temp copy of the WHOLE
+Kea config that `-t` reads carries the database credentials and was written 0644: whether another local account could reach it
+depended on `/etc/kea`'s mode on the package in use, which is not something to depend on. It now takes the minimum the validator needs:
+created with `os.open(..., 0o600)` and `fchown`/`fchmod` on the descriptor, owned by the account that runs `-t` (the daemon's own, when
+it is run as that account) or by root (when it is run as root), 0600 either way, and removed on every exit path as before. (2) The run
+used the daemon account's primary group and no supplementary groups, so a unit with `Group=` or `SupplementaryGroups=` (TLS material
+readable through a group) started fine under systemd and failed Jen's `-t`. `_unit_account` now reads `User`, `Group` and
+`SupplementaryGroups` in one `systemctl show`; the gid is the unit's `Group=` when set (else the passwd primary), `extra_groups` are the
+unit's supplementary gids (resolved with `grp.getgrnam`), and a group the host does not have is `missingbinary` WITH the reason - never
+a guess. A change of behaviour inside the existing envelope: `HELPER_VERSION` stays 7.
 """
 
 from __future__ import annotations
@@ -238,7 +249,7 @@ import sys
 import tempfile
 
 HELPER_VERSION = 7
-HELPER_BUILD = 10
+HELPER_BUILD = 11
 # v5.66.0-beta.2 (Q104) — HELPER_BUILD is bumped on EVERY change to this file, never by
 # HELPER_VERSION alone; op_update's own _HELPER_BUILD_RE parses "^HELPER_BUILD = (\d+)$" out
 # of a candidate's raw bytes, so this line (like HELPER_VERSION's own, just above) must never
@@ -383,17 +394,31 @@ def _run_bin(name, args, **kw):
 
 
 def _unit_account(service):
-    """(name, uid, gid) of the account the daemon's systemd unit runs as - its `User=` - or None
-    when the unit sets none, names root, or the account does not exist here (v5.68.0-beta.6, Q141).
-    Never raises: a host without systemd or `pwd` simply has no answer."""
+    """The account the daemon's systemd unit runs as (v5.68.0-beta.6, Q141; groups since build 11, Q148): None when the unit sets no
+    `User=`, names root, or the account does not exist here; else `{"name", "uid", "gid", "extra_groups"}`, where `gid` is the unit's
+    `Group=` when it sets one (else the account's passwd primary group) and `extra_groups` are its `SupplementaryGroups=` as gids -
+    exactly the identity systemd gives the daemon, so what `-t` can read is what the daemon can read. A group the unit names that this
+    host does not have is `{"refused": reason}`, never a guess. Never raises: a host without systemd, `pwd` or `grp` simply has no
+    answer."""
     unit = _resolve_unit(service, "status")
     if not unit:
         return None
-    proc = _run_bin("systemctl", ["show", "-p", "User", "--value", unit], capture_output=True, text=True)
-    name = (proc.stdout or "").strip() if proc else ""
+    proc = _run_bin(
+        "systemctl",
+        ["show", "-p", "User", "-p", "Group", "-p", "SupplementaryGroups", unit],
+        capture_output=True,
+        text=True,
+    )
+    props = {}
+    for line in (proc.stdout or "").splitlines() if proc else []:
+        key, sep, value = line.partition("=")
+        if sep:
+            props[key.strip()] = value.strip()
+    name = props.get("User", "")
     if not name or name == "root":
         return None
     try:
+        import grp
         import pwd
     except ImportError:  # not a POSIX host (only ever the test harness)
         return None
@@ -401,7 +426,21 @@ def _unit_account(service):
         pw = pwd.getpwnam(name)
     except KeyError:
         return None
-    return (name, pw.pw_uid, pw.pw_gid) if pw.pw_uid != 0 else None
+    if pw.pw_uid == 0:
+        return None
+
+    def gid_of(group):
+        # `Group=` / `SupplementaryGroups=` take a name or a numeric gid
+        return int(group) if group.isdigit() else grp.getgrnam(group).gr_gid
+
+    gid, extra = pw.pw_gid, []
+    try:
+        if props.get("Group"):
+            gid = gid_of(props["Group"])
+        extra = [gid_of(g) for g in props.get("SupplementaryGroups", "").split() if g]
+    except KeyError as e:
+        return {"refused": f"its unit names the group {e.args[0]!r}, which does not exist on this host"}
+    return {"name": name, "uid": pw.pw_uid, "gid": gid, "extra_groups": extra}
 
 
 def _daemon_bin_ok(path, uid):
@@ -440,17 +479,19 @@ def _refusal_reason(path, unit_account):
         return "is owned by root but not root:root, and the helper runs it as the daemon's user only if that user owns it"
     if st.st_uid >= 1000:
         return f"is owned by {owner}, not a system account and not the daemon's user"
-    if unit_account is not None:
-        return f"is owned by {owner}, not the daemon's user {unit_account[0]}"
+    if unit_account is not None and "name" in unit_account:
+        return f"is owned by {owner}, not the daemon's user {unit_account['name']}"
     return f"is owned by {owner}, which cannot be used as the daemon's user"
 
 
 def _find_kea(service):
     """Resolve the Kea daemon binary and WHO runs it (v5.68.0-beta.6, Q141). Returns None when no
-    candidate exists under _BIN_DIRS at all, else a dict: {"binary", "user", "group"} on success -
-    user/group None means "run as root" (a root:root binary, the old rule, unchanged) - or
-    {"refused": reason} when a candidate exists but is not trusted. Candidates are looked at in
-    _BIN_DIRS order in directories that pass _bin_dir_ok; the first trusted one wins."""
+    candidate exists under _BIN_DIRS at all, else a dict: {"binary", "user", "group", "extra_groups"} on
+    success - user/group None means "run as root" (a root:root binary, the old rule, unchanged) - or
+    {"refused": reason} when a candidate exists but is not trusted (or the unit names a group this host
+    lacks). The identity is the unit's own (User, Group, SupplementaryGroups: build 11, Q148), else the
+    file's owner with its primary group. Candidates are looked at in _BIN_DIRS order in directories
+    that pass _bin_dir_ok; the first trusted one wins."""
     name = _SERVICE_BINARY.get(service, "kea-dhcp6")
     refused = None
     unit_account = None
@@ -462,21 +503,26 @@ def _find_kea(service):
         if not os.path.lexists(cand):
             continue
         if _bin_owner_ok(cand) and os.access(cand, os.X_OK):
-            return {"binary": cand, "user": None, "group": None}
+            return {"binary": cand, "user": None, "group": None, "extra_groups": []}
         if not unit_looked:
             unit_account, unit_looked = _unit_account(service), True
+        if unit_account is not None and "refused" in unit_account:
+            return {"refused": unit_account["refused"]}  # a group that does not exist is a refusal with its reason, not a guess
         try:
             import pwd
 
             owner = pwd.getpwuid(os.lstat(cand).st_uid)
         except (ImportError, KeyError, OSError):
             owner = None
-        # who the daemon runs as: its unit's User=, else the file's own owner
-        run_uid, run_gid = (unit_account[1], unit_account[2]) if unit_account else (None, None)
+        # who the daemon runs as: its unit's User=/Group=/SupplementaryGroups=, else the file's own owner and its primary group
+        if unit_account is not None:
+            run_uid, run_gid, run_extra = unit_account["uid"], unit_account["gid"], unit_account["extra_groups"]
+        else:
+            run_uid, run_gid, run_extra = None, None, []
         if run_uid is None and owner is not None:
             run_uid, run_gid = owner.pw_uid, owner.pw_gid
         if run_uid is not None and _daemon_bin_ok(cand, run_uid) and os.access(cand, os.X_OK):
-            return {"binary": cand, "user": run_uid, "group": run_gid}
+            return {"binary": cand, "user": run_uid, "group": run_gid, "extra_groups": run_extra}
         if refused is None:
             refused = _refusal_reason(cand, unit_account)
     return {"refused": refused} if refused is not None else None
@@ -493,9 +539,10 @@ def _kea_binary(service):
 
 
 def _run_kea_test(service, path, config, tls_paths):
-    """Write `config` to `<path>.jen_tmp` (0644, so the daemon's own account can read it), verify
-    any TLS material exists, run `kea-dhcpX -t` against the temp file AS THE ACCOUNT THE DAEMON RUNS
-    AS (`_find_kea`; root only for a root:root binary), and ALWAYS remove the temp file. Returns
+    """Write `config` to `<path>.jen_tmp` - created 0600 and owned by the account that runs `-t` (the daemon's own account, or root for
+    a root:root binary), because the copy carries the database credentials and nobody else needs to read it (build 11, Q148; it used to
+    be 0644) - verify any TLS material exists, run `kea-dhcpX -t` against the temp file AS THE ACCOUNT THE DAEMON RUNS AS (`_find_kea`:
+    its user, its Group= and its SupplementaryGroups=; root only for a root:root binary), and ALWAYS remove the temp file. Returns
     (ok: bool, result: dict). This only validates - apply re-writes its own."""
     found = _find_kea(service)
     name = _SERVICE_BINARY.get(service, "kea-dhcp6")
@@ -508,11 +555,15 @@ def _run_kea_test(service, path, config, tls_paths):
 
     tmp = path + ".jen_tmp"
     try:
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
         try:
-            os.fchmod(fd, 0o644)  # whatever the umask said: the daemon's account must be able to read it
-        except (OSError, AttributeError):
-            pass
+            os.fchmod(fd, 0o600)  # whatever the umask said, and whatever mode a stale file of this name had
+            if found.get("user") is not None:
+                # the file is the daemon account's own, so it can read it however /etc/kea's mode is set; nobody else can at all
+                os.fchown(fd, found["user"], found["group"] if found.get("group") is not None else -1)
+        except BaseException:
+            os.close(fd)
+            raise
         with os.fdopen(fd, "w") as f:
             json.dump(config, f, indent=2)
 
@@ -524,8 +575,8 @@ def _run_kea_test(service, path, config, tls_paths):
 
         kw = {}
         if found.get("user") is not None:
-            # the daemon's own account, no supplementary groups: what `kea-dhcpX` itself runs as on every start
-            kw = {"user": found["user"], "group": found["group"], "extra_groups": []}
+            # the daemon's own identity - account, Group= and SupplementaryGroups= - what `kea-dhcpX` itself runs as on every start
+            kw = {"user": found["user"], "group": found["group"], "extra_groups": list(found.get("extra_groups") or [])}
         proc = subprocess.run([binary, "-t", tmp], capture_output=True, text=True, env=_CLEAN_ENV, **kw)  # nosec B603
         combined = (proc.stdout or "") + (proc.stderr or "")
         if proc.returncode != 0 or "ERROR" in combined:

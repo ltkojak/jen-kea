@@ -550,6 +550,152 @@ class TestAdoptionIsAuditedAndTheRowNamesTheServer:
         assert c.status == "fail" and "kea-a" in c.detail and "still at DEBUG 55" in c.detail
 
 
+class TestADamagedMarkerIsNeverReadAsProofTheKeysNeverExisted:
+    """v5.68.0-beta.13 (Q148): `clear_investigation_logging` used to read a marker whose `restore` object was missing or damaged as `{}`, so
+    every key read as "absent" and the logger's severity and debuglevel were REMOVED together with the marker. It validates the marker
+    first; an unreadable one changes NOTHING and answers "marker-invalid". Only a valid `{"created": true}`, or BOTH keys each "absent"
+    or a real value, restores."""
+
+    def _on(self, restore_edit):
+        cfg = _cfg(
+            [{"name": "kea-dhcp4", "severity": "INFO", "debuglevel": 3, "output-options": [{"output": "stdout"}]}]
+        )
+        on, _ = ed.set_investigation_logging(cfg, PAST)
+        marker = _entry(on)["user-context"]["jen-investigation"]
+        restore_edit(marker)
+        return on
+
+    @pytest.mark.parametrize(
+        "damage",
+        [
+            lambda m: m.pop("restore"),
+            lambda m: m.__setitem__("restore", "INFO"),
+            lambda m: m.__setitem__("restore", {"debuglevel": 3}),
+            lambda m: m.__setitem__("restore", {"severity": "INFO"}),
+            lambda m: m.__setitem__("restore", {"created": "yes"}),
+            lambda m: m.__setitem__("restore", {"created": False, "severity": "INFO", "debuglevel": 3}),
+            lambda m: m.__setitem__("restore", {"severity": "", "debuglevel": 3}),
+            lambda m: m.__setitem__("restore", {"severity": "INFO", "debuglevel": "3"}),
+            lambda m: m.__setitem__("restore", {"severity": "INFO", "debuglevel": True}),
+            lambda m: m.__setitem__("restore", None),
+        ],
+        ids=[
+            "missing-restore",
+            "restore-not-a-dict",
+            "missing-severity",
+            "missing-debuglevel",
+            "created-not-a-bool",
+            "created-false",
+            "empty-severity",
+            "debuglevel-a-string",
+            "debuglevel-a-bool",
+            "restore-null",
+        ],
+    )
+    def test_a_marker_that_lost_its_restore_object_changes_nothing(self, damage):
+        on = self._on(damage)
+        before = copy.deepcopy(on)
+        out, code = ed.clear_investigation_logging(on)
+        assert code == "marker-invalid" and out == before, "the logger and the marker are left exactly as they are"
+        assert (_entry(out)["severity"], _entry(out)["debuglevel"]) == ("DEBUG", 55)
+        assert ed.clear_investigation_logging(on, now=NOW)[1] == "marker-invalid", (
+            "the sweep's rule gets the same answer"
+        )
+
+    def test_the_absent_sentinels_are_valid_and_remove_the_keys(self):
+        on = self._on(lambda m: m.__setitem__("restore", {"severity": "absent", "debuglevel": "absent"}))
+        out, code = ed.clear_investigation_logging(on)
+        assert code == "ok" and "severity" not in _entry(out) and "debuglevel" not in _entry(out)
+        assert "user-context" not in _entry(out) and _entry(out)["output-options"] == [{"output": "stdout"}]
+
+    def test_real_saved_values_are_valid_and_come_back(self):
+        on = self._on(lambda m: m.__setitem__("restore", {"severity": "WARN", "debuglevel": 0}))
+        out, code = ed.clear_investigation_logging(on)
+        assert code == "ok" and (_entry(out)["severity"], _entry(out)["debuglevel"]) == ("WARN", 0)
+
+    def test_a_valid_created_marker_removes_the_entry_it_created(self):
+        on, _ = ed.set_investigation_logging(_cfg(), PAST)
+        out, code = ed.clear_investigation_logging(on)
+        assert code == "ok" and out["Dhcp4"]["loggers"] == []
+
+    def test_the_same_marker_is_not_due_yet_so_the_sweep_leaves_it_alone_before_judging_it(self):
+        on, _ = ed.set_investigation_logging(_cfg([{"name": "kea-dhcp4"}]), FUTURE)
+        _entry(on)["user-context"]["jen-investigation"].pop("restore")
+        assert ed.clear_investigation_logging(on, now=NOW)[1] == "nochange"
+
+    def test_turning_it_on_again_never_records_debug_as_what_to_restore(self):
+        damaged = self._on(lambda m: m.pop("restore"))
+        out, code = ed.set_investigation_logging(damaged, FUTURE)
+        assert code == "marker-invalid" and "restore" not in _entry(out)["user-context"]["jen-investigation"]
+
+    def test_the_pure_validator(self):
+        assert ed.restore_problem({"created": True}) == ""
+        assert ed.restore_problem({"severity": "INFO", "debuglevel": 3}) == ""
+        assert ed.restore_problem({"severity": "absent", "debuglevel": "absent"}) == ""
+        assert ed.restore_problem({"severity": "INFO", "debuglevel": "absent"}) == ""
+        assert ed.restore_problem({"created": True, "severity": "INFO"}) != "", "created is the WHOLE restore object"
+        assert ed.restore_problem(None) != "" and ed.restore_problem([]) != ""
+
+
+class TestADamagedMarkerIsSaidOutLoud:
+    """The sweep records the unreadable marker as the entry's error, the Health row goes red naming the server with the by-hand text, and
+    turn_off says the same - and none of them changes the config."""
+
+    def _damaged_world(self, world):
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        marker = _entry(world.daemons[1].file)["user-context"]["jen-investigation"]
+        marker.pop("restore")
+        return copy.deepcopy(world.daemons[1].file)
+
+    def test_turn_off_refuses_changes_nothing_and_says_how_to_restore_it_by_hand(self, world):
+        before = self._damaged_world(world)
+        writes = world.daemons[1].writes
+        out = inv.turn_off(world.servers[0], actor="alice")
+        assert out["ok"] is False and world.daemons[1].file == before and world.daemons[1].writes == writes
+        text = out["lines"][-1]
+        assert "the restore marker on kea-a is unreadable" in text and "restore by hand" in text
+        assert "10.0.0.1" in text and "jen-investigation" in text and "debuglevel" in text
+        (entry,) = inv.active()
+        assert entry["marker_invalid"] and entry["error"], "the entry is kept so the Health row keeps saying so"
+        assert world.daemons[1].calls.count("config-reload") == 1, (
+            "only turn_on's: the daemon was not asked to reload a config nobody wrote"
+        )
+
+    def test_the_sweep_records_it_as_an_error_and_keeps_trying_to_read_it_every_minute_without_writing(self, world):
+        before = self._damaged_world(world)
+        for minute in (6, 7, 8):
+            out = inv.sweep(now=NOW + timedelta(minutes=minute))
+            assert out["restored"] == [] and "unreadable" in out["errors"][0] and "kea-a" in out["errors"][0]
+        assert world.daemons[1].file == before
+
+    def test_the_health_row_goes_red_naming_the_server_and_the_by_hand_text(self, world):
+        from jen.services import health
+
+        self._damaged_world(world)
+        inv.sweep(now=NOW + timedelta(minutes=6))
+        c = health._debug_logging_left_on({})
+        assert c.status == "fail"
+        assert "the restore marker on kea-a is unreadable" in c.detail and "restore by hand" in c.detail
+        assert "10.0.0.1" in c.detail and "jen-investigation" in c.detail
+        assert "should have ended" not in c.detail and "still at DEBUG 55" not in c.detail, "said once, not three ways"
+
+    def test_removing_the_server_stays_refused_while_it_is_unreadable(self, world):
+        self._damaged_world(world)
+        inv.turn_off(world.servers[0])
+        assert inv.removal_refusal([1]) != ""
+
+    def test_once_a_person_fixes_the_marker_the_next_sweep_restores_it(self, world):
+        self._damaged_world(world)
+        inv.sweep(now=NOW + timedelta(minutes=6))
+        _entry(world.daemons[1].file)["user-context"]["jen-investigation"]["restore"] = {
+            "severity": "INFO",
+            "debuglevel": "absent",
+        }
+        out = inv.sweep(now=NOW + timedelta(minutes=7))
+        assert out["restored"] == ["kea-a"] and not inv.active()
+        assert _entry(world.daemons[1].file) == {"name": "kea-dhcp4", "severity": "INFO"}
+
+
 class TestTheHealthRow:
     def _check(self):
         from jen.services import health

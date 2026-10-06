@@ -11,6 +11,13 @@ with no group or other write bit. This records what each image really has — ow
 belongs to, the image's own USER — into $KEA_COMPAT_BINARY_OUT, and asserts the two things the helper's rule depends on, so the suite goes red the
 day ISC changes either: the binary is NOT root-owned, and it satisfies the helper's rule. Run against the compat job's own running daemon
 container (default name `kea`).
+
+v5.68.0-beta.13 (Q148) also records `/etc/kea` - its owner, group and mode, and the same for `kea-dhcp4.conf` where the image has one. The
+helper's validation copy of the whole Kea config (which carries the database credentials) used to be written 0644 beside the real file, and
+whether another local account could read it depended on that directory's mode on the package in use. Build 11 makes the copy the
+daemon account's own and 0600, which does not depend on it; the recorded facts put the window that closed on record, per ISC image
+(`world_traversable` is "any account can enter the directory"). Recorded, not asserted: ISC's packaging may change it and nothing here
+depends on it any more.
 """
 
 import json
@@ -89,6 +96,27 @@ def _daemon_run_as() -> dict:
     return {"uid": int(uid), "name": name or None}
 
 
+def path_facts(path: str) -> dict | None:
+    """Owner, group, mode and kind of `path` inside the image - or None when it is not there. `world_traversable` is whether the OTHER
+    bits let any account enter (a directory) or read (a file). Pure over `stat`'s output."""
+    out = _exec("stat", "-c", "%U|%G|%u|%g|%a|%F", path, check=False)
+    if not out or out.count("|") != 5:
+        return None
+    facts = parse_stat(out)
+    facts["world_traversable"] = bool(int(facts["mode"], 8) & 0o005)
+    return facts
+
+
+class TestPathFactsShape:
+    def test_a_directory_anyone_can_enter(self):
+        facts = parse_stat("root|root|0|0|755|directory")
+        facts["world_traversable"] = bool(int(facts["mode"], 8) & 0o005)
+        assert facts["world_traversable"] is True and facts["mode"] == "0755"
+
+    def test_a_directory_only_its_owner_and_group_can_enter(self):
+        assert not (int(parse_stat("root|_kea|0|106|750|directory")["mode"], 8) & 0o005)
+
+
 def test_binary_facts():
     facts = parse_stat(_exec("stat", "-c", "%U|%G|%u|%g|%a|%F", BINARY))
     image_user = _docker("inspect", "--format", "{{.Config.User}}", CONTAINER, check=False)
@@ -100,6 +128,9 @@ def test_binary_facts():
         "image_user": image_user or "(none: the image's default user, root)",
         "entrypoint": entrypoint,
         "helper_would_run_it": helper_would_run_it(facts),
+        # the directory the helper's validation copy used to sit in 0644, and the real config beside it (Q148)
+        "etc_kea": path_facts("/etc/kea"),
+        "etc_kea_dhcp4_conf": path_facts("/etc/kea/kea-dhcp4.conf"),
     }
     print(json.dumps(record, indent=2))
     if OUT:

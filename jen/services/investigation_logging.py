@@ -95,6 +95,8 @@ def active(now: datetime | None = None) -> list[dict]:
                 "by": entry.get("by", ""),
                 "mode": entry.get("mode", ""),
                 "error": entry.get("error", ""),
+                # v5.68.0-beta.13 (Q148): the marker lost its restore object, so Jen refused to guess - a person restores it
+                "marker_invalid": bool(entry.get("marker_invalid")),
                 # v5.68.0-beta.9 (Q144): the state machine's three fields, and what a person needs for a server Jen can no longer reach
                 "file": entry.get("file", "debug"),
                 "daemon": entry.get("daemon", "debug"),
@@ -141,7 +143,10 @@ def _change(server: dict, mutate_fn, summary: str, unsupported: str):
         summary,
         servers=[server],
         restart=not use_reload,
-        code_messages={"unsupported": unsupported},
+        code_messages={
+            "unsupported": unsupported,
+            "marker-invalid": "the investigation-logging marker is unreadable, so nothing was changed",
+        },
     )
     return result, use_reload
 
@@ -313,6 +318,14 @@ def _restore(server: dict, record: dict, now: datetime | None, summary: str) -> 
     entry = record["servers"].get(sid)
     result, use_reload = _change(server, lambda cfg: _edit.clear_investigation_logging(cfg, now=now), summary, "")
     lines = [text for _kind, text in result.lines]
+    if result.status == "aborted" and result.last_code == "marker-invalid":
+        # v5.68.0-beta.13 (Q148): the marker's restore object is missing or malformed. Nothing was written (the change set aborted before
+        # any write), the entry is KEPT so the Health row and the Servers page keep saying so, and a person is told how to finish it.
+        entry = entry or _entry_for(server, _iso(now or _now()))
+        text = marker_invalid_text(server, entry)
+        entry.update(marker_invalid=True, error=text[:900])
+        _put(record, sid, entry)
+        return {"ok": False, "mode": "", "lines": [f"❌ {text}"]}
     if result.status == "ok":
         if not use_reload:  # the change set restarted the daemon: both steps done
             _drop(record, sid)
@@ -402,6 +415,14 @@ def forget(server_id, actor: str = "") -> bool:
         f"restored by hand; entry dropped by {actor or 'an admin'}",
     )
     return True
+
+
+def marker_invalid_text(server: dict, entry: dict) -> str:
+    """The sentence for a marker Jen will not guess at: shown by turn_off, recorded on the entry for the sweep, and the Health row."""
+    return (
+        f"the restore marker on {_name(server)} is unreadable (its `restore` object is missing or malformed, so Jen cannot tell what the "
+        f"logger was before and changed nothing) — restore by hand: {by_hand(entry)}"
+    )
 
 
 def by_hand(entry: dict) -> str:

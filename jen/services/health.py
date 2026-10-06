@@ -297,11 +297,21 @@ def _debug_logging_left_on(ctx) -> Check:
         c.status, c.detail = "ok", "no server is at investigation logging"
         return c
     orphaned = [e for e in entries if e["removed"]]
-    stuck = [e for e in entries if e["stuck"] and not e["removed"]]
-    overdue = [e for e in entries if not e["removed"] and (e["overdue"] or (e["error"] and e["remaining_s"] == 0))]
-    if orphaned or stuck or overdue:
+    damaged = [e for e in entries if e["marker_invalid"] and not e["removed"]]
+    stuck = [e for e in entries if e["stuck"] and not e["removed"] and not e["marker_invalid"]]
+    overdue = [
+        e
+        for e in entries
+        if not e["removed"] and not e["marker_invalid"] and (e["overdue"] or (e["error"] and e["remaining_s"] == 0))
+    ]
+    if orphaned or damaged or stuck or overdue:
         c.status = "fail"
         parts = [
+            # v5.68.0-beta.13 (Q148): the marker lost its restore object; Jen changed nothing and will not guess
+            f"the restore marker on {e['name']} is unreadable — restore by hand: {__inv.by_hand(e)}"
+            for e in damaged
+        ]
+        parts += [
             # v5.68.0-beta.9 (Q144): a server that was removed from Jen with its log level not restored - Jen cannot reach it, so a
             # person has to, and the row says how
             f"investigation logging may still be on on {e['name']} (removed from Jen) - restore it by hand: {__inv.by_hand(e)}"

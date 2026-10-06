@@ -664,7 +664,11 @@ def set_investigation_logging(cfg: dict, until_iso: str):
     if not isinstance(context, dict):
         return cfg, "unsupported"
     marker = context.get(INVESTIGATION_KEY)
-    if isinstance(marker, dict) and isinstance(marker.get("restore"), dict):
+    if isinstance(marker, dict):
+        # a marker is already there: its ORIGINAL restore object is kept. If it has been damaged there is nothing trustworthy to keep,
+        # and re-recording the logger's CURRENT (DEBUG) values as "what to restore" would make DEBUG the thing to put back - refuse
+        if restore_problem(marker.get("restore")):
+            return cfg, "marker-invalid"
         restore = marker["restore"]
     elif created:
         restore = {"created": True}
@@ -690,12 +694,40 @@ def _parse_until(text):
     return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
 
 
+_RESTORE_KEYS = ("severity", "debuglevel")
+
+
+def restore_problem(restore) -> str:
+    """ "" when a marker's `restore` object says, unambiguously, how to put the logger back - else a short reason. Valid is exactly
+    one of: `{"created": true}` (Jen created the entry; remove it), or an object carrying BOTH `severity` and `debuglevel`, each either
+    the literal "absent" (the key was not there; remove it) or a real value (a non-empty string severity, an integer debuglevel).
+    Anything else - no `restore`, not an object, a missing key, a `created` that is not `true` - is a marker that has lost the very
+    thing it exists to carry, and must not be read as proof that the keys never existed (v5.68.0-beta.13, Q148)."""
+    if not isinstance(restore, dict):
+        return "its restore object is missing or is not an object"
+    if "created" in restore:
+        return "" if restore["created"] is True and len(restore) == 1 else "its `created` marker is malformed"
+    for key in _RESTORE_KEYS:
+        if key not in restore:
+            return f"its restore object has no `{key}`"
+        value = restore[key]
+        if value == "absent":
+            continue
+        if key == "severity" and not (isinstance(value, str) and value.strip()):
+            return "its restored `severity` is not a value"
+        if key == "debuglevel" and (isinstance(value, bool) or not isinstance(value, int)):
+            return "its restored `debuglevel` is not a value"
+    return ""
+
+
 def clear_investigation_logging(cfg: dict, now=None):
     """Put the kea-dhcp4 logger back as `set_investigation_logging` found it. With `now` (a timezone-aware datetime) it does
     so only when the marker's `until` has passed - the sweep's rule; an unreadable `until` counts as passed. With `now=None`
     it restores unconditionally (the button). Returns (cfg, code): "ok" (restored), "nochange" (nothing marked, or not yet
-    due). An entry Jen created is removed again; one that existed gets exactly its old severity and debuglevel back (a key
-    that was absent is removed), and its `output-options` and any other `user-context` keys are left alone."""
+    due), "marker-invalid" (the marker's restore object cannot be trusted: NOTHING is changed - the logger and the marker are left
+    exactly as they were, because a damaged marker used to read as "these keys never existed" and delete the logger's severity and
+    debuglevel together with it). An entry Jen created is removed again; one that existed gets exactly its old severity and
+    debuglevel back (a key that was absent is removed), and its `output-options` and any other `user-context` keys are left alone."""
     cfg = copy.deepcopy(cfg)
     _section, loggers = _dhcp4_loggers(cfg, create=False)
     entry = _logger_entry(loggers or [])
@@ -707,7 +739,9 @@ def clear_investigation_logging(cfg: dict, now=None):
         due = _parse_until(marker.get("until"))
         if due is not None and due > now:
             return cfg, "nochange"
-    restore = marker.get("restore") if isinstance(marker.get("restore"), dict) else {}
+    if restore_problem(marker.get("restore")):
+        return cfg, "marker-invalid"
+    restore = marker["restore"]
     if restore.get("created"):
         loggers.remove(entry)
         return cfg, "ok"

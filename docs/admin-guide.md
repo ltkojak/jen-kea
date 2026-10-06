@@ -1034,7 +1034,7 @@ is your installed Jen version, shown on the About page; `7`/`9` are this
 release's `HELPER_VERSION`/`HELPER_BUILD`):
 
 ```bash
-d="$(mktemp -d)" && cd "$d" && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper.sig && printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && /usr/bin/python3 -I jen-kea-helper version </dev/null | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin);sys.exit(0 if d.get("ok") is True and d.get("helper_version")==7 and d.get("helper_build")==10 else 1)' && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
+d="$(mktemp -d)" && cd "$d" && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper.sig && printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && /usr/bin/python3 -I jen-kea-helper version </dev/null | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin);sys.exit(0 if d.get("ok") is True and d.get("helper_version")==7 and d.get("helper_build")==11 else 1)' && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
 ```
 
 then add the sudoers line above. **Settings → Kea → SSH** shows the
@@ -1053,7 +1053,7 @@ trust (`scp`, a USB drive), then run the same verify-then-install steps
 locally, in the directory holding both files:
 
 ```bash
-printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && /usr/bin/python3 -I jen-kea-helper version </dev/null | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin);sys.exit(0 if d.get("ok") is True and d.get("helper_version")==7 and d.get("helper_build")==10 else 1)' && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
+printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && /usr/bin/python3 -I jen-kea-helper version </dev/null | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin);sys.exit(0 if d.get("ok") is True and d.get("helper_version")==7 and d.get("helper_build")==11 else 1)' && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
 ```
 
 Never skip the verify step just because you trust the transport — it's
@@ -1177,6 +1177,17 @@ test reads is written mode `0644` explicitly and the helper's clean environment 
 upgrading Jen** — Settings → Kea → SSH shows the host as "v7 (build 9, build 10 available)", and Health Center warns "helper build < 10 on an
 ISC-packaged Kea cannot validate configs" for a host whose Kea version string says so. No sudoers change: it is still the one `/usr/local/sbin/jen-kea-helper` line.
 
+**Helper build 11 (v5.68.0-beta.13) — the config check runs with the daemon's real credentials and leaves nothing readable behind. Press Update
+helper again.** Two things build 10 got only partly right about the copy of your Kea config that the helper writes beside the real file to run
+`kea-dhcpX -t` on. (1) That copy is the whole config, **database credentials included**, and it was written mode `0644`; whether another local account on
+the Kea host could read it depended on `/etc/kea`'s own mode on the package in use. It is now created `0600` and owned by the account that runs the check
+(the daemon's own account, or root when the binary is `root:root`), whatever the umask, and is still removed on every exit path. (2) The check ran as the
+daemon account's primary group with no supplementary groups, so a unit with `Group=` or `SupplementaryGroups=` (TLS material readable through a group)
+started fine under systemd and failed Jen's check. The helper now reads `User`, `Group` and `SupplementaryGroups` from the unit in one `systemctl show` and
+runs the check with exactly that identity; a group the unit names that the host does not have is refused with the reason on the Servers page
+(*"kea-dhcp4 is present but the helper will not run it: its unit names the group 'x', which does not exist on this host"*) instead of being guessed. The
+kea-compat job records `/etc/kea`'s owner and mode on each ISC image so the window build 11 closed is on record. No sudoers change.
+
 **v5.20.0 — the legacy grant is now checked, not just used.** Every
 time Jen checks or installs the helper it also checks whether
 `/etc/sudoers.d/jen-kea` (below) is still present, and records that
@@ -1283,7 +1294,7 @@ Jen can put a Kea server's `kea-dhcp4` logger at DEBUG, debuglevel 55, for 5, 15
                   "restore": { "severity": "INFO", "debuglevel": "absent" } } }
 ```
 
-`restore` is exactly what was there before (`"absent"` removes the key again; `{"created": true}` means Jen created the entry and removes it). The entry's `output-options`, every other logger and every other `user-context` key are left alone. The marker lives in the config on purpose: it survives a Jen restart, a restored database or a second Jen, and a person reading the file can see what is on and how to undo it. By hand, setting `severity`/`debuglevel` back to `restore` and deleting the `jen-investigation` key is the whole undo.
+`restore` is exactly what was there before (`"absent"` removes the key again; `{"created": true}` means Jen created the entry and removes it). **If a hand edit or a partial write leaves the marker without a readable `restore` object** (missing, not an object, no `severity` or no `debuglevel`, a `created` that is not `true`), Jen does **not** guess and changes nothing: the logger and the marker stay exactly as they are, the Health row **DEBUG logging left on** goes red with *the restore marker on &lt;server&gt; is unreadable — restore by hand* and the by-hand steps, *Turn it off now* says the same, and the sweep keeps reading the marker every minute, so once you have set `severity`/`debuglevel` back (or repaired `restore`) it finishes the job itself. (Before this release an unreadable marker was treated as proof that the keys had never existed, and its removal deleted the logger's severity and debuglevel with it.) The entry's `output-options`, every other logger and every other `user-context` key are left alone. The marker lives in the config on purpose: it survives a Jen restart, a restored database or a second Jen, and a person reading the file can see what is on and how to undo it. By hand, setting `severity`/`debuglevel` back to `restore` and deleting the `jen-investigation` key is the whole undo.
 
 **What Jen records, and when it lets go (v5.68.0-beta.9).** Jen keeps an index of what it knows is on, and each entry says two things separately: whether the config file is back and whether the running Kea has taken it. An entry is dropped only when both are true. If a reload was refused and the restart failed, the file is already clean but Kea is still at DEBUG: the entry stays, the Health row says so, and the sweep tries the reload or restart again every minute until Kea takes it, even if the original time was longer. When you turn logging on and Kea does not take it, Jen puts the file straight back. **A server cannot be removed from Settings (or have its SSH host or API URL blanked) while it has an entry** until you turn the logging off from Servers. If a server is removed from Jen some different way (a hand edit of `jen.config`) while logging was on, Jen cannot reach it: the Servers page and the Health row show *Investigation logging may still be on on &lt;name&gt; (removed from Jen)*, with the host and the config path, and the by-hand edit above is the restore. Press **I restored it by hand** on the Servers page afterwards so that Jen stops reporting it. A marker Jen finds in a server's config that its own index did not list, and a refused removal, each write an audit row.
 
@@ -1307,7 +1318,9 @@ narrow anything. Jen shows an admin banner for every host still on this
 path. (v5.68.0-beta.6: a host on this path was never affected by the
 ISC-package ownership problem described under Helper build 10 above — the
 generated script has no ownership check on the Kea binary — while the same
-host moved onto helper build 7–9 was; press Update helper to reach build 10.)
+host moved onto helper build 7–9 was; press Update helper to reach build 10. Build 11 (v5.68.0-beta.13) changes only how the helper validates a
+config on a host that has it — the validation copy is `0600`, owned by the account that runs the check, and runs with the unit's `Group=` and
+`SupplementaryGroups=` — and the generated script of this path is unchanged.)
 
 The grant is needed for **one run** to install the helper, and — below
 helper v6 — for **one more run** to reach v6 (Update helper copies the
