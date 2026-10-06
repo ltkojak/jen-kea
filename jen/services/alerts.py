@@ -170,7 +170,7 @@ DEFAULT_TEMPLATES = {
     "kea_config_changed": "ℹ️ <b>Kea Config Changed</b>\nSubnet {subnet} was modified via Jen\nChange: {details}",
     "config_drift_detected": "⚠️ <b>Config Drift Detected</b>\n{message}",
     "config_drift_resolved": "✅ <b>Config Drift Resolved</b>\n{message}",
-    "client_problems": "⚠️ <b>Client had DHCP trouble</b>\nClient: {mac} {ip}\nWhat: {kind}, {count} in the last hour\nServer: {server}\nInvestigate: {investigate}",
+    "client_problems": "⚠️ <b>Client had DHCP trouble</b>\nClient: {mac} {ip}\nWhat: {kind}, {count} in the last hour (as of {at} UTC)\nServer: {server}\nInvestigate: {investigate}",
     "cert_expiring": "⚠️ <b>TLS Certificate Expiring</b>\nJen's HTTPS certificate expires in <b>{days_left}</b> day(s).",
     "daily_summary": "ℹ️ <b>Daily Summary</b>\n{summary}",
     "rogue_device": "🚨 <b>{subject}</b>\n{body}",

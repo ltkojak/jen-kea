@@ -1134,6 +1134,32 @@ def _m031_client_problems_alert_attempted(db):
     logger.info("Migration 31: client_problems.alert_attempted_at")
 
 
+def _m032_client_problems_qualified(db):
+    """
+    v5.68.0-beta.13 (Q148) - `qualified_at` / `qualified_count` on client_problems: when a (kind, client, subnet) first crossed the alert
+    threshold and how many events it had then. The retry of an alert that failed to deliver reads THESE, not the log tail: a busy
+    server rotates the qualifying lines out of the 1000-line tail inside the 30-minute retry bound, and an alert the sweep had
+    decided to send was then never sent. Cleared when the alert is delivered, the row is resolved, or 24 hours after `qualified_at`.
+    Additive and idempotent (each column is added only when it is absent).
+    """
+    with db.cursor() as cur:
+        for column, ddl in (
+            (
+                "qualified_at",
+                "ALTER TABLE client_problems ADD COLUMN qualified_at DATETIME NULL AFTER alert_attempted_at",
+            ),
+            ("qualified_count", "ALTER TABLE client_problems ADD COLUMN qualified_count INT NULL AFTER qualified_at"),
+        ):
+            cur.execute(
+                "SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() "
+                "AND TABLE_NAME = 'client_problems' AND COLUMN_NAME = %s",
+                (column,),
+            )
+            if not cur.fetchone()["n"]:
+                cur.execute(ddl)
+    logger.info("Migration 32: client_problems.qualified_at / qualified_count")
+
+
 MIGRATIONS = [
     (1, "Baseline schema (all tables, current definitions)", _m001_baseline),
     (2, "users.avatar_url column", _m002_users_avatar),
@@ -1189,6 +1215,11 @@ MIGRATIONS = [
         31,
         "client_problems.alert_attempted_at: delivered vs attempted (v5.68.0-beta.9, Q144)",
         _m031_client_problems_alert_attempted,
+    ),
+    (
+        32,
+        "client_problems.qualified_at / qualified_count: a persisted alert qualification (v5.68.0-beta.13, Q148)",
+        _m032_client_problems_qualified,
     ),
 ]
 

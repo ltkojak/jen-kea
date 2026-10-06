@@ -565,8 +565,10 @@ class TestMigration30ClientProblems:
             "detail",
             "alerted_at",
             "alert_attempted_at",
+            "qualified_at",
+            "qualified_count",
             "resolved_at",
-        }  # fmt: skip  (alert_attempted_at: migration 31, v5.68.0-beta.9)
+        }  # fmt: skip  (alert_attempted_at: migration 31, v5.68.0-beta.9; qualified_*: migration 32, v5.68.0-beta.13)
         # mac and ip are NOT NULL with an empty default: a NULL would make the unique key useless (MySQL treats NULLs as distinct)
         assert cols["mac"]["Null"] == "NO" and cols["ip"]["Null"] == "NO"
         assert cols["subnet_id"]["Null"] == "YES" and cols["resolved_at"]["Null"] == "YES"
@@ -626,6 +628,56 @@ class TestMigration31ClientProblemsAlertAttempted:
             db.commit()
             cur.execute("SELECT alert_attempted_at FROM client_problems WHERE server_id=99")
             assert cur.fetchone() == {"alert_attempted_at": None}
+            cur.execute("DELETE FROM client_problems WHERE server_id=99")
+            db.commit()
+
+
+class TestMigration32ClientProblemsQualified:
+    """v5.68.0-beta.13 (Q148) - `qualified_at` / `qualified_count`: when a (kind, client, subnet) first crossed the alert threshold and how
+    many events it had then, read by the retry of an undelivered alert instead of the log tail. Additive: a new numbered migration, never
+    an edit of migration 30 or 31."""
+
+    def test_migration_recorded_and_it_is_a_new_numbered_one(self):
+        assert 32 in applied_versions()
+        by_version = {v: fn.__name__ for v, _d, fn in MIGRATIONS}
+        assert (
+            by_version[32] == "_m032_client_problems_qualified"
+            and by_version[31] == "_m031_client_problems_alert_attempted"
+        )
+        assert MIGRATIONS[-1][0] >= 32
+
+    def test_the_columns_are_nullable_and_after_alert_attempted_at(self):
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("SHOW COLUMNS FROM client_problems")
+            fields = [c["Field"] for c in cur.fetchall()]
+            cur.execute("SHOW COLUMNS FROM client_problems WHERE Field IN ('qualified_at', 'qualified_count')")
+            cols = {c["Field"]: c for c in cur.fetchall()}
+        assert cols["qualified_at"]["Type"].lower().startswith("datetime") and cols["qualified_at"]["Null"] == "YES"
+        assert cols["qualified_count"]["Type"].lower().startswith("int") and cols["qualified_count"]["Null"] == "YES"
+        assert fields.index("qualified_at") == fields.index("alert_attempted_at") + 1
+
+    def test_rerun_is_idempotent(self):
+        from jen.models.migrations import _m032_client_problems_qualified
+
+        with jen_db() as db:
+            _m032_client_problems_qualified(db)  # must not raise when the columns already exist
+            db.commit()
+
+    def test_it_adds_the_columns_to_a_table_that_lacks_them_and_keeps_the_rows(self):
+        from jen.models.migrations import _m032_client_problems_qualified
+
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("DELETE FROM client_problems WHERE server_id=99")
+            cur.execute(
+                "INSERT INTO client_problems (server_id, kind, mac, ip, first_seen, last_seen) "
+                "VALUES (99, 'nak', 'aa:bb:cc:dd:ee:32', '', NOW(), NOW())"
+            )
+            cur.execute("ALTER TABLE client_problems DROP COLUMN qualified_count, DROP COLUMN qualified_at")
+            db.commit()
+            _m032_client_problems_qualified(db)
+            db.commit()
+            cur.execute("SELECT qualified_at, qualified_count FROM client_problems WHERE server_id=99")
+            assert cur.fetchone() == {"qualified_at": None, "qualified_count": None}
             cur.execute("DELETE FROM client_problems WHERE server_id=99")
             db.commit()
 

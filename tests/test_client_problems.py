@@ -202,14 +202,16 @@ class TestCollectAndTheWatermark:
     def test_the_first_sweep_counts_everything_in_the_tail(self):
         events = [_ev("nak", MAC, T0 + timedelta(seconds=i)) for i in range(4)]
         groups, recent, wm = cp.collect(events, None)
-        assert groups[("nak", MAC, "")]["new"] == 4 and recent[("nak", MAC)] == 4 and wm == T0 + timedelta(seconds=3)
+        assert (
+            groups[("nak", MAC, "")]["new"] == 4 and recent[("nak", MAC, None)] == 4 and wm == T0 + timedelta(seconds=3)
+        )
 
     def test_a_line_read_by_two_sweeps_is_one_event(self):
         events = [_ev("nak", MAC, T0 + timedelta(seconds=i)) for i in range(3)]
         _g, _r, wm = cp.collect(events, None)
         groups, recent, wm2 = cp.collect(events, wm)
         assert groups == {} and wm2 == wm
-        assert recent[("nak", MAC)] == 3, (
+        assert recent[("nak", MAC, None)] == 3, (
             "the alert window is the log's, not the sweep's: old lines still count toward it"
         )
 
@@ -237,10 +239,10 @@ class TestCollectAndTheWatermark:
             _ev("nak", MAC2, T0 + timedelta(minutes=59)),
         ]
         _g, recent, _wm = cp.collect(events, None)
-        assert recent[("nak", MAC)] == 3 and recent[("nak", MAC2)] == 1
+        assert recent[("nak", MAC, None)] == 3 and recent[("nak", MAC2, None)] == 1
         events.append(_ev("nak", MAC, T0 + timedelta(minutes=61)))
         _g, recent, _wm = cp.collect(events, None)
-        assert recent[("nak", MAC)] == 3, "the 10:00 line fell out of the hour ending at the newest line (11:01)"
+        assert recent[("nak", MAC, None)] == 3, "the 10:00 line fell out of the hour ending at the newest line (11:01)"
 
     def test_each_kind_and_address_is_its_own_group(self):
         events = [
@@ -390,9 +392,9 @@ class TestTheAlertType:
     def test_the_template_names_the_client_the_kind_the_count_and_the_investigate_link(self):
         text = alerts.render_template_str(
             alerts.DEFAULT_TEMPLATES["client_problems"],
-            mac=MAC, ip="10.0.0.9", kind="NAK", count=4, server="kea-a", investigate=f"/client?q={MAC}",
+            mac=MAC, ip="10.0.0.9", kind="NAK", count=4, at="2026-10-04 11:05", server="kea-a", investigate=f"/client?q={MAC}",
         )  # fmt: skip
-        for needle in (MAC, "10.0.0.9", "NAK", "4 in the last hour", "kea-a", f"/client?q={MAC}"):
+        for needle in (MAC, "10.0.0.9", "NAK", "4 in the last hour", "2026-10-04 11:05", "kea-a", f"/client?q={MAC}"):
             assert needle in text
         assert "{" not in text
 
@@ -426,11 +428,11 @@ class TestTheEventsOwnTimes:
     def test_the_alert_window_is_judged_against_now_not_the_newest_line(self):
         six_hours_ago = [_ev("nak", MAC, T0 + timedelta(seconds=i)) for i in range(3)]
         _g, newest_anchored, _wm = cp.collect(six_hours_ago, None)
-        assert newest_anchored[("nak", MAC)] == 3, (
+        assert newest_anchored[("nak", MAC, None)] == 3, (
             "anchored at the newest line (the pure default): three NAKs just happened"
         )
         _g, recent, _wm = cp.collect(six_hours_ago, None, now=T0 + timedelta(hours=6))
-        assert recent.get(("nak", MAC), 0) == 0, "judged against now they are six hours old and are no alert"
+        assert recent.get(("nak", MAC, None), 0) == 0, "judged against now they are six hours old and are no alert"
 
     def test_a_group_keeps_the_newest_events_own_subnet(self):
         events = [_ev("nak", MAC, T0, subnet_id=2), _ev("nak", MAC, T0 + timedelta(seconds=5), subnet_id=None)]
@@ -533,3 +535,36 @@ class TestAnAlertAboutAClientWithNoSubnetFailsClosedForAScopedChannel:
         sent.clear()
         alerts.send_alert("kea_down", log_result=False, subnet_id=None, server="kea-a")
         assert sorted(sent) == ["slack", "telegram"], "an unscoped alert type is unchanged"
+
+
+class TestTheCountIsPerSubnet:
+    """v5.68.0-beta.13 (Q148): `recent`, and so the alert decision, is keyed (kind, client, subnet) - None its own key - because a channel
+    scoped to a subnet is only ever told about rows it could see on the page. Two NAKs in a hidden subnet plus one in the caller's must
+    never read as the three that cross the threshold."""
+
+    def _events(self, per_subnet):
+        out, n = [], 0
+        for subnet, count in per_subnet:
+            for _ in range(count):
+                out.append(_ev("nak", MAC, T0 + timedelta(seconds=n), subnet_id=subnet))
+                n += 1
+        return out
+
+    def test_two_in_b_and_one_in_a_is_no_key_at_the_threshold_of_three(self):
+        _g, recent, _wm = cp.collect(self._events([(2, 2), (1, 1)]), None)
+        assert recent == {("nak", MAC, 2): 2, ("nak", MAC, 1): 1}
+        assert not [k for k, v in recent.items() if v >= 3], "no (client, subnet) reaches three, so nobody is alerted"
+
+    def test_three_in_a_and_two_in_b_is_three_for_a_never_five(self):
+        _g, recent, _wm = cp.collect(self._events([(1, 3), (2, 2)]), None)
+        assert recent[("nak", MAC, 1)] == 3 and recent[("nak", MAC, 2)] == 2
+        assert ("nak", MAC) not in recent and sum(recent.values()) == 5
+
+    def test_unattributed_is_its_own_key_and_never_added_to_an_attributed_one(self):
+        _g, recent, _wm = cp.collect(self._events([(None, 2), (1, 2), (2, 1)]), None)
+        assert recent == {("nak", MAC, None): 2, ("nak", MAC, 1): 2, ("nak", MAC, 2): 1}
+
+    def test_the_sweeps_resolver_decides_where_an_event_happened(self):
+        events = self._events([(None, 3)])
+        _g, recent, _wm = cp.collect(events, None, subnet_of=lambda e: 7)
+        assert recent == {("nak", MAC, 7): 3}

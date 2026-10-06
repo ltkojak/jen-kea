@@ -82,6 +82,9 @@ TAIL_TIMEOUT_S = 20
 THRESHOLD_WINDOW = timedelta(hours=1)
 ALERT_EVERY = timedelta(hours=24)
 ALERT_RETRY_EVERY = timedelta(minutes=30)  # a failing alert is tried again this often, not every sweep
+QUALIFICATION_KEEP = timedelta(
+    hours=24
+)  # an undelivered alert's persisted qualification is dropped after this (v5.68.0-beta.13, Q148)
 CLOCK_STEP_S = 900  # a host's timezone offset is a multiple of a quarter hour
 RESOLVE_AFTER = timedelta(hours=24)
 KEEP_FOR = timedelta(days=30)
@@ -107,16 +110,24 @@ def threshold() -> int:
 
 
 def collect(
-    events: list[dict], watermark: datetime | None, window: timedelta = THRESHOLD_WINDOW, now: datetime | None = None
+    events: list[dict],
+    watermark: datetime | None,
+    window: timedelta = THRESHOLD_WINDOW,
+    now: datetime | None = None,
+    subnet_of=None,
 ):
     """Pure: what a sweep adds from one server's `problem_events`. Returns `(groups, recent, new_watermark)`:
 
       groups  {(kind, mac, ip): {"new": events newer than the watermark, "first_ts", "last_ts", "detail", "subnet_id"}}  - only groups
               with something new; the timestamps are the events' OWN (`uts`, UTC, when the sweep converted them; else `ts`), and
               `subnet_id` is the newest event's own (None when the event named none)
-      recent  {(kind, mac): events within `window` of `now`}  - the count the alert threshold is judged on, across every address the
-              client asked for, and including lines an earlier sweep already counted. `now=None` anchors the window at the newest
-              event instead (the pure tests); the sweep always passes the real now
+      recent  {(kind, mac, subnet_id): events within `window` of `now`}  - the count the alert threshold is judged on, per client AND
+              subnet (None is a key of its own: "no attributable subnet"), across every address the client asked for in that subnet,
+              and including lines an earlier sweep already counted. The page shows a user only the rows in subnets they may see, so
+              the count an alert reports for them must be made of those rows alone (v5.68.0-beta.13, Q148: it used to be
+              per client across every subnet, so two NAKs in a hidden subnet plus one in the caller's read as three). `subnet_of(event)`
+              says where an event happened (the sweep passes `event_subnet`); the default is the event's own `subnet_id`.
+              `now=None` anchors the window at the newest event instead (the pure tests); the sweep always passes the real now
       new_watermark  the newest LOG timestamp seen (never moves backwards): the watermark is in the log's own clock, `ts`
 
     The watermark makes the same line, read by two sweeps, one event. A line with exactly the watermark's timestamp counts as
@@ -129,11 +140,13 @@ def collect(
         return e.get("uts", e["ts"])
 
     anchor = now if now is not None else max(when(e) for e in events)
+    where = subnet_of or (lambda event: event.get("subnet_id"))
     groups: dict = {}
     recent: dict = {}
     for e in events:
         if when(e) >= anchor - window:
-            recent[(e["kind"], e["mac"])] = recent.get((e["kind"], e["mac"]), 0) + 1
+            key = (e["kind"], e["mac"], where(e))
+            recent[key] = recent.get(key, 0) + 1
         if watermark is not None and e["ts"] <= watermark:
             continue
         g = groups.setdefault(
@@ -472,6 +485,8 @@ _UPSERT_LOG = (
     "first_seen = IF(resolved_at IS NULL, first_seen, VALUES(first_seen)), "
     "alerted_at = IF(resolved_at IS NULL, alerted_at, NULL), "
     "alert_attempted_at = IF(resolved_at IS NULL, alert_attempted_at, NULL), "
+    "qualified_at = IF(resolved_at IS NULL, qualified_at, NULL), "
+    "qualified_count = IF(resolved_at IS NULL, qualified_count, NULL), "
     "subnet_id = VALUES(subnet_id), "
     "detail = VALUES(detail), last_seen = GREATEST(last_seen, VALUES(last_seen)), resolved_at = NULL"
 )  # resolved_at LAST: the assignments above read its old value, and MySQL applies them left to right
@@ -485,13 +500,17 @@ _UPSERT_STATE = (
     "first_seen = IF(resolved_at IS NULL, first_seen, VALUES(first_seen)), "
     "alerted_at = IF(resolved_at IS NULL, alerted_at, NULL), "
     "alert_attempted_at = IF(resolved_at IS NULL, alert_attempted_at, NULL), "
+    "qualified_at = IF(resolved_at IS NULL, qualified_at, NULL), "
+    "qualified_count = IF(resolved_at IS NULL, qualified_count, NULL), "
     "subnet_id = COALESCE(VALUES(subnet_id), subnet_id), "
     "detail = VALUES(detail), last_seen = VALUES(last_seen), `count` = 1, resolved_at = NULL"
 )
 
 
-def _send_alert(server_id, kind, mac, ip, subnet_id, recent) -> list:
-    """Send the alert and return what each ELIGIBLE channel answered: [(channel_type, ok, error)] - empty when no channel was eligible."""
+def _send_alert(server_id, kind, mac, ip, subnet_id, recent, qualified_at=None) -> list:
+    """Send the alert and return what each ELIGIBLE channel answered: [(channel_type, ok, error)] - empty when no channel was eligible.
+    `recent` and `qualified_at` are the PERSISTED qualification (the count when the key first crossed the threshold, and when), so a
+    retry says what the first attempt would have said."""
     from jen.services import alerts as _alerts
 
     who = mac or ip
@@ -502,6 +521,7 @@ def _send_alert(server_id, kind, mac, ip, subnet_id, recent) -> list:
         ip=ip,
         kind=KIND_LABELS.get(kind, kind),
         count=recent,
+        at=(qualified_at or _now()).strftime("%Y-%m-%d %H:%M"),
         server=_alerts.safe_text(server_name(server_id)),
         investigate=f"/client?q={who}",
     )
@@ -541,7 +561,15 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                 # the events' OWN times, in UTC; anything older than a day is history the inbox would resolve at once
                 everything = shift_events(_klt.problem_events(lines), offset_s, now)
                 events = [e for e in everything if e["uts"] >= now - RESOLVE_AFTER]
-                groups, recent, new_wm = collect(events, wm, now=now)
+                subnets: dict = {}
+
+                def subnet_of(e, subnets=subnets):
+                    k = (e["ip"], e.get("subnet_id"))
+                    if k not in subnets:
+                        subnets[k] = event_subnet(*k)
+                    return subnets[k]
+
+                groups, recent, new_wm = collect(events, wm, now=now, subnet_of=subnet_of)
                 if wm is None:
                     # the first read sets the watermark from EVERYTHING it saw (old events and ordinary lines too), so the sweep after it
                     # is a normal one and its alerts are not suppressed for want of a mark
@@ -571,27 +599,58 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                             ),
                         )
                         summary["events"] += g["new"]
-                    # a (kind, client) with something new is considered, and so is one whose last alert FAILED to land - it is retried
-                    # (bounded below) without waiting for the client to have more trouble
+                    # The alert is decided per (kind, client, SUBNET) - None is a subnet of its own - from the rows in that subnet
+                    # alone (v5.68.0-beta.13, Q148), because a channel scoped to a subnet is only ever told about rows it could see on the
+                    # page. A key with something new is considered, and so is one whose alert FAILED to land or whose qualification is
+                    # still waiting for delivery: it is retried (bounded below) from the PERSISTED qualification, without waiting for the
+                    # client to have more trouble and without needing the qualifying lines to still be in the 1000-line tail.
+                    keys = {
+                        (k, m, subnet_of({"ip": ip, "subnet_id": g.get("subnet_id")}))
+                        for (k, m, ip), g in groups.items()
+                    }
                     cur.execute(
-                        "SELECT kind, mac FROM client_problems WHERE server_id=%s AND resolved_at IS NULL "
-                        "AND alert_attempted_at IS NOT NULL AND alerted_at IS NULL",
+                        "SELECT kind, mac, subnet_id FROM client_problems WHERE server_id=%s AND resolved_at IS NULL "
+                        "AND alerted_at IS NULL AND (alert_attempted_at IS NOT NULL OR qualified_at IS NOT NULL)",
                         (sid,),
                     )
-                    failed_before = {(r["kind"], r["mac"]) for r in cur.fetchall()}
-                    for kind, mac in {(k, m) for (k, m, _ip) in groups} | failed_before:
-                        if first_sweep or recent.get((kind, mac), 0) < threshold():
-                            continue
+                    keys |= {(r["kind"], r["mac"], r["subnet_id"]) for r in cur.fetchall()}
+                    for kind, mac, subnet in keys:
                         cur.execute(
-                            "SELECT ip, subnet_id, alerted_at, alert_attempted_at FROM client_problems "
-                            "WHERE server_id=%s AND kind=%s AND mac=%s AND resolved_at IS NULL ORDER BY last_seen DESC",
-                            (sid, kind, mac),
+                            "SELECT ip, alerted_at, alert_attempted_at, qualified_at, qualified_count FROM client_problems "
+                            "WHERE server_id=%s AND kind=%s AND mac=%s AND subnet_id <=> %s AND resolved_at IS NULL "
+                            "ORDER BY last_seen DESC",
+                            (sid, kind, mac, subnet),
                         )
                         rows = cur.fetchall()
                         if not rows or any(
                             r["alerted_at"] is not None and (now - r["alerted_at"]) < ALERT_EVERY for r in rows
                         ):
                             continue
+                        qualified = max(
+                            (r for r in rows if r["qualified_at"] is not None),
+                            key=lambda r: r["qualified_at"],
+                            default=None,
+                        )
+                        if qualified is not None and now - qualified["qualified_at"] >= QUALIFICATION_KEEP:
+                            # 24 hours undelivered: the qualification is dropped, and the key must earn it again from the tail
+                            cur.execute(
+                                "UPDATE client_problems SET qualified_at=NULL, qualified_count=NULL WHERE server_id=%s AND kind=%s "
+                                "AND mac=%s AND subnet_id <=> %s AND resolved_at IS NULL",
+                                (sid, kind, mac, subnet),
+                            )
+                            qualified = None
+                        if qualified is not None:
+                            q_at, q_count = qualified["qualified_at"], qualified["qualified_count"]
+                        else:
+                            current = recent.get((kind, mac, subnet), 0)
+                            if first_sweep or current < threshold():
+                                continue
+                            q_at, q_count = now, current
+                            cur.execute(
+                                "UPDATE client_problems SET qualified_at=%s, qualified_count=%s WHERE server_id=%s AND kind=%s "
+                                "AND mac=%s AND subnet_id <=> %s AND resolved_at IS NULL",
+                                (q_at, q_count, sid, kind, mac, subnet),
+                            )
                         # a delivery that keeps failing is retried, but not every sweep (a row that DID deliver is the 24-hour rule's)
                         if any(
                             r["alerted_at"] is None
@@ -600,16 +659,17 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                             for r in rows
                         ):
                             continue
-                        alerts_due.append((kind, mac, rows[0]["ip"], rows[0]["subnet_id"], recent[(kind, mac)]))
+                        alerts_due.append((kind, mac, rows[0]["ip"], subnet, q_count, q_at))
                 for (
                     kind,
                     mac,
                     ip,
                     subnet_id,
                     count,
+                    qualified_at,
                 ) in alerts_due:  # the network I/O after the connection is back in the pool
                     try:
-                        results = _send_alert(sid, kind, mac, ip, subnet_id, count)
+                        results = _send_alert(sid, kind, mac, ip, subnet_id, count, qualified_at)
                     except Exception as e:
                         logger.error(f"client_problems: alert failed: {type(e).__name__}: {e}")
                         results = []
@@ -621,8 +681,8 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                         # delivery no longer silences the client for 24 hours
                         cur.execute(
                             "UPDATE client_problems SET alert_attempted_at=%s, alerted_at=IF(%s, %s, alerted_at) "
-                            "WHERE server_id=%s AND kind=%s AND mac=%s AND resolved_at IS NULL",
-                            (now, delivered, now, sid, kind, mac),
+                            "WHERE server_id=%s AND kind=%s AND mac=%s AND subnet_id <=> %s AND resolved_at IS NULL",
+                            (now, delivered, now, sid, kind, mac, subnet_id),
                         )
                 if new_wm is not None:
                     _wm_set(sid, new_wm)

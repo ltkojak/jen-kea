@@ -572,6 +572,145 @@ class TestDeliveredIsNotAttempted:
         assert out["errors"] == [] and out["alerts_failed"] == 1 and rows(db)[0]["alerted_at"] is None
 
 
+class TestTheAlertIsDecidedPerSubnet:
+    """v5.68.0-beta.13 (Q148): the count that crosses the threshold, and the row the delivery is recorded on, are per (kind, client, subnet),
+    None its own key, so a channel scoped to a subnet is never told a number made of rows it cannot see on the page."""
+
+    A, B = "10.45.0.9", "10.46.0.9"  # an address in subnet 1 (A) and one in subnet 2 (B)
+
+    def _counts(self, calls):
+        return sorted((subnet, kw["count"]) for _type, subnet, kw in calls["alerts"])
+
+    def test_two_in_b_and_one_in_a_with_a_threshold_of_three_alerts_nobody(self, db, stack):
+        logs, calls = stack
+        prime(logs)
+        logs[1] = [decline(1, ip=self.B), decline(2, ip=self.B), decline(3, ip=self.A)]
+        out = cp.sweep(NOW, servers=[SERVER_A])
+        assert out["alerts_attempted"] == 0 and calls["alerts"] == []
+
+    def test_three_in_a_and_two_in_b_alerts_a_with_three_never_five(self, db, stack):
+        logs, calls = stack
+        prime(logs)
+        logs[1] = [decline(i, ip=self.A) for i in (1, 2, 3)] + [decline(i, ip=self.B) for i in (4, 5)]
+        out = cp.sweep(NOW, servers=[SERVER_A])
+        assert out["alerts"] == 1 and self._counts(calls) == [(1, 3)]
+
+    def test_each_subnet_that_crosses_alerts_on_its_own_count(self, db, stack):
+        logs, calls = stack
+        prime(logs)
+        logs[1] = [decline(i, ip=self.A) for i in (1, 2, 3)] + [decline(i, ip=self.B) for i in (4, 5, 6, 7)]
+        cp.sweep(NOW, servers=[SERVER_A])
+        assert self._counts(calls) == [(1, 3), (2, 4)]
+
+    def test_a_delivery_is_recorded_on_that_subnets_rows_only(self, db, stack):
+        logs, calls = stack
+        prime(logs)
+        logs[1] = [decline(i, ip=self.A) for i in (1, 2, 3)] + [decline(i, ip=self.B) for i in (4, 5)]
+        cp.sweep(NOW, servers=[SERVER_A])
+        by_subnet = {r["subnet_id"]: r for r in rows(db)}
+        assert by_subnet[1]["alerted_at"] == NOW and by_subnet[1]["qualified_count"] == 3
+        assert by_subnet[2]["alerted_at"] is None and by_subnet[2]["alert_attempted_at"] is None
+        assert by_subnet[2]["qualified_at"] is None, "two in B never qualified"
+
+    def test_unattributed_events_are_their_own_key_and_never_topped_up_by_attributed_ones(self, db, stack):
+        logs, calls = stack
+        prime(logs)
+        # three NAKs that name no address (no subnet) and two declines in A: only the unattributed key crosses
+        logs[1] = [nak(1), nak(2), nak(3), decline(4, ip=self.A), decline(5, ip=self.A)]
+        cp.sweep(NOW, servers=[SERVER_A])
+        assert self._counts(calls) == [(None, 3)]
+        assert alerts.channel_allows_subnet({"subnet_scope": "[1]"}, None, scoped=True) is False
+
+    def test_two_unattributed_and_one_attributed_is_nobody(self, db, stack):
+        logs, calls = stack
+        prime(logs)
+        logs[1] = [nak(1), nak(2), decline(3, ip=self.A)]
+        assert cp.sweep(NOW, servers=[SERVER_A])["alerts_attempted"] == 0
+
+
+class TestAFailedAlertSurvivesTheLogRotating:
+    """v5.68.0-beta.13 (Q148): the retry reads the PERSISTED qualification (`qualified_at` / `qualified_count`), not the 1000-line tail, until
+    the alert is delivered, the row is resolved, or the qualification is 24 hours old."""
+
+    def _sender(self, calls, monkeypatch, ok):
+        monkeypatch.setattr(
+            alerts,
+            "send_alert",
+            lambda alert_type, log_result=True, subnet_id=None, **kw: (
+                calls["alerts"].append((alert_type, subnet_id, kw)) or [("telegram", ok, "" if ok else "429")]
+            ),
+        )
+
+    def test_threshold_reached_delivery_fails_the_tail_rotates_and_the_retry_still_happens(
+        self, db, stack, monkeypatch
+    ):
+        logs, calls = stack
+        prime(logs)
+        self._sender(calls, monkeypatch, False)
+        logs[1] = [decline(1, minute=40), decline(2, minute=40), decline(3, minute=40)]
+        cp.sweep(NOW, servers=[SERVER_A])
+        row = rows(db)[0]
+        assert row["alerted_at"] is None and row["qualified_at"] == NOW and row["qualified_count"] == 3
+        # a busy server: the next sweep's 1000 lines hold none of the qualifying ones
+        logs[1] = [_line(i, "DHCP4_LEASE_OFFER", "lease 10.45.0.77 will be offered", mac=MAC2) for i in range(1, 6)]
+        out = cp.sweep(NOW + timedelta(minutes=5), servers=[SERVER_A])
+        assert out["alerts_attempted"] == 0, "bounded: not every sweep"
+        db.commit()
+        self._sender(calls, monkeypatch, True)
+        out = cp.sweep(NOW + timedelta(minutes=31), servers=[SERVER_A])
+        assert (out["alerts"], out["alerts_attempted"]) == (1, 1), (
+            "31 minutes on, with none of the lines in the tail, it goes again"
+        )
+        retry = calls["alerts"][-1][2]
+        assert retry["count"] == 3 and retry["at"] == NOW.strftime("%Y-%m-%d %H:%M"), (
+            "the persisted count and time, not the tail's"
+        )
+        db.commit()
+        assert rows(db)[0]["alerted_at"] == NOW + timedelta(minutes=31)
+
+    def test_a_resolved_row_is_not_retried(self, db, stack, monkeypatch):
+        logs, calls = stack
+        prime(logs)
+        self._sender(calls, monkeypatch, False)
+        logs[1] = [decline(1, minute=40), decline(2, minute=40), decline(3, minute=40)]
+        cp.sweep(NOW, servers=[SERVER_A])
+        db.commit()
+        with db.cursor() as cur:
+            cur.execute("UPDATE client_problems SET resolved_at=%s", (NOW + timedelta(minutes=1),))
+        db.commit()
+        logs[1] = []
+        assert cp.sweep(NOW + timedelta(minutes=31), servers=[SERVER_A])["alerts_attempted"] == 0
+
+    def test_after_24_hours_the_qualification_is_cleared_and_must_be_earned_again(self, db, stack, monkeypatch):
+        logs, calls = stack
+        prime(logs)
+        self._sender(calls, monkeypatch, False)
+        logs[1] = [decline(1, minute=40), decline(2, minute=40), decline(3, minute=40)]
+        cp.sweep(NOW, servers=[SERVER_A])
+        db.commit()
+        logs[1] = []
+        out = cp.sweep(NOW + timedelta(hours=24, minutes=1), servers=[SERVER_A])
+        assert out["alerts_attempted"] == 0, "a day old and undelivered: dropped, not retried for ever"
+        db.commit()
+        assert rows(db)[0]["qualified_at"] is None and rows(db)[0]["qualified_count"] is None
+
+    def test_a_recurrence_after_resolution_starts_a_fresh_qualification(self, db, stack, monkeypatch):
+        logs, calls = stack
+        prime(logs)
+        self._sender(calls, monkeypatch, False)
+        logs[1] = [decline(1, minute=40), decline(2, minute=40), decline(3, minute=40)]
+        cp.sweep(NOW, servers=[SERVER_A])
+        db.commit()
+        with db.cursor() as cur:
+            cur.execute("UPDATE client_problems SET resolved_at=%s", (NOW + timedelta(minutes=1),))
+        db.commit()
+        logs[1] = [decline(1, hour=13, minute=50), decline(2, hour=13, minute=50)]
+        cp.sweep(NOW + timedelta(hours=2), servers=[SERVER_A])
+        db.commit()
+        row = rows(db)[0]
+        assert row["resolved_at"] is None and row["qualified_at"] is None and row["alert_attempted_at"] is None
+
+
 class TestTheDatabaseKinds:
     def _declined(self, db, ip="10.45.0.61", subnet=1):
         with db.cursor() as cur:

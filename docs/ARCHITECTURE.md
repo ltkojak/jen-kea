@@ -2239,6 +2239,17 @@ page says which. The alert window is judged against now, a server's first read s
 news), and `alerted_at` is set only when a channel actually took the alert: `alert_attempted_at` (migration 31) records every try and a
 failing delivery is retried every half hour, not every five minutes and not never.
 
+**The alert is decided per (kind, client, subnet), and a decision survives the log rotating (v5.68.0-beta.13, Q148).** The count that
+crosses `client_problem_threshold` was kept per (kind, client) across every subnet, then reported to a channel scoped to one of them:
+two NAKs in a subnet a channel cannot see plus one in its own read as the three that fire, and the message said so, while the Problems page
+would have shown that channel's users one. `client_problems.collect` now keys `recent` by (kind, client, subnet) with `None` a key of its
+own ("no attributable subnet", for unrestricted channels only, as before), the delivery is recorded on that subnet's rows alone, and the page
+keeps grouping by client for display. The retry used to re-read the same 1000-line tail to re-check the threshold, so on a busy server the
+lines that qualified the alert rotated out inside the 30-minute retry bound and an alert the sweep had decided to send was never sent
+though its row said it failed. Migration 32 adds `qualified_at` and `qualified_count`: the sweep writes them on a key's rows when it first
+crosses the threshold, the retry reads THEM rather than the tail until the alert is delivered, the row is resolved, or the qualification is
+24 hours old (then cleared; a recurrence earns a fresh one), and the message carries the persisted count and the time it qualified.
+
 ### 6.1 On-disk layout (v5.13.0, extended in v5.14.0, relocatable since v5.67.0)
 
 Through v5.12.x the application tree under `/opt/jen` held user-writable
