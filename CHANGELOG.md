@@ -2,6 +2,56 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.68.0-beta.10] - 2026-10-06
+
+Beta channel. Stacked on 5.68.0-beta.9. **Explain evidence that is current, coherent and byte-exact.** Six defects in how the
+Investigation page and Explain decide what is true about a client, found by an outside review of beta.7 and confirmed against the
+code. There is no migration and nothing to do on upgrade.
+
+**"Active" meant three different things.** One query asked for a lease that is state 0 and not past its expiry; four asked for state 0
+alone. Kea keeps a state-0 row past its `expire` until reclamation removes it, so an expired row was "the current lease": it decided who
+holds an address, which MAC a hostname resolves to, what the Investigation page called the client's lease, what Explain read the client
+id and hostname from, and the IPv6 list counted it as an active lease. There is now one definition, state 0 and an expiry still in the
+future, for the client's lease by MAC or by address, the holder of an address, the owner of a hostname, the pool-occupancy and
+reserved-address-holder lookups Explain makes, and its IPv6 twin; the historical views (the Leases page with *show expired*) keep
+every row. Each of those consequences has a test that seeds an expired state-0 row beside an active one, and a source test refuses a
+current-lease query that spells the predicate by hand. (Test fixtures that seeded IPv6 leases with a hard-coded 2026-08 expiry
+now use a future one: that date is past.)
+
+**Explain's log inputs were stitched from different exchanges.** The newest client id, the newest class list and the newest packet dump
+were each taken on their own, so one "observation" could mix a DISCOVER's classes, an old REQUEST's options and a later client id.
+Kea tags every line with the client's transaction id, which was not used. The log is now grouped by MAC and transaction id (a
+transaction id is the client's own and repeats, so lines further than a minute apart are a different exchange), the newest exchange
+that has a class list or a packet dump is used on its own, and the Inputs card says which one (*the one at 15:10:39, transaction
+0x20006, on kea-b*). A class list logged before the live config's newest revision is labelled *observed before the config changed*;
+Jen says this only when it has measured the Kea host's clock, because it is a comparison across two clocks.
+
+**Evidence always came from the first server.** `KEA_SERVERS[0]` can be a standby, unreachable or without the helper, while the log
+that saw the client is on its peer. Jen now reads the HA-active server's log first, then the rest in order, until one holds an exchange
+for the client, skipping a server it cannot read, and names the server that supplied it.
+
+**Option 77 had three meanings, and a binary circuit id was compared as text.** The rule builder wrote `option[77].hex == '<text>'`,
+Explain evaluated that accessor against the typed text, and the compatibility test that real Kea matched uses the length-prefixed
+wire form (`0x08…`). A client sends its user class either as the bare string (dhclient's `send user-class`) or length-prefixed (RFC 3004,
+Windows) and the choice is the client's, so there is no one right literal, only the bytes Kea received. This was measured first, on real
+Kea 3.0.3, 3.2.0 and 3.3.1 (identical): a length-prefixed client is dumped as `08:6a:65:6e:2d:75:73:65:72` and matches
+`option[77].hex == 0x086a656e2d75736572` and `substring(option[77].hex,1,8) == 'jen-user'`, and does not match the string or
+`substring(…,0,8)`; a raw client is dumped as `6a:65:…:72 'jen-user'` (hex, then the printable text) and matches the string, its bare hex
+and `substring(…,0,8)`, and none of the length-prefixed forms; a circuit id of `DE AD BE EF` matches `relay4[1].hex == 0xdeadbeef` and
+no text. Explain now carries the display text and the bytes apart (`user_class` / `user_class_bytes`, `circuit_id` / `circuit_id_hex`),
+takes the bytes from the packet dump (or the lease's extended info) and compares those. With only the text known it judges a test under
+both client forms and calls it decided only when they agree, and undecided, with *supply user class as sent (option 77 bytes)*. The
+rule builder offers two user-class fields, plain text (what it always wrote) and length-prefixed, whose *starts with* skips the length
+byte; the grammar Explain reads accepts a non-zero `substring` start. The compatibility test boots one daemon with a class per spelling,
+sends a length-prefixed, a raw and a binary-circuit client, and requires the builder, real Kea and Explain to agree about every class.
+A side effect of the measurement: a raw client's option 77 row was unreadable before (the text after the hex defeated the parser) and
+showed no user class at all.
+
+**Standalone Explain used the lease it had just filtered out.** The route built the lease the caller may see for the inputs and then let
+the unfiltered one choose the subnet, be refused, and still reach the engine. The filtered lease is now the only lease the route knows:
+a scoped user whose client has a current lease in a hidden subnet and a reservation in a visible one is explained in the visible subnet from
+the reservation, and nothing of the hidden lease is on the page.
+
 ## [5.68.0-beta.9] - 2026-10-05
 
 Beta channel. Stacked on 5.68.0-beta.8. **Investigation logging that cannot forget, and a Problems inbox that attributes, times
