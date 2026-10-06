@@ -16,7 +16,8 @@ v5.68.0-beta.13 (Q148) also records `/etc/kea` - its owner, group and mode, and 
 helper's validation copy of the whole Kea config (which carries the database credentials) used to be written 0644 beside the real file, and
 whether another local account could read it depended on that directory's mode on the package in use. Build 11 makes the copy the
 daemon account's own and 0600, which does not depend on it; the recorded facts put the window that closed on record, per ISC image
-(`world_traversable` is "any account can enter the directory"). Recorded, not asserted: ISC's packaging may change it and nothing here
+(`world_traversable` is "any account can enter the directory"), read from the IMAGE's own filesystem - the running container's /etc/kea is a bind
+mount from the CI runner and would only report the runner's uid. Recorded, not asserted: ISC's packaging may change it and nothing here
 depends on it any more.
 """
 
@@ -96,15 +97,30 @@ def _daemon_run_as() -> dict:
     return {"uid": int(uid), "name": name or None}
 
 
-def path_facts(path: str) -> dict | None:
-    """Owner, group, mode and kind of `path` inside the image - or None when it is not there. `world_traversable` is whether the OTHER
-    bits let any account enter (a directory) or read (a file). Pure over `stat`'s output."""
-    out = _exec("stat", "-c", "%U|%G|%u|%g|%a|%F", path, check=False)
+def _facts_from(out: str) -> dict | None:
     if not out or out.count("|") != 5:
         return None
     facts = parse_stat(out)
     facts["world_traversable"] = bool(int(facts["mode"], 8) & 0o005)
     return facts
+
+
+def path_facts(path: str) -> dict | None:
+    """Owner, group, mode and kind of `path` as ISC's IMAGE ships it - or None when it is not there. The running daemon container has
+    its config directory BIND-MOUNTED from the CI runner (so a `stat` inside it reports the runner's own uid), which says nothing about
+    the package; a throwaway container from the same image, with the entrypoint replaced by `stat`, reads the image's own filesystem.
+    `world_traversable` is whether the OTHER bits let any account enter (a directory) or read (a file)."""
+    image = _docker("inspect", "--format", "{{.Config.Image}}", CONTAINER, check=False)
+    if not image:
+        return None
+    return _facts_from(
+        _docker("run", "--rm", "--entrypoint", "stat", image, "-c", "%U|%G|%u|%g|%a|%F", path, check=False)
+    )
+
+
+def mounted_path_facts(path: str) -> dict | None:
+    """The same, as the RUNNING container sees it (the CI bind mount): recorded so a reader can tell the two apart."""
+    return _facts_from(_exec("stat", "-c", "%U|%G|%u|%g|%a|%F", path, check=False))
 
 
 class TestPathFactsShape:
@@ -131,6 +147,7 @@ def test_binary_facts():
         # the directory the helper's validation copy used to sit in 0644, and the real config beside it (Q148)
         "etc_kea": path_facts("/etc/kea"),
         "etc_kea_dhcp4_conf": path_facts("/etc/kea/kea-dhcp4.conf"),
+        "etc_kea_as_mounted_in_ci": mounted_path_facts("/etc/kea"),
     }
     print(json.dumps(record, indent=2))
     if OUT:
