@@ -15,6 +15,7 @@ from tests.stored_object_fixtures import (  # noqa: F401 - fixtures are used by 
     D_MAC,
     S1,
     S2,
+    login,
     one,
     page,
     stored_objects,
@@ -49,7 +50,7 @@ class TestDirection1TrackedInBClientNowInA:
         assert S1 + "-pr" in everything and "now in" in everything and "Alpha-A" in everything
 
     def test_a_caller_scoped_to_a_cannot_untrack_it(self, pclient, db, stored_objects):
-        _caller(pclient, db, "admin_A")
+        login(pclient, db, "admin_A")
         pclient.post(f"{PR}/untrack/{A_MAC}")
         assert _owner(db, A_MAC) == 2
 
@@ -65,11 +66,11 @@ class TestDirection1TrackedInBClientNowInA:
     def test_only_an_explicit_move_by_a_caller_who_sees_both_subnets_changes_the_owner(
         self, pclient, db, stored_objects
     ):
-        _caller(pclient, db, "admin_A")
+        login(pclient, db, "admin_A")
         pclient.post(f"{PR}/move/{A_MAC}", data={"subnet_id": "1"})
         assert _owner(db, A_MAC) == 2, "an A-scoped caller cannot move what B owns, even into A"
         assert one(db, "SELECT id FROM audit_log WHERE action='PRESENCE_MOVE'") is None
-        _caller(pclient, db, "admin_all")
+        login(pclient, db, "admin_all")
         pclient.post(f"{PR}/move/{A_MAC}", data={"subnet_id": "1"})
         assert _owner(db, A_MAC) == 1
         audit = one(db, "SELECT details FROM audit_log WHERE action='PRESENCE_MOVE' AND entity=%s", (A_MAC,))
@@ -78,9 +79,9 @@ class TestDirection1TrackedInBClientNowInA:
         assert S1 + "-pr" not in page(pclient, db, "admin_B", PR + "/")
 
     def test_a_scoped_caller_cannot_move_a_device_into_a_subnet_they_cannot_see(self, pclient, db, stored_objects):
-        _caller(pclient, db, "admin_all")
+        login(pclient, db, "admin_all")
         pclient.post(f"{PR}/move/{A_MAC}", data={"subnet_id": "1"})  # now A's
-        _caller(pclient, db, "admin_A")
+        login(pclient, db, "admin_A")
         pclient.post(f"{PR}/move/{A_MAC}", data={"subnet_id": "2"})
         assert _owner(db, A_MAC) == 1
 
@@ -95,7 +96,7 @@ class TestDirection2TrackedInAClientNowInB:
         )
 
     def test_the_owner_can_untrack_it(self, pclient, db, stored_objects):
-        _caller(pclient, db, "admin_A")
+        login(pclient, db, "admin_A")
         pclient.post(f"{PR}/untrack/{D_MAC}")
         assert _owner(db, D_MAC) is None
 
@@ -107,6 +108,6 @@ class TestDirection2TrackedInAClientNowInB:
         assert _owner(db, D_MAC) == 1
 
     def test_the_owner_cannot_move_it_into_b(self, pclient, db, stored_objects):
-        _caller(pclient, db, "admin_A")
+        login(pclient, db, "admin_A")
         pclient.post(f"{PR}/move/{D_MAC}", data={"subnet_id": "2"})
         assert _owner(db, D_MAC) == 1

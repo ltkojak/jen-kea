@@ -19,6 +19,7 @@ from tests.stored_object_fixtures import (  # noqa: F401 - fixtures are used by 
     S1,
     S2,
     SECUREON_BYTES,
+    login,
     one,
     page,
     stored_objects,
@@ -71,31 +72,31 @@ class TestDirection1StoredInBClientNowInA:
         assert "now in" not in page(pclient, db, "admin_B", WOL + "/")
 
     def test_add_over_an_existing_favourite_cannot_rewrite_it(self, pclient, db, stored_objects):
-        _caller(pclient, db, "admin_A")
+        login(pclient, db, "admin_A")
         pclient.post(WOL + "/favourites/add", data={"mac": A_MAC, "label": "hijacked", "secureon": ""})
         assert _favourite(db, A_MAC)["label"] == S1 + "-wol"
 
     def test_delete_cannot_remove_it(self, pclient, db, stored_objects):
         fav = _favourite(db, A_MAC)
-        _caller(pclient, db, "admin_A")
+        login(pclient, db, "admin_A")
         pclient.post(f"{WOL}/favourites/{fav['id']}/delete")
         assert _favourite(db, A_MAC) is not None
 
     def test_waking_it_from_the_list_is_not_found_and_sends_nothing(self, pclient, db, stored_objects, packets):
         fav = _favourite(db, A_MAC)
-        _caller(pclient, db, "admin_A")
+        login(pclient, db, "admin_A")
         pclient.post(f"{WOL}/favourites/{fav['id']}/wake")
         assert packets == []
 
     def test_a_wake_of_the_host_itself_goes_ahead_without_the_hidden_favourites_password(
         self, pclient, db, stored_objects, packets
     ):
-        _caller(pclient, db, "admin_A")
+        login(pclient, db, "admin_A")
         pclient.post(f"{WOL}/wake?mac={A_MAC}")
         assert [(m, s) for m, _c, s in packets] == [(A_MAC, None)], "the host is in A: the wake goes, with no SecureOn"
 
     def test_the_wake_api_does_the_same_for_a_scoped_key(self, pclient, db, stored_objects, packets):
-        headers = _caller(pclient, db, "key_write")
+        headers = login(pclient, db, "key_write")
         r = pclient.post(
             "/api/v1/plugins/wol/wake", data=json.dumps({"mac": A_MAC}), headers=headers, follow_redirects=False
         )
@@ -104,7 +105,7 @@ class TestDirection1StoredInBClientNowInA:
     def test_the_control_an_unrestricted_caller_may_see_the_favourite_so_its_password_is_used(
         self, pclient, db, stored_objects, packets
     ):
-        _caller(pclient, db, "admin_all")
+        login(pclient, db, "admin_all")
         pclient.post(f"{WOL}/wake?mac={A_MAC}")
         assert [(m, s) for m, _c, s in packets] == [(A_MAC, SECUREON_BYTES)]
 
@@ -118,7 +119,7 @@ class TestDirection2StoredInAClientNowInB:
         assert S2 + "-wol" not in page(pclient, db, "admin_B", WOL + "/")
 
     def test_it_can_be_relabelled_and_deleted_by_its_owner(self, pclient, db, stored_objects):
-        _caller(pclient, db, "admin_A")
+        login(pclient, db, "admin_A")
         pclient.post(WOL + "/favourites/add", data={"mac": D_MAC, "label": "renamed", "secureon": ""})
         fav = _favourite(db, D_MAC)
         assert fav["label"] == "renamed" and fav["subnet_id"] == 1, "relabelled, and still filed under A"
@@ -129,13 +130,13 @@ class TestDirection2StoredInAClientNowInB:
         self, pclient, db, stored_objects, packets
     ):
         fav = _favourite(db, D_MAC)
-        _caller(pclient, db, "admin_A")
+        login(pclient, db, "admin_A")
         pclient.post(f"{WOL}/favourites/{fav['id']}/wake")
         pclient.post(f"{WOL}/wake?mac={D_MAC}")
         assert packets == []
 
     def test_nor_by_a_scoped_key(self, pclient, db, stored_objects, packets):
-        headers = _caller(pclient, db, "key_write")
+        headers = login(pclient, db, "key_write")
         r = pclient.post(
             "/api/v1/plugins/wol/wake", data=json.dumps({"mac": D_MAC}), headers=headers, follow_redirects=False
         )

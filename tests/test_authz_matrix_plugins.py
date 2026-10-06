@@ -539,6 +539,19 @@ ROWS = [
         {},
     ),
     (
+        # v5.68.0-beta.12 (Q147): moving a device is the one way its owner subnet changes, and needs BOTH subnets; a caller scoped
+        # to A can neither move what B owns nor use the move to take it into A
+        "presence move B's device into subnet A",
+        "POST",
+        f"/management/presence/move/{B_MAC}",
+        FormBody(subnet_id="1"),
+        UI,
+        _DENY,
+        (B_MAC,),
+        _pr_b_not_retagged,
+        {},
+    ),
+    (
         "presence track a B MAC from a row, naming subnet A in the query string",
         "POST",
         f"/management/presence/track-row?mac={B_MAC}&subnet_id=1&hostname=hijack",

@@ -98,19 +98,33 @@ def stored_objects(plugin_app, db, plugin_data):
     db.commit()
 
 
+def _forget(db, username):
+    with db.cursor() as cur:
+        cur.execute("DELETE FROM users WHERE username=%s", (username,))
+    db.commit()
+
+
 def as_admin_b(pclient, db):
     """An admin scoped to subnet B only - the owner of everything direction 1 stored."""
     from tests.conftest import restricted_client
 
+    _forget(db, "authz_admin_B")
     restricted_client(pclient, db, allowed_subnets=[2], role="admin", username="authz_admin_B")
+
+
+def login(pclient, db, role):
+    """Log `pclient` in as a matrix role ("admin_B" included) and return the headers for a key role. Idempotent within a test:
+    `restricted_client` INSERTs its user, so a second login as the same role used to be a duplicate-key error."""
+    if role == "admin_B":
+        as_admin_b(pclient, db)
+        return {}
+    _forget(db, f"authz_{role}")
+    return _caller(pclient, db, role)
 
 
 def page(pclient, db, role, path):
     """GET `path` as `role` (a matrix role, or "admin_B") and return the body."""
-    if role == "admin_B":
-        as_admin_b(pclient, db)
-    else:
-        _caller(pclient, db, role)
+    login(pclient, db, role)
     return pclient.get(path).data.decode("utf-8", "replace")
 
 

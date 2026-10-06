@@ -18,6 +18,7 @@ from tests.stored_object_fixtures import (  # noqa: F401 - fixtures are used by 
     S1,
     S2,
     SW_A,
+    login,
     page,
     stored_objects,
 )
@@ -37,7 +38,7 @@ API = "/api/v1/plugins/switchport/locate"
 
 
 def _api(pclient, db, role, mac):
-    headers = _caller(pclient, db, role)
+    headers = login(pclient, db, role)
     r = pclient.get(f"{API}/{mac}", headers=headers)
     return r.status_code, (r.get_json() or {})
 

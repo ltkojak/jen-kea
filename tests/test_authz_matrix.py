@@ -767,7 +767,7 @@ PLUGIN_ROUTE_ALLOWLIST = {
         for fn in ("delete_favourite", "wake_favourite", "wake_from_row", "_api_wake")
     },
     **{f"wol:{fn}": _PLUGIN_OWN for fn in ("index", "add_favourite")},
-    **{f"presence:{fn}": _PLUGIN_CLIENT_FACING for fn in ("track", "untrack", "track_from_row")},
+    **{f"presence:{fn}": _PLUGIN_CLIENT_FACING for fn in ("track", "untrack", "track_from_row", "move_subnet")},
     **{f"presence:{fn}": _PLUGIN_OWN for fn in ("index", "add_sink", "toggle_sink", "delete_sink", "test_sink")},
     **{f"switchport:{fn}": _PLUGIN_CLIENT_FACING for fn in ("index", "_api_locate")},
     **{f"switchport:{fn}": _PLUGIN_OWN for fn in ("add_switch", "toggle_switch", "delete_switch", "set_uplink")},
