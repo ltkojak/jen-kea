@@ -732,6 +732,23 @@ class TestMigration33ClientProblemsScopeKey:
             cur.execute("DELETE FROM client_problems WHERE server_id=98")
             db.commit()
 
+    @staticmethod
+    def _key_columns(cur):
+        cur.execute(
+            "SELECT COLUMN_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() "
+            "AND TABLE_NAME = 'client_problems' AND INDEX_NAME = 'uq_client_problem' ORDER BY SEQ_IN_INDEX"
+        )
+        return [r["COLUMN_NAME"] for r in cur.fetchall()]
+
+    FIVE = ["server_id", "kind", "mac", "ip", "scope_key"]
+
+    def test_the_final_schema_is_the_five_column_key_and_the_column(self):
+        from jen.models.migrations import _client_problems_scope_state
+
+        with jen_db() as db, db.cursor() as cur:
+            assert self._key_columns(cur) == self.FIVE
+            assert _client_problems_scope_state(cur) == (True, True)
+
     def test_rerun_changes_nothing(self):
         from jen.models.migrations import _m033_client_problems_scope_key
 
@@ -740,8 +757,11 @@ class TestMigration33ClientProblemsScopeKey:
             self._insert(cur, 2, 2)
             cur.execute("REPLACE INTO settings (setting_key, setting_value) VALUES ('client_problems_wm:98', 'x')")
             db.commit()
-            _m033_client_problems_scope_key(db)  # the column exists: nothing is cleared
+            _m033_client_problems_scope_key(db)  # the whole end state is there: nothing is cleared
             db.commit()
+            assert self._key_columns(cur) == self.FIVE, (
+                "the guard is the final schema, and the key is still the five-column one"
+            )
             cur.execute("SELECT COUNT(*) AS n FROM client_problems WHERE server_id=98")
             assert cur.fetchone()["n"] == 1
             cur.execute("SELECT setting_value FROM settings WHERE setting_key='client_problems_wm:98'")
@@ -749,6 +769,75 @@ class TestMigration33ClientProblemsScopeKey:
             cur.execute("DELETE FROM client_problems WHERE server_id=98")
             cur.execute("DELETE FROM settings WHERE setting_key='client_problems_wm:98'")
             db.commit()
+
+    def test_an_interrupted_migration_finishes_the_key_it_never_reached(self):
+        """Q150: the first version returned as soon as the COLUMN existed. A failure between ADD COLUMN (auto-committed) and the key swap
+        left the column and the old four-column key; the next start saw the column, returned, and recorded 33. Interrupted here exactly
+        there: the column present, the four-column key, the migration unrecorded."""
+        from jen.models.migrations import _m033_client_problems_scope_key
+
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("DELETE FROM client_problems")
+            cur.execute("ALTER TABLE client_problems DROP INDEX uq_client_problem")
+            cur.execute("ALTER TABLE client_problems ADD UNIQUE KEY uq_client_problem (server_id, kind, mac, ip)")
+            db.commit()
+            assert self._key_columns(cur) == ["server_id", "kind", "mac", "ip"]
+            self._insert(cur, 2, 2, server=95)  # data from the contaminated state
+            cur.execute("REPLACE INTO settings (setting_key, setting_value) VALUES ('client_problems_wm:95', 'x')")
+            db.commit()
+            _m033_client_problems_scope_key(db)
+            db.commit()
+            assert self._key_columns(cur) == self.FIVE, "the re-run installs the five-column key"
+            cur.execute("SELECT COUNT(*) AS n FROM client_problems")
+            assert cur.fetchone()["n"] == 0, "and clears the rows again: they may still be mixed"
+            cur.execute("SELECT COUNT(*) AS n FROM settings WHERE setting_key='client_problems_wm:95'")
+            assert cur.fetchone()["n"] == 0
+
+    def test_an_interrupted_migration_finishes_a_missing_key(self):
+        """The other break: the old key already dropped, the new one not yet added (a crash between the two halves of a key swap)."""
+        from jen.models.migrations import _m033_client_problems_scope_key
+
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("ALTER TABLE client_problems DROP INDEX uq_client_problem")
+            db.commit()
+            assert self._key_columns(cur) == []
+            _m033_client_problems_scope_key(db)
+            db.commit()
+            assert self._key_columns(cur) == self.FIVE
+
+    def test_a_non_unique_or_reordered_key_of_the_right_name_is_not_the_final_schema(self):
+        from jen.models.migrations import _client_problems_scope_state, _m033_client_problems_scope_key
+
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("ALTER TABLE client_problems DROP INDEX uq_client_problem")
+            cur.execute(
+                "ALTER TABLE client_problems ADD UNIQUE KEY uq_client_problem (scope_key, server_id, kind, mac, ip)"
+            )
+            db.commit()
+            assert _client_problems_scope_state(cur) == (True, False), (
+                "the same five columns in another order are a different key"
+            )
+            _m033_client_problems_scope_key(db)
+            db.commit()
+            assert self._key_columns(cur) == self.FIVE
+            cur.execute("ALTER TABLE client_problems DROP INDEX uq_client_problem")
+            cur.execute("ALTER TABLE client_problems ADD INDEX uq_client_problem (server_id, kind, mac, ip, scope_key)")
+            db.commit()
+            assert _client_problems_scope_state(cur) == (True, False), "a non-unique index is not the unique key"
+            _m033_client_problems_scope_key(db)
+            db.commit()
+            assert _client_problems_scope_state(cur) == (True, True)
+
+    def test_a_column_of_the_wrong_shape_is_repaired_without_losing_the_key(self):
+        from jen.models.migrations import _client_problems_scope_state, _m033_client_problems_scope_key
+
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("ALTER TABLE client_problems MODIFY COLUMN scope_key BIGINT NULL DEFAULT NULL")
+            db.commit()
+            assert _client_problems_scope_state(cur)[0] is False
+            _m033_client_problems_scope_key(db)
+            db.commit()
+            assert _client_problems_scope_state(cur) == (True, True)
 
     def test_it_clears_rows_and_watermarks_but_keeps_clock_offsets_when_it_adds_the_column(self):
         from jen.models.migrations import _m033_client_problems_scope_key

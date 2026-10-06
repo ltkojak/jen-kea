@@ -21,6 +21,17 @@ Rules for writing migrations (MySQL/MariaDB)
    therefore also be idempotent (CREATE TABLE IF NOT EXISTS, guarded
    ALTERs via SHOW COLUMNS) so that a crash between a DDL statement
    and the version INSERT recovers cleanly on the next startup.
+   THE GUARD IS THE FINAL SCHEMA, NOT A STEP'S SIDE EFFECT (Q150). A
+   migration of several DDL statements can stop between any two of them,
+   and every statement before the break has already committed - so
+   "the column I add is there" proves nothing about the statements after
+   it. The guard reads the whole end state back (the column with its type,
+   nullability and default AND every index with exactly its columns, from
+   information_schema) and runs whatever is missing, each step on its own
+   evidence. Migration 33 stopped halfway between ADD COLUMN and the
+   unique-key swap and, on the next start, saw the column and recorded
+   itself done with the old key still in place. A test must interrupt
+   the migration between its statements and re-run it.
 2. Versions are integers, strictly increasing, never reused, never
    edited after release. New schema changes append a new version.
 3. One-time data fixes belong here too (see migration 6) — that is
@@ -1160,9 +1171,35 @@ def _m032_client_problems_qualified(db):
     logger.info("Migration 32: client_problems.qualified_at / qualified_count")
 
 
+_CLIENT_PROBLEMS_KEY = ["server_id", "kind", "mac", "ip", "scope_key"]
+
+
+def _client_problems_scope_state(cur) -> tuple[bool, bool]:
+    """(column_ok, key_ok) for migration 33, both read from information_schema: `scope_key` is an INT NOT NULL with default -1, and
+    `uq_client_problem` is a UNIQUE key on exactly (server_id, kind, mac, ip, scope_key) in that order."""
+    cur.execute(
+        "SELECT DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT FROM information_schema.COLUMNS "
+        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'client_problems' AND COLUMN_NAME = 'scope_key'"
+    )
+    col = cur.fetchone()
+    column_ok = bool(
+        col
+        and str(col["DATA_TYPE"]).lower() == "int"
+        and str(col["IS_NULLABLE"]).upper() == "NO"
+        and str(col["COLUMN_DEFAULT"]).strip("'") == "-1"
+    )
+    cur.execute(
+        "SELECT COLUMN_NAME, NON_UNIQUE FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() "
+        "AND TABLE_NAME = 'client_problems' AND INDEX_NAME = 'uq_client_problem' ORDER BY SEQ_IN_INDEX"
+    )
+    rows = cur.fetchall()
+    key_ok = [r["COLUMN_NAME"] for r in rows] == _CLIENT_PROBLEMS_KEY and all(not r["NON_UNIQUE"] for r in rows)
+    return column_ok, key_ok
+
+
 def _m033_client_problems_scope_key(db):
     """
-    v5.68.0-beta.14 (Q149) - the subnet is part of a Problems row's IDENTITY. Migration 30's unique key was (server_id, kind, mac, ip), and
+    v5.68.0-beta.14 (Q149; guard rewritten in Q150) - the subnet is part of a Problems row's IDENTITY. Migration 30's unique key was (server_id, kind, mac, ip), and
     two NAKs that name no address (an empty `ip`) in subnet B plus one in subnet A are ONE row for that key: the row's subnet was
     reassigned to the newest event's while its count, `first_seen`, `alerted_at`, `alert_attempted_at` and the qualification stayed - so
     a qualification earned in B was carried onto an A row and retried there. `scope_key` is `COALESCE(subnet_id, -1)` (a NULL cannot be
@@ -1171,22 +1208,35 @@ def _m033_client_problems_scope_key(db):
 
     EVERY EXISTING ROW MAY BE CROSS-CONTAMINATED and the inbox is nine days old, so the migration DELETES the rows and resets each
     server's log watermark: the inbox starts again and the next sweep refills it from the log tail (the first read of a server records
-    without alerting, as always). Per-server clock offsets are kept. It runs only when the column is absent, so a re-run changes nothing.
+    without alerting, as always). Per-server clock offsets are kept.
+
+    THE GUARD IS THE FINAL SCHEMA (Q150): the column with its type and default AND the five-column unique key, both read from
+    information_schema. The first version returned as soon as the COLUMN existed, so a failure between `ADD COLUMN` (auto-committed) and
+    the key swap left the column and the old four-column key, and the next start saw the column, returned, and recorded 33 as done - the
+    cross-subnet contamination this migration exists to remove survived an interrupted upgrade. Now anything short of the full end
+    state runs the missing steps: the rows and watermarks are cleared again (the inbox is reconstructable from the logs, so doing it
+    twice costs nothing), the column is added only when missing, the key is replaced only when it is not exactly the one wanted.
     """
     with db.cursor() as cur:
+        column_ok, key_ok = _client_problems_scope_state(cur)
+        if column_ok and key_ok:
+            return
+        cur.execute("DELETE FROM client_problems")
+        cur.execute("DELETE FROM settings WHERE setting_key LIKE 'client_problems_wm:%'")
         cur.execute(
             "SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() "
             "AND TABLE_NAME = 'client_problems' AND COLUMN_NAME = 'scope_key'"
         )
-        if cur.fetchone()["n"]:
-            return
-        cur.execute("DELETE FROM client_problems")
-        cur.execute("DELETE FROM settings WHERE setting_key LIKE 'client_problems_wm:%'")
-        cur.execute("ALTER TABLE client_problems ADD COLUMN scope_key INT NOT NULL DEFAULT -1 AFTER subnet_id")
-        cur.execute(
-            "ALTER TABLE client_problems DROP INDEX uq_client_problem, "
-            "ADD UNIQUE KEY uq_client_problem (server_id, kind, mac, ip, scope_key)"
-        )
+        if not cur.fetchone()["n"]:
+            cur.execute("ALTER TABLE client_problems ADD COLUMN scope_key INT NOT NULL DEFAULT -1 AFTER subnet_id")
+        elif not column_ok:
+            cur.execute("ALTER TABLE client_problems MODIFY COLUMN scope_key INT NOT NULL DEFAULT -1")
+        if not key_ok:
+            if _index_exists(cur, "client_problems", "uq_client_problem"):
+                cur.execute("ALTER TABLE client_problems DROP INDEX uq_client_problem")
+            cur.execute(
+                "ALTER TABLE client_problems ADD UNIQUE KEY uq_client_problem (server_id, kind, mac, ip, scope_key)"
+            )
     logger.info("Migration 33: client_problems.scope_key (rows and watermarks cleared)")
 
 

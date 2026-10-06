@@ -310,7 +310,7 @@ class TestD2Config:
 
 
 class TestAtomicWrite:
-    """v5.10.4 — _write_parser() writes a sibling .tmp file and
+    """v5.10.4 — _write_parser() writes a sibling temp file and
     os.replace()s it into place: an interrupted write can't truncate
     jen.config, and a save only needs write access to /etc/jen (not the
     file), so a box whose jen.config was left root-owned by an older
@@ -329,7 +329,9 @@ class TestAtomicWrite:
 
         assert calls, "write_value() did not go through os.replace()"
         src, dst = calls[-1]
-        assert src == f"{dst}.tmp"
+        # v5.68.0-beta.15 (Q150): a UNIQUE temp name (`.jen.config.<random>.tmp`), O_EXCL 0600, in the target's own directory
+        assert os.path.dirname(src) == os.path.dirname(dst)
+        assert os.path.basename(src).startswith(".jen.config.") and src.endswith(".tmp")
         assert dst == str(isolated_config)
         assert not os.path.exists(src), "the .tmp file was left behind"
         assert extensions.KEA_API_URL == "http://tmp.test:8000"

@@ -20,6 +20,10 @@ ExecStart=@@APP_DIR@@/current/venv/bin/python @@APP_DIR@@/current/app/run.py
 Restart=always
 RestartSec=5
 Environment=PYTHONUNBUFFERED=1
+# v5.68.0-beta.15 (Q150) - everything the service creates is private to it by default: jen.config, the SSL key and the Fernet key
+# are also written 0600-from-the-first-byte by jen/services/private_files.py, and run.py sets the same umask for Docker. The root
+# self-updater and the plugin installer are separate units (their own umask) and are not affected.
+UMask=0077
 # v5.67.0 (Q114) — this unit is rendered, not copied, from
 # jen.service.template: @@APP_DIR@@/@@CONFIG_DIR@@/@@DATA_DIR@@ are filled
 # in from /etc/jen-layout.conf (absent = the historical defaults

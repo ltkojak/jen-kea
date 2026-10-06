@@ -332,6 +332,9 @@ def _gunicorn_importable() -> bool:
 
 
 def main():
+    # v5.68.0-beta.15 (Q150): a secret this process (or gunicorn, which inherits it through exec/Popen) ever creates is private from its
+    # first byte. The unit sets UMask=0077 for the same reason; this covers Docker and a hand-run `python run.py`, which have no unit.
+    os.umask(0o077)
     # Logging from env only first — create_app()/config load below log
     # before extensions.cfg exists. Reconfigure once it's populated.
     configure_logging()

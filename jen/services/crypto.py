@@ -129,9 +129,10 @@ def _load_or_create_key() -> bytes:
         try:
             new_key = Fernet.generate_key()
             os.makedirs(os.path.dirname(key_file), exist_ok=True)
-            with open(key_file, "wb") as f:
-                f.write(new_key)
-            os.chmod(key_file, 0o600)
+            # v5.68.0-beta.15 (Q150): the Fernet key is private from its first byte, never `open()` + chmod
+            from jen.services.private_files import write_private_file
+
+            write_private_file(key_file, new_key, 0o600)
             logger.warning("Generated a new MFA encryption key at %s", key_file)
             return new_key
         except Exception as e:

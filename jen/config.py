@@ -26,7 +26,6 @@ compatibility with existing callers and plugins.
 """
 
 import configparser
-import contextlib
 import ipaddress
 import logging
 import os
@@ -399,12 +398,17 @@ class AppConfig:
         #     (5.9.0–5.10.3 fresh installs — see write_config in
         #     install.sh) self-heals on its first Settings save instead of
         #     failing every save with EACCES.
-        tmp = f"{self.path}.tmp"
-        with open(tmp, "w") as f:
-            parser.write(f)
-        with contextlib.suppress(OSError):
-            os.chmod(tmp, 0o600)
-        os.replace(tmp, self.path)
+        # v5.68.0-beta.15 (Q150) - private from its FIRST BYTE: this file holds every database password and API credential, and
+        # `open(tmp, "w")` created it with the process umask (world-readable under systemd's 0022) and tightened it afterwards. The
+        # write goes through jen.services.private_files (unique O_EXCL 0600 temp in this directory, fsync, fchmod 0600 on the
+        # descriptor, os.replace) - the same discipline as the helper's `_private_tempfile`.
+        import io
+
+        from jen.services.private_files import write_private_file
+
+        buf = io.StringIO()
+        parser.write(buf)
+        write_private_file(self.path, buf.getvalue(), 0o600)
 
     def write_value(self, section: str, key: str, value: str, reload: bool = True) -> None:
         """Update a single value on disk, then reload."""

@@ -620,6 +620,19 @@ checker; `tests/test_jen_update_root.py` exercises the real validation
 rules — grammar, shared roots, nesting, ancestor ownership, the marker
 contract — against real temp dirs.
 
+**Secrets are private from their first byte (v5.68.0-beta.15, Q150).** `jen.config` (every database password and API credential), the SSL private
+key and the Fernet key used to be written with `open(tmp, "w")` and tightened with `chmod` afterwards: created with the process umask (0644 under
+systemd's default 0022), the secret written into it, and only then restricted. The only thing that closed the window was the directory's own mode
+(`/etc/jen` is service-owned 0750 on a stock install), which is not a thing to depend on. `jen/services/private_files.py::write_private_file` is the
+discipline in one place and is the same one the Kea-host helper uses for every file it writes (§3.3): a unique `O_CREAT|O_EXCL|O_NOFOLLOW` temp in the
+target's own directory, mode 0600 from the first byte, written and fsynced, the FINAL owner and mode applied to the descriptor (never to a path another
+process could swap), then `os.replace`. A file meant to be 0640 (the Flask secret key, the SSL key) is 0600 until it is complete. `run.py` sets
+`os.umask(0o077)` first thing in `main()` (Docker and a hand-run server have no unit) and `jen.service.template` carries `UMask=0077`, so anything else the
+service creates is private to it by default. The root self-updater and the plugin installer are separate units with their own umask and are NOT given
+it (it would make every file they install unreadable to the service user; `tests/test_private_files.py` asserts that). The proof is a directory
+watcher: it stats every entry of the directory in a tight loop while each real writer runs 300 times under umask 022, and no entry is ever seen with a
+group or other bit before it is complete. A source test refuses a new write-mode `open()` / `Path.write_*` in `jen/` that is not on its reviewed list.
+
 ### 3.2 SSH host-key verification (trust-on-first-use)
 
 Every outbound SSH connection Jen makes (`subnets.py`, `ddns.py`,

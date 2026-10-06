@@ -27,15 +27,11 @@ def write_atomically(path: str, data, mode: int) -> None:
     if os.path.exists(path):
         with contextlib.suppress(OSError):
             os.replace(path, path + ".prev")
-    tmp = path + ".new"
-    if isinstance(data, bytes):
-        with open(tmp, "wb") as f:
-            f.write(data)
-    else:
-        with open(tmp, "w") as f:
-            f.write(data)
-    os.chmod(tmp, mode)
-    os.replace(tmp, path)
+    # v5.68.0-beta.15 (Q150): the PEM - the private key above all - is private from its first byte (a unique O_EXCL 0600 temp, the
+    # final mode applied to the descriptor, then the replace), not written with the process umask and chmod'ed afterwards.
+    from jen.services.private_files import write_private_file
+
+    write_private_file(path, data, mode)
 
 
 def installed_cert_path() -> str:

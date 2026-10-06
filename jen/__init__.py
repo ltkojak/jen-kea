@@ -963,9 +963,10 @@ def _load_secret_key() -> str:
                     return key
             key = os.urandom(32).hex()
             os.makedirs(os.path.dirname(key_file), exist_ok=True)
-            with open(key_file, "w") as f:
-                f.write(key)
-            os.chmod(key_file, 0o640)
+            # v5.68.0-beta.15 (Q150): 0600 until complete, then the 0640 it is meant to be - never created with the umask
+            from jen.services.private_files import write_private_file
+
+            write_private_file(key_file, key, 0o640)
             return key
         except Exception as e:
             logger.warning(f"Could not read/persist secret key at {key_file}: {e}")
