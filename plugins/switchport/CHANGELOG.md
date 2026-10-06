@@ -1,5 +1,25 @@
 # Switch Port Locator Plugin — Changelog
 
+## [1.1.2] - 2026-10-06
+
+Fix: the rule 1.1.1 applied to the Investigation card now applies to every surface of the plugin. No change to what Jen needs:
+`requires_jen` stays 5.68.0.
+
+### Fixed: the page, the API and the search provider judge each position by its own switch
+
+1.1.1 filtered the Investigation card's positions by their switches' subnets and left the plugin's other three ways of asking
+"where is this MAC" judging the CLIENT's current subnet and then showing the newest position on any switch. A caller scoped to
+subnet A who looked up a client now in A saw the client's newest position on a switch in subnet B (switch name, port, alias,
+VLAN, time) on the page and from the API, and the search provider reported the client's subnet as the row's `subnet_id`, so
+Jen's own defence-in-depth filter passed a result whose text named a switch in B. All four surfaces now go through the one
+judgement the card uses, `positions_in_scope`: every stored position is judged by the subnet of its switch (the one its
+management address is in; a switch addressed by hostname is for callers who can see every subnet), and the answer is the newest
+position the caller may see. A client whose only positions are on switches the caller may not see is simply not located, the
+same answer as a MAC no switch has reported, for a session user and for a scoped API key alike (the API used to refuse such a key
+with 403 keyed on the MAC's own subnet, which told it which MACs exist elsewhere). When the newest position is hidden the page
+says *was last seen on* rather than *is on*, and does not say why. Search rows carry the SWITCH's subnet as their `subnet_id`.
+The exact-MAC search now takes 50 candidates, judges them, then keeps five, so hidden positions cannot push a visible one out.
+
 ## [1.1.1] - 2026-10-06
 
 Fix to the investigation provider added in 1.1.0. No change to what Jen needs: `requires_jen` stays 5.68.0.

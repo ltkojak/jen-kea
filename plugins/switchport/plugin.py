@@ -434,14 +434,6 @@ def _current_subnet_for_mac(mac):
     return client_subnet_for_mac(mac)
 
 
-def _mac_visible(mac):
-    """May the session user see where this MAC is? Judged on the MAC's current subnet;
-    a MAC with none (or an unknown one) is for unrestricted users only."""
-    if _can(None):
-        return True
-    return _can(_current_subnet_for_mac(mac))
-
-
 def _switch_subnet(host):
     """The Kea subnet a switch's management address is in, or None."""
     return derive_subnet_id(host, _subnet_map())
@@ -670,26 +662,22 @@ def _tick():
 # ── Locate: the answer to "where is this MAC" ───────────────────────────────────
 
 
-def _locate_mac(mac):
-    db = None
+def _locate_mac(mac, can=None):
+    """The newest position of `mac` the CALLER may see, or None (v1.1.2). Every stored position is judged by its own switch's
+    subnet (`positions_in_scope`, the one judgement - the page, the API and the search provider all come through it); where the
+    MAC is now decides nothing. `can` is the caller's predicate on a subnet id: the session user's `_can` by default, the API
+    key's for the API. The position carries `not_latest`: True when a NEWER position exists on a switch the caller may not see,
+    so the page can say "last seen" instead of "is on" - it never says why. A MAC whose only positions are hidden is simply not
+    located, the same answer as a MAC no switch has reported."""
     try:
-        db = _get_db()
-        with db.cursor() as cur:
-            cur.execute(
-                "SELECT mp.switch_id, s.name AS switch_name, mp.ifindex, p.ifname, p.ifalias, "
-                "mp.vlan, mp.last_seen FROM sp_mac_ports mp "
-                "JOIN sp_switches s ON s.id = mp.switch_id "
-                "LEFT JOIN sp_ports p ON p.switch_id = mp.switch_id AND p.ifindex = mp.ifindex "
-                "WHERE mp.mac=%s ORDER BY mp.last_seen DESC LIMIT 1",
-                (mac,),
-            )
-            return cur.fetchone()
+        positions = _positions_for_mac(mac)
     except Exception as e:
         logger.error(f"Switch Port Locator: locate failed for {mac}: {e}")
         return None
-    finally:
-        if db:
-            db.close()
+    visible, newest_hidden = positions_in_scope(positions, _subnet_map(), (), False, can=can or _can)
+    if not visible:
+        return None
+    return {**visible[0], "not_latest": newest_hidden}
 
 
 # ── Search provider ──────────────────────────────────────────────────────────
@@ -705,45 +693,50 @@ def _switchport_search(query, accessible_subnet_ids, all_subnets):
     like = like_pattern(q)
     db = None
     out = []
+    smap = _subnet_map()
+    limit = 5 if mac else 20
     try:
         db = _get_db()
         with db.cursor() as cur:
             if mac:
+                # v1.1.2 - 50 candidates, judged, THEN the cap of five (a LIMIT 5 first let five hidden positions hide a
+                # visible one)
                 cur.execute(
-                    "SELECT mp.mac, s.name AS switch_name, p.ifname FROM sp_mac_ports mp "
+                    "SELECT mp.mac, s.name AS switch_name, s.host AS host, p.ifname FROM sp_mac_ports mp "
                     "JOIN sp_switches s ON s.id = mp.switch_id "
                     "LEFT JOIN sp_ports p ON p.switch_id = mp.switch_id AND p.ifindex = mp.ifindex "
-                    "WHERE mp.mac=%s ORDER BY mp.last_seen DESC LIMIT 5",
+                    "WHERE mp.mac=%s ORDER BY mp.last_seen DESC LIMIT 50",
                     (mac,),
                 )
             else:
-                # v1.0.4 — a MAC's subnet isn't a column here (it's derived per row, below), so it
+                # v1.0.4 - a position's subnet isn't a column here (it's derived per row, below), so it
                 # can't be filtered in this query the way IPAM/Discovery/Watchdog's own subnet_id can;
                 # 200 candidates instead of 20, stopping once 20 have actually PASSED the per-row
                 # check, gives a restricted caller a real chance at a full page instead of whatever the
                 # newest 20 matches happened to be, most of them possibly in subnets they cannot see.
                 cur.execute(
-                    "SELECT mp.mac, s.name AS switch_name, p.ifname FROM sp_mac_ports mp "
+                    "SELECT mp.mac, s.name AS switch_name, s.host AS host, p.ifname FROM sp_mac_ports mp "
                     "JOIN sp_switches s ON s.id = mp.switch_id "
                     "LEFT JOIN sp_ports p ON p.switch_id = mp.switch_id AND p.ifindex = mp.ifindex "
                     "WHERE p.ifname LIKE %s OR p.ifalias LIKE %s ORDER BY mp.last_seen DESC LIMIT 200",
                     (like, like),
                 )
             for row in cur.fetchall():
-                # the MAC's own current subnet: Jen drops any row whose subnet_id is not in the
-                # caller's scope, so a None here made every result vanish for a restricted user
-                sid = _current_subnet_for_mac(row["mac"])
-                if not _can(sid):
+                # v1.1.2 - a row is a stored position and carries the SWITCH's subnet: the subnet whose information the row
+                # prints (the switch's name, the port). It used to report the CLIENT's current subnet, so Jen's own
+                # defence-in-depth filter passed a row whose text named a switch in a subnet the caller cannot see.
+                visible, _newest_hidden = positions_in_scope([row], smap, accessible_subnet_ids, all_subnets)
+                if not visible:
                     continue
                 out.append(
                     {
                         "title": row["mac"],
                         "subtitle": f"{row['switch_name']} · {row.get('ifname') or '?'}",
                         "href": url_for("switchport.index", mac=row["mac"]),
-                        "subnet_id": sid,
+                        "subnet_id": derive_subnet_id(row.get("host"), smap),
                     }
                 )
-                if len(out) >= 20:
+                if len(out) >= limit:
                     break
     except Exception as e:
         logger.error(f"Switch Port Locator: search provider failed: {e}")
@@ -771,17 +764,16 @@ def _when(value):
     return str(value) if value else ""
 
 
-def positions_in_scope(positions, subnet_map, accessible_subnet_ids, all_subnets):
+def positions_in_scope(positions, subnet_map, accessible_subnet_ids, all_subnets, can=None):
     """Pure: (visible, newest_hidden) for a MAC's stored positions, newest first. A position is a STORED object whose subnet is
     its SWITCH's - the one its management address is in - so each is judged on that and on nothing about where the client is
     now (v1.1.1). A switch addressed by hostname, or by an address in no Kea subnet, has no subnet and is for an unrestricted
     caller only. `newest_hidden` says the newest position was one the caller may not see, so the newest they CAN see is not
-    where the client is now - the card must not claim it is."""
-    visible = [
-        pos
-        for pos in positions or []
-        if in_scope(derive_subnet_id(pos.get("host"), subnet_map), accessible_subnet_ids, all_subnets)
-    ]
+    where the client is now - the card must not claim it is. This is the ONE judgement (v1.1.2): the page, the API, the search
+    provider and the Investigation card all call it. The caller's scope is `accessible_subnet_ids` / `all_subnets` (a provider
+    is handed them) or, for a session user or an API key, `can` - a predicate on a subnet id (None is never allow)."""
+    allowed = can or (lambda sid: in_scope(sid, accessible_subnet_ids, all_subnets))
+    visible = [pos for pos in positions or [] if allowed(derive_subnet_id(pos.get("host"), subnet_map))]
     newest_hidden = bool(positions) and not (visible and visible[0] is positions[0])
     return visible, newest_hidden
 
@@ -916,9 +908,11 @@ def index():
     query_mac = (request.args.get("mac") or "").strip()
     if query_mac:
         mac = _normalize_mac(query_mac)
-        if mac and _mac_visible(mac):
-            located = _locate_mac(mac)
-            located = {"mac": mac, **located} if located else {"mac": mac}
+        if mac:
+            # v1.1.2 - the newest position the caller may see, each judged by its own switch's subnet; where the MAC is
+            # now is no gate (it used to be, and then showed the newest position on ANY switch)
+            position = _locate_mac(mac)
+            located = {"mac": mac, **position} if position else {"mac": mac}
 
     return render_template(
         "switchport/index.html",
@@ -1093,11 +1087,10 @@ def _api_locate(mac):
     normalized = _normalize_mac(mac)
     if not normalized:
         return jsonify({"error": "invalid mac"}), 400
-    sid = _current_subnet_for_mac(normalized)
-    # a MAC with no attributable subnet is for an unrestricted key only — a scoped key read it as "allow"
-    if not api_key_can_access_subnet(g.api_key, sid):
-        return jsonify({"error": "subnet not accessible to this key"}), 403
-    row = _locate_mac(normalized)
+    # v1.1.2 - the same judgement as the page, with the KEY as the caller: the newest position on a switch whose subnet the
+    # key may see. A key that may see none of a MAC's positions gets the answer a MAC no switch has reported gets (a refusal
+    # keyed on the MAC's own subnet told a scoped key which MACs exist elsewhere, and judged the wrong thing)
+    row = _locate_mac(normalized, lambda sid: api_key_can_access_subnet(g.api_key, sid))
     if not row:
         return jsonify({"mac": normalized, "located": False})
     return jsonify(

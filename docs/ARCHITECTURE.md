@@ -234,6 +234,17 @@ host), applied to the *display* of stored data — so a favourite saved in B app
 moved to A, and a switch's last five positions were printed without asking where each switch was. The harness of each carries the B
 to A case, and the authorization matrix drives the three through a real `/client` request.
 
+**Stored object versus live act (v5.68.0-beta.12, Q147).** Q146 applied that rule to the Investigation card and left the same three plugins'
+pages, mutations, search providers and APIs judging by the client's current subnet; the rule now holds on every surface (the matrix
+drives list, add, delete, move, search and API in both directions with one shared moved-client fixture, `tests/stored_object_fixtures.py`).
+The distinction it needs is between two kinds of thing. A **stored object** (a favourite, a tracked device, a switch position) belongs to
+the subnet it was stored in and is judged on that alone; where the client is now is derived at read time and shown only to a caller who may
+see that subnet. A **live act** (a wake, a probe, a poll) acts on the device and is judged on where the device is now, because that is
+where it lands; and it never borrows what a hidden stored object holds - a wake for a host whose favourite the caller may not see goes ahead
+with no SecureOn password and no stored-subnet fallback, so no secret crosses a subnet boundary and nothing says the favourite exists.
+A plugin column that an event rewrites to follow the client is not a stored subnet; Presence's `pr_tracked.subnet_id` is the owner subnet,
+changed only by an audited move by a caller who can see both subnets.
+
 **Providers run under a budget Jen enforces (v5.68.0-beta.11, Q146).** `jen/services/provider_budget.py` runs every search and
 investigation provider on one shared pool of four threads inside a copy of the caller's request context (the same authenticated user
 the page loaded). The request waits at most one second for the group, shows a provider that has not answered as "unavailable (over

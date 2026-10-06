@@ -358,9 +358,23 @@ switch's subnet is the one its management address is in). That is the subnet a c
 **Where the client is now never widens that.** A favourite saved in subnet B is not shown to a caller scoped to A because the
 client's lease has since moved to A; the client's current subnet is a fact you may print beside the row ("now in ..."), and only
 when the caller may see that subnet too, because naming a subnet is access to it. A row with no subnet is for an unrestricted caller
-only, and so is a switch addressed by a hostname or by an address in no Kea subnet. The one place the current subnet is the right
-question is an **act on the live device** (a wake packet): that is judged on where the host is now, because that is where the packet
-goes. Wake & Actions, Presence and Switch Port Locator 1.1.1 are the reference: the pure `in_scope(subnet_id, accessible, all)` on the
+only, and so is a switch addressed by a hostname or by an address in no Kea subnet.
+
+**The rule holds on every surface, not only the card** (v5.68.0-beta.12): the list page, a view by id, add or relabel over an existing row,
+delete, a move, the search provider, the JSON API and the row action all judge a stored object on its own subnet. If one function answers
+"may this caller see the row?", every surface calls it; a page that judges by the client's current subnet while the card judges by the stored
+one is two plugins in one. A search row's `subnet_id` is the subnet of the object whose information the row prints (the switch's, the
+favourite's), never the client's. A plugin that keeps a subnet column and lets an event rewrite it to follow the client has no stored subnet
+at all: say what the column means (Presence's `pr_tracked.subnet_id` is the **owner** subnet, set when the device is tracked and changed only
+by an explicit move by a caller who can see both subnets, audited) and derive the current location at read time.
+
+**A live act is the other kind of thing, and it is kept apart.** A wake packet, a probe, a poll or a publish acts on a device, so it is
+judged on where the device is now, because that is where the act lands. It never borrows what a stored object holds for it: if the caller may
+not see the favourite, the favourite contributes nothing to the act - not its SecureOn password, not its stored subnet as a fallback - and
+the act goes ahead without it (a NIC that wants the password simply ignores the packet), with no word that a hidden object exists. Wake &
+Actions' `wake_inputs(favourite, current_subnet, can)` is the model: the same function serves the page, the row action and the API, with the
+session's or the key's own predicate. A test proves it by recording what reaches the packet builder. Wake & Actions 1.1.2, Switch Port Locator
+1.1.2 and Presence 1.2.0 are the reference, after 1.1.1 started them on the card: the pure `in_scope(subnet_id, accessible, all)` on the
 stored subnet, a harness test for the client that moved from B to A, and a position-by-position filter for rows (switch positions)
 whose subnet is derived rather than a column — filter *before* keeping the few you show, so hidden rows cannot push a visible one out.
 

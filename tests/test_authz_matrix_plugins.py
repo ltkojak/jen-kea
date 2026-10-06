@@ -67,7 +67,12 @@ N_MAC = "de:ad:be:ef:00:cd"  # a MAC Jen has never leased or reserved: no attrib
 NULL_LABEL = B_NAME + "-nullsubnet"  # contains the B marker
 WD_B, WD_NULL = 9101, 9102
 WOL_B, WOL_NULL = 9301, 9302
-WOL_MOVED = 9303  # stored subnet A (1), but the MAC (B_MAC) now resolves to subnet B (2)
+WOL_MOVED = (
+    9303  # stored subnet A (1), but its MAC (M_MAC) now resolves to subnet B (2) - a stored object judged by ITS subnet
+)
+M_MAC = (
+    "de:ad:be:ef:00:c1"  # NOT a leak marker: what is stored in A is the A caller's own data, and its MAC is part of it
+)
 DS_B = 9201
 SP_B = 9401
 PR_SINK = 9501
@@ -164,6 +169,7 @@ def plugin_data(plugin_app, db):
         cur.execute("DELETE FROM wd_state WHERE target_id IN (%s, %s)", (WD_B, WD_NULL))
         cur.execute("DELETE FROM wd_targets WHERE id IN (%s, %s)", (WD_B, WD_NULL))
         cur.execute("DELETE FROM wol_hosts WHERE id IN (%s, %s, %s)", (WOL_B, WOL_NULL, WOL_MOVED))
+        cur.execute("DELETE FROM devices WHERE mac=%s", (M_MAC,))
         cur.execute("DELETE FROM pr_state WHERE mac IN (%s, %s)", (B_MAC, N_MAC))
         cur.execute("DELETE FROM pr_tracked WHERE mac IN (%s, %s)", (B_MAC, N_MAC))
         cur.execute("DELETE FROM ds_records WHERE target_id=%s", (DS_B,))
@@ -188,11 +194,18 @@ def plugin_data(plugin_app, db):
             "(%s, %s, NULL, NULL, %s)",
             (WOL_B, B_MAC, B_NAME, WOL_NULL, N_MAC, NULL_LABEL),
         )
-        # WOL_MOVED: stored subnet 1 (A) from when it was added, but B2_MAC's CURRENT subnet
-        # (via the devices fallback, Jen's ONE precedence) is 2 (B) — a favourite that moved out.
+        # WOL_MOVED: stored subnet 1 (A) from when it was added, but M_MAC's CURRENT subnet
+        # (via the devices fallback, Jen's ONE precedence) is 2 (B) - a favourite whose host moved out. The favourite is
+        # a STORED object and stays the A caller's to list, edit and delete (v1.1.2); the WAKE is an act on the live host
+        # and is refused, because the host is now on a network the caller cannot see.
+        cur.execute(
+            "INSERT INTO devices (mac, last_ip, last_hostname, last_subnet_id, device_name, first_seen, last_seen) VALUES "
+            "(%s, '10.77.0.31', 'moved-host', 2, 'Moved to B', NOW(), NOW())",
+            (M_MAC,),
+        )
         cur.execute(
             "INSERT INTO wol_hosts (id, mac, ip, subnet_id, label) VALUES (%s, %s, NULL, 1, %s)",
-            (WOL_MOVED, B2_MAC, B_NAME + "-moved"),
+            (WOL_MOVED, M_MAC, "moved-out-stored-in-A"),
         )
         cur.execute(
             "INSERT INTO pr_tracked (mac, label, subnet_id, added_by) VALUES (%s, %s, 2, 'seed')", (B_MAC, B_NAME)
@@ -466,10 +479,10 @@ ROWS = [
         {},
     ),
     (
-        # v1.0.3 (Q100): a favourite stored under subnet A but whose MAC has since moved to B — an
-        # A-scoped admin used to still see and wake it (the stored value, never refreshed); it is
-        # judged on the CURRENT subnet now, the same rule Presence already applied to tracked devices.
-        "wol wake a favourite that moved out of the caller's subnet (stored A, current B)",
+        # v1.1.2 (Q147): a favourite stored under subnet A whose host has since moved to B is the A caller's
+        # to list and edit (a stored object, judged on ITS subnet), and NOT theirs to wake: a wake is an act on the
+        # live host and goes where the host is now, a network the caller cannot see.
+        "wol wake a favourite whose host moved out of the caller's subnet (stored A, current B)",
         "POST",
         f"/management/wol/favourites/{WOL_MOVED}/wake",
         None,
@@ -538,12 +551,14 @@ ROWS = [
     ),
     # ── Switch Port ──────────────────────────────────────────────────────────
     (
-        "switchport api locate a MAC with no attributable subnet (seen on a switch named with the B marker)",
+        # v1.1.2 (Q147): the position is on a B switch, so a key scoped to A is given what a MAC no switch has reported
+        # gets (200, located false) - not a refusal keyed on the MAC's own subnet - and not a word of the B switch
+        "switchport api locate a MAC whose only position is on a B switch (named with the B marker)",
         "GET",
         f"/api/v1/plugins/switchport/locate/{N_MAC}",
         None,
         KEYS,
-        {403, 404},
+        {200, 403, 404},
         (N_MAC,),
         None,
         {},
@@ -554,13 +569,13 @@ ROWS = [
         f"/api/v1/plugins/switchport/locate/{B_MAC}",
         None,
         KEYS,
-        {403, 404},
+        {200, 403, 404},
         (B_MAC,),
         None,
         {},
     ),
     (
-        "switchport page locating a MAC with no attributable subnet",
+        "switchport page locating a MAC whose only position is on a B switch",
         "GET",
         f"/network/switchport/?mac={N_MAC}",
         None,
@@ -1041,31 +1056,37 @@ class TestSearchProviderScopeIsAppliedBeforeTheLimit:
         so this needs the caller's own row to be genuinely absent from the naive top-20 window, not
         merely present among the (unbounded-by-subnet) candidates."""
         marker = "zzrow21sp"
-        switch_id = None
+        switch_ids = []
         with db.cursor() as cur:
+            # v1.1.2: a position belongs to its SWITCH's subnet. The caller's own match is on a switch addressed in subnet A
+            # (ranked oldest, last of 21); the 20 more recent rows are on a switch addressed in no Kea subnet, which a
+            # scoped caller may not see - under a naive unscoped LIMIT 20 they alone would fill the fetched window.
+            cur.execute("INSERT INTO sp_switches (name, host, community) VALUES ('zzrow21-mine', '10.98.1.9', 'x')")
+            mine_switch = cur.lastrowid
             cur.execute("INSERT INTO sp_switches (name, host, community) VALUES ('zzrow21-switch', '10.253.9.9', 'x')")
-            switch_id = cur.lastrowid
-            cur.execute("INSERT INTO sp_ports (switch_id, ifindex, ifname) VALUES (%s, 1, %s)", (switch_id, marker))
-            # A_MAC has a real lease in subnet 1 (the caller's own) — ranked oldest (last) of 21 rows.
+            hidden_switch = cur.lastrowid
+            switch_ids = [mine_switch, hidden_switch]
+            for sid in switch_ids:
+                cur.execute("INSERT INTO sp_ports (switch_id, ifindex, ifname) VALUES (%s, 1, %s)", (sid, marker))
             cur.execute(
                 "INSERT INTO sp_mac_ports (mac, switch_id, ifindex, last_seen) VALUES (%s, %s, 1, NOW() - INTERVAL 1 HOUR)",
-                (A_MAC, switch_id),
+                (A_MAC, mine_switch),
             )
-            # 20 never-seen MACs, unattributable to any subnet, all more recent: under the old
-            # unscoped LIMIT 20 these alone would fill the fetched window.
             cur.executemany(
                 "INSERT INTO sp_mac_ports (mac, switch_id, ifindex, last_seen) VALUES (%s, %s, 1, NOW())",
-                [(f"de:ad:be:ef:21:{i:02x}", switch_id) for i in range(20)],
+                [(f"de:ad:be:ef:21:{i:02x}", hidden_switch) for i in range(20)],
             )
         db.commit()
         try:
             body = self._search(pclient, db, marker)
             assert A_MAC in body, "switchport search: A_MAC (rank 21 of 21) was not found"
+            assert "de:ad:be:ef:21:" not in body, "positions on a switch the caller may not see must not be listed"
         finally:
             with db.cursor() as cur:
-                cur.execute("DELETE FROM sp_mac_ports WHERE switch_id=%s", (switch_id,))
-                cur.execute("DELETE FROM sp_ports WHERE switch_id=%s", (switch_id,))
-                cur.execute("DELETE FROM sp_switches WHERE id=%s", (switch_id,))
+                for sid in switch_ids:
+                    cur.execute("DELETE FROM sp_mac_ports WHERE switch_id=%s", (sid,))
+                    cur.execute("DELETE FROM sp_ports WHERE switch_id=%s", (sid,))
+                    cur.execute("DELETE FROM sp_switches WHERE id=%s", (sid,))
             db.commit()
 
 
