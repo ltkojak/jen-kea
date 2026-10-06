@@ -275,7 +275,7 @@
   {
     "id": "switchport",
     "name": "Switch Port Locator",
-    "version": "1.1.3",
+    "version": "1.1.4",
     "description": "Answers the one question Client Investigation can't: which switch port is this MAC on? Polls managed switches' MAC address tables over SNMP (BRIDGE-MIB / Q-BRIDGE-MIB) every 10 minutes, resolves the port name and alias (IF-MIB), and auto-detects uplinks by MAC count so trunk ports never look like where a device “lives”. Alerts when a known MAC's port changes.",
     "author": "Matthew Thibodeau",
     "requires_jen": "5.68.0",
@@ -319,8 +319,8 @@
         "sql": "ALTER TABLE sp_ports ADD COLUMN mac_count INT NOT NULL DEFAULT 0"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-switchport/raw/v1.1.3",
-    "sha256": "0319e511ddbe2c4e03171c193d74e1017e42fee83c61adeaefc319151388d845",
+    "download_url": "https://github.com/ltkojak/jen-plugin-switchport/raw/v1.1.4",
+    "sha256": "f97e48c72d297744c2ed3e0f72b821088dbfed38fa8f80ba29f41e9b26293078",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-switchport/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-switchport",
     "os_packages": [
@@ -331,7 +331,7 @@
   {
     "id": "wol",
     "name": "Wake & Actions",
-    "version": "1.1.3",
+    "version": "1.1.4",
     "description": "Wake-on-LAN from any lease, reservation, or device row, plus a favourites list for the hosts you wake often. Sends a standard magic packet (with optional SecureOn password) to both the subnet's directed broadcast and 255.255.255.255.",
     "author": "Matthew Thibodeau",
     "requires_jen": "5.68.0",
@@ -359,8 +359,8 @@
         "sql": "ALTER TABLE wol_hosts MODIFY COLUMN secureon TEXT NULL"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-wol/raw/v1.1.3",
-    "sha256": "9175b8db4ffaff73b3bda27ed5d6dbce29b68fabaa92b0f32c67f41e0273f1cb",
+    "download_url": "https://github.com/ltkojak/jen-plugin-wol/raw/v1.1.4",
+    "sha256": "66913294174c1f9b06aa33c6247a0edafb3ce27d1623431f3cc35d18c7afe92a",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-wol/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-wol",
     "plugin_api": 3
@@ -368,7 +368,7 @@
   {
     "id": "presence",
     "name": "Presence",
-    "version": "1.2.1",
+    "version": "1.2.2",
     "description": "Publishes tracked devices' online/offline state to Home Assistant (webhook), MQTT, or any HTTP endpoint, so the house can react to a phone joining or leaving. Opt-in per MAC — nothing is published for a device you haven't chosen to track.",
     "author": "Matthew Thibodeau",
     "requires_jen": "5.68.0",
@@ -402,8 +402,8 @@
         "sql": "CREATE TABLE IF NOT EXISTS pr_sinks (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100) NOT NULL, kind ENUM('ha_webhook','mqtt','http') NOT NULL, url VARCHAR(255) NOT NULL, credential TEXT, topic_prefix VARCHAR(100) NOT NULL DEFAULT 'jen/presence', retain TINYINT(1) NOT NULL DEFAULT 1, discovery TINYINT(1) NOT NULL DEFAULT 0, enabled TINYINT(1) NOT NULL DEFAULT 1, last_error VARCHAR(300) NULL)"
       }
     ],
-    "download_url": "https://github.com/ltkojak/jen-plugin-presence/raw/v1.2.1",
-    "sha256": "cfe4970f258e38856876e3c0576ed10731a2f66bcda6e772033a3f47c3c81d5c",
+    "download_url": "https://github.com/ltkojak/jen-plugin-presence/raw/v1.2.2",
+    "sha256": "9add7c6e1507eba7f0dc6b7a2002cb2120579c083d3862f92e4ae2b268a5cd7e",
     "changelog_url": "https://github.com/ltkojak/jen-plugin-presence/blob/main/CHANGELOG.md",
     "source_url": "https://github.com/ltkojak/jen-plugin-presence",
     "plugin_api": 3

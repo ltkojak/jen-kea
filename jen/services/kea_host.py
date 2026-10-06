@@ -251,7 +251,7 @@ JEN_HELPER_SHIPPED_VERSION = 7  # v7 (v5.66.0-beta.2, Q104): PATH hardening + pr
 # A helper below v7 never reports a build at all (record_helper_status's "build" stays
 # whatever it last was, usually None) — comparisons that matter fall back to version alone
 # in that case; see install_helper()'s already-check and helper_version_label() below.
-JEN_HELPER_SHIPPED_BUILD = 12  # v5.68.0-beta.14 (Q149): the unit is resolved BEFORE the binary is trusted, so a root-owned binary under User=_kea is validated as _kea (never root); build 11 (Q148): the validation copy is 0600 and the unit's own identity (Group=, SupplementaryGroups=) runs -t
+JEN_HELPER_SHIPPED_BUILD = 13  # v5.68.0-beta.15 (Q150): every file the helper writes is private from its first byte, the lock is taken for every op, a daemon-owned binary needs u+x, and remove-config exists; build 12 (Q149): the unit is resolved BEFORE the binary is trusted, so a root-owned binary under User=_kea is validated as _kea (never root); build 11 (Q148): the validation copy is 0600 and the unit's own identity (Group=, SupplementaryGroups=) runs -t
 # v5.66.0 (Q103) — the version whose "Update helper" click needs no legacy grant at all: at
 # or above this, install_helper() takes the signed path (helper_signature() + the `update`
 # op) instead of the pre-5.11.0 sudo-python3 engine. A host below this still gets one last

@@ -27,7 +27,8 @@ Public License v3. The source is at
   changes; nothing is installed on the Kea server except an optional
   helper script (`jen-kea-helper`) that runs only when Jen invokes it and
   performs a fixed set of operations: report its version, read, test and
-  apply a Kea config, control the Kea service, tail a Kea log, install
+  apply a Kea config, remove a config file Jen itself just created (the
+  undo of authoring a new one), control the Kea service, tail a Kea log, install
   the Kea packages, install a TLS certificate and update itself.
 - Jen is not a DNS server, and does not manage BIND or other DNS
   software directly — it can push DHCP hostnames into a handful of

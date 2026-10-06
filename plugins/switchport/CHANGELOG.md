@@ -1,5 +1,18 @@
 # Switch Port Locator Plugin — Changelog
 
+## [1.1.4] - 2026-10-07
+
+Fix. No change to what Jen needs: `requires_jen` stays 5.68.0.
+
+### Fixed: a move is announced in the subnet of the switches it names, not the client's
+
+The move alert (*aa:bb:… moved: sw-b Gi1/0/3 → sw-c Gi2/0/9*) and its Timeline event carried the subnet the client's lease is in, so
+the names and ports of switches in subnets B and C were told to a channel and a Timeline scoped to subnet A. Every read surface has judged
+a stored position by its switch's subnet since 1.1.2; the writer now does too. When both switches are in one attributable subnet, the
+alert and the event carry that subnet. When they are in different subnets, or either is addressed by a hostname or lies in no Kea subnet,
+the alert is sent only to channels with no subnet scope and the event is for unrestricted viewers: there is no per-scope redacted copy.
+The module's description of who sees what says so.
+
 ## [1.1.3] - 2026-10-07
 
 Fix. No change to what Jen needs: `requires_jen` stays 5.68.0.

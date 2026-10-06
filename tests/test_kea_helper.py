@@ -22,6 +22,8 @@ import shutil
 import stat
 import subprocess
 import sys
+import threading
+import time
 from importlib.machinery import SourceFileLoader
 
 import pytest
@@ -67,6 +69,11 @@ def _run(helper, op, payload, keep_version=False):
         parsed.pop("helper_version", None)
         parsed.pop("helper_build", None)
     return code, parsed, stderr.getvalue()
+
+
+def _leftover_temps(directory):
+    """Names of helper temp files left in `directory` (build 13: `.<name>.<16 hex>.jen_tmp`) - none must survive an op."""
+    return sorted(n for n in os.listdir(directory) if n.endswith(".jen_tmp"))
 
 
 class TestShape:
@@ -178,7 +185,7 @@ class TestVersion:
         assert code == 0
         assert out["ok"] is True
         assert out["helper_version"] == helper.HELPER_VERSION == 7
-        assert out["helper_build"] == helper.HELPER_BUILD == 12
+        assert out["helper_build"] == helper.HELPER_BUILD == 13
         assert out["python"].count(".") == 2
         assert err.startswith("jen-kea-helper: version ok")
 
@@ -226,6 +233,7 @@ class TestHelperVersionEnvelope:
             ("nonsense-op", {}),
             ("tail-log", {"path": "/etc/passwd"}),
             ("install-tls", {"service": "dhcp4", "files": {}}),
+            ("remove-config", {"service": "dhcp4", "path": "/tmp/evil.conf"}),
             ("update", {}),
         ],
     )
@@ -495,7 +503,7 @@ class TestTestConfig:
         _fake_kea_bin(helper, monkeypatch, tmp_path, "kea-dhcp4", exit_code=0)
         code, out, _ = _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}})
         assert out == {"ok": True}
-        assert not os.path.exists(p + ".jen_tmp")
+        assert _leftover_temps(tmp_path) == []
 
     def test_testerror_detail_and_tmp_removed(self, helper, tmp_path, monkeypatch):
         p = self._paths(helper, tmp_path, monkeypatch)
@@ -505,7 +513,7 @@ class TestTestConfig:
         code, out, _ = _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {}})
         assert out["error"] == "testerror"
         assert out["detail"] == "ERROR line one | ERROR line two"
-        assert not os.path.exists(p + ".jen_tmp")
+        assert _leftover_temps(tmp_path) == []
 
     def test_tlsmissing_checked_before_the_binary_runs(self, helper, tmp_path, monkeypatch):
         p = self._paths(helper, tmp_path, monkeypatch)
@@ -516,7 +524,7 @@ class TestTestConfig:
             {"service": "dhcp4", "path": p, "config": {}, "tls_paths": [["/nope/cert.pem", "file"]]},
         )
         assert out == {"ok": False, "error": "tlsmissing", "path": "/nope/cert.pem"}
-        assert not os.path.exists(p + ".jen_tmp")
+        assert _leftover_temps(tmp_path) == []
 
 
 @win
@@ -586,7 +594,10 @@ class TestRunAsTheDaemonsOwnAccount:
         _code, out, _ = _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}})
         assert out == {"ok": True}
         ((cmd, kw),) = calls
-        assert cmd == [binary, "-t", p + ".jen_tmp"]
+        assert cmd[:2] == [binary, "-t"]
+        assert os.path.dirname(cmd[2]) == os.path.dirname(p) and re.fullmatch(
+            r"\.kea-dhcp4\.conf\.[0-9a-f]{16}\.jen_tmp", os.path.basename(cmd[2])
+        ), "a unique name in the config's own directory, never the fixed `<conf>.jen_tmp` two helpers would share"
         assert (kw["user"], kw["group"], kw["extra_groups"]) == (105, 106, []), (
             "the daemon's own account, no supplementary groups"
         )
@@ -662,24 +673,24 @@ class TestRunAsTheDaemonsOwnAccount:
         assert out == {"ok": False, "error": "missingbinary", "binary": "kea-dhcp4"}
 
     @pytest.mark.parametrize("umask", [0o077, 0o022, 0o000])
-    def test_the_validation_copy_is_0600_and_the_daemon_accounts_own_when_it_runs_as_that_account(
+    def test_the_validation_copy_is_root_owned_0640_readable_not_writable_by_the_daemons_group(
         self, helper, tmp_path, monkeypatch, umask
     ):
-        """v5.68.0-beta.13 (Q148). The copy carries the database credentials. It used to be 0644 (so the daemon's account could read it),
-        which made another local account's access depend on /etc/kea's mode on the package in use; it is now the account's own and 0600,
-        whatever the umask - the minimum the validator needs."""
+        """v5.68.0-beta.13 (Q148) made the copy the daemon account's own 0600; Q150 (build 13) takes the ownership back: it is
+        `root:<the daemon's effective gid>` 0640 - READABLE by the account that runs `-t` (through its group), not WRITABLE by it, so that
+        account cannot change the config between its write and its validation. It is created 0600 and only becomes 0640 once complete."""
         p, _binary, calls = self._setup(helper, tmp_path, monkeypatch)
         old = os.umask(umask)
         try:
             _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}})
         finally:
             os.umask(old)
-        assert calls[0][1]["_seen"]["mode"] == 0o600, "nobody but the account that runs -t needs to read what -t reads"
-        assert self.chowns == [(self.KEA_UID, self.KEA_GID)], (
-            "owned by the account the validator runs as, and its group"
+        assert calls[0][1]["_seen"]["mode"] == 0o640, (
+            "group-readable for the account that runs -t, writable by nobody but root"
         )
+        assert self.chowns == [(0, self.KEA_GID)], "owned by ROOT, group = the daemon's effective gid (never its uid)"
         assert (calls[0][1]["user"], calls[0][1]["group"]) == (self.KEA_UID, self.KEA_GID)
-        assert not os.path.exists(p + ".jen_tmp")
+        assert _leftover_temps(tmp_path) == []
 
     @pytest.mark.parametrize("umask", [0o077, 0o022])
     def test_the_validation_copy_is_root_0600_when_it_runs_as_root(self, helper, tmp_path, monkeypatch, umask):
@@ -692,15 +703,43 @@ class TestRunAsTheDaemonsOwnAccount:
         assert calls[0][1]["_seen"]["mode"] == 0o600
         assert self.chowns == [], "run as root: the file stays root's own (nobody needs to chown it)"
         assert "user" not in calls[0][1]
-        assert not os.path.exists(p + ".jen_tmp")
+        assert _leftover_temps(tmp_path) == []
 
-    def test_a_stale_copy_with_a_looser_mode_is_tightened_not_reused(self, helper, tmp_path, monkeypatch):
+    def test_a_planted_file_or_symlink_at_the_old_fixed_name_is_never_used_or_followed(
+        self, helper, tmp_path, monkeypatch
+    ):
         p, _binary, calls = self._setup(helper, tmp_path, monkeypatch)
         stale = pathlib.Path(p + ".jen_tmp")
         stale.write_text("old credentials")
         os.chmod(stale, 0o666)
+        victim = tmp_path / "victim"
+        victim.write_text("keep")
+        os.symlink(victim, tmp_path / ".kea-dhcp4.conf.jen_tmp")
         _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}})
-        assert calls[0][1]["_seen"]["mode"] == 0o600 and not stale.exists()
+        assert calls[0][1]["_seen"]["mode"] == 0o640, "a new O_EXCL file, not the planted one"
+        assert stale.read_text() == "old credentials" and victim.read_text() == "keep"
+
+    def test_the_daemon_owned_binary_needs_its_owner_execute_bit(self, helper, tmp_path, monkeypatch):
+        """Build 13 (Q150): `os.access(X_OK)` is ROOT's answer - true when ANY class may execute - so a `_kea`-owned file with o+x and no
+        u+x passed and then failed to exec as `_kea`. Refused before exec, with the reason."""
+        p, _binary, calls = self._setup(helper, tmp_path, monkeypatch, mode=0o705)
+        _code, out, _ = _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}})
+        assert out == {
+            "ok": False,
+            "error": "missingbinary",
+            "binary": "kea-dhcp4",
+            "detail": "is owned by a system account that has no execute permission on it",
+        }
+        assert calls == [], "never exec'd"
+
+    def test_a_root_owned_binary_run_as_root_needs_its_owner_execute_bit_too(self, helper, tmp_path, monkeypatch):
+        p, binary, calls = self._setup(helper, tmp_path, monkeypatch, uid=0, mode=0o755, root_owned=True)
+        os.chmod(
+            binary, 0o655
+        )  # r-x for group and other, nothing for the owner: root could exec it, by a bit it is not using
+        monkeypatch.setattr(helper.os, "access", lambda path, mode: True)
+        _code, out, _ = _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}})
+        assert out["error"] == "missingbinary" and "no owner execute permission" in out["detail"] and calls == []
 
     def test_the_clean_environment_has_a_home(self, helper):
         assert helper._CLEAN_ENV == {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8", "HOME": "/"}
@@ -719,6 +758,21 @@ class TestRunAsTheDaemonsOwnAccount:
                 ),
             )
             assert helper._daemon_bin_ok(str(f), uid) is expect, uid
+
+    @pytest.mark.parametrize(
+        "mode,expect", [(0o750, True), (0o700, True), (0o705, False), (0o055, False), (0o640, False)]
+    )
+    def test_the_owner_execute_bit_is_required(self, helper, monkeypatch, tmp_path, mode, expect):
+        import types
+
+        f = tmp_path / "bin"
+        f.write_text("x")
+        monkeypatch.setattr(
+            os,
+            "lstat",
+            lambda path, *a, **k: types.SimpleNamespace(st_mode=stat.S_IFREG | mode, st_uid=105, st_gid=106),
+        )
+        assert helper._daemon_bin_ok(str(f), 105) is expect, oct(mode)
 
     def test_unit_account_reads_the_units_user_and_ignores_root_and_unknown_accounts(self, helper, monkeypatch):
         import pwd
@@ -1000,13 +1054,12 @@ class TestApplyConfig:
     def test_chown_calls_made_for_new_file(self, helper, tmp_path, monkeypatch):
         p = self._setup(helper, tmp_path, monkeypatch)
         chowns = []
-
-        def spy(path, uid, gid):
-            chowns.append((str(path), uid, gid))
-
-        monkeypatch.setattr(os, "chown", spy)
+        monkeypatch.setattr(os, "fchown", lambda fd, uid, gid: chowns.append((uid, gid)))
         _run(helper, "apply-config", {"service": "dhcp4", "path": p, "config": {}})
-        assert (p + ".jen_apply_tmp", 0, 0) in chowns
+        assert chowns == [(0, 0)], (
+            "root:root, applied to the DESCRIPTOR (build 13), not to a path another process could swap"
+        )
+        assert stat.S_IMODE(os.stat(p).st_mode) == 0o644
 
     # ── v2: optimistic concurrency ─────────────────────────────────────────
 
@@ -1049,7 +1102,7 @@ class TestApplyConfig:
         assert out["ok"] is False and out["error"] == "conflict"
         assert out["sha256"] == hashlib.sha256(original).hexdigest()
         assert p.read_bytes() == original  # file untouched
-        assert not (pathlib.Path(str(p) + ".jen_apply_tmp")).exists()
+        assert _leftover_temps(tmp_path) == []
         assert not marker.exists()  # kea-dhcpX -t was never invoked
 
     def test_expect_empty_string_on_missing_file_applies(self, helper, tmp_path, monkeypatch):
@@ -1067,6 +1120,13 @@ class TestApplyConfig:
             {"service": "dhcp4", "path": p, "config": {"Dhcp4": {"new": 1}}, "expect_sha256": ""},
         )
         assert out["ok"] is False and out["error"] == "conflict"
+
+    def test_a_lock_file_is_created_for_every_apply_whether_or_not_expect_is_given(self, helper, tmp_path, monkeypatch):
+        p = self._setup(helper, tmp_path, monkeypatch)
+        _run(
+            helper, "apply-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}}
+        )  # no expect_sha256 at all
+        assert pathlib.Path(p + ".jen_lock").exists()
 
     def test_a_lock_file_is_created_when_expect_is_given(self, helper, tmp_path, monkeypatch):
         p = self._setup(helper, tmp_path, monkeypatch, existing={"Dhcp4": {}})
@@ -1238,7 +1298,7 @@ class TestInstallTls:
         for svc in ("dhcp4", "dhcp6", "d2"):
             _code, out, _ = _run(helper, "install-tls", {"service": svc, "files": _tls_files()})
             assert out["ok"] is True
-        assert sorted(os.listdir(tls_root)) == ["d2", "dhcp4", "dhcp6"]
+        assert sorted(n for n in os.listdir(tls_root) if not n.endswith(".jen_lock")) == ["d2", "dhcp4", "dhcp6"]
 
     @win
     def test_modes_key_0640_certs_0644_dir_0755(self, helper, tls_root):
@@ -1782,3 +1842,356 @@ class TestBoundedTail:
         f.write_text("a\nb\n")
         assert _run(helper, "tail-log", {"path": str(f), "lines": 999999})[1]["lines"] == ["a", "b"]
         assert _run(helper, "tail-log", {"path": str(f), "lines": 0})[1]["lines"] == ["b"]  # clamped to >= 1
+
+
+# ── build 13 (v5.68.0-beta.15, Q150): private from the first byte, the lock everywhere, remove-config ─────────────────────────────────
+
+
+class _DirWatcher(threading.Thread):
+    """Stats every entry of `directory` in a tight loop and records the modes it ever sees, by name (a temp file is just "temp")."""
+
+    def __init__(self, directory):
+        super().__init__(daemon=True)
+        self.directory, self.stop, self.seen, self.samples = directory, threading.Event(), {}, 0
+
+    def run(self):
+        while not self.stop.is_set():
+            try:
+                with os.scandir(self.directory) as it:
+                    for entry in it:
+                        try:
+                            mode = stat.S_IMODE(entry.stat(follow_symlinks=False).st_mode)
+                        except FileNotFoundError:
+                            continue
+                        kind = "temp" if entry.name.startswith(".") and entry.name.endswith(".jen_tmp") else entry.name
+                        self.seen.setdefault(kind, set()).add(mode)
+                        self.samples += 1
+            except FileNotFoundError:
+                pass
+
+    def watch(self, work, rounds):
+        self.start()
+        try:
+            for i in range(rounds):
+                work(i)
+        finally:
+            self.stop.set()
+            self.join(5)
+
+
+def _say(request, line):
+    reporter = request.config.pluginmanager.getplugin("terminalreporter")
+    if reporter is not None:
+        reporter.write_line("")
+        reporter.write_line(line)
+
+
+@pytest.fixture
+def wide_window(monkeypatch):
+    """A 1 ms pause in every fsync: the window between "written" and "final mode" is wide enough that a polling watcher cannot miss it."""
+    real = os.fsync
+
+    def slow(fd):
+        time.sleep(0.001)
+        real(fd)
+
+    monkeypatch.setattr(os, "fsync", slow)
+
+
+@win
+class TestEveryFileTheHelperWritesIsPrivateAtEveryInstant:
+    """Q150 (build 13). A watcher stats every entry of the directory in a tight loop while the real op runs 120 times under umask 022
+    (so the old `open()` would have produced 0644 and be seen). A file that ends 0600 is only ever seen 0600; one that ends 0640 is seen
+    0600 until it is complete."""
+
+    ROUNDS = 120
+
+    @pytest.fixture(autouse=True)
+    def _umask(self, wide_window):
+        old = os.umask(0o022)
+        yield
+        os.umask(old)
+
+    def _report(self, request, label, watcher):
+        observed = {k: sorted(oct(m) for m in v) for k, v in sorted(watcher.seen.items())}
+        _say(
+            request,
+            f"[helper private-write watcher] {label}: {watcher.samples} stats over {self.ROUNDS} runs; modes seen {observed}",
+        )
+        assert watcher.samples > 0
+
+    def test_replacing_a_0600_config_is_never_readable_by_another_uid_at_any_instant(
+        self, helper, tmp_path, monkeypatch, request
+    ):
+        conf_dir = tmp_path / "etc"
+        conf_dir.mkdir()
+        conf = conf_dir / "kea-dhcp4.conf"
+        conf.write_text(json.dumps({"Dhcp4": {"password": "s3cret"}}))
+        os.chmod(conf, 0o600)
+        monkeypatch.setattr(helper, "_ALLOWED_CONF_DIRS", (str(conf_dir),))
+        _fake_kea_bin(helper, monkeypatch, tmp_path, "kea-dhcp4", exit_code=0)
+        w = _DirWatcher(str(conf_dir))
+        w.watch(
+            lambda i: _run(
+                helper,
+                "apply-config",
+                {"service": "dhcp4", "path": str(conf), "config": {"Dhcp4": {"password": f"s3cret-{i}"}}},
+            ),
+            self.ROUNDS,
+        )
+        self._report(request, "apply-config over a 0600 config", w)
+        for kind, modes in w.seen.items():
+            assert modes <= {0o600}, f"{kind} was seen with mode(s) {sorted(oct(m) for m in modes - {0o600})}"
+        assert "temp" in w.seen, "the watcher never caught a temp file in flight: the test has no power"
+        assert json.loads(conf.read_text())["Dhcp4"]["password"] == f"s3cret-{self.ROUNDS - 1}"
+
+    def test_the_backup_of_a_0600_config_is_private_from_its_first_byte_too(
+        self, helper, tmp_path, monkeypatch, request
+    ):
+        conf_dir = tmp_path / "etc"
+        conf_dir.mkdir()
+        conf = conf_dir / "kea-dhcp4.conf"
+        conf.write_text(json.dumps({"Dhcp4": {"password": "s3cret"}}))
+        os.chmod(conf, 0o600)
+        monkeypatch.setattr(helper, "_ALLOWED_CONF_DIRS", (str(conf_dir),))
+        _fake_kea_bin(helper, monkeypatch, tmp_path, "kea-dhcp4", exit_code=0)
+        w = _DirWatcher(str(conf_dir))
+        w.watch(
+            lambda i: _run(
+                helper, "apply-config", {"service": "dhcp4", "path": str(conf), "config": {"Dhcp4": {"n": i}}}
+            ),
+            self.ROUNDS,
+        )
+        self._report(request, "the .jen_backup copy", w)
+        assert w.seen.get("kea-dhcp4.conf.jen_backup") == {0o600}, (
+            "shutil.copy2 created it with the umask, then chmod'ed it"
+        )
+
+    def test_the_validation_copy_is_never_group_or_other_writable_and_world_unreadable(
+        self, helper, tmp_path, monkeypatch, request
+    ):
+        conf_dir = tmp_path / "etc"
+        conf_dir.mkdir()
+        monkeypatch.setattr(helper, "_ALLOWED_CONF_DIRS", (str(conf_dir),))
+        _fake_kea_bin(helper, monkeypatch, tmp_path, "kea-dhcp4", exit_code=0)
+        w = _DirWatcher(str(conf_dir))
+        w.watch(
+            lambda i: _run(
+                helper,
+                "test-config",
+                {"service": "dhcp4", "path": str(conf_dir / "kea-dhcp4.conf"), "config": {"Dhcp4": {"i": i}}},
+            ),
+            self.ROUNDS,
+        )
+        self._report(request, "the -t validation copy (run as root: stays 0600)", w)
+        assert w.seen["temp"] == {0o600}
+
+    def test_server_key_is_0600_while_written_and_0640_only_when_complete(self, helper, tmp_path, monkeypatch, request):
+        root = tmp_path / "tls"
+        monkeypatch.setattr(helper, "_TLS_ROOT", str(root))
+        monkeypatch.setattr(helper, "_daemon_group", lambda service: ("root", 0))
+        service_dir = root / "dhcp4"
+        os.makedirs(service_dir)
+        w = _DirWatcher(str(service_dir))
+        w.watch(lambda i: _run(helper, "install-tls", {"service": "dhcp4", "files": _tls_files()}), self.ROUNDS)
+        self._report(request, "install-tls (server.key final 0640, certs 0644)", w)
+        assert w.seen["server.key"] == {0o640}, "the final name is only ever the complete, 0640 file"
+        assert w.seen["server.crt"] == {0o644} and w.seen["ca.crt"] == {0o644}
+        assert w.seen["temp"] <= {0o600, 0o640, 0o644}
+        # the PRIVATE KEY is the thing that must never be world-readable before it is complete: the key's own temp is 0600 until the
+        # fchmod, which is the last thing before the replace. (Certificates are public: their temps reach 0644 the same way.)
+        assert 0o600 in w.seen["temp"]
+
+
+@win
+class TestTheLockIsTakenForEveryOp:
+    """Build 13: `<conf>.jen_lock` for EVERY test-config, apply-config, remove-config (and `<tls dir>.jen_lock` for install-tls)."""
+
+    @pytest.fixture
+    def taken(self, helper, monkeypatch):
+        import contextlib
+
+        paths = []
+        real = helper._locked
+
+        @contextlib.contextmanager
+        def spy(path):
+            paths.append(path)
+            with real(path):
+                yield
+
+        monkeypatch.setattr(helper, "_locked", spy)
+        return paths
+
+    def test_test_config_and_apply_config_and_remove_config_lock_their_path(self, helper, tmp_path, monkeypatch, taken):
+        monkeypatch.setattr(helper, "_ALLOWED_CONF_DIRS", (str(tmp_path),))
+        _fake_kea_bin(helper, monkeypatch, tmp_path, "kea-dhcp4", exit_code=0)
+        p = str(tmp_path / "kea-dhcp4.conf")
+        _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}})
+        _run(helper, "apply-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}})
+        _run(helper, "remove-config", {"service": "dhcp4", "path": p, "expect_sha256": "0" * 64})
+        assert taken == [p, p, p]
+
+    def test_install_tls_locks_the_service_directory(self, helper, tmp_path, monkeypatch, taken):
+        root = tmp_path / "tls"
+        monkeypatch.setattr(helper, "_TLS_ROOT", str(root))
+        monkeypatch.setattr(helper, "_daemon_group", lambda service: ("root", 0))
+        _run(helper, "install-tls", {"service": "dhcp4", "files": _tls_files()})
+        assert taken == [str(root / "dhcp4")]
+
+    def test_a_held_lock_blocks_the_other_ops_until_it_is_released(self, helper, tmp_path, monkeypatch):
+        """A real `flock`: while an apply is inside its (slow) validation, a test-config of the same file does not even start `kea -t`."""
+        import fcntl
+
+        monkeypatch.setattr(helper, "_ALLOWED_CONF_DIRS", (str(tmp_path),))
+        d = _fake_kea_bin(helper, monkeypatch, tmp_path, "kea-dhcp4", exit_code=0)
+        started, finished = tmp_path / "started", tmp_path / "finished"
+        stub = pathlib.Path(d) / "kea-dhcp4"
+        stub.write_text(f"#!/bin/sh\ntouch {started}\nsleep 0.6\ntouch {finished}\nexit 0\n")
+        stub.chmod(0o755)
+        p = str(tmp_path / "kea-dhcp4.conf")
+        result = {}
+        t = threading.Thread(
+            target=lambda: result.update(
+                apply=_run(helper, "apply-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}})[1]
+            )
+        )
+        t.start()
+        for _ in range(100):
+            if started.exists():
+                break
+            time.sleep(0.02)
+        assert started.exists() and not finished.exists(), "the apply is inside its validation"
+        fd = os.open(p + ".jen_lock", os.O_RDWR)
+        try:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # the apply holds it
+        finally:
+            os.close(fd)
+        t.join(10)
+        assert result["apply"]["ok"] is True
+
+
+@win
+class TestConcurrentOpsOnOnePath:
+    """Q150: a fixed `<conf>.jen_tmp` was shared by two helper processes on one config. Each op now has its own unique file."""
+
+    def _stub_that_reports_what_it_was_given(self, helper, monkeypatch, tmp_path):
+        d = _fake_kea_bin(helper, monkeypatch, tmp_path, "kea-dhcp4", exit_code=1)
+        stub = pathlib.Path(d) / "kea-dhcp4"
+        # prints the validated file's own content as its ERROR line (so the op's `detail` says WHAT it validated), after a pause
+        # long enough for two runs to overlap
+        stub.write_text('#!/bin/sh\nsleep 0.3\necho "ERROR saw=$(cat "$2" | tr -d \' \\n\')"\nexit 1\n')
+        stub.chmod(0o755)
+
+    def test_two_concurrent_test_configs_with_different_candidates_each_validate_their_own(
+        self, helper, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(helper, "_ALLOWED_CONF_DIRS", (str(tmp_path),))
+        self._stub_that_reports_what_it_was_given(helper, monkeypatch, tmp_path)
+        p = str(tmp_path / "kea-dhcp4.conf")
+        results = {}
+
+        def run(marker):
+            results[marker] = _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {"m": marker}})[1]
+
+        threads = [threading.Thread(target=run, args=(m,)) for m in ("MARKER-A", "MARKER-B")]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(15)
+        for mine, other in (("MARKER-A", "MARKER-B"), ("MARKER-B", "MARKER-A")):
+            detail = results[mine]["detail"]
+            assert mine in detail and other not in detail, f"{mine} validated {detail!r}"
+        assert _leftover_temps(tmp_path) == []
+
+    def test_a_test_config_started_during_an_apply_waits_for_it(self, helper, tmp_path, monkeypatch):
+        monkeypatch.setattr(helper, "_ALLOWED_CONF_DIRS", (str(tmp_path),))
+        d = _fake_kea_bin(helper, monkeypatch, tmp_path, "kea-dhcp4", exit_code=0)
+        log = tmp_path / "order.log"
+        stub = pathlib.Path(d) / "kea-dhcp4"
+        stub.write_text(
+            f'#!/bin/sh\necho "start $(tr -d \' \\n\' < "$2")" >> {log}\nsleep 0.3\necho "end" >> {log}\nexit 0\n'
+        )
+        stub.chmod(0o755)
+        p = str(tmp_path / "kea-dhcp4.conf")
+        a = threading.Thread(
+            target=lambda: _run(helper, "apply-config", {"service": "dhcp4", "path": p, "config": {"m": "APPLY"}})
+        )
+        a.start()
+        for _ in range(100):
+            if log.exists():
+                break
+            time.sleep(0.02)
+        _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {"m": "TEST"}})
+        a.join(10)
+        lines = log.read_text().splitlines()
+        assert [ln.split()[0] for ln in lines] == ["start", "end", "start", "end"], (
+            "the two validations never overlapped"
+        )
+        assert "APPLY" in lines[0] and "TEST" in lines[2]
+
+
+@win
+class TestRemoveConfig:
+    """Build 13: the rollback of an Author Kea Config target that had no file. Removes a config only if it still is the file Jen wrote."""
+
+    def _setup(self, helper, tmp_path, monkeypatch, content=None):
+        monkeypatch.setattr(helper, "_ALLOWED_CONF_DIRS", (str(tmp_path),))
+        p = tmp_path / "kea-dhcp6.conf"
+        if content is not None:
+            p.write_text(content)
+        return p
+
+    def _sha(self, p):
+        import hashlib
+
+        return hashlib.sha256(p.read_bytes()).hexdigest()
+
+    def test_is_registered(self, helper):
+        assert "remove-config" in helper._OPS
+
+    def test_removes_the_file_when_the_sha_matches(self, helper, tmp_path, monkeypatch):
+        p = self._setup(helper, tmp_path, monkeypatch, "{}")
+        code, out, _ = _run(
+            helper, "remove-config", {"service": "dhcp6", "path": str(p), "expect_sha256": self._sha(p)}
+        )
+        assert out == {"ok": True, "removed": True} and not p.exists()
+
+    def test_leaves_a_file_somebody_replaced_alone(self, helper, tmp_path, monkeypatch):
+        p = self._setup(helper, tmp_path, monkeypatch, "{}")
+        wrote = self._sha(p)
+        p.write_text('{"someone": "else"}')
+        _code, out, _ = _run(helper, "remove-config", {"service": "dhcp6", "path": str(p), "expect_sha256": wrote})
+        assert out["ok"] is False and out["error"] == "conflict" and out["sha256"] == self._sha(p) and p.exists()
+
+    def test_an_already_absent_file_is_the_state_wanted(self, helper, tmp_path, monkeypatch):
+        p = self._setup(helper, tmp_path, monkeypatch)
+        _code, out, _ = _run(helper, "remove-config", {"service": "dhcp6", "path": str(p), "expect_sha256": "a" * 64})
+        assert out == {"ok": True, "removed": False}
+
+    @pytest.mark.parametrize("sha", [None, "", "short", "G" * 64, "A" * 64, 123])
+    def test_a_missing_or_malformed_sha_is_never_a_license_to_delete(self, helper, tmp_path, monkeypatch, sha):
+        p = self._setup(helper, tmp_path, monkeypatch, "{}")
+        payload = {"service": "dhcp6", "path": str(p)}
+        if sha is not None:
+            payload["expect_sha256"] = sha
+        _code, out, _ = _run(helper, "remove-config", payload)
+        assert out == {"ok": False, "error": "not-allowed"} and p.exists()
+
+    def test_the_path_wall_is_the_same_as_apply_config(self, helper, tmp_path, monkeypatch):
+        victim = tmp_path / "kea-dhcp6.conf"
+        victim.write_text("{}")
+        # not under an allowed directory
+        _code, out, _ = _run(
+            helper, "remove-config", {"service": "dhcp6", "path": str(victim), "expect_sha256": self._sha(victim)}
+        )
+        assert out == {"ok": False, "error": "not-allowed"} and victim.exists()
+        monkeypatch.setattr(helper, "_ALLOWED_CONF_DIRS", (str(tmp_path),))
+        for bad in ("../x.conf", "/etc/passwd", str(tmp_path / "other.txt")):
+            _code, out, _ = _run(helper, "remove-config", {"service": "dhcp6", "path": bad, "expect_sha256": "a" * 64})
+            assert out == {"ok": False, "error": "not-allowed"}, bad
+        _code, out, _ = _run(
+            helper, "remove-config", {"service": "bogus", "path": str(victim), "expect_sha256": "a" * 64}
+        )
+        assert out == {"ok": False, "error": "not-allowed"}

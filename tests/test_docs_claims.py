@@ -70,6 +70,7 @@ class TestTheHelpersOperationsAreAllNamedOnTheAboutPage:
         "read-config": "read, test and\n  apply a Kea config",
         "test-config": "read, test and\n  apply a Kea config",
         "apply-config": "read, test and\n  apply a Kea config",
+        "remove-config": "remove a config file Jen itself just created",
         "service": "control the Kea service",
         "tail-log": "tail a Kea log",
         "install-package": "install\n  the Kea packages",

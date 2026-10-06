@@ -186,3 +186,18 @@ shows "v7 (build 11, build 12 available)"): build 12 runs the config check as th
 build 11 checked as root; a unit whose `User=` or `Group=` the host has no account for is refused with the reason on the Servers page. The by-hand install line
 shown in the flash and the docs embeds the new build. A damaged investigation-logging marker is now reported on the next scan instead of at its deadline, and the
 Servers page says where to find the old values (Config history) and offers **Forget** once you have put them back.
+
+## Press Update helper again: private files and authoring that undoes itself; the service now runs with a private umask
+
+Migration 33 now checks its own end state (5.68.0-beta.15): a box whose upgrade to 5.68.0-beta.14 was interrupted between its two schema steps finishes the
+second one on the next start instead of recording the migration as done with the old key still in place; nothing else changes for a box that upgraded cleanly.
+`jen.config`, the SSL private key and the encryption keys are now written private from their first byte, and the service runs with `UMask=0077`: the unit file is
+re-rendered by the next `sudo ./install.sh` or the in-app update (Docker and a hand-run server get the same umask from `run.py`). Three plugin updates come with
+it, offered under Settings → Plugins: Wake & Actions 1.1.4 and Presence 1.2.2 (adding, tracking, moving or removing an item now judges and writes in one step, so
+an item another admin changes at the same moment is never overwritten) and Switch Port Locator 1.1.4 (a switch-move alert and its Timeline entry go to the
+subnet of the switches it names, and to unrestricted channels only when they are in different subnets). Press **Update helper** on every Kea host (Settings → Kea
+→ SSH shows "v7 (build 12, build 13 available)"): build 13 writes every file it creates private from its first byte, makes the copy of your config that it checks
+root-owned and not writable by Kea's account, takes its lock for every operation, requires the execute permission of Kea's account on a Kea binary that account
+owns, and adds the operation that lets Jen undo an authored config. **Settings → Kea → Author a starting config** now writes every server or none, guards each
+write with the file the preview showed (so *overwrite* replaces the file you previewed), and records Jen's own subnets only when every server succeeded. The by-hand
+install line shown in the flash and the docs embeds the new build.

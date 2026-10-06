@@ -89,6 +89,14 @@ What a scoped caller is shown is built from the positions it may see alone, so i
 identical with or without a hidden one (v1.1.3). The subnet is derived server-side; a
 value the caller types is never the subject of a decision.
 
+**A move is announced in the subnet of the data it carries (v1.1.4).** The alert and the
+Timeline event name two switches and two ports; they belong to the subnets of those
+switches, not to the one the client's lease happens to be in. Both switches in ONE
+attributable subnet: the alert and the event carry that subnet. Switches in different
+subnets, or either one unattributable (hostname-addressed, in no Kea subnet): the alert
+goes only to channels with no subnet scope (`scoped=True`) and the event is for
+unrestricted viewers - there is no per-scope redacted copy.
+
 **The community string is an argv.** net-snmp's `snmpbulkwalk -c` takes
 the SNMPv2c community on the command line, so it is visible in `ps` on the
 Jen host for the few seconds a walk runs. net-snmp has no alternative for
@@ -619,14 +627,40 @@ _MOVED_ALERT_TYPE = "switchport_moved"
 _MOVED_TEMPLATE = "ℹ️ <b>{mac}</b> moved: {old} → {new}"
 
 
+def _switch_subnet_by_id(switch_id):
+    """The subnet the switch with this id is in (its management address), or None - also None for a switch that is gone."""
+    db = None
+    try:
+        db = _get_db()
+        with db.cursor() as cur:
+            cur.execute("SELECT host FROM sp_switches WHERE id=%s", (switch_id,))
+            row = cur.fetchone()
+        return _switch_subnet(row["host"]) if row else None
+    except Exception:
+        return None
+    finally:
+        if db:
+            db.close()
+
+
+def _move_subnet(old_pos, new_pos):
+    """The one subnet a move belongs to (v1.1.4): the subnet BOTH switches are in, else None. A move names two switches and two
+    ports - data of those switches' subnets, whatever subnet the client's lease is in - so one shared attributable subnet owns it,
+    and anything else (different subnets, either switch unattributable) belongs to unrestricted viewers only."""
+    old_subnet = _switch_subnet_by_id(old_pos[0])
+    new_subnet = _switch_subnet_by_id(new_pos[0])
+    return old_subnet if old_subnet is not None and old_subnet == new_subnet else None
+
+
 def _emit_move(mac, old_pos, new_pos):
     old_label = _port_label(*old_pos)
     new_label = _port_label(*new_pos)
-    subnet_id = _current_subnet_for_mac(mac)
+    subnet_id = _move_subnet(old_pos, new_pos)
     try:
         from jen.plugin_api import send_alert
 
-        send_alert(_MOVED_ALERT_TYPE, subnet_id=subnet_id, mac=mac, old=old_label, new=new_label)
+        # scoped=True: with no one subnet the move is told only to channels that are not limited to some subnets
+        send_alert(_MOVED_ALERT_TYPE, subnet_id=subnet_id, scoped=True, mac=mac, old=old_label, new=new_label)
     except Exception as e:
         logger.warning(f"Switch Port Locator: could not send move alert for {mac}: {e}")
     try:

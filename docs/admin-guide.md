@@ -1053,7 +1053,7 @@ is your installed Jen version, shown on the About page; `7`/`9` are this
 release's `HELPER_VERSION`/`HELPER_BUILD`):
 
 ```bash
-d="$(mktemp -d)" && cd "$d" && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper.sig && printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && /usr/bin/python3 -I jen-kea-helper version </dev/null | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin);sys.exit(0 if d.get("ok") is True and d.get("helper_version")==7 and d.get("helper_build")==12 else 1)' && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
+d="$(mktemp -d)" && cd "$d" && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper.sig && printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && /usr/bin/python3 -I jen-kea-helper version </dev/null | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin);sys.exit(0 if d.get("ok") is True and d.get("helper_version")==7 and d.get("helper_build")==13 else 1)' && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
 ```
 
 then add the sudoers line above. **Settings → Kea → SSH** shows the
@@ -1072,7 +1072,7 @@ trust (`scp`, a USB drive), then run the same verify-then-install steps
 locally, in the directory holding both files:
 
 ```bash
-printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && /usr/bin/python3 -I jen-kea-helper version </dev/null | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin);sys.exit(0 if d.get("ok") is True and d.get("helper_version")==7 and d.get("helper_build")==12 else 1)' && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
+printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && /usr/bin/python3 -I jen-kea-helper version </dev/null | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin);sys.exit(0 if d.get("ok") is True and d.get("helper_version")==7 and d.get("helper_build")==13 else 1)' && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
 ```
 
 Never skip the verify step just because you trust the transport — it's
@@ -1219,6 +1219,23 @@ groups are what systemd itself gives the daemon: the account's own `/etc/group` 
 because the account is in `ssl-cert` is readable to the check as it is to the daemon. No sudoers change. The by-hand install line shown in the flash and in
 this guide embeds the new build.
 
+**Helper build 13 (v5.68.0-beta.15) — every file the helper writes is private from its first byte, the lock is taken for every op, and Jen can undo
+an authored config. Press Update helper again.** (1) `apply-config` wrote the candidate config — **database passwords included** — to a fixed-name
+temp file created with the default permissions (0644) and only then copied the destination's mode onto it; `install-tls` wrote `server.key` the same
+way and `chmod`ed it 0640 after the private key was already on disk; and the `.jen_backup` copy was made the same way. Every one of those files is now
+created by one routine: a unique name in the destination's own directory, created exclusively with mode 0600, written and synced, given its final
+owner, group and mode on the open file, and only then renamed into place. A replacement of a 0600 config is never readable by another account at any
+instant; a new config is still `0644` (so Kea's account can read it) and the TLS key is still `0640 root:<Kea's group>`, but only once they are
+complete. (2) The copy of your config that the helper writes beside the real file to check it (`kea-dhcpX -t`) is now **owned by root, group = the
+Kea account's group, mode 0640**: readable by the account that runs the check, not writable by it, so that account cannot change the config between
+its being written and its being checked. (3) The `.jen_lock` lock is taken for **every** config check, apply and TLS install of a file (it was
+taken only when a sha was supplied), so two helper runs on one config never share a temp file or race each other. (4) A Kea binary owned by its
+service account is accepted only if that account has **execute** permission on it - the check used to ask "may anyone execute it?", which is true for
+a file with only the other-execute bit set and then failed to start as that account. (5) One new op, `remove-config`: it deletes a config file only
+if it still is exactly the file Jen wrote (a sha is required), under the same lock - it is how Jen undoes an Author Kea Config on a server that had no
+file before when a later server fails. No sudoers change: it is still the one `/usr/local/sbin/jen-kea-helper` line. A host on an older helper keeps
+working, but a failed authoring there leaves the new file and the Servers banner says to delete it by hand.
+
 **v5.20.0 — the legacy grant is now checked, not just used.** Every
 time Jen checks or installs the helper it also checks whether
 `/etc/sudoers.d/jen-kea` (below) is still present, and records that
@@ -1352,7 +1369,8 @@ generated script has no ownership check on the Kea binary — while the same
 host moved onto helper build 7–9 was; press Update helper to reach build 10. Build 11 (v5.68.0-beta.13) changes only how the helper validates a
 config on a host that has it — the validation copy is `0600`, owned by the account that runs the check, and runs with the unit's `Group=` and
 `SupplementaryGroups=` — and the generated script of this path is unchanged. Build 12 (v5.68.0-beta.14) only changes which account the
-helper validates as when the unit names one; the generated script of this path still runs no `-t` check of its own and is unchanged again.)
+helper validates as when the unit names one; the generated script of this path still runs no `-t` check of its own and is unchanged again. Build 13 (v5.68.0-beta.15) changes only how the helper writes and locks files on a host that has it, and
+adds `remove-config`: the legacy path has no such op, so a failed Author Kea Config there leaves the file it created and says to delete it by hand.)
 
 The grant is needed for **one run** to install the helper, and — below
 helper v6 — for **one more run** to reach v6 (Update helper copies the

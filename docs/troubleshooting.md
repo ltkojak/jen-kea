@@ -341,6 +341,16 @@ that then failed as `_kea`. Press **Update helper**: build 12 resolves the unit'
 `/etc/group` memberships and `SupplementaryGroups=`). If the Servers page now says *"its unit runs as User=x, which is not an account on this host"*,
 `getent passwd x` finds nothing: create the account or fix the unit — Jen will not run the check as root in its place.
 
+**A failed Author Kea Config left a new file on a server (helper build 13).** Authoring writes every server or none: if a later server fails, the
+earlier ones are put back, and a server that had no config file before is put back by removing the file Jen wrote. That removal is the helper's
+`remove-config` op (build 13). On a host with an older helper, or on the legacy `sudo python3` path, the Servers page shows a *rollback failed* banner
+naming the server and the file: delete it by hand (`sudo rm /etc/kea/kea-dhcp6.conf`) or press **Update helper** and run the authoring again. Nothing
+about Jen's own subnet record changes on a failed run.
+
+**Preview & Validate says a config file already exists, and Write refuses (helper build 13 and the authoring change in 5.68.0-beta.15).** *Overwrite*
+replaces the file you previewed, not whatever is there: tick it, preview again, then write. *"changed since you previewed it"* means the file on that
+server changed after the preview - run the preview again.
+
 ### Permission denied on kea-dhcp4.conf
 
 ```

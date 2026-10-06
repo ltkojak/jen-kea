@@ -390,6 +390,17 @@ scoped caller that a hidden one exists. Build a restricted caller's output from 
 on what was dropped (Switch Port Locator 1.1.3 always says "Last seen on ... at <time>" to a scoped caller and tests the page, card and API
 for identical output with and without the hidden row).
 
+**Judge and write in one transaction (v5.68.0-beta.15).** A route that authorizes a stored object and then changes it reads the row `FOR UPDATE` on the
+connection it writes with, judges it, and writes with the judged owner as a predicate and the count checked: `UPDATE ... WHERE key=%s AND subnet_id <=> %s` /
+`DELETE ...`, a refusal on a count that is not 1 (an UPDATE that changes nothing reports 0 in MySQL, so look again under the lock: only the same owner is a
+success). Creation is a plain `INSERT`; on error 1062 (or a 1213 deadlock) lock and judge the row that won - never `ON DUPLICATE KEY UPDATE` after a SELECT, which
+lets a row another admin created or moved in between be rewritten. Wake & Actions 1.1.4 and Presence 1.2.2 are the reference (the harness interleaves a row
+owned by a hidden subnet between the judgement and the write).
+
+**Scope what you write by the data it carries (v5.68.0-beta.15).** An alert or event that names an object is attached to the subnet of THAT object's data, never
+to the subnet of the client it happens to be about. Two objects in different subnets, or one that cannot be placed, belong to no one subnet: send the alert
+`scoped=True` and the event with no subnet (unrestricted viewers only) - do not build per-scope redacted copies. Switch Port Locator 1.1.4's move alert is the reference.
+
 ### Provider budget — what Jen enforces on a provider (v5.68.0-beta.11)
 
 Search and investigation providers are run by `jen/services/provider_budget.py`, not in the request thread. The page waits at most

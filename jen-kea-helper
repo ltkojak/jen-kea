@@ -240,6 +240,26 @@ identity whenever the unit names one, and as root only when it names none (or na
 is a refusal (`missingbinary` WITH the reason), never a run as root. The supplementary groups are what systemd itself gives the daemon:
 `os.getgrouplist(name, gid)` (the account's /etc/group memberships) plus the unit's `SupplementaryGroups=`. A change of behaviour inside
 the existing envelope: `HELPER_VERSION` stays 7.
+
+Build 13 (v5.68.0-beta.15, Q150) - every file the helper writes is private from its FIRST BYTE, the lock is not optional, and a daemon-owned
+binary must be executable by its owner. (1) `_private_tempfile(directory, prefix)` is the ONE way a file is created: a unique name in the
+TARGET'S OWN directory (so two helper processes never share a path), `O_CREAT | O_EXCL | O_NOFOLLOW`, mode 0600 from the first byte; the
+data is written and fsynced, the FINAL owner/group/mode is applied to the DESCRIPTOR (`fchown`/`fchmod`, never to a path another process
+could swap), and the file is `os.replace`d into place. It replaces three writers that created a fixed-name file with the umask and fixed
+it afterwards: `apply-config` (`<conf>.jen_apply_tmp`: the whole candidate config, database passwords included, 0644 until the mode was
+copied), `install-tls` (`server.key`: the private key was written 0644 and chmod'ed 0640 after it was on disk) and the `.jen_backup` copy.
+A replacement of a 0600 config is therefore never readable by another uid at any instant; the new-file mode (0644) and the key's final
+0640 are unchanged, reached only once the file is complete. (2) The validation copy `-t` reads is `root:<the daemon's effective gid>`
+0640 - READABLE by the account that runs the check (its `Group=` or primary group) but not WRITABLE by it: it used to be owned by that
+account, so between the write and the `-t` it could change the very config it was about to validate. A root-run check keeps a root 0600
+copy. (3) The `<conf>.jen_lock` flock is taken for EVERY `test-config`, `apply-config` and `install-tls` (it was taken only when an
+`expect_sha256` was given), so a validation never races an apply of the same path and two `test-config`s never share a temp name; the
+`expect_sha256` comparison stays the optional guard it is. (4) `_daemon_bin_ok` requires `S_IXUSR`: `os.access(X_OK)` is ROOT's answer,
+true when ANY class may execute, so a `_kea`-owned file with `o+x` and no `u+x` passed and then failed to exec as `_kea`; a root-run
+`root:root` binary needs its owner bit for the same reason, and one run as the unit's account needs the group/other bit it will use.
+(5) A new op, `remove-config`: it removes a config file only if it still hashes to exactly the `expect_sha256` given, under the same lock
+- the rollback of an Author Kea Config target that had no file before (Jen removes the file it created). A change of behaviour inside the
+existing envelope plus one op: `HELPER_VERSION` stays 7.
 """
 
 from __future__ import annotations
@@ -247,11 +267,13 @@ from __future__ import annotations
 import base64
 import binascii
 import collections
+import contextlib
 import hashlib
 import json
 import os
 import posixpath
 import re
+import secrets
 import shutil
 import stat
 import subprocess  # nosec B404 — every call is a fixed argv list, shell=False
@@ -259,7 +281,7 @@ import sys
 import tempfile
 
 HELPER_VERSION = 7
-HELPER_BUILD = 12
+HELPER_BUILD = 13
 # v5.66.0-beta.2 (Q104) — HELPER_BUILD is bumped on EVERY change to this file, never by
 # HELPER_VERSION alone; op_update's own _HELPER_BUILD_RE parses "^HELPER_BUILD = (\d+)$" out
 # of a candidate's raw bytes, so this line (like HELPER_VERSION's own, just above) must never
@@ -479,7 +501,9 @@ def _daemon_bin_ok(path, uid):
         return False
     if not stat.S_ISREG(st.st_mode) or st.st_mode & 0o022:
         return False
-    return st.st_uid == uid and 0 < uid < 1000
+    # S_IXUSR (build 13, Q150): the account that owns it is the one that executes it, and `os.access(X_OK)` is root's answer - true
+    # when any class may execute - so an owner-without-u+x file with o+x passed and then failed to exec as that account
+    return st.st_uid == uid and 0 < uid < 1000 and bool(st.st_mode & stat.S_IXUSR)
 
 
 def _refusal_reason(path, unit_account):
@@ -494,6 +518,8 @@ def _refusal_reason(path, unit_account):
         return "is not a regular file"
     if st.st_mode & 0o022:
         return "is writable by its group or by everyone"
+    if 0 < st.st_uid < 1000 and not st.st_mode & stat.S_IXUSR:
+        return "is owned by a system account that has no execute permission on it"
     try:
         import pwd
 
@@ -538,7 +564,12 @@ def _find_kea(service):
             return {"refused": unit_account["refused"]}  # a user or group that does not exist is a refusal with its reason, not root
         root_owned = _bin_owner_ok(cand) and os.access(cand, os.X_OK)
         if root_owned and unit_account is None:
-            return {"binary": cand, "user": None, "group": None, "extra_groups": []}
+            # run as root: the owner (root) bit is the one that will be used (build 13)
+            if os.stat(cand).st_mode & stat.S_IXUSR:
+                return {"binary": cand, "user": None, "group": None, "extra_groups": []}
+            if refused is None:
+                refused = "is root-owned and has no owner execute permission"
+            continue
         if root_owned:
             # a root-owned binary under a unit that names an account: validate as that account (it must be able to execute the file)
             if os.stat(cand).st_mode & 0o001 or _group_may_exec(cand, unit_account):
@@ -589,15 +620,96 @@ def _kea_binary(service):
     return found.get("binary") if found else None
 
 
+# ── private files and the per-path lock (build 13, Q150) ─────────────────────
+
+
+def _private_tempfile(directory, prefix):
+    """(fd, path): a NEW file in `directory` - the target's own directory - with a unique name, created `O_CREAT | O_EXCL | O_NOFOLLOW`
+    with mode 0600 whatever the umask (it can only remove bits), opened for writing. Every file this helper writes is created here, so a
+    secret is private from its first byte and two helper processes never share a path. The caller owns the file and removes it on failure."""
+    for _ in range(64):
+        path = os.path.join(directory, f".{prefix}.{secrets.token_hex(8)}.jen_tmp")
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        except FileExistsError:
+            continue
+        return fd, path
+    raise FileExistsError(f"no unused temp name in {directory}")
+
+
+def _write_all(fd, data):
+    view = memoryview(data)
+    while view:
+        view = view[os.write(fd, view) :]
+    os.fsync(fd)
+
+
+def _finish_private(fd, uid=None, gid=None, mode=0o600, path=None):
+    """Give the DESCRIPTOR its final owner/group and mode, then close it. `uid`/`gid` None leave that part alone. A chown the caller is not
+    allowed to make (a test run as an ordinary user) is skipped: the file simply stays the caller's own. `path` is only the fallback for a
+    platform with no `fchmod` (the Windows dev box that imports this file); the helper itself runs on Linux, where the descriptor is used."""
+    try:
+        if uid is not None or gid is not None:
+            try:
+                os.fchown(fd, -1 if uid is None else uid, -1 if gid is None else gid)
+            except (OSError, AttributeError):
+                pass
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, mode)
+        elif path is not None:
+            os.chmod(path, mode)
+    finally:
+        os.close(fd)
+
+
+def _install_private(path, data, uid=None, gid=None, mode=0o600):
+    """Write `data` (bytes) to `path` atomically and private from the first byte: unique O_EXCL 0600 temp in the same directory, written
+    and fsynced, final owner/group/mode applied to the descriptor, `os.replace`. Removes the temp on any failure and re-raises."""
+    fd, tmp = _private_tempfile(os.path.dirname(path) or ".", os.path.basename(path))
+    try:
+        try:
+            _write_all(fd, data)
+        except BaseException:
+            os.close(fd)
+            raise
+        _finish_private(fd, uid, gid, mode, tmp)
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+@contextlib.contextmanager
+def _locked(path):
+    """Hold an exclusive `flock` on `<path>.jen_lock` (created 0600) for the whole operation on `path`. EVERY test-config, apply-config,
+    remove-config and install-tls takes it (build 13): it used to be taken only when an `expect_sha256` was given, so a validation never
+    waited for an apply of the same file. A held lock is released when the descriptor closes, including when this process dies."""
+    try:
+        import fcntl  # Linux-only: the helper only ever runs there
+    except ImportError:  # the Windows dev box that imports this file for its tests: no flock, so no lock
+        yield
+        return
+    fd = os.open(path + ".jen_lock", os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        with contextlib.suppress(OSError):
+            os.fchmod(fd, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
 # ── Kea config test (shared by test-config and apply-config) ─────────────────
 
 
 def _run_kea_test(service, path, config, tls_paths):
-    """Write `config` to `<path>.jen_tmp` - created 0600 and owned by the account that runs `-t` (the daemon's own account, or root for
-    a root:root binary), because the copy carries the database credentials and nobody else needs to read it (build 11, Q148; it used to
-    be 0644) - verify any TLS material exists, run `kea-dhcpX -t` against the temp file AS THE ACCOUNT THE DAEMON RUNS AS (`_find_kea`:
-    its user, its Group= and its SupplementaryGroups=; root only for a root:root binary), and ALWAYS remove the temp file. Returns
-    (ok: bool, result: dict). This only validates - apply re-writes its own."""
+    """Validate `config` with `kea-dhcpX -t` AS THE ACCOUNT THE DAEMON RUNS AS (`_find_kea`: its user, its Group= and its
+    SupplementaryGroups=; root only for a root:root binary run as root) and ALWAYS remove the copy. The copy is a unique file in the
+    config's own directory made by `_private_tempfile` (0600 from the first byte - it carries the database credentials), and just before
+    the check it becomes `root:<the daemon's effective gid>` 0640 (build 13, Q150): READABLE by the account that runs `-t`, not WRITABLE by
+    it, so that account cannot change the config between its write and its validation (it used to own the file). A root-run check keeps a
+    root 0600 copy. The caller holds `_locked(path)`. Returns (ok: bool, result: dict). This only validates - apply re-writes its own."""
     found = _find_kea(service)
     name = _SERVICE_BINARY.get(service, "kea-dhcp6")
     if found is None or "binary" not in found:
@@ -607,19 +719,17 @@ def _run_kea_test(service, path, config, tls_paths):
         return False, result
     binary = found["binary"]
 
-    tmp = path + ".jen_tmp"
+    fd, tmp = _private_tempfile(os.path.dirname(path) or ".", os.path.basename(path))
     try:
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
         try:
-            os.fchmod(fd, 0o600)  # whatever the umask said, and whatever mode a stale file of this name had
-            if found.get("user") is not None:
-                # the file is the daemon account's own, so it can read it however /etc/kea's mode is set; nobody else can at all
-                os.fchown(fd, found["user"], found["group"] if found.get("group") is not None else -1)
+            _write_all(fd, json.dumps(config, indent=2).encode("utf-8"))
         except BaseException:
             os.close(fd)
             raise
-        with os.fdopen(fd, "w") as f:
-            json.dump(config, f, indent=2)
+        if found.get("user") is not None:
+            _finish_private(fd, 0, found["group"] if found.get("group") is not None else 0, 0o640, tmp)
+        else:
+            _finish_private(fd, None, None, 0o600, tmp)
 
         for entry in tls_paths or []:
             tp, kind = entry[0], (entry[1] if len(entry) > 1 else "file")
@@ -638,10 +748,8 @@ def _run_kea_test(service, path, config, tls_paths):
             return False, {"ok": False, "error": "testerror", "detail": " | ".join(lines[:3])}
         return True, {"ok": True}
     finally:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp)
-        except OSError:
-            pass
 
 
 # ── Ops ─────────────────────────────────────────────────────────────────────
@@ -680,7 +788,8 @@ def op_test_config(payload):
     config = payload.get("config")
     if not isinstance(config, dict):
         return {"ok": False, "error": "not-allowed"}, path
-    _ok, result = _run_kea_test(service, path, config, payload.get("tls_paths") or [])
+    with _locked(path):  # build 13: a validation never races an apply (or another validation) of the same file
+        _ok, result = _run_kea_test(service, path, config, payload.get("tls_paths") or [])
     return result, path
 
 
@@ -697,18 +806,7 @@ def op_apply_config(payload):
     # "<hex>" → the file must currently hash to exactly this.
     expect = payload.get("expect_sha256")
 
-    lock_fd = None
-    if expect is not None:
-        import fcntl  # Linux-only; guarded here so py_compile works on Windows
-
-        lock_fd = os.open(path + ".jen_lock", os.O_CREAT | os.O_RDWR, 0o600)
-        try:
-            os.fchmod(lock_fd, 0o600)
-        except OSError:
-            pass
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)  # held until we close the fd
-
-    try:
+    with _locked(path):  # held until the end; taken for EVERY apply since build 13, `expect` or not
         if expect is not None:
             current = _file_sha256(path)  # None when the file is absent
             conflict = (current is not None) if expect == "" else (current != expect)
@@ -723,42 +821,43 @@ def op_apply_config(payload):
         if exists and not allow_overwrite:
             return {"ok": False, "error": "exists"}, path
 
-        tmp = path + ".jen_apply_tmp"
-        try:
-            with open(tmp, "w") as f:
-                json.dump(config, f, indent=2)
+        data = json.dumps(config, indent=2).encode("utf-8")
+        backup = None
+        if exists:
+            backup = path + ".jen_backup"
+            st = os.stat(path)
+            with open(path, "rb") as f:
+                previous = f.read()
+            # the backup is the whole previous config (credentials too): private from its first byte, the same owner and mode as it had
+            _install_private(backup, previous, st.st_uid, st.st_gid, st.st_mode & 0o777)
+            # the replacement keeps the destination's owner and mode, and is 0600 until it is complete (build 13)
+            _install_private(path, data, st.st_uid, st.st_gid, st.st_mode & 0o777)
+        else:
+            # A brand-new config: match what `json.dump` under the old sudo-python3 path produced. Ubuntu's kea runs as `_kea` and
+            # must be able to read it - 0644, reached only once the file is complete.
+            _install_private(path, data, 0, 0, 0o644)
+        return {"ok": True, "backup": backup, "sha256": _file_sha256(path)}, path
 
-            backup = None
-            if exists:
-                backup = path + ".jen_backup"
-                shutil.copy2(path, backup)
-                st = os.stat(path)
-                try:
-                    os.chown(tmp, st.st_uid, st.st_gid)
-                except (OSError, AttributeError):
-                    pass
-                os.chmod(tmp, st.st_mode & 0o777)
-            else:
-                # A brand-new config: match what `json.dump` under the old
-                # sudo-python3 path produced. Ubuntu's kea runs as `_kea` and
-                # must be able to read it.
-                os.chmod(tmp, 0o644)
-                try:
-                    os.chown(tmp, 0, 0)
-                except (OSError, AttributeError):
-                    pass
 
-            os.replace(tmp, path)
-            return {"ok": True, "backup": backup, "sha256": _file_sha256(path)}, path
-        finally:
-            if os.path.exists(tmp):
-                try:
-                    os.unlink(tmp)
-                except OSError:
-                    pass
-    finally:
-        if lock_fd is not None:
-            os.close(lock_fd)
+def op_remove_config(payload):
+    """Remove a config file only if it still is the one the caller says (build 13, Q150): the rollback of an Author Kea Config target that
+    had no file before. `expect_sha256` is required (never "" or None: there is no such thing as removing 'whatever is there'); the
+    comparison and the unlink happen under the same lock an apply takes, so a file somebody replaced in between is left alone."""
+    service = payload.get("service")
+    path = payload.get("path")
+    if not _valid_service(service) or not _allowed_conf_path(path):
+        return {"ok": False, "error": "not-allowed"}, None
+    expect = payload.get("expect_sha256")
+    if not isinstance(expect, str) or not re.fullmatch(r"[0-9a-f]{64}", expect):
+        return {"ok": False, "error": "not-allowed"}, path
+    with _locked(path):
+        current = _file_sha256(path)
+        if current is None:
+            return {"ok": True, "removed": False}, path  # already gone: the state wanted
+        if current != expect:
+            return {"ok": False, "error": "conflict", "sha256": current}, path
+        os.unlink(path)
+        return {"ok": True, "removed": True}, path
 
 
 def _resolve_unit(service, action):
@@ -928,26 +1027,18 @@ def op_install_tls(payload):
 
     group, gid = _daemon_group(service)
     written = {}
-    for name in _TLS_FILES:
-        target = os.path.join(target_dir, name)
-        if os.path.islink(target):
-            return {"ok": False, "error": "symlink", "path": target}, target
-        tmp = target + ".jen_tmp"
-        try:
-            with open(tmp, "w") as f:
-                f.write(files[name])
-            _chown(tmp, 0, gid)
-            os.chmod(tmp, 0o640 if name == "server.key" else 0o644)
-            os.replace(tmp, target)
-        except OSError as e:
-            return {"ok": False, "error": "write-failed", "path": target, "detail": str(e)}, target
-        finally:
-            if os.path.exists(tmp):
-                try:
-                    os.unlink(tmp)
-                except OSError:
-                    pass
-        written[name] = target
+    with _locked(target_dir):  # build 13: two installs for one service never interleave
+        for name in _TLS_FILES:
+            target = os.path.join(target_dir, name)
+            if os.path.islink(target):
+                return {"ok": False, "error": "symlink", "path": target}, target
+            try:
+                # build 13 (Q150): server.key is created 0600 root and only becomes root:<daemon group> 0640 once the whole key is on
+                # disk - it used to be written with the umask (0644) and chmod'ed afterwards
+                _install_private(target, files[name].encode("utf-8"), 0, gid, 0o640 if name == "server.key" else 0o644)
+            except OSError as e:
+                return {"ok": False, "error": "write-failed", "path": target, "detail": str(e)}, target
+            written[name] = target
     return {"ok": True, "paths": written, "owner": f"root:{group}"}, target_dir
 
 
@@ -1194,6 +1285,7 @@ _OPS = {
     "read-config": op_read_config,
     "test-config": op_test_config,
     "apply-config": op_apply_config,
+    "remove-config": op_remove_config,
     "service": op_service,
     "tail-log": op_tail_log,
     "install-package": op_install_package,

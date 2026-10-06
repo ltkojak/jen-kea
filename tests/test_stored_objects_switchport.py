@@ -19,6 +19,7 @@ from tests.stored_object_fixtures import (  # noqa: F401 - fixtures are used by 
     S2,
     SW_A,
     SW_B,
+    SW_D,
     login,
     page,
     stored_objects,
@@ -149,3 +150,66 @@ class TestDirection2PositionOnAnASwitchClientNowInB:
         body = page(pclient, db, "admin_B", f"{SP}/?mac={D_MAC}")
         assert S2 + "-sw" not in body and "No switch has reported" in body
         assert S2 + "-sw" not in _search(pclient, db, "admin_B", D_MAC)
+
+
+class TestAMoveIsAnnouncedWhereItsSwitchesAre:
+    """v5.68.0-beta.15 (Q150, Switch Port Locator 1.1.4). The move alert and its Timeline event name two switches and two ports; they were sent with
+    the subnet of the CLIENT's lease, so the names of switches in B reached a channel and a Timeline scoped to A. Now: both switches in one
+    attributable subnet -> that subnet; different subnets, or either unattributable -> subnet None, the alert `scoped=True` (a channel with a subnet
+    scope never receives it) and the event unrestricted-only. Run through Jen's REAL alert filter and the real events table."""
+
+    SENT = None
+
+    def _world(self, monkeypatch, db):
+        import json
+        import sys
+
+        from jen.services import alerts
+
+        module = sys.modules["jen_plugin_switchport"]
+        sent = []
+        channels = [
+            {"id": "A", "channel_type": "ntfy", "alert_types": ["switchport_moved"], "subnet_scope": json.dumps([1])},
+            {"id": "B", "channel_type": "ntfy", "alert_types": ["switchport_moved"], "subnet_scope": json.dumps([2])},
+            {"id": "all", "channel_type": "ntfy", "alert_types": ["switchport_moved"], "subnet_scope": None},
+        ]
+        monkeypatch.setattr(alerts, "get_active_channels", lambda: channels)
+        monkeypatch.setattr(alerts, "get_channel_config", lambda ch: {"who": ch["id"]})
+        monkeypatch.setattr(alerts, "_send_ntfy_channel", lambda message, config: sent.append(config["who"]) or True)
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM events WHERE kind='plugin.switchport.moved' AND mac=%s", (A_MAC,))
+        db.commit()
+        return module, sent
+
+    def _event_subnet(self, db):
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT subnet_id FROM events WHERE kind='plugin.switchport.moved' AND mac=%s ORDER BY id DESC LIMIT 1",
+                (A_MAC,),
+            )
+            row = cur.fetchone()
+        return row["subnet_id"] if row else "no event"
+
+    def test_a_client_in_a_moving_between_a_b_switch_and_an_a_switch_tells_only_unrestricted_channels(
+        self, plugin_app, db, stored_objects, monkeypatch
+    ):
+        module, sent = self._world(monkeypatch, db)
+        with plugin_app.app_context():
+            module._emit_move(A_MAC, (SW_B, 1), (SW_A, 1))  # the client's lease is in A; the switches are in B and in A
+        assert sent == ["all"], "neither the A-scoped nor the B-scoped channel is told about switches in two subnets"
+        assert self._event_subnet(db) is None, "and the Timeline entry is for unrestricted viewers"
+
+    def test_both_switches_in_a_is_a_moves_in_a(self, plugin_app, db, stored_objects, monkeypatch):
+        module, sent = self._world(monkeypatch, db)
+        with plugin_app.app_context():
+            module._emit_move(A_MAC, (SW_A, 1), (SW_D, 1))  # SW_A and SW_D are both in A
+        assert sorted(sent) == ["A", "all"], "the A channel and the unrestricted one; never the B channel"
+        assert self._event_subnet(db) == 1
+
+    def test_the_clients_own_subnet_decides_nothing(self, plugin_app, db, stored_objects, monkeypatch):
+        """A client currently in B moving between two A switches is an A move, whatever the lease says."""
+        module, sent = self._world(monkeypatch, db)
+        monkeypatch.setattr(module, "_current_subnet_for_mac", lambda mac: 2)
+        with plugin_app.app_context():
+            module._emit_move(A_MAC, (SW_A, 1), (SW_D, 1))
+        assert sorted(sent) == ["A", "all"] and self._event_subnet(db) == 1

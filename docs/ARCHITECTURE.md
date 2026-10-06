@@ -257,6 +257,21 @@ without writing or auditing anything. Wake & Actions' and Presence's existence l
 the database failing for that one statement the route proceeded as a new object judged on the client's current subnet and the upsert rewrote a
 row a hidden subnet owns (wol 1.1.3, presence 1.2.1; the other four bundled plugins were checked and have no such lookup).
 
+**A writer scopes by the data it carries, and authorization and mutation are one transaction (v5.68.0-beta.15, Q150).** Two more instances of the
+rules above that the next sweep found. (1) *Scope what you write by the data it contains, not by the client it is about.* Switch Port Locator's move
+alert and Timeline event named two switches and two ports but were sent with the subnet of the CLIENT's lease, so the names of switches in subnets B and
+C reached a channel scoped to A. Every read surface had judged a stored position by its switch's subnet since 1.1.2; the writer now does too (1.1.4): both
+switches in one attributable subnet -> that subnet; different subnets or either unattributable -> subnet None, the alert sent `scoped=True` (channels with no
+subnet scope only) and the event unrestricted-only - never a per-scope redacted copy. A Presence transition event now carries the tracking's owner subnet
+(it carried none, so the owner-scoped user never saw their own device go online). (2) *A check and the write it authorizes are one transaction.* Wake & Actions
+and Presence read the existing row on one connection, judged its owner, and wrote on another (`INSERT ... ON DUPLICATE KEY UPDATE`, `UPDATE ... WHERE mac=%s`,
+`DELETE ... WHERE mac=%s`), so a row another admin created or moved in between was rewritten. Each now does both on ONE connection: the row is read
+`SELECT ... FOR UPDATE`, judged on its own stored subnet, and written with the judged owner as a predicate (`subnet_id <=> owner`) and the count checked (an
+UPDATE that changes nothing counts 0 in MySQL, so a 0 is resolved by looking again under the lock: only the same owner is a success); creation is a plain
+`INSERT`, and a 1062 (or a 1213 deadlock between two inserts of one key) is handled by locking and judging the row that WON, never by an unconditional
+`ON DUPLICATE KEY UPDATE`. wol 1.1.4, presence 1.2.2; the other four bundled plugins' upserts are unrestricted-only or poll-owned and carry no cross-scope
+judgement.
+
 **Providers run under a budget Jen enforces (v5.68.0-beta.11, Q146).** `jen/services/provider_budget.py` runs every search and
 investigation provider on one shared pool of four threads inside a copy of the caller's request context (the same authenticated user
 the page loaded). The request waits at most one second for the group, shows a provider that has not answered as "unavailable (over
@@ -892,6 +907,26 @@ own: `_unit_account` reads `User`, `Group` and `SupplementaryGroups` in one `sys
 is `missingbinary` WITH the reason, never a guess. A unit with a group (TLS material readable through it) used to start under systemd and fail Jen's `-t`.
 The ops list is unchanged and so is the sudoers line; `tests/kea_helper_build.json` is re-pinned to build 11 and kea-compat records `/etc/kea`'s owner and
 mode per ISC image so the exposure window this closed is on record.
+
+**Helper build 13 (v5.68.0-beta.15, Q150 — `HELPER_VERSION` stays 7; one new op): private from the first byte, the lock on every op.** Sweep D found
+three writers that created a fixed-name file with the process umask and fixed its mode afterwards: `op_apply_config` wrote `<conf>.jen_apply_tmp` (the whole
+candidate config, database passwords included) with `open(tmp, "w")` and copied the destination's mode on after the fact, `op_install_tls` wrote `server.key`
+0644 and `chmod`ed 0640 once the private key was on disk, and `shutil.copy2` made the `.jen_backup` copy the same way; the two deterministic temp names
+(`.jen_tmp`, `.jen_apply_tmp`) were also shared by any two helper processes on one config, and the `.jen_lock` flock was taken only `if expect is not None`
+(so `test-config` never locked and Author Config's applies never locked). **`_private_tempfile(directory, prefix)` is now the one way a file is created**:
+a unique `.name.<16 hex>.jen_tmp` in the target's own directory, `O_CREAT|O_EXCL|O_NOFOLLOW`, 0600 from the first byte; `_install_private` writes and fsyncs it,
+applies the FINAL owner/group/mode to the DESCRIPTOR (`fchown`, `fchmod` - never to a path another process could swap) and `os.replace`s it. A replacement of a
+0600 config is never readable by another uid at any instant; the new-file mode (0644) and the key's final 0640 are reached only once the file is complete.
+**The validation copy** is `root:<the daemon's effective gid>` 0640 - readable by the account that runs `-t` through its group, not writable by it (build 11
+made the copy that account's own, so it could change the config between the write and the check) - and a root-run check keeps a root 0600 copy. **The lock**
+(`_locked(path)`, an `flock` on `<path>.jen_lock`) is taken for EVERY `test-config`, `apply-config`, `remove-config` and `install-tls` (on the service's TLS directory),
+and held for the whole op; `expect_sha256` stays the optional comparison it is. **The execute bit**: `_daemon_bin_ok` requires `S_IXUSR` (`os.access(X_OK)` is root's
+answer - true when ANY class may execute - so a `_kea`-owned file with `o+x` and no `u+x` passed and then failed to exec as `_kea`); a root-run `root:root` binary needs
+its owner bit; one run as the unit's account needs the group/other bit it will actually use (`_group_may_exec`). **`remove-config`** (the op list is now version, read-config,
+test-config, apply-config, remove-config, service, tail-log, install-package, install-tls, update): removes a config file only if it still hashes to exactly the
+required `expect_sha256` (a 64-hex value, never "" - there is no removing "whatever is there"), under the same lock; it is the rollback of an Author Kea Config target that had
+no file (§3.11). The sudoers line is unchanged. `tests/test_kea_helper.py` proves it with a directory watcher that stats every entry in a tight loop while the real op runs
+120 times under umask 022, plus two concurrent test-configs that each validate their own candidate, a test-config that waits for an apply, and the lock taken on every op.
 
 **Helper build 12 (v5.68.0-beta.14, Q149 — a build-only change; `HELPER_VERSION` stays 7): identity first, trust second.** Build 11 consulted
 `_unit_account` only after `_bin_owner_ok` had already decided a `root:root` binary was fine, and then returned "run as root": a root-owned binary under a
