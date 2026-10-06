@@ -2,6 +2,44 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.68.0-beta.13] - 2026-10-06
+
+Beta channel. Stacked on 5.68.0-beta.12. **Problems alerts that respect the subnet boundary and survive log rotation, a Kea config check that runs with the
+daemon's real credentials on a private copy, and a restore marker that fails closed.** Five defects from an outside review of beta.11, each confirmed
+against the code. Migration 32 runs on the first start; the helper change reaches a Kea host when you press **Update helper**.
+
+**A Problems alert counted across a subnet boundary the page keeps.** The Problems inbox shows a user only the rows in subnets they may see, but the
+alert threshold was counted per client across every subnet and then sent to a channel scoped to one of them: two NAKs in a subnet a channel cannot see plus
+one in its own read as the three that fire, and the message said "3" where the page would have shown that channel's users one. The count and the alert
+decision are now kept per (kind, client, subnet), "no attributable subnet" a key of its own that only unrestricted channels receive, and a delivery is
+recorded on that subnet's rows alone. The page still groups by client.
+
+**A failed alert stopped retrying when the lines rotated out.** A delivery that failed was retried every half hour, but each retry first re-checked the
+threshold against the current 1000-line tail of the Kea log. On a busy server the lines that qualified the alert are gone from that tail within the 30-minute
+bound, so an alert the sweep had decided to send was never sent, although its row said it had failed. Migration 32 adds `qualified_at` and `qualified_count`
+to `client_problems`: the sweep records them when a client's trouble in a subnet first crosses the threshold, and the retry reads those, not the tail, until
+the alert is delivered, the row is resolved, or the qualification is a day old (then it is cleared and must be earned again). The default message now says
+the count and when it qualified ("4 in the last hour (as of 2026-10-06 14:05 UTC)").
+
+**The helper's validation copy of your Kea config was mode 0644.** To check a change before it is written, the helper writes the whole config, database
+credentials included, beside the real file and runs `kea-dhcpX -t` on it. It was written mode `0644` so the daemon's account could read it, which made a different
+local account's access depend on `/etc/kea`'s own mode on whichever package was installed. Helper build 11 creates it `0600` and owned by the account that
+runs the check (the daemon's own, or root for a `root:root` binary), whatever the umask, and removes it on every exit path as before. kea-compat now records
+`/etc/kea`'s owner and mode on each of ISC's images, so the window that closed is on record.
+
+**The check ran with fewer groups than the daemon.** The helper took the daemon account's primary group and no supplementary groups, so a unit with `Group=` or
+`SupplementaryGroups=` (TLS material readable through a group) started fine under systemd and failed Jen's check. It now reads `User`, `Group` and
+`SupplementaryGroups` from the unit in one `systemctl show` and runs the check with exactly that identity; a group the unit names that the host does not have
+is refused with the reason on the Servers page instead of being guessed. The by-hand install one-liner's embedded build number moves with it (10 to 11).
+
+**A damaged restore marker deleted logger settings.** Investigation logging records what to put back in a marker on the `kea-dhcp4` logger. A marker that
+lost its `restore` object (a hand edit, a partial write) was read as an empty one, so every key looked "absent" and the logger's severity and debuglevel were
+removed together with the marker. The marker is now validated before anything is changed: `restore` must be `{"created": true}` or carry both `severity` and
+`debuglevel`, each `"absent"` or a real value. Anything else leaves the logger and the marker exactly as they are; the sweep records it every minute, the
+Health row **DEBUG logging left on** goes red with *the restore marker on kea-a is unreadable — restore by hand* and the steps, *Turn it off now* says
+the same, and turning logging on again over a damaged marker is refused too. Once the marker is repaired, or the logger set back by hand, the next sweep
+finishes the job.
+
 ## [5.68.0-beta.12] - 2026-10-06
 
 Beta channel. Stacked on 5.68.0-beta.11. **The rule beta.11 stated for the Investigation cards, applied to every surface of the three plugins.**

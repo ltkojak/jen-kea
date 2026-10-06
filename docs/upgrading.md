@@ -163,3 +163,14 @@ For Presence this changes what the subnet of a tracked device means: it is the s
 and changed only by the new *Move* button (an admin who can see both subnets; audited), and no longer follows the device when it moves to a different
 subnet. A device that had followed its client keeps the subnet it has; if a restricted account lost sight of a device it used to see,
 move the device to a subnet that account can see, or lift the restriction.
+
+## Press Update helper again: the config check runs with the unit's own groups on a private copy
+
+Migration 32 runs on the first start (5.68.0-beta.13): two columns on the Problems table so a Problems alert that failed to deliver is retried from what qualified it,
+not from the log tail. A channel limited to some subnets is now told about a client's trouble in those subnets only, counted from those subnets' rows alone, so a
+count it received before may be lower than the number of rows across all subnets. Press **Update helper** on every Kea host (Settings → Kea → SSH shows
+"v7 (build 10, build 11 available)"): build 11 writes the copy of the Kea config that it checks `0600` and owned by the account that runs the check, where
+build 10 wrote it `0644`, and runs the check with the unit's `Group=` and `SupplementaryGroups=` so a Kea whose TLS material is readable through a group passes
+the check it used to fail. A unit that names a group the host does not have is refused with the reason on the Servers page. The by-hand install line shown in
+the flash and the docs embeds the new build. A restore marker for investigation logging that lost its `restore` object is no longer treated as proof that the
+logger had no settings: Jen changes nothing and the Health row says how to restore it by hand.
