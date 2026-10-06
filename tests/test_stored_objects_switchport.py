@@ -106,20 +106,23 @@ class TestAScopedCallerCannotTellThatAHiddenNewerPositionExists:
         match = re.search(r'data-plugin-card="switchport".*?</table>', body, re.S)
         return re.sub(r"\s+", " ", match.group(0)) if match else ""
 
-    def _everything(self, pclient, db):
+    def _everything(self, pclient, db, headers):
         page_body = page(pclient, db, "admin_A", f"{SP}/?mac={A_MAC}")
         overview = page(pclient, db, "admin_A", f"/client?q={A_MAC}")
-        status, api = _api(pclient, db, "key_read", A_MAC)
-        return self._located_block(page_body), self._card(overview), (status, api)
+        r = pclient.get(
+            f"{API}/{A_MAC}", headers=headers
+        )  # `login` inserts an API key row: once per test, never per call
+        return self._located_block(page_body), self._card(overview), (r.status_code, r.get_json() or {})
 
     def test_the_page_the_card_and_the_api_are_the_same_with_and_without_the_hidden_newer_position(
         self, pclient, db, stored_objects
     ):
-        with_b = self._everything(pclient, db)
+        headers = login(pclient, db, "key_read")
+        with_b = self._everything(pclient, db, headers)
         with db.cursor() as cur:
             cur.execute("DELETE FROM sp_mac_ports WHERE switch_id=%s", (SW_B,))
         db.commit()
-        without_b = self._everything(pclient, db)
+        without_b = self._everything(pclient, db, headers)
         assert with_b[0] and with_b[0] == without_b[0], "the page's located block"
         assert S1 + "-sw-a" in with_b[1] and with_b[1] == without_b[1], "the Investigation card"
         assert with_b[2] == without_b[2] and with_b[2][1]["switch"] == S1 + "-sw-a", "the API answer"
