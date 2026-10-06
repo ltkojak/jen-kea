@@ -378,6 +378,18 @@ session's or the key's own predicate. A test proves it by recording what reaches
 stored subnet, a harness test for the client that moved from B to A, and a position-by-position filter for rows (switch positions)
 whose subnet is derived rather than a column — filter *before* keeping the few you show, so hidden rows cannot push a visible one out.
 
+**A lookup that raises is not "absent" (v5.68.0-beta.14).** The lookup that decides whether a row already exists (so whether this is a new
+object or somebody else's) has three outcomes: found, not found, failed. On a failure refuse - flash that the existing record could not be
+checked and nothing was changed, log, write nothing, audit nothing. Treating the exception as "not found" lets an upsert rewrite a row a hidden
+subnet owns while the database is failing for that one statement. Wake & Actions 1.1.3 and Presence 1.2.1 are the reference (the harness makes
+the first statement raise while every later write could succeed).
+
+**Say the same thing with or without what the caller may not see (v5.68.0-beta.14).** Filtering the rows is not enough if the wording around
+them changes: a card that says "On X" when the newest stored position is the caller's and "Last seen on X" when a newer one is hidden tells a
+scoped caller that a hidden one exists. Build a restricted caller's output from the visible rows alone, with one wording that does not depend
+on what was dropped (Switch Port Locator 1.1.3 always says "Last seen on ... at <time>" to a scoped caller and tests the page, card and API
+for identical output with and without the hidden row).
+
 ### Provider budget — what Jen enforces on a provider (v5.68.0-beta.11)
 
 Search and investigation providers are run by `jen/services/provider_budget.py`, not in the request thread. The page waits at most

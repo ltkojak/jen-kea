@@ -18,6 +18,7 @@ from tests.stored_object_fixtures import (  # noqa: F401 - fixtures are used by 
     S1,
     S2,
     SW_A,
+    SW_B,
     login,
     page,
     stored_objects,
@@ -86,12 +87,56 @@ class TestDirection1NewestPositionOnABSwitchClientNowInA:
         assert status == 200 and api == {"mac": A_MAC, "located": False}, "the answer a MAC no switch has reported gets"
 
 
+class TestAScopedCallerCannotTellThatAHiddenNewerPositionExists:
+    """v5.68.0-beta.14 (Q149): 1.1.2 said "was last seen on" / "Last seen on" instead of "is on" / "On" only when the newest position was
+    on a switch the caller may not see - a tell. A scoped caller's page, card and API are built from the visible positions alone, so they
+    are IDENTICAL with the hidden newer position and without it."""
+
+    @staticmethod
+    def _located_block(body):
+        import re
+
+        match = re.search(r'<div class="alert alert-info mt-2">.*?</div>', body, re.S)
+        return re.sub(r"\s+", " ", match.group(0)) if match else ""
+
+    @staticmethod
+    def _card(body):
+        import re
+
+        match = re.search(r'data-plugin-card="switchport".*?</table>', body, re.S)
+        return re.sub(r"\s+", " ", match.group(0)) if match else ""
+
+    def _everything(self, pclient, db):
+        page_body = page(pclient, db, "admin_A", f"{SP}/?mac={A_MAC}")
+        overview = page(pclient, db, "admin_A", f"/client?q={A_MAC}")
+        status, api = _api(pclient, db, "key_read", A_MAC)
+        return self._located_block(page_body), self._card(overview), (status, api)
+
+    def test_the_page_the_card_and_the_api_are_the_same_with_and_without_the_hidden_newer_position(
+        self, pclient, db, stored_objects
+    ):
+        with_b = self._everything(pclient, db)
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM sp_mac_ports WHERE switch_id=%s", (SW_B,))
+        db.commit()
+        without_b = self._everything(pclient, db)
+        assert with_b[0] and with_b[0] == without_b[0], "the page's located block"
+        assert S1 + "-sw-a" in with_b[1] and with_b[1] == without_b[1], "the Investigation card"
+        assert with_b[2] == without_b[2] and with_b[2][1]["switch"] == S1 + "-sw-a", "the API answer"
+        assert "was last seen on" in with_b[0] and " is on " not in with_b[0]
+        assert "Last seen on" in with_b[1] and "On " + S1 not in with_b[1]
+
+    def test_an_unrestricted_caller_keeps_is_on_when_the_newest_position_is_theirs(self, pclient, db, stored_objects):
+        body = page(pclient, db, "admin_all", f"{SP}/?mac={A_MAC}")
+        assert "is on" in body and S1 + "-sw-b" in body
+
+
 class TestDirection2PositionOnAnASwitchClientNowInB:
     def test_it_is_the_a_callers_to_see_on_every_surface_whatever_subnet_the_client_is_in(
         self, pclient, db, stored_objects
     ):
         body = page(pclient, db, "admin_A", f"{SP}/?mac={D_MAC}")
-        assert S2 + "-sw" in body and "is on" in body
+        assert S2 + "-sw" in body and "was last seen on" in body, "a scoped caller never gets an 'is on' claim (v1.1.3)"
         assert_no_marker(body)
         assert S2 + "-sw" in _search(pclient, db, "admin_A", D_MAC)
         status, api = _api(pclient, db, "key_read", D_MAC)

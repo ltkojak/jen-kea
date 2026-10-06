@@ -401,7 +401,7 @@ class TestAnEventIsScopedByItsOwnEvidence:
         cp.sweep(NOW, servers=[SERVER_A])
         assert rows(db)[0]["subnet_id"] == 2
 
-    def test_the_newest_event_decides_where_a_row_is(self, db, stack):
+    def test_a_row_keeps_its_subnet_as_events_for_the_same_address_arrive(self, db, stack):
         logs, _c = stack
         logs[1] = [decline(1, ip="10.45.0.9")]
         cp.sweep(NOW - timedelta(minutes=5), servers=[SERVER_A])
@@ -608,7 +608,9 @@ class TestTheAlertIsDecidedPerSubnet:
         logs[1] = [decline(i, ip=self.A) for i in (1, 2, 3)] + [decline(i, ip=self.B) for i in (4, 5)]
         cp.sweep(NOW, servers=[SERVER_A])
         by_subnet = {r["subnet_id"]: r for r in rows(db)}
-        assert by_subnet[1]["alerted_at"] == NOW and by_subnet[1]["qualified_count"] == 3
+        assert by_subnet[1]["alerted_at"] == NOW and by_subnet[1]["qualified_count"] is None, (
+            "delivered: nothing left to retry"
+        )
         assert by_subnet[2]["alerted_at"] is None and by_subnet[2]["alert_attempted_at"] is None
         assert by_subnet[2]["qualified_at"] is None, "two in B never qualified"
 
@@ -626,6 +628,33 @@ class TestTheAlertIsDecidedPerSubnet:
         prime(logs)
         logs[1] = [nak(1), nak(2), decline(3, ip=self.A)]
         assert cp.sweep(NOW, servers=[SERVER_A])["alerts_attempted"] == 0
+
+
+class TestADeliveredAlertLeavesNoPendingQualification:
+    """v5.68.0-beta.14 (Q149 item 8): `qualified_at` / `qualified_count` are what a RETRY reads. A delivery used to set `alerted_at` and leave
+    them behind (only the 24-hour expiry cleared them), so a delivered alert looked like one still waiting to be retried."""
+
+    def test_delivery_sets_alerted_and_attempted_and_clears_the_qualification_on_that_subnets_rows(self, db, stack):
+        logs, calls = stack
+        prime(logs)
+        logs[1] = [decline(i, ip="10.45.0.9") for i in (1, 2, 3)] + [decline(i, ip="10.46.0.9") for i in (4, 5)]
+        out = cp.sweep(NOW, servers=[SERVER_A])
+        assert out["alerts"] == 1
+        by = {r["subnet_id"]: r for r in rows(db)}
+        assert by[1]["alerted_at"] == NOW and by[1]["alert_attempted_at"] == NOW
+        assert by[1]["qualified_at"] is None and by[1]["qualified_count"] is None
+        assert by[2]["alerted_at"] is None and by[2]["qualified_at"] is None, "the other subnet's row is untouched"
+
+    def test_a_failed_delivery_keeps_the_qualification_for_the_retry(self, db, stack, monkeypatch):
+        logs, calls = stack
+        prime(logs)
+        monkeypatch.setattr(
+            alerts, "send_alert", lambda alert_type, log_result=True, subnet_id=None, **kw: [("telegram", False, "429")]
+        )
+        logs[1] = [decline(i, ip="10.45.0.9") for i in (1, 2, 3)]
+        cp.sweep(NOW, servers=[SERVER_A])
+        row = rows(db)[0]
+        assert row["alerted_at"] is None and row["qualified_at"] == NOW and row["qualified_count"] == 3
 
 
 class TestAFailedAlertSurvivesTheLogRotating:
@@ -709,6 +738,150 @@ class TestAFailedAlertSurvivesTheLogRotating:
         db.commit()
         row = rows(db)[0]
         assert row["resolved_at"] is None and row["qualified_at"] is None and row["alert_attempted_at"] is None
+
+
+def nak_in(subnet, second, minute=0, mac=MAC):
+    """A NAK that names no address, in the transaction Kea selected `subnet` for (a DEBUG line) - the only way such a row is placed."""
+    tid = f"0x{subnet:x}{second:02x}{minute:02x}"
+    return [
+        _line(
+            second,
+            "DHCP4_SUBNET_SELECTED",
+            f"the subnet with ID {subnet} was selected for client assignments",
+            mac=mac,
+            tid=tid,
+            level="DEBUG",
+            minute=minute,
+        ),
+        _line(
+            second,
+            "DHCP4_PACKET_SEND",
+            "trying to send packet DHCPNAK (type 6) from a:67 to b:67",
+            mac=mac,
+            tid=tid,
+            minute=minute,
+        ),
+    ]
+
+
+class TestARowsIdentityIncludesItsSubnet:
+    """v5.68.0-beta.14 (Q149): migration 33 makes `scope_key` (= COALESCE(subnet_id, -1)) part of the unique key. Before it, the same client,
+    kind and EMPTY address in B, B and A were ONE row whose subnet was reassigned to the newest event's while its count, times and alert
+    state stayed - so B's history and a qualification earned in B ended up on an A row."""
+
+    def _by_subnet(self, db):
+        db.commit()
+        return {r["subnet_id"]: r for r in rows(db)}
+
+    def _sender(self, calls, monkeypatch, ok):
+        monkeypatch.setattr(
+            alerts,
+            "send_alert",
+            lambda alert_type, log_result=True, subnet_id=None, **kw: (
+                calls["alerts"].append((alert_type, subnet_id, kw)) or [("telegram", ok, "" if ok else "429")]
+            ),
+        )
+
+    def test_b_b_a_with_no_address_is_a_b_row_and_an_a_row_and_neither_qualifies_at_three(self, db, stack):
+        logs, calls = stack
+        prime(logs)
+        logs[1] = [*nak_in(2, 1), *nak_in(2, 2), *nak_in(1, 3)]
+        out = cp.sweep(NOW, servers=[SERVER_A])
+        by = self._by_subnet(db)
+        assert sorted(by) == [1, 2] and by[2]["count"] == 2 and by[1]["count"] == 1
+        assert by[1]["mac"] == by[2]["mac"] == MAC and by[1]["ip"] == by[2]["ip"] == ""
+        assert out["alerts_attempted"] == 0 and calls["alerts"] == [], "two in B and one in A is not three anywhere"
+        assert cp.widget([1], False, NOW)["total"] == 1, "the A-scoped page sees the one row of its own subnet"
+        assert [r["subnet_id"] for r in cp.fetch_open(["p.subnet_id IN (%s)"], [1])] == [1]
+
+    def test_a_b_qualification_that_failed_delivery_is_not_carried_onto_an_a_row_nor_retried_there(
+        self, db, stack, monkeypatch
+    ):
+        logs, calls = stack
+        prime(logs)
+        self._sender(calls, monkeypatch, False)
+        logs[1] = [*nak_in(2, 1, minute=40), *nak_in(2, 2, minute=40), *nak_in(2, 3, minute=40)]
+        cp.sweep(NOW, servers=[SERVER_A])
+        b = self._by_subnet(db)[2]
+        assert (
+            b["qualified_at"] == NOW
+            and b["qualified_count"] == 3
+            and b["alert_attempted_at"] == NOW
+            and b["alerted_at"] is None
+        )
+        # an A event arrives for the same client, kind and empty address
+        logs[1] = [*logs[1], *nak_in(1, 4, minute=41)]
+        cp.sweep(NOW + timedelta(minutes=5), servers=[SERVER_A])
+        by = self._by_subnet(db)
+        assert by[2]["qualified_at"] == NOW and by[2]["qualified_count"] == 3 and by[2]["count"] == 3, (
+            "B keeps its own state"
+        )
+        assert by[1]["count"] == 1 and by[1]["qualified_at"] is None and by[1]["alert_attempted_at"] is None, (
+            "A is a separate row"
+        )
+        calls["alerts"].clear()
+        self._sender(calls, monkeypatch, True)
+        out = cp.sweep(NOW + timedelta(minutes=31), servers=[SERVER_A])
+        assert out["alerts"] == 1 and [(s, kw["count"]) for _t, s, kw in calls["alerts"]] == [(2, 3)], (
+            "B's retry, for B's subnet"
+        )
+        by = self._by_subnet(db)
+        assert by[2]["alerted_at"] is not None and by[1]["alerted_at"] is None and by[1]["alert_attempted_at"] is None
+
+    def test_attributed_and_unattributed_events_are_separate_rows_in_both_directions(self, db, stack):
+        logs, _c = stack
+        prime(logs)
+        logs[1] = [nak(1), *nak_in(1, 2)]  # one that names no subnet at all, and one Kea placed in A
+        cp.sweep(NOW, servers=[SERVER_A])
+        by = self._by_subnet(db)
+        assert set(by) == {None, 1} and by[None]["count"] == 1 and by[1]["count"] == 1
+        # and the other way round: the next sweep's first event is the unattributed one
+        logs[1] = [*logs[1], nak(5, minute=2)]
+        cp.sweep(NOW + timedelta(minutes=5), servers=[SERVER_A])
+        by = self._by_subnet(db)
+        assert by[None]["count"] == 2 and by[1]["count"] == 1, "the unattributed row grew; the A row did not move"
+
+    def test_rows_resolve_independently(self, db, stack):
+        logs, _c = stack
+        prime(logs)
+        logs[1] = [*nak_in(2, 1), *nak_in(1, 2)]
+        cp.sweep(NOW, servers=[SERVER_A])
+        db.commit()
+        with db.cursor() as cur:
+            cur.execute("UPDATE client_problems SET last_seen=%s WHERE subnet_id=2", (NOW - timedelta(hours=25),))
+        db.commit()
+        cp.sweep(NOW + timedelta(minutes=5), servers=[SERVER_A])
+        by = self._by_subnet(db)
+        assert by[2]["resolved_at"] is not None and by[1]["resolved_at"] is None, "B went quiet and resolved; A did not"
+
+    def test_a_recurrence_in_one_subnet_reopens_only_that_subnets_row(self, db, stack):
+        logs, _c = stack
+        prime(logs)
+        logs[1] = [*nak_in(2, 1), *nak_in(1, 2)]
+        cp.sweep(NOW, servers=[SERVER_A])
+        db.commit()
+        with db.cursor() as cur:
+            cur.execute("UPDATE client_problems SET resolved_at=%s", (NOW + timedelta(minutes=1),))
+        db.commit()
+        logs[1] = [*logs[1], *nak_in(2, 9, minute=30)]
+        cp.sweep(NOW + timedelta(minutes=10), servers=[SERVER_A])
+        by = self._by_subnet(db)
+        assert by[2]["resolved_at"] is None and by[2]["count"] == 1, "B reopened as a fresh episode"
+        assert by[1]["resolved_at"] is not None and by[1]["count"] == 1, "A stayed resolved"
+
+    def test_counts_never_mix_across_sweeps_and_the_unique_key_is_per_subnet(self, db, stack):
+        logs, _c = stack
+        prime(logs)
+        logs[1] = nak_in(2, 1)
+        cp.sweep(NOW, servers=[SERVER_A])
+        logs[1] = [*logs[1], *nak_in(2, 2, minute=1), *nak_in(1, 3, minute=1)]
+        cp.sweep(NOW + timedelta(minutes=5), servers=[SERVER_A])
+        by = self._by_subnet(db)
+        assert by[2]["count"] == 2 and by[1]["count"] == 1
+        assert len(rows(db)) == 2, "two rows, not one that moved"
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS n FROM client_problems WHERE scope_key = -1")
+            assert cur.fetchone()["n"] == 0, "scope_key is the subnet's id here, never the unattributed -1"
 
 
 class TestTheDatabaseKinds:

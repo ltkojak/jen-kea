@@ -203,7 +203,9 @@ class TestCollectAndTheWatermark:
         events = [_ev("nak", MAC, T0 + timedelta(seconds=i)) for i in range(4)]
         groups, recent, wm = cp.collect(events, None)
         assert (
-            groups[("nak", MAC, "")]["new"] == 4 and recent[("nak", MAC, None)] == 4 and wm == T0 + timedelta(seconds=3)
+            groups[("nak", MAC, "", None)]["new"] == 4
+            and recent[("nak", MAC, None)] == 4
+            and wm == T0 + timedelta(seconds=3)
         )
 
     def test_a_line_read_by_two_sweeps_is_one_event(self):
@@ -218,7 +220,7 @@ class TestCollectAndTheWatermark:
     def test_only_the_newer_lines_are_added(self):
         events = [_ev("nak", MAC, T0 + timedelta(seconds=i)) for i in range(5)]
         groups, _r, wm = cp.collect(events, T0 + timedelta(seconds=2))
-        assert groups[("nak", MAC, "")]["new"] == 2 and wm == T0 + timedelta(seconds=4)
+        assert groups[("nak", MAC, "", None)]["new"] == 2 and wm == T0 + timedelta(seconds=4)
 
     def test_a_line_at_exactly_the_watermark_counts_as_seen(self):
         groups, _r, _wm = cp.collect([_ev("nak", MAC, T0)], T0)
@@ -251,12 +253,16 @@ class TestCollectAndTheWatermark:
             _ev("decline", MAC, T0, ip="10.0.0.1"),
         ]
         groups, _r, _wm = cp.collect(events, None)
-        assert set(groups) == {("nak", MAC, "10.0.0.1"), ("nak", MAC, ""), ("decline", MAC, "10.0.0.1")}
+        assert set(groups) == {
+            ("nak", MAC, "10.0.0.1", None),
+            ("nak", MAC, "", None),
+            ("decline", MAC, "10.0.0.1", None),
+        }
 
     def test_the_group_keeps_the_newest_detail(self):
         events = [_ev("nak", MAC, T0, detail="old"), _ev("nak", MAC, T0 + timedelta(seconds=5), detail="new")]
         groups, _r, _wm = cp.collect(events, None)
-        assert groups[("nak", MAC, "")]["detail"] == "new"
+        assert groups[("nak", MAC, "", None)]["detail"] == "new"
 
 
 class TestShouldAlert:
@@ -415,14 +421,14 @@ class TestTheEventsOwnTimes:
     def test_a_group_carries_the_first_and_last_timestamps_of_its_own_events(self):
         events = [_ev("nak", MAC, T0 + timedelta(minutes=m)) for m in (5, 1, 9)]
         groups, _r, _wm = cp.collect(events, None)
-        g = groups[("nak", MAC, "")]
+        g = groups[("nak", MAC, "", None)]
         assert g["first_ts"] == T0 + timedelta(minutes=1) and g["last_ts"] == T0 + timedelta(minutes=9)
 
     def test_the_converted_time_is_what_is_stored_while_the_watermark_stays_in_the_logs_clock(self):
         now = T0 + timedelta(days=1)
         events = cp.shift_events([_ev("nak", MAC, T0 + timedelta(minutes=m)) for m in (1, 2)], -18000, now)
         groups, _r, wm = cp.collect(events, None, now=now)
-        g = groups[("nak", MAC, "")]
+        g = groups[("nak", MAC, "", None)]
         assert g["first_ts"] == T0 + timedelta(minutes=1, hours=5) and wm == T0 + timedelta(minutes=2)
 
     def test_the_alert_window_is_judged_against_now_not_the_newest_line(self):
@@ -434,12 +440,21 @@ class TestTheEventsOwnTimes:
         _g, recent, _wm = cp.collect(six_hours_ago, None, now=T0 + timedelta(hours=6))
         assert recent.get(("nak", MAC, None), 0) == 0, "judged against now they are six hours old and are no alert"
 
-    def test_a_group_keeps_the_newest_events_own_subnet(self):
-        events = [_ev("nak", MAC, T0, subnet_id=2), _ev("nak", MAC, T0 + timedelta(seconds=5), subnet_id=None)]
+    def test_events_in_different_subnets_are_different_groups_even_with_no_address(self):
+        # v5.68.0-beta.14 (Q149): the subnet is part of a row's identity - the same client, kind and (empty) address in B, B and A is two
+        # groups, and so two rows; the newest event no longer reassigns the one row's subnet
+        events = [
+            _ev("nak", MAC, T0, subnet_id=2),
+            _ev("nak", MAC, T0 + timedelta(seconds=1), subnet_id=2),
+            _ev("nak", MAC, T0 + timedelta(seconds=5), subnet_id=1),
+        ]
         groups, _r, _wm = cp.collect(events, None)
-        assert groups[("nak", MAC, "")]["subnet_id"] is None, "the newest event named none: the row is unattributed"
+        assert {k: g["new"] for k, g in groups.items()} == {("nak", MAC, "", 2): 2, ("nak", MAC, "", 1): 1}
+
+    def test_attributed_and_unattributed_events_are_different_groups(self):
         events = [_ev("nak", MAC, T0, subnet_id=None), _ev("nak", MAC, T0 + timedelta(seconds=5), subnet_id=1)]
-        assert cp.collect(events, None)[0][("nak", MAC, "")]["subnet_id"] == 1
+        groups, _r, _wm = cp.collect(events, None)
+        assert set(groups) == {("nak", MAC, "", None), ("nak", MAC, "", 1)}
 
     def test_a_converted_time_is_never_later_than_now(self):
         now = T0 + timedelta(minutes=10)

@@ -1160,6 +1160,36 @@ def _m032_client_problems_qualified(db):
     logger.info("Migration 32: client_problems.qualified_at / qualified_count")
 
 
+def _m033_client_problems_scope_key(db):
+    """
+    v5.68.0-beta.14 (Q149) - the subnet is part of a Problems row's IDENTITY. Migration 30's unique key was (server_id, kind, mac, ip), and
+    two NAKs that name no address (an empty `ip`) in subnet B plus one in subnet A are ONE row for that key: the row's subnet was
+    reassigned to the newest event's while its count, `first_seen`, `alerted_at`, `alert_attempted_at` and the qualification stayed - so
+    a qualification earned in B was carried onto an A row and retried there. `scope_key` is `COALESCE(subnet_id, -1)` (a NULL cannot be
+    part of a unique key in MySQL: NULLs are all distinct) and the unique key becomes (server_id, kind, mac, ip, scope_key); the sweep
+    writes it with the row and no upsert ever reassigns the subnet.
+
+    EVERY EXISTING ROW MAY BE CROSS-CONTAMINATED and the inbox is nine days old, so the migration DELETES the rows and resets each
+    server's log watermark: the inbox starts again and the next sweep refills it from the log tail (the first read of a server records
+    without alerting, as always). Per-server clock offsets are kept. It runs only when the column is absent, so a re-run changes nothing.
+    """
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) AS n FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() "
+            "AND TABLE_NAME = 'client_problems' AND COLUMN_NAME = 'scope_key'"
+        )
+        if cur.fetchone()["n"]:
+            return
+        cur.execute("DELETE FROM client_problems")
+        cur.execute("DELETE FROM settings WHERE setting_key LIKE 'client_problems_wm:%'")
+        cur.execute("ALTER TABLE client_problems ADD COLUMN scope_key INT NOT NULL DEFAULT -1 AFTER subnet_id")
+        cur.execute(
+            "ALTER TABLE client_problems DROP INDEX uq_client_problem, "
+            "ADD UNIQUE KEY uq_client_problem (server_id, kind, mac, ip, scope_key)"
+        )
+    logger.info("Migration 33: client_problems.scope_key (rows and watermarks cleared)")
+
+
 MIGRATIONS = [
     (1, "Baseline schema (all tables, current definitions)", _m001_baseline),
     (2, "users.avatar_url column", _m002_users_avatar),
@@ -1220,6 +1250,11 @@ MIGRATIONS = [
         32,
         "client_problems.qualified_at / qualified_count: a persisted alert qualification (v5.68.0-beta.13, Q148)",
         _m032_client_problems_qualified,
+    ),
+    (
+        33,
+        "client_problems.scope_key: the subnet is part of a row's identity; rows and watermarks cleared (v5.68.0-beta.14, Q149)",
+        _m033_client_problems_scope_key,
     ),
 ]
 

@@ -1,5 +1,25 @@
 # Switch Port Locator Plugin — Changelog
 
+## [1.1.3] - 2026-10-07
+
+Fix. No change to what Jen needs: `requires_jen` stays 5.68.0.
+
+### Fixed: the wording no longer reveals that a newer position exists on a switch the caller may not see
+
+1.1.2 filtered every surface down to the positions on switches the caller may see, and then changed one word when the newest stored
+position was on a switch they may not: the card said *Last seen on …* where it would have said *On …*, and the page *was last seen
+on* where it would have said *is on*. A scoped caller could tell that a newer position exists elsewhere. What a scoped caller is shown
+is now built from the visible positions alone: the card and the page always say *Last seen on … at <time>* (never *On*, never a
+claim about a move), whether or not a hidden newer position exists, so the output is the same with or without it, on the page, the
+card and the JSON API. A caller who can see every subnet keeps *On …* and the move note. `positions_in_scope` now returns whether the
+CALLER is restricted instead of a fact about the stored positions.
+
+### Changed: the module's design notes state the stored-object contract
+
+The "who sees what" paragraph at the top of the file still said a MAC is shown only when its current subnet is one the caller may
+see. It now says what 1.1.1 and 1.1.2 made true (a position belongs to its switch's subnet; one judgement for every surface) and points
+at the plugins documentation as the source.
+
 ## [1.1.2] - 2026-10-06
 
 Fix: the rule 1.1.1 applied to the Investigation card now applies to every surface of the plugin. No change to what Jen needs:

@@ -245,6 +245,18 @@ with no SecureOn password and no stored-subnet fallback, so no secret crosses a 
 A plugin column that an event rewrites to follow the client is not a stored subnet; Presence's `pr_tracked.subnet_id` is the owner subnet,
 changed only by an audited move by a caller who can see both subnets.
 
+**Two invariants the next review found were half-applied (v5.68.0-beta.14, Q149).** Each of the last three reviews found the second-order
+consequence of the previous fix, so an invariant is now stated with every object and every surface it governs, and the failure path of each
+check is a test case too. (1) **A persisted row's identity includes everything its access decision depends on.** The Problems alert was keyed
+by subnet in beta.13 but the stored row was not: the unique key was (server, kind, client, address), so the same client's NAKs that name no
+address in subnet B, B and A were ONE row whose subnet was reassigned to the newest event's while its count, times and alert state stayed -
+B's history, and a qualification B earned, ended up on an A row and was retried there. Migration 33 adds `scope_key` (`COALESCE(subnet_id,
+-1)`, because a NULL cannot be part of a unique key) to the key, no upsert assigns the subnet, and `collect` groups by it. (2) **A lookup that
+raises is not "absent".** An authorization lookup that gates a write has three outcomes - found, not found, FAILED - and a failed one refuses
+without writing or auditing anything. Wake & Actions' and Presence's existence lookups used to degrade to "no such row" on an exception, so with
+the database failing for that one statement the route proceeded as a new object judged on the client's current subnet and the upsert rewrote a
+row a hidden subnet owns (wol 1.1.3, presence 1.2.1; the other four bundled plugins were checked and have no such lookup).
+
 **Providers run under a budget Jen enforces (v5.68.0-beta.11, Q146).** `jen/services/provider_budget.py` runs every search and
 investigation provider on one shared pool of four threads inside a copy of the caller's request context (the same authenticated user
 the page loaded). The request waits at most one second for the group, shows a provider that has not answered as "unavailable (over
@@ -2268,6 +2280,11 @@ lines that qualified the alert rotated out inside the 30-minute retry bound and 
 though its row said it failed. Migration 32 adds `qualified_at` and `qualified_count`: the sweep writes them on a key's rows when it first
 crosses the threshold, the retry reads THEM rather than the tail until the alert is delivered, the row is resolved, or the qualification is
 24 hours old (then cleared; a recurrence earns a fresh one), and the message carries the persisted count and the time it qualified.
+A delivered alert clears the qualification on that subnet's rows (v5.68.0-beta.14): nothing is left to retry. **A row's subnet is part of
+its identity (v5.68.0-beta.14, Q149).** Migration 33 added `scope_key` (`COALESCE(subnet_id, -1)`) to the unique key, so the same client's events
+in subnet B, B and A are two rows - each with its own count, first/last time, alert state and resolution - and the newest event no longer moves a
+row between subnets. The migration deletes the existing rows (they may be cross-contaminated) and resets each server's log watermark: the inbox
+starts again and the next sweep refills it from the log tail, the first read of a server recording without alerting as always.
 
 ### 6.1 On-disk layout (v5.13.0, extended in v5.14.0, relocatable since v5.67.0)
 

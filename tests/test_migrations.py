@@ -552,35 +552,40 @@ class TestMigration30ClientProblems:
         with jen_db() as db, db.cursor() as cur:
             cur.execute("SHOW COLUMNS FROM client_problems")
             cols = {c["Field"]: c for c in cur.fetchall()}
-        assert set(cols) == {
-            "id",
-            "server_id",
-            "kind",
-            "mac",
-            "ip",
-            "subnet_id",
-            "first_seen",
-            "last_seen",
-            "count",
-            "detail",
-            "alerted_at",
-            "alert_attempted_at",
-            "qualified_at",
-            "qualified_count",
-            "resolved_at",
-        }  # fmt: skip  (alert_attempted_at: migration 31, v5.68.0-beta.9; qualified_*: migration 32, v5.68.0-beta.13)
+        assert (
+            set(cols)
+            == {
+                "id",
+                "server_id",
+                "kind",
+                "mac",
+                "ip",
+                "subnet_id",
+                "first_seen",
+                "last_seen",
+                "count",
+                "detail",
+                "alerted_at",
+                "alert_attempted_at",
+                "qualified_at",
+                "qualified_count",
+                "scope_key",
+                "resolved_at",
+            }
+        )  # fmt: skip  (alert_attempted_at: migration 31, v5.68.0-beta.9; qualified_*: migration 32, v5.68.0-beta.13; scope_key: 33)
         # mac and ip are NOT NULL with an empty default: a NULL would make the unique key useless (MySQL treats NULLs as distinct)
         assert cols["mac"]["Null"] == "NO" and cols["ip"]["Null"] == "NO"
         assert cols["subnet_id"]["Null"] == "YES" and cols["resolved_at"]["Null"] == "YES"
         assert cols["server_id"]["Default"] == "0"
 
-    def test_the_unique_key_is_server_kind_mac_ip(self):
+    def test_the_unique_key_is_server_kind_mac_ip_and_the_scope_key(self):
+        # migration 33 (v5.68.0-beta.14, Q149) added `scope_key`: the subnet is part of a row's identity
         with jen_db() as db, db.cursor() as cur:
             cur.execute("SHOW INDEX FROM client_problems WHERE Key_name='uq_client_problem'")
             parts = sorted((r["Seq_in_index"], r["Column_name"]) for r in cur.fetchall())
             cur.execute("SHOW INDEX FROM client_problems WHERE Key_name='uq_client_problem' AND Non_unique=0")
             unique = cur.fetchall()
-        assert [c for _s, c in parts] == ["server_id", "kind", "mac", "ip"] and unique
+        assert [c for _s, c in parts] == ["server_id", "kind", "mac", "ip", "scope_key"] and unique
 
     def test_rerun_is_idempotent(self):
         from jen.models.migrations import _m030_client_problems
@@ -680,6 +685,104 @@ class TestMigration32ClientProblemsQualified:
             assert cur.fetchone() == {"qualified_at": None, "qualified_count": None}
             cur.execute("DELETE FROM client_problems WHERE server_id=99")
             db.commit()
+
+
+class TestMigration33ClientProblemsScopeKey:
+    """v5.68.0-beta.14 (Q149) - the subnet is part of a Problems row's identity. `scope_key` = COALESCE(subnet_id, -1) is in the unique key
+    (a NULL cannot be: MySQL treats NULLs as distinct); the migration DELETES the existing rows (they may be cross-contaminated) and resets
+    the per-server watermarks, and runs only when the column is absent."""
+
+    def _insert(self, cur, subnet, scope, server=98, ip=""):
+        cur.execute(
+            "INSERT INTO client_problems (server_id, kind, mac, ip, subnet_id, scope_key, first_seen, last_seen) "
+            "VALUES (%s, 'nak', 'aa:bb:cc:dd:ee:33', %s, %s, %s, NOW(), NOW())",
+            (server, ip, subnet, scope),
+        )
+
+    def test_migration_recorded_and_it_is_a_new_numbered_one(self):
+        assert 33 in applied_versions()
+        by_version = {v: fn.__name__ for v, _d, fn in MIGRATIONS}
+        assert (
+            by_version[33] == "_m033_client_problems_scope_key" and by_version[32] == "_m032_client_problems_qualified"
+        )
+        assert MIGRATIONS[-1][0] >= 33
+
+    def test_scope_key_is_a_not_null_int_in_the_unique_key(self):
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("SHOW COLUMNS FROM client_problems LIKE 'scope_key'")
+            col = cur.fetchone()
+        assert col["Type"].lower().startswith("int") and col["Null"] == "NO"
+
+    def test_the_same_client_kind_and_empty_address_may_exist_once_per_subnet_including_none(self):
+        import pymysql
+        import pytest
+
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("DELETE FROM client_problems WHERE server_id=98")
+            self._insert(cur, 2, 2)
+            self._insert(cur, 1, 1)
+            self._insert(cur, None, -1)
+            db.commit()
+            cur.execute("SELECT COUNT(*) AS n FROM client_problems WHERE server_id=98")
+            assert cur.fetchone()["n"] == 3
+            for subnet, scope in ((2, 2), (None, -1)):
+                with pytest.raises(pymysql.err.IntegrityError):
+                    self._insert(cur, subnet, scope)  # the same key twice is still refused, NULL subnet included
+                db.rollback()
+            cur.execute("DELETE FROM client_problems WHERE server_id=98")
+            db.commit()
+
+    def test_rerun_changes_nothing(self):
+        from jen.models.migrations import _m033_client_problems_scope_key
+
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("DELETE FROM client_problems WHERE server_id=98")
+            self._insert(cur, 2, 2)
+            cur.execute("REPLACE INTO settings (setting_key, setting_value) VALUES ('client_problems_wm:98', 'x')")
+            db.commit()
+            _m033_client_problems_scope_key(db)  # the column exists: nothing is cleared
+            db.commit()
+            cur.execute("SELECT COUNT(*) AS n FROM client_problems WHERE server_id=98")
+            assert cur.fetchone()["n"] == 1
+            cur.execute("SELECT setting_value FROM settings WHERE setting_key='client_problems_wm:98'")
+            assert cur.fetchone() is not None
+            cur.execute("DELETE FROM client_problems WHERE server_id=98")
+            cur.execute("DELETE FROM settings WHERE setting_key='client_problems_wm:98'")
+            db.commit()
+
+    def test_it_clears_rows_and_watermarks_but_keeps_clock_offsets_when_it_adds_the_column(self):
+        from jen.models.migrations import _m033_client_problems_scope_key
+
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("DELETE FROM client_problems")
+            self._insert(cur, 2, 2, server=97)
+            self._insert(cur, 1, 1, server=96)
+            cur.execute("REPLACE INTO settings (setting_key, setting_value) VALUES ('client_problems_wm:97', 'x')")
+            cur.execute(
+                "REPLACE INTO settings (setting_key, setting_value) VALUES ('client_problems_clock:97', '-18000')"
+            )
+            db.commit()
+            cur.execute("ALTER TABLE client_problems DROP INDEX uq_client_problem")
+            cur.execute("ALTER TABLE client_problems DROP COLUMN scope_key")
+            cur.execute("ALTER TABLE client_problems ADD UNIQUE KEY uq_client_problem (server_id, kind, mac, ip)")
+            db.commit()
+            _m033_client_problems_scope_key(db)
+            db.commit()
+            cur.execute("SELECT COUNT(*) AS n FROM client_problems")
+            assert cur.fetchone()["n"] == 0, "every existing row may be cross-contaminated: the inbox starts again"
+            cur.execute("SELECT setting_key FROM settings WHERE setting_key LIKE 'client_problems_%'")
+            keys = {r["setting_key"] for r in cur.fetchall()}
+            assert "client_problems_wm:97" not in keys and "client_problems_clock:97" in keys
+            cur.execute("DELETE FROM settings WHERE setting_key LIKE 'client_problems_clock:97'")
+            db.commit()
+            cur.execute("SHOW INDEX FROM client_problems WHERE Key_name='uq_client_problem'")
+            assert [r["Column_name"] for r in sorted(cur.fetchall(), key=lambda r: r["Seq_in_index"])] == [
+                "server_id",
+                "kind",
+                "mac",
+                "ip",
+                "scope_key",
+            ]
 
 
 class TestMigration28DashboardPrefsWiden:

@@ -118,9 +118,10 @@ def collect(
 ):
     """Pure: what a sweep adds from one server's `problem_events`. Returns `(groups, recent, new_watermark)`:
 
-      groups  {(kind, mac, ip): {"new": events newer than the watermark, "first_ts", "last_ts", "detail", "subnet_id"}}  - only groups
-              with something new; the timestamps are the events' OWN (`uts`, UTC, when the sweep converted them; else `ts`), and
-              `subnet_id` is the newest event's own (None when the event named none)
+      groups  {(kind, mac, ip, subnet_id): {"new": events newer than the watermark, "first_ts", "last_ts", "detail", "subnet_id"}}  - only
+              groups with something new; the timestamps are the events' OWN (`uts`, UTC, when the sweep converted them; else `ts`). The
+              subnet is part of the key (v5.68.0-beta.14, Q149): it is part of a stored row's identity, so events in different subnets are
+              different groups even when the client and the address (often none) are the same, and a row never changes subnet
       recent  {(kind, mac, subnet_id): events within `window` of `now`}  - the count the alert threshold is judged on, per client AND
               subnet (None is a key of its own: "no attributable subnet"), across every address the client asked for in that subnet,
               and including lines an earlier sweep already counted. The page shows a user only the rows in subnets they may see, so
@@ -149,14 +150,15 @@ def collect(
             recent[key] = recent.get(key, 0) + 1
         if watermark is not None and e["ts"] <= watermark:
             continue
+        subnet = where(e)
         g = groups.setdefault(
-            (e["kind"], e["mac"], e["ip"]),
-            {"new": 0, "first_ts": when(e), "last_ts": when(e), "detail": e["detail"], "subnet_id": e.get("subnet_id")},
+            (e["kind"], e["mac"], e["ip"], subnet),
+            {"new": 0, "first_ts": when(e), "last_ts": when(e), "detail": e["detail"], "subnet_id": subnet},
         )
         g["new"] += 1
         g["first_ts"] = min(g["first_ts"], when(e))
         if when(e) >= g["last_ts"]:
-            g["last_ts"], g["detail"], g["subnet_id"] = when(e), e["detail"], e.get("subnet_id")
+            g["last_ts"], g["detail"] = when(e), e["detail"]
     new_watermark = newest if (watermark is None or newest > watermark) else watermark
     return groups, recent, new_watermark
 
@@ -478,8 +480,8 @@ def clock_notes() -> list[dict]:
 
 
 _UPSERT_LOG = (
-    "INSERT INTO client_problems (server_id, kind, mac, ip, subnet_id, first_seen, last_seen, `count`, detail) "
-    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
+    "INSERT INTO client_problems (server_id, kind, mac, ip, subnet_id, scope_key, first_seen, last_seen, `count`, detail) "
+    "VALUES (%s, %s, %s, %s, %s, COALESCE(%s, -1), %s, %s, %s, %s) "
     "ON DUPLICATE KEY UPDATE "
     "`count` = IF(resolved_at IS NULL, `count` + VALUES(`count`), VALUES(`count`)), "
     "first_seen = IF(resolved_at IS NULL, first_seen, VALUES(first_seen)), "
@@ -487,22 +489,21 @@ _UPSERT_LOG = (
     "alert_attempted_at = IF(resolved_at IS NULL, alert_attempted_at, NULL), "
     "qualified_at = IF(resolved_at IS NULL, qualified_at, NULL), "
     "qualified_count = IF(resolved_at IS NULL, qualified_count, NULL), "
-    "subnet_id = VALUES(subnet_id), "
     "detail = VALUES(detail), last_seen = GREATEST(last_seen, VALUES(last_seen)), resolved_at = NULL"
 )  # resolved_at LAST: the assignments above read its old value, and MySQL applies them left to right
-# `subnet_id = VALUES(subnet_id)`: the newest event decides where the row is (v5.68.0-beta.9, Q144) - an event that named no subnet makes
-# the row unattributed (unrestricted callers only) rather than leaving it where an older event put it
+# The subnet is NOT assigned on duplicate (v5.68.0-beta.14, Q149): it is part of the unique key (`scope_key` = COALESCE(subnet_id, -1)), so a
+# row's subnet never changes and an event in another subnet - or none - is another row, with its own count, times and alert state.
+# (Q144 had the newest event reassign it, which carried one subnet's history and qualification onto another subnet's row.)
 
 _UPSERT_STATE = (
-    "INSERT INTO client_problems (server_id, kind, mac, ip, subnet_id, first_seen, last_seen, `count`, detail) "
-    "VALUES (%s, %s, %s, %s, %s, %s, %s, 1, %s) "
+    "INSERT INTO client_problems (server_id, kind, mac, ip, subnet_id, scope_key, first_seen, last_seen, `count`, detail) "
+    "VALUES (%s, %s, %s, %s, %s, COALESCE(%s, -1), %s, %s, 1, %s) "
     "ON DUPLICATE KEY UPDATE "
     "first_seen = IF(resolved_at IS NULL, first_seen, VALUES(first_seen)), "
     "alerted_at = IF(resolved_at IS NULL, alerted_at, NULL), "
     "alert_attempted_at = IF(resolved_at IS NULL, alert_attempted_at, NULL), "
     "qualified_at = IF(resolved_at IS NULL, qualified_at, NULL), "
     "qualified_count = IF(resolved_at IS NULL, qualified_count, NULL), "
-    "subnet_id = COALESCE(VALUES(subnet_id), subnet_id), "
     "detail = VALUES(detail), last_seen = VALUES(last_seen), `count` = 1, resolved_at = NULL"
 )
 
@@ -582,8 +583,7 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                 first_sweep = wm is None  # a server's first read sets the watermark and records; a backlog is not news
                 alerts_due = []
                 with __db.jen_db() as db, db.cursor() as cur:
-                    for (kind, mac, ip), g in groups.items():
-                        subnet_id = event_subnet(ip, g.get("subnet_id"))
+                    for (kind, mac, ip, subnet_id), g in groups.items():
                         cur.execute(
                             _UPSERT_LOG,
                             (
@@ -591,6 +591,7 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                                 kind,
                                 mac,
                                 ip,
+                                subnet_id,
                                 subnet_id,
                                 g["first_ts"],
                                 g["last_ts"],
@@ -604,10 +605,7 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                     # page. A key with something new is considered, and so is one whose alert FAILED to land or whose qualification is
                     # still waiting for delivery: it is retried (bounded below) from the PERSISTED qualification, without waiting for the
                     # client to have more trouble and without needing the qualifying lines to still be in the 1000-line tail.
-                    keys = {
-                        (k, m, subnet_of({"ip": ip, "subnet_id": g.get("subnet_id")}))
-                        for (k, m, ip), g in groups.items()
-                    }
+                    keys = {(k, m, s) for (k, m, _ip, s) in groups}
                     cur.execute(
                         "SELECT kind, mac, subnet_id FROM client_problems WHERE server_id=%s AND resolved_at IS NULL "
                         "AND alerted_at IS NULL AND (alert_attempted_at IS NOT NULL OR qualified_at IS NOT NULL)",
@@ -679,10 +677,13 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                     with __db.jen_db() as db, db.cursor() as cur:
                         # `alerted_at` ONLY for a delivered alert: it is what the once-a-day rule reads, so a failed
                         # delivery no longer silences the client for 24 hours
+                        # a delivered alert leaves NO pending qualification behind (Q149): `qualified_at` / `qualified_count` are what a
+                        # retry reads, and there is nothing left to retry. A failed one keeps them for the next try.
                         cur.execute(
-                            "UPDATE client_problems SET alert_attempted_at=%s, alerted_at=IF(%s, %s, alerted_at) "
+                            "UPDATE client_problems SET alert_attempted_at=%s, alerted_at=IF(%s, %s, alerted_at), "
+                            "qualified_at=IF(%s, NULL, qualified_at), qualified_count=IF(%s, NULL, qualified_count) "
                             "WHERE server_id=%s AND kind=%s AND mac=%s AND subnet_id <=> %s AND resolved_at IS NULL",
-                            (now, delivered, now, sid, kind, mac, subnet_id),
+                            (now, delivered, now, delivered, delivered, sid, kind, mac, subnet_id),
                         )
                 if new_wm is not None:
                     _wm_set(sid, new_wm)
@@ -697,7 +698,7 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                     subnet_id = p["subnet_id"] or event_subnet(p["ip"], None)
                     cur.execute(
                         _UPSERT_STATE,
-                        (DB_SERVER_ID, p["kind"], p["mac"], p["ip"], subnet_id, now, now, p["detail"][:255]),
+                        (DB_SERVER_ID, p["kind"], p["mac"], p["ip"], subnet_id, subnet_id, now, now, p["detail"][:255]),
                     )
                 # a state that is no longer there is resolved at once - it is a fact about now, not an event that may recur
                 marks = ",".join(["%s"] * len(DB_KINDS))

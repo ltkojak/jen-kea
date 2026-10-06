@@ -33,7 +33,7 @@
     {% if query_mac %}
         {% if located and located.switch_name %}
         <div class="alert alert-info mt-2">
-            <span class="mono">{{ located.mac }}</span> {{ 'was last seen on' if located.not_latest else 'is on' }} <b>{{ located.switch_name }}</b>, port
+            <span class="mono">{{ located.mac }}</span> {{ 'was last seen on' if located.restricted else 'is on' }} <b>{{ located.switch_name }}</b>, port
             <span class="mono">{{ located.ifname or ('ifindex ' ~ located.ifindex) }}</span>
             {% if located.ifalias %}<span class="small muted">({{ located.ifalias }})</span>{% endif %}
             {% if located.vlan is not none %}&middot; VLAN {{ located.vlan }}{% endif %}

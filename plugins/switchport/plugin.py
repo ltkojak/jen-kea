@@ -75,16 +75,19 @@ each port's real MAC count (`sp_ports.mac_count`, uplinks included) and
 the page shows "Auto (uplink, 37 MACs)" — the operator can see the
 heuristic fired, and why.
 
-**Who sees what (v1.0.1).** A MAC is shown only when its CURRENT subnet
-(device, active lease, reservation, in that order) is one the caller may
-see; "no attributable subnet" is for unrestricted callers only, for API
-keys and the search provider too (`plugin_api.can_access_subnet` /
-`api_key_can_access_subnet`). A switch belongs to the subnet its
-management address is in (`derive_subnet_id`): a scoped account sees, and
-may change, only switches whose address is in its own subnets; a switch
-addressed by hostname, or by an address in no Kea subnet, is for
-unrestricted accounts. The subnet is derived server-side; a value the
-caller types is never the subject of a decision.
+**Who sees what.** A stored port position is a STORED object (the rule is in
+plugins/README.md, "Stored data", which is the source - this paragraph only points
+at it): it belongs to the subnet of its SWITCH, the one the switch's management
+address is in (`derive_subnet_id`), and the page, the search, the JSON API and the
+Investigation card all judge it through the one `positions_in_scope` and show the
+newest position the caller may see. Where the MAC is now decides nothing. A scoped
+account sees, and may change, only switches whose address is in its own subnets; a
+switch addressed by hostname, or by an address in no Kea subnet, is for unrestricted
+accounts; "no attributable subnet" is for unrestricted callers only, for API keys and
+the search provider too (`plugin_api.can_access_subnet` / `api_key_can_access_subnet`).
+What a scoped caller is shown is built from the positions it may see alone, so it is
+identical with or without a hidden one (v1.1.3). The subnet is derived server-side; a
+value the caller types is never the subject of a decision.
 
 **The community string is an argv.** net-snmp's `snmpbulkwalk -c` takes
 the SNMPv2c community on the command line, so it is visible in `ps` on the
@@ -666,18 +669,19 @@ def _locate_mac(mac, can=None):
     """The newest position of `mac` the CALLER may see, or None (v1.1.2). Every stored position is judged by its own switch's
     subnet (`positions_in_scope`, the one judgement - the page, the API and the search provider all come through it); where the
     MAC is now decides nothing. `can` is the caller's predicate on a subnet id: the session user's `_can` by default, the API
-    key's for the API. The position carries `not_latest`: True when a NEWER position exists on a switch the caller may not see,
-    so the page can say "last seen" instead of "is on" - it never says why. A MAC whose only positions are hidden is simply not
-    located, the same answer as a MAC no switch has reported."""
+    key's for the API. The position carries `restricted` (v1.1.3): True for a caller who cannot see every subnet, so the page says
+    "was last seen on" - a claim made from the visible positions alone, which is the same words with or without a hidden newer one.
+    (1.1.2 said "last seen" only when a newer position WAS hidden, which told a scoped caller that one exists.) A MAC whose only
+    positions are hidden is simply not located, the same answer as a MAC no switch has reported."""
     try:
         positions = _positions_for_mac(mac)
     except Exception as e:
         logger.error(f"Switch Port Locator: locate failed for {mac}: {e}")
         return None
-    visible, newest_hidden = positions_in_scope(positions, _subnet_map(), (), False, can=can or _can)
+    visible, restricted = positions_in_scope(positions, _subnet_map(), (), False, can=can or _can)
     if not visible:
         return None
-    return {**visible[0], "not_latest": newest_hidden}
+    return {**visible[0], "restricted": restricted}
 
 
 # ── Search provider ──────────────────────────────────────────────────────────
@@ -725,7 +729,7 @@ def _switchport_search(query, accessible_subnet_ids, all_subnets):
                 # v1.1.2 - a row is a stored position and carries the SWITCH's subnet: the subnet whose information the row
                 # prints (the switch's name, the port). It used to report the CLIENT's current subnet, so Jen's own
                 # defence-in-depth filter passed a row whose text named a switch in a subnet the caller cannot see.
-                visible, _newest_hidden = positions_in_scope([row], smap, accessible_subnet_ids, all_subnets)
+                visible, _restricted = positions_in_scope([row], smap, accessible_subnet_ids, all_subnets)
                 if not visible:
                     continue
                 out.append(
@@ -765,33 +769,35 @@ def _when(value):
 
 
 def positions_in_scope(positions, subnet_map, accessible_subnet_ids, all_subnets, can=None):
-    """Pure: (visible, newest_hidden) for a MAC's stored positions, newest first. A position is a STORED object whose subnet is
+    """Pure: (visible, restricted) for a MAC's stored positions, newest first. A position is a STORED object whose subnet is
     its SWITCH's - the one its management address is in - so each is judged on that and on nothing about where the client is
     now (v1.1.1). A switch addressed by hostname, or by an address in no Kea subnet, has no subnet and is for an unrestricted
-    caller only. `newest_hidden` says the newest position was one the caller may not see, so the newest they CAN see is not
-    where the client is now - the card must not claim it is. This is the ONE judgement (v1.1.2): the page, the API, the search
-    provider and the Investigation card all call it. The caller's scope is `accessible_subnet_ids` / `all_subnets` (a provider
-    is handed them) or, for a session user or an API key, `can` - a predicate on a subnet id (None is never allow)."""
+    caller only. `restricted` is whether the CALLER is scoped (cannot see "no attributable subnet"), never a fact about the
+    stored positions: 1.1.2 returned `newest_hidden` and the card said "Last seen on" instead of "On" when the newest position was
+    hidden, so a scoped caller could tell that a newer position exists. Output for a restricted caller is built from the visible
+    positions alone, so it is identical with or without a hidden one. This is the ONE judgement (v1.1.2): the page, the API, the
+    search provider and the Investigation card all call it. The caller's scope is `accessible_subnet_ids` / `all_subnets` (a
+    provider is handed them) or, for a session user or an API key, `can` - a predicate on a subnet id (None is never allow)."""
     allowed = can or (lambda sid: in_scope(sid, accessible_subnet_ids, all_subnets))
     visible = [pos for pos in positions or [] if allowed(derive_subnet_id(pos.get("host"), subnet_map))]
-    newest_hidden = bool(positions) and not (visible and visible[0] is positions[0])
-    return visible, newest_hidden
+    return visible, not allowed(None)
 
 
-def investigation_card(positions, newest_hidden=False):
+def investigation_card(positions, restricted=False):
     """Pure: the Investigation page's card from this MAC's stored positions (newest first, at most a few), or None when it
     was never located. A MAC that has stored positions on more than one switch has moved - the older entry is still there
     only until that switch is next polled; a port that is NOW treated as an uplink (pinned by hand after the MAC was
-    stored, or crossed the MAC-count threshold) is a position behind which the real one hides, and says so. When the newest
-    stored position is on a switch the caller may not see (`newest_hidden`) the position shown is not the latest, and the
-    card says "last seen" with its time instead of "on", and makes no claim about a move."""
+    stored, or crossed the MAC-count threshold) is a position behind which the real one hides, and says so. For a RESTRICTED
+    caller (v1.1.3) the card is built from the positions it is handed - the visible ones - alone and always says "Last seen on
+    ... at <time>": it never claims "On", because whether the newest position is theirs is exactly what they must not be able to
+    learn, and it makes no claim about a move."""
     if not positions:
         return None
     here = positions[0]
     port = here.get("ifname") or "?"
     alias = here.get("ifalias") or ""
     uplink = port_is_uplink(here.get("is_uplink"), here.get("mac_count"))
-    if newest_hidden:
+    if restricted:
         summary = f"Last seen on {here['switch_name']}, port {port}"
         if here.get("last_seen"):
             summary += f" at {_when(here['last_seen'])}"
@@ -810,7 +816,7 @@ def investigation_card(positions, newest_hidden=False):
         rows.append({"label": "Last seen on this port", "value": _when(here["last_seen"])})
     if here.get("first_seen"):
         rows.append({"label": "On this switch since", "value": _when(here["first_seen"])})
-    if len(positions) > 1 and not newest_hidden:
+    if len(positions) > 1 and not restricted:
         older = positions[1]
         summary += f"; it was also on {older['switch_name']}, port {older.get('ifname') or '?'}, so it has moved"
         rows.append(
@@ -859,10 +865,10 @@ def _investigate(subject, accessible_subnet_ids, all_subnets):
     stored = _positions_for_mac(mac)
     if not stored:
         return None
-    visible, newest_hidden = positions_in_scope(stored, _subnet_map(), accessible_subnet_ids, all_subnets)
+    visible, restricted = positions_in_scope(stored, _subnet_map(), accessible_subnet_ids, all_subnets)
     if not visible:
         return None
-    card = investigation_card(visible[:5], newest_hidden)
+    card = investigation_card(visible[:5], restricted)
     if card is not None:
         card["href"] = f"/network/switchport?mac={mac}"
     return card
