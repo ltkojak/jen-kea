@@ -425,8 +425,8 @@ def _unit_account(service):
         if sep:
             props[key.strip()] = value.strip()
     name = props.get("User", "")
-    if not name or name == "root":
-        return None
+    if not name or name == "root" or (name.isdigit() and int(name) == 0):
+        return None  # no User=, or root by name or by uid: the daemon is root's, so the check is
     try:
         import grp
         import pwd

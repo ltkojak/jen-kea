@@ -174,3 +174,15 @@ build 10 wrote it `0644`, and runs the check with the unit's `Group=` and `Suppl
 the check it used to fail. A unit that names a group the host does not have is refused with the reason on the Servers page. The by-hand install line shown in
 the flash and the docs embeds the new build. A restore marker for investigation logging that lost its `restore` object is no longer treated as proof that the
 logger had no settings: Jen changes nothing and the Health row says how to restore it by hand.
+
+## Press Update helper again: the config check runs as the account the unit names; the Problems inbox starts again
+
+Migration 33 runs on the first start (5.68.0-beta.14) and **empties the Problems inbox**: a row is now kept per client, kind and subnet, and the rows already
+there may have mixed one subnet's history into another's. The next sweep fills it again from the Kea logs (a server's first read after this records without
+alerting, as before), so nothing is lost that the logs still hold. Three plugin updates come with it, offered under Settings → Plugins: Wake & Actions 1.1.3,
+Presence 1.2.1 and Switch Port Locator 1.1.3 (a failed existence check now refuses instead of being read as "not found", and a subnet-scoped account is
+told the same thing about a switch position whether or not a newer one is hidden from them). Press **Update helper** on every Kea host (Settings → Kea → SSH
+shows "v7 (build 11, build 12 available)"): build 12 runs the config check as the account the Kea unit names even when the Kea binary is owned by root, which
+build 11 checked as root; a unit whose `User=` or `Group=` the host has no account for is refused with the reason on the Servers page. The by-hand install line
+shown in the flash and the docs embeds the new build. A damaged investigation-logging marker is now reported on the next scan instead of at its deadline, and the
+Servers page says where to find the old values (Config history) and offers **Forget** once you have put them back.
