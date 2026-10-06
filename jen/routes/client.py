@@ -32,6 +32,7 @@ from flask_login import current_user, login_required
 import jen.services.kea6 as __kea6
 from jen import extensions
 from jen.services import client_changes as __changes
+from jen.services import client_dns as __client_dns
 from jen.services import client_subject as __subject
 from jen.services import config_revisions as __rev
 from jen.services import dns_reconcile as __reconcile
@@ -209,28 +210,27 @@ def _config_tab(view):
 
 
 def _dns_tab(view):
-    """DNS tab: dns_reconcile.reconcile() over just this subject's own
-    reservation/lease names — never the fleet-wide rows /ddns/reconcile
-    builds. `import jen.routes.ddns` for `_run_verify`/`_reconcile_suffix`
-    reuses the exact same resolver and DDNS-suffix lookup that page uses."""
-    rows = []
-    if view.reservation and view.reservation.get("hostname"):
-        rows.append({"name": view.reservation["hostname"], "ip": view.reservation["ip"], "source": "reservation"})
-    if view.lease and view.lease.get("hostname"):
-        rows.append({"name": view.lease["hostname"], "ip": view.lease["ip"], "source": "lease"})
+    """DNS tab: dns_reconcile.reconcile() over every name this subject's own records carry that the caller may see - each v4
+    reservation and lease, and with IPv6 on each v6 reservation address and lease - never the fleet-wide rows /ddns/reconcile
+    builds. (It used to check only the FIRST reservation and the newest lease, so a wrong record on any other read as fine;
+    `client_dns.records_for` lists them all, one row per distinct name and address.) `import jen.routes.ddns` for
+    `_run_verify`/`_reconcile_suffix` reuses the exact same resolver and DDNS-suffix lookup that page uses. Returns
+    (results, error, note): `note` says when more records exist than one page checks."""
+    rows, total = __client_dns.records_for(view)
     if not rows:
-        return [], ""
+        return [], "", ""
     from jen.routes.ddns import _reconcile_suffix, _run_verify
 
+    note = f"Checked the first {len(rows)} of {total} records." if total > len(rows) else ""
     try:
         suffix = _reconcile_suffix()
-        results = __reconcile.reconcile(rows, _run_verify, suffix=suffix, limit=10)
-        return results, ""
+        results = __reconcile.reconcile(rows, _run_verify, suffix=suffix, limit=len(rows))
+        return results, "", note
     except __reconcile.ReconcileBusy:
-        return [], "A fleet-wide reconciliation is running right now — try again in a moment."
+        return [], "A fleet-wide reconciliation is running right now — try again in a moment.", ""
     except Exception as e:
         logger.error(f"client: DNS tab reconcile failed: {e}")
-        return [], "Could not check DNS. Check server logs for details."
+        return [], "Could not check DNS. Check server logs for details.", ""
 
 
 def _matched_classes(view) -> list[str]:
@@ -305,6 +305,7 @@ def client_page():
     config_sha = ""
     dns_results: list = []
     dns_error = ""
+    dns_note = ""
     chosen_subnet = None
     chosen_how = ""
     if view and view.mac:
@@ -312,8 +313,9 @@ def client_page():
             _client, chosen_subnet, chosen_how = _explain_inputs(view)
         if tab == "config" and chosen_subnet is not None:
             config_result, config_sha = _config_tab(view)
-        if tab == "dns":
-            dns_results, dns_error = _dns_tab(view)
+    if view and tab == "dns" and not view.candidates and view.found:
+        # not inside the `view.mac` branch above: an IPv6 or DUID subject with no MAC still has records to check
+        dns_results, dns_error, dns_note = _dns_tab(view)
 
     explain_qs = ""
     explain_line = ""
@@ -374,6 +376,7 @@ def client_page():
         config_result=config_result,
         config_sha=config_sha,
         dns_results=dns_results,
+        dns_note=dns_note,
         dns_error=dns_error,
         investigation_id=investigation_id,
     )

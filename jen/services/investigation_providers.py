@@ -3,8 +3,9 @@ jen/services/investigation_providers.py
 ────────────────────────────────────────
 v5.68.0-beta.4 (Q139) — register_investigation_provider(), the plugin-API hook that adds one card per plugin to the
 Investigation page's Overview ("What else Jen knows"), after the core facts. Mirrored on search_providers.py: a registry keyed
-by plugin id, registered once per plugin at load time, run in the request thread with a 1.0 s advisory budget, and a provider
-that raises is logged and shown as "unavailable" rather than breaking the page.
+by plugin id, registered once per plugin at load time, and a provider that raises is logged and shown as "unavailable" rather than
+breaking the page. Since v5.68.0-beta.11 (Q146) a provider is run by `provider_budget`, which enforces the 1.0 s budget (the page
+stops waiting; a provider that is not done shows "unavailable (over 1 s)") and caps how many calls can be outstanding.
 
 What a provider is handed is the ALREADY-AUTHORIZED view of the client (`client_subject.authorize`): it never resolves the
 client itself and sees only what the caller may. Defence in depth, the Q55 rule - the plugin's own filtering is never trusted
@@ -15,7 +16,8 @@ Jen, and the caller's own subnet scope is passed beside the subject so the provi
 import copy
 import logging
 import re
-import time
+
+from jen.services import provider_budget
 
 logger = logging.getLogger(__name__)
 
@@ -90,33 +92,50 @@ def _card(raw) -> dict | None:
 
 def run_investigation_providers(subject, accessible_subnet_ids, all_subnets: bool) -> list[dict]:
     """One entry per registered provider that has something to say (or failed), in registration order:
-    {"plugin_id", "title", "card", "unavailable"}. A provider answering None renders nothing and is not listed. A provider that
-    raises (or answers something that is not a card) is logged and listed as unavailable; one over its time budget is logged but
-    its card still shows - called in the request thread, so the budget is advisory, not a preemptive cutoff."""
+    {"plugin_id", "title", "card", "unavailable", "reason"}. A provider answering None renders nothing and is not listed. A
+    provider that raises (or answers something that is not a card) is logged and listed as unavailable; one that has not answered
+    within BUDGET_SECONDS is listed as unavailable with reason "over 1 s" and the page goes on without it (`provider_budget`
+    runs the calls concurrently, so the whole page waits for the budget once, not once per provider); when too many calls are
+    already outstanding a provider is not run and the reason is "busy"."""
     accessible = set(accessible_subnet_ids or ())
     if not all_subnets and not accessible:
         return []
+    # a deep copy per call: the provider gets the caller's view to READ, and cannot change what the next provider (or the page)
+    # sees by editing a list or dict inside it
+    calls = [
+        (
+            plugin_id,
+            lambda fn=entry["fn"]: fn(copy.deepcopy(subject), accessible_subnet_ids, all_subnets),
+        )
+        for plugin_id, entry in _PROVIDERS.items()
+    ]
+    titles = {plugin_id: entry["title"] for plugin_id, entry in _PROVIDERS.items()}
     out = []
-    for plugin_id, entry in _PROVIDERS.items():
+    for result in provider_budget.run_bounded("investigation", calls, BUDGET_SECONDS):
+        plugin_id = result["label"]
         card = None
-        unavailable = False
-        start = time.monotonic()
-        try:
-            # a deep copy: the provider gets the caller's view to READ, and cannot change what the next provider (or the page)
-            # sees by editing a list or dict inside it
-            card = _card(entry["fn"](copy.deepcopy(subject), accessible_subnet_ids, all_subnets))
-        except Exception as e:
+        reason = result["reason"]
+        unavailable = result["state"] != "ok"
+        if result["state"] == "error":
+            e = result["error"]
             logger.error(f"investigation provider {plugin_id!r} raised: {type(e).__name__}: {e}")
-            unavailable = True
-        else:
-            elapsed = time.monotonic() - start
-            if elapsed > BUDGET_SECONDS:
-                logger.warning(
-                    f"investigation provider {plugin_id!r} took {elapsed:.2f}s, over the {BUDGET_SECONDS}s budget"
-                )
+        elif not unavailable:
+            try:
+                card = _card(result["value"])
+            except ValueError as e:
+                logger.error(f"investigation provider {plugin_id!r} raised: {type(e).__name__}: {e}")
+                unavailable = True
         if card is None and not unavailable:
             continue
-        out.append({"plugin_id": plugin_id, "title": entry["title"], "card": card, "unavailable": unavailable})
+        out.append(
+            {
+                "plugin_id": plugin_id,
+                "title": titles[plugin_id],
+                "card": card,
+                "unavailable": unavailable,
+                "reason": reason,
+            }
+        )
     return out
 
 

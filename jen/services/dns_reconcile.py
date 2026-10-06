@@ -105,6 +105,25 @@ def _definitive(errno) -> bool:
     return errno is None or errno in _DEFINITIVE_ERRNOS
 
 
+def _record_type(ip: str) -> str:
+    """ "AAAA" for an IPv6 address, "A" for anything else - the record a row's name should have for its address."""
+    return "AAAA" if ":" in str(ip or "") else "A"
+
+
+def _of_the_rows_family(observed: dict, rtype: str) -> dict:
+    """`observed` with `forward_ips` cut to the rows record type. The system resolver answers a name with every address it has,
+    A and AAAA together, so a dual-stack host reads as "multiple-a" against either of its addresses and an IPv6 row is
+    checked against its IPv4 address. Only the addresses of the row's own family count; a name that has records but none of this
+    type is "missing-forward" (no A / no AAAA record), which is what it is. (v5.68.0-beta.11, Q146.)"""
+    if "forward_ips" not in observed:
+        return observed
+    forward = observed.get("forward_ips") or []
+    same = [a for a in forward if _record_type(a) == rtype]
+    if forward and not same and not observed.get("forward_error") and not observed.get("lookup_failed"):
+        return {**observed, "forward_ips": [], "forward_error": f"no {rtype} record"}  # no errno: a definitive miss
+    return {**observed, "forward_ips": same}
+
+
 def _classify(observed: dict, expected_ip: str, expected_name: str, expired_names: set[str]) -> str:
     """`observed` is whatever `resolve(name, ip)` returned — see
     ddns._run_verify's docstring for the exact shape this expects:
@@ -162,8 +181,10 @@ def reconcile(
     just means every reverse mismatch reads as wrong-ptr instead.
 
     Returns one dict per row (input order, capped at `limit`):
-    `{"name", "ip", "source", "expected_a", "observed_a",
-    "expected_ptr", "observed_ptr", "verdict"}`.
+    `{"name", "ip", "source", "rtype", "expected_a", "observed_a",
+    "expected_ptr", "observed_ptr", "verdict"}`. `rtype` is "A" for a v4 row
+    and "AAAA" for a v6 one (read from the address): a row is judged only
+    on the addresses of its own family (`_of_the_rows_family`).
     """
     expired = {str(n).rstrip(".").lower() for n in (expired_names or ())}
     capped = list(rows[:limit])
@@ -203,6 +224,8 @@ def reconcile(
                     msg = str(e) or e.__class__.__name__
                     logger.warning(f"dns_reconcile lookup failed for {fqdn}: {msg}")
                     observed = {"lookup_failed": True, "forward_error": msg, "reverse_error": msg}
+            rtype = _record_type(row["ip"])
+            observed = _of_the_rows_family(observed, rtype)
             verdict = _classify(observed, row["ip"], fqdn, expired)
             forward_ips = observed.get("forward_ips") or []
             results.append(
@@ -210,6 +233,7 @@ def reconcile(
                     "name": fqdn,
                     "ip": row["ip"],
                     "source": row.get("source", ""),
+                    "rtype": rtype,
                     "expected_a": row["ip"],
                     "observed_a": ", ".join(sorted(forward_ips)),
                     "expected_ptr": fqdn,

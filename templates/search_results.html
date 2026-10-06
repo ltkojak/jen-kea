@@ -159,13 +159,14 @@
 {% endif %}
 
 {# v5.57.0 (Q73) — one card per registered plugin search provider,
-   after the core sections; a provider that raised shows "unavailable"
-   rather than an empty card silently disappearing. #}
+   after the core sections; a provider that raised, ran over its budget (Q146) or was
+   turned away because too many calls are outstanding shows "unavailable"
+   (with the reason) rather than an empty card silently disappearing. #}
 {% for provider in provider_results %}
 <div class="card">
     <div class="card-header"><span class="card-title">{{ icon("puzzle") }} {{ provider.title }}{% if not provider.unavailable %} ({{ provider.rows|length }}){% endif %}</span></div>
     {% if provider.unavailable %}
-    <p class="u-6f1339">{{ provider.title }} search is unavailable right now.</p>
+    <p class="u-6f1339">{{ provider.title }} search is unavailable right now{% if provider.reason %} ({{ provider.reason }}){% endif %}.</p>
     {% elif provider.rows %}
     <div class="table-wrap">
     <table>

@@ -25,14 +25,32 @@ LEASE_IP = "10.0.0.120"
 
 
 def _config(
-    *, dns="10.0.0.53", pool_end=200, own_res_dns="9.9.9.9", neighbour_res_dns="8.8.4.4", subnet2_dns="1.1.1.1"
+    *,
+    dns="10.0.0.53",
+    pool_end=200,
+    own_res_dns="9.9.9.9",
+    neighbour_res_dns="8.8.4.4",
+    subnet2_dns="1.1.1.1",
+    global_dns="lan.example",
+    lifetime=3600,
+    log_severity="INFO",
+    socket="/run/kea/kea4-ctrl.sock",
+    interfaces=("eth0",),
+    lease_host="db.lan",
 ):
     """A Dhcp4 config with a shared network holding subnet 1 (our client's: a pool it is in, a pool it is not in, its own
-    reservation and a neighbour's) and a subnet 2 beside it, a class that guards the second pool, and a global option."""
+    reservation and a neighbour's) and a subnet 2 beside it, a class that guards the second pool, global options and
+    lifetime (Q146: client behaviour) and the server settings that are NOT client behaviour (loggers, control socket, hooks,
+    interfaces, the lease database)."""
     return {
         "Dhcp4": {
-            "valid-lifetime": 3600,
-            "option-data": [{"name": "domain-name", "data": "lan.example"}],
+            "valid-lifetime": lifetime,
+            "option-data": [{"name": "domain-name", "data": global_dns}],
+            "loggers": [{"name": "kea-dhcp4", "severity": log_severity}],
+            "control-socket": {"socket-type": "unix", "socket-name": socket},
+            "hooks-libraries": [{"library": "/usr/lib/kea/hooks/libdhcp_lease_cmds.so"}],
+            "interfaces-config": {"interfaces": list(interfaces)},
+            "lease-database": {"type": "mysql", "host": lease_host, "name": "kea"},
             "client-classes": [
                 {"name": "voip", "test": "substring(option[60].hex,0,4) == 'Cisc'"},
                 {"name": "unrelated", "test": "member('ALL')"},
@@ -137,13 +155,52 @@ class TestWhatIsOnThePath:
             "shared network campus",
             "pool 10.0.0.100 - 10.0.0.200",
             f"reservation {MAC}",
+            cc.GLOBAL_LABEL,
         }
 
-    def test_nothing_of_a_neighbour_a_pool_it_is_not_in_the_other_subnet_or_a_global_option(self):
+    def test_nothing_of_a_neighbour_a_pool_it_is_not_in_or_the_other_subnet(self):
         out = cc.extract(_config(), PATH)
         blob = json.dumps(out)
         assert "11:22:33:44:55:66" not in blob, "a neighbour's reservation is not on this client's path"
-        assert "10.0.0.201" not in blob and "10.0.1." not in blob and "lan.example" not in blob
+        assert "10.0.0.201" not in blob and "10.0.1." not in blob
+
+    def test_the_global_settings_every_client_inherits_are_on_the_path_and_only_those(self):
+        # Q146: a global option or lifetime is what every client in the service is given - it changes a client's answer
+        # more often than anything else, so it is on every client's path - and the component carries client behaviour only
+        settings = cc.extract(_config(), PATH)[cc.GLOBAL_LABEL]
+        assert settings == {
+            "option-data": [{"name": "domain-name", "data": "lan.example"}],
+            "valid-lifetime": 3600,
+        }
+        blob = json.dumps(cc.extract(_config(), PATH))
+        for not_client_behaviour in ("kea-dhcp4", "kea4-ctrl.sock", "libdhcp_lease_cmds", "eth0", "db.lan"):
+            assert not_client_behaviour not in blob, f"{not_client_behaviour!r} is not what a client is given"
+
+    def test_a_config_with_none_of_the_global_keys_has_no_global_component(self):
+        bare = {"Dhcp4": {"subnet4": [{"id": 1, "subnet": "10.0.0.0/24"}], "loggers": [{"name": "x"}]}}
+        assert cc.GLOBAL_LABEL not in cc.extract(bare, PATH)
+
+    def test_every_key_in_the_component_is_one_that_decides_what_a_client_is_given(self):
+        assert {
+            "option-data",
+            "valid-lifetime",
+            "renew-timer",
+            "rebind-timer",
+            "host-reservation-identifiers",
+            "reservations-global",
+            "reservations-in-subnet",
+            "match-client-id",
+            "echo-client-id",
+        } <= set(cc.GLOBAL_KEYS)
+        for key in (
+            "loggers",
+            "control-socket",
+            "hooks-libraries",
+            "interfaces-config",
+            "lease-database",
+            "hosts-database",
+        ):
+            assert key not in cc.GLOBAL_KEYS
 
     def test_the_subnets_own_element_carries_no_pools_or_reservations(self):
         element = cc.extract(_config(), PATH)["subnet 1 (10.0.0.0/24)"]
@@ -202,6 +259,61 @@ class TestDiffingTwoConfigs:
     @pytest.mark.parametrize("after", [{"neighbour_res_dns": "4.4.4.4"}, {"subnet2_dns": "4.4.4.4"}])
     def test_a_neighbours_reservation_or_the_other_subnet_is_not(self, after):
         assert self._changes(**after) == {}
+
+    def test_a_change_to_a_global_dns_option_appears(self):
+        changes = self._changes(global_dns="corp.example")
+        assert list(changes) == [cc.GLOBAL_LABEL] and changes[cc.GLOBAL_LABEL]["kind"] == "changed"
+        lines = changes[cc.GLOBAL_LABEL]["lines"]
+        assert any(line.startswith("-") and "lan.example" in line for line in lines)
+        assert any(line.startswith("+") and "corp.example" in line for line in lines)
+
+    def test_a_change_to_the_global_lifetime_appears(self):
+        changes = self._changes(lifetime=7200)
+        assert list(changes) == [cc.GLOBAL_LABEL]
+        assert any(line.startswith("+") and "7200" in line for line in changes[cc.GLOBAL_LABEL]["lines"])
+
+    @pytest.mark.parametrize(
+        "after",
+        [
+            {"log_severity": "DEBUG"},
+            {"socket": "/tmp/other.sock"},
+            {"interfaces": ("eth0", "eth1")},
+            {"lease_host": "db2.lan"},
+        ],
+        ids=["loggers", "control-socket", "interfaces", "lease-database"],
+    )
+    def test_a_change_to_a_setting_that_is_not_client_behaviour_does_not(self, after):
+        assert self._changes(**after) == {}
+
+    def test_hooks_libraries_are_not_client_behaviour_either(self):
+        after = copy.deepcopy(_config())
+        after["Dhcp4"]["hooks-libraries"].append({"library": "/usr/lib/kea/hooks/libdhcp_host_cmds.so"})
+        assert cc.diff_paths(_config(), after, PATH) == []
+
+    def test_global_settings_that_appear_or_disappear(self):
+        bare = copy.deepcopy(_config())
+        for key in cc.GLOBAL_KEYS:
+            bare["Dhcp4"].pop(key, None)
+        kinds = {c["label"]: c["kind"] for c in cc.diff_paths(bare, _config(), PATH)}
+        assert kinds == {cc.GLOBAL_LABEL: "added"}
+        kinds = {c["label"]: c["kind"] for c in cc.diff_paths(_config(), bare, PATH)}
+        assert kinds == {cc.GLOBAL_LABEL: "removed"}
+
+    def test_the_v6_service_has_its_own_global_settings(self):
+        path6 = cc.ClientPath(service="dhcp6", subnet_ids=frozenset({7}), identifiers=frozenset({"aabbccddeeff"}))
+
+        def cfg6(preferred):
+            return {"Dhcp6": {"preferred-lifetime": preferred, "subnet6": [{"id": 7, "subnet": "2001:db8::/64"}]}}
+
+        (change,) = cc.diff_paths(cfg6(3600), cfg6(1800), path6)
+        assert change["label"] == cc.GLOBAL_LABEL and any("1800" in line for line in change["lines"])
+
+    def test_the_element_filter_names_the_global_component(self):
+        assert cc.element_matches(cc.GLOBAL_LABEL, "global") and cc.element_matches(
+            cc.GLOBAL_LABEL, "global DHCP settings"
+        )
+        assert not cc.element_matches(cc.GLOBAL_LABEL, "reservation")
+        assert not cc.element_matches(f"global reservation {MAC}", "global")
 
     def test_a_pool_that_moves_is_one_removed_and_one_added(self):
         changes = self._changes(pool_end=210)
@@ -410,6 +522,27 @@ class TestRouteTheChangesTab:
         r = logged_in_client.get(f"/client?q={MAC}&tab=changes")
         assert r.status_code == 200
         assert "alpha dns moved" not in r.data.decode()
+
+
+class TestRouteGlobalSettings:
+    """Q146: the tab shows a change to the global settings every client inherits, and still not one to the server's own plumbing."""
+
+    def test_a_global_option_change_is_listed_and_a_logging_change_is_not(self, logged_in_client, three_revisions):
+        _revision(_config(subnet2_dns="4.4.4.4", dns="10.0.0.99", global_dns="corp.example"), "global domain moved")
+        _revision(
+            _config(subnet2_dns="4.4.4.4", dns="10.0.0.99", global_dns="corp.example", log_severity="DEBUG"),
+            "logging turned up",
+        )
+        body = logged_in_client.get(f"/client?q={MAC}&tab=changes").data.decode()
+        assert "global domain moved" in body and "global DHCP settings" in body and "corp.example" in body
+        assert "logging turned up" not in body
+
+    def test_the_global_filter_shows_only_that_component(self, logged_in_client, three_revisions):
+        _revision(_config(subnet2_dns="4.4.4.4", dns="10.0.0.99", lifetime=7200), "lifetime doubled")
+        body = logged_in_client.get(
+            "/client", query_string={"q": MAC, "tab": "changes", "element": "global DHCP settings"}
+        ).data.decode()
+        assert "lifetime doubled" in body and "alpha dns moved" not in body
 
 
 class TestRouteTheElementFilter:

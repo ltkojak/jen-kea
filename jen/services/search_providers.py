@@ -3,7 +3,8 @@ jen/services/search_providers.py
 ──────────────────────────────────
 v5.57.0 (Q73) — register_search_provider(), the plugin-API v3 hook that
 adds a card of results to /search (templates/search_results.html) after
-the core sections. Registered once per plugin at load time.
+the core sections. Registered once per plugin at load time. Since v5.68.0-beta.11 (Q146) a provider is run by `provider_budget`:
+the page stops waiting after BUDGET_SECONDS and shows "unavailable (over 1 s)", and the number of calls outstanding is capped.
 
 Defence in depth (the Q55 rule): even though `fn` is handed the caller's
 own accessible_subnet_ids, run_search_providers() drops any returned row
@@ -13,7 +14,8 @@ filtered correctly.
 """
 
 import logging
-import time
+
+from jen.services import provider_budget
 
 logger = logging.getLogger(__name__)
 
@@ -38,26 +40,25 @@ def registered_search_providers() -> dict:
 
 def run_search_providers(query: str, accessible_subnet_ids, all_subnets: bool) -> list[dict]:
     """One entry per registered provider, in registration order:
-    {"plugin_id", "title", "rows", "unavailable"}. A provider that
+    {"plugin_id", "title", "rows", "unavailable", "reason"}. A provider that
     raises is logged and marked unavailable rather than breaking the
-    page; one over its time budget is logged but its rows still show —
-    called in the request thread (no separate worker), so the budget is
-    advisory, not a preemptive cutoff."""
+    page; one that has not answered within BUDGET_SECONDS is unavailable
+    ("over 1 s") and the page goes on without it, and when too many calls
+    are already outstanding it is not run at all ("busy") - see
+    `provider_budget`."""
     accessible = set(accessible_subnet_ids)
+    calls = [
+        (plugin_id, lambda fn=entry["fn"]: fn(query, accessible_subnet_ids, all_subnets))
+        for plugin_id, entry in _PROVIDERS.items()
+    ]
+    titles = {plugin_id: entry["title"] for plugin_id, entry in _PROVIDERS.items()}
     out = []
-    for plugin_id, entry in _PROVIDERS.items():
-        unavailable = False
-        start = time.monotonic()
-        try:
-            raw_rows = entry["fn"](query, accessible_subnet_ids, all_subnets) or []
-        except Exception as e:
-            logger.error(f"search provider {plugin_id!r} raised: {e}")
-            unavailable = True
-            raw_rows = []
-        else:
-            elapsed = time.monotonic() - start
-            if elapsed > BUDGET_SECONDS:
-                logger.warning(f"search provider {plugin_id!r} took {elapsed:.2f}s, over the {BUDGET_SECONDS}s budget")
+    for result in provider_budget.run_bounded("search", calls, BUDGET_SECONDS):
+        plugin_id = result["label"]
+        unavailable = result["state"] != "ok"
+        raw_rows = (result["value"] or []) if not unavailable else []
+        if result["state"] == "error":
+            logger.error(f"search provider {plugin_id!r} raised: {result['error']}")
         # v5.65.8 (Q97 j): filter by the caller's subnets FIRST and truncate afterwards. It used to
         # truncate to MAX_ROWS before the re-filter, so a restricted caller whose rows were 21 and later
         # saw "No results". A malformed row (not a dict) is skipped, not allowed to raise here, outside
@@ -76,5 +77,13 @@ def run_search_providers(query: str, accessible_subnet_ids, all_subnets: bool) -
             rows.append(row)
             if len(rows) >= MAX_ROWS:
                 break
-        out.append({"plugin_id": plugin_id, "title": entry["title"], "rows": rows, "unavailable": unavailable})
+        out.append(
+            {
+                "plugin_id": plugin_id,
+                "title": titles[plugin_id],
+                "rows": rows,
+                "unavailable": unavailable,
+                "reason": result["reason"],
+            }
+        )
     return out

@@ -1474,3 +1474,102 @@ class TestInvestigationProviderCards:
     def test_presence_names_the_sinks_to_an_admin_only(self, pclient, db, investigated):
         assert "matrix-sink" in self._page(pclient, db, "admin_A", A_MAC)
         assert "matrix-sink" not in self._page(pclient, db, "viewer_A", A_MAC)
+
+
+# ── v5.68.0-beta.11 (Q146): a STORED object is judged by its own subnet, never by where the client is now ──────────────────
+STORED_B = "ZZ-STORED-B"  # printed by what was saved in subnet B for a client that is now in A
+STORED_A = "ZZ-STORED-A"
+STORED_SW_B, STORED_SW_A = 9412, 9413
+
+
+def _stored_clean(cur):
+    cur.execute("DELETE FROM wol_hosts WHERE mac=%s", (A_MAC,))
+    cur.execute("DELETE FROM pr_state WHERE mac=%s", (A_MAC,))
+    cur.execute("DELETE FROM pr_tracked WHERE mac=%s", (A_MAC,))
+    cur.execute("DELETE FROM sp_mac_ports WHERE switch_id IN (%s, %s)", (STORED_SW_B, STORED_SW_A))
+    cur.execute("DELETE FROM sp_ports WHERE switch_id IN (%s, %s)", (STORED_SW_B, STORED_SW_A))
+    cur.execute("DELETE FROM sp_switches WHERE id IN (%s, %s)", (STORED_SW_B, STORED_SW_A))
+
+
+@pytest.fixture
+def stored_in_b(plugin_app, db, plugin_data):
+    """The control client is in subnet A NOW (a lease there). Everything the three plugins hold for it was stored in subnet B:
+    a favourite and a tracked row saved in B, and a position on a switch addressed in B that is NEWER than the one on a switch in
+    A. This is the leak direction the first provider releases missed: judged by where the client is now, the A-scoped caller
+    could read all of it."""
+    with db.cursor() as cur:
+        _inv_clean(cur)
+        _stored_clean(cur)
+        cur.execute(
+            "INSERT INTO wol_hosts (mac, ip, subnet_id, label) VALUES (%s, %s, 2, %s)",
+            (A_MAC, INV_A_IP, STORED_B + "-wol"),
+        )
+        cur.execute(
+            "INSERT INTO pr_tracked (mac, label, subnet_id, added_by) VALUES (%s, %s, 2, 'seed')",
+            (A_MAC, STORED_B + "-pr"),
+        )
+        cur.execute("INSERT INTO pr_state (mac, online, since, last_seen) VALUES (%s, 1, NOW(), NOW())", (A_MAC,))
+        cur.execute(
+            "INSERT INTO sp_switches (id, name, host, community) VALUES (%s, %s, '10.77.0.2', 'x'), (%s, %s, '10.98.1.2', 'x')",
+            (STORED_SW_B, STORED_B + "-sw", STORED_SW_A, STORED_A + "-sw"),
+        )
+        cur.execute(
+            "INSERT INTO sp_ports (switch_id, ifindex, ifname) VALUES (%s, 1, 'Gi2/0/9'), (%s, 1, 'Gi1/0/7')",
+            (STORED_SW_B, STORED_SW_A),
+        )
+        cur.execute(
+            "INSERT INTO sp_mac_ports (mac, switch_id, ifindex, vlan, last_seen) VALUES "
+            "(%s, %s, 1, 30, NOW()), (%s, %s, 1, 20, DATE_SUB(NOW(), INTERVAL 1 HOUR))",
+            (A_MAC, STORED_SW_B, A_MAC, STORED_SW_A),
+        )
+    db.commit()
+    yield
+    with db.cursor() as cur:
+        _stored_clean(cur)
+    db.commit()
+
+
+class TestAStoredObjectIsJudgedByItsOwnSubnet:
+    """The rule (plugins/README.md, docs/ARCHITECTURE.md section 2) driven through the real /client page with every bundled plugin
+    enabled: wol 1.1.1, presence 1.1.1 and switchport 1.1.1. A caller scoped to A investigates the client that is in A now."""
+
+    def _page(self, pclient, db, role):
+        _caller(pclient, db, role)
+        return pclient.get(f"/client?q={A_MAC}").data.decode("utf-8", "replace")
+
+    def test_a_favourite_and_a_tracked_row_saved_in_b_are_not_shown_to_a_caller_scoped_to_a(
+        self, pclient, db, stored_in_b
+    ):
+        body = self._page(pclient, db, "admin_A")
+        assert STORED_B + "-wol" not in body and STORED_B + "-pr" not in body
+        assert 'data-plugin-card="wol"' not in body and 'data-plugin-card="presence"' not in body
+        assert_no_marker(body)
+
+    def test_the_same_rows_are_shown_to_an_unrestricted_caller_with_where_the_client_is_now(
+        self, pclient, db, stored_in_b
+    ):
+        body = self._page(pclient, db, "admin_all")
+        assert STORED_B + "-wol" in body and STORED_B + "-pr" in body, "they exist: their absence above is the scope"
+        assert "Now in" in body and "Alpha-A" in body, "the unrestricted caller is told where the client is now"
+
+    def test_a_scoped_caller_sees_only_the_position_on_the_switch_in_their_own_subnet(self, pclient, db, stored_in_b):
+        body = self._page(pclient, db, "admin_A")
+        assert STORED_A + "-sw" in body and "Gi1/0/7" in body
+        assert STORED_B + "-sw" not in body and "Gi2/0/9" not in body
+        assert "Last seen on " + STORED_A + "-sw" in body, (
+            "the newest position was hidden, so the card says last seen, not on"
+        )
+        assert "has moved" not in body.split("What else Jen knows")[-1], (
+            "no claim about a move the caller cannot see the end of"
+        )
+
+    def test_an_unrestricted_caller_sees_both_positions(self, pclient, db, stored_in_b):
+        body = self._page(pclient, db, "admin_all")
+        assert STORED_B + "-sw" in body and "Gi2/0/9" in body and STORED_A + "-sw" in body
+
+    def test_a_client_whose_only_positions_are_on_switches_in_b_gets_no_switchport_card(self, pclient, db, stored_in_b):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM sp_mac_ports WHERE switch_id=%s", (STORED_SW_A,))
+        db.commit()
+        body = self._page(pclient, db, "admin_A")
+        assert 'data-plugin-card="switchport"' not in body and STORED_B + "-sw" not in body and "Gi2/0/9" not in body

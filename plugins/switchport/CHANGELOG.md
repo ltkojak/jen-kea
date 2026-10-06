@@ -1,5 +1,22 @@
 # Switch Port Locator Plugin — Changelog
 
+## [1.1.1] - 2026-10-06
+
+Fix to the investigation provider added in 1.1.0. No change to what Jen needs: `requires_jen` stays 5.68.0.
+
+### Fixed: each stored position is judged by its own switch, not by where the client is now
+
+1.1.0 judged the client by the subnet it is in now and then printed its last five stored positions without asking where
+each one was. A switch belongs to the subnet its management address is in, and a position is stored data about that
+switch, so a client that had been on a switch in a subnet the caller cannot see was shown, switch name and port, to a
+caller scoped to the subnet the client has since moved to. Each position is now judged by its own switch's subnet before the
+card is built: a client whose positions are all on switches the caller cannot see gets no card, one with a mix gets only
+the positions on switches the caller can see, and a switch addressed by hostname (or by an address in no Kea subnet) is
+for callers who can see every subnet. When the newest position is on a switch the caller cannot see, the position shown is
+not the latest, so the card says "Last seen on ..." with its time instead of "On ...", and makes no claim about a move.
+The position query takes every stored position (up to 50) and filters before keeping five, so hidden positions can no
+longer push a visible one out of the card.
+
 ## [1.1.0] - 2026-10-04
 
 Requires Jen 5.68.0 (a 5.68.0 beta satisfies it): this release registers an **investigation provider**.

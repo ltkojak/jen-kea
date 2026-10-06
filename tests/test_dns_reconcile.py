@@ -134,6 +134,7 @@ class TestReconcile:
                 "name",
                 "ip",
                 "source",
+                "rtype",
                 "expected_a",
                 "observed_a",
                 "expected_ptr",
@@ -341,3 +342,49 @@ class TestReconcileAtTheCap:
         finally:
             gate.set()
             time.sleep(0.3)  # let the released workers drain before the next test
+
+
+class TestRecordType:
+    """v5.68.0-beta.11 (Q146): a row is an A record for a v4 address and an AAAA record for a v6 one, and is judged only on the
+    addresses of its own family - the system resolver answers a name with both."""
+
+    DUAL = {"dual.lan": {"forward_ips": ["10.0.0.5", "2001:db8::5"], "reverse_name": "dual.lan"}}
+
+    def _one(self, ip, responses=None):
+        rows = [{"name": "dual.lan", "ip": ip, "source": "reservation"}]
+        (result,) = dr.reconcile(rows, _resolver(responses or self.DUAL))
+        return result
+
+    def test_a_dual_stack_host_is_ok_for_its_v4_row_not_multiple_a(self):
+        result = self._one("10.0.0.5")
+        assert result["verdict"] == "ok" and result["rtype"] == "A" and result["observed_a"] == "10.0.0.5"
+
+    def test_and_ok_for_its_v6_row(self):
+        result = self._one("2001:db8::5")
+        assert result["verdict"] == "ok" and result["rtype"] == "AAAA" and result["observed_a"] == "2001:db8::5"
+
+    def test_a_v6_row_whose_aaaa_is_wrong_is_wrong_forward_even_when_the_a_record_is_right(self):
+        wrong = {"dual.lan": {"forward_ips": ["10.0.0.5", "2001:db8::9"], "reverse_name": "dual.lan"}}
+        assert self._one("2001:db8::5", wrong)["verdict"] == "wrong-forward"
+        assert self._one("10.0.0.5", wrong)["verdict"] == "ok"
+
+    def test_a_name_with_records_but_none_of_the_rows_type_is_missing_forward(self):
+        only_a = {"v4only.lan": {"forward_ips": ["10.0.0.5"], "reverse_name": "v4only.lan"}}
+        rows = [{"name": "v4only.lan", "ip": "2001:db8::5", "source": "lease"}]
+        assert dr.reconcile(rows, _resolver(only_a))[0]["verdict"] == "missing-forward"
+        only_aaaa = {"v6only.lan": {"forward_ips": ["2001:db8::5"], "reverse_name": "v6only.lan"}}
+        rows = [{"name": "v6only.lan", "ip": "10.0.0.5", "source": "lease"}]
+        assert dr.reconcile(rows, _resolver(only_aaaa))[0]["verdict"] == "missing-forward"
+
+    def test_two_aaaa_records_are_multiple_a_for_a_v6_row_and_a_single_a_is_untouched(self):
+        two = {"x.lan": {"forward_ips": ["10.0.0.5", "2001:db8::5", "2001:db8::6"], "reverse_name": "x.lan"}}
+        rows = [
+            {"name": "x.lan", "ip": "2001:db8::5", "source": "lease"},
+            {"name": "x.lan", "ip": "10.0.0.5", "source": "lease"},
+        ]
+        assert [r["verdict"] for r in dr.reconcile(rows, _resolver(two))] == ["multiple-a", "ok"]
+
+    def test_an_error_or_a_failed_lookup_is_not_rewritten_as_a_missing_type(self):
+        failed = {"f.lan": {"lookup_failed": True, "forward_ips": ["10.0.0.5"]}}
+        rows = [{"name": "f.lan", "ip": "2001:db8::5", "source": "lease"}]
+        assert dr.reconcile(rows, _resolver(failed))[0]["verdict"] == "lookup-failed"

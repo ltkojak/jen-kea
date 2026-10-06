@@ -292,7 +292,7 @@ provider that limits to 20 rows and lets Jen filter them can spend all 20
 on matches in subnets the caller cannot see and hand a restricted caller
 nothing. Put the scope in the query with `search_scope()` (below) and match
 the text with `like_pattern()`. At most 20 rows are shown; a provider that
-raises shows "unavailable" instead of breaking the page.
+raises, or has not answered within 1 s, shows "unavailable" instead of breaking the page (see *Provider budget*, below).
 
 ```python
 from jen.plugin_api import register_search_provider
@@ -340,13 +340,40 @@ register_investigation_provider("switchport", title="Switch Port Locator", fn=_i
 * **Scope is yours and Jen's.** Jen only asks about a client the caller may see, and hands you the caller's own
   `accessible_subnet_ids` and `all_subnets` — put them in your own query (`search_scope()`, `can_access_subnet()`) exactly as a
   search provider does, and answer `None` rather than a row from a subnet outside them. A client the caller cannot place in a
-  subnet is the page's ordinary "No client matched" answer and no provider is called at all.
+  subnet is the page's ordinary "No client matched" answer and no provider is called at all. **Judge what you stored by the
+  subnet it was stored in** (*Stored data*, below): never by where the client is now.
 * The card is `{"summary": one sentence, "rows": [{"label", "value", "href"?}], "href", "status"}`. Jen validates and trims it:
   text is length-capped, at most 20 rows, an unknown `status` reads as `ok`, and any `href` that is not a single-slash path inside
   Jen is dropped. A card with neither summary nor rows is the same as `None`.
-* Providers run in registration order, in the request, with an advisory 1.0 s budget each (over-budget is logged; the card still
-  shows). One that raises — or answers something that is not a card — shows "unavailable" and is logged; it never breaks the page.
+* Providers are shown in registration order and run with a hard 1.0 s budget (*Provider budget*, below). One that raises — or
+  answers something that is not a card — shows "unavailable" and is logged; one that is too slow shows "unavailable (over 1 s)". It
+  never breaks the page.
 * Same cache rule as a search provider: do your own `LIMIT` after your own scope filter. Registered once, in `register(app)`.
+
+### Stored data — judge it by its own subnet (v5.68.0-beta.11)
+
+A plugin that keeps a row about a client (a favourite, a tracked device, a port a MAC was seen on, a scan result) holds a **stored
+object**, and a stored object belongs to the subnet it was stored in — the subnet of the row, or of the thing the row is about (a
+switch's subnet is the one its management address is in). That is the subnet a caller must be allowed to see to be shown it.
+**Where the client is now never widens that.** A favourite saved in subnet B is not shown to a caller scoped to A because the
+client's lease has since moved to A; the client's current subnet is a fact you may print beside the row ("now in ..."), and only
+when the caller may see that subnet too, because naming a subnet is access to it. A row with no subnet is for an unrestricted caller
+only, and so is a switch addressed by a hostname or by an address in no Kea subnet. The one place the current subnet is the right
+question is an **act on the live device** (a wake packet): that is judged on where the host is now, because that is where the packet
+goes. Wake & Actions, Presence and Switch Port Locator 1.1.1 are the reference: the pure `in_scope(subnet_id, accessible, all)` on the
+stored subnet, a harness test for the client that moved from B to A, and a position-by-position filter for rows (switch positions)
+whose subnet is derived rather than a column — filter *before* keeping the few you show, so hidden rows cannot push a visible one out.
+
+### Provider budget — what Jen enforces on a provider (v5.68.0-beta.11)
+
+Search and investigation providers are run by `jen/services/provider_budget.py`, not in the request thread. The page waits at most
+`BUDGET_SECONDS` (1.0) for the providers as a group — they run concurrently, on a small shared pool, so several slow ones cost one
+second, not one each. A provider that has not answered by then is shown as "unavailable (over 1 s)" and the page goes on; Python cannot
+stop a thread that is running, so the call is logged once, counted, and its answer dropped when it arrives. At most 8 provider calls
+are outstanding at once, and a slot is only returned when the call really ends: when they are all taken, a new call is not started and
+the provider reads "unavailable (busy)". The practical rules for a provider: answer from your own tables with no network call in the
+request path, give every query and socket its own timeout well under a second, and expect to run in a worker thread — the caller's
+request (`current_user`, `request`, `url_for`) is there, a copy of it, but `flask.g` set earlier in the request is not.
 
 ### Subnet checks — `can_access_subnet` / `api_key_can_access_subnet` (v5.65.2)
 

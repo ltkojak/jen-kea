@@ -771,18 +771,40 @@ def _when(value):
     return str(value) if value else ""
 
 
-def investigation_card(positions):
+def positions_in_scope(positions, subnet_map, accessible_subnet_ids, all_subnets):
+    """Pure: (visible, newest_hidden) for a MAC's stored positions, newest first. A position is a STORED object whose subnet is
+    its SWITCH's - the one its management address is in - so each is judged on that and on nothing about where the client is
+    now (v1.1.1). A switch addressed by hostname, or by an address in no Kea subnet, has no subnet and is for an unrestricted
+    caller only. `newest_hidden` says the newest position was one the caller may not see, so the newest they CAN see is not
+    where the client is now - the card must not claim it is."""
+    visible = [
+        pos
+        for pos in positions or []
+        if in_scope(derive_subnet_id(pos.get("host"), subnet_map), accessible_subnet_ids, all_subnets)
+    ]
+    newest_hidden = bool(positions) and not (visible and visible[0] is positions[0])
+    return visible, newest_hidden
+
+
+def investigation_card(positions, newest_hidden=False):
     """Pure: the Investigation page's card from this MAC's stored positions (newest first, at most a few), or None when it
     was never located. A MAC that has stored positions on more than one switch has moved - the older entry is still there
     only until that switch is next polled; a port that is NOW treated as an uplink (pinned by hand after the MAC was
-    stored, or crossed the MAC-count threshold) is a position behind which the real one hides, and says so."""
+    stored, or crossed the MAC-count threshold) is a position behind which the real one hides, and says so. When the newest
+    stored position is on a switch the caller may not see (`newest_hidden`) the position shown is not the latest, and the
+    card says "last seen" with its time instead of "on", and makes no claim about a move."""
     if not positions:
         return None
     here = positions[0]
     port = here.get("ifname") or "?"
     alias = here.get("ifalias") or ""
     uplink = port_is_uplink(here.get("is_uplink"), here.get("mac_count"))
-    summary = f"On {here['switch_name']}, port {port}"
+    if newest_hidden:
+        summary = f"Last seen on {here['switch_name']}, port {port}"
+        if here.get("last_seen"):
+            summary += f" at {_when(here['last_seen'])}"
+    else:
+        summary = f"On {here['switch_name']}, port {port}"
     if here.get("vlan"):
         summary += f" (VLAN {here['vlan']})"
     status = "ok"
@@ -796,7 +818,7 @@ def investigation_card(positions):
         rows.append({"label": "Last seen on this port", "value": _when(here["last_seen"])})
     if here.get("first_seen"):
         rows.append({"label": "On this switch since", "value": _when(here["first_seen"])})
-    if len(positions) > 1:
+    if len(positions) > 1 and not newest_hidden:
         older = positions[1]
         summary += f"; it was also on {older['switch_name']}, port {older.get('ifname') or '?'}, so it has moved"
         rows.append(
@@ -817,12 +839,15 @@ def _positions_for_mac(mac):
     try:
         db = _get_db()
         with db.cursor() as cur:
+            # a switch's subnet is derived from its address, not a column, so the scope cannot go in this query: take every
+            # stored position (a MAC is on a handful of switches at most; 50 is a ceiling, not a page) and let the caller
+            # filter THEN keep the few it shows - a LIMIT 5 here would let five hidden positions hide a visible one
             cur.execute(
-                "SELECT s.name AS switch_name, mp.ifindex, p.ifname, p.ifalias, p.is_uplink, p.mac_count, "
+                "SELECT s.name AS switch_name, s.host AS host, mp.ifindex, p.ifname, p.ifalias, p.is_uplink, p.mac_count, "
                 "mp.vlan, mp.first_seen, mp.last_seen FROM sp_mac_ports mp "
                 "JOIN sp_switches s ON s.id = mp.switch_id "
                 "LEFT JOIN sp_ports p ON p.switch_id = mp.switch_id AND p.ifindex = mp.ifindex "
-                "WHERE mp.mac=%s ORDER BY mp.last_seen DESC LIMIT 5",
+                "WHERE mp.mac=%s ORDER BY mp.last_seen DESC LIMIT 50",
                 (mac,),
             )
             return list(cur.fetchall())
@@ -832,14 +857,20 @@ def _positions_for_mac(mac):
 
 
 def _investigate(subject, accessible_subnet_ids, all_subnets):
-    """The Investigation page's card for the client Jen resolved. A MAC's subnet is Jen's one precedence
-    (`client_subnet_for_mac`); a client outside the caller's scope - or in none, for a restricted caller - gets nothing."""
+    """The Investigation page's card for the client Jen resolved. Every stored position is judged by its OWN switch's subnet
+    (v1.1.1), before the card is built: a client whose positions are all on switches the caller may not see gets no card,
+    and one with a mix gets only the positions on switches the caller may see. Where the client is now never widens that -
+    Jen has already decided the caller may see the client at all."""
     mac = _normalize_mac(getattr(subject, "mac", "") or "")
     if not mac:
         return None
-    if not in_scope(_current_subnet_for_mac(mac), accessible_subnet_ids, all_subnets):
+    stored = _positions_for_mac(mac)
+    if not stored:
         return None
-    card = investigation_card(_positions_for_mac(mac))
+    visible, newest_hidden = positions_in_scope(stored, _subnet_map(), accessible_subnet_ids, all_subnets)
+    if not visible:
+        return None
+    card = investigation_card(visible[:5], newest_hidden)
     if card is not None:
         card["href"] = f"/network/switchport?mac={mac}"
     return card

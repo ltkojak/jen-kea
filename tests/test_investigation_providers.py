@@ -7,7 +7,7 @@ refuses to trust the plugin, the read-only subject, and the export from jen.plug
 """
 
 import logging
-import time
+import threading
 
 import pytest
 
@@ -80,17 +80,24 @@ class TestRunning:
         out = ip.run_investigation_providers(_subject(), {1}, True)
         assert out[0]["unavailable"] is True
 
-    def test_a_slow_provider_is_logged_over_budget_but_its_card_still_shows(self, monkeypatch, caplog):
-        monkeypatch.setattr(ip, "BUDGET_SECONDS", 0.0)
+    def test_a_provider_over_its_budget_is_unavailable_and_the_card_it_would_have_returned_never_shows(
+        self, monkeypatch, caplog
+    ):
+        monkeypatch.setattr(ip, "BUDGET_SECONDS", 0.05)
+        release = threading.Event()
 
         def slow(s, a, al):
-            time.sleep(0.01)
+            release.wait(5)
             return {"summary": "late"}
 
         ip.register_investigation_provider("slow", title="Slow", fn=slow)
-        with caplog.at_level(logging.WARNING):
-            out = ip.run_investigation_providers(_subject(), {1}, True)
-        assert out[0]["card"]["summary"] == "late" and "over the" in caplog.text
+        try:
+            with caplog.at_level(logging.WARNING):
+                out = ip.run_investigation_providers(_subject(), {1}, True)
+        finally:
+            release.set()
+        assert out[0]["unavailable"] is True and out[0]["card"] is None and out[0]["reason"] == "over 0.05 s"
+        assert "still running" in caplog.text
 
     def test_the_provider_is_handed_the_subject_and_the_callers_own_scope(self):
         seen = {}

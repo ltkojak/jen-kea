@@ -12,9 +12,14 @@ over only the parts of the config that decide what THIS client gets, and keeps t
 The client's path (`ClientPath`, built from the resolved view) is: the subnet it is in (by id OR by CIDR — an id can be
 renumbered, a CIDR is what the client is on), the shared network that subnet sits in, the pools its addresses fall in
 (every pool of the subnet when it has no address yet), the classes that guard that path or that the client matches, its own
-reservation (by MAC/DUID or by address — which carries any host-scoped option with it), and nothing else. A change to
-another client's reservation in the same subnet, to another pool, or to a global option is NOT in the path and is not
-shown — the tab says "touches this client", and means it. Each hit shows only the lines that moved inside the matching
+reservation (by MAC/DUID or by address — which carries any host-scoped option with it), and the service's GLOBAL DHCP
+SETTINGS (v5.68.0-beta.11, Q146: one component, `GLOBAL_LABEL`, limited to `GLOBAL_KEYS`). Those were left out at first on the
+reasoning that a global is "not this client's", which is backwards: a global option, lifetime or timer, the reservation modes and
+the host-reservation identifiers are the defaults every client in the service inherits, so they are what changes a client's
+answer most often. Only keys that decide what a client is given are in the component; loggers, control sockets, hooks
+libraries, interfaces and the lease database are not client behaviour and never appear. A change to another client's
+reservation in the same subnet or to another pool is NOT in the path and is not shown — the tab says "touches this client", and
+means it. Each hit shows only the lines that moved inside the matching
 element (a unified diff of that element alone, 3 lines of context), the revision's summary, who made it, when, and its
 `source` (jen / external / restore / baseline).
 
@@ -51,6 +56,33 @@ _SERVICES = {
     "dhcp6": {"root": "Dhcp6", "subnets": "subnet6", "address_key": "ip-addresses"},
 }
 _CLASS_KEYS = ("client-class", "client-classes", "require-client-classes", "evaluate-additional-classes")
+
+# The global settings that decide what a client is given, in either service (a key a service does not have is simply absent):
+# global options; lifetimes and timers (valid / preferred with their min and max, T1 and T2 and how they are derived); how
+# reservations are looked up (the identifiers tried, whether global / in-subnet / out-of-pool reservations count); and what the
+# server does with the client-id. NOT here: loggers, control sockets, hooks libraries, interfaces, the lease/host databases,
+# DDNS plumbing and every other server setting - none of them changes what a client is handed.
+GLOBAL_LABEL = "global DHCP settings"
+GLOBAL_KEYS = (
+    "option-data",
+    "valid-lifetime",
+    "min-valid-lifetime",
+    "max-valid-lifetime",
+    "preferred-lifetime",
+    "min-preferred-lifetime",
+    "max-preferred-lifetime",
+    "renew-timer",
+    "rebind-timer",
+    "calculate-tee-times",
+    "t1-percent",
+    "t2-percent",
+    "host-reservation-identifiers",
+    "reservations-global",
+    "reservations-in-subnet",
+    "reservations-out-of-pool",
+    "match-client-id",
+    "echo-client-id",
+)
 
 
 @dataclass(frozen=True)
@@ -233,6 +265,10 @@ def extract(cfg, path: ClientPath) -> dict:
             out[f"shared network {network.get('name')}"] = _without(network, spec["subnets"])
             referenced |= _classes_named(network)
 
+    settings = {key: inner[key] for key in GLOBAL_KEYS if key in inner}
+    if settings:
+        out[GLOBAL_LABEL] = settings
+
     for res in inner.get("reservations") or []:  # global reservations, outside any subnet
         if _reservation_matches(res, path):
             out[f"global reservation {_reservation_label(res)}"] = res
@@ -298,13 +334,16 @@ def element_matches(label: str, element: str) -> bool:
     """Is the change labelled `label` ("pool 10.0.0.100 - 10.0.0.200", "subnet 1 (10.0.0.0/24)", "reservation aa:bb:…",
     "class voip", "shared network campus", "global reservation …") the config element `element` names? `element` is a whole
     label, or just a kind ("reservation", "pool", …) meaning every element of that kind. Case-insensitive; an empty
-    `element` matches everything. (v5.68.0-beta.2, Q135 - an Explain verdict links here filtered to the element it is about.)"""
+    `element` matches everything. (v5.68.0-beta.2, Q135 - an Explain verdict links here filtered to the element it is about.)
+    The global settings component is matched by its whole label ("global DHCP settings") or by the kind "global"."""
     e = (element or "").strip().lower()
     if not e:
         return True
     lab = (label or "").lower()
     if lab == e:
         return True
+    if e == "global":
+        return lab == GLOBAL_LABEL.lower()
     if e in _ELEMENT_KINDS:
         return lab.startswith((e, "global " + e))
     return lab.startswith(e + " ")

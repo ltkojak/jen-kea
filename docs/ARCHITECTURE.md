@@ -225,6 +225,22 @@ single-slash path inside Jen) rather than trusting the plugin. What a plugin loo
 duty, exactly as for a search provider, and every bundled provider is covered by the plugin authorization matrix
 (`tests/test_authz_matrix_plugins.py`).
 
+**A stored object is judged by its own subnet (v5.68.0-beta.11, Q146).** The rule the core already follows for a reservation, a
+device or an alert row applies to what a plugin stores about a client: the subnet that decides whether a caller may see a stored row
+is the subnet the row was stored in (for a switch position, the subnet of the switch). Where the client is now is a fact the page may
+show, and only to a caller who may see that subnet; it never widens access. The first three providers (wol, presence, switchport
+1.1.0) judged by the client's current subnet first, falling back to the stored one — Q100's precedence for a *wake* (an act on a live
+host), applied to the *display* of stored data — so a favourite saved in B appeared to a caller scoped to A the moment the client
+moved to A, and a switch's last five positions were printed without asking where each switch was. The harness of each carries the B
+to A case, and the authorization matrix drives the three through a real `/client` request.
+
+**Providers run under a budget Jen enforces (v5.68.0-beta.11, Q146).** `jen/services/provider_budget.py` runs every search and
+investigation provider on one shared pool of four threads inside a copy of the caller's request context (the same authenticated user
+the page loaded). The request waits at most one second for the group, shows a provider that has not answered as "unavailable (over
+1 s)" and goes on; a call still running cannot be stopped, so it keeps its slot, which bounds the damage a hung provider can do: eight
+calls outstanding, then new ones are refused as "busy" instead of queueing. Before this the budget was a log line written after the
+provider returned, and a provider that hung held the web worker for as long as it liked.
+
 **One identity, one place to resolve it (v5.63.0, Q82).**
 `jen.services.client_subject.resolve()` is now the only place a typed
 identifier (MAC in any separator style, IPv4, IPv6, DUID, or a hostname —
@@ -258,7 +274,10 @@ which is admin content, so it follows `/servers/<id>/config-history`'s own gate 
 admin with access to every subnet) and is not offered to anyone else; it compares
 each of the newest 50 revisions of each server with the one before it over the
 client's path only (subnet by id or CIDR, shared network, the pools its addresses fall
-in, classes, its own config-file reservation) and shows masked values.
+in, classes, its own config-file reservation, and — since v5.68.0-beta.11 — the service's
+global DHCP settings: global options, lifetimes and timers, the reservation modes and
+identifiers, the client-id handling; never loggers, control sockets, hooks, interfaces or
+the lease database) and shows masked values.
 
 **What Explain evaluates, and why-not (v5.68.0-beta.2, Q135).** The Explain engine
 (`jen/services/dhcp_explain.py`) stays pure; `jen/services/explain_inputs.py` builds its client
