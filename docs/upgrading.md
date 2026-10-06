@@ -139,3 +139,15 @@ Nothing to do on upgrade (5.68.0-beta.9); migration 31 adds one column by itself
 ## Explain: current leases, one exchange, the right server, and option 77 as bytes
 
 Nothing to do on upgrade (5.68.0-beta.10). A lease counts as the client current lease only while it has not expired (Kea keeps an expired lease in its table until it reclaims it), so an expired lease no longer decides who holds an address, which client a hostname belongs to, or what Explain reads the client id and hostname from, and the IPv6 lists count only active leases; the Leases page with show expired still lists everything. What Explain reads from Kea log now comes from one exchange (one transaction), read from the HA-active server first and then the rest in order, and the Inputs card names the exchange and the server. Option 77 (user class) and the relay circuit id are compared as the bytes Kea saw: a client sends its user class as the bare string or, like Windows, with a length byte in front, and a class rule written for one form does not match clients that send the second. The class rule builder therefore has two user class fields, plain text (what it always wrote) and length-prefixed; existing classes keep working unchanged. Explain reads the bytes from the packet dump (debuglevel 55) and takes them by hand in the user class as sent box. A scoped user whose client has a current lease in a subnet they cannot see and a reservation in one they can is now explained in the visible subnet.
+
+## Plugin cards on the Investigation page follow the subnet they were stored in, and the Changes and DNS tabs look at the whole client
+
+Nothing to do on Jen (5.68.0-beta.11). Three plugin updates come with it, offered under Settings → Plugins: Wake & Actions 1.1.1, Presence 1.1.1
+and Switch Port Locator 1.1.1. Each card now follows the subnet its row was stored in: a favourite or a tracked device saved in a subnet
+a restricted user cannot see is not shown to them because the client has since moved into one they can, and a switch position is shown
+only if the switch is in a subnet they may see (a switch addressed by hostname is for users who can see every subnet). Where a client is
+now appears on the card as *Now in* only when the user may see that subnet. Providers are now bounded: a plugin card or a plugin search
+section that takes longer than one second shows *unavailable (over 1 s)* instead of holding the page. The Changes tab also lists changes
+to the global DHCP settings every client inherits (global options, lifetimes and timers, reservation modes), and the DNS tab checks every
+reservation and lease the client has, with IPv6 addresses checked as AAAA records, instead of the first one. The device timestamp on the
+Overview reads *Device*, not *Config*.

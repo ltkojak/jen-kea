@@ -2,6 +2,52 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.68.0-beta.11] - 2026-10-06
+
+Beta channel. Stacked on 5.68.0-beta.10. **The Investigation page's plugin cards, Changes tab and DNS tab, made to match what they
+say.** Five defects found by an outside review of beta.7 and confirmed against the code, with three plugin releases to go with them.
+There is no migration and nothing to do on Jen; the plugin updates are offered under Settings → Plugins.
+
+**Three plugin cards judged stored data by where the client is now.** Wake & Actions, Presence and Switch Port Locator each add a card
+about the client to the Overview. The first two decided whether a caller may see the card from the subnet the client is in now and
+only fell back to the subnet stored on the row, which is the right question for a wake (an act on a live host, sent where the host is)
+and the wrong one for showing what was saved: a favourite or a tracked device saved in subnet B appeared to a caller scoped to subnet A
+the moment the client's lease moved to A. Switch Port Locator judged the client the same way and then printed its last five stored
+positions without asking where each switch was. The rule, now written in `plugins/README.md` and ARCHITECTURE §2, is the one the core
+already follows for a reservation or a device: a stored object belongs to the subnet it was stored in (a switch's subnet is the one
+its management address is in), and where the client is now never widens that. Wake & Actions 1.1.1 and Presence 1.1.1 judge the row by
+its own stored subnet and show where the client is now (*Now in*) only to a caller who may see that subnet, because naming a subnet is
+access to it; a row with no subnet is for an unrestricted caller only. Switch Port Locator 1.1.1 filters each position by its switch's
+subnet before the card is built, so a client whose positions are all on switches the caller cannot see gets no card, a mix shows only
+the visible positions, and when the newest position is hidden the card says *Last seen on …* with its time rather than claiming the
+client is there now or has moved. Each plugin's harness carries the client that moved from B to A, and Jen's authorization matrix
+drives all three through a real `/client` request.
+
+**The one-second provider budget was a log line.** Investigation and search providers ran in the request thread and the elapsed time was
+compared with the budget afterwards, so a provider that hung held the web worker for as long as it liked. They now run on one shared pool
+of four threads, each inside a copy of the caller's request (the same user the page loaded), and the page waits at most one second for
+the group: several slow providers cost one second, not one each. One that has not answered shows *unavailable (over 1 s)* and the page
+goes on. A running thread cannot be stopped, so such a call keeps its slot until it really ends, is logged once and is counted; at most
+eight calls are outstanding, and when they are all taken a provider is not started and reads *unavailable (busy)* instead of queueing
+behind the ones that hung.
+
+**The Changes tab left out what changes a client's answer most often.** It compared a revision over the client's subnet, shared network,
+pools, classes and reservation, on the reasoning that a global setting is not this client's. It is every client's: the global
+options, the valid lifetime and the renew and rebind timers, the host-reservation identifiers and the reservation modes, the client-id
+handling. They are one more component, *global DHCP settings*, and only keys that decide what a client is given are in it; a change
+to loggers, the control socket, hooks, interfaces or the lease database is not client behaviour and does not appear.
+
+**The DNS tab looked at one record.** It was built from the first reservation and the newest lease, so a client with a good first record
+and a wrong second one read as fine. Every v4 reservation and lease the caller may see is now a row (the same name and address from a
+reservation and a lease is one row), and with IPv6 on so is each v6 reservation address and lease, checked as an AAAA record. The
+reconciler gained the record type to do it honestly: the system resolver answers a name with its A and AAAA records together, so a
+dual-stack host used to read as *multiple-a* against either address; a row is now judged only on the addresses of its own family, and a
+name that has records but none of the row's type is *missing-forward*. The first twenty records are checked and the tab says when there
+are more.
+
+**One label named two things.** The freshness line under the Overview's facts printed *Config* before the device timestamp and *Config*
+again before the config's SHA. The device fetch is now *Device*; the SHA keeps *Config*.
+
 ## [5.68.0-beta.10] - 2026-10-06
 
 Beta channel. Stacked on 5.68.0-beta.9. **Explain evidence that is current, coherent and byte-exact.** Six defects in how the
