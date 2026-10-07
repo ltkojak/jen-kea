@@ -16,6 +16,7 @@
         <span class="card-title">{{ icon("clipboard-list") }} Alert Log</span>
         <span class="u-865c33">Last {{ recent_alerts|length }} — channels and templates are under <a href="/settings/alerts">Alerts &amp; Integrations</a></span>
     </div>
+    <p class="u-865c33" style="margin:0 16px 8px;font-size:12px;">Each delivery is kept for {{ alert_retention_days }} days after it was sent, then removed; the totals shown to Prometheus keep counting what was removed.</p>
     {% if recent_alerts %}
     <div class="table-wrap">
     <table  class="rowlist u-a1fa25">

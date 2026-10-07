@@ -12,6 +12,7 @@ from flask_login import current_user, login_required
 
 import jen.models.db as __db
 import jen.models.user as __user
+import jen.services.alerts as __alerts
 import jen.services.auth as __auth
 import jen.services.client_subject as __client_subject
 import jen.services.kea as __kea
@@ -68,7 +69,14 @@ def audit_log():
         except Exception as e:
             logger.error(f"Could not load alert log: {e}")
             flash("Could not load the alert log. Check server logs for details.", "error")
-        return render_template("logs.html", tab="alerts", recent_alerts=recent_alerts, total=0, search="")
+        return render_template(
+            "logs.html",
+            tab="alerts",
+            recent_alerts=recent_alerts,
+            total=0,
+            search="",
+            alert_retention_days=__alerts.alert_log_retention_days(),
+        )
 
     try:
         page = max(1, int(request.args.get("page", 1)))

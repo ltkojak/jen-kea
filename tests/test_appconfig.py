@@ -347,3 +347,106 @@ class TestAtomicWrite:
         assert extensions.KEA_API_PASS == "rotated-secret"
         mode = os.stat(str(isolated_config)).st_mode & 0o777
         assert mode == 0o600, oct(mode)
+
+
+class TestWritersAreSerialized:
+    """v5.68.0-beta.17 (Q152) - every writer is read-modify-write, and the app serves from threads: without ONE lock held from the read to
+    the replace, two saves at once lose one of them (the second read misses the first write)."""
+
+    ROUNDS = 200
+
+    @staticmethod
+    def _hammer(writers):
+        import threading
+
+        errors = []
+
+        def run(fn):
+            try:
+                fn()
+            except Exception as e:  # pragma: no cover - reported through the assertion below
+                errors.append(e)
+
+        threads = [threading.Thread(target=run, args=(w,)) for w in writers]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(60)
+        assert not errors, errors
+
+    def _writers(self):
+        def a():
+            for i in range(self.ROUNDS):
+                app_config.write_value("race", f"a{i}", str(i), reload=False)
+
+        def b():
+            for i in range(self.ROUNDS):
+                app_config.write_values([("race", f"b{i}", str(i))], reload=False)
+
+        return a, b
+
+    def _present(self, path):
+        on_disk = configparser.ConfigParser(interpolation=None)
+        on_disk.read(str(path))
+        return set(on_disk["race"]) if on_disk.has_section("race") else set()
+
+    def test_two_threads_writing_different_keys_lose_nothing(self, isolated_config):
+        self._hammer(self._writers())
+        expected = {f"a{i}" for i in range(self.ROUNDS)} | {f"b{i}" for i in range(self.ROUNDS)}
+        assert self._present(isolated_config) == expected
+
+    def test_the_test_has_power_without_the_lock_updates_are_lost(self, isolated_config, monkeypatch):
+        """The same run with the lock replaced by a no-op loses writes, so a green result above is the lock's doing."""
+        import contextlib
+
+        from jen.config import AppConfig
+
+        class NoLock:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(AppConfig, "_write_lock", NoLock())
+        real_write = AppConfig._write_parser
+
+        def slow_write(self, parser):
+            import time
+
+            time.sleep(0.001)  # widen the read-modify-write window so the race is certain, not likely
+            real_write(self, parser)
+
+        monkeypatch.setattr(AppConfig, "_write_parser", slow_write)
+        with contextlib.suppress(Exception):
+            self._hammer(self._writers())
+        expected = {f"a{i}" for i in range(self.ROUNDS)} | {f"b{i}" for i in range(self.ROUNDS)}
+        assert self._present(isolated_config) != expected, (
+            "no update was lost even without the lock - the test proves nothing"
+        )
+
+    def test_subnet_writers_and_value_writers_share_the_lock(self, isolated_config):
+        def subnets():
+            for _ in range(40):
+                app_config.write_subnets({1: {"name": "LAN", "cidr": "192.168.1.0/24"}}, reload=False)
+
+        def values():
+            for i in range(self.ROUNDS):
+                app_config.write_value("race", f"v{i}", str(i), reload=False)
+
+        self._hammer([subnets, values])
+        assert self._present(isolated_config) == {f"v{i}" for i in range(self.ROUNDS)}
+
+    def test_mutate_may_call_a_writer_it_is_an_rlock(self, isolated_config):
+        """A callback that itself writes must not deadlock on the lock its own `mutate` holds (the outer write then wins, as before)."""
+        import threading
+
+        done = threading.Event()
+
+        def go():
+            app_config.mutate(lambda p: app_config.write_value("race", "inner", "1", reload=False), reload=False)
+            done.set()
+
+        t = threading.Thread(target=go, daemon=True)
+        t.start()
+        assert done.wait(10), "mutate() with a nested writer deadlocked"

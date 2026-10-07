@@ -26,10 +26,12 @@ compatibility with existing callers and plugins.
 """
 
 import configparser
+import functools
 import ipaddress
 import logging
 import os
 import re
+import threading
 
 from jen import extensions
 
@@ -191,8 +193,28 @@ def _reconcile_subnet_names(subnet_dict: dict, stored: dict, raw_section: dict) 
     return reconciled
 
 
+def _serialized(fn):
+    """Run a writer while holding AppConfig's one lock - see AppConfig._write_lock."""
+
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        with AppConfig._write_lock:
+            return fn(self, *args, **kwargs)
+
+    return wrapper
+
+
 class AppConfig:
     """Owns loading, writing, and derivation of jen.config."""
+
+    # v5.68.0-beta.17 (Q152) - ONE lock for every writer. Each writer is read-modify-write (read the file, change one thing, replace the
+    # file), and gunicorn runs one worker with N threads, so two Settings saves at once - two admins, or a save racing the setup wizard
+    # or Author Kea Config's `[subnets]` write - were a lost update: the second read missed the first write. The lock is held from the
+    # read to the end of the reload, so what a writer reads is what is on disk when it replaces it and the globals follow the same
+    # order as the file. It is an RLock because `mutate`'s callback may itself call a writer, and CLASS-level so every AppConfig
+    # instance (the module's `app_config`, a test's own) serialises against every other. Readers (`load`, `reload`) take no lock:
+    # `os.replace` means they see the old file or the new one, never half of one.
+    _write_lock = threading.RLock()
 
     # ── Path (dynamic — tests repoint extensions.CONFIG_FILE) ────────────
 
@@ -410,6 +432,7 @@ class AppConfig:
         parser.write(buf)
         write_private_file(self.path, buf.getvalue(), 0o600)
 
+    @_serialized
     def write_value(self, section: str, key: str, value: str, reload: bool = True) -> None:
         """Update a single value on disk, then reload."""
         parser = self._read_parser()
@@ -420,6 +443,7 @@ class AppConfig:
         if reload:
             self.reload()
 
+    @_serialized
     def write_values(self, items, reload: bool = True) -> None:
         """Update multiple (section, key, value) tuples in one write+reload."""
         parser = self._read_parser()
@@ -431,6 +455,7 @@ class AppConfig:
         if reload:
             self.reload()
 
+    @_serialized
     def write_subnets(self, subnet_dict: dict, reload: bool = True) -> None:
         """Rewrite the [subnets] section entirely, then reload.
 
@@ -453,6 +478,7 @@ class AppConfig:
         if reload:
             self.reload()
 
+    @_serialized
     def write_subnets6(self, subnet_dict: dict, reload: bool = True) -> None:
         """Rewrite the [subnets6] section entirely, then reload. Mirrors
         write_subnets() above (including the v5.67.0-beta.7, Q119, item g
@@ -475,6 +501,7 @@ class AppConfig:
         if reload:
             self.reload()
 
+    @_serialized
     def mutate(self, fn, reload: bool = True) -> None:
         """
         Arbitrary structured edit: load the parser from disk, pass it to

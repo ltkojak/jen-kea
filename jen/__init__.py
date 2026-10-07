@@ -803,6 +803,21 @@ def create_app() -> Flask:
 
     load_plugins(app)
 
+    # v5.68.0-beta.17 (Q152) - the provider pool is sized for this server: one worker per request thread, a ceiling of
+    # max(16, 2 x threads x registered providers). AFTER load_plugins(), which is what registers the providers.
+    try:
+        from jen import extensions as _ext
+        from jen.services import investigation_providers as _ip
+        from jen.services import provider_budget as _pb
+        from jen.services import search_providers as _sp
+
+        _pb.configure(
+            _ext.WORKER_THREADS,
+            len(_ip.registered_investigation_providers()) + len(_sp.registered_search_providers()),
+        )
+    except Exception as e:  # the module's own defaults are a working pool
+        logger.warning(f"provider pool sizing skipped: {e}")
+
     # v5.62.1 (Q81) — resolve every `@diagnostic_surface`-tagged route into
     # access.DIAGNOSTIC_SURFACES now that app.url_map is fully populated
     # (Blueprint route registration is deferred until register_blueprint()

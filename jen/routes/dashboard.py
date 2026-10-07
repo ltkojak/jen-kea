@@ -954,9 +954,10 @@ def prometheus_metrics():
     except Exception:
         pass
 
-    # ── Alerts sent, cumulative — a real Prometheus counter, since
-    #    alert_log is never pruned (confirmed: no DELETE/retention logic
-    #    exists for it anywhere in the codebase) ─────────────────────────
+    # ── Alerts sent, cumulative — a real Prometheus counter. alert_log is pruned by
+    #    retention since v5.68.0-beta.17 (Q152), so the pruned rows are counted
+    #    into a stored total first and added back (alerts.alert_sent_totals):
+    #    the exported number never goes down ──────────────────────────────
     lines.append(
         "# HELP jen_alerts_sent_total Cumulative alerts sent, by type and status. "
         "A real counter — use rate()/increase() in PromQL for a firing rate."
@@ -964,11 +965,10 @@ def prometheus_metrics():
     lines.append("# TYPE jen_alerts_sent_total counter")
     try:
         with __db.jen_db() as db, db.cursor() as cur:
-            cur.execute("SELECT alert_type, status, COUNT(*) as cnt FROM alert_log GROUP BY alert_type, status")
-            for row in cur.fetchall():
-                atype = str(row["alert_type"]).replace('"', "")
-                status = str(row["status"]).replace('"', "")
-                lines.append(f'jen_alerts_sent_total{{alert_type="{atype}",status="{status}"}} {row["cnt"]}')
+            for (atype, status), cnt in sorted(__alerts.alert_sent_totals(cur).items()):
+                atype = atype.replace('"', "")
+                status = status.replace('"', "")
+                lines.append(f'jen_alerts_sent_total{{alert_type="{atype}",status="{status}"}} {cnt}')
     except Exception:
         pass
 

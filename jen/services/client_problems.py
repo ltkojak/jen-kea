@@ -339,6 +339,93 @@ def _wm_set(server_id, value: datetime) -> None:
         )
 
 
+# ── The sweep's own record of whether it is reading each server (v5.68.0-beta.17, Q152) ──────────────────────────────────────
+# A server whose log could not be read added a line to the sweep's summary, which the scheduler logged and nobody reads: the inbox
+# stayed quiet because it was blind, indistinguishable from a quiet network. The sweep now keeps, per SSH-configured server, the time
+# of its last successful read, the text of its last error and the number of reads missed in a row, and the time the sweep last ran -
+# all in the settings table beside the watermark - and the Health Center's "Problems inbox sweep" row reads them (never SSH).
+
+SWEEP_INTERVAL_S = 300  # scheduler.py runs the sweep every five minutes
+MISS_LIMIT = 6  # six misses in a row = thirty minutes without reading a server's log: the Health row goes red
+_SWEPT_KEY = "client_problems_swept"
+
+
+def _note_server(server_id, ok: bool, error: str, now: datetime) -> None:
+    """Record one read attempt. Never raises: bookkeeping must not break the sweep it describes."""
+    from jen.models import db as __db
+
+    try:
+        with __db.jen_db() as db, db.cursor() as cur:
+            upsert = (
+                "INSERT INTO settings (setting_key, setting_value) VALUES (%s, %s) "
+                "ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)"
+            )
+            if ok:
+                cur.execute(upsert, (f"client_problems_read:{server_id}", now.isoformat()))
+                cur.execute(upsert, (f"client_problems_err:{server_id}", ""))
+                cur.execute(upsert, (f"client_problems_miss:{server_id}", "0"))
+            else:
+                cur.execute(upsert, (f"client_problems_err:{server_id}", (error or "error")[:200]))
+                cur.execute(
+                    "INSERT INTO settings (setting_key, setting_value) VALUES (%s, '1') "
+                    "ON DUPLICATE KEY UPDATE setting_value=CAST(setting_value AS UNSIGNED)+1",
+                    (f"client_problems_miss:{server_id}",),
+                )
+    except Exception as e:
+        logger.error(f"client_problems: could not record the read of server {server_id}: {type(e).__name__}: {e}")
+
+
+def _note_swept(now: datetime) -> None:
+    from jen.models import db as __db
+
+    try:
+        with __db.jen_db() as db, db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO settings (setting_key, setting_value) VALUES (%s, %s) "
+                "ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)",
+                (_SWEPT_KEY, now.isoformat()),
+            )
+    except Exception as e:
+        logger.error(f"client_problems: could not record the sweep time: {type(e).__name__}: {e}")
+
+
+def read_status(servers: list[dict] | None = None) -> dict:
+    """What the sweep has recorded: {"swept_at": datetime | None, "servers": [{"id", "name", "last_read": datetime | None,
+    "last_error": str, "misses": int}]} for every SSH-configured server (or the given list). Reads the settings table directly (the
+    cached reader could be 30 s behind). The Health Center's row is built from this."""
+    from jen.models import db as __db
+
+    if servers is None:
+        servers = [s for s in extensions.KEA_SERVERS or [] if s.get("ssh_host")]
+    with __db.jen_db() as db, db.cursor() as cur:
+        cur.execute("SELECT setting_key, setting_value FROM settings WHERE setting_key LIKE %s", ("client_problems_%",))
+        values = {r["setting_key"]: r["setting_value"] for r in cur.fetchall()}
+
+    def when(raw):
+        try:
+            return datetime.fromisoformat(str(raw)) if raw else None
+        except ValueError:
+            return None
+
+    out = []
+    for s in servers:
+        sid = s.get("id")
+        try:
+            misses = int(values.get(f"client_problems_miss:{sid}") or 0)
+        except ValueError:
+            misses = 0
+        out.append(
+            {
+                "id": sid,
+                "name": s.get("name") or s.get("ssh_host") or f"Server {sid}",
+                "last_read": when(values.get(f"client_problems_read:{sid}")),
+                "last_error": values.get(f"client_problems_err:{sid}") or "",
+                "misses": misses,
+            }
+        )
+    return {"swept_at": when(values.get(_SWEPT_KEY)), "servers": out}
+
+
 def _declined_rows() -> list[dict]:
     from jen.models import db as __db
 
@@ -555,6 +642,7 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                 res = _host.tail_log(server, extensions.DHCP4_LOG, TAIL_LINES, timeout=TAIL_TIMEOUT_S, helper_only=True)
                 if not res.get("ok"):
                     summary["errors"].append(f"{server.get('name')}: {res.get('code') or 'error'}")
+                    _note_server(sid, False, str(res.get("code") or "error"), now)
                     continue
                 wm = _wm_get(sid)
                 lines = res.get("lines", [])
@@ -688,9 +776,11 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                 if new_wm is not None:
                     _wm_set(sid, new_wm)
                 summary["servers"] += 1
+                _note_server(sid, True, "", now)
             except Exception as e:
                 logger.error(f"client_problems: server {server.get('name')!r}: {type(e).__name__}: {e}")
                 summary["errors"].append(f"{server.get('name')}: {type(e).__name__}")
+                _note_server(sid, False, type(e).__name__, now)
         try:
             state = from_declined(_declined_rows()) + from_held(_held_rows())
             with __db.jen_db() as db, db.cursor() as cur:
@@ -720,6 +810,7 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                 summary["resolved"] = cur.rowcount
         except Exception as e:
             logger.error(f"client_problems: resolve: {type(e).__name__}: {e}")
+        _note_swept(now)
     return summary
 
 

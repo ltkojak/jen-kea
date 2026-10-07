@@ -12,7 +12,8 @@ message, never a 500.
 Groups and check ids are stable (tests and the JSON twin key off them):
 
   kea       kea_reachable · kea_version_supported · kea_ha_state ·
-            kea_hooks · kea_time_sync · kea_config_drift ·
+            kea_hooks · kea_time_sync · debug_logging_left_on · problems_sweep ·
+            kea_config_drift ·
             kea_subnets_declared · config_doctor · packet_health ·
             capabilities
   capacity  pool_utilization · lease_snapshot_fresh
@@ -336,6 +337,57 @@ def _debug_logging_left_on(ctx) -> Check:
         return c
     c.status = "ok"
     c.detail = "; ".join(f"{e['name']}: on until {e['until']}" for e in entries)
+    return c
+
+
+def _problems_sweep(ctx) -> Check:
+    """v5.68.0-beta.17 (Q152) - the Problems inbox is only as good as the sweep that fills it, and that sweep's failures were a log
+    line: a server whose log could not be read left the inbox quiet because it was blind, which looks exactly like a quiet network.
+    The sweep now records, per SSH-configured server, its last successful read, its last error and how many reads in a row have
+    failed (settings table, beside the watermark). This row fails when any server has missed six in a row (thirty minutes), and
+    when the sweep itself has not run for that long; the next successful read turns it green. It reads Jen's own records, never SSH."""
+    c = Check(
+        "problems_sweep",
+        "Problems inbox sweep",
+        "kea",
+        fix_url="/settings/kea",
+        fix_hint="Check that Jen can still reach the server over SSH (Settings → Kea → SSH) and that the Kea log path is set; the sweep retries every five minutes.",
+    )
+    from jen.services import client_problems as __cp
+
+    servers = [s for s in extensions.KEA_SERVERS or [] if s.get("ssh_host")]
+    if not servers:
+        c.status, c.detail = "skip", "no Kea server has SSH configured, so there is no log for the sweep to read"
+        return c
+    st = __cp.read_status(servers)
+    now = __cp._now()
+    swept = st["swept_at"]
+
+    def fmt(t):
+        return t.strftime("%Y-%m-%d %H:%M UTC") if t else "never"
+
+    stale = swept is not None and (now - swept).total_seconds() > __cp.MISS_LIMIT * __cp.SWEEP_INTERVAL_S
+    blind = [s for s in st["servers"] if s["misses"] >= __cp.MISS_LIMIT]
+    if blind or stale:
+        c.status = "fail"
+        parts = [
+            f"{s['name']}: its log has not been read for {s['misses']} sweeps (last read {fmt(s['last_read'])}"
+            + (f"; last error: {s['last_error']}" if s["last_error"] else "")
+            + ")"
+            for s in blind
+        ]
+        if stale:
+            parts.append(f"the sweep itself last ran at {fmt(swept)} and should run every five minutes")
+        c.detail = "; ".join(parts)
+        return c
+    if swept is None:
+        c.status, c.detail = "skip", "the sweep has not run yet (it runs every five minutes)"
+        return c
+    c.status = "ok"
+    c.detail = f"last ran {fmt(swept)}; " + "; ".join(
+        f"{s['name']}: last read {fmt(s['last_read'])}" + (f" ({s['misses']} missed)" if s["misses"] else "")
+        for s in st["servers"]
+    )
     return c
 
 
@@ -1359,6 +1411,7 @@ _CHECKS = [
     _kea_hooks,
     _kea_time_sync,
     _debug_logging_left_on,
+    _problems_sweep,
     _kea_config_drift,
     _kea_subnets_declared,
     _config_doctor,
@@ -1395,6 +1448,7 @@ _CHECK_META = {
     "kea_hooks": ("Kea hooks loaded", "kea"),
     "kea_time_sync": ("Kea clock in sync", "kea"),
     "debug_logging_left_on": ("DEBUG logging left on", "kea"),
+    "problems_sweep": ("Problems inbox sweep", "kea"),
     "kea_config_drift": ("Subnet map matches Kea", "kea"),
     "kea_subnets_declared": ("Every Kea subnet is named", "kea"),
     "config_doctor": ("Configuration Doctor", "kea"),

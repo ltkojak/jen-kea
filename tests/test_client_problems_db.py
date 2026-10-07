@@ -963,3 +963,102 @@ class TestTheDatabaseKinds:
             )
         db.commit()
         assert cp.sweep(NOW, servers=[])["state_rows"] == 0
+
+
+class TestTheSweepRecordsWhetherItCanReadEachServer:
+    """v5.68.0-beta.17 (Q152, item e) - a log that could not be read used to be a line in the sweep's summary. The sweep now keeps the
+    time of each server's last successful read, its last error and the number of misses in a row, and the Health Center's "Problems
+    inbox sweep" row fails after six (thirty minutes) and goes green on the next successful read."""
+
+    @pytest.fixture(autouse=True)
+    def _clock_and_cleanup(self, db, monkeypatch):
+        monkeypatch.setattr(cp, "_now", lambda: NOW)
+        self._wipe(db)
+        yield
+        self._wipe(db)
+
+    @staticmethod
+    def _wipe(db):
+        with db.cursor() as cur:
+            cur.execute(
+                "DELETE FROM settings WHERE setting_key LIKE 'client_problems_read:%' OR setting_key LIKE 'client_problems_err:%' "
+                "OR setting_key LIKE 'client_problems_miss:%' OR setting_key = 'client_problems_swept'"
+            )
+        db.commit()
+
+    @staticmethod
+    def _row():
+        from jen.services import health
+
+        return health._problems_sweep({})
+
+    def test_a_good_read_records_the_time_and_clears_the_error(self, db, stack):
+        logs, _ = stack
+        logs[1] = [nak(1)]
+        cp.sweep(NOW, servers=[SERVER_A])
+        st = cp.read_status([SERVER_A])
+        assert st["swept_at"] == NOW
+        assert st["servers"] == [{"id": 1, "name": "kea-a", "last_read": NOW, "last_error": "", "misses": 0}]
+
+    def test_six_misses_turn_the_row_red_and_the_next_good_read_turns_it_green(self, db, stack, monkeypatch):
+        logs, _ = stack
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [dict(SERVER_A)])
+        logs[1] = [nak(1)]
+        cp.sweep(NOW, servers=[SERVER_A])  # one good read, then the log goes unreadable
+        logs[1] = {"ok": False, "code": "unreachable", "lines": []}
+        for n in range(1, 6):
+            cp.sweep(NOW, servers=[SERVER_A])
+            row = self._row()
+            assert row.status == "ok" and f"({n} missed)" in row.detail, (n, row.status, row.detail)
+        cp.sweep(NOW, servers=[SERVER_A])  # the sixth miss in a row
+        row = self._row()
+        assert row.status == "fail" and row.id == "problems_sweep"
+        assert "kea-a" in row.detail and "6 sweeps" in row.detail and "unreachable" in row.detail
+        assert "last read 2026-10-04 12:00 UTC" in row.detail
+        logs[1] = [nak(2)]
+        cp.sweep(NOW, servers=[SERVER_A])
+        row = self._row()
+        assert row.status == "ok" and "missed" not in row.detail
+        assert cp.read_status([SERVER_A])["servers"][0]["misses"] == 0
+
+    def test_an_exception_while_reading_counts_as_a_miss_and_names_it(self, db, stack, monkeypatch):
+        logs, _ = stack
+
+        def boom(*a, **k):
+            raise TimeoutError("ssh timed out")
+
+        monkeypatch.setattr(kea_host, "tail_log", boom)
+        cp.sweep(NOW, servers=[SERVER_A])
+        s = cp.read_status([SERVER_A])["servers"][0]
+        assert s["misses"] == 1 and s["last_error"] == "TimeoutError" and s["last_read"] is None
+
+    def test_one_blind_server_is_named_and_the_healthy_one_is_not(self, db, stack, monkeypatch):
+        logs, _ = stack
+        logs[1] = {"ok": False, "code": "unreachable", "lines": []}
+        logs[2] = [nak(1)]
+        for _ in range(cp.MISS_LIMIT):
+            cp.sweep(NOW, servers=[SERVER_A, SERVER_B])
+        row = self._row()
+        assert row.status == "fail" and "kea-a" in row.detail and "kea-b" not in row.detail
+
+    def test_the_row_is_skipped_when_no_server_has_ssh(self, db, stack, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "plain", "api_url": "http://x"}])
+        row = self._row()
+        assert row.status == "skip" and "no Kea server has SSH" in row.detail
+
+    def test_the_row_is_skipped_before_the_sweep_has_ever_run(self, db, stack):
+        assert self._row().status == "skip"
+
+    def test_a_sweep_that_has_stopped_running_is_a_failure_too(self, db, stack, monkeypatch):
+        logs, _ = stack
+        logs[1] = [nak(1)]
+        cp.sweep(NOW, servers=[SERVER_A])
+        monkeypatch.setattr(cp, "_now", lambda: NOW + timedelta(minutes=40))
+        row = self._row()
+        assert row.status == "fail" and "the sweep itself last ran at" in row.detail
+
+    def test_the_row_is_registered_in_the_health_center_in_step(self):
+        from jen.services import health
+
+        assert health._CHECK_META["problems_sweep"] == ("Problems inbox sweep", "kea")
+        assert health._problems_sweep in health._CHECKS

@@ -940,6 +940,15 @@ Investigation logging (Trace or Servers) puts a Kea server's logger at DEBUG for
    **The restore marker is unreadable (v5.68.0-beta.13).** If the Health row says *the restore marker on &lt;name&gt; is unreadable — restore by hand*, the `jen-investigation` marker lost its `restore` object (a hand edit or a partial write). Jen changed nothing and will not guess what the logger was before. In `kea-dhcp4.conf` set the `kea-dhcp4` logger's `severity`/`debuglevel` to what you want (usually your old level; remove `debuglevel` if it had none), delete the `jen-investigation` key, and `config-reload` (or restart) Kea; or repair the marker's `restore` object and Jen restores it itself within a minute.
 6. A log that still has no packet dump after turning it on usually has a more specific logger entry of its own (`kea-dhcp4.packets`) with its own severity; that one wins for its component.
 
+## "Problems inbox sweep" is red (v5.68.0-beta.17)
+
+The Problems inbox is filled by a sweep every five minutes that tails each SSH-configured server's Kea log. A quiet inbox could mean a quiet network or a sweep that cannot read the log; the Health Center row **Problems inbox sweep** tells them apart: it fails when a server's log has not been read for six sweeps in a row (thirty minutes) and names the server, its last successful read and its last error.
+
+1. **`HelperUnreachable` or a timeout**: Jen cannot SSH to the host. Check Settings → Kea → SSH (key, user, host, trust) and the host's firewall; the sweep retries on its own every five minutes and the row turns green on the first successful read.
+2. **`no-helper`**: the Kea host helper is missing, or too old to have `tail-log`; press **Update helper** on the Servers page. The sweep reads the log through the helper only.
+3. **`missing`** ("log file not found"): the DHCP4 log path in Jen is not where Kea writes; Settings → Kea → the DHCP4 log path must be the file Kea logs to (the file output of the `kea-dhcp4` logger), readable by the helper.
+4. **"the sweep itself last ran at …"** means the scheduler is not running the job: check the Background workers row and the service log.
+
 ## Log Locations
 
 | Log | Location | How to view |

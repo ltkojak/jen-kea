@@ -160,7 +160,9 @@ class TestOutstandingCalls:
     def _capped(self, monkeypatch, n):
         monkeypatch.setattr(pb, "_slots", threading.BoundedSemaphore(n))
 
-    def test_when_every_slot_is_taken_a_new_call_is_turned_away_at_once(self, kind, monkeypatch, caplog):
+    def test_when_every_slot_is_taken_a_new_call_waits_and_is_busy_only_when_the_deadline_passes(
+        self, kind, monkeypatch, caplog
+    ):
         self._capped(monkeypatch, 2)
         hang = Hang()
         for name in ("a", "b", "c"):
@@ -212,9 +214,72 @@ class TestOutstandingCalls:
         assert [r["unavailable"] for r in out] == [True, True]
         assert ran == [], "a provider that was still queued when its budget ended must not run afterwards"
 
+    def test_a_call_waiting_for_a_slot_gets_one_that_frees_inside_the_budget(self, kind, monkeypatch):
+        """Q152: the ceiling no longer turns a call away on arrival. A slot that comes back before the page's deadline is used."""
+        self._capped(monkeypatch, 1)
+        gate = threading.Event()
+
+        def first(*args):
+            gate.wait(5)
+            return _good(kind, "first")(*args)
+
+        _register(kind, "a", first)
+        _register(kind, "b", _good(kind, "second"))
+        threading.Timer(0.05, gate.set).start()
+        out = _run(kind)
+        assert [r["unavailable"] for r in out] == [False, False], (
+            "the second call waited 50 ms for the first one's slot"
+        )
+        assert pb.stats()["refused"] == 0
+
     def test_the_real_module_limits_are_the_documented_ones(self):
-        assert (pb.MAX_WORKERS, pb.MAX_OUTSTANDING) == (4, 8)
+        assert (pb.MAX_WORKERS, pb.MIN_OUTSTANDING) == (8, 16)
         assert ip.BUDGET_SECONDS == 1.0 and sp.BUDGET_SECONDS == 1.0
+
+
+class TestThePoolIsSizedForTheServer:
+    """v5.68.0-beta.17 (Q152): seven providers per page and a ceiling of 8 meant the second page opened during the first got one slot
+    and six 'busy' cards. The ceiling is max(16, 2 x threads x providers) and the workers follow [server] threads."""
+
+    @pytest.mark.parametrize(
+        "threads,providers,expected",
+        [(8, 7, (8, 112)), (1, 0, (1, 16)), (2, 7, (2, 28)), (64, 7, (64, 896)), (0, 3, (1, 16))],
+    )
+    def test_sizing_rule(self, threads, providers, expected):
+        assert pb.sizing(threads, providers) == expected
+
+    def test_configure_replaces_the_pool_and_the_ceiling(self, monkeypatch):
+        monkeypatch.setattr(pb, "MAX_WORKERS", pb.MAX_WORKERS)
+        monkeypatch.setattr(pb, "MAX_OUTSTANDING", pb.MAX_OUTSTANDING)
+        pb.configure(3, 7)
+        assert (pb.MAX_WORKERS, pb.MAX_OUTSTANDING) == (3, 42)
+        assert pb._executor._max_workers == 3
+        assert all(pb._slots.acquire(blocking=False) for _ in range(42)) and not pb._slots.acquire(blocking=False)
+
+    def test_two_pages_of_seven_providers_at_once_are_fourteen_ok_cards(self, kind, monkeypatch):
+        monkeypatch.setattr(ip, "BUDGET_SECONDS", 1.0)
+        monkeypatch.setattr(sp, "BUDGET_SECONDS", 1.0)
+        pb.configure(8, 7)
+
+        def slowish(*args):
+            time.sleep(0.15)  # long enough that both pages' calls overlap
+            return _good(kind)(*args)
+
+        for n in range(7):
+            _register(kind, f"p{n}", slowish)
+        results = []
+
+        def page():
+            results.append(_run(kind))
+
+        threads = [threading.Thread(target=page) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(10)
+        cards = [r for page_ in results for r in page_]
+        assert len(cards) == 14 and all(r["unavailable"] is False and r["reason"] == "" for r in cards)
+        assert pb.stats()["refused"] == 0
 
 
 class TestAProviderStillAnswersForTheCaller:

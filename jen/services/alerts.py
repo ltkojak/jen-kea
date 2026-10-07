@@ -863,6 +863,89 @@ def _purge_old_events() -> None:
         logger.error(f"Events retention purge error: {e}")
 
 
+ALERT_LOG_DEFAULT_RETENTION_DAYS = 180
+ALERT_LOG_PRUNED_KEY = "alert_log_pruned_totals"
+
+
+def alert_log_retention_days() -> int:
+    """v5.68.0-beta.17 (Q152) - how long a delivery-log row is kept: the `alert_log_retention_days` setting (a settings key beside
+    `events_retention_days`), default 180. A value that is not a whole number of days, or is below 1, is the default - a typo must
+    not turn into "delete everything" or "keep nothing"."""
+    try:
+        days = int(__get_global_setting("alert_log_retention_days", str(ALERT_LOG_DEFAULT_RETENTION_DAYS)))
+    except (TypeError, ValueError):
+        return ALERT_LOG_DEFAULT_RETENTION_DAYS
+    return days if days >= 1 else ALERT_LOG_DEFAULT_RETENTION_DAYS
+
+
+def _purge_old_alert_log() -> int:
+    """v5.68.0-beta.17 (Q152) - `alert_log` was the one history table nothing pruned: a row on every delivery (and one per client and
+    kind per day from the Problems alert), read by the Alerts log, the dashboard, the Timeline and a client's alert status. Rows older
+    than `alert_log_retention_days` are removed in the same pass as the other history tables.
+
+    `jen_alerts_sent_total` is a Prometheus COUNTER built from this table, and a counter that drops is read as a reset. So what is
+    removed is first counted into `alert_log_pruned_totals` (a JSON object keyed "type|status") in the same transaction, and
+    `alert_sent_totals()` adds the two back together: the exported number never goes down. Returns the number of rows removed."""
+    import json
+
+    try:
+        days = alert_log_retention_days()
+        with __jen_db_ctx() as jdb, jdb.cursor() as jcur:
+            jcur.execute("SELECT DATE_SUB(NOW(), INTERVAL %s DAY) AS cutoff", (days,))
+            cutoff = jcur.fetchone()["cutoff"]
+            jcur.execute(
+                "SELECT alert_type, status, COUNT(*) AS cnt FROM alert_log WHERE sent_at < %s GROUP BY alert_type, status",
+                (cutoff,),
+            )
+            gone = jcur.fetchall()
+            if not gone:
+                return 0
+            jcur.execute("SELECT setting_value FROM settings WHERE setting_key=%s FOR UPDATE", (ALERT_LOG_PRUNED_KEY,))
+            row = jcur.fetchone()
+            try:
+                totals = json.loads(row["setting_value"]) if row else {}
+            except (TypeError, ValueError):
+                totals = {}
+            if not isinstance(totals, dict):
+                totals = {}
+            removed = 0
+            for g in gone:
+                key = f"{g['alert_type']}|{g['status']}"
+                totals[key] = int(totals.get(key, 0)) + int(g["cnt"])
+                removed += int(g["cnt"])
+            jcur.execute("DELETE FROM alert_log WHERE sent_at < %s", (cutoff,))
+            jcur.execute(
+                "INSERT INTO settings (setting_key, setting_value) VALUES (%s, %s) ON DUPLICATE KEY UPDATE setting_value=%s",
+                (ALERT_LOG_PRUNED_KEY, json.dumps(totals), json.dumps(totals)),
+            )
+            return removed
+    except Exception as e:
+        logger.error(f"Alert log retention purge error: {e}")
+        return 0
+
+
+def alert_sent_totals(cur) -> dict:
+    """{(alert_type, status): count} of every delivery ever recorded: the rows still in `alert_log` plus those the retention job has
+    already removed. `cur` is an open jen_db cursor. This is what `jen_alerts_sent_total` exports (a counter never decreases)."""
+    import json
+
+    totals: dict = {}
+    cur.execute("SELECT setting_value FROM settings WHERE setting_key=%s", (ALERT_LOG_PRUNED_KEY,))
+    row = cur.fetchone()
+    try:
+        pruned = json.loads(row["setting_value"]) if row else {}
+    except (TypeError, ValueError):
+        pruned = {}
+    for key, n in pruned.items() if isinstance(pruned, dict) else ():
+        atype, _, status = str(key).partition("|")
+        totals[(atype, status)] = int(n)
+    cur.execute("SELECT alert_type, status, COUNT(*) AS cnt FROM alert_log GROUP BY alert_type, status")
+    for r in cur.fetchall():
+        k = (str(r["alert_type"]), str(r["status"]))
+        totals[k] = totals.get(k, 0) + int(r["cnt"])
+    return totals
+
+
 def _check_packet_health_alerts(alerted_packet_health) -> None:
     """Fire `packet_health` (warn/fail) / `packet_health_ok` (recovery)
     once per server per transition — the utilization_high/utilization_ok
@@ -1485,6 +1568,7 @@ def check_alerts():
                 take_server_stats_snapshot()
                 _check_packet_health_alerts(alerted_packet_health)
                 _purge_old_events()
+                _purge_old_alert_log()
                 last_snapshot_time = now_ts
 
             # ── Daily summary ──
