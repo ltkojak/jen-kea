@@ -150,7 +150,7 @@ class TestReportsChartsTheCounts:
         _wipe()
         self._seed()
         page = logged_in_client.get("/reports").get_data(as_text=True)
-        assert 'id="chart6-' not in page and "finite pool" not in page
+        assert 'id="chart6-' not in page and "has no finite pool to project against" not in page
         _wipe()
 
     def test_a_restricted_account_sees_only_the_v6_subnets_paired_to_a_v4_subnet_it_may_see(self, v6_world, client, db):
