@@ -1717,7 +1717,7 @@ backup_existing() {
 
     ROLLBACK_JEN=""
     ROLLBACK_PKG=""
-    local item real_item
+    local real_item
     if [[ -f "$src/run.py" && ! -L "$src/run.py" ]]; then
         real_item="$(realpath -- "$src/run.py")"
         [[ "$real_item" == "$real_install"/* ]] || fatal "Refusing to snapshot $src/run.py: it resolves outside $INSTALL_DIR"
