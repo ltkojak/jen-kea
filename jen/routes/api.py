@@ -19,6 +19,7 @@ from jen import extensions
 from jen.models.db import jen_db, kea_db
 from jen.models.user import audit
 from jen.services import client_subject as __subject
+from jen.services import pools as __pools
 from jen.services.access import diagnostic_surface
 from jen.services.api_auth import RATE_LIMIT_MESSAGE, json_object_body, write_rate_limited
 from jen.services.api_auth import api_auth as _api_auth
@@ -189,17 +190,22 @@ def api_v1_subnets():
                 for s, _sn in iter_subnet4(cfg_result["arguments"].get("Dhcp4", {})):
                     for r in result:
                         if r["id"] == s["id"]:
-                            pool_size = 0
-                            pools = []
-                            for p in s.get("pools", []):
-                                ps = p.get("pool", "") if isinstance(p, dict) else str(p)
-                                if "-" in ps:
-                                    start, end = [x.strip() for x in ps.split("-")]
-                                    pool_size += _ip_to_int(end) - _ip_to_int(start) + 1
-                                    pools.append(ps)
+                            # v5.68.0-beta.18 (Q153): the total of every pool (ranges AND CIDRs, merged), and utilisation over the
+                            # pool union from the leases INSIDE it - an active lease outside every pool (a reservation) consumes
+                            # no dynamic capacity. `active_leases` stays the subnet's whole active count.
+                            pool_size = __pools.total_pool_size(s.get("pools", []))
                             r["pool_size"] = pool_size
-                            r["pools"] = pools
-                            r["utilization_pct"] = round(r["active_leases"] / pool_size * 100, 1) if pool_size else 0
+                            r["pools"] = [
+                                (p.get("pool", "") if isinstance(p, dict) else str(p)).strip()
+                                for p in s.get("pools", [])
+                                if __pools.parse_pool(p.get("pool", "") if isinstance(p, dict) else p) is not None
+                            ]
+                            used = 0
+                            if pool_size:
+                                with kea_db() as pdb, pdb.cursor() as pcur:
+                                    used = __pools.consumption(pcur, s["id"], s.get("pools", []))
+                            r["pool_used"] = used
+                            r["utilization_pct"] = round(used / pool_size * 100, 1) if pool_size else 0
         except Exception:
             pass
     except Exception as e:

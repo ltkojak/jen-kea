@@ -327,16 +327,17 @@ class TestPacketHealthAlerts:
         calls = []
         monkeypatch.setattr(alerts, "send_alert", lambda t, *a, **kw: calls.append((t, kw)))
 
-        alerted = set()
         self._insert(db, 30, {"pkt4-received": 100, "pkt4-receive-drop": 0})
         self._insert(db, 0, {"pkt4-received": 200, "pkt4-receive-drop": 50})  # 25% drop -> fail
-        alerts._check_packet_health_alerts(alerted)
-        assert alerted == {1}
+        alerts._check_packet_health_alerts()
+        assert (
+            alerts.alert_state("packet_health", 1) is True
+        )  # v5.68.0-beta.18 (Q153): the state is a settings row, not a set
         assert len(calls) == 1 and calls[0][0] == "packet_health"
         assert calls[0][1]["status"] == "fail"
 
         # Same bad state again — must not re-fire while already alerted.
-        alerts._check_packet_health_alerts(alerted)
+        alerts._check_packet_health_alerts()
         assert len(calls) == 1
 
         with db.cursor() as cur:
@@ -344,8 +345,8 @@ class TestPacketHealthAlerts:
         db.commit()
         self._insert(db, 30, {"pkt4-received": 100, "pkt4-receive-drop": 0})
         self._insert(db, 0, {"pkt4-received": 200, "pkt4-receive-drop": 0})  # clean -> recovery
-        alerts._check_packet_health_alerts(alerted)
-        assert alerted == set()
+        alerts._check_packet_health_alerts()
+        assert alerts.alert_state("packet_health", 1) is False
         assert len(calls) == 2 and calls[1][0] == "packet_health_ok"
 
     def test_no_alert_while_status_stays_ok(self, db, monkeypatch):
@@ -359,5 +360,5 @@ class TestPacketHealthAlerts:
 
         self._insert(db, 30, {"pkt4-received": 100, "pkt4-ack-sent": 90})
         self._insert(db, 0, {"pkt4-received": 200, "pkt4-ack-sent": 180})
-        alerts._check_packet_health_alerts(set())
+        alerts._check_packet_health_alerts()
         assert calls == []

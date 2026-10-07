@@ -89,23 +89,18 @@ def _ip_or_none(value: str):
 
 
 def parse_pool(pool: str, network: ipaddress.IPv4Network) -> tuple[int, int, str] | None:
-    """Kea pool syntax → (first, last, text). `a - b`, `a-b`, or a CIDR."""
+    """Kea pool syntax → (first, last, text). `a - b`, `a-b`, or a CIDR. The reading itself is `jen.services.pools.parse_pool` (v5.68.0-beta.18,
+    Q153: one pool parser for the whole tree); this adds the canonical text the page shows."""
+    from jen.services import pools as _pools
+
+    bounds = _pools.parse_pool(pool, network)
+    if bounds is None:
+        return None
+    first, last = bounds
     text = str(pool or "").strip()
-    if not text:
-        return None
     if "-" in text:
-        a, _, b = text.partition("-")
-        first, last = _ip_or_none(a), _ip_or_none(b)
-        if first is None or last is None or int(first) > int(last):
-            return None
-        return int(first), int(last), f"{first} - {last}"
-    try:
-        sub = ipaddress.IPv4Network(text, strict=False)
-    except ValueError:
-        return None
-    if not sub.subnet_of(network):
-        return None
-    return int(sub.network_address), int(sub.broadcast_address), str(sub)
+        return first, last, f"{ipaddress.IPv4Address(first)} - {ipaddress.IPv4Address(last)}"
+    return first, last, str(ipaddress.IPv4Network(text, strict=False))
 
 
 def _split_ips(data: str) -> list[str]:

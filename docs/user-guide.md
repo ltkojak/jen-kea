@@ -91,7 +91,11 @@ Each configured subnet has a card showing:
 - **Dynamic** — devices using a dynamically assigned address (no reservation)
 - **Reserved** — devices with a static reservation
 
-The utilization bar at the bottom of each card fills as the subnet gets more active leases.
+The utilization bar at the bottom of each card fills as the subnet's pools fill (v5.68.0-beta.18). A subnet is judged **as a whole over all of
+its pools**: the capacity is every pool added together (ranges and CIDR pools alike - two ranges of 50 and 60 addresses are 110, not 60), and what
+fills it is the active leases whose address is **inside** a pool. An active lease outside every pool - a reservation's address - is still an active
+lease and still counted in *Active leases*, but it uses none of the pool's capacity, so it does not move the bar. The same capacity and the same count
+are used by the Reports page, the Health Center, the REST API, Prometheus and the alerts below.
 
 ### Recently Issued Leases
 
@@ -456,6 +460,18 @@ The log panel shows the most recent 200 lines from the DDNS log file, newest fir
 Enter a fully-qualified hostname in the lookup field and click **Lookup** to query your Technitium DNS server directly. The result shows all DNS records for that hostname including IP address, record type, and TTL.
 
 ---
+
+## Capacity alerts that remember (v5.68.0-beta.18)
+
+**Subnet utilization high** fires when a subnet's pools are at or above the threshold (Settings → Alerts, default 80 %) and **Subnet utilization
+recovery** when they drop back; **Pool exhaustion warning** fires when the free addresses in the whole subnet are at or below the setting (default 5) and
+the new **Pool exhaustion recovery** when they climb back to that number plus a margin of a fifth of it, at least 2 (7 free by default), so a subnet
+hovering at the line does not flip between the two. Tick *Pool exhaustion recovery* on a channel to hear about the recovery; the existing channels keep
+the types they had. Each is sent **once per episode**: before this release the exhaustion warning was repeated on every check for as long as the subnet
+was low, and a Jen restart (every upgrade) re-sent every utilization and packet-health alert whose condition was still true and never sent the recovery
+for one that cleared while Jen was down. Jen now remembers, in its settings, which side each condition is on, so a restart sends nothing new and a
+recovery that happened while it was down is sent once when it comes back. The first check after upgrading sends the alerts for conditions that are true
+at that moment once, because nothing had been recorded before.
 
 ## Alert log retention (v5.68.0-beta.17)
 

@@ -364,11 +364,13 @@ class TestPoolOccupancy:
             assert r["answer"]["ip"] == f"from pool {A_POOL}"
             assert all(p["free"] is None for p in r["pools"])
 
-    def test_pool_bounds_reads_ranges_and_cidrs(self):
-        assert ex.pool_bounds("10.0.0.1 - 10.0.0.3") == (167772161, 167772163)
-        assert ex.pool_bounds("10.0.0.0/30") == (167772160, 167772163)
+    def test_the_one_pool_parser_reads_ranges_and_cidrs(self):
+        from jen.services import pools
+
+        assert pools.parse_pool("10.0.0.1 - 10.0.0.3") == (167772161, 167772163)
+        assert pools.parse_pool("10.0.0.0/30") == (167772160, 167772164 - 1)
         for bad in ("", "x", "10.0.0.9 - 10.0.0.1", "10.0.0.1 - nope", None):
-            assert ex.pool_bounds(bad) is None
+            assert pools.parse_pool(bad) is None
 
     def test_a_blocked_pool_is_a_why_not_when_nothing_else_is_left(self):
         cfg = {

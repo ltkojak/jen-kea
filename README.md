@@ -134,7 +134,7 @@ Full detail, with the version each capability shipped in, is in [`docs/features.
 | Recovery | One encrypted bundle (Jen's database, config, keys, content); `install.sh --restore` puts it back | — |
 | IPv6 (DHCPv6) | Leases, Devices, Reservations, Subnets, Dashboard and Search in a v6 view; author a starting `kea-dhcp6.conf` | Off by default; Kea built with DHCPv6 |
 | Device management | Inventory with OUI fingerprinting, filter by type/subnet, custom icons | — |
-| Notifications | 7 channels (Pushover, Telegram, Slack, ntfy, Discord, Email, Webhook), 22 alert types | — |
+| Notifications | 7 channels (Pushover, Telegram, Slack, ntfy, Discord, Email, Webhook), 23 alert types | — |
 | Access control | 3 roles, per-subnet scope, TOTP/passkey MFA, SSO via OpenID Connect, full audit log | — |
 | Plugins | 7 bundled add-ins — network discovery, IPAM, host watchdog, DNS sync, switch-port locator, Wake-on-LAN, presence | Each opt-in; some need an extra host tool (`nmap`, `snmpbulkwalk`) |
 

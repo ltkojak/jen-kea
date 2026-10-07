@@ -2581,7 +2581,7 @@ arrives mid-read wait for it; Trace and Explain's log read (the layer below its 
 | Table | Pruned by | Setting (default) |
 |---|---|---|
 | `lease_history` | the snapshot pass (`take_lease_snapshot`) | `history_retention_days` (90) |
-| `lease6_history` | the same pass (`take_lease6_snapshot`, only when IPv6 is on) | `history_retention_days` (90) |
+| `lease6_history` | the same pass, UNCONDITIONALLY (`take_lease_snapshot` - IPv6 on or off; only the live read and insert behind `take_lease6_snapshot` need IPv6 on; v5.68.0-beta.18) | `history_retention_days` (90) |
 | `server_stats` | the snapshot pass (`take_server_stats_snapshot`) | `history_retention_days` (90) |
 | `events` | the snapshot pass (`_purge_old_events`) | `events_retention_days` (90) |
 | `alert_log` | the snapshot pass (`_purge_old_alert_log`) | `alert_log_retention_days` (180) |

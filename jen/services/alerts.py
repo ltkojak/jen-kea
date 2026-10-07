@@ -13,6 +13,7 @@ import time
 import requests
 
 from jen import extensions
+from jen.services import pools as __pools
 from jen.services.leases_sql import ACTIVE_LEASE4, active_lease4
 
 logger = logging.getLogger(__name__)
@@ -136,6 +137,7 @@ ALERT_TYPE_ICONS = {
     "utilization_high": "triangle-alert",
     "utilization_ok": "circle-check",
     "pool_exhaustion": "circle-x",
+    "pool_exhaustion_ok": "circle-check",
     "pool_forecast": "trending-up",
     "packet_health": "triangle-alert",
     "packet_health_ok": "circle-check",
@@ -162,6 +164,7 @@ DEFAULT_TEMPLATES = {
     "utilization_high": "⚠️ <b>Utilization Alert</b>\nSubnet <b>{subnet}</b> ({cidr})\nUsage: <b>{pct}%</b> ({used}/{total} addresses)",
     "utilization_ok": "✅ <b>Utilization Recovery</b>\nSubnet <b>{subnet}</b> ({cidr})\nUsage back to <b>{pct}%</b> ({used}/{total} addresses)",
     "pool_exhaustion": "🚨 <b>Pool Exhaustion Warning</b>\nSubnet <b>{subnet}</b> ({cidr})\nOnly <b>{free}</b> addresses remaining!",
+    "pool_exhaustion_ok": "✅ <b>Pool Exhaustion Recovery</b>\nSubnet <b>{subnet}</b> ({cidr})\n<b>{free}</b> addresses free again.",
     "pool_forecast": "⚠️ <b>Pool Exhaustion Forecast</b>\nSubnet <b>{subnet}</b> ({cidr})\nTrend <b>{trend}/day</b> — on track to reach 90% in ~<b>{days}</b> days ({date})\nPeak so far: {peak}/{total}",
     "packet_health": "⚠️ <b>Packet Health Alert</b> ({status})\n{server_name}: {detail}",
     "packet_health_ok": "✅ <b>Packet Health Recovered</b>\n{server_name} is back to clean packet processing.",
@@ -202,7 +205,7 @@ GLYPH_LEGEND = [
 #   check already surfaced elsewhere (the /metrics jen_kea6_up gauge), and
 #   could feed a v6-specific variant of this alert later if wanted — not
 #   done here since it's a genuinely new feature, not a generalization.
-# - utilization_high / utilization_ok / pool_exhaustion: DELIBERATELY NOT
+# - utilization_high / utilization_ok / pool_exhaustion / pool_exhaustion_ok: DELIBERATELY NOT
 #   generalized. Same reasoning as lease6_history's schema (Phase 0/1) and
 #   /metrics' missing jen_subnet6_utilization_ratio (Phase 4): a percentage
 #   of a /64 pool is not a meaningful signal the way it is for a v4 /24 —
@@ -251,6 +254,7 @@ ALERT_TYPE_LABELS = {
     "utilization_high": "Subnet utilization high",
     "utilization_ok": "Subnet utilization recovery",
     "pool_exhaustion": "Pool exhaustion warning",
+    "pool_exhaustion_ok": "Pool exhaustion recovery",
     "pool_forecast": "Pool exhaustion forecast (90% within 30 days)",
     "packet_health": "Packet health warn/fail (drops, NAKs, allocation failures)",
     "packet_health_ok": "Packet health recovery",
@@ -762,11 +766,11 @@ def take_lease_snapshot():
             result = __kea_command("config-get", server=__get_active_kea_server())
             if result.get("result") == 0:
                 for s, _sn in __iter_subnet4(result["arguments"].get("Dhcp4", {})):
-                    for pool in s.get("pools", []):
-                        p = pool.get("pool", "") if isinstance(pool, dict) else str(pool)
-                        if "-" in p:
-                            start, end = [x.strip() for x in p.split("-")]
-                            pool_sizes[s["id"]] = ip_to_int(end) - ip_to_int(start) + 1
+                    # v5.68.0-beta.18 (Q153): the TOTAL of every pool (ranges and CIDRs, merged) - it was the last range's size, and a CIDR
+                    # pool was skipped. This number is what lease_history, Health, Reports, Prometheus and the forecast read back.
+                    size = __pools.total_pool_size(s.get("pools", []))
+                    if size:
+                        pool_sizes[s["id"]] = size
 
             with kdb.cursor() as kcur, jdb.cursor() as jcur:
                 for subnet_id, _info in extensions.SUBNET_MAP.items():
@@ -991,13 +995,83 @@ def alert_sent_totals(cur) -> dict:
     return totals
 
 
-def _check_packet_health_alerts(alerted_packet_health) -> None:
+# ── Transition state for threshold alerts, in the settings table (v5.68.0-beta.18, Q153) ─────────────────────────────────────────────
+# `utilization_high`/`utilization_ok`, `pool_exhaustion`/`pool_exhaustion_ok` and `packet_health`/`packet_health_ok` fire on a TRANSITION, so
+# something has to remember which side a condition is on. That memory was a local set of `check_alerts()`: a Jen restart (every upgrade) re-sent
+# every alert whose condition was still true and never sent the `_ok` for one that cleared while Jen was down - and pool_exhaustion had no state
+# at all and re-sent every cycle. The state is now a settings row per (alert type, key), `alert_state:<type>:<key>` = "1" while the condition
+# holds - the same pattern `pool_forecast_alerted_<id>` already used - read on every pass.
+
+
+def _alert_state_key(alert_type, key) -> str:
+    return f"alert_state:{alert_type}:{key}"
+
+
+def alert_state(alert_type, key) -> bool:
+    """Is the condition for (alert_type, key) currently recorded as ACTIVE (alerted and not yet recovered)?"""
+    return __get_global_setting(_alert_state_key(alert_type, key), "0") == "1"
+
+
+def set_alert_state(alert_type, key, active: bool) -> None:
+    __set_global_setting(_alert_state_key(alert_type, key), "1" if active else "0")
+
+
+def check_utilization_alerts(cur, dhcp4_cfg) -> None:
+    """`utilization_high`/`utilization_ok` and `pool_exhaustion`/`pool_exhaustion_ok`, judged per SUBNET over the union of its pools
+    (v5.68.0-beta.18, Q153): capacity is the total of every pool (`pools.total_pool_size`), consumption is the active leases whose address is
+    INSIDE a pool (`pools.consumption` - a reservation outside every pool consumes no dynamic capacity). It was the subnet's whole active
+    count compared with each pool in turn (100 leases over pools of 50 and 200 read as 200 % and 50 %, and two pools could flip one subnet's
+    state twice in a pass). `cur` is an open Kea-database cursor; `dhcp4_cfg` the Dhcp4 section of Kea's config.
+
+    State is persisted (`alert_state`): a repeated pass sends nothing, a restart re-sends nothing, and a condition that cleared while Jen was
+    down sends its `_ok` once. `pool_exhaustion` has hysteresis - it fires at `free <= N` (`pool_exhaustion_free`, default 5) and recovers,
+    with `pool_exhaustion_ok`, only at `free >= N + max(2, N // 5)` - so a subnet hovering at the line does not flap."""
+    threshold = int(__get_global_setting("alert_threshold_pct", "80"))
+    exhaustion = int(__get_global_setting("pool_exhaustion_free", "5"))
+    recover_at = exhaustion + max(2, exhaustion // 5)
+    for s, _sn in __iter_subnet4(dhcp4_cfg):
+        sid = s["id"]
+        info = extensions.SUBNET_MAP.get(sid)
+        if info is None:
+            continue
+        pool_size = __pools.total_pool_size(s.get("pools", []))
+        if pool_size <= 0:
+            continue
+        used = __pools.consumption(cur, sid, s.get("pools", []))
+        pct = round(used / pool_size * 100)
+        free = pool_size - used
+        details = {
+            "subnet": info["name"],
+            "cidr": info["cidr"],
+            "pct": pct,
+            "used": used,
+            "total": pool_size,
+            "subnet_id": sid,
+        }
+        high = alert_state("utilization_high", sid)
+        if pct >= threshold and not high:
+            send_alert("utilization_high", **details)
+            set_alert_state("utilization_high", sid, True)
+        elif pct < threshold and high:
+            send_alert("utilization_ok", **details)
+            set_alert_state("utilization_high", sid, False)
+        exhausted = alert_state("pool_exhaustion", sid)
+        if free <= exhaustion and not exhausted:
+            send_alert("pool_exhaustion", subnet=info["name"], cidr=info["cidr"], free=free, subnet_id=sid)
+            set_alert_state("pool_exhaustion", sid, True)
+        elif free >= recover_at and exhausted:
+            send_alert("pool_exhaustion_ok", subnet=info["name"], cidr=info["cidr"], free=free, subnet_id=sid)
+            set_alert_state("pool_exhaustion", sid, False)
+
+
+def _check_packet_health_alerts() -> None:
     """Fire `packet_health` (warn/fail) / `packet_health_ok` (recovery)
     once per server per transition — the utilization_high/utilization_ok
     pattern. Reads the server_stats rows take_server_stats_snapshot() just
-    wrote; called right after it in the same snapshot pass.
-    `alerted_packet_health` is the caller's set of currently-alerted
-    server ids, mutated in place."""
+    wrote; called right after it in the same snapshot pass. The transition
+    state is `alert_state:packet_health:<server id>` in the settings table
+    (v5.68.0-beta.18, Q153: it was a set local to check_alerts(), lost on
+    every restart)."""
     import json
 
     from jen.services import packet_health
@@ -1020,14 +1094,15 @@ def _check_packet_health_alerts(alerted_packet_health) -> None:
                     continue
                 a = packet_health.assess(packet_health.rates(packet_health.deltas(rows), window_minutes=60))
                 sid = srv["id"]
-                if a["status"] in ("warn", "fail") and sid not in alerted_packet_health:
+                alerted = alert_state("packet_health", sid)
+                if a["status"] in ("warn", "fail") and not alerted:
                     send_alert(
                         "packet_health", server_name=srv["name"], status=a["status"], detail="; ".join(a["notes"])
                     )
-                    alerted_packet_health.add(sid)
-                elif a["status"] not in ("warn", "fail") and sid in alerted_packet_health:
+                    set_alert_state("packet_health", sid, True)
+                elif a["status"] not in ("warn", "fail") and alerted:
                     send_alert("packet_health_ok", server_name=srv["name"])
-                    alerted_packet_health.discard(sid)
+                    set_alert_state("packet_health", sid, False)
     except Exception as e:
         logger.error(f"Packet health alert check error: {e}")
 
@@ -1237,9 +1312,7 @@ def check_alerts():
     last_kea_status = {}
     last_seen_leases = {}  # ip -> {mac, hostname, subnet_id, is_reserved} — see diff_leases()
     known_macs = set()
-    alerted_high_subnets = set()
     alerted_stale_macs = set()
-    alerted_packet_health = set()  # server_id, while assess() reads warn/fail
     first_run = True
     last_summary_date = None
     last_cert_check_date = None  # v5.12.0 — cert-expiry check runs once per process-day
@@ -1495,56 +1568,7 @@ def check_alerts():
                     # ── Utilization alerts ──
                     kea_cfg = __kea_command("config-get", server=__get_active_kea_server())
                     if kea_cfg.get("result") == 0:
-                        threshold = int(__get_global_setting("alert_threshold_pct", "80"))
-                        exhaustion_threshold = int(__get_global_setting("pool_exhaustion_free", "5"))
-                        for s, _sn in __iter_subnet4(kea_cfg["arguments"].get("Dhcp4", {})):
-                            sid = s["id"]
-                            if sid not in extensions.SUBNET_MAP:
-                                continue
-                            info = extensions.SUBNET_MAP[sid]
-                            cur.execute(
-                                f"SELECT COUNT(*) as cnt FROM lease4 WHERE {ACTIVE_LEASE4} AND subnet_id=%s",  # nosec B608 - a fixed constant
-                                (sid,),
-                            )
-                            active = cur.fetchone()["cnt"]
-                            for pool in s.get("pools", []):
-                                p = pool.get("pool", "") if isinstance(pool, dict) else str(pool)
-                                if "-" in p:
-                                    start, end = [x.strip() for x in p.split("-")]
-                                    pool_size = ip_to_int(end) - ip_to_int(start) + 1
-                                    pct = round(active / pool_size * 100) if pool_size > 0 else 0
-                                    free = pool_size - active
-                                    subnet_key = f"{sid}"
-                                    if pct >= threshold and subnet_key not in alerted_high_subnets:
-                                        send_alert(
-                                            "utilization_high",
-                                            subnet=info["name"],
-                                            cidr=info["cidr"],
-                                            pct=pct,
-                                            used=active,
-                                            total=pool_size,
-                                            subnet_id=sid,
-                                        )
-                                        alerted_high_subnets.add(subnet_key)
-                                    elif pct < threshold and subnet_key in alerted_high_subnets:
-                                        send_alert(
-                                            "utilization_ok",
-                                            subnet=info["name"],
-                                            cidr=info["cidr"],
-                                            pct=pct,
-                                            used=active,
-                                            total=pool_size,
-                                            subnet_id=sid,
-                                        )
-                                        alerted_high_subnets.discard(subnet_key)
-                                    if free <= exhaustion_threshold:
-                                        send_alert(
-                                            "pool_exhaustion",
-                                            subnet=info["name"],
-                                            cidr=info["cidr"],
-                                            free=free,
-                                            subnet_id=sid,
-                                        )
+                        check_utilization_alerts(cur, kea_cfg["arguments"].get("Dhcp4", {}))
 
                     # ── Stale reservation alerts ──
                     try:
@@ -1617,7 +1641,7 @@ def check_alerts():
             if now_ts - last_snapshot_time >= snapshot_interval:
                 take_lease_snapshot()
                 take_server_stats_snapshot()
-                _check_packet_health_alerts(alerted_packet_health)
+                _check_packet_health_alerts()
                 _purge_old_events()
                 _purge_old_alert_log()
                 last_snapshot_time = now_ts

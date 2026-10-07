@@ -22,6 +22,7 @@ import jen.services.health as __health
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
 import jen.services.kea_config_view as __view
+import jen.services.pools as __pools
 from jen import extensions
 from jen.services.access import accessible_subnet6_map, diagnostic_surface, paired_v4_id, subnet6_visible
 from jen.services.fingerprint import DEVICE_TYPE_DISPLAY
@@ -436,15 +437,16 @@ def api_stats():
         }
         # Get pool sizes from Kea config
         pool_sizes = {}
+        pool_defs = {}
         kea_config_error = None
         result = __kea.kea_command("config-get", server=__kea.get_active_kea_server())
         if result.get("result") == 0:
             for s, _sn in __view.iter_subnet4(result["arguments"].get("Dhcp4", {})):
-                for pool in s.get("pools", []):
-                    p = pool.get("pool", "") if isinstance(pool, dict) else str(pool)
-                    if "-" in p:
-                        start, end = [x.strip() for x in p.split("-")]
-                        pool_sizes[str(s["id"])] = __ip_to_int(end) - __ip_to_int(start) + 1
+                # v5.68.0-beta.18 (Q153): total of every pool (ranges and CIDRs), judged per subnet; pool_used = active leases INSIDE them
+                size = __pools.total_pool_size(s.get("pools", []))
+                if size:
+                    pool_sizes[str(s["id"])] = size
+                    pool_defs[s["id"]] = s.get("pools", [])
         else:
             # v5.28.1 (Q26, D3) — surfaced to the frontend alongside the
             # other stats rather than left for pool_sizes to just be
@@ -467,6 +469,14 @@ def api_stats():
             }
             for s in extensions.KEA_SERVERS
         ]
+        if pool_defs:
+            try:
+                with __db.kea_db() as db, db.cursor() as cur:
+                    for sid, defs in pool_defs.items():
+                        if str(sid) in stats:
+                            stats[str(sid)]["pool_used"] = __pools.consumption(cur, sid, defs)
+            except Exception as e:
+                logger.warning(f"api_stats: pool consumption skipped: {e}")
         # Add HA state and version for online servers
         for srv in server_statuses:
             if srv["up"]:

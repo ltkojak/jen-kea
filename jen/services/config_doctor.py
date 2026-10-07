@@ -26,6 +26,7 @@ from jen.services import dhcp_options as _opts
 from jen.services import kea_classes as _classes
 from jen.services import kea_config_view as _view
 from jen.services import kea_readiness as _readiness
+from jen.services import pools as _pools_mod
 
 Finding = dict  # {id, severity, title, detail, where, fix_url, why}
 
@@ -42,25 +43,6 @@ def _finding(id_, severity, title, detail, where, fix_url="", why="") -> Finding
         "fix_url": fix_url,
         "why": why,
     }
-
-
-def _pool_range(pool_str: str) -> tuple[int, int] | None:
-    """A pool's (first, last) address as ints, or None if unparseable —
-    Kea accepts both 'a.b.c.d - a.b.c.e' and a bare CIDR as a pool."""
-    s = (pool_str or "").strip()
-    if not s:
-        return None
-    if "-" in s:
-        a, b = (p.strip() for p in s.split("-", 1))
-        try:
-            return int(ipaddress.IPv4Address(a)), int(ipaddress.IPv4Address(b))
-        except ValueError:
-            return None
-    try:
-        net = ipaddress.IPv4Network(s, strict=False)
-        return int(net.network_address), int(net.broadcast_address)
-    except ValueError:
-        return None
 
 
 def _subnet_range(cidr: str) -> tuple[int, int] | None:
@@ -92,7 +74,7 @@ def _check_pools_overlap(dhcp4_cfg, hosts) -> list[Finding]:
         rows = []
         for s in subnets:
             for p in _pools(s):
-                r = _pool_range(p.get("pool"))
+                r = _pools_mod.parse_pool(p.get("pool"))
                 if r:
                     rows.append((r, s.get("id"), p.get("pool")))
         return sorted(rows, key=lambda row: row[0])
@@ -145,7 +127,7 @@ def _check_pool_outside_subnet(dhcp4_cfg, hosts) -> list[Finding]:
             continue
         lo, hi = subnet_range
         for p in _pools(s):
-            r = _pool_range(p.get("pool"))
+            r = _pools_mod.parse_pool(p.get("pool"))
             if r is None:
                 continue
             if r[0] < lo or r[1] > hi:
@@ -279,7 +261,9 @@ def _check_reservation_inside_pool(dhcp4_cfg, hosts) -> list[Finding]:
         ip_int = _ip_to_int(ip)
         if ip_int is None:
             continue
-        inside_pool = any((r := _pool_range(p.get("pool"))) and r[0] <= ip_int <= r[1] for p in _pools(subnet))
+        inside_pool = any(
+            (r := _pools_mod.parse_pool(p.get("pool"))) and r[0] <= ip_int <= r[1] for p in _pools(subnet)
+        )
         if not inside_pool:
             continue
         out_of_pool = bool(subnet.get("reservations-out-of-pool", dhcp4_cfg.get("reservations-out-of-pool", False)))

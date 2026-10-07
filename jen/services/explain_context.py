@@ -41,6 +41,7 @@ from jen.services import dhcp_explain as _explain
 from jen.services import explain_inputs as _inputs
 from jen.services import kea_log_inputs as _li
 from jen.services import log_tail as _log_tail
+from jen.services import pools as _pools
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,7 @@ _log_cache: dict[tuple, tuple[float, dict]] = {}
 def pool_used(subnet_id, pool_text) -> int | None:
     """Active (state 0, unexpired) leases of `subnet_id` whose address lies inside the pool, or None when the pool cannot be
     read or the lease table cannot be reached."""
-    bounds = _explain.pool_bounds(pool_text)
+    bounds = _pools.parse_pool(pool_text)
     if bounds is None:
         return None
     try:

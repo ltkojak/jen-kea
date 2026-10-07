@@ -1786,6 +1786,19 @@ detected-once/resolved-once pattern as HA failover and config drift. It
 is computed in the same snapshot pass as `lease_history`, so it fires on
 the same cadence as the snapshot interval, not every alert-loop tick.
 
+### Capacity numbers and alert state (v5.68.0-beta.18)
+
+**One pool utility.** Every capacity number - the snapshot's `pool_size` (what `lease_history`, Health, Reports, Prometheus' `jen_subnet_pool_size` and the
+forecast read back), the dashboard's live stats, `GET /api/v1/subnets` (`pool_size`, `pools`, and the new `pool_used`) and the alert loop - comes from
+`jen/services/pools.py`: the **total of every pool** of the subnet (ranges with or without spaces, and CIDR pools), merged so an overlap cannot count an
+address twice. Consumption (`pool_used`, the alert's "used") is the active, unexpired leases whose address is **inside** that union; the history table's
+`active_leases` stays the subnet's whole active count. Utilisation and exhaustion are per subnet over the union. `lease_history` rows written before this
+release carry the last pool's size (and none for a CIDR-only subnet); the forecast reads the newest row, so it corrects itself at the next snapshot.
+
+**Threshold-alert state** lives in the `settings` table as `alert_state:<alert type>:<subnet or server id>` = `1` while the condition holds, for
+`utilization_high`, `pool_exhaustion` and `packet_health`. Deleting a row only makes the next check treat the condition as new (one more alert if it is
+still true). `pool_exhaustion_free` (default 5) is the warning line; recovery needs `free >= N + max(2, N // 5)`.
+
 ### History retention (v5.68.0-beta.17)
 
 Every history table has a retention, kept in the `settings` table (`history_retention_days` is the one on **Reports → History Settings**). `lease_history`, `lease6_history`

@@ -53,6 +53,7 @@ import re
 from jen.services import dhcp_options as _opts
 from jen.services import kea_classes as _classes
 from jen.services import kea_config_view as _view
+from jen.services import pools as _pools_mod
 
 # ── Expression grammar ────────────────────────────────────────────────────────
 
@@ -417,20 +418,6 @@ def _pools(subnet: dict) -> list[dict]:
     return [p for p in subnet.get("pools") or [] if isinstance(p, dict)]
 
 
-def pool_bounds(text) -> tuple[int, int] | None:
-    """(first, last) address of a Kea pool as integers - `a - b` or a CIDR - or None when it cannot be read."""
-    text = str(text or "").strip()
-    try:
-        if "/" in text:
-            net = ipaddress.IPv4Network(text, strict=False)
-            return int(net.network_address), int(net.broadcast_address)
-        lo, hi = (part.strip() for part in text.split("-", 1))
-        lo_i, hi_i = int(ipaddress.IPv4Address(lo)), int(ipaddress.IPv4Address(hi))
-    except ValueError:
-        return None
-    return (lo_i, hi_i) if lo_i <= hi_i else None
-
-
 def _lifetime(dhcp4_cfg, sn, subnet, matched_class_dicts):
     for scope, label in (
         (subnet, "subnet"),
@@ -769,7 +756,7 @@ def explain(
         net = None
     for p in _pools(chosen):
         st, guards = _guard_state(p)
-        bounds = pool_bounds(p.get("pool"))
+        bounds = _pools_mod.parse_pool(p.get("pool"))
         size = (bounds[1] - bounds[0] + 1) if bounds else None
         used = None
         if size is not None and pool_used is not None:

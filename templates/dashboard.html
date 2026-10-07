@@ -902,11 +902,12 @@ function updateStats() {
                 var poolSize = (data.pool_sizes && data.pool_sizes[id]) || POOL_SIZES[id] || 0;
                 totalPool += poolSize;
                 if (poolSize > 0 && utilEl) {
-                    var pct = Math.min(100, Math.round(s.dynamic / poolSize * 100));
+                    var used = (s.pool_used !== undefined) ? s.pool_used : s.dynamic;  // pool_used: active leases inside the pools (Q153)
+                    var pct = Math.min(100, Math.round(used / poolSize * 100));
                     utilEl.style.width = pct + '%';
                     utilEl.style.background = pct >= 90 ? 'var(--danger)' :
                                               pct >= 75 ? 'var(--warning)' : 'var(--primary)';
-                    if (pctEl) pctEl.textContent = pct + '% of pool (' + s.dynamic + '/' + poolSize + ')';
+                    if (pctEl) pctEl.textContent = pct + '% of pool (' + used + '/' + poolSize + ')';
                 }
             });
 
