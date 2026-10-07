@@ -197,7 +197,9 @@ class TestJenConfigOwnership:
     with EACCES until the next `install.sh --upgrade`."""
 
     def test_config_file_is_chowned_to_the_service_user_not_root(self):
-        assert 'chown "$JEN_USER:$JEN_USER" "$CONFIG_FILE"' in INSTALL_SH
+        # v5.68.0-beta.16 (Q151): the owner is applied to the open file by `_private_write` (before the rename), no longer by a chown afterwards
+        assert '--owner "$jen_owner" --mode 0600' in INSTALL_SH
+        assert 'jen_owner="$(id -u "$JEN_USER"):$(id -g "$JEN_USER")"' in INSTALL_SH
         assert 'chown root:www-data "$CONFIG_FILE"' not in INSTALL_SH
 
 
