@@ -945,8 +945,10 @@ Investigation logging (Trace or Servers) puts a Kea server's logger at DEBUG for
 Jen takes an advisory lock on `jen.config.lock` (in `/etc/jen`) for every save, and `sudo ./install.sh --configure` holds the same lock while its wizard is open
 so a save cannot be overwritten by the installer's older copy. A save made during the wizard waits up to 30 seconds and then fails with *`…jen.config.lock is held
 by another process (the installer's --configure?)`*. Finish or cancel the wizard (the lock is released when the installer exits) and save again. If nothing is
-running, check `fuser /etc/jen/jen.config.lock` for a stuck process. The lock file must be owned by the service user (the installer creates it that way); if
-Jen cannot open it a save still works - serialised within Jen only - and the log says *config file lock … unavailable*.
+running, check `fuser /etc/jen/jen.config.lock` for a stuck process. The lock file must be owned by the service user (the installer creates it that way). **If
+Jen cannot open it, the save is refused (v5.68.0-beta.19)** - it used to carry on without the lock - after one attempt to replace an unopenable file with a
+private one it owns; the message names the file and the fix: `sudo chown <the Jen service user> /etc/jen/jen.config.lock; sudo chmod 600 /etc/jen/jen.config.lock`.
+A symlink at that path is refused outright; remove it. `sudo ./install.sh --configure` needs `flock` (`util-linux`) and says so if it is missing.
 
 ## "Problems inbox sweep" is red (v5.68.0-beta.17)
 

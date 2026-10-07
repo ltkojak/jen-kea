@@ -242,3 +242,18 @@ it) is sent when the free addresses climb back past a small margin; utilization 
 longer repeats them (the first check after this upgrade sends once for conditions that are true at that moment). `sudo ./install.sh --configure` now keeps
 anything its wizard does not ask about (OIDC, extra Kea servers, `[kea6]`, the update channel) and a setting you saved in Jen while the wizard was open; Jen's
 saves and the installer share a lock file, `/etc/jen/jen.config.lock`. IPv6 history is removed after `history_retention_days` even when IPv6 is turned off.
+
+## Capacity is measured by pool use, alerts know whether anyone was told, and the restore tool writes safely
+
+Nothing to do beyond the usual (5.68.0-beta.19). The history table gains a `pool_used` column (migration 34): every snapshot from now on records how many leases are
+inside the pools, and every capacity number - the Health page's pool check, the forecast, the *Pool exhaustion forecast* alert, the Prometheus utilisation ratio, Reports
+and the dashboard's history - reads that, so a subnet with reservations or out-of-pool leases is no longer reported fuller than its pools are. Rows written before
+the upgrade have no such figure and are ignored by the forecast (it needs a few snapshots to start again; the Health row says it is waiting for the first one).
+Reports charts **Reservations configured** where it used to chart a "dynamic leases" line. A warning now counts as sent only when a channel that handles it accepted
+it: with every channel down, or none enabled yet, Jen keeps trying (1, 2, 4 ... 60 minutes) for as long as the condition holds, and a recovery is sent only after its
+warning was delivered. History, event and alert-log retention now runs even when Kea is unreachable, and the audit log's retention - which had been deleting by a
+column the table does not have, so it never removed a row - works: the first run after the upgrade removes audit rows older than `audit_retention_days` (90; 0 keeps
+everything). Health's *Background workers* and *Problems inbox sweep* rows now go red when the scheduler or a loop is genuinely not running. Prometheus label values
+are escaped. `sudo ./install.sh` now requires `flock` (installed with `util-linux` automatically); a Settings save is refused, with the fix named, when the config lock
+file cannot be opened; and `install.sh --restore` / `--rollback` write each file the way the installer does (never through a symlink, never partly written, the
+recorded owner applied or the restore aborts).

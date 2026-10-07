@@ -53,29 +53,136 @@ def _existing_owner(path) -> tuple[int, int] | None:
         return None
 
 
-def _write_file(dest: Path, content: bytes, mode: int, owner: tuple[int, int] | None) -> None:
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(content)
-    dest.chmod(mode)
-    if owner is not None and hasattr(os, "chown"):
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_O_BINARY = getattr(os, "O_BINARY", 0)
+
+
+def _fsync_dir(directory: str) -> None:
+    """fsync a directory so the rename survives a crash. A filesystem that cannot fsync a directory (EINVAL/ENOTSUP/EBADF, or no directory
+    descriptors at all on Windows) is the one case this skips; anything else is a failed install."""
+    if os.name == "nt":
+        return
+    import errno
+
+    fd = os.open(directory, os.O_RDONLY)
+    try:
         try:
-            os.chown(dest, *owner)
+            os.fsync(fd)
         except OSError as e:
-            print(f"warning: could not set ownership on {dest}: {e}", file=sys.stderr)
+            if e.errno not in (errno.EINVAL, errno.ENOTSUP, errno.EBADF):
+                raise
+    finally:
+        os.close(fd)
 
 
-def _copy_file(src: Path, dest: Path, mode: int, owner: tuple[int, int] | None) -> None:
-    """`_write_file` for a file on disk: copied in small reads, never read whole
+def _ensure_dirs_under(root: Path, directory: Path) -> None:
+    """Create `directory` and its parents, but ONLY beneath `root`, and never through a symlink: every component from `root` down must be a
+    real directory (or is created as one). `root` itself may be reached by a link (the operator's own /etc/jen), nothing below it may."""
+    root_abs = os.path.abspath(root)
+    os.makedirs(
+        root_abs, exist_ok=True
+    )  # the root itself is the operator's: created if the restore is onto a fresh box
+    target = os.path.abspath(directory)
+    rel = os.path.relpath(target, root_abs)
+    if rel == os.curdir:
+        return
+    if rel == os.pardir or rel.startswith(os.pardir + os.sep) or os.path.isabs(rel):
+        raise RestoreRefused(f"{directory} is not under {root} - refusing to write outside the restore root")
+    current = root_abs
+    for part in Path(rel).parts:
+        current = os.path.join(current, part)
+        if os.path.islink(current):
+            raise RestoreRefused(f"{current} is a symlink - the restore never writes through one")
+        if os.path.lexists(current):
+            if not os.path.isdir(current):
+                raise RestoreRefused(f"{current} exists and is not a directory")
+        else:
+            os.mkdir(current)
+
+
+def _write_all(fd: int, view: memoryview) -> None:
+    while view:
+        view = view[os.write(fd, view) :]
+
+
+def _restore_private(dest: Path, source, mode: int, owner: tuple[int, int] | None, root: Path) -> None:
+    """The ONE way the restore tool writes a file (v5.68.0-beta.19, Q154) - the same discipline as the installer's `tools/private_write.py`, the Kea
+    helper's `_install_private` and the app's `private_files.write_private_file`. It used to be the exempt writer: `write_bytes` then `chmod`
+    (so under the installer's umask 022 a previously absent SSL/SSH/MFA key was born 0644), a symlink the service account had left at the live path
+    was followed by root, a kill mid-write truncated the live file, and a failing `chown` was a printed warning.
+
+      1. `dest` must be under `root` (the config or content directory being restored) and no component below `root` may be a symlink; a symlink
+         (or anything not a regular file) at `dest` itself is REFUSED (RestoreRefused), never followed;
+      2. a UNIQUE temp name in `dest`'s own directory, `O_CREAT | O_EXCL | O_NOFOLLOW`, mode 0600 - unreadable to anyone else from its first byte;
+      3. `source` (bytes, a Path, or a binary file object) STREAMED in 1 MiB chunks, then fsynced;
+      4. the FINAL owner and mode applied to the open descriptor - `fchown` failure ABORTS (a secret owned by the wrong account is not a
+         restore), then `fchmod`;
+      5. `os.replace` into place and an fsync of the directory: `dest` is the old file or the complete new one, never partial; on any failure the
+         temp is removed and `dest` is untouched.
+    """
+    import secrets
+
+    dest = Path(dest)
+    _ensure_dirs_under(root, dest.parent)
+    try:
+        existing = os.lstat(dest)
+    except FileNotFoundError:
+        existing = None
+    import stat as _stat
+
+    if existing is not None and not _stat.S_ISREG(existing.st_mode):
+        raise RestoreRefused(f"{dest} is a symlink or not a regular file - the restore never writes through one")
+    directory = str(dest.parent)
+    tmp = fd = None
+    for _ in range(64):
+        candidate = os.path.join(directory, f".{dest.name}.{secrets.token_hex(8)}.tmp")
+        try:
+            fd = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW | _O_BINARY, 0o600)
+        except FileExistsError:
+            continue
+        tmp = candidate
+        break
+    if tmp is None:
+        raise FileExistsError(f"no unused temp name in {directory}")
+    try:
+        try:
+            if isinstance(source, (bytes, bytearray, memoryview)):
+                _write_all(fd, memoryview(source))
+            else:
+                with contextlib.ExitStack() as stack:
+                    reader = (
+                        stack.enter_context(open(source, "rb")) if isinstance(source, (str, os.PathLike)) else source
+                    )
+                    while True:
+                        chunk = reader.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        _write_all(fd, memoryview(chunk))
+            os.fsync(fd)
+            if owner is not None and hasattr(os, "fchown"):
+                os.fchown(fd, owner[0], owner[1])  # never swallowed
+            if hasattr(os, "fchmod"):
+                os.fchmod(fd, mode)
+            else:  # pragma: no cover - Windows dev boxes
+                os.chmod(tmp, mode)
+        finally:
+            os.close(fd)
+        os.replace(tmp, dest)
+        _fsync_dir(directory)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+def _write_file(dest: Path, content: bytes, mode: int, owner: tuple[int, int] | None, root: Path) -> None:
+    _restore_private(dest, content, mode, owner, root)
+
+
+def _copy_file(src: Path, dest: Path, mode: int, owner: tuple[int, int] | None, root: Path) -> None:
+    """`_write_file` for a file on disk: streamed in small reads, never read whole
     (a JENREC2 bundle can carry files far larger than memory is worth)."""
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    with open(src, "rb") as fin, open(dest, "wb") as fout:
-        shutil.copyfileobj(fin, fout, 1024 * 1024)
-    dest.chmod(mode)
-    if owner is not None and hasattr(os, "chown"):
-        try:
-            os.chown(dest, *owner)
-        except OSError as e:
-            print(f"warning: could not set ownership on {dest}: {e}", file=sys.stderr)
+    _restore_private(dest, src, mode, owner, root)
 
 
 def extract_bundle_file(in_fp, passphrase: str, dest_dir: Path, scratch_dir: Path | None = None) -> None:
@@ -366,13 +473,13 @@ def restore_etc_jen(bundle_dir: Path, etc_jen: Path) -> list[str]:
 
     config_src = bundle_dir / "jen.config"
     if config_src.is_file():
-        _write_file(etc_jen / "jen.config", config_src.read_bytes(), 0o600, owner)
+        _write_file(etc_jen / "jen.config", config_src.read_bytes(), 0o600, owner, etc_jen)
         lines.append("wrote jen.config")
 
     for key_name in ("mfa_key", "secret_key"):
         key_src = bundle_dir / key_name
         if key_src.is_file():
-            _write_file(etc_jen / key_name, key_src.read_bytes(), 0o600, owner)
+            _write_file(etc_jen / key_name, key_src.read_bytes(), 0o600, owner, etc_jen)
             lines.append(f"wrote {key_name}")
 
     for sub in ("ssl", "ssh"):
@@ -383,7 +490,7 @@ def restore_etc_jen(bundle_dir: Path, etc_jen: Path) -> list[str]:
         for path in src_root.rglob("*"):
             if path.is_file():
                 rel = path.relative_to(src_root)
-                _write_file(etc_jen / sub / rel, path.read_bytes(), 0o600, owner)
+                _write_file(etc_jen / sub / rel, path.read_bytes(), 0o600, owner, etc_jen)
                 count += 1
         if count:
             lines.append(f"wrote {count} file(s) under {sub}/")
@@ -445,7 +552,7 @@ def restore_content(bundle_dir: Path, content_dir: Path) -> int:
             # files (content/keys/) as ordinary content; never write one
             # back world-readable.
             mode = 0o600 if rel.parts and rel.parts[0] == "keys" else 0o644
-            _copy_file(path, content_dir / rel, mode, owner)
+            _copy_file(path, content_dir / rel, mode, owner, content_dir)
             count += 1
     return count
 
@@ -666,13 +773,9 @@ def _restore_tree(tar_path: Path, root: Path, exclude: tuple[str, ...] = ()) -> 
             if m.isdir():
                 target.mkdir(parents=True, exist_ok=True)
                 continue
-            target.parent.mkdir(parents=True, exist_ok=True)
-            with open(target, "wb") as out:
-                shutil.copyfileobj(tf.extractfile(m), out, 1024 * 1024)
-            target.chmod(m.mode & 0o777)
-            if hasattr(os, "chown"):
-                with contextlib.suppress(OSError):
-                    os.chown(target, m.uid, m.gid)
+            # v5.68.0-beta.19 (Q154): through the one private writer - bounded by `root`, never through a symlink, a unique 0600 temp,
+            # streamed, the recorded owner applied to the descriptor (a failing chown ABORTS the rollback loudly, it is not swallowed), replaced
+            _restore_private(target, tf.extractfile(m), m.mode & 0o777, (m.uid, m.gid), root)
 
 
 def rollback_snapshot(snap: Path, etc_jen: Path, content_dir: Path) -> None:

@@ -454,9 +454,10 @@ _config_lock_acquire() {
     if [[ -L "$CONFIG_LOCK_FILE" ]]; then
         fatal "$CONFIG_LOCK_FILE is a symlink - refusing to lock through it"
     fi
+    # v5.68.0-beta.19 (Q154): flock is REQUIRED (util-linux, present on every supported Ubuntu). Continuing without it left Jen's own saves free to be
+    # overwritten by the wizard's older copy - the very thing the lock exists to prevent - so --configure refuses instead.
     if ! command -v flock >/dev/null 2>&1; then
-        warn "flock is not installed - Jen's own saves cannot be held off while the wizard runs"
-        return 0
+        fatal "--configure needs flock (util-linux) to hold Jen's config lock while the wizard runs: apt-get install util-linux"
     fi
     if [[ ! -e "$CONFIG_LOCK_FILE" ]]; then
         install -m 0600 -o "$JEN_USER" -g "$JEN_USER" /dev/null "$CONFIG_LOCK_FILE" \
@@ -799,6 +800,9 @@ preflight_checks() {
     # systemd
     command -v systemctl &>/dev/null && ok "systemd" || { err "systemd not found"; failed=$((failed+1)); }
 
+    # flock (v5.68.0-beta.19, Q154) - the installer and Jen's own saves share a lock file (see _config_lock_acquire); util-linux ships it
+    command -v flock &>/dev/null && ok "flock" || { err "flock not found (util-linux) - apt-get install util-linux"; failed=$((failed+1)); }
+
     # pip
     command -v pip3 &>/dev/null || python3 -m pip --version &>/dev/null 2>&1 \
         && ok "pip3" || warn "pip3 not found — will attempt install"
@@ -927,6 +931,7 @@ install_dependencies() {
     command -v ssh-keygen  &>/dev/null || pkgs+=(openssh-client)
     command -v curl        &>/dev/null || pkgs+=(curl)
     command -v openssl     &>/dev/null || pkgs+=(openssl)
+    command -v flock       &>/dev/null || pkgs+=(util-linux)
     python3 -c 'import venv, ensurepip' &>/dev/null || pkgs+=(python3-venv)
 
     if [[ ${#pkgs[@]} -gt 0 ]]; then

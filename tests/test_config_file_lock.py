@@ -182,17 +182,6 @@ class TestTheLockFile:
         lock = pathlib.Path(f"{cfg}.lock")
         assert lock.exists() and stat.S_IMODE(lock.stat().st_mode) == 0o600
 
-    def test_a_symlink_there_is_never_followed_and_the_save_still_works_unlocked(self, cfg, tmp_path, caplog):
-        from jen.config import AppConfig
-
-        victim = tmp_path / "victim"
-        victim.write_text("untouched")
-        os.symlink(victim, f"{cfg}.lock")
-        AppConfig().write_value("a", "b", "1", reload=False)
-        assert victim.read_text() == "untouched"
-        assert ("a", "b") in _present(cfg)
-        assert "unavailable" in caplog.text
-
     def test_a_nested_writer_does_not_deadlock_on_its_own_threads_lock(self, cfg):
         """The RLock allows nesting (a callback of `mutate` may reach another writer through a service) - and the file lock is taken once per
         thread, not once per writer: a second descriptor in the same thread would queue behind the first forever."""
@@ -207,3 +196,94 @@ class TestTheLockFile:
         t = threading.Thread(target=go, daemon=True)
         t.start()
         assert done.wait(5), "taking the file lock twice in one thread deadlocked"
+
+
+class TestTheLockFailsClosed:
+    """v5.68.0-beta.19 (Q154): beta.18 degraded to the in-process lock alone (with a log line) when the lock file could not be opened - exactly when
+    something is wrong with it, the lock was silently gone. Now a symlink is refused, an unopenable file gets ONE repair attempt, and if that fails the
+    save is refused with the reason and the fix."""
+
+    def test_a_symlink_is_refused_never_followed_and_nothing_is_written(self, cfg, tmp_path):
+        import jen.config as c
+
+        victim = tmp_path / "victim"
+        victim.write_text("untouched")
+        os.symlink(victim, f"{cfg}.lock")
+        before = cfg.read_text()
+        with pytest.raises(c.ConfigFileLocked, match=r"is a symlink.*chown"):
+            c.AppConfig().write_value("a", "b", "1", reload=False)
+        assert victim.read_text() == "untouched" and cfg.read_text() == before
+
+    def test_an_old_root_owned_lock_is_repaired_once_and_the_save_succeeds(self, cfg, monkeypatch, caplog):
+        """A lock file this account cannot open (a root-owned 0600 one from an older run - simulated as EACCES on the first open of it) is replaced by a
+        private file this account owns (the config directory is its own), and the save goes ahead under the new lock."""
+        import jen.config as c
+
+        lock = f"{cfg}.lock"
+        pathlib.Path(lock).write_text("")
+        real_open = os.open
+        refused = []
+
+        def fake_open(path, flags, mode=0o777, **kw):
+            if str(path) == lock and not refused:
+                refused.append(1)
+                raise PermissionError(13, "Permission denied", lock)
+            return real_open(path, flags, mode, **kw)
+
+        monkeypatch.setattr(os, "open", fake_open)
+        c.AppConfig().write_value("a", "b", "1", reload=False)
+        assert refused == [1] and ("a", "b") in _present(cfg)
+        assert stat.S_IMODE(os.stat(lock).st_mode) == 0o600 and os.stat(lock).st_uid == os.getuid()
+        assert "replaced with a private file" in caplog.text
+
+    def test_a_mode_000_lock_is_repaired_too(self, cfg):
+        import jen.config as c
+
+        lock = pathlib.Path(f"{cfg}.lock")
+        lock.write_text("")
+        os.chmod(lock, 0o000)
+        if os.geteuid() == 0:
+            pytest.skip("root opens a mode-000 file")
+        c.AppConfig().write_value("a", "b", "1", reload=False)
+        assert ("a", "b") in _present(cfg) and stat.S_IMODE(lock.stat().st_mode) == 0o600
+
+    def test_when_the_repair_fails_the_save_is_refused_with_the_reason_and_the_fix(self, cfg, monkeypatch):
+        import jen.config as c
+
+        lock = f"{cfg}.lock"
+        pathlib.Path(lock).write_text("")
+        real_open = os.open
+
+        def always_refuse(path, flags, mode=0o777, **kw):
+            if str(path) == lock:
+                raise PermissionError(13, "Permission denied", lock)
+            return real_open(path, flags, mode, **kw)
+
+        monkeypatch.setattr(os, "open", always_refuse)
+        monkeypatch.setattr(
+            c, "_replace_lock_with_private_file", lambda p: (_ for _ in ()).throw(OSError(1, "Operation not permitted"))
+        )
+        before = cfg.read_text()
+        with pytest.raises(c.ConfigFileLocked) as err:
+            c.AppConfig().write_value("a", "b", "1", reload=False)
+        message = str(err.value)
+        assert lock in message and "could not be repaired" in message and "chown" in message and "chmod 600" in message
+        assert cfg.read_text() == before
+
+    def test_a_lock_that_cannot_be_opened_for_another_reason_is_refused_without_a_repair(self, cfg, monkeypatch):
+        import jen.config as c
+
+        lock = f"{cfg}.lock"
+        real_open = os.open
+        repairs = []
+
+        def disk_gone(path, flags, mode=0o777, **kw):
+            if str(path) == lock:
+                raise OSError(5, "Input/output error", lock)
+            return real_open(path, flags, mode, **kw)
+
+        monkeypatch.setattr(os, "open", disk_gone)
+        monkeypatch.setattr(c, "_replace_lock_with_private_file", lambda p: repairs.append(p))
+        with pytest.raises(c.ConfigFileLocked, match="cannot be opened"):
+            c.AppConfig().write_value("a", "b", "1", reload=False)
+        assert repairs == []

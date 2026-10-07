@@ -486,3 +486,28 @@ class TestConfigureHoldsTheLockAndMergesIntoTheLiveFile:
         proc = _bash(tmp_path, 'JEN_USER="$(id -un)"; _config_lock_acquire; echo reached')
         assert proc.returncode != 0 and "reached" not in proc.stdout
         assert victim.read_text() == "x"
+
+
+class TestFlockIsRequired:
+    """v5.68.0-beta.19 (Q154): flock is a required dependency. Continuing without it let Jen's own saves be overwritten by the wizard - the thing the
+    lock exists to prevent - so `--configure` refuses, and the preflight and the dependency installer know about it."""
+
+    HIDE_FLOCK = (
+        'command() { if [[ "${1:-}" == "-v" && "${2:-}" == "flock" ]]; then return 1; fi; builtin command "$@"; }\n'
+        'JEN_USER="$(id -un)"; mkdir -p "$CONFIG_DIR"\n'
+    )
+
+    def test_configure_refuses_without_flock_and_says_how_to_fix_it(self, tmp_path):
+        proc = _bash(tmp_path, self.HIDE_FLOCK + "_config_lock_acquire; echo reached")
+        assert proc.returncode != 0 and "reached" not in proc.stdout
+        assert "needs flock" in (proc.stdout + proc.stderr) and "util-linux" in (proc.stdout + proc.stderr)
+
+    def test_the_preflight_checks_it_and_the_dependency_installer_would_install_it(self):
+        text = INSTALL_SH.read_text(encoding="utf-8")
+        assert 'command -v flock &>/dev/null && ok "flock"' in text
+        assert "command -v flock       &>/dev/null || pkgs+=(util-linux)" in text
+
+    def test_configure_mode_acquires_the_lock_before_it_reads_anything(self):
+        text = INSTALL_SH.read_text(encoding="utf-8")
+        body = text[text.index("_run_configure_mode() {") :]
+        assert body.index("_config_lock_acquire") < body.index("detect_existing") < body.index("write_config")

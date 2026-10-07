@@ -497,6 +497,16 @@ inline snippet. `tests/test_no_root_jen_imports.py` scans every inline
 `-c "..."` python invocation in both scripts and refuses one that
 imports `jen` (statically or via `__import__`) without `runuser`.
 
+**The restore tool writes under the same discipline as the installer (v5.68.0-beta.19, Q154).** `jen.tools.restore` runs as root and was the one writer
+exempt from it: `write_bytes` then `chmod` (so under the installer's umask 022 a previously absent SSL/SSH/MFA key was born 0644 until the chmod), a symlink
+the service account had left at a live path was followed by root, a kill mid-write truncated the live file, and a failing `chown` was a printed warning.
+`_restore_private` is now the only way it writes a file - `_write_file`, `_copy_file` and `_restore_tree` (the rollback) all call it: the destination must be
+under the restore root (`/etc/jen` or the content directory) with no symlink component below it, and a symlink or non-regular file at the destination is
+refused (`RestoreRefused`), never followed; a unique `O_CREAT|O_EXCL|O_NOFOLLOW` 0600 temp in the destination's own directory; the source streamed in 1 MiB
+chunks and fsynced; the recorded owner applied to the open descriptor with `fchown` (a failure ABORTS the restore - a secret owned by the wrong account is not
+a restore) and then the mode; `os.replace` and an fsync of the directory, so the path is the old file or the complete new one. The allowlist entry that exempted
+`restore.py` from `tests/test_private_files.py`'s source scan is gone.
+
 `jen-update-root.py` must never derive a decision from `sys.argv`
 reachable via the sudoers grant above beyond the fixed `--plugins`
 dispatch (`tests/test_jen_update_root.py` pins this). `--check-layout`
@@ -2581,7 +2591,11 @@ running, so a Settings save made during the wizard was overwritten by the instal
 extra Kea servers, `[kea6]`, `[subnets6]`, the update channel - was dropped with it). Every writer now also takes an exclusive advisory `flock` on
 `<config>.lock` for its whole read-modify-replace (once per thread: the RLock allows a nested writer and a second descriptor in the same thread would queue
 behind the first), waiting up to 30 s and then raising `ConfigFileLocked` (a Settings save says why instead of writing); the lock file is created 0600 owned
-by the service user and never opened through a symlink (if it cannot be opened the save degrades to the in-process lock alone and logs it).
+by the service user and never opened through a symlink. **It fails closed (v5.68.0-beta.19, Q154):** beta.18 degraded to the in-process lock alone, with a
+log line, when the lock file could not be opened - exactly when something is wrong with it, the lock was silently gone. A symlink is now refused; a file this
+account cannot open (a root-owned 0600 one from an older run, a mode of 000) gets ONE repair attempt - the directory is the service user's, so a fresh private
+file is renamed over it; and if that fails the save is refused (`ConfigFileLocked`) with the path, the reason and the `chown`/`chmod` that fixes it.
+`install.sh` requires `flock` (the preflight checks it, the dependency step installs `util-linux` when it is missing, and `--configure` refuses without it).
 `install.sh --configure` takes the lock before it reads anything (`_config_lock_acquire`) and holds it through `write_config`; because the wizard is
 interactive, `write_config` then re-reads the live file and merges the answers INTO it (`tools/config_merge.py`): a key the wizard did not ask about keeps its
 live value, a key the operator changed in the wizard wins, and a key the operator left as it was never undoes a newer save. Every other write the installer makes

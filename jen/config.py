@@ -214,6 +214,55 @@ class ConfigFileLocked(RuntimeError):
     """The config file's advisory lock (`<config>.lock`) is held by another process and did not come free in `FILE_LOCK_WAIT_S`."""
 
 
+def _open_lock(lock_path):
+    """Open `<config>.lock` for locking, FAILING CLOSED (v5.68.0-beta.19, Q154). beta.18 degraded to the in-process lock alone with a log line when it
+    could not be opened - exactly when something is wrong with it (a root-owned file from an older run, a planted symlink) the lock was silently
+    gone, and the installer's wizard could overwrite a save. Now: a symlink is refused (never followed); a file this process cannot open gets ONE
+    repair attempt - the directory is the service user's, so a fresh private file is renamed over it - and if that fails the save is refused with
+    the reason and the fix."""
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        return os.open(lock_path, flags, 0o600)
+    except OSError as first:
+        if os.path.islink(lock_path):
+            raise _refuse_lock(lock_path, "is a symlink - Jen never locks through one; remove it", first) from first
+        if first.errno not in (errno.EACCES, errno.EPERM) or not os.path.lexists(lock_path):
+            raise _refuse_lock(lock_path, f"cannot be opened ({first.strerror or first})", first) from first
+        try:  # one repair attempt of an unopenable lock (root-owned 0600 from an older run, a mode of 000)
+            _replace_lock_with_private_file(lock_path)
+            return os.open(lock_path, flags, 0o600)
+        except OSError as second:
+            raise _refuse_lock(
+                lock_path,
+                f"cannot be opened ({first.strerror or first}) and could not be repaired ({second.strerror or second})",
+                second,
+            ) from second
+
+
+def _replace_lock_with_private_file(lock_path):
+    import secrets
+
+    directory, base = os.path.split(lock_path)
+    tmp = os.path.join(directory, f".{base}.{secrets.token_hex(6)}.repair")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    os.close(fd)
+    try:
+        os.replace(tmp, lock_path)
+    except OSError:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+    logger.warning(
+        f"config file lock {lock_path} could not be opened and was replaced with a private file owned by this account"
+    )
+
+
+def _refuse_lock(lock_path, reason, cause):
+    message = f"the config lock {lock_path} {reason} - fix its ownership and mode (sudo chown <the Jen service user> {lock_path}; chmod 600 {lock_path})"
+    logger.error(message)
+    return ConfigFileLocked(message)
+
+
 @contextlib.contextmanager
 def _file_lock(path):
     """An exclusive advisory `flock` on `<config>.lock`, held for the whole read-modify-replace of one writer.
@@ -231,21 +280,7 @@ def _file_lock(path):
             _writer_state.lock_depth = depth
         return
     lock_path = f"{path}.lock"
-    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
-    try:
-        fd = os.open(lock_path, flags, 0o600)
-    except OSError as e:
-        # a lock file this process cannot open (a root-owned one from an older run, a symlink) must not make every Settings save fail:
-        # degrade to the in-process lock alone and say so, once per call
-        logger.warning(
-            f"config file lock {lock_path} unavailable ({e}); this save is serialised within the process only"
-        )
-        _writer_state.lock_depth = depth + 1
-        try:
-            yield
-        finally:
-            _writer_state.lock_depth = depth
-        return
+    fd = _open_lock(lock_path)
     try:
         deadline = time.monotonic() + FILE_LOCK_WAIT_S
         while True:

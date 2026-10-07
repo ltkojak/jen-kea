@@ -294,14 +294,9 @@ REVIEWED_WRITES = {
     ("jen/services/plugins.py", "enable_plugin"): "a request marker: no secret",
     ("jen/services/recovery.py", "build_tar"): "an in-memory tar stream",
     ("jen/services/recovery.py", "build_stream"): "an in-memory tar stream",
-    (
-        "jen/tools/restore.py",
-        "_copy_file",
-    ): "the OFFLINE root restore tool: runs with the service stopped, ownership/mode set after",
+    # v5.68.0-beta.19 (Q154): `_copy_file`, `_restore_tree` and `_write_file` are no longer here - they write through `_restore_private`
     ("jen/tools/restore.py", "_tar_tree"): "an in-memory/out-file tar stream of the restore snapshot",
-    ("jen/tools/restore.py", "safe_extract"): "the offline root restore tool",
-    ("jen/tools/restore.py", "_restore_tree"): "the offline root restore tool",
-    ("jen/tools/restore.py", "_write_file"): "the offline root restore tool",
+    ("jen/tools/restore.py", "safe_extract"): "bundle members into the restore's own 0700 scratch directory",
     ("jen/tools/restore.py", "_write_report"): "a plain-text restore report",
     (
         "jen/services/kea_host.py",
