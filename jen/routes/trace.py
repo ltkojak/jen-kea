@@ -21,8 +21,8 @@ from flask_login import current_user, login_required
 import jen.services.auth as __auth
 import jen.services.capabilities as __caps
 import jen.services.investigation_logging as __inv
-import jen.services.kea_host as __host
 import jen.services.kea_log_trace as __trace
+import jen.services.log_tail as __log_tail
 from jen import extensions
 from jen.routes.explain import _hex_identifier, _load_lease, _load_reservations
 from jen.services import client_subject as __subject
@@ -133,7 +133,9 @@ def trace_page():
                 res = {"ok": False, "code": "no-helper"}
                 trace_refusal = caps.why("trace")
             else:
-                res = __host.tail_log(server, extensions.DHCP4_LOG, lines, timeout=TAIL_TIMEOUT_S, helper_only=True)
+                # v5.68.0-beta.17 (Q152): one cached read per server and path for WATCH_STEP_S, shared by every watcher and by Explain's
+                # log read - two admins watching the same server cost the Kea host one tail per step, not two
+                res = __log_tail.tail(server, extensions.DHCP4_LOG, lines, timeout=TAIL_TIMEOUT_S)
                 trace_refusal = NEEDS_HELPER
             if res["code"] == "no-helper":
                 ctx["error"] = trace_refusal

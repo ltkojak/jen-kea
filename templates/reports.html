@@ -84,6 +84,23 @@
 
 {% endif %}
 
+{# v5.68.0-beta.17 (Q152) - IPv6 subnets: counts only. A /64 has no finite pool, so there is no utilization line and no projection, and the
+   page says so once, here, in words (the same way a v4 chart with nothing to project says why). #}
+{% if data_points6 > 0 %}
+<div class="form-hint chart-note" style="margin:16px 0 8px;">IPv6 subnets show lease counts only: an IPv6 subnet has no finite pool to project against, so there is no utilization line and no forecast.</div>
+{% for subnet_id, h in history6.items() %}
+{% if h.data %}
+<div class="card">
+    <div class="card-header">
+        <span class="card-title">{{ icon("chart-bar") }} {{ h.name }} — {{ h.cidr }} (IPv6)</span>
+        <span class="u-865c33">{{ h.data|length }} data points</span>
+    </div>
+    <canvas id="chart6-{{ subnet_id }}" height="80"></canvas>
+</div>
+{% endif %}
+{% endfor %}
+{% endif %}
+
 <!-- Settings -->
 {% if current_user.role in ('superadmin','admin') %}
 <div class="card">
@@ -115,11 +132,12 @@
 document.getElementById('days-select').addEventListener('change', function() {
     window.location = '?days=' + this.value;
 });
-{% if data_points > 0 %}
+{% if data_points > 0 or data_points6 > 0 %}
 </script>
 <script src="/static/js/chart.umd.min.js"></script>
 <script nonce="{{ csp_nonce }}">
 const HISTORY = {{ history | tojson }};
+const HISTORY6 = {{ history6 | tojson }};
 const FORECAST = {{ forecast | tojson }};
 // v5.53.0 (Q60): on a phone the canvas's 80px-tall default aspect (about 90px at 350 wide) is
 // unreadable; a 1.5:1 chart is ~230px tall there, and the legend moves below it.
@@ -279,12 +297,67 @@ function buildCharts() {
         });
     });
 }
+// v5.68.0-beta.17 (Q152) - an IPv6 subnet's counts: addresses, delegated prefixes (and temporary addresses / reservations when there are any).
+// No pool-size series and no projection - an IPv6 subnet has no finite pool, and the sentence above the charts says so.
+function buildCharts6() {
+    const borderColor = jenColor('var(--border)');
+    const textColor = jenColor('var(--text-muted)');
+    const textStrong = jenColor('var(--text)');
+    const surface2 = jenColor('var(--surface2)');
+    const primary = jenColor('var(--primary)');
+    const success = jenColor('var(--success)');
+    const warning = jenColor('var(--warning)');
+    const gridColor = `color-mix(in srgb, ${textStrong} 8%, transparent)`;
+    Object.entries(HISTORY6).forEach(([subnetId, h]) => {
+        const canvas = document.getElementById('chart6-' + subnetId);
+        if (!canvas || !h.data || !h.data.length) return;
+        const series = [
+            ['Active addresses (IA_NA)', 'active_na', primary, false, true],
+            ['Active prefixes (IA_PD)', 'active_pd', success, false, true],
+            ['Temporary addresses (IA_TA)', 'active_ta', warning, false, false],
+            ['Reserved addresses', 'reserved_na', textStrong, true, false],
+            ['Reserved prefixes', 'reserved_pd', textColor, true, false],
+        ];
+        const datasets = series
+            .filter(([, key, , , always]) => always || h.data.some(d => d[key] > 0))
+            .map(([label, key, color, dashed]) => ({
+                label: label,
+                data: h.data.map(d => d[key]),
+                borderColor: color,
+                backgroundColor: 'transparent',
+                fill: false,
+                tension: 0.4,
+                pointRadius: h.data.length > 100 ? 0 : 2,
+                borderWidth: 2,
+                ...(dashed ? { borderDash: [4, 4] } : {}),
+            }));
+        new Chart(canvas, {
+            type: 'line',
+            data: { labels: h.data.map(d => d.ts), datasets: datasets },
+            options: {
+                responsive: true,
+                ...(PHONE ? { aspectRatio: 1.5 } : {}),
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: { position: PHONE ? 'bottom' : 'top', labels: { color: textColor, boxWidth: 12, font: { size: 11 } } },
+                    tooltip: { backgroundColor: surface2, borderColor: borderColor, borderWidth: 1, titleColor: textStrong, bodyColor: textColor },
+                },
+                scales: {
+                    x: { grid: { color: gridColor }, ticks: { color: textColor, font: { size: 10 }, maxTicksLimit: 12, maxRotation: 0 } },
+                    y: { grid: { color: gridColor }, ticks: { color: textColor, font: { size: 11 } }, beginAtZero: true },
+                },
+            },
+        });
+    });
+}
 buildCharts();
+buildCharts6();
 // v5.55.0 (Q63) — a theme switch changes every color above; destroy and
 // rebuild rather than trying to patch live Chart.js instances in place.
 document.addEventListener('jen:theme', function() {
     Object.values(Chart.instances).forEach(c => c.destroy());
     buildCharts();
+    buildCharts6();
 });
 {% endif %}
 {% endblock %}

@@ -40,6 +40,7 @@ from jen.services import client_subject as _cs
 from jen.services import dhcp_explain as _explain
 from jen.services import explain_inputs as _inputs
 from jen.services import kea_log_inputs as _li
+from jen.services import log_tail as _log_tail
 
 logger = logging.getLogger(__name__)
 
@@ -200,8 +201,6 @@ def read_log(mac: str, *, allowed: bool, fetch: bool = True) -> dict:
         return cached[1]
     if not fetch:
         return {**empty, "state": "not-fetched", "message": ""}
-    from jen.services import kea_host as _host
-
     view = None
     first_ok = None  # a server whose log was read but never named the client
     fallback = None  # an exchange that has no class list or packet dump (the client id only)
@@ -214,7 +213,9 @@ def read_log(mac: str, *, allowed: bool, fetch: bool = True) -> dict:
                 "message": "Reading Kea's log needs SSH access to the Kea host.",
             }
             continue
-        res = _host.tail_log(server, extensions.DHCP4_LOG, TAIL_LINES, timeout=TAIL_TIMEOUT_S, helper_only=True)
+        # v5.68.0-beta.17 (Q152): the layer below this function's own 30 s per-MAC cache - one read per server and path is shared
+        # with Trace's live watch (jen.services.log_tail), so a watcher and an Investigation page do not each tail the log
+        res = _log_tail.tail(server, extensions.DHCP4_LOG, TAIL_LINES, timeout=TAIL_TIMEOUT_S)
         if res.get("code") == "no-helper":
             problem = problem or {
                 **empty,
@@ -251,6 +252,7 @@ def read_log(mac: str, *, allowed: bool, fetch: bool = True) -> dict:
 
 def clear_log_cache() -> None:
     _log_cache.clear()
+    _log_tail.clear()  # the shared 3 s read below this per-MAC cache (v5.68.0-beta.17, Q152)
 
 
 def run(cfg, built: dict, *, subnet_id, lease, reservations, accessible_ids=None) -> dict:

@@ -419,6 +419,12 @@ amber when 90 % is within 30 days and red within 7 — the same thresholds
 the **Pool exhaustion forecast** check on the Health page and the optional
 **Pool exhaustion forecast** alert use.
 
+**IPv6 subnets (v5.68.0-beta.17).** With IPv6 on, each IPv6 subnet you may see gets its own chart under the IPv4 ones, drawn from the same
+snapshots: *Active addresses (IA_NA)* and *Active prefixes (IA_PD)* always, and *Temporary addresses* and the *Reserved* lines when there are any.
+It shows counts only - a sentence above the charts says an IPv6 subnet has no finite pool to project against, so there is no utilization line
+and no forecast. The history starts at the first snapshot after the upgrade: IPv6 counts were not recorded before then. The same retention applies
+as for IPv4 (set at the bottom of the page).
+
 ---
 
 ## DDNS Status
@@ -450,6 +456,13 @@ The log panel shows the most recent 200 lines from the DDNS log file, newest fir
 Enter a fully-qualified hostname in the lookup field and click **Lookup** to query your Technitium DNS server directly. The result shows all DNS records for that hostname including IP address, record type, and TTL.
 
 ---
+
+## Alert log retention (v5.68.0-beta.17)
+
+**Settings → Logs → Alert Log** lists the deliveries of every alert. Each delivery is kept for 180 days after it was sent and then removed by the
+same job that prunes the lease history; the page says how many days it keeps. The retention is the settings key `alert_log_retention_days`
+(a whole number of days, 1 or more; anything else means 180). The total that Prometheus sees as `jen_alerts_sent_total` keeps counting what was
+removed, so it never goes down.
 
 ## Audit Log
 

@@ -799,6 +799,47 @@ def take_lease_snapshot():
             jdb.commit()
     except Exception as e:
         logger.error(f"Snapshot error: {e}")
+    # v5.68.0-beta.17 (Q152): the IPv6 counts are recorded by the same pass, and only when IPv6 is on - a v4-only install does not
+    # even reach take_lease6_snapshot's body. Its failure never takes the v4 snapshot above down with it (that is already committed).
+    try:
+        from jen.services import kea6 as _kea6
+
+        if _kea6.is_ipv6_enabled():
+            take_lease6_snapshot()
+    except Exception as e:
+        logger.error(f"IPv6 snapshot error: {e}")
+
+
+def take_lease6_snapshot():
+    """v5.68.0-beta.17 (Q152) - fill `lease6_history`, which migration 11 created in v5.0 and nothing ever wrote (so every install had
+    an empty table, the backup described "historical IPv6 lease counts" that did not exist, and an IPv6 subnet had no history on
+    Reports). One row per IPv6 subnet per snapshot: the ACTIVE leases by type (IA_NA addresses, IA_TA, IA_PD delegated prefixes) and the
+    reservations by type (address, prefix), counted through the same readers the pages use (`kea6.list_lease6`, which keeps only
+    active leases, and `kea6.get_ipv6_reservations`). There is deliberately no pool size column: a /64 has no finite pool to measure
+    utilization against (migration 11). Old rows are removed with the same `history_retention_days` as the IPv4 history."""
+    from jen.services import kea6 as _kea6
+
+    retention_days = int(__get_global_setting("history_retention_days", "90"))
+    with __jen_db_ctx() as jdb, jdb.cursor() as jcur:
+        for subnet_id in list(extensions.SUBNET6_MAP):
+            active = {"IA_NA": 0, "IA_TA": 0, "IA_PD": 0}
+            for lease in _kea6.list_lease6(subnet_id=subnet_id):
+                name = lease.get("lease_type_name")
+                if name in active:
+                    active[name] += 1
+            reserved = {"IA_NA": 0, "IA_PD": 0}
+            for host in _kea6.get_ipv6_reservations(subnet_id=subnet_id):
+                for r in host.get("reservations", []):
+                    if r.get("type_name") in reserved:
+                        reserved[r["type_name"]] += 1
+            jcur.execute(
+                "INSERT INTO lease6_history (subnet_id, active_na, active_ta, active_pd, reserved_na, reserved_pd) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (subnet_id, active["IA_NA"], active["IA_TA"], active["IA_PD"], reserved["IA_NA"], reserved["IA_PD"]),
+            )
+        jcur.execute(
+            "DELETE FROM lease6_history WHERE snapshot_time < DATE_SUB(NOW(), INTERVAL %s DAY)", (retention_days,)
+        )
 
 
 def _packet_stat_key(key):

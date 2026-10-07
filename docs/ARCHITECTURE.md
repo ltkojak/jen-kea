@@ -2537,6 +2537,55 @@ until the root install's own final step removes it. Uninstalling a
 bundled-only plugin disables it rather than deleting release-owned
 files.
 
+### 6.3 Concurrency, pool sizing and retention (v5.68.0-beta.17, Q152)
+
+Jen runs one gunicorn worker with N threads (`[server] threads`, default 8) and one scheduler in the same process. Three things that were each
+right for one request at a time were not right for N, and one family of tables had no lifecycle at all.
+
+**The config file has one writer at a time.** Every `AppConfig` writer (`write_value`, `write_values`, `write_subnets`, `write_subnets6`,
+`mutate`) is read-modify-write: read `jen.config`, change one thing, replace the file. Two Settings saves at once - two admins, or a save racing
+the setup wizard or Author Kea Config's `[subnets]` write - were a lost update: the second read missed the first write. A single class-level
+`RLock` (`AppConfig._write_lock`) is held from the read to the end of the reload, so what a writer reads is what is on disk when it replaces it and
+the `extensions.*` globals are re-derived in the order the file changed. It is an RLock because `mutate`'s callback may call a writer, and
+class-level so every instance serialises against every other. Readers take no lock: `os.replace` means they see the old file or the new one.
+It guards threads in this process only - a second Jen process writing the same file is outside the model, as before.
+
+**The provider pool is sized for the server, not for one page.** Investigation and search providers (one per bundled plugin) run on a shared
+pool so the one-second budget is a bound (`jen/services/provider_budget.py`). It had 4 workers and a ceiling of 8 outstanding calls, with
+seven providers per page: a second admin's page opened while the first's seven calls were in flight got one slot and six "unavailable (busy)"
+cards. The workers now follow `[server] threads` and the ceiling is `max(16, 2 x threads x registered providers)`, set once by `configure()`
+after the plugins have registered (a plugin install needs a restart, so the count is fixed for the process). A call over the ceiling waits for a
+slot until ITS PAGE's deadline and is shown "busy" only if the deadline passes while it waits; abandoned calls still keep their slot until they
+really end, so hung providers cannot pile up past the ceiling.
+
+**One read of the Kea log per server, shared.** The live watch on Trace re-tailed every 3 s per watcher; two admins on one server doubled the
+load on the Kea host. `jen/services/log_tail.py` keeps one read per (server id, path) for `WATCH_STEP_S` (3 s) and makes a reader that
+arrives mid-read wait for it; Trace and Explain's log read (the layer below its own 30 s per-MAC cache) both use it, the Problems sweep does not
+(it needs a current read, every five minutes). A failed read is kept for the window too.
+
+**Retention, in one place.** Every history table Jen writes, with what prunes it:
+
+| Table | Pruned by | Setting (default) |
+|---|---|---|
+| `lease_history` | the snapshot pass (`take_lease_snapshot`) | `history_retention_days` (90) |
+| `lease6_history` | the same pass (`take_lease6_snapshot`, only when IPv6 is on) | `history_retention_days` (90) |
+| `server_stats` | the snapshot pass (`take_server_stats_snapshot`) | `history_retention_days` (90) |
+| `events` | the snapshot pass (`_purge_old_events`) | `events_retention_days` (90) |
+| `alert_log` | the snapshot pass (`_purge_old_alert_log`) | `alert_log_retention_days` (180) |
+| `client_problems` | the daily cleanup (`client_problems.prune`) | 30 days, fixed |
+| `audit_log` | the daily cleanup at 00:05 | `audit_retention_days` (90; 0 = keep forever) |
+
+`alert_log` is also the source of the Prometheus counter `jen_alerts_sent_total`, and a counter that drops is read as a reset: what the job
+removes is first counted into `settings.alert_log_pruned_totals` (JSON keyed `type|status`) in the same transaction, and the metric is the
+live rows plus that total, so the exported number never goes down. `lease6_history` had existed since v5.0 and nothing wrote it; with IPv6 on
+the snapshot pass now writes one row per IPv6 subnet (active leases by type, reservations by type - no pool size, a /64 has none to measure),
+and with IPv6 off nothing in this path runs (`TestZeroBehaviorChange`).
+
+**The Problems sweep records whether it can read.** Per SSH-configured server it keeps the last successful read, the last error and the
+count of misses in a row (settings keys `client_problems_read:`, `_err:`, `_miss:<id>`) and its own last run (`client_problems_swept`); the Health
+Center row `problems_sweep` fails after `MISS_LIMIT` (6) misses - thirty minutes - or when the sweep itself has not run for that long, and reads
+only these records, never SSH.
+
 ### 6.2 Recovery bundle (v5.44.0)
 
 `jen/services/recovery.py` builds a single encrypted archive

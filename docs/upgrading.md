@@ -218,3 +218,14 @@ working set in place. Migrations 3, 4, 6, 8, 22 and 24 now finish themselves aft
 completes the rest on the next start, and a box that stopped after migration 6 widened the role column but before it raised the legacy administrators to superadmin still gets
 that done. A box that upgraded cleanly sees no change. The by-hand install line shown in the flash and the docs embeds the new build.
 
+## IPv6 history starts, the Alert Log is pruned, and the Health page can tell a blind Problems sweep from a quiet network
+
+Nothing to do (5.68.0-beta.17); `sudo ./install.sh` or the in-app update does it and no Kea host needs touching. **The Alert Log now keeps 180 days:** the
+first snapshot pass after the upgrade removes deliveries older than that (a box that has run for years loses its oldest rows; Prometheus'
+`jen_alerts_sent_total` does not go down, the removed ones are counted into a stored total first). The number of days is the settings key
+`alert_log_retention_days`. **With IPv6 on, Reports gains a chart per IPv6 subnet:** the table behind it was never filled before, so the history begins at
+the first snapshot after the upgrade and shows counts only (no pool, no forecast). The Health page gains **Problems inbox sweep**, which turns red when Jen
+cannot read a Kea server's log for thirty minutes, and an empty inbox next to a red row means blind, not quiet. Behind the scenes: two Settings saves at
+once no longer lose one, two people opening an Investigation page together no longer get "busy" plugin cards, and several people watching the same server on
+Trace cost the Kea host one log read per three seconds.
+

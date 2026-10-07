@@ -479,6 +479,17 @@ def _reset_capabilities_cache():
 
 
 @pytest.fixture(autouse=True)
+def _reset_log_tail():
+    """v5.68.0-beta.17 (Q152) - jen.services.log_tail keeps one read of a Kea server's log for 3 s per (server, path), shared by every
+    reader. Every test starts (and ends) with none, so one test's stubbed log can never answer for the next."""
+    from jen.services import log_tail
+
+    log_tail.clear()
+    yield
+    log_tail.clear()
+
+
+@pytest.fixture(autouse=True)
 def clean_tables(db):
     yield
     with db.cursor() as cur:

@@ -13,9 +13,10 @@ import jen.models.db as __db
 import jen.models.user as __user
 import jen.services.capacity as __capacity
 import jen.services.health as __health
+import jen.services.kea6 as __kea6
 from jen import extensions
+from jen.services.access import accessible_subnet6_map, diagnostic_surface
 from jen.services.access import admin_required as _admin_required
-from jen.services.access import diagnostic_surface
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("reports", __name__)
@@ -117,6 +118,28 @@ def reports():
     except Exception as e:
         logger.error(f"Reports forecast error: {e}")
 
+    # v5.68.0-beta.17 (Q152): IPv6 subnets' lease COUNTS over the same range, from lease6_history (written by the snapshot job
+    # when IPv6 is on). Only the v6 subnets this user may see (accessible_subnet6_map), and nothing at all with IPv6 off.
+    history6 = {}
+    try:
+        if __kea6.is_ipv6_enabled():
+            with __db.jen_db() as db, db.cursor() as cur:
+                for subnet_id, info in accessible_subnet6_map().items():
+                    cur.execute(
+                        """
+                            SELECT DATE_FORMAT(snapshot_time, '%%Y-%%m-%%d %%H:%%i') as ts,
+                                   active_na, active_ta, active_pd, reserved_na, reserved_pd
+                            FROM lease6_history
+                            WHERE subnet_id=%s AND snapshot_time >= DATE_SUB(NOW(), INTERVAL %s DAY)
+                            ORDER BY snapshot_time ASC
+                        """,
+                        (subnet_id, days),
+                    )
+                    history6[subnet_id] = {"name": info["name"], "cidr": info["cidr"], "data": cur.fetchall()}
+    except Exception as e:
+        logger.error(f"Reports IPv6 history error: {e}")
+    data_points6 = sum(len(h["data"]) for h in history6.values())
+
     snapshot_interval = __user.get_global_setting("snapshot_interval_minutes", "30")
     retention_days = __user.get_global_setting("history_retention_days", "90")
     data_points = sum(len(h["data"]) for h in history.values())
@@ -129,6 +152,8 @@ def reports():
         days=days,
         subnet_map=current_user.filter_subnet_map(extensions.SUBNET_MAP),
         data_points=data_points,
+        history6=history6,
+        data_points6=data_points6,
         snapshot_interval=snapshot_interval,
         retention_days=retention_days,
     )

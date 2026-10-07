@@ -316,3 +316,16 @@ class TestTraceIsHelperOnly:
         _clean(db)
         r = logged_in_client.get("/tools/trace", query_string={"mac": MAC})
         assert b"Trace needs the Kea host helper" in r.data
+
+
+class TestTheLiveWatchIsCoalesced:
+    """v5.68.0-beta.17 (Q152): two watchers of one server cost the Kea host one tail per step, not two."""
+
+    def test_two_watch_polls_within_the_step_make_one_tail_log_call(self, logged_in_client, db, monkeypatch):
+        _servers(monkeypatch)
+        calls = _stub_tail(monkeypatch, _ok(EXCHANGE))
+        _clean(db)
+        for t in ("0", "3"):
+            r = logged_in_client.get("/tools/trace", query_string={"mac": MAC, "watch": "1", "t": t})
+            assert r.status_code == 200 and b"offered 10.0.1.55" in r.data
+        assert len(calls) == 1

@@ -1786,6 +1786,20 @@ detected-once/resolved-once pattern as HA failover and config drift. It
 is computed in the same snapshot pass as `lease_history`, so it fires on
 the same cadence as the snapshot interval, not every alert-loop tick.
 
+### History retention (v5.68.0-beta.17)
+
+Every history table has a retention, kept in the `settings` table (`history_retention_days` is the one on **Reports → History Settings**). `lease_history`, `lease6_history`
+and `server_stats` keep `history_retention_days` (default 90); `events` keeps `events_retention_days` (90); `alert_log` keeps `alert_log_retention_days`
+(180; it had no retention before this release, so an install that has run for a long time loses its oldest deliveries at the first pass after the
+upgrade); the Problems inbox keeps 30 days; the audit log keeps `audit_retention_days` (default 90; 0 = forever). The snapshot pass runs every
+`snapshot_interval_minutes` and prunes all of the first group together. `lease6_history` is written only when IPv6 is on, one row per IPv6 subnet per
+snapshot. `jen_alerts_sent_total` keeps counting alerts that retention removed (a stored total, `alert_log_pruned_totals`, is added back).
+
+**Settings saves are serialised.** Two saves at the same moment (two admins, or a save during the setup wizard) used to be able to lose one; Jen now
+writes `jen.config` one writer at a time. **The provider pool** that runs the plugins' investigation and search cards follows `[server] threads` (the
+ceiling is `max(16, 2 × threads × providers)`), so two people opening an Investigation page together both get every card. **The live watch on Trace**
+costs the Kea host one log read per three seconds however many people are watching.
+
 ## Configuration Doctor
 
 **Network → Doctor** (`/tools/doctor`, v5.40.0) looks for things in the
