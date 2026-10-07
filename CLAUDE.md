@@ -63,7 +63,17 @@ and as a gate on every tagged release (`release.yml`).
   admin session, `restricted_client()` helper for a subnet-restricted non-superadmin,
   `mock_kea` fixture to stub the Kea API.
 - A new schema change is a **new numbered migration**, never an edit to an existing one
-  — then add a test in `tests/test_migrations.py`.
+  — then add a test in `tests/test_migrations.py` that interrupts it between its statements
+  and re-runs it. Every DDL statement has its own guard (Q151); the only edit to a released
+  migration is tightening its guards.
+- **The audits are tests.** `tests/test_invariant_sweeps.py` (Q151) is the whole-repo audit of
+  the invariants that kept being re-found by hand: S1 a secret is never written by a plain
+  `open`/redirect/`cp` (private from the first byte, `jen/services/private_files.py`,
+  `tools/private_write.py`), S2 a `.prev` is made only by `certs.commit_file_set`, S3 every
+  migration statement has its own guard, S4 one identity resolver and no swallowed
+  `chown`/`replace`/`fsync` in the helper, S5 the legacy config script never runs for authoring,
+  S9 root never copies anything into the app tree from the config or content dirs. A new
+  violation fails CI; do not add to a sweep's reviewed allowlist without saying why in the test.
 - **Probe, redirect and TLS behavior is tested against real local servers**, not a
   mocked `urlopen`. v5.8.3's SSL health-check bug shipped behind a test that mocked
   `urlopen` *raising* `HTTPError(302)` — a real redirect is followed, never raised. Stand

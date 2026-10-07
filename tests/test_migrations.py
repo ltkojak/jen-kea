@@ -927,3 +927,84 @@ class TestMigration28DashboardPrefsWiden:
                     cur.execute("UPDATE dashboard_prefs SET widgets=%s WHERE user_id=1", (original["widgets"],))
                 db.commit()
         assert json.loads(row["widgets"]) == big
+
+
+class TestInterruptedMigrationsFinishOnTheNextStart:
+    """v5.68.0-beta.16 (Q151, item 8) - every DDL statement of a migration is guarded by the FINAL schema it produces, so a crash between two
+    statements (each ALTER auto-commits) is finished by the next start. The state a crash leaves is made by dropping a LATER member of each
+    migration, re-running the migration, and asserting the whole set is back. Migration 6's own interrupt matrix (it needs a pre-3.5 `users.role`)
+    is in tests/test_migration_6_interrupted.py against a stand-in."""
+
+    @staticmethod
+    def _present(table, column):
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute(f"SHOW COLUMNS FROM {table} LIKE %s", (column,))
+            return cur.fetchone() is not None
+
+    @staticmethod
+    def _drop(table, column):
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute(f"ALTER TABLE {table} DROP COLUMN {column}")
+            db.commit()
+
+    def test_migration_3_adds_the_columns_a_crash_after_the_first_left_missing(self):
+        from jen.models.migrations import _m003_devices_manufacturer
+
+        self._drop("devices", "device_icon")
+        self._drop("devices", "device_type")
+        assert self._present("devices", "manufacturer")  # the exact state a crash after the first ALTER leaves
+        with jen_db() as db:
+            _m003_devices_manufacturer(db)
+            db.commit()
+        assert all(self._present("devices", c) for c in ("manufacturer", "device_type", "device_icon"))
+
+    def test_migration_4_adds_the_override_columns_and_widens_the_icon_after_a_partial_run(self):
+        from jen.models.migrations import _m004_devices_overrides
+
+        self._drop("devices", "device_icon_override")
+        self._drop("devices", "device_type_override")
+        with jen_db() as db:
+            _m004_devices_overrides(db)
+            db.commit()
+        assert all(
+            self._present("devices", c)
+            for c in ("manufacturer_override", "device_type_override", "device_icon_override")
+        )
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute(
+                "ALTER TABLE devices MODIFY COLUMN device_icon_override VARCHAR(10) DEFAULT NULL"
+            )  # the narrow state
+            db.commit()
+            _m004_devices_overrides(db)  # the first column is present: the width must still be fixed
+            db.commit()
+            cur.execute("SHOW COLUMNS FROM devices LIKE 'device_icon_override'")
+            assert str(cur.fetchone()["Type"]).lower() == "varchar(50)"
+
+    def test_migration_8_finishes_after_a_crash_between_its_two_columns(self):
+        from jen.models.migrations import _m008_trusted_device_metadata
+
+        self._drop("mfa_trusted_devices", "user_agent")
+        with jen_db() as db:
+            _m008_trusted_device_metadata(db)
+            db.commit()
+        assert self._present("mfa_trusted_devices", "ip_address") and self._present("mfa_trusted_devices", "user_agent")
+
+    def test_migration_22_restores_the_unique_key_a_crash_before_it_left_missing(self):
+        from jen.models.migrations import _index_exists, _m022_users_oidc_columns
+
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("ALTER TABLE users DROP INDEX uq_users_provider_ext")
+            db.commit()
+            assert not _index_exists(cur, "users", "uq_users_provider_ext")
+            _m022_users_oidc_columns(db)
+            db.commit()
+            assert _index_exists(cur, "users", "uq_users_provider_ext")
+
+    def test_migration_24_finishes_after_a_crash_between_its_two_columns(self):
+        from jen.models.migrations import _m024_webauthn_transports_aaguid
+
+        self._drop("webauthn_credentials", "aaguid")
+        with jen_db() as db:
+            _m024_webauthn_transports_aaguid(db)
+            db.commit()
+        assert self._present("webauthn_credentials", "transports") and self._present("webauthn_credentials", "aaguid")

@@ -2183,6 +2183,12 @@ Both go through the same trust boundary already established for v4
   has no default-gateway option; that's Router Advertisement's job,
   entirely outside Kea.
 
+**Author Kea Config is a change set too (v5.68.0-beta.16, Q151).** The generated-script description above is the preview/edit path;
+the authoring route that writes a whole `kea-dhcpX.conf` goes through `kea_changeset.apply_change()` (§3.11) like every other write - every subnet name is
+validated before anything is touched, every target must report helper build 13+ (the legacy `sudo python3` script is never used for it: it could not create the
+file private or put a failed write back), and Jen's own subnet record is written inside the change set by a `finalize` callback whose failure puts every
+server's config back.
+
 ### 5.5 What's explicitly deferred, and why
 
 Stated plainly rather than left to be discovered mid-implementation:

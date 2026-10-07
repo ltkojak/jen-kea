@@ -23,8 +23,6 @@ import ast
 import pathlib
 import re
 
-import pytest
-
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
@@ -210,7 +208,6 @@ def _guard_test(if_node):
     return True
 
 
-@pytest.mark.xfail(strict=True, reason="Q151 item 8 (migrations 3, 4, 6) lands in commit 4")
 class TestS3EveryMigrationStatementHasItsOwnGuard:
     """Q150 wrote the rule at the top of migrations.py and applied it to migration 33; Q151 applies it to the rest. DDL auto-commits, so a crash
     between two statements that share ONE guard leaves the first applied and the next start sees the guard satisfied by the first statement's side

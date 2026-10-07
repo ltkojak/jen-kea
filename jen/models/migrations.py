@@ -32,8 +32,28 @@ Rules for writing migrations (MySQL/MariaDB)
    unique-key swap and, on the next start, saw the column and recorded
    itself done with the old key still in place. A test must interrupt
    the migration between its statements and re-run it.
+   EVERY DDL STATEMENT HAS ITS OWN GUARD (Q151). One `if` around several
+   statements is the same mistake as the one above: it proves the first
+   statement ran and says nothing of the rest. Migrations 3 and 4 tested
+   only their first column and then added all of them, so a crash after
+   the first ALTER left the others missing for good; migration 4's width
+   fix was an `elif` of that test. Each statement now reads its own end
+   state. tests/test_invariant_sweeps.py (S3) refuses a migration whose
+   DDL statements share a guard or have none.
+   A DATA FIX WHOSE DECISION IS READ FROM STATE ITS OWN DDL CHANGES
+   RECORDS THE DECISION FIRST (Q151, migration 6). Migration 6 promotes
+   legacy admins only when the role ENUM lacks 'superadmin' - and the
+   ALTER that adds it auto-commits, so a crash before the UPDATE left a
+   schema that read "not a legacy install" and the legacy admins were
+   never promoted (while promoting unconditionally would escalate every
+   mid-tier admin on every start). The decision is written to `settings`
+   (`legacy_admin_promotion_pending`) BEFORE the ALTER, the UPDATE runs
+   whenever that marker exists, and the marker is deleted after it.
 2. Versions are integers, strictly increasing, never reused, never
-   edited after release. New schema changes append a new version.
+   edited after release. New schema changes append a new version. The one
+   permitted edit to a released migration is TIGHTENING ITS GUARDS (rule 1)
+   so a crash recovers; what it produces, and its recorded version, never
+   change.
 3. One-time data fixes belong here too (see migration 6) — that is
    the entire point: "runs exactly once" is now enforced by the
    version table instead of hoped-for by conditional guards.
@@ -338,20 +358,30 @@ def _m002_users_avatar(db):
 
 
 def _m003_devices_manufacturer(db):
-    """devices manufacturer/type/icon columns (fingerprinting feature)."""
+    """devices manufacturer/type/icon columns (fingerprinting feature).
+
+    v5.68.0-beta.16 (Q151): EACH of the three ADD COLUMNs has its own guard (the rule at the top of this file). It used to test only the first
+    column and then add all three, so a crash after the first ALTER left `manufacturer` present and the next start skipped the other two for good."""
     with db.cursor() as cur:
         if _column_missing(cur, "devices", "manufacturer"):
             cur.execute("ALTER TABLE devices ADD COLUMN manufacturer VARCHAR(100) DEFAULT NULL")
+        if _column_missing(cur, "devices", "device_type"):
             cur.execute("ALTER TABLE devices ADD COLUMN device_type VARCHAR(30) DEFAULT NULL")
+        if _column_missing(cur, "devices", "device_icon"):
             cur.execute("ALTER TABLE devices ADD COLUMN device_icon VARCHAR(10) DEFAULT NULL")
 
 
 def _m004_devices_overrides(db):
-    """devices override columns; widen device_icon_override to VARCHAR(50)."""
+    """devices override columns; widen device_icon_override to VARCHAR(50).
+
+    v5.68.0-beta.16 (Q151): each ADD COLUMN has its own guard, and the width of `device_icon_override` is checked on its own (never an `elif` of the
+    first column's guard): a crash between the ALTERs left the later columns missing, or the icon column at VARCHAR(10), for good."""
     with db.cursor() as cur:
         if _column_missing(cur, "devices", "manufacturer_override"):
             cur.execute("ALTER TABLE devices ADD COLUMN manufacturer_override VARCHAR(100) DEFAULT NULL")
+        if _column_missing(cur, "devices", "device_type_override"):
             cur.execute("ALTER TABLE devices ADD COLUMN device_type_override VARCHAR(30) DEFAULT NULL")
+        if _column_missing(cur, "devices", "device_icon_override"):
             cur.execute("ALTER TABLE devices ADD COLUMN device_icon_override VARCHAR(50) DEFAULT NULL")
         elif "varchar(10)" in _column_type(cur, "devices", "device_icon_override"):
             cur.execute("ALTER TABLE devices MODIFY COLUMN device_icon_override VARCHAR(50) DEFAULT NULL")
@@ -388,16 +418,28 @@ def _m006_superadmin_role(db):
         # must be promoted. On any ≥3.5 schema (including adoption of this
         # migration system by an existing install), 'admin' rows are deliberate
         # mid-tier RBAC accounts and MUST NOT be touched.
+        #
+        # v5.68.0-beta.16 (Q151): the discriminator is the ENUM itself, and the ENUM ALTER auto-commits. A crash between the ALTER and the UPDATE
+        # left an ENUM that already had 'superadmin', so the next start decided "not a pre-3.5 schema" and the legacy admins were never promoted -
+        # while "always promote" would escalate every modern mid-tier admin. So the DECISION is recorded in `settings` BEFORE the ALTER, and the
+        # UPDATE runs whenever that marker is set, whatever the ENUM says; the marker is cleared only after the UPDATE.
         is_pre_35_schema = "superadmin" not in _column_type(cur, "users", "role")
         if is_pre_35_schema:
+            cur.execute(
+                "INSERT INTO settings (setting_key, setting_value) VALUES ('legacy_admin_promotion_pending', '1') "
+                "ON DUPLICATE KEY UPDATE setting_value='1'"
+            )
             cur.execute("""
                 ALTER TABLE users
                 MODIFY COLUMN role ENUM('superadmin','admin','viewer')
                 NOT NULL DEFAULT 'viewer'
             """)
+        cur.execute("SELECT setting_value FROM settings WHERE setting_key='legacy_admin_promotion_pending'")
+        if cur.fetchone():
             cur.execute("UPDATE users SET role='superadmin' WHERE role='admin'")
             if cur.rowcount:
                 logger.info(f"Migration 6: promoted {cur.rowcount} legacy admin(s) to superadmin")
+            cur.execute("DELETE FROM settings WHERE setting_key='legacy_admin_promotion_pending'")
         if _column_missing(cur, "users", "subnet_access"):
             cur.execute("""
                 ALTER TABLE users

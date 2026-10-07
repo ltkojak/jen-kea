@@ -201,3 +201,20 @@ root-owned and not writable by Kea's account, takes its lock for every operation
 owns, and adds the operation that lets Jen undo an authored config. **Settings → Kea → Author a starting config** now writes every server or none, guards each
 write with the file the preview showed (so *overwrite* replaces the file you previewed), and records Jen's own subnets only when every server succeeded. The by-hand
 install line shown in the flash and the docs embeds the new build.
+
+
+## Press Update helper again: a new Kea config is never world-readable; the installer, the migrations and the certificate set keep their promises
+
+Nothing to do beyond the usual (5.68.0-beta.16): `sudo ./install.sh` or the in-app update. **Press Update helper on every Kea host** (Settings → Kea → SSH shows
+"v7 (build 13, build 14 available)"). Build 14 creates a brand-new Kea config `root:<Kea's group>` `0640` (or `root:root` `0600` when Kea runs as root) instead of
+`0644`, takes the group of `server.key` from the same account lookup the config check uses (a unit with `Group=` no longer gets a key its daemon cannot read), stops
+ignoring an ownership change that fails, and installs `ca.crt`, `server.crt` and `server.key` as a set that is replaced together or not at all. **Author Kea Config**
+now needs build 13 or later on every server it writes to (a server with an older helper is named and nothing is changed), checks every subnet name before touching
+anything, and saves Jen's own subnet list as part of the same change, so a failure on any server puts every config and the list back. On the Jen host the
+installer's rollback snapshot of `run.py` and the `jen` package now lives under `/opt/jen/.rollback` (root-owned) and nothing root copies into the application
+directory ever comes from `/etc/jen` or `/var/lib/jen`; `jen.config` and its backup are written `0600` from their first byte; Docker's first-start config is written
+atomically. Uploading an HTTPS certificate, rotating the Kea CA and issuing a client certificate replace their files as a set, so a failure leaves the previous
+working set in place. Migrations 3, 4, 6, 8, 22 and 24 now finish themselves after an interrupted upgrade: a box whose upgrade stopped between two schema steps
+completes the rest on the next start, and a box that stopped after migration 6 widened the role column but before it raised the legacy administrators to superadmin still gets
+that done. A box that upgraded cleanly sees no change. The by-hand install line shown in the flash and the docs embeds the new build.
+
