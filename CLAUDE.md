@@ -66,6 +66,8 @@ and as a gate on every tagged release (`release.yml`).
   — then add a test in `tests/test_migrations.py` that interrupts it between its statements
   and re-runs it. Every DDL statement has its own guard (Q151); the only edit to a released
   migration is tightening its guards.
+- **Six layers (Q154).** A Q that states a contract ends by naming where it is true in each of: live, persisted, derived, delivered, restored, exported - and
+  the test that says so (`docs/ARCHITECTURE.md` §2). The review keeps reading the archive and asking "where else is this true?"; ask it first.
 - **A fix to a definition is a fix to every use.** A Q that introduces or changes a definition (what "current lease" means, how a pool's size
   is read, what a threshold alert's state is) carries the repository-wide grep of its uses as a deliverable - the count goes in the report - and
   a source test over the WHOLE tree, never a file list (Q145 pinned `ACTIVE_LEASE4` over three files and twenty-five other queries kept

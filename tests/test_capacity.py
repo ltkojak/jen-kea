@@ -225,3 +225,51 @@ class TestProjectionNote:
     @pytest.mark.parametrize("series", [[50] * 12, list(range(200, 80, -10)), list(range(100, 200, 10))])
     def test_a_chart_with_a_projection_needs_no_note(self, series):
         assert cap.projection_note(cap.forecast(_rows(series), today=TODAY)) == ""
+
+
+class TestPoolUsedIsTheConsumptionSeries:
+    """v5.68.0-beta.19 (Q154): the forecast fits the leases INSIDE the pools (`pool_used`), ignores a row whose pool_used is NULL, and never
+    reads a row without the key as anything but the legacy `active_leases` caller it is."""
+
+    @staticmethod
+    def _with_used(series, used_series, pool_size=100):
+        rows = _rows(series, pool_size=pool_size, per_day=1)
+        for row, used in zip(rows, used_series, strict=True):
+            row["pool_used"] = used
+        return rows
+
+    def test_thirty_reservations_outside_the_pool_do_not_move_the_forecast(self):
+        """80 in the pool plus 30 outside: whole-subnet active is 110 (110 %), pool use is 80 (80 %)."""
+        flat_in_pool = [80] * 10
+        rows = self._with_used([110] * 10, flat_in_pool)
+        f = cap.forecast(rows, today=TODAY)
+        assert f["latest_peak"] == 80 and f["pct_now"] == 80.0 and f["trend"] == "flat"
+        assert cap.high_water(rows)["peak"] == 80
+
+    def test_a_null_pool_used_is_ignored_never_read_as_zero(self):
+        rows = self._with_used([50] * 10, [None] * 6 + [60, 60, 60, 60])
+        peaks = cap.daily_peaks(rows)
+        assert [v for _d, v in peaks] == [60, 60, 60, 60], "the six rows from before the column are not 0 and not 50"
+        assert cap.forecast(rows, today=TODAY)["trend"] == "insufficient"
+        assert cap.forecast(rows, today=TODAY)["days"] == 4
+
+    def test_all_null_is_insufficient_history_and_no_high_water(self):
+        rows = self._with_used([50] * 10, [None] * 10)
+        assert cap.high_water(rows) is None
+        f = cap.forecast(rows, today=TODAY)
+        assert f["trend"] == "insufficient" and f["days"] == 0 and f["latest_peak"] == 0
+
+    def test_enough_new_rows_after_old_null_ones_forecast_normally(self):
+        rows = self._with_used([10] * 18, [None] * 8 + [10 + 3 * i for i in range(10)])
+        f = cap.forecast(rows, today=TODAY)
+        assert f["trend"] == "rising" and f["days"] == 10 and f["days_to_90pct"] is not None
+
+    def test_a_row_with_no_pool_used_key_falls_back_to_active_leases(self):
+        rows = _rows([10 + 5 * i for i in range(10)])
+        assert "pool_used" not in rows[0]
+        assert cap.forecast(rows, today=TODAY)["trend"] == "rising"
+
+    def test_the_used_accessor(self):
+        assert cap.used({"pool_used": 7, "active_leases": 99}) == 7
+        assert cap.used({"pool_used": None, "active_leases": 99}) is None
+        assert cap.used({"active_leases": 99}) == 99

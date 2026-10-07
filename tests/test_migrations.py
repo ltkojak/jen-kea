@@ -1008,3 +1008,41 @@ class TestInterruptedMigrationsFinishOnTheNextStart:
             _m024_webauthn_transports_aaguid(db)
             db.commit()
         assert self._present("webauthn_credentials", "transports") and self._present("webauthn_credentials", "aaguid")
+
+
+class TestMigration34LeaseHistoryPoolUsed:
+    """v5.68.0-beta.19 (Q154) - lease_history.pool_used, nullable; old rows stay NULL and are never back-filled."""
+
+    def test_migration_recorded(self):
+        assert 34 in applied_versions()
+        assert MIGRATIONS[-1][0] >= 34
+
+    def test_the_column_is_a_nullable_int_with_no_default_value(self):
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("SHOW COLUMNS FROM lease_history LIKE 'pool_used'")
+            row = cur.fetchone()
+        assert row is not None and row["Null"] == "YES" and str(row["Type"]).lower().startswith("int")
+        assert row["Default"] is None
+
+    def test_a_row_written_without_it_reads_back_null_not_zero(self):
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("DELETE FROM lease_history WHERE subnet_id=994")
+            cur.execute("INSERT INTO lease_history (subnet_id, active_leases, pool_size) VALUES (994, 5, 100)")
+            db.commit()
+            cur.execute("SELECT pool_used FROM lease_history WHERE subnet_id=994")
+            assert cur.fetchone()["pool_used"] is None
+            cur.execute("DELETE FROM lease_history WHERE subnet_id=994")
+            db.commit()
+
+    def test_it_finishes_after_an_interruption_and_changes_nothing_when_complete(self):
+        from jen.models.migrations import _m034_lease_history_pool_used
+
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("ALTER TABLE lease_history DROP COLUMN pool_used")
+            db.commit()
+            _m034_lease_history_pool_used(db)  # the state a crash before the ALTER leaves: the column is missing
+            db.commit()
+            _m034_lease_history_pool_used(db)  # and a second run is a no-op
+            db.commit()
+            cur.execute("SHOW COLUMNS FROM lease_history LIKE 'pool_used'")
+            assert cur.fetchone() is not None

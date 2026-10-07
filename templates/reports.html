@@ -27,21 +27,24 @@
     <div class="stat-value" style="font-size:28px;">{{ s.current }}</div>
     <div class="stat-meta">active leases</div>
     <div style="display:flex;gap:16px;margin-top:8px;font-size:12px;color:var(--text-muted);">
-        <span>Peak ({{ days }}d): <strong class="u-52df2b">{{ s.peak }}</strong></span>
+        {% if s.peak is not none %}<span>Peak pool use ({{ days }}d): <strong class="u-52df2b">{{ s.peak }}</strong></span>{% endif %}
         {% if s.pool_size > 0 %}
         <span>Pool: <strong>{{ s.pool_size }}</strong></span>
-        <span>Free: <strong class="u-5a4529">{{ s.pool_size - s.current }}</strong></span>
+        {% if s.pool_used is not none %}<span>Free: <strong class="u-5a4529">{{ s.pool_size - s.pool_used }}</strong></span>{% endif %}
         {% endif %}
     </div>
-    {% if s.pool_size > 0 %}
+    {# v5.68.0-beta.19 (Q154): utilisation is the leases INSIDE the pools (the newest snapshot's pool_used), not the subnet's whole active count - a reservation outside every pool is active but uses none of the pool #}
+    {% if s.pool_size > 0 and s.pool_used is not none %}
     <div class="util-bar u-8a77e5">
-        <div class="util-fill" style="width:{{ [(s.current / s.pool_size * 100)|round, 100]|min }}%;
-            background:{% if (s.current / s.pool_size * 100) >= 90 %}var(--danger){% elif (s.current / s.pool_size * 100) >= 75 %}var(--warning){% else %}var(--primary){% endif %};">
+        <div class="util-fill" style="width:{{ [(s.pool_used / s.pool_size * 100)|round, 100]|min }}%;
+            background:{% if (s.pool_used / s.pool_size * 100) >= 90 %}var(--danger){% elif (s.pool_used / s.pool_size * 100) >= 75 %}var(--warning){% else %}var(--primary){% endif %};">
         </div>
     </div>
     <div style="font-size:11px;color:var(--text-muted);margin-top:3px;">
-        {{ (s.current / s.pool_size * 100)|round }}% utilized
+        {{ (s.pool_used / s.pool_size * 100)|round|int }}% of the pool used ({{ s.pool_used }} of {{ s.pool_size }})
     </div>
+    {% elif s.pool_size > 0 %}
+    <div style="font-size:11px;color:var(--text-muted);margin-top:3px;">Pool use is recorded from the first snapshot taken after the upgrade to 5.68.0-beta.19.</div>
     {% endif %}
     {% set f = forecast.get(subnet_id) %}
     {% if f %}
@@ -162,15 +165,18 @@ function buildCharts() {
         if (!canvas || !h.data || !h.data.length) return;
 
         const labels = h.data.map(d => d.ts);
-        const dynamic = h.data.map(d => d.dynamic_leases);
+        // v5.68.0-beta.19 (Q154): the capacity series is `pool_used` (leases INSIDE the pools); `active_leases` is the subnet's whole
+        // active count; `reserved_leases` is how many reservations are CONFIGURED (not how many hold a lease); `dynamic_leases` is no
+        // longer drawn (a hwaddr-only join: a client-id reservation counted as dynamic). Snapshots from before 5.68.0-beta.19 have no
+        // pool_used (null): the line starts at the first one that does.
         const reserved = h.data.map(d => d.reserved_leases);
-        const total = h.data.map(d => d.active_leases);
+        const total = h.data.map(d => d.pool_used);
+        const active = h.data.map(d => d.active_leases);
         const poolSize = h.data.map(d => d.pool_size);
-        const free = h.data.map((d, i) => Math.max(0, (d.pool_size || 0) - d.active_leases));
 
         // v5.36.0: the dashed projection — null under the history so the
         // line starts at the last real point and runs forward day by day.
-        // v5.67.0-beta.12 (Q124): it continues the thin "Total active" line (the series the forecast is
+        // v5.67.0-beta.12 (Q124): it continues the "Pool used" line (the series the forecast is
         // actually fitted on), and it exists for rising, flat AND falling trends; when there is none the
         // dataset is not added at all (the sentence under the chart says why) — a hidden dataset's legend
         // label is drawn struck through, which read as a broken feature.
@@ -183,8 +189,8 @@ function buildCharts() {
         }
         const datasets = [
             {
-                label: 'Dynamic Leases',
-                data: dynamic,
+                label: 'Pool used',
+                data: total,
                 borderColor: primary,
                 backgroundColor: `color-mix(in srgb, ${primary} 15%, transparent)`,
                 fill: true,
@@ -193,7 +199,7 @@ function buildCharts() {
                 borderWidth: 2,
             },
             {
-                label: 'Reserved',
+                label: 'Reservations configured',
                 data: reserved,
                 borderColor: success,
                 backgroundColor: `color-mix(in srgb, ${success} 10%, transparent)`,
@@ -203,8 +209,8 @@ function buildCharts() {
                 borderWidth: 2,
             },
             {
-                label: 'Total active',
-                data: total,
+                label: 'Active clients (whole subnet)',
+                data: active,
                 borderColor: textStrong,
                 backgroundColor: 'transparent',
                 fill: false,
@@ -270,9 +276,10 @@ function buildCharts() {
                                     const ppct = pool > 0 ? Math.round(v / pool * 100) : 0;
                                     return [`Projected total: ${v} (an estimate from the trend)`, pool > 0 ? `Utilization: ${ppct}%` : ''];
                                 }
-                                const sum = total[idx] || 0;  // active_leases — `reserved` is a count of reservations, not of active leases
+                                const sum = total[idx];  // pool_used - null for a snapshot from before it was recorded
+                                if (sum === null || sum === undefined) return [`Active clients: ${active[idx] || 0}`, 'Pool use was not recorded for this snapshot'];
                                 const pct = pool > 0 ? Math.round(sum / pool * 100) : 0;
-                                return [`Total active: ${sum}`, pool > 0 ? `Utilization: ${pct}%` : ''];
+                                return [`Pool used: ${sum}`, pool > 0 ? `Utilization: ${pct}%` : '', `Active clients: ${active[idx] || 0}`];
                             }
                         }
                     }

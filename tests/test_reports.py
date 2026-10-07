@@ -42,10 +42,10 @@ class TestReportsChartJsVendoring:
                 cur.execute(
                     """
                     INSERT INTO lease_history (subnet_id, active_leases,
-                        dynamic_leases, reserved_leases, pool_size)
-                    VALUES (%s, %s, %s, %s, %s)
+                        dynamic_leases, reserved_leases, pool_size, pool_used)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                 """,
-                    (subnet_id, 10 + i, 5 + i, 5, 100),
+                    (subnet_id, 10 + i, 5 + i, 5, 100, 10 + i),
                 )
         db.commit()
 

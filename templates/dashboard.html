@@ -467,6 +467,8 @@ function drawSparkline(canvasId, points, _unused, _attempt) {
         setTimeout(function() { drawSparkline(canvasId, points, _unused, attempt); }, 100);
         return;
     }
+    // v5.68.0-beta.19 (Q154): an hour whose snapshots predate pool_used has no percentage (null) - nothing to draw, never a 0
+    points = (points || []).filter(function(p) { return p.pct !== null && p.pct !== undefined; });
     var ctx = canvas.getContext('2d');
     var h = canvas.height;
     canvas.width = w;
@@ -654,11 +656,12 @@ function loadHistory() {
             setTimeout(function() {
                 SUBNET_IDS.forEach(function(sid) {
                     var points = data.history[String(sid)];
-                    if (points && points.length > 1) {
-                        var pct = points[points.length-1].pct;
-                        drawSparkline('chart-' + sid, points, null);
+                    var known = (points || []).filter(function(p) { return p.pct !== null && p.pct !== undefined; });
+                    if (known.length > 1) {
+                        var last = known[known.length-1];
+                        drawSparkline('chart-' + sid, known, null);
                         var label = document.getElementById('chart-label-' + sid);
-                        if (label) label.textContent = pct + '% utilization · ' + points[points.length-1].d + ' dynamic';
+                        if (label) label.textContent = last.pct + '% of the pool · ' + last.u + ' in the pools';
                     }
                 });
             }, 200);

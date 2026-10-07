@@ -548,7 +548,7 @@ def api_lease_history():
                     """
                         SELECT subnet_id,
                                DATE_FORMAT(snapshot_time, '%%Y-%%m-%%d %%H:00:00') AS hour,
-                               AVG(dynamic_leases) AS dynamic,
+                               AVG(pool_used)      AS used,
                                AVG(active_leases)  AS active,
                                MAX(pool_size)      AS pool_size
                         FROM lease_history
@@ -565,7 +565,7 @@ def api_lease_history():
                     f"""
                         SELECT subnet_id,
                                DATE_FORMAT(snapshot_time, '%%Y-%%m-%%d %%H:00:00') AS hour,
-                               AVG(dynamic_leases) AS dynamic,
+                               AVG(pool_used)      AS used,
                                AVG(active_leases)  AS active,
                                MAX(pool_size)      AS pool_size
                         FROM lease_history
@@ -587,13 +587,15 @@ def api_lease_history():
             if sid not in history:
                 history[sid] = []
             pool = row["pool_size"] or 0
-            dynamic = float(row["dynamic"] or 0)
+            # v5.68.0-beta.19 (Q154): the percentage is the leases INSIDE the pools (pool_used) over the pool's total size; an hour whose
+            # snapshots predate pool_used has none (None: nothing to draw), it is never read as 0. "u" is pool use, "a" the subnet's active count.
+            used = None if row["used"] is None else float(row["used"])
             history[sid].append(
                 {
                     "t": row["hour"],
-                    "d": round(dynamic, 1),
+                    "u": None if used is None else round(used, 1),
                     "a": round(float(row["active"] or 0), 1),
-                    "pct": round(dynamic / pool * 100, 1) if pool > 0 else 0,
+                    "pct": round(used / pool * 100, 1) if (pool > 0 and used is not None) else None,
                     "pool": pool,
                 }
             )
@@ -885,17 +887,21 @@ def prometheus_metrics():
             for subnet_id, info in extensions.SUBNET_MAP.items():
                 cur.execute(
                     """
-                        SELECT active_leases, pool_size FROM lease_history
+                        SELECT pool_used, pool_size FROM lease_history
                         WHERE subnet_id=%s ORDER BY snapshot_time DESC LIMIT 1
                     """,
                     (subnet_id,),
                 )
                 row = cur.fetchone()
                 if row and row["pool_size"]:
-                    util = row["active_leases"] / row["pool_size"]
+                    # v5.68.0-beta.19 (Q154): pool_used / pool_size - the leases INSIDE the pools. A snapshot with no pool_used (taken before
+                    # migration 34) is no reading: the pool size is still exported, the ratio is not.
                     lines.append(
                         f'jen_subnet_pool_size{{subnet="{info["name"]}",cidr="{info["cidr"]}"}} {row["pool_size"]}'
                     )
+                    if row["pool_used"] is None:
+                        continue
+                    util = row["pool_used"] / row["pool_size"]
                     lines.append(
                         f'jen_subnet_utilization_ratio{{subnet="{info["name"]}",cidr="{info["cidr"]}"}} {util:.4f}'
                     )

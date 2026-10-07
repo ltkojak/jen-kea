@@ -425,7 +425,7 @@ def _collect_lease_history() -> list[dict]:
         cur.execute(
             """
             SELECT subnet_id, COUNT(*) AS snapshots, MIN(snapshot_time) AS first, MAX(snapshot_time) AS last,
-                   MAX(active_leases) AS peak_active, MAX(pool_size) AS pool_size
+                   MAX(active_leases) AS peak_active, MAX(pool_used) AS peak_pool_used, MAX(pool_size) AS pool_size
             FROM lease_history WHERE snapshot_time >= DATE_SUB(NOW(), INTERVAL %s DAY)
             GROUP BY subnet_id ORDER BY subnet_id
             """,

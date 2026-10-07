@@ -409,6 +409,19 @@ stale entry fails too. Plugins receive the constants through `jen.plugin_api` on
 MEANS carries the repository-wide grep of its uses as a deliverable (the count goes in the report) and a source test over the whole tree, never
 over a file list.
 
+**The six layers of a contract (v5.68.0-beta.19, Q154).** A Q that introduces a contract - "pool consumption is the active leases inside the pool union",
+"a threshold alert has a transition state", "every secret is written private" - used to apply it to the layer the bug was found in, the LIVE page, and
+the next review found the same contract false one layer down, three betas in a row (beta.18's three contracts each had a live-page fix and a
+stale persisted, derived, delivered or restored twin). A contract has six layers, and the last step of every Q that states one - and the first
+of every audit - is to name, for each, where it is true and which test says so: (1) **live** - the page or job that computes it now; (2) **persisted**
+- what is stored (`lease_history`); (3) **derived** - what is computed from the stored thing (Health, the forecast, the forecast alert, Prometheus,
+Reports, the dashboard history); (4) **delivered** - did anyone receive the alert (an alert marked handled when no channel took it is not handled);
+(5) **restored** - the recovery tool writes the same secrets the installer and the app do, under the same discipline; (6) **exported** - the backup,
+the support bundle, the API. Beta.19's own count for beta.18's contracts: pool consumption - live (alerts, dashboard, API: beta.18), persisted
+(`lease_history.pool_used`, migration 34), derived (Health, forecast, forecast alert, Prometheus, Reports, dashboard history: `tests/test_pool_used.py`'s
+nine surfaces), exported (the support bundle carries `peak_pool_used`); alert transition state - live, persisted (settings), delivered
+(`notified`, backoff retries); private writes - live, installer, restored (`jen/tools/restore.py`).
+
 ## 3. Deliberate trust boundaries
 
 These are places where Jen makes a conscious security tradeoff rather
@@ -2588,6 +2601,16 @@ really end, so hung providers cannot pile up past the ceiling.
 load on the Kea host. `jen/services/log_tail.py` keeps one read per (server id, path) for `WATCH_STEP_S` (3 s) and makes a reader that
 arrives mid-read wait for it; Trace and Explain's log read (the layer below its own 30 s per-MAC cache) both use it, the Problems sweep does not
 (it needs a current read, every five minutes). A failed read is kept for the window too.
+
+**What each `lease_history` column means (v5.68.0-beta.19, Q154).** `active_leases` - the subnet's whole count of active, unexpired leases
+("active clients"; a reservation outside every pool is one). `pool_used` - the active leases INSIDE the subnet's pools at snapshot time
+(`pools.consumption`); the number every derived capacity figure divides by `pool_size` (Health's pool row, the forecast and the pool-forecast
+alert, Prometheus' `jen_subnet_utilization_ratio`, Reports' free/utilisation/high-water/projection, the dashboard's history percentage). It is
+NULL for every row written before migration 34 and for a snapshot taken while Kea's config was unreadable, and a NULL row is ignored (never read as
+0, never back-filled - what was in the pools then cannot be reconstructed): the forecast says "insufficient history" until enough new snapshots
+exist. `pool_size` - the total of every pool (`pools.total_pool_size`). `reserved_leases` - how many reservations are CONFIGURED in the subnet (charted as
+"Reservations configured"; it is not how many hold a lease). `dynamic_leases` - active leases whose hwaddr matches no hwaddr-type reservation (a
+client-id reservation counts as dynamic, so it is not a capacity series; the column stays for exports).
 
 **Retention, in one place.** Every history table Jen writes, with what prunes it:
 

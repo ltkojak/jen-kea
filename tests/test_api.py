@@ -49,9 +49,9 @@ class TestLeaseHistoryApi:
         with db.cursor() as cur:
             cur.execute("""
                 INSERT INTO lease_history
-                    (subnet_id, active_leases, dynamic_leases, reserved_leases, pool_size)
-                VALUES (1, 50, 30, 20, 200),
-                       (1, 55, 35, 20, 200)
+                    (subnet_id, active_leases, dynamic_leases, reserved_leases, pool_size, pool_used)
+                VALUES (1, 50, 30, 20, 200, 50),
+                       (1, 55, 35, 20, 200, 55)
             """)
         db.commit()
 
@@ -356,8 +356,8 @@ class TestHealthApi:
             cur.execute("DELETE FROM api_keys WHERE name='_health_api_probe3'")
             cur.execute("DELETE FROM lease_history")
             cur.execute(
-                "INSERT INTO lease_history (subnet_id, active_leases, pool_size, snapshot_time) "
-                "VALUES (1, 98, 100, NOW())"
+                "INSERT INTO lease_history (subnet_id, active_leases, pool_used, pool_size, snapshot_time) "
+                "VALUES (1, 98, 98, 100, NOW())"
             )
         db.commit()
         admin_id = _insert_admin_user(db, "health_api_admin3")

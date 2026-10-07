@@ -357,9 +357,9 @@ class TestPoolUtilization:
             cur.execute("DELETE FROM lease_history")
             for sid, active, size, mins_ago in rows:
                 cur.execute(
-                    "INSERT INTO lease_history (subnet_id, active_leases, pool_size, snapshot_time) "
-                    "VALUES (%s, %s, %s, DATE_SUB(NOW(), INTERVAL %s MINUTE))",
-                    (sid, active, size, mins_ago),
+                    "INSERT INTO lease_history (subnet_id, active_leases, pool_used, pool_size, snapshot_time) "
+                    "VALUES (%s, %s, %s, %s, DATE_SUB(NOW(), INTERVAL %s MINUTE))",
+                    (sid, active, active, size, mins_ago),
                 )
         db.commit()
 
@@ -401,9 +401,9 @@ class TestPoolExhaustionForecast:
             for i, peak in enumerate(peaks):
                 days_ago = len(peaks) - i
                 cur.execute(
-                    "INSERT INTO lease_history (subnet_id, active_leases, pool_size, snapshot_time) "
-                    "VALUES (%s, %s, %s, DATE_SUB(NOW(), INTERVAL %s DAY))",
-                    (sid, peak, pool_size, days_ago),
+                    "INSERT INTO lease_history (subnet_id, active_leases, pool_used, pool_size, snapshot_time) "
+                    "VALUES (%s, %s, %s, %s, DATE_SUB(NOW(), INTERVAL %s DAY))",
+                    (sid, peak, peak, pool_size, days_ago),
                 )
         db.commit()
 
@@ -521,9 +521,9 @@ class TestReportsForecastCard:
             cur.execute("DELETE FROM lease_history")
             for i, peak in enumerate(peaks):
                 cur.execute(
-                    "INSERT INTO lease_history (subnet_id, active_leases, dynamic_leases, reserved_leases, pool_size, snapshot_time) "
-                    "VALUES (%s, %s, %s, 0, %s, DATE_SUB(NOW(), INTERVAL %s DAY))",
-                    (sid, peak, peak, pool_size, len(peaks) - i),
+                    "INSERT INTO lease_history (subnet_id, active_leases, dynamic_leases, reserved_leases, pool_used, pool_size, snapshot_time) "
+                    "VALUES (%s, %s, %s, 0, %s, %s, DATE_SUB(NOW(), INTERVAL %s DAY))",
+                    (sid, peak, peak, peak, pool_size, len(peaks) - i),
                 )
         db.commit()
 
@@ -575,7 +575,8 @@ class TestReportsForecastCard:
     def test_the_legend_labels_are_the_new_ones_and_the_old_one_is_gone(self, logged_in_client, db):
         self._seed(db, 1, [100 + 8 * i for i in range(10)])
         body = logged_in_client.get("/reports?days=30").data.decode()
-        assert "label: 'Total active'" in body
+        assert "label: 'Pool used'" in body and "label: 'Reservations configured'" in body
+        assert "Dynamic Leases" not in body, "dynamic_leases is no longer a capacity series (Q154)"
         assert "label: 'Projected total (trend of daily peaks)'" in body
         assert "'Projected (trend)'" not in body
 
@@ -1180,8 +1181,8 @@ class TestHealthCenterPage:
         with db.cursor() as cur:
             cur.execute("DELETE FROM lease_history")
             cur.execute(
-                "INSERT INTO lease_history (subnet_id, active_leases, pool_size, snapshot_time) "
-                "VALUES (1, 98, 100, NOW()), (2, 5, 100, NOW())"
+                "INSERT INTO lease_history (subnet_id, active_leases, pool_used, pool_size, snapshot_time) "
+                "VALUES (1, 98, 98, 100, NOW()), (2, 5, 5, 100, NOW())"
             )
         db.commit()
 

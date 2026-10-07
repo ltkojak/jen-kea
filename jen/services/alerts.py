@@ -763,9 +763,12 @@ def take_lease_snapshot():
         with __kea_db_ctx() as kdb, __jen_db_ctx() as jdb:
             # Get pool sizes from Kea config
             pool_sizes = {}
+            pool_defs = {}  # subnet id -> its pool list, for pool consumption (None for every subnet when Kea's config was not readable)
             result = __kea_command("config-get", server=__get_active_kea_server())
-            if result.get("result") == 0:
+            config_read = result.get("result") == 0
+            if config_read:
                 for s, _sn in __iter_subnet4(result["arguments"].get("Dhcp4", {})):
+                    pool_defs[s["id"]] = s.get("pools", [])
                     # v5.68.0-beta.18 (Q153): the TOTAL of every pool (ranges and CIDRs, merged) - it was the last range's size, and a CIDR
                     # pool was skipped. This number is what lease_history, Health, Reports, Prometheus and the forecast read back.
                     size = __pools.total_pool_size(s.get("pools", []))
@@ -792,12 +795,17 @@ def take_lease_snapshot():
                     kcur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
                     reserved = kcur.fetchone()["cnt"]
                     pool_size = pool_sizes.get(subnet_id, 0)
+                    # v5.68.0-beta.19 (Q154): the persisted number every derived capacity figure reads - the active leases INSIDE the pools.
+                    # NULL (unknown, never 0) when Kea's config could not be read: a zero would be a reading.
+                    pool_used = (
+                        __pools.consumption(kcur, subnet_id, pool_defs.get(subnet_id, [])) if config_read else None
+                    )
                     jcur.execute(
                         """
-                        INSERT INTO lease_history (subnet_id, active_leases, dynamic_leases, reserved_leases, pool_size)
-                        VALUES (%s, %s, %s, %s, %s)
+                        INSERT INTO lease_history (subnet_id, active_leases, dynamic_leases, reserved_leases, pool_size, pool_used)
+                        VALUES (%s, %s, %s, %s, %s, %s)
                     """,
-                        (subnet_id, active, dynamic, reserved, pool_size),
+                        (subnet_id, active, dynamic, reserved, pool_size, pool_used),
                     )
 
                 # Purge old history - every history table's retention is one unconditional pass (v5.68.0-beta.18, Q153): the IPv6 table's

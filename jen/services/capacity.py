@@ -7,7 +7,13 @@ already collects (`lease_history`: one row per subnet per snapshot with
 
 Pure. The route / Health check / API hand in rows and get back numbers.
 
-Method: daily peaks of `active_leases` over the last `window_days`
+v5.68.0-beta.19 (Q154) - the consumption series is `pool_used` (the active leases INSIDE the pools, migration 34), not `active_leases` (the
+subnet's whole active count): an active lease outside every pool - a reservation - cannot exhaust a pool. A row whose `pool_used` is NULL (every row
+written before migration 34, and a snapshot taken while Kea's config was unreadable) is IGNORED, never read as 0 and never back-filled, so the
+forecast says "insufficient history" until enough new snapshots exist. A row with no `pool_used` KEY at all (a caller that predates the column)
+falls back to `active_leases`.
+
+Method: daily peaks of the pool consumption over the last `window_days`
 (default 30), least-squares line through them, projected forward to the
 day the line crosses 90 % and 100 % of the pool. A pool resize makes
 older peaks incomparable, so only rows carrying the *current* pool size
@@ -50,6 +56,15 @@ def _day(ts) -> date | None:
     return None
 
 
+def used(row: dict) -> int | None:
+    """The pool consumption a history row records: `pool_used`, or None when the row has none (NULL: unknown, to be ignored). A row without
+    the `pool_used` key at all is a caller that predates migration 34: its `active_leases` stands in."""
+    if "pool_used" in row:
+        value = row.get("pool_used")
+        return None if value is None else int(value)
+    return int(row.get("active_leases") or 0)
+
+
 def current_pool_size(rows: list[dict]) -> int:
     """The pool size of the newest row (0 when there are no rows or it
     is unknown)."""
@@ -64,7 +79,7 @@ def current_pool_size(rows: list[dict]) -> int:
 
 
 def daily_peaks(rows: list[dict], pool_size: int | None = None) -> list[tuple[date, int]]:
-    """[(day, peak active_leases)] ascending, for rows whose pool_size
+    """[(day, peak pool consumption)] ascending, for rows whose pool_size
     equals `pool_size` (default: the current one). Rows with no usable
     timestamp are skipped."""
     if pool_size is None:
@@ -74,10 +89,10 @@ def daily_peaks(rows: list[dict], pool_size: int | None = None) -> list[tuple[da
         if int(r.get("pool_size") or 0) != pool_size:
             continue
         d = _day(r.get("snapshot_time") or r.get("ts"))
-        if d is None:
+        consumed = used(r)
+        if d is None or consumed is None:
             continue
-        active = int(r.get("active_leases") or 0)
-        peaks[d] = max(peaks.get(d, 0), active)
+        peaks[d] = max(peaks.get(d, 0), consumed)
     return sorted(peaks.items())
 
 
@@ -86,9 +101,9 @@ def high_water(rows: list[dict]) -> dict | None:
     best = None
     for r in rows or []:
         d = _day(r.get("snapshot_time") or r.get("ts"))
-        active = int(r.get("active_leases") or 0)
-        if d is not None and (best is None or active > best["peak"]):
-            best = {"peak": active, "on": d}
+        consumed = used(r)
+        if d is not None and consumed is not None and (best is None or consumed > best["peak"]):
+            best = {"peak": consumed, "on": d}
     return best
 
 

@@ -42,12 +42,14 @@ class TestReportsTooltip:
         start = html.index("afterBody: function(items)")
         return html[start : html.index("scales:", start)]
 
-    def test_the_point_tooltip_prints_active_leases(self):
+    def test_the_point_tooltip_prints_pool_use_and_the_active_count(self):
         body = self._after_body()
-        assert "const sum = total[idx] || 0;" in body
+        assert "const sum = total[idx];" in body
         assert "dynamic[idx]" not in body and "reserved[idx]" not in body
-        assert "Total active: ${sum}" in body
+        assert "Pool used: ${sum}" in body and "Active clients: ${active[idx] || 0}" in body
 
-    def test_total_is_the_active_leases_series(self):
+    def test_total_is_the_pool_used_series_and_active_is_the_whole_subnet(self):
+        """v5.68.0-beta.19 (Q154): the capacity series is pool_used; active_leases is the subnet's whole active count."""
         html = _read("templates/reports.html")
-        assert re.search(r"const total = h\.data\.map\(d => d\.active_leases\);", html)
+        assert re.search(r"const total = h\.data\.map\(d => d\.pool_used\);", html)
+        assert re.search(r"const active = h\.data\.map\(d => d\.active_leases\);", html)

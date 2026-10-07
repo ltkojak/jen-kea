@@ -579,7 +579,7 @@ def _latest_lease_history() -> list[dict]:
     with __db.jen_db() as db, db.cursor() as cur:
         cur.execute(
             """
-            SELECT lh.subnet_id, lh.active_leases, lh.pool_size, lh.snapshot_time
+            SELECT lh.subnet_id, lh.active_leases, lh.pool_used, lh.pool_size, lh.snapshot_time
             FROM lease_history lh
             INNER JOIN (
                 SELECT subnet_id, MAX(snapshot_time) AS mx
@@ -607,11 +607,15 @@ def _pool_utilization(ctx) -> Check:
         c.status, c.detail = "skip", "first snapshot pending"
         return c
     warn, crit = [], []
+    measured = 0
     for r in rows:
         size = r["pool_size"] or 0
-        if size <= 0:
+        # v5.68.0-beta.19 (Q154): the leases INSIDE the pools. A snapshot with no pool_used (taken before migration 34, or while Kea's
+        # config was unreadable) is not a reading - it used to be the whole subnet's active count, so a reservation outside the pool read as 110 %.
+        if size <= 0 or r.get("pool_used") is None:
             continue
-        pct = 100.0 * (r["active_leases"] or 0) / size
+        measured += 1
+        pct = 100.0 * (r["pool_used"] or 0) / size
         label = f"{_subnet_label(r['subnet_id'])} {pct:.0f}%"
         if pct >= 95:
             crit.append(label)
@@ -621,13 +625,15 @@ def _pool_utilization(ctx) -> Check:
         c.status, c.detail = "fail", "near exhaustion: " + ", ".join(crit)
     elif warn:
         c.status, c.detail = "warn", f"over {threshold}%: " + ", ".join(warn)
+    elif not measured:
+        c.status, c.detail = "skip", "waiting for the first snapshot that records pool use (5.68.0-beta.19)"
     else:
-        c.status, c.detail = "ok", f"{len(rows)} subnet(s) below {threshold}%"
+        c.status, c.detail = "ok", f"{measured} subnet(s) below {threshold}%"
     return c
 
 
 def lease_history_window(days: int = __capacity.WINDOW_DAYS + 1) -> dict[int, list[dict]]:
-    """subnet_id → rows (snapshot_time, active_leases, pool_size) for the
+    """subnet_id → rows (snapshot_time, active_leases, pool_used, pool_size) for the
     last `days` days, oldest first. One query for every subnet; the
     forecast (v5.36.0) wants a month of snapshots per subnet, which the
     newest-row reader above cannot give it. Shared with the API and the
@@ -636,7 +642,7 @@ def lease_history_window(days: int = __capacity.WINDOW_DAYS + 1) -> dict[int, li
     with __db.jen_db() as db, db.cursor() as cur:
         cur.execute(
             """
-            SELECT subnet_id, snapshot_time, active_leases, pool_size
+            SELECT subnet_id, snapshot_time, active_leases, pool_used, pool_size
             FROM lease_history
             WHERE snapshot_time >= DATE_SUB(NOW(), INTERVAL %s DAY)
             ORDER BY snapshot_time ASC

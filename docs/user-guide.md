@@ -423,6 +423,13 @@ amber when 90 % is within 30 days and red within 7 — the same thresholds
 the **Pool exhaustion forecast** check on the Health page and the optional
 **Pool exhaustion forecast** alert use.
 
+**Pool use, not active clients (v5.68.0-beta.19).** Each chart draws **Pool used** - the active leases whose address is inside the subnet's pools - against
+the dashed **Pool Size**, a thin **Active clients (whole subnet)** line, and **Reservations configured** (how many reservations exist, not how many hold a
+lease). The percentages, the *Free* figure, the peak, the Health row, the Prometheus ratio and the forecast all use pool use: eighty leases in a 100-address
+pool plus thirty reservations outside it is **80 % used**, not 110 %. The old *Dynamic Leases* line is gone (a reservation made by client id counted as
+dynamic). Snapshots taken before 5.68.0-beta.19 did not record pool use, so the lines start at the first snapshot after the upgrade and the forecast says
+*No projection yet: N more day(s) of history needed* until about a week of new snapshots has accumulated.
+
 **IPv6 subnets (v5.68.0-beta.17).** With IPv6 on, each IPv6 subnet you may see gets its own chart under the IPv4 ones, drawn from the same
 snapshots: *Active addresses (IA_NA)* and *Active prefixes (IA_PD)* always, and *Temporary addresses* and the *Reserved* lines when there are any.
 It shows counts only - a sentence above the charts says an IPv6 subnet has no finite pool to project against, so there is no utilization line

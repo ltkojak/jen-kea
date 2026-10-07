@@ -484,7 +484,7 @@ def seed(conn) -> None:
         history_rows = lease_history_rows(random.Random(20260921))
         cur.executemany(
             "INSERT INTO lease_history (subnet_id, snapshot_time, active_leases, dynamic_leases, "
-            "reserved_leases, pool_size) VALUES (%s, %s, %s, %s, %s, %s)",
+            "reserved_leases, pool_size, pool_used) VALUES (%s, %s, %s, %s, %s, %s, %s)",
             [
                 (
                     r["subnet_id"],
@@ -493,6 +493,7 @@ def seed(conn) -> None:
                     r["dynamic_leases"],
                     r["reserved_leases"],
                     r["pool_size"],
+                    r["active_leases"],  # the demo network has no lease outside its pools: pool use == active
                 )
                 for r in history_rows
             ],

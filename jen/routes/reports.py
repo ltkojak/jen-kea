@@ -52,7 +52,7 @@ def reports():
                     """
                         SELECT
                             DATE_FORMAT(snapshot_time, '%%Y-%%m-%%d %%H:%%i') as ts,
-                            active_leases, dynamic_leases, reserved_leases, pool_size
+                            active_leases, dynamic_leases, reserved_leases, pool_used, pool_size
                         FROM lease_history
                         WHERE subnet_id=%s
                         AND snapshot_time >= DATE_SUB(NOW(), INTERVAL %s DAY)
@@ -78,7 +78,7 @@ def reports():
                 active = cur.fetchone()["cnt"]
                 jcur.execute(
                     """
-                                SELECT active_leases, pool_size, snapshot_time
+                                SELECT active_leases, pool_used, pool_size, snapshot_time
                                 FROM lease_history WHERE subnet_id=%s
                                 ORDER BY snapshot_time DESC LIMIT 1
                             """,
@@ -87,7 +87,7 @@ def reports():
                 last = jcur.fetchone()
                 jcur.execute(
                     """
-                                SELECT MAX(active_leases) as peak FROM lease_history
+                                SELECT MAX(pool_used) as peak FROM lease_history
                                 WHERE subnet_id=%s AND snapshot_time >= DATE_SUB(NOW(), INTERVAL %s DAY)
                             """,
                     (subnet_id, days),
@@ -98,7 +98,8 @@ def reports():
                     "cidr": info["cidr"],
                     "current": active,
                     "pool_size": last["pool_size"] if last else 0,
-                    "peak": peak["peak"] if peak and peak["peak"] else active,
+                    "pool_used": last["pool_used"] if last else None,
+                    "peak": peak["peak"] if peak and peak["peak"] is not None else None,
                 }
     except Exception as e:
         logger.error(f"Reports summary error: {e}")

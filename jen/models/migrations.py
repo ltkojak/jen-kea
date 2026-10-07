@@ -1239,6 +1239,23 @@ def _client_problems_scope_state(cur) -> tuple[bool, bool]:
     return column_ok, key_ok
 
 
+def _m034_lease_history_pool_used(db):
+    """
+    v5.68.0-beta.19 (Q154) - `lease_history.pool_used`: the active leases INSIDE the subnet's pools at the moment of the snapshot
+    (`pools.consumption`), the number every derived capacity figure divides by `pool_size`. The table stored the subnet's WHOLE active
+    count (`active_leases`), so thirty reservations outside a 100-address pool made Health and Prometheus say 110 % while the live page said 80 %,
+    and the forecast predicted exhaustion from addresses that cannot exhaust the pool. `active_leases` stays as "active clients in the
+    subnet"; `dynamic_leases` (a hwaddr-only join: a client-id reservation counted as dynamic) is no longer a capacity series.
+
+    OLD ROWS ARE LEFT NULL AND NEVER BACK-FILLED: what was inside the pools at the time cannot be reconstructed (the lease table has moved
+    on and pools may have been edited). The forecast ignores a NULL row, so it says "insufficient history" until enough new snapshots
+    exist. The guard is the final schema (the column, nullable): a re-run after an interruption adds nothing twice.
+    """
+    with db.cursor() as cur:
+        if _column_missing(cur, "lease_history", "pool_used"):
+            cur.execute("ALTER TABLE lease_history ADD COLUMN pool_used INT NULL DEFAULT NULL AFTER reserved_leases")
+
+
 def _m033_client_problems_scope_key(db):
     """
     v5.68.0-beta.14 (Q149; guard rewritten in Q150) - the subnet is part of a Problems row's IDENTITY. Migration 30's unique key was (server_id, kind, mac, ip), and
@@ -1347,6 +1364,11 @@ MIGRATIONS = [
         33,
         "client_problems.scope_key: the subnet is part of a row's identity; rows and watermarks cleared (v5.68.0-beta.14, Q149)",
         _m033_client_problems_scope_key,
+    ),
+    (
+        34,
+        "lease_history.pool_used: the leases inside the pools, what the forecast and every capacity figure read (v5.68.0-beta.19, Q154)",
+        _m034_lease_history_pool_used,
     ),
 ]
 

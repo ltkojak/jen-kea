@@ -345,7 +345,9 @@ class TestGrafanaDashboard:
         # dashboard referencing something /metrics can never produce.
         with db.cursor() as cur:
             cur.execute("DELETE FROM lease_history")
-            cur.execute("INSERT INTO lease_history (subnet_id, active_leases, pool_size) VALUES (1, 5, 100)")
+            cur.execute(
+                "INSERT INTO lease_history (subnet_id, active_leases, pool_used, pool_size) VALUES (1, 5, 5, 100)"
+            )
             cur.execute("DELETE FROM server_stats")
             cur.execute(
                 "INSERT INTO server_stats (server_id, stats) VALUES (1, %s)",
