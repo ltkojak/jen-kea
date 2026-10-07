@@ -155,7 +155,7 @@ class TestEightyInThirtyOutOnEverySurface:
 
     def test_9_the_pool_forecast_alert(self, world, monkeypatch):
         sent = []
-        monkeypatch.setattr(alerts, "send_alert", lambda t, *a, **kw: sent.append((t, kw)))
+        monkeypatch.setattr(alerts, "send_alert", lambda t, *a, **kw: sent.append((t, kw)) or [("test", True, "")])
         alerts.take_lease_snapshot()
         alerts.check_pool_forecast_alerts()
         kw = next(kw for t, kw in sent if t == "pool_forecast")

@@ -2602,6 +2602,19 @@ load on the Kea host. `jen/services/log_tail.py` keeps one read per (server id, 
 arrives mid-read wait for it; Trace and Explain's log read (the layer below its own 30 s per-MAC cache) both use it, the Problems sweep does not
 (it needs a current read, every five minutes). A failed read is kept for the window too.
 
+**An alert's state knows whether anyone was told (v5.68.0-beta.19, Q154).** `alert_state:<type>:<key>` is a JSON object: `a` active, `n` notified, `t` last
+attempt, `c` attempts since it last changed, `d` when it was notified. beta.18 set the state after the send whatever the send returned, so every channel down - or
+no channel eligible yet - suppressed the warning until the condition recovered, and a later `_ok` went out for a warning nobody had received. `notify_condition`
+is the one helper (utilization high/ok, pool exhaustion/ok, packet health/ok, cert_expiring per 30/7/1-day bucket, pool_forecast): `n` becomes true only when at
+least one ELIGIBLE channel returned ok (`send_alert` answers `[(channel, ok, error)]`, empty when none was eligible); until then it retries with backoff (1, 2, 4
+... 60 minutes) for as long as the condition holds, including after a channel is enabled later; one successful channel counts as told (the others are not
+retried); the `_ok` is sent only when `n` was true; `repeat_after` is the forecast's weekly reminder. A value written by beta.18 (`"1"`/`"0"`) reads as
+active-and-notified / inactive.
+
+**Liveness (v5.68.0-beta.19, Q154).** Health's *Background workers* row asks `background.liveness()`: the scheduler object exists and `.running`, every core job
+is registered (`scheduler.CORE_JOB_IDS`), the alert-loop thread and the plugin periodic thread `is_alive()`; `start_scheduler` records why it did not start. The
+*Problems inbox sweep* row is a skip for `MISS_LIMIT x SWEEP_INTERVAL_S` after the workers started and a failure after that when the sweep has never run.
+
 **What each `lease_history` column means (v5.68.0-beta.19, Q154).** `active_leases` - the subnet's whole count of active, unexpired leases
 ("active clients"; a reservation outside every pool is one). `pool_used` - the active leases INSIDE the subnet's pools at snapshot time
 (`pools.consumption`); the number every derived capacity figure divides by `pool_size` (Health's pool row, the forecast and the pool-forecast
@@ -2616,13 +2629,18 @@ client-id reservation counts as dynamic, so it is not a capacity series; the col
 
 | Table | Pruned by | Setting (default) |
 |---|---|---|
-| `lease_history` | the snapshot pass (`take_lease_snapshot`) | `history_retention_days` (90) |
-| `lease6_history` | the same pass, UNCONDITIONALLY (`take_lease_snapshot` - IPv6 on or off; only the live read and insert behind `take_lease6_snapshot` need IPv6 on; v5.68.0-beta.18) | `history_retention_days` (90) |
-| `server_stats` | the snapshot pass (`take_server_stats_snapshot`) | `history_retention_days` (90) |
-| `events` | the snapshot pass (`_purge_old_events`) | `events_retention_days` (90) |
-| `alert_log` | the snapshot pass (`_purge_old_alert_log`) | `alert_log_retention_days` (180) |
+| `lease_history` | `alerts.purge_history()` | `history_retention_days` (90) |
+| `lease6_history` | `purge_history()` - IPv6 on or off | `history_retention_days` (90) |
+| `server_stats` | `purge_history()` | `history_retention_days` (90) |
+| `events` | `purge_history()` | `events_retention_days` (90) |
+| `alert_log` | `purge_history()` (`_purge_old_alert_log`) | `alert_log_retention_days` (180) |
+| `audit_log` | `purge_history()` by `created_at` | `audit_retention_days` (90; 0 = keep forever) |
 | `client_problems` | the daily cleanup (`client_problems.prune`) | 30 days, fixed |
-| `audit_log` | the daily cleanup at 00:05 | `audit_retention_days` (90; 0 = keep forever) |
+
+`purge_history()` (v5.68.0-beta.19, Q154) touches `jen_db` ALONE - each table in its own try, one failure never stops the rest - and is called by the snapshot
+job in a `finally` after the Kea snapshots (so a Kea outage cannot stop Jen's own retention, which used to run inside `take_lease_snapshot` after the Kea
+database was opened) and by the daily 00:05 cleanup. The audit-log cleanup it replaced (and the immediate one on the Settings page) deleted by a `timestamp`
+column the table does not have (`created_at`), so it had never removed a row.
 
 `alert_log` is also the source of the Prometheus counter `jen_alerts_sent_total`, and a counter that drops is read as a reset: what the job
 removes is first counted into `settings.alert_log_pruned_totals` (JSON keyed `type|status`) in the same transaction, and the metric is the

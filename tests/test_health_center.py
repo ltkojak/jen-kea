@@ -473,13 +473,14 @@ class TestPoolForecastAlert:
         from jen.services import alerts
 
         monkeypatch.setattr("jen.services.health.lease_history_window", lambda days=31: history)
-        monkeypatch.setattr(alerts, "send_alert", lambda *a, **kw: calls.append(kw))
+        monkeypatch.setattr(alerts, "send_alert", lambda *a, **kw: calls.append(kw) or [("test", True, "")])
         alerts.check_pool_forecast_alerts(today=today)
 
     def test_fires_once_then_again_after_seven_days(self, db, monkeypatch):
         from datetime import date, timedelta
 
-        from jen.models.user import get_global_setting, set_global_setting
+        from jen.models.user import set_global_setting
+        from jen.services import alerts as alerts_mod
 
         monkeypatch.setattr(extensions, "SUBNET_MAP", {1: {"name": "LAN", "cidr": "10.0.0.0/24"}})
         set_global_setting("pool_forecast_alerted_1", "")
@@ -488,7 +489,7 @@ class TestPoolForecastAlert:
         hist = {1: self._rows([100 + 8 * i for i in range(10)])}
         self._run(monkeypatch, hist, calls, today)
         assert len(calls) == 1 and calls[0]["subnet"] == "LAN" and calls[0]["subnet_id"] == 1
-        assert get_global_setting("pool_forecast_alerted_1") == "2026-09-15"
+        assert alerts_mod.alert_delivery("pool_forecast", 1)["notified"] is True
         self._run(monkeypatch, hist, calls, today + timedelta(days=3))
         assert len(calls) == 1
         self._run(monkeypatch, hist, calls, today + timedelta(days=7))
@@ -1215,7 +1216,9 @@ class TestCertExpiringAlert:
         from jen.services import alerts
 
         monkeypatch.setattr("jen.services.health.cert_days_left", lambda: days)
-        monkeypatch.setattr(alerts, "send_alert", lambda *a, **kw: calls.append(kw.get("days_left")))
+        monkeypatch.setattr(
+            alerts, "send_alert", lambda *a, **kw: calls.append(kw.get("days_left")) or [("test", True, "")]
+        )
         alerts.check_cert_expiry_alert()
 
     def test_no_ssl_never_fires(self, db, monkeypatch):

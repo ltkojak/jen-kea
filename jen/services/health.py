@@ -381,6 +381,22 @@ def _problems_sweep(ctx) -> Check:
         c.detail = "; ".join(parts)
         return c
     if swept is None:
+        # v5.68.0-beta.19 (Q154): "has not run yet" was a skip with no age limit - a scheduler that never started left it skipped forever.
+        # It is a grace period of MISS_LIMIT sweeps after the workers started, then a failure.
+        from datetime import timedelta as _td
+
+        from jen.services import background as _bg
+
+        started = _bg.STARTED_AT
+        if started is not None:
+            started_naive = started.astimezone(timezone.utc).replace(tzinfo=None) if started.tzinfo else started
+            if now - started_naive > _td(seconds=__cp.MISS_LIMIT * __cp.SWEEP_INTERVAL_S):
+                c.status = "fail"
+                c.detail = (
+                    f"the sweep has never run, {int((now - started_naive).total_seconds() // 60)} minutes after Jen started "
+                    "(it runs every five minutes) - the scheduler is not running it"
+                )
+                return c
         c.status, c.detail = "skip", "the sweep has not run yet (it runs every five minutes)"
         return c
     c.status = "ok"
@@ -1119,7 +1135,31 @@ def _background_workers(ctx) -> Check:
     if started.tzinfo is None:
         started = started.replace(tzinfo=timezone.utc)
     up = (datetime.now(timezone.utc) - started).total_seconds()
-    c.status, c.detail = "ok", f"scheduler + alert loop running for {up / 3600:.1f} h"
+    # v5.68.0-beta.19 (Q154): proof, not a timestamp. It used to read "scheduler + alert loop running" from `STARTED_AT is not None` alone, and
+    # `start_scheduler` catches its own failure and logs it - so a scheduler that never started (APScheduler missing, `.start()` raising) was
+    # green forever. Now: the scheduler object exists and `.running`, every core job is registered, and the alert loop and the plugin periodic
+    # loop are alive threads.
+    from jen.services import scheduler as _scheduler_mod
+
+    live = background.liveness()
+    sched = live["scheduler"]
+    problems = []
+    if not sched["exists"] or not sched["running"]:
+        problems.append("the scheduler is not running" + (f" - {sched['error']}" if sched["error"] else ""))
+    else:
+        missing = [j for j in _scheduler_mod.CORE_JOB_IDS if j not in sched["jobs"]]
+        if missing:
+            problems.append("scheduler jobs not registered: " + ", ".join(missing))
+    if not live["alert_thread"]:
+        problems.append("the alert loop thread is not alive")
+    if not live["periodic_thread"]:
+        problems.append("the plugin periodic-job thread is not alive")
+    if problems:
+        c.status, c.detail = "fail", "; ".join(problems)
+        c.fix_hint = "Restart Jen (the service); the log says why the background work stopped."
+        return c
+    c.status = "ok"
+    c.detail = f"scheduler ({len(sched['jobs'])} jobs), alert loop and periodic loop alive for {up / 3600:.1f} h"
     return c
 
 

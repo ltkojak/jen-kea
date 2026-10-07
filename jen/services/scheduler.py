@@ -12,16 +12,36 @@ from datetime import datetime, timezone
 logger = logging.getLogger(__name__)
 
 _scheduler = None
+_start_error = (
+    ""  # why the scheduler is not running, for the Health Center (v5.68.0-beta.19, Q154); empty when it started
+)
+
+#: the jobs `start_scheduler` registers - the Health Center's liveness row requires every one of them
+CORE_JOB_IDS = ("jen_backup", "jen_audit_cleanup", "jen_investigation_sweep", "jen_client_problems_sweep")
+
+
+def scheduler_status() -> dict:
+    """What the Health Center can prove about the scheduler: {"exists", "running", "jobs" (registered job ids), "error" (why it did not
+    start, or "")}. A scheduler that was never created or whose start raised is reported as exactly that, never as "running"."""
+    exists = _scheduler is not None
+    running = bool(exists and _scheduler.running)
+    jobs = []
+    if exists:
+        with contextlib.suppress(Exception):
+            jobs = sorted(j.id for j in _scheduler.get_jobs())
+    return {"exists": exists, "running": running, "jobs": jobs, "error": _start_error}
 
 
 def start_scheduler(app):
-    global _scheduler
+    global _scheduler, _start_error
+    _start_error = ""
     try:
         from apscheduler.schedulers.background import BackgroundScheduler
         from apscheduler.triggers.cron import CronTrigger
         from apscheduler.triggers.interval import IntervalTrigger
     except ImportError:
         logger.warning("APScheduler not installed — scheduled backups disabled")
+        _start_error = "APScheduler is not installed"
         return
 
     _scheduler = BackgroundScheduler(daemon=True)
@@ -55,6 +75,7 @@ def start_scheduler(app):
         logger.info("Backup scheduler started")
     except Exception as e:
         logger.warning(f"Backup scheduler failed to start: {e}")
+        _start_error = f"the scheduler failed to start ({type(e).__name__}: {e})"
 
 
 def _run_backup_job(app):
@@ -136,19 +157,12 @@ def _run_audit_cleanup(app):
         except Exception as e:
             logger.error(f"Problems inbox cleanup error: {e}")
         try:
-            from jen.models import db as __db
-            from jen.models import user as __user
+            from jen.services import alerts
 
-            days_str = __user.get_global_setting("audit_retention_days", "90")
-            days = int(days_str) if days_str else 90
-            if days <= 0:
-                return  # 0 = keep forever
-            with __db.jen_db() as db:
-                with db.cursor() as cur:
-                    cur.execute("DELETE FROM audit_log WHERE timestamp < DATE_SUB(NOW(), INTERVAL %s DAY)", (days,))
-                    deleted = cur.rowcount
-                db.commit()
-            if deleted:
-                logger.info(f"Audit log cleanup: removed {deleted} entries older than {days} days")
+            removed = (
+                alerts.purge_history()
+            )  # v5.68.0-beta.19 (Q154): one place lists every history table (audit_log: 0 = keep forever)
+            if any(removed.values()):
+                logger.info(f"History cleanup: removed {removed}")
         except Exception as e:
-            logger.error(f"Audit log cleanup error: {e}")
+            logger.error(f"History cleanup error: {e}")

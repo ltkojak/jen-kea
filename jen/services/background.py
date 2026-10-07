@@ -140,12 +140,30 @@ def _periodic_loop() -> None:
 # it to tell "workers running" from "started under the test server".
 STARTED_AT = None
 
+# v5.68.0-beta.19 (Q154): the worker threads, kept so the Health Center can ask whether they are still alive instead of inferring it
+# from the fact that `start_background_workers` was once called.
+_alert_thread = None
+_periodic_thread = None
+
+
+def liveness() -> dict:
+    """{"started_at", "alert_thread", "periodic_thread" (is_alive each), "scheduler" (scheduler.scheduler_status())} - what is PROVEN about the
+    background work, not what was once attempted."""
+    from jen.services.scheduler import scheduler_status
+
+    return {
+        "started_at": STARTED_AT,
+        "alert_thread": bool(_alert_thread is not None and _alert_thread.is_alive()),
+        "periodic_thread": bool(_periodic_thread is not None and _periodic_thread.is_alive()),
+        "scheduler": scheduler_status(),
+    }
+
 
 def start_background_workers(app) -> bool:
     """Start the backup scheduler and the alert-monitoring loop for this
     process. Idempotent — returns True if this call started them, False
     if they were already running."""
-    global _started, STARTED_AT
+    global _started, STARTED_AT, _alert_thread, _periodic_thread
     with _lock:
         if _started:
             return False
@@ -164,9 +182,11 @@ def start_background_workers(app) -> bool:
 
     t = threading.Thread(target=check_alerts, name="jen-alerts", daemon=True)
     t.start()
+    _alert_thread = t
     # v5.30.0 (Q30, A2) — the plugins' periodic-job loop, started here and
     # only here (never by the factory).
-    threading.Thread(target=_periodic_loop, name="jen-periodic", daemon=True).start()
+    _periodic_thread = threading.Thread(target=_periodic_loop, name="jen-periodic", daemon=True)
+    _periodic_thread.start()
     logger.info("Background workers started (scheduler + alert loop + periodic jobs)")
     return True
 

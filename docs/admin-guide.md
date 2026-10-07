@@ -1799,6 +1799,16 @@ release carry the last pool's size (and none for a CIDR-only subnet); the foreca
 `utilization_high`, `pool_exhaustion` and `packet_health`. Deleting a row only makes the next check treat the condition as new (one more alert if it is
 still true). `pool_exhaustion_free` (default 5) is the warning line; recovery needs `free >= N + max(2, N // 5)`.
 
+### Retention runs without Kea, and Health proves the workers are alive (v5.68.0-beta.19)
+
+`purge_history()` removes old rows of `lease_history`, `lease6_history`, `server_stats`, `events`, `alert_log` and `audit_log` using Jen's own database only, from
+the snapshot job (after the Kea snapshots, whatever their outcome) and from the daily 00:05 cleanup - a Kea outage no longer stops it. The audit log's cleanup
+(and the immediate one when you save *Audit log retention* under Settings → System) had been deleting by a column the table does not have, so it never removed
+anything: the first run after the upgrade removes whatever is older than `audit_retention_days` (default 90; 0 keeps everything). **Background workers running**
+on the Health page now fails when the scheduler never started (or stopped), a core job is missing, or the alert or plugin loop thread has died, and says which;
+**Problems inbox sweep** fails when the sweep has still never run thirty minutes after Jen started. Prometheus label values (`subnet`, `server`, `alert_type`)
+are escaped, so a name containing a quote or a backslash no longer breaks the scrape.
+
 ### History retention (v5.68.0-beta.17)
 
 Every history table has a retention, kept in the `settings` table (`history_retention_days` is the one on **Reports → History Settings**). `lease_history`, `lease6_history`

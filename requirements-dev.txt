@@ -10,6 +10,8 @@
 pytest
 # tests/test_workflow_hygiene.py parses the CI workflows (v5.67.0-beta.10, Q122)
 pyyaml
+# tests/test_prometheus_labels.py parses /metrics with the real exposition-format parser (v5.68.0-beta.19, Q154)
+prometheus-client
 bandit
 pip-audit
 ruff==0.16.6

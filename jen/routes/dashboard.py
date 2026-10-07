@@ -784,6 +784,13 @@ def api_recent_leases():
     )
 
 
+def _prom_label(value) -> str:
+    """A Prometheus label VALUE in the text exposition format (v5.68.0-beta.19, Q154): backslash, newline and double quote are escaped.
+    Subnet and server names are operator-typed free text; interpolated raw, a name containing a quote or a backslash ended the label early and broke
+    the whole scrape (and the old workaround for server names STRIPPED the quote, silently renaming the series). Nothing is stripped now."""
+    return str(value).replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
+
+
 @bp.route("/metrics")
 def prometheus_metrics():
     """
@@ -854,7 +861,9 @@ def prometheus_metrics():
                 )
                 cnt = cur.fetchone()["cnt"]
                 active_by_subnet[subnet_id] = cnt
-                lines.append(f'jen_subnet_active_leases{{subnet="{info["name"]}",cidr="{info["cidr"]}"}} {cnt}')
+                lines.append(
+                    f'jen_subnet_active_leases{{subnet="{_prom_label(info["name"])}",cidr="{_prom_label(info["cidr"])}"}} {cnt}'
+                )
     except Exception:
         pass
 
@@ -866,7 +875,9 @@ def prometheus_metrics():
             for subnet_id, info in extensions.SUBNET_MAP.items():
                 cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
                 cnt = cur.fetchone()["cnt"]
-                lines.append(f'jen_subnet_reserved_hosts{{subnet="{info["name"]}",cidr="{info["cidr"]}"}} {cnt}')
+                lines.append(
+                    f'jen_subnet_reserved_hosts{{subnet="{_prom_label(info["name"])}",cidr="{_prom_label(info["cidr"])}"}} {cnt}'
+                )
     except Exception:
         pass
 
@@ -897,13 +908,13 @@ def prometheus_metrics():
                     # v5.68.0-beta.19 (Q154): pool_used / pool_size - the leases INSIDE the pools. A snapshot with no pool_used (taken before
                     # migration 34) is no reading: the pool size is still exported, the ratio is not.
                     lines.append(
-                        f'jen_subnet_pool_size{{subnet="{info["name"]}",cidr="{info["cidr"]}"}} {row["pool_size"]}'
+                        f'jen_subnet_pool_size{{subnet="{_prom_label(info["name"])}",cidr="{_prom_label(info["cidr"])}"}} {row["pool_size"]}'
                     )
                     if row["pool_used"] is None:
                         continue
                     util = row["pool_used"] / row["pool_size"]
                     lines.append(
-                        f'jen_subnet_utilization_ratio{{subnet="{info["name"]}",cidr="{info["cidr"]}"}} {util:.4f}'
+                        f'jen_subnet_utilization_ratio{{subnet="{_prom_label(info["name"])}",cidr="{_prom_label(info["cidr"])}"}} {util:.4f}'
                     )
     except Exception:
         pass
@@ -928,7 +939,7 @@ def prometheus_metrics():
             rows = history.get(subnet_id, [])
             days = __capacity.forecast(rows)["days_to_90pct"] if rows else None
             lines.append(
-                f'jen_subnet_days_to_90pct{{subnet="{info["name"]}",cidr="{info["cidr"]}"}} '
+                f'jen_subnet_days_to_90pct{{subnet="{_prom_label(info["name"])}",cidr="{_prom_label(info["cidr"])}"}} '
                 f"{days if days is not None else -1}"
             )
     except Exception:
@@ -955,7 +966,7 @@ def prometheus_metrics():
                 ) m ON m.server_id = ss.server_id AND m.mx = ss.snapshot_time
             """)
             for row in cur.fetchall():
-                name = str(server_names.get(row["server_id"], row["server_id"])).replace('"', "")
+                name = str(server_names.get(row["server_id"], row["server_id"]))
                 stats = row["stats"]
                 if isinstance(stats, str):
                     stats = json.loads(stats)
@@ -971,7 +982,7 @@ def prometheus_metrics():
             )
             lines.append(f"# TYPE {metric_name} counter")
             for name, value in by_metric[metric_name]:
-                lines.append(f'{metric_name}{{server="{name}"}} {value}')
+                lines.append(f'{metric_name}{{server="{_prom_label(name)}"}} {value}')
     except Exception:
         pass
 
@@ -987,9 +998,9 @@ def prometheus_metrics():
     try:
         with __db.jen_db() as db, db.cursor() as cur:
             for (atype, status), cnt in sorted(__alerts.alert_sent_totals(cur).items()):
-                atype = atype.replace('"', "")
-                status = status.replace('"', "")
-                lines.append(f'jen_alerts_sent_total{{alert_type="{atype}",status="{status}"}} {cnt}')
+                lines.append(
+                    f'jen_alerts_sent_total{{alert_type="{_prom_label(atype)}",status="{_prom_label(status)}"}} {cnt}'
+                )
     except Exception:
         pass
 
@@ -1001,8 +1012,8 @@ def prometheus_metrics():
     lines.append("# TYPE jen_server_up gauge")
     try:
         for status in __kea.get_all_server_status():
-            name = str(status["server"].get("name", status["server"].get("id", "unknown"))).replace('"', "")
-            lines.append(f'jen_server_up{{server="{name}"}} {1 if status["up"] else 0}')
+            name = str(status["server"].get("name", status["server"].get("id", "unknown")))
+            lines.append(f'jen_server_up{{server="{_prom_label(name)}"}} {1 if status["up"] else 0}')
     except Exception:
         pass
 
@@ -1043,7 +1054,7 @@ def prometheus_metrics():
                     by_type[lease["lease_type_name"]] = by_type.get(lease["lease_type_name"], 0) + 1
                 for type_name, cnt in by_type.items():
                     lines.append(
-                        f'jen_subnet6_active_leases{{subnet="{info["name"]}",cidr="{info["cidr"]}",type="{type_name}"}} {cnt}'
+                        f'jen_subnet6_active_leases{{subnet="{_prom_label(info["name"])}",cidr="{_prom_label(info["cidr"])}",type="{_prom_label(type_name)}"}} {cnt}'
                     )
         except Exception:
             pass
@@ -1053,7 +1064,9 @@ def prometheus_metrics():
         try:
             for subnet_id, info in extensions.SUBNET6_MAP.items():
                 cnt = len(__kea6.get_ipv6_reservations(subnet_id=subnet_id))
-                lines.append(f'jen_subnet6_reserved_hosts{{subnet="{info["name"]}",cidr="{info["cidr"]}"}} {cnt}')
+                lines.append(
+                    f'jen_subnet6_reserved_hosts{{subnet="{_prom_label(info["name"])}",cidr="{_prom_label(info["cidr"])}"}} {cnt}'
+                )
         except Exception:
             pass
 

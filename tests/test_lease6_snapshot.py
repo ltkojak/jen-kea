@@ -83,11 +83,11 @@ class TestTheSnapshotWritesLease6History:
         assert v4 >= 1, "the IPv4 snapshot still ran"
         assert {r["subnet_id"] for r in _rows()} == {501, 502}, "and the same pass recorded the IPv6 subnets"
 
-    def test_rows_older_than_the_retention_are_removed_by_the_snapshot_pass(self, v6_world, mock_kea):
+    def test_rows_older_than_the_retention_are_removed_by_the_retention_pass(self, v6_world, mock_kea):
         set_global_setting("history_retention_days", "30")
         try:
             _seed_old_and_recent()
-            alerts.take_lease_snapshot()
+            alerts.purge_history()
             kept = [r["active_na"] for r in _rows() if r["subnet_id"] == 501]
             assert 9 not in kept and 8 in kept
         finally:
@@ -123,7 +123,7 @@ class TestRetentionDoesNotDependOnTheFeatureFlag:
         _wipe()
         try:
             _seed_old_and_recent()
-            alerts.take_lease_snapshot()
+            alerts.purge_history()
             assert [r["active_na"] for r in _rows()] == [8], (
                 "the 31-day-old row is gone, the 10-day-old one stays, nothing new is written"
             )

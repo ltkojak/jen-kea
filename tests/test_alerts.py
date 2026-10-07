@@ -325,7 +325,7 @@ class TestPacketHealthAlerts:
             cur.execute("DELETE FROM server_stats")
         db.commit()
         calls = []
-        monkeypatch.setattr(alerts, "send_alert", lambda t, *a, **kw: calls.append((t, kw)))
+        monkeypatch.setattr(alerts, "send_alert", lambda t, *a, **kw: calls.append((t, kw)) or [("test", True, "")])
 
         self._insert(db, 30, {"pkt4-received": 100, "pkt4-receive-drop": 0})
         self._insert(db, 0, {"pkt4-received": 200, "pkt4-receive-drop": 50})  # 25% drop -> fail
@@ -356,7 +356,7 @@ class TestPacketHealthAlerts:
             cur.execute("DELETE FROM server_stats")
         db.commit()
         calls = []
-        monkeypatch.setattr(alerts, "send_alert", lambda t, *a, **kw: calls.append((t, kw)))
+        monkeypatch.setattr(alerts, "send_alert", lambda t, *a, **kw: calls.append((t, kw)) or [("test", True, "")])
 
         self._insert(db, 30, {"pkt4-received": 100, "pkt4-ack-sent": 90})
         self._insert(db, 0, {"pkt4-received": 200, "pkt4-ack-sent": 180})

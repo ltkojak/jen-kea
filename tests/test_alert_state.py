@@ -38,7 +38,7 @@ def world(db, monkeypatch):
 
     monkeypatch.setattr(extensions, "SUBNET_MAP", {1: {"name": "A", "cidr": "10.81.0.0/16"}})
     sent = []
-    monkeypatch.setattr(alerts, "send_alert", lambda t, *a, **kw: sent.append((t, kw)))
+    monkeypatch.setattr(alerts, "send_alert", lambda t, *a, **kw: sent.append((t, kw)) or [("test", True, "")])
     set_global_setting("alert_threshold_pct", "80")
     set_global_setting("pool_exhaustion_free", "5")
     _wipe(db)
@@ -198,7 +198,12 @@ class TestUtilisationAcrossARestart:
                 "SELECT setting_key, setting_value FROM settings WHERE setting_key LIKE 'alert_state:%' ORDER BY setting_key"
             )
             rows = {r["setting_key"]: r["setting_value"] for r in cur.fetchall()}
-        assert rows == {"alert_state:pool_exhaustion:1": "1", "alert_state:utilization_high:1": "1"}
+        import json
+
+        assert set(rows) == {"alert_state:pool_exhaustion:1", "alert_state:utilization_high:1"}
+        assert all(json.loads(v)["a"] and json.loads(v)["n"] for v in rows.values()), (
+            "active, and told (the sender returned ok)"
+        )
 
     def test_a_subnet_without_a_readable_pool_is_skipped(self, db, world):
         _fill(db, 10, 3)
@@ -221,7 +226,7 @@ class TestPacketHealthAcrossARestart:
     def test_a_restart_neither_re_alerts_nor_loses_the_recovery(self, db, monkeypatch):
         sent = []
         monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "Kea", "api_url": "http://x"}])
-        monkeypatch.setattr(alerts, "send_alert", lambda t, *a, **kw: sent.append(t))
+        monkeypatch.setattr(alerts, "send_alert", lambda t, *a, **kw: sent.append(t) or [("test", True, "")])
         with db.cursor() as cur:
             cur.execute("DELETE FROM server_stats")
         db.commit()

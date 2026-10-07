@@ -759,7 +759,6 @@ def _send_discord_channel(message, config):
 def take_lease_snapshot():
     """Record current lease counts for all subnets."""
     try:
-        retention_days = int(__get_global_setting("history_retention_days", "90"))
         with __kea_db_ctx() as kdb, __jen_db_ctx() as jdb:
             # Get pool sizes from Kea config
             pool_sizes = {}
@@ -808,15 +807,6 @@ def take_lease_snapshot():
                         (subnet_id, active, dynamic, reserved, pool_size, pool_used),
                     )
 
-                # Purge old history - every history table's retention is one unconditional pass (v5.68.0-beta.18, Q153): the IPv6 table's
-                # rows are removed here whether or not IPv6 is still on (its live read and insert stay behind is_ipv6_enabled below)
-                jcur.execute(
-                    f"DELETE FROM lease_history WHERE snapshot_time < DATE_SUB(NOW(), INTERVAL {retention_days} DAY)"
-                )
-                jcur.execute(
-                    "DELETE FROM lease6_history WHERE snapshot_time < DATE_SUB(NOW(), INTERVAL %s DAY)",
-                    (retention_days,),
-                )
             jdb.commit()
     except Exception as e:
         logger.error(f"Snapshot error: {e}")
@@ -837,7 +827,7 @@ def take_lease6_snapshot():
     Reports). One row per IPv6 subnet per snapshot: the ACTIVE leases by type (IA_NA addresses, IA_TA, IA_PD delegated prefixes) and the
     reservations by type (address, prefix), counted with the predicate the pages use (`ACTIVE_LEASE6`). There is deliberately no pool size column: a /64 has no finite pool to measure
     utilization against (migration 11). Counted by two aggregate queries (`kea6.count_lease6_by_subnet` / `count_reservations6_by_subnet`,
-    v5.68.0-beta.18); old rows are removed by `take_lease_snapshot`'s retention pass with the IPv4 history's `history_retention_days`."""
+    v5.68.0-beta.18); old rows are removed by `purge_history` with the IPv4 history's `history_retention_days`."""
     from jen.services import kea6 as _kea6
 
     # v5.68.0-beta.18 (Q153): two aggregate queries for the whole map (it was `list_lease6` + `get_ipv6_reservations` per subnet,
@@ -872,7 +862,6 @@ def take_server_stats_snapshot():
     import json
 
     try:
-        retention_days = int(__get_global_setting("history_retention_days", "90"))
         with __jen_db_ctx() as jdb:
             with jdb.cursor() as jcur:
                 for srv in extensions.KEA_SERVERS:
@@ -899,25 +888,72 @@ def take_server_stats_snapshot():
                         (srv["id"], json.dumps(stats)),
                     )
 
-                # Purge old history
-                jcur.execute(
-                    f"DELETE FROM server_stats WHERE snapshot_time < DATE_SUB(NOW(), INTERVAL {retention_days} DAY)"
-                )
             jdb.commit()
     except Exception as e:
         logger.error(f"Server stats snapshot error: {e}")
 
 
-def _purge_old_events() -> None:
-    """v5.42.0 (Q43) — the events retention job, same cadence as
-    lease_history's: `events_retention_days` (default 90), pruned in the
-    same snapshot pass."""
+def run_snapshot_pass() -> None:
+    """The periodic snapshot job (v5.68.0-beta.19, Q154): the Kea-facing snapshots, the packet-health alert, then Jen's own retention -
+    `purge_history` runs in a `finally`, so a Kea outage (or a snapshot that raised) never stops it."""
     try:
-        retention_days = int(__get_global_setting("events_retention_days", "90"))
-        with __jen_db_ctx() as jdb, jdb.cursor() as jcur:
-            jcur.execute(f"DELETE FROM events WHERE ts < DATE_SUB(NOW(), INTERVAL {retention_days} DAY)")
-    except Exception as e:
-        logger.error(f"Events retention purge error: {e}")
+        take_lease_snapshot()
+        take_server_stats_snapshot()
+        _check_packet_health_alerts()
+    finally:
+        purge_history()
+
+
+def purge_history() -> dict:
+    """Every history table's retention, in ONE place, on Jen's own database alone (v5.68.0-beta.19, Q154). The deletes of `lease_history` and
+    `lease6_history` used to run inside `take_lease_snapshot` after the Kea database was opened - a Kea outage stopped Jen's own retention
+    - and `server_stats` inside the stats snapshot. None of them needs Kea: this touches `jen_db` only, each table in its own try (one failure
+    never stops the rest), and is called by the snapshot job AFTER the Kea snapshots whatever their outcome and by the daily cleanup job.
+
+        lease_history, lease6_history, server_stats   `history_retention_days`   (default 90)
+        events                                        `events_retention_days`    (default 90)
+        alert_log                                     `alert_log_retention_days` (default 180)
+        audit_log                                     `audit_retention_days`     (default 90; 0 = keep forever) - by `created_at`; the cleanup
+                                                      this replaced deleted by a `timestamp` column the table does not have, so it never ran
+
+    Returns {table: rows removed, or None when that table's purge failed}."""
+    removed = {}
+
+    def days(key, default):
+        try:
+            value = int(__get_global_setting(key, str(default)))
+        except (TypeError, ValueError):
+            return default
+        return value
+
+    history = days("history_retention_days", 90)
+    plan = (
+        ("lease_history", "DELETE FROM lease_history WHERE snapshot_time < DATE_SUB(NOW(), INTERVAL %s DAY)", history),
+        (
+            "lease6_history",
+            "DELETE FROM lease6_history WHERE snapshot_time < DATE_SUB(NOW(), INTERVAL %s DAY)",
+            history,
+        ),
+        ("server_stats", "DELETE FROM server_stats WHERE snapshot_time < DATE_SUB(NOW(), INTERVAL %s DAY)", history),
+        ("events", "DELETE FROM events WHERE ts < DATE_SUB(NOW(), INTERVAL %s DAY)", days("events_retention_days", 90)),
+        (
+            "audit_log",
+            "DELETE FROM audit_log WHERE created_at < DATE_SUB(NOW(), INTERVAL %s DAY)",
+            days("audit_retention_days", 90),
+        ),
+    )
+    for table, sql, keep in plan:
+        if table == "audit_log" and keep <= 0:
+            continue  # 0 = keep forever
+        try:
+            with __jen_db_ctx() as jdb, jdb.cursor() as jcur:
+                jcur.execute(sql, (keep,))
+                removed[table] = jcur.rowcount
+        except Exception as e:
+            logger.error(f"History retention ({table}): {e}")
+            removed[table] = None
+    removed["alert_log"] = _purge_old_alert_log()
+    return removed
 
 
 ALERT_LOG_DEFAULT_RETENTION_DAYS = 180
@@ -1009,19 +1045,146 @@ def alert_sent_totals(cur) -> dict:
 # every alert whose condition was still true and never sent the `_ok` for one that cleared while Jen was down - and pool_exhaustion had no state
 # at all and re-sent every cycle. The state is now a settings row per (alert type, key), `alert_state:<type>:<key>` = "1" while the condition
 # holds - the same pattern `pool_forecast_alerted_<id>` already used - read on every pass.
+#
+# v5.68.0-beta.19 (Q154) - the state also knows whether ANYONE WAS TOLD. beta.18 set it after the send whatever the send returned: every channel
+# down, or no channel eligible yet, and the condition was marked handled until it recovered - and a later `_ok` went out for a warning nobody
+# had received. The value is now a small JSON object: `a` active, `n` notified (true only when at least one ELIGIBLE channel returned ok),
+# `t` the time of the last attempt, `c` the attempts since it last changed, `d` when it was notified. A pending notification retries with backoff
+# (1, 2, 4 ... 60 minutes) for as long as the condition holds - including after a channel is enabled later; the `_ok` goes out only after a
+# delivered warning. One helper, `notify_condition`, does this for utilization, pool_exhaustion, packet_health, cert_expiring and pool_forecast.
+
+_BACKOFF_MINUTES = (1, 2, 4, 8, 16, 32, 60)
+
+
+def _utcnow():
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _alert_state_key(alert_type, key) -> str:
     return f"alert_state:{alert_type}:{key}"
 
 
+def _load_state(alert_type, key) -> dict:
+    """{"a": active, "n": notified, "t": iso | None, "c": attempts, "d": iso | None}. A value written by beta.18 ("1"/"0") is read as
+    active-and-notified / inactive: it was set after a send whose result nobody checked, and re-sending on upgrade would be worse."""
+    import json
+
+    raw = __get_global_setting(_alert_state_key(alert_type, key), "") or ""
+    if raw in ("1", "0"):
+        return {"a": raw == "1", "n": raw == "1", "t": None, "c": 0, "d": None}
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        value = None
+    if not isinstance(value, dict):
+        return {"a": False, "n": False, "t": None, "c": 0, "d": None}
+    return {
+        "a": bool(value.get("a")),
+        "n": bool(value.get("n")),
+        "t": value.get("t"),
+        "c": int(value.get("c") or 0),
+        "d": value.get("d"),
+    }
+
+
+def _save_state(alert_type, key, state) -> None:
+    import json
+
+    __set_global_setting(_alert_state_key(alert_type, key), json.dumps(state, separators=(",", ":")))
+
+
 def alert_state(alert_type, key) -> bool:
-    """Is the condition for (alert_type, key) currently recorded as ACTIVE (alerted and not yet recovered)?"""
-    return __get_global_setting(_alert_state_key(alert_type, key), "0") == "1"
+    """Is the condition for (alert_type, key) currently recorded as ACTIVE (alerted or pending, and not yet recovered)?"""
+    return _load_state(alert_type, key)["a"]
 
 
-def set_alert_state(alert_type, key, active: bool) -> None:
-    __set_global_setting(_alert_state_key(alert_type, key), "1" if active else "0")
+def alert_delivery(alert_type, key) -> dict:
+    """{"active", "notified", "attempts", "last_attempt"} for (alert_type, key) - what the delivery half of the state says."""
+    s = _load_state(alert_type, key)
+    return {"active": s["a"], "notified": s["n"], "attempts": s["c"], "last_attempt": s["t"]}
+
+
+def _delivered(results) -> bool:
+    """True when at least one ELIGIBLE channel returned ok. `send_alert` answers [(channel, ok, error), ...] - empty when nobody was eligible."""
+    return isinstance(results, (list, tuple)) and any(r[1] for r in results)
+
+
+def _iso(moment) -> str:
+    return moment.isoformat()
+
+
+def _parse(moment):
+    from datetime import datetime
+
+    try:
+        return datetime.fromisoformat(moment) if moment else None
+    except ValueError:
+        return None
+
+
+def mark_notified(alert_type, key, now=None) -> None:
+    """Record (alert_type, key) as active AND notified without sending - for a condition that is true but that a TIGHTER alert has already
+    spoken for (cert_expiring's 30-day bucket when the 7-day one fires)."""
+    now = now or _utcnow()
+    s = _load_state(alert_type, key)
+    if not (s["a"] and s["n"]):
+        _save_state(alert_type, key, {"a": True, "n": True, "t": _iso(now), "c": 0, "d": _iso(now)})
+
+
+def notify_condition(
+    alert_type, key, active, *, kwargs, ok_type=None, ok_kwargs=None, repeat_after=None, now=None
+) -> str:
+    """The one place a threshold alert is sent, retried and recovered (v5.68.0-beta.19, Q154). `active` is whether the condition holds NOW.
+    Returns what it did: "sent", "pending" (attempted, nobody took it; will retry), "waiting" (backing off), "quiet" (nothing to do),
+    "recovered" (the `_ok` was sent), "cleared" (the condition ended; no `_ok`: no warning had been delivered, or the type has none).
+
+      * a condition that becomes true starts a pending notification; it is `notified` only when at least one eligible channel returned ok -
+        every channel failing, or none eligible, leaves it pending and it is retried with backoff (1, 2, 4 ... 60 min) while it holds;
+      * a condition that ends sends `ok_type` ONLY if its warning was delivered (a recovery for a warning nobody got is noise);
+      * `repeat_after` (a timedelta) re-opens a delivered condition that is still true after that long (the forecast's weekly reminder).
+    """
+    from datetime import timedelta
+
+    now = now or _utcnow()
+    state = _load_state(alert_type, key)
+    if not active:
+        if not state["a"]:
+            return "quiet"
+        outcome = "cleared"
+        if state["n"] and ok_type:
+            send_alert(ok_type, **(ok_kwargs if ok_kwargs is not None else kwargs))
+            outcome = "recovered"
+        _save_state(alert_type, key, {"a": False, "n": False, "t": None, "c": 0, "d": None})
+        return outcome
+    if not state["a"]:
+        state = {"a": True, "n": False, "t": None, "c": 0, "d": None}
+    elif state["n"] and repeat_after is not None:
+        told = _parse(state["d"])
+        if told is not None and now - told >= repeat_after:
+            state = {"a": True, "n": False, "t": None, "c": 0, "d": None}
+    if state["n"]:
+        _save_state(alert_type, key, state)
+        return "quiet"
+    last = _parse(state["t"])
+    if last is not None and state["c"] > 0:
+        wait = timedelta(minutes=_BACKOFF_MINUTES[min(state["c"] - 1, len(_BACKOFF_MINUTES) - 1)])
+        if now < last + wait:
+            _save_state(alert_type, key, state)
+            return "waiting"
+    try:
+        delivered = _delivered(send_alert(alert_type, **kwargs))
+    except Exception as e:
+        logger.error(f"alert {alert_type} ({key}): send failed: {e}")
+        delivered = False
+    state["t"] = _iso(now)
+    if delivered:
+        state.update(n=True, c=0, d=_iso(now))
+    else:
+        state["c"] += 1
+    _save_state(alert_type, key, state)
+    return "sent" if delivered else "pending"
 
 
 def check_utilization_alerts(cur, dhcp4_cfg) -> None:
@@ -1056,20 +1219,11 @@ def check_utilization_alerts(cur, dhcp4_cfg) -> None:
             "total": pool_size,
             "subnet_id": sid,
         }
-        high = alert_state("utilization_high", sid)
-        if pct >= threshold and not high:
-            send_alert("utilization_high", **details)
-            set_alert_state("utilization_high", sid, True)
-        elif pct < threshold and high:
-            send_alert("utilization_ok", **details)
-            set_alert_state("utilization_high", sid, False)
-        exhausted = alert_state("pool_exhaustion", sid)
-        if free <= exhaustion and not exhausted:
-            send_alert("pool_exhaustion", subnet=info["name"], cidr=info["cidr"], free=free, subnet_id=sid)
-            set_alert_state("pool_exhaustion", sid, True)
-        elif free >= recover_at and exhausted:
-            send_alert("pool_exhaustion_ok", subnet=info["name"], cidr=info["cidr"], free=free, subnet_id=sid)
-            set_alert_state("pool_exhaustion", sid, False)
+        notify_condition("utilization_high", sid, pct >= threshold, kwargs=details, ok_type="utilization_ok")
+        # hysteresis: once exhausted the condition holds until free climbs back to `recover_at`
+        exhausted = free <= exhaustion or (alert_state("pool_exhaustion", sid) and free < recover_at)
+        warn = {"subnet": info["name"], "cidr": info["cidr"], "free": free, "subnet_id": sid}
+        notify_condition("pool_exhaustion", sid, exhausted, kwargs=warn, ok_type="pool_exhaustion_ok")
 
 
 def _check_packet_health_alerts() -> None:
@@ -1102,15 +1256,14 @@ def _check_packet_health_alerts() -> None:
                     continue
                 a = packet_health.assess(packet_health.rates(packet_health.deltas(rows), window_minutes=60))
                 sid = srv["id"]
-                alerted = alert_state("packet_health", sid)
-                if a["status"] in ("warn", "fail") and not alerted:
-                    send_alert(
-                        "packet_health", server_name=srv["name"], status=a["status"], detail="; ".join(a["notes"])
-                    )
-                    set_alert_state("packet_health", sid, True)
-                elif a["status"] not in ("warn", "fail") and alerted:
-                    send_alert("packet_health_ok", server_name=srv["name"])
-                    set_alert_state("packet_health", sid, False)
+                notify_condition(
+                    "packet_health",
+                    sid,
+                    a["status"] in ("warn", "fail"),
+                    kwargs={"server_name": srv["name"], "status": a["status"], "detail": "; ".join(a["notes"])},
+                    ok_type="packet_health_ok",
+                    ok_kwargs={"server_name": srv["name"]},
+                )
     except Exception as e:
         logger.error(f"Packet health alert check error: {e}")
 
@@ -1163,14 +1316,23 @@ def check_cert_expiry_alert() -> None:
     if days is None:
         return
     bucket = next((b for b in (1, 7, 30) if days <= b), None)
+    # v5.68.0-beta.19 (Q154): each bucket is its own condition through `notify_condition` - only the TIGHTEST reached one speaks, a looser one it
+    # has passed is recorded as already told, a tighter one not reached is cleared, and a bucket whose notification was not delivered is retried.
+    # A `cert_expiry_alerted` value left by an older Jen counts as the buckets it had already fired.
     try:
-        fired = int(__get_global_setting("cert_expiry_alerted", "0") or "0")
+        legacy = int(__get_global_setting("cert_expiry_alerted", "0") or "0")
     except (TypeError, ValueError):
-        fired = 0
-    if bucket is not None and (fired == 0 or bucket < fired):
-        send_alert("cert_expiring", days_left=days)
-        __set_global_setting("cert_expiry_alerted", str(bucket))
-    elif bucket is None and fired:
+        legacy = 0
+    for b in (30, 7, 1):
+        if legacy and b >= legacy and not _load_state("cert_expiring", b)["a"]:
+            mark_notified("cert_expiring", b)
+        if bucket is None or b < bucket:
+            notify_condition("cert_expiring", b, False, kwargs={})
+        elif b > bucket:
+            mark_notified("cert_expiring", b)
+        else:
+            notify_condition("cert_expiring", b, True, kwargs={"days_left": days})
+    if legacy:
         __set_global_setting("cert_expiry_alerted", "0")
 
 
@@ -1180,11 +1342,13 @@ def check_pool_forecast_alerts(today=None) -> None:
     7 days, tracked in the settings key `pool_forecast_alerted_<id>` (the
     date last fired) so a restart doesn't re-alert. The forecast itself is
     jen/services/capacity.py; the history read is health.lease_history_window."""
-    from datetime import date, timedelta
+    from datetime import date, datetime, timedelta
 
     from jen.services import capacity
     from jen.services.health import lease_history_window
 
+    # a caller-supplied `today` (the tests) is the clock; in production it is the real time, so a retry's backoff really elapses
+    now = datetime.combine(today, datetime.min.time()) if today is not None else _utcnow()
     today = today or date.today()
     history = lease_history_window()
     for sid, rows in history.items():
@@ -1194,28 +1358,41 @@ def check_pool_forecast_alerts(today=None) -> None:
         f = capacity.forecast(rows, today=today)
         d = f["days_to_90pct"]
         if d is None or d > capacity.WARN_DAYS:
+            notify_condition(
+                "pool_forecast", sid, False, kwargs={}
+            )  # the trend no longer reaches 90 %: the episode is over
             continue
-        key = f"pool_forecast_alerted_{sid}"
-        last = __get_global_setting(key, "") or ""
-        try:
-            last_day = date.fromisoformat(last) if last else None
-        except ValueError:
-            last_day = None
-        if last_day is not None and today - last_day < timedelta(days=7):
-            continue
+        # v5.68.0-beta.19 (Q154): one `notify_condition` per subnet - retried while undelivered, a weekly reminder once delivered
+        legacy_key = f"pool_forecast_alerted_{sid}"  # an older Jen's "date last fired" counts as a delivered notification on that date
+        legacy = __get_global_setting(legacy_key, "") or ""
+        if legacy and not _load_state("pool_forecast", sid)["a"]:
+            try:
+                told = datetime.combine(date.fromisoformat(legacy), datetime.min.time())
+                _save_state(
+                    "pool_forecast", sid, {"a": True, "n": True, "t": told.isoformat(), "c": 0, "d": told.isoformat()}
+                )
+            except ValueError:
+                pass
+        if legacy:
+            __set_global_setting(legacy_key, "")
         hw = capacity.high_water(rows)
-        send_alert(
+        notify_condition(
             "pool_forecast",
-            subnet=info["name"],
-            cidr=info["cidr"],
-            trend=f"{f['slope_per_day']:+.1f}",
-            days=d,
-            date=f["date_90"],
-            peak=hw["peak"] if hw else f["latest_peak"],
-            total=f["pool_size"],
-            subnet_id=sid,
+            sid,
+            True,
+            kwargs={
+                "subnet": info["name"],
+                "cidr": info["cidr"],
+                "trend": f"{f['slope_per_day']:+.1f}",
+                "days": d,
+                "date": f["date_90"],
+                "peak": hw["peak"] if hw else f["latest_peak"],
+                "total": f["pool_size"],
+                "subnet_id": sid,
+            },
+            repeat_after=timedelta(days=7),
+            now=now,
         )
-        __set_global_setting(key, today.isoformat())
 
 
 def diff_leases(prev: dict, cur: dict) -> list[dict]:
@@ -1647,11 +1824,7 @@ def check_alerts():
             snapshot_interval = int(__get_global_setting("snapshot_interval_minutes", "30")) * 60
             now_ts = time.time()
             if now_ts - last_snapshot_time >= snapshot_interval:
-                take_lease_snapshot()
-                take_server_stats_snapshot()
-                _check_packet_health_alerts()
-                _purge_old_events()
-                _purge_old_alert_log()
+                run_snapshot_pass()
                 last_snapshot_time = now_ts
 
             # ── Daily summary ──

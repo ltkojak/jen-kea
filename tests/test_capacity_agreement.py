@@ -138,7 +138,7 @@ class TestOneNumberEverywhere:
 
     def test_the_alert_loop_judges_the_same_capacity_and_consumption(self, subnet, db, monkeypatch):
         sent = []
-        monkeypatch.setattr(alerts, "send_alert", lambda t, *a, **kw: sent.append((t, kw)))
+        monkeypatch.setattr(alerts, "send_alert", lambda t, *a, **kw: sent.append((t, kw)) or [("test", True, "")])
         from jen.models.user import set_global_setting
 
         set_global_setting("alert_threshold_pct", "5")  # 12 / 174 = 7 %: over this line

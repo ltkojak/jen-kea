@@ -480,6 +480,12 @@ for one that cleared while Jen was down. Jen now remembers, in its settings, whi
 recovery that happened while it was down is sent once when it comes back. The first check after upgrading sends the alerts for conditions that are true
 at that moment once, because nothing had been recorded before.
 
+**Delivery is part of the state (v5.68.0-beta.19).** A warning counts as sent only when at least one channel that handles it actually accepted it. If every
+channel is down - or no channel handles that type yet - Jen keeps the warning pending and tries again after 1, 2, 4 ... up to 60 minutes for as long as the condition
+holds, so enabling a channel later still delivers it. A recovery (*Subnet utilization recovery*, *Pool exhaustion recovery*, *Packet health recovery*) is sent only
+after its warning was delivered. One channel accepting is enough; the others are not retried. The *Pool exhaustion forecast* and *Certificate expiring* alerts use
+the same rule (the forecast reminds weekly while the trend still reaches 90 %).
+
 ## Alert log retention (v5.68.0-beta.17)
 
 **Settings → Logs → Alert Log** lists the deliveries of every alert. Each delivery is kept for 180 days after it was sent and then removed by the

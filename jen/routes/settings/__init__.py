@@ -317,7 +317,8 @@ def save_audit_retention():
         try:
             with __db.jen_db() as db:
                 with db.cursor() as cur:
-                    cur.execute("DELETE FROM audit_log WHERE timestamp < DATE_SUB(NOW(), INTERVAL %s DAY)", (days,))
+                    # v5.68.0-beta.19 (Q154): `created_at` - the table has no `timestamp` column, so this (and the daily cleanup) always failed
+                    cur.execute("DELETE FROM audit_log WHERE created_at < DATE_SUB(NOW(), INTERVAL %s DAY)", (days,))
                     deleted = cur.rowcount
                 db.commit()
             flash(f"Audit log retention set to {days} days. {deleted} old entries removed.", "success")
