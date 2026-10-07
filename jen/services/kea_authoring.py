@@ -520,8 +520,25 @@ for _p, _kind in {list(tls_paths)!r}:
         on_pass = "os.unlink(tmp)\nprint('preview-ok')"
         exists_check = ""
     else:
+        # v5.68.0-beta.16 (Q151): the legacy engine's write is private from its first byte too. `tmp` is a mkstemp file (unique, O_EXCL, 0600), the
+        # backup of an existing config is a mkstemp copy given the original's owner and mode before it is renamed (shutil.copy2 created it with the
+        # umask first), and the replacement takes the destination's owner and mode - or, for a file that did not exist, root and the directory's
+        # group at 0640 (never 0644: it carries database credentials). Author Kea Config no longer reaches this engine at all (helper-only).
         on_pass = (
-            "if os.path.exists(path):\n    shutil.copy2(path, path + '.jen_backup')\nos.replace(tmp, path)\nprint('ok')"
+            "if os.path.exists(path):\n"
+            "    st = os.stat(path)\n"
+            "    bfd, btmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix='.jen_legacy_bak_')\n"
+            "    with os.fdopen(bfd, 'wb') as bf, open(path, 'rb') as src:\n"
+            "        bf.write(src.read())\n"
+            "    os.chown(btmp, st.st_uid, st.st_gid)\n"
+            "    os.chmod(btmp, st.st_mode & 0o777)\n"
+            "    os.replace(btmp, path + '.jen_backup')\n"
+            "    os.chown(tmp, st.st_uid, st.st_gid)\n"
+            "    os.chmod(tmp, st.st_mode & 0o777)\n"
+            "else:\n"
+            "    os.chown(tmp, 0, os.stat(os.path.dirname(path)).st_gid)\n"
+            "    os.chmod(tmp, 0o640)\n"
+            "os.replace(tmp, path)\nprint('ok')"
         )
         exists_check = (
             f"if os.path.exists(path) and not {allow_overwrite!r}:\n"
@@ -531,13 +548,13 @@ for _p, _kind in {list(tls_paths)!r}:
         )
 
     return f"""
-import json, sys, shutil, subprocess, os
+import json, sys, shutil, subprocess, os, tempfile
 
 path = {repr(kea_conf_path)}
 cfg = {config_json}
 
-tmp = path + '.jen_author_tmp'
-with open(tmp, 'w') as f:
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix='.jen_legacy_', suffix='.tmp')
+with os.fdopen(fd, 'w') as f:
     json.dump(cfg, f, indent=2)
 
 {exists_check}{tls_check}

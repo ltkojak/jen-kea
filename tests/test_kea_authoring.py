@@ -431,8 +431,13 @@ class TestRenderAuthorConfigScript:
         script = render_author_config_script(
             "dhcp6", "/etc/kea/kea-dhcp6.conf", {"Dhcp6": {}}, allow_overwrite=True, dry_run=False
         )
-        assert "shutil.copy2" in script
-        assert "os.replace(tmp, path)" in script
+        # v5.68.0-beta.16 (Q151): the backup is a mkstemp copy given the original's owner/mode, not shutil.copy2 (which used the umask first)
+        assert ".jen_backup" in script and "shutil.copy2" not in script
+        assert "tempfile.mkstemp" in script and "os.replace(tmp, path)" in script
+        assert "jen_author_tmp" not in script, "no fixed temp name"
+        assert "os.chmod(tmp, 0o640)" in script, (
+            "a file that did not exist is never created 0644 (it carries database credentials)"
+        )
 
     def test_uses_correct_kea_binary_per_service(self):
         from jen.services.kea_authoring import render_author_config_script

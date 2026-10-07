@@ -332,30 +332,51 @@ class TestS4TheHelperHasOneIdentityResolverAndSwallowsNothing:
 # ── S5: the legacy engine is unreachable from an all-or-nothing path ─────────
 
 
-@pytest.mark.xfail(strict=True, reason="Q151 item 4 (helper-only authoring) lands in commit 2")
 class TestS5TheLegacyEngineIsNotReachableFromAnAllOrNothingPath:
     """Q151. Author Kea Config promises every server or none; its rollback of a file Jen created is the helper's `remove-config`. A helper-less
     target fell back to the legacy script for the WRITE and then could not be rolled back: A written, B failing, `rollback_failed`. The authoring
-    path requires a current helper on every target and passes `helper_only=True`; the legacy engine keeps its other, single-step ops."""
+    path requires a current helper on every target and passes `helper_only=True`; the legacy engine keeps serving the single-step edits of a host
+    that has no helper (CLAUDE.md: the legacy `sudo python3` fallback is banner-warned and never removed in 5.x), through the ONE script below,
+    which is itself written private from its first byte (a unique mkstemp temp, never the fixed `.jen_author_tmp` plain open)."""
 
-    def test_the_authoring_script_is_gone(self):
-        assert "render_author_config_script" not in _read("jen/services/kea_authoring.py"), (
-            "the legacy author script wrote a fixed .jen_author_tmp with a plain open() and cannot be rolled back"
-        )
-        assert "render_author_config_script" not in _read("jen/services/kea_host.py")
-
-    def test_test_config_and_apply_config_can_be_told_never_to_use_the_legacy_engine(self):
+    def test_the_legacy_script_is_called_only_from_test_config_and_apply_config_behind_a_helper_only_guard(self):
         tree = ast.parse(_read("jen/services/kea_host.py"))
-        for name in ("test_config", "apply_config"):
+        parents = _parents(tree)
+        callers = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and ast.unparse(node.func).endswith("render_author_config_script"):
+                callers.setdefault(_enclosing_function(node, parents), []).append(node)
+        assert set(callers) == {"test_config", "apply_config"}, f"the legacy script is reachable from {sorted(callers)}"
+        for name in callers:
             function = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == name)
             assert "helper_only" in [a.arg for a in function.args.args + function.args.kwonlyargs], (
                 f"{name} must accept helper_only"
             )
+            source = ast.unparse(function)
+            assert source.index("if helper_only") < source.index("render_author_config_script"), (
+                f"{name}: the helper_only refusal must come before the legacy script is rendered"
+            )
 
-    def test_the_authoring_route_requires_the_helper_on_every_target_and_uses_it_only(self):
+    def test_nothing_the_authoring_route_runs_can_reach_the_legacy_script(self):
         text = _read("jen/routes/settings/authoring.py")
-        assert "helper_only=True" in text or "helper_only" in text
-        assert "helper_build" in text, "the route checks every target's helper build before the preflight"
+        assert "render_author_config_script" not in text and "_legacy_python3" not in text
+        assert "helper_only=True" in text, "the preview's test_config and the change set both run helper_only"
+        assert text.count("helper_only=True") >= 2
+        assert "helper_build" in text, "every target's helper build is checked before the preflight"
+        assert "__host.apply_config(" not in text
+
+    def test_the_change_set_passes_helper_only_to_every_host_call_it_makes(self):
+        text = _read("jen/services/kea_changeset.py")
+        assert text.count('**({"helper_only": True} if helper_only else {})') >= 3, (
+            "test_config, apply_config and the restore"
+        )
+
+    def test_the_legacy_script_writes_private_and_not_to_a_fixed_name(self):
+        text = _read("jen/services/kea_authoring.py")
+        assert "jen_author_tmp" not in text, "the fixed temp name is gone"
+        assert "tempfile.mkstemp" in text and "shutil.copy2(path" not in text, (
+            "unique O_EXCL 0600 temp; the backup is not made with the umask"
+        )
 
 
 # ── S9: what root copies into the app tree ───────────────────────────────────

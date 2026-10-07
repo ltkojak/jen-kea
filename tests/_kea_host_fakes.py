@@ -19,6 +19,8 @@ class FakeHelper:
         self.calls = []  # list of (server_id, op, payload)
         self.missing_for = set()  # server ids that raise HelperMissing
         self.helper_version = 2  # what `version` and every envelope reports
+        self.helper_build = None  # `helper_build` in the `version` reply (None: a pre-v7 helper that reports none)
+        self.builds = {}  # server id -> build, overriding `helper_build` for that one server
 
     def helper_call(self, server, op, payload=None, timeout=60):
         from jen.services import kea_host
@@ -31,7 +33,11 @@ class FakeHelper:
             raise kea_host.HelperMissing("fake: helper not installed on this host")
 
         if op == "version":
-            return {"ok": True, "helper_version": self.helper_version, "python": "3.12.0"}
+            reply = {"ok": True, "helper_version": self.helper_version, "python": "3.12.0"}
+            build = self.builds.get(sid, self.helper_build)
+            if build is not None:
+                reply["helper_build"] = build
+            return reply
 
         if op == "read-config":
             cfg = self.configs.get((sid, payload.get("service")))

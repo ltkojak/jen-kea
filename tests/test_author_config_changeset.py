@@ -290,3 +290,175 @@ class TestRemoveConfig:
         world.fake.responses["remove-config"] = {"ok": False, "error": "unknown-op"}
         res = self._call(world)
         assert res["ok"] is False and "too old" in res["detail"] and "Update helper" in res["detail"]
+
+
+class TestEveryTargetNeedsACurrentHelperBeforeAnythingHappens:
+    """v5.68.0-beta.16 (Q151, item 4). A helper-less target used to be written through the legacy script (which cannot roll back) and then could not
+    be undone when a later server failed: A written, B failing, `rollback_failed`, A keeps the file. Author Kea Config now refuses before the first
+    preflight unless EVERY target has a helper at build 13 or later (the one with `remove-config`), and runs `helper_only` (never the legacy script)."""
+
+    def test_a_helper_less_target_and_a_current_one_refuses_before_any_call_that_changes_anything(
+        self, logged_in_client, world
+    ):
+        world.fake.missing_for.add(1)
+        flashes = _post(logged_in_client, world, base_sha_1="", base_sha_2="")
+        assert [op for (_sid, op, _p) in world.fake.calls if op in ("test-config", "apply-config", "read-config")] == []
+        assert not world.has(1) and not world.has(2) and world.subnet_writes == []
+        assert any("Update helper on kea-a" in f and "build 13" in f for f in flashes)
+
+    def test_a_helper_too_old_for_remove_config_is_refused(self, logged_in_client, world):
+        world.fake.builds[2] = 12
+        flashes = _post(logged_in_client, world, base_sha_1="", base_sha_2="")
+        assert world.calls("apply-config") == [] and not world.has(1) and not world.has(2)
+        assert any("Update helper on kea-b" in f for f in flashes)
+
+    def test_a_helper_that_reports_no_build_at_all_is_refused(self, logged_in_client, world):
+        world.fake.builds.clear()
+        world.fake.helper_build = None  # a pre-v7 helper answers `version` with no build
+        flashes = _post(logged_in_client, world, base_sha_1="", base_sha_2="")
+        assert world.calls("apply-config") == [] and any("Update helper on kea-a, kea-b" in f for f in flashes)
+
+    def test_mixed_builds_name_only_the_hosts_that_need_it(self, logged_in_client, world):
+        world.fake.builds[1] = 13
+        world.fake.builds[2] = 11
+        flashes = _post(logged_in_client, world, base_sha_1="", base_sha_2="")
+        assert any("Update helper on kea-b" in f for f in flashes)
+        assert not any("kea-a" in f and "Update helper" in f for f in flashes)
+
+    def test_an_unreachable_host_is_not_a_helper_less_one(self, logged_in_client, world, monkeypatch):
+        def unreachable(server, op, payload=None, timeout=60):
+            if server["id"] == 2:
+                raise kea_host.HelperUnreachable("SSH to kea@10.0.0.2 failed - timed out")
+            return world.fake.helper_call(server, op, payload, timeout)
+
+        monkeypatch.setattr(kea_host, "helper_call", unreachable)
+        flashes = _post(logged_in_client, world, base_sha_1="", base_sha_2="")
+        assert world.calls("apply-config") == [] and any("Could not reach kea-b" in f for f in flashes)
+        assert not any("Update helper on kea-b" in f for f in flashes)
+
+    def test_helper_only_never_reaches_the_legacy_engine(self, world, monkeypatch):
+        world.fake.missing_for.add(1)
+        monkeypatch.setattr(kea_host, "_flag_legacy", lambda server: None)
+
+        def boom(*a, **k):
+            raise AssertionError("the legacy sudo-python3 engine was used")
+
+        monkeypatch.setattr(kea_host, "_legacy_python3", boom)
+        for call in (
+            lambda: kea_host.test_config(A, "dhcp6", {"Dhcp6": {}}, helper_only=True),
+            lambda: kea_host.apply_config(A, "dhcp6", {"Dhcp6": {}}, helper_only=True),
+        ):
+            res = call()
+            assert res["ok"] is False and res["detail"] == kea_host.HELPER_REQUIRED
+
+
+class TestJensOwnRecordIsPartOfTheTransaction:
+    """Item 3. Everything Jen does locally because of the change runs in `finalize`, after every target committed; if it raises, every server goes
+    back and the operation is `rolled_back`, never ok. Names are validated before any of it starts."""
+
+    def test_a_kea_valid_jen_invalid_name_is_refused_before_any_server_is_touched(self, logged_in_client, world):
+        flashes = _post(logged_in_client, world, subnets="1 = V6[LAN], 2001:db8::/64", base_sha_1="", base_sha_2="")
+        assert world.calls("apply-config") == [] and world.calls("test-config") == []
+        assert not world.has(1) and not world.has(2) and world.subnet_writes == []
+        assert any("Name must not contain" in f for f in flashes)
+
+    def test_the_preview_refuses_it_too(self, logged_in_client, world):
+        r = logged_in_client.post(URL + "/preview", data=dict(FORM, subnets="1 = V6[LAN], 2001:db8::/64"))
+        assert r.status_code == 400 and "Name must not contain" in r.get_json()["error"]
+
+    def test_an_oserror_while_recording_the_subnets_rolls_every_server_back_and_leaves_jens_map_alone(
+        self, logged_in_client, world, monkeypatch
+    ):
+        def disk_full(subnets):
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr("jen.config.write_subnets6_config", disk_full)
+        flashes = _post(logged_in_client, world, base_sha_1="", base_sha_2="")
+        assert not world.has(1) and not world.has(2), "both servers are back to having no file"
+        assert world.subnet_writes == []
+        assert any("could not record this change" in f for f in flashes) and not any(
+            "written. Enable" in f for f in flashes
+        )
+        cs.clear_attention()
+
+    def test_a_server_that_cannot_be_restored_after_a_failed_finalize_is_an_incident(
+        self, logged_in_client, world, monkeypatch
+    ):
+        def disk_full(subnets):
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr("jen.config.write_subnets6_config", disk_full)
+        world.fail_remove.add(1)
+        flashes = _post(logged_in_client, world, base_sha_1="", base_sha_2="")
+        attention = cs.attention()
+        assert attention and attention["incidents"][-1]["status"] == "rollback_failed"
+        assert attention["incidents"][-1]["needs_hands"] == ["kea-a"]
+        assert world.has(1) and not world.has(2) and any("ROLLBACK FAILED" in f for f in flashes)
+        cs.clear_attention()
+
+
+class TestFinalizeInTheChangeSetItself:
+    def _author(self, finalize, **kw):
+        return cs.apply_change(
+            "dhcp6",
+            None,
+            "x",
+            servers=[A, B],
+            restart=False,
+            candidate_for=lambda server, cfg: ({"Dhcp6": {"for": server["id"]}}, "ok"),
+            absent_is_expected=True,
+            finalize=finalize,
+            **kw,
+        )
+
+    def test_finalize_runs_once_after_every_target_committed(self, world):
+        seen = []
+        result = self._author(lambda r: seen.append((world.has(1), world.has(2), r.status, sorted(r.covered))))
+        assert result.status == "ok" and seen == [(True, True, "ok", ["kea-a", "kea-b"])]
+
+    def test_it_does_not_run_when_a_target_failed(self, world):
+        world.fail_apply.add(2)
+        seen = []
+        result = self._author(lambda r: seen.append(1))
+        assert result.status == "aborted" and seen == []
+
+    def test_a_raising_finalize_restores_every_target_and_reports_rolled_back(self, world):
+        def boom(result):
+            raise ValueError("a subnet name the validator refuses")
+
+        result = self._author(boom)
+        assert result.status == "rolled_back" and result.last_code == "finalize-failed"
+        assert not world.has(1) and not world.has(2)
+        assert not any("subnet name the validator" in text for _kind, text in result.lines), (
+            "the exception's own text is logged, never shown"
+        )
+
+    def test_a_restore_that_fails_after_a_raising_finalize_is_rollback_failed(self, world):
+        world.fail_remove.add(2)
+
+        def boom(result):
+            raise OSError("disk")
+
+        result = self._author(boom)
+        assert (
+            result.status == "rollback_failed" and result.needs_hands == ["kea-b"] and world.has(2) and not world.has(1)
+        )
+
+    def test_a_target_that_existed_is_restored_by_re_applying_what_it_had(self, world):
+        world.put(1, {"Dhcp6": {"original": True}}, "orig")
+
+        def boom(result):
+            raise RuntimeError("x")
+
+        result = cs.apply_change(
+            "dhcp6",
+            None,
+            "x",
+            servers=[A],
+            restart=False,
+            candidate_for=lambda server, cfg: ({"Dhcp6": {"new": True}}, "ok"),
+            absent_is_expected=True,
+            expected_sha_for=lambda server: "orig",
+            finalize=boom,
+        )
+        assert result.status == "rolled_back" and world.fake.configs[(1, "dhcp6")] == {"Dhcp6": {"original": True}}

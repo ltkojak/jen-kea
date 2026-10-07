@@ -665,7 +665,35 @@ def _tls_list(tls_paths):
     return [[p, kind] for (p, kind) in (tls_paths or [])]
 
 
-def test_config(server: dict, service: str, cfg: dict, tls_paths=()) -> dict:
+AUTHORING_MIN_HELPER_BUILD = (
+    13  # Author Kea Config's rollback of a file Jen created is the helper's `remove-config` op (build 13)
+)
+HELPER_REQUIRED = "the Kea host helper is not installed on this host - press Update helper"
+
+
+def helper_build(server: dict) -> dict:
+    """Ask `server`'s helper for its version and BUILD right now (one `version` round trip, recorded like every other helper contact):
+    `{"code": "ok" | "missing" | "unreachable" | "error", "version": int | None, "build": int | None, "detail": str}`. Never raises. Author Kea Config
+    (v5.68.0-beta.16, Q151) requires `build >= AUTHORING_MIN_HELPER_BUILD` on EVERY target before it preflights anything."""
+    try:
+        resp = helper_call(server, "version", {})
+    except HelperMissing:
+        record_helper_status(server.get("id"), None)
+        return {"code": "missing", "version": None, "build": None, "detail": HELPER_REQUIRED}
+    except HelperUnreachable as e:
+        return {"code": "unreachable", "version": None, "build": None, "detail": str(e)}
+    except HelperError as e:
+        return {"code": "error", "version": None, "build": None, "detail": str(e)}
+    version = resp.get("helper_version") if resp.get("ok") else None
+    build = resp.get("helper_build") if resp.get("ok") else None
+    record_helper_status(server.get("id"), version, build=build)
+    return {"code": "ok", "version": version, "build": build if isinstance(build, int) else None, "detail": ""}
+
+
+def test_config(server: dict, service: str, cfg: dict, tls_paths=(), helper_only: bool = False) -> dict:
+    """Validate `cfg` with the daemon's own `-t` on the host. `helper_only=True` (v5.68.0-beta.16, Q151) never falls back to the legacy
+    `sudo python3` script: a host without the helper answers `HELPER_REQUIRED` instead. Author Kea Config uses it, because its all-or-nothing
+    rollback (`remove-config`) exists only in the helper."""
     path = _conf_path(server, service)
     try:
         resp = helper_call(
@@ -679,6 +707,8 @@ def test_config(server: dict, service: str, cfg: dict, tls_paths=()) -> dict:
         return _from_helper_test(resp, "preview-ok")
     except HelperMissing:
         _flag_legacy(server)
+        if helper_only:
+            return {"ok": False, "code": "error", "detail": HELPER_REQUIRED, "via": "helper"}
         # v5.23.0 — D2 has no legacy engine: render_author_config_script's
         # binary/unit logic below only knows dhcp4/dhcp6 (anything not
         # "dhcp4" is treated as dhcp6), so a d2 call falling through here
@@ -768,8 +798,9 @@ def apply_config(
     expect_sha256: str | None = None,
     summary: str | None = None,
     source: str = "jen",
+    helper_only: bool = False,
 ) -> dict:
-    """Write `cfg` to the host. `expect_sha256` is a value from an
+    """Write `cfg` to the host. `helper_only=True` (v5.68.0-beta.16, Q151) never uses the legacy script - see `test_config`. `expect_sha256` is a value from an
     earlier `read_config_versioned()` call — a raw sha (v2 helper), a
     canonical sentinel (v1 helper or legacy — see `_canonical_sentinel`),
     or "" for "must not exist" — or None to skip the guard entirely. On
@@ -815,6 +846,8 @@ def apply_config(
         result = _from_helper_test(resp, "ok")
     except HelperMissing:
         _flag_legacy(server)
+        if helper_only:
+            return {"ok": False, "code": "error", "detail": HELPER_REQUIRED, "via": "helper"}
         # v5.23.0 — see the identical guard in test_config(): D2 has no
         # legacy engine, and render_author_config_script's dhcp4/dhcp6-only
         # binary logic would otherwise silently run kea-dhcp6 against D2's

@@ -406,9 +406,14 @@ On each **Kea host**: `ca.crt`, `server.crt`, `server.key` in
   previewed"; an existing file is not replaced without the tick, and not at all
   unless it was previewed. A rollback that cannot finish (a server that is
   unreachable at that moment) is a banner on the Servers page, like any other
-  change set. Removing a file Jen created needs the host's helper on build 13 or
-  later (press **Update helper**); on an older one the banner tells you to delete
-  the file by hand.
+  change set. **Every server must have the Kea host helper at build 13 or later**
+  (v5.68.0-beta.16): the undo of a file Jen created is the helper's `remove-config`, and a
+  server without the helper used to be written through the old script and then could
+  not be undone. Authoring refuses before it writes anything and names the servers to
+  press **Update helper** on. Subnet names are checked first too (no comma, `=`,
+  brackets or control characters, at most 64 characters), and Jen's own subnet record is
+  part of the same all-or-nothing step: if it cannot be written, every server is put
+  back.
 
 ### [kea_db] section
 

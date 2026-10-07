@@ -153,12 +153,6 @@ ALLOWED_RAW_EXCEPTION_LINES = [
     ),
     (
         "jen/routes/settings/authoring.py",
-        'flash(f"Jen could not record the subnet(s) used: {e}", "error")',
-        "the ValueError config.write_subnets_config raises for a subnet name that fails Jen's own validator: a sentence about the "
-        "operator's own typed input (v5.67.0-beta.5, Q117 h; moved here from an errors list by the change-set rewrite, Q150).",
-    ),
-    (
-        "jen/routes/settings/authoring.py",
         '"error": str(e)}',
         "SSH binary-check failure against an admin-configured server.",
     ),

@@ -1644,6 +1644,22 @@ the file to delete by hand. `restart=False`: authoring never restarts the daemon
 Jen's `[subnets]` is written only on `status == "ok"`. A source test refuses any
 route that calls `apply_config` inside a loop.
 
+**Everything Jen does locally joins the transaction, and the transaction only runs on an engine that can roll back (v5.68.0-beta.16, Q151).**
+(1) `finalize(result)`: `_run_change` gains a callback that runs after every target committed (and restarted, when `restart`). Author Kea Config's
+`write_subnets_config` used to run after the "ok", in the route, with only `ValueError` caught: an `OSError` 500ed with Kea changed and Jen's map old, and a
+Kea-valid, Jen-invalid subnet name failed after every server had already committed. It now runs inside the change set: if it raises, EVERY target is put
+back exactly as for a failed restart (`_put_everything_back`: the previous config re-applied, or the file Jen created removed), a revert that fails is
+`rollback_failed` (an incident on the Servers page), and the result is `rolled_back` with `last_code == "finalize-failed"` - never ok; the exception's own text
+is logged, not shown. `_parse_subnet_lines` also validates every typed name with `invalid_subnet_name_reason` before the preview and before the change
+set starts. (2) `helper_only`: `kea_host.test_config`/`apply_config` take `helper_only=True`, which refuses with `HELPER_REQUIRED` instead of falling back to the
+legacy `sudo python3` script, and `apply_change(helper_only=True)` passes it to every host call including the restore. Author Kea Config checks
+`kea_host.helper_build()` (one live `version` round trip) on EVERY target before anything else and refuses unless each is at build 13 or later - the build with
+`remove-config`, the only way "put it back as it was" is true for a file Jen created: a helper-less target used to be written through the legacy script and then
+could not be undone (A written, B failing, `rollback_failed`, A keeps the file). A host that cannot be reached is reported as unreachable, not as "needs Update
+helper". The legacy script (`kea_authoring.render_author_config_script`) is NOT deleted: it is the banner-warned fallback that still serves a helper-less host's
+single-step edits and CLAUDE.md keeps it through 5.x; it is reached only behind a `helper_only` guard (test: the S5 sweep), and it writes private from its first
+byte now (a mkstemp temp, the backup made with the original's owner and mode, a new file root:<directory group> 0640).
+
 **What this does NOT cover.** `install_kea_binary`/`check_kea_binaries`, HA
 actions, and the Windows import wizard (which has its own single-primary-server
 preview==apply guarantee — see the wizard's own code) are unchanged by this module.

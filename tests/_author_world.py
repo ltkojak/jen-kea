@@ -26,6 +26,10 @@ FORM = {
 class World:
     def __init__(self, monkeypatch):
         self.fake = FakeHelper()
+        self.fake.helper_version, self.fake.helper_build = (
+            7,
+            13,
+        )  # a current helper on every host (tests override one server via fake.builds)
         self.fail_apply, self.fail_test, self.fail_remove = set(), set(), set()
         self.counter = 0
         self.fake.responses["test-config"] = self._test

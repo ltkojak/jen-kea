@@ -148,7 +148,7 @@ def _failure_line(name: str, res: dict, daemon_label: str) -> str:
     return f"❌ {name}: {res.get('detail', code)}"
 
 
-def _restore_target(t: Target, service: str, summary: str) -> dict:
+def _restore_target(t: Target, service: str, summary: str, helper_only: bool = False) -> dict:
     """Put one already-committed target back as it was (v5.68.0-beta.15, Q150): the previous config re-applied, or - for a target that
     had no config file before - the file Jen wrote removed again, guarded by the sha that write produced. A result dict like
     `kea_host.apply_config`'s; never raises."""
@@ -162,6 +162,7 @@ def _restore_target(t: Target, service: str, summary: str) -> dict:
         expect_sha256=t.applied_sha,
         summary=f"rollback: {summary}",
         source="rollback",
+        **({"helper_only": True} if helper_only else {}),
     )
 
 
@@ -181,6 +182,8 @@ def _run_change(
     candidate_for=None,
     absent_is_expected: bool = False,
     tls_paths_for=None,
+    finalize=None,
+    helper_only: bool = False,
 ) -> ChangeSetResult:
     """Push one config mutation to every SSH-configured Kea server for
     `service` ("dhcp4" | "dhcp6" | "d2"), preflighting all of them
@@ -230,6 +233,14 @@ def _run_change(
     a missing config file a normal target - expected sha "" (the helper's "must not exist"), `allow_overwrite=False` at commit, and
     rolled back by removing what Jen wrote - while a host that cannot be READ at all (SSH down, a helper that answers badly) still
     aborts: only a read that succeeded and found nothing is "absent". `tls_paths_for(server)` gives each target its own TLS files.
+
+    `helper_only=True` (v5.68.0-beta.16, Q151) is passed through to every `test_config` / `apply_config` the change makes (never the legacy
+    script): a change whose rollback exists only in the helper must not be written through an engine that cannot roll back.
+
+    `finalize(result)` (v5.68.0-beta.16, Q151) runs once every target has committed (and restarted, when `restart`): the place for what
+    Jen does LOCALLY because of this change (Author Kea Config's `[subnets]` record). If it raises, the change did not stand: every
+    target is put back exactly as for a failed restart, a revert that fails is `rollback_failed`, and the result is `rolled_back`
+    with `last_code == "finalize-failed"` - never ok.
 
     Never raises — a per-server exception during planning aborts the
     whole change set with that exception's text as the line, matching
@@ -309,7 +320,14 @@ def _run_change(
     # ── Phase 2: preflight every target before touching anything ─────
     preflight_failed = False
     for t in targets:
-        res = _safe(_host.test_config, t.server, service, t.after_cfg, tls_paths=t.tls_paths)
+        res = _safe(
+            _host.test_config,
+            t.server,
+            service,
+            t.after_cfg,
+            tls_paths=t.tls_paths,
+            **({"helper_only": True} if helper_only else {}),
+        )
         if not res.get("ok"):
             preflight_failed = True
             if res.get("code") == "conflict":
@@ -332,6 +350,7 @@ def _run_change(
             allow_overwrite=t.allow_overwrite,
             expect_sha256=t.before_sha,
             summary=summary,
+            **({"helper_only": True} if helper_only else {}),
         )
         if res.get("ok"):
             t.applied_sha = res.get("sha256")
@@ -347,7 +366,7 @@ def _run_change(
         revert_failed = []  # the revert call itself failed: still on the NEW config
         restart_stuck = []  # the previous config is back but the daemon would not restart on it
         for done in reversed(committed):
-            rres = _restore_target(done, service, summary)
+            rres = _restore_target(done, service, summary, helper_only)
             if not rres.get("ok"):
                 revert_failed.append(done.name)
                 continue
@@ -399,43 +418,96 @@ def _run_change(
         return ChangeSetResult("aborted", res.get("code", "error"), lines)
 
     # ── Phase 4: restart (every apply succeeded) ──────────────────────
-    # `config.applied` is emitted only once the change stands: a restart failure below
-    # rolls it back, and a timeline entry saying it was applied would be false.
-    if not restart:
-        for t in targets:
-            _events.emit("config.applied", server=t.name, detail=summary)
-            lines.append(("success", f"✅ {t.name}: {summary}"))
-        return ChangeSetResult("ok", "ok", lines, covered=[t.name for t in targets])
-
-    restarts = {t.name: _safe(_host.service_action, t.server, service, "restart") for t in targets}
-    failed = [t for t in targets if not restarts[t.name].get("ok")]
-    if not failed:
-        for t in targets:
-            _events.emit("config.applied", server=t.name, detail=summary)
-            lines.append(("success", f"✅ {t.name}: {summary}, {daemon_label} restarted"))
-        return ChangeSetResult("ok", "ok", lines, covered=[t.name for t in targets])
-
-    # A restart failed although the config passed preflight and was written: the daemon
-    # cannot start from what it was just handed (and the restart already stopped the old
-    # process). "The config is valid, restart it by hand" is not an honest state to leave a
-    # server in, so EVERY target goes back to what it had and is restarted again — putting
-    # only the failed one back would leave the servers disagreeing, the very state this
-    # module exists to prevent.
-    for t in failed:
-        lines.append(
-            (
-                "error",
-                f"❌ {t.name}: {daemon_label} did NOT restart on the new config ({_tail(restarts[t.name].get('detail'))})",
+    # `config.applied` is emitted only once the change stands: a restart failure below (or a finalize
+    # failure, phase 5) rolls it back, and a timeline entry saying it was applied would be false.
+    if restart:
+        restarts = {t.name: _safe(_host.service_action, t.server, service, "restart") for t in targets}
+        failed = [t for t in targets if not restarts[t.name].get("ok")]
+        if failed:
+            # A restart failed although the config passed preflight and was written: the daemon
+            # cannot start from what it was just handed (and the restart already stopped the old
+            # process). "The config is valid, restart it by hand" is not an honest state to leave a
+            # server in, so EVERY target goes back to what it had and is restarted again — putting
+            # only the failed one back would leave the servers disagreeing, the very state this
+            # module exists to prevent.
+            for t in failed:
+                lines.append(
+                    (
+                        "error",
+                        f"❌ {t.name}: {daemon_label} did NOT restart on the new config "
+                        f"({_tail(restarts[t.name].get('detail'))})",
+                    )
+                )
+            stuck = _put_everything_back(
+                targets, service, summary, daemon_label, lines, restart=True, helper_only=helper_only
             )
-        )
+            names = [t.name for t in failed]
+            if stuck:
+                lines.append(("error", "🛑 ROLLBACK FAILED — " + _by_hand(stuck)))
+                return ChangeSetResult("rollback_failed", "restart-failed", lines, names, stuck)
+            lines.append(
+                (
+                    "error",
+                    f"↩️ rolled back: {', '.join(t.name for t in targets)} {'is' if len(targets) == 1 else 'are'} "
+                    f"on the previous config and {daemon_label} restarted; the change was NOT applied.",
+                )
+            )
+            return ChangeSetResult("rolled_back", "restart-failed", lines, names)
+
+    # ── Phase 5: finalize (v5.68.0-beta.16, Q151) ─────────────────────
+    # Everything Jen does LOCALLY on the strength of this change (Author Kea Config's `[subnets]` record) joins the
+    # transaction: it runs after every target committed, and an exception from it is a failure of the whole change,
+    # exactly like a failed restart - every target is put back, a revert that fails is `rollback_failed` (an incident
+    # on the Servers page), and the change is reported `rolled_back`, never ok. It used to run after the "ok" in the
+    # route, where an OSError left Kea changed and Jen's map old and a Kea-valid, Jen-invalid name failed after every
+    # server had already committed.
+    if finalize is not None:
+        try:
+            finalize(ChangeSetResult("ok", "ok", list(lines), covered=[t.name for t in targets]))
+        except Exception as e:
+            logger.warning(f"kea_changeset: finalize raised {type(e).__name__}: {e}")
+            lines.append(
+                (
+                    "error",
+                    f"❌ Jen could not record this change on its own side ({type(e).__name__}); "
+                    "every server is being put back as it was.",
+                )
+            )
+            stuck = _put_everything_back(
+                targets, service, summary, daemon_label, lines, restart=restart, helper_only=helper_only
+            )
+            if stuck:
+                lines.append(("error", "🛑 ROLLBACK FAILED — " + _by_hand(stuck)))
+                return ChangeSetResult("rollback_failed", "finalize-failed", lines, [], stuck)
+            lines.append(
+                (
+                    "error",
+                    f"↩️ rolled back: {', '.join(t.name for t in targets)} "
+                    f"{'is' if len(targets) == 1 else 'are'} on the previous config; the change was NOT applied.",
+                )
+            )
+            return ChangeSetResult("rolled_back", "finalize-failed", lines, [t.name for t in targets])
+
+    for t in targets:
+        _events.emit("config.applied", server=t.name, detail=summary)
+        lines.append(("success", f"✅ {t.name}: {summary}" + (f", {daemon_label} restarted" if restart else "")))
+    return ChangeSetResult("ok", "ok", lines, covered=[t.name for t in targets])
+
+
+def _put_everything_back(targets, service, summary, daemon_label, lines, *, restart, helper_only=False) -> list[str]:
+    """Put EVERY target back as it was (reverse order): the previous config re-applied, or the file Jen created removed again; with
+    `restart` the daemon is restarted on it. Appends one error line per target that could not be put back. Returns the names that are
+    stuck (a revert or the second restart that failed)."""
     stuck: list[str] = []
     for t in reversed(targets):
-        rres = _restore_target(t, service, summary)
+        rres = _restore_target(t, service, summary, helper_only)
         if not rres.get("ok"):
             stuck.append(t.name)
             lines.append(
                 ("error", f"❌ {t.name}: could not put the previous config back ({_tail(rres.get('detail'))})")
             )
+            continue
+        if not restart:
             continue
         again = _safe(_host.service_action, t.server, service, "restart")
         if not again.get("ok"):
@@ -447,18 +519,7 @@ def _run_change(
                     f"({_tail(again.get('detail'))})",
                 )
             )
-    names = [t.name for t in failed]
-    if stuck:
-        lines.append(("error", "🛑 ROLLBACK FAILED — " + _by_hand(stuck)))
-        return ChangeSetResult("rollback_failed", "restart-failed", lines, names, stuck)
-    lines.append(
-        (
-            "error",
-            f"↩️ rolled back: {', '.join(t.name for t in targets)} {'is' if len(targets) == 1 else 'are'} "
-            f"on the previous config and {daemon_label} restarted; the change was NOT applied.",
-        )
-    )
-    return ChangeSetResult("rolled_back", "restart-failed", lines, names)
+    return stuck
 
 
 # ── what a person must be told about (v5.65.1, Q90) ──────────────────────────

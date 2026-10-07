@@ -140,6 +140,13 @@ def _parse_subnet_lines(text: str, service: str):
     subnets = AppConfig.derive_subnet_map(parser, section=section)
     if not subnets:
         return None, 'At least one subnet is required — one per line, e.g. "1 = LAN, 192.168.1.0/24".'
+    # v5.68.0-beta.16 (Q151): a name Kea accepts and Jen's own record refuses (a comma, `=`, a bracket, a control character, too long) used to
+    # fail only AFTER every server had committed, when the subnet record was written. Every typed name is validated here, before the preview and
+    # before any change set starts: refused with the reason, nothing touched.
+    for sid, info in subnets.items():
+        reason = __config.invalid_subnet_name_reason(info["name"])
+        if reason:
+            return None, f"Subnet {sid} ({info['name']!r}): {reason}"
     return subnets, None
 
 
@@ -493,7 +500,7 @@ def author_kea_config_preview(service):
             server_results.append({"name": name, "ok": False, "message": cfg_err})
             continue
         try:
-            res = __host.test_config(server, service, config, tls_paths=tls_paths)
+            res = __host.test_config(server, service, config, tls_paths=tls_paths, helper_only=True)
             row = {"name": name, "config": __authoring.redact_secrets(config)}
             # v5.68.0-beta.15 (Q150): the preview records which file it is previewing. The form carries each server's `base_sha` back
             # (`base_sha_<id>`): "overwrite" then means "replace the file I previewed", never "replace whatever is there".
@@ -568,6 +575,31 @@ def author_kea_config_post(service):
         flash("No Kea server has SSH configured.", "error")
         return redirect(url_for("settings.settings_kea"))
 
+    # v5.68.0-beta.16 (Q151) - the rollback of a file Jen created is the helper's `remove-config` (build 13+), and the legacy script cannot roll
+    # anything back: every target must have a current helper BEFORE anything is previewed for write or preflighted, and the whole change set runs
+    # `helper_only` (a helper-less target used to be written through the legacy script and then could not be undone).
+    needs_update, unreachable = [], []
+    for server in servers:
+        info = __host.helper_build(server)
+        name = server.get("name", server["ssh_host"])
+        if info["code"] == "unreachable":
+            unreachable.append(f"{name} ({info['detail']})")
+        elif info["code"] != "ok" or info["build"] is None or info["build"] < __host.AUTHORING_MIN_HELPER_BUILD:
+            needs_update.append(name)
+    if needs_update or unreachable:
+        if needs_update:
+            flash(
+                f"Author Kea Config needs the Kea host helper at build {__host.AUTHORING_MIN_HELPER_BUILD} or later on every server, so a failed "
+                f"write can be undone: press Update helper on {', '.join(needs_update)} (Settings → Kea → SSH). Nothing was written.",
+                "error",
+            )
+        if unreachable:
+            flash(f"Could not reach {', '.join(unreachable)} to check its helper. Nothing was written.", "error")
+        __user.audit(
+            "AUTHOR_KEA_CONFIG", service, f"overwrite={allow_overwrite} servers={len(servers)} status=helper-required"
+        )
+        return redirect(url_for("settings.settings_kea"))
+
     # v5.68.0-beta.15 (Q150) - Author Kea Config is a change set like every other multi-server push (jen/services/kea_changeset.py):
     # build EVERY server's candidate first (one that cannot be built stops the whole thing before a byte is written), preflight every
     # target, commit with each server's previewed sha, put earlier targets back if a later one fails, and write Jen's own
@@ -608,12 +640,28 @@ def author_kea_config_post(service):
         sha = base_shas.get(server.get("id"))
         return "" if sha is None else sha
 
+    def finalize(_result):
+        # Persist the subnets used to author this config into Jen's own [subnets]/[subnets6] - INSIDE the change set (v5.68.0-beta.16, Q151):
+        # it runs after every server committed, and an exception (a failed write, an OSError) puts every server back and leaves Jen's map
+        # as it was. This is what closes the loop this whole flow exists for: authoring a config from a blank slate must leave Jen actually
+        # able to see/edit those subnets afterward, not just Kea. Merges with (doesn't replace) any subnets Jen already knew about, so
+        # authoring never silently drops existing entries.
+        existing, _ = _author_kea_subnets_and_db(service)
+        merged = dict(existing)
+        merged.update(subnets)
+        if service == "dhcp4":
+            __config.write_subnets_config(merged)
+        else:
+            __config.write_subnets6_config(merged)
+
     result = __changeset.apply_change(
         service,
         None,
         f"authored a new {service} config",
         servers=servers,
         restart=False,  # authoring never restarts: "Enable/restart the service to use it"
+        helper_only=True,  # never the legacy script: the rollback (remove-config) exists only in the helper
+        finalize=finalize,
         candidate_for=candidate_for,
         absent_is_expected=True,
         expected_sha_for=expected_sha_for,
@@ -631,25 +679,9 @@ def author_kea_config_post(service):
         written = {s.get("name") or s.get("ssh_host") or "?": __authoring.conf_path_for(s, service) for s in servers}
         for name in result.covered:
             flash(f"{name}: {written.get(name, '')} written. Enable/restart the service to use it.", "success")
-        # Persist the subnets used to author this config into Jen's own [subnets]/[subnets6] - only when the whole change
-        # stood. This is what closes the loop this whole flow exists for: authoring a config from a blank slate must leave Jen
-        # actually able to see/edit those subnets afterward, not just Kea. Merges with (doesn't replace) any subnets Jen already
-        # knew about, so authoring never silently drops existing entries.
-        existing, _ = _author_kea_subnets_and_db(service)
-        merged = dict(existing)
-        merged.update(subnets)
-        try:
-            if service == "dhcp4":
-                __config.write_subnets_config(merged)
-            else:
-                __config.write_subnets6_config(merged)
-        except ValueError as e:
-            # v5.67.0-beta.5 (Q117, item h) - the config file(s) above are already written to the server(s); only Jen's own
-            # [subnets] record failed. Flashed, not raised, so the operator sees which subnet name to fix rather than a 500.
-            flash(f"Jen could not record the subnet(s) used: {e}", "error")
     else:
-        # aborted / rolled_back / rollback_failed (a rollback_failed also lands on the Servers page as an incident): the lines say
-        # what happened server by server; Jen's own subnet record is left exactly as it was
+        # aborted / rolled_back / rollback_failed (a rollback_failed also lands on the Servers page as an incident; a failed finalize is
+        # rolled_back with every server restored): the lines say what happened server by server; Jen's own subnet record is left as it was
         for kind, text in result.lines:
             flash(text, categories.get(kind, "error"))
         if result.status == "noservers":
