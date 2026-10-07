@@ -722,7 +722,7 @@ class TestRunAsTheDaemonsOwnAccount:
     def test_the_daemon_owned_binary_needs_its_owner_execute_bit(self, helper, tmp_path, monkeypatch):
         """Build 13 (Q150): `os.access(X_OK)` is ROOT's answer - true when ANY class may execute - so a `_kea`-owned file with o+x and no
         u+x passed and then failed to exec as `_kea`. Refused before exec, with the reason."""
-        p, _binary, calls = self._setup(helper, tmp_path, monkeypatch, mode=0o705)
+        p, _binary, calls = self._setup(helper, tmp_path, monkeypatch, mode=0o605)
         _code, out, _ = _run(helper, "test-config", {"service": "dhcp4", "path": p, "config": {"Dhcp4": {}}})
         assert out == {
             "ok": False,
@@ -760,7 +760,7 @@ class TestRunAsTheDaemonsOwnAccount:
             assert helper._daemon_bin_ok(str(f), uid) is expect, uid
 
     @pytest.mark.parametrize(
-        "mode,expect", [(0o750, True), (0o700, True), (0o705, False), (0o055, False), (0o640, False)]
+        "mode,expect", [(0o750, True), (0o700, True), (0o605, False), (0o055, False), (0o640, False)]
     )
     def test_the_owner_execute_bit_is_required(self, helper, monkeypatch, tmp_path, mode, expect):
         import types
