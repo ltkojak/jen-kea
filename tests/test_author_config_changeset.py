@@ -139,7 +139,7 @@ class TestOverwriteMeansTheFileThatWasPreviewed:
 
     def test_a_host_that_cannot_be_read_is_not_an_absent_host(self, logged_in_client, world, monkeypatch):
         def unreachable(server, op, payload=None, timeout=60):
-            if server["id"] == 2:
+            if server["id"] == 2 and op == "read-config":  # the build check before it (op "version") still answers
                 raise kea_host.HelperUnreachable("SSH to kea@10.0.0.2 failed - timed out")
             return world.fake.helper_call(server, op, payload, timeout)
 
