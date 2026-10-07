@@ -40,11 +40,11 @@
             background:{% if (s.pool_used / s.pool_size * 100) >= 90 %}var(--danger){% elif (s.pool_used / s.pool_size * 100) >= 75 %}var(--warning){% else %}var(--primary){% endif %};">
         </div>
     </div>
-    <div style="font-size:11px;color:var(--text-muted);margin-top:3px;">
+    <div class="u-5d9b49">
         {{ (s.pool_used / s.pool_size * 100)|round|int }}% of the pool used ({{ s.pool_used }} of {{ s.pool_size }})
     </div>
     {% elif s.pool_size > 0 %}
-    <div style="font-size:11px;color:var(--text-muted);margin-top:3px;">Pool use is recorded from the first snapshot taken after the upgrade to 5.68.0-beta.19.</div>
+    <div class="u-5d9b49">Pool use is recorded from the first snapshot taken after the upgrade to 5.68.0-beta.19.</div>
     {% endif %}
     {% set f = forecast.get(subnet_id) %}
     {% if f %}
