@@ -801,7 +801,7 @@ preflight_checks() {
     command -v systemctl &>/dev/null && ok "systemd" || { err "systemd not found"; failed=$((failed+1)); }
 
     # flock (v5.68.0-beta.19, Q154) - the installer and Jen's own saves share a lock file (see _config_lock_acquire); util-linux ships it
-    command -v flock &>/dev/null && ok "flock" || { err "flock not found (util-linux) - apt-get install util-linux"; failed=$((failed+1)); }
+    command -v flock &>/dev/null && ok "flock" || { err "flock not found (util-linux) - install the util-linux package"; failed=$((failed+1)); }
 
     # pip
     command -v pip3 &>/dev/null || python3 -m pip --version &>/dev/null 2>&1 \

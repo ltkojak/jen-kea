@@ -15,7 +15,7 @@ from email.utils import format_datetime
 import pytest
 
 from jen import extensions
-from jen.services import health
+from jen.services import health, scheduler
 from jen.services import kea as kea_svc
 
 # ── shared ctx builders ────────────────────────────────────────────────────
@@ -924,7 +924,20 @@ class TestBackgroundWorkers:
         assert c.status == "skip"
 
     def test_set_ok(self, monkeypatch):
-        monkeypatch.setattr("jen.services.background.STARTED_AT", datetime.now(timezone.utc) - timedelta(hours=2))
+        """Q154: "ok" needs the workers PROVEN alive (tests/test_health_liveness.py covers every way they are not), so this stands in a live set."""
+        from jen.services import background
+
+        monkeypatch.setattr(background, "STARTED_AT", datetime.now(timezone.utc) - timedelta(hours=2))
+        monkeypatch.setattr(
+            background,
+            "liveness",
+            lambda: {
+                "started_at": datetime.now(timezone.utc),
+                "alert_thread": True,
+                "periodic_thread": True,
+                "scheduler": {"exists": True, "running": True, "jobs": list(scheduler.CORE_JOB_IDS), "error": ""},
+            },
+        )
         c = health._background_workers(_ctx())
         assert c.status == "ok"
 

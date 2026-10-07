@@ -37,6 +37,9 @@ class TestStartBackgroundWorkers:
 
     def teardown_method(self):
         background._started = False
+        background._alert_thread = background._periodic_thread = (
+            None  # the stand-in threads below must not leak into liveness()
+        )
 
     def test_starts_scheduler_and_alert_thread_once(self):
         calls = {"sched": 0, "thread": 0}
@@ -171,3 +174,4 @@ class TestPeriodicJobs:
             assert "jen-periodic" in names and "jen-alerts" in names
         finally:
             background._started = False
+            background._alert_thread = background._periodic_thread = None

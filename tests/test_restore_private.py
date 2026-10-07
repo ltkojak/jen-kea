@@ -264,8 +264,9 @@ class TestNoOtherWriterInTheTool:
                 mode = str(node.args[1].value)
             if name in ("write_bytes", "write_text") or (name == "open" and any(c in mode for c in "wax")):
                 offenders.append(f"{enclosing(node)}: {ast.unparse(node)[:70]}")
-        # safe_extract (bundle members into the 0700 scratch directory) and the plain-text report are the reviewed exceptions
-        assert {o.split(":")[0] for o in offenders} <= {"safe_extract", "_write_report"}, offenders
+        # safe_extract (bundle members into the 0700 scratch directory), _tar_tree (the pre-restore snapshot archive, inside the 0700 snapshot
+        # directory) and the plain-text report are the reviewed exceptions
+        assert {o.split(":")[0] for o in offenders} <= {"safe_extract", "_tar_tree", "_write_report"}, offenders
 
     def test_the_old_writers_are_off_the_private_files_allowlist(self):
         text = (pathlib.Path(__file__).resolve().parent / "test_private_files.py").read_text(encoding="utf-8")

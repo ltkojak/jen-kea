@@ -509,5 +509,6 @@ class TestFlockIsRequired:
 
     def test_configure_mode_acquires_the_lock_before_it_reads_anything(self):
         text = INSTALL_SH.read_text(encoding="utf-8")
-        body = text[text.index("_run_configure_mode() {") :]
-        assert body.index("_config_lock_acquire") < body.index("detect_existing") < body.index("write_config")
+        body = text[text.index("_run_configure_mode() {") :].split(chr(10) + "}" + chr(10), 1)[0]
+        calls = [ln.strip() for ln in body.splitlines() if not ln.strip().startswith("#")]
+        assert calls.index("_config_lock_acquire") < calls.index("detect_existing") < calls.index("write_config")
