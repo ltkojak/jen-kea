@@ -191,7 +191,9 @@ class TestUtilisationAcrossARestart:
     def test_the_state_is_a_settings_row_named_for_the_type_and_the_key(self, db, world):
         _fill(db, 10, 17)
         _pass(db, A_RANGE)
-        with db.cursor() as cur:
+        from jen.models.db import jen_db
+
+        with jen_db() as jdb, jdb.cursor() as cur:  # a fresh connection: the settings were written by another one
             cur.execute(
                 "SELECT setting_key, setting_value FROM settings WHERE setting_key LIKE 'alert_state:%' ORDER BY setting_key"
             )

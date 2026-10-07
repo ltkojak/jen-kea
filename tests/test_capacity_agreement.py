@@ -44,6 +44,8 @@ def subnet(db, monkeypatch, mock_kea):
             else {"result": 0, "text": "ok", "arguments": {}}
         ),
     )
+    # jen.routes.api imported kea_command BY NAME, so the module attribute patch above does not reach it
+    monkeypatch.setattr("jen.routes.api.kea_command", kea_svc.kea_command)
     _wipe(db)
     with db.cursor() as cur:
         rows = [(_ip("10.91.0.10") + i, "A") for i in range(5)] + [(_ip("10.91.0.100") + i, "A") for i in range(3)]
@@ -69,8 +71,11 @@ def subnet(db, monkeypatch, mock_kea):
 
 
 def _wipe(db):
+    """Subnet 1's totals count EVERY lease of the subnet, so a lease another test left behind would be counted too: start from none."""
     with db.cursor() as cur:
-        cur.execute("DELETE FROM lease4 WHERE address BETWEEN INET_ATON('10.91.0.0') AND INET_ATON('10.91.255.255')")
+        cur.execute(
+            "DELETE FROM lease4 WHERE subnet_id=1 OR address BETWEEN INET_ATON('10.91.0.0') AND INET_ATON('10.91.255.255')"
+        )
     db.commit()
 
 
