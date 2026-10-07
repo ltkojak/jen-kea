@@ -2,6 +2,54 @@
 
 *Detailed per-series notes for the 3.x line live in [docs/release-history/](docs/release-history/).*
 
+## [5.68.0-beta.15] - 2026-10-07
+
+Beta channel. Stacked on 5.68.0-beta.14. **A migration that proves its own end state, every secret written private from its first byte, Author Kea Config that writes every
+server or none, stored-object writes that judge and write in one step, and a switch-move alert scoped by the switches it names.** These come from re-running pattern sweeps over
+the whole tree (every alert and event and the subnet it carries, every migration for partial-DDL idempotency, every config push that bypasses the change set, every temp file and
+lock in the Kea helper, every upsert that follows an authorization check, every place a secret is written) rather than re-reading the last release's lines, plus the findings of
+the review of beta.14. Press **Update helper** on every Kea host (Settings → Kea → SSH shows build 13 as available); three bundled plugins ship new versions; the service unit
+gains `UMask=0077` the next time it is rendered by `sudo ./install.sh` or the in-app update.
+
+**An interrupted migration recorded itself as done.** Migration 33 (beta.14) adds a column and then swaps a unique key: two statements that each commit on their own. It returned as soon
+as the COLUMN existed, so a failure between them left the new column and the old four-column key, and the next start saw the column, returned, and recorded 33 as applied - the
+cross-subnet mix-up it exists to remove survived an interrupted upgrade. The guard is now the whole end state read from `information_schema` (the column with its type and default AND
+the key with exactly its five columns, in order, as a unique key); anything short of that runs only the missing steps, clearing the inbox again (it refills from the logs). The
+migrations module's header now states the rule for every migration after it, and the tests interrupt the migration between its statements.
+
+**Secrets were created world-readable and tightened afterwards.** `jen.config` (every database password and API credential), the SSL private key and the encryption keys were written
+with `open(path, "w")` - the process umask, 0644 under systemd's default - and `chmod`ed once the secret was already on disk; only the directory's own mode kept that window closed. One
+routine (`jen/services/private_files.py`) now writes them: a unique exclusive temp file created 0600 in the same directory, written and synced, given its final mode on the open file, and
+renamed into place (the Flask secret key and the SSL key are 0600 until complete and only then the 0640 they are meant to be). `run.py` sets `umask 0077` first thing and the unit
+template carries `UMask=0077`, so anything else the service creates is private to it. The root self-updater and the plugin installer are separate units and are not given it. A test
+runs each real writer 300 times under a directory watcher that stats every entry in a tight loop and never sees a group or other bit before a file is complete, and a source test
+refuses a new write-mode `open()` in `jen/` that nobody reviewed.
+
+**Author Kea Config wrote server by server.** It looped over your servers calling `apply_config` for each, with no check of the others first, no expected file (so *overwrite* replaced
+whatever was on a host at that moment, whatever the preview had shown), no rollback, and Jen's own `[subnets]` written when ANY server succeeded. It is now a change set like every other
+multi-server edit: every server's config is built and checked before anything is written; each write is guarded with the file Preview & Validate showed (a server with no file is guarded
+as "must not exist"); a later failure puts the earlier servers back - a file Jen created is removed again (a new helper operation, `remove-config`), one it replaced is restored; a rollback
+that cannot finish is a banner on the Servers page; and Jen's subnet record is written only when every server succeeded. *Overwrite* now means "replace the file I previewed", and an
+existing file that was not previewed is not replaced.
+
+**Wake & Actions and Presence judged on one connection and wrote on another.** Add favourite, track, move and untrack read the row, judged its owner subnet, closed the connection, and
+wrote with `INSERT ... ON DUPLICATE KEY UPDATE`, or an `UPDATE`/`DELETE` that named only the MAC: an item another admin created or moved in the moment between was rewritten. Each now reads the
+row `FOR UPDATE` on the connection it writes with, judges it, and writes with the judged owner as a condition and the count checked; a new item is a plain insert, and a lost race (duplicate
+key, or a deadlock between two inserts of one MAC) re-judges the row that won. Wake & Actions 1.1.4, Presence 1.2.2. Presence's online/offline Timeline event also carries the tracking's
+owner subnet now (it carried none, so its owner never saw it).
+
+**A switch move was announced in the client's subnet.** The alert and Timeline entry name two switches and two ports, but were sent with the subnet of the client's lease, so switches in
+subnets B and C reached a channel and a Timeline scoped to A. Switch Port Locator 1.1.4 sends a move with the subnet BOTH switches are in; when they are in different subnets, or either is
+addressed by a hostname or lies in no Kea subnet, only unrestricted channels get the alert and only unrestricted viewers see the entry.
+
+**The Kea helper (build 13) wrote its own files the same way, and its lock was optional.** `apply-config` wrote the whole candidate config - database passwords included - to a fixed-name temp
+file with the default permissions and copied the destination's mode on afterwards; `install-tls` wrote the private key 0644 and tightened it after it was on disk; the backup copy was made the
+same way; and the lock was taken only when a sha was supplied, so a config check never waited for an apply of the same file and two helper runs shared a temp name. Every file is now created
+by one routine (unique name, exclusive, 0600 from the first byte, final owner and mode applied to the open file, then renamed); the copy of your config that `kea-dhcpX -t` reads is root-owned
+and group-readable by Kea's account but not writable by it; the lock is taken for every check, apply and TLS install; and a Kea binary owned by its service account must have **execute
+permission for that account** (the check asked "may anyone execute it?", which is true for a file with only the other-execute bit and then failed to start as that account). The new
+`remove-config` operation deletes a config only if it still is exactly the file Jen wrote. No sudoers change.
+
 ## [5.68.0-beta.14] - 2026-10-07
 
 Beta channel. Stacked on 5.68.0-beta.13. **A Problems row that keeps its own subnet, existence checks that fail closed in two plugins, a Kea config check that
