@@ -164,11 +164,15 @@ def upload_cert():
             flash(f"Certificate rejected — {reason}. Nothing was changed.", "error")
             return redirect(url_for("settings.settings_security"))
         combined = cert_data + ("" if cert_data.endswith("\n") else "\n") + (ca_data or "")
-        _write_atomically(extensions.SSL_CERT, cert_data, 0o644)
-        _write_atomically(extensions.SSL_KEY, key_data, 0o640)
+        # v5.68.0-beta.16 (Q151): the whole set (certificate, key, CA bundle, combined chain) is installed ALL-OR-NOTHING - it used to be written one file
+        # at a time, so a failure at any step left a new key beside an old certificate (gunicorn then refuses to start). A failure puts every file back.
+        from jen.services.certs import commit_file_set
+
+        members = [(extensions.SSL_KEY, key_data, 0o640), (extensions.SSL_CERT, cert_data, 0o644)]
         if ca_data:
-            _write_atomically(extensions.SSL_CA, ca_data, 0o644)
-        _write_atomically(extensions.SSL_COMBINED, combined, 0o644)
+            members.append((extensions.SSL_CA, ca_data, 0o644))
+        members.append((extensions.SSL_COMBINED, combined, 0o644))
+        commit_file_set(members)
         __user.audit("UPLOAD_CERT", "settings", "SSL certificate uploaded")
         # v5.67.0-beta.10 (Q122) — restart by deployment (systemd or Docker); say so when neither.
         if __runtime.restart_service() == "none":

@@ -664,6 +664,15 @@ umask 022 (created 0644, followed a planted link, tightened after every password
 bootstrap (`run.py::_build_config_from_env`) writes through `write_private_file` (a crash mid-write leaves no live file, so the next launch regenerates it) and Docker's
 `.env` is written under `umask 077`.
 
+**A set of files is installed all-or-nothing, and a live file is never moved away first (v5.68.0-beta.16, Q151).** `certs.write_atomically` did `os.replace(live, live + ".prev")` BEFORE the
+replacement existed (a failure right after left no live file at all), the HTTPS upload wrote certificate, key, CA bundle and combined chain one after another, and
+`kea_tls.commit_rotation` promoted the Kea CA's four staged files one by one - after the remote servers had already moved to the new CA - so a failure at any step left a mixed or
+missing set (a new key beside an old certificate: gunicorn refuses to start). `certs.commit_file_set(members, keep_prev=True)` is now the ONE place a set is installed and the only
+place a `.prev` is made (S2): STAGE every member (a unique O_EXCL 0600 temp, final mode applied), SNAPSHOT every live member into memory without moving it and write `<name>.prev` as a
+COPY, REPLACE each in order; on any failure every member already replaced is put back byte-for-byte (one that did not exist is removed), every staged temp is removed, and the
+error is re-raised - or an OSError naming every path now wrong if a restore also failed. `write_atomically` is a set of one. The failure injection breaks the install before and
+after every member in the staging, in the `.prev` copy and in the replace, and after each asserts the live set equals the original and no key/certificate mismatch exists.
+
 ### 3.2 SSH host-key verification (trust-on-first-use)
 
 Every outbound SSH connection Jen makes (`subnets.py`, `ddns.py`,
@@ -923,6 +932,19 @@ own: `_unit_account` reads `User`, `Group` and `SupplementaryGroups` in one `sys
 is `missingbinary` WITH the reason, never a guess. A unit with a group (TLS material readable through it) used to start under systemd and fail Jen's `-t`.
 The ops list is unchanged and so is the sudoers line; `tests/kea_helper_build.json` is re-pinned to build 11 and kea-compat records `/etc/kea`'s owner and
 mode per ISC image so the exposure window this closed is on record.
+
+**Helper build 14 (v5.68.0-beta.16, Q151 — `HELPER_VERSION` stays 7): one identity, ownership that cannot silently fail, the set commit.** The promises build 13 made, kept by every
+path. **One resolver:** `_daemon_group` (the unit's `User=` -> that account's passwd primary group, else `_kea`, else root) is deleted and `op_install_tls` takes `server.key`'s
+group from `_unit_account` (the effective gid after `Group=`, numeric `User=` accepted; no non-root account -> root:root; an unresolvable user/group is `unit-account` with the
+reason, never a guess) - the same identity validation runs as; before, a unit with `Group=kea-config` got a key its daemon could not read. A source test (S4) refuses a second
+`systemctl show -p User`. **New-file ownership:** a brand-new config is `root:<effective daemon gid>` 0640 for a non-root account, `root:root` 0600 for a root daemon - never 0644
+(it carries `lease-database.password`). **No swallowed ownership failure:** `_finish_private` lets `fchown` raise (the temp is removed, the live file untouched), `_chown` (the
+swallowing wrapper) is gone, `install-tls`'s directory `chown`s and `op_update`'s are plain `os.chown`, and the one case a directory fsync legitimately cannot work
+(EINVAL/ENOTSUP/EBADF) is named by errno in `_fsync_dir` - `op_update` treats any other fsync failure as a failed install and rolls back; S4 refuses `except OSError: pass` /
+`suppress(OSError)` around `chown`/`fchown`/`replace`/`fsync` in the file. **The set commit:** `_commit_file_set([(path, data, uid, gid, mode)])` stages every member privately,
+reads every live member into memory WITHOUT moving it, replaces each in order, and on any failure puts every replaced member back byte-for-byte (a member that did not exist is
+removed) and reports `write-failed` naming every path that could not be restored; `install-tls` uses it, and `jen/services/certs.py::commit_file_set` is the same shape for the
+Jen host (§3.1: the HTTPS upload, the Kea CA's `commit_rotation`, `ensure_ca`, `issue_client_cert`). The ops list and the sudoers line are unchanged.
 
 **Helper build 13 (v5.68.0-beta.15, Q150 — `HELPER_VERSION` stays 7; one new op): private from the first byte, the lock on every op.** Sweep D found
 three writers that created a fixed-name file with the process umask and fixed its mode afterwards: `op_apply_config` wrote `<conf>.jen_apply_tmp` (the whole

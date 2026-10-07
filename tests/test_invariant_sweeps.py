@@ -161,7 +161,6 @@ class TestS1SecretsArePrivateFromTheirFirstByte:
 # ── S2: a live file is never moved away before its replacement exists ────────
 
 
-@pytest.mark.xfail(strict=True, reason="Q151 item 5 (commit_file_set) lands in commit 3")
 class TestS2NoLiveFileIsMovedAwayBeforeItsReplacementExists:
     """Q151. `certs.write_atomically` did `os.replace(live, live + ".prev")` and only THEN wrote the new file: a failure left the set with no live
     file at all (a service that cannot start). `kea_tls.commit_rotation` did the same four times in a row. The one place that may keep a `.prev` is
@@ -272,7 +271,6 @@ class TestS3EveryMigrationStatementHasItsOwnGuard:
 # ── S4: one identity resolver; no swallowed ownership/durability failure ─────
 
 
-@pytest.mark.xfail(strict=True, reason="Q151 items 6 and 7 (helper build 14) land in commit 3")
 class TestS4TheHelperHasOneIdentityResolverAndSwallowsNothing:
     """Q151. `_daemon_group` (User= -> passwd primary group) decided `server.key`'s group while `_unit_account` (numeric User, `Group=`,
     SupplementaryGroups) decided what validation runs as: a unit with `Group=kea-config` got a key its daemon could not read. And a

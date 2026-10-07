@@ -49,6 +49,15 @@ def helper():
     return _load()
 
 
+@pytest.fixture(autouse=True)
+def _no_real_chown(monkeypatch):
+    """The helper runs as root; these tests do not. Build 14 (Q151) stopped swallowing a failed chown/fchown (a requested ownership that cannot be applied
+    ABORTS the install), so a test that is not root stubs the CALL - it no longer relies on the failure being ignored. A test that cares about the
+    arguments (or about the failure) monkeypatches `os.fchown` / `os.chown` itself and wins over this default."""
+    monkeypatch.setattr(os, "fchown", lambda fd, uid, gid: None, raising=False)
+    monkeypatch.setattr(os, "chown", lambda path, uid, gid: None, raising=False)
+
+
 def _run(helper, op, payload, keep_version=False):
     """Invoke main() with a captured stdin/stdout/stderr. Returns
     (exit_code, parsed_stdout_json, stderr_text). v2 stamps `helper_version`
@@ -185,7 +194,7 @@ class TestVersion:
         assert code == 0
         assert out["ok"] is True
         assert out["helper_version"] == helper.HELPER_VERSION == 7
-        assert out["helper_build"] == helper.HELPER_BUILD == 13
+        assert out["helper_build"] == helper.HELPER_BUILD == 14
         assert out["python"].count(".") == 2
         assert err.startswith("jen-kea-helper: version ok")
 
@@ -1030,7 +1039,8 @@ class TestApplyConfig:
         )
         assert out["ok"] is True and out["backup"] is None
         assert json.loads(pathlib.Path(p).read_text()) == {"Dhcp4": {"subnet4": []}}
-        assert stat.S_IMODE(os.stat(p).st_mode) == 0o644
+        # build 14 (Q151): a brand-new config carries lease-database.password and is NEVER 0644; with no unit account (the daemon runs as root) it is root 0600
+        assert stat.S_IMODE(os.stat(p).st_mode) == 0o600
 
     def test_backup_written_and_mode_preserved(self, helper, tmp_path, monkeypatch):
         p = self._setup(helper, tmp_path, monkeypatch, existing={"old": True})
@@ -1055,11 +1065,12 @@ class TestApplyConfig:
         p = self._setup(helper, tmp_path, monkeypatch)
         chowns = []
         monkeypatch.setattr(os, "fchown", lambda fd, uid, gid: chowns.append((uid, gid)))
+        monkeypatch.setattr(helper, "_unit_account", lambda service: None)
         _run(helper, "apply-config", {"service": "dhcp4", "path": p, "config": {}})
         assert chowns == [(0, 0)], (
             "root:root, applied to the DESCRIPTOR (build 13), not to a path another process could swap"
         )
-        assert stat.S_IMODE(os.stat(p).st_mode) == 0o644
+        assert stat.S_IMODE(os.stat(p).st_mode) == 0o600
 
     # ── v2: optimistic concurrency ─────────────────────────────────────────
 
@@ -1276,7 +1287,7 @@ class TestInstallTls:
     def tls_root(self, helper, tmp_path, monkeypatch):
         root = tmp_path / "tls"
         monkeypatch.setattr(helper, "_TLS_ROOT", str(root))
-        monkeypatch.setattr(helper, "_daemon_group", lambda service: ("root", 0))
+        monkeypatch.setattr(helper, "_unit_account", lambda service: None)
         return root
 
     def test_is_registered_and_is_not_an_update_op(self, helper):
@@ -1403,33 +1414,60 @@ class TestInstallTls:
         assert out["ok"] is False and out["error"] == "symlink"
         assert os.listdir(elsewhere) == []
 
-    def test_daemon_group_falls_back_to_root_when_nothing_resolves(self, helper, monkeypatch):
-        monkeypatch.setattr(helper, "_resolve_unit", lambda service, action: None)
-        try:
-            import pwd  # noqa: F401
-        except ImportError:
-            assert helper._daemon_group("dhcp4") == ("root", 0)
-            return
-        monkeypatch.setattr("pwd.getpwnam", lambda name: (_ for _ in ()).throw(KeyError(name)))
-        assert helper._daemon_group("dhcp4") == ("root", 0)
+    # build 14 (Q151): ONE identity resolver. `_daemon_group` is gone; the key's group is `_unit_account`'s effective gid, the same identity validation runs as.
+    def test_the_second_resolver_is_gone(self, helper):
+        assert not hasattr(helper, "_daemon_group") and not hasattr(helper, "_chown")
 
-    def test_daemon_group_prefers_the_units_user(self, helper, monkeypatch):
-        pytest.importorskip("pwd")
-        import pwd
+    @win
+    @pytest.mark.parametrize(
+        "account,expected_gid,expected_owner",
+        [
+            ({"name": "_kea", "uid": 105, "gid": 106, "extra_groups": []}, 106, "root:_kea"),
+            (
+                {"name": "kea", "uid": 100, "gid": 300, "extra_groups": [4242]},
+                300,
+                "root:kea-config",
+            ),  # User=kea Group=kea-config
+            (
+                {"name": "9001", "uid": 9001, "gid": 9002, "extra_groups": []},
+                9002,
+                "root:9002",
+            ),  # a numeric User= and Group=
+            (None, 0, "root:root"),  # the daemon runs as root
+        ],
+        ids=["User=_kea", "User=kea Group=kea-config", "numeric User/Group", "root daemon"],
+    )
+    def test_server_key_takes_its_group_from_the_one_resolver(
+        self, helper, tls_root, monkeypatch, account, expected_gid, expected_owner
+    ):
+        import grp
 
-        class Proc:
-            returncode, stdout, stderr = 0, "keauser\n", ""
-
-        monkeypatch.setattr(helper, "_resolve_unit", lambda service, action: "kea-dhcp4-server")
-        monkeypatch.setattr(helper.subprocess, "run", lambda *a, **k: Proc())
-
-        class PW:
-            pw_gid = 4242
-
+        monkeypatch.setattr(helper, "_unit_account", lambda service: account)
         monkeypatch.setattr(
-            pwd, "getpwnam", lambda name: PW() if name == "keauser" else (_ for _ in ()).throw(KeyError(name))
+            grp,
+            "getgrgid",
+            lambda gid: (
+                type("G", (), {"gr_name": {106: "_kea", 300: "kea-config"}[gid]})()
+                if gid in (106, 300)
+                else (_ for _ in ()).throw(KeyError(gid))
+            ),
         )
-        assert helper._daemon_group("dhcp4") == ("keauser", 4242)
+        chowns = []
+        monkeypatch.setattr(os, "fchown", lambda fd, uid, gid: chowns.append((uid, gid)))
+        _code, out, _ = _run(helper, "install-tls", {"service": "dhcp4", "files": _tls_files()})
+        assert out["ok"] is True and out["owner"] == expected_owner
+        assert chowns == [(0, expected_gid)] * 3, "every member is root:<that group>"
+
+    @win
+    def test_a_unit_account_that_cannot_be_resolved_refuses_the_install(self, helper, tls_root, monkeypatch):
+        monkeypatch.setattr(
+            helper,
+            "_unit_account",
+            lambda service: {"refused": "its unit runs as User=ghost, which is not an account on this host"},
+        )
+        _code, out, _ = _run(helper, "install-tls", {"service": "dhcp4", "files": _tls_files()})
+        assert out["ok"] is False and out["error"] == "unit-account" and "ghost" in out["detail"]
+        assert not (tls_root / "dhcp4").exists()
 
 
 def _load_jen_update_root():
@@ -1989,7 +2027,7 @@ class TestEveryFileTheHelperWritesIsPrivateAtEveryInstant:
     def test_server_key_is_0600_while_written_and_0640_only_when_complete(self, helper, tmp_path, monkeypatch, request):
         root = tmp_path / "tls"
         monkeypatch.setattr(helper, "_TLS_ROOT", str(root))
-        monkeypatch.setattr(helper, "_daemon_group", lambda service: ("root", 0))
+        monkeypatch.setattr(helper, "_unit_account", lambda service: None)
         service_dir = root / "dhcp4"
         os.makedirs(service_dir)
         w = _DirWatcher(str(service_dir))
@@ -2035,7 +2073,7 @@ class TestTheLockIsTakenForEveryOp:
     def test_install_tls_locks_the_service_directory(self, helper, tmp_path, monkeypatch, taken):
         root = tmp_path / "tls"
         monkeypatch.setattr(helper, "_TLS_ROOT", str(root))
-        monkeypatch.setattr(helper, "_daemon_group", lambda service: ("root", 0))
+        monkeypatch.setattr(helper, "_unit_account", lambda service: None)
         _run(helper, "install-tls", {"service": "dhcp4", "files": _tls_files()})
         assert taken == [str(root / "dhcp4")]
 
@@ -2195,3 +2233,273 @@ class TestRemoveConfig:
             helper, "remove-config", {"service": "bogus", "path": str(victim), "expect_sha256": "a" * 64}
         )
         assert out == {"ok": False, "error": "not-allowed"}
+
+
+# ── build 14 (v5.68.0-beta.16, Q151): the identity, ownership and set-commit promises, kept by every path ────────────────────────────
+
+
+@win
+class TestANewConfigIsOwnedByTheDaemonsIdentityNeverWorldReadable:
+    """Item 2. A brand-new Kea config carries `lease-database.password`. Build 13 created it root:root 0644 (so `_kea` could read it - and so could every
+    local account). It is now `root:<the daemon's effective gid>` 0640 when the unit names a non-root account, `root:root` 0600 when the daemon runs as root."""
+
+    def _apply_new(self, helper, tmp_path, monkeypatch, account):
+        monkeypatch.setattr(helper, "_ALLOWED_CONF_DIRS", (str(tmp_path),))
+        _fake_kea_bin(helper, monkeypatch, tmp_path, "kea-dhcp4", exit_code=0)
+        monkeypatch.setattr(helper, "_unit_account", lambda service: account)
+        monkeypatch.setattr(
+            helper,
+            "_find_kea",
+            lambda service: {
+                "binary": str(tmp_path / "bin" / "kea-dhcp4"),
+                "user": None,
+                "group": None,
+                "extra_groups": [],
+            },
+        )
+        chowns = []
+        monkeypatch.setattr(os, "fchown", lambda fd, uid, gid: chowns.append((uid, gid)))
+        p = str(tmp_path / "kea-dhcp4.conf")
+        _code, out, _ = _run(
+            helper,
+            "apply-config",
+            {"service": "dhcp4", "path": p, "config": {"Dhcp4": {"lease-database": {"password": "s3cret"}}}},
+        )
+        return p, out, chowns
+
+    @pytest.mark.parametrize(
+        "account,gid",
+        [
+            ({"name": "_kea", "uid": 105, "gid": 106, "extra_groups": []}, 106),
+            (
+                {"name": "kea", "uid": 100, "gid": 300, "extra_groups": []},
+                300,
+            ),  # User=kea Group=kea-config: the UNIT's group
+        ],
+        ids=["User=_kea", "User=kea Group=kea-config"],
+    )
+    def test_a_non_root_daemon_gets_root_group_0640(self, helper, tmp_path, monkeypatch, account, gid):
+        p, out, chowns = self._apply_new(helper, tmp_path, monkeypatch, account)
+        assert out["ok"] is True
+        assert chowns == [(0, gid)] and stat.S_IMODE(os.stat(p).st_mode) == 0o640, (
+            "the daemon's group can read it; nobody else can"
+        )
+
+    def test_a_root_daemon_gets_root_root_0600(self, helper, tmp_path, monkeypatch):
+        p, out, chowns = self._apply_new(helper, tmp_path, monkeypatch, None)
+        assert out["ok"] is True and chowns == [(0, 0)] and stat.S_IMODE(os.stat(p).st_mode) == 0o600
+
+    def test_never_world_readable_whatever_the_umask(self, helper, tmp_path, monkeypatch):
+        old = os.umask(0)
+        try:
+            p, out, _ = self._apply_new(
+                helper, tmp_path, monkeypatch, {"name": "_kea", "uid": 105, "gid": 106, "extra_groups": []}
+            )
+        finally:
+            os.umask(old)
+        assert out["ok"] is True and stat.S_IMODE(os.stat(p).st_mode) & 0o007 == 0
+
+    def test_a_unit_that_names_an_account_the_host_lacks_is_refused_and_nothing_is_written(
+        self, helper, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(helper, "_ALLOWED_CONF_DIRS", (str(tmp_path),))
+        _fake_kea_bin(helper, monkeypatch, tmp_path, "kea-dhcp4", exit_code=0)
+        monkeypatch.setattr(
+            helper,
+            "_unit_account",
+            lambda service: {"refused": "its unit runs as User=ghost, which is not an account on this host"},
+        )
+        p = tmp_path / "kea-dhcp4.conf"
+        _code, out, _ = _run(helper, "apply-config", {"service": "dhcp4", "path": str(p), "config": {"Dhcp4": {}}})
+        assert out["ok"] is False and not p.exists() and _leftover_temps(tmp_path) == []
+
+
+@win
+class TestAFailedOwnershipAbortsBeforeTheReplace:
+    """Item 7. `_finish_private` swallowed a failed `fchown` ("a test run as an ordinary user") and the caller then replaced the live file and reported
+    success: a config or key owned by the wrong account. A requested ownership that fails now aborts: the temp is removed, the live file untouched."""
+
+    def test_apply_config_over_an_existing_config_leaves_it_byte_for_byte_when_fchown_fails(
+        self, helper, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(helper, "_ALLOWED_CONF_DIRS", (str(tmp_path),))
+        _fake_kea_bin(helper, monkeypatch, tmp_path, "kea-dhcp4", exit_code=0)
+        conf = tmp_path / "kea-dhcp4.conf"
+        conf.write_bytes(b'{"Dhcp4": {"old": true}}')
+        original = conf.read_bytes()
+
+        def refuse(fd, uid, gid):
+            raise PermissionError(1, "Operation not permitted")
+
+        monkeypatch.setattr(os, "fchown", refuse)
+        _code, out, _ = _run(
+            helper, "apply-config", {"service": "dhcp4", "path": str(conf), "config": {"Dhcp4": {"new": True}}}
+        )
+        assert out["ok"] is False, out
+        assert conf.read_bytes() == original and _leftover_temps(tmp_path) == []
+
+    def test_install_tls_returns_the_failure_and_installs_nothing(self, helper, tmp_path, monkeypatch):
+        root = tmp_path / "tls"
+        monkeypatch.setattr(helper, "_TLS_ROOT", str(root))
+        monkeypatch.setattr(helper, "_unit_account", lambda service: None)
+        monkeypatch.setattr(
+            os, "fchown", lambda fd, uid, gid: (_ for _ in ()).throw(PermissionError(1, "Operation not permitted"))
+        )
+        _code, out, _ = _run(helper, "install-tls", {"service": "dhcp4", "files": _tls_files()})
+        assert out["ok"] is False and out["error"] == "write-failed"
+        assert sorted(n for n in os.listdir(root / "dhcp4") if not n.endswith(".jen_lock")) == []
+
+    def test_finish_private_does_not_catch_the_error(self, helper, tmp_path, monkeypatch):
+        fd, tmp = helper._private_tempfile(str(tmp_path), "x")
+        monkeypatch.setattr(
+            os, "fchown", lambda fd, uid, gid: (_ for _ in ()).throw(PermissionError(1, "Operation not permitted"))
+        )
+        try:
+            with pytest.raises(PermissionError):
+                helper._finish_private(fd, 0, 0, 0o640, tmp)
+        finally:
+            os.unlink(tmp)
+
+    def test_a_chown_of_the_tls_directories_that_fails_is_a_failure_not_a_skip(self, helper, tmp_path, monkeypatch):
+        root = tmp_path / "tls"
+        monkeypatch.setattr(helper, "_TLS_ROOT", str(root))
+        monkeypatch.setattr(helper, "_unit_account", lambda service: None)
+        monkeypatch.setattr(
+            os, "chown", lambda path, uid, gid: (_ for _ in ()).throw(PermissionError(1, "Operation not permitted"))
+        )
+        _code, out, _ = _run(helper, "install-tls", {"service": "dhcp4", "files": _tls_files()})
+        assert out["ok"] is False and out["error"] == "helper-exception"
+
+
+@win
+class TestInstallTlsIsASetCommit:
+    """Item 5 (the helper's half; the same shape in its own code - jen/services/certs.py::commit_file_set is the Jen host's). `server.key`,
+    `server.crt` and `ca.crt` are installed all-or-nothing: a failure at ANY step leaves the original set (a new key beside an old certificate is a
+    daemon that cannot start). Broken BEFORE and AFTER every member, in the staging and in the replace."""
+
+    OLD = {"ca.crt": _CERT_PEM, "server.crt": _CERT_PEM, "server.key": _KEY_PEM}
+    NEW_KEY = _KEY_PEM.replace("MIGHAgEAMBMGByqGSM49", "QUJDREVGR0hJSktMTU5P")
+    NEW = {
+        "ca.crt": _CERT_PEM.replace("Zm9v", "bmV3"),
+        "server.crt": _CERT_PEM.replace("Zm9v", "bmV3"),
+        "server.key": NEW_KEY,
+    }
+
+    @pytest.fixture
+    def installed(self, helper, tmp_path, monkeypatch):
+        root = tmp_path / "tls"
+        monkeypatch.setattr(helper, "_TLS_ROOT", str(root))
+        monkeypatch.setattr(helper, "_unit_account", lambda service: None)
+        _code, out, _ = _run(helper, "install-tls", {"service": "dhcp4", "files": self.OLD})
+        assert out["ok"] is True
+        return root / "dhcp4"
+
+    def _assert_original(self, directory):
+        for name, content in self.OLD.items():
+            assert (directory / name).read_text() == content, f"{name} is not what it was"
+        assert stat.S_IMODE((directory / "server.key").stat().st_mode) == 0o640
+        assert sorted(n for n in os.listdir(directory)) == ["ca.crt", "server.crt", "server.key"], (
+            "no staged temp left behind"
+        )
+
+    def test_the_set_is_replaced_together(self, helper, installed):
+        _code, out, _ = _run(helper, "install-tls", {"service": "dhcp4", "files": self.NEW})
+        assert out["ok"] is True
+        assert {n: (installed / n).read_text() for n in self.NEW} == self.NEW
+
+    @pytest.mark.parametrize("n", range(3))
+    def test_a_failing_replace_before_or_after_any_member_restores_the_original_set(
+        self, helper, installed, monkeypatch, n
+    ):
+        order = ["ca.crt", "server.crt", "server.key"]
+        real = os.replace
+
+        def failing(src, dst, *a, **k):
+            if str(dst) == str(installed / order[n]):
+                raise OSError(28, "No space left on device")
+            return real(src, dst, *a, **k)
+
+        monkeypatch.setattr(os, "replace", failing)
+        _code, out, _ = _run(helper, "install-tls", {"service": "dhcp4", "files": self.NEW})
+        monkeypatch.setattr(os, "replace", real)
+        assert out["ok"] is False and out["error"] == "write-failed" and "No space left" in out["detail"]
+        self._assert_original(installed)
+
+    @pytest.mark.parametrize("n", range(3))
+    def test_a_failing_staging_touches_no_live_file(self, helper, installed, monkeypatch, n):
+        real = helper._private_tempfile
+        calls = {"n": 0}
+
+        def failing(directory, prefix):
+            calls["n"] += 1
+            if calls["n"] == n + 1:
+                raise OSError(5, "Input/output error")
+            return real(directory, prefix)
+
+        monkeypatch.setattr(helper, "_private_tempfile", failing)
+        _code, out, _ = _run(helper, "install-tls", {"service": "dhcp4", "files": self.NEW})
+        monkeypatch.setattr(helper, "_private_tempfile", real)
+        assert out["ok"] is False
+        self._assert_original(installed)
+
+    def test_no_key_and_certificate_mismatch_after_any_failure(self, helper, installed, monkeypatch):
+        real = os.replace
+        for failing_member in ("ca.crt", "server.crt", "server.key"):
+
+            def failing(src, dst, *a, failing_member=failing_member, **k):
+                if str(dst) == str(installed / failing_member):
+                    raise OSError(28, "No space left on device")
+                return real(src, dst, *a, **k)
+
+            monkeypatch.setattr(os, "replace", failing)
+            _run(helper, "install-tls", {"service": "dhcp4", "files": self.NEW})
+            monkeypatch.setattr(os, "replace", real)
+            assert (installed / "server.key").read_text() == _KEY_PEM and (
+                installed / "server.crt"
+            ).read_text() == _CERT_PEM
+
+    def test_a_restore_that_also_fails_names_the_paths_that_are_now_wrong(self, helper, installed, monkeypatch):
+        real_replace = os.replace
+        real_install = helper._install_private
+
+        def fail_the_third(src, dst, *a, **k):
+            if str(dst) == str(installed / "server.key"):
+                raise OSError(28, "No space left on device")
+            return real_replace(src, dst, *a, **k)
+
+        def fail_restoring_the_ca(path, data, uid=None, gid=None, mode=0o600):
+            if str(path) == str(installed / "ca.crt"):
+                raise OSError(5, "Input/output error")
+            return real_install(path, data, uid, gid, mode)
+
+        monkeypatch.setattr(os, "replace", fail_the_third)
+        monkeypatch.setattr(helper, "_install_private", fail_restoring_the_ca)
+        _code, out, _ = _run(helper, "install-tls", {"service": "dhcp4", "files": self.NEW})
+        assert out["ok"] is False and str(installed / "ca.crt") in out["detail"] and "now wrong" in out["detail"]
+        assert str(installed / "server.crt") not in out["detail"], "server.crt WAS restored"
+
+    def test_a_symlink_at_any_member_is_refused_before_anything_is_touched(self, helper, installed):
+        os.unlink(installed / "server.crt")
+        victim = installed.parent / "victim"
+        victim.write_text("keep")
+        os.symlink(victim, installed / "server.crt")
+        _code, out, _ = _run(helper, "install-tls", {"service": "dhcp4", "files": self.NEW})
+        assert out["ok"] is False and out["error"] == "symlink" and victim.read_text() == "keep"
+        assert (installed / "server.key").read_text() == _KEY_PEM, "the key was not replaced"
+
+
+class TestFsyncOfADirectory:
+    @win
+    def test_a_filesystem_that_cannot_fsync_a_directory_is_the_one_named_exception(self, helper, tmp_path, monkeypatch):
+        import errno
+
+        monkeypatch.setattr(os, "fsync", lambda fd: (_ for _ in ()).throw(OSError(errno.EINVAL, "Invalid argument")))
+        helper._fsync_dir(str(tmp_path))  # no exception
+
+    @win
+    def test_every_other_failure_propagates(self, helper, tmp_path, monkeypatch):
+        import errno
+
+        monkeypatch.setattr(os, "fsync", lambda fd: (_ for _ in ()).throw(OSError(errno.EIO, "Input/output error")))
+        with pytest.raises(OSError):
+            helper._fsync_dir(str(tmp_path))

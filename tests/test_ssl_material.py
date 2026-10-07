@@ -146,6 +146,34 @@ class TestUploadCertRoute:
         assert not any(p.name.endswith(".new") for p in ssl_dir.iterdir())
         assert oct(os.stat(ssl_dir / "key.pem").st_mode & 0o777) == "0o640"
 
+    @pytest.mark.parametrize("failing", ["cert.pem", "key.pem", "combined.pem"])
+    def test_a_failure_while_installing_the_set_leaves_the_previous_pair_and_no_mismatch(
+        self, logged_in_client, tmp_path, monkeypatch, failing
+    ):
+        """v5.68.0-beta.16 (Q151): cert, key and the combined chain used to be written one after another; a failure in the middle left a NEW key
+        beside the OLD certificate and gunicorn refused to start. The set is all-or-nothing: whichever member fails, the live files are the previous
+        pair, byte for byte."""
+        ssl_dir = self._point_ssl_at(monkeypatch, tmp_path)
+        cert1, key1 = _pair(tmp_path, name="one")
+        self._post(logged_in_client, cert1, key1)
+        before = {n: (ssl_dir / n).read_bytes() for n in ("cert.pem", "key.pem", "combined.pem")}
+        cert2, key2 = _pair(tmp_path, name="two")
+        real = os.replace
+
+        def refusing(src, dst, *a, **k):
+            if str(dst) == str(ssl_dir / failing):
+                raise OSError(28, "No space left on device")
+            return real(src, dst, *a, **k)
+
+        monkeypatch.setattr(os, "replace", refusing)
+        r = self._post(logged_in_client, cert2, key2)
+        monkeypatch.setattr(os, "replace", real)
+        assert b"Error uploading certificate" in r.data
+        assert {n: (ssl_dir / n).read_bytes() for n in before} == before, (
+            "the previous cert/key/chain are all still live"
+        )
+        assert not any(p.name.endswith(".tmp") for p in ssl_dir.iterdir()), "no staged temp left behind"
+
 
 class TestRunPyStartupGuard:
     def test_loadable_pair_true_bad_pair_false(self, tmp_path):

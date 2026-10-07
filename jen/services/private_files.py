@@ -28,6 +28,9 @@ import os
 import secrets
 
 _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_O_BINARY = getattr(
+    os, "O_BINARY", 0
+)  # Windows (the dev box): a descriptor is text mode unless asked, and would rewrite every newline
 _ATTEMPTS = 64
 
 
@@ -37,22 +40,23 @@ def private_tempfile(directory: str, prefix: str) -> tuple[int, str]:
     for _ in range(_ATTEMPTS):
         path = os.path.join(directory, f".{prefix}.{secrets.token_hex(8)}.tmp")
         try:
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW, 0o600)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW | _O_BINARY, 0o600)
         except FileExistsError:
             continue
         return fd, path
     raise FileExistsError(f"could not find an unused temp name in {directory}")
 
 
-def write_private_file(
+def stage_private_file(
     path: str,
     data: bytes | str,
     mode: int = 0o600,
     *,
     owner: tuple[int, int] | None = None,
-) -> None:
-    """Write `data` to `path` atomically, private from its first byte, ending up with `mode` and (when given) `owner` = (uid, gid).
-    The previous file, if any, is replaced in one `os.replace`. Raises OSError on failure, leaving no temp file behind."""
+) -> str:
+    """Write `data` to a NEW unique private temp next to `path` and return its name, with `mode` (and `owner` = (uid, gid) when given) already applied
+    to the open descriptor and the data fsynced - ready to be `os.replace`d over `path`, which this function does NOT do (Q151: a set of files is
+    staged first and replaced only once every member is staged). A failure removes the temp and raises, leaving nothing behind."""
     directory = os.path.dirname(os.path.abspath(path))
     payload = data.encode("utf-8") if isinstance(data, str) else data
     fd, tmp = private_tempfile(directory, os.path.basename(path))
@@ -70,6 +74,25 @@ def write_private_file(
                 os.chmod(tmp, mode)
         finally:
             os.close(fd)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+    return tmp
+
+
+def write_private_file(
+    path: str,
+    data: bytes | str,
+    mode: int = 0o600,
+    *,
+    owner: tuple[int, int] | None = None,
+) -> None:
+    """Write `data` to `path` atomically, private from its first byte, ending up with `mode` and (when given) `owner` = (uid, gid).
+    The previous file, if any, is replaced in one `os.replace`. Raises OSError on failure, leaving no temp file behind."""
+    directory = os.path.dirname(os.path.abspath(path))
+    tmp = stage_private_file(path, data, mode, owner=owner)
+    try:
         os.replace(tmp, path)
     except BaseException:
         with contextlib.suppress(OSError):

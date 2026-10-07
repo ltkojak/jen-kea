@@ -341,6 +341,12 @@ that then failed as `_kea`. Press **Update helper**: build 12 resolves the unit'
 `/etc/group` memberships and `SupplementaryGroups=`). If the Servers page now says *"its unit runs as User=x, which is not an account on this host"*,
 `getent passwd x` finds nothing: create the account or fix the unit — Jen will not run the check as root in its place.
 
+**Kea cannot read `server.key` after a TLS install, or `kea-dhcp4.conf` is unreadable by Kea (fixed in helper build 14).** A unit with `Group=` or a numeric `User=` got a key
+whose group came from a simpler lookup than the one validation used, and a brand-new config was created world-readable (`0644`). Press **Update helper**: build 14 uses the one
+account lookup for both, creates a new config `root:<Kea's group>` `0640` (or `root:root` `0600` when Kea runs as root), and a TLS install replaces `ca.crt`, `server.crt` and
+`server.key` together or not at all. If the Servers page says *"its unit runs as User=x, which is not an account on this host"*, `getent passwd x` finds nothing: create the account or
+fix the unit.
+
 **A failed Author Kea Config left a new file on a server (helper build 13).** Authoring writes every server or none: if a later server fails, the
 earlier ones are put back, and a server that had no config file before is put back by removing the file Jen wrote. That removal is the helper's
 `remove-config` op (build 13), and since 5.68.0-beta.16 authoring refuses to start unless every server has it (*"Author Kea Config needs the Kea host helper at build 13 or

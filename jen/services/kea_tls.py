@@ -49,7 +49,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from jen import extensions
-from jen.services.certs import write_atomically
+from jen.services.certs import commit_file_set, write_atomically
 
 logger = logging.getLogger(__name__)
 
@@ -225,9 +225,8 @@ def ensure_ca(force: bool = False) -> dict:
     key = _new_key()
     cn = f"Jen Kea CA {_hostname()} {datetime.now(timezone.utc):%Y-%m-%d}"
     cert = _build_ca(key, cn)
-    # Key first, then cert: a reader that finds a cert always finds its key.
-    write_atomically(key_path, _key_pem(key), 0o600)
-    write_atomically(crt, _cert_pem(cert), 0o644)
+    # Key first, then cert: a reader that finds a cert always finds its key - and the pair is installed as a SET (v5.68.0-beta.16, Q151).
+    commit_file_set([(key_path, _key_pem(key), 0o600), (crt, _cert_pem(cert), 0o644)])
     logger.info(f"kea_tls: {'rotated' if force else 'created'} the Kea CA at {crt}")
     return {"cert": crt, "key": key_path, "created": True, "subject": cn}
 
@@ -354,8 +353,7 @@ def issue_client_cert(force: bool = False) -> dict:
     key = _new_key()
     cert = _leaf(ca_cert, ca_key, key, f"jen {_hostname()}", [], client=True)
     _ensure_dir(SSL_DIR)
-    write_atomically(key_path, _key_pem(key), 0o600)
-    write_atomically(pem, _cert_pem(cert), 0o644)
+    commit_file_set([(key_path, _key_pem(key), 0o600), (pem, _cert_pem(cert), 0o644)])
     logger.info(f"kea_tls: issued Jen's Kea client certificate at {pem}")
     return {"cert": pem, "key": key_path, "issued": True}
 
@@ -409,14 +407,16 @@ def _live_for(staged_path: str) -> str:
 
 
 def commit_rotation(staged: dict) -> None:
-    """Promote the staged files to live (each previous file kept as
-    `.prev`). Keys first, then certs, so a reader that finds a new cert
-    always finds its key."""
-    for k in ("ca_key", "ca_cert", "client_key", "client_cert"):
-        live = _live_for(staged[k])
-        if os.path.exists(live):
-            os.replace(live, live + ".prev")
-        os.replace(staged[k], live)
+    """Promote the staged files to live as ONE set (v5.68.0-beta.16, Q151): `certs.commit_file_set` stages every member again, snapshots the live
+    members without moving them (each previous file kept as a `.prev` COPY), replaces them keys first, then certs, and on any failure puts every
+    replaced member back byte-for-byte. It used to `os.replace` the live file to `.prev` and then the staged one over it, four times in a row,
+    after the remote servers had already moved to the new CA: a failure at any step left a mixed or missing set."""
+    members = []
+    for k, mode in (("ca_key", 0o600), ("ca_cert", 0o644), ("client_key", 0o600), ("client_cert", 0o644)):
+        with open(staged[k], "rb") as f:
+            members.append((_live_for(staged[k]), f.read(), mode))
+    commit_file_set(members)
+    discard_rotation(staged)
     logger.info("kea_tls: rotated the Kea CA and Jen's client certificate")
 
 

@@ -260,6 +260,19 @@ true when ANY class may execute, so a `_kea`-owned file with `o+x` and no `u+x` 
 (5) A new op, `remove-config`: it removes a config file only if it still hashes to exactly the `expect_sha256` given, under the same lock
 - the rollback of an Author Kea Config target that had no file before (Jen removes the file it created). A change of behaviour inside the
 existing envelope plus one op: `HELPER_VERSION` stays 7.
+
+Build 14 (v5.68.0-beta.16, Q151) - the identity, ownership and set-commit promises build 13 made, kept by EVERY path. (1) A brand-new Kea config is
+owned `root:<the daemon's effective gid>` 0640 when the unit names a non-root account, `root:root` 0600 when the daemon runs as root - the identity
+from `_unit_account`, never 0644 (it carries `lease-database.password`; build 13 created it 0644 so `_kea` could read it, and so could every local
+account). (2) ONE identity resolver: `_daemon_group` (the unit's `User=` -> that account's passwd primary group, else `_kea`, else root) is deleted;
+`install-tls` takes `server.key`'s group from `_unit_account` too (the effective gid after `Group=`) - a unit with `Group=kea-config` used to get a key its
+daemon could not read, because the key's group came from one resolver and what validation ran as from the other. (3) `_finish_private` no longer swallows
+a failed `fchown`: a requested ownership that cannot be applied ABORTS before the replace (the temp is removed, the live file untouched) instead of
+installing a config or key owned by the wrong account and reporting success; the same for every other chown/fsync the helper does (`_chown`, the
+swallowing wrapper, is gone; the one filesystem-cannot-fsync-a-directory case is named by errno, not by `except OSError: pass`). (4) `install-tls` commits
+its three files as a SET (`_commit_file_set`): every member is staged private under a unique name, every live member is read into memory WITHOUT being moved,
+each is then replaced, and on any failure every member already replaced is put back byte-for-byte (a member that did not exist is removed) - a failure at
+any step used to leave a new `server.key` beside an old `server.crt`. A change of behaviour inside the existing envelope: `HELPER_VERSION` stays 7.
 """
 
 from __future__ import annotations
@@ -268,6 +281,7 @@ import base64
 import binascii
 import collections
 import contextlib
+import errno
 import hashlib
 import json
 import os
@@ -281,7 +295,7 @@ import sys
 import tempfile
 
 HELPER_VERSION = 7
-HELPER_BUILD = 13
+HELPER_BUILD = 14
 # v5.66.0-beta.2 (Q104) — HELPER_BUILD is bumped on EVERY change to this file, never by
 # HELPER_VERSION alone; op_update's own _HELPER_BUILD_RE parses "^HELPER_BUILD = (\d+)$" out
 # of a candidate's raw bytes, so this line (like HELPER_VERSION's own, just above) must never
@@ -645,15 +659,13 @@ def _write_all(fd, data):
 
 
 def _finish_private(fd, uid=None, gid=None, mode=0o600, path=None):
-    """Give the DESCRIPTOR its final owner/group and mode, then close it. `uid`/`gid` None leave that part alone. A chown the caller is not
-    allowed to make (a test run as an ordinary user) is skipped: the file simply stays the caller's own. `path` is only the fallback for a
-    platform with no `fchmod` (the Windows dev box that imports this file); the helper itself runs on Linux, where the descriptor is used."""
+    """Give the DESCRIPTOR its final owner/group and mode, then close it. `uid`/`gid` None leave that part alone. A requested ownership that
+    cannot be applied ABORTS (build 14, Q151): it used to be swallowed "for a test run as an ordinary user" and the caller then replaced the live file
+    and reported success - a config or key owned by the wrong account. The caller removes its temp and leaves the live file untouched. `path` is only
+    the fallback for a platform with no `fchmod` (the Windows dev box that imports this file); the helper itself runs on Linux."""
     try:
         if uid is not None or gid is not None:
-            try:
-                os.fchown(fd, -1 if uid is None else uid, -1 if gid is None else gid)
-            except (OSError, AttributeError):
-                pass
+            os.fchown(fd, -1 if uid is None else uid, -1 if gid is None else gid)
         if hasattr(os, "fchmod"):
             os.fchmod(fd, mode)
         elif path is not None:
@@ -678,6 +690,77 @@ def _install_private(path, data, uid=None, gid=None, mode=0o600):
         with contextlib.suppress(OSError):
             os.unlink(tmp)
         raise
+
+
+def _fsync_dir(directory):
+    """fsync a directory so a rename in it is durable. The one expected exception - a filesystem that cannot fsync a directory descriptor
+    (EINVAL / ENOTSUP / EBADF) - is named by errno; every other failure propagates (it is never `except OSError: pass`)."""
+    if os.name == "nt":  # the Windows dev box that imports this file for its tests: a directory cannot be opened, nothing to sync
+        return
+    fd = os.open(directory, os.O_RDONLY)
+    try:
+        try:
+            os.fsync(fd)
+        except OSError as e:
+            if e.errno not in (errno.EINVAL, errno.ENOTSUP, errno.EBADF):
+                raise
+    finally:
+        os.close(fd)
+
+
+def _commit_file_set(members):
+    """Install a SET of files all-or-nothing (build 14, Q151). `members` = [(path, data: bytes, uid, gid, mode)] in install order.
+
+    1. STAGE every member: a unique private temp in its own directory (`_private_tempfile`, 0600 from the first byte), written, fsynced, given its
+       final owner/group/mode on the descriptor. A failure here has touched no live file.
+    2. SNAPSHOT every live member into memory WITHOUT moving it (the old design moved the live file aside before its replacement existed).
+    3. REPLACE each staged file over its live path, in order.
+    On ANY failure every member already replaced is put back byte-for-byte with its old owner and mode (one that did not exist is removed), every
+    unreplaced temp is removed, and the original error is re-raised - or, if a restore ALSO failed, an OSError naming every path that is now wrong.
+    A symlink at a live path is refused up front."""
+    staged, snapshots, replaced = [], {}, []
+    try:
+        for path, data, uid, gid, mode in members:
+            if os.path.islink(path):
+                raise OSError(errno.ELOOP, "refusing to replace a symlink", path)
+            fd, tmp = _private_tempfile(os.path.dirname(path) or ".", os.path.basename(path))
+            staged.append((path, tmp))
+            try:
+                _write_all(fd, data)
+            except BaseException:
+                os.close(fd)
+                raise
+            _finish_private(fd, uid, gid, mode, tmp)
+        for path, _tmp in staged:
+            try:
+                with open(path, "rb") as f:
+                    st = os.fstat(f.fileno())
+                    snapshots[path] = (f.read(), st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode))
+            except FileNotFoundError:
+                snapshots[path] = None
+        for path, tmp in staged:
+            os.replace(tmp, path)
+            replaced.append(path)
+    except BaseException as original:
+        wrong = []
+        for path in reversed(replaced):
+            snap = snapshots.get(path)
+            try:
+                if snap is None:
+                    os.unlink(path)
+                else:
+                    _install_private(path, snap[0], snap[1], snap[2], snap[3])
+            except OSError as e:
+                wrong.append(f"{path} ({e})")
+        for _path, tmp in staged:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+        if wrong:
+            raise OSError(0, "the set could not be put back; these paths are now wrong: " + ", ".join(wrong)) from original
+        raise
+    for _path, tmp in staged:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)  # already renamed away on success: nothing left to remove
 
 
 @contextlib.contextmanager
@@ -833,9 +916,16 @@ def op_apply_config(payload):
             # the replacement keeps the destination's owner and mode, and is 0600 until it is complete (build 13)
             _install_private(path, data, st.st_uid, st.st_gid, st.st_mode & 0o777)
         else:
-            # A brand-new config: match what `json.dump` under the old sudo-python3 path produced. Ubuntu's kea runs as `_kea` and
-            # must be able to read it - 0644, reached only once the file is complete.
-            _install_private(path, data, 0, 0, 0o644)
+            # A brand-new config (build 14, Q151): it carries `lease-database.password`, so never 0644. The identity is the unit's own
+            # (`_unit_account`, the one resolver): root:<the daemon's effective gid> 0640 when the unit names a non-root account (it can read
+            # the file, and nobody else can), root:root 0600 when the daemon runs as root. Reached only once the file is complete.
+            account = _unit_account(service)
+            if account is not None and "refused" in account:
+                return {"ok": False, "error": "unit-account", "detail": account["refused"]}, path
+            if account is None:
+                _install_private(path, data, 0, 0, 0o600)
+            else:
+                _install_private(path, data, 0, account["gid"], 0o640)
         return {"ok": True, "backup": backup, "sha256": _file_sha256(path)}, path
 
 
@@ -965,42 +1055,6 @@ def _pem_ok(name, body):
     return bool(_PEM_CERTS_RE.match(body)) and "PRIVATE KEY" not in body
 
 
-def _daemon_group(service):
-    """(name, gid) the daemon's key must be readable by: the unit's
-    `User=` (its primary group), else `_kea` (Ubuntu/Debian packages),
-    else root. v5.68.0-beta.6 (Q141): this used to say "ISC's own packages run the daemons as
-    root" - never checked, and not what a real ISC deb shows: on Kea 3.0.4 from ISC's own
-    packages `/usr/sbin/kea-dhcp4` is owned `_kea:_kea` (mode 0750), the account the daemon
-    is meant to run as. ISC's container images (3.0.3, 3.2.0, 3.3.1, recorded by tests/kea_compat
-    `test_binary_facts`) ship it owned by their service account `kea` (uid 100, mode 0754) while the
-    daemon process itself runs as root; the fallback to root below is only for a host where neither
-    the unit nor `_kea` resolves."""
-    user = ""
-    unit = _resolve_unit(service, "status")
-    if unit:
-        proc = _run_bin("systemctl", ["show", "-p", "User", "--value", unit], capture_output=True, text=True)
-        user = (proc.stdout or "").strip() if proc else ""
-    try:
-        import pwd
-    except ImportError:  # not a POSIX host (only ever the test harness)
-        return "root", 0
-    for cand in (user, "_kea"):
-        if not cand:
-            continue
-        try:
-            return cand, pwd.getpwnam(cand).pw_gid
-        except KeyError:
-            continue
-    return "root", 0
-
-
-def _chown(path, uid, gid):
-    try:
-        os.chown(path, uid, gid)
-    except (OSError, AttributeError):
-        pass
-
-
 def op_install_tls(payload):
     service = payload.get("service")
     files = payload.get("files")
@@ -1016,30 +1070,41 @@ def op_install_tls(payload):
     for p in (_TLS_ROOT, target_dir):
         if os.path.islink(p):
             return {"ok": False, "error": "symlink", "path": p}, p
-    os.makedirs(target_dir, mode=0o755, exist_ok=True)
-    _chown(_TLS_ROOT, 0, 0)
-    _chown(target_dir, 0, 0)
-    try:
-        os.chmod(_TLS_ROOT, 0o755)
-        os.chmod(target_dir, 0o755)
-    except OSError:
-        pass
+    for name in _TLS_FILES:
+        if os.path.islink(os.path.join(target_dir, name)):
+            return {"ok": False, "error": "symlink", "path": os.path.join(target_dir, name)}, os.path.join(target_dir, name)
 
-    group, gid = _daemon_group(service)
-    written = {}
+    # build 14 (Q151): the key's group is the one `_unit_account` gives (the effective gid after `Group=`), the same identity validation runs as;
+    # a daemon that runs as root (no unit `User=`) gets root:root
+    account = _unit_account(service)
+    if account is not None and "refused" in account:
+        return {"ok": False, "error": "unit-account", "detail": account["refused"]}, None
+    gid = 0 if account is None else account["gid"]
+    group = "root"
+    if account is not None:
+        try:
+            import grp
+
+            group = grp.getgrgid(gid).gr_name
+        except (ImportError, KeyError):
+            group = str(gid)
+
+    os.makedirs(target_dir, mode=0o755, exist_ok=True)
+    os.chown(_TLS_ROOT, 0, 0)  # build 14: never swallowed - root cannot chown its own directory is a real fault, not a skip
+    os.chown(target_dir, 0, 0)
+    os.chmod(_TLS_ROOT, 0o755)
+    os.chmod(target_dir, 0o755)
+
+    members = [
+        (os.path.join(target_dir, name), files[name].encode("utf-8"), 0, gid, 0o640 if name == "server.key" else 0o644)
+        for name in _TLS_FILES
+    ]
     with _locked(target_dir):  # build 13: two installs for one service never interleave
-        for name in _TLS_FILES:
-            target = os.path.join(target_dir, name)
-            if os.path.islink(target):
-                return {"ok": False, "error": "symlink", "path": target}, target
-            try:
-                # build 13 (Q150): server.key is created 0600 root and only becomes root:<daemon group> 0640 once the whole key is on
-                # disk - it used to be written with the umask (0644) and chmod'ed afterwards
-                _install_private(target, files[name].encode("utf-8"), 0, gid, 0o640 if name == "server.key" else 0o644)
-            except OSError as e:
-                return {"ok": False, "error": "write-failed", "path": target, "detail": str(e)}, target
-            written[name] = target
-    return {"ok": True, "paths": written, "owner": f"root:{group}"}, target_dir
+        try:
+            _commit_file_set(members)  # build 14: all three or none - a failure puts every replaced member back
+        except OSError as e:
+            return {"ok": False, "error": "write-failed", "path": target_dir, "detail": str(e)}, target_dir
+    return {"ok": True, "paths": {name: os.path.join(target_dir, name) for name in _TLS_FILES}, "owner": f"root:{group}"}, target_dir
 
 
 # ── v6 (v5.66.0, Q103): signed self-update ────────────────────────────────────
@@ -1229,25 +1294,26 @@ def op_update(payload):
         # rollback copy is now unconditional — there is no longer a "nothing to roll back to"
         # case (v5.66.0-beta.4, Q106).
         shutil.copy2(_SELF_PATH, prev_path)
-        _chown(prev_path, 0, 0)
+        os.chown(prev_path, 0, 0)  # build 14: never swallowed (this was `_chown`, which ignored a failure and carried on)
         os.chmod(prev_path, 0o755)
 
-        _chown(final_tmp, 0, 0)
+        os.chown(final_tmp, 0, 0)
         os.chmod(final_tmp, 0o755)
         os.replace(final_tmp, _SELF_PATH)
+        fsync_error = None
         try:
-            dir_fd = os.open(os.path.dirname(_SELF_PATH), os.O_RDONLY)
-            try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
-        except OSError:
-            pass  # best-effort durability only — not every OS supports fsync on a directory fd
+            _fsync_dir(os.path.dirname(_SELF_PATH))
+        except OSError as e:
+            fsync_error = e  # the rename may not be durable: that is a failed install, rolled back below, never a silent skip
 
         # ── postflight: the INSTALLED path must answer the same way, or roll back ──
         post_ok, post_version, post_build, post_reason = _probe_helper_version(_SELF_PATH)
-        if not post_ok or post_version != new_version or post_build != new_build:
-            detail = post_reason or "the installed candidate's own version op disagreed after install"
+        if fsync_error is not None or not post_ok or post_version != new_version or post_build != new_build:
+            detail = (
+                f"the directory could not be synced after the install: {fsync_error}"
+                if fsync_error is not None
+                else post_reason or "the installed candidate's own version op disagreed after install"
+            )
             try:
                 os.replace(prev_path, _SELF_PATH)
             except OSError as e:
