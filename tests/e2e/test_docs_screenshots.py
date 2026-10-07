@@ -171,7 +171,7 @@ class TestDesktopScreenshots:
             "reports",
         )
         # v5.67.0-beta.12 (Q124) — every chart now has a dashed projection (rising, flat or falling,
-        # whenever the history is long enough), continuing a thin "Total active" line, and none has a
+        # whenever the history is long enough), continuing a thin "Pool used" line (it was "Total active" before 5.68.0-beta.19), and none has a
         # struck-out legend entry. Frame Production's card: demo_data.py gives it a FALLING trend, the
         # case that used to draw nothing, with IoT's rising one just below it.
         # Chart.js keeps resizing/animating canvases for a while after the "N
@@ -185,7 +185,7 @@ class TestDesktopScreenshots:
         # round trip in between to leave a gap for another resize to land in.
         desktop.wait_for_timeout(1500)
         # the docs image must really show what Q124 is about: a projection on a falling chart, the thin
-        # Total active series it continues, and no dataset switched off (a hidden dataset is what drew the
+        # Pool used series it continues, and no dataset switched off (a hidden dataset is what drew the
         # struck-out legend label)
         legend = desktop.evaluate(
             "() => Object.values(Chart.instances).map(c => ({"
@@ -194,7 +194,9 @@ class TestDesktopScreenshots:
         )
         assert legend, "reports: no charts were built"
         assert not any(c["anyHidden"] for c in legend), f"reports: a chart still carries a hidden dataset: {legend}"
-        assert all("Total active" in c["labels"] for c in legend), legend
+        assert all("Pool used" in c["labels"] for c in legend), (
+            legend
+        )  # beta.19 (Q154): the series the projection continues
         assert all("Projected total (trend of daily peaks)" in c["labels"] for c in legend), (
             f"reports: every demo subnet has 30 days of history, so every chart should draw a projection: {legend}"
         )

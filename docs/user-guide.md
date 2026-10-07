@@ -393,11 +393,12 @@ Below that is the forecast: the highest active-lease count in the last
 the trend is rising — roughly when it reaches 90 % of the pool, with the
 date.
 
-**The chart.** Each chart draws three lease lines — *Dynamic Leases*,
-*Reserved*, and a thin *Total active* line that is their sum, which is the
-series the forecast is fitted on — and, when there is enough history, a
+**The chart.** Each chart draws *Pool used* (the leases inside the pools -
+the series the forecast is fitted on, recorded from the first snapshot taken
+by 5.68.0-beta.19), *Reservations configured*, *Active clients (whole
+subnet)* and the *Pool Size* — and, when there is enough history, a
 dashed amber **Projected total (trend of daily peaks)** that continues the
-Total active line from its last point, 30 days ahead. The dashed line is a
+Pool used line from its last point, 30 days ahead. The dashed line is a
 straight-line fit of each day's peak over the last 30 days, carried forward
 and kept between 0 and the pool size; a rising line stops the day it would
 fill the pool. It is drawn for a **rising, a flat and a falling** trend
