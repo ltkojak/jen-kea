@@ -396,6 +396,19 @@ subnet": `None` is False unless the caller is unrestricted or opts out
 explicitly — core's rule, instead of four plugins each writing
 `if sid is not None and sid not in allowed` (which makes None mean allow).
 
+**A fix to a definition is a fix to every use (v5.68.0-beta.18, Q153).** "This lease is current" is `state = 0 AND expire > NOW()`: Kea keeps a
+state-0 row past its expiry until reclamation removes it, so `state = 0` alone calls an expired lease current. Q145 (beta.10) defined the
+predicate and applied it to "every current-lease query named above" - a list written from one grep of `client_subject`, pinned by a guard over
+three files - and twenty-five other queries in the tree kept the bare `state=0` (the default Leases view, every per-subnet count, the delete
+safety check, the API summary, Reports, the snapshot that feeds history and the forecast, the alert lease map, the device scan, DDNS, the setup
+wizard, three bundled plugins): an expired lease counted as active, as pool consumption and as a device that was "seen". The definition now lives
+in one Flask-free module, `jen/services/leases_sql.py` (`ACTIVE_LEASE4/6`, `active_lease4('l')` for an aliased table, `NOT_ACTIVE_LEASE4/6`), and
+`tests/test_active_lease.py::TestTheWholeTreeHasOneSpelling` parses EVERY Python file under `jen/` and `plugins/` and fails on a SQL string that
+spells `state = 0` / `state != 0` by hand - the allowlist (`HISTORICAL`) holds the deliberately historical queries, each with its reason, and a
+stale entry fails too. Plugins receive the constants through `jen.plugin_api` only. The rule for the next definition: a change to what something
+MEANS carries the repository-wide grep of its uses as a deliverable (the count goes in the report) and a source test over the whole tree, never
+over a file list.
+
 ## 3. Deliberate trust boundaries
 
 These are places where Jen makes a conscious security tradeoff rather

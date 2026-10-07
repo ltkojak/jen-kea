@@ -32,6 +32,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 
 import jen.models.db as __db
+from jen.services import leases_sql as _leases_sql
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,9 @@ logger = logging.getLogger(__name__)
 #: Explain's inputs are read from. Every query that asks for the CURRENT lease of a client, an address or a hostname uses this
 #: (the historical views - the Leases page with "show expired" - keep the rows). The IPv6 twin is `kea6.ACTIVE_LEASE6`;
 #: tests/test_active_lease.py refuses a "current lease" query that spells it any other way.
-ACTIVE_LEASE4 = "state = 0 AND expire > NOW()"
+ACTIVE_LEASE4 = (
+    _leases_sql.ACTIVE_LEASE4
+)  # the one definition (jen/services/leases_sql.py); kept here for the callers that import it from this module
 
 # ── Identifier kind detection (pure) ────────────────────────────────────────────
 

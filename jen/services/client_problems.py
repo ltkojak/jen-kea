@@ -50,6 +50,7 @@ from datetime import datetime, timedelta, timezone
 from jen import extensions
 from jen.services import kea_host as _host
 from jen.services import kea_log_trace as _klt
+from jen.services.leases_sql import active_lease4
 
 logger = logging.getLogger(__name__)
 
@@ -446,7 +447,7 @@ def _held_rows() -> list[dict]:
             "SELECT HEX(h.dhcp_identifier) AS res_mac_hex, INET_NTOA(h.ipv4_address) AS ip, h.dhcp4_subnet_id AS subnet_id, "
             "HEX(l.hwaddr) AS holder_hex FROM hosts h JOIN lease4 l ON l.address = h.ipv4_address "
             "WHERE h.dhcp_identifier_type=0 AND h.ipv4_address IS NOT NULL AND h.ipv4_address <> 0 "
-            "AND l.state=0 AND l.expire > NOW() AND l.hwaddr <> h.dhcp_identifier LIMIT %s",
+            f"AND {active_lease4('l')} AND l.hwaddr <> h.dhcp_identifier LIMIT %s",  # nosec B608 - a fixed constant
             (MAX_DB_ROWS,),
         )
         return list(cur.fetchall())

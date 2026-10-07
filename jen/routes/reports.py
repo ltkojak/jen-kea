@@ -17,6 +17,7 @@ import jen.services.kea6 as __kea6
 from jen import extensions
 from jen.services.access import accessible_subnet6_map, diagnostic_surface
 from jen.services.access import admin_required as _admin_required
+from jen.services.leases_sql import ACTIVE_LEASE4
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("reports", __name__)
@@ -70,7 +71,10 @@ def reports():
     try:
         with __db.kea_db() as db, __db.jen_db() as jdb, db.cursor() as cur, jdb.cursor() as jcur:
             for subnet_id, info in current_user.filter_subnet_map(extensions.SUBNET_MAP).items():
-                cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
+                cur.execute(
+                    f"SELECT COUNT(*) as cnt FROM lease4 WHERE {ACTIVE_LEASE4} AND subnet_id=%s",  # nosec B608 - a fixed constant
+                    (subnet_id,),
+                )
                 active = cur.fetchone()["cnt"]
                 jcur.execute(
                     """

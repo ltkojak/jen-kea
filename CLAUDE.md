@@ -66,6 +66,10 @@ and as a gate on every tagged release (`release.yml`).
   — then add a test in `tests/test_migrations.py` that interrupts it between its statements
   and re-runs it. Every DDL statement has its own guard (Q151); the only edit to a released
   migration is tightening its guards.
+- **A fix to a definition is a fix to every use.** A Q that introduces or changes a definition (what "current lease" means, how a pool's size
+  is read, what a threshold alert's state is) carries the repository-wide grep of its uses as a deliverable - the count goes in the report - and
+  a source test over the WHOLE tree, never a file list (Q145 pinned `ACTIVE_LEASE4` over three files and twenty-five other queries kept
+  `state=0`; Q153 moved them and made the guard whole-tree: `tests/test_active_lease.py`, `jen/services/leases_sql.py`).
 - **The audits are tests.** `tests/test_invariant_sweeps.py` (Q151) is the whole-repo audit of
   the invariants that kept being re-found by hand: S1 a secret is never written by a plain
   `open`/redirect/`cp` (private from the first byte, `jen/services/private_files.py`,

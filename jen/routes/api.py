@@ -31,6 +31,7 @@ from jen.services.kea import (
     kea_command,
     probe_kea_health,
 )
+from jen.services.leases_sql import ACTIVE_LEASE4, active_lease4
 
 bp = Blueprint("api", __name__)
 
@@ -137,7 +138,10 @@ def api_v1_subnets():
             for sid, info in extensions.SUBNET_MAP.items():
                 if scope is not None and sid not in scope:
                     continue
-                cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (sid,))
+                cur.execute(
+                    f"SELECT COUNT(*) as cnt FROM lease4 WHERE {ACTIVE_LEASE4} AND subnet_id=%s",  # nosec B608 - a fixed constant
+                    (sid,),
+                )
                 active = cur.fetchone()["cnt"]
                 cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (sid,))
                 reserved = cur.fetchone()["cnt"]
@@ -284,7 +288,7 @@ def api_v1_leases():
     result = []
     try:
         with kea_db() as db, db.cursor() as cur:
-            where = ["l.state=0", "l.expire > NOW()"]
+            where = [active_lease4("l")]
             params = []
             if scope is not None:
                 placeholders = ",".join(["%s"] * len(scope))

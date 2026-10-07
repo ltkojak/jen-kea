@@ -32,6 +32,7 @@ from jen import extensions
 from jen.services.access import accessible_subnet6_map, assert_subnet6_access
 from jen.services.access import admin_required as _admin_required
 from jen.services.csv_safe import safe_row as _safe_row
+from jen.services.leases_sql import active_lease4
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("reservations", __name__)
@@ -132,7 +133,7 @@ def reservations():
             # between the COUNT query and the main SELECT and a
             # LEFT JOIN would double-count/complicate COUNT(*).
             active_lease_exists = (
-                "EXISTS (SELECT 1 FROM lease4 l WHERE l.address=h.ipv4_address AND l.state=0 AND l.expire > NOW())"
+                f"EXISTS (SELECT 1 FROM lease4 l WHERE l.address=h.ipv4_address AND {active_lease4('l')})"
             )
             if status_filter == "active":
                 where.append(active_lease_exists)
@@ -153,7 +154,7 @@ def reservations():
                                l.expire AS lease_expire, HEX(l.hwaddr) AS lease_mac_hex
                         FROM hosts h
                         LEFT JOIN lease4 l ON l.address = h.ipv4_address
-                            AND l.state = 0 AND l.expire > NOW()
+                            AND {active_lease4("l")}
                         WHERE {" AND ".join(where)}
                         ORDER BY {sort_col} {direction}
                         {limit_clause}

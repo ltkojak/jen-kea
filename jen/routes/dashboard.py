@@ -25,6 +25,7 @@ import jen.services.kea_config_view as __view
 from jen import extensions
 from jen.services.access import accessible_subnet6_map, diagnostic_surface, paired_v4_id, subnet6_visible
 from jen.services.fingerprint import DEVICE_TYPE_DISPLAY
+from jen.services.leases_sql import ACTIVE_LEASE4, active_lease4
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("dashboard", __name__)
@@ -214,8 +215,7 @@ def dashboard():
                            HEX(l.hwaddr) AS mac_hex, l.subnet_id,
                            (l.expire - INTERVAL l.valid_lifetime SECOND) AS obtained
                     FROM lease4 l
-                    WHERE l.state=0
-                      AND l.expire > NOW()
+                    WHERE {active_lease4("l")}
                       AND (l.expire - INTERVAL l.valid_lifetime SECOND) > (NOW() - INTERVAL %s SECOND)
                       {subnet_clause}
                     ORDER BY (l.expire - INTERVAL l.valid_lifetime SECOND) DESC
@@ -402,14 +402,17 @@ def api_stats():
             accessible = current_user.filter_subnet_map(extensions.SUBNET_MAP)
             with db.cursor() as cur:
                 for subnet_id, info in accessible.items():
-                    cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
+                    cur.execute(
+                        f"SELECT COUNT(*) as cnt FROM lease4 WHERE {ACTIVE_LEASE4} AND subnet_id=%s",  # nosec B608 - a fixed constant
+                        (subnet_id,),
+                    )
                     active = cur.fetchone()["cnt"]
                     cur.execute(
-                        """
+                        f"""
                         SELECT COUNT(*) as cnt FROM lease4 l
                         LEFT JOIN hosts h ON h.dhcp4_subnet_id=l.subnet_id
                             AND h.dhcp_identifier=l.hwaddr AND h.dhcp_identifier_type=0
-                        WHERE l.state=0 AND l.subnet_id=%s AND h.host_id IS NULL
+                        WHERE {active_lease4("l")} AND l.subnet_id=%s AND h.host_id IS NULL
                     """,
                         (subnet_id,),
                     )
@@ -723,8 +726,7 @@ def api_recent_leases():
 
             where, params = (
                 [
-                    "l.state=0",
-                    "l.expire > NOW()",
+                    active_lease4("l"),
                     "(l.expire - INTERVAL l.valid_lifetime SECOND) > (NOW() - INTERVAL %s SECOND)",
                 ],
                 [window_seconds],
@@ -834,7 +836,10 @@ def prometheus_metrics():
     try:
         with __db.kea_db() as db, db.cursor() as cur:
             for subnet_id, info in extensions.SUBNET_MAP.items():
-                cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
+                cur.execute(
+                    f"SELECT COUNT(*) as cnt FROM lease4 WHERE {ACTIVE_LEASE4} AND subnet_id=%s",  # nosec B608 - a fixed constant
+                    (subnet_id,),
+                )
                 cnt = cur.fetchone()["cnt"]
                 active_by_subnet[subnet_id] = cnt
                 lines.append(f'jen_subnet_active_leases{{subnet="{info["name"]}",cidr="{info["cidr"]}"}} {cnt}')

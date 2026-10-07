@@ -19,6 +19,7 @@ import jen.services.kea6 as __kea6
 from jen import extensions
 from jen.services.access import accessible_subnet6_map, assert_subnet6_access
 from jen.services.access import admin_required as _admin_required
+from jen.services.leases_sql import ACTIVE_LEASE4, active_lease4
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("leases", __name__)
@@ -90,7 +91,7 @@ def leases():
                 where = []
                 params = []
                 if not show_expired:
-                    where.append("l.state=0")
+                    where.append(active_lease4("l"))
                 if subnet_filter != "all":
                     where.append("l.subnet_id=%s")
                     params.append(int(subnet_filter))
@@ -304,7 +305,10 @@ def release_lease():
                 # v4.4.9: check which subnet this IP actually belongs to
                 # before touching it — previously any admin could release
                 # any lease system-wide by IP alone, no subnet check at all.
-                cur.execute("SELECT subnet_id FROM lease4 WHERE inet_ntoa(address)=%s AND state=0", (ip,))
+                cur.execute(
+                    f"SELECT subnet_id FROM lease4 WHERE inet_ntoa(address)=%s AND {ACTIVE_LEASE4}",  # nosec B608 - a fixed constant
+                    (ip,),
+                )
                 row = cur.fetchone()
                 if not row:
                     flash(f"No active lease found for {ip}.", "warning")
@@ -363,7 +367,7 @@ def bulk_release_leases():
                             "SELECT l.subnet_id FROM lease4 l "
                             "LEFT JOIN hosts h ON h.dhcp4_subnet_id=l.subnet_id "
                             "AND h.dhcp_identifier=l.hwaddr AND h.dhcp_identifier_type=0 "
-                            "WHERE inet_ntoa(l.address)=%s AND l.state=0 AND h.host_id IS NULL",
+                            f"WHERE inet_ntoa(l.address)=%s AND {active_lease4('l')} AND h.host_id IS NULL",  # nosec B608 - a fixed constant
                             (ip,),
                         )
                         row = cur.fetchone()
@@ -479,7 +483,7 @@ def ipmap():
     try:
         with __db.kea_db() as db, db.cursor() as cur:
             cur.execute(
-                "SELECT inet_ntoa(address) AS ip, hostname, HEX(hwaddr) AS mac_hex FROM lease4 WHERE state=0 AND subnet_id=%s",
+                f"SELECT inet_ntoa(address) AS ip, hostname, HEX(hwaddr) AS mac_hex FROM lease4 WHERE {ACTIVE_LEASE4} AND subnet_id=%s",  # nosec B608 - a fixed constant
                 (subnet_filter,),
             )
             for row in cur.fetchall():

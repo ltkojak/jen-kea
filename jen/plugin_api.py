@@ -93,6 +93,11 @@ from jen.services.fingerprint import classify_device  # noqa: E402
 # ── Investigation providers (v5.68.0-beta.4, Q139) ────────────────────────────
 from jen.services.investigation_providers import register_investigation_provider  # noqa: E402
 
+# ── The one definition of a CURRENT lease (v5.68.0-beta.18, Q153) ─────────────────
+# `state = 0 AND expire > NOW()` - Kea keeps a state-0 row past its expiry until reclamation, so `state = 0` alone calls an expired
+# lease current. Interpolate these (they are constants, not input); a plugin never spells the predicate itself.
+from jen.services.leases_sql import ACTIVE_LEASE4, ACTIVE_LEASE6  # noqa: E402
+
 # ── Small helpers every plugin copied by hand (v5.65.10, Q99 l) ──────────────────
 from jen.services.plugin_helpers import (  # noqa: E402
     in_placeholders,
@@ -173,6 +178,8 @@ def jen_version() -> str:
 
 
 __all__ = [
+    "ACTIVE_LEASE4",
+    "ACTIVE_LEASE6",
     "PERIODIC_MIN_MINUTES",
     "PLUGIN_API_VERSION",
     "admin_required",

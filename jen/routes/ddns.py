@@ -38,6 +38,7 @@ from jen.services.access import add_subnet_restriction as _add_subnet_restrictio
 from jen.services.access import admin_required as _admin_required
 from jen.services.access import diagnostic_surface
 from jen.services.csv_safe import safe_row as _safe_row
+from jen.services.leases_sql import NOT_ACTIVE_LEASE4, active_lease4
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("ddns", __name__)
@@ -397,7 +398,7 @@ def _reconcile_rows():
             rows.append({"name": row["hostname"], "ip": row["ip"], "source": "reservation"})
 
         # (same reviewed B608 pattern as the reservations query above)
-        where, params = ["l.state=0", "l.hostname != ''"], []
+        where, params = [active_lease4("l"), "l.hostname != ''"], []
         where, params = _add_subnet_restriction(where, params, "l", "subnet_id")
         cur.execute(
             f"SELECT inet_ntoa(l.address) AS ip, l.hostname FROM lease4 l WHERE {' AND '.join(where)} ORDER BY l.address",
@@ -409,7 +410,9 @@ def _reconcile_rows():
         # Expired names are scoped like the two queries above: a restricted user
         # must not learn hostnames from subnets they cannot see. A fixed
         # statement (bandit B608), filtered per row.
-        cur.execute("SELECT DISTINCT subnet_id, hostname FROM lease4 WHERE state != 0 AND hostname != ''")
+        cur.execute(
+            f"SELECT DISTINCT subnet_id, hostname FROM lease4 WHERE {NOT_ACTIVE_LEASE4} AND hostname != ''"  # nosec B608 - a fixed constant
+        )
         for row in cur.fetchall():
             if current_user.all_subnets or current_user.can_access_subnet(row["subnet_id"]):
                 expired_names.add(row["hostname"].lower())

@@ -20,6 +20,7 @@ import jen.services.mfa as __mfa
 from jen import extensions
 from jen.services.access import admin_required as _admin_required
 from jen.services.access import superadmin_required as _superadmin_required
+from jen.services.leases_sql import ACTIVE_LEASE4
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("users", __name__)
@@ -130,7 +131,10 @@ def about():
     try:
         with __db.kea_db() as db, db.cursor() as cur:
             for sid in extensions.SUBNET_MAP:
-                cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (sid,))
+                cur.execute(
+                    f"SELECT COUNT(*) as cnt FROM lease4 WHERE {ACTIVE_LEASE4} AND subnet_id=%s",  # nosec B608 - a fixed constant
+                    (sid,),
+                )
                 lease_counts[sid] = cur.fetchone()["cnt"]
     except Exception:
         pass

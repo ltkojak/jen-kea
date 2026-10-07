@@ -10,6 +10,7 @@ import logging
 import os
 
 from jen import extensions
+from jen.services.leases_sql import ACTIVE_LEASE4
 
 logger = logging.getLogger(__name__)
 
@@ -318,7 +319,7 @@ def client_hostname(ip: str) -> str:
 
         with kea_db() as db, db.cursor() as cur:
             cur.execute(
-                "SELECT hostname FROM lease4 WHERE inet_ntoa(address)=%s AND state=0 ORDER BY expire DESC LIMIT 1",
+                f"SELECT hostname FROM lease4 WHERE inet_ntoa(address)=%s AND {ACTIVE_LEASE4} ORDER BY expire DESC LIMIT 1",  # nosec B608 - a fixed constant
                 (ip,),
             )
             row = cur.fetchone()

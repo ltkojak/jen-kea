@@ -13,6 +13,7 @@ import time
 import requests
 
 from jen import extensions
+from jen.services.leases_sql import ACTIVE_LEASE4, active_lease4
 
 logger = logging.getLogger(__name__)
 
@@ -769,14 +770,17 @@ def take_lease_snapshot():
 
             with kdb.cursor() as kcur, jdb.cursor() as jcur:
                 for subnet_id, _info in extensions.SUBNET_MAP.items():
-                    kcur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
+                    kcur.execute(
+                        f"SELECT COUNT(*) as cnt FROM lease4 WHERE {ACTIVE_LEASE4} AND subnet_id=%s",  # nosec B608 - a fixed constant
+                        (subnet_id,),
+                    )
                     active = kcur.fetchone()["cnt"]
                     kcur.execute(
-                        """
+                        f"""
                         SELECT COUNT(*) as cnt FROM lease4 l
                         LEFT JOIN hosts h ON h.dhcp4_subnet_id=l.subnet_id
                             AND h.dhcp_identifier=l.hwaddr AND h.dhcp_identifier_type=0
-                        WHERE l.state=0 AND l.subnet_id=%s AND h.host_id IS NULL
+                        WHERE {active_lease4("l")} AND l.subnet_id=%s AND h.host_id IS NULL
                     """,
                         (subnet_id,),
                     )
@@ -792,9 +796,14 @@ def take_lease_snapshot():
                         (subnet_id, active, dynamic, reserved, pool_size),
                     )
 
-                # Purge old history
+                # Purge old history - every history table's retention is one unconditional pass (v5.68.0-beta.18, Q153): the IPv6 table's
+                # rows are removed here whether or not IPv6 is still on (its live read and insert stay behind is_ipv6_enabled below)
                 jcur.execute(
                     f"DELETE FROM lease_history WHERE snapshot_time < DATE_SUB(NOW(), INTERVAL {retention_days} DAY)"
+                )
+                jcur.execute(
+                    "DELETE FROM lease6_history WHERE snapshot_time < DATE_SUB(NOW(), INTERVAL %s DAY)",
+                    (retention_days,),
                 )
             jdb.commit()
     except Exception as e:
@@ -814,32 +823,27 @@ def take_lease6_snapshot():
     """v5.68.0-beta.17 (Q152) - fill `lease6_history`, which migration 11 created in v5.0 and nothing ever wrote (so every install had
     an empty table, the backup described "historical IPv6 lease counts" that did not exist, and an IPv6 subnet had no history on
     Reports). One row per IPv6 subnet per snapshot: the ACTIVE leases by type (IA_NA addresses, IA_TA, IA_PD delegated prefixes) and the
-    reservations by type (address, prefix), counted through the same readers the pages use (`kea6.list_lease6`, which keeps only
-    active leases, and `kea6.get_ipv6_reservations`). There is deliberately no pool size column: a /64 has no finite pool to measure
-    utilization against (migration 11). Old rows are removed with the same `history_retention_days` as the IPv4 history."""
+    reservations by type (address, prefix), counted with the predicate the pages use (`ACTIVE_LEASE6`). There is deliberately no pool size column: a /64 has no finite pool to measure
+    utilization against (migration 11). Counted by two aggregate queries (`kea6.count_lease6_by_subnet` / `count_reservations6_by_subnet`,
+    v5.68.0-beta.18); old rows are removed by `take_lease_snapshot`'s retention pass with the IPv4 history's `history_retention_days`."""
     from jen.services import kea6 as _kea6
 
-    retention_days = int(__get_global_setting("history_retention_days", "90"))
+    # v5.68.0-beta.18 (Q153): two aggregate queries for the whole map (it was `list_lease6` + `get_ipv6_reservations` per subnet,
+    # materialising every lease with a MAC lookup each), and no DELETE here: the retention of every history table is one
+    # unconditional pass (`take_lease_snapshot`), so turning IPv6 off no longer leaves months of rows behind forever.
+    leases = _kea6.count_lease6_by_subnet()
+    reservations = _kea6.count_reservations6_by_subnet()
     with __jen_db_ctx() as jdb, jdb.cursor() as jcur:
         for subnet_id in list(extensions.SUBNET6_MAP):
-            active = {"IA_NA": 0, "IA_TA": 0, "IA_PD": 0}
-            for lease in _kea6.list_lease6(subnet_id=subnet_id):
-                name = lease.get("lease_type_name")
-                if name in active:
-                    active[name] += 1
-            reserved = {"IA_NA": 0, "IA_PD": 0}
-            for host in _kea6.get_ipv6_reservations(subnet_id=subnet_id):
-                for r in host.get("reservations", []):
-                    if r.get("type_name") in reserved:
-                        reserved[r["type_name"]] += 1
+            active = leases.get(subnet_id, {})
+            reserved = reservations.get(subnet_id, {})
+            active = {"IA_NA": active.get("IA_NA", 0), "IA_TA": active.get("IA_TA", 0), "IA_PD": active.get("IA_PD", 0)}
+            reserved = {"IA_NA": reserved.get("IA_NA", 0), "IA_PD": reserved.get("IA_PD", 0)}
             jcur.execute(
                 "INSERT INTO lease6_history (subnet_id, active_na, active_ta, active_pd, reserved_na, reserved_pd) "
                 "VALUES (%s, %s, %s, %s, %s, %s)",
                 (subnet_id, active["IA_NA"], active["IA_TA"], active["IA_PD"], reserved["IA_NA"], reserved["IA_PD"]),
             )
-        jcur.execute(
-            "DELETE FROM lease6_history WHERE snapshot_time < DATE_SUB(NOW(), INTERVAL %s DAY)", (retention_days,)
-        )
 
 
 def _packet_stat_key(key):
@@ -1035,7 +1039,10 @@ def send_daily_summary():
         with __kea_db_ctx() as db, __jen_db_ctx() as jdb:
             with db.cursor() as cur:
                 for subnet_id, info in extensions.SUBNET_MAP.items():
-                    cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
+                    cur.execute(
+                        f"SELECT COUNT(*) as cnt FROM lease4 WHERE {ACTIVE_LEASE4} AND subnet_id=%s",  # nosec B608 - a fixed constant
+                        (subnet_id,),
+                    )
                     active = cur.fetchone()["cnt"]
                     cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
                     reserved = cur.fetchone()["cnt"]
@@ -1321,14 +1328,14 @@ def check_alerts():
                     # reserved leases need different freshness logic,
                     # only a different alert type once something IS
                     # fresh.
-                    cur.execute("""
+                    cur.execute(f"""
                             SELECT inet_ntoa(l.address) AS ip, l.hwaddr,
                                    IFNULL(l.hostname,'') AS hostname, l.subnet_id,
                                    (h.host_id IS NOT NULL) AS is_reserved
                             FROM lease4 l
                             LEFT JOIN hosts h ON h.dhcp4_subnet_id=l.subnet_id
                                 AND h.dhcp_identifier=l.hwaddr AND h.dhcp_identifier_type=0
-                            WHERE l.state=0
+                            WHERE {active_lease4("l")}
                         """)
                     # v5.42.0 (Q43) — IP-keyed dict, not just a set of IPs,
                     # so diff_leases() (pure, factored out) can also spot
@@ -1346,10 +1353,10 @@ def check_alerts():
                     lease_events = [] if first_run else diff_leases(last_seen_leases, current_leases)
 
                     # ── Device inventory update ──
-                    cur.execute("""
+                    cur.execute(f"""
                             SELECT inet_ntoa(l.address) AS ip, l.hwaddr,
                                    IFNULL(l.hostname,'') AS hostname, l.subnet_id
-                            FROM lease4 l WHERE l.state=0
+                            FROM lease4 l WHERE {active_lease4("l")}
                         """)
                     all_leases = cur.fetchall()
                     try:
@@ -1495,7 +1502,10 @@ def check_alerts():
                             if sid not in extensions.SUBNET_MAP:
                                 continue
                             info = extensions.SUBNET_MAP[sid]
-                            cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (sid,))
+                            cur.execute(
+                                f"SELECT COUNT(*) as cnt FROM lease4 WHERE {ACTIVE_LEASE4} AND subnet_id=%s",  # nosec B608 - a fixed constant
+                                (sid,),
+                            )
                             active = cur.fetchone()["cnt"]
                             for pool in s.get("pools", []):
                                 p = pool.get("pool", "") if isinstance(pool, dict) else str(pool)

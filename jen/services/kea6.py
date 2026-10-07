@@ -28,6 +28,7 @@ import logging
 import shlex
 
 from jen import extensions
+from jen.services import leases_sql as _leases_sql
 from jen.services.kea import kea_command
 
 logger = logging.getLogger(__name__)
@@ -301,7 +302,7 @@ def get_lease6_mac(hwaddr_hex: str, duid_hex: str):
 #: v5.68.0-beta.10 (Q145) - the v6 twin of client_subject.ACTIVE_LEASE4: a lease6 row is ACTIVE when its state is 0 and it has
 #: not passed its expiry. `expired` on a row is the negation (state != 0 OR expire <= NOW()). A state-0 row past its `expire` lingers
 #: until Kea reclaims it and used to count as an active v6 lease.
-ACTIVE_LEASE6 = "state = 0 AND expire > NOW()"
+ACTIVE_LEASE6 = _leases_sql.ACTIVE_LEASE6  # the one definition (jen/services/leases_sql.py)
 
 
 def list_lease6(
@@ -467,6 +468,47 @@ def _reservation6_matches(host: dict, needle: str) -> bool:
         or (bool(duid_n) and duid_n in (host.get("duid_hex") or "").lower())
         or any(n in s for r in host.get("reservations", []) for s in _address_spellings(r.get("address")))
     )
+
+
+def count_lease6_by_subnet(subnet_ids=None) -> dict:
+    """v5.68.0-beta.18 (Q153) - ACTIVE leases per IPv6 subnet and type from ONE aggregate query (`state = 0 AND expire > NOW()`, the
+    same predicate `list_lease6` uses): {subnet_id: {"IA_NA": n, "IA_TA": n, "IA_PD": n}}. The snapshot job used to materialise every
+    lease of every subnet through `list_lease6` (a MAC lookup per row) to count them in Python. `subnet_ids` (default
+    `extensions.SUBNET6_MAP`) scopes the result: a subnet outside it is never returned."""
+    from jen.models.db import kea6_db
+
+    wanted = set(extensions.SUBNET6_MAP if subnet_ids is None else subnet_ids)
+    out = {sid: {"IA_NA": 0, "IA_TA": 0, "IA_PD": 0} for sid in wanted}
+    with kea6_db() as db, db.cursor() as cur:
+        cur.execute(
+            f"SELECT subnet_id, lease_type, COUNT(*) AS cnt FROM lease6 WHERE {ACTIVE_LEASE6} GROUP BY subnet_id, lease_type"  # nosec B608 - a fixed constant
+        )
+        for row in cur.fetchall():
+            name = LEASE6_TYPE_NAMES.get(row["lease_type"])
+            if row["subnet_id"] in out and name in out[row["subnet_id"]]:
+                out[row["subnet_id"]][name] = int(row["cnt"])
+    return out
+
+
+def count_reservations6_by_subnet(subnet_ids=None) -> dict:
+    """v5.68.0-beta.18 (Q153) - IPv6 reservations per subnet and type from ONE aggregate query over `hosts` x `ipv6_reservations`:
+    {subnet_id: {"IA_NA": n, "IA_PD": n}} (an address entry and a prefix entry of one host are each counted, as
+    `get_ipv6_reservations` lists them). Scoped by `subnet_ids` (default `extensions.SUBNET6_MAP`) as `count_lease6_by_subnet` is."""
+    from jen.models.db import kea6_db
+
+    wanted = set(extensions.SUBNET6_MAP if subnet_ids is None else subnet_ids)
+    out = {sid: {"IA_NA": 0, "IA_PD": 0} for sid in wanted}
+    with kea6_db() as db, db.cursor() as cur:
+        cur.execute(
+            "SELECT h.dhcp6_subnet_id AS subnet_id, r.type AS rtype, COUNT(*) AS cnt FROM hosts h "
+            "JOIN ipv6_reservations r ON r.host_id = h.host_id WHERE h.dhcp6_subnet_id IS NOT NULL "
+            "GROUP BY h.dhcp6_subnet_id, r.type"
+        )
+        for row in cur.fetchall():
+            name = IPV6_RESERVATION_TYPE_NAMES.get(row["rtype"])
+            if row["subnet_id"] in out and name in out[row["subnet_id"]]:
+                out[row["subnet_id"]][name] = int(row["cnt"])
+    return out
 
 
 def get_ipv6_reservations(subnet_id: int = None) -> list:

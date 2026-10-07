@@ -33,6 +33,7 @@ from jen.services.access import accessible_subnet6_map, assert_subnet6_access, c
 from jen.services.access import admin_required as _admin_required
 from jen.services.access import assert_subnet_access as _assert_subnet_access
 from jen.services.access import superadmin_required as _superadmin_required
+from jen.services.leases_sql import ACTIVE_LEASE4
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("subnets", __name__)
@@ -169,7 +170,10 @@ def subnets():
             accessible_subnet_map = current_user.filter_subnet_map(extensions.SUBNET_MAP)
             with db.cursor() as cur:
                 for subnet_id, info in accessible_subnet_map.items():
-                    cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
+                    cur.execute(
+                        f"SELECT COUNT(*) as cnt FROM lease4 WHERE {ACTIVE_LEASE4} AND subnet_id=%s",  # nosec B608 - a fixed constant
+                        (subnet_id,),
+                    )
                     active = cur.fetchone()["cnt"]
                     cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
                     reserved = cur.fetchone()["cnt"]
@@ -502,7 +506,10 @@ def delete_subnet(subnet_id):
     # deleting Kea config out from under live leases would orphan them.
     try:
         with __db.kea_db() as db, db.cursor() as cur:
-            cur.execute("SELECT COUNT(*) as cnt FROM lease4 WHERE state=0 AND subnet_id=%s", (subnet_id,))
+            cur.execute(
+                f"SELECT COUNT(*) as cnt FROM lease4 WHERE {ACTIVE_LEASE4} AND subnet_id=%s",  # nosec B608 - a fixed constant
+                (subnet_id,),
+            )
             active_leases = cur.fetchone()["cnt"]
             cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
             reservations = cur.fetchone()["cnt"]

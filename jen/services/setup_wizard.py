@@ -22,6 +22,8 @@ import json
 import logging
 from urllib.parse import urlsplit, urlunsplit
 
+from jen.services.leases_sql import active_lease4
+
 logger = logging.getLogger(__name__)
 
 STEPS = ("connect", "found", "helper", "baseline", "recovery", "investigate")
@@ -883,7 +885,7 @@ def recent_leases(limit: int = 5) -> list[dict]:
     out = []
     try:
         with __db.kea_db() as conn:
-            where, params = add_subnet_restriction(["l.state=0"], [], "l", "subnet_id")
+            where, params = add_subnet_restriction([active_lease4("l")], [], "l", "subnet_id")
             with conn.cursor() as cur:
                 cur.execute(
                     f"""
