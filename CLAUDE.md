@@ -182,6 +182,9 @@ assign an `extensions.*` config global anywhere else. To change config at runtim
 `app_config.write_value()` / `write_values()` / `write_subnets()` / `mutate()` — each
 writes to disk *and* re-derives every global atomically, so disk and memory can't diverge.
 (The test suite patching these globals directly is the one sanctioned exception.)
+Every writer holds ONE lock for its whole read-modify-replace: the class-level `RLock` (threads) and an advisory `flock` on `<config>.lock`
+(processes - `install.sh --configure` holds the same one, and merges its wizard's answers into the live file through `tools/config_merge.py`).
+A writer called from inside a `mutate` callback raises; edit the parser you were given.
 
 ### App factory and request pipeline
 

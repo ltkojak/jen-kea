@@ -1809,7 +1809,11 @@ upgrade); the Problems inbox keeps 30 days; the audit log keeps `audit_retention
 snapshot. `jen_alerts_sent_total` keeps counting alerts that retention removed (a stored total, `alert_log_pruned_totals`, is added back).
 
 **Settings saves are serialised.** Two saves at the same moment (two admins, or a save during the setup wizard) used to be able to lose one; Jen now
-writes `jen.config` one writer at a time. **The provider pool** that runs the plugins' investigation and search cards follows `[server] threads` (the
+writes `jen.config` one writer at a time - and, since 5.68.0-beta.18, one writer at a time across processes too: `jen.config.lock` (beside the config, owned by
+the service user) is an advisory lock every save takes and that `sudo ./install.sh --configure` holds from the start of its wizard until it has written the file.
+A Settings save made while the wizard is open waits for it (up to 30 s, then says the config is locked) instead of being overwritten, and `--configure` now
+**merges your answers into the live file**: anything the wizard does not ask about (OIDC, extra Kea servers, `[kea6]`, the update channel) is kept rather than
+dropped, and a setting you saved in Jen while the wizard was open survives unless you changed that very question. **The provider pool** that runs the plugins' investigation and search cards follows `[server] threads` (the
 ceiling is `max(16, 2 × threads × providers)`), so two people opening an Investigation page together both get every card. **The live watch on Trace**
 costs the Kea host one log read per three seconds however many people are watching.
 

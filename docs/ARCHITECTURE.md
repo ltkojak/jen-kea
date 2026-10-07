@@ -2561,7 +2561,20 @@ the setup wizard or Author Kea Config's `[subnets]` write - were a lost update: 
 `RLock` (`AppConfig._write_lock`) is held from the read to the end of the reload, so what a writer reads is what is on disk when it replaces it and
 the `extensions.*` globals are re-derived in the order the file changed. It is an RLock because `mutate`'s callback may call a writer, and
 class-level so every instance serialises against every other. Readers take no lock: `os.replace` means they see the old file or the new one.
-It guards threads in this process only - a second Jen process writing the same file is outside the model, as before.
+It guards threads in this process only - the installer is another process, see the next paragraph.
+
+**...and the installer takes the same lock (v5.68.0-beta.18, Q153).** `install.sh --configure` runs an interactive wizard and rewrites `jen.config` with Jen
+running, so a Settings save made during the wizard was overwritten by the installer's older copy (and everything the wizard never asks about - `[oidc]`,
+extra Kea servers, `[kea6]`, `[subnets6]`, the update channel - was dropped with it). Every writer now also takes an exclusive advisory `flock` on
+`<config>.lock` for its whole read-modify-replace (once per thread: the RLock allows a nested writer and a second descriptor in the same thread would queue
+behind the first), waiting up to 30 s and then raising `ConfigFileLocked` (a Settings save says why instead of writing); the lock file is created 0600 owned
+by the service user and never opened through a symlink (if it cannot be opened the save degrades to the in-process lock alone and logs it).
+`install.sh --configure` takes the lock before it reads anything (`_config_lock_acquire`) and holds it through `write_config`; because the wizard is
+interactive, `write_config` then re-reads the live file and merges the answers INTO it (`tools/config_merge.py`): a key the wizard did not ask about keeps its
+live value, a key the operator changed in the wizard wins, and a key the operator left as it was never undoes a newer save. Every other write the installer makes
+of the config or its backup goes through `tools/private_write.py --lock`. `AppConfig.mutate` hands its callback the parser to change and writes THAT parser
+when it returns, so a writer called from inside the callback would write to disk and then be silently overwritten; it now raises
+`RuntimeError("mutate the parser you were given")` (the old test codified "the outer write then wins").
 
 **The provider pool is sized for the server, not for one page.** Investigation and search providers (one per bundled plugin) run on a shared
 pool so the one-second budget is a bound (`jen/services/provider_budget.py`). It had 4 workers and a ceiling of 8 outstanding calls, with

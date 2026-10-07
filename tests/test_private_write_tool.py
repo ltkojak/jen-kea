@@ -152,3 +152,77 @@ class TestAFailedWriteLeavesNothingBehind:
         os.symlink(victim, tmp_path / ".k.aaaa.tmp")
         self._call(tool, tmp_path / "k")
         assert victim.read_text() == "keep" and (tmp_path / "k").read_bytes() == b"new content"
+
+
+class TestTheConfigFileLock:
+    """v5.68.0-beta.18 (Q153): `--lock PATH` holds the same exclusive advisory flock Jen's AppConfig writers take (`<config>.lock`) for the whole
+    write, so the installer and the running service cannot both rewrite jen.config at once."""
+
+    @staticmethod
+    def _hold(path, seconds=1.5):
+        import fcntl
+        import threading
+        import time
+
+        ready = threading.Event()
+
+        def run():
+            fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            ready.set()
+            time.sleep(seconds)
+            os.close(fd)
+
+        t = threading.Thread(target=run)
+        t.start()
+        ready.wait(5)
+        return t
+
+    def test_the_write_waits_for_a_held_lock_and_then_happens(self, tmp_path):
+        import time
+
+        lock = tmp_path / "jen.config.lock"
+        holder = self._hold(str(lock), 1.2)
+        started = time.monotonic()
+        proc = _run(str(tmp_path / "jen.config"), "--lock", str(lock), stdin=b"[a]\nb = 1\n")
+        waited = time.monotonic() - started
+        holder.join()
+        assert proc.returncode == 0, proc.stderr
+        assert waited >= 0.9, f"it did not wait for the lock holder ({waited:.2f}s)"
+        assert (tmp_path / "jen.config").read_bytes() == b"[a]\nb = 1\n"
+
+    def test_the_lock_file_is_created_0600_and_the_write_holds_nothing_afterwards(self, tmp_path):
+        import fcntl
+
+        lock = tmp_path / "jen.config.lock"
+        assert _run(str(tmp_path / "jen.config"), "--lock", str(lock), stdin=b"x").returncode == 0
+        assert stat.S_IMODE(lock.stat().st_mode) == 0o600
+        fd = os.open(lock, os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(fd)
+
+    def test_a_backup_copy_reads_the_live_file_inside_the_lock(self, tmp_path):
+        """The copy is read AFTER the lock is taken: a writer that held it and changed the file is seen, never a stale read from before."""
+        import threading
+        import time
+
+        live = tmp_path / "jen.config"
+        live.write_text("before")
+        lock = tmp_path / "jen.config.lock"
+        holder = self._hold(str(lock), 1.0)
+        threading.Timer(0.3, lambda: live.write_text("after")).start()  # the holder's save, while it holds the lock
+        time.sleep(0.05)
+        proc = _run(str(tmp_path / "bak"), "--copy-from", str(live), "--lock", str(lock))
+        holder.join()
+        assert proc.returncode == 0, proc.stderr
+        assert (tmp_path / "bak").read_text() == "after"
+
+    def test_a_symlink_lock_path_is_not_followed(self, tmp_path):
+        victim = tmp_path / "victim"
+        victim.write_text("untouched")
+        os.symlink(victim, tmp_path / "jen.config.lock")
+        proc = _run(str(tmp_path / "jen.config"), "--lock", str(tmp_path / "jen.config.lock"), stdin=b"x")
+        assert proc.returncode == 6 and not (tmp_path / "jen.config").exists()
+        assert victim.read_text() == "untouched"

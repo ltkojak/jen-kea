@@ -408,7 +408,12 @@ class TestWritersAreSerialized:
             def __exit__(self, *a):
                 return False
 
+        import jen.config as config_module
+
         monkeypatch.setattr(AppConfig, "_write_lock", NoLock())
+        monkeypatch.setattr(
+            config_module, "fcntl", None
+        )  # v5.68.0-beta.18: the file lock serialises threads too; remove both
         real_write = AppConfig._write_parser
 
         def slow_write(self, parser):
@@ -437,16 +442,32 @@ class TestWritersAreSerialized:
         self._hammer([subnets, values])
         assert self._present(isolated_config) == {f"v{i}" for i in range(self.ROUNDS)}
 
-    def test_mutate_may_call_a_writer_it_is_an_rlock(self, isolated_config):
-        """A callback that itself writes must not deadlock on the lock its own `mutate` holds (the outer write then wins, as before)."""
-        import threading
+    def test_a_writer_called_from_inside_mutate_raises_and_writes_nothing(self, isolated_config):
+        """v5.68.0-beta.18 (Q153): `mutate` writes the parser it handed to its callback when the callback returns, so a nested writer would
+        write to disk and be silently overwritten by the outer write of the parser read before. It is refused instead (it used to be
+        'allowed' and discard its change - tests/test_appconfig.py codified 'the outer write then wins')."""
+        import pytest
 
-        done = threading.Event()
+        for nested in (
+            lambda: app_config.write_value("race", "inner", "1", reload=False),
+            lambda: app_config.write_values([("race", "inner", "1")], reload=False),
+            lambda: app_config.mutate(lambda p: None, reload=False),
+        ):
+            with pytest.raises(RuntimeError, match="mutate the parser you were given"):
+                app_config.mutate(lambda p, nested=nested: nested(), reload=False)
+        assert "inner" not in self._present(isolated_config)
 
-        def go():
-            app_config.mutate(lambda p: app_config.write_value("race", "inner", "1", reload=False), reload=False)
-            done.set()
+    def test_the_callback_still_edits_the_parser_it_was_given(self, isolated_config):
+        app_config.mutate(lambda p: (p.add_section("race"), p.set("race", "viaparser", "1")), reload=False)
+        assert "viaparser" in self._present(isolated_config)
 
-        t = threading.Thread(target=go, daemon=True)
-        t.start()
-        assert done.wait(10), "mutate() with a nested writer deadlocked"
+    def test_a_failed_callback_does_not_leave_the_guard_on(self, isolated_config):
+        import pytest
+
+        def boom(p):
+            raise ValueError("callback failed")
+
+        with pytest.raises(ValueError):
+            app_config.mutate(boom, reload=False)
+        app_config.write_value("race", "after", "1", reload=False)  # an ordinary writer works again
+        assert "after" in self._present(isolated_config)

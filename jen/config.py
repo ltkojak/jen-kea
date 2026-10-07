@@ -26,12 +26,15 @@ compatibility with existing callers and plugins.
 """
 
 import configparser
+import contextlib
+import errno
 import functools
 import ipaddress
 import logging
 import os
 import re
 import threading
+import time
 
 from jen import extensions
 
@@ -193,12 +196,90 @@ def _reconcile_subnet_names(subnet_dict: dict, stored: dict, raw_section: dict) 
     return reconciled
 
 
+try:  # advisory file locks are POSIX; the app itself only runs on Linux (the lock is skipped where `fcntl` does not exist)
+    import fcntl
+except ImportError:  # pragma: no cover - Windows dev boxes
+    fcntl = None
+
+#: v5.68.0-beta.18 (Q153) - how long a writer waits for the config file lock before giving up (an installer's `--configure` holds it for
+#: the length of an interactive wizard, so a Settings save during it waits - and then says why - instead of overwriting the installer's copy).
+FILE_LOCK_WAIT_S = 30.0
+
+_writer_state = (
+    threading.local()
+)  # per thread: how many writers are open, and whether we are inside a `mutate` callback
+
+
+class ConfigFileLocked(RuntimeError):
+    """The config file's advisory lock (`<config>.lock`) is held by another process and did not come free in `FILE_LOCK_WAIT_S`."""
+
+
+@contextlib.contextmanager
+def _file_lock(path):
+    """An exclusive advisory `flock` on `<config>.lock`, held for the whole read-modify-replace of one writer.
+
+    v5.68.0-beta.18 (Q153): `AppConfig._write_lock` serialises this PROCESS's threads, and the installer is another process - `install.sh
+    --configure` runs its wizard and rewrites jen.config while Jen is running, so a Settings save made during the wizard was overwritten by the
+    installer's older copy. The installer and `tools/private_write.py` take this same lock. Taken once per thread (a nested writer, which the
+    RLock allows, must not queue behind its own thread on a second descriptor); the lock file is created 0600, never through a symlink."""
+    depth = getattr(_writer_state, "lock_depth", 0)
+    if fcntl is None or depth > 0:
+        _writer_state.lock_depth = depth + 1
+        try:
+            yield
+        finally:
+            _writer_state.lock_depth = depth
+        return
+    lock_path = f"{path}.lock"
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        fd = os.open(lock_path, flags, 0o600)
+    except OSError as e:
+        # a lock file this process cannot open (a root-owned one from an older run, a symlink) must not make every Settings save fail:
+        # degrade to the in-process lock alone and say so, once per call
+        logger.warning(
+            f"config file lock {lock_path} unavailable ({e}); this save is serialised within the process only"
+        )
+        _writer_state.lock_depth = depth + 1
+        try:
+            yield
+        finally:
+            _writer_state.lock_depth = depth
+        return
+    try:
+        deadline = time.monotonic() + FILE_LOCK_WAIT_S
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError as e:
+                if e.errno not in (errno.EAGAIN, errno.EACCES):
+                    raise
+                if time.monotonic() >= deadline:
+                    raise ConfigFileLocked(
+                        f"{lock_path} is held by another process (the installer's --configure?) - try again when it has finished"
+                    ) from e
+                time.sleep(0.05)
+        _writer_state.lock_depth = 1
+        try:
+            yield
+        finally:
+            _writer_state.lock_depth = 0
+    finally:
+        os.close(fd)  # closing the descriptor releases the flock
+
+
 def _serialized(fn):
-    """Run a writer while holding AppConfig's one lock - see AppConfig._write_lock."""
+    """Run a writer while holding AppConfig's one lock - see AppConfig._write_lock - and the config file's advisory lock."""
 
     @functools.wraps(fn)
     def wrapper(self, *args, **kwargs):
-        with AppConfig._write_lock:
+        if getattr(_writer_state, "in_mutate", False):
+            # v5.68.0-beta.18 (Q153): `mutate` hands its callback the parser to change and writes THAT parser when it returns, so a writer
+            # called from inside it would write to disk and then be overwritten - silently - by the outer write of the parser read before.
+            # The contract refuses what it cannot honour instead of advertising it.
+            raise RuntimeError("mutate the parser you were given")
+        with AppConfig._write_lock, _file_lock(self.path):
             return fn(self, *args, **kwargs)
 
     return wrapper
@@ -509,7 +590,11 @@ class AppConfig:
         that add/remove whole sections (e.g. extra Kea servers).
         """
         parser = self._read_parser()
-        fn(parser)
+        _writer_state.in_mutate = True
+        try:
+            fn(parser)
+        finally:
+            _writer_state.in_mutate = False
         self._write_parser(parser)
         if reload:
             self.reload()
