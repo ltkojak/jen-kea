@@ -228,15 +228,13 @@ api_url      = {os.environ.get("JEN_DDNS_URL", "")}
 api_token    = {os.environ.get("JEN_DDNS_TOKEN", "")}
 forward_zone = {os.environ.get("JEN_DDNS_ZONE", "")}
 """
-    with open(config_path, "w") as f:
-        f.write(config_content)
+    # v5.68.0-beta.16 (Q151): through the one private writer - a unique O_EXCL 0600 temp, fsync, replace - so a crash mid-write leaves NO live
+    # file (the guard above is `os.path.exists`: a truncated live jen.config used to survive and never be regenerated) and the file is
+    # never created with the umask. 0600, not the 0640 it used to be chmod'ed to: the container runs as ONE user, so the group bit never
+    # granted anyone anything.
+    from jen.services.private_files import write_private_file
 
-    # Set permissions if possible (may not be root in Docker).
-    # Literal try/except — run.py stays contextlib-free (see the re-exec guard note).
-    try:  # noqa: SIM105
-        os.chmod(config_path, 0o640)
-    except Exception:
-        pass
+    write_private_file(config_path, config_content, 0o600)
 
     print(f"Jen: config generated from environment variables → {config_path}")
 

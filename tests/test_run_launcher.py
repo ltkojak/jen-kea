@@ -10,6 +10,8 @@ import configparser
 import os
 import sys
 
+import pytest
+
 import run
 
 
@@ -151,3 +153,36 @@ class TestBuildConfigFromEnv:
         cfg = configparser.ConfigParser(interpolation=None)
         cfg.read(tmp_path / "jen.config")
         assert cfg.get("kea", "api_url") == "http://10.0.0.5:8000"
+
+    def test_the_generated_config_is_0600_and_never_regenerated_from_a_truncated_one(self, tmp_path, monkeypatch):
+        """v5.68.0-beta.16 (Q151, item 9): written through the private writer (unique temp, replace), 0600 under any umask; the live file is
+        either absent or complete, so the `os.path.exists` guard can never be fooled by a half-written one."""
+        self._clear_jen_env(monkeypatch)
+        monkeypatch.setenv("JEN_DB_HOST", "mysql")
+        monkeypatch.setattr(run.extensions, "CONFIG_DIR", str(tmp_path))
+        old = os.umask(0)
+        try:
+            run._build_config_from_env()
+        finally:
+            os.umask(old)
+        config_path = tmp_path / "jen.config"
+        if os.name != "nt":
+            assert (config_path.stat().st_mode & 0o777) == 0o600
+        assert [p.name for p in tmp_path.iterdir()] == ["jen.config"]
+
+    def test_a_failure_mid_write_leaves_no_live_file_and_the_next_launch_regenerates(self, tmp_path, monkeypatch):
+        self._clear_jen_env(monkeypatch)
+        monkeypatch.setenv("JEN_DB_HOST", "mysql")
+        monkeypatch.setattr(run.extensions, "CONFIG_DIR", str(tmp_path))
+        real_fsync = os.fsync
+
+        def disk_full(fd):
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr(os, "fsync", disk_full)
+        with pytest.raises(OSError):
+            run._build_config_from_env()
+        assert list(tmp_path.iterdir()) == [], "no truncated jen.config, no temp file"
+        monkeypatch.setattr(os, "fsync", real_fsync)
+        run._build_config_from_env()  # the next launch regenerates it
+        assert (tmp_path / "jen.config").exists()

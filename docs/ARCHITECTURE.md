@@ -648,6 +648,22 @@ it (it would make every file they install unreadable to the service user; `tests
 watcher: it stats every entry of the directory in a tight loop while each real writer runs 300 times under umask 022, and no entry is ever seen with a
 group or other bit before it is complete. A source test refuses a new write-mode `open()` / `Path.write_*` in `jen/` that is not on its reviewed list.
 
+**What root trusts, and from where (v5.68.0-beta.16, Q151).** `$CONFIG_DIR` and `$CONTENT_DIR` are SERVICE-OWNED (§6.1): the service account can
+plant any file or symlink in them. Two rules follow for everything the root installer and updater do, and `tests/test_invariant_sweeps.py` (S1, S9)
+enforces them over the whole repository: **(1) root never copies, executes or installs anything into the app tree (`$INSTALL_DIR`, `/usr/local/sbin`,
+`/etc/systemd`) from under those directories** - its inputs are the release tarball and its own snapshots, which live in `$ROOT_ROLLBACK_DIR`
+(`$INSTALL_DIR/.rollback`, root-owned, go-rwx). The upgrade snapshot of `run.py` and the `jen/` package used to be written to `$CONFIG_DIR/backups` and a failed upgrade
+`cp`ed it back as root (Q119 moved only the `ext.*` snapshot and called it closed): a compromised service account that planted a `run.py` there had it installed
+by root. Now the snapshot is taken with `cp -a --no-dereference` from a source whose real path is verified to be under `$INSTALL_DIR`, and the rollback
+(`_trusted_snapshot`) refuses one that is not root-owned, is a symlink, contains a symlink, or is not under `$ROOT_ROLLBACK_DIR`; snapshots a pre-5.68.0-beta.16
+install left in `$CONFIG_DIR/backups` are removed, never migrated; `$CONFIG_DIR/backups` keeps only the operator-facing `jen.config.*.bak` copies and is never read by
+root. **(2) a secret root writes into those directories is written private from its first byte** through `tools/private_write.py` (shipped in the tarball; the
+installer's `_private_write`): a symlink at the live path is refused, a unique `O_EXCL` 0600 temp in the same directory, fsync, owner and mode on the descriptor
+(a failing chown aborts), replace - the same discipline as `jen/services/private_files.py` and the Kea helper's `_install_private`. `write_config` used `cat >` under
+umask 022 (created 0644, followed a planted link, tightened after every password was in it) and copied the backup with `cp`; both go through the tool now. Docker's
+bootstrap (`run.py::_build_config_from_env`) writes through `write_private_file` (a crash mid-write leaves no live file, so the next launch regenerates it) and Docker's
+`.env` is written under `umask 077`.
+
 ### 3.2 SSH host-key verification (trust-on-first-use)
 
 Every outbound SSH connection Jen makes (`subnets.py`, `ddns.py`,
@@ -2421,7 +2437,8 @@ these at install time.
 | `<app_dir>/current` | Relative symlink → `releases/<live>` | symlink | Flipped with `os.replace()` (atomic). A rollback flips it back. |
 | `<app_dir>/` (flat, pre-5.14) | `jen/`, `run.py`, `templates/`, `static/`, `plugins/`, `venv/` | `root:root`, `a+rX` | Removed by the migration run / `install.sh` once the versioned layout is live. Docker stays flat. |
 | `<app_dir>/plugins-installed/` (v5.27.0, §3.10) | Registry-installed plugins landed by `jen-plugin-install.service` | `root:root`, `a+rX,go-w` — read-and-execute only for `www-data` | Written only by `jen-update-root.py --plugins`, one plugin id at a time, via a staged-directory `os.rename()`. Untouched by a Jen release upgrade. |
-| `<config_dir>/` | `jen.config`, its backups, TLS certs (`ssl/`), SSH keys (`ssh/`) | `www-data` | Never touched. |
+| `<config_dir>/` | `jen.config`, its backups, TLS certs (`ssl/`), SSH keys (`ssh/`) | `www-data` | Never touched, except that `install.sh --configure` rewrites `jen.config` through `tools/private_write.py` (refuses a symlink, 0600 from the first byte). Root never reads a code snapshot or anything else back out of it (§3.1). |
+| `<app_dir>/.rollback/` (v5.68.0-beta.16) | Root's own rollback material: `run.py.<ts>`, `jen.<ts>/` (flat-layout upgrade snapshots) and `ext.<ts>/` (the units, sudoers, `jen-update-root.py`) | `root:root`, `700` | Replaced on every upgrade; the rollback restores from it only after `_trusted_snapshot` (root-owned, no symlink, under this directory). |
 | `<data_dir>/` | User content: `icons/`, `branding/` (`nav_logo.*`, `favicon.ico`), `backups/` (database backups), `plugins/` (legacy registry-installed, pre-5.27.0 — see §3.10), `plugins-enabled/` (enable markers), `plugin-requests/` (v5.27.0 install/remove markers + results), `keys/` (`.secret_key`, `.mfa_key` fallbacks) | `www-data`, `750` | Never touched. Populated once, on the upgrade to 5.13.0, by moving the old locations out of `<app_dir>`. |
 | `/tmp` | Scratch only (`PrivateTmp=yes`) | per-service namespace | n/a |
 
