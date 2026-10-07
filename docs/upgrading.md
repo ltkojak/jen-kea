@@ -229,3 +229,16 @@ cannot read a Kea server's log for thirty minutes, and an empty inbox next to a 
 once no longer lose one, two people opening an Investigation page together no longer get "busy" plugin cards, and several people watching the same server on
 Trace cost the Kea host one log read per three seconds.
 
+## Expired leases stop counting, pool sizes are the whole subnet's, and alerts remember across a restart
+
+Nothing to do beyond the usual (5.68.0-beta.18); four plugin updates are offered under Settings → Plugins (DNS Sync 1.1.1, Network Discovery 1.3.1, Presence 1.2.3
+and IPAM 1.7.1) and need this Jen. A lease that has passed its expiry but that Kea has not yet cleaned up no longer counts as active anywhere: the Leases page's
+default view, the subnet counts on the dashboard, Subnets, Reports and the API, the history and its forecast, the device scan, DDNS and the plugins now all read
+only current leases, so a count may drop by the number of such rows (the *show expired* view still lists them). A subnet's pool size is now the total of **all**
+of its pools - ranges and CIDR pools - where the last range used to win and a CIDR pool was skipped, and a subnet's utilisation counts only the leases inside
+those pools; the history written before this release carries the old size and the forecast reads the newest row, so it corrects itself at the next snapshot.
+The **Pool exhaustion warning** is sent once per episode instead of at every check, and a new **Pool exhaustion recovery** type (tick it on a channel to receive
+it) is sent when the free addresses climb back past a small margin; utilization and packet-health alerts keep their state across a restart, so an upgrade no
+longer repeats them (the first check after this upgrade sends once for conditions that are true at that moment). `sudo ./install.sh --configure` now keeps
+anything its wizard does not ask about (OIDC, extra Kea servers, `[kea6]`, the update channel) and a setting you saved in Jen while the wizard was open; Jen's
+saves and the installer share a lock file, `/etc/jen/jen.config.lock`. IPv6 history is removed after `history_retention_days` even when IPv6 is turned off.

@@ -51,7 +51,7 @@
 
 set -euo pipefail
 
-JEN_VERSION="5.68.0-beta.17"
+JEN_VERSION="5.68.0-beta.18"
 
 JEN_USER="www-data"
 # v5.67.0-beta.18 (Q132) — every apt-get / pip / venv / systemctl / mysql call's stdout AND stderr goes here
