@@ -133,7 +133,7 @@ def reservations():
             # between the COUNT query and the main SELECT and a
             # LEFT JOIN would double-count/complicate COUNT(*).
             active_lease_exists = (
-                f"EXISTS (SELECT 1 FROM lease4 l WHERE l.address=h.ipv4_address AND {active_lease4('l')})"
+                f"EXISTS (SELECT 1 FROM lease4 l WHERE l.address=h.ipv4_address AND {active_lease4('l')})"  # nosec B608 - a fixed constant
             )
             if status_filter == "active":
                 where.append(active_lease_exists)
