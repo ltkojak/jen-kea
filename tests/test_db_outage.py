@@ -25,7 +25,7 @@ FAIL_AFTER_S = 0.15  # stands for the 10 s connect timeout
 def clean_settings_cache(monkeypatch):
     monkeypatch.setattr(usermod, "_settings_cache", {})
     monkeypatch.setattr(usermod, "_settings_cache_ts", 0)
-    monkeypatch.setattr(usermod, "_settings_next_try", 0)
+    monkeypatch.setattr(usermod, "_settings_next_try_mono", 0)
 
 
 @pytest.fixture
@@ -59,7 +59,7 @@ class TestTheSettingsCacheUnderAnOutage:
         self, clean_settings_cache, down, monkeypatch
     ):
         clock = {"now": 5000.0}
-        monkeypatch.setattr(time, "time", lambda: clock["now"])
+        monkeypatch.setattr(time, "monotonic", lambda: clock["now"])
         usermod.get_global_setting("k", None)
         clock["now"] += usermod._SETTINGS_RETRY_S - 0.1
         usermod.get_global_setting("k", None)
@@ -71,7 +71,7 @@ class TestTheSettingsCacheUnderAnOutage:
     def test_the_last_good_values_keep_being_served_while_the_database_is_down(self, down, monkeypatch):
         monkeypatch.setattr(usermod, "_settings_cache", {"daily_summary_time": "06:30"})
         monkeypatch.setattr(usermod, "_settings_cache_ts", 1)  # long expired
-        monkeypatch.setattr(usermod, "_settings_next_try", 0)
+        monkeypatch.setattr(usermod, "_settings_next_try_mono", 0)
         assert usermod.get_global_setting("daily_summary_time", "07:00") == "06:30", (
             "the stale cache is served, not the default"
         )
@@ -83,7 +83,7 @@ class TestTheSettingsCacheUnderAnOutage:
 
     def test_a_recovered_database_is_picked_up_after_the_window(self, clean_settings_cache, monkeypatch):
         clock = {"now": 9000.0}
-        monkeypatch.setattr(time, "time", lambda: clock["now"])
+        monkeypatch.setattr(time, "monotonic", lambda: clock["now"])
         state = {"up": False}
 
         class Cur:
@@ -123,9 +123,9 @@ class TestTheSettingsCacheUnderAnOutage:
         assert usermod.get_global_setting("k", "dflt") == "v"
 
     def test_saving_a_setting_clears_the_retry_hold(self, clean_settings_cache, monkeypatch):
-        monkeypatch.setattr(usermod, "_settings_next_try", time.time() + 100)
+        monkeypatch.setattr(usermod, "_settings_next_try_mono", time.monotonic() + 100)
         usermod._invalidate_settings_cache()
-        assert usermod._settings_next_try == 0
+        assert usermod._settings_next_try_mono == 0
 
 
 class TestPoolCreationIsThrottled:
@@ -254,7 +254,7 @@ class TestTheReloadIsSingleFlight:
     ):
         monkeypatch.setattr(usermod, "_settings_cache", {"some_key": "stale-but-served"})
         monkeypatch.setattr(usermod, "_settings_cache_ts", 1)  # long expired
-        monkeypatch.setattr(usermod, "_settings_next_try", 0)
+        monkeypatch.setattr(usermod, "_settings_next_try_mono", 0)
         monkeypatch.setattr(usermod, "_settings_ever_loaded", True)
         started = time.monotonic()
         results = self._run(self.THREADS)
@@ -315,14 +315,100 @@ class TestTheReloadIsSingleFlight:
     def test_a_save_invalidates_and_allows_a_fresh_reload(self, monkeypatch):
         monkeypatch.setattr(usermod, "_settings_cache", {"k": "old"})
         monkeypatch.setattr(usermod, "_settings_cache_ts", time.time())
-        monkeypatch.setattr(usermod, "_settings_next_try", time.time() + 100)
+        monkeypatch.setattr(usermod, "_settings_next_try_mono", time.monotonic() + 100)
         usermod._invalidate_settings_cache()
-        assert usermod._settings_cache_ts == 0 and usermod._settings_next_try == 0
+        assert usermod._settings_cache_ts == 0 and usermod._settings_next_try_mono == 0
 
     def test_the_lock_is_released_after_a_failed_reload(self, clean_settings_cache, down):
         usermod.get_global_setting("k", None)
         assert usermod._settings_refresh_lock.acquire(blocking=False), "the refresh lock was left held"
         usermod._settings_refresh_lock.release()
+
+
+class TestTheCooldownCountsFromTheEndOfTheFailure:
+    """v5.68.0-beta.23 (Q158, item 3): beta.22 set `_settings_next_try = now + 5` from the reading taken BEFORE the connect. A failing connect that
+    took 12 s (a 10 s timeout plus a pool creation) put the deadline 7 s in the past - the very next call connected again - and the threads that had
+    waited behind the holder on a cold start re-checked against that past deadline and each connected too. The deadline is now taken from a monotonic
+    clock AFTER the failed attempt ends, and a waiter re-checks with a fresh reading under the lock."""
+
+    ATTEMPT_S = 12.0  # what the failing connect takes, on the stand-in clock
+
+    @pytest.fixture
+    def slow_down(self, monkeypatch):
+        import threading
+
+        clock = {"mono": 1000.0, "wall": 50000.0}
+        guard = threading.Lock()
+        attempts = []
+        monkeypatch.setattr(time, "monotonic", lambda: clock["mono"])
+        monkeypatch.setattr(time, "time", lambda: clock["wall"])
+
+        @contextlib.contextmanager
+        def jen_db():
+            with guard:
+                attempts.append((clock["mono"], clock["wall"]))
+            time.sleep(0.05)  # real time, so the other threads queue behind this one
+            with guard:  # ... and the failure takes ATTEMPT_S on the clock the code reads
+                clock["mono"] += self.ATTEMPT_S
+                clock["wall"] += self.ATTEMPT_S
+            raise pymysql.err.OperationalError(2003, "Can't connect to MySQL server")
+            yield  # pragma: no cover
+
+        monkeypatch.setattr(dbmod, "jen_db", jen_db)
+        return type("SlowDown", (), {"clock": clock, "attempts": attempts})
+
+    def test_after_a_twelve_second_failure_the_very_next_call_does_not_connect_and_the_next_one_waits_five_seconds_from_its_end(
+        self, clean_settings_cache, slow_down
+    ):
+        assert usermod.get_global_setting("k", "dflt") == "dflt"
+        first_started, first_ended = slow_down.attempts[0][0], slow_down.clock["mono"]
+        assert first_ended - first_started == self.ATTEMPT_S
+        assert usermod.get_global_setting("k", "dflt") == "dflt" and len(slow_down.attempts) == 1, (
+            "inside the cooldown: a deadline taken before the connect would already have passed (12 s > 5 s) and this call would connect"
+        )
+        slow_down.clock["mono"] = first_ended + usermod._SETTINGS_RETRY_S - 0.1
+        slow_down.clock["wall"] += usermod._SETTINGS_RETRY_S - 0.1
+        usermod.get_global_setting("k", "dflt")
+        assert len(slow_down.attempts) == 1, "4.9 s after the failure ENDED"
+        slow_down.clock["mono"] = first_ended + usermod._SETTINGS_RETRY_S + 0.1
+        slow_down.clock["wall"] += 0.2
+        usermod.get_global_setting("k", "dflt")
+        assert len(slow_down.attempts) == 2, "5.1 s after it ended: eligible again"
+        print(
+            f"COOLDOWN failure ran {first_started:.1f}..{first_ended:.1f} (12 s); next call at {first_ended:.1f}: no connect; "
+            f"4.9 s later: no connect; 5.1 s later ({slow_down.attempts[1][0]:.1f}): connect"
+        )
+
+    def test_ten_waiters_on_a_cold_start_make_one_connect_whatever_the_failure_took(
+        self, clean_settings_cache, slow_down, monkeypatch
+    ):
+        import threading
+
+        monkeypatch.setattr(usermod, "_settings_ever_loaded", False)
+        results = []
+        barrier = threading.Barrier(10)
+
+        def go():
+            barrier.wait(10)
+            results.append(usermod.get_global_setting("k", "dflt"))
+
+        pool = [threading.Thread(target=go) for _ in range(10)]
+        for th in pool:
+            th.start()
+        for th in pool:
+            th.join(30)
+        assert len(results) == 10 and set(results) == {"dflt"}
+        assert len(slow_down.attempts) == 1, (
+            f"{len(slow_down.attempts)} connects: a waiter re-checked against a deadline that expired while the holder was failing"
+        )
+
+    def test_the_cache_ttl_is_still_wall_time(self, clean_settings_cache, monkeypatch):
+        monkeypatch.setattr(usermod, "_settings_cache", {"k": "v"})
+        monkeypatch.setattr(usermod, "_settings_cache_ts", time.time())
+        monkeypatch.setattr(
+            dbmod, "jen_db", lambda: (_ for _ in ()).throw(AssertionError("a fresh cache must not reload"))
+        )
+        assert usermod.get_global_setting("k", "dflt") == "v"
 
 
 class TestTheKea6PoolIsThrottledToo:

@@ -386,7 +386,7 @@ class TestTheNewestCompleteExchangeAcrossServersWins:
         }
         view = ctx.read_log(MAC, allowed=True)
         assert view["server"]["name"] == "kea-b" and view["transaction"]["tid"] == "0xb"
-        assert view["query"]["hostname"] == "new-active" and "also_seen_on" not in view
+        assert view["query"]["hostname"] == "new-active" and "other_complete" not in view
 
     def test_a_newer_b_older_the_newer_one_wins_whatever_the_order(self, servers, monkeypatch):
         monkeypatch.setattr(ctx, "_clock_offset_s", lambda server: 0.0)
@@ -413,7 +413,7 @@ class TestTheNewestCompleteExchangeAcrossServersWins:
         servers["tails"][1] = {"ok": True, "code": "ok", "lines": _exchange("10:00:00.110", "01:aa", "0xa", "a-host")}
         servers["tails"][2] = {"ok": True, "code": "ok", "lines": _exchange("10:00:03.110", "01:bb", "0xb", "b-host")}
         view = ctx.read_log(MAC, allowed=True)
-        assert view["server"]["name"] == "kea-a" and view["also_seen_on"] == ["kea-b"]
+        assert view["server"]["name"] == "kea-a" and view["other_complete"] == [{"server": "kea-b", "comparable": True}]
         assert view["query"]["hostname"] == "a-host", "fields are never mixed across transactions"
 
     def test_ha_active_first_decides_a_tie(self, servers, monkeypatch):
@@ -422,7 +422,7 @@ class TestTheNewestCompleteExchangeAcrossServersWins:
         servers["tails"][1] = {"ok": True, "code": "ok", "lines": _exchange("10:00:00.110", "01:aa", "0xa", "standby")}
         servers["tails"][2] = {"ok": True, "code": "ok", "lines": _exchange("10:00:01.110", "01:bb", "0xb", "active")}
         view = ctx.read_log(MAC, allowed=True)
-        assert view["server"]["name"] == "kea-b" and view["also_seen_on"] == ["kea-a"]
+        assert view["server"]["name"] == "kea-b" and view["other_complete"] == [{"server": "kea-a", "comparable": True}]
 
     def test_an_incomplete_exchange_is_only_the_fallback_when_no_server_has_a_complete_one(self, servers, monkeypatch):
         monkeypatch.setattr(ctx, "_clock_offset_s", lambda server: 0.0)
@@ -443,7 +443,7 @@ class TestTheNewestCompleteExchangeAcrossServersWins:
         servers["tails"][1] = {"ok": False, "code": "error", "detail": "ssh refused"}
         servers["tails"][2] = {"ok": True, "code": "ok", "lines": _exchange("10:00:00.110", "01:bb", "0xb", "only")}
         view = ctx.read_log(MAC, allowed=True)
-        assert view["state"] == "ok" and view["server"]["name"] == "kea-b" and "also_seen_on" not in view
+        assert view["state"] == "ok" and view["server"]["name"] == "kea-b" and "other_complete" not in view
 
     def test_the_explain_tab_says_so(self):
         import pathlib
@@ -451,4 +451,80 @@ class TestTheNewestCompleteExchangeAcrossServersWins:
         html = (pathlib.Path(__file__).resolve().parent.parent / "templates" / "_explain_result.html").read_text(
             encoding="utf-8"
         )
-        assert "also_seen_on" in html and "logged this client at about the same time" in html
+        assert "other_complete" in html and "logged this client at about the same time" in html
+        assert "the two clocks cannot be compared" in html
+
+
+class TestTheOtherExchangeIsNamedWhateverTheClocks:
+    """v5.68.0-beta.23 (Q158, item 5): beta.22 named the other server only when BOTH log-clock offsets were known and the times were within 5 s - with an
+    offset unknown the second complete exchange was silently not mentioned, although the docstring said it was. `other_complete` is
+    [{"server", "comparable"}]: comparable = both offsets known (and within the tie window, or it is not "also" at all)."""
+
+    @staticmethod
+    def _logs(servers, a="10:00:00.110", b="10:00:03.110"):
+        servers["tails"][1] = {"ok": True, "code": "ok", "lines": _exchange(a, "01:aa", "0xa", "a-host")}
+        servers["tails"][2] = {"ok": True, "code": "ok", "lines": _exchange(b, "01:bb", "0xb", "b-host")}
+
+    def test_both_clocks_known_within_five_seconds_is_comparable(self, servers, monkeypatch):
+        monkeypatch.setattr(ctx, "_clock_offset_s", lambda server: 0.0)
+        self._logs(servers)
+        view = ctx.read_log(MAC, allowed=True)
+        assert view["server"]["name"] == "kea-a" and view["other_complete"] == [{"server": "kea-b", "comparable": True}]
+
+    def test_both_clocks_known_more_than_five_seconds_apart_the_newer_wins_and_nothing_is_also(
+        self, servers, monkeypatch
+    ):
+        monkeypatch.setattr(ctx, "_clock_offset_s", lambda server: 0.0)
+        self._logs(servers, "10:00:00.110", "10:00:30.110")
+        view = ctx.read_log(MAC, allowed=True)
+        assert view["server"]["name"] == "kea-b" and "other_complete" not in view
+
+    def test_the_first_servers_clock_unknown_names_the_second_as_not_comparable(self, servers, monkeypatch):
+        monkeypatch.setattr(ctx, "_clock_offset_s", lambda server: None if server["id"] == 1 else 0.0)
+        self._logs(servers, "10:00:00.110", "11:00:00.110")
+        view = ctx.read_log(MAC, allowed=True)
+        assert view["server"]["name"] == "kea-a", "first in order: the comparison is a guess"
+        assert view["other_complete"] == [{"server": "kea-b", "comparable": False}]
+
+    def test_the_second_servers_clock_unknown_names_it_as_not_comparable(self, servers, monkeypatch):
+        monkeypatch.setattr(ctx, "_clock_offset_s", lambda server: None if server["id"] == 2 else 0.0)
+        self._logs(servers, "10:00:00.110", "09:00:00.110")
+        view = ctx.read_log(MAC, allowed=True)
+        assert view["server"]["name"] == "kea-a" and view["other_complete"] == [
+            {"server": "kea-b", "comparable": False}
+        ]
+
+    def test_neither_clock_known_names_the_other_as_not_comparable(self, servers):
+        self._logs(servers)
+        view = ctx.read_log(MAC, allowed=True)
+        assert view["server"]["name"] == "kea-a" and view["other_complete"] == [
+            {"server": "kea-b", "comparable": False}
+        ]
+        assert view["query"]["hostname"] == "a-host", "fields are never mixed across transactions"
+
+    def test_the_two_sentences_the_tab_prints(self):
+        import pathlib
+        import re
+
+        import jinja2
+
+        html = (pathlib.Path(__file__).resolve().parent.parent / "templates" / "_explain_result.html").read_text(
+            encoding="utf-8"
+        )
+        paragraph = re.search(r'(<p class="u-865c33" id="explain-exchange">What was read.*?</p>)', html, re.S).group(1)
+        env = jinja2.Environment(autoescape=True, undefined=jinja2.StrictUndefined)
+        template = env.from_string(paragraph)
+        exchange = {"at": "10:00:00.110", "tid": "0xa", "server": "kea-a", "before_config_change": False}
+        same = template.render(exchange=exchange, other_complete=[{"server": "kea-b", "comparable": True}])
+        assert (
+            "Another server also logged this client at about the same time (kea-b)" in same
+            and "cannot be compared" not in same
+        )
+        unknown = template.render(exchange=exchange, other_complete=[{"server": "kea-b", "comparable": False}])
+        assert (
+            "Another server also logged a complete exchange (kea-b), but the two clocks cannot be compared, so this one was chosen because it is first in order."
+            in unknown
+        )
+        assert "at about the same time" not in unknown
+        alone = template.render(exchange=exchange, other_complete=[])
+        assert "Another server" not in alone

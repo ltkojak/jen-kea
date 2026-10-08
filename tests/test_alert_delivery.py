@@ -941,7 +941,7 @@ class TestTheSummaryWaitsForSettingsItCanRead:
         # the process just started: nothing was ever read
         monkeypatch.setattr(usermod, "_settings_cache", {})
         monkeypatch.setattr(usermod, "_settings_cache_ts", 0)
-        monkeypatch.setattr(usermod, "_settings_next_try", 0)
+        monkeypatch.setattr(usermod, "_settings_next_try_mono", 0)
         monkeypatch.setattr(usermod, "_settings_ever_loaded", False)
         state = {"up": False}
         real = dbmod.jen_db
@@ -959,7 +959,7 @@ class TestTheSummaryWaitsForSettingsItCanRead:
 
         def comes_up(clock):
             state["up"] = True
-            usermod._settings_next_try = 0
+            usermod._settings_next_try_mono = 0
 
         def evening(clock):
             clock["now"] = T0.replace(hour=19, minute=59, second=30)

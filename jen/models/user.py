@@ -151,7 +151,7 @@ def needs_rehash(stored_hash: str) -> bool:
 
 _settings_cache: dict = {}
 _settings_cache_ts: float = 0
-_settings_next_try: float = 0  # earliest time a FAILED reload is attempted again
+_settings_next_try_mono: float = 0  # earliest MONOTONIC time a FAILED reload is attempted again (v5.68.0-beta.23, Q158: set from the clock AFTER the failure)
 _settings_ever_loaded: bool = False  # has the cache EVER been read from the database in this process?
 _settings_refresh_lock = threading.Lock()  # v5.68.0-beta.22 (Q157): one reload at a time
 _SETTINGS_CACHE_TTL: float = 30.0  # seconds
@@ -163,9 +163,9 @@ _SETTINGS_RETRY_S: float = 5.0
 
 def _invalidate_settings_cache() -> None:
     """Call after any set_global_setting to flush the cache immediately."""
-    global _settings_cache_ts, _settings_next_try
+    global _settings_cache_ts, _settings_next_try_mono
     _settings_cache_ts = 0
-    _settings_next_try = 0
+    _settings_next_try_mono = 0
 
 
 def settings_ever_loaded() -> bool:
@@ -183,20 +183,25 @@ def get_global_setting(key: str, default=None):
     """
     import time
 
-    global _settings_cache, _settings_cache_ts, _settings_next_try, _settings_ever_loaded
+    global _settings_cache, _settings_cache_ts, _settings_next_try_mono, _settings_ever_loaded
     now = time.time()
     # Cache expired - ONE thread reloads (v5.68.0-beta.22, Q157). `_settings_next_try` moved only after a reload FAILED, so N threads that saw
     # an expired cache all reloaded: with the database down and `check_session_timeout` on every request, a burst of requests was a burst of
     # 10 s connects. The holder reloads; everyone else returns the stale cache at once (`default` only when nothing was ever read - and then
     # they wait for the holder, once, and re-check: a first load is not a place to hand out defaults).
+    #
+    # v5.68.0-beta.23 (Q158): the cooldown is counted from the END of the failed attempt, on a monotonic clock. beta.22 set `now + _SETTINGS_RETRY_S`
+    # from the reading taken BEFORE the connect: a failing connect that took 12 s (a 10 s timeout plus a pool creation) put the deadline 7 s in the PAST,
+    # and the threads that had waited behind the holder on a cold start (blocking acquire while nothing was ever loaded) re-checked against it and each
+    # connected again. A waiter now takes a fresh reading under the lock and, inside the cooldown, returns what it has (`default` on a cold start).
     if (
         now - _settings_cache_ts > _SETTINGS_CACHE_TTL
-        and now >= _settings_next_try
+        and time.monotonic() >= _settings_next_try_mono
         and _settings_refresh_lock.acquire(blocking=not _settings_ever_loaded)
     ):
         try:
             now = time.time()
-            if now - _settings_cache_ts > _SETTINGS_CACHE_TTL and now >= _settings_next_try:
+            if now - _settings_cache_ts > _SETTINGS_CACHE_TTL and time.monotonic() >= _settings_next_try_mono:
                 from jen.models.db import jen_db
 
                 try:
@@ -204,11 +209,11 @@ def get_global_setting(key: str, default=None):
                         cur.execute("SELECT setting_key, setting_value FROM settings")
                         _settings_cache = {r["setting_key"]: r["setting_value"] for r in cur.fetchall()}
                     _settings_cache_ts = now
-                    _settings_next_try = 0
+                    _settings_next_try_mono = 0
                     _settings_ever_loaded = True
                 except Exception as e:
-                    # keep serving what was last read and do not try again for _SETTINGS_RETRY_S
-                    _settings_next_try = now + _SETTINGS_RETRY_S
+                    # keep serving what was last read and do not try again for _SETTINGS_RETRY_S after THIS failure ended
+                    _settings_next_try_mono = time.monotonic() + _SETTINGS_RETRY_S
                     logger.error(f"get_global_setting cache reload: {e}")
         finally:
             _settings_refresh_lock.release()

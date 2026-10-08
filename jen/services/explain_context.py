@@ -294,16 +294,21 @@ def read_log(mac: str, *, allowed: bool, fetch: bool = True) -> dict:
             ):
                 best = candidate
         view = _view_from(best[0], best[1])
-        also = [
-            _name(server)
-            for server, _tx, utc in complete
-            if server is not best[0]
-            and best[2] is not None
-            and utc is not None
-            and abs((utc - best[2]).total_seconds()) <= CLOCK_TIE_S
-        ]
-        if also:
-            view["also_seen_on"] = also
+        # v5.68.0-beta.23 (Q158): every OTHER server that logged a complete exchange is named, and whether the two can be COMPARED. beta.22 named
+        # a server only when both log-clock offsets were known and the times were within CLOCK_TIE_S, so with an offset unknown the second exchange
+        # was silently not mentioned although the docstring said it was: "comparable" True = both offsets known and within the tie window ("at about
+        # the same time"); False = a clock could not be compared, so the first in order was chosen by position. Two comparable exchanges more than
+        # CLOCK_TIE_S apart are not "also" - the newer one won, and the older one is simply older.
+        others = []
+        for server, _tx, utc in complete:
+            if server is best[0]:
+                continue
+            if best[2] is None or utc is None:
+                others.append({"server": _name(server), "comparable": False})
+            elif abs((utc - best[2]).total_seconds()) <= CLOCK_TIE_S:
+                others.append({"server": _name(server), "comparable": True})
+        if others:
+            view["other_complete"] = others
     if view is None:
         view = fallback or first_ok or problem or {**empty, "state": "error", "message": "Could not read Kea's log."}
     if len(_log_cache) > 256:

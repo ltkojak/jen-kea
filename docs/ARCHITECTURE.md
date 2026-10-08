@@ -2767,7 +2767,10 @@ retries "undelivered" with the notification backoff (1, 2, 4 ... 60 min) and "fa
 restart may then send one duplicate - the documented trade-off against sending none). A start with the Jen database down no longer reads `daily_summary_sent` through an empty cache:
 `_summary_sent_date()` returns `UNKNOWN` until the settings table has been read (`user.settings_ever_loaded()`), and the loop sends nothing until it knows. *The settings cache reload is
 single-flight*: one thread reloads (a non-blocking lock; a first-ever load waits for the holder once), everyone else returns the stale cache, and the holder alone moves
-`_settings_next_try` - fifty threads during an outage are one connect attempt. *The kea6 pool* has the same throttle as the jen and kea pools (the direct connect outside the lock).
+`_settings_next_try` - fifty threads during an outage are one connect attempt. **v5.68.0-beta.23 (Q158):** the cooldown was set from the reading taken BEFORE the connect (`now + 5`), so a failing connect that took
+12 s (a 10 s timeout plus a pool creation) put the deadline 7 s in the past - the very next call connected again, and the threads that had waited behind the holder on a cold start (a blocking acquire
+while nothing was ever loaded) re-checked against that past deadline and each connected too. It is now `_settings_next_try_mono`, taken from `time.monotonic()` AFTER the failed attempt ends (the cache
+TTL stays on wall time), and a waiter that takes the lock re-reads both clocks and, inside the cooldown, returns what it has (`default` on a cold start): one connect per cooldown, whatever the failure cost. *The kea6 pool* has the same throttle as the jen and kea pools (the direct connect outside the lock).
 *A failed periodic-job start* is retried after `min(interval, 60 s x 2^(failures-1))` - it advanced `next_due` by a whole interval before the spawn and the failure branch did not put it
 back. *Orphan cleanup* no longer skips an empty set: `SUBNET_MAP` / `KEA_SERVERS` are the last APPLIED config, so empty means the last subnet or server was removed; the gate is whether a config
 has been applied at all (`extensions.cfg`). *The config lock* turns every flock failure into `ConfigFileLocked` with the errno, and names the DIRECTORY (not a lock file to chown) when the
@@ -2776,7 +2779,12 @@ file could not be created.
 **`read_log` chooses the newest complete exchange across servers (v5.68.0-beta.22, Q157).** It broke at the first server in order (HA-active first) whose exchange was complete and never compared
 times across servers, so after a failover the old active's older exchange beat the standby's newer one. It now collects the complete exchange of every reachable server and takes the newest by
 its last line corrected by `_clock_offset_s` - ordered only when BOTH offsets are known; within `CLOCK_TIE_S` (5 s) or with an offset unknown, the first in `_evidence_servers` order wins, and the
-view carries `also_seen_on` (names), shown on the Explain tab as "another server also logged this client at about the same time". Incomplete exchanges stay the fallback only when no server has
+view carries `also_seen_on` (names), shown on the Explain tab as "another server also logged this client at about the same time". **v5.68.0-beta.23 (Q158):** that field was filled only when
+BOTH offsets were known and the times were within 5 s, so with an offset unknown the second complete exchange was silently not mentioned although the docstring said it was. It is now
+`other_complete: [{"server", "comparable"}]` - one entry per other server that logged a complete exchange: `comparable` True when both log-clock offsets are known and the exchanges are within
+`CLOCK_TIE_S` ("another server also logged this client at about the same time (X)"), False when a clock could not be compared ("another server also logged a complete exchange (Y), but the two
+clocks cannot be compared, so this one was chosen because it is first in order"); two comparable exchanges more than 5 s apart name nothing - the newer won and the other is simply older.
+Incomplete exchanges stay the fallback only when no server has
 a complete one, and fields are never mixed across transactions. The IP map follows the same rule as every subnet surface: a user who may see no subnet at all gets "no subnet you can see" and
 nothing is queried (it used to fall back to the first configured subnet; found by the grep for the old spelling), and the authorization matrix has the cell.
 
