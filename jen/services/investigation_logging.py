@@ -743,6 +743,10 @@ def _restore(server: dict, record: dict, now: datetime | None, summary: str) -> 
             return {"ok": True, "mode": "nothing", "lines": lines}
         entry.pop("error", None)
         entry.update(file="restored")
+        if entry.get("contradiction"):
+            # fixup 5 (F10): the daemon this entry's API answers for is NOT the one whose file was edited, so what it shows - the captured original level
+            # - proves nothing about the box SSH restarted on the DEBUG file. No observation is believed here: only Forget (after a look) ends it
+            return _left_alone(record, sid, entry, lines)
         before = entry.get("daemon")
         state = observe(server, entry)
         if state == "restored":
@@ -818,6 +822,8 @@ def _left_alone(record: dict, sid: str, entry: dict, lines: list[str]) -> dict:
     entry["pending"] = None
     if not _put(record, sid, entry):
         logger.warning("investigation_logging: the left-alone entry %s could not be stored", sid)
+    if entry.get("contradiction"):
+        return {"ok": False, "mode": "", "lines": lines + [hand_text(_row(sid, entry, _now()))]}
     return {"ok": False, "mode": "", "lines": lines + [_seen_line(entry), by_hand_running(entry)]}
 
 
@@ -826,6 +832,8 @@ def _finish(server: dict, record: dict, entry: dict, state: str, mode: str, line
     next sweep drops it - the restore itself is done). Anything else keeps the entry and says what was seen; a daemon seen at neither level is left
     alone (nothing is owed), at DEBUG or unseen the step is still owed."""
     sid = str(server.get("id"))
+    if entry.get("contradiction"):
+        return _left_alone(record, sid, entry, lines)  # never dropped on an observation (fixup 5, F10)
     if state == "restored":
         if not _drop(record, sid):
             entry["pending"] = None

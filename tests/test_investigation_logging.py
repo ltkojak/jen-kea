@@ -1661,6 +1661,35 @@ class TestContradictoryEvidenceIsNamedNotIndexedAsNothing:
         out = inv.turn_on(world.servers[0], 5)
         assert out["ok"] is False and not inv.active() and not _daemon_at_debug(kea)
 
+    def test_the_contradiction_survives_the_sweeps_and_only_forget_ends_it(self, world):
+        """F10 (fixup 5): the entry is `file=restored`, so it is due every minute, and the restore's nothing branch observed the SAME wrong daemon,
+        which shows the captured original level, read "restored" and dropped it - one sweep later. Nothing is reloaded or restarted for it and no
+        observation ends it."""
+        from jen.services import health
+
+        kea = world.daemons[1]
+        kea.commands = ["version-get"]
+        kea.restart_ignored = True
+        inv.turn_on(world.servers[0], 5)
+        assert inv.active()[0]["contradiction"]
+        reloads0, restarts0 = _reloads(kea), _restarts(kea)
+        writes0 = kea.writes
+        for minute in (1, 2, 3):
+            out = inv.sweep(now=NOW + timedelta(minutes=minute))
+            assert out["restored"] == [], minute
+        (entry,) = inv.active(NOW + timedelta(minutes=3))
+        assert entry["contradiction"] and entry["needs_hand"] and entry["pending"] is None
+        assert (_reloads(kea) - reloads0, _restarts(kea) - restarts0) == (0, 0), kea.calls
+        assert kea.writes == writes0, "the file is already clean: the sweeps wrote (and so restarted) nothing"
+        c = health._debug_logging_left_on({})
+        assert c.status == "fail" and "api_url" in c.detail and "ssh_host" in c.detail
+        # the button does not end it either
+        assert inv.turn_off(world.servers[0])["ok"] is False and inv.active()
+        assert inv.forget(1, actor="alice") is True and not inv.active(), "Forget (after a look) is what ends it"
+        print(
+            f"F10 contradiction over three sweeps + Turn off: reloads {_reloads(kea) - reloads0}, restarts {_restarts(kea) - restarts0}"
+        )
+
     def test_the_contradiction_can_be_forgotten_once_a_person_has_looked(self, world):
         kea = world.daemons[1]
         kea.commands = ["version-get"]
