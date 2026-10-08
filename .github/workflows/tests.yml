@@ -1115,6 +1115,66 @@ jobs:
           echo "the whole life cycle ran on /srv/q121/life and never created anything under the default paths"
           sudo rm -rf /srv/q121
 
+      # v5.68.0-beta.21 (Q156, item 1) - `--configure` on a CONFIGURED box. The wizard's Kea, Kea-database, SSH and DDNS answers come from `_cfgval`
+      # (answers file, else JEN_* environment, else EMPTY) and never from the live file, so an interactive `--configure` blanked [kea], [kea_db], [kea_ssh]
+      # and [ddns] and the box restarted into /setup with its DDNS token gone - while docs/upgrading.md promised the opposite. `_run_configure_mode` now
+      # seeds ANSWERS from the live file first (`tools/config_merge.py --answers`). This leg installs a box WITH a Kea connection, an SSH target and a
+      # DDNS token, runs `--configure` with an answers file that carries the database and ports and NOTHING about Kea, and greps them still there.
+      - name: Write the answers for a configured box and for its reconfigure
+        run: |
+          umask 077
+          cat > "$RUNNER_TEMP/answers-configured.env" << 'EOF'
+          JEN_DB_HOST=127.0.0.1
+          JEN_DB_USER=jen
+          JEN_DB_PASS=jen_pw
+          JEN_DB_NAME=jen
+          JEN_HTTP_PORT=5050
+          JEN_HTTPS_PORT=8443
+          JEN_KEA_API_URL=http://127.0.0.1:8000
+          JEN_KEA_API_USER=ci-kea-user
+          JEN_KEA_API_PASS=ci-kea-pass
+          JEN_KEA_SSH_HOST=kea.ci.example
+          JEN_KEA_SSH_USER=jen
+          JEN_DDNS_PROVIDER=technitium
+          JEN_DDNS_URL=http://127.0.0.1:5380
+          JEN_DDNS_TOKEN=ci-ddns-token-q156
+          EOF
+          cat > "$RUNNER_TEMP/answers-reconfigure.env" << 'EOF'
+          JEN_DB_HOST=127.0.0.1
+          JEN_DB_USER=jen
+          JEN_DB_PASS=jen_pw
+          JEN_DB_NAME=jen
+          JEN_HTTP_PORT=5050
+          JEN_HTTPS_PORT=8443
+          EOF
+
+      - name: Install a configured box (Kea connection, SSH target, DDNS token)
+        run: |
+          set -e
+          mkdir -p "$RUNNER_TEMP/install-configured"
+          tar xzf dist/jen-head.tar.gz -C "$RUNNER_TEMP/install-configured"
+          cd "$RUNNER_TEMP/install-configured/jen"
+          sudo TERM=linux ./install.sh --answers "$RUNNER_TEMP/answers-configured.env" --unattended
+          sudo grep -E '^api_url *= *http://127\.0\.0\.1:8000$' /etc/jen/jen.config
+          sudo grep -E '^api_token *= *ci-ddns-token-q156$' /etc/jen/jen.config
+
+      - name: --configure keeps the Kea connection and the DDNS token when its answers say nothing about them
+        run: |
+          set -e
+          cd "$RUNNER_TEMP/install-configured/jen"
+          sudo TERM=linux ./install.sh --configure --answers "$RUNNER_TEMP/answers-reconfigure.env" --unattended
+          echo "--- jen.config after --configure (secrets redacted) ---"
+          sudo sed -E 's/^(api_pass|api_token|password) *=.*/\1 = <redacted>/' /etc/jen/jen.config
+          echo "--- the greps ---"
+          sudo grep -E '^api_url *= *http://127\.0\.0\.1:8000$' /etc/jen/jen.config
+          sudo grep -E '^api_user *= *ci-kea-user$' /etc/jen/jen.config
+          sudo grep -E '^api_pass *= *ci-kea-pass$' /etc/jen/jen.config
+          sudo grep -E '^host *= *kea\.ci\.example$' /etc/jen/jen.config
+          sudo grep -E '^dns_provider *= *technitium$' /etc/jen/jen.config
+          sudo grep -E '^api_token *= *ci-ddns-token-q156$' /etc/jen/jen.config
+          systemctl is-active --quiet jen
+          grep -q jen_version < <(curl -sf http://127.0.0.1:5050/api/v1/health)
+
       - name: Kea log on failure
         if: failure()
         run: docker logs kea 2>&1 | tail -100 || true

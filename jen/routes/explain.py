@@ -113,7 +113,13 @@ def explain_page():
         built = __ctx.build_inputs(client["mac"], typed=typed, lease=usable_lease, log=log_view, auto=auto)
         client = built["client"]
         cid_hex = _hex_identifier(client["client_id"])
-        reservations = _load_reservations(mac_hex, cid_hex)
+        # v5.68.0-beta.21 (Q156): only the reservations the caller may see - global ones, or in a subnet of theirs - exist for this route, and they are
+        # chosen from BEFORE the subnet is. It filtered them after: a MAC whose only reservation sat in a hidden subnet picked that subnet, was refused
+        # ("You do not have access to that subnet") and got a different page from a MAC nobody has ever seen - an existence oracle. A denial and a
+        # not-found are one message (docs/ARCHITECTURE.md section 2).
+        reservations = [
+            r for r in _load_reservations(mac_hex, cid_hex) if r["subnet_id"] == 0 or r["subnet_id"] in subnet_map
+        ]
         if raw_subnet.isdigit():
             subnet_id = int(raw_subnet)
             chosen_how = "chosen"
@@ -133,8 +139,6 @@ def explain_page():
         if subnet_id is not None and not cfg:
             flash("Could not read the Kea configuration (config-get failed) — see Settings → Kea → Probe.", "error")
         elif subnet_id is not None:
-            # Only reservations in accessible subnets (or global ones) feed the decision.
-            reservations = [r for r in reservations if r["subnet_id"] == 0 or r["subnet_id"] in subnet_map]
             result = __ctx.run(
                 cfg,
                 built,

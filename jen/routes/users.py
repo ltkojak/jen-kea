@@ -120,6 +120,9 @@ def about():
     kea_up = False
     kea_version = ""
     lease_counts = {}
+    # v5.68.0-beta.21 (Q156): the subnets THEMSELVES are scoped (docs/ARCHITECTURE.md section 2) - this page printed every subnet's id, name, CIDR and
+    # active lease count to any logged-in user, a viewer restricted to subnet 1 included. The map, and the lease counts over it, are the user's own.
+    visible_subnets = current_user.filter_subnet_map(extensions.SUBNET_MAP)
     try:
         ver_result = __kea.kea_command("version-get")
         if ver_result.get("result") == 0:
@@ -130,7 +133,7 @@ def about():
         pass
     try:
         with __db.kea_db() as db, db.cursor() as cur:
-            for sid in extensions.SUBNET_MAP:
+            for sid in visible_subnets:
                 cur.execute(
                     f"SELECT COUNT(*) as cnt FROM lease4 WHERE {ACTIVE_LEASE4} AND subnet_id=%s",  # nosec B608 - a fixed constant
                     (sid,),
@@ -153,7 +156,7 @@ def about():
         https_port=extensions.HTTPS_PORT,
         ssl_on=ssl_configured(),
         kea_ssh_host=extensions.KEA_SSH_HOST,
-        subnet_map=extensions.SUBNET_MAP,
+        subnet_map=visible_subnets,
         lease_counts=lease_counts,
         changelog_entries=changelog_entries,
     )

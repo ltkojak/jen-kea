@@ -399,6 +399,14 @@ def _problems_sweep(ctx) -> Check:
                 return c
         c.status, c.detail = "skip", "the sweep has not run yet (it runs every five minutes)"
         return c
+    if st.get("dropped"):
+        # v5.68.0-beta.21 (Q156): the inbox records at most MAX_NEW_KEYS_PER_SWEEP new keys per server per sweep; the rest were counted, not kept
+        c.status = "warn"
+        c.detail = (
+            f"{st['dropped']} problem keys dropped last sweep (the cap is {__cp.MAX_NEW_KEYS_PER_SWEEP} new keys per server per sweep) - "
+            "a NAK storm? Existing keys kept updating; last ran " + fmt(swept)
+        )
+        return c
     c.status = "ok"
     c.detail = f"last ran {fmt(swept)}; " + "; ".join(
         f"{s['name']}: last read {fmt(s['last_read'])}" + (f" ({s['misses']} missed)" if s["misses"] else "")

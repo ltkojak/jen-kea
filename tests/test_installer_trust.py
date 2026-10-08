@@ -688,3 +688,129 @@ class TestTheInstallerLocksTheSameInodeThroughTheOneOpen:
         ]
         assert offenders == [], offenders
         assert "BACKUP_DIR:?" not in text.replace("CONFIG_BACKUP_DIR", "")
+
+
+CONFIGURED_CONFIG = LIVE_CONFIG.replace(
+    "api_url = http://old:8000\napi_user = u\napi_pass = old-pass",
+    "api_url = http://kea.lan:8000\napi_user = jen-api\napi_pass = api-secret",
+).replace(
+    "dns_provider = none\napi_url =\napi_token =\nforward_zone =",
+    "dns_provider = technitium\napi_url = http://dns.lan:5380\napi_token = ddns-token-1234\nforward_zone = lan.example",
+)
+
+# what the wizard's Kea / Kea-database / SSH / DDNS sections do with the network, stubbed (the sections read their values with `_cfgval`)
+CONFIGURE_STUBS = """
+    test_kea_api() { return 0; }; test_mysql() { return 0; }
+    spinner_start() { :; }; spinner_stop() { :; }; sleep() { :; }
+"""
+
+
+class TestConfigureSeedsTheWizardFromTheLiveFile:
+    """v5.68.0-beta.21 (Q156, item 1): the wizard reads the Kea connection, the Kea database, the SSH target and the DDNS settings with `_cfgval` (an
+    answers file, else the JEN_* environment, else EMPTY) and never from the live file, so an interactive `--configure` wrote them blank and the merge
+    applied the blanks - a configured box lost its Kea connection and its DDNS token. `_run_configure_mode` now seeds ANSWERS from the live file."""
+
+    def _live(self, tmp_path):
+        etc = tmp_path / "etc"
+        etc.mkdir(exist_ok=True)
+        (etc / "jen.config").write_text(CONFIGURED_CONFIG)
+        (etc / "jen.config.lock").write_text("")
+        os.chmod(etc / "jen.config.lock", 0o600)
+        return etc
+
+    SECTIONS = "_configure_kea_api >/dev/null; _configure_kea_db >/dev/null; _configure_ssh >/dev/null; _configure_ddns >/dev/null\n"
+    DUMP = (
+        'echo "api=$KEA_API_URL|$KEA_API_USER|$KEA_API_PASS"\n'
+        'echo "db=$KEA_DB_HOST|$KEA_DB_USER|$KEA_DB_PASS|$KEA_DB_NAME"\n'
+        'echo "ssh=$KEA_SSH_HOST|$KEA_SSH_USER|$KEA_CONF_PATH"\n'
+        'echo "ddns=$DDNS_PROVIDER|$DDNS_URL|$DDNS_TOKEN|$DDNS_LOG|$DDNS_ZONE"\n'
+    )
+
+    def _values(self, proc):
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        return dict(
+            line.split("=", 1)
+            for line in proc.stdout.splitlines()
+            if line.split("=", 1)[0] in {"api", "db", "ssh", "ddns"}
+        )
+
+    def test_without_the_seed_the_wizard_has_nothing_for_them(self, tmp_path):
+        """The bug as it was: the same four sections on the same configured box, no seeding - every value is blank (or the wizard's own default)."""
+        self._live(tmp_path)
+        proc = _bash(tmp_path, CONFIGURE_STUBS + self.SECTIONS + self.DUMP)
+        values = self._values(proc)
+        assert values["api"] == "||" and values["ddns"].startswith("none||")
+
+    def test_the_seed_gives_the_wizard_every_value_the_live_file_holds(self, tmp_path):
+        self._live(tmp_path)
+        proc = _bash(tmp_path, CONFIGURE_STUBS + '_seed_answers_from_live "$CONFIG_FILE"\n' + self.SECTIONS + self.DUMP)
+        values = self._values(proc)
+        assert values["api"] == "http://kea.lan:8000|jen-api|api-secret"
+        assert values["db"] == "db|kea|kea-secret|kea"
+        assert values["ssh"] == "h|s|/etc/kea/kea-dhcp4.conf"
+        assert values["ddns"] == "technitium|http://dns.lan:5380|ddns-token-1234|/var/log/kea/ddns.log|lan.example"
+
+    def test_an_answers_file_value_wins_over_the_seed(self, tmp_path):
+        self._live(tmp_path)
+        proc = _bash(
+            tmp_path,
+            CONFIGURE_STUBS
+            + 'ANSWERS[JEN_KEA_API_URL]="http://from-the-answers-file:9"\n_seed_answers_from_live "$CONFIG_FILE"\n'
+            + self.SECTIONS
+            + self.DUMP,
+        )
+        assert self._values(proc)["api"] == "http://from-the-answers-file:9|jen-api|api-secret"
+
+    def test_an_environment_variable_wins_over_the_seed(self, tmp_path):
+        self._live(tmp_path)
+        proc = _bash(
+            tmp_path,
+            CONFIGURE_STUBS + '_seed_answers_from_live "$CONFIG_FILE"\n' + self.SECTIONS + self.DUMP,
+            env={"JEN_DDNS_TOKEN": "token-from-the-environment"},
+        )
+        assert self._values(proc)["ddns"].split("|")[2] == "token-from-the-environment"
+
+    def test_a_secret_with_odd_characters_is_seeded_verbatim(self, tmp_path):
+        etc = self._live(tmp_path)
+        text = (etc / "jen.config").read_text().replace("api-secret", 'p@ss=w0rd "q" $x `y` \\z')
+        (etc / "jen.config").write_text(text)
+        proc = _bash(tmp_path, CONFIGURE_STUBS + '_seed_answers_from_live "$CONFIG_FILE"\n' + self.SECTIONS + self.DUMP)
+        assert self._values(proc)["api"].endswith('|jen-api|p@ss=w0rd "q" $x `y` \\z')
+
+    def test_no_live_file_seeds_nothing_and_does_not_fail(self, tmp_path):
+        (tmp_path / "etc").mkdir()
+        proc = _bash(tmp_path, '_seed_answers_from_live "$CONFIG_FILE"; echo "n=${#ANSWERS[@]}"')
+        assert proc.returncode == 0 and "n=0" in proc.stdout
+
+    def test_the_whole_configure_path_keeps_the_connection_and_the_token_and_the_oidc_section(self, tmp_path):
+        """The wizard's four sections run (stubbed network), then `write_config` merges: the real shape end to end, through the real tools."""
+        etc = self._live(tmp_path)
+        script = (
+            'JEN_USER="$(id -un)"; MODE_CONFIGURE=true; CONFIGURE=true; IS_UPGRADE=true\n'
+            + CONFIGURE_STUBS
+            + 'CONFIG_SNAPSHOT_TEXT="$(cat "$CONFIG_FILE")"\n'
+            + '_seed_answers_from_live "$CONFIG_FILE"\n'
+            + self.SECTIONS
+            + "JEN_DB_HOST=db; JEN_DB_USER=jen; JEN_DB_PASS='jen-secret'; JEN_DB_NAME=jen\n"
+            + "HTTP_PORT=5050; HTTPS_PORT=8443\nSUBNET_LINES='1 = LAN, 10.0.0.0/24\\n'\n"
+            + "write_config\n"
+        )
+        proc = _bash(tmp_path, "umask 022\n" + script)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        import configparser
+
+        merged = configparser.ConfigParser(interpolation=None)
+        merged.read(etc / "jen.config")
+        assert merged.get("kea", "api_url") == "http://kea.lan:8000" and merged.get("kea", "api_pass") == "api-secret"
+        assert merged.get("kea_ssh", "host") == "h" and merged.get("kea_db", "password") == "kea-secret"
+        assert (
+            merged.get("ddns", "dns_provider") == "technitium" and merged.get("ddns", "api_token") == "ddns-token-1234"
+        )
+        assert merged.get("oidc", "issuer") == "https://idp.example"
+
+    def test_configure_mode_seeds_before_it_reads_the_wizard_s_answers(self):
+        text = INSTALL_SH.read_text(encoding="utf-8")
+        body = text[text.index("_run_configure_mode() {") :].split(chr(10) + "}" + chr(10), 1)[0]
+        calls = [ln.strip() for ln in body.splitlines() if not ln.strip().startswith("#")]
+        seed = next(i for i, c in enumerate(calls) if c.startswith("_seed_answers_from_live"))
+        assert calls.index("_config_lock_acquire") < seed < calls.index("collect_config")

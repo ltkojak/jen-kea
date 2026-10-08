@@ -409,6 +409,14 @@ stale entry fails too. Plugins receive the constants through `jen.plugin_api` on
 MEANS carries the repository-wide grep of its uses as a deliverable (the count goes in the report) and a source test over the whole tree, never
 over a file list.
 
+**The subnets themselves are scoped, and the oracle rule reaches Explain (v5.68.0-beta.21, Q156).** `/about` printed every configured subnet's id, name, CIDR and
+active-lease count to any logged-in user - the authorization matrix had allowlisted it as "no per-client fields", which was true and was not the rule: the
+subnets are the thing scoped, not only the rows about clients. It iterates `current_user.filter_subnet_map` now (the lease counts are taken only for those), and
+the matrix entry says so. The Explain route filtered a client's RESERVATIONS after it had chosen the subnet from them: a MAC whose only reservation sat in a hidden
+subnet chose that subnet, was refused ("You do not have access to that subnet") and got a different page from a MAC nobody had ever seen. `usable reservations`
+(global, or in a subnet of the caller's) are computed before the choice and are the only reservations the route knows, exactly as `usable_lease` is for leases
+(Q145); `TestAReservationInAHiddenSubnetIsNotAnOracle` renders both and compares the pages.
+
 **The six layers of a contract (v5.68.0-beta.19, Q154).** A Q that introduces a contract - "pool consumption is the active leases inside the pool union",
 "a threshold alert has a transition state", "every secret is written private" - used to apply it to the layer the bug was found in, the LIVE page, and
 the next review found the same contract false one layer down, three betas in a row (beta.18's three contracts each had a live-page fix and a
@@ -2616,7 +2624,14 @@ normalised in place by the installer on every upgrade and `--configure`, never r
 `install.sh --configure` takes the lock before it reads anything (`_config_lock_acquire`) and holds it through `write_config`; because the wizard is
 interactive, `write_config` then re-reads the live file and merges the answers INTO it (`tools/config_merge.py`): a key the wizard did not ask about keeps its
 live value, a key the operator changed in the wizard wins, and a key the operator left as it was never undoes a newer save. Every other write the installer makes
-of the config or its backup goes through `tools/private_write.py --lock`. `AppConfig.mutate` hands its callback the parser to change and writes THAT parser
+of the config or its backup goes through `tools/private_write.py --lock`. **`--configure` seeds the wizard from the live file (v5.68.0-beta.21, Q156).** The wizard reads
+the Kea connection, the Kea database, the SSH target and the DDNS settings (fifteen answers) with `_cfgval` - an answers file, else the `JEN_*` environment, else EMPTY - and
+never prompts for them (Jen's own /setup connects Kea), so an interactive `--configure` wrote them blank; the merge faithfully applied the blanks (a blank differs from the
+snapshot), and a configured box restarted into /setup without its Kea connection or its DDNS token while upgrading.md promised the opposite. The merge test built the
+wizard's file FROM THE SNAPSHOT, a wizard install.sh does not have. `_run_configure_mode` now calls `_seed_answers_from_live` (through `tools/config_merge.py --answers`)
+before the wizard: every one of the fifteen the live file holds goes into `ANSWERS` unless an answers file or an environment variable already has it, which also makes the
+merge's "the operator accepted the default, live wins" rule reachable. A CI install leg installs a box with a Kea connection, an SSH target and a DDNS token, runs
+`--configure` with an answers file that says nothing about Kea, and greps them all still there. `AppConfig.mutate` hands its callback the parser to change and writes THAT parser
 when it returns, so a writer called from inside the callback would write to disk and then be silently overwritten; it now raises
 `RuntimeError("mutate the parser you were given")` (the old test codified "the outer write then wins").
 
@@ -2703,6 +2718,12 @@ asserts a purge WAITS before counting, and runs two real purges at once (six rou
 `lease6_history` had existed since v5.0 and nothing wrote it; with IPv6 on
 the snapshot pass now writes one row per IPv6 subnet (active leases by type, reservations by type - no pool size, a /64 has none to measure),
 and with IPv6 off nothing in this path runs (`TestZeroBehaviorChange`).
+
+**The Problems inbox caps what a log can add (v5.68.0-beta.21, Q156).** A group is keyed by (kind, client, address, subnet), so a thousand-line tail of declines from
+spoofed MACs and requested addresses added up to a thousand rows per sweep, kept 30 days; `MAX_DB_ROWS` bounds only the two lease-database kinds. At most
+`MAX_NEW_KEYS_PER_SWEEP` (200) NEW keys are recorded per server per sweep (`_cap_new_keys`: a key that already has a row always updates; of the new ones the newest
+`last_ts` are kept); the rest are counted in `summary["dropped_keys"]`, logged once per sweep and stored (`client_problems_dropped`) for the Problems sweep Health row,
+which warns "N problem keys dropped last sweep - a NAK storm?" until a sweep drops nothing.
 
 **The Problems sweep records whether it can read.** Per SSH-configured server it keeps the last successful read, the last error and the
 count of misses in a row (settings keys `client_problems_read:`, `_err:`, `_miss:<id>`) and its own last run (`client_problems_swept`); the Health

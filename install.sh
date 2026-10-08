@@ -2689,11 +2689,29 @@ _run_restore_mode() {
 
 # --configure mode: just re-run the wizard and restart the service. Keeps
 # user content and the release tree untouched.
+# _seed_answers_from_live FILE (v5.68.0-beta.21, Q156) - put the wizard's Kea, Kea-database, SSH and DDNS answers that the live config already holds into
+# ANSWERS, so `--configure` starts from what is configured instead of from nothing. Those fifteen values are read by `_cfgval` (answers file, else the
+# JEN_* environment, else EMPTY) and never prompted for, so an interactive `--configure` wrote them blank - and `tools/config_merge.py` applies a wizard
+# value that differs from the snapshot, so a configured box was disconnected from Kea and lost its DDNS token. An answers file or an environment variable
+# still wins: the seed only fills a name that has neither. A key the file does not carry is not seeded and the wizard keeps its own default for it.
+_seed_answers_from_live() {
+    local f="$1" line name value
+    [[ -f "$f" ]] || return 0
+    while IFS= read -r line; do
+        name="${line%%=*}"
+        value="${line#*=}"
+        [[ "$name" =~ ^JEN_[A-Z_]+$ ]] || continue
+        [[ -n "${ANSWERS[$name]+x}" || -n "${!name:-}" ]] && continue
+        ANSWERS["$name"]="$value"
+    done < <("$PYBIN_FOR_LAYOUT" "$SCRIPT_DIR/tools/config_merge.py" --answers "$f")
+}
+
 _run_configure_mode() {
     # v5.68.0-beta.18 (Q153): the lock is taken BEFORE anything is read and held until write_config has committed; the snapshot is the live
     # file as it was when this began (what write_config's merge compares against). A Settings save in the meantime waits for the lock.
     _config_lock_acquire
     [[ -f "$CONFIG_FILE" ]] && CONFIG_SNAPSHOT_TEXT="$(cat -- "$CONFIG_FILE")"
+    _seed_answers_from_live "$CONFIG_FILE"
     detect_existing
     show_mode_banner
     CONFIGURE=true

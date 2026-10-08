@@ -91,6 +91,11 @@ RESOLVE_AFTER = timedelta(hours=24)
 KEEP_FOR = timedelta(days=30)
 MAX_CLOCK_LEASES = 20  # lease rows read per sweep to learn a host's clock offset
 MAX_DB_ROWS = 500
+#: v5.68.0-beta.21 (Q156): at most this many NEW (kind, client, address, subnet) keys are recorded per server per sweep. A group is keyed by all four, so
+#: a thousand-line tail of NAKs from spoofed MACs and requested addresses added up to a thousand rows every five minutes, kept for 30 days;
+#: `MAX_DB_ROWS` bounds only the two lease-database kinds. Keys that already exist always update; the newest new ones are kept and the rest are COUNTED
+#: (`summary["dropped_keys"]`, logged once per sweep, shown by the Problems sweep Health row).
+MAX_NEW_KEYS_PER_SWEEP = 200
 
 _lock = threading.Lock()
 
@@ -349,6 +354,43 @@ def _wm_set(server_id, value: datetime) -> None:
 SWEEP_INTERVAL_S = 300  # scheduler.py runs the sweep every five minutes
 MISS_LIMIT = 6  # six misses in a row = thirty minutes without reading a server's log: the Health row goes red
 _SWEPT_KEY = "client_problems_swept"
+_DROPPED_KEY = "client_problems_dropped"
+
+
+def _cap_new_keys(cur, server_id, groups: dict, limit: int = MAX_NEW_KEYS_PER_SWEEP) -> tuple[dict, int]:
+    """(groups to record, number of NEW groups dropped). A group whose (kind, mac, ip, subnet) already has a row for this server is never dropped; of
+    the new ones the `limit` with the newest `last_ts` are kept."""
+    macs = sorted({key[1] for key in groups if key[1]})
+    existing = set()
+    for i in range(0, len(macs), 500):
+        chunk = macs[i : i + 500]
+        marks = ",".join(["%s"] * len(chunk))
+        cur.execute(
+            f"SELECT kind, mac, ip, scope_key FROM client_problems WHERE server_id=%s AND mac IN ({marks})",  # nosec B608 - %s placeholders only
+            (server_id, *chunk),
+        )
+        existing |= {(r["kind"], r["mac"], r["ip"], r["scope_key"]) for r in cur.fetchall()}
+    new = [k for k in groups if (k[0], k[1], k[2], -1 if k[3] is None else k[3]) not in existing]
+    if len(new) <= limit:
+        return groups, 0
+    new.sort(key=lambda k: groups[k]["last_ts"], reverse=True)
+    dropped = set(new[limit:])
+    return {k: g for k, g in groups.items() if k not in dropped}, len(dropped)
+
+
+def _note_dropped(now: datetime, dropped: int) -> None:
+    """Record how many new keys the LAST sweep refused (0 clears it). Never raises."""
+    from jen.models import db as __db
+
+    try:
+        with __db.jen_db() as db, db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO settings (setting_key, setting_value) VALUES (%s, %s) "
+                "ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)",
+                (_DROPPED_KEY, str(int(dropped))),
+            )
+    except Exception as e:
+        logger.error(f"client_problems: could not record the dropped-key count: {type(e).__name__}: {e}")
 
 
 def _note_server(server_id, ok: bool, error: str, now: datetime) -> None:
@@ -424,7 +466,11 @@ def read_status(servers: list[dict] | None = None) -> dict:
                 "misses": misses,
             }
         )
-    return {"swept_at": when(values.get(_SWEPT_KEY)), "servers": out}
+    try:
+        dropped = int(values.get(_DROPPED_KEY) or 0)
+    except ValueError:
+        dropped = 0
+    return {"swept_at": when(values.get(_SWEPT_KEY)), "servers": out, "dropped": dropped}
 
 
 def _declined_rows() -> list[dict]:
@@ -632,6 +678,7 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
         "alerts_failed": 0,
         "resolved": 0,
         "pruned": 0,
+        "dropped_keys": 0,
         "errors": [],
     }
     with _lock:
@@ -672,6 +719,8 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                 first_sweep = wm is None  # a server's first read sets the watermark and records; a backlog is not news
                 alerts_due = []
                 with __db.jen_db() as db, db.cursor() as cur:
+                    groups, dropped = _cap_new_keys(cur, sid, groups)
+                    summary["dropped_keys"] += dropped
                     for (kind, mac, ip, subnet_id), g in groups.items():
                         cur.execute(
                             _UPSERT_LOG,
@@ -811,6 +860,12 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                 summary["resolved"] = cur.rowcount
         except Exception as e:
             logger.error(f"client_problems: resolve: {type(e).__name__}: {e}")
+        if summary["dropped_keys"]:
+            logger.warning(
+                f"client_problems: {summary['dropped_keys']} new problem keys were not recorded this sweep "
+                f"(the cap is {MAX_NEW_KEYS_PER_SWEEP} new keys per server) - a NAK storm?"
+            )
+        _note_dropped(now, summary["dropped_keys"])
         _note_swept(now)
     return summary
 

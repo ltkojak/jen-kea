@@ -4,6 +4,8 @@ tests/test_users.py
 Tests for user management — create, password change, role, session timeout.
 """
 
+import pytest
+
 from jen.models.user import hash_password, needs_rehash, verify_password
 
 
@@ -199,6 +201,90 @@ class TestAboutPageDeploymentDetailIsAdminOnly:
         assert b">Config File</td>" not in r.data
         # the page itself still renders for a viewer
         assert b"About Jen" in r.data
+
+
+class TestAboutListsOnlyTheSubnetsTheUserMaySee:
+    """v5.68.0-beta.21 (Q156, item 2): /about printed every configured subnet's id, name, CIDR and active-lease count to any logged-in user. ARCHITECTURE
+    section 2 scopes the subnets themselves, not only the per-client rows; the authorization matrix had allowlisted the route as "no per-client
+    fields", which was true and was not the rule."""
+
+    @pytest.fixture
+    def two_subnets(self, monkeypatch):
+        from jen import extensions
+
+        monkeypatch.setattr(
+            extensions,
+            "SUBNET_MAP",
+            {
+                1: {"name": "Visible-LAN", "cidr": "10.61.0.0/24"},
+                2: {"name": "Hidden-Secrets-VLAN", "cidr": "10.62.0.0/24"},
+            },
+        )
+
+    def test_a_viewer_scoped_to_subnet_1_never_sees_subnet_2(self, client, db, two_subnets):
+        from tests.conftest import restricted_client
+
+        c, _ = restricted_client(client, db, allowed_subnets=[1], role="viewer")
+        html = c.get("/about").get_data(as_text=True)
+        assert "Visible-LAN" in html and "10.61.0.0/24" in html
+        assert "Hidden-Secrets-VLAN" not in html and "10.62.0.0/24" not in html
+
+    def test_the_lease_counts_are_only_taken_for_the_visible_subnets(self, client, db, two_subnets, monkeypatch):
+        from jen.models import db as dbmod
+        from tests.conftest import restricted_client
+
+        asked = []
+        real = dbmod.kea_db
+
+        import contextlib
+
+        @contextlib.contextmanager
+        def watching():
+            with real() as conn:
+
+                class Cur:
+                    def __init__(self, cur):
+                        self._cur = cur
+
+                    def __enter__(self):
+                        self._cur.__enter__()
+                        return self
+
+                    def __exit__(self, *a):
+                        return self._cur.__exit__(*a)
+
+                    def execute(self, sql, args=None):
+                        asked.append(args)
+                        return self._cur.execute(sql, args)
+
+                    def __getattr__(self, name):
+                        return getattr(self._cur, name)
+
+                class Conn:
+                    def cursor(self, *a, **k):
+                        return Cur(conn.cursor(*a, **k))
+
+                    def __getattr__(self, name):
+                        return getattr(conn, name)
+
+                yield Conn()
+
+        monkeypatch.setattr(dbmod, "kea_db", watching)
+        c, _ = restricted_client(client, db, allowed_subnets=[1], role="viewer")
+        assert c.get("/about").status_code == 200
+        assert (2,) not in asked and (1,) in asked
+
+    def test_an_unrestricted_admin_still_sees_every_subnet(self, logged_in_client, two_subnets):
+        html = logged_in_client.get("/about").get_data(as_text=True)
+        assert "Visible-LAN" in html and "Hidden-Secrets-VLAN" in html
+
+    def test_the_matrix_entry_says_it_is_subnet_filtered(self):
+        import pathlib
+
+        text = (pathlib.Path(__file__).resolve().parent / "test_authz_matrix.py").read_text(encoding="utf-8")
+        assert (
+            '"users.about": "subnet-filtered' in text and "static info page" not in text.split('"users.about"')[1][:120]
+        )
 
 
 class TestOidcUsersPage:

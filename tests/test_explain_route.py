@@ -461,6 +461,93 @@ class TestTheUsableLeaseIsTheOnlyLeaseTheRouteKnows:
             assert secret not in page, f"{secret!r}: the hidden lease reached the page"
 
 
+class TestAReservationInAHiddenSubnetIsNotAnOracle:
+    """v5.68.0-beta.21 (Q156, item 5): the reservations were filtered AFTER the subnet was chosen from them. A MAC whose only reservation sat in a hidden
+    subnet chose that subnet, was refused ("You do not have access to that subnet") and got a different page from a MAC nobody has ever seen - the
+    page confirmed a hidden reservation exists. A denial and a not-found are one message."""
+
+    HIDDEN_MAC = "00:aa:aa:aa:aa:77"
+    UNKNOWN_MAC = "00:aa:aa:aa:aa:78"
+
+    @pytest.fixture
+    def hidden(self, monkeypatch, db, no_log):
+        from jen import extensions
+
+        monkeypatch.setattr("jen.routes.explain.dhcp4_config", lambda force=False: SMALL_CFG)
+        monkeypatch.setattr(
+            extensions,
+            "SUBNET_MAP",
+            {1: {"name": "NET-A", "cidr": "192.168.1.0/24"}, 2: {"name": "HIDDEN-NET-B", "cidr": "10.99.0.0/24"}},
+        )
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier)='00AAAAAAAA77'")
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
+                "VALUES (UNHEX('00AAAAAAAA77'), 0, 2, INET_ATON('10.99.0.77'), 'hidden-reservation-host')"
+            )
+        db.commit()
+        yield
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier)='00AAAAAAAA77'")
+        db.commit()
+
+    @staticmethod
+    def _shape(page, mac):
+        """The page with the one thing that legitimately differs (the MAC typed) taken out."""
+        import re
+
+        page = re.sub(r"(?i)00[:-]?aa[:-]?aa[:-]?aa[:-]?aa[:-]?7[78]", "<mac>", page)
+        return re.sub(r"\s+", " ", page.replace(mac, "<mac>"))
+
+    def test_a_hidden_reservation_and_a_never_seen_mac_render_the_same_page(self, client, db, hidden, mock_kea):
+        from tests.conftest import restricted_client
+
+        c, _uid = restricted_client(client, db, allowed_subnets=[1], role="admin", username="_explain_oracle_admin")
+        hidden_page = c.get(f"/tools/explain?mac={self.HIDDEN_MAC}").get_data(as_text=True)
+        unknown_page = c.get(f"/tools/explain?mac={self.UNKNOWN_MAC}").get_data(as_text=True)
+        assert "first subnet you can see" in hidden_page and "first subnet you can see" in unknown_page
+        assert "You do not have access to that subnet" not in hidden_page
+        assert "from a reservation" not in hidden_page
+        for secret in ("10.99.0.77", "hidden-reservation-host", "HIDDEN-NET-B"):
+            assert secret not in hidden_page
+        assert self._shape(hidden_page, self.HIDDEN_MAC) == self._shape(unknown_page, self.UNKNOWN_MAC), (
+            "the two pages differ: the reservation in a hidden subnet is observable"
+        )
+
+    def test_the_embedded_partial_is_the_same_for_both(self, client, db, hidden, mock_kea):
+        from tests.conftest import restricted_client
+
+        c, _uid = restricted_client(client, db, allowed_subnets=[1], role="admin", username="_explain_oracle_admin2")
+        headers = {"HX-Request": "true"}
+        a = c.get(f"/tools/explain?mac={self.HIDDEN_MAC}", headers=headers).get_data(as_text=True)
+        b = c.get(f"/tools/explain?mac={self.UNKNOWN_MAC}", headers=headers).get_data(as_text=True)
+        assert self._shape(a, self.HIDDEN_MAC) == self._shape(b, self.UNKNOWN_MAC)
+
+    def test_an_unrestricted_caller_still_gets_the_reservation_s_subnet(self, logged_in_client, hidden, mock_kea):
+        page = logged_in_client.get(f"/tools/explain?mac={self.HIDDEN_MAC}").get_data(as_text=True)
+        assert "from a reservation" in page
+
+    def test_a_reservation_in_a_visible_subnet_still_chooses_it_for_a_scoped_caller(self, client, db, hidden, mock_kea):
+        from tests.conftest import restricted_client
+
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier)='00AAAAAAAA79'")
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
+                "VALUES (UNHEX('00AAAAAAAA79'), 0, 1, INET_ATON('192.168.1.79'), 'visible-reservation')"
+            )
+        db.commit()
+        try:
+            c, _uid = restricted_client(
+                client, db, allowed_subnets=[1], role="admin", username="_explain_oracle_admin3"
+            )
+            assert "from a reservation" in c.get("/tools/explain?mac=00:aa:aa:aa:aa:79").get_data(as_text=True)
+        finally:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier)='00AAAAAAAA79'")
+            db.commit()
+
+
 class TestTheTabNamesTheExchange:
     """v5.68.0-beta.10 (Q145): what was read from Kea's log is one exchange on one server, and the tab says which."""
 

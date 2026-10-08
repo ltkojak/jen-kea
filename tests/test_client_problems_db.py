@@ -99,7 +99,8 @@ def _clean(db):
     with db.cursor() as cur:
         cur.execute("DELETE FROM client_problems")
         cur.execute(
-            "DELETE FROM settings WHERE setting_key LIKE 'client_problems_wm:%' OR setting_key LIKE 'client_problems_clock:%'"
+            "DELETE FROM settings WHERE setting_key LIKE 'client_problems_wm:%' OR setting_key LIKE 'client_problems_clock:%' "
+            "OR setting_key = 'client_problems_dropped'"
         )
         cur.execute(
             "DELETE FROM lease4 WHERE HEX(hwaddr) IN (%s, %s) OR address IN "
@@ -1062,3 +1063,80 @@ class TestTheSweepRecordsWhetherItCanReadEachServer:
 
         assert health._CHECK_META["problems_sweep"] == ("Problems inbox sweep", "kea")
         assert health._problems_sweep in health._CHECKS
+
+
+class TestANakStormCannotFloodTheInbox:
+    """v5.68.0-beta.21 (Q156, item 6): a group is keyed by (kind, client, address, subnet), so a thousand-line tail of declines from spoofed MACs and
+    requested addresses added up to a thousand rows per sweep, kept 30 days - `MAX_DB_ROWS` bounds only the two lease-database kinds. At most
+    `MAX_NEW_KEYS_PER_SWEEP` NEW keys are recorded per server per sweep; the rest are counted, logged once and shown by the Health row."""
+
+    @staticmethod
+    def _storm(n, first=0):
+        out = []
+        for i in range(first, first + n):
+            out.append(
+                decline(
+                    i % 60,
+                    ip=f"10.45.{i // 250}.{i % 250 + 1}",
+                    mac=f"aa:bb:cc:{i // 65536:02x}:{(i // 256) % 256:02x}:{i % 256:02x}",
+                    minute=(i // 60) % 60,
+                )
+            )
+        return out
+
+    def test_a_thousand_distinct_spoofed_keys_record_the_cap_and_count_the_rest(self, db, stack, caplog):
+        logs, _calls = stack
+        prime(logs)
+        logs[1] = self._storm(1000)
+        out = cp.sweep(NOW, servers=[SERVER_A])
+        assert len(rows(db, "kind='decline'")) == cp.MAX_NEW_KEYS_PER_SWEEP == 200
+        assert out["dropped_keys"] == 800
+        assert "800 new problem keys were not recorded" in caplog.text
+        assert caplog.text.count("new problem keys were not recorded") == 1, "logged once per sweep"
+
+    def test_the_newest_new_keys_are_the_ones_kept(self, db, stack):
+        logs, _calls = stack
+        prime(logs)
+        logs[1] = self._storm(1000)
+        cp.sweep(NOW, servers=[SERVER_A])
+        kept = {r["mac"] for r in rows(db, "kind='decline'")}
+        newest = {f"aa:bb:cc:{i // 65536:02x}:{(i // 256) % 256:02x}:{i % 256:02x}" for i in range(800, 1000)}
+        assert kept == newest
+
+    def test_a_key_that_already_exists_always_updates_even_when_the_cap_is_spent(self, db, stack):
+        logs, _calls = stack
+        prime(logs)
+        logs[1] = self._storm(1)
+        cp.sweep(NOW - timedelta(minutes=5), servers=[SERVER_A])
+        before = rows(db, "kind='decline'")[0]["count"]
+        logs[1] = [decline(59, ip="10.45.0.1", mac="aa:bb:cc:00:00:00", minute=30), *self._storm(400, first=1000)]
+        out = cp.sweep(NOW, servers=[SERVER_A])
+        existing = rows(db, "kind='decline' AND mac='aa:bb:cc:00:00:00'")
+        assert existing and existing[0]["count"] > before, "the existing key was not updated"
+        assert out["dropped_keys"] == 200 and len(rows(db, "kind='decline'")) == 1 + 200
+
+    def test_a_normal_sweep_drops_nothing_and_clears_the_record(self, db, stack):
+        logs, _calls = stack
+        prime(logs)
+        logs[1] = self._storm(300)
+        assert cp.sweep(NOW - timedelta(minutes=5), servers=[SERVER_A])["dropped_keys"] == 100
+        assert cp.read_status([SERVER_A])["dropped"] == 100
+        logs[1] = [decline(5, ip="10.45.0.200", mac=MAC2, minute=40)]
+        assert cp.sweep(NOW, servers=[SERVER_A])["dropped_keys"] == 0
+        assert cp.read_status([SERVER_A])["dropped"] == 0
+
+    def test_the_health_row_warns_and_names_the_count(self, db, stack, monkeypatch):
+        from jen.services import health
+
+        monkeypatch.setattr(cp, "_now", lambda: NOW)
+
+        logs, _calls = stack
+        prime(logs)
+        logs[1] = self._storm(500)
+        cp.sweep(NOW, servers=[SERVER_A])
+        check = health._problems_sweep({})
+        assert (
+            check.status == "warn"
+            and "300 problem keys dropped last sweep" in check.detail
+            and "NAK storm" in check.detail
+        )

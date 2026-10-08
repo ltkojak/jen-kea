@@ -626,9 +626,9 @@ ROUTE_ALLOWLIST = {
     "subnets.subnets": "subnet list with aggregate counts — tests/test_subnets.py",
     "subnets.delete_subnet": "write route, admin-only — tests/test_subnets.py",
     # Users — audit_log is the superadmin-only audit trail (unrestricted by
-    # design, like Doctor); about is a static info page with lease COUNT()s only.
+    # design, like Doctor); about lists the subnets themselves, so it is filtered like every other subnet surface (v5.68.0-beta.21, Q156).
     "users.audit_log": "superadmin-only audit trail, unrestricted by design — tests/test_users.py",
-    "users.about": "static info page, aggregate lease counts only, no per-client fields",
+    "users.about": "subnet-filtered (filter_subnet_map), aggregate lease counts only, no per-client fields — tests/test_users.py",
     # Other REST v1 routes — scoped via _api_key_subnet_ids()/filter_subnet_ids()
     # already; not in Q81's named six (devices/devices-by-mac/leases-by-mac/
     # timeline/events/health-checks). tests/test_api_key_authorization.py.
