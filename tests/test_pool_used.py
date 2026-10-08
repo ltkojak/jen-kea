@@ -212,8 +212,8 @@ class TestAnUnmeasuredPoolUseIsNeverReplacedByAnotherNumber:
         data = logged_in_client.get("/api/stats").get_json()
         assert "pool_used" in data["subnets"]["1"] and data["subnets"]["1"]["pool_used"] is None
         assert data["pool_sizes"]["1"] == SIZE, "the pool size is still known; only the use is not"
-        assert data["subnets"]["1"]["dynamic"] == IN, (
-            "dynamic stays what it is - a different number on a different question"
+        assert data["subnets"]["1"]["dynamic"] == IN + OUT, (
+            "dynamic stays what it is (every lease here is dynamic) - a different number on a different question"
         )
 
     def test_api_stats_says_null_when_kea_s_config_cannot_be_read(self, world, logged_in_client, monkeypatch):
