@@ -190,7 +190,7 @@ class TestTheServerThatHandledTheClient:
         servers["tails"][1] = {"ok": True, "code": "ok", "lines": []}
         servers["tails"][2] = {"ok": True, "code": "ok", "lines": OWN_LOG}
         view = ctx.read_log(MAC, allowed=True)
-        assert servers["asked"] == [2], "the HA-active server had the exchange: the standby was never asked"
+        assert servers["asked"] == [2, 1], "every reachable server is read now (Q157), the HA-active one first"
         assert view["server"]["name"] == "kea-b"
 
     def test_the_helper_only_on_server_1(self, servers, monkeypatch):
@@ -349,7 +349,7 @@ class TestTheHaQuestionIsAskedRarely:
     def test_the_order_is_still_ha_active_first(self, servers, counted):
         servers["ha"] = {1: _ha([]), 2: _ha(["server1"])}
         view = ctx.read_log(MAC, allowed=True)
-        assert servers["asked"] == [2] and view["server"]["name"] == "kea-b"
+        assert servers["asked"] == [2, 1] and view["server"]["name"] == "kea-b"
         probes = len(counted)
         assert [s["id"] for s in ctx._evidence_servers()] == [2, 1], "the memoised order is the HA-active-first one"
         assert len(counted) == probes
@@ -358,3 +358,97 @@ class TestTheHaQuestionIsAskedRarely:
         monkeypatch.setattr(extensions, "KEA_SERVERS", [dict(S1)])
         ctx.read_log(MAC, allowed=True)
         assert counted == []
+
+
+def _exchange(at, cid, tid, host):
+    return [
+        _classes(at, MAC, cid, tid, ["ALL", f"CLASS_{host}"]),
+        *_dump(at.replace(":00.110", ":00.120"), MAC, cid, tid, host),
+    ]
+
+
+class TestTheNewestCompleteExchangeAcrossServersWins:
+    """v5.68.0-beta.22 (Q157, item 7): `read_log` broke at the FIRST server in order whose exchange was complete and never compared times across
+    servers, so after a failover the old active's older exchange beat the standby's newer one. It now collects the complete exchange of every
+    reachable server and chooses the newest - ordered only when both log-clock offsets are known, else (or within 5 s) the first in order."""
+
+    def test_a_older_b_newer_the_newer_one_wins_when_the_offsets_are_known(self, servers, monkeypatch):
+        monkeypatch.setattr(ctx, "_clock_offset_s", lambda server: 0.0)
+        servers["tails"][1] = {
+            "ok": True,
+            "code": "ok",
+            "lines": _exchange("10:00:00.110", "01:aa", "0xa", "old-active"),
+        }
+        servers["tails"][2] = {
+            "ok": True,
+            "code": "ok",
+            "lines": _exchange("10:05:00.110", "01:bb", "0xb", "new-active"),
+        }
+        view = ctx.read_log(MAC, allowed=True)
+        assert view["server"]["name"] == "kea-b" and view["transaction"]["tid"] == "0xb"
+        assert view["query"]["hostname"] == "new-active" and "also_seen_on" not in view
+
+    def test_a_newer_b_older_the_newer_one_wins_whatever_the_order(self, servers, monkeypatch):
+        monkeypatch.setattr(ctx, "_clock_offset_s", lambda server: 0.0)
+        servers["tails"][1] = {"ok": True, "code": "ok", "lines": _exchange("10:09:00.110", "01:aa", "0xa", "newer")}
+        servers["tails"][2] = {"ok": True, "code": "ok", "lines": _exchange("10:01:00.110", "01:bb", "0xb", "older")}
+        assert ctx.read_log(MAC, allowed=True)["server"]["name"] == "kea-a"
+
+    def test_known_offsets_reorder_what_the_raw_times_say(self, servers, monkeypatch):
+        """B's clock runs two hours ahead of UTC: its 12:00 is 10:00 UTC, older than A's 10:30 (offset 0)."""
+        monkeypatch.setattr(ctx, "_clock_offset_s", lambda server: 7200.0 if server["id"] == 2 else 0.0)
+        servers["tails"][1] = {"ok": True, "code": "ok", "lines": _exchange("10:30:00.110", "01:aa", "0xa", "a-host")}
+        servers["tails"][2] = {"ok": True, "code": "ok", "lines": _exchange("12:00:00.110", "01:bb", "0xb", "b-host")}
+        assert ctx.read_log(MAC, allowed=True)["server"]["name"] == "kea-a"
+
+    def test_unknown_offsets_fall_back_to_the_server_order_not_the_raw_times(self, servers):
+        servers["tails"][1] = {"ok": True, "code": "ok", "lines": _exchange("10:00:00.110", "01:aa", "0xa", "first")}
+        servers["tails"][2] = {"ok": True, "code": "ok", "lines": _exchange("11:00:00.110", "01:bb", "0xb", "second")}
+        assert ctx.read_log(MAC, allowed=True)["server"]["name"] == "kea-a", (
+            "an offset-less comparison is a guess; the HA order decides"
+        )
+
+    def test_within_five_seconds_the_first_in_order_wins_and_the_other_is_named(self, servers, monkeypatch):
+        monkeypatch.setattr(ctx, "_clock_offset_s", lambda server: 0.0)
+        servers["tails"][1] = {"ok": True, "code": "ok", "lines": _exchange("10:00:00.110", "01:aa", "0xa", "a-host")}
+        servers["tails"][2] = {"ok": True, "code": "ok", "lines": _exchange("10:00:03.110", "01:bb", "0xb", "b-host")}
+        view = ctx.read_log(MAC, allowed=True)
+        assert view["server"]["name"] == "kea-a" and view["also_seen_on"] == ["kea-b"]
+        assert view["query"]["hostname"] == "a-host", "fields are never mixed across transactions"
+
+    def test_ha_active_first_decides_a_tie(self, servers, monkeypatch):
+        monkeypatch.setattr(ctx, "_clock_offset_s", lambda server: 0.0)
+        servers["ha"] = {1: _ha([]), 2: _ha(["server1"])}
+        servers["tails"][1] = {"ok": True, "code": "ok", "lines": _exchange("10:00:00.110", "01:aa", "0xa", "standby")}
+        servers["tails"][2] = {"ok": True, "code": "ok", "lines": _exchange("10:00:01.110", "01:bb", "0xb", "active")}
+        view = ctx.read_log(MAC, allowed=True)
+        assert view["server"]["name"] == "kea-b" and view["also_seen_on"] == ["kea-a"]
+
+    def test_an_incomplete_exchange_is_only_the_fallback_when_no_server_has_a_complete_one(self, servers, monkeypatch):
+        monkeypatch.setattr(ctx, "_clock_offset_s", lambda server: 0.0)
+        servers["tails"][1] = {"ok": True, "code": "ok", "lines": [_packet("10:09:00.100", MAC, "01:aa", "0x1")]}
+        servers["tails"][2] = {
+            "ok": True,
+            "code": "ok",
+            "lines": _exchange("10:01:00.110", "01:bb", "0xb", "complete-but-older"),
+        }
+        view = ctx.read_log(MAC, allowed=True)
+        assert view["server"]["name"] == "kea-b" and view["transaction"]["complete"] is True
+        ctx.clear_log_cache()
+        servers["tails"][2] = {"ok": True, "code": "ok", "lines": [_packet("10:02:00.100", MAC, "01:bb", "0x2")]}
+        assert ctx.read_log(MAC, allowed=True)["transaction"]["complete"] is False
+
+    def test_one_unreachable_server_leaves_the_other_s_exchange(self, servers, monkeypatch):
+        monkeypatch.setattr(ctx, "_clock_offset_s", lambda server: 0.0)
+        servers["tails"][1] = {"ok": False, "code": "error", "detail": "ssh refused"}
+        servers["tails"][2] = {"ok": True, "code": "ok", "lines": _exchange("10:00:00.110", "01:bb", "0xb", "only")}
+        view = ctx.read_log(MAC, allowed=True)
+        assert view["state"] == "ok" and view["server"]["name"] == "kea-b" and "also_seen_on" not in view
+
+    def test_the_explain_tab_says_so(self):
+        import pathlib
+
+        html = (pathlib.Path(__file__).resolve().parent.parent / "templates" / "_explain_result.html").read_text(
+            encoding="utf-8"
+        )
+        assert "also_seen_on" in html and "logged this client at about the same time" in html

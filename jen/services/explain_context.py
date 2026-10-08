@@ -117,6 +117,10 @@ def _serves_clients(server: dict) -> bool:
     return bool(local.get("scopes")) and local.get("state") in HA_ACTIVE_STATES
 
 
+#: v5.68.0-beta.22 (Q157): two exchanges whose corrected times are this close are "at about the same time" - the first server in order wins and the
+#: other is named as also having logged the client.
+CLOCK_TIE_S = 5
+
 _evidence_memo: tuple | None = None  # (monotonic time, ids of the configured servers, the ordered list)
 
 
@@ -150,6 +154,18 @@ def _clock_offset_s(server: dict) -> float | None:
         return _cp._clock_get(server.get("id"))
     except Exception:
         return None
+
+
+def _utc_of(server: dict, tx: dict):
+    """The exchange's last line as a naive UTC time, or None when the host's log-clock offset is unknown (the comparison across servers is then
+    not made - never a guess)."""
+    offset = _clock_offset_s(server)
+    when = _li._when(tx["last"])
+    if offset is None or when is None:
+        return None
+    from datetime import timedelta
+
+    return when - timedelta(seconds=offset)
 
 
 def _before_config_change(server: dict, at_text: str) -> bool:
@@ -222,7 +238,7 @@ def read_log(mac: str, *, allowed: bool, fetch: bool = True) -> dict:
     if not fetch:
         return {**empty, "state": "not-fetched", "message": ""}
     servers = _evidence_servers()
-    view = None
+    complete = []  # (server, tx, utc time or None) for every reachable server whose log holds a COMPLETE exchange of the client
     first_ok = None  # a server whose log was read but never named the client
     fallback = None  # an exchange that has no class list or packet dump (the client id only)
     problem = None  # why the first server that could not be read could not be
@@ -260,9 +276,34 @@ def read_log(mac: str, *, allowed: bool, fetch: bool = True) -> dict:
             first_ok = first_ok or _view_from(server, None)
             continue
         if tx["complete"]:
-            view = _view_from(server, tx)
-            break
+            complete.append((server, tx, _utc_of(server, tx)))
+            continue
         fallback = fallback or _view_from(server, tx)
+    view = None
+    if complete:
+        # v5.68.0-beta.22 (Q157): the NEWEST complete exchange across the reachable servers, not the first one in server order - after a failover the
+        # old active's older exchange used to beat the standby's newer one. Two exchanges are ordered only when both servers' log-clock offsets are
+        # known (the Problems sweep measures them); within CLOCK_TIE_S, or with an offset unknown, the first in `_evidence_servers` order (the
+        # HA-active server) wins. Fields are never mixed across transactions: the view is built from the ONE exchange chosen.
+        best = complete[0]
+        for candidate in complete[1:]:
+            if (
+                best[2] is not None
+                and candidate[2] is not None
+                and (candidate[2] - best[2]).total_seconds() > CLOCK_TIE_S
+            ):
+                best = candidate
+        view = _view_from(best[0], best[1])
+        also = [
+            _name(server)
+            for server, _tx, utc in complete
+            if server is not best[0]
+            and best[2] is not None
+            and utc is not None
+            and abs((utc - best[2]).total_seconds()) <= CLOCK_TIE_S
+        ]
+        if also:
+            view["also_seen_on"] = also
     if view is None:
         view = fallback or first_ok or problem or {**empty, "state": "error", "message": "Could not read Kea's log."}
     if len(_log_cache) > 256:

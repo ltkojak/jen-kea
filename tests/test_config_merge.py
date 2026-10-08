@@ -293,3 +293,55 @@ class TestAnswersFrom:
     def test_a_missing_file_prints_nothing(self, tmp_path, capsys):
         assert cm.main(["--answers", str(tmp_path / "nope")]) == 0
         assert capsys.readouterr().out == ""
+
+
+class TestThePromptedDefaults:
+    """v5.68.0-beta.22 (Q157, item 9): `--answers` also prints the five answers the wizard prompts for as `DEFAULT_<name>` lines."""
+
+    def test_the_five_defaults_come_from_the_live_file(self):
+        defaults = dict(cm.defaults_from(CONFIGURED.replace("https_port = 8443", "https_port = 9443")))
+        assert defaults == {
+            "DEFAULT_JEN_HTTP_PORT": "5050",
+            "DEFAULT_JEN_HTTPS_PORT": "9443",
+            "DEFAULT_JEN_DB_HOST": "db",
+            "DEFAULT_JEN_DB_USER": "jen",
+            "DEFAULT_JEN_DB_NAME": "jen",
+        }
+        assert len(cm.WIZARD_DEFAULTS) == 5
+
+    def test_an_empty_or_missing_value_is_not_a_default(self):
+        assert cm.defaults_from("[server]\nhttp_port =\n[jen_db]\nhost = h\n") == [("DEFAULT_JEN_DB_HOST", "h")]
+
+    def test_the_command_line_prints_the_answers_then_the_defaults(self, tmp_path, capsys):
+        f = tmp_path / "live.ini"
+        f.write_text(CONFIGURED)
+        assert cm.main(["--answers", str(f)]) == 0
+        lines = capsys.readouterr().out.splitlines()
+        assert "DEFAULT_JEN_HTTPS_PORT=8443" in lines and "JEN_KEA_API_URL=http://kea.lan:8000" in lines
+        assert lines.index("JEN_KEA_API_URL=http://kea.lan:8000") < lines.index("DEFAULT_JEN_HTTPS_PORT=8443")
+
+    def test_a_prompted_name_is_not_also_an_answer(self):
+        names = {name for _s, _k, name in cm.WIZARD_ANSWERS}
+        assert not names & {name for _s, _k, name in cm.WIZARD_DEFAULTS}, (
+            "a defaulted value must stay changeable by the wizard"
+        )
+
+    def test_every_default_name_is_one_the_wizard_asks(self):
+        import pathlib
+        import re
+
+        text = (pathlib.Path(__file__).resolve().parent.parent / "install.sh").read_text(encoding="utf-8")
+        asked = set(re.findall(r'_ask\s+"(JEN_[A-Z_]+)"', text))
+        assert {name for _s, _k, name in cm.WIZARD_DEFAULTS} <= asked
+
+
+class TestAMultiLineValueTravelsOnOneLine:
+    def test_newlines_and_backslashes_are_escaped(self):
+        assert cm.escape_line("a\nb\\c\r\nd") == "a\\nb\\\\c\\nd"
+
+    def test_the_command_line_prints_one_line_per_answer(self, tmp_path, capsys):
+        f = tmp_path / "live.ini"
+        f.write_text("[kea]\napi_url = http://x\napi_pass = one\n    two\n")
+        cm.main(["--answers", str(f)])
+        out = capsys.readouterr().out.splitlines()
+        assert out == ["JEN_KEA_API_URL=http://x", "JEN_KEA_API_PASS=one\\ntwo"]

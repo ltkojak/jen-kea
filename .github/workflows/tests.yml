@@ -1129,7 +1129,7 @@ jobs:
           JEN_DB_PASS=jen_pw
           JEN_DB_NAME=jen
           JEN_HTTP_PORT=5050
-          JEN_HTTPS_PORT=8443
+          JEN_HTTPS_PORT=9443
           JEN_KEA_API_URL=http://127.0.0.1:8000
           JEN_KEA_API_USER=ci-kea-user
           JEN_KEA_API_PASS=ci-kea-pass
@@ -1139,13 +1139,12 @@ jobs:
           JEN_DDNS_URL=http://127.0.0.1:5380
           JEN_DDNS_TOKEN=ci-ddns-token-q156
           EOF
+          # v5.68.0-beta.22 (Q157, item 9): the reconfigure's answers carry the Jen database's user, name and password and NOTHING about the ports or the
+          # database host - the prompted answers fall back to what is configured (a non-default https_port, 9443, was written back as 8443)
           cat > "$RUNNER_TEMP/answers-reconfigure.env" << 'EOF'
-          JEN_DB_HOST=127.0.0.1
           JEN_DB_USER=jen
           JEN_DB_PASS=jen_pw
           JEN_DB_NAME=jen
-          JEN_HTTP_PORT=5050
-          JEN_HTTPS_PORT=8443
           EOF
 
       - name: Install a configured box (Kea connection, SSH target, DDNS token)
@@ -1172,6 +1171,9 @@ jobs:
           sudo grep -E '^host *= *kea\.ci\.example$' /etc/jen/jen.config
           sudo grep -E '^dns_provider *= *technitium$' /etc/jen/jen.config
           sudo grep -E '^api_token *= *ci-ddns-token-q156$' /etc/jen/jen.config
+          sudo grep -E '^https_port *= *9443$' /etc/jen/jen.config
+          sudo grep -E '^http_port *= *5050$' /etc/jen/jen.config
+          sudo python3 -c "import configparser; c = configparser.ConfigParser(); c.read('/etc/jen/jen.config'); assert c.get('jen_db', 'host') == '127.0.0.1', c.get('jen_db', 'host'); print('jen_db host kept:', c.get('jen_db', 'host'))"
           systemctl is-active --quiet jen
           grep -q jen_version < <(curl -sf http://127.0.0.1:5050/api/v1/health)
 

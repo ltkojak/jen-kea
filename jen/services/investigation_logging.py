@@ -168,7 +168,7 @@ def _change(server: dict, mutate_fn, summary: str, unsupported: str, *, refuse_u
     return result, use_reload, support
 
 
-def _daemon_step(server: dict, use_reload: bool) -> dict:
+def _daemon_step(server: dict, use_reload: bool, *, allow_restart: bool) -> dict:
     """Step 2: make the daemon re-read its file - `config-reload` when the daemon has it, a restart otherwise or when the reload is
     refused. Returns {"ok", "mode": "reload"|"restart"|"", "lines": [...]}."""
     if use_reload:
@@ -176,6 +176,18 @@ def _daemon_step(server: dict, use_reload: bool) -> dict:
         if reply.get("result") == 0:
             return {"ok": True, "mode": "reload", "lines": ["Kea re-read its config without a restart."]}
         refused = reply.get("text") or "refused"
+        if not allow_restart:
+            # v5.68.0-beta.22 (Q157): turning logging ON never restarts Kea. A `config-reload` that does not return 0 is a refusal, a connection failure
+            # or a timeout - `kea_command` gives all three the same shape - and at this point they cannot be told apart. beta.21 refused when
+            # `list-commands` was silent and then restarted over SSH when the NEXT call to the same API failed; the caller puts the file back.
+            return {
+                "ok": False,
+                "mode": "",
+                "lines": [
+                    f"Kea's API did not confirm the reload ({refused}), so the log level was put back; nothing was restarted - "
+                    "check Settings → Kea → Probe."
+                ],
+            }
         restarted = _host.service_action(server, "dhcp4", "restart")
         if restarted.get("ok"):
             return {
@@ -322,7 +334,7 @@ def turn_on(server: dict, minutes: int, actor: str = "") -> dict:
         # The file now carries DEBUG 55: Jen is responsible for it from this moment, so the entry is saved BEFORE the daemon is asked.
         entry.update(daemon="unknown", pending="reload")
         _put(record, sid, entry)
-        step = _daemon_step(server, use_reload=True)
+        step = _daemon_step(server, use_reload=True, allow_restart=False)
         if step["ok"]:
             entry.update(daemon="debug", pending=None, mode=step["mode"])
             _put(record, sid, entry)
@@ -385,7 +397,9 @@ def _restore(server: dict, record: dict, now: datetime | None, summary: str) -> 
             _put(record, sid, entry)
         return {"ok": False, "mode": "", "lines": lines}
     reload_now = _reload_support(server)
-    step = _daemon_step(server, use_reload=entry.get("pending") != "restart" and reload_now == "yes")
+    step = _daemon_step(
+        server, use_reload=entry.get("pending") != "restart" and reload_now == "yes", allow_restart=True
+    )
     if step["ok"]:
         _drop(record, sid)
         why = (

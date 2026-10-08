@@ -1128,7 +1128,8 @@ change is `kea_changeset.apply_change` (`apply-config` with the sha guard, `kea-
 revert on failure, an audit row and a config revision), the daemon learns of it through `config-reload` on
 the control channel Jen already uses (restart through the existing `service` op only when the daemon answered and lacks
 or refuses it - v5.68.0-beta.21, Q156: `_reload_support` is yes / no / unknown, and "unknown" (the API did not answer) REFUSES turning logging on, because a restart of a
-production daemon must not follow from a Control Agent that was down; turn-off and the expiry restore still fall back to the restart, and say why), and the log is read through `tail-log`. The only thing the helper sees is a config whose
+production daemon must not follow from a Control Agent that was down - and (v5.68.0-beta.22, Q157) the SECOND call is judged the same way: `_daemon_step(..., allow_restart=False)`
+for `turn_on`, so a `config-reload` that does not return 0 (a refusal, a connection failure, a timeout: one reply shape) puts the file back through `_revert_file` and restarts nothing; turn-off and the expiry restore still fall back to the restart, and say why), and the log is read through `tail-log`. The only thing the helper sees is a config whose
 `kea-dhcp4` logger entry carries a `user-context` marker saying what to restore; `docs/admin-guide.md`
 names the one logger entry Jen touches. **A marker that has lost its `restore` object is never read as "these keys never existed"
 (v5.68.0-beta.13, Q148).** `kea_config_edit.clear_investigation_logging` validates the marker before it mutates anything: `restore` must be
@@ -2632,7 +2633,7 @@ snapshot), and a configured box restarted into /setup without its Kea connection
 wizard's file FROM THE SNAPSHOT, a wizard install.sh does not have. `_run_configure_mode` now calls `_seed_answers_from_live` (through `tools/config_merge.py --answers`)
 before the wizard: every one of the fifteen the live file holds goes into `ANSWERS` unless an answers file or an environment variable already has it, which also makes the
 merge's "the operator accepted the default, live wins" rule reachable. A CI install leg installs a box with a Kea connection, an SSH target and a DDNS token, runs
-`--configure` with an answers file that says nothing about Kea, and greps them all still there. `AppConfig.mutate` hands its callback the parser to change and writes THAT parser
+`--configure` with an answers file that says nothing about Kea, and greps them all still there. v5.68.0-beta.22 (Q157) extends the seed to the five PROMPTED answers (`WIZARD_DEFAULTS`: the two ports and the Jen database's host, user, name): `--answers` prints them as `DEFAULT_<name>`, `LIVE_DEFAULTS` holds them and `_ask` offers that as its default, so Enter or an unattended run keeps what is configured; the seed reads the tool's output into a variable (a failing exit is a `fatal` naming the file and the code, not an invisible process-substitution status) and a multi-line value travels on one line (newlines as backslash-n, backslashes doubled) and is unescaped with `printf %b`. `AppConfig.mutate` hands its callback the parser to change and writes THAT parser
 when it returns, so a writer called from inside the callback would write to disk and then be silently overwritten; it now raises
 `RuntimeError("mutate the parser you were given")` (the old test codified "the outer write then wins").
 
@@ -2745,6 +2746,13 @@ deliveries were dropped to a full queue, and FAILS when the thread is dead (beta
 whose subnet or server is no longer configured (no `_ok`; an empty live set clears nothing), and the Problems sweep deletes the per-server settings keys of a removed server.
 *The device seed:* the `known_macs` seed ran once before the alert loop, so a Jen database that was down at start left it empty for the life of the process and every known
 device that was offline at start fired `new_device` when it came back; it is retried at the top of each cycle until it works and `new_device` waits for it.
+
+**`read_log` chooses the newest complete exchange across servers (v5.68.0-beta.22, Q157).** It broke at the first server in order (HA-active first) whose exchange was complete and never compared
+times across servers, so after a failover the old active's older exchange beat the standby's newer one. It now collects the complete exchange of every reachable server and takes the newest by
+its last line corrected by `_clock_offset_s` - ordered only when BOTH offsets are known; within `CLOCK_TIE_S` (5 s) or with an offset unknown, the first in `_evidence_servers` order wins, and the
+view carries `also_seen_on` (names), shown on the Explain tab as "another server also logged this client at about the same time". Incomplete exchanges stay the fallback only when no server has
+a complete one, and fields are never mixed across transactions. The IP map follows the same rule as every subnet surface: a user who may see no subnet at all gets "no subnet you can see" and
+nothing is queried (it used to fall back to the first configured subnet; found by the grep for the old spelling), and the authorization matrix has the cell.
 
 **The Problems inbox caps what a log can add (v5.68.0-beta.21, Q156).** A group is keyed by (kind, client, address, subnet), so a thousand-line tail of declines from
 spoofed MACs and requested addresses added up to a thousand rows per sweep, kept 30 days; `MAX_DB_ROWS` bounds only the two lease-database kinds. At most

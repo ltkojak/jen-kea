@@ -134,6 +134,98 @@ class TestIpMapPoolBlocks:
         assert blocks[0]["start"] == "10.0.0.1"
 
 
+class TestIpMapForAUserWhoMaySeeNoSubnet:
+    """v5.68.0-beta.22 (Q157, item 8): `default_subnet` fell back to the first CONFIGURED subnet when the user's own map was empty, and the page then
+    queried and printed that subnet's leases, reservations and CIDR - reachable for a restricted account whose access list names only subnets that
+    have since left `[subnets]` (or is empty). Pre-existing since v4.4.9, found by the grep for the old spelling."""
+
+    @pytest.fixture
+    def two_subnets(self, db, monkeypatch):
+        from jen import extensions
+
+        monkeypatch.setattr(
+            extensions,
+            "SUBNET_MAP",
+            {
+                1: {"name": "FIRST-CONFIGURED-NET", "cidr": "10.201.0.0/24"},
+                2: {"name": "SECOND-NET", "cidr": "10.202.0.0/24"},
+            },
+        )
+        monkeypatch.setattr("jen.routes.leases._get_pools", lambda sid: [("10.201.0.10", "10.201.0.20")])
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4 WHERE address=INET_ATON('10.201.0.12')")
+            cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier)='00AA02010001'")
+            cur.execute(
+                "INSERT INTO lease4 (address, hwaddr, valid_lifetime, expire, subnet_id, state, hostname) VALUES "
+                "(INET_ATON('10.201.0.12'), UNHEX('00AA02010002'), 3600, DATE_ADD(NOW(), INTERVAL 1 HOUR), 1, 0, 'first-net-lease-host')"
+            )
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) VALUES "
+                "(UNHEX('00AA02010001'), 0, 1, INET_ATON('10.201.0.15'), 'first-net-reservation-host')"
+            )
+        db.commit()
+        yield
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4 WHERE address=INET_ATON('10.201.0.12')")
+            cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier)='00AA02010001'")
+        db.commit()
+
+    SECRETS = (
+        "FIRST-CONFIGURED-NET",
+        "10.201.0",
+        "first-net-lease-host",
+        "first-net-reservation-host",
+        "SECOND-NET",
+        "10.202.0",
+        "00:aa:02",
+    )
+
+    @pytest.mark.parametrize("allowed", [[], [999]])
+    def test_a_user_with_no_visible_subnet_gets_a_page_with_nothing_of_any_subnet(
+        self, client, db, two_subnets, allowed
+    ):
+        from tests.conftest import restricted_client
+
+        c, _uid = restricted_client(
+            client, db, allowed_subnets=allowed, role="viewer", username=f"_ipmap_none_{len(allowed)}"
+        )
+        for url in ("/ipmap", "/ipmap?subnet=1", "/ipmap?subnet=2", "/ipmap?subnet=garbage"):
+            r = c.get(url)
+            assert r.status_code == 200
+            body = r.get_data(as_text=True)
+            assert "no subnet you can see" in body and 'id="ipmap-no-subnets"' in body
+            for secret in self.SECRETS:
+                assert secret.lower() not in body.lower(), f"{url}: {secret!r} reached a user who may see no subnet"
+
+    def test_nothing_is_queried_for_such_a_user(self, client, db, two_subnets, monkeypatch):
+        from jen.models import db as dbmod
+        from tests.conftest import restricted_client
+
+        asked = []
+        real = dbmod.kea_db
+
+        def watching():
+            asked.append(1)
+            return real()
+
+        monkeypatch.setattr(dbmod, "kea_db", watching)
+        c, _uid = restricted_client(client, db, allowed_subnets=[999], role="viewer", username="_ipmap_none_q")
+        assert c.get("/ipmap").status_code == 200
+        assert asked == [], "the Kea database was opened for a user who may see no subnet"
+
+    def test_a_user_with_a_visible_subnet_still_gets_the_map_and_cannot_pick_another(self, client, db, two_subnets):
+        from tests.conftest import restricted_client
+
+        c, _uid = restricted_client(client, db, allowed_subnets=[2], role="viewer", username="_ipmap_two")
+        body = c.get("/ipmap?subnet=1").get_data(as_text=True)
+        assert "SECOND-NET" in body and "FIRST-CONFIGURED-NET" not in body and "first-net-lease-host" not in body
+        assert "no subnet you can see" not in body
+
+    def test_an_unrestricted_user_sees_the_first_subnet_by_default(self, logged_in_client, two_subnets):
+        body = logged_in_client.get("/ipmap").get_data(as_text=True)
+        assert "FIRST-CONFIGURED-NET" in body and "first-net-lease-host" in body
+
+
 class TestSearch:
     """Global search."""
 

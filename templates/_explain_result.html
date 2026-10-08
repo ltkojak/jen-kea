@@ -74,7 +74,7 @@
         </tbody>
     </table>
     {% endif %}
-    {% if exchange %}<p class="u-865c33" id="explain-exchange">What was read from Kea's log came from one exchange: the one at {{ exchange.at }}, transaction {{ exchange.tid }}, on {{ exchange.server }}.{% if exchange.before_config_change %} It was logged before the config last changed, so Kea may decide differently now.{% endif %}</p>
+    {% if exchange %}<p class="u-865c33" id="explain-exchange">What was read from Kea's log came from one exchange: the one at {{ exchange.at }}, transaction {{ exchange.tid }}, on {{ exchange.server }}.{% if exchange.before_config_change %} It was logged before the config last changed, so Kea may decide differently now.{% endif %}{% if also_seen_on %} Another server also logged this client at about the same time ({{ also_seen_on|join(", ") }}); this is the first of them in order.{% endif %}</p>
     {% elif log_server %}<p class="u-865c33" id="explain-exchange">Kea's log on {{ log_server }} does not show this client.</p>{% endif %}
     {% if source_hint %}<p class="u-865c33">{{ source_hint }}</p>{% endif %}
 </div>

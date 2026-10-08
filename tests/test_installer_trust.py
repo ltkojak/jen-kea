@@ -817,3 +817,161 @@ class TestConfigureSeedsTheWizardFromTheLiveFile:
         calls = [ln.strip() for ln in body.splitlines() if not ln.strip().startswith("#")]
         seed = next(i for i, c in enumerate(calls) if c.startswith("_seed_answers_from_live"))
         assert calls.index("_config_lock_acquire") < seed < calls.index("collect_config")
+
+
+PROMPTED_LIVE = (
+    CONFIGURED_CONFIG.replace("http_port = 5050", "http_port = 5051")
+    .replace("https_port = 8443", "https_port = 9443")
+    .replace(
+        "[jen_db]\nhost = db\nuser = jen\npassword = jen-secret\ndatabase = jen",
+        "[jen_db]\nhost = jendb.lan\nuser = jenu\npassword = jen-secret\ndatabase = jend",
+    )
+)
+
+
+class TestConfigureKeepsThePromptedAnswersToo:
+    """v5.68.0-beta.22 (Q157, items 9 and 15): beta.21 seeded the fifteen answers the wizard reads SILENTLY and left the five it PROMPTS for - the HTTP and
+    HTTPS ports and the Jen database's host, user and name - on constant defaults: `https_port = 9443` was shown as 8443, and Enter (or `--unattended`
+    without an answers file) wrote 8443, which differs from the snapshot, so the merge applied it. The Jen database host also defaulted to the KEA
+    database's host, which the seed had just filled in. The prompt's default is what is configured now."""
+
+    def _live(self, tmp_path, text=PROMPTED_LIVE):
+        etc = tmp_path / "etc"
+        etc.mkdir(exist_ok=True)
+        (etc / "jen.config").write_text(text)
+        return etc
+
+    ASK_PROMPTS = (
+        'prompt_input() { echo "PROMPT[$1]=$2" >&2; printf "%s" "$2"; }\n'
+        "HAVE_TTY=true; MODE_UNATTENDED=false\n"
+        'JEN_DB_PASS="typed-secret"; export JEN_DB_PASS\n'
+    )
+    SEED = '_seed_answers_from_live "$CONFIG_FILE"\n'
+
+    def test_the_ports_prompt_shows_the_configured_ports_and_enter_keeps_them(self, tmp_path):
+        self._live(tmp_path)
+        proc = _bash(
+            tmp_path,
+            CONFIGURE_STUBS
+            + self.ASK_PROMPTS
+            + self.SEED
+            + '_configure_ports >/dev/null\necho "ports=$HTTP_PORT|$HTTPS_PORT"',
+        )
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert "PROMPT[HTTP port]=5051" in proc.stderr and "PROMPT[HTTPS port]=9443" in proc.stderr, proc.stderr
+        assert "ports=5051|9443" in proc.stdout
+
+    def test_without_the_seed_the_prompt_default_is_the_constant_as_it_was(self, tmp_path):
+        self._live(tmp_path)
+        proc = _bash(
+            tmp_path,
+            CONFIGURE_STUBS + self.ASK_PROMPTS + '_configure_ports >/dev/null\necho "ports=$HTTP_PORT|$HTTPS_PORT"',
+        )
+        assert "ports=5050|8443" in proc.stdout
+
+    def test_an_unattended_run_with_no_answers_file_keeps_the_configured_ports(self, tmp_path):
+        self._live(tmp_path)
+        proc = _bash(
+            tmp_path,
+            CONFIGURE_STUBS
+            + "HAVE_TTY=false; MODE_UNATTENDED=true\n"
+            + self.SEED
+            + '_configure_ports >/dev/null\necho "ports=$HTTP_PORT|$HTTPS_PORT"',
+        )
+        assert "ports=5051|9443" in proc.stdout
+
+    def test_an_answers_file_value_or_the_environment_still_wins_over_the_configured_default(self, tmp_path):
+        self._live(tmp_path)
+        proc = _bash(
+            tmp_path,
+            CONFIGURE_STUBS
+            + "HAVE_TTY=false; MODE_UNATTENDED=true\nANSWERS[JEN_HTTPS_PORT]=7443\n"
+            + self.SEED
+            + '_configure_ports >/dev/null\necho "ports=$HTTP_PORT|$HTTPS_PORT"',
+            env={"JEN_HTTP_PORT": "6060"},
+        )
+        assert "ports=6060|7443" in proc.stdout
+
+    def test_the_jen_database_defaults_are_the_jen_ones_not_the_kea_hosts(self, tmp_path):
+        self._live(tmp_path)
+        proc = _bash(
+            tmp_path,
+            CONFIGURE_STUBS
+            + self.ASK_PROMPTS
+            + self.SEED
+            + "_jen_db_offer_create() { return 1; }\n_configure_jen_db >/dev/null\n"
+            + 'echo "jendb=$JEN_DB_HOST|$JEN_DB_USER|$JEN_DB_NAME"\necho "keadb=$KEA_DB_HOST"',
+        )
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert "PROMPT[Host]=jendb.lan" in proc.stderr, (
+            "the Jen database host's default was the KEA database host (db.lan)"
+        )
+        assert "jendb=jendb.lan|jenu|jend" in proc.stdout
+        assert "keadb=db.lan" in proc.stdout
+
+    def test_the_jen_database_password_is_still_typed(self, tmp_path):
+        self._live(tmp_path)
+        proc = _bash(
+            tmp_path,
+            CONFIGURE_STUBS
+            + 'prompt_secret() { echo "SECRET-PROMPTED" >&2; printf "typed"; }\nHAVE_TTY=true; MODE_UNATTENDED=false\n'
+            + self.SEED
+            + "unset JEN_DB_PASS\n_jen_db_offer_create() { return 1; }\n_configure_jen_db >/dev/null\n"
+            + 'echo "pass=$JEN_DB_PASS"',
+        )
+        assert "SECRET-PROMPTED" in proc.stderr and "pass=typed" in proc.stdout
+
+    def test_the_whole_configure_path_keeps_the_ports_and_the_database_with_no_answers_file(self, tmp_path):
+        etc = self._live(tmp_path)
+        script = (
+            'JEN_USER="$(id -un)"; MODE_CONFIGURE=true; CONFIGURE=true; IS_UPGRADE=true\n'
+            + CONFIGURE_STUBS
+            + "HAVE_TTY=false; MODE_UNATTENDED=true\nJEN_DB_PASS=jen-secret; export JEN_DB_PASS\n"
+            + 'CONFIG_SNAPSHOT_TEXT="$(cat "$CONFIG_FILE")"\n'
+            + self.SEED
+            + self.SECTIONS_ALL
+            + "SUBNET_LINES='1 = LAN, 10.0.0.0/24\\n'\nwrite_config\n"
+        )
+        proc = _bash(tmp_path, "umask 022\n" + script)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        import configparser
+
+        merged = configparser.ConfigParser(interpolation=None)
+        merged.read(etc / "jen.config")
+        assert (merged.get("server", "http_port"), merged.get("server", "https_port")) == ("5051", "9443")
+        assert (merged.get("jen_db", "host"), merged.get("jen_db", "user"), merged.get("jen_db", "database")) == (
+            "jendb.lan",
+            "jenu",
+            "jend",
+        )
+        assert (
+            merged.get("kea", "api_url") == "http://kea.lan:8000"
+            and merged.get("ddns", "api_token") == "ddns-token-1234"
+        )
+
+    SECTIONS_ALL = (
+        "_jen_db_offer_create() { return 1; }\n"
+        "_configure_kea_api >/dev/null; _configure_kea_db >/dev/null; _configure_jen_db >/dev/null; _configure_ssh >/dev/null; "
+        "_configure_ddns >/dev/null; _configure_ports >/dev/null\n"
+    )
+
+    # ── item 15 ──
+    def test_an_unreadable_live_file_stops_the_seed_loudly_naming_the_file_and_the_exit_code(self, tmp_path):
+        etc = self._live(tmp_path, "[kea\nbroken")
+        proc = _bash(tmp_path, self.SEED + "echo reached")
+        assert proc.returncode != 0 and "reached" not in proc.stdout
+        text = proc.stdout + proc.stderr
+        assert str(etc / "jen.config") in text and "exited 1" in text and "not a readable INI" in text
+
+    def test_a_multi_line_value_is_seeded_whole_not_as_its_first_line(self, tmp_path):
+        text = PROMPTED_LIVE.replace("api_pass = api-secret", "api_pass = line one\n    line two\\ with back\\\\slash")
+        self._live(tmp_path, text)
+        proc = _bash(tmp_path, self.SEED + 'printf "<%s>" "${ANSWERS[JEN_KEA_API_PASS]}"')
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert proc.stdout.endswith("<line one\nline two\\ with back\\\\slash>"), repr(proc.stdout)
+
+    def test_a_value_ending_in_a_newline_survives_the_command_substitution(self, tmp_path):
+        text = PROMPTED_LIVE.replace("api_pass = api-secret", "api_pass = tail\n    ")
+        self._live(tmp_path, text)
+        proc = _bash(tmp_path, self.SEED + 'printf "<%s>" "${ANSWERS[JEN_KEA_API_PASS]}"')
+        assert proc.returncode == 0 and "<tail" in proc.stdout

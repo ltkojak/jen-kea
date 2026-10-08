@@ -6,6 +6,9 @@
     <p>Visual layout of address space usage</p>
 </div>
 
+{% if no_subnets %}
+<div class="card"><div class="u-c92bea" id="ipmap-no-subnets">There is no subnet you can see, so there is no address map to show. Ask an administrator which subnets your account may use.</div></div>
+{% else %}
 <div class="filter-bar">
     <form method="GET">
         <select name="subnet" aria-label="Subnet" data-submit>
@@ -56,4 +59,5 @@
     <div class="u-c92bea">Could not determine pool range from Kea config.</div>
     {% endif %}
 </div>
+{% endif %}
 {% endblock %}

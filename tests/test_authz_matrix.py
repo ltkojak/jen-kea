@@ -186,9 +186,11 @@ SESSION_ROLES = {
     "admin_A": {"role": "admin", "allowed": [1]},
     "admin_all": {"role": "admin", "allowed": None},
     "superadmin": {"role": "superadmin", "allowed": None},
+    # v5.68.0-beta.22 (Q157): an account whose access list names ONLY a subnet that is not in `[subnets]` (it was removed): it may see no subnet at all
+    "viewer_none": {"role": "viewer", "allowed": [999]},
 }
 KEY_ROLES = {"key_read": (RAW_READ, 0), "key_write": (RAW_WRITE, 1)}
-MUST_NOT_SEE_B = {"viewer_A", "admin_A", "key_read", "key_write"}
+MUST_NOT_SEE_B = {"viewer_A", "admin_A", "viewer_none", "key_read", "key_write"}
 
 
 def _caller(client, db, role):
@@ -216,6 +218,23 @@ def _caller(client, db, role):
 # carrying a refusal notice; the marker assertion is what proves nothing leaked.
 _ANY = {200, 302, 403, 404}
 SURFACES = [
+    # v5.68.0-beta.22 (Q157, item 8): the IP map used to fall back to the first CONFIGURED subnet for a user who may see none
+    (
+        "ip map",
+        "GET",
+        "/ipmap",
+        None,
+        {"viewer_A": {200}, "admin_A": {200}, "viewer_none": {200}, "admin_all": {200}, "superadmin": {200}},
+        (),
+    ),
+    (
+        "ip map of B by id",
+        "GET",
+        "/ipmap?subnet=2",
+        None,
+        {"viewer_A": {200}, "admin_A": {200}, "viewer_none": {200}, "admin_all": {200}, "superadmin": {200}},
+        (),
+    ),
     (
         "explain by B mac",
         "GET",

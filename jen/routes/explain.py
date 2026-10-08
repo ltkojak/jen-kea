@@ -195,6 +195,7 @@ def _result_context(built, log_view, result, subnet_id) -> dict:
     return {
         "exchange": {**transaction, "server": log_server} if transaction else None,
         "log_server": log_server,
+        "also_seen_on": list((log_view or {}).get("also_seen_on") or []),
         "provenance": __ctx.provenance(built) if built else [],
         "source_hint": __ctx.hint_for(result, log_view) if result else "",
         "can_changes": _may_read_kea_log(),

@@ -465,11 +465,25 @@ def ipmap():
     # but the URL parameter itself wasn't enforced, so a restricted user
     # could edit the URL and view leases/reservations for any subnet.
     accessible_map = current_user.filter_subnet_map(extensions.SUBNET_MAP)
-    default_subnet = (
-        list(accessible_map.keys())[0]
-        if accessible_map
-        else (list(extensions.SUBNET_MAP.keys())[0] if extensions.SUBNET_MAP else 1)
-    )
+    if not accessible_map:
+        # v5.68.0-beta.22 (Q157): a user who may see no subnet at all - a restricted account whose access list names only subnets that have since left
+        # `[subnets]`, or an empty one - used to fall back to the FIRST CONFIGURED subnet, and the page then queried and printed that subnet's leases,
+        # reservations and CIDR. Nothing is queried and nothing of any subnet is rendered.
+        return render_template(
+            "ipmap.html",
+            no_subnets=True,
+            leases={},
+            reservations={},
+            used={},
+            pool_blocks=[],
+            pool_truncated=False,
+            max_ipmap_addresses=MAX_IPMAP_ADDRESSES,
+            subnet_filter=None,
+            subnet_id=None,
+            subnet_map={},
+            cidr="",
+        )
+    default_subnet = list(accessible_map.keys())[0]
     subnet_filter = request.args.get("subnet", default_subnet)
     try:
         subnet_filter = int(subnet_filter)

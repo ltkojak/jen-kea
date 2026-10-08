@@ -89,6 +89,7 @@ ROLLBACK_ARMED=false
 # names to learn across bare metal and Docker.
 ANSWERS_FILE=""
 declare -A ANSWERS
+declare -A LIVE_DEFAULTS   # v5.68.0-beta.22 (Q157): what is CONFIGURED for the answers the wizard prompts for - `_ask` shows it as the default
 
 # v5.67.0 (Q114) — an explicit --app-dir/--config-dir/--data-dir, if given.
 # Resolved against any existing $LAYOUT_FILE / --answers / JEN_*_DIR env in
@@ -366,6 +367,9 @@ _cfgval() {
 # "default" is empty).
 _ask() {
     local name="$1" question="$2" default="$3" required="${4:-}"
+    # v5.68.0-beta.22 (Q157): on `--configure` the prompt's default (and the value an unattended run falls back to) is what the live config holds
+    # (`_seed_answers_from_live`), not a constant: `https_port = 9443` was shown as 8443, and Enter wrote 8443 over it.
+    [[ -n "${LIVE_DEFAULTS[$name]:-}" ]] && default="${LIVE_DEFAULTS[$name]}"
     if [[ -n "${ANSWERS[$name]+x}" ]]; then
         printf '%s' "${ANSWERS[$name]}"; return
     fi
@@ -2695,15 +2699,27 @@ _run_restore_mode() {
 # value that differs from the snapshot, so a configured box was disconnected from Kea and lost its DDNS token. An answers file or an environment variable
 # still wins: the seed only fills a name that has neither. A key the file does not carry is not seeded and the wizard keeps its own default for it.
 _seed_answers_from_live() {
-    local f="$1" line name value
+    local f="$1" line name value out rc
     [[ -f "$f" ]] || return 0
+    # v5.68.0-beta.22 (Q157): read into a variable, not a process substitution - an exit status there is invisible, and a live file the seed could not
+    # read (the merge would later fail on the same file, but only after the whole wizard) now stops here, naming the file and the exit code.
+    out="$("$PYBIN_FOR_LAYOUT" "$SCRIPT_DIR/tools/config_merge.py" --answers "$f")" || {
+        rc=$?
+        fatal "Could not read the live config $f to seed the wizard (config_merge.py --answers exited $rc): $f is not a readable INI file - fix it, or restore it from /opt/jen/.rollback/config/"
+    }
     while IFS= read -r line; do
         name="${line%%=*}"
         value="${line#*=}"
+        # a multi-line INI value arrives on one line with its newlines as `\n` and its backslashes doubled (config_merge.escape_line)
+        value="$(printf '%bx' "$value")"; value="${value%x}"
+        if [[ "$name" =~ ^DEFAULT_JEN_[A-Z_]+$ ]]; then
+            LIVE_DEFAULTS["${name#DEFAULT_}"]="$value"
+            continue
+        fi
         [[ "$name" =~ ^JEN_[A-Z_]+$ ]] || continue
         [[ -n "${ANSWERS[$name]+x}" || -n "${!name:-}" ]] && continue
         ANSWERS["$name"]="$value"
-    done < <("$PYBIN_FOR_LAYOUT" "$SCRIPT_DIR/tools/config_merge.py" --answers "$f")
+    done <<< "$out"
 }
 
 _run_configure_mode() {

@@ -154,7 +154,9 @@ class FakeKea:
         if command == "config-reload":
             if not self.reload_result:
                 self.loaded = copy.deepcopy(self.file)
-            return {"result": self.reload_result, "text": "reloaded" if not self.reload_result else "reload refused"}
+            if self.reload_result:
+                return {"result": self.reload_result, "text": getattr(self, "reload_text", "reload refused")}
+            return {"result": 0, "text": "reloaded"}
         return {"result": 0}
 
     def service_action(self, server, service, action):
@@ -256,16 +258,18 @@ class TestTurnOn:
         )
         assert any("restarted" in line for line in out["lines"])
 
-    def test_a_refused_reload_falls_back_to_a_restart_and_says_why(self, world):
+    def test_a_refused_reload_puts_the_file_back_and_never_restarts_kea(self, world):
+        """beta.22 (Q157): beta.21 refused when list-commands was silent and then RESTARTED Kea when the next call to the same API - config-reload -
+        failed. A reload that does not return 0 is a refusal, a connection failure or a timeout (the same shape) and turning logging on never restarts."""
+        original = copy.deepcopy(world.daemons[1].file)
         world.daemons[1].reload_result = 1
         out = inv.turn_on(world.servers[0], 5)
-        assert out["ok"] and out["mode"] == "restart" and "restart:dhcp4" in world.daemons[1].calls
-        assert any("config-reload was refused (reload refused)" in line for line in out["lines"])
-
-    def test_a_refused_reload_and_a_failed_restart_is_a_failure_that_says_the_daemon_kept_its_settings(self, world):
-        world.daemons[1].reload_result, world.daemons[1].restart_ok = 1, False
-        out = inv.turn_on(world.servers[0], 5)
-        assert not out["ok"] and "still running on its previous settings" in out["lines"][-1] and not inv.active()
+        assert not out["ok"] and out["until"] == "" and world.daemons[1].file == original and not inv.active()
+        assert not any(c.startswith("restart") for c in world.daemons[1].calls), world.daemons[1].calls
+        assert any("did not confirm the reload" in line and "nothing was restarted" in line for line in out["lines"]), (
+            out["lines"]
+        )
+        assert "_audit" not in world.store
 
     def test_only_the_three_durations_exist(self, world):
         out = inv.turn_on(world.servers[0], 7)
@@ -458,7 +462,7 @@ class TestTurnOnTakesResponsibilityBeforeTheDaemonIsAsked:
         world.daemons[1].reload_result, world.daemons[1].restart_ok = 1, False
         out = inv.turn_on(world.servers[0], 5)
         assert not out["ok"] and world.daemons[1].file == original and not inv.active()
-        assert "previous settings" in out["lines"][-1]
+        assert "did not confirm the reload" in out["lines"][-1] or any("did not confirm" in x for x in out["lines"])
 
     def test_when_even_the_revert_fails_the_entry_stays_and_the_sweep_finishes_it(self, world):
         kea = world.daemons[1]
@@ -945,3 +949,88 @@ class TestAControlAgentThatDidNotAnswer:
         out = inv.turn_off(world.servers[0])
         assert out["ok"] and out["mode"] == "restart"
         assert any("did not answer" in line for line in out["lines"])
+
+
+class TestTurningOnNeverRestartsKea:
+    """v5.68.0-beta.22 (Q157, item 1): the matrix. `turn_on` calls Kea's API twice - `list-commands`, then `config-reload` - and beta.21 handled only a
+    silence on the FIRST. Every way the second can fail is the same reply shape (`result` 1 with a text), so none of them may become a restart over SSH:
+    the file is put back, nothing is indexed, and the line says so. Only a daemon that ANSWERED and does not list config-reload keeps the documented
+    restart (the operator was told the daemon lacks it)."""
+
+    @staticmethod
+    def _restarted(kea):
+        return [
+            c
+            for c in kea.calls
+            if c.startswith("restart") or c == "apply(restart=True):investigation logging on for 5 min"
+        ]
+
+    @pytest.mark.parametrize(
+        "text", ["reload refused", "connection refused", "timed out after 10 s", "HTTP 502 from the Control Agent", ""]
+    )
+    def test_a_reload_that_fails_in_any_way_reverts_and_never_restarts(self, world, text):
+        kea = world.daemons[1]
+        original = copy.deepcopy(kea.file)
+        kea.reload_result, kea.reload_text = 1, text
+        out = inv.turn_on(world.servers[0], 5)
+        assert out["ok"] is False and out["until"] == ""
+        assert kea.file == original and ed.investigation_marker(kea.file) is None, "the file was put back"
+        assert self._restarted(kea) == [], kea.calls
+        assert not inv.active() and "_audit" not in world.store
+        assert any("nothing was restarted" in line for line in out["lines"])
+        assert not _daemon_at_debug(kea), "the daemon never moved"
+
+    def test_a_reload_that_works_reloads_and_does_not_restart(self, world):
+        kea = world.daemons[1]
+        out = inv.turn_on(world.servers[0], 5)
+        assert out["ok"] and out["mode"] == "reload" and self._restarted(kea) == []
+
+    def test_a_daemon_that_answered_and_lacks_config_reload_is_restarted_as_documented(self, world):
+        kea = world.daemons[1]
+        kea.commands = ["version-get"]
+        out = inv.turn_on(world.servers[0], 5)
+        assert (
+            out["ok"]
+            and out["mode"] == "restart"
+            and "apply(restart=True):investigation logging on for 5 min" in kea.calls
+        )
+
+    def test_a_silent_list_commands_refuses_before_writing(self, world):
+        kea = world.daemons[1]
+        kea.list_unreachable = True
+        out = inv.turn_on(world.servers[0], 5)
+        assert not out["ok"] and kea.writes == 0 and self._restarted(kea) == []
+
+    def test_a_failed_reload_then_a_failed_revert_keeps_the_entry_with_the_error_and_the_sweep_finishes_it(self, world):
+        kea = world.daemons[1]
+        kea.reload_result, kea.reload_text, kea.fail_writes_after = 1, "connection refused", 1
+        out = inv.turn_on(world.servers[0], 5)
+        assert not out["ok"] and ed.investigation_marker(kea.file), "the file still carries the marker"
+        assert self._restarted(kea) == [], "even now, turning ON did not restart"
+        (entry,) = inv.active()
+        assert entry["file"] == "debug" and entry["pending"] == "reload" and entry["error"]
+        kea.reload_result, kea.fail_writes_after = 0, None
+        assert inv.sweep(now=NOW + timedelta(minutes=6))["restored"] == ["kea-a"]
+        assert not inv.active() and ed.investigation_marker(kea.file) is None
+
+    def test_the_restore_paths_still_restart_when_the_reload_fails_and_say_so(self, world):
+        kea = world.daemons[1]
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        kea.reload_result, kea.reload_text = 1, "connection refused"
+        out = inv.turn_off(world.servers[0])
+        assert out["ok"] and out["mode"] == "restart" and "restart:dhcp4" in kea.calls
+        assert any("config-reload was refused (connection refused)" in line for line in out["lines"])
+
+    def test_the_expiry_sweep_still_restarts_when_the_reload_fails(self, world):
+        kea = world.daemons[1]
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        kea.reload_result, kea.reload_text = 1, "timed out"
+        assert inv.sweep(now=NOW + timedelta(minutes=6))["restored"] == ["kea-a"]
+        assert "restart:dhcp4" in kea.calls and not _daemon_at_debug(kea)
+
+    def test_turn_on_is_the_only_caller_that_forbids_the_restart(self):
+        import inspect
+
+        source = inspect.getsource(inv)
+        assert source.count("allow_restart=False") == 1 and source.count("allow_restart=True") == 1
+        assert "def _daemon_step(server: dict, use_reload: bool, *, allow_restart: bool)" in source

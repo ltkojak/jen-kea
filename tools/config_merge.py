@@ -93,11 +93,39 @@ WIZARD_ANSWERS = (
 )
 
 
+#: v5.68.0-beta.22 (Q157): the five answers the wizard PROMPTS for (or defaults) rather than reads silently. They are not seeded as answers - the operator
+#: may change them - but the prompt's DEFAULT is what is configured: `--configure` showed 5050/8443/localhost/jen/jen and Enter (or `--unattended` with no
+#: answers file) wrote them, which differs from the snapshot and so was applied by the merge. Printed as `DEFAULT_<name>`.
+WIZARD_DEFAULTS = (
+    ("server", "http_port", "JEN_HTTP_PORT"),
+    ("server", "https_port", "JEN_HTTPS_PORT"),
+    ("jen_db", "host", "JEN_DB_HOST"),
+    ("jen_db", "user", "JEN_DB_USER"),
+    ("jen_db", "database", "JEN_DB_NAME"),
+)
+
+
 def answers_from(live_text):
     """[(JEN_NAME, value)] for every wizard answer the live file HAS, in `WIZARD_ANSWERS` order (v5.68.0-beta.21, Q156). A key the file does not
     carry is not listed, so the wizard falls back to its own default for it."""
     live = _parse(live_text, "the live file")
     return [(name, live.get(section, key)) for section, key, name in WIZARD_ANSWERS if live.has_option(section, key)]
+
+
+def defaults_from(live_text):
+    """[("DEFAULT_JEN_NAME", value)] for the prompted answers (`WIZARD_DEFAULTS`) the live file holds and that are not empty."""
+    live = _parse(live_text, "the live file")
+    return [
+        (f"DEFAULT_{name}", live.get(section, key))
+        for section, key, name in WIZARD_DEFAULTS
+        if live.has_option(section, key) and live.get(section, key) != ""
+    ]
+
+
+def escape_line(value):
+    """A value on ONE line: a backslash is doubled and a newline (a continuation line of a multi-line INI value) becomes the two characters `\\n`. install.sh
+    unescapes it with `printf %b`, so a multi-line value is seeded whole instead of as its first line."""
+    return value.replace("\\", "\\\\").replace("\r", "").replace("\n", "\\n")
 
 
 def main(argv=None):
@@ -113,8 +141,9 @@ def main(argv=None):
     )
     args = ap.parse_args(argv)
     if args.answers is not None:
-        for name, value in answers_from(_read(args.answers)):
-            sys.stdout.write(f"{name}={value}\n")
+        text = _read(args.answers)
+        for name, value in [*answers_from(text), *defaults_from(text)]:
+            sys.stdout.write(f"{name}={escape_line(value)}\n")
         return 0
     if not args.live:
         ap.error("--live is required unless --answers is given")
