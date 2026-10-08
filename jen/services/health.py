@@ -1162,6 +1162,24 @@ def _background_workers(ctx) -> Check:
         problems.append("the alert loop thread is not alive")
     if not live["periodic_thread"]:
         problems.append("the plugin periodic-job thread is not alive")
+    # v5.68.0-beta.21 (Q156): a plugin job still `running` after twice its interval is wedged (a running job is skipped for ever), and a job whose last
+    # three runs all failed is a warning - `periodic_jobs()` carried last_error / running / last_started and nothing read it.
+    now_utc = datetime.now(timezone.utc)
+    job_warnings = []
+    for job in live.get("periodic_jobs", []):
+        started_at = job.get("last_started")
+        if started_at is not None and started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=timezone.utc)
+        label = f"{job['plugin_id']}/{job['name']}"
+        if job.get("running") and started_at is not None:
+            running_min = (now_utc - started_at).total_seconds() / 60
+            if running_min > 2 * job["every_minutes"]:
+                problems.append(
+                    f"plugin job {label} has been running for {running_min:.0f} min (it should finish within its {job['every_minutes']} min interval) - it is wedged and will not run again"
+                )
+        history = job.get("history") or []
+        if len(history) >= 3 and not any(history[-3:]):
+            job_warnings.append(f"plugin job {label} failed its last three runs: {job.get('last_error') or 'error'}")
     if problems:
         if not live["dispatcher"]:
             problems.append("the event dispatcher is not running")
@@ -1172,10 +1190,25 @@ def _background_workers(ctx) -> Check:
     # the thread that emitted (a request, the alert loop), so a slow subscriber slows that thread - and Health used to stay green. Down with the
     # three others up is a warning; down with another also down is part of the failure above.
     depth = live.get("queue_depth", 0)
+    ds = live.get("dispatcher_status") or {}
     if not live["dispatcher"]:
-        c.status = "warn"
+        # v5.68.0-beta.21 (Q156): a dead dispatcher thread is a FAILURE (it was a warning in beta.20): events still reach subscribers, inline, but on
+        # whatever thread emitted them - a request, the alert loop - so one slow subscriber now slows that thread, silently
+        c.status = "fail"
         c.detail = "event dispatcher not running - subscribers run inline on the thread that emits"
         c.fix_hint = "Restart Jen (the service); the log says why the dispatcher stopped."
+        return c
+    warnings = list(job_warnings)
+    age = ds.get("last_dispatch_age_s")
+    if depth > 0 and age is not None and age > 60:
+        warnings.append(
+            f"event dispatcher is stuck: {depth} event(s) queued and none dispatched for {age:.0f} s - a subscriber is blocking it"
+        )
+    if ds.get("dropped"):
+        warnings.append(f"{ds['dropped']} event deliveries were dropped because the dispatcher's queue was full")
+    if warnings:
+        c.status, c.detail = "warn", "; ".join(warnings)
+        c.fix_hint = "A plugin's subscriber or periodic job is misbehaving: check its log lines, then restart Jen if it is wedged."
         return c
     c.status = "ok"
     c.detail = (

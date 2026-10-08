@@ -7,6 +7,7 @@ Problems sweep row said "skip - has not run yet" with no age limit. Both now loo
 No database: `background.liveness` and `client_problems.read_status` are stand-ins. `pytest --noconftest tests/test_health_liveness.py`.
 """
 
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -21,7 +22,18 @@ NOW = datetime(2026, 10, 7, 12, 0, 0)  # naive UTC, the module's own convention
 
 
 def _live(
-    *, scheduler_exists=True, running=True, jobs=None, alert=True, periodic=True, error="", dispatcher=True, depth=0
+    *,
+    scheduler_exists=True,
+    running=True,
+    jobs=None,
+    alert=True,
+    periodic=True,
+    error="",
+    dispatcher=True,
+    depth=0,
+    age=0.0,
+    dropped=0,
+    plugin_jobs=None,
 ):
     return {
         "started_at": datetime.now(timezone.utc),
@@ -29,6 +41,13 @@ def _live(
         "periodic_thread": periodic,
         "dispatcher": dispatcher,
         "queue_depth": depth,
+        "dispatcher_status": {
+            "running": dispatcher,
+            "queue_depth": depth,
+            "last_dispatch_age_s": age if dispatcher else None,
+            "dropped": dropped,
+        },
+        "periodic_jobs": plugin_jobs or [],
         "scheduler": {
             "exists": scheduler_exists,
             "running": running,
@@ -184,11 +203,12 @@ class TestTheEventDispatcherIsTheFourthWorker:
         c = _workers(monkeypatch, _live(depth=3))
         assert c.status == "ok" and "event dispatcher (3 queued)" in c.detail
 
-    def test_a_stopped_dispatcher_with_the_others_alive_is_a_warning_that_says_what_it_means(
+    def test_a_stopped_dispatcher_with_the_others_alive_is_a_failure_that_says_what_it_means(
         self, started, monkeypatch
     ):
+        """beta.20 made this a warning; beta.21 (Q156, item 10) makes a DEAD dispatcher thread a failure - a WEDGED one is the warning below."""
         c = _workers(monkeypatch, _live(dispatcher=False))
-        assert c.status == "warn", "not ok: subscribers now run inline on the emitting thread"
+        assert c.status == "fail", "subscribers now run inline on the emitting thread, silently"
         assert "event dispatcher not running" in c.detail and "inline" in c.detail
 
     @pytest.mark.parametrize(
@@ -226,4 +246,211 @@ class TestTheEventDispatcherIsTheFourthWorker:
             "liveness",
             lambda: {**real, "alert_thread": True, "periodic_thread": True, "scheduler": _live()["scheduler"]},
         )
-        assert health._background_workers({}).status == "warn"
+        assert health._background_workers({}).status == "fail"
+
+
+def _job(plugin="ipam", name="scan", every=10, running=False, started_min_ago=None, history=None, error=""):
+    started = datetime.now(timezone.utc) - timedelta(minutes=started_min_ago) if started_min_ago is not None else None
+    return {
+        "plugin_id": plugin,
+        "name": name,
+        "every_minutes": every,
+        "running": running,
+        "last_started": started,
+        "last_finished": None,
+        "last_error": error,
+        "history": history or [],
+    }
+
+
+class TestAWedgedOrFailingPluginJobIsVisible:
+    """v5.68.0-beta.21 (Q156, item 9): `periodic_jobs()` carries last_error / running / last_started and nothing outside the tests read it. A job still
+    `running` is skipped for ever, and `_run_one_periodic` had no deadline - one wedged plugin job stopped that plugin's scheduled work permanently
+    and nothing said so."""
+
+    def test_a_job_running_for_more_than_twice_its_interval_fails_the_row_and_names_it(self, started, monkeypatch):
+        c = _workers(
+            monkeypatch,
+            _live(plugin_jobs=[_job("network-discovery", "sweep", every=10, running=True, started_min_ago=25)]),
+        )
+        assert c.status == "fail"
+        assert "network-discovery/sweep" in c.detail and "wedged" in c.detail
+
+    def test_a_job_running_within_twice_its_interval_is_fine(self, started, monkeypatch):
+        c = _workers(monkeypatch, _live(plugin_jobs=[_job(every=10, running=True, started_min_ago=19)]))
+        assert c.status == "ok"
+
+    def test_a_job_that_is_not_running_is_never_wedged_however_old_its_last_start(self, started, monkeypatch):
+        assert _workers(monkeypatch, _live(plugin_jobs=[_job(running=False, started_min_ago=600)])).status == "ok"
+
+    def test_three_failures_in_a_row_is_a_warning_with_the_last_error(self, started, monkeypatch):
+        c = _workers(
+            monkeypatch,
+            _live(plugin_jobs=[_job("dns-sync", "push", history=[False, False, False], error="provider returned 502")]),
+        )
+        assert c.status == "warn"
+        assert "dns-sync/push" in c.detail and "failed its last three runs" in c.detail and "502" in c.detail
+
+    def test_two_failures_or_a_recovery_in_the_last_three_is_not_a_warning(self, started, monkeypatch):
+        for history in ([False, False], [False, True, False], [True, False, False]):
+            assert _workers(monkeypatch, _live(plugin_jobs=[_job(history=history)])).status == "ok", history
+
+    def test_a_wedged_job_outranks_a_failing_one(self, started, monkeypatch):
+        jobs = [_job("a", "x", history=[False] * 3), _job("b", "y", every=5, running=True, started_min_ago=30)]
+        c = _workers(monkeypatch, _live(plugin_jobs=jobs))
+        assert c.status == "fail" and "b/y" in c.detail
+
+
+class TestPeriodicJobBookkeeping:
+    @pytest.fixture(autouse=True)
+    def _clean(self):
+        background._periodic.clear()
+        yield
+        background._periodic.clear()
+
+    def test_a_blocking_job_is_running_and_the_row_fails_after_the_deadline(self, started, monkeypatch):
+        import threading
+
+        release = threading.Event()
+        background.register_periodic("slowplug", "block", lambda: release.wait(30), 5)
+        try:
+            now = datetime.now(timezone.utc)
+            background._periodic[0]["next_due"] = now - timedelta(minutes=30)
+            assert (
+                background.run_due_periodic_jobs(now=now - timedelta(minutes=11)) == 1
+            )  # "started" eleven minutes ago: 2 x 5 + 1
+            (job,) = background.periodic_jobs()
+            assert job["running"] is True and job["last_finished"] is None
+            monkeypatch.setattr(background, "liveness", lambda: _live(plugin_jobs=background.periodic_jobs()))
+            check = health._background_workers({})
+            assert check.status == "fail" and "slowplug/block" in check.detail
+        finally:
+            release.set()
+
+    def test_a_spawn_that_raises_leaves_running_false_and_records_the_error(self):
+        background.register_periodic("plug", "job", lambda: None, 5)
+        background._periodic[0]["next_due"] = datetime.now(timezone.utc) - timedelta(minutes=1)
+
+        def boom(job):
+            raise RuntimeError("can't start new thread")
+
+        started = background.run_due_periodic_jobs(spawn=boom)
+        (job,) = background.periodic_jobs()
+        assert started == 0 and job["running"] is False
+        assert "could not start" in job["last_error"] and job["history"] == [False]
+
+    def test_a_job_that_could_not_start_is_tried_again_on_the_next_tick(self):
+        calls = []
+        background.register_periodic("plug", "job", lambda: calls.append(1), 5)
+        entry = background._periodic[0]
+        entry["next_due"] = datetime.now(timezone.utc) - timedelta(minutes=1)
+
+        def boom(job):
+            raise RuntimeError("no threads")
+
+        background.run_due_periodic_jobs(spawn=boom)
+        entry["next_due"] = datetime.now(timezone.utc) - timedelta(seconds=1)
+        assert background.run_due_periodic_jobs(spawn=lambda j: background._run_one_periodic(j)) == 1
+        assert calls == [1] and background.periodic_jobs()[0]["history"] == [False, True]
+
+    def test_a_run_records_when_it_finished_and_keeps_the_last_three_outcomes(self):
+        outcomes = iter([True, False, False, False, True])
+
+        def fn():
+            if not next(outcomes):
+                raise ValueError("bad")
+
+        background.register_periodic("plug", "job", fn, 5)
+        job = background._periodic[0]
+        for _ in range(5):
+            job["running"] = True
+            background._run_one_periodic(job)
+        assert job["history"] == [False, False, True] and job["last_finished"] is not None and job["running"] is False
+
+    def test_liveness_carries_the_jobs(self):
+        background.register_periodic("plug", "job", lambda: None, 5)
+        assert [j["name"] for j in background.liveness()["periodic_jobs"]] == ["job"]
+
+
+class TestAStuckDispatcherIsAWarning:
+    """v5.68.0-beta.21 (Q156, item 10): the dispatcher thread is ALIVE when a subscriber blocks, so Q155's `is_alive()` row stayed green while the queue
+    grew and - at 1000 events - subscriber delivery was dropped with one log line a minute."""
+
+    def test_events_waiting_and_none_dispatched_for_a_minute_is_a_warning(self, started, monkeypatch):
+        c = _workers(monkeypatch, _live(depth=7, age=90.0))
+        assert c.status == "warn" and "stuck" in c.detail and "7 event(s) queued" in c.detail
+
+    def test_a_busy_but_moving_dispatcher_is_fine(self, started, monkeypatch):
+        assert _workers(monkeypatch, _live(depth=300, age=0.4)).status == "ok"
+
+    def test_an_idle_dispatcher_with_an_old_last_dispatch_is_fine(self, started, monkeypatch):
+        assert _workers(monkeypatch, _live(depth=0, age=3600.0)).status == "ok"
+
+    def test_dropped_deliveries_are_a_warning_and_counted(self, started, monkeypatch):
+        c = _workers(monkeypatch, _live(dropped=12))
+        assert c.status == "warn" and "12 event deliveries were dropped" in c.detail
+
+    def test_the_dispatcher_status_of_a_real_dispatcher(self):
+        from jen.services import events
+
+        events.stop_dispatcher()
+        assert (
+            events.dispatcher_status()["running"] is False and events.dispatcher_status()["last_dispatch_age_s"] is None
+        )
+        events.start_dispatcher()
+        try:
+            status = events.dispatcher_status()
+            assert status["running"] is True and status["queue_depth"] == 0 and status["last_dispatch_age_s"] < 5
+            assert status["dropped"] == events._dropped_total
+        finally:
+            events.stop_dispatcher()
+
+    def test_a_subscriber_that_blocks_makes_the_queue_grow_and_the_row_warn(self, started, monkeypatch):
+        import threading
+
+        from jen.services import events
+
+        gate, entered = threading.Event(), threading.Event()
+
+        def blocker(event):
+            entered.set()
+            gate.wait(30)
+
+        events.stop_dispatcher()
+        events.subscribe("*", blocker)
+        events.start_dispatcher()
+        try:
+            for _ in range(5):
+                events.emit("config.applied", detail="q156")
+            assert entered.wait(10), "the subscriber was never called"
+            deadline = time.monotonic() + 5
+            while events.queue_depth() < 4 and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert events.queue_depth() >= 4, "the queue did not grow behind the blocked subscriber"
+            monkeypatch.setattr(events, "_last_dispatch_at", time.monotonic() - 120)  # nothing finished for two minutes
+            real = background.liveness()
+            monkeypatch.setattr(
+                background,
+                "liveness",
+                lambda: {**real, "alert_thread": True, "periodic_thread": True, "scheduler": _live()["scheduler"]},
+            )
+            check = health._background_workers({})
+            assert check.status == "warn" and "stuck" in check.detail
+        finally:
+            gate.set()
+            events.unsubscribe(blocker)
+            events.stop_dispatcher()
+
+    def test_a_full_queue_counts_what_it_drops(self, monkeypatch):
+        import queue
+
+        from jen.services import events
+
+        monkeypatch.setattr(events, "_queue", queue.Queue(maxsize=1))
+        monkeypatch.setattr(events, "dispatcher_running", lambda: True)
+        monkeypatch.setattr(events, "_dropped_total", 0)
+        monkeypatch.setattr("jen.models.db.jen_db", lambda: (_ for _ in ()).throw(RuntimeError("no db")))
+        events.emit("config.applied", detail="one")
+        events.emit("config.applied", detail="two")  # the queue (size 1) is full: dropped
+        events.emit("config.applied", detail="three")
+        assert events._dropped_total == 2

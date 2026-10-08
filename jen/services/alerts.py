@@ -1138,6 +1138,36 @@ def _save_state(alert_type, key, state) -> None:
     __set_global_setting(_alert_state_key(alert_type, key), json.dumps(state, separators=(",", ":")))
 
 
+def _clear_orphan_states(alert_type, live_keys) -> int:
+    """Delete `alert_state:<alert_type>:<key>` rows whose key is no longer configured (v5.68.0-beta.21, Q156). A subnet that left Jen's map (or a server
+    that was removed) used to leave its state behind for ever: active, never recovered, loaded on every settings reload. No `_ok` is sent - the thing
+    the alert was about is gone. An EMPTY live set clears nothing: a configuration that could not be read must not wipe every state (and re-alert
+    them all when it comes back). Returns the number of rows removed."""
+    live = {str(k) for k in live_keys}
+    if not live:
+        return 0
+    prefix = f"alert_state:{alert_type}:"
+    try:
+        with __jen_db_ctx() as jdb, jdb.cursor() as jcur:
+            jcur.execute("SELECT setting_key FROM settings WHERE setting_key LIKE %s", (prefix + "%",))
+            stale = [
+                r["setting_key"]
+                for r in jcur.fetchall()
+                if r["setting_key"].startswith(prefix) and r["setting_key"][len(prefix) :] not in live
+            ]
+            for key in stale:
+                jcur.execute("DELETE FROM settings WHERE setting_key=%s", (key,))
+        if stale:
+            from jen.models.user import _invalidate_settings_cache
+
+            _invalidate_settings_cache()
+            logger.info(f"alert state: cleared {len(stale)} {alert_type} row(s) for keys that are no longer configured")
+        return len(stale)
+    except Exception as e:
+        logger.error(f"alert state: orphan cleanup for {alert_type} failed: {e}")
+        return 0
+
+
 def alert_state(alert_type, key) -> bool:
     """Is the condition for (alert_type, key) currently recorded as ACTIVE (alerted or pending, and not yet recovered)?"""
     return _load_state(alert_type, key)["a"]
@@ -1312,6 +1342,9 @@ def check_utilization_alerts(cur, dhcp4_cfg) -> None:
         exhausted = free <= exhaustion or (alert_state("pool_exhaustion", sid) and free < recover_at)
         warn = {"subnet": info["name"], "cidr": info["cidr"], "free": free, "subnet_id": sid}
         notify_condition("pool_exhaustion", sid, exhausted, kwargs=warn, ok_type="pool_exhaustion_ok")
+    # a subnet that is no longer in Jen's map keeps no state (v5.68.0-beta.21, Q156)
+    for orphan_type in ("utilization_high", "pool_exhaustion"):
+        _clear_orphan_states(orphan_type, extensions.SUBNET_MAP)
 
 
 def _check_packet_health_alerts() -> None:
@@ -1354,10 +1387,11 @@ def _check_packet_health_alerts() -> None:
                 )
     except Exception as e:
         logger.error(f"Packet health alert check error: {e}")
+    _clear_orphan_states("packet_health", [srv["id"] for srv in extensions.KEA_SERVERS or []])
 
 
-def send_daily_summary():
-    """Build and send daily summary."""
+def send_daily_summary() -> bool:
+    """Build and send daily summary. True when it was built and handed to the channels, False when building it failed."""
     try:
         lines = ["<b>Daily Network Summary</b>"]
         with __kea_db_ctx() as db, __jen_db_ctx() as jdb:
@@ -1383,8 +1417,10 @@ def send_daily_summary():
             lines.append(f"Total known devices: <b>{total_devices}</b>")
         summary = "\n".join(lines)
         send_alert("daily_summary", summary=summary)
+        return True
     except Exception as e:
         logger.error(f"Daily summary error: {e}")
+        return False
 
 
 def ip_to_int(ip):
@@ -1519,6 +1555,7 @@ def check_pool_forecast_alerts(today=None, use_cache=False) -> None:
             repeat_after=timedelta(days=7),
             now=now,
         )
+    _clear_orphan_states("pool_forecast", extensions.SUBNET_MAP)
 
 
 def diff_leases(prev: dict, cur: dict) -> list[dict]:
@@ -1618,6 +1655,38 @@ def diff_leases(prev: dict, cur: dict) -> list[dict]:
     return events
 
 
+def _summary_sent_date():
+    """The date the daily summary was last sent (`daily_summary_sent`), read when the alert loop starts. With no record (a fresh install, or the first
+    start after the upgrade that added it) a summary time that has already passed today counts as sent today: the loop must not announce a summary at
+    an arbitrary hour just because it started after the configured time."""
+    from datetime import date
+
+    try:
+        raw = __get_global_setting("daily_summary_sent", "") or ""
+        if raw:
+            return date.fromisoformat(raw)
+        now = _utcnow()
+        h, m = [int(x) for x in (__get_global_setting("daily_summary_time", "07:00") or "07:00").split(":")]
+        return now.date() if (now.hour, now.minute) >= (h, m) else None
+    except Exception as e:
+        logger.warning(f"Could not read daily_summary_sent: {e}")
+        return None
+
+
+def _seed_known_macs(known_macs: set) -> bool:
+    """Add every MAC in the devices table to `known_macs`. True when it worked; False (logged) when the Jen database could not be read."""
+    try:
+        with __jen_db_ctx() as jdb, jdb.cursor() as jcur:
+            jcur.execute("SELECT mac FROM devices")
+            seeded = [row["mac"].lower() for row in jcur.fetchall()]
+    except Exception as e:
+        logger.warning(f"Could not seed known_macs from devices (will retry): {e}")
+        return False
+    known_macs.update(seeded)
+    logger.info(f"Seeded {len(known_macs)} known MACs from devices table")
+    return True
+
+
 def check_alerts():
     import time
 
@@ -1626,7 +1695,10 @@ def check_alerts():
     known_macs = set()
     alerted_stale_macs = set()
     first_run = True
-    last_summary_date = None
+    last_summary_date = (
+        _summary_sent_date()
+    )  # v5.68.0-beta.21 (Q156): persisted, so a restart after the summary does not send it twice
+    last_summary_try = None
     last_condition_pass = (
         None  # v5.68.0-beta.20 (Q155): the certificate and forecast conditions run every CONDITION_INTERVAL_MINUTES
     )
@@ -1634,19 +1706,15 @@ def check_alerts():
     last_ha_states = {}  # server_id -> last known HA state
     last_drift_issues = {}  # issue_key -> issue dict, for detected-once/resolved-once alerting
 
-    # Seed known_macs from devices table so restarts don't
-    # flood with "new device" alerts for every known device
-    try:
-        with __jen_db_ctx() as jdb, jdb.cursor() as jcur:
-            jcur.execute("SELECT mac FROM devices")
-            for row in jcur.fetchall():
-                known_macs.add(row["mac"].lower())
-        logger.info(f"Seeded {len(known_macs)} known MACs from devices table")
-    except Exception as e:
-        logger.warning(f"Could not seed known_macs from devices: {e}")
+    # Seed known_macs from devices table so restarts don't flood with "new device" alerts for every known device. v5.68.0-beta.21 (Q156): the seed
+    # is retried at the top of each cycle until it succeeds - it ran once before the loop, so a Jen database that was down at start left it empty for the
+    # life of the process and every known device that was offline at start fired `new_device` when it came back - and `new_device` is not sent until it has.
+    macs_seeded = False
 
     while True:
         try:
+            if not macs_seeded:
+                macs_seeded = _seed_known_macs(known_macs)
             # ── Kea up/down + HA — checked every ~5s (6 times within
             # this outer iteration's ~30s cycle), decoupled from the
             # heavier work below. v5.1.17 — everything in this loop
@@ -1853,8 +1921,10 @@ def check_alerts():
                         )
                         # New device alert — only fire for MACs truly never
                         # seen before (not in devices table, not just unknown
-                        # since last restart)
-                        if mac not in known_macs:
+                        # since last restart). Not until the devices table has been read
+                        # (v5.68.0-beta.21, Q156): an empty known_macs would call every
+                        # known device "new" when it comes back online.
+                        if mac not in known_macs and macs_seeded:
                             send_alert(
                                 "new_device",
                                 ip=ev["ip"],
@@ -1871,6 +1941,8 @@ def check_alerts():
                                 hostname=ev["hostname"] or None,
                             )
                             known_macs.add(mac)  # prevent repeat alerts this session
+                        elif mac not in known_macs:
+                            known_macs.add(mac)  # unseeded: remembered, not announced
 
                     # Update known MACs from all current leases
                     for row in all_leases:
@@ -1960,16 +2032,21 @@ def check_alerts():
             import datetime as dt
 
             summary_time = __get_global_setting("daily_summary_time", "07:00")
-            now = dt.datetime.now(dt.timezone.utc)
+            now = _utcnow()
             today = now.date()
             try:
                 h, m = [int(x) for x in summary_time.split(":")]
-                summary_due = now.hour == h and now.minute == m
-                if summary_due and last_summary_date != today:
-                    send_daily_summary()
-                    last_summary_date = today
-            except Exception:
-                pass
+                # v5.68.0-beta.21 (Q156): due AT OR AFTER its time, once per day. It was `now.hour == h and now.minute == m`, evaluated once per outer
+                # cycle - and a cycle is 6 x (probe + 5 s), 90 s with one server down, plus the heavy block: the one-minute window was missed with no
+                # log line. A failed build is retried no more often than every 15 minutes; `daily_summary_sent` (the date) survives a restart.
+                summary_due = (now.hour, now.minute) >= (h, m) and last_summary_date != today
+                if summary_due and (last_summary_try is None or now - last_summary_try >= dt.timedelta(minutes=15)):
+                    last_summary_try = now
+                    if send_daily_summary():
+                        last_summary_date = today
+                        __set_global_setting("daily_summary_sent", today.isoformat())
+            except Exception as e:
+                logger.error(f"Daily summary scheduling error: {e}")
 
             # ── TLS certificate expiry (v5.12.0) and pool exhaustion forecast (v5.36.0) ──
             # v5.68.0-beta.20 (Q155): every CONDITION_INTERVAL_MINUTES, no longer once per process-day. `notify_condition` retries a failed

@@ -150,13 +150,19 @@ def needs_rehash(stored_hash: str) -> bool:
 
 _settings_cache: dict = {}
 _settings_cache_ts: float = 0
+_settings_next_try: float = 0  # earliest time a FAILED reload is attempted again
 _SETTINGS_CACHE_TTL: float = 30.0  # seconds
+#: v5.68.0-beta.21 (Q156): after a failed reload the next one waits this long. A failed reload used to leave the cache timestamp alone, so the very next
+#: call reloaded again - and with the Jen database down each attempt costs a pool creation (10 s) and a direct connect (10 s): `check_session_timeout`
+#: on every request and ~4 reads per subnet per alert-loop pass made a pass take minutes and the 5 s kea_down cadence was lost.
+_SETTINGS_RETRY_S: float = 5.0
 
 
 def _invalidate_settings_cache() -> None:
     """Call after any set_global_setting to flush the cache immediately."""
-    global _settings_cache_ts
+    global _settings_cache_ts, _settings_next_try
     _settings_cache_ts = 0
+    _settings_next_try = 0
 
 
 def get_global_setting(key: str, default=None):
@@ -168,9 +174,9 @@ def get_global_setting(key: str, default=None):
     """
     import time
 
-    global _settings_cache, _settings_cache_ts
+    global _settings_cache, _settings_cache_ts, _settings_next_try
     now = time.time()
-    if now - _settings_cache_ts > _SETTINGS_CACHE_TTL:
+    if now - _settings_cache_ts > _SETTINGS_CACHE_TTL and now >= _settings_next_try:
         # Cache expired — reload all settings in one query
         from jen.models.db import jen_db
 
@@ -179,9 +185,11 @@ def get_global_setting(key: str, default=None):
                 cur.execute("SELECT setting_key, setting_value FROM settings")
                 _settings_cache = {r["setting_key"]: r["setting_value"] for r in cur.fetchall()}
             _settings_cache_ts = now
+            _settings_next_try = 0
         except Exception as e:
+            # keep serving what was last read (`default` only when nothing ever was) and do not try again for _SETTINGS_RETRY_S
+            _settings_next_try = now + _SETTINGS_RETRY_S
             logger.error(f"get_global_setting cache reload: {e}")
-            return default
     return _settings_cache.get(key, default)
 
 

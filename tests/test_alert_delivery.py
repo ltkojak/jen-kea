@@ -436,11 +436,17 @@ def real_loop(monkeypatch):
     monkeypatch.setitem(alerts.__dict__, "__get_active_kea_server", lambda: None)
     monkeypatch.setitem(alerts.__dict__, "__check_config_drift", list)
 
-    def drive(minutes):
+    def drive(minutes, hooks=None):
+        """Run the loop for `minutes` of simulated time. `hooks` {n: fn(clock)} runs after the n-th sleep (1-based) - a place to jump the clock or
+        change the world between two cycles."""
         end = T0 + timedelta(minutes=minutes)
+        slept = {"n": 0}
 
         def fake_sleep(seconds):
             clock["now"] += timedelta(seconds=seconds)
+            slept["n"] += 1
+            if hooks and slept["n"] in hooks:
+                hooks[slept["n"]](clock)
             if clock["now"] >= end:
                 raise _Stop
 
@@ -448,6 +454,7 @@ def real_loop(monkeypatch):
         with pytest.raises(_Stop):
             alerts.check_alerts()
 
+    drive.clock = clock
     alerts._CONDITION_CACHE.clear()
     yield drive
     alerts._CONDITION_CACHE.clear()
@@ -517,3 +524,249 @@ class TestTheConditionsRunInTheRealLoop:
 
         source = inspect.getsource(alerts.check_alerts)
         assert "last_cert_check_date" not in source and "run_slow_conditions" in source
+
+
+class TestTheDailySummaryIsDueAtOrAfterItsTime:
+    """v5.68.0-beta.21 (Q156, item 7): `summary_due = now.hour == h and now.minute == m`, evaluated once per outer cycle - and a cycle is 6 x (probe + 5 s),
+    90 s with one server down, plus the heavy block. The one-minute window was missed with no log line. It is now due AT OR AFTER its time, once a day,
+    and `daily_summary_sent` (the date) survives a restart. These tests run the real loop on a clock that JUMPS over the minute."""
+
+    DAY = "2026-10-07"  # T0 is 12:00:00 on this date
+
+    @pytest.fixture
+    def summary(self, db, monkeypatch):
+        from jen.models.user import set_global_setting
+
+        sent = []
+        monkeypatch.setattr(alerts, "send_daily_summary", lambda: sent.append(alerts._utcnow()) or True)
+
+        def configure(at, persisted=""):
+            set_global_setting("daily_summary_time", at)
+            set_global_setting("daily_summary_sent", persisted)
+
+        yield sent, configure
+        set_global_setting("daily_summary_sent", "")
+        set_global_setting("daily_summary_time", "07:00")
+
+    @staticmethod
+    def _stored():
+        from jen.models.user import get_global_setting
+
+        return get_global_setting("daily_summary_sent", "")
+
+    def test_a_cycle_that_jumps_from_before_the_minute_to_after_it_still_sends_once(self, real_loop, summary):
+        sent, configure = summary
+        configure("12:04")  # no record, and 12:00 has not reached it: the first cycle past it sends
+        # the clock goes from 12:01:00 to 12:11:00 between two cycles - no cycle ever starts inside minute 12:04
+        real_loop(20, hooks={12: lambda clock: clock.__setitem__("now", clock["now"] + timedelta(minutes=10))})
+        assert len(sent) == 1 and sent[0] >= T0 + timedelta(minutes=10), sent
+        assert self._stored() == self.DAY
+
+    def test_it_is_sent_once_a_day_not_every_cycle_after_its_time(self, real_loop, summary):
+        sent, configure = summary
+        configure("12:00", persisted="2026-10-06")
+        real_loop(10)
+        assert len(sent) == 1
+
+    def test_a_restart_after_sending_does_not_send_again(self, real_loop, summary):
+        sent, configure = summary
+        configure("11:00", persisted=self.DAY)
+        real_loop(20)
+        assert sent == []
+
+    def test_a_restart_before_its_time_sends_at_the_first_cycle_past_it(self, real_loop, summary):
+        sent, configure = summary
+        configure("12:10")
+        real_loop(20)
+        assert len(sent) == 1 and T0 + timedelta(minutes=10) <= sent[0] < T0 + timedelta(minutes=11)
+
+    def test_a_start_after_the_time_with_no_record_does_not_announce_a_summary_at_a_random_hour(
+        self, real_loop, summary
+    ):
+        """A fresh install, or the first start after the upgrade that added the record: 07:00 has passed, nothing says it was not sent - the loop
+        does not send a 'daily' summary at 12:00 because it happened to start then."""
+        sent, configure = summary
+        configure("07:00")
+        real_loop(20)
+        assert sent == []
+
+    def test_the_next_day_it_is_sent_again(self, real_loop, summary):
+        sent, configure = summary
+        configure("11:00", persisted=self.DAY)
+        real_loop(3, hooks={4: lambda clock: clock.__setitem__("now", clock["now"] + timedelta(days=1))})
+        assert len(sent) == 1 and sent[0].date().isoformat() == "2026-10-08"
+        assert self._stored() == "2026-10-08"
+
+    def test_a_failed_summary_is_retried_no_more_often_than_every_fifteen_minutes_and_is_not_recorded(
+        self, real_loop, summary, monkeypatch
+    ):
+        sent, configure = summary
+        tries = []
+        monkeypatch.setattr(alerts, "send_daily_summary", lambda: tries.append(alerts._utcnow()) or False)
+        configure("11:00", persisted="2026-10-06")
+        real_loop(40)
+        assert len(tries) == 3, f"expected the first try, then one every 15 minutes: {tries}"
+        assert all((b - a) >= timedelta(minutes=15) for a, b in zip(tries, tries[1:], strict=False))
+        assert self._stored() == "2026-10-06", "a summary that failed to build is not recorded as sent"
+
+    def test_send_daily_summary_says_whether_it_worked(self, db, monkeypatch):
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {})
+        monkeypatch.setattr(alerts, "send_alert", lambda *a, **k: [])
+        assert alerts.send_daily_summary() is True
+
+        def broken():
+            raise RuntimeError("kea database down")
+
+        monkeypatch.setitem(alerts.__dict__, "__kea_db_ctx", broken)
+        assert alerts.send_daily_summary() is False
+
+
+class TestTheKnownMacsSeedIsRetried:
+    """v5.68.0-beta.21 (Q156, item 12): the seed ran once before the loop. A Jen database that was down at start left `known_macs` empty for the life of
+    the process and every known device that was offline at start fired `new_device` when it came back. The seed is retried at the top of each cycle until
+    it succeeds, and `new_device` is not sent until it has."""
+
+    D_MAC = "aa:bb:cc:00:1a:01"
+    NEW_MAC = "aa:bb:cc:00:1a:02"
+
+    @pytest.fixture
+    def world(self, db, monkeypatch):
+        sent = []
+        monkeypatch.setattr(alerts, "send_alert", lambda t, *a, **kw: sent.append(t) or [("test", True, "")])
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {1: {"name": "LAN", "cidr": "10.85.0.0/24"}})
+
+        def lease(mac, n):
+            with db.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO lease4 (address, hwaddr, valid_lifetime, expire, subnet_id, state) VALUES "
+                    "(INET_ATON(%s), UNHEX(%s), 3600, DATE_ADD(NOW(), INTERVAL 1 HOUR), 1, 0)",
+                    (f"10.85.0.{n}", mac.replace(":", "")),
+                )
+            db.commit()
+
+        def clean():
+            with db.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM lease4 WHERE address BETWEEN INET_ATON('10.85.0.0') AND INET_ATON('10.85.0.255')"
+                )
+            db.commit()
+
+        clean()
+        yield sent, lease
+        clean()
+
+    def test_the_seed_fails_twice_then_succeeds_and_a_known_device_coming_back_is_not_new(
+        self, real_loop, world, monkeypatch
+    ):
+        sent, lease = world
+        attempts = []
+
+        def seed(known_macs):
+            attempts.append(1)
+            if len(attempts) < 3:
+                return False
+            known_macs.add(self.D_MAC)
+            return True
+
+        monkeypatch.setattr(alerts, "_seed_known_macs", seed)
+        # D is in the devices table all along but only comes online during the third cycle (its first sleep is #13)
+        real_loop(5, hooks={13: lambda clock: lease(self.D_MAC, 9)})
+        assert len(attempts) == 3, "retried every cycle until it worked, then never again"
+        assert "new_lease" in sent
+        assert "new_device" not in sent, "a device that was in the table all along was announced as new"
+
+    def test_while_the_seed_keeps_failing_no_device_is_announced_as_new(self, real_loop, world, monkeypatch):
+        sent, lease = world
+        attempts = []
+        monkeypatch.setattr(alerts, "_seed_known_macs", lambda known: attempts.append(1) or False)
+        real_loop(4, hooks={13: lambda clock: lease(self.NEW_MAC, 11)})
+        assert len(attempts) >= 3, "the seed is retried at the top of every cycle"
+        assert "new_lease" in sent and "new_device" not in sent
+
+    def test_once_seeded_a_truly_new_device_is_still_announced(self, real_loop, world, monkeypatch):
+        sent, lease = world
+        monkeypatch.setattr(alerts, "_seed_known_macs", lambda known: (known.add(self.D_MAC), True)[1])
+        real_loop(3, hooks={13: lambda clock: lease(self.NEW_MAC, 12)})
+        assert "new_device" in sent
+
+    def test_the_seed_itself_reports_failure_and_success(self, db, monkeypatch):
+        known = set()
+        assert alerts._seed_known_macs(known) is True
+        monkeypatch.setitem(alerts.__dict__, "__jen_db_ctx", lambda: (_ for _ in ()).throw(RuntimeError("down")))
+        assert alerts._seed_known_macs(known) is False
+
+
+class TestOrphanedAlertStateIsCleared:
+    """v5.68.0-beta.21 (Q156, item 11): `if info is None: continue` - a subnet that left Jen's map kept its `alert_state:utilization_high:<sid>` /
+    `pool_exhaustion` / `pool_forecast` rows active for ever (never an `_ok`, loaded on every settings reload); a removed server's packet-health state
+    likewise."""
+
+    @staticmethod
+    def _stored(db, alert_type):
+        with db.cursor() as cur:
+            cur.execute("SELECT setting_key FROM settings WHERE setting_key LIKE %s", (f"alert_state:{alert_type}:%",))
+            return sorted(r["setting_key"].rsplit(":", 1)[1] for r in cur.fetchall())
+
+    @staticmethod
+    def _put(db, alert_type, keys):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM settings WHERE setting_key LIKE %s", (f"alert_state:{alert_type}:%",))
+            for key in keys:
+                cur.execute(
+                    "INSERT INTO settings (setting_key, setting_value) VALUES (%s, %s)",
+                    (f"alert_state:{alert_type}:{key}", '{"a":true,"n":true,"t":null,"c":0,"d":null,"r":false}'),
+                )
+        db.commit()
+        from jen.models.user import _invalidate_settings_cache
+
+        _invalidate_settings_cache()
+
+    def test_the_rows_of_keys_that_are_not_live_are_deleted_and_the_live_ones_kept(self, db, send):
+        sender = send(OK)
+        self._put(db, "utilization_high", [5, 6, 7])
+        assert alerts._clear_orphan_states("utilization_high", {5, 7}) == 1
+        assert self._stored(db, "utilization_high") == ["5", "7"]
+        assert sender.sent == [], "no recovery is sent: the thing the alert was about is gone"
+
+    def test_an_empty_live_set_clears_nothing(self, db):
+        self._put(db, "pool_exhaustion", [1, 2])
+        assert alerts._clear_orphan_states("pool_exhaustion", []) == 0
+        assert self._stored(db, "pool_exhaustion") == ["1", "2"], (
+            "an unreadable configuration must not wipe every state"
+        )
+
+    def test_another_alert_types_rows_are_untouched(self, db):
+        self._put(db, "utilization_high", [9])
+        self._put(db, "packet_health", [9])
+        alerts._clear_orphan_states("utilization_high", {1})
+        assert self._stored(db, "utilization_high") == [] and self._stored(db, "packet_health") == ["9"]
+
+    def test_a_subnet_leaving_the_map_loses_its_state_on_the_next_utilization_pass(self, db, monkeypatch, send):
+        send(OK)
+        self._put(db, "utilization_high", [41, 42])
+        self._put(db, "pool_exhaustion", [41, 42])
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {41: {"name": "A", "cidr": "10.141.0.0/24"}})
+        with db.cursor() as cur:
+            alerts.check_utilization_alerts(cur, {"subnet4": []})
+        assert self._stored(db, "utilization_high") == ["41"] and self._stored(db, "pool_exhaustion") == ["41"]
+
+    def test_the_forecast_pass_clears_a_removed_subnet(self, db, monkeypatch, send):
+        send(OK)
+        self._put(db, "pool_forecast", [51, 52])
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {51: {"name": "A", "cidr": "10.151.0.0/24"}})
+        monkeypatch.setattr("jen.services.health.lease_history_window", lambda days=31: {})
+        alerts.check_pool_forecast_alerts(today=T0.date())
+        assert self._stored(db, "pool_forecast") == ["51"]
+
+    def test_a_removed_server_loses_its_packet_health_state(self, db, monkeypatch):
+        self._put(db, "packet_health", [1, 2])
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "Kea", "api_url": "http://x"}])
+        alerts._check_packet_health_alerts()
+        assert self._stored(db, "packet_health") == ["1"]
+
+    def test_the_cert_buckets_are_not_subnet_keys_and_are_never_touched(self, db, monkeypatch):
+        self._put(db, "cert_expiring", [30, 7, 1])
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {1: {"name": "A", "cidr": "10.1.0.0/24"}})
+        with db.cursor() as cur:
+            alerts.check_utilization_alerts(cur, {"subnet4": []})
+        assert self._stored(db, "cert_expiring") == ["1", "30", "7"]

@@ -1140,3 +1140,61 @@ class TestANakStormCannotFloodTheInbox:
             and "300 problem keys dropped last sweep" in check.detail
             and "NAK storm" in check.detail
         )
+
+
+class TestARemovedServersKeysAreCleared:
+    """v5.68.0-beta.21 (Q156, item 11): `client_problems_read/_err/_miss/_wm/_clock:<server id>` of a server that left Jen were never deleted."""
+
+    KEYS = (
+        "client_problems_wm:",
+        "client_problems_read:",
+        "client_problems_err:",
+        "client_problems_miss:",
+        "client_problems_clock:",
+    )
+
+    @staticmethod
+    def _put(db, server_id):
+        with db.cursor() as cur:
+            for prefix in TestARemovedServersKeysAreCleared.KEYS:
+                cur.execute(
+                    "INSERT INTO settings (setting_key, setting_value) VALUES (%s, 'x') ON DUPLICATE KEY UPDATE setting_value='x'",
+                    (f"{prefix}{server_id}",),
+                )
+        db.commit()
+
+    @staticmethod
+    def _present(db, server_id):
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT setting_key FROM settings WHERE setting_key IN (%s,%s,%s,%s,%s)",
+                tuple(f"{p}{server_id}" for p in TestARemovedServersKeysAreCleared.KEYS),
+            )
+            return len(cur.fetchall())
+
+    def test_the_keys_of_a_server_that_is_gone_are_deleted_after_a_sweep_and_a_live_servers_stay(self, db, stack):
+        logs, _calls = stack
+        prime(logs)
+        self._put(db, 77)  # not in KEA_SERVERS (the stack has servers 1 and 2)
+        assert self._present(db, 77) == 5
+        cp.sweep(NOW, servers=[SERVER_A])
+        assert self._present(db, 77) == 0
+        assert self._present(db, 1) >= 3, "the live server's own keys are kept"
+
+    def test_with_no_server_configured_nothing_is_cleared(self, db, stack, monkeypatch):
+        self._put(db, 78)
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [])
+        assert cp._clear_orphan_server_keys() == 0 and self._present(db, 78) == 5
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM settings WHERE setting_key LIKE 'client_problems_%:78'")
+        db.commit()
+
+    def test_the_sweeps_own_keys_are_not_touched(self, db, stack):
+        logs, _calls = stack
+        prime(logs)
+        cp.sweep(NOW, servers=[SERVER_A])
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT setting_key FROM settings WHERE setting_key IN ('client_problems_swept', 'client_problems_dropped')"
+            )
+            assert len(cur.fetchall()) == 2

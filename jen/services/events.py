@@ -61,6 +61,14 @@ _queue: "queue.Queue" = queue.Queue(maxsize=QUEUE_MAX)
 _dispatcher: threading.Thread | None = None
 _last_drop_log = 0.0
 _STOP = object()
+#: v5.68.0-beta.21 (Q156): what Health needs to tell a WEDGED dispatcher from a live one. The thread is alive when a subscriber blocks, so `is_alive()`
+#: stays green while the queue grows and - at QUEUE_MAX - subscriber delivery is dropped with one log line a minute.
+_last_dispatch_at: float | None = (
+    None  # monotonic, when the dispatcher last FINISHED an event (or started, until it has)
+)
+_dropped_total = (
+    0  # events whose subscriber delivery was dropped because the queue was full, since this process started
+)
 
 
 def subscribe(kind_or_star: str, fn) -> None:
@@ -91,6 +99,8 @@ def start_dispatcher() -> bool:
     with _lock:
         if _alive(_dispatcher):
             return False
+        global _last_dispatch_at
+        _last_dispatch_at = time.monotonic()
         _dispatcher = threading.Thread(target=_dispatch_loop, name="jen-events", daemon=True)
         _dispatcher.start()
         return True
@@ -133,6 +143,17 @@ def queue_depth() -> int:
         return 0
 
 
+def dispatcher_status() -> dict:
+    """{"running", "queue_depth", "last_dispatch_age_s", "dropped"} (v5.68.0-beta.21, Q156). `last_dispatch_age_s` is how long ago the dispatcher last
+    finished an event (or, before it has finished one, how long ago it started); None when it is not running. A queue with events in it and an age of
+    a minute or more is a dispatcher stuck inside a subscriber; `dropped` counts deliveries lost to a full queue since the process started."""
+    running = dispatcher_running()
+    age = None
+    if running and _last_dispatch_at is not None:
+        age = max(0.0, time.monotonic() - _last_dispatch_at)
+    return {"running": running, "queue_depth": queue_depth(), "last_dispatch_age_s": age, "dropped": _dropped_total}
+
+
 def _alive(t) -> bool:
     """True for a live thread. Tolerates a stand-in with no `is_alive` (tests
     that replace `threading.Thread` and call start_background_workers())."""
@@ -143,6 +164,7 @@ def _alive(t) -> bool:
 
 
 def _dispatch_loop() -> None:
+    global _last_dispatch_at
     while True:
         item = _queue.get()
         if item is _STOP:
@@ -151,6 +173,7 @@ def _dispatch_loop() -> None:
             _dispatch(item)
         except Exception as e:  # never let the worker die
             logger.error(f"events dispatcher error: {e}")
+        _last_dispatch_at = time.monotonic()
 
 
 def _dispatch(event: dict) -> None:
@@ -235,7 +258,8 @@ def emit(kind, *, mac=None, ip=None, subnet_id=None, hostname=None, server=None,
         try:
             _queue.put_nowait(event)
         except queue.Full:
-            global _last_drop_log
+            global _last_drop_log, _dropped_total
+            _dropped_total += 1
             now = time.monotonic()
             if now - _last_drop_log >= 60:
                 _last_drop_log = now

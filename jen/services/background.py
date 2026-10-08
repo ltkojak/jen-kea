@@ -70,7 +70,9 @@ def register_periodic(plugin_id: str, name: str, fn, every_minutes: int) -> None
         "next_due": datetime.now(timezone.utc) + timedelta(minutes=every),
         "running": False,
         "last_started": None,
+        "last_finished": None,  # v5.68.0-beta.21 (Q156)
         "last_error": "",
+        "history": [],  # the outcome (True = ran clean) of the last three runs, oldest first
     }
     with _periodic_lock:
         _periodic[:] = [j for j in _periodic if (j["plugin_id"], j["name"]) != key]
@@ -91,12 +93,19 @@ def periodic_jobs() -> list[dict]:
         return [{k: v for k, v in j.items() if k != "fn"} for j in _periodic]
 
 
+def _record_run(job: dict, ok: bool) -> None:
+    job["history"] = [*job.get("history", []), ok][-3:]
+    job["last_finished"] = datetime.now(timezone.utc)
+
+
 def _run_one_periodic(job: dict) -> None:
     try:
         job["fn"]()
         job["last_error"] = ""
+        _record_run(job, True)
     except Exception as e:  # a plugin bug must never take the loop down
         job["last_error"] = str(e)
+        _record_run(job, False)
         logger.error(f"Periodic job {job['plugin_id']}/{job['name']} failed: {e}")
     finally:
         job["running"] = False
@@ -115,13 +124,22 @@ def run_due_periodic_jobs(now: datetime | None = None, spawn=None) -> int:
             j["last_started"] = now
             j["next_due"] = now + timedelta(minutes=j["every_minutes"])
     for j in due:
-        started += 1
-        if spawn is not None:
-            spawn(j)
-        else:
-            threading.Thread(
-                target=_run_one_periodic, args=(j,), name=f"jen-periodic-{j['plugin_id']}", daemon=True
-            ).start()
+        # v5.68.0-beta.21 (Q156): `running` was set above, under the lock, and the thread started here OUTSIDE it with no rollback - a `Thread.start()`
+        # that raised (the process out of threads) left `running=True` for ever, and a running job is skipped for ever. A start that fails is a failed
+        # run: running goes back to False, the error is recorded, and the next tick tries again.
+        try:
+            if spawn is not None:
+                spawn(j)
+            else:
+                threading.Thread(
+                    target=_run_one_periodic, args=(j,), name=f"jen-periodic-{j['plugin_id']}", daemon=True
+                ).start()
+            started += 1
+        except Exception as e:
+            j["running"] = False
+            j["last_error"] = f"could not start: {e}"
+            _record_run(j, False)
+            logger.error(f"Periodic job {j['plugin_id']}/{j['name']} could not be started: {e}")
     return started
 
 
@@ -153,12 +171,17 @@ def liveness() -> dict:
     from jen.services import events
     from jen.services.scheduler import scheduler_status
 
+    dispatcher = (
+        events.dispatcher_status()
+    )  # v5.68.0-beta.21 (Q156): depth, last-dispatch age, drops - a wedged dispatcher is still alive
     return {
         "started_at": STARTED_AT,
         "alert_thread": bool(_alert_thread is not None and _alert_thread.is_alive()),
         "periodic_thread": bool(_periodic_thread is not None and _periodic_thread.is_alive()),
-        "dispatcher": bool(events.dispatcher_running()),
-        "queue_depth": events.queue_depth(),
+        "dispatcher": bool(dispatcher["running"]),
+        "queue_depth": dispatcher["queue_depth"],
+        "dispatcher_status": dispatcher,
+        "periodic_jobs": periodic_jobs(),
         "scheduler": scheduler_status(),
     }
 

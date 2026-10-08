@@ -2727,6 +2727,25 @@ again for each of Explain, Config and Changes (`LOG_TTL_S` bounded the log read,
 every caller. `TestTheHaQuestionIsAskedRarely` counts the probes: zero for an Overview render and for a cached read, one per server for a whole page's worth of readers, one more
 after the window.
 
+**Background work that has to keep its promises (v5.68.0-beta.21, Q156).** A sweep of every thread, loop, job and pool with seven questions (what if the body raises, the
+database is down at start, a connection or lock is held across I/O, something grows without bound, a worker hangs, a second worker runs it, SIGTERM arrives) found six
+contracts that did not hold. *The daily summary:* it was due when `now.hour == h and now.minute == m`, checked once per outer cycle, and a cycle is 6 x (probe + 5 s) - 90 s
+with one server down, plus the heavy block - so the one-minute window was missed with no log line. It is due AT OR AFTER its time, once per day, with `daily_summary_sent` (the
+date) persisted so a restart after the summary does not send it twice; a start after the configured time with NO record counts as sent today (it must not announce a "daily"
+summary at an arbitrary hour because the process started then), and a summary that failed to build is retried no more often than every 15 minutes and is not recorded as sent.
+*The settings cache:* a failed reload left its timestamp alone, so the next call reloaded again - and with the Jen database down each attempt costs a pool creation (10 s connect
+timeout) and a direct connect (10 s): `check_session_timeout` on every request and about four reads per subnet per alert-loop pass made a pass take minutes and the 5 s kea_down
+cadence was lost. The cache now keeps serving the last values it read (`default` only when it never read any) and retries after `_SETTINGS_RETRY_S` (5 s); `db.get_jen_db` /
+`get_kea_db` record a failed pool creation and within `_POOL_RETRY_S` (10 s) only try the direct connect, once per call, outside the pool lock. *Plugin periodic jobs:* a job that
+was `running` was skipped for ever and `_run_one_periodic` has no deadline, and `Thread.start()` ran outside the lock with no rollback; the start is guarded (a failure is a failed
+run, `running` back to False), each run records `last_finished` and the outcome of the last three, `liveness()` carries `periodic_jobs()`, and the Background workers row FAILS for
+a job `running` more than twice its interval (naming plugin and job) and warns when its last three runs failed. *The event dispatcher:* `dispatcher_status()` = {running,
+queue_depth, last_dispatch_age_s, dropped}; a dispatcher stuck inside a subscriber is ALIVE, so the row warns when events are queued and none was dispatched for a minute or when
+deliveries were dropped to a full queue, and FAILS when the thread is dead (beta.20 warned). *Orphaned state:* `_clear_orphan_states` deletes `alert_state:<type>:<key>` rows
+whose subnet or server is no longer configured (no `_ok`; an empty live set clears nothing), and the Problems sweep deletes the per-server settings keys of a removed server.
+*The device seed:* the `known_macs` seed ran once before the alert loop, so a Jen database that was down at start left it empty for the life of the process and every known
+device that was offline at start fired `new_device` when it came back; it is retried at the top of each cycle until it works and `new_device` waits for it.
+
 **The Problems inbox caps what a log can add (v5.68.0-beta.21, Q156).** A group is keyed by (kind, client, address, subnet), so a thousand-line tail of declines from
 spoofed MACs and requested addresses added up to a thousand rows per sweep, kept 30 days; `MAX_DB_ROWS` bounds only the two lease-database kinds. At most
 `MAX_NEW_KEYS_PER_SWEEP` (200) NEW keys are recorded per server per sweep (`_cap_new_keys`: a key that already has a row always updates; of the new ones the newest

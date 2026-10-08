@@ -14,6 +14,7 @@ DB is temporarily unavailable.
 import logging
 import os
 import threading
+import time
 from contextlib import contextmanager, suppress
 
 import pymysql
@@ -32,6 +33,17 @@ _pool_lock = threading.Lock()
 
 _POOL_MIN = 2  # connections kept open permanently
 _POOL_MAX = 10  # maximum concurrent connections
+
+#: v5.68.0-beta.21 (Q156): a pool whose creation FAILED is not re-attempted for this long. `_make_jen_pool()` opens `mincached` connections with a 10 s
+#: connect timeout, and a failed one left `_jen_pool` None, so with the database down EVERY call re-attempted it (10 s) and then a direct connect (10 s) -
+#: up to 20 s per call, per settings read, per request. Within the window only the direct connect is tried (once per call).
+_POOL_RETRY_S = 10.0
+_pool_failed_at: dict = {}  # "jen" / "kea" -> time.monotonic() of the last failed pool creation
+
+
+def _pool_recently_failed(name: str) -> bool:
+    failed = _pool_failed_at.get(name)
+    return failed is not None and time.monotonic() - failed < _POOL_RETRY_S
 
 
 def _ssl_kwargs(ca_path: str) -> dict:
@@ -102,22 +114,31 @@ def get_jen_db() -> pymysql.connections.Connection:
     """
     global _jen_pool
     if _jen_pool is None:
+        direct = False
         with _pool_lock:
             if _jen_pool is None:  # double-checked locking
-                try:
-                    _jen_pool = _make_jen_pool()
-                    logger.info("Jen DB connection pool initialized (dbutils)")
-                except Exception as e:
-                    logger.warning(f"Jen DB pool failed, using direct connections: {e}")
-                    return pymysql.connect(
-                        host=extensions.JEN_DB_HOST,
-                        user=extensions.JEN_DB_USER,
-                        password=extensions.JEN_DB_PASS,
-                        database=extensions.JEN_DB_NAME,
-                        cursorclass=pymysql.cursors.DictCursor,
-                        connect_timeout=10,
-                        **_ssl_kwargs(extensions.JEN_DB_SSL_CA),
-                    )
+                if _pool_recently_failed("jen"):
+                    direct = True
+                else:
+                    try:
+                        _jen_pool = _make_jen_pool()
+                        _pool_failed_at.pop("jen", None)
+                        logger.info("Jen DB connection pool initialized (dbutils)")
+                    except Exception as e:
+                        _pool_failed_at["jen"] = time.monotonic()
+                        logger.warning(f"Jen DB pool failed, using direct connections: {e}")
+                        direct = True
+        if direct:
+            # outside the lock: a direct connect that hangs must not queue every other caller behind it
+            return pymysql.connect(
+                host=extensions.JEN_DB_HOST,
+                user=extensions.JEN_DB_USER,
+                password=extensions.JEN_DB_PASS,
+                database=extensions.JEN_DB_NAME,
+                cursorclass=pymysql.cursors.DictCursor,
+                connect_timeout=10,
+                **_ssl_kwargs(extensions.JEN_DB_SSL_CA),
+            )
     return _jen_pool.connection()
 
 
@@ -128,23 +149,31 @@ def get_kea_db() -> pymysql.connections.Connection:
     """
     global _kea_pool
     if _kea_pool is None:
+        direct = False
         with _pool_lock:
             if _kea_pool is None:
-                try:
-                    _kea_pool = _make_kea_pool()
-                    logger.info("Kea DB connection pool initialized (dbutils)")
-                except Exception as e:
-                    logger.warning(f"Kea DB pool failed, using direct connections: {e}")
-                    return pymysql.connect(
-                        host=extensions.KEA_DB_HOST,
-                        port=extensions.KEA_DB_PORT,
-                        user=extensions.KEA_DB_USER,
-                        password=extensions.KEA_DB_PASS,
-                        database=extensions.KEA_DB_NAME,
-                        cursorclass=pymysql.cursors.DictCursor,
-                        connect_timeout=10,
-                        **_ssl_kwargs(extensions.KEA_DB_SSL_CA),
-                    )
+                if _pool_recently_failed("kea"):
+                    direct = True
+                else:
+                    try:
+                        _kea_pool = _make_kea_pool()
+                        _pool_failed_at.pop("kea", None)
+                        logger.info("Kea DB connection pool initialized (dbutils)")
+                    except Exception as e:
+                        _pool_failed_at["kea"] = time.monotonic()
+                        logger.warning(f"Kea DB pool failed, using direct connections: {e}")
+                        direct = True
+        if direct:
+            return pymysql.connect(
+                host=extensions.KEA_DB_HOST,
+                port=extensions.KEA_DB_PORT,
+                user=extensions.KEA_DB_USER,
+                password=extensions.KEA_DB_PASS,
+                database=extensions.KEA_DB_NAME,
+                cursorclass=pymysql.cursors.DictCursor,
+                connect_timeout=10,
+                **_ssl_kwargs(extensions.KEA_DB_SSL_CA),
+            )
     return _kea_pool.connection()
 
 
@@ -314,6 +343,7 @@ def reset_kea_pools() -> None:
     restart. Jen's own pool is left alone: this changes nothing about it."""
     global _kea_pool, _kea6_pool
     with _pool_lock:
+        _pool_failed_at.pop("kea", None)  # the settings just changed: dial them now, not after the retry window
         if _kea_pool is not None:
             _drop_pool(_kea_pool)
             _kea_pool = None
@@ -330,6 +360,7 @@ def reset_pools() -> None:
     """
     global _jen_pool
     with _pool_lock:
+        _pool_failed_at.pop("jen", None)
         if _jen_pool is not None:
             _drop_pool(_jen_pool)
             _jen_pool = None

@@ -378,6 +378,47 @@ def _cap_new_keys(cur, server_id, groups: dict, limit: int = MAX_NEW_KEYS_PER_SW
     return {k: g for k, g in groups.items() if k not in dropped}, len(dropped)
 
 
+_SERVER_KEY_PREFIXES = (
+    "client_problems_wm:",
+    "client_problems_read:",
+    "client_problems_err:",
+    "client_problems_miss:",
+    "client_problems_clock:",
+)
+
+
+def _clear_orphan_server_keys() -> int:
+    """Delete the per-server settings keys (watermark, last read, last error, misses, clock offset) of a server id that is no longer in `KEA_SERVERS`
+    (v5.68.0-beta.21, Q156): a removed server left them behind for ever, loaded on every settings reload. With no server configured at all nothing is
+    cleared - an unreadable configuration must not wipe every watermark (the next sweep would re-read a backlog as news). Never raises."""
+    from jen.models import db as __db
+
+    live = {str(srv.get("id")) for srv in extensions.KEA_SERVERS or []}
+    if not live:
+        return 0
+    removed = 0
+    try:
+        with __db.jen_db() as db, db.cursor() as cur:
+            for prefix in _SERVER_KEY_PREFIXES:
+                cur.execute("SELECT setting_key FROM settings WHERE setting_key LIKE %s", (prefix + "%",))
+                stale = [
+                    r["setting_key"]
+                    for r in cur.fetchall()
+                    if r["setting_key"].startswith(prefix) and r["setting_key"][len(prefix) :] not in live
+                ]
+                for key in stale:
+                    cur.execute("DELETE FROM settings WHERE setting_key=%s", (key,))
+                removed += len(stale)
+        if removed:
+            from jen.models.user import _invalidate_settings_cache
+
+            _invalidate_settings_cache()
+            logger.info(f"client_problems: cleared {removed} setting key(s) of servers that are no longer configured")
+    except Exception as e:
+        logger.error(f"client_problems: orphan key cleanup failed: {type(e).__name__}: {e}")
+    return removed
+
+
 def _note_dropped(now: datetime, dropped: int) -> None:
     """Record how many new keys the LAST sweep refused (0 clears it). Never raises."""
     from jen.models import db as __db
@@ -866,6 +907,7 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                 f"(the cap is {MAX_NEW_KEYS_PER_SWEEP} new keys per server) - a NAK storm?"
             )
         _note_dropped(now, summary["dropped_keys"])
+        _clear_orphan_server_keys()
         _note_swept(now)
     return summary
 
