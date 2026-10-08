@@ -266,12 +266,12 @@ class TestPathsFollowTheLayout:
             """
             INSTALL_DIR=/srv/jen/app; CONFIG_DIR=/srv/jen/etc; CONTENT_DIR=/srv/jen/data
             _set_paths
-            echo "$CONFIG_FILE|$BACKUP_DIR|$RELEASES_DIR|$CURRENT_LINK|$ROOT_ROLLBACK_DIR"
+            echo "$CONFIG_FILE|$CONFIG_BACKUP_DIR|$RELEASES_DIR|$CURRENT_LINK|$ROOT_ROLLBACK_DIR"
             """,
         )
         assert r.returncode == 0, r.stdout + r.stderr
         assert r.stdout.strip() == (
-            "/srv/jen/etc/jen.config|/srv/jen/etc/backups|/srv/jen/app/releases|/srv/jen/app/current|/srv/jen/app/.rollback"
+            "/srv/jen/etc/jen.config|/srv/jen/app/.rollback/config|/srv/jen/app/releases|/srv/jen/app/current|/srv/jen/app/.rollback"
         )
 
     def test_set_paths_returns_zero_even_when_no_venv_exists(self, tmp_path):
