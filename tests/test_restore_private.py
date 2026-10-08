@@ -174,7 +174,7 @@ class TestAFailureLeavesTheLiveFileAlone:
     def test_a_failed_replace_removes_the_temp(self, tmp_path, monkeypatch):
         etc = tmp_path / "etc"
         etc.mkdir()
-        monkeypatch.setattr(os, "replace", lambda a, b: (_ for _ in ()).throw(OSError("disk full")))
+        monkeypatch.setattr(os, "replace", lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
         with pytest.raises(OSError, match="disk full"):
             restore._write_file(etc / "jen.config", b"x", 0o600, ME, etc)
         assert not (etc / "jen.config").exists() and _no_temp_left(etc)
@@ -275,3 +275,46 @@ class TestNoOtherWriterInTheTool:
                 f'("jen/tools/restore.py", "{name}")' not in text
                 and f'"jen/tools/restore.py",\n        "{name}"' not in text
             )
+
+
+class TestTheParentIsWalkedByDescriptors:
+    """v5.68.0-beta.20 (Q155): the restore resolves no pathname after it was checked - every component below the restore root is opened
+    `O_DIRECTORY | O_NOFOLLOW` relative to the previous descriptor and the temp, the rename and the fsync are relative to the last one."""
+
+    def test_a_planted_symlink_parent_is_refused_and_nothing_is_created_or_written_beyond_it(self, tmp_path):
+        etc = tmp_path / "etc"
+        etc.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        os.symlink(outside, etc / "ssl")
+        with pytest.raises(restore.RestoreRefused, match="symlink"):
+            restore._write_file(etc / "ssl" / "sub" / "server.key", b"KEY", 0o600, ME, etc)
+        assert list(outside.iterdir()) == []
+
+    def test_a_parent_replaced_between_the_check_and_the_write_is_refused(self, tmp_path, monkeypatch):
+        etc = tmp_path / "etc"
+        (etc / "ssl").mkdir(parents=True)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        real_fsync = os.fsync
+        swapped = []
+
+        def swap_then_fsync(fd):
+            if not swapped:
+                swapped.append(1)
+                os.rename(etc / "ssl", etc / "ssl-moved")
+                os.symlink(outside, etc / "ssl")
+            return real_fsync(fd)
+
+        monkeypatch.setattr(os, "fsync", swap_then_fsync)
+        with pytest.raises(restore.RestoreRefused, match="replaced while"):
+            restore._write_file(etc / "ssl" / "server.key", b"KEY", 0o600, ME, etc)
+        assert list(outside.iterdir()) == []
+        assert list((etc / "ssl-moved").iterdir()) == []
+
+    def test_every_step_after_the_walk_is_relative_to_the_descriptor(self):
+        import inspect
+
+        source = inspect.getsource(restore._restore_private)
+        for needle in ("dir_fd=dfd", "src_dir_fd=dfd", "dst_dir_fd=dfd"):
+            assert needle in source

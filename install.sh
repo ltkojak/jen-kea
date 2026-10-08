@@ -446,34 +446,44 @@ _private_write() {
 # re-reads the live file at the last moment and merges the answers INTO it (`tools/config_merge.py`): a key the wizard did not ask about keeps
 # its live value, and a key the operator left as it was does not undo a newer save. The lock file is owned by the service user (it must be
 # able to open it) and is never created or locked through a symlink.
-CONFIG_LOCK_FD=""
+CONFIG_LOCK_PID=""
 CONFIG_SNAPSHOT_TEXT=""
 
 _config_lock_acquire() {
     mkdir -p "$CONFIG_DIR"
-    if [[ -L "$CONFIG_LOCK_FILE" ]]; then
-        fatal "$CONFIG_LOCK_FILE is a symlink - refusing to lock through it"
-    fi
     # v5.68.0-beta.19 (Q154): flock is REQUIRED (util-linux, present on every supported Ubuntu). Continuing without it left Jen's own saves free to be
     # overwritten by the wizard's older copy - the very thing the lock exists to prevent - so --configure refuses instead.
     if ! command -v flock >/dev/null 2>&1; then
         fatal "--configure needs flock (util-linux) to hold Jen's config lock while the wizard runs: apt-get install util-linux"
     fi
-    if [[ ! -e "$CONFIG_LOCK_FILE" ]]; then
-        install -m 0600 -o "$JEN_USER" -g "$JEN_USER" /dev/null "$CONFIG_LOCK_FILE" \
-            || fatal "Could not create the config lock file $CONFIG_LOCK_FILE"
-    fi
-    exec {CONFIG_LOCK_FD}>>"$CONFIG_LOCK_FILE" || fatal "Could not open the config lock file $CONFIG_LOCK_FILE"
-    if ! flock -w 120 "$CONFIG_LOCK_FD"; then
-        fatal "Could not take the config lock ($CONFIG_LOCK_FILE): Jen is saving its configuration, or another installer is running. Try again."
+    # v5.68.0-beta.20 (Q155): the lock is OPENED ONCE, by `tools/private_write.py --hold-lock` (take_lock: one O_NOFOLLOW open, the SAME inode normalised
+    # in place - chown to the service user, chmod 600, neither drops an flock - never a new file renamed over it). A lock is an inode: the `-L` test and
+    # `install -o` above/below it were a check-then-open, and an installer holding one inode while Jen locked another held no lock at all. The holder
+    # is a coprocess that prints "locked" and keeps the flock until it is signalled (`_config_lock_release`) or this installer dies (it polls its parent).
+    local owner; owner="$(id -u "$JEN_USER"):$(id -g "$JEN_USER")"
+    coproc CONFIG_LOCK_HOLDER { "$PYBIN_FOR_LAYOUT" "$SCRIPT_DIR/tools/private_write.py" --hold-lock "$CONFIG_LOCK_FILE" --owner "$owner"; }
+    CONFIG_LOCK_PID="$CONFIG_LOCK_HOLDER_PID"
+    local said=""
+    if ! read -r -t 140 -u "${CONFIG_LOCK_HOLDER[0]}" said || [[ "$said" != "locked" ]]; then
+        kill "$CONFIG_LOCK_PID" 2>/dev/null || true
+        wait "$CONFIG_LOCK_PID" 2>/dev/null || true
+        CONFIG_LOCK_PID=""
+        fatal "Could not take the config lock ($CONFIG_LOCK_FILE): Jen is saving its configuration, another installer is running, or the file is not one this installer will lock (a symlink, a hard link). Try again."
     fi
 }
 
 _config_lock_release() {
-    [[ -n "$CONFIG_LOCK_FD" ]] || return 0
-    flock -u "$CONFIG_LOCK_FD" 2>/dev/null || true
-    exec {CONFIG_LOCK_FD}>&-
-    CONFIG_LOCK_FD=""
+    [[ -n "$CONFIG_LOCK_PID" ]] || return 0
+    kill "$CONFIG_LOCK_PID" 2>/dev/null || true
+    wait "$CONFIG_LOCK_PID" 2>/dev/null || true
+    CONFIG_LOCK_PID=""
+}
+
+# _ensure_root_rollback_dir — root's own directory for rollback material and the jen.config backups: root-owned, 0700.
+_ensure_root_rollback_dir() {
+    mkdir -p "$ROOT_ROLLBACK_DIR"
+    chown root:root "$ROOT_ROLLBACK_DIR"
+    chmod 700 "$ROOT_ROLLBACK_DIR"
 }
 
 # _root_owned PATH — the owner check, in its own function so a test (which never runs as root) can override just this one decision.
@@ -586,7 +596,6 @@ _set_paths() {
     SUDOERS_FILE="/etc/sudoers.d/jen"
     CONFIG_FILE="$CONFIG_DIR/jen.config"
     CONFIG_LOCK_FILE="${CONFIG_DIR}/jen.config.lock"   # the advisory flock Jen's AppConfig writers take (v5.68.0-beta.18, Q153)
-    BACKUP_DIR="$CONFIG_DIR/backups"    # jen.config backups (NOT the DB backups — those are $CONTENT_DIR/backups)
     # v5.67.0-beta.7 (Q119, item c) — the external-files rollback snapshot
     # (jen-sudoers, the systemd units, jen-update-root.py itself) is NOT a
     # config backup and must never live under $CONFIG_DIR: that directory is
@@ -598,6 +607,9 @@ _set_paths() {
     # subdirectory too, on every run), so that's where root's own rollback
     # material belongs.
     ROOT_ROLLBACK_DIR="$INSTALL_DIR/.rollback"
+    # v5.68.0-beta.20 (Q155): the jen.config backups live HERE too (root-owned 0700, never a service-owned parent). They used to go to
+    # $CONFIG_DIR/backups: a symlink the service account planted there was followed by root, and two `rm -rf` cleanups ran under that tree as root.
+    CONFIG_BACKUP_DIR="$ROOT_ROLLBACK_DIR/config"
 
     # v5.14.0 — versioned release directories. Each release is built whole
     # under releases/<X.Y.Z>/{app,venv}; `current` is a relative symlink to
@@ -1578,10 +1590,11 @@ write_config() {
     local _cfg_lock_args=()
     [[ "$MODE_CONFIGURE" == "true" ]] || _cfg_lock_args=(--lock "$CONFIG_LOCK_FILE")
     if [[ -f "$CONFIG_FILE" || -L "$CONFIG_FILE" ]]; then
-        local bak; bak="${BACKUP_DIR}/jen.config.$(date +%Y%m%d_%H%M%S).bak"
-        mkdir -p "$BACKUP_DIR"
-        _private_write "$bak" --copy-from "$CONFIG_FILE" --owner "$jen_owner" --mode 0600 ${_cfg_lock_args[@]+"${_cfg_lock_args[@]}"} \
-            || fatal "Could not back up the existing config (a symlink at $CONFIG_FILE or $bak is refused): $CONFIG_FILE"
+        local bak; bak="${CONFIG_BACKUP_DIR}/jen.config.$(date +%Y%m%d_%H%M%S).bak"
+        _ensure_root_rollback_dir
+        # root's own directory: walked from $ROOT_ROLLBACK_DIR by O_NOFOLLOW directory descriptors (--trusted-root), root-owned, 0600
+        _private_write "$bak" --copy-from "$CONFIG_FILE" --owner "$(id -u):$(id -g)" --lock-owner "$jen_owner" --mode 0600 --trusted-root "$ROOT_ROLLBACK_DIR" ${_cfg_lock_args[@]+"${_cfg_lock_args[@]}"} \
+            || fatal "Could not back up the existing config (a symlink at $CONFIG_FILE or under $ROOT_ROLLBACK_DIR is refused): $CONFIG_FILE"
         ok "Backed up existing config → ${DIM}${bak}${NC}"
     fi
 
@@ -1642,7 +1655,7 @@ CONFEOF
             --snapshot <(printf '%s\n' "$CONFIG_SNAPSHOT_TEXT") --live "$CONFIG_FILE" <<< "$wizard_text")" \
             || fatal "Could not merge the wizard's answers into the live $CONFIG_FILE"
     fi
-    printf '%s\n' "$final_text" | _private_write "$CONFIG_FILE" --owner "$jen_owner" --mode 0600 ${_cfg_lock_args[@]+"${_cfg_lock_args[@]}"} \
+    printf '%s\n' "$final_text" | _private_write "$CONFIG_FILE" --owner "$jen_owner" --mode 0600 --trusted-root "$CONFIG_DIR" ${_cfg_lock_args[@]+"${_cfg_lock_args[@]}"} \
         || fatal "Could not write $CONFIG_FILE (a symlink there is refused)"
 
     # v5.10.4 — jen.config is the app's file: the running service rewrites
@@ -1743,7 +1756,6 @@ backup_existing() {
     divider
     blank
 
-    mkdir -p "$BACKUP_DIR"   # the operator-facing jen.config.*.bak copies ONLY: root never reads this directory back
     local ts; ts=$(date +%Y%m%d_%H%M%S)
 
     # v5.14.0 — the real rollback is the previous release dir + a symlink
@@ -1758,13 +1770,10 @@ backup_existing() {
     # had it installed by root on the next upgrade that failed. Q119 moved only the ext.* snapshot (the units, sudoers, jen-update-root.py) and
     # called the problem closed. The code snapshots now live in $ROOT_ROLLBACK_DIR with it: root-owned, go-rwx, taken with
     # `cp -a --no-dereference` from a source whose REAL path is verified to be under $INSTALL_DIR, and the rollback refuses one that is not
-    # root-owned or is a symlink (`_trusted_snapshot`). Snapshots a pre-5.68.0-beta.16 install left under $BACKUP_DIR are not trustworthy and
-    # not needed (nothing references them): removed, never migrated. The glob is digits-only so the jen.config.*.bak copies stay.
-    rm -f "${BACKUP_DIR:?}"/run.py.*.bak 2>/dev/null || true
-    rm -rf "${BACKUP_DIR:?}"/jen.[0-9]*.bak 2>/dev/null || true
-    mkdir -p "$ROOT_ROLLBACK_DIR"
-    chown root:root "$ROOT_ROLLBACK_DIR"
-    chmod 700 "$ROOT_ROLLBACK_DIR"
+    # root-owned or is a symlink (`_trusted_snapshot`). v5.68.0-beta.20 (Q155): nothing here touches $CONFIG_DIR/backups any more - not even to
+    # delete (the two `rm -rf` cleanups ran as root under a service-owned tree). A pre-beta.20 install's directory is left exactly as it is: nothing
+    # references what is in it and root never reads it back; remove it by hand when you no longer want the old jen.config copies (docs/upgrading.md).
+    _ensure_root_rollback_dir
     rm -rf "${ROOT_ROLLBACK_DIR:?}"/run.py.* "${ROOT_ROLLBACK_DIR:?}"/jen.[0-9]* 2>/dev/null || true
 
     local real_install real_src
@@ -1813,13 +1822,6 @@ _EXTERNAL_FILES=(
 )
 snapshot_external_files() {
     [[ "$IS_UPGRADE" == "false" ]] && return
-
-    # v5.67.0-beta.7 (Q119, item c) — a pre-fix install may still have
-    # snapshot directories sitting under the OLD, service-owned location;
-    # they're not trustworthy (the whole point of this fix) and not
-    # needed (nothing references them — $ROLLBACK_EXT is only ever this
-    # run's own fresh snapshot), so they're removed rather than migrated.
-    rm -rf "${BACKUP_DIR:?}"/ext.* 2>/dev/null || true
 
     local ts; ts=$(date +%Y%m%d_%H%M%S)
     local dir="${ROOT_ROLLBACK_DIR}/ext.${ts}"

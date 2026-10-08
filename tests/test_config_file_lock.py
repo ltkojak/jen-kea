@@ -199,9 +199,10 @@ class TestTheLockFile:
 
 
 class TestTheLockFailsClosed:
-    """v5.68.0-beta.19 (Q154): beta.18 degraded to the in-process lock alone (with a log line) when the lock file could not be opened - exactly when
-    something is wrong with it, the lock was silently gone. Now a symlink is refused, an unopenable file gets ONE repair attempt, and if that fails the
-    save is refused with the reason and the fix."""
+    """v5.68.0-beta.19 (Q154) made the lock fail closed; v5.68.0-beta.20 (Q155) removed the one thing that still let it be two locks. beta.19 repaired an
+    unopenable lock by renaming a fresh private file OVER it, and `flock` locks an INODE: an installer holding the old inode and Jen locking the new
+    one both "held" the lock. There is no repair now - a symlink is refused, an unopenable file refuses the save with the exact fix, and the inode is
+    never replaced."""
 
     def test_a_symlink_is_refused_never_followed_and_nothing_is_written(self, cfg, tmp_path):
         import jen.config as c
@@ -214,68 +215,93 @@ class TestTheLockFailsClosed:
             c.AppConfig().write_value("a", "b", "1", reload=False)
         assert victim.read_text() == "untouched" and cfg.read_text() == before
 
-    def test_an_old_root_owned_lock_is_repaired_once_and_the_save_succeeds(self, cfg, monkeypatch, caplog):
-        """A lock file this account cannot open (a root-owned 0600 one from an older run - simulated as EACCES on the first open of it) is replaced by a
-        private file this account owns (the config directory is its own), and the save goes ahead under the new lock."""
+    def test_the_repair_function_is_gone(self):
+        """`_replace_lock_with_private_file` made a second inode under a held lock; nothing in the module may rename over the lock path again."""
+        import inspect
+
         import jen.config as c
 
-        lock = f"{cfg}.lock"
-        pathlib.Path(lock).write_text("")
-        real_open = os.open
-        refused = []
+        assert not hasattr(c, "_replace_lock_with_private_file")
+        source = inspect.getsource(c._open_lock) + inspect.getsource(c._file_lock)
+        assert "os.replace" not in source and "os.rename" not in source and "os.unlink" not in source
 
-        def fake_open(path, flags, mode=0o777, **kw):
-            if str(path) == lock and not refused:
-                refused.append(1)
-                raise PermissionError(13, "Permission denied", lock)
-            return real_open(path, flags, mode, **kw)
-
-        monkeypatch.setattr(os, "open", fake_open)
-        c.AppConfig().write_value("a", "b", "1", reload=False)
-        assert refused == [1] and ("a", "b") in _present(cfg)
-        assert stat.S_IMODE(os.stat(lock).st_mode) == 0o600 and os.stat(lock).st_uid == os.getuid()
-        assert "replaced with a private file" in caplog.text
-
-    def test_a_mode_000_lock_is_repaired_too(self, cfg):
+    def test_a_lock_a_privileged_holder_owns_is_refused_and_its_inode_never_changes(self, cfg, monkeypatch):
+        """A privileged stand-in (a child process - as the installer does - that holds the flock on inode A and then makes the file unopenable for this
+        account, the state `chown root` + `chmod 600` leaves): AppConfig's save is REFUSED at once with the fix in the message, the lock file is still
+        inode A, the config is unchanged for as long as the holder lives, and once the operator's fix (a chmod, in the same inode) is made the save
+        goes through. beta.19 renamed a fresh file over the lock here: the holder kept inode A, Jen locked inode B, and both held 'the' lock."""
         import jen.config as c
 
+        if os.geteuid() == 0:
+            pytest.skip("root opens a mode-000 file")
+        lock = pathlib.Path(f"{cfg}.lock")
+        holder = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                textwrap.dedent(
+                    f"""
+                    import fcntl, os, sys
+                    fd = os.open({str(lock)!r}, os.O_RDWR | os.O_CREAT, 0o600)
+                    fcntl.flock(fd, fcntl.LOCK_EX)
+                    os.chmod({str(lock)!r}, 0o000)
+                    print("held", flush=True)
+                    sys.stdin.read()
+                    """
+                ),
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            assert holder.stdout.readline().strip() == "held"
+            inode_before = os.stat(lock).st_ino
+            config_before = cfg.read_text()
+            with pytest.raises(c.ConfigFileLocked) as err:
+                c.AppConfig().write_value("a", "b", "1", reload=False)
+            message = str(err.value)
+            assert (
+                str(lock) in message and "cannot be opened" in message and "chown" in message and "chmod 600" in message
+            )
+            assert os.stat(lock).st_ino == inode_before, "the lock file was replaced - a second inode under a held lock"
+            assert cfg.read_text() == config_before
+            assert sorted(p.name for p in lock.parent.iterdir() if "repair" in p.name or p.name.endswith(".tmp")) == []
+            os.chmod(lock, 0o600)  # the operator's fix, on the same inode
+            monkeypatch.setattr(c, "FILE_LOCK_WAIT_S", 0.3)
+            started = time.monotonic()
+            with pytest.raises(c.ConfigFileLocked, match=r"held by another process"):
+                c.AppConfig().write_value("a", "b", "1", reload=False)  # opened (same inode), and WAITS on the holder
+            assert 0.25 <= time.monotonic() - started < 5
+            assert os.stat(lock).st_ino == inode_before and cfg.read_text() == config_before
+        finally:
+            holder.stdin.close()
+            holder.wait(10)
+        c.AppConfig().write_value("a", "b", "1", reload=False)  # the holder has exited: the save goes through
+        assert ("a", "b") in _present(cfg) and os.stat(lock).st_ino == inode_before
+
+    def test_a_mode_000_lock_is_refused_with_the_fix_and_works_once_chmodded(self, cfg):
+        import jen.config as c
+
+        if os.geteuid() == 0:
+            pytest.skip("root opens a mode-000 file")
         lock = pathlib.Path(f"{cfg}.lock")
         lock.write_text("")
         os.chmod(lock, 0o000)
-        if os.geteuid() == 0:
-            pytest.skip("root opens a mode-000 file")
-        c.AppConfig().write_value("a", "b", "1", reload=False)
-        assert ("a", "b") in _present(cfg) and stat.S_IMODE(lock.stat().st_mode) == 0o600
-
-    def test_when_the_repair_fails_the_save_is_refused_with_the_reason_and_the_fix(self, cfg, monkeypatch):
-        import jen.config as c
-
-        lock = f"{cfg}.lock"
-        pathlib.Path(lock).write_text("")
-        real_open = os.open
-
-        def always_refuse(path, flags, mode=0o777, **kw):
-            if str(path) == lock:
-                raise PermissionError(13, "Permission denied", lock)
-            return real_open(path, flags, mode, **kw)
-
-        monkeypatch.setattr(os, "open", always_refuse)
-        monkeypatch.setattr(
-            c, "_replace_lock_with_private_file", lambda p: (_ for _ in ()).throw(OSError(1, "Operation not permitted"))
-        )
+        inode = os.stat(lock).st_ino
         before = cfg.read_text()
-        with pytest.raises(c.ConfigFileLocked) as err:
+        with pytest.raises(c.ConfigFileLocked, match=r"chown.*chmod 600"):
             c.AppConfig().write_value("a", "b", "1", reload=False)
-        message = str(err.value)
-        assert lock in message and "could not be repaired" in message and "chown" in message and "chmod 600" in message
-        assert cfg.read_text() == before
+        assert os.stat(lock).st_ino == inode and cfg.read_text() == before
+        os.chmod(lock, 0o600)
+        c.AppConfig().write_value("a", "b", "1", reload=False)
+        assert ("a", "b") in _present(cfg) and os.stat(lock).st_ino == inode
 
-    def test_a_lock_that_cannot_be_opened_for_another_reason_is_refused_without_a_repair(self, cfg, monkeypatch):
+    def test_a_lock_that_cannot_be_opened_for_another_reason_is_refused(self, cfg, monkeypatch):
         import jen.config as c
 
         lock = f"{cfg}.lock"
         real_open = os.open
-        repairs = []
 
         def disk_gone(path, flags, mode=0o777, **kw):
             if str(path) == lock:
@@ -283,7 +309,5 @@ class TestTheLockFailsClosed:
             return real_open(path, flags, mode, **kw)
 
         monkeypatch.setattr(os, "open", disk_gone)
-        monkeypatch.setattr(c, "_replace_lock_with_private_file", lambda p: repairs.append(p))
         with pytest.raises(c.ConfigFileLocked, match="cannot be opened"):
             c.AppConfig().write_value("a", "b", "1", reload=False)
-        assert repairs == []

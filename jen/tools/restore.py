@@ -55,49 +55,54 @@ def _existing_owner(path) -> tuple[int, int] | None:
 
 _NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _O_BINARY = getattr(os, "O_BINARY", 0)
+_O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
+_O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 
 
-def _fsync_dir(directory: str) -> None:
-    """fsync a directory so the rename survives a crash. A filesystem that cannot fsync a directory (EINVAL/ENOTSUP/EBADF, or no directory
-    descriptors at all on Windows) is the one case this skips; anything else is a failed install."""
-    if os.name == "nt":
-        return
+def _open_dirs_under(root: Path, directory: Path) -> int:
+    """An open descriptor for `directory`, reached from `root` one `O_DIRECTORY | O_NOFOLLOW` descriptor at a time (v5.68.0-beta.20, Q155): no pathname
+    is re-resolved after it was checked, so a directory the service account swaps for a symlink between the check and the write cannot redirect it.
+    Missing components are created (`mkdir` relative to the previous descriptor). `root` itself may be reached by a link (the operator's own
+    /etc/jen) and is created on a fresh box; nothing BELOW it may be a symlink or a non-directory."""
     import errno
 
-    fd = os.open(directory, os.O_RDONLY)
-    try:
-        try:
-            os.fsync(fd)
-        except OSError as e:
-            if e.errno not in (errno.EINVAL, errno.ENOTSUP, errno.EBADF):
-                raise
-    finally:
-        os.close(fd)
-
-
-def _ensure_dirs_under(root: Path, directory: Path) -> None:
-    """Create `directory` and its parents, but ONLY beneath `root`, and never through a symlink: every component from `root` down must be a
-    real directory (or is created as one). `root` itself may be reached by a link (the operator's own /etc/jen), nothing below it may."""
     root_abs = os.path.abspath(root)
-    os.makedirs(
-        root_abs, exist_ok=True
-    )  # the root itself is the operator's: created if the restore is onto a fresh box
+    os.makedirs(root_abs, exist_ok=True)
     target = os.path.abspath(directory)
     rel = os.path.relpath(target, root_abs)
-    if rel == os.curdir:
-        return
     if rel == os.pardir or rel.startswith(os.pardir + os.sep) or os.path.isabs(rel):
         raise RestoreRefused(f"{directory} is not under {root} - refusing to write outside the restore root")
-    current = root_abs
-    for part in Path(rel).parts:
-        current = os.path.join(current, part)
-        if os.path.islink(current):
-            raise RestoreRefused(f"{current} is a symlink - the restore never writes through one")
-        if os.path.lexists(current):
-            if not os.path.isdir(current):
-                raise RestoreRefused(f"{current} exists and is not a directory")
-        else:
-            os.mkdir(current)
+    fd = os.open(root_abs, os.O_RDONLY | _O_DIRECTORY | _O_CLOEXEC)
+    try:
+        if rel != os.curdir:
+            for part in rel.split(os.sep):
+                flags = os.O_RDONLY | _O_DIRECTORY | _NOFOLLOW | _O_CLOEXEC
+                try:
+                    nxt = os.open(part, flags, dir_fd=fd)
+                except FileNotFoundError:
+                    os.mkdir(part, dir_fd=fd)
+                    nxt = os.open(part, flags, dir_fd=fd)
+                except OSError as e:
+                    if e.errno in (errno.ELOOP, errno.ENOTDIR):
+                        raise RestoreRefused(
+                            f"{part} under {root} is a symlink or not a directory - the restore never writes through one"
+                        ) from e
+                    raise
+                os.close(fd)
+                fd = nxt
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _still_names(dfd: int, directory: str) -> bool:
+    """True while the pathname `directory` still resolves to the very directory `dfd` holds."""
+    try:
+        a, b = os.fstat(dfd), os.stat(directory)
+    except OSError:
+        return False
+    return (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino)
 
 
 def _write_all(fd: int, view: memoryview) -> None:
@@ -111,8 +116,11 @@ def _restore_private(dest: Path, source, mode: int, owner: tuple[int, int] | Non
     (so under the installer's umask 022 a previously absent SSL/SSH/MFA key was born 0644), a symlink the service account had left at the live path
     was followed by root, a kill mid-write truncated the live file, and a failing `chown` was a printed warning.
 
-      1. `dest` must be under `root` (the config or content directory being restored) and no component below `root` may be a symlink; a symlink
-         (or anything not a regular file) at `dest` itself is REFUSED (RestoreRefused), never followed;
+      1. `dest` must be under `root` (the config or content directory being restored); its parents are walked FROM `root` by directory
+         descriptors opened `O_DIRECTORY | O_NOFOLLOW` (v5.68.0-beta.20, Q155), and every later step - the lstat of `dest`, the temp, the rename, the
+         directory fsync - is relative to the LAST descriptor, so nothing is looked up by pathname after it was checked. A symlink at any component, or
+         at (or any non-regular file as) `dest` itself, is REFUSED (RestoreRefused), never followed; a directory swapped out while the write is in
+         flight (the path no longer names the directory held) is refused before the rename;
       2. a UNIQUE temp name in `dest`'s own directory, `O_CREAT | O_EXCL | O_NOFOLLOW`, mode 0600 - unreadable to anyone else from its first byte;
       3. `source` (bytes, a Path, or a binary file object) STREAMED in 1 MiB chunks, then fsynced;
       4. the FINAL owner and mode applied to the open descriptor - `fchown` failure ABORTS (a secret owned by the wrong account is not a
@@ -121,58 +129,63 @@ def _restore_private(dest: Path, source, mode: int, owner: tuple[int, int] | Non
          temp is removed and `dest` is untouched.
     """
     import secrets
-
-    dest = Path(dest)
-    _ensure_dirs_under(root, dest.parent)
-    try:
-        existing = os.lstat(dest)
-    except FileNotFoundError:
-        existing = None
     import stat as _stat
 
-    if existing is not None and not _stat.S_ISREG(existing.st_mode):
-        raise RestoreRefused(f"{dest} is a symlink or not a regular file - the restore never writes through one")
-    directory = str(dest.parent)
-    tmp = fd = None
-    for _ in range(64):
-        candidate = os.path.join(directory, f".{dest.name}.{secrets.token_hex(8)}.tmp")
-        try:
-            fd = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW | _O_BINARY, 0o600)
-        except FileExistsError:
-            continue
-        tmp = candidate
-        break
-    if tmp is None:
-        raise FileExistsError(f"no unused temp name in {directory}")
+    dest = Path(dest)
+    directory = os.path.abspath(dest.parent)
+    base = dest.name
+    dfd = _open_dirs_under(root, dest.parent)
+    tmp = None
     try:
         try:
-            if isinstance(source, (bytes, bytearray, memoryview)):
-                _write_all(fd, memoryview(source))
-            else:
-                with contextlib.ExitStack() as stack:
-                    reader = (
-                        stack.enter_context(open(source, "rb")) if isinstance(source, (str, os.PathLike)) else source
-                    )
+            existing = os.lstat(base, dir_fd=dfd)
+        except FileNotFoundError:
+            existing = None
+        if existing is not None and not _stat.S_ISREG(existing.st_mode):
+            raise RestoreRefused(f"{dest} is a symlink or not a regular file - the restore never writes through one")
+        fd = None
+        for _ in range(64):
+            candidate = f".{base}.{secrets.token_hex(8)}.tmp"
+            try:
+                fd = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW | _O_BINARY, 0o600, dir_fd=dfd)
+            except FileExistsError:
+                continue
+            tmp = candidate
+            break
+        if tmp is None:
+            raise FileExistsError(f"no unused temp name in {directory}")
+        try:
+            with contextlib.ExitStack() as stack:
+                if isinstance(source, (bytes, bytearray, memoryview)):
+                    _write_all(fd, memoryview(source))
+                else:
+                    src = stack.enter_context(open(source, "rb")) if isinstance(source, (str, os.PathLike)) else source
                     while True:
-                        chunk = reader.read(1024 * 1024)
+                        chunk = src.read(1024 * 1024)
                         if not chunk:
                             break
                         _write_all(fd, memoryview(chunk))
             os.fsync(fd)
             if owner is not None and hasattr(os, "fchown"):
                 os.fchown(fd, owner[0], owner[1])  # never swallowed
-            if hasattr(os, "fchmod"):
-                os.fchmod(fd, mode)
-            else:  # pragma: no cover - Windows dev boxes
-                os.chmod(tmp, mode)
+            os.fchmod(fd, mode)
         finally:
             os.close(fd)
-        os.replace(tmp, dest)
-        _fsync_dir(directory)
+        if not _still_names(dfd, directory):
+            raise RestoreRefused(
+                f"{directory} was replaced while {dest.name} was being restored - nothing was written through it"
+            )
+        os.replace(tmp, base, src_dir_fd=dfd, dst_dir_fd=dfd)
+        tmp = None
+        with contextlib.suppress(OSError):  # a filesystem that cannot fsync a directory
+            os.fsync(dfd)
     except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp)
+        if tmp is not None:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp, dir_fd=dfd)
         raise
+    finally:
+        os.close(dfd)
 
 
 def _write_file(dest: Path, content: bytes, mode: int, owner: tuple[int, int] | None, root: Path) -> None:

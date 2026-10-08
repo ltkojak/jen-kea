@@ -422,6 +422,16 @@ the support bundle, the API. Beta.19's own count for beta.18's contracts: pool c
 nine surfaces), exported (the support bundle carries `peak_pool_used`); alert transition state - live, persisted (settings), delivered
 (`notified`, backoff retries); private writes - live, installer, restored (`jen/tools/restore.py`).
 
+**A lock is an inode (v5.68.0-beta.20, Q155).** `flock` is held on the file a descriptor points at, not on a name, so a lock "repaired" by renaming a fresh
+file over its path is a SECOND lock: an installer still holding the old inode and Jen locking the new one both held "the" lock, and the lost update the
+lock exists to prevent was back (beta.19's `_replace_lock_with_private_file` did exactly that, and the reviewer confirmed the kernel behaviour). The rules now:
+a lock file is OPENED ONCE, with `O_NOFOLLOW`, by one primitive - `tools/private_write.py take_lock` on the installer's side (`--hold-lock`, a coprocess that
+prints `locked` and keeps the flock until it is signalled or the installer dies) and `config._open_lock` on Jen's - and an existing file is normalised IN PLACE
+(`fchown` to the service user, `fchmod` 0600 on the open descriptor; neither drops an flock; a file with more than one link or that is not a regular file is
+refused). A file Jen cannot open refuses the save with the exact fix (`chown <service user>; chmod 600` on the same inode) - no `-L` test followed by an
+`exec {fd}>>`, no `install` of a new file, no rename. `tests/test_config_file_lock.py::TestTheLockFailsClosed` holds the flock from a child on inode A and
+makes the file unopenable: the save is refused, the inode number is unchanged, the config is unchanged until the holder exits.
+
 ## 3. Deliberate trust boundaries
 
 These are places where Jen makes a conscious security tradeoff rather
@@ -692,8 +702,14 @@ enforces them over the whole repository: **(1) root never copies, executes or in
 `cp`ed it back as root (Q119 moved only the `ext.*` snapshot and called it closed): a compromised service account that planted a `run.py` there had it installed
 by root. Now the snapshot is taken with `cp -a --no-dereference` from a source whose real path is verified to be under `$INSTALL_DIR`, and the rollback
 (`_trusted_snapshot`) refuses one that is not root-owned, is a symlink, contains a symlink, or is not under `$ROOT_ROLLBACK_DIR`; snapshots a pre-5.68.0-beta.16
-install left in `$CONFIG_DIR/backups` are removed, never migrated; `$CONFIG_DIR/backups` keeps only the operator-facing `jen.config.*.bak` copies and is never read by
-root. **(2) a secret root writes into those directories is written private from its first byte** through `tools/private_write.py` (shipped in the tarball; the
+install left in `$CONFIG_DIR/backups` are no longer removed (v5.68.0-beta.20, Q155: root deletes nothing under a service-owned tree - the two `rm -rf` cleanups
+that ran there were the leftovers' last use of it); the `jen.config.*.bak` copies are written under `$ROOT_ROLLBACK_DIR/config/` (root-owned 0700) and an existing
+`$CONFIG_DIR/backups` is left exactly as it is and never read by root. **Root-side writers walk by directory descriptors (v5.68.0-beta.20, Q155).** `tools/private_write.py
+--trusted-root DIR` and the restore tool's `_restore_private` open the root once and every component below it with `O_DIRECTORY | O_NOFOLLOW` relative to the previous
+descriptor (created when absent); the temp, the lstat of the destination, the rename and the directory fsync are all relative to the LAST descriptor, so nothing is
+looked up by pathname after it was checked: a symlink at any component is refused, and a directory swapped for a symlink while the write is in flight is refused
+before the rename (the descriptor's directory is compared with what the path now names). The earlier version resolved the parent of the destination by pathname at the
+moment of `open` and `rename`, so a symlink the service account planted at `$CONFIG_DIR/backups` was followed by root. **(2) a secret root writes into those directories is written private from its first byte** through `tools/private_write.py` (shipped in the tarball; the
 installer's `_private_write`): a symlink at the live path is refused, a unique `O_EXCL` 0600 temp in the same directory, fsync, owner and mode on the descriptor
 (a failing chown aborts), replace - the same discipline as `jen/services/private_files.py` and the Kea helper's `_install_private`. `write_config` used `cat >` under
 umask 022 (created 0644, followed a planted link, tightened after every password was in it) and copied the backup with `cp`; both go through the tool now. Docker's
@@ -2592,9 +2608,10 @@ extra Kea servers, `[kea6]`, `[subnets6]`, the update channel - was dropped with
 `<config>.lock` for its whole read-modify-replace (once per thread: the RLock allows a nested writer and a second descriptor in the same thread would queue
 behind the first), waiting up to 30 s and then raising `ConfigFileLocked` (a Settings save says why instead of writing); the lock file is created 0600 owned
 by the service user and never opened through a symlink. **It fails closed (v5.68.0-beta.19, Q154):** beta.18 degraded to the in-process lock alone, with a
-log line, when the lock file could not be opened - exactly when something is wrong with it, the lock was silently gone. A symlink is now refused; a file this
-account cannot open (a root-owned 0600 one from an older run, a mode of 000) gets ONE repair attempt - the directory is the service user's, so a fresh private
-file is renamed over it; and if that fails the save is refused (`ConfigFileLocked`) with the path, the reason and the `chown`/`chmod` that fixes it.
+log line, when the lock file could not be opened - exactly when something is wrong with it, the lock was silently gone. A symlink is now refused, and a file this
+account cannot open (a root-owned 0600 one from an older run, a mode of 000) refuses the save (`ConfigFileLocked`) with the path, the reason and the `chown`/`chmod`
+that fixes it. (beta.19 first "repaired" such a file by renaming a new one over it; v5.68.0-beta.20, Q155, removed that - a lock is an inode, see §2: the file is
+normalised in place by the installer on every upgrade and `--configure`, never replaced.)
 `install.sh` requires `flock` (the preflight checks it, the dependency step installs `util-linux` when it is missing, and `--configure` refuses without it).
 `install.sh --configure` takes the lock before it reads anything (`_config_lock_acquire`) and holds it through `write_config`; because the wizard is
 interactive, `write_config` then re-reads the live file and merges the answers INTO it (`tools/config_merge.py`): a key the wizard did not ask about keeps its

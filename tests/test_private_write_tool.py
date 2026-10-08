@@ -226,3 +226,176 @@ class TestTheConfigFileLock:
         proc = _run(str(tmp_path / "jen.config"), "--lock", str(tmp_path / "jen.config.lock"), stdin=b"x")
         assert proc.returncode == 6 and not (tmp_path / "jen.config").exists()
         assert victim.read_text() == "untouched"
+
+
+class TestTheLockIsOneInodeNormalisedInPlace:
+    """v5.68.0-beta.20 (Q155): `take_lock` opens the lock ONCE with O_NOFOLLOW and normalises THAT inode (fchown/fchmod, which keep an flock); it never
+    renames a new file over the path - a lock is an inode, and two inodes are two locks. `--hold-lock` is the installer's side of the same primitive."""
+
+    def test_an_existing_loose_lock_is_made_0600_in_place_the_inode_unchanged(self, tool, tmp_path):
+        lock = tmp_path / "jen.config.lock"
+        lock.write_text("")
+        os.chmod(lock, 0o666)
+        inode = lock.stat().st_ino
+        fd = tool.take_lock(str(lock), owner=(os.getuid(), os.getgid()))
+        os.close(fd)
+        assert stat.S_IMODE(lock.stat().st_mode) == 0o600 and lock.stat().st_ino == inode
+
+    def test_a_chown_and_chmod_do_not_drop_a_held_flock(self, tool, tmp_path):
+        """The holder keeps its flock across the normalisation another opener makes: the second take_lock waits (it is the same inode)."""
+        import fcntl
+
+        lock = tmp_path / "jen.config.lock"
+        lock.write_text("")
+        os.chmod(lock, 0o644)
+        held = os.open(lock, os.O_RDWR)
+        fcntl.flock(held, fcntl.LOCK_EX)
+        try:
+            with pytest.raises(TimeoutError, match="held by another process"):
+                tool.take_lock(str(lock), owner=(os.getuid(), os.getgid()), wait_s=0.3)
+            assert stat.S_IMODE(lock.stat().st_mode) == 0o600, "normalised in place while it was held"
+            second = os.open(lock, os.O_RDWR)
+            try:
+                with pytest.raises(BlockingIOError):
+                    fcntl.flock(second, fcntl.LOCK_EX | fcntl.LOCK_NB)  # still the holder's lock: one inode
+            finally:
+                os.close(second)
+        finally:
+            os.close(held)
+
+    def test_it_never_replaces_the_file(self, tool):
+        import inspect
+
+        source = inspect.getsource(tool.take_lock) + inspect.getsource(tool._normalise_lock)
+        assert "os.replace" not in source and "os.rename" not in source and "os.unlink" not in source
+
+    def test_a_hard_linked_lock_is_refused_and_never_chowned(self, tool, tmp_path):
+        target = tmp_path / "somebody-elses-file"
+        target.write_text("x")
+        os.link(target, tmp_path / "jen.config.lock")
+        with pytest.raises(tool.Refused, match="links"):
+            tool.take_lock(str(tmp_path / "jen.config.lock"), owner=(os.getuid(), os.getgid()))
+
+    def test_a_symlink_is_refused(self, tool, tmp_path):
+        victim = tmp_path / "victim"
+        victim.write_text("x")
+        os.symlink(victim, tmp_path / "jen.config.lock")
+        with pytest.raises(OSError):
+            tool.take_lock(str(tmp_path / "jen.config.lock"))
+        assert victim.read_text() == "x"
+
+    def test_hold_lock_prints_locked_holds_until_stdin_closes_and_then_releases(self, tmp_path):
+        import fcntl
+
+        lock = tmp_path / "jen.config.lock"
+        proc = subprocess.Popen(
+            [sys.executable, str(TOOL), "--hold-lock", str(lock), "--owner", f"{os.getuid()}:{os.getgid()}"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            assert proc.stdout.readline().strip() == "locked"
+            fd = os.open(lock, os.O_RDWR)
+            try:
+                with pytest.raises(BlockingIOError):
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            finally:
+                os.close(fd)
+        finally:
+            proc.stdin.close()
+            assert proc.wait(10) == 0
+        fd = os.open(lock, os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # released with the holder
+        finally:
+            os.close(fd)
+
+    def test_hold_lock_on_a_symlink_exits_non_zero_and_touches_nothing(self, tmp_path):
+        victim = tmp_path / "victim"
+        victim.write_text("x")
+        os.symlink(victim, tmp_path / "jen.config.lock")
+        proc = _run("--hold-lock", str(tmp_path / "jen.config.lock"))
+        assert proc.returncode == 6 and victim.read_text() == "x"
+
+
+class TestATrustedRootIsWalkedByDescriptors:
+    """v5.68.0-beta.20 (Q155): with `--trusted-root DIR` no pathname is re-resolved after it was checked. A symlink the service account planted at
+    `$CONFIG_DIR/backups` was followed by root (the reviewer reproduced it with the shipped file)."""
+
+    def test_a_file_is_written_into_directories_created_0700_below_the_root(self, tmp_path):
+        root = tmp_path / "root"
+        root.mkdir()
+        proc = _run(str(root / "config" / "jen.config.1.bak"), "--trusted-root", str(root), stdin=b"secret")
+        assert proc.returncode == 0, proc.stderr
+        written = root / "config" / "jen.config.1.bak"
+        assert written.read_bytes() == b"secret" and stat.S_IMODE(written.stat().st_mode) == 0o600
+        assert stat.S_IMODE((root / "config").stat().st_mode) == 0o700
+
+    def test_a_planted_symlink_component_is_refused_and_nothing_lands_or_is_created_beyond_it(self, tmp_path):
+        root = tmp_path / "root"
+        root.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        os.symlink(outside, root / "backups")
+        proc = _run(str(root / "backups" / "jen.config.1.bak"), "--trusted-root", str(root), stdin=b"secret")
+        assert proc.returncode == 3, proc.stderr
+        assert list(outside.iterdir()) == [], "something was written through the planted symlink"
+        assert (root / "backups").is_symlink()
+
+    def test_the_root_itself_may_be_reached_by_a_link(self, tmp_path):
+        real = tmp_path / "real"
+        real.mkdir()
+        os.symlink(real, tmp_path / "etc-jen")
+        proc = _run(str(tmp_path / "etc-jen" / "jen.config"), "--trusted-root", str(tmp_path / "etc-jen"), stdin=b"x")
+        assert proc.returncode == 0, proc.stderr
+        assert (real / "jen.config").read_bytes() == b"x"
+
+    def test_a_destination_outside_the_root_is_refused(self, tmp_path):
+        root = tmp_path / "root"
+        root.mkdir()
+        proc = _run(str(tmp_path / "elsewhere" / "k"), "--trusted-root", str(root), stdin=b"x")
+        assert proc.returncode == 3 and not (tmp_path / "elsewhere").exists()
+
+    def test_a_symlink_at_the_destination_is_refused_in_this_mode_too(self, tmp_path):
+        root = tmp_path / "root"
+        root.mkdir()
+        victim = tmp_path / "victim"
+        victim.write_text("untouched")
+        os.symlink(victim, root / "jen.config")
+        proc = _run(str(root / "jen.config"), "--trusted-root", str(root), stdin=b"x")
+        assert proc.returncode == 3 and victim.read_text() == "untouched"
+
+    def test_a_parent_replaced_between_the_check_and_the_write_is_refused(self, tool, tmp_path, monkeypatch):
+        """The attacker swaps the parent for a symlink AFTER the walk validated it (the window is the fsync of the data): the write must not
+        land beyond the link and must say so; the original directory keeps no half-written file."""
+        root = tmp_path / "root"
+        (root / "backups").mkdir(parents=True)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        real_fsync = os.fsync
+        swapped = []
+
+        def swap_then_fsync(fd):
+            if not swapped:
+                swapped.append(1)
+                os.rename(root / "backups", root / "backups-moved")
+                os.symlink(outside, root / "backups")
+            return real_fsync(fd)
+
+        monkeypatch.setattr(os, "fsync", swap_then_fsync)
+        with pytest.raises(tool.Refused, match="replaced while"):
+            tool.write_private(str(root / "backups" / "jen.config.bak"), b"secret", 0o600, None, trusted_root=str(root))
+        assert list(outside.iterdir()) == [], "the write landed beyond the symlink that replaced the parent"
+        assert [p.name for p in (root / "backups-moved").iterdir()] == [], (
+            "a temp or a half-written file was left behind"
+        )
+
+    def test_a_failure_leaves_the_old_file_and_no_temp(self, tool, tmp_path, monkeypatch):
+        root = tmp_path / "root"
+        root.mkdir()
+        (root / "k").write_text("OLD")
+        monkeypatch.setattr(os, "fchown", lambda *a: (_ for _ in ()).throw(PermissionError("no")))
+        with pytest.raises(PermissionError):
+            tool.write_private(str(root / "k"), b"NEW", 0o600, (0, 0), trusted_root=str(root))
+        assert (root / "k").read_text() == "OLD" and sorted(p.name for p in root.iterdir()) == ["k"]

@@ -41,7 +41,7 @@ conflicts with Oracle's `mysql-client-core`).
 | `/opt/jen/releases/<version>/venv/` | `root:root` | that release's virtualenv, built for its own `requirements.txt` |
 | `/opt/jen/current` | symlink | relative symlink → `releases/<live>`; the unit runs `current/venv/bin/python current/app/run.py` |
 | `/var/lib/jen/` | `www-data:www-data`, `0750` | user content: `icons/`, `branding/`, `backups/`, `plugins/`, `plugins-enabled/`, `keys/` — **never touched by upgrades** (v5.13.0) |
-| `/etc/jen/` | `www-data:www-data` | `jen.config`, `ssl/`, `ssh/`, `backups/` — **never touched by upgrades** |
+| `/etc/jen/` | `www-data:www-data` | `jen.config`, `ssl/`, `ssh/` — **never touched by upgrades** (an older release's `backups/` here is left alone; the installer's `jen.config` backups are under `/opt/jen/.rollback/config/` since 5.68.0-beta.20) |
 | `/etc/jen/jen.config` | `www-data:www-data`, `0600` | config + secrets |
 | `/etc/systemd/system/jen.service` | root | the unit, **rendered** from `jen.service.template` (step 5) |
 | `/etc/sudoers.d/jen` | root, `0440` | the three `systemctl` grants `www-data` needs (restart, self-update trigger, plugin-install trigger) |
@@ -63,7 +63,7 @@ tar xzf jen-vX.Y.Z.tar.gz && cd jen      # substitute the release you downloaded
 VER=$(grep -oP 'JEN_VERSION\s*=\s*"\K[^"]+' jen/__init__.py)
 REL="/opt/jen/releases/$VER"
 
-sudo mkdir -p "$REL/app" /etc/jen/ssl /etc/jen/ssh /etc/jen/backups \
+sudo mkdir -p "$REL/app" /etc/jen/ssl /etc/jen/ssh \
     /var/lib/jen/{icons,branding,backups,plugins,plugins-enabled,keys}
 sudo cp -r . "$REL/app/"
 sudo rm -rf "$REL/app/.git" "$REL/app/tests"

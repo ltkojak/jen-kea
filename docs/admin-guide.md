@@ -1821,7 +1821,7 @@ snapshot. `jen_alerts_sent_total` keeps counting alerts that retention removed (
 **Settings saves are serialised.** Two saves at the same moment (two admins, or a save during the setup wizard) used to be able to lose one; Jen now
 writes `jen.config` one writer at a time - and, since 5.68.0-beta.18, one writer at a time across processes too: `jen.config.lock` (beside the config, owned by
 the service user) is an advisory lock every save takes and that `sudo ./install.sh --configure` holds from the start of its wizard until it has written the file.
-A Settings save made while the wizard is open waits for it (up to 30 s, then says the config is locked) instead of being overwritten. **The lock fails closed (5.68.0-beta.19):** if the lock file cannot be opened (a root-owned one from an older run) Jen replaces it once with a private file it owns, and if that fails the save is refused with the `chown`/`chmod` that fixes it, rather than carrying on without the lock; a symlink there is refused. `install.sh` requires `flock` (`util-linux`; the dependency step installs it) and `--configure` refuses without it. Restoring from a recovery bundle writes every file the way the installer does - never through a symlink, never partly written, with the recorded owner or not at all, and `--configure` now
+A Settings save made while the wizard is open waits for it (up to 30 s, then says the config is locked) instead of being overwritten. **The lock fails closed (5.68.0-beta.19) and is never replaced (5.68.0-beta.20):** if the lock file cannot be opened (a root-owned one from an older run) the save is refused with the exact fix, `sudo chown <the Jen service user> /etc/jen/jen.config.lock; sudo chmod 600 /etc/jen/jen.config.lock`, rather than carrying on without the lock; a symlink there is refused. Jen never swaps in a new file - a lock belongs to a file, and two files would be two locks - and `install.sh` (on every upgrade and `--configure`) puts the existing file right in place for you. `install.sh` requires `flock` (`util-linux`; the dependency step installs it) and `--configure` refuses without it. Restoring from a recovery bundle writes every file the way the installer does - never through a symlink, never partly written, with the recorded owner or not at all, and `--configure` now
 **merges your answers into the live file**: anything the wizard does not ask about (OIDC, extra Kea servers, `[kea6]`, the update channel) is kept rather than
 dropped, and a setting you saved in Jen while the wizard was open survives unless you changed that very question. **The provider pool** that runs the plugins' investigation and search cards follows `[server] threads` (the
 ceiling is `max(16, 2 × threads × providers)`), so two people opening an Investigation page together both get every card. **The live watch on Trace**
@@ -1893,7 +1893,7 @@ config fresh each time, nothing is cached.
 | `/etc/jen/secret_key`, `/etc/jen/mfa_key` | Flask session secret + MFA encryption key (auto-generated) |
 | `/etc/jen/ssl/` | SSL certificates |
 | `/etc/jen/ssh/` | SSH keys for subnet editing |
-| `/etc/jen/backups/` | `jen.config` snapshots created during upgrades |
+| `/opt/jen/.rollback/config/` | `jen.config` snapshots created during upgrades (root-owned, 0700; from 5.68.0-beta.20 - earlier releases wrote them to `/etc/jen/backups/`, which an upgrade leaves exactly as it is) |
 | `/etc/systemd/system/jen.service` | Systemd service definition |
 | `/etc/sudoers.d/jen` | Allows Jen to restart itself after cert upload |
 

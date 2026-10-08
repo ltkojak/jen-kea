@@ -257,3 +257,7 @@ everything). Health's *Background workers* and *Problems inbox sweep* rows now g
 are escaped. `sudo ./install.sh` now requires `flock` (installed with `util-linux` automatically); a Settings save is refused, with the fix named, when the config lock
 file cannot be opened; and `install.sh --restore` / `--rollback` write each file the way the installer does (never through a symlink, never partly written, the
 recorded owner applied or the restore aborts).
+
+## The last concurrency and privileged-boundary edges
+
+Nothing to do beyond the usual (5.68.0-beta.20). The config lock is never replaced any more: if a save is refused with *the config lock ... cannot be opened*, run the `chown`/`chmod` it prints (the installer does the same, in place, on every upgrade and `--configure`). The installer's `jen.config` backups now live in `/opt/jen/.rollback/config/` (root-owned, 0700) instead of `/etc/jen/backups/`, and root no longer deletes anything under `/etc/jen`: **an existing `/etc/jen/backups` is left exactly as it is** - the old `jen.config.*.bak` copies in it are yours to keep or remove, and any `run.py.*`, `jen.<timestamp>.bak` or `ext.*` entries an old release left there can simply be deleted by hand (nothing reads them).

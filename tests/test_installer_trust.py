@@ -15,6 +15,7 @@ no-op stub and `_root_owned` - the ownership decision, in its own function for e
 import os
 import pathlib
 import platform
+import re
 import stat
 import subprocess
 import sys
@@ -51,7 +52,7 @@ def _bash(tmp_path, script, env=None):
         source "{lib}" >/dev/null 2>&1
         T="{tmp_path}"
         INSTALL_DIR="$T/opt"; CONFIG_DIR="$T/etc"; CONTENT_DIR="$T/var"
-        BACKUP_DIR="$CONFIG_DIR/backups"; ROOT_ROLLBACK_DIR="$INSTALL_DIR/.rollback"
+        ROOT_ROLLBACK_DIR="$INSTALL_DIR/.rollback"; CONFIG_BACKUP_DIR="$ROOT_ROLLBACK_DIR/config"
         CURRENT_LINK="$INSTALL_DIR/current"; RELEASES_DIR="$INSTALL_DIR/releases"
         CONFIG_FILE="$CONFIG_DIR/jen.config"; CONFIG_LOCK_FILE="$CONFIG_DIR/jen.config.lock"; JEN_VERSION=9.9.9; IS_UPGRADE=true
         chown() {{ :; }}
@@ -92,16 +93,21 @@ class TestTheUpgradeSnapshotIsRootsOwn:
         )
         assert stat.S_IMODE(rollback.stat().st_mode) & 0o077 == 0, "go-rwx"
 
-    def test_snapshots_a_pre_fix_install_left_in_the_config_dir_are_removed_but_the_config_backups_stay(self, tmp_path):
+    def test_a_pre_fix_install_s_config_backups_directory_is_left_exactly_as_it_is(self, tmp_path):
+        """v5.68.0-beta.20 (Q155): root no longer deletes anything under the service-owned $CONFIG_DIR - not even the leftovers of the old layout
+        (two `rm -rf` ran there as root). Nothing references what is in it, root never reads it back, and nothing is created, changed or removed."""
         _flat_box(tmp_path)
         backups = tmp_path / "etc" / "backups"
         (backups / "run.py.20260101_000000.bak").write_text("EVIL")
         (backups / "jen.20260101_000000.bak").mkdir()
         (backups / "jen.20260101_000000.bak" / "x.py").write_text("EVIL")
+        (backups / "ext.20260101_000000").mkdir()
         (backups / "jen.config.20260101_000000.bak").write_text("[jen_db]\npassword = keep\n")
+        before = sorted(str(p.relative_to(backups)) for p in backups.rglob("*"))
         proc = _bash(tmp_path, "backup_existing")
         assert proc.returncode == 0, proc.stdout + proc.stderr
-        assert sorted(p.name for p in backups.iterdir()) == ["jen.config.20260101_000000.bak"]
+        assert sorted(str(p.relative_to(backups)) for p in backups.rglob("*")) == before
+        assert (backups / "run.py.20260101_000000.bak").read_text() == "EVIL"
 
     def test_a_source_that_resolves_outside_the_install_dir_is_refused(self, tmp_path):
         _flat_box(tmp_path)
@@ -217,9 +223,46 @@ class TestWriteConfigIsPrivateFromItsFirstByte:
         os.chmod(etc / "jen.config", 0o644)
         proc = _bash(tmp_path, "umask 022\n" + WRITE_CONFIG_ENV + "write_config")
         assert proc.returncode == 0, proc.stdout + proc.stderr
-        (backup,) = list((etc / "backups").glob("jen.config.*.bak"))
+        (backup,) = list((tmp_path / "opt" / ".rollback" / "config").glob("jen.config.*.bak"))
         assert "old-secret" in backup.read_text() and stat.S_IMODE(backup.stat().st_mode) == 0o600
+        assert stat.S_IMODE((tmp_path / "opt" / ".rollback" / "config").stat().st_mode) == 0o700
+        assert not (etc / "backups").exists(), "no config backup is written under the service-owned config directory"
         assert "old-secret" not in (etc / "jen.config").read_text()
+
+    def test_a_planted_backups_symlink_is_never_followed_or_deleted_through(self, tmp_path):
+        """The reviewer's reproduction of beta.19: a symlink at $CONFIG_DIR/backups. The backup is root's own now, so nothing is written through
+        it - and nothing is deleted through it either (the `rm -rf` cleanups under that tree are gone)."""
+        etc = tmp_path / "etc"
+        etc.mkdir()
+        (etc / "jen.config").write_text("[jen_db]\npassword = old-secret\n")
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "ext.keep-me").write_text("must survive")
+        os.symlink(outside, etc / "backups")
+        proc = _bash(tmp_path, "umask 022\n" + WRITE_CONFIG_ENV + "write_config\nbackup_existing")
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert sorted(p.name for p in outside.iterdir()) == ["ext.keep-me"], (
+            "something was written (or deleted) through the symlink"
+        )
+        assert (etc / "backups").is_symlink()
+        assert len(list((tmp_path / "opt" / ".rollback" / "config").glob("jen.config.*.bak"))) == 1
+
+    def test_a_symlink_where_the_root_backup_directory_should_be_is_refused(self, tmp_path):
+        """If `.rollback/config` is a symlink (it is root's directory, so only a bug or an attacker with root could have made it): the walk by
+        directory descriptors refuses it and the installer stops - the backup is not made through it."""
+        etc = tmp_path / "etc"
+        etc.mkdir()
+        (etc / "jen.config").write_text("[jen_db]\npassword = old-secret\n")
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (tmp_path / "opt" / ".rollback").mkdir(parents=True)
+        os.symlink(outside, tmp_path / "opt" / ".rollback" / "config")
+        proc = _bash(tmp_path, "umask 022\n" + WRITE_CONFIG_ENV + "write_config")
+        assert proc.returncode != 0
+        assert list(outside.iterdir()) == []
+        assert "old-secret" in (etc / "jen.config").read_text(), (
+            "the live config was replaced although its backup could not be made"
+        )
 
     def test_a_symlink_at_the_live_path_is_refused_and_its_target_untouched(self, tmp_path):
         etc = tmp_path / "etc"
@@ -236,7 +279,7 @@ class TestWriteConfigIsPrivateFromItsFirstByte:
         """A directory watcher stats every entry in a tight loop while write_config runs 25 times under umask 022 with the writer made slow (a
         30 ms fsync), so the window between 'created' and 'final mode' is wide. `cat >` would be seen 0644."""
         etc = tmp_path / "etc"
-        (etc / "backups").mkdir(parents=True)
+        etc.mkdir(parents=True)
         slow = tmp_path / "slowpython"
         slow.write_text(
             "#!/bin/sh\n"
@@ -253,7 +296,7 @@ class TestWriteConfigIsPrivateFromItsFirstByte:
 
         def watch():
             while not stop.is_set():
-                for directory in (etc, etc / "backups"):
+                for directory in (etc, tmp_path / "opt" / ".rollback" / "config"):
                     try:
                         with os.scandir(directory) as it:
                             for entry in it:
@@ -418,7 +461,7 @@ class TestConfigureHoldsTheLockAndMergesIntoTheLiveFile:
         assert proc.returncode == 0, proc.stdout + proc.stderr
         config = etc / "jen.config"
         assert stat.S_IMODE(config.stat().st_mode) == 0o600 and config.stat().st_uid == os.getuid()
-        (backup,) = list((etc / "backups").glob("jen.config.*.bak"))
+        (backup,) = list((tmp_path / "opt" / ".rollback" / "config").glob("jen.config.*.bak"))
         assert "issuer = https://idp.example" in backup.read_text()
 
     def test_a_fresh_install_is_not_merged_with_anything(self, tmp_path):
@@ -512,3 +555,136 @@ class TestFlockIsRequired:
         body = text[text.index("_run_configure_mode() {") :].split(chr(10) + "}" + chr(10), 1)[0]
         calls = [ln.strip() for ln in body.splitlines() if not ln.strip().startswith("#")]
         assert calls.index("_config_lock_acquire") < calls.index("detect_existing") < calls.index("write_config")
+
+
+class TestTheInstallerLocksTheSameInodeThroughTheOneOpen:
+    """v5.68.0-beta.20 (Q155): `_config_lock_acquire` no longer tests `-L` and then `exec {fd}>>`s (a check-then-open) or `install`s a new file. The lock is
+    opened ONCE by `tools/private_write.py --hold-lock` (`take_lock`: O_NOFOLLOW, the same inode normalised in place); a lock is an inode, and two
+    inodes are two locks."""
+
+    SCRIPT = (
+        'set -uo pipefail\nsource "{lib}" >/dev/null 2>&1\n'
+        'CONFIG_DIR="{etc}"; CONFIG_LOCK_FILE="{etc}/jen.config.lock"; JEN_USER="$(id -un)"\n'
+        "{body}\n"
+    )
+
+    def _run(self, tmp_path, body):
+        etc = tmp_path / "etc"
+        etc.mkdir(exist_ok=True)
+        script = self.SCRIPT.format(lib=_lib(tmp_path), etc=etc, body=body)
+        return subprocess.Popen(["bash", "-c", script], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    def test_an_existing_loose_lock_is_normalised_in_place_and_held_on_that_inode(self, tmp_path):
+        import fcntl
+
+        lock = tmp_path / "etc" / "jen.config.lock"
+        lock.parent.mkdir()
+        lock.write_text("")
+        os.chmod(lock, 0o666)
+        inode = lock.stat().st_ino
+        proc = self._run(
+            tmp_path,
+            '_config_lock_acquire; echo "locked $(stat -c %i "$CONFIG_LOCK_FILE")"; sleep 2; _config_lock_release; echo released',
+        )
+        try:
+            assert proc.stdout.readline().split() == ["locked", str(inode)], (
+                "the installer locked a different file than the one that was there"
+            )
+            assert stat.S_IMODE(lock.stat().st_mode) == 0o600 and lock.stat().st_ino == inode
+            fd = os.open(lock, os.O_RDWR)
+            try:
+                with pytest.raises(BlockingIOError):
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # held by the installer's holder
+            finally:
+                os.close(fd)
+        finally:
+            proc.wait(15)
+        fd = os.open(lock, os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # released
+        finally:
+            os.close(fd)
+
+    def test_a_save_in_the_other_process_waits_on_that_same_inode(self, tmp_path):
+        """Jen's AppConfig opens the lock path; the installer's holder has the lock on the file at that path: one inode, so the save WAITS."""
+        etc = tmp_path / "etc"
+        etc.mkdir()
+        (etc / "jen.config").write_text("[a]\nb = 1\n")
+        proc = self._run(tmp_path, "_config_lock_acquire; echo locked; sleep 2; _config_lock_release")
+        try:
+            assert proc.stdout.readline().strip() == "locked"
+            script = (
+                "import sys, time\n"
+                f"sys.path.insert(0, {str(ROOT)!r})\n"
+                "from jen import extensions\n"
+                f"extensions.CONFIG_FILE = {str(etc / 'jen.config')!r}\n"
+                "from jen.config import AppConfig\n"
+                "t = time.monotonic()\n"
+                "AppConfig().write_value('settings', 'saved', '1', reload=False)\n"
+                "print(round(time.monotonic() - t, 2))\n"
+            )
+            out = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=60)
+            assert out.returncode == 0, out.stderr
+            assert float(out.stdout.strip()) >= 1.0, "the save did not wait for the installer's lock"
+        finally:
+            proc.wait(15)
+
+    def test_the_holder_goes_with_the_installer_when_it_is_killed(self, tmp_path):
+        import fcntl
+        import signal
+
+        lock = tmp_path / "etc" / "jen.config.lock"
+        proc = self._run(tmp_path, "_config_lock_acquire; echo locked; sleep 60")
+        try:
+            assert proc.stdout.readline().strip() == "locked"
+            os.kill(proc.pid, signal.SIGKILL)  # no trap runs, nothing releases anything
+            proc.wait(10)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+        deadline = time.monotonic() + 8
+        while True:
+            fd = os.open(lock, os.O_RDWR)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() > deadline:
+                    raise AssertionError("the lock holder outlived a killed installer") from None
+                time.sleep(0.2)
+            finally:
+                os.close(fd)
+
+    def test_a_hard_linked_lock_is_refused_and_the_other_name_is_not_chowned(self, tmp_path):
+        etc = tmp_path / "etc"
+        etc.mkdir()
+        target = tmp_path / "root-file"
+        target.write_text("x")
+        os.link(target, etc / "jen.config.lock")
+        os.chmod(target, 0o644)
+        proc = self._run(tmp_path, "_config_lock_acquire; echo reached")
+        out, err = proc.communicate(timeout=60)
+        assert proc.returncode != 0 and "reached" not in out
+        assert stat.S_IMODE(target.stat().st_mode) == 0o644, (
+            "a file the installer was tricked into locking was re-moded"
+        )
+
+    def test_the_installer_no_longer_checks_then_opens_or_creates_a_second_file(self):
+        text = INSTALL_SH.read_text(encoding="utf-8")
+        body = text[text.index("_config_lock_acquire() {") : text.index("_config_lock_release() {")]
+        code = "\n".join(ln.split("#", 1)[0] for ln in body.splitlines())
+        assert '-L "$CONFIG_LOCK_FILE"' not in code and "exec {CONFIG_LOCK_FD}" not in code and "install -m" not in code
+        assert "--hold-lock" in code
+
+    def test_root_deletes_nothing_under_the_service_owned_trees(self):
+        """`rm -rf "${BACKUP_DIR:?}"/...` ran as root under $CONFIG_DIR/backups. No recursive removal in install.sh may name $CONFIG_DIR, $CONTENT_DIR or a
+        BACKUP_DIR (the $ROOT_ROLLBACK_DIR ones are root's own)."""
+        text = INSTALL_SH.read_text(encoding="utf-8")
+        offenders = [
+            ln.strip()
+            for ln in text.splitlines()
+            if re.search(r"\brm\s+-[a-zA-Z]*[rR]", ln.split("#", 1)[0])
+            and re.search(r"\$\{?(CONFIG_DIR|CONTENT_DIR|BACKUP_DIR|CONFIG_BACKUP_DIR)\b", ln.split("#", 1)[0])
+        ]
+        assert offenders == [], offenders
+        assert "BACKUP_DIR:?" not in text.replace("CONFIG_BACKUP_DIR", "")
