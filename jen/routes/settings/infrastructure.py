@@ -19,6 +19,7 @@ import jen.config as __config
 import jen.models.user as __user
 import jen.services.auth as __auth
 import jen.services.capabilities as __caps
+import jen.services.host_match as __host_match
 import jen.services.investigation_logging as __inv
 import jen.services.kea as __kea
 import jen.services.kea6 as __kea6
@@ -418,7 +419,7 @@ def save_infra_kea():
     __config.app_config.write_values(items)
     __user.set_global_setting("restart_pending", "true")
     flash("Kea API settings saved. Restart Jen to apply.", "success")
-    mismatch = __auth.api_ssh_mismatch(api_url, extensions.cfg.get("kea_ssh", "host", fallback=""))
+    mismatch = __host_match.api_ssh_mismatch(api_url, extensions.cfg.get("kea_ssh", "host", fallback=""))
     if mismatch:
         flash(mismatch, "warning")
     __user.audit(
@@ -1699,7 +1700,7 @@ def save_infra_ssh():
     __config.app_config.write_values(items)
     __user.set_global_setting("restart_pending", "true")
     flash("SSH settings saved. Restart Jen to apply.", "success")
-    mismatch = __auth.api_ssh_mismatch(extensions.cfg.get("kea", "api_url", fallback=""), host)
+    mismatch = __host_match.api_ssh_mismatch(extensions.cfg.get("kea", "api_url", fallback=""), host)
     if mismatch:
         flash(mismatch, "warning")
     __user.audit("SAVE_INFRA", "ssh", f"host={host} user={user}")
@@ -1874,7 +1875,7 @@ def save_extra_servers():
     count = len(extensions.KEA_SERVERS) - 1
     flash(f"Additional servers saved — {count} extra server(s) configured.", "success")
     for url, host in zip(api_urls, ssh_hosts, strict=False):
-        mismatch = __auth.api_ssh_mismatch(url, host)
+        mismatch = __host_match.api_ssh_mismatch(url, host)
         if mismatch:
             flash(mismatch, "warning")
     __user.set_global_setting("restart_pending", "true")

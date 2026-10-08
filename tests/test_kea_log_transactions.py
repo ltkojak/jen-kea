@@ -801,7 +801,7 @@ class TestTheApiAndSshHostsAreCompared:
 
     @staticmethod
     def _resolver(monkeypatch, table):
-        from jen.services import auth
+        from jen.services import host_match as auth
 
         monkeypatch.setattr(auth, "_addresses_of", lambda host, timeout=2.0: table.get(host))
         return auth
@@ -826,7 +826,7 @@ class TestTheApiAndSshHostsAreCompared:
         assert auth.api_ssh_mismatch("not a url", "kea-api") == ""
 
     def test_ip_literals_need_no_lookup(self):
-        from jen.services import auth
+        from jen.services import host_match as auth
 
         assert auth._addresses_of("10.1.2.3") == {"10.1.2.3"} and auth._addresses_of("[::1]") == {"::1"}
         assert "different addresses" in auth.api_ssh_mismatch("http://10.0.0.1:8000", "10.0.0.2")
@@ -838,5 +838,5 @@ class TestTheApiAndSshHostsAreCompared:
         source = (
             pathlib.Path(__file__).resolve().parent.parent / "jen" / "routes" / "settings" / "infrastructure.py"
         ).read_text(encoding="utf-8")
-        assert source.count("__auth.api_ssh_mismatch(") == 3
+        assert source.count("__host_match.api_ssh_mismatch(") == 3
         assert source.count('flash(mismatch, "warning")') == 3
