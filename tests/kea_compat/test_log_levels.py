@@ -394,6 +394,13 @@ def test_config_reload_applies_the_investigation_log_level_without_a_restart(fin
     shown = kea.kea_command("config-get").get("arguments", {}).get("Dhcp4", {}).get("loggers", [])
     entry = next((x for x in shown if x.get("name") == "kea-dhcp4"), {})
     record["config_get_logger"] = {k: entry.get(k) for k in ("severity", "debuglevel", "user-context")}
+    # v5.68.0-beta.23 (Q158): Jen no longer believes the reload's reply - it READS the running logger. What Kea shows after the reload is what
+    # `observe` must call "debug": DEBUG, debuglevel 55, and the jen-investigation marker in the logger's user-context.
+    from jen.services import investigation_logging as inv
+
+    restore_object = (ed.investigation_marker(mutated) or {}).get("restore")
+    observed = {"restore": restore_object}
+    record["observed_after_reload"] = {"state": inv.observe(None, observed), "seen": observed.get("seen")}
 
     # a broken file: the reload must be refused and the daemon must keep running on what it had
     with open(conf_path, "w") as fh:
@@ -414,6 +421,13 @@ def test_config_reload_applies_the_investigation_log_level_without_a_restart(fin
     _exchange(mac, requested, local, 0x30020)
     record["packet_dump_after_restore"] = li_has(_daemon_log()[seen_before:], mac, "DHCP4_QUERY_DATA")
     record["process_survived_restore"] = _status()["pid"] == before["status"]["pid"]
+    shown_after = kea.kea_command("config-get").get("arguments", {}).get("Dhcp4", {}).get("loggers", [])
+    entry_after = next((x for x in shown_after if x.get("name") == "kea-dhcp4"), {})
+    record["config_get_logger_after_restore"] = {
+        k: entry_after.get(k) for k in ("severity", "debuglevel", "user-context")
+    }
+    restored_probe = {"restore": restore_object}
+    record["observed_after_restore"] = {"state": inv.observe(None, restored_probe), "seen": restored_probe.get("seen")}
 
     assert reply.get("result") == 0, record
     assert record["process_survived"] and record["container_survived"], record
@@ -421,6 +435,15 @@ def test_config_reload_applies_the_investigation_log_level_without_a_restart(fin
     assert record["lease_survived"], record
     assert record["broken_file_reply"]["result"] != 0 and record["answers_after_broken_reload"], record
     assert back.get("result") == 0 and not record["packet_dump_after_restore"], record
+    # the running daemon, read back (Q158): DEBUG 55 with the marker after the reload; no marker, not at DEBUG 55, and "restored" after the restore
+    shown_logger = record["config_get_logger"]
+    assert str(shown_logger["severity"]).upper() == "DEBUG" and shown_logger["debuglevel"] == 55, record
+    assert "jen-investigation" in (shown_logger["user-context"] or {}), record
+    assert record["observed_after_reload"]["state"] == "debug", record
+    back_logger = record["config_get_logger_after_restore"]
+    assert "jen-investigation" not in (back_logger["user-context"] or {}), record
+    assert not (str(back_logger["severity"]).upper() == "DEBUG" and back_logger["debuglevel"] == 55), record
+    assert record["observed_after_restore"]["state"] == "restored", record
 
 
 def test_what_a_ddns_failure_line_carries(findings):

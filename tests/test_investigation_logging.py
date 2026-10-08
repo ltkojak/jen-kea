@@ -142,6 +142,10 @@ class FakeKea:
         )  # what the RUNNING daemon is configured with: only a reload or a restart moves it
         self.fail_writes_after = None  # once this many writes have worked, every further change set fails
         self.rollback_fails = False  # a failed restart cannot be rolled back either
+        self.list_unreachable = False  # the Control Agent does not answer (list-commands AND config-get)
+        self.reload_applied_but_lost = False  # config-reload takes effect and its reply is lost (result 1)
+        self.api_silent = False  # config-get never answers
+        self.silent_gets = 0  # ... or the first N config-gets do not
 
     def kea_command(self, command, **kw):
         self.calls.append(command)
@@ -152,17 +156,30 @@ class FakeKea:
                 return {"result": 1, "text": "connection refused"}
             return {"result": 0, "arguments": self.commands}
         if command == "config-reload":
+            if self.reload_applied_but_lost:
+                # v5.68.0-beta.23 (Q158): Kea APPLIED the reload and the HTTP reply never arrived - the daemon moved, the caller is told it failed
+                self.loaded = copy.deepcopy(self.file)
+                return {"result": 1, "text": "timed out after 10 s"}
             if not self.reload_result:
                 self.loaded = copy.deepcopy(self.file)
             if self.reload_result:
                 return {"result": self.reload_result, "text": getattr(self, "reload_text", "reload refused")}
             return {"result": 0, "text": "reloaded"}
+        if command == "config-get":
+            # the RUNNING daemon's configuration (`loaded`), never the file; `api_silent` is a Control Agent that does not answer at all
+            if (
+                self.api_silent or self.list_unreachable or self.silent_gets > 0
+            ):  # a Control Agent that is down answers neither command
+                self.silent_gets = max(0, self.silent_gets - 1)
+                return {"result": 1, "text": "connection refused"}
+            return {"result": 0, "arguments": copy.deepcopy(self.loaded)}
         return {"result": 0}
 
     def service_action(self, server, service, action):
         self.calls.append(f"{action}:{service}")
         if self.restart_ok:
             self.loaded = copy.deepcopy(self.file)
+            self.list_unreachable = False  # the restarted daemon answers on its control socket again
         return {"ok": self.restart_ok, "detail": "" if self.restart_ok else "unit failed"}
 
     def apply_change(self, service, mutate_fn, summary, **kw):
@@ -182,6 +199,7 @@ class FakeKea:
         if kw.get("restart", True):  # the real change set restarts the daemon inside apply_change
             if self.restart_ok:
                 self.loaded = copy.deepcopy(self.file)
+                self.list_unreachable = False  # the restarted daemon answers on its control socket again
             else:
                 self.file = after if self.rollback_fails else before
                 status = "rollback_failed" if self.rollback_fails else "rolled_back"
@@ -198,8 +216,21 @@ def world(monkeypatch):
     from jen import extensions
 
     store = {}
+    db = {
+        "fails": None
+    }  # a predicate on the investigation record being written: True = the Jen database does not take THIS write
+
+    def set_setting(key, value):
+        if key == inv.RECORD_KEY and db["fails"] is not None and db["fails"](value):
+            return (
+                False  # what jen.models.user.set_global_setting answers when the write did not happen (v5.68.0-beta.22)
+            )
+        store[key] = value
+        return True
+
     monkeypatch.setattr("jen.models.user.get_global_setting", lambda k, d="": store.get(k, d))
-    monkeypatch.setattr("jen.models.user.set_global_setting", lambda k, v: store.__setitem__(k, v))
+    monkeypatch.setattr("jen.models.user.set_global_setting", set_setting)
+    monkeypatch.setattr(inv, "_sleep", lambda seconds: None)
     monkeypatch.setattr("jen.models.user.audit", lambda *a, **k: store.setdefault("_audit", []).append(a))
     servers = [{"id": 1, "name": "kea-a", "ssh_host": "10.0.0.1"}, {"id": 2, "name": "kea-b", "ssh_host": "10.0.0.2"}]
     monkeypatch.setattr(extensions, "KEA_SERVERS", servers)
@@ -224,7 +255,7 @@ def world(monkeypatch):
     monkeypatch.setattr(inv._changeset, "apply_change", fake_apply)
     monkeypatch.setattr(inv, "_now", lambda: NOW)
     inv._runs["n"] = 0
-    return type("World", (), {"store": store, "servers": servers, "daemons": daemons})
+    return type("World", (), {"store": store, "servers": servers, "daemons": daemons, "db": db})
 
 
 class TestTurnOn:
@@ -943,8 +974,7 @@ class TestAControlAgentThatDidNotAnswer:
         daemon = world.daemons[1]
         assert inv.turn_on(world.servers[0], 5)["ok"]
         # the file was put back by hand; the daemon still runs DEBUG 55 and Kea's API is down
-        daemon.file = copy.deepcopy(daemon.loaded)
-        daemon.file["Dhcp4"].pop("loggers", None)
+        daemon.file, _code = ed.clear_investigation_logging(daemon.loaded)
         daemon.list_unreachable = True
         out = inv.turn_off(world.servers[0])
         assert out["ok"] and out["mode"] == "restart"
@@ -1033,4 +1063,399 @@ class TestTurningOnNeverRestartsKea:
 
         source = inspect.getsource(inv)
         assert source.count("allow_restart=False") == 1 and source.count("allow_restart=True") == 1
-        assert "def _daemon_step(server: dict, use_reload: bool, *, allow_restart: bool)" in source
+        assert "def _daemon_step(server: dict, use_reload: bool, *, allow_restart: bool, verify=None)" in source
+
+
+# ── v5.68.0-beta.23 (Q158): the daemon is OBSERVED, never inferred ─────────────────────────────────────────────────────────────────
+
+
+def _servers_of(value):
+    import json
+
+    return json.loads(value or "{}").get("servers", {})
+
+
+class TestTheRunningLoggerIsRead:
+    """`daemon_logger` reads `config-get` (tests/kea_compat/test_log_levels.py records what Kea 3.0.3 / 3.2.0 / 3.3.1 answer); `observe` turns it into
+    the entry's daemon state: debug / restored / other / unknown."""
+
+    def test_the_four_states(self, world):
+        kea, server = world.daemons[1], world.servers[0]
+        entry = {"restore": {"severity": "INFO", "debuglevel": "absent"}}
+        assert inv.observe(server, entry) == "restored" and entry["daemon"] == "restored" and entry["observed_at"]
+        assert entry["seen"].startswith("INFO")
+        on, _ = ed.set_investigation_logging(kea.file, FUTURE)
+        kea.loaded = on
+        assert inv.observe(server, entry) == "debug" and "DEBUG" in entry["seen"]
+        kea.loaded = _cfg([{"name": "kea-dhcp4", "severity": "WARN", "debuglevel": 0}])
+        assert inv.observe(server, entry) == "other" and "WARN" in entry["seen"]
+        kea.api_silent = True
+        assert inv.observe(server, entry) == "unknown" and entry["seen"] == ""
+
+    def test_what_is_read_when_kea_answers_with_something_that_is_not_a_dhcp4_config(self, world, monkeypatch):
+        for reply in (
+            {"result": 0, "arguments": {"Dhcp6": {}}},
+            {"result": 0, "arguments": []},
+            {"result": 0},
+            {"result": 0, "arguments": {"Dhcp4": {"loggers": "nope"}}},
+            {"result": 1, "text": "x"},
+        ):
+            monkeypatch.setattr(inv._kea, "kea_command", lambda command, server=None, _r=reply, **kw: _r)
+            assert inv.daemon_logger(world.servers[0]) is None, reply
+
+    def test_a_logger_that_is_absent_is_what_a_created_one_looks_like_once_restored(self, world):
+        kea, server = world.daemons[2], world.servers[1]
+        assert inv.daemon_logger(server) == {"present": False, "severity": None, "debuglevel": None, "marker": None}
+        assert inv.observe(server, {"restore": {"created": True}}) == "restored"
+        assert inv.observe(server, {}) == "restored", (
+            "an entry written before beta.23 has no restore object: no marker and not DEBUG 55"
+        )
+        assert inv.observe(server, {"restore": {"severity": "INFO", "debuglevel": 0}}) == "other", (
+            "the logger it described is gone"
+        )
+        on, _ = ed.set_investigation_logging(kea.file, FUTURE)
+        kea.loaded = on
+        assert inv.observe(server, {"restore": {"created": True}}) == "debug"
+
+    @pytest.mark.parametrize(
+        "restore, shown, expected",
+        [
+            ({"severity": "WARN", "debuglevel": 0}, {"severity": "WARN", "debuglevel": 0}, "restored"),
+            ({"severity": "WARN", "debuglevel": 0}, {"severity": "warn", "debuglevel": 0}, "restored"),
+            ({"severity": "WARN", "debuglevel": 0}, {"severity": "INFO", "debuglevel": 0}, "other"),
+            ({"severity": "WARN", "debuglevel": 0}, {"severity": "WARN", "debuglevel": 3}, "other"),
+            ({"severity": "absent", "debuglevel": "absent"}, {"severity": "INFO", "debuglevel": 0}, "restored"),
+            ({"severity": "absent", "debuglevel": "absent"}, {"severity": "DEBUG", "debuglevel": 55}, "other"),
+            ({"severity": "INFO", "debuglevel": "absent"}, {"severity": "INFO"}, "restored"),
+            ({"severity": "DEBUG", "debuglevel": 99}, {"severity": "DEBUG", "debuglevel": 99}, "restored"),
+            ({"severity": "DEBUG", "debuglevel": 55}, {"severity": "DEBUG", "debuglevel": 55}, "restored"),
+        ],
+    )
+    def test_restored_means_what_the_marker_said_it_was(self, world, restore, shown, expected):
+        world.daemons[1].loaded = _cfg([{"name": "kea-dhcp4", **shown}])
+        assert inv.observe(world.servers[0], {"restore": restore}) == expected
+
+    def test_a_restart_gets_a_few_seconds_to_answer(self, world, monkeypatch):
+        sleeps = []
+        monkeypatch.setattr(inv, "_sleep", sleeps.append)
+        kea = world.daemons[1]
+        kea.silent_gets = 2
+        entry = {}
+        t = [0.0]
+        monkeypatch.setattr(inv.time, "monotonic", lambda: t.__setitem__(0, t[0] + 0.1) or t[0])
+        assert inv.observe(world.servers[0], entry, wait_s=inv.OBSERVE_AFTER_RESTART_S) == "restored"
+        assert len(sleeps) == 2, "it looked again after each silence"
+        kea.silent_gets = 99
+        sleeps.clear()
+        assert inv.observe(world.servers[0], entry, wait_s=0) == "unknown" and sleeps == [], "no waiting unless asked"
+
+
+class TestALostReloadReplyIsNotAFailure:
+    """The reviewer's P1: a `config-reload` Kea APPLIED whose HTTP reply was lost came back as a failure; the file was put back, the entry dropped,
+    and the daemon stayed at DEBUG 55 with nothing left that knew. Turning on now reverts the file WITHOUT a restart and then LOOKS."""
+
+    def test_turn_on_keeps_the_entry_says_what_it_saw_and_never_restarts(self, world):
+        kea = world.daemons[1]
+        original = copy.deepcopy(kea.file)
+        kea.reload_applied_but_lost = True
+        out = inv.turn_on(world.servers[0], 5)
+        assert out["ok"] is False and out["until"] == ""
+        assert kea.file == original and ed.investigation_marker(kea.file) is None, "the file is back"
+        assert _daemon_at_debug(kea), "and the daemon DID take the change"
+        assert not any(c.startswith("restart") for c in kea.calls), kea.calls
+        assert any("applied the change although its API did not confirm it" in line for line in out["lines"]), out[
+            "lines"
+        ]
+        (entry,) = inv.active()
+        assert (entry["file"], entry["daemon"], entry["pending"], entry["stuck"]) == (
+            "restored",
+            "debug",
+            "reload",
+            True,
+        )
+        assert entry["observed_at"] and "_audit" not in world.store, "nothing is audited as ON"
+
+    def test_the_health_row_says_so_and_the_sweep_finishes_it_without_a_restart(self, world):
+        from jen.services import health
+
+        kea = world.daemons[1]
+        kea.reload_applied_but_lost = True
+        inv.turn_on(world.servers[0], 5)
+        c = health._debug_logging_left_on({})
+        assert c.status == "fail" and "kea-a" in c.detail and "still at DEBUG 55" in c.detail
+        calls_before = len(kea.calls)
+        out = inv.sweep(now=NOW)  # nothing is due by the clock; the entry is owed a daemon step
+        assert out["restored"] == ["kea-a"] and not inv.active() and not _daemon_at_debug(kea)
+        assert not any(c.startswith("restart") for c in kea.calls[calls_before:]), (
+            "the reload was applied; Jen SAW the daemon restored"
+        )
+        assert kea.file == _cfg([{"name": "kea-dhcp4", "severity": "INFO"}])
+
+    def test_a_reload_truly_refused_is_seen_restored_and_dropped_at_once(self, world):
+        kea = world.daemons[1]
+        kea.reload_result, kea.reload_text = 1, "reload refused"
+        out = inv.turn_on(world.servers[0], 5)
+        assert not out["ok"] and not inv.active() and not _daemon_at_debug(kea)
+        assert any("Logging was not activated" in line for line in out["lines"])
+
+    def test_a_restore_whose_reply_is_lost_is_not_followed_by_a_restart(self, world):
+        kea = world.daemons[1]
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        kea.reload_applied_but_lost = True
+        out = inv.turn_off(world.servers[0])
+        assert out["ok"] and not inv.active() and not _daemon_at_debug(kea)
+        assert "restart:dhcp4" not in kea.calls, "the daemon was SEEN restored, so the restart fallback did not run"
+        assert any("seen at the right level" in line for line in out["lines"]), out["lines"]
+
+    def test_a_restore_the_daemon_really_refused_still_restarts_when_it_is_not_seen_restored(self, world):
+        kea = world.daemons[1]
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        kea.reload_result, kea.reload_text = 1, "refused"
+        out = inv.turn_off(world.servers[0])
+        assert out["ok"] and out["mode"] == "restart" and "restart:dhcp4" in kea.calls and not inv.active()
+
+
+class TestAnEntryIsDroppedOnlyWhenTheDaemonWasSeenRestored:
+    def test_a_restore_that_reports_ok_but_leaves_the_daemon_at_debug_keeps_the_entry(self, world):
+        kea = world.daemons[1]
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        real = kea.kea_command
+
+        def reload_says_ok_and_does_nothing(command, **kw):
+            if command == "config-reload":
+                kea.calls.append(command)
+                return {"result": 0, "text": "reloaded"}
+            return real(command, **kw)
+
+        kea.kea_command = reload_says_ok_and_does_nothing
+        out = inv.turn_off(world.servers[0])
+        assert out["ok"] is False and _daemon_at_debug(kea)
+        (entry,) = inv.active()
+        assert (entry["file"], entry["daemon"], entry["pending"], entry["stuck"]) == (
+            "restored",
+            "debug",
+            "reload",
+            True,
+        )
+        assert "still running at DEBUG 55" in out["lines"][-1]
+        kea.kea_command = real
+        assert inv.sweep(now=NOW)["restored"] == ["kea-a"] and not inv.active()
+
+    def test_a_daemon_that_cannot_be_seen_keeps_the_entry_and_nothing_is_restarted_on_a_guess(self, world):
+        from jen.services import health
+
+        kea = world.daemons[1]
+        kea.reload_result, kea.reload_text, kea.api_silent = 1, "connection refused", True
+        out = inv.turn_on(world.servers[0], 5)
+        assert out["ok"] is False
+        (entry,) = inv.active()
+        assert (entry["file"], entry["daemon"], entry["pending"]) == ("restored", "unknown", "reload")
+        assert not any(c.startswith("restart") for c in kea.calls), kea.calls
+        c = health._debug_logging_left_on({})
+        assert c.status == "fail" and "unconfirmed since" in c.detail and "kea-a" in c.detail
+        calls_before = len(kea.calls)
+        for minute in (1, 2, 3):  # the API stays silent: the sweep looks, and does not reload or restart on a guess
+            assert inv.sweep(now=NOW + timedelta(minutes=minute))["restored"] == []
+        assert not any(c.startswith(("restart", "config-reload")) for c in kea.calls[calls_before:]), kea.calls[
+            calls_before:
+        ]
+        kea.api_silent, kea.reload_result = False, 0  # the API comes back: Jen sees the daemon at its original level
+        assert inv.sweep(now=NOW + timedelta(minutes=4))["restored"] == ["kea-a"] and not inv.active()
+
+    def test_a_reload_kea_confirms_but_the_level_cannot_be_read_back_is_on_and_unconfirmed(self, world):
+        from jen.services import health
+
+        kea = world.daemons[1]
+        real = kea.kea_command
+        kea.kea_command = lambda command, **kw: (
+            {"result": 1, "text": "connection refused"} if command == "config-get" else real(command, **kw)
+        )
+        out = inv.turn_on(world.servers[0], 5)
+        assert out["ok"] is True and any("could not read Kea's running log level back" in line for line in out["lines"])
+        (entry,) = inv.active()
+        assert (entry["file"], entry["daemon"], entry["pending"]) == ("debug", "unknown", None)
+        assert health._debug_logging_left_on({}).status == "warn"
+        kea.kea_command = real
+        inv.sweep(now=NOW + timedelta(minutes=1))  # the API answers: the daemon is SEEN at DEBUG
+        (entry,) = inv.active(now=NOW + timedelta(minutes=1))
+        assert entry["daemon"] == "debug" and health._debug_logging_left_on({}).status == "ok"
+
+    def test_a_daemon_seen_at_something_else_is_said_so_and_the_entry_stays(self, world):
+        from jen.services import health
+
+        kea = world.daemons[1]
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        real = kea.kea_command
+
+        def reload_lands_on_warn(command, **kw):
+            if command == "config-reload":
+                kea.calls.append(command)
+                kea.loaded = _cfg([{"name": "kea-dhcp4", "severity": "WARN", "debuglevel": 0}])
+                return {"result": 0, "text": "reloaded"}
+            return real(command, **kw)
+
+        kea.kea_command = reload_lands_on_warn
+        out = inv.turn_off(world.servers[0])
+        assert out["ok"] is False and "WARN" in out["lines"][-1] and "neither" in out["lines"][-1]
+        (entry,) = inv.active()
+        assert entry["daemon"] == "other" and entry["stuck"]
+        assert "neither at investigation DEBUG nor at what it was before" in health._debug_logging_left_on({}).detail
+
+    def test_a_restart_that_leaves_the_daemon_where_it_was_is_not_believed(self, world):
+        kea = world.daemons[1]
+        kea.commands = ["version-get"]  # no config-reload: the restart path
+        real = kea.apply_change
+
+        def apply_but_the_daemon_ignores_the_restart(service, mutate_fn, summary, **kw):
+            result = real(service, mutate_fn, summary, **kw)
+            kea.loaded = _cfg([{"name": "kea-dhcp4", "severity": "INFO"}])
+            return result
+
+        kea.apply_change = apply_but_the_daemon_ignores_the_restart
+        out = inv.turn_on(world.servers[0], 5)
+        assert out["ok"] is False and not inv.active() and ed.investigation_marker(kea.file) is None
+        assert any("not running at DEBUG" in line for line in out["lines"])
+
+
+class TestEveryStateWriteIsChecked:
+    """`set_global_setting` answers False when the Jen database did not take a write (beta.22). The index is now written on that answer."""
+
+    @staticmethod
+    def _pending_write(value):
+        return any(e.get("pending") == "reload" and e.get("daemon") == "unknown" for e in _servers_of(value).values())
+
+    @staticmethod
+    def _post_activation_write(value):
+        return any(
+            e.get("daemon") == "debug" and e.get("pending") is None and e.get("file") == "debug"
+            for e in _servers_of(value).values()
+        )
+
+    def test_the_helpers_report_what_was_stored(self, world):
+        world.db["fails"] = lambda value: True
+        record = {"servers": {}}
+        assert inv._put(record, 1, {"name": "x"}) is False
+        assert inv._drop(record, 1) is False and "1" in record["servers"], (
+            "a drop that was not stored leaves the entry in view"
+        )
+        world.db["fails"] = None
+        assert (
+            inv._put(record, 1, {"name": "x"}) is True and inv._drop(record, 1) is True and inv._drop(record, 1) is True
+        )
+
+    def test_the_db_failing_at_the_pending_write_reverts_the_file_and_never_asks_the_daemon(self, world):
+        kea = world.daemons[1]
+        original = copy.deepcopy(kea.file)
+        world.db["fails"] = self._pending_write
+        out = inv.turn_on(world.servers[0], 5)
+        assert out["ok"] is False and kea.file == original and not inv.active()
+        assert "config-reload" not in kea.calls and "config-get" not in kea.calls, "the daemon was not asked"
+        assert any("Jen could not record this" in line and "nothing was activated" in line for line in out["lines"])
+        assert not _daemon_at_debug(kea) and "_audit" not in world.store
+
+    def test_the_db_failing_at_the_pending_write_and_the_revert_failing_too_says_where_the_marker_is(self, world):
+        kea = world.daemons[1]
+        kea.fail_writes_after = 1
+        world.db["fails"] = self._pending_write
+        out = inv.turn_on(world.servers[0], 5)
+        assert out["ok"] is False and "config-reload" not in kea.calls
+        assert any("could not be put back" in line and "ten-minute scan" in line for line in out["lines"])
+        assert ed.investigation_marker(kea.file), "the file still carries the marker; the full scan adopts it"
+        world.db["fails"], kea.fail_writes_after = None, None
+        out = inv.sweep(now=NOW, full=True)
+        assert out["adopted"] == ["kea-a"], "indexed by the full scan, which reads the file"
+        assert inv.sweep(now=NOW + timedelta(minutes=6))["restored"] == ["kea-a"]
+
+    def test_the_db_failing_after_the_activation_turns_logging_off_again(self, world):
+        kea = world.daemons[1]
+        original = copy.deepcopy(kea.file)
+        world.db["fails"] = self._post_activation_write
+        out = inv.turn_on(world.servers[0], 5)
+        assert out["ok"] is False and out["until"] == ""
+        assert any(
+            "could not record that logging is on" in line and "turned off again" in line for line in out["lines"]
+        ), out["lines"]
+        assert kea.file == original and not _daemon_at_debug(kea) and not inv.active()
+        assert "_audit" not in world.store
+
+    def test_the_db_failing_at_the_final_drop_leaves_the_entry_and_the_next_sweep_drops_it(self, world):
+        kea = world.daemons[1]
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        world.db["fails"] = lambda value: value == ""
+        out = inv.turn_off(world.servers[0])
+        assert out["ok"] is True and not _daemon_at_debug(kea)
+        assert any("could not clear its own record" in line for line in out["lines"])
+        assert len(inv.active()) == 1, "the entry is still stored"
+        world.db["fails"] = None
+        calls_before = len(kea.calls)
+        assert inv.sweep(now=NOW)["restored"] == ["kea-a"] and not inv.active()
+        assert not any(c.startswith(("config-reload", "restart")) for c in kea.calls[calls_before:]), (
+            "it was SEEN restored: nothing to do"
+        )
+
+    def test_a_failed_save_of_the_orphan_flag_is_not_a_crash(self, world):
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        world.servers.pop(0)
+        world.db["fails"] = lambda value: True
+        inv.sweep(now=NOW)  # does not raise
+
+
+class TestTheFullScanReadsTheDaemonToo:
+    def test_a_running_logger_at_debug_with_a_clean_file_and_no_entry_is_adopted_and_restored(self, world):
+        kea = world.daemons[1]
+        on, _ = ed.set_investigation_logging(kea.file, FUTURE)
+        kea.loaded = (
+            on  # the daemon runs DEBUG 55 ... and the file was put back (a lost reply, a hand edit, a restored backup)
+        )
+        assert ed.investigation_marker(kea.file) is None and not inv.active()
+        out = inv.sweep(now=NOW, full=True)
+        assert out["adopted"] == ["kea-a"] and out["restored"] == ["kea-a"] and out["errors"] == []
+        assert not _daemon_at_debug(kea) and not inv.active()
+        assert "config-reload" in kea.calls and "restart:dhcp4" not in kea.calls
+        assert [a[0] for a in world.store["_audit"]][:1] == ["INVESTIGATION_LOGGING_ADOPTED"]
+
+    def test_without_config_reload_the_documented_restart_finishes_it(self, world):
+        kea = world.daemons[1]
+        kea.commands = ["version-get"]
+        on, _ = ed.set_investigation_logging(kea.file, FUTURE)
+        kea.loaded = on
+        out = inv.sweep(now=NOW, full=True)
+        assert out["restored"] == ["kea-a"] and kea.writes == 0, "the file was already clean: nothing was written"
+        assert "restart:dhcp4" in kea.calls and not _daemon_at_debug(kea) and not inv.active()
+
+    def test_a_live_marker_in_the_file_is_adopted_with_the_daemon_observed(self, world):
+        kea = world.daemons[1]
+        live, _ = ed.set_investigation_logging(kea.file, FUTURE)
+        kea.file = kea.loaded = live
+        assert inv.sweep(now=NOW, full=True)["adopted"] == ["kea-a"]
+        (entry,) = inv.active(NOW)
+        assert (entry["file"], entry["daemon"], entry["pending"]) == ("debug", "debug", None)
+
+    def test_a_live_marker_in_the_file_that_the_daemon_never_loaded_is_adopted_unconfirmed_not_assumed(self, world):
+        kea = world.daemons[1]
+        live, _ = ed.set_investigation_logging(kea.file, FUTURE)
+        kea.file = live  # written, never reloaded
+        inv.sweep(now=NOW, full=True)
+        (entry,) = inv.active(NOW)
+        assert entry["file"] == "debug" and entry["daemon"] == "restored" and entry["pending"] == "reload"
+
+    def test_a_daemon_that_does_not_answer_is_not_adopted_or_restarted(self, world):
+        kea = world.daemons[2]
+        kea.api_silent = True
+        assert inv.sweep(now=NOW, full=True) == {"restored": [], "adopted": [], "errors": []}
+        assert not any(c.startswith(("config-reload", "restart")) for c in kea.calls)
+
+    def test_a_logger_at_debug_without_the_marker_is_somebody_elses_and_is_left_alone(self, world):
+        kea = world.daemons[1]
+        kea.file = kea.loaded = _cfg([{"name": "kea-dhcp4", "severity": "DEBUG", "debuglevel": 99}])
+        assert inv.sweep(now=NOW, full=True) == {"restored": [], "adopted": [], "errors": []}
+        assert not inv.active() and not any(c.startswith(("config-reload", "restart")) for c in kea.calls)
+
+    def test_the_cheap_path_reads_no_daemon_for_a_known_good_entry(self, world):
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        calls_before = len(world.daemons[1].calls)
+        inv.sweep(now=NOW + timedelta(minutes=1))
+        assert "config-get" not in world.daemons[1].calls[calls_before:], (
+            "an entry seen at DEBUG is not re-read every minute"
+        )
+        assert "config-get" not in world.daemons[2].calls

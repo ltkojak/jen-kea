@@ -25,6 +25,14 @@ not this Jen set it" - and to adopt a live one so the banners show it. One serve
 v5.68.0-beta.9 (Q144): each index entry carries the FILE state, the DAEMON state and what is still owed (see "the state machine" below),
 a server removed from Jen while an entry exists keeps it (the Health row says how to restore it by hand) and the settings routes refuse
 to remove a server that has one, and every adoption or refused removal writes an audit row.
+
+v5.68.0-beta.23 (Q158): the daemon is OBSERVED, never inferred. Six betas corrected this state machine at the level of acknowledgements (what a call
+returned), and each left a case where the acknowledgement and the truth differ - the sharpest: a `config-reload` Kea APPLIED whose HTTP reply was
+lost came back as a failure, the file was put back, the entry dropped, and the daemon stayed at DEBUG 55 with nothing left that knew. Kea answers
+the question directly - `config-get` returns the RUNNING daemon's loggers, severity, debuglevel and user-context included - so `daemon_logger` reads
+it, `observe` turns it into the entry's `daemon` field (debug / restored / other / unknown) after every reload and every restart, and ONE rule
+follows: an entry is dropped when the file is restored AND the daemon was SEEN restored. Anything else keeps the entry, pending, and the Health row
+says "unconfirmed". Every write of the index is checked too (`_save`/`_put`/`_drop` return whether it was stored).
 """
 
 from __future__ import annotations
@@ -32,6 +40,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 
 from jen import extensions
@@ -46,12 +55,17 @@ RECORD_KEY = "investigation_logging"
 DURATIONS = (5, 15, 60)  # minutes; 60 is offered with a confirm that names the disk
 FULL_SCAN_EVERY = 10  # sweep runs between reads of every server's config
 OVERDUE_GRACE_S = 120  # how long past `until` before the Health row calls it left on
+OBSERVE_AFTER_RESTART_S = 8  # a restarted daemon takes a few seconds to answer on its control socket: look for this long before saying "unknown"
 _lock = threading.Lock()
 _runs = {"n": 0}
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _sleep(seconds: float) -> None:  # a name the tests replace
+    time.sleep(seconds)
 
 
 def _iso(when: datetime) -> str:
@@ -72,10 +86,12 @@ def _record() -> dict:
     return {"servers": servers if isinstance(servers, dict) else {}}
 
 
-def _save(record: dict) -> None:
+def _save(record: dict) -> bool:
+    """Store the index. True when it was stored: `set_global_setting` answers False when the Jen database did not take the write (v5.68.0-beta.22), and
+    a caller that says "recorded" or "dropped" must say it on the strength of that answer (v5.68.0-beta.23, Q158)."""
     from jen.models import user as _user
 
-    _user.set_global_setting(RECORD_KEY, json.dumps(record) if record["servers"] else "")
+    return _user.set_global_setting(RECORD_KEY, json.dumps(record) if record["servers"] else "") is not False
 
 
 def active(now: datetime | None = None) -> list[dict]:
@@ -102,6 +118,9 @@ def active(now: datetime | None = None) -> list[dict]:
                 "file": entry.get("file", "debug"),
                 "daemon": entry.get("daemon", "debug"),
                 "pending": entry.get("pending"),
+                # v5.68.0-beta.23 (Q158): what the running daemon was last SEEN doing, and when / what it showed
+                "observed_at": entry.get("observed_at", ""),
+                "seen": entry.get("seen", ""),
                 "removed": bool(entry.get("removed")),
                 "ssh_host": entry.get("ssh_host", ""),
                 "kea_conf": entry.get("kea_conf", ""),
@@ -146,6 +165,114 @@ def _unreachable_note(server: dict) -> str:
     return f"Kea's API on {_name(server)} did not answer, so Jen could not ask whether it can re-read its config without a restart"
 
 
+# ── observing the running daemon (v5.68.0-beta.23, Q158) ────────────────────────────────────────────────────────────────────────────
+
+
+def daemon_logger(server: dict) -> dict | None:
+    """What the RUNNING kea-dhcp4 says its logger is, read with `config-get` (tests/kea_compat/test_log_levels.py records it on Kea 3.0.3 / 3.2.0 / 3.3.1):
+    {"present": bool, "severity", "debuglevel", "marker": the `jen-investigation` user-context or None}. None when Kea's API did not answer, or
+    answered with something that is not a Dhcp4 configuration - the caller must treat that as "could not see", never as "restored"."""
+    reply = _kea.kea_command("config-get", server=server)
+    if reply.get("result") != 0:
+        return None
+    arguments = reply.get("arguments")
+    section = arguments.get("Dhcp4") if isinstance(arguments, dict) else None
+    if not isinstance(section, dict):
+        return None
+    loggers = section.get("loggers")
+    if loggers is None:
+        loggers = []
+    if not isinstance(loggers, list):
+        return None
+    entry = next((x for x in loggers if isinstance(x, dict) and x.get("name") == _edit.INVESTIGATION_LOGGER), None)
+    if entry is None:
+        return {"present": False, "severity": None, "debuglevel": None, "marker": None}
+    context = entry.get("user-context")
+    marker = context.get(_edit.INVESTIGATION_KEY) if isinstance(context, dict) else None
+    return {
+        "present": True,
+        "severity": entry.get("severity"),
+        "debuglevel": entry.get("debuglevel"),
+        "marker": marker if isinstance(marker, dict) else None,
+    }
+
+
+def _at_investigation_level(seen: dict) -> bool:
+    return str(seen.get("severity") or "").upper() == _edit.INVESTIGATION_SEVERITY and seen.get("debuglevel") == (
+        _edit.INVESTIGATION_DEBUGLEVEL
+    )
+
+
+def _is_original(seen: dict, restore) -> bool:
+    """Is the running logger what the marker's restore object says it was before Jen touched it? `restore` is None for an entry written before
+    beta.23 (it did not carry the object): then "restored" is "carries no marker and is not at the investigation level"."""
+    if seen.get("marker") is not None:
+        return False
+    if isinstance(restore, dict) and restore.get("created") is True:
+        return not seen["present"]
+    if not seen["present"]:
+        return not isinstance(restore, dict)  # a logger that existed and is gone is not what the object describes
+    if not isinstance(restore, dict) or _edit.restore_problem(restore):
+        return not _at_investigation_level(seen)
+    severity, level = restore.get("severity", "absent"), restore.get("debuglevel", "absent")
+    shown_severity = str(seen.get("severity") or "").upper()
+    # a key the original did not have is Kea's own default (INFO / 0): all that can be said is that it is not the investigation value
+    severity_ok = (
+        shown_severity != _edit.INVESTIGATION_SEVERITY
+        if severity == "absent"
+        else shown_severity == str(severity).upper()
+    )
+    level_ok = (
+        seen.get("debuglevel") != _edit.INVESTIGATION_DEBUGLEVEL
+        if level == "absent"
+        else seen.get("debuglevel") == level
+    )
+    return severity_ok and level_ok
+
+
+def _describe(seen: dict) -> str:
+    if not seen["present"]:
+        return "no kea-dhcp4 logger"
+    return f"{seen.get('severity') or 'default severity'} / debuglevel {seen.get('debuglevel') if seen.get('debuglevel') is not None else 'default'}"
+
+
+def observe(server: dict, entry: dict, *, wait_s: float = 0.0) -> str:
+    """Read the running daemon and set `entry["daemon"]` (and `observed_at`, `seen`) from what it SHOWS - never from what a call returned:
+    "debug" (DEBUG with the jen-investigation marker), "restored" (what the marker's restore object says it was, or the logger absent when Jen
+    created it), "other" (something else - said so), "unknown" (Kea's API did not answer: nothing is inferred). `wait_s` keeps looking that long
+    for an answer, one try a second - a daemon that has just been restarted takes a moment to open its control socket."""
+    deadline = time.monotonic() + max(0.0, wait_s)
+    seen = daemon_logger(server)
+    while seen is None and time.monotonic() < deadline:
+        _sleep(1.0)
+        seen = daemon_logger(server)
+    entry["observed_at"] = _iso(_now())
+    if seen is None:
+        state, entry["seen"] = "unknown", ""
+    else:
+        entry["seen"] = _describe(seen)
+        if seen["marker"] is not None and str(seen.get("severity") or "").upper() == _edit.INVESTIGATION_SEVERITY:
+            state = "debug"
+        elif _is_original(seen, entry.get("restore")):
+            state = "restored"
+        else:
+            state = "other"
+    entry["daemon"] = state
+    return state
+
+
+def _seen_line(entry: dict) -> str:
+    state = entry.get("daemon")
+    if state == "debug":
+        return "Kea is still running at DEBUG 55."
+    if state == "other":
+        return (
+            f"Kea's running logger is {entry.get('seen') or 'neither at investigation DEBUG nor at its original setting'}: neither investigation DEBUG "
+            "nor what it was before - Jen has left it and keeps checking."
+        )
+    return "Jen could not read Kea's running log level, so it does not know - it looks again every minute."
+
+
 def _change(server: dict, mutate_fn, summary: str, unsupported: str, *, refuse_unknown: bool = False):
     """Step 1: write one mutation to ONE server through apply_change - with a restart folded in when the daemon has no
     `config-reload`. Returns (ChangeSetResult, use_reload, support); with `refuse_unknown` and Kea's API silent nothing is written and the
@@ -168,14 +295,26 @@ def _change(server: dict, mutate_fn, summary: str, unsupported: str, *, refuse_u
     return result, use_reload, support
 
 
-def _daemon_step(server: dict, use_reload: bool, *, allow_restart: bool) -> dict:
+def _daemon_step(server: dict, use_reload: bool, *, allow_restart: bool, verify=None) -> dict:
     """Step 2: make the daemon re-read its file - `config-reload` when the daemon has it, a restart otherwise or when the reload is
-    refused. Returns {"ok", "mode": "reload"|"restart"|"", "lines": [...]}."""
+    refused. Returns {"ok", "mode": "reload"|"restart"|"", "lines": [...]}.
+
+    `verify` (v5.68.0-beta.23, Q158) is asked before a refused reload becomes a restart: a reply that is not 0 is a refusal, a connection failure
+    or a timeout - the last of which Kea may well have APPLIED - so a caller that can LOOK at the daemon says whether it is already where it should
+    be (True), and then nothing is restarted."""
     if use_reload:
         reply = _kea.kea_command("config-reload", server=server)
         if reply.get("result") == 0:
             return {"ok": True, "mode": "reload", "lines": ["Kea re-read its config without a restart."]}
         refused = reply.get("text") or "refused"
+        if verify is not None and verify():
+            return {
+                "ok": True,
+                "mode": "reload",
+                "lines": [
+                    f"Kea's API did not confirm the reload ({refused}), but Kea was seen at the right level, so nothing was restarted."
+                ],
+            }
         if not allow_restart:
             # v5.68.0-beta.22 (Q157): turning logging ON never restarts Kea. A `config-reload` that does not return 0 is a refusal, a connection failure
             # or a timeout - `kea_command` gives all three the same shape - and at this point they cannot be told apart. beta.21 refused when
@@ -244,14 +383,22 @@ def _entry_for(server: dict, until: str, by: str = "") -> dict:
     }
 
 
-def _put(record: dict, sid, entry: dict) -> None:
+def _put(record: dict, sid, entry: dict) -> bool:
+    """Index `entry` for `sid`. True when it was STORED (v5.68.0-beta.23, Q158): turn_on does not ask the daemon on an unstored entry."""
     record["servers"][str(sid)] = entry
-    _save(record)
+    return _save(record)
 
 
-def _drop(record: dict, sid) -> None:
-    if record["servers"].pop(str(sid), None) is not None:
-        _save(record)
+def _drop(record: dict, sid) -> bool:
+    """Forget `sid`'s entry. True when it is gone from the store; False when the write failed - then the entry is still stored, and the next sweep
+    observes it again and drops it (the in-memory copy is put back so the rest of this call sees what is stored)."""
+    gone = record["servers"].pop(str(sid), None)
+    if gone is None:
+        return True
+    if _save(record):
+        return True
+    record["servers"][str(sid)] = gone
+    return False
 
 
 def _revert_file(server: dict, summary: str) -> tuple[bool, list[str]]:
@@ -270,9 +417,25 @@ def _revert_file(server: dict, summary: str) -> tuple[bool, list[str]]:
 # ── turn on / off ────────────────────────────────────────────────────────────
 
 
+def _undo_activation(server: dict, record: dict, why: str) -> dict:
+    """Logging was switched on and Jen could not STORE that it had been: take it off again at once through the restore path (which keeps trying
+    while the entry cannot be written). {"ok": False, "mode", "lines"}; the caller holds the lock."""
+    outcome = _restore(server, record, None, "investigation logging on failed: log level put back")
+    return {
+        "ok": False,
+        "mode": "",
+        "lines": [f"❌ {why}, so logging was turned off again."] + outcome["lines"],
+        "until": "",
+    }
+
+
 def turn_on(server: dict, minutes: int, actor: str = "") -> dict:
     """Investigation logging on `server` for `minutes` (one of DURATIONS), through apply_change. Refused while ANOTHER server has
-    it on (one at a time per Jen). Returns {"ok", "mode", "lines", "until"}."""
+    it on (one at a time per Jen). Returns {"ok", "mode", "lines", "until"}.
+
+    v5.68.0-beta.23 (Q158): the daemon is OBSERVED after the reload (and after a restart) rather than inferred from the reply. A reload whose reply
+    was lost HAS been applied, so an unconfirmed reload reverts the file and then LOOKS: seen at its original level, the entry is dropped; seen at
+    DEBUG, the entry is kept (file restored, daemon debug, reload owed) and the sweep finishes it; not seen, it is kept as unknown."""
     if minutes not in DURATIONS:
         return {"ok": False, "mode": "", "lines": [f"Choose {', '.join(map(str, DURATIONS))} minutes."], "until": ""}
     name = _name(server)
@@ -290,9 +453,18 @@ def turn_on(server: dict, minutes: int, actor: str = "") -> dict:
                 "until": "",
             }
         until = _iso(_now() + timedelta(minutes=minutes))
+        captured: dict = {}
+
+        def mutate(cfg):
+            new_cfg, code = _edit.set_investigation_logging(cfg, until)
+            marker = _edit.investigation_marker(new_cfg) if code == "ok" else None
+            if marker is not None:  # what the logger WAS: the daemon is later judged "restored" against it
+                captured["restore"] = marker.get("restore")
+            return new_cfg, code
+
         result, use_reload, _support = _change(
             server,
-            lambda cfg: _edit.set_investigation_logging(cfg, until),
+            mutate,
             f"investigation logging on for {minutes} min",
             "this config has no Dhcp4 section to log from",
             refuse_unknown=True,
@@ -310,56 +482,158 @@ def turn_on(server: dict, minutes: int, actor: str = "") -> dict:
             }
         lines = [text for _kind, text in result.lines]
         entry = _entry_for(server, until, actor)
+        if captured.get("restore") is not None:
+            entry["restore"] = captured["restore"]
 
         if result.status == "rollback_failed":
             # the change set could not put the file back after a failed restart: the file may carry the marker and the daemon is
             # in an unknown state - take responsibility for it rather than forgetting it
             entry.update(daemon="unknown", pending="restart", error=(lines[-1] if lines else "rollback failed")[:300])
-            _put(record, sid, entry)
+            if not _put(record, sid, entry):
+                lines.append(
+                    "❌ Jen could not record this either: the next ten-minute scan finds the marker in the file."
+                )
             return {"ok": False, "mode": "", "lines": lines, "until": ""}
         if result.status != "ok":
             return {"ok": False, "mode": "", "lines": lines, "until": ""}
 
-        if not use_reload:  # the change set restarted the daemon: file and daemon moved together
-            entry.update(daemon="debug", pending=None, mode="restart")
-            _put(record, sid, entry)
+        if not use_reload:  # the change set restarted the daemon: file and daemon moved together - and the daemon is looked at, not assumed
+            state = observe(server, entry, wait_s=OBSERVE_AFTER_RESTART_S)
+            if state == "restored":
+                restored, revert_lines = _revert_file(server, "investigation logging on failed: log level put back")
+                if restored:
+                    return {
+                        "ok": False,
+                        "mode": "",
+                        "lines": lines
+                        + revert_lines
+                        + ["Kea was restarted but is not running at DEBUG, so the log level was put back."],
+                        "until": "",
+                    }
+                entry.update(
+                    pending="reload",
+                    error="❌ The config file still carries the DEBUG marker and could not be put back.",
+                )
+                _put(record, sid, entry)
+                return {"ok": False, "mode": "", "lines": lines + revert_lines + [entry["error"]], "until": ""}
+            entry.update(pending=None if state == "debug" else "reload", mode="restart")
+            if not _put(record, sid, entry):
+                return _undo_activation(server, record, "Jen could not record that logging is on")
             _audit("INVESTIGATION_LOGGING_ON", name, f"DEBUG 55 until {until} (restart)")
+            tail = [] if state == "debug" else [_seen_line(entry)]
             return {
                 "ok": True,
                 "mode": "restart",
-                "lines": lines + ["Kea has no config-reload here, so it was restarted."],
+                "lines": lines + ["Kea has no config-reload here, so it was restarted."] + tail,
                 "until": until,
             }
 
-        # The file now carries DEBUG 55: Jen is responsible for it from this moment, so the entry is saved BEFORE the daemon is asked.
+        # The file now carries DEBUG 55: Jen is responsible for it from this moment, so the entry is saved BEFORE the daemon is asked - and when it
+        # cannot be saved the daemon is NOT asked (a DEBUG daemon with no stored entry is exactly what this module exists to prevent).
         entry.update(daemon="unknown", pending="reload")
-        _put(record, sid, entry)
+        if not _put(record, sid, entry):
+            restored, revert_lines = _revert_file(server, "investigation logging on failed: Jen could not record it")
+            note = ["Jen could not record this (its database did not take the write), so nothing was activated."]
+            if not restored:
+                note.append(
+                    "❌ The config file still carries the DEBUG marker and could not be put back; the ten-minute scan finds the marker and "
+                    "the sweep puts it back when it is due."
+                )
+            return {"ok": False, "mode": "", "lines": lines + revert_lines + note, "until": ""}
         step = _daemon_step(server, use_reload=True, allow_restart=False)
         if step["ok"]:
-            entry.update(daemon="debug", pending=None, mode=step["mode"])
-            _put(record, sid, entry)
-            _audit("INVESTIGATION_LOGGING_ON", name, f"DEBUG 55 until {until} ({step['mode']})")
-            return {"ok": True, "mode": step["mode"], "lines": lines + step["lines"], "until": until}
-        # the daemon did not take it: put the file straight back (the daemon never moved, so nothing else is owed)
+            state = observe(server, entry)
+            if state == "debug":
+                entry.update(pending=None, mode=step["mode"])
+                entry.pop("error", None)
+                if not _put(record, sid, entry):
+                    return _undo_activation(server, record, "Jen could not record that logging is on")
+                _audit("INVESTIGATION_LOGGING_ON", name, f"DEBUG 55 until {until} ({step['mode']})")
+                return {"ok": True, "mode": step["mode"], "lines": lines + step["lines"], "until": until}
+            if state == "unknown":
+                # Kea said it reloaded; its API then did not answer a config-get. The reload was confirmed, the level was not READ BACK
+                entry.update(pending=None, mode=step["mode"])
+                _put(record, sid, entry)
+                _audit(
+                    "INVESTIGATION_LOGGING_ON",
+                    name,
+                    f"DEBUG 55 until {until} ({step['mode']}; the running level was not read back)",
+                )
+                return {
+                    "ok": True,
+                    "mode": step["mode"],
+                    "lines": lines
+                    + step["lines"]
+                    + [
+                        "Jen could not read Kea's running log level back to confirm it; the entry stays and the sweep looks again."
+                    ],
+                    "until": until,
+                }
+            step = {
+                "ok": False,
+                "mode": "",
+                "lines": [
+                    f"Kea said it reloaded, but its running logger is {entry.get('seen') or 'not at DEBUG'} - the change did not take."
+                ],
+            }
+        # The daemon did not (visibly) take it: put the file straight back, WITHOUT a restart - and then look, because a reload whose reply was lost
+        # may have been applied.
         restored, revert_lines = _revert_file(server, "investigation logging on failed: log level put back")
         if restored:
-            _drop(record, sid)
-            return {"ok": False, "mode": "", "lines": lines + revert_lines + step["lines"], "until": ""}
+            entry.update(file="restored")
+            state = observe(server, entry)
+            if state == "restored":
+                if _drop(record, sid):
+                    return {
+                        "ok": False,
+                        "mode": "",
+                        "lines": lines + revert_lines + step["lines"] + ["Logging was not activated."],
+                        "until": "",
+                    }
+                _put(record, sid, entry)
+                return {
+                    "ok": False,
+                    "mode": "",
+                    "lines": lines
+                    + revert_lines
+                    + step["lines"]
+                    + ["Logging was not activated; Jen could not clear its own record, and the next sweep does."],
+                    "until": "",
+                }
+            entry.update(pending="reload")
+            entry.pop("error", None)
+            _put(record, sid, entry)
+            if state == "debug":
+                tail = [
+                    "Kea applied the change although its API did not confirm it. The file is back and the sweep asks Kea to re-read it within a "
+                    "minute; the entry stays until Jen has seen Kea back at its original level."
+                ]
+            else:
+                tail = [f"The file is back. {_seen_line(entry)} The entry stays until Jen has seen Kea restored."]
+            return {"ok": False, "mode": "", "lines": lines + revert_lines + step["lines"] + tail, "until": ""}
         note = "❌ The config file still carries the DEBUG marker and could not be put back; Jen keeps trying every minute."
-        entry.update(daemon="unknown", pending="reload", error=note[:300])
+        observe(server, entry)
+        entry.update(pending="reload", error=note[:300])
         _put(record, sid, entry)
         return {"ok": False, "mode": "", "lines": lines + revert_lines + step["lines"] + [note], "until": ""}
 
 
 def _restore(server: dict, record: dict, now: datetime | None, summary: str) -> dict:
     """Put `server`'s logger back and make the daemon take it. `now=None` restores unconditionally (the button); a datetime
-    restores only what is due (the sweep). The entry is dropped only when the file AND the daemon are both restored. Returns
-    {"ok", "mode", "lines"}; caller holds the lock."""
+    restores only what is due (the sweep). The entry is dropped only when the file is restored AND the daemon was SEEN restored (v5.68.0-beta.23,
+    Q158): every reload and restart is followed by a `config-get`, and a daemon Jen could not see, or saw at anything else, keeps the entry pending.
+    Returns {"ok", "mode", "lines"}; caller holds the lock."""
     sid = str(server.get("id"))
     entry = record["servers"].get(sid)
-    result, use_reload, support = _change(
-        server, lambda cfg: _edit.clear_investigation_logging(cfg, now=now), summary, ""
-    )
+    captured: dict = {}
+
+    def mutate(cfg):
+        marker = _edit.investigation_marker(cfg)
+        if marker is not None and not _edit.restore_problem(marker.get("restore")):
+            captured["restore"] = marker["restore"]
+        return _edit.clear_investigation_logging(cfg, now=now)
+
+    result, use_reload, support = _change(server, mutate, summary, "")
     lines = [text for _kind, text in result.lines]
     if result.status == "aborted" and result.last_code == "marker-invalid":
         # v5.68.0-beta.13 (Q148): the marker's restore object is missing or malformed. Nothing was written (the change set aborted before
@@ -370,26 +644,41 @@ def _restore(server: dict, record: dict, now: datetime | None, summary: str) -> 
         _put(record, sid, entry)
         return {"ok": False, "mode": "", "lines": [f"❌ {text}"]}
     if result.status == "ok":
-        if not use_reload:  # the change set restarted the daemon: both steps done
-            _drop(record, sid)
+        entry = entry or _entry_for(server, _iso(now or _now()))
+        if captured.get("restore") is not None and entry.get("restore") is None:
+            entry["restore"] = captured["restore"]
+        if not use_reload:  # the change set restarted the daemon: both steps done - now look at it
+            entry.update(file="restored", pending=None)
+            entry.pop("error", None)
+            state = observe(server, entry, wait_s=OBSERVE_AFTER_RESTART_S)
             why = (
                 f"{_unreachable_note(server)}, so Kea was restarted to take the restore (DEBUG 55 has to come off)."
                 if support == "unknown"
                 else "Kea has no config-reload here, so it was restarted."
             )
-            return {"ok": True, "mode": "restart", "lines": lines + [why]}
-        # the file is clean, the daemon still at DEBUG: say so in the index before the daemon is asked
-        entry = entry or _entry_for(server, _iso(now or _now()))
+            return _finish(server, record, entry, state, "restart", lines + [why])
+        # the file is clean, the daemon not yet looked at: say so in the index before the daemon is asked
         entry.pop("error", None)
-        entry.update(file="restored", daemon="debug", pending="reload")
+        entry.update(file="restored", pending="reload")
         _put(record, sid, entry)
     elif result.status == "nothing":
-        # no marker in the file: nothing to write. The daemon may still be at DEBUG - the very case a forgotten reload leaves.
-        if entry is None or entry.get("daemon") == "restored":
-            _drop(record, sid)
+        # no marker in the file: nothing to write. The daemon may still be at DEBUG - the very case a forgotten reload leaves - so LOOK before acting.
+        if entry is None:
             return {"ok": True, "mode": "nothing", "lines": lines}
         entry.pop("error", None)
-        entry.update(file="restored", pending=entry.get("pending") or "reload")
+        entry.update(file="restored")
+        before = entry.get("daemon")
+        state = observe(server, entry)
+        if state == "restored":
+            return _finish(server, record, entry, state, "nothing", lines)
+        if state == "unknown" and before != "debug" and now is not None:
+            # Kea's API did not answer and the daemon was NOT last seen at DEBUG: the sweep does not reload or restart on a guess (a restart every
+            # minute of a daemon Jen cannot see is not a fix). One that was last SEEN at DEBUG, or a person pressing Turn off, goes on to the
+            # documented fallback below - and the observation after it moves `daemon` off "debug", so that happens once.
+            entry["pending"] = entry.get("pending") or "reload"
+            _put(record, sid, entry)
+            return {"ok": False, "mode": "", "lines": lines + [_seen_line(entry)]}
+        entry["pending"] = entry.get("pending") or "reload"
         _put(record, sid, entry)
     else:
         if entry is not None:
@@ -398,23 +687,46 @@ def _restore(server: dict, record: dict, now: datetime | None, summary: str) -> 
         return {"ok": False, "mode": "", "lines": lines}
     reload_now = _reload_support(server)
     step = _daemon_step(
-        server, use_reload=entry.get("pending") != "restart" and reload_now == "yes", allow_restart=True
+        server,
+        use_reload=entry.get("pending") != "restart" and reload_now == "yes",
+        allow_restart=True,
+        verify=lambda: observe(server, entry) == "restored",
+    )
+    state = observe(server, entry, wait_s=OBSERVE_AFTER_RESTART_S if step["mode"] == "restart" else 0.0)
+    why = (
+        [f"{_unreachable_note(server)}, so Kea was restarted to take the restore (DEBUG 55 has to come off)."]
+        if reload_now == "unknown" and step["mode"] == "restart"
+        else []
     )
     if step["ok"]:
-        _drop(record, sid)
-        why = (
-            [f"{_unreachable_note(server)}, so Kea was restarted to take the restore (DEBUG 55 has to come off)."]
-            if reload_now == "unknown" and step["mode"] == "restart"
-            else []
-        )
-        return {"ok": True, "mode": step["mode"], "lines": lines + step["lines"] + why}
+        return _finish(server, record, entry, state, step["mode"], lines + step["lines"] + why)
     entry.update(
-        daemon="debug",
         pending="reload" if _reload_support(server) == "yes" else "restart",
         error=step["lines"][-1][:300],
     )
     _put(record, sid, entry)
     return {"ok": False, "mode": "", "lines": lines + step["lines"]}
+
+
+def _finish(server: dict, record: dict, entry: dict, state: str, mode: str, lines: list[str]) -> dict:
+    """The daemon step is over and the daemon has been looked at. Seen restored: the entry is dropped (and if the record cannot be cleared the
+    next sweep drops it - the restore itself is done). Anything else keeps the entry, pending, and says what was seen."""
+    sid = str(server.get("id"))
+    if state == "restored":
+        if not _drop(record, sid):
+            entry["pending"] = None
+            return {
+                "ok": True,
+                "mode": mode,
+                "lines": lines
+                + [
+                    "Jen could not clear its own record of this (its database did not take the write); the next sweep does."
+                ],
+            }
+        return {"ok": True, "mode": mode, "lines": lines}
+    entry["pending"] = entry.get("pending") or "reload"
+    _put(record, sid, entry)
+    return {"ok": False, "mode": "", "lines": lines + [_seen_line(entry)]}
 
 
 def turn_off(server: dict, actor: str = "", reason: str = "investigation logging off") -> dict:
@@ -585,6 +897,21 @@ def sweep(now: datetime | None = None, full: bool = False) -> dict:
                 )
                 _save(record)
         scanned = {sid for sid, _s in due}
+        # v5.68.0-beta.23 (Q158): an entry whose daemon state is not KNOWN (a reload that said ok and could not be read back, a daemon seen at
+        # something else) is looked at again every minute - one config-get - so the Health row says "unconfirmed" only for as long as it is true
+        for sid, entry in record["servers"].items():
+            if (
+                sid in known
+                and sid not in scanned
+                and entry.get("file", "debug") == "debug"
+                and entry.get("daemon") in ("unknown", "other")
+                and not entry.get("marker_invalid")
+            ):
+                before = entry.get("daemon")
+                if observe(known[sid], entry) == "debug":
+                    entry["pending"] = None
+                if entry.get("daemon") != before or entry.get("pending") is None:
+                    _put(record, sid, entry)
         if full:
             for sid, server in known.items():
                 if sid in scanned:
@@ -615,6 +942,30 @@ def sweep(now: datetime | None = None, full: bool = False) -> dict:
                     continue
                 marker = _edit.investigation_marker(cfg) if cfg else None
                 if not marker:
+                    # v5.68.0-beta.23 (Q158): the FILE is clean. The scan reads the DAEMON too - a running logger at DEBUG carrying the
+                    # jen-investigation marker with no entry is the "file restored, daemon DEBUG, nothing owed" state a lost reload reply used
+                    # to leave, whatever caused it. It is indexed with the daemon step owed and finished below (reload, then the documented
+                    # restart), and the daemon is observed again afterwards.
+                    seen = daemon_logger(server)
+                    if (
+                        record["servers"].get(sid) is None
+                        and seen is not None
+                        and seen["marker"] is not None
+                        and str(seen.get("severity") or "").upper() == _edit.INVESTIGATION_SEVERITY
+                    ):
+                        entry = _entry_for(server, str(seen["marker"].get("until") or _iso(now)))
+                        entry.update(file="restored", daemon="debug", pending="reload", mode="adopted")
+                        entry["observed_at"], entry["seen"] = _iso(now), _describe(seen)
+                        if not _edit.restore_problem(seen["marker"].get("restore")):
+                            entry["restore"] = seen["marker"]["restore"]
+                        _put(record, sid, entry)
+                        summary["adopted"].append(_name(server))
+                        _audit(
+                            "INVESTIGATION_LOGGING_ADOPTED",
+                            _name(server),
+                            "the running Kea was at investigation DEBUG with its config file already clean; Jen is asking it to re-read the file",
+                        )
+                        due.append((sid, server))
                     continue
                 held = record["servers"].get(sid)
                 if held and held.get("marker_invalid"):
@@ -627,6 +978,10 @@ def sweep(now: datetime | None = None, full: bool = False) -> dict:
                 elif sid not in record["servers"]:
                     entry = _entry_for(server, marker["until"])
                     entry["mode"] = "adopted"
+                    if not _edit.restore_problem(marker.get("restore")):
+                        entry["restore"] = marker["restore"]
+                    observe(server, entry)
+                    entry["pending"] = None if entry["daemon"] == "debug" else "reload"
                     _put(record, sid, entry)
                     summary["adopted"].append(_name(server))
                     _audit(
