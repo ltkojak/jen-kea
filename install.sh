@@ -2705,7 +2705,7 @@ _seed_answers_from_live() {
     # read (the merge would later fail on the same file, but only after the whole wizard) now stops here, naming the file and the exit code.
     out="$("$PYBIN_FOR_LAYOUT" "$SCRIPT_DIR/tools/config_merge.py" --answers "$f")" || {
         rc=$?
-        fatal "Could not read the live config $f to seed the wizard (config_merge.py --answers exited $rc): $f is not a readable INI file - fix it, or restore it from /opt/jen/.rollback/config/"
+        fatal "Could not read the live config $f to seed the wizard (config_merge.py --answers exited $rc): $f is not a readable INI file - fix it, or restore it from $ROOT_ROLLBACK_DIR/config/"
     }
     while IFS= read -r line; do
         name="${line%%=*}"

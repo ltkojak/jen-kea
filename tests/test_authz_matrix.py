@@ -218,23 +218,6 @@ def _caller(client, db, role):
 # carrying a refusal notice; the marker assertion is what proves nothing leaked.
 _ANY = {200, 302, 403, 404}
 SURFACES = [
-    # v5.68.0-beta.22 (Q157, item 8): the IP map used to fall back to the first CONFIGURED subnet for a user who may see none
-    (
-        "ip map",
-        "GET",
-        "/ipmap",
-        None,
-        {"viewer_A": {200}, "admin_A": {200}, "viewer_none": {200}, "admin_all": {200}, "superadmin": {200}},
-        (),
-    ),
-    (
-        "ip map of B by id",
-        "GET",
-        "/ipmap?subnet=2",
-        None,
-        {"viewer_A": {200}, "admin_A": {200}, "viewer_none": {200}, "admin_all": {200}, "superadmin": {200}},
-        (),
-    ),
     (
         "explain by B mac",
         "GET",
@@ -552,6 +535,30 @@ def test_cell(client, db, seeded, label, method, path, body, role, codes, typed)
             assert_no_marker(client.open(path, method=method, follow_redirects=True, **kwargs).data, ignore=typed)
 
 
+IPMAP_CELLS = [
+    pytest.param(role, path, id=f"{path}|{role}")
+    for path in ("/ipmap", "/ipmap?subnet=2")
+    for role in ("viewer_A", "admin_A", "viewer_none", "admin_all", "superadmin")
+]
+
+
+@pytest.mark.parametrize("role,path", IPMAP_CELLS)
+def test_ipmap_cell(client, db, seeded, role, path):
+    """v5.68.0-beta.22 (Q157, item 8): the IP map is an allowlisted route (a subnet-scoped visualisation, not a per-client diagnostic), so its cells
+    live here rather than in SURFACES. It used to fall back to the FIRST CONFIGURED subnet for a user who may see none; a caller who must not see B
+    sees no B marker on either spelling, and the account whose access list names only a removed subnet sees nothing of any subnet."""
+    headers = _caller(client, db, role)
+    r = client.open(path, method="GET", follow_redirects=False, **({"headers": headers} if headers else {}))
+    assert r.status_code == 200, f"{path} as {role}: HTTP {r.status_code}"
+    if role in MUST_NOT_SEE_B:
+        assert_no_marker(r.data)
+    if role == "viewer_none":
+        body = r.get_data(as_text=True)
+        assert "no subnet you can see" in body and "10.99.0." not in body, (
+            "the first configured subnet reached an account that may see none"
+        )
+
+
 class TestFixtureIsReal:
     """Positive controls: the matrix proves nothing unless B is really there for
     a caller who may see it."""
@@ -616,7 +623,7 @@ ROUTE_ALLOWLIST = {
     "leases.delete_stale_leases": "bulk admin action, subnet-restricted — tests/test_leases.py",
     "leases.release_lease": "single-lease admin action, subnet-restricted — tests/test_leases.py",
     "leases.bulk_release_leases": "bulk admin action, subnet-restricted — tests/test_leases.py",
-    "leases.ipmap": "subnet-scoped visualisation of the leases page's own data — tests/test_leases.py",
+    "leases.ipmap": "subnet-scoped visualisation of the leases page's own data — the cells in test_authz_matrix.py::TestTheIpMapCells and tests/test_leases.py::TestIpMapForAUserWhoMaySeeNoSubnet",
     # Reservation CRUD — add_subnet_restriction()/assert_subnet_access(); tests/test_reservations.py.
     "reservations.reservations": "list page, subnet-restricted at the query — tests/test_reservations.py",
     "reservations.add_reservation_post": "write route, subnet-restricted — tests/test_reservations.py",

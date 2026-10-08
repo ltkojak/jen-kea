@@ -847,6 +847,8 @@ class TestConfigureKeepsThePromptedAnswersToo:
         'JEN_DB_PASS="typed-secret"; export JEN_DB_PASS\n'
     )
     SEED = '_seed_answers_from_live "$CONFIG_FILE"\n'
+    # CI exports JEN_DB_* / JEN_HTTP* for its other tests; an environment variable wins over the configured default, so the tests that are about the DEFAULT unset them
+    UNSET_ENV = "unset JEN_DB_HOST JEN_DB_USER JEN_DB_NAME JEN_HTTP_PORT JEN_HTTPS_PORT\n"
 
     def test_the_ports_prompt_shows_the_configured_ports_and_enter_keeps_them(self, tmp_path):
         self._live(tmp_path)
@@ -854,6 +856,7 @@ class TestConfigureKeepsThePromptedAnswersToo:
             tmp_path,
             CONFIGURE_STUBS
             + self.ASK_PROMPTS
+            + self.UNSET_ENV
             + self.SEED
             + '_configure_ports >/dev/null\necho "ports=$HTTP_PORT|$HTTPS_PORT"',
         )
@@ -875,6 +878,7 @@ class TestConfigureKeepsThePromptedAnswersToo:
             tmp_path,
             CONFIGURE_STUBS
             + "HAVE_TTY=false; MODE_UNATTENDED=true\n"
+            + self.UNSET_ENV
             + self.SEED
             + '_configure_ports >/dev/null\necho "ports=$HTTP_PORT|$HTTPS_PORT"',
         )
@@ -898,6 +902,7 @@ class TestConfigureKeepsThePromptedAnswersToo:
             tmp_path,
             CONFIGURE_STUBS
             + self.ASK_PROMPTS
+            + self.UNSET_ENV
             + self.SEED
             + "_jen_db_offer_create() { return 1; }\n_configure_jen_db >/dev/null\n"
             + 'echo "jendb=$JEN_DB_HOST|$JEN_DB_USER|$JEN_DB_NAME"\necho "keadb=$KEA_DB_HOST"',
@@ -928,6 +933,7 @@ class TestConfigureKeepsThePromptedAnswersToo:
             + CONFIGURE_STUBS
             + "HAVE_TTY=false; MODE_UNATTENDED=true\nJEN_DB_PASS=jen-secret; export JEN_DB_PASS\n"
             + 'CONFIG_SNAPSHOT_TEXT="$(cat "$CONFIG_FILE")"\n'
+            + self.UNSET_ENV
             + self.SEED
             + self.SECTIONS_ALL
             + "SUBNET_LINES='1 = LAN, 10.0.0.0/24\\n'\nwrite_config\n"
