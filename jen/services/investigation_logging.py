@@ -78,23 +78,50 @@ def _iso(when: datetime) -> str:
 # ── the index of what this Jen knows is on ───────────────────────────────────
 
 
+DAMAGED_KEY = (
+    RECORD_KEY + ".damaged"
+)  # the unreadable value, kept once before anything overwrites it (v5.68.0-beta.24, Q159)
+
+
 def _record() -> dict:
+    """The index: {"servers": {...}, "damaged": bool, "raw": the unreadable value or ""}.
+
+    v5.68.0-beta.24 (Q159, item 3): a stored value that is not a JSON object with a `servers` object - malformed JSON, a list, a string, an object
+    without `servers` - used to read as an EMPTY index. The one-server rule then allowed a second session, the next write overwrote the damaged value,
+    and the only thing that might rediscover a running DEBUG was the ten-minute scan. It is `damaged` now: turn-on refuses, Health fails naming the
+    setting, `_save` keeps the old value in `investigation_logging.damaged` before it writes anything, and the full scan rebuilds the record."""
     from jen.models import user as _user
 
-    try:
-        data = json.loads(_user.get_global_setting(RECORD_KEY, "") or "{}")
-    except ValueError:
-        data = {}
-    servers = data.get("servers") if isinstance(data, dict) else None
-    return {"servers": servers if isinstance(servers, dict) else {}}
+    raw = _user.get_global_setting(RECORD_KEY, "") or ""
+    data = None
+    if raw != "":
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            data = None
+    damaged = raw != "" and not (isinstance(data, dict) and isinstance(data.get("servers"), dict))
+    servers = data["servers"] if (raw != "" and not damaged) else {}
+    return {"servers": servers, "damaged": damaged, "raw": raw if damaged else ""}
 
 
 def _save(record: dict) -> bool:
     """Store the index. True when it was stored: `set_global_setting` answers False when the Jen database did not take the write (v5.68.0-beta.22), and
-    a caller that says "recorded" or "dropped" must say it on the strength of that answer (v5.68.0-beta.23, Q158)."""
+    a caller that says "recorded" or "dropped" must say it on the strength of that answer (v5.68.0-beta.23, Q158).
+
+    A DAMAGED value (Q159) is copied to `investigation_logging.damaged` first, once (when that key is empty), and if the copy cannot be stored nothing
+    is overwritten: a person may need the old value to see which server was meant."""
     from jen.models import user as _user
 
-    return _user.set_global_setting(RECORD_KEY, json.dumps(record) if record["servers"] else "") is not False
+    keep = record.get("damaged") and record.get("raw") and not _user.get_global_setting(DAMAGED_KEY, "")
+    if keep and _user.set_global_setting(DAMAGED_KEY, record["raw"]) is False:
+        return False
+    stored = (
+        _user.set_global_setting(RECORD_KEY, json.dumps({"servers": record["servers"]}) if record["servers"] else "")
+        is not False
+    )
+    if stored:
+        record["damaged"], record["raw"] = False, ""  # what is stored now is a record this code wrote
+    return stored
 
 
 def _row(sid, entry: dict, now: datetime) -> dict:
@@ -277,6 +304,13 @@ def _is_original(seen: dict, restore) -> bool:
 def _describe(seen: dict) -> str:
     if not seen["present"]:
         return "no kea-dhcp4 logger"
+    if (
+        seen.get("marker") is not None
+        and str(seen.get("severity") or "").upper() == _edit.INVESTIGATION_SEVERITY
+        and not _at_investigation_level(seen)
+    ):
+        # v5.68.0-beta.24 (Q159, item 1): the marker is ours, the level is not the one it names - said, and classified "other" (never "debug")
+        return f"DEBUG at debuglevel {seen.get('debuglevel')}, not 55"
     return f"{seen.get('severity') or 'default severity'} / debuglevel {seen.get('debuglevel') if seen.get('debuglevel') is not None else 'default'}"
 
 
@@ -295,7 +329,7 @@ def observe(server: dict, entry: dict, *, wait_s: float = 0.0) -> str:
         state, entry["seen"] = "unknown", ""
     else:
         entry["seen"] = _describe(seen)
-        if seen["marker"] is not None and str(seen.get("severity") or "").upper() == _edit.INVESTIGATION_SEVERITY:
+        if seen["marker"] is not None and _at_investigation_level(seen):
             state = "debug"
         elif _is_original(seen, entry.get("restore")):
             state = "restored"
@@ -550,6 +584,13 @@ def turn_on(server: dict, minutes: int, actor: str = "") -> dict:
     sid = str(server.get("id"))
     with _lock:
         record = _record()
+        if record.get("damaged"):
+            return {
+                "ok": False,
+                "mode": "",
+                "lines": ["Jen's record of investigation logging cannot be read; see Health → DEBUG logging left on"],
+                "until": "",
+            }
         others = [e["name"] for other, e in record["servers"].items() if other != sid]
         if others:
             return {
@@ -1155,7 +1196,7 @@ def sweep(now: datetime | None = None, full: bool = False) -> dict:
                         record["servers"].get(sid) is None
                         and seen is not None
                         and seen["marker"] is not None
-                        and str(seen.get("severity") or "").upper() == _edit.INVESTIGATION_SEVERITY
+                        and _at_investigation_level(seen)
                     ):
                         entry = _entry_for(server, str(seen["marker"].get("until") or _iso(now)))
                         entry.update(file="restored", daemon="debug", pending="reload", mode="adopted")
@@ -1215,6 +1256,13 @@ def sweep(now: datetime | None = None, full: bool = False) -> dict:
                     entry["error"] = text[:300]
                     _put(record, sid, entry)
                 summary["errors"].append(f"{name}: {text}")
+        # v5.68.0-beta.24 (Q159, item 3): every SSH server was read (and whatever it held was adopted or restored above) and the stored value is still the
+        # damaged one: replace it with the record that was rebuilt - `_save` keeps the old value in `investigation_logging.damaged`. A scan that could not
+        # read a server leaves it damaged: that server may be the one running DEBUG.
+        if full and record.get("damaged") and not summary["errors"] and not _save(record):
+            summary["errors"].append(
+                "Jen's record of investigation logging could not be rebuilt (its database did not take the write)"
+            )
     return summary
 
 

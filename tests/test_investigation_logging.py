@@ -1855,3 +1855,213 @@ class TestAMovedDaemonWithASilentApiIsFinishedWhenTheApiReturns:
         assert inv.sweep(now=NOW + timedelta(minutes=4))["restored"] == ["kea-a"] and not inv.active()
         assert (_reloads(kea) - reloads0, _restarts(kea) - restarts0) == (1, 0)
         assert not _daemon_at_debug(kea)
+
+
+# ── v5.68.0-beta.24 (Q159): "debug" means DEBUG 55 exactly, and a damaged record fails closed ─────────────────────────────────────────
+
+
+_MISSING = object()
+
+
+def _marked_logger(severity, debuglevel):
+    """A running kea-dhcp4 logger that carries a valid jen-investigation marker, at the given severity and debuglevel."""
+    entry = {
+        "name": "kea-dhcp4",
+        "severity": severity,
+        "user-context": {
+            "jen-investigation": {"until": FUTURE, "restore": {"severity": "INFO", "debuglevel": "absent"}}
+        },
+    }
+    if debuglevel is not _MISSING:
+        entry["debuglevel"] = debuglevel
+    return _cfg([entry])
+
+
+class TestDebugMeansDebugFiftyFiveExactly:
+    """Item 1: `observe` classified "debug" for any DEBUG logger carrying the marker; the predicate for "at the investigation level" existed
+    (`_at_investigation_level`: DEBUG AND debuglevel 55) and the classification did not use it. A DEBUG 0 / DEBUG 30 logger with the marker was reported
+    as investigation logging active: turn_on said success, cleared pending, and Health said "on"."""
+
+    @pytest.mark.parametrize(
+        "severity, level, state, seen",
+        [
+            ("DEBUG", 0, "other", "DEBUG at debuglevel 0, not 55"),
+            ("DEBUG", 30, "other", "DEBUG at debuglevel 30, not 55"),
+            ("DEBUG", 55, "debug", "DEBUG / debuglevel 55"),
+            ("INFO", 0, "other", "INFO / debuglevel 0"),
+            ("DEBUG", _MISSING, "other", "DEBUG at debuglevel None, not 55"),
+            ("DEBUG", "55", "other", "DEBUG at debuglevel 55, not 55"),
+        ],
+        ids=["debug-0", "debug-30", "debug-55", "info-0", "debuglevel-missing", "debuglevel-a-string"],
+    )
+    def test_the_six_cases_each_with_a_valid_marker(self, world, severity, level, state, seen):
+        world.daemons[1].loaded = _marked_logger(severity, level)
+        entry = {"restore": {"severity": "INFO", "debuglevel": "absent"}}
+        assert inv.observe(world.servers[0], entry) == state
+        assert entry["daemon"] == state and entry["seen"] == seen, entry
+
+    def test_a_reload_that_lands_on_debug_thirty_is_not_success(self, world):
+        from jen.services import health
+
+        kea = world.daemons[1]
+        real = kea.kea_command
+
+        def lands_on_debug_30(command, **kw):
+            result = real(command, **kw)
+            if command == "config-reload":
+                _entry(kea.loaded)["debuglevel"] = 30
+            return result
+
+        kea.kea_command = lands_on_debug_30
+        out = inv.turn_on(world.servers[0], 5)
+        assert out["ok"] is False and out["until"] == "" and "_audit" not in world.store
+        assert ed.investigation_marker(kea.file) is None, "the file went back"
+        (entry,) = inv.active()
+        assert (
+            entry["daemon"] == "other"
+            and entry["seen"] == "DEBUG at debuglevel 30, not 55"
+            and entry["pending"] is None
+        )
+        c = health._debug_logging_left_on({})
+        assert c.status == "fail" and "left it alone" in c.detail and "DEBUG at debuglevel 30, not 55" in c.detail
+
+    def test_the_full_scan_adopts_debug_fifty_five_and_not_debug_thirty(self, world):
+        kea = world.daemons[1]
+        kea.loaded = _marked_logger("DEBUG", 30)  # clean file, running DEBUG 30 with the marker
+        assert inv.sweep(now=NOW, full=True) == {"restored": [], "adopted": [], "errors": []}
+        assert not inv.active() and not any(c.startswith(("config-reload", "restart")) for c in kea.calls)
+        kea.loaded = _marked_logger("DEBUG", 55)
+        out = inv.sweep(now=NOW, full=True)
+        assert (
+            out["adopted"] == ["kea-a"]
+            and out["restored"] == ["kea-a"]
+            and not _daemon_at_debug(kea)
+            and not inv.active()
+        )
+
+    def test_nothing_classifies_by_severity_alone(self):
+        """The self-check, as a test: INVESTIGATION_SEVERITY appears only inside `_at_investigation_level`, `_is_original` and `_describe`."""
+        import ast
+        import inspect
+
+        tree = ast.parse(inspect.getsource(inv))
+        users = {
+            fn.name
+            for fn in ast.walk(tree)
+            if isinstance(fn, ast.FunctionDef)
+            and any(isinstance(n, ast.Attribute) and n.attr == "INVESTIGATION_SEVERITY" for n in ast.walk(fn))
+        }
+        assert users == {"_at_investigation_level", "_is_original", "_describe"}, users
+
+
+class TestADamagedRecordFailsClosed:
+    """Item 3: `_record()` read a stored value that was not a JSON object with a `servers` object as an EMPTY index. The one-server rule then allowed a
+    second session, the next write overwrote the damaged value, and only the ten-minute scan could rediscover a running DEBUG."""
+
+    @staticmethod
+    def _damage(world, raw):
+        world.store[inv.RECORD_KEY] = raw
+
+    def test_an_empty_value_and_an_empty_record_are_not_damaged(self, world):
+        assert inv._record() == {"servers": {}, "damaged": False, "raw": ""}
+        self._damage(world, '{"servers": {}}')
+        assert inv._record()["damaged"] is False and inv.turn_on(world.servers[0], 5)["ok"]
+
+    def test_one_active_server_is_a_valid_record(self, world):
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        record = inv._record()
+        assert record["damaged"] is False and list(record["servers"]) == ["1"]
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            '{"servers": ',
+            "not json at all",
+            "[]",
+            '"a string"',
+            "42",
+            '{"nope": 1}',
+            '{"servers": []}',
+            '{"servers": "x"}',
+        ],
+    )
+    def test_malformed_and_wrong_shaped_values_are_damaged_and_turn_on_is_refused(self, world, raw):
+        from jen.services import health
+
+        self._damage(world, raw)
+        record = inv._record()
+        assert record["damaged"] is True and record["servers"] == {} and record["raw"] == raw
+        kea = world.daemons[1]
+        out = inv.turn_on(world.servers[0], 5)
+        assert out["ok"] is False and "cannot be read; see Health" in out["lines"][0]
+        assert kea.writes == 0 and kea.calls == [] and world.store[inv.RECORD_KEY] == raw, (
+            "nothing asked, nothing written, nothing overwritten"
+        )
+        assert inv.active() == []
+        c = health._debug_logging_left_on({})
+        assert (
+            c.status == "fail"
+            and "`investigation_logging` setting" in c.detail
+            and "investigation_logging.damaged" in c.detail
+        )
+
+    def test_the_damaged_value_is_kept_once_before_anything_overwrites_it(self, world):
+        self._damage(world, "{broken")
+        inv.sweep(now=NOW)  # the cheap path writes nothing for a damaged record
+        assert inv.DAMAGED_KEY not in world.store and world.store[inv.RECORD_KEY] == "{broken"
+        inv.sweep(now=NOW, full=True)  # every server was read, none holds a marker: the record is rebuilt (empty)
+        assert world.store[inv.DAMAGED_KEY] == "{broken", "the old value, kept"
+        assert world.store[inv.RECORD_KEY] == "" and inv._record()["damaged"] is False
+        self._damage(world, "[1, 2]")  # damaged again: the first copy is NOT replaced
+        inv.sweep(now=NOW, full=True)
+        assert world.store[inv.DAMAGED_KEY] == "{broken"
+
+    def test_if_the_old_value_cannot_be_kept_nothing_is_overwritten(self, world, monkeypatch):
+        self._damage(world, "{broken")
+
+        def refuse_the_copy(key, value):  # the settings table refuses the DAMAGED_KEY write only
+            if key == inv.DAMAGED_KEY:
+                return False
+            world.store[key] = value
+            return True
+
+        monkeypatch.setattr("jen.models.user.set_global_setting", refuse_the_copy)
+        out = inv.sweep(now=NOW, full=True)
+        assert world.store[inv.RECORD_KEY] == "{broken" and inv._record()["damaged"] is True
+        assert out["errors"] and "could not be rebuilt" in out["errors"][-1]
+
+    def test_a_server_the_scan_could_not_read_leaves_the_record_damaged(self, world, monkeypatch):
+        self._damage(world, "{broken")
+        real = inv._host.read_config_versioned
+
+        def unreadable_b(server, service):
+            if server["id"] == 2:
+                raise OSError("no route")
+            return real(server, service)
+
+        monkeypatch.setattr(inv._host, "read_config_versioned", unreadable_b)
+        out = inv.sweep(now=NOW, full=True)
+        assert out["errors"] and inv._record()["damaged"] is True and world.store[inv.RECORD_KEY] == "{broken", (
+            "that server may be the one at DEBUG"
+        )
+
+    def test_malformed_while_a_daemon_runs_debug_the_other_server_is_refused_the_scan_adopts_and_the_record_is_repaired(
+        self, world
+    ):
+        from jen.services import health
+
+        kea = world.daemons[1]
+        assert inv.turn_on(world.servers[0], 60)["ok"] and _daemon_at_debug(kea)
+        self._damage(world, "{this was the record")  # the record is lost while kea-a keeps running DEBUG 55
+        assert inv.active() == []
+        refused = inv.turn_on(world.servers[1], 5)
+        assert refused["ok"] is False and "cannot be read" in refused["lines"][0] and world.daemons[2].writes == 0
+        assert health._debug_logging_left_on({}).status == "fail"
+        out = inv.sweep(now=NOW + timedelta(minutes=1), full=True)
+        assert out["adopted"] == ["kea-a"] and out["errors"] == []
+        assert inv._record()["damaged"] is False and [e["name"] for e in inv.active(NOW)] == ["kea-a"]
+        assert world.store[inv.DAMAGED_KEY] == "{this was the record"
+        assert health._debug_logging_left_on({}).status == "ok", "the next page load"
+        assert inv.sweep(now=NOW + timedelta(minutes=2))["errors"] == [], "the next sweep"
+        assert _daemon_at_debug(kea), "the adopted logging is still on, and still indexed"
+        assert inv.turn_off(world.servers[0])["ok"] and not inv.active() and not _daemon_at_debug(kea)

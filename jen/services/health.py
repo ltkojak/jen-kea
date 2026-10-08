@@ -293,6 +293,16 @@ def _debug_logging_left_on(ctx) -> Check:
     )
     from jen.services import investigation_logging as __inv
 
+    if __inv._record().get("damaged"):
+        # v5.68.0-beta.24 (Q159, item 3): an unreadable index used to read as an empty one - "no server is at investigation logging" - while a Kea
+        # might be running DEBUG 55. Fail closed.
+        c.status = "fail"
+        c.detail = (
+            "Jen's record of investigation logging (the `investigation_logging` setting) is unreadable; the ten-minute scan rebuilds it from the servers; "
+            "the old value is kept in `investigation_logging.damaged`. Turning logging on is refused until then."
+        )
+        c.fix_hint = "Wait for the scan (or press Turn it off on Servers if you know a server is at DEBUG); the old value is in the settings table."
+        return c
     entries = __inv.active()
     if not entries:
         c.status, c.detail = "ok", "no server is at investigation logging"
