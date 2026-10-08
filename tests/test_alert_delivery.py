@@ -593,7 +593,8 @@ class TestTheDailySummaryIsDueAtOrAfterItsTime:
     def test_the_next_day_it_is_sent_again(self, real_loop, summary):
         sent, configure = summary
         configure("11:00", persisted=self.DAY)
-        real_loop(3, hooks={4: lambda clock: clock.__setitem__("now", clock["now"] + timedelta(days=1))})
+        # the run ends 3 minutes after the clock has jumped a day, so the cycles after the jump actually run
+        real_loop(24 * 60 + 3, hooks={4: lambda clock: clock.__setitem__("now", clock["now"] + timedelta(days=1))})
         assert len(sent) == 1 and sent[0].date().isoformat() == "2026-10-08"
         assert self._stored() == "2026-10-08"
 

@@ -1112,6 +1112,7 @@ class TestANakStormCannotFloodTheInbox:
         # log order is time order: the storm first (11:16 - 11:23), the existing key's newer event last (11:30)
         logs[1] = [*self._storm(400, first=1000), decline(59, ip="10.45.0.1", mac="aa:bb:cc:00:00:00", minute=30)]
         out = cp.sweep(NOW, servers=[SERVER_A])
+        db.commit()  # this connection's REPEATABLE READ snapshot began at the read above: read what the sweep (another connection) wrote
         existing = rows(db, "kind='decline' AND mac='aa:bb:cc:00:00:00'")
         assert existing and existing[0]["count"] > before, "the existing key was not updated"
         assert out["dropped_keys"] == 200 and len(rows(db, "kind='decline'")) == 1 + 200
@@ -1166,6 +1167,7 @@ class TestARemovedServersKeysAreCleared:
 
     @staticmethod
     def _present(db, server_id):
+        db.commit()  # a fresh snapshot: the sweep writes through another connection
         with db.cursor() as cur:
             cur.execute(
                 "SELECT setting_key FROM settings WHERE setting_key IN (%s,%s,%s,%s,%s)",

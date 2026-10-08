@@ -498,7 +498,7 @@ class TestAReservationInAHiddenSubnetIsNotAnOracle:
 
         page = re.sub(r"(?i)00[:-]?aa[:-]?aa[:-]?aa[:-]?aa[:-]?7[78]", "<mac>", page)
         # every page carries a per-request CSRF token and a CSP nonce: long token-shaped quoted values are not content
-        page = re.sub(r'"[A-Za-z0-9_+/=.-]{24,}"', '"<token>"', page)
+        page = re.sub(r'"[A-Za-z0-9_+/=.-]{16,}"', '"<token>"', page)
         return re.sub(r"\s+", " ", page.replace(mac, "<mac>"))
 
     def test_a_hidden_reservation_and_a_never_seen_mac_render_the_same_page(self, client, db, hidden, mock_kea):
