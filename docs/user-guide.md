@@ -484,7 +484,7 @@ at that moment once, because nothing had been recorded before.
 **Delivery is part of the state (v5.68.0-beta.19).** A warning counts as sent only when at least one channel that handles it actually accepted it. If every
 channel is down - or no channel handles that type yet - Jen keeps the warning pending and tries again after 1, 2, 4 ... up to 60 minutes for as long as the condition
 holds, so enabling a channel later still delivers it. A recovery (*Subnet utilization recovery*, *Pool exhaustion recovery*, *Packet health recovery*) is sent only
-after its warning was delivered. One channel accepting is enough; the others are not retried. The *Pool exhaustion forecast* and *Certificate expiring* alerts use
+after its warning was delivered, and a recovery that no channel accepted is itself retried (5.68.0-beta.20) with the same 1, 2, 4 ... 60 minute spacing until one does - the warning is never sent again meanwhile. One channel accepting is enough; the others are not retried. The *Pool exhaustion forecast* and *Certificate expiring* alerts use
 the same rule (the forecast reminds weekly while the trend still reaches 90 %).
 
 ## Alert log retention (v5.68.0-beta.17)

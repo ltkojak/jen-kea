@@ -1077,6 +1077,21 @@ def alert_sent_totals(cur) -> dict:
 # `t` the time of the last attempt, `c` the attempts since it last changed, `d` when it was notified. A pending notification retries with backoff
 # (1, 2, 4 ... 60 minutes) for as long as the condition holds - including after a channel is enabled later; the `_ok` goes out only after a
 # delivered warning. One helper, `notify_condition`, does this for utilization, pool_exhaustion, packet_health, cert_expiring and pool_forecast.
+#
+# v5.68.0-beta.20 (Q155) - three more edges of the same contract. (1) A RECOVERY is state too: `r` (recovery pending) is set when the `_ok` was
+# not delivered, the condition is inactive, and each pass retries the `_ok` with the same backoff until a channel takes it - or the condition
+# comes back (the earlier warning stands; nothing is re-sent). The warning is never re-sent while a recovery waits. (2) beta.18's "1" is read as
+# active and NOT notified: beta.18 wrote it without checking the send, so "delivered" was a guess; one attempt on the next pass (a possible single
+# duplicate beats a missed warning). (3) The state is written only when it changed: the quiet path used to upsert a settings row per (type, key)
+# on every 30-second pass.
+
+#: v5.68.0-beta.20 (Q155) - how often the certificate and forecast CONDITIONS are evaluated by the alert loop. They ran once per process-day, but
+#: `notify_condition` retries a failed delivery after 1, 2, 4 ... minutes: a one-day certificate warning whose channel was down was next tried
+#: tomorrow, after the certificate had expired. Evaluating a delivered condition is free (nothing is written, nothing is sent); the EXPENSIVE inputs
+#: - the certificate file's days-left and the forecast fit - are cached for `CONDITION_CACHE_MINUTES`.
+CONDITION_INTERVAL_MINUTES = 15
+CONDITION_CACHE_MINUTES = 60
+_CONDITION_CACHE: dict = {}
 
 _BACKOFF_MINUTES = (1, 2, 4, 8, 16, 32, 60)
 
@@ -1092,25 +1107,28 @@ def _alert_state_key(alert_type, key) -> str:
 
 
 def _load_state(alert_type, key) -> dict:
-    """{"a": active, "n": notified, "t": iso | None, "c": attempts, "d": iso | None}. A value written by beta.18 ("1"/"0") is read as
-    active-and-notified / inactive: it was set after a send whose result nobody checked, and re-sending on upgrade would be worse."""
+    """{"a": active, "n": notified, "t": iso | None, "c": attempts, "d": iso | None, "r": recovery pending}. A value written by beta.18 ("1"/"0")
+    is read as active-and-NOT-notified / inactive (v5.68.0-beta.20, Q155): beta.18 set "1" after a send whose result nobody checked, so an
+    undelivered warning survived the upgrade as "delivered" until the condition recovered. Not notified means one attempt on the next pass - a
+    possible single duplicate beats a missed warning."""
     import json
 
     raw = __get_global_setting(_alert_state_key(alert_type, key), "") or ""
     if raw in ("1", "0"):
-        return {"a": raw == "1", "n": raw == "1", "t": None, "c": 0, "d": None}
+        return {"a": raw == "1", "n": False, "t": None, "c": 0, "d": None, "r": False}
     try:
         value = json.loads(raw)
     except (TypeError, ValueError):
         value = None
     if not isinstance(value, dict):
-        return {"a": False, "n": False, "t": None, "c": 0, "d": None}
+        return {"a": False, "n": False, "t": None, "c": 0, "d": None, "r": False}
     return {
         "a": bool(value.get("a")),
         "n": bool(value.get("n")),
         "t": value.get("t"),
         "c": int(value.get("c") or 0),
         "d": value.get("d"),
+        "r": bool(value.get("r")),
     }
 
 
@@ -1155,7 +1173,7 @@ def mark_notified(alert_type, key, now=None) -> None:
     now = now or _utcnow()
     s = _load_state(alert_type, key)
     if not (s["a"] and s["n"]):
-        _save_state(alert_type, key, {"a": True, "n": True, "t": _iso(now), "c": 0, "d": _iso(now)})
+        _save_state(alert_type, key, {"a": True, "n": True, "t": _iso(now), "c": 0, "d": _iso(now), "r": False})
 
 
 def notify_condition(
@@ -1163,52 +1181,97 @@ def notify_condition(
 ) -> str:
     """The one place a threshold alert is sent, retried and recovered (v5.68.0-beta.19, Q154). `active` is whether the condition holds NOW.
     Returns what it did: "sent", "pending" (attempted, nobody took it; will retry), "waiting" (backing off), "quiet" (nothing to do),
-    "recovered" (the `_ok` was sent), "cleared" (the condition ended; no `_ok`: no warning had been delivered, or the type has none).
+    "recovered" (the `_ok` was delivered), "recovery-pending" (the `_ok` was attempted and nobody took it; it will be retried), "cleared" (the
+    condition ended; no `_ok`: no warning had been delivered, or the type has none).
 
       * a condition that becomes true starts a pending notification; it is `notified` only when at least one eligible channel returned ok -
         every channel failing, or none eligible, leaves it pending and it is retried with backoff (1, 2, 4 ... 60 min) while it holds;
-      * a condition that ends sends `ok_type` ONLY if its warning was delivered (a recovery for a warning nobody got is noise);
-      * `repeat_after` (a timedelta) re-opens a delivered condition that is still true after that long (the forecast's weekly reminder).
+      * a condition that ends sends `ok_type` ONLY if its warning was delivered (a recovery for a warning nobody got is noise) - and, since
+        v5.68.0-beta.20 (Q155), a recovery nobody took is retried with the same backoff until it is delivered (`r`): the operator used to keep
+        "high" forever. The warning is NEVER re-sent while a recovery waits; if the condition comes back first, the earlier warning stands;
+      * `repeat_after` (a timedelta) re-opens a delivered condition that is still true after that long (the forecast's weekly reminder);
+      * the state is written only when it CHANGED (a quiet pass writes nothing).
     """
     from datetime import timedelta
 
     now = now or _utcnow()
     state = _load_state(alert_type, key)
+    original = dict(state)
+
+    def persist():
+        if state != original:
+            _save_state(alert_type, key, state)
+
+    def backing_off():
+        last = _parse(state["t"])
+        if last is None or state["c"] <= 0:
+            return False
+        return now < last + timedelta(minutes=_BACKOFF_MINUTES[min(state["c"] - 1, len(_BACKOFF_MINUTES) - 1)])
+
+    def attempt(send_type, send_kwargs):
+        try:
+            return _delivered(send_alert(send_type, **send_kwargs))
+        except Exception as e:
+            logger.error(f"alert {send_type} ({key}): send failed: {e}")
+            return False
+
+    inactive = {"a": False, "n": False, "t": None, "c": 0, "d": None, "r": False}
     if not active:
-        if not state["a"]:
-            return "quiet"
-        outcome = "cleared"
-        if state["n"] and ok_type:
-            send_alert(ok_type, **(ok_kwargs if ok_kwargs is not None else kwargs))
-            outcome = "recovered"
-        _save_state(alert_type, key, {"a": False, "n": False, "t": None, "c": 0, "d": None})
-        return outcome
-    if not state["a"]:
-        state = {"a": True, "n": False, "t": None, "c": 0, "d": None}
+        if state["a"]:  # the condition has just ended
+            if state["n"] and ok_type:
+                if attempt(ok_type, ok_kwargs if ok_kwargs is not None else kwargs):
+                    state.clear()
+                    state.update(inactive)
+                    persist()
+                    return "recovered"
+                # not delivered: the condition is over, the recovery is owed
+                state.update(a=False, n=False, t=_iso(now), c=1, r=True)
+                persist()
+                return "recovery-pending"
+            state.clear()
+            state.update(inactive)
+            persist()
+            return "cleared"
+        if state["r"]:  # a recovery still owed
+            if not ok_type:
+                state.clear()
+                state.update(inactive)
+                persist()
+                return "cleared"
+            if backing_off():
+                return "waiting"
+            if attempt(ok_type, ok_kwargs if ok_kwargs is not None else kwargs):
+                state.clear()
+                state.update(inactive)
+                persist()
+                return "recovered"
+            state.update(t=_iso(now), c=state["c"] + 1)
+            persist()
+            return "recovery-pending"
+        return "quiet"
+    if state["r"] and not state["a"]:
+        # the condition came back before its recovery was delivered: the warning that was delivered earlier still stands - nothing is re-sent
+        state.update(a=True, n=True, t=None, c=0, r=False)
+    elif not state["a"]:
+        state.clear()
+        state.update(a=True, n=False, t=None, c=0, d=None, r=False)
     elif state["n"] and repeat_after is not None:
         told = _parse(state["d"])
         if told is not None and now - told >= repeat_after:
-            state = {"a": True, "n": False, "t": None, "c": 0, "d": None}
+            state.update(n=False, t=None, c=0, d=None)
     if state["n"]:
-        _save_state(alert_type, key, state)
+        persist()
         return "quiet"
-    last = _parse(state["t"])
-    if last is not None and state["c"] > 0:
-        wait = timedelta(minutes=_BACKOFF_MINUTES[min(state["c"] - 1, len(_BACKOFF_MINUTES) - 1)])
-        if now < last + wait:
-            _save_state(alert_type, key, state)
-            return "waiting"
-    try:
-        delivered = _delivered(send_alert(alert_type, **kwargs))
-    except Exception as e:
-        logger.error(f"alert {alert_type} ({key}): send failed: {e}")
-        delivered = False
+    if backing_off():
+        persist()
+        return "waiting"
+    delivered = attempt(alert_type, kwargs)
     state["t"] = _iso(now)
     if delivered:
         state.update(n=True, c=0, d=_iso(now))
     else:
         state["c"] += 1
-    _save_state(alert_type, key, state)
+    persist()
     return "sent" if delivered else "pending"
 
 
@@ -1329,15 +1392,44 @@ def ip_to_int(ip):
     return sum(int(x) << (8 * (3 - i)) for i, x in enumerate(parts))
 
 
-def check_cert_expiry_alert() -> None:
+def _cached(name, compute, now):
+    """`compute()` at most once per `CONDITION_CACHE_MINUTES` for `name` (v5.68.0-beta.20, Q155): the alert loop evaluates the certificate and
+    forecast conditions every `CONDITION_INTERVAL_MINUTES`, and the file read and the forecast fit behind them are not worth repeating that often."""
+    from datetime import timedelta
+
+    held = _CONDITION_CACHE.get(name)
+    if held is not None and now - held[0] < timedelta(minutes=CONDITION_CACHE_MINUTES):
+        return held[1]
+    value = compute()
+    _CONDITION_CACHE[name] = (now, value)
+    return value
+
+
+def run_slow_conditions(now=None) -> None:
+    """The certificate-expiry and pool-forecast conditions, evaluated by the alert loop every `CONDITION_INTERVAL_MINUTES` (v5.68.0-beta.20, Q155) -
+    each guarded on its own, with the expensive inputs cached hourly."""
+    now = now or _utcnow()
+    try:
+        check_cert_expiry_alert(now=now, use_cache=True)
+    except Exception as e:
+        logger.error(f"Cert expiry check error: {e}")
+    try:
+        check_pool_forecast_alerts(use_cache=True)
+    except Exception as e:
+        logger.error(f"Pool forecast check error: {e}")
+
+
+def check_cert_expiry_alert(now=None, use_cache=False) -> None:
     """Fire `cert_expiring` when Jen's HTTPS certificate's days-left crosses
     into a tighter bucket (30 → 7 → 1). The last-fired bucket lives in the
     settings key `cert_expiry_alerted` so a restart doesn't re-alert; it
     resets to 0 once the cert is renewed (days-left back above 30). No-op
-    when HTTPS isn't configured (`cert_days_left()` returns None)."""
+    when HTTPS isn't configured (`cert_days_left()` returns None).
+    `use_cache` (the alert loop) reads the certificate's days-left through the hourly cache."""
     from jen.services.health import cert_days_left
 
-    days = cert_days_left()
+    now = now or _utcnow()
+    days = _cached("cert_days_left", cert_days_left, now) if use_cache else cert_days_left()
     if days is None:
         return
     bucket = next((b for b in (1, 7, 30) if days <= b), None)
@@ -1350,23 +1442,25 @@ def check_cert_expiry_alert() -> None:
         legacy = 0
     for b in (30, 7, 1):
         if legacy and b >= legacy and not _load_state("cert_expiring", b)["a"]:
-            mark_notified("cert_expiring", b)
+            mark_notified("cert_expiring", b, now=now)
         if bucket is None or b < bucket:
-            notify_condition("cert_expiring", b, False, kwargs={})
+            notify_condition("cert_expiring", b, False, kwargs={}, now=now)
         elif b > bucket:
-            mark_notified("cert_expiring", b)
+            mark_notified("cert_expiring", b, now=now)
         else:
-            notify_condition("cert_expiring", b, True, kwargs={"days_left": days})
+            notify_condition("cert_expiring", b, True, kwargs={"days_left": days}, now=now)
     if legacy:
         __set_global_setting("cert_expiry_alerted", "0")
 
 
-def check_pool_forecast_alerts(today=None) -> None:
+def check_pool_forecast_alerts(today=None, use_cache=False) -> None:
     """v5.36.0 (Q35): fire `pool_forecast` for every subnet whose trend
     reaches 90 % of its pool within 30 days — at most once per subnet per
     7 days, tracked in the settings key `pool_forecast_alerted_<id>` (the
     date last fired) so a restart doesn't re-alert. The forecast itself is
-    jen/services/capacity.py; the history read is health.lease_history_window."""
+    jen/services/capacity.py; the history read is health.lease_history_window.
+    `use_cache` (the alert loop, every `CONDITION_INTERVAL_MINUTES`) reads the history and fits the forecast at most once an hour; the
+    notification state of each subnet is still evaluated on every call, which costs nothing for a delivered condition."""
     from datetime import date, datetime, timedelta
 
     from jen.services import capacity
@@ -1374,17 +1468,23 @@ def check_pool_forecast_alerts(today=None) -> None:
 
     # a caller-supplied `today` (the tests) is the clock; in production it is the real time, so a retry's backoff really elapses
     now = datetime.combine(today, datetime.min.time()) if today is not None else _utcnow()
-    today = today or date.today()
-    history = lease_history_window()
-    for sid, rows in history.items():
+    today = today or now.date()
+
+    def fit():
+        return {
+            sid: (capacity.forecast(rows, today=today), capacity.high_water(rows))
+            for sid, rows in lease_history_window().items()
+        }
+
+    fits = _cached("pool_forecast", fit, now) if use_cache else fit()
+    for sid, (f, hw) in fits.items():
         info = extensions.SUBNET_MAP.get(sid)
         if not info:
             continue
-        f = capacity.forecast(rows, today=today)
         d = f["days_to_90pct"]
         if d is None or d > capacity.WARN_DAYS:
             notify_condition(
-                "pool_forecast", sid, False, kwargs={}
+                "pool_forecast", sid, False, kwargs={}, now=now
             )  # the trend no longer reaches 90 %: the episode is over
             continue
         # v5.68.0-beta.19 (Q154): one `notify_condition` per subnet - retried while undelivered, a weekly reminder once delivered
@@ -1394,13 +1494,14 @@ def check_pool_forecast_alerts(today=None) -> None:
             try:
                 told = datetime.combine(date.fromisoformat(legacy), datetime.min.time())
                 _save_state(
-                    "pool_forecast", sid, {"a": True, "n": True, "t": told.isoformat(), "c": 0, "d": told.isoformat()}
+                    "pool_forecast",
+                    sid,
+                    {"a": True, "n": True, "t": told.isoformat(), "c": 0, "d": told.isoformat(), "r": False},
                 )
             except ValueError:
                 pass
         if legacy:
             __set_global_setting(legacy_key, "")
-        hw = capacity.high_water(rows)
         notify_condition(
             "pool_forecast",
             sid,
@@ -1423,7 +1524,8 @@ def check_pool_forecast_alerts(today=None) -> None:
 def diff_leases(prev: dict, cur: dict) -> list[dict]:
     """Pure diff between two snapshots of currently-active leases, each
     `{ip: {"mac", "hostname", "subnet_id", "is_reserved"}}` (one entry
-    per lease4 row with `state=0`). No I/O — `check_alerts()`'s
+    per CURRENT lease4 row - `ACTIVE_LEASE4`, state 0 and not past its
+    expiry: v5.68.0-beta.18 moved the whole tree off a bare `state=0`). No I/O — `check_alerts()`'s
     lease-tracking block builds the two dicts and calls this; factored
     out (Q43) so it's unit-testable without a database.
 
@@ -1525,7 +1627,9 @@ def check_alerts():
     alerted_stale_macs = set()
     first_run = True
     last_summary_date = None
-    last_cert_check_date = None  # v5.12.0 — cert-expiry check runs once per process-day
+    last_condition_pass = (
+        None  # v5.68.0-beta.20 (Q155): the certificate and forecast conditions run every CONDITION_INTERVAL_MINUTES
+    )
     last_snapshot_time = 0
     last_ha_states = {}  # server_id -> last known HA state
     last_drift_issues = {}  # issue_key -> issue dict, for detected-once/resolved-once alerting
@@ -1867,18 +1971,17 @@ def check_alerts():
             except Exception:
                 pass
 
-            # ── TLS certificate expiry (v5.12.0) — once per process-day ──
-            if last_cert_check_date != today:
-                last_cert_check_date = today
-                try:
-                    check_cert_expiry_alert()
-                except Exception as e:
-                    logger.error(f"Cert expiry check error: {e}")
-                # ── Pool exhaustion forecast (v5.36.0) — same once-per-day cadence ──
-                try:
-                    check_pool_forecast_alerts()
-                except Exception as e:
-                    logger.error(f"Pool forecast check error: {e}")
+            # ── TLS certificate expiry (v5.12.0) and pool exhaustion forecast (v5.36.0) ──
+            # v5.68.0-beta.20 (Q155): every CONDITION_INTERVAL_MINUTES, no longer once per process-day. `notify_condition` retries a failed
+            # delivery after 1, 2, 4 ... minutes, and a one-day certificate warning whose channel was down used to be next tried tomorrow -
+            # after the certificate expired. Evaluating a delivered condition writes and sends nothing; the file read and the forecast fit
+            # are cached for CONDITION_CACHE_MINUTES.
+            condition_now = _utcnow()
+            if last_condition_pass is None or condition_now - last_condition_pass >= dt.timedelta(
+                minutes=CONDITION_INTERVAL_MINUTES
+            ):
+                last_condition_pass = condition_now
+                run_slow_conditions(condition_now)
 
         except Exception as e:
             logger.error(f"Alert thread error: {e}")

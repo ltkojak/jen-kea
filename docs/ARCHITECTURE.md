@@ -2639,12 +2639,28 @@ no channel eligible yet - suppressed the warning until the condition recovered, 
 is the one helper (utilization high/ok, pool exhaustion/ok, packet health/ok, cert_expiring per 30/7/1-day bucket, pool_forecast): `n` becomes true only when at
 least one ELIGIBLE channel returned ok (`send_alert` answers `[(channel, ok, error)]`, empty when none was eligible); until then it retries with backoff (1, 2, 4
 ... 60 minutes) for as long as the condition holds, including after a channel is enabled later; one successful channel counts as told (the others are not
-retried); the `_ok` is sent only when `n` was true; `repeat_after` is the forecast's weekly reminder. A value written by beta.18 (`"1"`/`"0"`) reads as
+retried); the `_ok` is sent only when `n` was true; `repeat_after` is the forecast's weekly reminder. A value written by beta.18 (`"1"`/`"0"`) read as
 active-and-notified / inactive.
+
+**Recoveries are state too, and nothing is gated on the calendar day (v5.68.0-beta.20, Q155).** `notify_condition` ignored the `_ok`'s result and cleared the state, so a
+recovery that failed was never retried and the operator kept "high" forever. The object gains `r` (recovery pending): when the `_ok` is not delivered the condition goes
+inactive with `r` set and every pass retries the `_ok` with the same backoff until a channel takes it (none eligible counts as not delivered, so enabling the channel
+later delivers it); the WARNING is never re-sent while a recovery waits, and if the condition returns first the earlier warning stands (`r` clears, nothing is sent).
+beta.18's `"1"` now reads as active and NOT notified - beta.18 wrote it without checking the send, so "delivered" was a guess that hid an undelivered warning until
+recovery - which costs one attempt on the next pass after the upgrade (a possible single duplicate beats a missed warning). The state is written only when it changed (the
+quiet path used to upsert one settings row per type and subnet on every 30-second pass). The certificate and forecast conditions were evaluated once per process-day,
+so the backoff above could not run: a one-day certificate warning whose channel was down was next tried tomorrow, after the certificate expired. The alert loop now
+evaluates them every `CONDITION_INTERVAL_MINUTES` (15) - free for a delivered condition, since nothing is read from a channel and nothing written - with the two
+expensive inputs, the certificate file's days-left and the forecast fit, cached for `CONDITION_CACHE_MINUTES` (60). `tests/test_alert_delivery.py` runs the real
+`check_alerts` loop on an injected clock (`time.sleep` advances `alerts._utcnow`): a cert warning whose first send fails is attempted again two minutes later, the
+forecast likewise, and the file is read once an hour.
 
 **Liveness (v5.68.0-beta.19, Q154).** Health's *Background workers* row asks `background.liveness()`: the scheduler object exists and `.running`, every core job
 is registered (`scheduler.CORE_JOB_IDS`), the alert-loop thread and the plugin periodic thread `is_alive()`; `start_scheduler` records why it did not start. The
-*Problems inbox sweep* row is a skip for `MISS_LIMIT x SWEEP_INTERVAL_S` after the workers started and a failure after that when the sweep has never run.
+*Problems inbox sweep* row is a skip for `MISS_LIMIT x SWEEP_INTERVAL_S` after the workers started and a failure after that when the sweep has never run. v5.68.0-beta.20
+(Q155): `liveness()` also reports the **event dispatcher** (`events.dispatcher_running()`, with `events.queue_depth()`) - with it dead `emit()` does not fail, it runs every
+subscriber inline on the thread that emitted, and the row used to stay green. The dispatcher down with the other three alive is a `warn` ("event dispatcher not running -
+subscribers run inline"); any of the other three down is the `fail`, and the dispatcher is named in it when it is down too.
 
 **What each `lease_history` column means (v5.68.0-beta.19, Q154).** `active_leases` - the subnet's whole count of active, unexpired leases
 ("active clients"; a reservation outside every pool is one). `pool_used` - the active leases INSIDE the subnet's pools at snapshot time

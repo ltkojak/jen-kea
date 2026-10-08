@@ -174,8 +174,8 @@ def reservations():
                     )
                     dns_row = cur.fetchone()
                     # Active: the reserved IP currently has a live
-                    # lease (the JOIN above only matches non-expired,
-                    # state=0 leases, so a match here means "in use
+                    # lease (the JOIN above only matches CURRENT leases -
+                    # ACTIVE_LEASE4: state 0 and not expired - so a match here means "in use
                     # right now"). Conflict: that live lease belongs
                     # to a DIFFERENT MAC than the reservation itself
                     # — the reservation exists but something else is

@@ -27,6 +27,7 @@ def _rows(series, pool_size=254, per_day=2, start=None):
                 {
                     "snapshot_time": datetime(d.year, d.month, d.day, 8 + k * 6),
                     "active_leases": active,
+                    "pool_used": active,
                     "pool_size": pool_size,
                 }
             )
@@ -48,8 +49,8 @@ class TestDailyPeaks:
 
     def test_string_timestamps_from_the_reports_query(self):
         rows = [
-            {"ts": "2026-09-10 08:00", "active_leases": 5, "pool_size": 10},
-            {"ts": "2026-09-10 20:00", "active_leases": 9, "pool_size": 10},
+            {"ts": "2026-09-10 08:00", "pool_used": 5, "pool_size": 10},
+            {"ts": "2026-09-10 20:00", "pool_used": 9, "pool_size": 10},
         ]
         assert cap.daily_peaks(rows) == [(date(2026, 9, 10), 9)]
 
@@ -122,7 +123,7 @@ class TestForecast:
         f = cap.forecast(rows, today=TODAY)
         assert f["trend"] == "rising" and 4 <= f["slope_per_day"] <= 6 and f["days_to_90pct"] is not None
 
-    @pytest.mark.parametrize("bad", [[], [{"snapshot_time": "garbage", "active_leases": 1, "pool_size": 10}]])
+    @pytest.mark.parametrize("bad", [[], [{"snapshot_time": "garbage", "pool_used": 1, "pool_size": 10}]])
     def test_garbage_rows_are_harmless(self, bad):
         f = cap.forecast(bad, today=TODAY)
         assert f["trend"] in ("no-pool", "insufficient")
@@ -228,8 +229,8 @@ class TestProjectionNote:
 
 
 class TestPoolUsedIsTheConsumptionSeries:
-    """v5.68.0-beta.19 (Q154): the forecast fits the leases INSIDE the pools (`pool_used`), ignores a row whose pool_used is NULL, and never
-    reads a row without the key as anything but the legacy `active_leases` caller it is."""
+    """v5.68.0-beta.19 (Q154): the forecast fits the leases INSIDE the pools (`pool_used`) and ignores a row whose pool_used is NULL. v5.68.0-beta.20
+    (Q155): a row with no `pool_used` KEY is ignored too - beta.19 read `active_leases` there, the semantic it had just removed."""
 
     @staticmethod
     def _with_used(series, used_series, pool_size=100):
@@ -264,12 +265,20 @@ class TestPoolUsedIsTheConsumptionSeries:
         f = cap.forecast(rows, today=TODAY)
         assert f["trend"] == "rising" and f["days"] == 10 and f["days_to_90pct"] is not None
 
-    def test_a_row_with_no_pool_used_key_falls_back_to_active_leases(self):
+    def test_a_row_with_no_pool_used_key_is_unknown_and_never_read_as_active_leases(self):
+        """The beta.19 test pinned the OTHER behaviour: whole-subnet `active_leases` stood in for pool use, so a reservation outside the pools read
+        as consumption exactly as it did before the column existed."""
         rows = _rows([10 + 5 * i for i in range(10)])
-        assert "pool_used" not in rows[0]
-        assert cap.forecast(rows, today=TODAY)["trend"] == "rising"
+        for row in rows:
+            del row["pool_used"]
+        assert "pool_used" not in rows[0] and rows[0]["active_leases"] >= 5
+        assert cap.daily_peaks(rows) == []
+        assert cap.high_water(rows) is None
+        f = cap.forecast(rows, today=TODAY)
+        assert f["trend"] == "insufficient" and f["days"] == 0 and f["latest_peak"] == 0
 
     def test_the_used_accessor(self):
         assert cap.used({"pool_used": 7, "active_leases": 99}) == 7
         assert cap.used({"pool_used": None, "active_leases": 99}) is None
-        assert cap.used({"active_leases": 99}) == 99
+        assert cap.used({"active_leases": 99}) is None, "no path reads active_leases as pool use"
+        assert cap.used({}) is None

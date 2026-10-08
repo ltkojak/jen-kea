@@ -125,6 +125,14 @@ def dispatcher_running() -> bool:
     return _alive(_dispatcher)
 
 
+def queue_depth() -> int:
+    """How many events are waiting for the dispatcher thread (v5.68.0-beta.20, Q155 - Health shows it beside the dispatcher's liveness)."""
+    try:
+        return int(_queue.qsize())
+    except Exception:
+        return 0
+
+
 def _alive(t) -> bool:
     """True for a live thread. Tolerates a stand-in with no `is_alive` (tests
     that replace `threading.Thread` and call start_background_workers())."""

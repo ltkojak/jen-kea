@@ -20,11 +20,15 @@ CORE = list(sched.CORE_JOB_IDS)
 NOW = datetime(2026, 10, 7, 12, 0, 0)  # naive UTC, the module's own convention
 
 
-def _live(*, scheduler_exists=True, running=True, jobs=None, alert=True, periodic=True, error=""):
+def _live(
+    *, scheduler_exists=True, running=True, jobs=None, alert=True, periodic=True, error="", dispatcher=True, depth=0
+):
     return {
         "started_at": datetime.now(timezone.utc),
         "alert_thread": alert,
         "periodic_thread": periodic,
+        "dispatcher": dispatcher,
+        "queue_depth": depth,
         "scheduler": {
             "exists": scheduler_exists,
             "running": running,
@@ -170,3 +174,56 @@ class TestTheProblemsSweepRowHasANoRunLimit:
             },
         )
         assert health._problems_sweep({}).status == "ok"
+
+
+class TestTheEventDispatcherIsTheFourthWorker:
+    """v5.68.0-beta.20 (Q155, item 8). `events.dispatcher_running()` existed and nothing read it: with the dispatcher thread dead `emit()` does not fail, it
+    runs every subscriber INLINE on the thread that emitted - and Health stayed green."""
+
+    def test_a_running_dispatcher_is_ok_and_its_queue_depth_is_shown(self, started, monkeypatch):
+        c = _workers(monkeypatch, _live(depth=3))
+        assert c.status == "ok" and "event dispatcher (3 queued)" in c.detail
+
+    def test_a_stopped_dispatcher_with_the_others_alive_is_a_warning_that_says_what_it_means(
+        self, started, monkeypatch
+    ):
+        c = _workers(monkeypatch, _live(dispatcher=False))
+        assert c.status == "warn", "not ok: subscribers now run inline on the emitting thread"
+        assert "event dispatcher not running" in c.detail and "inline" in c.detail
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [{"alert": False}, {"periodic": False}, {"running": False}, {"jobs": ["jen_backup"]}],
+    )
+    def test_any_other_worker_down_is_a_failure_even_with_the_dispatcher_up(self, started, monkeypatch, kwargs):
+        assert _workers(monkeypatch, _live(**kwargs)).status == "fail"
+
+    def test_the_dispatcher_down_with_another_worker_down_is_a_failure_naming_both(self, started, monkeypatch):
+        c = _workers(monkeypatch, _live(alert=False, dispatcher=False))
+        assert c.status == "fail" and "alert loop" in c.detail and "event dispatcher" in c.detail
+
+    def test_liveness_reads_the_real_dispatcher_and_its_queue(self, monkeypatch):
+        from jen.services import events
+
+        events.stop_dispatcher()
+        assert background.liveness()["dispatcher"] is False
+        events.start_dispatcher()
+        try:
+            live = background.liveness()
+            assert live["dispatcher"] is True and isinstance(live["queue_depth"], int)
+        finally:
+            events.stop_dispatcher()
+        assert background.liveness()["dispatcher"] is False
+
+    def test_the_dispatcher_really_stopped_is_not_ok_through_the_whole_chain(self, started, monkeypatch):
+        """No stand-in dictionary: the real `liveness()` with the real dispatcher stopped and the other three presented as alive."""
+        from jen.services import events
+
+        events.stop_dispatcher()
+        real = background.liveness()
+        monkeypatch.setattr(
+            background,
+            "liveness",
+            lambda: {**real, "alert_thread": True, "periodic_thread": True, "scheduler": _live()["scheduler"]},
+        )
+        assert health._background_workers({}).status == "warn"

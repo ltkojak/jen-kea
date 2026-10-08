@@ -195,3 +195,71 @@ class TestRowsFromBeforeTheColumnAreNotReadings:
         with jen_db() as jdb, jdb.cursor() as cur:
             cur.execute("SELECT COUNT(*) AS n FROM lease_history WHERE subnet_id=1 AND pool_used IS NULL")
             assert cur.fetchone()["n"] == 8
+
+
+class TestAnUnmeasuredPoolUseIsNeverReplacedByAnotherNumber:
+    """v5.68.0-beta.20 (Q155, item 7): beta.19 left two fallbacks to the number it had removed. `capacity.used` read `active_leases` for a row with no
+    `pool_used` KEY, and the dashboard showed `s.dynamic` under the pool-use label when `api_stats`' consumption pass failed (the key was simply
+    left out). Pool use is now null until measured, the page says "unavailable", and no path puts anything else in its place."""
+
+    def test_api_stats_says_null_when_the_consumption_pass_fails(self, world, logged_in_client, monkeypatch):
+        from jen.services import pools
+
+        def broken(cur, sid, defs):
+            raise RuntimeError("kea database went away")
+
+        monkeypatch.setattr(pools, "consumption", broken)
+        data = logged_in_client.get("/api/stats").get_json()
+        assert "pool_used" in data["subnets"]["1"] and data["subnets"]["1"]["pool_used"] is None
+        assert data["pool_sizes"]["1"] == SIZE, "the pool size is still known; only the use is not"
+        assert data["subnets"]["1"]["dynamic"] == IN, (
+            "dynamic stays what it is - a different number on a different question"
+        )
+
+    def test_api_stats_says_null_when_kea_s_config_cannot_be_read(self, world, logged_in_client, monkeypatch):
+        failing = lambda command, *a, **kw: {"result": 1, "text": "unreachable", "arguments": {}}  # noqa: E731
+        monkeypatch.setattr(kea_svc, "kea_command", failing)
+        data = logged_in_client.get("/api/stats").get_json()
+        assert data["subnets"]["1"]["pool_used"] is None
+
+    def test_api_stats_reports_the_measured_value_when_it_works(self, world, logged_in_client):
+        assert logged_in_client.get("/api/stats").get_json()["subnets"]["1"]["pool_used"] == IN
+
+    def test_the_prometheus_ratio_is_omitted_for_a_subnet_with_no_measured_use(self, world, client, db, metrics_opened):
+        with db.cursor() as cur:
+            cur.execute("UPDATE lease_history SET pool_used=NULL WHERE subnet_id=1")
+        db.commit()
+        text = client.get("/metrics").get_data(as_text=True)
+        assert 'jen_subnet_pool_size{subnet="A"' in text
+        assert 'jen_subnet_utilization_ratio{subnet="A"' not in text, "no ratio is computed from anything else"
+
+
+class TestNoPathReadsActiveLeasesAsPoolUse:
+    def test_the_dashboard_script_has_no_dynamic_fallback_under_the_pool_use_label(self):
+        import pathlib
+
+        html = (pathlib.Path(__file__).resolve().parent.parent / "templates" / "dashboard.html").read_text(
+            encoding="utf-8"
+        )
+        assert "s.pool_used !== undefined) ? s.pool_used : s.dynamic" not in html
+        assert "pool use unavailable" in html and "usedUnknown" in html
+        assert "totalDynamic / totalPool" not in html, "the totals widget's percentage is pool use too"
+
+    def test_capacity_used_is_none_for_a_row_without_the_key(self):
+        assert capacity.used({"active_leases": 99}) is None
+
+    def test_no_source_line_feeds_active_leases_into_a_capacity_calculation(self):
+        """The whole tree: `capacity.py` never names `active_leases` outside prose, and the history readers select pool_used beside it."""
+        import ast
+        import pathlib
+
+        source = (pathlib.Path(__file__).resolve().parent.parent / "jen" / "services" / "capacity.py").read_text(
+            encoding="utf-8"
+        )
+        tree = ast.parse(source)
+        code_uses = [
+            n.value
+            for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str) and n.value == "active_leases"
+        ]
+        assert code_uses == [], "capacity.py reads the subnet's whole active count as a code value"

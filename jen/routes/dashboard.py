@@ -469,6 +469,11 @@ def api_stats():
             }
             for s in extensions.KEA_SERVERS
         ]
+        # v5.68.0-beta.20 (Q155): pool use is `null` until it is MEASURED. When the consumption pass fails (or Kea's config could not be read) the
+        # key used to be left out and the page showed `dynamic` under the pool-use label - the old number, on a different question. Now every
+        # subnet carries `pool_used: null` and the page says "unavailable".
+        for entry in stats.values():
+            entry["pool_used"] = None
         if pool_defs:
             try:
                 with __db.kea_db() as db, db.cursor() as cur:
@@ -477,6 +482,10 @@ def api_stats():
                             stats[str(sid)]["pool_used"] = __pools.consumption(cur, sid, defs)
             except Exception as e:
                 logger.warning(f"api_stats: pool consumption skipped: {e}")
+                for entry in stats.values():
+                    entry["pool_used"] = (
+                        None  # a pass that died half-way must not leave some subnets measured and others guessed
+                    )
         # Add HA state and version for online servers
         for srv in server_statuses:
             if srv["up"]:
@@ -889,8 +898,8 @@ def prometheus_metrics():
     )
     lines.append("# TYPE jen_subnet_pool_size gauge")
     lines.append(
-        "# HELP jen_subnet_utilization_ratio Active leases / pool size (0.0-1.0), "
-        "from the most recent periodic snapshot"
+        "# HELP jen_subnet_utilization_ratio Pool use (the active leases inside the pools) / pool size (0.0-1.0), "
+        "from the most recent periodic snapshot; absent for a subnet whose snapshot recorded no pool use"
     )
     lines.append("# TYPE jen_subnet_utilization_ratio gauge")
     try:

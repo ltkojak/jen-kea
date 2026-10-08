@@ -147,14 +147,18 @@ _periodic_thread = None
 
 
 def liveness() -> dict:
-    """{"started_at", "alert_thread", "periodic_thread" (is_alive each), "scheduler" (scheduler.scheduler_status())} - what is PROVEN about the
-    background work, not what was once attempted."""
+    """{"started_at", "alert_thread", "periodic_thread" (is_alive each), "dispatcher" (the event dispatcher thread, v5.68.0-beta.20 - `emit()` runs
+    its subscribers inline without it), "queue_depth" (events waiting for it), "scheduler" (scheduler.scheduler_status())} - what is PROVEN about
+    the background work, not what was once attempted."""
+    from jen.services import events
     from jen.services.scheduler import scheduler_status
 
     return {
         "started_at": STARTED_AT,
         "alert_thread": bool(_alert_thread is not None and _alert_thread.is_alive()),
         "periodic_thread": bool(_periodic_thread is not None and _periodic_thread.is_alive()),
+        "dispatcher": bool(events.dispatcher_running()),
+        "queue_depth": events.queue_depth(),
         "scheduler": scheduler_status(),
     }
 

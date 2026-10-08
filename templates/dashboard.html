@@ -888,7 +888,7 @@ function updateStats() {
 
             // Per-subnet cards
             var totalActive = 0, totalDynamic = 0, totalReserved = 0;
-            var totalPool = 0;
+            var totalPool = 0, totalUsed = 0, usedUnknown = false;
             Object.keys(data.subnets).forEach(function(id) {
                 var s = data.subnets[id];
                 totalActive   += s.active   || 0;
@@ -905,12 +905,20 @@ function updateStats() {
                 var poolSize = (data.pool_sizes && data.pool_sizes[id]) || POOL_SIZES[id] || 0;
                 totalPool += poolSize;
                 if (poolSize > 0 && utilEl) {
-                    var used = (s.pool_used !== undefined) ? s.pool_used : s.dynamic;  // pool_used: active leases inside the pools (Q153)
-                    var pct = Math.min(100, Math.round(used / poolSize * 100));
-                    utilEl.style.width = pct + '%';
-                    utilEl.style.background = pct >= 90 ? 'var(--danger)' :
-                                              pct >= 75 ? 'var(--warning)' : 'var(--primary)';
-                    if (pctEl) pctEl.textContent = pct + '% of pool (' + used + '/' + poolSize + ')';
+                    // pool_used: the active leases inside the pools. v5.68.0-beta.20 (Q155): null (or absent) means it could not be measured -
+                    // say so; never put another number (the dynamic count) under the pool-use label
+                    if (s.pool_used === null || s.pool_used === undefined) {
+                        usedUnknown = true;
+                        utilEl.style.width = '0%';
+                        if (pctEl) pctEl.textContent = 'pool use unavailable';
+                    } else {
+                        totalUsed += s.pool_used;
+                        var pct = Math.min(100, Math.round(s.pool_used / poolSize * 100));
+                        utilEl.style.width = pct + '%';
+                        utilEl.style.background = pct >= 90 ? 'var(--danger)' :
+                                                  pct >= 75 ? 'var(--warning)' : 'var(--primary)';
+                        if (pctEl) pctEl.textContent = pct + '% of pool (' + s.pool_used + '/' + poolSize + ')';
+                    }
                 }
             });
 
@@ -935,8 +943,11 @@ function updateStats() {
             if (ta) ta.textContent = totalActive;
             if (td) td.textContent = totalDynamic;
             if (tr) tr.textContent = totalReserved;
-            if (totalPool > 0) {
-                var totalPct = Math.min(100, Math.round(totalDynamic / totalPool * 100));
+            if (totalPool > 0 && usedUnknown) {
+                if (tp) tp.textContent = 'unavailable';
+                if (tf) tf.style.width = '0%';
+            } else if (totalPool > 0) {
+                var totalPct = Math.min(100, Math.round(totalUsed / totalPool * 100));
                 if (tp) tp.textContent = totalPct + '%';
                 if (tf) {
                     tf.style.width = totalPct + '%';

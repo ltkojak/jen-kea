@@ -465,7 +465,7 @@ class TestPoolForecastAlert:
 
         today = today or datetime(2026, 9, 15)
         return [
-            {"snapshot_time": today - timedelta(days=len(peaks) - i), "active_leases": p, "pool_size": pool_size}
+            {"snapshot_time": today - timedelta(days=len(peaks) - i), "pool_used": p, "pool_size": pool_size}
             for i, p in enumerate(peaks)
         ]
 
@@ -935,6 +935,8 @@ class TestBackgroundWorkers:
                 "started_at": datetime.now(timezone.utc),
                 "alert_thread": True,
                 "periodic_thread": True,
+                "dispatcher": True,
+                "queue_depth": 0,
                 "scheduler": {"exists": True, "running": True, "jobs": list(scheduler.CORE_JOB_IDS), "error": ""},
             },
         )

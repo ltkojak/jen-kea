@@ -241,6 +241,7 @@ class TestCertExpiryAndTheForecastUseTheSameHelper:
                 {
                     "snapshot_time": datetime(2026, 9, 15) - timedelta(days=10 - i),
                     "active_leases": 100 + 8 * i,
+                    "pool_used": 100 + 8 * i,
                     "pool_size": 254,
                 }
                 for i in range(10)
@@ -262,25 +263,257 @@ class TestCertExpiryAndTheForecastUseTheSameHelper:
 
 
 class TestAnOlderJensStateIsHonoured:
-    def test_the_beta_18_values_read_as_active_and_notified(self, db):
+    def test_the_beta_18_one_reads_as_active_and_not_notified(self, db):
+        """v5.68.0-beta.20 (Q155, item 6): beta.18 wrote "1" after a send whose result nobody checked. Reading it as DELIVERED let an undelivered
+        warning survive the upgrade as sent until the condition recovered; it now reads as active, not notified - one attempt on the next pass."""
         from jen.models.user import set_global_setting
 
         set_global_setting("alert_state:utilization_high:3", "1")
         set_global_setting("alert_state:utilization_high:4", "0")
         assert alerts.alert_delivery("utilization_high", 3) == {
             "active": True,
-            "notified": True,
+            "notified": False,
             "attempts": 0,
             "last_attempt": None,
         }
         assert alerts.alert_state("utilization_high", 4) is False
 
-    def test_an_active_old_state_is_not_re_sent_on_upgrade_and_does_recover(self, db, send):
+    def test_an_active_old_state_gets_one_attempt_on_the_next_pass_and_then_recovers_normally(self, db, send):
         from jen.models.user import set_global_setting
 
         sender = send(OK)
         set_global_setting("alert_state:utilization_high:3", "1")
-        alerts.notify_condition("utilization_high", 3, True, kwargs={}, ok_type="utilization_ok", now=T0)
-        assert sender.sent == []
+        assert (
+            alerts.notify_condition("utilization_high", 3, True, kwargs={}, ok_type="utilization_ok", now=T0) == "sent"
+        )
+        assert sender.sent == ["utilization_high"], "one attempt: a possible single duplicate beats a missed warning"
+        assert (
+            alerts.notify_condition("utilization_high", 3, True, kwargs={}, ok_type="utilization_ok", now=T0) == "quiet"
+        )
         alerts.notify_condition("utilization_high", 3, False, kwargs={}, ok_type="utilization_ok", now=T0)
-        assert sender.sent == ["utilization_ok"]
+        assert sender.sent == ["utilization_high", "utilization_ok"]
+
+    def test_an_old_active_state_whose_channel_is_still_down_keeps_trying_and_never_sends_a_recovery_nobody_asked_for(
+        self, db, send
+    ):
+        from jen.models.user import set_global_setting
+
+        sender = send(DOWN)
+        set_global_setting("alert_state:utilization_high:5", "1")
+        assert (
+            alerts.notify_condition("utilization_high", 5, True, kwargs={}, ok_type="utilization_ok", now=T0)
+            == "pending"
+        )
+        assert (
+            alerts.notify_condition("utilization_high", 5, False, kwargs={}, ok_type="utilization_ok", now=T0)
+            == "cleared"
+        )
+        assert sender.sent == ["utilization_high"]
+
+
+class TestARecoveryIsStateToo:
+    """v5.68.0-beta.20 (Q155, item 5): the `_ok` result used to be ignored and the state cleared - a recovery that failed was never retried, and the
+    operator kept "high" forever. `r` (recovery pending) is set when the `_ok` was not delivered; every pass retries it with the same backoff."""
+
+    def _warn_then_clear(self, send, ok_script):
+        sender = send(OK, *ok_script)
+        assert _notify(True, T0) == "sent"
+        return sender
+
+    def test_the_ok_fails_is_retried_and_succeeds_exactly_once_without_the_warning_again(self, db, send):
+        sender = self._warn_then_clear(send, [DOWN, DOWN, OK])
+        assert _notify(False, T0 + timedelta(minutes=10)) == "recovery-pending"
+        state = alerts._load_state("utilization_high", 7)
+        assert state["r"] is True and state["a"] is False and state["c"] == 1
+        assert _notify(False, T0 + timedelta(minutes=10, seconds=30)) == "waiting", "backing off 1 minute"
+        assert (
+            _notify(False, T0 + timedelta(minutes=11)) == "recovery-pending"
+        )  # second failure: the next wait is 2 minutes
+        assert _notify(False, T0 + timedelta(minutes=12)) == "waiting"
+        assert _notify(False, T0 + timedelta(minutes=13)) == "recovered"
+        assert sender.sent == ["utilization_high", "utilization_ok", "utilization_ok", "utilization_ok"]
+        assert alerts._load_state("utilization_high", 7)["r"] is False
+        for minutes in (14, 30, 200):
+            assert _notify(False, T0 + timedelta(minutes=minutes)) == "quiet"
+        assert sender.sent.count("utilization_ok") == 3 and sender.sent.count("utilization_high") == 1, (
+            "delivered once: no further ok, and the warning is never sent again while a recovery waits"
+        )
+
+    def test_no_eligible_channel_for_the_ok_keeps_the_recovery_pending_until_one_exists(self, db, send):
+        """`utilization_ok` has to be ticked on a channel; with none, `send_alert` answers [] - nobody was told - so it stays owed."""
+        sender = self._warn_then_clear(send, [[], [], OK])
+        assert _notify(False, T0 + timedelta(minutes=5)) == "recovery-pending"
+        assert _notify(False, T0 + timedelta(minutes=6)) == "recovery-pending"
+        assert alerts.alert_delivery("utilization_high", 7)["active"] is False
+        assert _notify(False, T0 + timedelta(minutes=8)) == "recovered"
+        assert sender.sent == ["utilization_high", "utilization_ok", "utilization_ok", "utilization_ok"]
+
+    def test_a_condition_that_comes_back_while_its_recovery_is_owed_does_not_re_warn(self, db, send):
+        sender = self._warn_then_clear(send, [DOWN])
+        assert _notify(False, T0 + timedelta(minutes=5)) == "recovery-pending"
+        assert _notify(True, T0 + timedelta(minutes=6)) == "quiet", "the earlier warning was delivered and still stands"
+        state = alerts._load_state("utilization_high", 7)
+        assert state["a"] is True and state["n"] is True and state["r"] is False
+        assert sender.sent == ["utilization_high", "utilization_ok"]
+        # and a later real recovery is delivered normally
+        sender2 = send(OK)
+        assert _notify(False, T0 + timedelta(minutes=30)) == "recovered" and sender2.sent == ["utilization_ok"]
+
+    def test_a_sender_that_raises_on_the_ok_is_a_failed_attempt_not_a_crash(self, db, monkeypatch):
+        calls = []
+
+        def flaky(alert_type, *a, **k):
+            calls.append(alert_type)
+            if alert_type == "utilization_ok":
+                raise RuntimeError("smtp exploded")
+            return OK
+
+        monkeypatch.setattr(alerts, "send_alert", flaky)
+        assert _notify(True, T0) == "sent"
+        assert _notify(False, T0 + timedelta(minutes=5)) == "recovery-pending"
+        assert alerts._load_state("utilization_high", 7)["r"] is True
+
+    def test_a_type_without_an_ok_just_clears_even_if_a_recovery_was_somehow_owed(self, db, send):
+        from jen.models.user import set_global_setting
+
+        send(OK)
+        set_global_setting("alert_state:pool_forecast:9", '{"a":false,"n":false,"t":null,"c":2,"d":null,"r":true}')
+        assert alerts.notify_condition("pool_forecast", 9, False, kwargs={}, now=T0) == "cleared"
+        assert alerts._load_state("pool_forecast", 9)["r"] is False
+
+
+class TestAQuietPassWritesNothing:
+    """v5.68.0-beta.20 (Q155, F-1): `notify_condition` saved the state on its quiet path - a settings UPSERT per (type, key) on every 30-second pass
+    with nothing changed."""
+
+    def test_only_a_change_is_written(self, db, send, monkeypatch):
+        send(OK)
+        writes = []
+        real = alerts._save_state
+        monkeypatch.setattr(alerts, "_save_state", lambda *a, **k: (writes.append(a[:2]), real(*a, **k))[1])
+        assert _notify(True, T0) == "sent" and len(writes) == 1
+        for minutes in range(1, 20):
+            assert _notify(True, T0 + timedelta(minutes=minutes)) == "quiet"
+        assert len(writes) == 1, f"{len(writes) - 1} writes on passes that changed nothing"
+        assert _notify(False, T0 + timedelta(minutes=30)) == "recovered" and len(writes) == 2
+        for minutes in range(31, 40):
+            assert _notify(False, T0 + timedelta(minutes=minutes)) == "quiet"
+        assert len(writes) == 2
+
+    def test_a_waiting_pass_writes_nothing_either(self, db, send, monkeypatch):
+        send(DOWN)
+        _notify(True, T0)
+        writes = []
+        real = alerts._save_state
+        monkeypatch.setattr(alerts, "_save_state", lambda *a, **k: (writes.append(a[:2]), real(*a, **k))[1])
+        assert _notify(True, T0 + timedelta(seconds=10)) == "waiting" and writes == []
+        assert _notify(True, T0 + timedelta(seconds=40)) == "waiting" and writes == []
+
+    def test_a_missing_state_that_stays_quiet_writes_no_row(self, db, send, monkeypatch):
+        writes = []
+        monkeypatch.setattr(alerts, "_save_state", lambda *a, **k: writes.append(a[:2]))
+        for minutes in range(5):
+            assert _notify(False, T0 + timedelta(minutes=minutes)) == "quiet"
+        assert writes == []
+
+
+class _Stop(BaseException):
+    """Ends the alert loop from inside its own sleep (a BaseException passes the loop's `except Exception`)."""
+
+
+@pytest.fixture
+def real_loop(monkeypatch):
+    """Run the REAL `alerts.check_alerts` loop on an injected clock: `time.sleep` advances `alerts._utcnow` and ends the run after the given
+    simulated minutes. Only what is not under test is stubbed - the Kea servers (none), the snapshot pass and the daily summary."""
+    import time as _time
+
+    clock = {"now": T0}
+    monkeypatch.setattr(alerts, "_utcnow", lambda: clock["now"])
+    monkeypatch.setattr(extensions, "KEA_SERVERS", [])
+    monkeypatch.setattr(alerts, "run_snapshot_pass", lambda: None)
+    monkeypatch.setattr(alerts, "send_daily_summary", lambda: None)
+    monkeypatch.setitem(alerts.__dict__, "__kea_command", lambda *a, **k: {"result": 1})
+    monkeypatch.setitem(alerts.__dict__, "__get_active_kea_server", lambda: None)
+    monkeypatch.setitem(alerts.__dict__, "__check_config_drift", list)
+
+    def drive(minutes):
+        end = T0 + timedelta(minutes=minutes)
+
+        def fake_sleep(seconds):
+            clock["now"] += timedelta(seconds=seconds)
+            if clock["now"] >= end:
+                raise _Stop
+
+        monkeypatch.setattr(_time, "sleep", fake_sleep)
+        with pytest.raises(_Stop):
+            alerts.check_alerts()
+
+    alerts._CONDITION_CACHE.clear()
+    yield drive
+    alerts._CONDITION_CACHE.clear()
+
+
+class TestTheConditionsRunInTheRealLoop:
+    """v5.68.0-beta.20 (Q155, item 3): `notify_condition` schedules a failed delivery for retry in 1, 2, 4 ... minutes, but the certificate and forecast
+    checks were called once per process-day - a one-day certificate warning whose channel was down was next attempted tomorrow, after the certificate
+    expired. They now run every CONDITION_INTERVAL_MINUTES in the alert loop, with the expensive inputs cached hourly. These tests run the loop itself."""
+
+    def test_the_default_cadence_is_every_fifteen_minutes(self, db, real_loop, monkeypatch):
+        assert alerts.CONDITION_INTERVAL_MINUTES == 15 and alerts.CONDITION_CACHE_MINUTES == 60
+        calls = []
+        monkeypatch.setattr(alerts, "run_slow_conditions", lambda now=None: calls.append(now))
+        real_loop(40)
+        assert len(calls) == 3, f"expected the first pass, then one every 15 minutes: {calls}"
+        gaps = [(b - a).total_seconds() / 60 for a, b in zip(calls, calls[1:], strict=False)]
+        assert all(15 <= gap < 16 for gap in gaps), gaps
+
+    def test_a_cert_warning_whose_first_send_fails_is_attempted_again_two_minutes_later(
+        self, db, real_loop, monkeypatch, send
+    ):
+        monkeypatch.setattr(
+            alerts, "CONDITION_INTERVAL_MINUTES", 1
+        )  # the loop's cadence; the retry backoff (1, 2, 4 min) is notify_condition's
+        days_calls = []
+        monkeypatch.setattr("jen.services.health.cert_days_left", lambda: (days_calls.append(1), 1)[1])
+        sender = send(DOWN, DOWN, OK)
+        real_loop(5)
+        assert sender.sent == ["cert_expiring"] * 3, sender.sent
+        assert alerts.alert_delivery("cert_expiring", 1)["notified"] is True
+        assert len(days_calls) == 1, "the certificate file is read once an hour, not on every pass"
+
+    def test_a_forecast_whose_first_send_fails_is_attempted_again_and_delivered(self, db, real_loop, monkeypatch, send):
+        monkeypatch.setattr(alerts, "CONDITION_INTERVAL_MINUTES", 1)
+        monkeypatch.setattr("jen.services.health.cert_days_left", lambda: None)
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {1: {"name": "LAN", "cidr": "10.0.0.0/24"}})
+        history = {
+            1: [
+                {
+                    "snapshot_time": T0 - timedelta(days=10 - i),
+                    "active_leases": 100 + 8 * i,
+                    "pool_used": 100 + 8 * i,
+                    "pool_size": 254,
+                }
+                for i in range(10)
+            ]
+        }
+        reads = []
+        monkeypatch.setattr("jen.services.health.lease_history_window", lambda days=31: (reads.append(1), history)[1])
+        sender = send(DOWN, OK)
+        real_loop(4)
+        assert sender.sent == ["pool_forecast", "pool_forecast"], sender.sent
+        assert alerts.alert_delivery("pool_forecast", 1)["notified"] is True
+        assert len(reads) == 1, "the history is read and the forecast fitted once an hour"
+
+    def test_the_cache_expires_after_an_hour(self, db, real_loop, monkeypatch, send):
+        monkeypatch.setattr(alerts, "CONDITION_INTERVAL_MINUTES", 10)
+        days_calls = []
+        monkeypatch.setattr("jen.services.health.cert_days_left", lambda: (days_calls.append(1), 100)[1])
+        send(OK)
+        real_loop(130)
+        assert len(days_calls) == 3, "t=0.5 min, then after the hour, then after the next hour"
+
+    def test_the_loop_does_not_gate_either_check_on_the_calendar_day_any_more(self):
+        import inspect
+
+        source = inspect.getsource(alerts.check_alerts)
+        assert "last_cert_check_date" not in source and "run_slow_conditions" in source

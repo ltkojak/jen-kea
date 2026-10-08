@@ -1155,11 +1155,25 @@ def _background_workers(ctx) -> Check:
     if not live["periodic_thread"]:
         problems.append("the plugin periodic-job thread is not alive")
     if problems:
+        if not live["dispatcher"]:
+            problems.append("the event dispatcher is not running")
         c.status, c.detail = "fail", "; ".join(problems)
         c.fix_hint = "Restart Jen (the service); the log says why the background work stopped."
         return c
+    # v5.68.0-beta.20 (Q155): the event dispatcher is the fourth worker. With it down `events.emit()` does not fail - it runs every subscriber INLINE on
+    # the thread that emitted (a request, the alert loop), so a slow subscriber slows that thread - and Health used to stay green. Down with the
+    # three others up is a warning; down with another also down is part of the failure above.
+    depth = live.get("queue_depth", 0)
+    if not live["dispatcher"]:
+        c.status = "warn"
+        c.detail = "event dispatcher not running - subscribers run inline on the thread that emits"
+        c.fix_hint = "Restart Jen (the service); the log says why the dispatcher stopped."
+        return c
     c.status = "ok"
-    c.detail = f"scheduler ({len(sched['jobs'])} jobs), alert loop and periodic loop alive for {up / 3600:.1f} h"
+    c.detail = (
+        f"scheduler ({len(sched['jobs'])} jobs), alert loop, periodic loop and event dispatcher "
+        f"({depth} queued) alive for {up / 3600:.1f} h"
+    )
     return c
 
 

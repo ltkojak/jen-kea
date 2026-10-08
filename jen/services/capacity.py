@@ -3,15 +3,16 @@ jen/services/capacity.py
 ────────────────────────
 v5.36.0 (Q35) — pool exhaustion forecast on the lease history Jen
 already collects (`lease_history`: one row per subnet per snapshot with
-`active_leases` and `pool_size`).
+`pool_used` and `pool_size`; `active_leases` is the subnet's WHOLE active count and is no capacity number).
 
 Pure. The route / Health check / API hand in rows and get back numbers.
 
 v5.68.0-beta.19 (Q154) - the consumption series is `pool_used` (the active leases INSIDE the pools, migration 34), not `active_leases` (the
 subnet's whole active count): an active lease outside every pool - a reservation - cannot exhaust a pool. A row whose `pool_used` is NULL (every row
 written before migration 34, and a snapshot taken while Kea's config was unreadable) is IGNORED, never read as 0 and never back-filled, so the
-forecast says "insufficient history" until enough new snapshots exist. A row with no `pool_used` KEY at all (a caller that predates the column)
-falls back to `active_leases`.
+forecast says "insufficient history" until enough new snapshots exist. v5.68.0-beta.20 (Q155): so is a row with no `pool_used` KEY at all - beta.19
+fell back to `active_leases` there, which is the semantic it had just removed (a reservation outside the pools read as pool consumption); no path
+reads `active_leases` as pool use any more.
 
 Method: daily peaks of the pool consumption over the last `window_days`
 (default 30), least-squares line through them, projected forward to the
@@ -57,12 +58,10 @@ def _day(ts) -> date | None:
 
 
 def used(row: dict) -> int | None:
-    """The pool consumption a history row records: `pool_used`, or None when the row has none (NULL: unknown, to be ignored). A row without
-    the `pool_used` key at all is a caller that predates migration 34: its `active_leases` stands in."""
-    if "pool_used" in row:
-        value = row.get("pool_used")
-        return None if value is None else int(value)
-    return int(row.get("active_leases") or 0)
+    """The pool consumption a history row records: `pool_used`, or None when the row has none - NULL, or no such key at all (unknown, to be
+    ignored). Never `active_leases`: that is the subnet's whole active count, not what the pools hold."""
+    value = row.get("pool_used")
+    return None if value is None else int(value)
 
 
 def current_pool_size(rows: list[dict]) -> int:
