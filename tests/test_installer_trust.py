@@ -908,11 +908,11 @@ class TestConfigureKeepsThePromptedAnswersToo:
             + 'echo "jendb=$JEN_DB_HOST|$JEN_DB_USER|$JEN_DB_NAME"\necho "keadb=$KEA_DB_HOST"',
         )
         assert proc.returncode == 0, proc.stdout + proc.stderr
-        assert "PROMPT[Host]=jendb.lan" in proc.stderr, (
-            "the Jen database host's default was the KEA database host (db.lan)"
-        )
+        assert "PROMPT[Host]=jendb.lan" in proc.stderr, "the Jen database host's default was the KEA database host (db)"
         assert "jendb=jendb.lan|jenu|jend" in proc.stdout
-        assert "keadb=db.lan" in proc.stdout
+        assert (
+            "keadb=db" in proc.stdout.splitlines()
+        )  # the Kea database's own host (CONFIGURED_CONFIG), not the Jen one's
 
     def test_the_jen_database_password_is_still_typed(self, tmp_path):
         self._live(tmp_path)
