@@ -7,6 +7,7 @@ installer's older copy. Every writer now also takes an exclusive advisory `flock
 installer and `tools/private_write.py` take the same one. Linux (flock is POSIX); no database needed.
 """
 
+import errno
 import os
 import pathlib
 import platform
@@ -301,6 +302,9 @@ class TestTheLockFailsClosed:
         import jen.config as c
 
         lock = f"{cfg}.lock"
+        pathlib.Path(lock).write_text(
+            ""
+        )  # a lock file that EXISTS and cannot be opened (no file at all is the directory case, below)
         real_open = os.open
 
         def disk_gone(path, flags, mode=0o777, **kw):
@@ -311,3 +315,93 @@ class TestTheLockFailsClosed:
         monkeypatch.setattr(os, "open", disk_gone)
         with pytest.raises(c.ConfigFileLocked, match="cannot be opened"):
             c.AppConfig().write_value("a", "b", "1", reload=False)
+
+
+class TestEveryFlockFailureIsARefusalWithTheReason:
+    """v5.68.0-beta.22 (Q157, item 12): `_file_lock` re-raised any flock OSError other than EAGAIN/EACCES bare - ENOLCK (NFS), EBADF - and the save 500'd;
+    and the "chown the lock file" fix was given for a lock file that did not exist because its DIRECTORY could not be written."""
+
+    @pytest.mark.parametrize("code", [errno.ENOLCK, errno.EBADF, errno.EINTR, errno.EIO])
+    def test_a_flock_that_fails_for_any_other_reason_is_a_config_file_locked_naming_the_errno(
+        self, cfg, monkeypatch, code
+    ):
+        import fcntl
+
+        import jen.config as c
+
+        def failing(fd, op):
+            raise OSError(code, os.strerror(code))
+
+        monkeypatch.setattr(fcntl, "flock", failing)
+        before = cfg.read_text()
+        with pytest.raises(c.ConfigFileLocked) as err:
+            c.AppConfig().write_value("a", "b", "1", reload=False)
+        assert (
+            errno.errorcode[code] in str(err.value)
+            and f"{cfg}.lock" in str(err.value)
+            and "local file system" in str(err.value)
+        )
+        assert cfg.read_text() == before
+
+    def test_the_lock_descriptor_is_closed_after_a_failed_flock(self, cfg, monkeypatch):
+        import fcntl
+
+        import jen.config as c
+
+        opened = []
+        real_open = os.open
+
+        def tracking(path, flags, mode=0o777, **kw):
+            fd = real_open(path, flags, mode, **kw)
+            if str(path).endswith(".lock"):
+                opened.append(fd)
+            return fd
+
+        monkeypatch.setattr(os, "open", tracking)
+        monkeypatch.setattr(fcntl, "flock", lambda fd, op: (_ for _ in ()).throw(OSError(errno.ENOLCK, "no locks")))
+        with pytest.raises(c.ConfigFileLocked):
+            c.AppConfig().write_value("a", "b", "1", reload=False)
+        with pytest.raises(OSError):
+            os.fstat(opened[0])  # closed
+
+    def test_an_unwritable_directory_names_the_directory_not_a_lock_file_to_chown(self, tmp_path, monkeypatch):
+        import jen.config as c
+        from jen import extensions
+
+        if os.geteuid() == 0:
+            pytest.skip("root can write anywhere")
+        directory = tmp_path / "ro"
+        directory.mkdir()
+        (directory / "jen.config").write_text("[a]\nb = 1\n")
+        os.chmod(directory, 0o500)
+        monkeypatch.setattr(extensions, "CONFIG_FILE", str(directory / "jen.config"))
+        try:
+            with pytest.raises(c.ConfigFileLocked) as err:
+                c.AppConfig().write_value("a", "b", "2", reload=False)
+        finally:
+            os.chmod(directory, 0o700)
+        message = str(err.value)
+        assert "could not be created" in message and f"the config directory {directory}" in message
+        assert f"chown <the Jen service user> {directory}" in message
+        assert "chmod 600" not in message, "there is no lock file to chmod"
+
+    def test_a_missing_directory_is_the_same_case(self, tmp_path, monkeypatch):
+        import jen.config as c
+
+        with (
+            pytest.raises(c.ConfigFileLocked, match="could not be created"),
+            c._file_lock(str(tmp_path / "no-such-dir" / "jen.config")),
+        ):
+            pass
+
+    def test_an_existing_unopenable_file_still_gets_the_chown_chmod_fix(self, cfg):
+        import jen.config as c
+
+        if os.geteuid() == 0:
+            pytest.skip("root opens a mode-000 file")
+        lock = pathlib.Path(f"{cfg}.lock")
+        lock.write_text("")
+        os.chmod(lock, 0o000)
+        with pytest.raises(c.ConfigFileLocked, match=r"cannot be opened.*chown.*chmod 600"):
+            c.AppConfig().write_value("a", "b", "1", reload=False)
+        os.chmod(lock, 0o600)

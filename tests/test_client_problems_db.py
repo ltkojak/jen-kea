@@ -1184,12 +1184,19 @@ class TestARemovedServersKeysAreCleared:
         assert self._present(db, 77) == 0
         assert self._present(db, 1) >= 3, "the live server's own keys are kept"
 
-    def test_with_no_server_configured_nothing_is_cleared(self, db, stack, monkeypatch):
+    def test_removing_the_last_server_clears_its_keys_too(self, db, stack, monkeypatch):
+        """beta.21 cleared nothing for an empty server list; KEA_SERVERS is the last APPLIED config, so empty means the last server was removed (Q157)."""
         self._put(db, 78)
         monkeypatch.setattr(extensions, "KEA_SERVERS", [])
-        assert cp._clear_orphan_server_keys() == 0 and self._present(db, 78) == 5
+        assert cp._clear_orphan_server_keys() >= 5
+        assert self._present(db, 78) == 0
+
+    def test_a_process_whose_config_was_never_applied_touches_nothing(self, db, stack, monkeypatch):
+        self._put(db, 79)
+        monkeypatch.setattr(extensions, "cfg", None)
+        assert cp._clear_orphan_server_keys() == 0 and self._present(db, 79) == 5
         with db.cursor() as cur:
-            cur.execute("DELETE FROM settings WHERE setting_key LIKE 'client_problems_%:78'")
+            cur.execute("DELETE FROM settings WHERE setting_key LIKE 'client_problems_%:79'")
         db.commit()
 
     def test_the_sweeps_own_keys_are_not_touched(self, db, stack):

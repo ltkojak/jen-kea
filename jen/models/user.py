@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import secrets
+import threading
 
 from flask_login import UserMixin
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -151,6 +152,8 @@ def needs_rehash(stored_hash: str) -> bool:
 _settings_cache: dict = {}
 _settings_cache_ts: float = 0
 _settings_next_try: float = 0  # earliest time a FAILED reload is attempted again
+_settings_ever_loaded: bool = False  # has the cache EVER been read from the database in this process?
+_settings_refresh_lock = threading.Lock()  # v5.68.0-beta.22 (Q157): one reload at a time
 _SETTINGS_CACHE_TTL: float = 30.0  # seconds
 #: v5.68.0-beta.21 (Q156): after a failed reload the next one waits this long. A failed reload used to leave the cache timestamp alone, so the very next
 #: call reloaded again - and with the Jen database down each attempt costs a pool creation (10 s) and a direct connect (10 s): `check_session_timeout`
@@ -165,6 +168,12 @@ def _invalidate_settings_cache() -> None:
     _settings_next_try = 0
 
 
+def settings_ever_loaded() -> bool:
+    """True once the settings table has been read successfully in this process. False means `get_global_setting` has only ever returned its default
+    (the Jen database was unreachable) - a caller that must not act on a default (the daily summary's "already sent today?") asks first."""
+    return _settings_ever_loaded
+
+
 def get_global_setting(key: str, default=None):
     """
     Read a value from the settings table.
@@ -174,27 +183,41 @@ def get_global_setting(key: str, default=None):
     """
     import time
 
-    global _settings_cache, _settings_cache_ts, _settings_next_try
+    global _settings_cache, _settings_cache_ts, _settings_next_try, _settings_ever_loaded
     now = time.time()
-    if now - _settings_cache_ts > _SETTINGS_CACHE_TTL and now >= _settings_next_try:
-        # Cache expired — reload all settings in one query
-        from jen.models.db import jen_db
-
+    # Cache expired - ONE thread reloads (v5.68.0-beta.22, Q157). `_settings_next_try` moved only after a reload FAILED, so N threads that saw
+    # an expired cache all reloaded: with the database down and `check_session_timeout` on every request, a burst of requests was a burst of
+    # 10 s connects. The holder reloads; everyone else returns the stale cache at once (`default` only when nothing was ever read - and then
+    # they wait for the holder, once, and re-check: a first load is not a place to hand out defaults).
+    if (
+        now - _settings_cache_ts > _SETTINGS_CACHE_TTL
+        and now >= _settings_next_try
+        and _settings_refresh_lock.acquire(blocking=not _settings_ever_loaded)
+    ):
         try:
-            with jen_db() as db, db.cursor() as cur:
-                cur.execute("SELECT setting_key, setting_value FROM settings")
-                _settings_cache = {r["setting_key"]: r["setting_value"] for r in cur.fetchall()}
-            _settings_cache_ts = now
-            _settings_next_try = 0
-        except Exception as e:
-            # keep serving what was last read (`default` only when nothing ever was) and do not try again for _SETTINGS_RETRY_S
-            _settings_next_try = now + _SETTINGS_RETRY_S
-            logger.error(f"get_global_setting cache reload: {e}")
+            now = time.time()
+            if now - _settings_cache_ts > _SETTINGS_CACHE_TTL and now >= _settings_next_try:
+                from jen.models.db import jen_db
+
+                try:
+                    with jen_db() as db, db.cursor() as cur:
+                        cur.execute("SELECT setting_key, setting_value FROM settings")
+                        _settings_cache = {r["setting_key"]: r["setting_value"] for r in cur.fetchall()}
+                    _settings_cache_ts = now
+                    _settings_next_try = 0
+                    _settings_ever_loaded = True
+                except Exception as e:
+                    # keep serving what was last read and do not try again for _SETTINGS_RETRY_S
+                    _settings_next_try = now + _SETTINGS_RETRY_S
+                    logger.error(f"get_global_setting cache reload: {e}")
+        finally:
+            _settings_refresh_lock.release()
     return _settings_cache.get(key, default)
 
 
-def set_global_setting(key: str, value: str) -> None:
-    """Upsert a value in the settings table and invalidate the cache."""
+def set_global_setting(key: str, value: str) -> bool:
+    """Upsert a value in the settings table and invalidate the cache. True when it was written, False when it was not (logged): the caller that
+    records a FACT with it (`daily_summary_sent`, an alert's delivery state) can say whether it is stored (v5.68.0-beta.22, Q157)."""
     from jen.models.db import jen_db
 
     try:
@@ -210,8 +233,10 @@ def set_global_setting(key: str, value: str) -> None:
                 )
             db.commit()
         _invalidate_settings_cache()
+        return True
     except Exception as e:
         logger.error(f"set_global_setting({key}): {e}")
+        return False
 
 
 def audit(action: str, entity: str, details: str = "") -> None:

@@ -1135,17 +1135,23 @@ def _load_state(alert_type, key) -> dict:
 def _save_state(alert_type, key, state) -> None:
     import json
 
-    __set_global_setting(_alert_state_key(alert_type, key), json.dumps(state, separators=(",", ":")))
+    if not __set_global_setting(_alert_state_key(alert_type, key), json.dumps(state, separators=(",", ":"))):
+        # v5.68.0-beta.22 (Q157): the write failed (it is logged by the setter); the state is now only in memory of this pass, so a restart may repeat a notification
+        logger.warning(f"alert state {alert_type}:{key} could not be stored: a restart may repeat this notification")
 
 
 def _clear_orphan_states(alert_type, live_keys) -> int:
     """Delete `alert_state:<alert_type>:<key>` rows whose key is no longer configured (v5.68.0-beta.21, Q156). A subnet that left Jen's map (or a server
     that was removed) used to leave its state behind for ever: active, never recovered, loaded on every settings reload. No `_ok` is sent - the thing
-    the alert was about is gone. An EMPTY live set clears nothing: a configuration that could not be read must not wipe every state (and re-alert
-    them all when it comes back). Returns the number of rows removed."""
-    live = {str(k) for k in live_keys}
-    if not live:
+    the alert was about is gone. Returns the number of rows removed.
+
+    v5.68.0-beta.22 (Q157): an EMPTY live set is no longer a reason to clear nothing. beta.21 guarded against "a configuration that could not be
+    read", but `extensions.SUBNET_MAP` / `KEA_SERVERS` are the LAST APPLIED config (`AppConfig.apply`) - there is no runtime state in which they are
+    unreadable - so an empty map is a box whose last subnet was removed, and its state stayed active for ever. The validity gate is whether a config
+    has been applied at all (`extensions.cfg`)."""
+    if getattr(extensions, "cfg", None) is None:
         return 0
+    live = {str(k) for k in live_keys}
     prefix = f"alert_state:{alert_type}:"
     try:
         with __jen_db_ctx() as jdb, jdb.cursor() as jcur:
@@ -1390,37 +1396,57 @@ def _check_packet_health_alerts() -> None:
     _clear_orphan_states("packet_health", [srv["id"] for srv in extensions.KEA_SERVERS or []])
 
 
-def send_daily_summary() -> bool:
-    """Build and send daily summary. True when it was built and handed to the channels, False when building it failed."""
+_pending_summary = (
+    None  # (date, text): a summary that was built and NOT delivered - a retry sends this text, it does not rebuild
+)
+
+
+def _build_daily_summary() -> str:
+    lines = ["<b>Daily Network Summary</b>"]
+    with __kea_db_ctx() as db, __jen_db_ctx() as jdb:
+        with db.cursor() as cur:
+            for subnet_id, info in extensions.SUBNET_MAP.items():
+                cur.execute(
+                    f"SELECT COUNT(*) as cnt FROM lease4 WHERE {ACTIVE_LEASE4} AND subnet_id=%s",  # nosec B608 - a fixed constant
+                    (subnet_id,),
+                )
+                active = cur.fetchone()["cnt"]
+                cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
+                reserved = cur.fetchone()["cnt"]
+                lines.append(f"\n<b>{info['name']}</b> ({info['cidr']}): {active} active, {reserved} reserved")
+            # New devices in last 24h
+            with jdb.cursor() as jcur:
+                jcur.execute(
+                    "SELECT COUNT(*) as cnt FROM devices WHERE first_seen >= DATE_SUB(NOW(), INTERVAL 24 HOUR)"
+                )
+                new_devices = jcur.fetchone()["cnt"]
+                jcur.execute("SELECT COUNT(*) as cnt FROM devices")
+                total_devices = jcur.fetchone()["cnt"]
+        lines.append(f"\nNew devices (24h): <b>{new_devices}</b>")
+        lines.append(f"Total known devices: <b>{total_devices}</b>")
+    return "\n".join(lines)
+
+
+def send_daily_summary() -> str:
+    """Build (once per day) and send the daily summary. Returns "delivered" (at least one ELIGIBLE channel took it), "undelivered" (it was built
+    and nobody did - every channel failed, or none handles `daily_summary`) or "failed" (it could not be built).
+
+    v5.68.0-beta.22 (Q157): it returned True after `send_alert(...)` whatever the channels answered, and the loop then recorded the day as sent -
+    every other notification since beta.19 is judged by `_delivered(...)`, this one was not. The built text is kept in `_pending_summary` so a retry
+    sends the same text without rebuilding it; a new day drops it."""
+    global _pending_summary
+    today = _utcnow().date()
     try:
-        lines = ["<b>Daily Network Summary</b>"]
-        with __kea_db_ctx() as db, __jen_db_ctx() as jdb:
-            with db.cursor() as cur:
-                for subnet_id, info in extensions.SUBNET_MAP.items():
-                    cur.execute(
-                        f"SELECT COUNT(*) as cnt FROM lease4 WHERE {ACTIVE_LEASE4} AND subnet_id=%s",  # nosec B608 - a fixed constant
-                        (subnet_id,),
-                    )
-                    active = cur.fetchone()["cnt"]
-                    cur.execute("SELECT COUNT(*) as cnt FROM hosts WHERE dhcp4_subnet_id=%s", (subnet_id,))
-                    reserved = cur.fetchone()["cnt"]
-                    lines.append(f"\n<b>{info['name']}</b> ({info['cidr']}): {active} active, {reserved} reserved")
-                # New devices in last 24h
-                with jdb.cursor() as jcur:
-                    jcur.execute(
-                        "SELECT COUNT(*) as cnt FROM devices WHERE first_seen >= DATE_SUB(NOW(), INTERVAL 24 HOUR)"
-                    )
-                    new_devices = jcur.fetchone()["cnt"]
-                    jcur.execute("SELECT COUNT(*) as cnt FROM devices")
-                    total_devices = jcur.fetchone()["cnt"]
-            lines.append(f"\nNew devices (24h): <b>{new_devices}</b>")
-            lines.append(f"Total known devices: <b>{total_devices}</b>")
-        summary = "\n".join(lines)
-        send_alert("daily_summary", summary=summary)
-        return True
+        if _pending_summary is None or _pending_summary[0] != today:
+            _pending_summary = (today, _build_daily_summary())
+        results = send_alert("daily_summary", summary=_pending_summary[1])
     except Exception as e:
         logger.error(f"Daily summary error: {e}")
-        return False
+        return "failed"
+    if _delivered(results):
+        _pending_summary = None
+        return "delivered"
+    return "undelivered"
 
 
 def ip_to_int(ip):
@@ -1655,14 +1681,25 @@ def diff_leases(prev: dict, cur: dict) -> list[dict]:
     return events
 
 
+UNKNOWN = object()  # `_summary_sent_date()` could not read the settings table at all
+
+
 def _summary_sent_date():
     """The date the daily summary was last sent (`daily_summary_sent`), read when the alert loop starts. With no record (a fresh install, or the first
     start after the upgrade that added it) a summary time that has already passed today counts as sent today: the loop must not announce a summary at
-    an arbitrary hour just because it started after the configured time."""
+    an arbitrary hour just because it started after the configured time.
+
+    v5.68.0-beta.22 (Q157): returns `UNKNOWN` when the settings table has never been read (the Jen database was down at start). Reading through the
+    empty cache returned `""` and `"07:00"`, so a process that started at 09:00 with the database down decided "07:00 has passed, today is sent" and
+    skipped a configured 20:00 summary that day. The loop asks again each cycle until it knows, and sends nothing meanwhile."""
     from datetime import date
+
+    from jen.models.user import settings_ever_loaded
 
     try:
         raw = __get_global_setting("daily_summary_sent", "") or ""
+        if not settings_ever_loaded():
+            return UNKNOWN
         if raw:
             return date.fromisoformat(raw)
         now = _utcnow()
@@ -1670,7 +1707,7 @@ def _summary_sent_date():
         return now.date() if (now.hour, now.minute) >= (h, m) else None
     except Exception as e:
         logger.warning(f"Could not read daily_summary_sent: {e}")
-        return None
+        return UNKNOWN
 
 
 def _seed_known_macs(known_macs: set) -> bool:
@@ -1689,6 +1726,7 @@ def _seed_known_macs(known_macs: set) -> bool:
 
 def check_alerts():
     import time
+    from datetime import timedelta
 
     last_kea_status = {}
     last_seen_leases = {}  # ip -> {mac, hostname, subnet_id, is_reserved} — see diff_leases()
@@ -1699,6 +1737,8 @@ def check_alerts():
         _summary_sent_date()
     )  # v5.68.0-beta.21 (Q156): persisted, so a restart after the summary does not send it twice
     last_summary_try = None
+    summary_attempts = 0
+    summary_wait = timedelta(minutes=15)  # how long after an attempt the next may be made
     last_condition_pass = (
         None  # v5.68.0-beta.20 (Q155): the certificate and forecast conditions run every CONDITION_INTERVAL_MINUTES
     )
@@ -2039,12 +2079,37 @@ def check_alerts():
                 # v5.68.0-beta.21 (Q156): due AT OR AFTER its time, once per day. It was `now.hour == h and now.minute == m`, evaluated once per outer
                 # cycle - and a cycle is 6 x (probe + 5 s), 90 s with one server down, plus the heavy block: the one-minute window was missed with no
                 # log line. A failed build is retried no more often than every 15 minutes; `daily_summary_sent` (the date) survives a restart.
-                summary_due = (now.hour, now.minute) >= (h, m) and last_summary_date != today
-                if summary_due and (last_summary_try is None or now - last_summary_try >= dt.timedelta(minutes=15)):
+                # v5.68.0-beta.22 (Q157): the day is recorded only when a channel TOOK the summary. "undelivered" (every channel failed, or none
+                # handles it) is retried with the notification backoff (1, 2, 4 ... 60 min) and never recorded; "failed" (it could not be built) is
+                # retried every 15 minutes; a record that could not be WRITTEN is logged - a restart may then send one duplicate, the documented
+                # trade-off against sending none.
+                if last_summary_date is UNKNOWN:
+                    last_summary_date = (
+                        _summary_sent_date()
+                    )  # the settings could not be read at start: ask again until they can, send nothing meanwhile
+                summary_due = (
+                    last_summary_date is not UNKNOWN and (now.hour, now.minute) >= (h, m) and last_summary_date != today
+                )
+                if summary_due and (last_summary_try is None or now - last_summary_try >= summary_wait):
                     last_summary_try = now
-                    if send_daily_summary():
+                    outcome = send_daily_summary()
+                    if outcome == "delivered":
                         last_summary_date = today
-                        __set_global_setting("daily_summary_sent", today.isoformat())
+                        summary_attempts, summary_wait = 0, dt.timedelta(minutes=15)
+                        if not __set_global_setting("daily_summary_sent", today.isoformat()):
+                            logger.warning(
+                                "daily_summary_sent could not be stored: a restart before tomorrow may send today's summary again"
+                            )
+                    elif outcome == "undelivered":
+                        summary_attempts += 1
+                        summary_wait = dt.timedelta(
+                            minutes=_BACKOFF_MINUTES[min(summary_attempts - 1, len(_BACKOFF_MINUTES) - 1)]
+                        )
+                        logger.warning(
+                            f"daily summary: no channel took it (attempt {summary_attempts}); trying again in {summary_wait}"
+                        )
+                    else:
+                        summary_wait = dt.timedelta(minutes=15)
             except Exception as e:
                 logger.error(f"Daily summary scheduling error: {e}")
 

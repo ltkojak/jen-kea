@@ -339,19 +339,62 @@ class TestPeriodicJobBookkeeping:
         assert started == 0 and job["running"] is False
         assert "could not start" in job["last_error"] and job["history"] == [False]
 
-    def test_a_job_that_could_not_start_is_tried_again_on_the_next_tick(self):
+    def test_a_job_that_could_not_start_is_tried_again_soon_not_a_whole_interval_later(self):
+        """beta.21 advanced `next_due` by the interval BEFORE the spawn and the failure branch did not put it back; its test reset `next_due` by hand
+        before the second run, which is the thing the claim ("the next tick tries again") depends on. Q157: the schedule is the code's, not the test's."""
         calls = []
-        background.register_periodic("plug", "job", lambda: calls.append(1), 5)
+        background.register_periodic("plug", "job", lambda: calls.append(1), 10)
         entry = background._periodic[0]
-        entry["next_due"] = datetime.now(timezone.utc) - timedelta(minutes=1)
+        now = datetime.now(timezone.utc)
+        entry["next_due"] = now - timedelta(minutes=1)
 
         def boom(job):
             raise RuntimeError("no threads")
 
-        background.run_due_periodic_jobs(spawn=boom)
-        entry["next_due"] = datetime.now(timezone.utc) - timedelta(seconds=1)
-        assert background.run_due_periodic_jobs(spawn=lambda j: background._run_one_periodic(j)) == 1
-        assert calls == [1] and background.periodic_jobs()[0]["history"] == [False, True]
+        background.run_due_periodic_jobs(now=now, spawn=boom)
+        assert entry["start_failures"] == 1 and entry["next_due"] == now + timedelta(seconds=60), (
+            entry["next_due"] - now
+        )
+        # nothing before the retry time, and the very next call after it runs the job - with next_due untouched by the test
+        assert background.run_due_periodic_jobs(now=now + timedelta(seconds=59), spawn=boom) == 0
+        assert (
+            background.run_due_periodic_jobs(now=now + timedelta(seconds=61), spawn=background._run_one_periodic) == 1
+        )
+        assert calls == [1] and entry["history"] == [False, True] and entry["start_failures"] == 0
+
+    def test_repeated_start_failures_back_off_to_the_interval_and_no_further(self):
+        background.register_periodic("plug", "job", lambda: None, 5)
+        entry = background._periodic[0]
+        now = datetime.now(timezone.utc)
+        waits = []
+
+        def boom(job):
+            raise RuntimeError("no threads")
+
+        for _ in range(6):
+            entry["next_due"] = now
+            background.run_due_periodic_jobs(now=now, spawn=boom)
+            waits.append(int((entry["next_due"] - now).total_seconds()))
+        assert waits == [60, 120, 240, 300, 300, 300], waits  # 60 x 2^(n-1), capped at the 5-minute interval
+
+    def test_a_real_thread_start_that_raises_is_handled_the_same_way(self, monkeypatch):
+        import threading
+
+        background.register_periodic("plug", "job", lambda: None, 5)
+        entry = background._periodic[0]
+        now = datetime.now(timezone.utc)
+        entry["next_due"] = now - timedelta(minutes=1)
+
+        class NoThreads:
+            def __init__(self, *a, **k):
+                pass
+
+            def start(self):
+                raise RuntimeError("can't start new thread")
+
+        monkeypatch.setattr(threading, "Thread", NoThreads)
+        assert background.run_due_periodic_jobs(now=now) == 0
+        assert entry["running"] is False and entry["next_due"] == now + timedelta(seconds=60)
 
     def test_a_run_records_when_it_finished_and_keeps_the_last_three_outcomes(self):
         outcomes = iter([True, False, False, False, True])

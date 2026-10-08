@@ -238,23 +238,34 @@ def get_kea6_db() -> pymysql.connections.Connection:
     if _kea6_targets_same_db():
         return get_kea_db()
     if _kea6_pool is None:
+        direct = False
         with _pool_lock:
             if _kea6_pool is None:
-                try:
-                    _kea6_pool = _make_kea6_pool()
-                    logger.info("Kea6 DB connection pool initialized (dbutils)")
-                except Exception as e:
-                    logger.warning(f"Kea6 DB pool failed, using direct connections: {e}")
-                    return pymysql.connect(
-                        host=extensions.KEA6_DB_HOST,
-                        port=extensions.KEA6_DB_PORT,
-                        user=extensions.KEA6_DB_USER,
-                        password=extensions.KEA6_DB_PASS,
-                        database=extensions.KEA6_DB_NAME,
-                        cursorclass=pymysql.cursors.DictCursor,
-                        connect_timeout=10,
-                        **_ssl_kwargs(extensions.KEA6_DB_SSL_CA),
-                    )
+                # v5.68.0-beta.22 (Q157): the same shape as the jen and kea pools (Q156) - a failed creation is recorded and not re-attempted for
+                # _POOL_RETRY_S, and the direct connect runs OUTSIDE the lock. A separate, down v6 lease host used to cost ~20 s per call and
+                # serialise every other database caller behind it.
+                if _pool_recently_failed("kea6"):
+                    direct = True
+                else:
+                    try:
+                        _kea6_pool = _make_kea6_pool()
+                        _pool_failed_at.pop("kea6", None)
+                        logger.info("Kea6 DB connection pool initialized (dbutils)")
+                    except Exception as e:
+                        _pool_failed_at["kea6"] = time.monotonic()
+                        logger.warning(f"Kea6 DB pool failed, using direct connections: {e}")
+                        direct = True
+        if direct:
+            return pymysql.connect(
+                host=extensions.KEA6_DB_HOST,
+                port=extensions.KEA6_DB_PORT,
+                user=extensions.KEA6_DB_USER,
+                password=extensions.KEA6_DB_PASS,
+                database=extensions.KEA6_DB_NAME,
+                cursorclass=pymysql.cursors.DictCursor,
+                connect_timeout=10,
+                **_ssl_kwargs(extensions.KEA6_DB_SSL_CA),
+            )
     return _kea6_pool.connection()
 
 
@@ -344,6 +355,7 @@ def reset_kea_pools() -> None:
     global _kea_pool, _kea6_pool
     with _pool_lock:
         _pool_failed_at.pop("kea", None)  # the settings just changed: dial them now, not after the retry window
+        _pool_failed_at.pop("kea6", None)
         if _kea_pool is not None:
             _drop_pool(_kea_pool)
             _kea_pool = None

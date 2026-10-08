@@ -2747,6 +2747,19 @@ whose subnet or server is no longer configured (no `_ok`; an empty live set clea
 *The device seed:* the `known_macs` seed ran once before the alert loop, so a Jen database that was down at start left it empty for the life of the process and every known
 device that was offline at start fired `new_device` when it came back; it is retried at the top of each cycle until it works and `new_device` waits for it.
 
+**Every claim is backed by the result of the call that made it (v5.68.0-beta.22, Q157).** beta.21 fixed several contracts at the FIRST call and left the second with the old shape. *The daily
+summary* returned True after `send_alert(...)` whatever the channels answered and the loop recorded the day as sent; it now returns "delivered" (an ELIGIBLE channel took it), "undelivered" (it
+was built and nobody did) or "failed" (it could not be built), keeps the built text in `_pending_summary` so a retry does not rebuild, records `daily_summary_sent` ONLY on delivery,
+retries "undelivered" with the notification backoff (1, 2, 4 ... 60 min) and "failed" every 15 minutes, and logs a record that could not be written (`set_global_setting` returns a bool; a
+restart may then send one duplicate - the documented trade-off against sending none). A start with the Jen database down no longer reads `daily_summary_sent` through an empty cache:
+`_summary_sent_date()` returns `UNKNOWN` until the settings table has been read (`user.settings_ever_loaded()`), and the loop sends nothing until it knows. *The settings cache reload is
+single-flight*: one thread reloads (a non-blocking lock; a first-ever load waits for the holder once), everyone else returns the stale cache, and the holder alone moves
+`_settings_next_try` - fifty threads during an outage are one connect attempt. *The kea6 pool* has the same throttle as the jen and kea pools (the direct connect outside the lock).
+*A failed periodic-job start* is retried after `min(interval, 60 s x 2^(failures-1))` - it advanced `next_due` by a whole interval before the spawn and the failure branch did not put it
+back. *Orphan cleanup* no longer skips an empty set: `SUBNET_MAP` / `KEA_SERVERS` are the last APPLIED config, so empty means the last subnet or server was removed; the gate is whether a config
+has been applied at all (`extensions.cfg`). *The config lock* turns every flock failure into `ConfigFileLocked` with the errno, and names the DIRECTORY (not a lock file to chown) when the
+file could not be created.
+
 **`read_log` chooses the newest complete exchange across servers (v5.68.0-beta.22, Q157).** It broke at the first server in order (HA-active first) whose exchange was complete and never compared
 times across servers, so after a failover the old active's older exchange beat the standby's newer one. It now collects the complete exchange of every reachable server and takes the newest by
 its last line corrected by `_clock_offset_s` - ordered only when BOTH offsets are known; within `CLOCK_TIE_S` (5 s) or with an offset unknown, the first in `_evidence_servers` order wins, and the

@@ -538,7 +538,7 @@ class TestTheDailySummaryIsDueAtOrAfterItsTime:
         from jen.models.user import set_global_setting
 
         sent = []
-        monkeypatch.setattr(alerts, "send_daily_summary", lambda: sent.append(alerts._utcnow()) or True)
+        monkeypatch.setattr(alerts, "send_daily_summary", lambda: sent.append(alerts._utcnow()) or "delivered")
 
         def configure(at, persisted=""):
             set_global_setting("daily_summary_time", at)
@@ -603,7 +603,7 @@ class TestTheDailySummaryIsDueAtOrAfterItsTime:
     ):
         sent, configure = summary
         tries = []
-        monkeypatch.setattr(alerts, "send_daily_summary", lambda: tries.append(alerts._utcnow()) or False)
+        monkeypatch.setattr(alerts, "send_daily_summary", lambda: tries.append(alerts._utcnow()) or "failed")
         configure("11:00", persisted="2026-10-06")
         real_loop(40)
         assert len(tries) == 3, f"expected the first try, then one every 15 minutes: {tries}"
@@ -612,14 +612,20 @@ class TestTheDailySummaryIsDueAtOrAfterItsTime:
 
     def test_send_daily_summary_says_whether_it_worked(self, db, monkeypatch):
         monkeypatch.setattr(extensions, "SUBNET_MAP", {})
+        monkeypatch.setattr(alerts, "_pending_summary", None)
+        monkeypatch.setattr(alerts, "send_alert", lambda *a, **k: [("telegram", True, "")])
+        assert alerts.send_daily_summary() == "delivered"
         monkeypatch.setattr(alerts, "send_alert", lambda *a, **k: [])
-        assert alerts.send_daily_summary() is True
+        assert alerts.send_daily_summary() == "undelivered", (
+            "no channel was eligible: nobody was told (beta.21 pinned True here)"
+        )
 
         def broken():
             raise RuntimeError("kea database down")
 
+        monkeypatch.setattr(alerts, "_pending_summary", None)
         monkeypatch.setitem(alerts.__dict__, "__kea_db_ctx", broken)
-        assert alerts.send_daily_summary() is False
+        assert alerts.send_daily_summary() == "failed"
 
 
 class TestTheKnownMacsSeedIsRetried:
@@ -729,12 +735,37 @@ class TestOrphanedAlertStateIsCleared:
         assert self._stored(db, "utilization_high") == ["5", "7"]
         assert sender.sent == [], "no recovery is sent: the thing the alert was about is gone"
 
-    def test_an_empty_live_set_clears_nothing(self, db):
+    def test_the_last_subnet_s_state_is_cleared_too(self, db):
+        """beta.21 cleared nothing for an empty live set ("an unreadable configuration"), but SUBNET_MAP is the last APPLIED config: empty means the
+        last subnet was removed, and its state stayed active for ever (Q157, item 6)."""
         self._put(db, "pool_exhaustion", [1, 2])
-        assert alerts._clear_orphan_states("pool_exhaustion", []) == 0
-        assert self._stored(db, "pool_exhaustion") == ["1", "2"], (
-            "an unreadable configuration must not wipe every state"
-        )
+        assert alerts._clear_orphan_states("pool_exhaustion", []) == 2
+        assert self._stored(db, "pool_exhaustion") == []
+
+    def test_removing_the_last_subnet_through_the_real_pass_clears_its_rows(self, db, monkeypatch, send):
+        send(OK)
+        self._put(db, "utilization_high", [61])
+        self._put(db, "pool_exhaustion", [61])
+        self._put(db, "pool_forecast", [61])
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {})
+        monkeypatch.setattr("jen.services.health.lease_history_window", lambda days=31: {})
+        with db.cursor() as cur:
+            alerts.check_utilization_alerts(cur, {"subnet4": []})
+        alerts.check_pool_forecast_alerts(today=T0.date())
+        for kind in ("utilization_high", "pool_exhaustion", "pool_forecast"):
+            assert self._stored(db, kind) == [], kind
+
+    def test_removing_the_last_server_clears_its_packet_health_state(self, db, monkeypatch):
+        self._put(db, "packet_health", [4])
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [])
+        alerts._check_packet_health_alerts()
+        assert self._stored(db, "packet_health") == []
+
+    def test_a_process_whose_config_was_never_applied_touches_nothing(self, db, monkeypatch):
+        self._put(db, "utilization_high", [1, 2])
+        monkeypatch.setattr(extensions, "cfg", None)
+        assert alerts._clear_orphan_states("utilization_high", []) == 0
+        assert self._stored(db, "utilization_high") == ["1", "2"]
 
     def test_another_alert_types_rows_are_untouched(self, db):
         self._put(db, "utilization_high", [9])
@@ -771,3 +802,200 @@ class TestOrphanedAlertStateIsCleared:
         with db.cursor() as cur:
             alerts.check_utilization_alerts(cur, {"subnet4": []})
         assert self._stored(db, "cert_expiring") == ["1", "30", "7"]
+
+
+_REAL_SEND_DAILY_SUMMARY = alerts.send_daily_summary
+
+
+class TestTheSummaryIsRecordedOnlyWhenAChannelTookIt:
+    """v5.68.0-beta.22 (Q157, item 2): `send_daily_summary` returned True after `send_alert(...)` whatever the channels answered, and the loop recorded
+    the day as sent. Every other notification since beta.19 is judged by `_delivered`. "delivered" is recorded; "undelivered" is retried with the
+    notification backoff (1, 2, 4 ... 60 min) and never recorded; the built text is kept so a retry does not rebuild."""
+
+    @pytest.fixture
+    def world(self, db, monkeypatch, real_loop):
+        from jen.models.user import set_global_setting
+
+        builds = []
+        monkeypatch.setattr(alerts, "send_daily_summary", _REAL_SEND_DAILY_SUMMARY)
+        monkeypatch.setattr(alerts, "_pending_summary", None)
+        monkeypatch.setattr(alerts, "_build_daily_summary", lambda: (builds.append(1), "the built summary")[1])
+        set_global_setting("daily_summary_time", "11:00")
+        set_global_setting("daily_summary_sent", "2026-10-06")  # yesterday: due from the first cycle
+        yield builds
+        set_global_setting("daily_summary_sent", "")
+        set_global_setting("daily_summary_time", "07:00")
+
+    @staticmethod
+    def _stored():
+        from jen.models.user import get_global_setting
+
+        return get_global_setting("daily_summary_sent", "")
+
+    def test_one_channel_taking_it_is_recorded_and_sent_once(self, real_loop, world, send):
+        sender = send([("telegram", False, "429"), ("ntfy", True, "")])
+        real_loop(10)
+        assert sender.sent == ["daily_summary"] and world == [1]
+        assert self._stored() == "2026-10-07"
+
+    def test_every_channel_failing_is_not_recorded_retried_at_1_2_4_minutes_and_built_once(
+        self, real_loop, world, send
+    ):
+        sender = send(DOWN, DOWN, DOWN, OK)
+        real_loop(12)
+        # cycles end every 30 s: attempts at 0:30 (c1, wait 1 min), 1:30 (c2, wait 2 min), 3:30 (c3, wait 4 min), 7:30 (delivered)
+        assert sender.sent == ["daily_summary"] * 4, sender.sent
+        assert world == [1], "the summary was built once: a retry sends the kept text"
+        assert self._stored() == "2026-10-07", "recorded only when it was finally delivered"
+
+    def test_the_retries_follow_the_backoff_not_every_cycle(self, real_loop, world, send, monkeypatch):
+        sender = send(DOWN)
+        times = []
+        inner = alerts.send_alert
+        monkeypatch.setattr(alerts, "send_alert", lambda *a, **k: (times.append(alerts._utcnow()), inner(*a, **k))[1])
+        real_loop(10)
+        gaps = [int((b - a).total_seconds() // 60) for a, b in zip(times, times[1:], strict=False)]
+        assert gaps[:3] == [1, 2, 4], gaps
+        assert self._stored() == "2026-10-06", "never delivered, never recorded"
+        assert len(sender.sent) == len(times)
+
+    def test_no_eligible_channel_is_not_recorded(self, real_loop, world, send):
+        sender = send([])  # send_alert answers [] when no channel handles daily_summary
+        real_loop(4)
+        assert len(sender.sent) >= 2 and self._stored() == "2026-10-06"
+
+    def test_a_restart_with_a_pending_summary_builds_again_and_sends_once_delivered(
+        self, real_loop, world, send, monkeypatch
+    ):
+        send(DOWN)
+        real_loop(3)
+        assert world == [1] and alerts._pending_summary is not None and self._stored() == "2026-10-06"
+        # the process restarts: the pending text is memory of the old process
+        monkeypatch.setattr(alerts, "_pending_summary", None)
+        alerts._CONDITION_CACHE.clear()
+        sender2 = send(OK)
+        real_loop.clock["now"] = T0
+        real_loop(3)
+        assert world == [1, 1], "built again after the restart"
+        assert sender2.sent == ["daily_summary"] and self._stored() == "2026-10-07"
+
+    def test_a_new_day_drops_the_pending_text(self, db, monkeypatch, send):
+        monkeypatch.setattr(alerts, "_pending_summary", (T0.date() - timedelta(days=1), "yesterday's text"))
+        built = []
+        monkeypatch.setattr(alerts, "_build_daily_summary", lambda: (built.append(1), "today's text")[1])
+        monkeypatch.setattr(alerts, "_utcnow", lambda: T0)
+        sender = send(OK)
+        assert alerts.send_daily_summary() == "delivered" and built == [1] and sender.sent == ["daily_summary"]
+
+    def test_the_pending_text_is_what_the_retry_sends(self, db, monkeypatch):
+        sent_texts = []
+        results = iter([DOWN, OK])
+        monkeypatch.setattr(alerts, "_pending_summary", None)
+        monkeypatch.setattr(alerts, "_utcnow", lambda: T0)
+        monkeypatch.setattr(alerts, "_build_daily_summary", lambda: f"built at call {len(sent_texts)}")
+        monkeypatch.setattr(alerts, "send_alert", lambda t, **kw: (sent_texts.append(kw["summary"]), next(results))[1])
+        assert alerts.send_daily_summary() == "undelivered"
+        assert alerts.send_daily_summary() == "delivered"
+        assert sent_texts == ["built at call 0", "built at call 0"]
+
+    def test_a_failing_settings_write_is_logged_and_the_day_is_not_recorded(
+        self, real_loop, world, send, monkeypatch, caplog
+    ):
+        send(OK)
+        monkeypatch.setitem(alerts.__dict__, "__set_global_setting", lambda key, value: False)
+        real_loop(3)
+        assert "daily_summary_sent could not be stored" in caplog.text
+        assert self._stored() == "2026-10-06"
+
+    def test_set_global_setting_says_whether_it_wrote(self, db, monkeypatch):
+        from jen.models import db as dbmod
+        from jen.models.user import set_global_setting
+
+        assert set_global_setting("q157_probe", "1") is True
+
+        def down():
+            raise RuntimeError("database down")
+
+        monkeypatch.setattr(dbmod, "jen_db", down)
+        assert set_global_setting("q157_probe", "2") is False
+
+    def test_a_save_state_that_cannot_be_stored_warns(self, db, monkeypatch, caplog):
+        monkeypatch.setitem(alerts.__dict__, "__set_global_setting", lambda key, value: False)
+        alerts._save_state("utilization_high", 3, {"a": True, "n": True, "t": None, "c": 0, "d": None, "r": False})
+        assert "could not be stored" in caplog.text
+
+
+class TestTheSummaryWaitsForSettingsItCanRead:
+    """v5.68.0-beta.22 (Q157, item 13): `_summary_sent_date()` read through an EMPTY cache when the Jen database was down at start (`""` and
+    `"07:00"`): a start at 12:00 decided "07:00 has passed, today is sent" and skipped a configured 20:00 summary that day."""
+
+    def test_the_database_down_for_the_first_cycles_then_up_the_20_00_summary_is_sent(self, db, monkeypatch, real_loop):
+        from jen.models import db as dbmod
+        from jen.models import user as usermod
+        from jen.models.user import set_global_setting
+
+        set_global_setting("daily_summary_time", "20:00")
+        set_global_setting("daily_summary_sent", "")
+        sent = []
+        monkeypatch.setattr(alerts, "send_daily_summary", lambda: sent.append(alerts._utcnow()) or "delivered")
+        # the process just started: nothing was ever read
+        monkeypatch.setattr(usermod, "_settings_cache", {})
+        monkeypatch.setattr(usermod, "_settings_cache_ts", 0)
+        monkeypatch.setattr(usermod, "_settings_next_try", 0)
+        monkeypatch.setattr(usermod, "_settings_ever_loaded", False)
+        state = {"up": False}
+        real = dbmod.jen_db
+
+        import contextlib
+
+        @contextlib.contextmanager
+        def flaky():
+            if not state["up"]:
+                raise RuntimeError("the Jen database is down")
+            with real() as conn:
+                yield conn
+
+        monkeypatch.setattr(dbmod, "jen_db", flaky)
+
+        def comes_up(clock):
+            state["up"] = True
+            usermod._settings_next_try = 0
+
+        def evening(clock):
+            clock["now"] = T0.replace(hour=19, minute=59, second=30)
+
+        try:
+            real_loop(8 * 60 + 8, hooks={13: comes_up, 14: evening})
+            assert alerts._summary_sent_date() is not alerts.UNKNOWN
+            assert len(sent) == 1 and sent[0].hour == 20, f"sent at {sent}"
+        finally:
+            set_global_setting("daily_summary_time", "07:00")
+            set_global_setting("daily_summary_sent", "")
+
+    def test_while_the_settings_are_unreadable_nothing_is_sent_even_when_the_time_has_passed(
+        self, db, monkeypatch, real_loop
+    ):
+        from jen.models import db as dbmod
+        from jen.models import user as usermod
+
+        sent = []
+        monkeypatch.setattr(alerts, "send_daily_summary", lambda: sent.append(1) or "delivered")
+        monkeypatch.setattr(usermod, "_settings_cache", {})
+        monkeypatch.setattr(usermod, "_settings_cache_ts", 0)
+        monkeypatch.setattr(usermod, "_settings_ever_loaded", False)
+        monkeypatch.setattr(dbmod, "jen_db", lambda: (_ for _ in ()).throw(RuntimeError("down")))
+        real_loop(5)
+        assert sent == []
+
+    def test_the_sentinel_is_what_an_unread_settings_table_gives(self, monkeypatch):
+        from jen.models import user as usermod
+
+        monkeypatch.setattr(usermod, "_settings_ever_loaded", False)
+        monkeypatch.setattr(usermod, "_settings_cache_ts", time_now_plus())
+        assert alerts._summary_sent_date() is alerts.UNKNOWN
+
+
+def time_now_plus():
+    import time
+
+    return time.time() + 3600  # a cache that is "fresh" so no reload is attempted

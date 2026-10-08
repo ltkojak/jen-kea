@@ -228,6 +228,14 @@ def _open_lock(lock_path):
     except OSError as e:
         if os.path.islink(lock_path):
             raise _refuse_lock(lock_path, "is a symlink - Jen never locks through one; remove it", e) from e
+        if not os.path.lexists(lock_path):
+            # v5.68.0-beta.22 (Q157): there is NO lock file - the open failed trying to CREATE it (ENOENT / EACCES / EROFS on the DIRECTORY). The fix
+            # is not "chown the lock file" (nothing to chown): the config directory must exist and be writable by this account.
+            directory = os.path.dirname(lock_path) or "."
+            raise ConfigFileLocked(
+                f"the config lock {lock_path} could not be created ({e.strerror or e}): the config directory {directory} must exist and be writable by the "
+                f"Jen service user - sudo chown <the Jen service user> {directory}"
+            ) from e
         raise _refuse_lock(lock_path, f"cannot be opened ({e.strerror or e})", e) from e
 
 
@@ -263,7 +271,11 @@ def _file_lock(path):
                 break
             except OSError as e:
                 if e.errno not in (errno.EAGAIN, errno.EACCES):
-                    raise
+                    # v5.68.0-beta.22 (Q157): ENOLCK (NFS), EBADF, EINTR... escaped as a bare OSError and 500'd the save; it is a refusal with the reason
+                    raise ConfigFileLocked(
+                        f"the config lock {lock_path} could not be taken ({errno.errorcode.get(e.errno, e.errno)}: {e.strerror or e}) - "
+                        "the file system does not support the advisory lock Jen's saves take; keep /etc/jen on a local file system"
+                    ) from e
                 if time.monotonic() >= deadline:
                     raise ConfigFileLocked(
                         f"{lock_path} is held by another process (the installer's --configure?) - try again when it has finished"

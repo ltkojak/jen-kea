@@ -389,13 +389,14 @@ _SERVER_KEY_PREFIXES = (
 
 def _clear_orphan_server_keys() -> int:
     """Delete the per-server settings keys (watermark, last read, last error, misses, clock offset) of a server id that is no longer in `KEA_SERVERS`
-    (v5.68.0-beta.21, Q156): a removed server left them behind for ever, loaded on every settings reload. With no server configured at all nothing is
-    cleared - an unreadable configuration must not wipe every watermark (the next sweep would re-read a backlog as news). Never raises."""
+    (v5.68.0-beta.21, Q156): a removed server left them behind for ever, loaded on every settings reload. v5.68.0-beta.22 (Q157): the guard that
+    cleared nothing for an EMPTY server list is gone - `KEA_SERVERS` is the last APPLIED config, so empty means the last server was removed; the
+    gate is whether a config has been applied at all (`extensions.cfg`). Never raises."""
     from jen.models import db as __db
 
-    live = {str(srv.get("id")) for srv in extensions.KEA_SERVERS or []}
-    if not live:
+    if getattr(extensions, "cfg", None) is None:
         return 0
+    live = {str(srv.get("id")) for srv in extensions.KEA_SERVERS or []}
     removed = 0
     try:
         with __db.jen_db() as db, db.cursor() as cur:

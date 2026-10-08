@@ -73,6 +73,7 @@ def register_periodic(plugin_id: str, name: str, fn, every_minutes: int) -> None
         "last_finished": None,  # v5.68.0-beta.21 (Q156)
         "last_error": "",
         "history": [],  # the outcome (True = ran clean) of the last three runs, oldest first
+        "start_failures": 0,  # consecutive failed Thread.start() calls (v5.68.0-beta.22, Q157)
     }
     with _periodic_lock:
         _periodic[:] = [j for j in _periodic if (j["plugin_id"], j["name"]) != key]
@@ -126,7 +127,10 @@ def run_due_periodic_jobs(now: datetime | None = None, spawn=None) -> int:
     for j in due:
         # v5.68.0-beta.21 (Q156): `running` was set above, under the lock, and the thread started here OUTSIDE it with no rollback - a `Thread.start()`
         # that raised (the process out of threads) left `running=True` for ever, and a running job is skipped for ever. A start that fails is a failed
-        # run: running goes back to False, the error is recorded, and the next tick tries again.
+        # run: running goes back to False, the error is recorded - and (v5.68.0-beta.22, Q157) its SCHEDULE is put back: `next_due` was advanced by a
+        # whole interval above, before the spawn, so "the next tick tries again" was a comment - the job waited out its interval. A failed start is
+        # retried after `min(interval, 60 s x 2^(failures - 1))`: 60 s, 120 s, 240 s ... never later than the interval itself; a start that works
+        # resets the count.
         try:
             if spawn is not None:
                 spawn(j)
@@ -135,11 +139,18 @@ def run_due_periodic_jobs(now: datetime | None = None, spawn=None) -> int:
                     target=_run_one_periodic, args=(j,), name=f"jen-periodic-{j['plugin_id']}", daemon=True
                 ).start()
             started += 1
+            j["start_failures"] = 0
         except Exception as e:
             j["running"] = False
             j["last_error"] = f"could not start: {e}"
             _record_run(j, False)
-            logger.error(f"Periodic job {j['plugin_id']}/{j['name']} could not be started: {e}")
+            j["start_failures"] = j.get("start_failures", 0) + 1
+            wait_s = min(j["every_minutes"] * 60, 60 * 2 ** (j["start_failures"] - 1))
+            with _periodic_lock:
+                j["next_due"] = now + timedelta(seconds=wait_s)
+            logger.error(
+                f"Periodic job {j['plugin_id']}/{j['name']} could not be started ({j['start_failures']} in a row): {e}; trying again in {wait_s} s"
+            )
     return started
 
 

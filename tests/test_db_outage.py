@@ -218,3 +218,168 @@ class TestPoolCreationIsThrottled:
             dbmod.get_jen_db()
         assert held == [False]
         assert isinstance(dbmod._pool_lock, type(threading.Lock()))
+
+
+class TestTheReloadIsSingleFlight:
+    """v5.68.0-beta.22 (Q157, item 3): `_settings_next_try` moved only after a reload FAILED, so N threads that saw an expired cache all reloaded - with
+    the database down and `check_session_timeout` on every request, a burst of requests was a burst of 10 s connects."""
+
+    THREADS = 50
+
+    @staticmethod
+    def _run(threads, key="some_key", default="dflt"):
+        import threading
+
+        results, errors = [], []
+        barrier = threading.Barrier(threads)
+
+        def go():
+            try:
+                barrier.wait(10)
+                started = time.monotonic()
+                results.append((usermod.get_global_setting(key, default), time.monotonic() - started))
+            except Exception as e:  # pragma: no cover
+                errors.append(e)
+
+        pool = [threading.Thread(target=go) for _ in range(threads)]
+        for th in pool:
+            th.start()
+        for th in pool:
+            th.join(30)
+        assert not errors, errors
+        return results
+
+    def test_fifty_threads_during_an_outage_make_one_connect_attempt_and_all_return_within_its_time(
+        self, monkeypatch, down
+    ):
+        monkeypatch.setattr(usermod, "_settings_cache", {"some_key": "stale-but-served"})
+        monkeypatch.setattr(usermod, "_settings_cache_ts", 1)  # long expired
+        monkeypatch.setattr(usermod, "_settings_next_try", 0)
+        monkeypatch.setattr(usermod, "_settings_ever_loaded", True)
+        started = time.monotonic()
+        results = self._run(self.THREADS)
+        elapsed = time.monotonic() - started
+        assert len(down) == 1, f"{len(down)} threads opened a connection: the retry is not single-flight"
+        assert len(results) == self.THREADS and {value for value, _t in results} == {"stale-but-served"}
+        assert elapsed < FAIL_AFTER_S * 3 + 1.0
+        waited = sorted(t for _v, t in results)
+        assert waited[-2] < FAIL_AFTER_S, "everyone but the holder returned the stale cache at once"
+
+    def test_a_first_ever_load_during_an_outage_is_one_attempt_too_and_everyone_gets_the_default(
+        self, clean_settings_cache, down, monkeypatch
+    ):
+        monkeypatch.setattr(usermod, "_settings_ever_loaded", False)
+        results = self._run(self.THREADS)
+        assert len(down) == 1
+        assert {value for value, _t in results} == {"dflt"}
+        assert max(t for _v, t in results) < FAIL_AFTER_S * 3 + 1.0
+
+    def test_a_successful_refresh_updates_everyone(self, clean_settings_cache, monkeypatch):
+        loads = []
+
+        class Cur:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def execute(self, sql, args=None):
+                loads.append(1)
+                time.sleep(0.05)
+
+            def fetchall(self):
+                return [{"setting_key": "some_key", "setting_value": "fresh"}]
+
+        class Conn:
+            def cursor(self):
+                return Cur()
+
+            def commit(self):
+                pass
+
+            def close(self):
+                pass
+
+        @contextlib.contextmanager
+        def jen_db():
+            yield Conn()
+
+        monkeypatch.setattr(dbmod, "jen_db", jen_db)
+        monkeypatch.setattr(usermod, "_settings_ever_loaded", False)
+        results = self._run(self.THREADS)
+        assert loads == [1], "one reload for fifty readers"
+        assert {value for value, _t in results} == {"fresh"}, "a first load is waited for, not answered with a default"
+        assert usermod.settings_ever_loaded() is True
+
+    def test_a_save_invalidates_and_allows_a_fresh_reload(self, monkeypatch):
+        monkeypatch.setattr(usermod, "_settings_cache", {"k": "old"})
+        monkeypatch.setattr(usermod, "_settings_cache_ts", time.time())
+        monkeypatch.setattr(usermod, "_settings_next_try", time.time() + 100)
+        usermod._invalidate_settings_cache()
+        assert usermod._settings_cache_ts == 0 and usermod._settings_next_try == 0
+
+    def test_the_lock_is_released_after_a_failed_reload(self, clean_settings_cache, down):
+        usermod.get_global_setting("k", None)
+        assert usermod._settings_refresh_lock.acquire(blocking=False), "the refresh lock was left held"
+        usermod._settings_refresh_lock.release()
+
+
+class TestTheKea6PoolIsThrottledToo:
+    """v5.68.0-beta.22 (Q157, item 10): `get_kea6_db` still created its pool and direct-connected INSIDE `_pool_lock` with no failure mark - the shape
+    Q156 fixed for the jen and kea pools. A separate, down v6 lease host cost ~20 s per call and serialised every other database caller."""
+
+    @pytest.fixture
+    def broken(self, monkeypatch):
+        monkeypatch.setattr(dbmod, "_kea6_targets_same_db", lambda: False)
+        monkeypatch.setattr(dbmod, "_kea6_pool", None)
+        monkeypatch.setattr(dbmod, "_pool_failed_at", {})
+        made, connects, held = [], [], []
+
+        def make():
+            made.append(1)
+            raise pymysql.err.OperationalError(2003, "pool: can't connect")
+
+        def connect(**kw):
+            connects.append(kw.get("host"))
+            held.append(dbmod._pool_lock.locked())
+            raise pymysql.err.OperationalError(2003, "direct: can't connect")
+
+        monkeypatch.setattr(dbmod, "_make_kea6_pool", make)
+        monkeypatch.setattr(dbmod.pymysql, "connect", connect)
+        return made, connects, held
+
+    def test_twenty_calls_make_the_pool_once_and_dial_directly_each_time_outside_the_lock(self, broken):
+        made, connects, held = broken
+        for _ in range(20):
+            with pytest.raises(pymysql.err.OperationalError, match="direct"):
+                dbmod.get_kea6_db()
+        assert len(made) == 1 and len(connects) == 20
+        assert not any(held), "the direct connect ran while holding the pool lock"
+
+    def test_the_pool_is_attempted_again_after_the_window(self, broken, monkeypatch):
+        made, _connects, _held = broken
+        clock = {"now": 100.0}
+        monkeypatch.setattr(dbmod.time, "monotonic", lambda: clock["now"])
+        with pytest.raises(pymysql.err.OperationalError):
+            dbmod.get_kea6_db()
+        clock["now"] += dbmod._POOL_RETRY_S + 0.1
+        with pytest.raises(pymysql.err.OperationalError):
+            dbmod.get_kea6_db()
+        assert len(made) == 2
+
+    def test_resetting_the_kea_pools_clears_the_kea6_mark(self, broken):
+        made, _connects, _held = broken
+        with pytest.raises(pymysql.err.OperationalError):
+            dbmod.get_kea6_db()
+        dbmod.reset_kea_pools()
+        with pytest.raises(pymysql.err.OperationalError):
+            dbmod.get_kea6_db()
+        assert len(made) == 2
+
+    def test_the_three_pools_share_the_one_throttle(self):
+        import inspect
+
+        for fn in (dbmod.get_jen_db, dbmod.get_kea_db, dbmod.get_kea6_db):
+            source = inspect.getsource(fn)
+            assert "_pool_recently_failed(" in source and "_pool_failed_at[" in source, fn.__name__
