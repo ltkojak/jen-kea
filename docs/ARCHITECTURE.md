@@ -277,7 +277,10 @@ investigation provider on one shared pool of four threads inside a copy of the c
 the page loaded). The request waits at most one second for the group, shows a provider that has not answered as "unavailable (over
 1 s)" and goes on; a call still running cannot be stopped, so it keeps its slot, which bounds the damage a hung provider can do: eight
 calls outstanding, then new ones are refused as "busy" instead of queueing. Before this the budget was a log line written after the
-provider returned, and a provider that hung held the web worker for as long as it liked.
+provider returned, and a provider that hung held the web worker for as long as it liked. **What is and is not guaranteed (v5.68.0-beta.22, Q157):** a page WAITS a bounded time for its
+providers (one second for the group) and goes on; a provider that never returns keeps its thread - and its slot - until Jen restarts (a Python thread cannot be stopped), and once enough of them
+hang every later provider call is answered "busy"/"unavailable" for the life of the process. Bounded waits, not termination; Health does not yet show the pool's saturation. Hung-provider
+containment (an audit of every bundled provider's I/O for finite timeouts and a Health row on `provider_budget.stats()`) is a deferred candidate, not a feature.
 
 **One identity, one place to resolve it (v5.63.0, Q82).**
 `jen.services.client_subject.resolve()` is now the only place a typed
@@ -731,7 +734,11 @@ missing set (a new key beside an old certificate: gunicorn refuses to start). `c
 place a `.prev` is made (S2): STAGE every member (a unique O_EXCL 0600 temp, final mode applied), SNAPSHOT every live member into memory without moving it and write `<name>.prev` as a
 COPY, REPLACE each in order; on any failure every member already replaced is put back byte-for-byte (one that did not exist is removed), every staged temp is removed, and the
 error is re-raised - or an OSError naming every path now wrong if a restore also failed. `write_atomically` is a set of one. The failure injection breaks the install before and
-after every member in the staging, in the `.prev` copy and in the replace, and after each asserts the live set equals the original and no key/certificate mismatch exists.
+after every member in the staging, in the `.prev` copy and in the replace, and after each asserts the live set equals the original and no key/certificate mismatch exists. **What is and is not guaranteed (v5.68.0-beta.22, Q157):** the set is
+all-or-nothing against every failure the code can HANDLE - an exception between two replaces, a failed `chown`, a full disk - and it restores what it replaced. It is not crash-consistent: a SIGKILL,
+power loss or OOM-kill BETWEEN two `os.replace` calls leaves a mixed set on disk with nothing to finish or revert it at the next start. A durable journal (`<dir>/.jen-tx`: the previous and the new
+generation, fsynced before the first replace, removed after the last, read by startup and by the helper's next op) is the deferred candidate that would close that window; until then a mixed set is
+recovered from the `.prev` copies the commit leaves (`docs/troubleshooting.md`).
 
 ### 3.2 SSH host-key verification (trust-on-first-use)
 
@@ -2676,8 +2683,9 @@ forecast likewise, and the file is read once an hour.
 is registered (`scheduler.CORE_JOB_IDS`), the alert-loop thread and the plugin periodic thread `is_alive()`; `start_scheduler` records why it did not start. The
 *Problems inbox sweep* row is a skip for `MISS_LIMIT x SWEEP_INTERVAL_S` after the workers started and a failure after that when the sweep has never run. v5.68.0-beta.20
 (Q155): `liveness()` also reports the **event dispatcher** (`events.dispatcher_running()`, with `events.queue_depth()`) - with it dead `emit()` does not fail, it runs every
-subscriber inline on the thread that emitted, and the row used to stay green. The dispatcher down with the other three alive is a `warn` ("event dispatcher not running -
-subscribers run inline"); any of the other three down is the `fail`, and the dispatcher is named in it when it is down too.
+subscriber inline on the thread that emitted, and the row used to stay green. beta.20 made the dispatcher down with the other three alive a `warn`; **v5.68.0-beta.21 (Q156) made a dead
+dispatcher thread a `fail`** - one contract, stated once here and in the Health table: the row FAILS when any worker is not alive (the dispatcher included, and it is named when it is down too)
+and WARNS when the dispatcher is alive but not keeping up (below).
 
 **What each `lease_history` column means (v5.68.0-beta.19, Q154).** `active_leases` - the subnet's whole count of active, unexpired leases
 ("active clients"; a reservation outside every pool is one). `pool_used` - the active leases INSIDE the subnet's pools at snapshot time
@@ -2740,10 +2748,13 @@ cadence was lost. The cache now keeps serving the last values it read (`default`
 `get_kea_db` record a failed pool creation and within `_POOL_RETRY_S` (10 s) only try the direct connect, once per call, outside the pool lock. *Plugin periodic jobs:* a job that
 was `running` was skipped for ever and `_run_one_periodic` has no deadline, and `Thread.start()` ran outside the lock with no rollback; the start is guarded (a failure is a failed
 run, `running` back to False), each run records `last_finished` and the outcome of the last three, `liveness()` carries `periodic_jobs()`, and the Background workers row FAILS for
-a job `running` more than twice its interval (naming plugin and job) and warns when its last three runs failed. *The event dispatcher:* `dispatcher_status()` = {running,
-queue_depth, last_dispatch_age_s, dropped}; a dispatcher stuck inside a subscriber is ALIVE, so the row warns when events are queued and none was dispatched for a minute or when
-deliveries were dropped to a full queue, and FAILS when the thread is dead (beta.20 warned). *Orphaned state:* `_clear_orphan_states` deletes `alert_state:<type>:<key>` rows
-whose subnet or server is no longer configured (no `_ok`; an empty live set clears nothing), and the Problems sweep deletes the per-server settings keys of a removed server.
+a job `running` more than twice its interval (naming plugin and job) and warns when its last three runs failed. *The event dispatcher:* a dispatcher stuck inside a subscriber is ALIVE, so beta.21
+reported {running, queue_depth, last_dispatch_age_s, dropped} and warned when events were queued and none had FINISHED for a minute. v5.68.0-beta.22 (Q157) judges it by what is waiting NOW:
+each queued event carries its enqueue time, the loop stamps when it STARTED the event it is on, and `dispatcher_status()` = {running, queue_depth, current_age_s, oldest_queued_age_s,
+last_dispatch_age_s, dropped_recent (the last 10 minutes), dropped_total}; the row WARNS when `current_age_s` or `oldest_queued_age_s` exceeds 60 s or there were drops in the last 10
+minutes (the lifetime total is only text - one old overflow no longer warns for the life of the process, and an idle hour followed by a burst no longer reads as stuck), and FAILS when the
+thread is dead. *Orphaned state:* `_clear_orphan_states` deletes `alert_state:<type>:<key>` rows
+whose subnet or server is no longer configured (no `_ok`; since beta.22 an empty live set clears too - see "Every claim is backed..."), and the Problems sweep deletes the per-server settings keys of a removed server.
 *The device seed:* the `known_macs` seed ran once before the alert loop, so a Jen database that was down at start left it empty for the life of the process and every known
 device that was offline at start fired `new_device` when it came back; it is retried at the top of each cycle until it works and `new_device` waits for it.
 

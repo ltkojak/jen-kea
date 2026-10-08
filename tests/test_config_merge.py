@@ -143,8 +143,11 @@ class TestFreshAndOddInputs:
 
 
 def _real_wizard(seeded):
-    """The file install.sh's `write_config` produces on an interactive `--configure`. Every key is written; the Kea, Kea-database, SSH and DDNS answers
-    are the live file's values when the wizard was SEEDED from it (`--answers`), and BLANK (with the wizard's own defaults) when it was not."""
+    """A TRANSCRIPTION of the heredoc in install.sh's `write_config`, not its output - what that function writes on an interactive `--configure` if
+    it is fed the live values (seeded) or nothing (unseeded). Every key is written; the Kea, Kea-database, SSH and DDNS answers are the live file's
+    values when the wizard was SEEDED from it (`--answers`), and BLANK (with the wizard's own defaults) when it was not. This pure fixture can drift
+    from the heredoc; the bash harness in tests/test_installer_trust.py (`TestConfigureSeedsTheWizardFromTheLiveFile`, `TestConfigureKeepsThePromptedAnswersToo`)
+    runs the REAL `write_config` and is the test that would notice."""
     answers = dict(cm.answers_from(CONFIGURED)) if seeded else {}
 
     def value(name, default=""):

@@ -248,18 +248,97 @@ class TestNoPathReadsActiveLeasesAsPoolUse:
     def test_capacity_used_is_none_for_a_row_without_the_key(self):
         assert capacity.used({"active_leases": 99}) is None
 
-    def test_no_source_line_feeds_active_leases_into_a_capacity_calculation(self):
-        """The whole tree: `capacity.py` never names `active_leases` outside prose, and the history readers select pool_used beside it."""
+    # (file, function) -> why a function that names `active_leases` AND does arithmetic or calls a capacity routine is not a capacity calculation on it
+    REVIEWED = {
+        ("jen/routes/api.py", "api_v1_subnets"): (
+            "reports `active_leases` (the subnet's whole active count) as its own field beside `pool_used`; the utilisation, the forecast and the "
+            "high-water mark are computed from `pool_used` / the history's `pool_used` (tests/test_pool_used.py, the nine surfaces)"
+        ),
+        ("plugins/ipam/plugin.py", "_count_sets"): (
+            "the name is a parameter holding a SET of lease addresses (set arithmetic over addresses); the division is address-space bookkeeping, "
+            "not a capacity ratio - IPAM has its own space model and never reads Jen's pool consumption"
+        ),
+    }
+
+    CAPACITY_CALL = re.compile(r"capacity\.|forecast|consumption")
+    RATIO_NAME = re.compile(r"pct|percent|ratio|util|forecast|consumption|capacity|headroom|saturat", re.I)
+
+    @staticmethod
+    def _names_active_leases(fn):
+        import ast
+
+        found = []
+        for node in ast.walk(fn):
+            if (
+                isinstance(node, ast.Name)
+                and node.id == "active_leases"
+                or isinstance(node, ast.Attribute)
+                and node.attr == "active_leases"
+                or isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and re.fullmatch(r"\s*(?:\w+\.)?active_leases\s*", node.value)
+            ):
+                found.append(node)
+        return found
+
+    def _scan_tree(self):
+        """Every function under jen/ and plugins/ that names `active_leases` as a CODE value (a variable, an attribute, a dict key or column name) and
+        in the same function divides, calls a capacity / forecast / consumption routine, or names a ratio or a percentage."""
         import ast
         import pathlib
 
-        source = (pathlib.Path(__file__).resolve().parent.parent / "jen" / "services" / "capacity.py").read_text(
-            encoding="utf-8"
+        root = pathlib.Path(__file__).resolve().parent.parent
+        offenders, scanned = [], 0
+        for base in ("jen", "plugins"):
+            for path in sorted((root / base).rglob("*.py")):
+                try:
+                    tree = ast.parse(path.read_text(encoding="utf-8"))
+                except (SyntaxError, UnicodeDecodeError):
+                    continue
+                scanned += 1
+                for fn in ast.walk(tree):
+                    if not isinstance(fn, ast.FunctionDef | ast.AsyncFunctionDef) or not self._names_active_leases(fn):
+                        continue
+                    why = set()
+                    for node in ast.walk(fn):
+                        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div | ast.FloorDiv):
+                            why.add("a division")
+                        elif isinstance(node, ast.Call) and self.CAPACITY_CALL.search(ast.unparse(node.func)):
+                            why.add(f"a call to {ast.unparse(node.func)}")
+                        elif isinstance(node, ast.Name) and self.RATIO_NAME.search(node.id):
+                            why.add(f"the name {node.id}")
+                    if why:
+                        offenders.append(((str(path.relative_to(root)).replace("\\", "/"), fn.name), sorted(why)))
+        return offenders, scanned
+
+    def test_no_function_in_the_whole_tree_feeds_active_leases_into_a_capacity_calculation(self):
+        """v5.68.0-beta.22 (Q157, item 14): beta.19's version of this test parsed capacity.py ONLY while its docstring said "the whole tree". It now walks
+        every module under jen/ and plugins/. A function that names `active_leases` and also divides, calls a capacity routine or names a ratio is an
+        offender unless it is on the reviewed list below - with its reason - and a stale entry (a function that no longer matches) fails too."""
+        offenders, scanned = self._scan_tree()
+        assert scanned > 100, f"the walk found only {scanned} modules: the guard has no power"
+        found = {key for key, _why in offenders}
+        unreviewed = {key: why for key, why in offenders if key not in self.REVIEWED}
+        assert not unreviewed, (
+            f"active_leases (the whole subnet's count) feeds a capacity-shaped calculation: {unreviewed}"
+        )
+        stale = set(self.REVIEWED) - found
+        assert not stale, f"reviewed entries that no longer match anything: {sorted(stale)}"
+
+    def test_the_guard_has_power_a_planted_function_is_caught(self, tmp_path, monkeypatch):
+        import ast
+
+        source = (
+            "def pool_pct(row):\n    return row['active_leases'] / row['pool_size'] * 100\n"
+            "def innocent(row):\n    return row['active_leases']\n"
         )
         tree = ast.parse(source)
-        code_uses = [
-            n.value
-            for n in ast.walk(tree)
-            if isinstance(n, ast.Constant) and isinstance(n.value, str) and n.value == "active_leases"
-        ]
-        assert code_uses == [], "capacity.py reads the subnet's whole active count as a code value"
+        flagged = []
+        for fn in ast.walk(tree):
+            divides = any(isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div) for n in ast.walk(fn))
+            if isinstance(fn, ast.FunctionDef) and self._names_active_leases(fn) and divides:
+                flagged.append(fn.name)
+        assert flagged == ["pool_pct"]
+
+    def test_every_reviewed_entry_says_why(self):
+        assert all(len(reason) > 40 for reason in self.REVIEWED.values())

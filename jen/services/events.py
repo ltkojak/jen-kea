@@ -9,6 +9,7 @@ logged, never raised — this is telemetry for the `/timeline` page and
 plugins, not a transaction anything else depends on.
 """
 
+import collections
 import logging
 import queue
 import re
@@ -61,6 +62,15 @@ _queue: "queue.Queue" = queue.Queue(maxsize=QUEUE_MAX)
 _dispatcher: threading.Thread | None = None
 _last_drop_log = 0.0
 _STOP = object()
+#: v5.68.0-beta.22 (Q157): judged by what is waiting NOW. `_last_dispatch_at` is stamped when an event FINISHES, so after an idle hour the first burst (or
+#: one slow first subscriber) read as "stuck" while the first event had been in flight for milliseconds, and the lifetime drop total warned for the
+#: rest of the process after one historical overflow. Each queued event now carries its enqueue time, the dispatcher stamps when it STARTED the event
+#: it is on, and drops are remembered with their times (a window of DROP_WINDOW_S).
+_current_started_at: float | None = (
+    None  # monotonic, when the event being dispatched right now was taken off the queue; None between events
+)
+_drop_times: "collections.deque" = collections.deque(maxlen=1000)
+DROP_WINDOW_S = 600
 #: v5.68.0-beta.21 (Q156): what Health needs to tell a WEDGED dispatcher from a live one. The thread is alive when a subscriber blocks, so `is_alive()`
 #: stays green while the queue grows and - at QUEUE_MAX - subscriber delivery is dropped with one log line a minute.
 _last_dispatch_at: float | None = (
@@ -148,10 +158,30 @@ def dispatcher_status() -> dict:
     finished an event (or, before it has finished one, how long ago it started); None when it is not running. A queue with events in it and an age of
     a minute or more is a dispatcher stuck inside a subscriber; `dropped` counts deliveries lost to a full queue since the process started."""
     running = dispatcher_running()
+    now = time.monotonic()
     age = None
     if running and _last_dispatch_at is not None:
-        age = max(0.0, time.monotonic() - _last_dispatch_at)
-    return {"running": running, "queue_depth": queue_depth(), "last_dispatch_age_s": age, "dropped": _dropped_total}
+        age = max(0.0, now - _last_dispatch_at)
+    current = max(0.0, now - _current_started_at) if running and _current_started_at is not None else None
+    oldest = None
+    try:
+        with _queue.mutex:
+            head = _queue.queue[0] if _queue.queue else None
+        if isinstance(head, tuple) and len(head) == 2 and isinstance(head[1], float):
+            oldest = max(0.0, now - head[1])
+    except Exception:
+        oldest = None
+    recent = sum(1 for t in list(_drop_times) if now - t <= DROP_WINDOW_S)
+    return {
+        "running": running,
+        "queue_depth": queue_depth(),
+        "current_age_s": current,
+        "oldest_queued_age_s": oldest,
+        "last_dispatch_age_s": age,
+        "dropped_recent": recent,
+        "dropped_total": _dropped_total,
+        "dropped": _dropped_total,  # kept for older readers: the lifetime total
+    }
 
 
 def _alive(t) -> bool:
@@ -164,15 +194,18 @@ def _alive(t) -> bool:
 
 
 def _dispatch_loop() -> None:
-    global _last_dispatch_at
+    global _last_dispatch_at, _current_started_at
     while True:
         item = _queue.get()
         if item is _STOP:
             return
+        event = item[0] if isinstance(item, tuple) and len(item) == 2 else item
+        _current_started_at = time.monotonic()
         try:
-            _dispatch(item)
+            _dispatch(event)
         except Exception as e:  # never let the worker die
             logger.error(f"events dispatcher error: {e}")
+        _current_started_at = None
         _last_dispatch_at = time.monotonic()
 
 
@@ -256,11 +289,12 @@ def emit(kind, *, mac=None, ip=None, subnet_id=None, hostname=None, server=None,
     }
     if dispatcher_running():
         try:
-            _queue.put_nowait(event)
+            _queue.put_nowait((event, time.monotonic()))
         except queue.Full:
             global _last_drop_log, _dropped_total
             _dropped_total += 1
             now = time.monotonic()
+            _drop_times.append(now)
             if now - _last_drop_log >= 60:
                 _last_drop_log = now
                 logger.error(f"events queue full ({QUEUE_MAX}); dropping subscriber delivery (rows are still written)")

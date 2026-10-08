@@ -32,7 +32,10 @@ def _live(
     dispatcher=True,
     depth=0,
     age=0.0,
-    dropped=0,
+    current=None,
+    oldest=None,
+    dropped_recent=0,
+    dropped_total=None,
     plugin_jobs=None,
 ):
     return {
@@ -44,8 +47,11 @@ def _live(
         "dispatcher_status": {
             "running": dispatcher,
             "queue_depth": depth,
+            "current_age_s": current if dispatcher else None,
+            "oldest_queued_age_s": oldest if dispatcher else None,
             "last_dispatch_age_s": age if dispatcher else None,
-            "dropped": dropped,
+            "dropped_recent": dropped_recent,
+            "dropped_total": dropped_recent if dropped_total is None else dropped_total,
         },
         "periodic_jobs": plugin_jobs or [],
         "scheduler": {
@@ -415,40 +421,73 @@ class TestPeriodicJobBookkeeping:
         assert [j["name"] for j in background.liveness()["periodic_jobs"]] == ["job"]
 
 
-class TestAStuckDispatcherIsAWarning:
-    """v5.68.0-beta.21 (Q156, item 10): the dispatcher thread is ALIVE when a subscriber blocks, so Q155's `is_alive()` row stayed green while the queue
-    grew and - at 1000 events - subscriber delivery was dropped with one log line a minute."""
+class TestTheDispatcherIsJudgedByWhatIsWaitingNow:
+    """v5.68.0-beta.21 (Q156, item 10) put the dispatcher's depth and last-dispatch age in Health; v5.68.0-beta.22 (Q157, item 4) judges it by what is
+    waiting NOW. `_last_dispatch_at` is stamped when an event FINISHES, so after an idle hour the first burst - or one slow first subscriber - read
+    as "stuck" while the first event had been in flight for milliseconds; and the lifetime drop total warned for the rest of the process after one
+    historical overflow. The Health row now reads the event the dispatcher is on (`current_age_s`), the oldest one still queued
+    (`oldest_queued_age_s`) and the drops of the last 10 minutes (`dropped_recent`)."""
 
-    def test_events_waiting_and_none_dispatched_for_a_minute_is_a_warning(self, started, monkeypatch):
-        c = _workers(monkeypatch, _live(depth=7, age=90.0))
-        assert c.status == "warn" and "stuck" in c.detail and "7 event(s) queued" in c.detail
+    def test_a_subscriber_running_for_more_than_a_minute_warns_and_names_the_age(self, started, monkeypatch):
+        c = _workers(monkeypatch, _live(depth=7, current=90.0, oldest=88.0))
+        assert (
+            c.status == "warn"
+            and "stuck" in c.detail
+            and "90 s" in c.detail
+            and "7 event(s) queued behind it" in c.detail
+        )
+
+    def test_an_old_queued_event_behind_a_moving_dispatcher_warns_as_behind(self, started, monkeypatch):
+        c = _workers(monkeypatch, _live(depth=40, current=0.2, oldest=75.0))
+        assert c.status == "warn" and "behind" in c.detail and "75 s" in c.detail
 
     def test_a_busy_but_moving_dispatcher_is_fine(self, started, monkeypatch):
-        assert _workers(monkeypatch, _live(depth=300, age=0.4)).status == "ok"
+        assert _workers(monkeypatch, _live(depth=300, current=0.3, oldest=2.0)).status == "ok"
+
+    def test_an_idle_hour_then_a_burst_is_not_stuck(self, started, monkeypatch):
+        """The beta.21 rule (depth > 0 and the last FINISHED event more than 60 s ago) warned here: the dispatcher had been idle for an hour."""
+        c = _workers(monkeypatch, _live(depth=25, age=3600.0, current=0.01, oldest=0.05))
+        assert c.status == "ok", c.detail
 
     def test_an_idle_dispatcher_with_an_old_last_dispatch_is_fine(self, started, monkeypatch):
         assert _workers(monkeypatch, _live(depth=0, age=3600.0)).status == "ok"
 
-    def test_dropped_deliveries_are_a_warning_and_counted(self, started, monkeypatch):
-        c = _workers(monkeypatch, _live(dropped=12))
-        assert c.status == "warn" and "12 event deliveries were dropped" in c.detail
+    def test_recent_drops_warn_and_the_lifetime_total_is_only_text(self, started, monkeypatch):
+        c = _workers(monkeypatch, _live(dropped_recent=12, dropped_total=40))
+        assert (
+            c.status == "warn"
+            and "12 event deliveries were dropped in the last 10 minutes" in c.detail
+            and "40 since Jen started" in c.detail
+        )
 
-    def test_the_dispatcher_status_of_a_real_dispatcher(self):
+    def test_an_old_overflow_no_longer_warns(self, started, monkeypatch):
+        assert _workers(monkeypatch, _live(dropped_recent=0, dropped_total=500)).status == "ok"
+
+    def test_the_status_of_a_real_dispatcher(self):
         from jen.services import events
 
         events.stop_dispatcher()
-        assert (
-            events.dispatcher_status()["running"] is False and events.dispatcher_status()["last_dispatch_age_s"] is None
-        )
+        status = events.dispatcher_status()
+        assert status["running"] is False and status["last_dispatch_age_s"] is None and status["current_age_s"] is None
         events.start_dispatcher()
         try:
             status = events.dispatcher_status()
             assert status["running"] is True and status["queue_depth"] == 0 and status["last_dispatch_age_s"] < 5
-            assert status["dropped"] == events._dropped_total
+            assert status["current_age_s"] is None and status["oldest_queued_age_s"] is None
+            assert status["dropped_total"] == events._dropped_total
+            assert set(status) >= {
+                "running",
+                "queue_depth",
+                "current_age_s",
+                "oldest_queued_age_s",
+                "last_dispatch_age_s",
+                "dropped_recent",
+                "dropped_total",
+            }
         finally:
             events.stop_dispatcher()
 
-    def test_a_subscriber_that_blocks_makes_the_queue_grow_and_the_row_warn(self, started, monkeypatch):
+    def test_a_subscriber_that_blocks_makes_the_current_age_grow_and_the_row_warn(self, started, monkeypatch):
         import threading
 
         from jen.services import events
@@ -464,13 +503,23 @@ class TestAStuckDispatcherIsAWarning:
         events.start_dispatcher()
         try:
             for _ in range(5):
-                events.emit("config.applied", detail="q156")
+                events.emit("config.applied", detail="q157")
             assert entered.wait(10), "the subscriber was never called"
             deadline = time.monotonic() + 5
             while events.queue_depth() < 4 and time.monotonic() < deadline:
                 time.sleep(0.05)
             assert events.queue_depth() >= 4, "the queue did not grow behind the blocked subscriber"
-            monkeypatch.setattr(events, "_last_dispatch_at", time.monotonic() - 120)  # nothing finished for two minutes
+            fresh = events.dispatcher_status()
+            assert fresh["current_age_s"] is not None and fresh["current_age_s"] < 60, (
+                "a blocked subscriber that just started is not yet stuck"
+            )
+            assert fresh["oldest_queued_age_s"] is not None and fresh["oldest_queued_age_s"] < 60
+            # two minutes pass: the clock the dispatcher reads is shifted, not slept
+            shift = 120.0
+            real_monotonic = time.monotonic
+            monkeypatch.setattr(events.time, "monotonic", lambda: real_monotonic() + shift)
+            aged = events.dispatcher_status()
+            assert aged["current_age_s"] >= 120 and aged["oldest_queued_age_s"] >= 120
             real = background.liveness()
             monkeypatch.setattr(
                 background,
@@ -478,13 +527,48 @@ class TestAStuckDispatcherIsAWarning:
                 lambda: {**real, "alert_thread": True, "periodic_thread": True, "scheduler": _live()["scheduler"]},
             )
             check = health._background_workers({})
-            assert check.status == "warn" and "stuck" in check.detail
+            assert check.status == "warn" and "stuck" in check.detail and "running for 1" in check.detail, check.detail
         finally:
             gate.set()
             events.unsubscribe(blocker)
             events.stop_dispatcher()
 
-    def test_a_full_queue_counts_what_it_drops(self, monkeypatch):
+    def test_an_idle_hour_then_one_event_and_a_burst_on_the_real_dispatcher_is_not_stuck(self, started, monkeypatch):
+        import threading
+
+        from jen.services import events
+
+        done = threading.Event()
+        seen = []
+
+        def collector(event):
+            seen.append(event["detail"])
+            if len(seen) >= 6:
+                done.set()
+
+        events.stop_dispatcher()
+        events.subscribe("*", collector)
+        events.start_dispatcher()
+        try:
+            monkeypatch.setattr(events, "_last_dispatch_at", time.monotonic() - 3600)  # idle for an hour
+            for n in range(6):
+                events.emit("config.applied", detail=f"burst-{n}")
+            assert done.wait(10)
+            status = events.dispatcher_status()
+            assert status["current_age_s"] is None or status["current_age_s"] < 5
+            assert status["oldest_queued_age_s"] is None or status["oldest_queued_age_s"] < 5
+            real = background.liveness()
+            monkeypatch.setattr(
+                background,
+                "liveness",
+                lambda: {**real, "alert_thread": True, "periodic_thread": True, "scheduler": _live()["scheduler"]},
+            )
+            assert health._background_workers({}).status == "ok"
+        finally:
+            events.unsubscribe(collector)
+            events.stop_dispatcher()
+
+    def test_a_full_queue_counts_recent_and_total_and_the_recent_count_expires_after_ten_minutes(self, monkeypatch):
         import queue
 
         from jen.services import events
@@ -492,8 +576,41 @@ class TestAStuckDispatcherIsAWarning:
         monkeypatch.setattr(events, "_queue", queue.Queue(maxsize=1))
         monkeypatch.setattr(events, "dispatcher_running", lambda: True)
         monkeypatch.setattr(events, "_dropped_total", 0)
+        monkeypatch.setattr(events, "_drop_times", events.collections.deque(maxlen=1000))
         monkeypatch.setattr("jen.models.db.jen_db", lambda: (_ for _ in ()).throw(RuntimeError("no db")))
         events.emit("config.applied", detail="one")
         events.emit("config.applied", detail="two")  # the queue (size 1) is full: dropped
         events.emit("config.applied", detail="three")
         assert events._dropped_total == 2
+        status = events.dispatcher_status()
+        assert status["dropped_recent"] == 2 and status["dropped_total"] == 2
+        real_monotonic = time.monotonic
+        monkeypatch.setattr(events.time, "monotonic", lambda: real_monotonic() + events.DROP_WINDOW_S + 1)
+        later = events.dispatcher_status()
+        assert later["dropped_recent"] == 0 and later["dropped_total"] == 2, (
+            "a full queue that drains: the warning clears after 10 minutes"
+        )
+
+    def test_a_queued_event_carries_its_enqueue_time_and_subscribers_never_see_it(self, monkeypatch):
+        import queue
+
+        from jen.services import events
+
+        q = queue.Queue(maxsize=5)
+        monkeypatch.setattr(events, "_queue", q)
+        monkeypatch.setattr(events, "dispatcher_running", lambda: True)
+        monkeypatch.setattr("jen.models.db.jen_db", lambda: (_ for _ in ()).throw(RuntimeError("no db")))
+        event = events.emit("config.applied", detail="x")
+        queued = q.get_nowait()
+        assert isinstance(queued, tuple) and queued[0] is event and isinstance(queued[1], float)
+        assert "_enqueued_at" not in event and set(event) == {
+            "id",
+            "kind",
+            "mac",
+            "ip",
+            "subnet_id",
+            "hostname",
+            "server",
+            "actor",
+            "detail",
+        }

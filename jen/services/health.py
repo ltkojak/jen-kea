@@ -1199,13 +1199,20 @@ def _background_workers(ctx) -> Check:
         c.fix_hint = "Restart Jen (the service); the log says why the dispatcher stopped."
         return c
     warnings = list(job_warnings)
-    age = ds.get("last_dispatch_age_s")
-    if depth > 0 and age is not None and age > 60:
+    # v5.68.0-beta.22 (Q157): judged by what is waiting NOW - the event the dispatcher is on and the oldest one still queued - not by when the last
+    # event happened to finish (an idle hour then a burst read as "stuck"), and by RECENT drops, not the lifetime total (one old overflow warned for ever)
+    current, oldest = ds.get("current_age_s"), ds.get("oldest_queued_age_s")
+    if current is not None and current > 60:
         warnings.append(
-            f"event dispatcher is stuck: {depth} event(s) queued and none dispatched for {age:.0f} s - a subscriber is blocking it"
+            f"event dispatcher is stuck: one subscriber has been running for {current:.0f} s ({depth} event(s) queued behind it)"
         )
-    if ds.get("dropped"):
-        warnings.append(f"{ds['dropped']} event deliveries were dropped because the dispatcher's queue was full")
+    elif oldest is not None and oldest > 60:
+        warnings.append(f"event dispatcher is behind: the oldest of {depth} queued event(s) has waited {oldest:.0f} s")
+    if ds.get("dropped_recent"):
+        warnings.append(
+            f"{ds['dropped_recent']} event deliveries were dropped in the last 10 minutes because the dispatcher's queue was full "
+            f"({ds.get('dropped_total', ds['dropped_recent'])} since Jen started)"
+        )
     if warnings:
         c.status, c.detail = "warn", "; ".join(warnings)
         c.fix_hint = "A plugin's subscriber or periodic job is misbehaving: check its log lines, then restart Jen if it is wedged."
