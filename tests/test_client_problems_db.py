@@ -1109,7 +1109,8 @@ class TestANakStormCannotFloodTheInbox:
         logs[1] = self._storm(1)
         cp.sweep(NOW - timedelta(minutes=5), servers=[SERVER_A])
         before = rows(db, "kind='decline'")[0]["count"]
-        logs[1] = [decline(59, ip="10.45.0.1", mac="aa:bb:cc:00:00:00", minute=30), *self._storm(400, first=1000)]
+        # log order is time order: the storm first (11:16 - 11:23), the existing key's newer event last (11:30)
+        logs[1] = [*self._storm(400, first=1000), decline(59, ip="10.45.0.1", mac="aa:bb:cc:00:00:00", minute=30)]
         out = cp.sweep(NOW, servers=[SERVER_A])
         existing = rows(db, "kind='decline' AND mac='aa:bb:cc:00:00:00'")
         assert existing and existing[0]["count"] > before, "the existing key was not updated"

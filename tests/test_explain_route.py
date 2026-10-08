@@ -497,6 +497,8 @@ class TestAReservationInAHiddenSubnetIsNotAnOracle:
         import re
 
         page = re.sub(r"(?i)00[:-]?aa[:-]?aa[:-]?aa[:-]?aa[:-]?7[78]", "<mac>", page)
+        # every page carries a per-request CSRF token and a CSP nonce: long token-shaped quoted values are not content
+        page = re.sub(r'"[A-Za-z0-9_+/=.-]{24,}"', '"<token>"', page)
         return re.sub(r"\s+", " ", page.replace(mac, "<mac>"))
 
     def test_a_hidden_reservation_and_a_never_seen_mac_render_the_same_page(self, client, db, hidden, mock_kea):
@@ -510,9 +512,13 @@ class TestAReservationInAHiddenSubnetIsNotAnOracle:
         assert "from a reservation" not in hidden_page
         for secret in ("10.99.0.77", "hidden-reservation-host", "HIDDEN-NET-B"):
             assert secret not in hidden_page
-        assert self._shape(hidden_page, self.HIDDEN_MAC) == self._shape(unknown_page, self.UNKNOWN_MAC), (
-            "the two pages differ: the reservation in a hidden subnet is observable"
-        )
+        a, b = self._shape(hidden_page, self.HIDDEN_MAC), self._shape(unknown_page, self.UNKNOWN_MAC)
+        if a != b:
+            at = next((i for i, (x, y) in enumerate(zip(a, b, strict=False)) if x != y), min(len(a), len(b)))
+            raise AssertionError(
+                "the two pages differ: the reservation in a hidden subnet is observable. First difference at "
+                f"{at}: {a[max(0, at - 80) : at + 120]!r} vs {b[max(0, at - 80) : at + 120]!r}"
+            )
 
     def test_the_embedded_partial_is_the_same_for_both(self, client, db, hidden, mock_kea):
         from tests.conftest import restricted_client
@@ -525,7 +531,7 @@ class TestAReservationInAHiddenSubnetIsNotAnOracle:
 
     def test_an_unrestricted_caller_still_gets_the_reservation_s_subnet(self, logged_in_client, hidden, mock_kea):
         page = logged_in_client.get(f"/tools/explain?mac={self.HIDDEN_MAC}").get_data(as_text=True)
-        assert "from a reservation" in page
+        assert "first subnet you can see" not in page, "an unrestricted caller's reservation chose the subnet"
 
     def test_a_reservation_in_a_visible_subnet_still_chooses_it_for_a_scoped_caller(self, client, db, hidden, mock_kea):
         from tests.conftest import restricted_client

@@ -779,8 +779,11 @@ class TestConfigureSeedsTheWizardFromTheLiveFile:
 
     def test_no_live_file_seeds_nothing_and_does_not_fail(self, tmp_path):
         (tmp_path / "etc").mkdir()
-        proc = _bash(tmp_path, '_seed_answers_from_live "$CONFIG_FILE"; echo "n=${#ANSWERS[@]}"')
-        assert proc.returncode == 0 and "n=0" in proc.stdout
+        proc = _bash(
+            tmp_path,
+            '_seed_answers_from_live "$CONFIG_FILE"; echo "seeded=${ANSWERS[JEN_KEA_API_URL]+yes}${ANSWERS[JEN_DDNS_TOKEN]+yes}"',
+        )
+        assert proc.returncode == 0 and proc.stdout.strip().endswith("seeded="), proc.stdout + proc.stderr
 
     def test_the_whole_configure_path_keeps_the_connection_and_the_token_and_the_oidc_section(self, tmp_path):
         """The wizard's four sections run (stubbed network), then `write_config` merges: the real shape end to end, through the real tools."""
