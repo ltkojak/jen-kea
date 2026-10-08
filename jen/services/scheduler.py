@@ -162,7 +162,11 @@ def _run_audit_cleanup(app):
             removed = (
                 alerts.purge_history()
             )  # v5.68.0-beta.19 (Q154): one place lists every history table (audit_log: 0 = keep forever)
-            if any(removed.values()):
-                logger.info(f"History cleanup: removed {removed}")
+            # v5.68.0-beta.20 (Q155): a table whose purge FAILED is reported as failed, never as 0 rows removed
+            summary = {table: ("failed" if n is None else n) for table, n in removed.items()}
+            if any(n is None for n in removed.values()):
+                logger.warning(f"History cleanup: {summary}")
+            elif any(removed.values()):
+                logger.info(f"History cleanup: removed {summary}")
         except Exception as e:
             logger.error(f"History cleanup error: {e}")

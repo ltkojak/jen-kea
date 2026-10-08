@@ -2675,7 +2675,16 @@ column the table does not have (`created_at`), so it had never removed a row.
 
 `alert_log` is also the source of the Prometheus counter `jen_alerts_sent_total`, and a counter that drops is read as a reset: what the job
 removes is first counted into `settings.alert_log_pruned_totals` (JSON keyed `type|status`) in the same transaction, and the metric is the
-live rows plus that total, so the exported number never goes down. `lease6_history` had existed since v5.0 and nothing wrote it; with IPv6 on
+live rows plus that total, so the exported number never goes down. **The purge serialises before it counts (v5.68.0-beta.20, Q155).** beta.17 counted the
+expiring rows and only then took `FOR UPDATE` on the totals row, and the purge runs from the alert thread every `snapshot_interval_minutes` AND from the daily 00:05
+cleanup: two overlapping passes both counted the same rows, so a counter that by design never decreases was permanently high, and a `FOR UPDATE` on a row that does not
+exist yet (the first purge) serialised nothing. `_purge_old_alert_log` now `INSERT IGNORE`s the totals row (its own committed statement - the shared lock a duplicate
+`INSERT IGNORE` takes is gone before the exclusive one is asked for, or two passes would deadlock), takes it `FOR UPDATE`, and only then counts, deletes and adds; a
+second pass waits at the lock and finds the rows gone. The DELETE's rowcount must equal what was counted, else everything rolls back and the pass is logged as failed;
+stored totals that are not a JSON object are never overwritten (the rows stay, the pass fails). A failed pass returns `None` and `purge_history` reports `None` for
+`alert_log` like every other table - it recorded `0` ("nothing to remove") before. `tests/test_alert_log_retention.py` holds the totals row from a test connection and
+asserts a purge WAITS before counting, and runs two real purges at once (six rounds, with and without the totals row) asserting every row is counted exactly once.
+`lease6_history` had existed since v5.0 and nothing wrote it; with IPv6 on
 the snapshot pass now writes one row per IPv6 subnet (active leases by type, reservations by type - no pool size, a /64 has none to measure),
 and with IPv6 off nothing in this path runs (`TestZeroBehaviorChange`).
 

@@ -971,19 +971,46 @@ def alert_log_retention_days() -> int:
     return days if days >= 1 else ALERT_LOG_DEFAULT_RETENTION_DAYS
 
 
-def _purge_old_alert_log() -> int:
+def _purge_old_alert_log():
     """v5.68.0-beta.17 (Q152) - `alert_log` was the one history table nothing pruned: a row on every delivery (and one per client and
     kind per day from the Problems alert), read by the Alerts log, the dashboard, the Timeline and a client's alert status. Rows older
     than `alert_log_retention_days` are removed in the same pass as the other history tables.
 
     `jen_alerts_sent_total` is a Prometheus COUNTER built from this table, and a counter that drops is read as a reset. So what is
     removed is first counted into `alert_log_pruned_totals` (a JSON object keyed "type|status") in the same transaction, and
-    `alert_sent_totals()` adds the two back together: the exported number never goes down. Returns the number of rows removed."""
+    `alert_sent_totals()` adds the two back together: the exported number never goes down.
+
+    v5.68.0-beta.20 (Q155): the pass SERIALISES FIRST and counts after. beta.17 counted the expiring rows and only then took `FOR UPDATE` on the
+    totals row, and this runs from the alert thread every `snapshot_interval_minutes` AND from the daily 00:05 cleanup - two overlapping passes
+    both counted the same rows, so a counter that by design never decreases was permanently high; and a `FOR UPDATE` on a row that does not exist
+    yet (the first purge) serialises nothing. Now: (1) the totals row is created if absent (`INSERT IGNORE`, its own committed statement so its
+    shared lock is gone before the next one asks for the exclusive one - two passes would otherwise deadlock on the upgrade); (2) it is locked
+    `FOR UPDATE`; (3) only THEN are the expiring rows counted, deleted and added - a second pass waits at (2), then finds the rows already gone;
+    (4) the DELETE's rowcount must equal what was counted, else everything rolls back. Stored totals that are not a JSON object are never
+    overwritten: the pass fails, the rows stay, the error is logged.
+
+    Returns the number of rows removed, or None when the purge failed (`purge_history` reports that as a failure, never as "nothing to remove")."""
     import json
 
     try:
         days = alert_log_retention_days()
         with __jen_db_ctx() as jdb, jdb.cursor() as jcur:
+            jcur.execute(
+                "INSERT IGNORE INTO settings (setting_key, setting_value) VALUES (%s, %s)", (ALERT_LOG_PRUNED_KEY, "{}")
+            )
+        with __jen_db_ctx() as jdb, jdb.cursor() as jcur:
+            jcur.execute("SELECT setting_value FROM settings WHERE setting_key=%s FOR UPDATE", (ALERT_LOG_PRUNED_KEY,))
+            row = jcur.fetchone()
+            try:
+                totals = json.loads(row["setting_value"]) if row else None
+            except (TypeError, ValueError):
+                totals = None
+            if not isinstance(totals, dict):
+                logger.error(
+                    f"Alert log retention: the stored {ALERT_LOG_PRUNED_KEY} is not a JSON object - nothing was purged and nothing was overwritten"
+                )
+                jdb.rollback()
+                return None
             jcur.execute("SELECT DATE_SUB(NOW(), INTERVAL %s DAY) AS cutoff", (days,))
             cutoff = jcur.fetchone()["cutoff"]
             jcur.execute(
@@ -992,29 +1019,27 @@ def _purge_old_alert_log() -> int:
             )
             gone = jcur.fetchall()
             if not gone:
+                jdb.rollback()
                 return 0
-            jcur.execute("SELECT setting_value FROM settings WHERE setting_key=%s FOR UPDATE", (ALERT_LOG_PRUNED_KEY,))
-            row = jcur.fetchone()
-            try:
-                totals = json.loads(row["setting_value"]) if row else {}
-            except (TypeError, ValueError):
-                totals = {}
-            if not isinstance(totals, dict):
-                totals = {}
-            removed = 0
+            counted = 0
             for g in gone:
                 key = f"{g['alert_type']}|{g['status']}"
                 totals[key] = int(totals.get(key, 0)) + int(g["cnt"])
-                removed += int(g["cnt"])
+                counted += int(g["cnt"])
             jcur.execute("DELETE FROM alert_log WHERE sent_at < %s", (cutoff,))
+            if jcur.rowcount != counted:
+                logger.error(
+                    f"Alert log retention: counted {counted} expiring rows but the DELETE removed {jcur.rowcount} - rolled back, nothing changed"
+                )
+                jdb.rollback()
+                return None
             jcur.execute(
-                "INSERT INTO settings (setting_key, setting_value) VALUES (%s, %s) ON DUPLICATE KEY UPDATE setting_value=%s",
-                (ALERT_LOG_PRUNED_KEY, json.dumps(totals), json.dumps(totals)),
+                "UPDATE settings SET setting_value=%s WHERE setting_key=%s", (json.dumps(totals), ALERT_LOG_PRUNED_KEY)
             )
-            return removed
+            return counted
     except Exception as e:
         logger.error(f"Alert log retention purge error: {e}")
-        return 0
+        return None
 
 
 def alert_sent_totals(cur) -> dict:
