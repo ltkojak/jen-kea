@@ -274,7 +274,7 @@ def _file_lock(path):
                     # v5.68.0-beta.22 (Q157): ENOLCK (NFS), EBADF, EINTR... escaped as a bare OSError and 500'd the save; it is a refusal with the reason
                     raise ConfigFileLocked(
                         f"the config lock {lock_path} could not be taken ({errno.errorcode.get(e.errno, e.errno)}: {e.strerror or e}) - "
-                        "the file system does not support the advisory lock Jen's saves take; keep /etc/jen on a local file system"
+                        "the file system does not support the advisory lock Jen's saves take; keep the config directory on a local file system"
                     ) from e
                 if time.monotonic() >= deadline:
                     raise ConfigFileLocked(

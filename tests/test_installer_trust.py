@@ -904,7 +904,7 @@ class TestConfigureKeepsThePromptedAnswersToo:
             + self.ASK_PROMPTS
             + self.UNSET_ENV
             + self.SEED
-            + "_jen_db_offer_create() { return 1; }\n_configure_jen_db >/dev/null\n"
+            + "_configure_kea_db >/dev/null; _jen_db_offer_create() { return 1; }\n_configure_jen_db >/dev/null\n"
             + 'echo "jendb=$JEN_DB_HOST|$JEN_DB_USER|$JEN_DB_NAME"\necho "keadb=$KEA_DB_HOST"',
         )
         assert proc.returncode == 0, proc.stdout + proc.stderr

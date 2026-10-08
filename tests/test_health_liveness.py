@@ -428,6 +428,14 @@ class TestTheDispatcherIsJudgedByWhatIsWaitingNow:
     historical overflow. The Health row now reads the event the dispatcher is on (`current_age_s`), the oldest one still queued
     (`oldest_queued_age_s`) and the drops of the last 10 minutes (`dropped_recent`)."""
 
+    @pytest.fixture(autouse=True)
+    def _no_drops_from_other_tests(self, monkeypatch):
+        """test_events overflows the queue on purpose; its drops are 'recent' for ten minutes of wall clock, and the whole suite runs in less."""
+        from jen.services import events
+
+        monkeypatch.setattr(events, "_drop_times", events.collections.deque(maxlen=1000))
+        monkeypatch.setattr(events, "_dropped_total", 0)
+
     def test_a_subscriber_running_for_more_than_a_minute_warns_and_names_the_age(self, started, monkeypatch):
         c = _workers(monkeypatch, _live(depth=7, current=90.0, oldest=88.0))
         assert (
