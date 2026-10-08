@@ -1062,7 +1062,7 @@ def tail_log(server: dict, path: str, lines: int = 200, timeout: int | None = No
         return _tail_log(server, path, lines, timeout, helper_only)
     except Exception as e:
         logger.warning(f"tail_log on {server.get('name') or server.get('ssh_host')}: {type(e).__name__}: {e}")
-        return {"ok": False, "code": "error", "detail": f"{type(e).__name__}: {e}", "via": "helper"}
+        return {"ok": False, "code": "error", "detail": f"{type(e).__name__}: {e}", "via": "helper", "transport": True}
 
 
 def _tail_log(server: dict, path: str, lines: int, timeout: int | None, helper_only: bool) -> dict:
@@ -1099,7 +1099,14 @@ def _tail_log(server: dict, path: str, lines: int, timeout: int | None, helper_o
             )
         return {"ok": True, "code": "ok", "lines": out.splitlines(), "via": "legacy"}
     except HelperError as e:
-        return {"ok": False, "code": "error", "detail": str(e), "via": "helper"}
+        # `transport`: no SSH session could be opened at all (HelperUnreachable) - Explain says "SSH failed" for it (v5.68.0-beta.24, Q159, item 2)
+        return {
+            "ok": False,
+            "code": "error",
+            "detail": str(e),
+            "via": "helper",
+            "transport": isinstance(e, HelperUnreachable),
+        }
 
 
 def install_package(server: dict, service: str) -> dict:

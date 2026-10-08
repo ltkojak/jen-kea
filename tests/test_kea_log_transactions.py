@@ -365,6 +365,30 @@ class TestTheHaQuestionIsAskedRarely:
         assert counted == []
 
 
+class _InFlight:
+    """Counts the fake reads/probes that have started and not finished. A pool worker thread outlives its task (the executor keeps it for the next
+    one), so a teardown cannot `join` it - it waits for the count to reach zero instead, THEN clears the caches the released reads wrote to."""
+
+    def __init__(self):
+        import threading
+
+        self._lock = threading.Lock()
+        self.n = 0
+
+    def __enter__(self):
+        with self._lock:
+            self.n += 1
+
+    def __exit__(self, *exc):
+        with self._lock:
+            self.n -= 1
+
+    def drain(self, timeout=5.0):
+        deadline = time.monotonic() + timeout
+        while self.n > 0 and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+
 def _exchange(at, cid, tid, host):
     return [
         _classes(at, MAC, cid, tid, ["ALL", f"CLASS_{host}"]),
@@ -554,16 +578,17 @@ class TestTheLogsAreReadConcurrentlyInsideOneBudget:
             "jen.services.config_revisions.latest", lambda server_id, service: None
         )  # no database in a timing test
         gate = threading.Event()  # released at teardown: a "hung" read never outlives the test
-        world = {"answers": {}, "delay": {}, "hang": set(), "asked": [], "gate": gate, "threads": set()}
+        inflight = _InFlight()
+        world = {"answers": {}, "delay": {}, "hang": set(), "asked": [], "gate": gate}
 
         def tail(server, path, lines, timeout=None, helper_only=False):
             world["asked"].append(server["id"])
-            world["threads"].add(threading.current_thread())
-            if server["id"] in world["hang"]:
-                gate.wait(30)
-            elif world["delay"].get(server["id"]):
-                time.sleep(world["delay"][server["id"]])
-            return world["answers"].get(server["id"]) or {"ok": False, "code": "error", "detail": "released"}
+            with inflight:
+                if server["id"] in world["hang"]:
+                    gate.wait(30)
+                elif world["delay"].get(server["id"]):
+                    time.sleep(world["delay"][server["id"]])
+                return world["answers"].get(server["id"]) or {"ok": False, "code": "error", "detail": "released"}
 
         monkeypatch.setattr("jen.services.kea_host.tail_log", tail)
         monkeypatch.setattr("jen.services.kea_ha.ha_status", lambda server: None)
@@ -575,10 +600,9 @@ class TestTheLogsAreReadConcurrentlyInsideOneBudget:
         )
         yield world
         gate.set()
-        # fixup 4 (F9): the released threads WRITE to the shared tail cache as they finish; join them first, then clear, or a late write survives into
+        # fixup 4 (F9): the released reads WRITE to the shared tail cache as they finish; wait for them first, then clear, or a late write survives into
         # the next test
-        for th in list(world["threads"]):
-            th.join(5)
+        inflight.drain()
         ctx.clear_log_cache()
         from jen.services import log_tail
 
@@ -722,7 +746,12 @@ class TestAFailedReadIsKeptForTheShortWindow:
         assert view["state"] == "ok" and view["server"]["name"] == "kea-b", (
             "a late recovery is used 3 s later, not 30 s"
         )
-        # a good view is still kept for the long window
+        # a view with a failed server is still the SHORT window (v5.68.0-beta.24: the failure is disclosed and may recover) ...
+        assert view["read_failures"] == [{"server": "kea-a", "reason": "the read failed"}]
+        # ... and a view with nothing wrong is kept for the long one
+        servers["tails"][1] = {"ok": True, "code": "ok", "lines": OWN_LOG}
+        clock["now"] += log_tail.TTL_S + 1
+        assert "read_failures" not in ctx.read_log(MAC, allowed=True)
         asked = len(servers["asked"])
         clock["now"] += 20
         ctx.read_log(MAC, allowed=True)
@@ -840,3 +869,342 @@ class TestTheApiAndSshHostsAreCompared:
         ).read_text(encoding="utf-8")
         assert source.count("__host_match.api_ssh_mismatch(") == 3
         assert source.count('flash(mismatch, "warning")') == 3
+
+
+# ── v5.68.0-beta.24 (Q159): failed reads disclosed, the pool follows the servers, the HA probes inside the budget ───────────────────────
+
+
+@pytest.fixture
+def evidence(monkeypatch):
+    """Four SSH servers whose log reads and HA probes can each be fast, slow or hung (released at teardown, threads joined BEFORE the caches are cleared),
+    with the budget scaled to a fraction of a second so the elapsed time of a whole read is something a test can assert."""
+    import threading
+
+    from jen.services import log_tail
+
+    ctx.clear_log_cache()
+    monkeypatch.setattr(ctx, "EVIDENCE_BUDGET_S", 2.0)
+    monkeypatch.setattr(ctx, "HA_PROBE_BUDGET_S", 0.5)
+    monkeypatch.setattr(ctx, "_clock_offset_s", lambda server: 0.0)
+    monkeypatch.setattr("jen.services.config_revisions.latest", lambda server_id, service: None)
+    monkeypatch.setattr(ctx, "_evidence_pool", None)
+    gate = threading.Event()
+    world = {
+        "logs": {},  # server id -> tail result
+        "log_delay": {},
+        "log_hang": set(),
+        "ha": {},  # server id -> ha_status answer
+        "ha_delay": {},
+        "ha_hang": set(),
+        "ha_calls": [],
+        "gate": gate,
+    }
+    inflight = _InFlight()
+
+    def tail(server, path, lines, timeout=None, helper_only=False):
+        with inflight:
+            if server["id"] in world["log_hang"]:
+                gate.wait(30)
+            elif world["log_delay"].get(server["id"]):
+                time.sleep(world["log_delay"][server["id"]])
+            return world["logs"].get(server["id"]) or {"ok": True, "code": "ok", "lines": []}
+
+    def ha_status(server):
+        world["ha_calls"].append(server["id"])
+        with inflight:
+            if server["id"] in world["ha_hang"]:
+                gate.wait(30)
+            elif world["ha_delay"].get(server["id"]):
+                time.sleep(world["ha_delay"][server["id"]])
+            return world["ha"].get(server["id"])
+
+    monkeypatch.setattr("jen.services.kea_host.tail_log", tail)
+    monkeypatch.setattr("jen.services.kea_ha.ha_status", ha_status)
+    monkeypatch.setattr(
+        extensions,
+        "KEA_SERVERS",
+        [{"id": i, "name": f"kea-{n}", "ssh_host": f"10.0.0.{i}"} for i, n in ((1, "a"), (2, "b"), (3, "c"), (4, "d"))],
+    )
+    yield world
+    gate.set()
+    inflight.drain()
+    ctx.clear_log_cache()
+    log_tail.clear()
+
+
+def _timed(fn):
+    started = time.monotonic()
+    value = fn()
+    return value, time.monotonic() - started
+
+
+def _good(at, tid, host):
+    return {"ok": True, "code": "ok", "lines": _exchange(at, f"01:{tid}", tid, host)}
+
+
+class TestAServerThatFailedIsDisclosedWhateverTheOthersShow:
+    """Item 2: `read_log` kept `problem` only when no complete exchange was found; with one, a server whose SSH failed, whose helper was missing or whose
+    log was gone was dropped without a word - the tab showed A's exchange and said nothing of B, which may hold a newer one. `not_checked` covered the
+    deadline only. `read_failures` carries a FIXED phrase per code, never the exception text."""
+
+    def _a_complete(self, evidence):
+        evidence["logs"][1] = _good("10:00:00.110", "0xa", "a-host")
+        return ctx.read_log(MAC, allowed=True)
+
+    def test_b_ssh_failed_names_b_and_says_a_newer_exchange_may_exist(self, evidence):
+        evidence["logs"][2] = {
+            "ok": False,
+            "code": "error",
+            "detail": "Connection refused by 10.0.0.2 as root",
+            "transport": True,
+        }
+        view = self._a_complete(evidence)
+        assert view["server"]["name"] == "kea-a" and view["read_failures"] == [
+            {"server": "kea-b", "reason": "SSH failed"}
+        ]
+        assert "10.0.0.2" not in str(view["read_failures"]) and "root" not in str(view["read_failures"]), (
+            "never the exception text"
+        )
+
+    def test_b_helper_missing(self, evidence):
+        evidence["logs"][2] = {"ok": False, "code": "no-helper", "detail": "not installed"}
+        assert self._a_complete(evidence)["read_failures"] == [{"server": "kea-b", "reason": "the helper is missing"}]
+
+    def test_b_log_missing(self, evidence):
+        evidence["logs"][2] = {"ok": False, "code": "missing", "detail": "log file not found"}
+        assert self._a_complete(evidence)["read_failures"] == [{"server": "kea-b", "reason": "the log is missing"}]
+
+    def test_b_read_failed_for_another_reason(self, evidence):
+        evidence["logs"][2] = {"ok": False, "code": "error", "detail": "tail exited 2"}
+        assert self._a_complete(evidence)["read_failures"] == [{"server": "kea-b", "reason": "the read failed"}]
+
+    def test_b_timeout_is_not_checked_not_a_read_failure(self, evidence):
+        evidence["log_hang"] = {2}
+        view = self._a_complete(evidence)
+        assert view["not_checked"] == ["kea-b"] and "read_failures" not in view
+
+    def test_b_answered_but_never_named_the_client_is_not_a_failure(self, evidence):
+        evidence["logs"][2] = {"ok": True, "code": "ok", "lines": ELSEWHERE_LOG}
+        view = self._a_complete(evidence)
+        assert view["server"]["name"] == "kea-a" and "read_failures" not in view and "not_checked" not in view
+
+    def test_both_complete_has_no_failure_to_disclose(self, evidence):
+        evidence["logs"][2] = _good("10:00:02.110", "0xb", "b-host")
+        view = self._a_complete(evidence)
+        assert "read_failures" not in view and view["other_complete"] == [{"server": "kea-b", "comparable": True}]
+
+    def test_several_failures_are_all_named_and_the_view_is_kept_the_short_window(self, evidence):
+        from jen.services import log_tail
+
+        evidence["logs"][2] = {"ok": False, "code": "no-helper"}
+        evidence["logs"][3] = {"ok": False, "code": "missing"}
+        view = self._a_complete(evidence)
+        assert [f["server"] for f in view["read_failures"]] == ["kea-b", "kea-c"]
+        assert ctx._log_cache[("log", MAC.lower())][2] == log_tail.TTL_S, (
+            "a recovery is picked up within the short window"
+        )
+
+    def test_the_tab_prints_the_sentence(self):
+        import pathlib
+        import re
+
+        import jinja2
+
+        html = (pathlib.Path(__file__).resolve().parent.parent / "templates" / "_explain_result.html").read_text(
+            encoding="utf-8"
+        )
+        paragraph = re.search(r'(<p class="u-865c33" id="explain-read-failures">.*?</p>)', html, re.S).group(1)
+        env = jinja2.Environment(autoescape=True, undefined=jinja2.StrictUndefined)
+        one = env.from_string(paragraph).render(
+            exchange={"server": "kea-a"}, read_failures=[{"server": "kea-b", "reason": "SSH failed"}]
+        )
+        assert (
+            one
+            == '<p class="u-865c33" id="explain-read-failures">The exchange shown came from kea-a. kea-b could not be checked (SSH failed), so a newer exchange may exist there.</p>'
+        )
+        two = env.from_string(paragraph).render(
+            exchange={"server": "kea-a"},
+            read_failures=[
+                {"server": "kea-b", "reason": "SSH failed"},
+                {"server": "kea-c", "reason": "the log is missing"},
+            ],
+        )
+        assert (
+            "kea-b could not be checked (SSH failed); kea-c could not be checked (the log is missing), so a newer exchange may exist on one of them."
+            in two
+        )
+        none = env.from_string(paragraph).render(
+            exchange=None, read_failures=[{"server": "kea-b", "reason": "SSH failed"}]
+        )
+        assert "The exchange shown" not in none and "kea-b could not be checked (SSH failed)." in none
+
+    def test_the_next_page_load_is_the_cached_view_and_a_recovery_clears_it(self, evidence, monkeypatch):
+        """The trace for the new field: the next load inside the window is the same view; after the window, a recovered server leaves nothing behind."""
+        from jen.services import log_tail
+
+        clock = {"now": 9000.0}
+        monkeypatch.setattr(ctx.time, "monotonic", lambda: clock["now"])
+        monkeypatch.setattr(log_tail.time, "monotonic", lambda: clock["now"])
+        evidence["logs"][2] = {"ok": False, "code": "no-helper"}
+        first = self._a_complete(evidence)
+        assert ctx.read_log(MAC, allowed=True) is first
+        evidence["logs"][2] = _good("10:00:04.110", "0xb", "b-host")
+        clock["now"] += log_tail.TTL_S + 0.5
+        again = ctx.read_log(MAC, allowed=True)
+        assert "read_failures" not in again and again["other_complete"] == [{"server": "kea-b", "comparable": True}]
+
+
+class TestThePoolFollowsTheServerCount:
+    """Item 4: `_pool` was sized once, at first use: one server at start and eight configured later was still four workers, and the later servers queued
+    past the budget."""
+
+    def test_one_server_then_eight_the_pool_follows_and_the_old_one_is_shut_down(self, monkeypatch):
+        monkeypatch.setattr(ctx, "_evidence_pool", None)
+        first = ctx._pool(1)
+        assert first._max_workers == 4
+        second = ctx._pool(8)
+        assert second is not first and second._max_workers == 16 and first._shutdown, (
+            "replaced, the old one shut down without waiting"
+        )
+        assert ctx._pool(8) is second, "the same size again is the same pool"
+
+    def test_removing_servers_never_shrinks_it_and_it_is_bounded(self, monkeypatch):
+        monkeypatch.setattr(ctx, "_evidence_pool", None)
+        big = ctx._pool(6)
+        assert big._max_workers == 12
+        assert ctx._pool(1) is big and ctx._pool(0) is big, "never shrinks"
+        assert ctx._pool(100)._max_workers == ctx.EVIDENCE_WORKERS_MAX == 16
+        assert ctx._pool(1000)._max_workers == 16, "bounded by the cap"
+
+    def test_reads_holding_the_old_pools_workers_do_not_block_the_new_one(self, monkeypatch):
+        import threading
+
+        monkeypatch.setattr(ctx, "_evidence_pool", None)
+        gate = threading.Event()
+        old = ctx._pool(1)
+        stuck = [old.submit(gate.wait, 30) for _ in range(4)]  # all four workers are busy with slow reads
+        new = ctx._pool(8)
+        started = time.monotonic()
+        assert new.submit(lambda: "answered").result(timeout=5) == "answered"
+        assert time.monotonic() - started < 1.0, "the new pool did not queue behind the old pool's hung reads"
+        gate.set()
+        for f in stuck:
+            f.result(timeout=5)
+
+    def test_eight_servers_added_after_a_one_server_start_are_all_read_inside_the_budget(self, evidence, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-a", "ssh_host": "10.0.0.1"}])
+        evidence["logs"][1] = _good("10:00:00.110", "0xa", "a-host")
+        ctx.read_log(MAC, allowed=True)
+        assert ctx._evidence_pool._max_workers == 4
+        ctx.clear_log_cache()
+        eight = [{"id": i, "name": f"kea-{i}", "ssh_host": f"10.0.0.{i}"} for i in range(1, 9)]
+        monkeypatch.setattr(extensions, "KEA_SERVERS", eight)
+        for i in range(2, 9):
+            evidence["logs"][i] = _good(f"10:00:{i:02d}.110", f"0x{i}", f"host-{i}")
+            evidence["log_delay"][i] = (
+                0.5  # every server needs 0.5 s: four workers would need two rounds (~1.0 s), sixteen need one
+            )
+        view, elapsed = _timed(lambda: ctx.read_log(MAC, allowed=True))
+        assert ctx._evidence_pool._max_workers == 16 and "not_checked" not in view
+        assert elapsed < 0.85, f"{elapsed:.2f} s: the later servers queued behind four workers"
+        print(f"POOL eight slow servers on a resized pool: {elapsed:.2f} s")
+
+
+class TestTheHaProbesSitInsideTheBudget:
+    """Item 5: the HA probes ran sequentially BEFORE the log budget started - N unreachable Control Agents cost 10 s each on top of the 20 s. They run on the
+    same pool now, concurrently with the log reads, against the same deadline and capped at HA_PROBE_BUDGET_S. The total elapsed time is the assertion."""
+
+    BUDGET, SLICE, MARGIN = 2.0, 0.5, 0.6
+
+    @staticmethod
+    def _active():
+        return {"local": {"role": "primary", "scopes": ["server1"], "state": "hot-standby"}, "remote": {}}
+
+    def test_two_unreachable_apis_and_a_reachable_ssh_log(self, evidence):
+        evidence["ha_hang"] = {1, 2}
+        evidence["ha"][3] = self._active()
+        for i in (1, 2, 3):
+            evidence["logs"][i] = _good(f"10:00:0{i}.110", f"0x{i}", f"host-{i}")
+        view, elapsed = _timed(lambda: ctx.read_log(MAC, allowed=True))
+        assert view["ha_order"] == "partial" and "not_checked" not in view
+        assert view["server"]["name"] == "kea-c", "the server whose probe answered (and is active) is first in order"
+        assert self.SLICE - 0.1 <= elapsed < self.BUDGET + self.MARGIN, elapsed
+        print(
+            f"HA two unreachable APIs + reachable logs: {elapsed:.2f} s (probe slice {self.SLICE} s, budget {self.BUDGET} s)"
+        )
+
+    def test_four_unreachable_apis_total_under_the_budget(self, evidence):
+        evidence["ha_hang"] = {1, 2, 3, 4}
+        evidence["logs"][1] = _good("10:00:01.110", "0x1", "host-1")
+        view, elapsed = _timed(lambda: ctx.read_log(MAC, allowed=True))
+        assert view["ha_order"] == "unknown" and view["server"]["name"] == "kea-a", "configured order"
+        assert elapsed < self.BUDGET, f"{elapsed:.2f} s: four hung Control Agents must not cost four timeouts"
+        print(f"HA four unreachable APIs: {elapsed:.2f} s")
+
+    def test_a_warm_memo_asks_nothing(self, evidence):
+        evidence["ha"][2] = self._active()
+        evidence["logs"][2] = _good("10:00:02.110", "0x2", "host-2")
+        ctx.read_log(MAC, allowed=True)
+        calls = len(evidence["ha_calls"])
+        assert calls == 4
+        view, elapsed = _timed(lambda: ctx.read_log(OTHER, allowed=True))  # a second client inside the memo window
+        assert len(evidence["ha_calls"]) == calls and elapsed < 0.4, (len(evidence["ha_calls"]), elapsed)
+        assert "ha_order" not in view
+        print(f"HA warm memo: {elapsed:.2f} s")
+
+    def test_a_cold_memo_probes_once_and_a_complete_answer_leaves_no_note(self, evidence):
+        evidence["ha"][3] = self._active()
+        evidence["logs"][3] = _good("10:00:03.110", "0x3", "host-3")
+        view, elapsed = _timed(lambda: ctx.read_log(MAC, allowed=True))
+        assert (
+            sorted(evidence["ha_calls"]) == [1, 2, 3, 4]
+            and "ha_order" not in view
+            and view["server"]["name"] == "kea-c"
+        )
+        assert elapsed < 0.5, elapsed
+        print(f"HA cold memo, every probe answers: {elapsed:.2f} s")
+
+    def test_a_slow_api_with_a_fast_ssh_log_is_waited_for_inside_the_slice(self, evidence):
+        evidence["ha_delay"] = {1: 0.3}
+        evidence["ha"][1] = self._active()
+        evidence["logs"][1] = _good("10:00:01.110", "0x1", "host-1")
+        view, elapsed = _timed(lambda: ctx.read_log(MAC, allowed=True))
+        assert "ha_order" not in view and view["server"]["name"] == "kea-a"
+        assert 0.25 <= elapsed < self.SLICE + 0.4, elapsed
+        print(f"HA slow API (0.3 s), fast SSH: {elapsed:.2f} s")
+
+    def test_every_read_succeeds_after_the_fallback_ordering(self, evidence):
+        evidence["ha_hang"] = {1, 2, 3, 4}
+        for i in (1, 2, 3, 4):
+            evidence["logs"][i] = _good(f"10:0{i}:00.110", f"0x{i}", f"host-{i}")
+        view, elapsed = _timed(lambda: ctx.read_log(MAC, allowed=True))
+        assert view["ha_order"] == "unknown" and "not_checked" not in view and "read_failures" not in view
+        assert view["server"]["name"] == "kea-d" and view["query"]["hostname"] == "host-4", (
+            "the newest, whatever the order"
+        )
+        assert elapsed < self.BUDGET, elapsed
+        print(f"HA all probes hung, all reads succeed: {elapsed:.2f} s")
+
+    def test_the_memo_keeps_whatever_was_learned_and_the_tab_notes_the_order(self, evidence):
+        import pathlib
+        import re
+
+        import jinja2
+
+        evidence["ha_hang"] = {1, 2}
+        evidence["ha"][3] = self._active()
+        ctx.read_log(MAC, allowed=True)
+        assert ctx._evidence_memo[3] == "partial" and [s["id"] for s in ctx._evidence_memo[2]][0] == 3
+        before = len(evidence["ha_calls"])
+        ctx.read_log(OTHER, allowed=True)
+        assert len(evidence["ha_calls"]) == before, "the partial answer is memoised, not re-probed per page"
+        html = (pathlib.Path(__file__).resolve().parent.parent / "templates" / "_explain_result.html").read_text(
+            encoding="utf-8"
+        )
+        paragraph = re.search(r'(<p class="u-865c33" id="explain-ha-order">.*?</p>)', html, re.S).group(1)
+        text = (
+            jinja2.Environment(autoescape=True, undefined=jinja2.StrictUndefined)
+            .from_string(paragraph)
+            .render(ha_order="partial")
+        )
+        assert "HA order not determined; servers read in configured order." in text

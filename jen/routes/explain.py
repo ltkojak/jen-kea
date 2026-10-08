@@ -197,6 +197,8 @@ def _result_context(built, log_view, result, subnet_id) -> dict:
         "log_server": log_server,
         "other_complete": list((log_view or {}).get("other_complete") or []),
         "not_checked": list((log_view or {}).get("not_checked") or []),
+        "read_failures": list((log_view or {}).get("read_failures") or []),
+        "ha_order": (log_view or {}).get("ha_order") or "",
         "provenance": __ctx.provenance(built) if built else [],
         "source_hint": __ctx.hint_for(result, log_view) if result else "",
         "can_changes": _may_read_kea_log(),

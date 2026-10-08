@@ -55,22 +55,44 @@ TAIL_TIMEOUT_S = 15
 #: this budget are the evidence; a server that did not answer in time is named ("could not be checked in time"), never silently dropped.
 EVIDENCE_BUDGET_S = 20
 EVIDENCE_WORKERS = 4
+#: v5.68.0-beta.24 (Q159): the pool follows the server count up to this cap, and never shrinks below what it has.
+EVIDENCE_WORKERS_MAX = 16
+#: v5.68.0-beta.24 (Q159, item 5): the HA probes that order the servers run INSIDE the budget, on the same pool, with their own slice of it. A server whose
+#: probe did not answer in time is ordered after the ones that did.
+HA_PROBE_BUDGET_S = 5
 _evidence_pool: concurrent.futures.ThreadPoolExecutor | None = None
 _evidence_pool_lock = threading.Lock()
 _log_cache: dict[tuple, tuple[float, dict, float]] = {}  # key -> (monotonic time, view, how long it is kept)
 
 
 def _pool(ssh_servers: int = 0) -> concurrent.futures.ThreadPoolExecutor:
-    """The module-level executor the per-server tails run on - created on first use, not at import (the factory and the test suite import freely).
-    Sized `max(EVIDENCE_WORKERS, 2 x the SSH servers)` at that first use (fixup 4, F7): four workers with six servers queued the last two behind the
-    first four, and one hung read pins a worker until its own timeout."""
+    """The module-level executor the per-server tails and HA probes run on - created on first use, not at import (the factory and the test suite import
+    freely). It needs `max(EVIDENCE_WORKERS, 2 x the SSH servers)` workers (a probe and a tail per server), capped at EVIDENCE_WORKERS_MAX.
+
+    v5.68.0-beta.24 (Q159, item 4): it used to be sized ONCE, at first use: one server at start and eight configured later was still four workers, and
+    the later servers queued past the budget. A pool that is too small for the servers now is REPLACED by a larger one; the old one is shut down without
+    waiting - its running reads finish on their own threads and their futures were already handed out. It never shrinks."""
     global _evidence_pool
+    wanted = min(EVIDENCE_WORKERS_MAX, max(EVIDENCE_WORKERS, 2 * ssh_servers))
     with _evidence_pool_lock:
-        if _evidence_pool is None:
+        if _evidence_pool is None or _evidence_pool._max_workers < wanted:
+            old = _evidence_pool
             _evidence_pool = concurrent.futures.ThreadPoolExecutor(
-                max_workers=max(EVIDENCE_WORKERS, 2 * ssh_servers), thread_name_prefix="jen-evidence-tail"
+                max_workers=wanted, thread_name_prefix="jen-evidence-tail"
             )
+            if old is not None:
+                old.shutdown(wait=False)
         return _evidence_pool
+
+
+#: A FIXED phrase per failure code - never the exception text, which can carry a host, a path or a library message (v5.68.0-beta.24, Q159, item 2).
+READ_FAILURE_PHRASES = {
+    "transport": "SSH failed",
+    "no-helper": "the helper is missing",
+    "missing": "the log is missing",
+    "error": "the read failed",
+    "no-ssh": "no SSH host is configured",
+}
 
 
 def _tail_one(server: dict) -> dict:
@@ -149,29 +171,55 @@ def _serves_clients(server: dict) -> bool:
 #: other is named as also having logged the client.
 CLOCK_TIE_S = 5
 
-_evidence_memo: tuple | None = None  # (monotonic time, ids of the configured servers, the ordered list)
+_evidence_memo: tuple | None = None  # (monotonic time, ids of the configured servers, the ordered list, ha_order)
 
 
-def _evidence_servers() -> list[dict]:
-    """The Kea servers whose log may hold the client's exchange, in the order to read them: the HA-ACTIVE server(s) first, then every
-    other configured server in order. With one server (the usual case) that is the server and no HA question is asked.
+def _evidence_plan(deadline: float) -> tuple[list[dict], str | None]:
+    """(servers in the order to read them, ha_order): the HA-ACTIVE server(s) first, then every other configured server in order. With one server (the
+    usual case) that is the server and no HA question is asked. `ha_order` is None when the order is known, "partial" when some servers' HA probes did
+    not answer in time (those are ordered after the ones that did, in configured order) and "unknown" when none did.
 
     v5.68.0-beta.21 (Q156): the answer is MEMOISED for `LOG_TTL_S`, so across every caller - the Overview, Explain, Config and Changes of one
     `/client` render, `/tools/explain`, a second person - there is at most one `status-get` per server per 30 seconds. A server whose Control Agent
     is down costs its 10 s timeout once in that window, not once per call. The memo is keyed by the configured server ids, so adding or removing a
-    server is seen at once."""
+    server is seen at once - and (Q159) it stores whatever was LEARNED, partial or not.
+
+    v5.68.0-beta.24 (Q159, item 5): the probes ran sequentially BEFORE the log budget started - N unreachable Control Agents cost 10 s each on top of
+    the 20 s. They now run on the evidence pool concurrently, against the SAME `deadline` the log reads use, capped at HA_PROBE_BUDGET_S."""
     global _evidence_memo
     servers = list(extensions.KEA_SERVERS or [])
     if len(servers) < 2:
-        return servers
+        return servers, None
     ids = tuple(s.get("id") for s in servers)
     now = time.monotonic()
     if _evidence_memo is not None and _evidence_memo[1] == ids and now - _evidence_memo[0] < LOG_TTL_S:
-        return list(_evidence_memo[2])
-    active = [s for s in servers if _serves_clients(s)]
-    ordered = active + [s for s in servers if s not in active]
-    _evidence_memo = (time.monotonic(), ids, ordered)
-    return list(ordered)
+        return list(_evidence_memo[2]), _evidence_memo[3]
+    probe_deadline = min(deadline, now + HA_PROBE_BUDGET_S)
+    pool = _pool(len(servers))
+    probes = {id(s): pool.submit(_serves_clients, s) for s in servers}
+    active, unanswered = [], []
+    for s in servers:
+        try:
+            if probes[id(s)].result(timeout=max(0.0, probe_deadline - time.monotonic())):
+                active.append(s)
+        except concurrent.futures.TimeoutError:
+            probes[id(s)].cancel()
+            unanswered.append(s)
+        except Exception as e:  # `_serves_clients` catches its own; a pool fault is "did not answer"
+            logger.warning(f"explain_context: HA probe for {_name(s)} raised {type(e).__name__}")
+            unanswered.append(s)
+    answered_rest = [s for s in servers if s not in active and s not in unanswered]
+    ordered = active + answered_rest + unanswered
+    ha_order = None if not unanswered else ("unknown" if len(unanswered) == len(servers) else "partial")
+    if ha_order == "unknown":
+        ordered = list(servers)  # nothing was learned: configured order
+    _evidence_memo = (time.monotonic(), ids, ordered, ha_order)
+    return list(ordered), ha_order
+
+
+def _evidence_servers() -> list[dict]:
+    """The servers in reading order (see `_evidence_plan`), without the `ha_order` note."""
+    return _evidence_plan(time.monotonic() + EVIDENCE_BUDGET_S)[0]
 
 
 def _clock_offset_s(server: dict) -> float | None:
@@ -265,16 +313,20 @@ def read_log(mac: str, *, allowed: bool, fetch: bool = True) -> dict:
         return cached[1]
     if not fetch:
         return {**empty, "state": "not-fetched", "message": ""}
-    servers = _evidence_servers()
+    # The ONE deadline is taken first (v5.68.0-beta.24, Q159, item 5): it covers the HA probes that order the servers as well as the log reads, which
+    # are submitted at once with them - a probe that never answers cannot start the clock late. Every SSH server is asked AT ONCE (v5.68.0-beta.23,
+    # Q158); the loop below reads the answers in the order the probes gave, each against the same deadline.
+    deadline = time.monotonic() + EVIDENCE_BUDGET_S
+    configured_servers = list(extensions.KEA_SERVERS or [])
+    ssh_servers = [server for server in configured_servers if server.get("ssh_host")]
+    pending = {id(server): _pool(len(configured_servers)).submit(_tail_one, server) for server in ssh_servers}
+    servers, ha_order = _evidence_plan(deadline)
     complete = []  # (server, tx, utc time or None) for every reachable server whose log holds a COMPLETE exchange of the client
     first_ok = None  # a server whose log was read but never named the client
     fallback = None  # an exchange that has no class list or packet dump (the client id only)
     problem = None  # why the first server that could not be read could not be
     not_checked = []  # servers whose answer did not arrive inside EVIDENCE_BUDGET_S
-    # Every SSH server is asked AT ONCE (v5.68.0-beta.23, Q158); the loop below then reads the answers in server order, each against the ONE deadline.
-    deadline = time.monotonic() + EVIDENCE_BUDGET_S
-    ssh_servers = [server for server in servers if server.get("ssh_host")]
-    pending = {id(server): _pool(len(ssh_servers)).submit(_tail_one, server) for server in ssh_servers}
+    read_failures = []  # servers whose read FAILED (v5.68.0-beta.24, Q159, item 2), whether or not another server's exchange was found
     for server in servers:
         if not server.get("ssh_host"):
             problem = problem or {
@@ -282,6 +334,7 @@ def read_log(mac: str, *, allowed: bool, fetch: bool = True) -> dict:
                 "state": "no-helper",
                 "message": "Reading Kea's log needs SSH access to the Kea host.",
             }
+            read_failures.append({"server": _name(server), "reason": READ_FAILURE_PHRASES["no-ssh"]})
             continue
         future = pending[id(server)]
         try:
@@ -295,6 +348,7 @@ def read_log(mac: str, *, allowed: bool, fetch: bool = True) -> dict:
             # the tail never raises by contract; a pool or thread fault must not take the page with it
             logger.error(f"explain_context: reading {_name(server)}'s log raised {type(e).__name__}: {e}")
             problem = problem or {**empty, "state": "error", "message": "Could not read Kea's log."}
+            read_failures.append({"server": _name(server), "reason": READ_FAILURE_PHRASES["error"]})
             continue
         if res.get("code") == "no-helper":
             problem = problem or {
@@ -302,6 +356,7 @@ def read_log(mac: str, *, allowed: bool, fetch: bool = True) -> dict:
                 "state": "no-helper",
                 "message": "Reading Kea's log needs the Kea host helper.",
             }
+            read_failures.append({"server": _name(server), "reason": READ_FAILURE_PHRASES["no-helper"]})
             continue
         if res.get("code") == "missing":
             problem = problem or {
@@ -309,10 +364,17 @@ def read_log(mac: str, *, allowed: bool, fetch: bool = True) -> dict:
                 "state": "missing",
                 "message": f"Kea's log was not found at {extensions.DHCP4_LOG}.",
             }
+            read_failures.append({"server": _name(server), "reason": READ_FAILURE_PHRASES["missing"]})
             continue
         if not res.get("ok"):
             logger.error(f"explain_context: tail_log failed on {_name(server)}: {res.get('detail')}")
             problem = problem or {**empty, "state": "error", "message": "Could not read Kea's log."}
+            read_failures.append(
+                {
+                    "server": _name(server),
+                    "reason": READ_FAILURE_PHRASES["transport" if res.get("transport") else "error"],
+                }
+            )
             continue
         tx = _li.latest_transaction(res.get("lines", []), mac)
         if tx is None:
@@ -354,6 +416,14 @@ def read_log(mac: str, *, allowed: bool, fetch: bool = True) -> dict:
             view["other_complete"] = others
     if view is None:
         view = fallback or first_ok or problem or {**empty, "state": "error", "message": "Could not read Kea's log."}
+    if read_failures:
+        view["read_failures"] = (
+            read_failures  # (item 2) disclosed whenever a server failed, an exchange from another one or not
+        )
+    if ha_order:
+        view["ha_order"] = (
+            ha_order  # (item 5) "partial" | "unknown": the tab says the servers were read in configured order
+        )
     if not_checked:
         view["not_checked"] = not_checked
         if view.get("state") == "error" and not view.get("transaction"):
@@ -364,7 +434,7 @@ def read_log(mac: str, *, allowed: bool, fetch: bool = True) -> dict:
         _log_cache.clear()
     # a view built from a failure or from servers that did not answer in time is kept for the short window the shared tail cache keeps a failed read
     # (fixup 4, F7a): 30 s would hide a late answer, and a server that was only slow, for half a minute
-    keep = _log_tail.TTL_S if (not_checked or view.get("state") == "error") else LOG_TTL_S
+    keep = _log_tail.TTL_S if (not_checked or read_failures or view.get("state") == "error") else LOG_TTL_S
     _log_cache[key] = (time.monotonic(), view, keep)
     return view
 
