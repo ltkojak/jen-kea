@@ -1053,6 +1053,19 @@ def install_tls(server: dict, service: str, files: dict) -> dict:
 
 
 def tail_log(server: dict, path: str, lines: int = 200, timeout: int | None = None, helper_only: bool = False) -> dict:
+    """Last `lines` of a log on the Kea host, as `_tail_log` reads it - and an SSH read that fails any other way is a FAILED READ, not an exception.
+
+    v5.68.0-beta.23 (Q158 fixup 4, F7c): paramiko raises socket.timeout from the channel read and a reset socket is an OSError; neither is a
+    HelperError, so they escaped to the caller, and `log_tail` - which keeps a failed read for its window - cached nothing: every page re-ran the whole
+    hang. The exception type stays in the detail; it is logged, so a programming error is not hidden."""
+    try:
+        return _tail_log(server, path, lines, timeout, helper_only)
+    except Exception as e:
+        logger.warning(f"tail_log on {server.get('name') or server.get('ssh_host')}: {type(e).__name__}: {e}")
+        return {"ok": False, "code": "error", "detail": f"{type(e).__name__}: {e}", "via": "helper"}
+
+
+def _tail_log(server: dict, path: str, lines: int, timeout: int | None, helper_only: bool) -> dict:
     """Last `lines` of a log on the Kea host. `timeout` bounds the SSH round trip (default: the
     helper's 60 s / the legacy path's 30 s) — Trace passes a short one so a hung host
     cannot hold a request worker."""

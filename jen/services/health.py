@@ -318,7 +318,7 @@ def _debug_logging_left_on(ctx) -> Check:
             f"investigation logging may still be on on {e['name']} (removed from Jen) - restore it by hand: {__inv.by_hand(e)}"
             for e in orphaned
         ]
-        parts += [_stuck_text(e) + (f" ({e['error'][:160]})" if e["error"] else "") for e in stuck]
+        parts += [__inv.hand_text(e) + (f" ({e['error'][:160]})" if e["error"] else "") for e in stuck]
         parts += [
             f"{e['name']}: DEBUG logging should have ended at {e['until']} and has not been put back"
             + (f" ({e['error'][:160]})" if e["error"] else "")
@@ -331,8 +331,9 @@ def _debug_logging_left_on(ctx) -> Check:
             "severity back by hand and remove its jen-investigation user-context."
         )
         return c
-    unconfirmed = [e for e in entries if e["daemon"] in ("unknown", "other")]
-    c.status = "warn" if unconfirmed else "ok"
+    unconfirmed = [e for e in entries if e["daemon"] in ("unknown", "other") and not e["not_loaded"]]
+    not_loaded = [e for e in entries if e["not_loaded"]]
+    c.status = "warn" if (unconfirmed or not_loaded) else "ok"
     c.detail = "; ".join(
         f"{e['name']}: on until {e['until']}"
         + (
@@ -340,25 +341,15 @@ def _debug_logging_left_on(ctx) -> Check:
             if e in unconfirmed
             else ""
         )
+        + (
+            # fixup 4 (F6): the file carries investigation DEBUG and Kea was SEEN not running it - "on" would be a false report
+            " (the config file carries investigation DEBUG but Kea is not running it - it has not been reloaded)"
+            if e in not_loaded
+            else ""
+        )
         for e in entries
     )
     return c
-
-
-def _stuck_text(e: dict) -> str:
-    """One entry whose config file is restored and whose daemon was not SEEN restored (v5.68.0-beta.23, Q158): what is said depends on what was
-    observed, never on what is assumed."""
-    if e["daemon"] == "debug":
-        return f"{e['name']}: the config file is restored but Kea is still at DEBUG 55 - Jen keeps trying a reload or restart every minute"
-    if e["daemon"] == "other":
-        return (
-            f"{e['name']}: the config file is restored, but Kea's running logger ({e['seen'] or 'unreadable'}) is neither at investigation "
-            "DEBUG nor at what it was before - Jen has left it and looks again every minute"
-        )
-    return (
-        f"{e['name']}: the config file is restored but Kea's running log level is unconfirmed since {e['observed_at'] or 'the restore'} "
-        "(its API did not answer) - Jen looks again every minute and changes nothing it cannot see"
-    )
 
 
 def _problems_sweep(ctx) -> Check:

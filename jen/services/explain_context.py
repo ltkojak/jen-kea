@@ -57,16 +57,18 @@ EVIDENCE_BUDGET_S = 20
 EVIDENCE_WORKERS = 4
 _evidence_pool: concurrent.futures.ThreadPoolExecutor | None = None
 _evidence_pool_lock = threading.Lock()
-_log_cache: dict[tuple, tuple[float, dict]] = {}
+_log_cache: dict[tuple, tuple[float, dict, float]] = {}  # key -> (monotonic time, view, how long it is kept)
 
 
-def _pool() -> concurrent.futures.ThreadPoolExecutor:
-    """The module-level executor the per-server tails run on - created on first use, not at import (the factory and the test suite import freely)."""
+def _pool(ssh_servers: int = 0) -> concurrent.futures.ThreadPoolExecutor:
+    """The module-level executor the per-server tails run on - created on first use, not at import (the factory and the test suite import freely).
+    Sized `max(EVIDENCE_WORKERS, 2 x the SSH servers)` at that first use (fixup 4, F7): four workers with six servers queued the last two behind the
+    first four, and one hung read pins a worker until its own timeout."""
     global _evidence_pool
     with _evidence_pool_lock:
         if _evidence_pool is None:
             _evidence_pool = concurrent.futures.ThreadPoolExecutor(
-                max_workers=EVIDENCE_WORKERS, thread_name_prefix="jen-evidence-tail"
+                max_workers=max(EVIDENCE_WORKERS, 2 * ssh_servers), thread_name_prefix="jen-evidence-tail"
             )
         return _evidence_pool
 
@@ -259,7 +261,7 @@ def read_log(mac: str, *, allowed: bool, fetch: bool = True) -> dict:
         return {**empty, "state": "no-helper", "message": "Reading Kea's log needs SSH access to the Kea host."}
     key = ("log", (mac or "").lower())
     cached = _log_cache.get(key)
-    if cached and time.monotonic() - cached[0] < LOG_TTL_S:
+    if cached and time.monotonic() - cached[0] < cached[2]:
         return cached[1]
     if not fetch:
         return {**empty, "state": "not-fetched", "message": ""}
@@ -271,7 +273,8 @@ def read_log(mac: str, *, allowed: bool, fetch: bool = True) -> dict:
     not_checked = []  # servers whose answer did not arrive inside EVIDENCE_BUDGET_S
     # Every SSH server is asked AT ONCE (v5.68.0-beta.23, Q158); the loop below then reads the answers in server order, each against the ONE deadline.
     deadline = time.monotonic() + EVIDENCE_BUDGET_S
-    pending = {id(server): _pool().submit(_tail_one, server) for server in servers if server.get("ssh_host")}
+    ssh_servers = [server for server in servers if server.get("ssh_host")]
+    pending = {id(server): _pool(len(ssh_servers)).submit(_tail_one, server) for server in ssh_servers}
     for server in servers:
         if not server.get("ssh_host"):
             problem = problem or {
@@ -359,7 +362,10 @@ def read_log(mac: str, *, allowed: bool, fetch: bool = True) -> dict:
             )
     if len(_log_cache) > 256:
         _log_cache.clear()
-    _log_cache[key] = (time.monotonic(), view)
+    # a view built from a failure or from servers that did not answer in time is kept for the short window the shared tail cache keeps a failed read
+    # (fixup 4, F7a): 30 s would hide a late answer, and a server that was only slow, for half a minute
+    keep = _log_tail.TTL_S if (not_checked or view.get("state") == "error") else LOG_TTL_S
+    _log_cache[key] = (time.monotonic(), view, keep)
     return view
 
 

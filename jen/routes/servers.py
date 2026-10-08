@@ -264,6 +264,13 @@ def servers():
             for e in __inv.active()
             if e.get("marker_invalid") and not e.get("removed")
         ],
+        # fixup 4 (F1/F3/F5): an entry whose config file is restored and whose running Kea is at neither level, or that Jen has stopped trying to move, is
+        # for a PERSON - with the Forget button, which looks before it lets go
+        investigation_hand=[
+            {**e, "text": __inv.hand_text(e)}
+            for e in __inv.active()
+            if e.get("needs_hand") and not e.get("removed") and not e.get("marker_invalid")
+        ],
         packet_health_sparklines={
             s["server"]["id"]: s["packet_health"]["sparkline"] for s in statuses if s["packet_health"]
         },
@@ -346,7 +353,11 @@ def investigation_logging_forget(server_id):
     elif __inv.forget(server_id, actor=current_user.username):
         flash("Forgotten. Jen no longer expects investigation logging to be on there.", "success")
     else:
-        flash("Nothing to forget for that server, or its config still carries the damaged marker.", "error")
+        flash(
+            "Nothing to forget for that server: Kea is still running investigation DEBUG, or its config still carries the marker, or Jen has not "
+            "been able to look.",
+            "error",
+        )
     return redirect(url_for("servers.servers"))
 
 

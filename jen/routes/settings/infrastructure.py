@@ -418,6 +418,9 @@ def save_infra_kea():
     __config.app_config.write_values(items)
     __user.set_global_setting("restart_pending", "true")
     flash("Kea API settings saved. Restart Jen to apply.", "success")
+    mismatch = __auth.api_ssh_mismatch(api_url, extensions.cfg.get("kea_ssh", "host", fallback=""))
+    if mismatch:
+        flash(mismatch, "warning")
     __user.audit(
         "SAVE_INFRA",
         "kea_api",
@@ -1696,6 +1699,9 @@ def save_infra_ssh():
     __config.app_config.write_values(items)
     __user.set_global_setting("restart_pending", "true")
     flash("SSH settings saved. Restart Jen to apply.", "success")
+    mismatch = __auth.api_ssh_mismatch(extensions.cfg.get("kea", "api_url", fallback=""), host)
+    if mismatch:
+        flash(mismatch, "warning")
     __user.audit("SAVE_INFRA", "ssh", f"host={host} user={user}")
     return redirect(url_for("settings.settings_kea"))
 
@@ -1867,6 +1873,10 @@ def save_extra_servers():
 
     count = len(extensions.KEA_SERVERS) - 1
     flash(f"Additional servers saved — {count} extra server(s) configured.", "success")
+    for url, host in zip(api_urls, ssh_hosts, strict=False):
+        mismatch = __auth.api_ssh_mismatch(url, host)
+        if mismatch:
+            flash(mismatch, "warning")
     __user.set_global_setting("restart_pending", "true")
     __user.audit("SAVE_INFRA", "extra_servers", f"{count} additional servers configured")
     return redirect(url_for("settings.settings_kea"))

@@ -554,10 +554,11 @@ class TestTheLogsAreReadConcurrentlyInsideOneBudget:
             "jen.services.config_revisions.latest", lambda server_id, service: None
         )  # no database in a timing test
         gate = threading.Event()  # released at teardown: a "hung" read never outlives the test
-        world = {"answers": {}, "delay": {}, "hang": set(), "asked": [], "gate": gate}
+        world = {"answers": {}, "delay": {}, "hang": set(), "asked": [], "gate": gate, "threads": set()}
 
         def tail(server, path, lines, timeout=None, helper_only=False):
             world["asked"].append(server["id"])
+            world["threads"].add(threading.current_thread())
             if server["id"] in world["hang"]:
                 gate.wait(30)
             elif world["delay"].get(server["id"]):
@@ -574,7 +575,14 @@ class TestTheLogsAreReadConcurrentlyInsideOneBudget:
         )
         yield world
         gate.set()
+        # fixup 4 (F9): the released threads WRITE to the shared tail cache as they finish; join them first, then clear, or a late write survives into
+        # the next test
+        for th in list(world["threads"]):
+            th.join(5)
         ctx.clear_log_cache()
+        from jen.services import log_tail
+
+        log_tail.clear()
 
     @staticmethod
     def _ok(at, tid, host):
@@ -689,3 +697,146 @@ class TestTheLogsAreReadConcurrentlyInsideOneBudget:
         assert "2 server(s) could not be checked in time (kea-a, kea-d)" in text
         assert "What is shown is what the rest said." in text
         assert '"not_checked"' in (root / "jen" / "routes" / "explain.py").read_text(encoding="utf-8")
+
+
+class TestAFailedReadIsKeptForTheShortWindow:
+    """Fixup 4, F7: (a) a view built from a failure or from servers that did not answer in time is cached for `log_tail.TTL_S`, not 30 s; (b) the evidence pool
+    is sized to the servers; (c) `kea_host.tail_log` turns an SSH timeout into a failed read, which `log_tail` then keeps for its window."""
+
+    def test_an_error_view_is_kept_three_seconds_a_good_one_thirty(self, servers, monkeypatch):
+        from jen.services import log_tail
+
+        clock = {"now": 5000.0}
+        monkeypatch.setattr(ctx.time, "monotonic", lambda: clock["now"])
+        monkeypatch.setattr(log_tail.time, "monotonic", lambda: clock["now"])
+        servers["tails"][1] = {"ok": False, "code": "error", "detail": "ssh refused"}
+        servers["tails"][2] = {"ok": False, "code": "error", "detail": "ssh refused"}
+        assert ctx.read_log(MAC, allowed=True)["state"] == "error"
+        asked = len(servers["asked"])
+        clock["now"] += log_tail.TTL_S - 0.5
+        ctx.read_log(MAC, allowed=True)
+        assert len(servers["asked"]) == asked, "inside the short window: served from the cache"
+        clock["now"] += 1.0
+        servers["tails"][2] = {"ok": True, "code": "ok", "lines": OWN_LOG}
+        view = ctx.read_log(MAC, allowed=True)
+        assert view["state"] == "ok" and view["server"]["name"] == "kea-b", (
+            "a late recovery is used 3 s later, not 30 s"
+        )
+        # a good view is still kept for the long window
+        asked = len(servers["asked"])
+        clock["now"] += 20
+        ctx.read_log(MAC, allowed=True)
+        assert len(servers["asked"]) == asked
+
+    def test_a_view_with_servers_that_did_not_answer_in_time_is_kept_the_short_window_too(self, monkeypatch):
+        import threading
+
+        from jen.services import log_tail
+
+        ctx.clear_log_cache()
+        gate = threading.Event()
+        monkeypatch.setattr(ctx, "EVIDENCE_BUDGET_S", 0.3)
+        monkeypatch.setattr(ctx, "_clock_offset_s", lambda server: 0.0)
+        monkeypatch.setattr("jen.services.config_revisions.latest", lambda server_id, service: None)
+        monkeypatch.setattr("jen.services.kea_ha.ha_status", lambda server: None)
+        monkeypatch.setattr(
+            extensions,
+            "KEA_SERVERS",
+            [{"id": 1, "name": "kea-a", "ssh_host": "10.0.0.1"}, {"id": 2, "name": "kea-b", "ssh_host": "10.0.0.2"}],
+        )
+
+        def tail(server, path, lines, timeout=None, helper_only=False):
+            if server["id"] == 2:
+                gate.wait(10)
+            return {"ok": True, "code": "ok", "lines": OWN_LOG}
+
+        monkeypatch.setattr("jen.services.kea_host.tail_log", tail)
+        try:
+            view = ctx.read_log(MAC, allowed=True)
+            assert view["not_checked"] == ["kea-b"]
+            key = ("log", MAC.lower())
+            assert ctx._log_cache[key][2] == log_tail.TTL_S
+        finally:
+            gate.set()
+            ctx.clear_log_cache()
+
+    def test_the_pool_is_sized_to_the_servers_at_first_use(self, monkeypatch):
+        monkeypatch.setattr(ctx, "_evidence_pool", None)
+        assert ctx._pool(1)._max_workers == 4, "never below EVIDENCE_WORKERS"
+        monkeypatch.setattr(ctx, "_evidence_pool", None)
+        assert ctx._pool(6)._max_workers == 12, "two workers per SSH server"
+
+    def test_an_ssh_timeout_is_a_failed_read_not_an_exception(self, monkeypatch):
+
+        from jen.services import kea_host
+
+        monkeypatch.setattr(kea_host, "helper_call", lambda *a, **k: (_ for _ in ()).throw(TimeoutError("timed out")))
+        res = kea_host.tail_log(
+            {"id": 9, "name": "kea-x", "ssh_host": "10.0.0.9"}, "/var/log/kea.log", 1000, timeout=15, helper_only=True
+        )
+        assert res["ok"] is False and res["code"] == "error" and "timeout" in res["detail"].lower()
+
+    def test_log_tail_keeps_that_failed_read_for_its_window_so_the_hang_runs_once(self, monkeypatch):
+
+        from jen.services import kea_host, log_tail
+
+        log_tail.clear()
+        attempts = []
+
+        def hang(*a, **k):
+            attempts.append(1)
+            raise TimeoutError("timed out")
+
+        monkeypatch.setattr(kea_host, "helper_call", hang)
+        server = {"id": 9, "name": "kea-x", "ssh_host": "10.0.0.9"}
+        first = log_tail.tail(server, "/var/log/kea.log", 1000, timeout=15)
+        second = log_tail.tail(server, "/var/log/kea.log", 1000, timeout=15)
+        assert first["ok"] is False and second == first and len(attempts) == 1, "one attempt per TTL"
+        log_tail.clear()
+
+
+class TestTheApiAndSshHostsAreCompared:
+    """Fixup 4, F3: Jen reads a Kea through the API and edits its file over SSH. If the two hosts are not the same Kea, what Jen reads back describes a
+    different daemon from the one whose file it changed. The Kea settings save WARNS (never refuses) when they resolve to different addresses."""
+
+    @staticmethod
+    def _resolver(monkeypatch, table):
+        from jen.services import auth
+
+        monkeypatch.setattr(auth, "_addresses_of", lambda host, timeout=2.0: table.get(host))
+        return auth
+
+    def test_different_addresses_warn_and_name_both_hosts(self, monkeypatch):
+        auth = self._resolver(monkeypatch, {"kea-api": {"10.0.0.1"}, "kea-ssh": {"10.0.0.2"}})
+        text = auth.api_ssh_mismatch("http://kea-api:8000", "kea-ssh")
+        assert "kea-api" in text and "kea-ssh" in text and "different addresses" in text and "Saved anyway" in text
+
+    def test_the_same_address_or_a_shared_one_is_silent(self, monkeypatch):
+        auth = self._resolver(
+            monkeypatch, {"kea-api": {"10.0.0.1", "10.0.0.2"}, "kea-ssh": {"10.0.0.2"}, "same": {"10.0.0.1"}}
+        )
+        assert auth.api_ssh_mismatch("http://kea-api:8000", "kea-ssh") == ""
+        assert auth.api_ssh_mismatch("https://same", "same") == ""
+
+    def test_what_does_not_resolve_is_not_warned_about(self, monkeypatch):
+        auth = self._resolver(monkeypatch, {"kea-api": {"10.0.0.1"}})
+        assert auth.api_ssh_mismatch("http://kea-api:8000", "unresolvable") == ""
+        assert auth.api_ssh_mismatch("http://unresolvable:8000", "kea-api") == ""
+        assert auth.api_ssh_mismatch("", "kea-api") == "" and auth.api_ssh_mismatch("http://kea-api", "") == ""
+        assert auth.api_ssh_mismatch("not a url", "kea-api") == ""
+
+    def test_ip_literals_need_no_lookup(self):
+        from jen.services import auth
+
+        assert auth._addresses_of("10.1.2.3") == {"10.1.2.3"} and auth._addresses_of("[::1]") == {"::1"}
+        assert "different addresses" in auth.api_ssh_mismatch("http://10.0.0.1:8000", "10.0.0.2")
+        assert auth.api_ssh_mismatch("http://10.0.0.1:8000", "10.0.0.1") == ""
+
+    def test_the_three_save_routes_call_it_and_only_warn(self):
+        import pathlib
+
+        source = (
+            pathlib.Path(__file__).resolve().parent.parent / "jen" / "routes" / "settings" / "infrastructure.py"
+        ).read_text(encoding="utf-8")
+        assert source.count("__auth.api_ssh_mismatch(") == 3
+        assert source.count('flash(mismatch, "warning")') == 3

@@ -69,6 +69,22 @@
 </div>
 {% endif %}
 
+{% if history_allowed and investigation_hand %}
+{# v5.68.0-beta.23 (Q158 fixup 4): the config file is restored but the running Kea is at neither level (or Jen has tried its reloads and its one restart); a person decides #}
+<div class="alert alert-warning u-3bceda">
+    {% for o in investigation_hand %}
+    <div>
+    {{ icon("siren") }} <strong>Kea on {{ o.name }} is not back at its original log level.</strong>
+    {{ o.text }}.
+    <form method="POST" action="/servers/investigation-logging/forget/{{ o.server_id }}" class="u-8a77e5">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-sm btn-secondary" data-confirm="Have you checked {{ o.name }}? Jen looks at the running Kea first and will not forget it while it is still at investigation DEBUG.">Forget</button>
+    </form>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
 {% if not single_server and ha_mode %}
 {% if ha_degraded %}
 <div class="alert alert-warning u-3bceda">
