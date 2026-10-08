@@ -1126,8 +1126,9 @@ have adopted the helper.
 server's `kea-dhcp4` logger up to DEBUG for a bounded time adds NO helper op and NO sudo string: the
 change is `kea_changeset.apply_change` (`apply-config` with the sha guard, `kea-dhcp4 -t` preflight,
 revert on failure, an audit row and a config revision), the daemon learns of it through `config-reload` on
-the control channel Jen already uses (restart through the existing `service` op only when the daemon lacks
-or refuses it), and the log is read through `tail-log`. The only thing the helper sees is a config whose
+the control channel Jen already uses (restart through the existing `service` op only when the daemon answered and lacks
+or refuses it - v5.68.0-beta.21, Q156: `_reload_support` is yes / no / unknown, and "unknown" (the API did not answer) REFUSES turning logging on, because a restart of a
+production daemon must not follow from a Control Agent that was down; turn-off and the expiry restore still fall back to the restart, and say why), and the log is read through `tail-log`. The only thing the helper sees is a config whose
 `kea-dhcp4` logger entry carries a `user-context` marker saying what to restore; `docs/admin-guide.md`
 names the one logger entry Jen touches. **A marker that has lost its `restore` object is never read as "these keys never existed"
 (v5.68.0-beta.13, Q148).** `kea_config_edit.clear_investigation_logging` validates the marker before it mutates anything: `restore` must be
@@ -2718,6 +2719,13 @@ asserts a purge WAITS before counting, and runs two real purges at once (six rou
 `lease6_history` had existed since v5.0 and nothing wrote it; with IPv6 on
 the snapshot pass now writes one row per IPv6 subnet (active leases by type, reservations by type - no pool size, a /64 has none to measure),
 and with IPv6 off nothing in this path runs (`TestZeroBehaviorChange`).
+
+**The log reader decides before it asks (v5.68.0-beta.21, Q156).** `explain_context.read_log` computed the order of the servers - one HA `status-get` each, a 10 s timeout for a
+Control Agent that is down - before it looked at `allowed`, its cache or `fetch=False`, so the Overview's "never a fresh round trip" read paid for it on every `/client` render and
+again for each of Explain, Config and Changes (`LOG_TTL_S` bounded the log read, not the probe). The order is now `allowed`, the configuration-only states, the per-MAC cache,
+`fetch`, and only then `_evidence_servers()`, which is memoised for `LOG_TTL_S` (keyed by the configured server ids): at most one `status-get` per server per 30 seconds across
+every caller. `TestTheHaQuestionIsAskedRarely` counts the probes: zero for an Overview render and for a cached read, one per server for a whole page's worth of readers, one more
+after the window.
 
 **The Problems inbox caps what a log can add (v5.68.0-beta.21, Q156).** A group is keyed by (kind, client, address, subnet), so a thousand-line tail of declines from
 spoofed MACs and requested addresses added up to a thousand rows per sweep, kept 30 days; `MAX_DB_ROWS` bounds only the two lease-database kinds. At most

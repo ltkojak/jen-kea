@@ -146,6 +146,10 @@ class FakeKea:
     def kea_command(self, command, **kw):
         self.calls.append(command)
         if command == "list-commands":
+            if getattr(
+                self, "list_unreachable", False
+            ):  # the Control Agent did not answer: kea_command's connection-failure reply
+                return {"result": 1, "text": "connection refused"}
             return {"result": 0, "arguments": self.commands}
         if command == "config-reload":
             if not self.reload_result:
@@ -871,3 +875,73 @@ class TestTheMacroSeesTheRequestContext:
                 continue
             text = p.read_text(encoding="utf-8")
             assert re.search(r"import investigation_controls with context %\}", text), p.name
+
+
+class TestAControlAgentThatDidNotAnswer:
+    """v5.68.0-beta.21 (Q156, item 4): `_supports_reload` was `result == 0 and "config-reload" in arguments`, and `kea_command` returns result 1 on a
+    connection failure or timeout - so a Control Agent that was DOWN read as "this daemon has no config-reload", `_change` passed `restart=True`, and
+    turning logging ON wrote the file and restarted kea-dhcp4 over SSH. On Kea 3.0+ config-reload is always listed: "not listed" can only mean
+    "could not ask". `_reload_support` says yes / no / unknown; turning ON refuses on unknown, and only the restore falls back to a restart."""
+
+    def test_the_three_answers(self, world):
+        daemon = world.daemons[1]
+        assert inv._reload_support(world.servers[0]) == "yes"
+        daemon.commands = ["version-get"]
+        assert inv._reload_support(world.servers[0]) == "no"
+        daemon.list_unreachable = True
+        assert inv._reload_support(world.servers[0]) == "unknown"
+
+    def test_turn_on_with_the_api_down_writes_nothing_restarts_nothing_and_says_what_to_check(self, world):
+        daemon = world.daemons[1]
+        daemon.list_unreachable = True
+        before = copy.deepcopy(daemon.file)
+        out = inv.turn_on(world.servers[0], 5, actor="alice")
+        assert out["ok"] is False and out["until"] == ""
+        assert "did not answer" in out["lines"][0] and "Settings → Kea → Probe" in out["lines"][0]
+        assert daemon.writes == 0 and daemon.file == before
+        assert not any(c.startswith(("apply", "restart")) for c in daemon.calls), daemon.calls
+        assert not inv.active(), "no index entry: nothing was written, so nothing is owed"
+        assert "_audit" not in world.store
+
+    def test_turn_on_still_restarts_a_daemon_that_answered_and_lacks_config_reload(self, world):
+        world.daemons[1].commands = ["version-get"]
+        out = inv.turn_on(world.servers[0], 5)
+        assert out["ok"] and out["mode"] == "restart"
+        assert any(c.startswith("apply(restart=True)") for c in world.daemons[1].calls)
+
+    def test_turn_off_with_the_api_down_restores_with_a_restart_and_says_why(self, world):
+        daemon = world.daemons[1]
+        original = copy.deepcopy(daemon.file)
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        daemon.list_unreachable = True
+        out = inv.turn_off(world.servers[0], actor="alice")
+        assert out["ok"] and out["mode"] == "restart" and daemon.file == original
+        assert any("did not answer" in line and "restarted to take the restore" in line for line in out["lines"]), out[
+            "lines"
+        ]
+        assert not inv.active()
+
+    def test_the_expiry_sweep_with_the_api_down_still_restores_with_the_restart_and_the_line_says_why(self, world):
+        daemon = world.daemons[1]
+        original = copy.deepcopy(daemon.file)
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        daemon.list_unreachable = True
+        out = inv.sweep(now=NOW + timedelta(minutes=6))
+        assert out["restored"] == ["kea-a"] and daemon.file == original and not inv.active()
+        assert any(c.startswith("apply(restart=True)") for c in daemon.calls), (
+            "DEBUG 55 must come off: the restart is the fallback here"
+        )
+        assert daemon.loaded == original, "the running daemon took the restore"
+
+    def test_a_restore_that_finds_nothing_to_write_but_a_daemon_still_at_debug_restarts_when_the_api_is_down(
+        self, world
+    ):
+        daemon = world.daemons[1]
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        # the file was put back by hand; the daemon still runs DEBUG 55 and Kea's API is down
+        daemon.file = copy.deepcopy(daemon.loaded)
+        daemon.file["Dhcp4"].pop("loggers", None)
+        daemon.list_unreachable = True
+        out = inv.turn_off(world.servers[0])
+        assert out["ok"] and out["mode"] == "restart"
+        assert any("did not answer" in line for line in out["lines"])

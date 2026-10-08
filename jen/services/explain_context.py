@@ -117,14 +117,29 @@ def _serves_clients(server: dict) -> bool:
     return bool(local.get("scopes")) and local.get("state") in HA_ACTIVE_STATES
 
 
+_evidence_memo: tuple | None = None  # (monotonic time, ids of the configured servers, the ordered list)
+
+
 def _evidence_servers() -> list[dict]:
     """The Kea servers whose log may hold the client's exchange, in the order to read them: the HA-ACTIVE server(s) first, then every
-    other configured server in order. With one server (the usual case) that is the server and no HA question is asked."""
+    other configured server in order. With one server (the usual case) that is the server and no HA question is asked.
+
+    v5.68.0-beta.21 (Q156): the answer is MEMOISED for `LOG_TTL_S`, so across every caller - the Overview, Explain, Config and Changes of one
+    `/client` render, `/tools/explain`, a second person - there is at most one `status-get` per server per 30 seconds. A server whose Control Agent
+    is down costs its 10 s timeout once in that window, not once per call. The memo is keyed by the configured server ids, so adding or removing a
+    server is seen at once."""
+    global _evidence_memo
     servers = list(extensions.KEA_SERVERS or [])
     if len(servers) < 2:
         return servers
+    ids = tuple(s.get("id") for s in servers)
+    now = time.monotonic()
+    if _evidence_memo is not None and _evidence_memo[1] == ids and now - _evidence_memo[0] < LOG_TTL_S:
+        return list(_evidence_memo[2])
     active = [s for s in servers if _serves_clients(s)]
-    return active + [s for s in servers if s not in active]
+    ordered = active + [s for s in servers if s not in active]
+    _evidence_memo = (time.monotonic(), ids, ordered)
+    return list(ordered)
 
 
 def _clock_offset_s(server: dict) -> float | None:
@@ -191,10 +206,14 @@ def read_log(mac: str, *, allowed: bool, fetch: bool = True) -> dict:
     empty = {"classes": None, "query": None, "cid": None, "transaction": None, "server": None}
     if not allowed:
         return {**empty, "state": "not-allowed", "message": ""}
-    servers = _evidence_servers()
-    if not servers:
+    # v5.68.0-beta.21 (Q156): `allowed`, the cache and `fetch` are decided BEFORE anything asks a server a question. The order of the servers
+    # (`_evidence_servers`) needs an HA `status-get` per server - a 10 s timeout for one whose Control Agent is down - and it used to be computed
+    # first, so the Overview's "never a fresh round trip" read (`fetch=False`) and every cached read paid for it. The two states that only need the
+    # CONFIGURED servers, not their order, are still answered from the configuration alone.
+    configured = list(extensions.KEA_SERVERS or [])
+    if not configured:
         return {**empty, "state": "no-server", "message": "No Kea server is configured."}
-    if not any(s.get("ssh_host") for s in servers):
+    if not any(s.get("ssh_host") for s in configured):
         return {**empty, "state": "no-helper", "message": "Reading Kea's log needs SSH access to the Kea host."}
     key = ("log", (mac or "").lower())
     cached = _log_cache.get(key)
@@ -202,6 +221,7 @@ def read_log(mac: str, *, allowed: bool, fetch: bool = True) -> dict:
         return cached[1]
     if not fetch:
         return {**empty, "state": "not-fetched", "message": ""}
+    servers = _evidence_servers()
     view = None
     first_ok = None  # a server whose log was read but never named the client
     fallback = None  # an exchange that has no class list or packet dump (the client id only)
@@ -252,6 +272,8 @@ def read_log(mac: str, *, allowed: bool, fetch: bool = True) -> dict:
 
 
 def clear_log_cache() -> None:
+    global _evidence_memo
+    _evidence_memo = None
     _log_cache.clear()
     _log_tail.clear()  # the shared 3 s read below this per-MAC cache (v5.68.0-beta.17, Q152)
 

@@ -266,3 +266,95 @@ class TestAClassListFromBeforeTheConfigChanged:
         ctx.clear_log_cache()
         self._revision(monkeypatch, datetime(2026, 10, 4, 16, 0, 0))  # 16:00 UTC: after it
         assert ctx.read_log(MAC, allowed=True)["transaction"]["before_config_change"] is True
+
+
+class TestTheHaQuestionIsAskedRarely:
+    """v5.68.0-beta.21 (Q156, item 3): `read_log` computed the order of the servers - one HA `status-get` each, a 10 s timeout for a Control Agent that
+    is down - BEFORE it looked at its own cache or at `fetch=False`, so the Overview's "never a fresh round trip" read paid for it on every `/client`
+    render, and again for each of Explain, Config and Changes. LOG_TTL_S bounded the log read, not the probe."""
+
+    @pytest.fixture
+    def counted(self, servers, monkeypatch):
+        calls = []
+
+        def ha_status(server):
+            calls.append(server["id"])
+            return servers["ha"].get(server["id"])
+
+        monkeypatch.setattr("jen.services.kea_ha.ha_status", ha_status)
+        servers["tails"][1] = {"ok": True, "code": "ok", "lines": OWN_LOG}
+        servers["tails"][2] = {"ok": True, "code": "ok", "lines": OWN_LOG}
+        return calls
+
+    def test_an_overview_render_with_two_servers_makes_zero_ha_calls_and_zero_reads(self, servers, counted):
+        view = ctx.read_log(MAC, allowed=True, fetch=False)
+        assert view["state"] == "not-fetched"
+        assert counted == [] and servers["asked"] == []
+
+    def test_a_caller_who_may_not_read_the_log_asks_nothing(self, servers, counted):
+        assert ctx.read_log(MAC, allowed=False)["state"] == "not-allowed"
+        assert counted == []
+
+    def test_no_server_and_no_helper_are_answered_from_the_configuration_alone(self, servers, counted, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [])
+        assert ctx.read_log(MAC, allowed=True)["state"] == "no-server"
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{**S1, "ssh_host": ""}, {**S2, "ssh_host": ""}])
+        assert ctx.read_log(MAC, allowed=True)["state"] == "no-helper"
+        assert counted == []
+
+    def test_a_cached_read_makes_zero_calls(self, servers, counted):
+        ctx.read_log(MAC, allowed=True)
+        assert sorted(counted) == [1, 2], "the first read asks each server once"
+        counted.clear()
+        servers["asked"].clear()
+        ctx.read_log(MAC, allowed=True)
+        ctx.read_log(MAC, allowed=True, fetch=False)
+        assert counted == [] and servers["asked"] == []
+
+    def test_two_reads_inside_the_ttl_for_different_macs_share_one_probe_per_server(self, servers, counted):
+        ctx.read_log(MAC, allowed=True)
+        assert sorted(counted) == [1, 2]
+        ctx.read_log(OTHER, allowed=True)  # a different client: its own log read, the same HA answer
+        assert sorted(counted) == [1, 2], "a second client's read re-asked the HA question"
+
+    def test_a_whole_client_page_worth_of_readers_is_one_probe_per_server(self, servers, counted):
+        """Overview (fetch=False), then Explain, Config and Changes each reading the log: one status-get per server, not four."""
+        ctx.read_log(MAC, allowed=True, fetch=False)
+        for _tab in ("explain", "config", "changes"):
+            ctx.read_log(MAC, allowed=True)
+        assert sorted(counted) == [1, 2]
+
+    def test_the_ttl_expiring_asks_each_server_again_once(self, servers, counted, monkeypatch):
+        clock = {"now": 1000.0}
+        monkeypatch.setattr(ctx.time, "monotonic", lambda: clock["now"])
+        ctx.read_log(MAC, allowed=True)
+        assert sorted(counted) == [1, 2]
+        clock["now"] += ctx.LOG_TTL_S - 1
+        ctx.read_log(OTHER, allowed=True)
+        assert sorted(counted) == [1, 2]
+        clock["now"] += 2
+        ctx.read_log(MAC, allowed=True)
+        assert sorted(counted) == [1, 1, 2, 2], "one more per server after the window"
+
+    def test_a_changed_server_list_is_seen_at_once(self, servers, counted, monkeypatch):
+        ctx.read_log(MAC, allowed=True)
+        counted.clear()
+        monkeypatch.setattr(
+            extensions, "KEA_SERVERS", [dict(S1), dict(S2), {"id": 3, "name": "kea-c", "ssh_host": "10.0.0.3"}]
+        )
+        servers["tails"][3] = {"ok": True, "code": "ok", "lines": OWN_LOG}
+        ctx.read_log(OTHER, allowed=True)
+        assert sorted(counted) == [1, 2, 3]
+
+    def test_the_order_is_still_ha_active_first(self, servers, counted):
+        servers["ha"] = {1: _ha([]), 2: _ha(["server1"])}
+        view = ctx.read_log(MAC, allowed=True)
+        assert servers["asked"] == [2] and view["server"]["name"] == "kea-b"
+        probes = len(counted)
+        assert [s["id"] for s in ctx._evidence_servers()] == [2, 1], "the memoised order is the HA-active-first one"
+        assert len(counted) == probes
+
+    def test_a_single_server_never_asks_the_ha_question(self, servers, counted, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [dict(S1)])
+        ctx.read_log(MAC, allowed=True)
+        assert counted == []

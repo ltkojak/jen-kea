@@ -129,15 +129,31 @@ def active(now: datetime | None = None) -> list[dict]:
 # it), before the daemon is asked, so a restart between the two activates DEBUG with an entry already indexed.
 
 
-def _supports_reload(server: dict) -> bool:
+def _reload_support(server: dict) -> str:
+    """Does the daemon have `config-reload`? "yes", "no" (Kea answered and does not list it) or "unknown" (Kea's API did not answer).
+
+    v5.68.0-beta.21 (Q156): this used to be a bool, and "unknown" read as "no": `list-commands` failing - a Control Agent that is down, a timeout -
+    returns result 1 from `kea_command`, `config-reload` is not in the missing answer, and turning logging ON wrote the file AND restarted
+    kea-dhcp4 over SSH. On Kea 3.0+ `config-reload` is always listed, so "not listed" can only mean "could not ask". A restart of a production
+    daemon must not follow from an API that did not answer."""
     reply = _kea.kea_command("list-commands", server=server)
-    return reply.get("result") == 0 and "config-reload" in (reply.get("arguments") or [])
+    if reply.get("result") != 0:
+        return "unknown"
+    return "yes" if "config-reload" in (reply.get("arguments") or []) else "no"
 
 
-def _change(server: dict, mutate_fn, summary: str, unsupported: str):
+def _unreachable_note(server: dict) -> str:
+    return f"Kea's API on {_name(server)} did not answer, so Jen could not ask whether it can re-read its config without a restart"
+
+
+def _change(server: dict, mutate_fn, summary: str, unsupported: str, *, refuse_unknown: bool = False):
     """Step 1: write one mutation to ONE server through apply_change - with a restart folded in when the daemon has no
-    `config-reload`. Returns (ChangeSetResult, use_reload)."""
-    use_reload = _supports_reload(server)
+    `config-reload`. Returns (ChangeSetResult, use_reload, support); with `refuse_unknown` and Kea's API silent nothing is written and the
+    result is None. (Turning logging OFF never refuses: DEBUG 55 must come off, so there the restart is the fallback.)"""
+    support = _reload_support(server)
+    if support == "unknown" and refuse_unknown:
+        return None, False, support
+    use_reload = support == "yes"
     result = _changeset.apply_change(
         "dhcp4",
         mutate_fn,
@@ -149,7 +165,7 @@ def _change(server: dict, mutate_fn, summary: str, unsupported: str):
             "marker-invalid": "the investigation-logging marker is unreadable, so nothing was changed",
         },
     )
-    return result, use_reload
+    return result, use_reload, support
 
 
 def _daemon_step(server: dict, use_reload: bool) -> dict:
@@ -262,12 +278,24 @@ def turn_on(server: dict, minutes: int, actor: str = "") -> dict:
                 "until": "",
             }
         until = _iso(_now() + timedelta(minutes=minutes))
-        result, use_reload = _change(
+        result, use_reload, _support = _change(
             server,
             lambda cfg: _edit.set_investigation_logging(cfg, until),
             f"investigation logging on for {minutes} min",
             "this config has no Dhcp4 section to log from",
+            refuse_unknown=True,
         )
+        if result is None:
+            # Kea's API did not answer: turning ON must never become a restart of a production daemon. Nothing was written.
+            return {
+                "ok": False,
+                "mode": "",
+                "lines": [
+                    f"{_unreachable_note(server)}, and Jen will not turn logging on by restarting Kea. "
+                    "Check Settings → Kea → Probe, then try again."
+                ],
+                "until": "",
+            }
         lines = [text for _kind, text in result.lines]
         entry = _entry_for(server, until, actor)
 
@@ -317,7 +345,9 @@ def _restore(server: dict, record: dict, now: datetime | None, summary: str) -> 
     {"ok", "mode", "lines"}; caller holds the lock."""
     sid = str(server.get("id"))
     entry = record["servers"].get(sid)
-    result, use_reload = _change(server, lambda cfg: _edit.clear_investigation_logging(cfg, now=now), summary, "")
+    result, use_reload, support = _change(
+        server, lambda cfg: _edit.clear_investigation_logging(cfg, now=now), summary, ""
+    )
     lines = [text for _kind, text in result.lines]
     if result.status == "aborted" and result.last_code == "marker-invalid":
         # v5.68.0-beta.13 (Q148): the marker's restore object is missing or malformed. Nothing was written (the change set aborted before
@@ -330,11 +360,12 @@ def _restore(server: dict, record: dict, now: datetime | None, summary: str) -> 
     if result.status == "ok":
         if not use_reload:  # the change set restarted the daemon: both steps done
             _drop(record, sid)
-            return {
-                "ok": True,
-                "mode": "restart",
-                "lines": lines + ["Kea has no config-reload here, so it was restarted."],
-            }
+            why = (
+                f"{_unreachable_note(server)}, so Kea was restarted to take the restore (DEBUG 55 has to come off)."
+                if support == "unknown"
+                else "Kea has no config-reload here, so it was restarted."
+            )
+            return {"ok": True, "mode": "restart", "lines": lines + [why]}
         # the file is clean, the daemon still at DEBUG: say so in the index before the daemon is asked
         entry = entry or _entry_for(server, _iso(now or _now()))
         entry.pop("error", None)
@@ -353,12 +384,20 @@ def _restore(server: dict, record: dict, now: datetime | None, summary: str) -> 
             entry["error"] = (lines[-1] if lines else "restore failed")[:300]
             _put(record, sid, entry)
         return {"ok": False, "mode": "", "lines": lines}
-    step = _daemon_step(server, use_reload=entry.get("pending") != "restart" and _supports_reload(server))
+    reload_now = _reload_support(server)
+    step = _daemon_step(server, use_reload=entry.get("pending") != "restart" and reload_now == "yes")
     if step["ok"]:
         _drop(record, sid)
-        return {"ok": True, "mode": step["mode"], "lines": lines + step["lines"]}
+        why = (
+            [f"{_unreachable_note(server)}, so Kea was restarted to take the restore (DEBUG 55 has to come off)."]
+            if reload_now == "unknown" and step["mode"] == "restart"
+            else []
+        )
+        return {"ok": True, "mode": step["mode"], "lines": lines + step["lines"] + why}
     entry.update(
-        daemon="debug", pending="reload" if _supports_reload(server) else "restart", error=step["lines"][-1][:300]
+        daemon="debug",
+        pending="reload" if _reload_support(server) == "yes" else "restart",
+        error=step["lines"][-1][:300],
     )
     _put(record, sid, entry)
     return {"ok": False, "mode": "", "lines": lines + step["lines"]}
