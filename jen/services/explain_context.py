@@ -31,7 +31,9 @@ v5.68.0-beta.10 (Q145). WHICH exchange and WHICH server the evidence comes from 
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
+import threading
 import time
 
 import jen.models.db as __db
@@ -48,7 +50,31 @@ logger = logging.getLogger(__name__)
 LOG_TTL_S = 30
 TAIL_LINES = 1000
 TAIL_TIMEOUT_S = 15
+#: v5.68.0-beta.23 (Q158, item 4): ONE shared deadline for reading every server's log. beta.22 read each server in turn, each with its own 15 s timeout:
+#: one good server and three unreachable ones cost ~45 s on top of the HA probes. The servers are read concurrently and the answers that arrived inside
+#: this budget are the evidence; a server that did not answer in time is named ("could not be checked in time"), never silently dropped.
+EVIDENCE_BUDGET_S = 20
+EVIDENCE_WORKERS = 4
+_evidence_pool: concurrent.futures.ThreadPoolExecutor | None = None
+_evidence_pool_lock = threading.Lock()
 _log_cache: dict[tuple, tuple[float, dict]] = {}
+
+
+def _pool() -> concurrent.futures.ThreadPoolExecutor:
+    """The module-level executor the per-server tails run on - created on first use, not at import (the factory and the test suite import freely)."""
+    global _evidence_pool
+    with _evidence_pool_lock:
+        if _evidence_pool is None:
+            _evidence_pool = concurrent.futures.ThreadPoolExecutor(
+                max_workers=EVIDENCE_WORKERS, thread_name_prefix="jen-evidence-tail"
+            )
+        return _evidence_pool
+
+
+def _tail_one(server: dict) -> dict:
+    # v5.68.0-beta.17 (Q152): the layer below this function's own 30 s per-MAC cache - one read per server and path is shared
+    # with Trace's live watch (jen.services.log_tail), so a watcher and an Investigation page do not each tail the log
+    return _log_tail.tail(server, extensions.DHCP4_LOG, TAIL_LINES, timeout=TAIL_TIMEOUT_S)
 
 
 def pool_used(subnet_id, pool_text) -> int | None:
@@ -242,6 +268,10 @@ def read_log(mac: str, *, allowed: bool, fetch: bool = True) -> dict:
     first_ok = None  # a server whose log was read but never named the client
     fallback = None  # an exchange that has no class list or packet dump (the client id only)
     problem = None  # why the first server that could not be read could not be
+    not_checked = []  # servers whose answer did not arrive inside EVIDENCE_BUDGET_S
+    # Every SSH server is asked AT ONCE (v5.68.0-beta.23, Q158); the loop below then reads the answers in server order, each against the ONE deadline.
+    deadline = time.monotonic() + EVIDENCE_BUDGET_S
+    pending = {id(server): _pool().submit(_tail_one, server) for server in servers if server.get("ssh_host")}
     for server in servers:
         if not server.get("ssh_host"):
             problem = problem or {
@@ -250,9 +280,19 @@ def read_log(mac: str, *, allowed: bool, fetch: bool = True) -> dict:
                 "message": "Reading Kea's log needs SSH access to the Kea host.",
             }
             continue
-        # v5.68.0-beta.17 (Q152): the layer below this function's own 30 s per-MAC cache - one read per server and path is shared
-        # with Trace's live watch (jen.services.log_tail), so a watcher and an Investigation page do not each tail the log
-        res = _log_tail.tail(server, extensions.DHCP4_LOG, TAIL_LINES, timeout=TAIL_TIMEOUT_S)
+        future = pending[id(server)]
+        try:
+            res = future.result(timeout=max(0.0, deadline - time.monotonic()))
+        except concurrent.futures.TimeoutError:
+            future.cancel()  # a read that has not started never will; one that has runs out its own timeout and its result is dropped
+            not_checked.append(_name(server))
+            logger.warning(f"explain_context: {_name(server)}'s log was not read inside {EVIDENCE_BUDGET_S} s")
+            continue
+        except Exception as e:
+            # the tail never raises by contract; a pool or thread fault must not take the page with it
+            logger.error(f"explain_context: reading {_name(server)}'s log raised {type(e).__name__}: {e}")
+            problem = problem or {**empty, "state": "error", "message": "Could not read Kea's log."}
+            continue
         if res.get("code") == "no-helper":
             problem = problem or {
                 **empty,
@@ -311,6 +351,12 @@ def read_log(mac: str, *, allowed: bool, fetch: bool = True) -> dict:
             view["other_complete"] = others
     if view is None:
         view = fallback or first_ok or problem or {**empty, "state": "error", "message": "Could not read Kea's log."}
+    if not_checked:
+        view["not_checked"] = not_checked
+        if view.get("state") == "error" and not view.get("transaction"):
+            view["message"] = f"{len(not_checked)} server(s) could not be checked in time. " + (
+                view.get("message") or ""
+            )
     if len(_log_cache) > 256:
         _log_cache.clear()
     _log_cache[key] = (time.monotonic(), view)

@@ -14,6 +14,7 @@ Pure (`pytest --noconftest tests/test_kea_log_transactions.py`): real logs from 
 """
 
 import pathlib
+import time
 from datetime import datetime
 
 import pytest
@@ -183,14 +184,14 @@ class TestTheServerThatHandledTheClient:
         servers["tails"][2] = {"ok": True, "code": "ok", "lines": OWN_LOG}
         view = ctx.read_log(MAC, allowed=True)
         assert view["state"] == "ok" and view["server"] == {"id": 2, "name": "kea-b"}
-        assert view["query"]["hostname"] == "packet-host" and servers["asked"] == [1, 2]
+        assert view["query"]["hostname"] == "packet-host" and sorted(servers["asked"]) == [1, 2]
 
     def test_server_0_standby_server_1_active_the_active_one_is_read_first_and_only_it(self, servers):
         servers["ha"] = {1: _ha([]), 2: _ha(["server1"])}
         servers["tails"][1] = {"ok": True, "code": "ok", "lines": []}
         servers["tails"][2] = {"ok": True, "code": "ok", "lines": OWN_LOG}
         view = ctx.read_log(MAC, allowed=True)
-        assert servers["asked"] == [2, 1], "every reachable server is read now (Q157), the HA-active one first"
+        assert sorted(servers["asked"]) == [1, 2], "every reachable server is read now (Q157), the HA-active one first"
         assert view["server"]["name"] == "kea-b"
 
     def test_the_helper_only_on_server_1(self, servers, monkeypatch):
@@ -206,7 +207,11 @@ class TestTheServerThatHandledTheClient:
         servers["tails"][1] = {"ok": True, "code": "ok", "lines": ELSEWHERE_LOG}
         servers["tails"][2] = {"ok": True, "code": "ok", "lines": OWN_LOG}
         view = ctx.read_log(MAC, allowed=True)
-        assert view["server"]["name"] == "kea-b" and view["transaction"]["tid"] == "0x9" and servers["asked"] == [1, 2]
+        assert (
+            view["server"]["name"] == "kea-b"
+            and view["transaction"]["tid"] == "0x9"
+            and sorted(servers["asked"]) == [1, 2]
+        )
 
     def test_when_no_server_names_the_client_the_view_is_empty_and_says_which_log_was_read(self, servers):
         servers["tails"][1] = {"ok": True, "code": "ok", "lines": ELSEWHERE_LOG}
@@ -349,7 +354,7 @@ class TestTheHaQuestionIsAskedRarely:
     def test_the_order_is_still_ha_active_first(self, servers, counted):
         servers["ha"] = {1: _ha([]), 2: _ha(["server1"])}
         view = ctx.read_log(MAC, allowed=True)
-        assert servers["asked"] == [2, 1] and view["server"]["name"] == "kea-b"
+        assert sorted(servers["asked"]) == [1, 2] and view["server"]["name"] == "kea-b"
         probes = len(counted)
         assert [s["id"] for s in ctx._evidence_servers()] == [2, 1], "the memoised order is the HA-active-first one"
         assert len(counted) == probes
@@ -528,3 +533,159 @@ class TestTheOtherExchangeIsNamedWhateverTheClocks:
         assert "at about the same time" not in unknown
         alone = template.render(exchange=exchange, other_complete=[])
         assert "Another server" not in alone
+
+
+class TestTheLogsAreReadConcurrentlyInsideOneBudget:
+    """v5.68.0-beta.23 (Q158, item 4): beta.22 read every server's log in turn, each with its own 15 s timeout - one good server and three unreachable
+    ones was ~45 s on top of the HA probes. The servers are read at once on a four-worker executor against ONE deadline (`EVIDENCE_BUDGET_S`, 20 s in
+    production; 1.0 s here), the newest complete exchange among the answers that arrived in time is chosen, and a server that did not answer is
+    named in `view["not_checked"]`."""
+
+    BUDGET = 1.0
+
+    @pytest.fixture
+    def pool(self, monkeypatch):
+        import threading
+
+        ctx.clear_log_cache()
+        monkeypatch.setattr(ctx, "EVIDENCE_BUDGET_S", self.BUDGET)
+        monkeypatch.setattr(ctx, "_clock_offset_s", lambda server: 0.0)
+        monkeypatch.setattr(
+            "jen.services.config_revisions.latest", lambda server_id, service: None
+        )  # no database in a timing test
+        gate = threading.Event()  # released at teardown: a "hung" read never outlives the test
+        world = {"answers": {}, "delay": {}, "hang": set(), "asked": [], "gate": gate}
+
+        def tail(server, path, lines, timeout=None, helper_only=False):
+            world["asked"].append(server["id"])
+            if server["id"] in world["hang"]:
+                gate.wait(30)
+            elif world["delay"].get(server["id"]):
+                time.sleep(world["delay"][server["id"]])
+            return world["answers"].get(server["id"]) or {"ok": False, "code": "error", "detail": "released"}
+
+        monkeypatch.setattr("jen.services.kea_host.tail_log", tail)
+        monkeypatch.setattr("jen.services.kea_ha.ha_status", lambda server: None)
+        names = {1: "kea-a", 2: "kea-b", 3: "kea-c", 4: "kea-d"}
+        monkeypatch.setattr(
+            extensions,
+            "KEA_SERVERS",
+            [{"id": i, "name": n, "ssh_host": f"10.0.0.{i}"} for i, n in names.items()],
+        )
+        yield world
+        gate.set()
+        ctx.clear_log_cache()
+
+    @staticmethod
+    def _ok(at, tid, host):
+        return {"ok": True, "code": "ok", "lines": _exchange(at, f"01:{tid}", tid, host)}
+
+    @staticmethod
+    def _timed(fn):
+        started = time.monotonic()
+        value = fn()
+        return value, time.monotonic() - started
+
+    def test_one_fast_server_and_three_that_never_answer_costs_the_budget_not_three_timeouts(self, pool):
+        pool["answers"] = {3: self._ok("10:00:00.110", "0xc", "c-host")}
+        pool["hang"] = {1, 2, 4}
+        view, elapsed = self._timed(lambda: ctx.read_log(MAC, allowed=True))
+        assert view["server"]["name"] == "kea-c" and view["transaction"]["tid"] == "0xc"
+        assert view["query"]["hostname"] == "c-host"
+        assert view["not_checked"] == ["kea-a", "kea-b", "kea-d"]
+        assert self.BUDGET - 0.1 <= elapsed < self.BUDGET + 1.0, (
+            f"{elapsed:.2f} s: one shared deadline, not one wait per server"
+        )
+        print(f"BUDGET one fast + three silent: {elapsed:.2f} s (budget {self.BUDGET} s)")
+
+    def test_two_fast_servers_with_different_times_the_newer_wins_and_nothing_waits(self, pool):
+        pool["answers"] = {
+            1: self._ok("10:00:00.110", "0xa", "old"),
+            2: self._ok("10:09:00.110", "0xb", "new"),
+            3: {"ok": True, "code": "ok", "lines": []},
+            4: {"ok": True, "code": "ok", "lines": []},
+        }
+        view, elapsed = self._timed(lambda: ctx.read_log(MAC, allowed=True))
+        assert view["server"]["name"] == "kea-b" and view["query"]["hostname"] == "new" and "not_checked" not in view
+        assert elapsed < 0.6, elapsed
+        print(f"BUDGET two fast: {elapsed:.2f} s")
+
+    def test_a_slow_server_inside_the_budget_is_used(self, pool):
+        pool["answers"] = {
+            1: self._ok("10:00:00.110", "0xa", "fast-old"),
+            2: self._ok("10:07:00.110", "0xb", "slow-new"),
+            3: {"ok": False, "code": "error", "detail": "ssh refused"},
+            4: {"ok": True, "code": "ok", "lines": []},
+        }
+        pool["delay"] = {2: 0.4}
+        view, elapsed = self._timed(lambda: ctx.read_log(MAC, allowed=True))
+        assert (
+            view["server"]["name"] == "kea-b" and view["query"]["hostname"] == "slow-new" and "not_checked" not in view
+        )
+        assert 0.35 <= elapsed < self.BUDGET, elapsed
+        print(f"BUDGET one fast + one slow inside the budget: {elapsed:.2f} s")
+
+    def test_every_server_unavailable_is_an_error_not_a_hang(self, pool):
+        pool["answers"] = {i: {"ok": False, "code": "error", "detail": "ssh refused"} for i in (1, 2, 3, 4)}
+        view, elapsed = self._timed(lambda: ctx.read_log(MAC, allowed=True))
+        assert view["state"] == "error" and "not_checked" not in view and elapsed < 0.6
+        ctx.clear_log_cache()
+        pool["hang"] = {1, 2, 3, 4}
+        view, elapsed = self._timed(lambda: ctx.read_log(MAC, allowed=True))
+        assert view["state"] == "error" and view["not_checked"] == ["kea-a", "kea-b", "kea-c", "kea-d"]
+        assert "4 server(s) could not be checked in time" in view["message"]
+        assert elapsed < self.BUDGET + 1.0
+        print(f"BUDGET all unavailable: {elapsed:.2f} s")
+
+    def test_the_budget_expiring_drops_the_late_answer_and_a_late_answer_never_changes_the_cached_view(self, pool):
+        pool["answers"] = {
+            1: self._ok("10:00:00.110", "0xa", "in-time"),
+            2: self._ok("10:09:00.110", "0xb", "too-late-and-newer"),
+            3: {"ok": True, "code": "ok", "lines": []},
+            4: {"ok": True, "code": "ok", "lines": []},
+        }
+        pool["delay"] = {2: self.BUDGET + 1.5}
+        view, elapsed = self._timed(lambda: ctx.read_log(MAC, allowed=True))
+        assert view["server"]["name"] == "kea-a" and view["query"]["hostname"] == "in-time"
+        assert view["not_checked"] == ["kea-b"], "named, not silently dropped"
+        assert self.BUDGET - 0.1 <= elapsed < self.BUDGET + 1.0, elapsed
+        time.sleep(1.6)  # the late read finishes; the cached view is untouched
+        again = ctx.read_log(MAC, allowed=True)
+        assert again["query"]["hostname"] == "in-time" and again["not_checked"] == ["kea-b"]
+        print(f"BUDGET expiring: {elapsed:.2f} s (the late answer would have taken {self.BUDGET + 1.5:.1f} s)")
+
+    def test_fields_are_never_mixed_across_the_servers_that_answered(self, pool):
+        pool["answers"] = {
+            1: self._ok("10:00:00.110", "0xa", "a-host"),
+            2: self._ok("10:00:02.110", "0xb", "b-host"),
+            3: {"ok": True, "code": "ok", "lines": []},
+            4: {"ok": True, "code": "ok", "lines": []},
+        }
+        view = ctx.read_log(MAC, allowed=True)
+        assert view["query"]["hostname"] == "a-host" and view["transaction"]["tid"] == "0xa"
+        assert view["other_complete"] == [{"server": "kea-b", "comparable": True}]
+
+    def test_the_pool_is_four_workers_and_created_on_first_use(self):
+        import inspect
+
+        assert ctx.EVIDENCE_WORKERS == 4 and ctx.EVIDENCE_BUDGET_S == 20
+        source = inspect.getsource(ctx)
+        assert source.count("ThreadPoolExecutor(") == 1
+        assert "_evidence_pool: concurrent.futures.ThreadPoolExecutor | None = None" in source
+
+    def test_the_tab_says_how_many_could_not_be_checked(self):
+        import pathlib
+        import re
+
+        import jinja2
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        html = (root / "templates" / "_explain_result.html").read_text(encoding="utf-8")
+        paragraph = re.search(r'(<p class="u-865c33" id="explain-not-checked">.*?</p>)', html, re.S).group(1)
+        env = jinja2.Environment(autoescape=True, undefined=jinja2.StrictUndefined)
+        text = env.from_string(paragraph).render(
+            not_checked=["kea-a", "kea-d"], exchange={"at": "x"}, log_server="kea-b"
+        )
+        assert "2 server(s) could not be checked in time (kea-a, kea-d)" in text
+        assert "What is shown is what the rest said." in text
+        assert '"not_checked"' in (root / "jen" / "routes" / "explain.py").read_text(encoding="utf-8")
