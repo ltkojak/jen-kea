@@ -80,6 +80,11 @@ and as a gate on every tagged release (`release.yml`).
   `chown`/`replace`/`fsync` in the helper, S5 the legacy config script never runs for authoring,
   S9 root never copies anything into the app tree from the config or content dirs. A new
   violation fails CI; do not add to a sweep's reviewed allowlist without saying why in the test.
+- **The registry and the release audit (Q166).** `docs/SAFETY_INVARIANTS.md` is the version-controlled list of the rules this project has learned - one per entry, with the Q that
+  established it, the choke point it is enforced at and the tests that fail when it breaks; `tests/test_safety_invariants.py` parses it with `ast` and fails on a missing test, an unresolved
+  reference or a reused id. A new rule gets its entry in the commit that adds its test. `docs/RELEASE_AUDIT.md` is the procedure run on a release candidate's diff BEFORE a tarball goes to a
+  reviewer (seven steps and an independent adversarial second pass). Sweep S10 in `tests/test_invariant_sweeps.py` is the fail-closed audit: an `except` on a security or safety path that returns
+  an empty value or passes must be on its reviewed list with the reason it fails closed there.
 - **The model test.** `tests/test_investigation_model.py` (Q163) is a seeded random walk over EVERY operation and fault of investigation logging, with nine
   invariants (I1 no DEBUG without responsibility ... I9 unavailable is refused) checked after every step against the STORED record, plus a second walk over Explain's
   log evidence (E1). Reviews kept finding SEQUENCES no path test named; this composes them. Any change under `jen/services/investigation_logging.py`,
