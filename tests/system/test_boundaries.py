@@ -2030,13 +2030,15 @@ def _s19_host_restored(pid):
 
 
 def _s19_jen_back_and_clean(web):
-    """Bring Jen back and let it settle: its sweep sees that the host already restored and drops the entry."""
+    """Bring Jen back and let it settle: its sweep sees that the host already restored and drops the entry. The clock stand-in is the one of scenario 16 - the sweep is called
+    with a time ten minutes on, because the deadline in Jen's own record is the real one and the host's was rewritten into the past."""
     st.wait_jen_healthy(timeout=180)
     out, _p = st.jen_py(
         """
+from datetime import datetime, timedelta, timezone
 from jen.services import investigation_logging as inv
 with app.app_context():
-    emit(inv.sweep(full=True))
+    emit(inv.sweep(now=datetime.now(timezone.utc) + timedelta(minutes=10), full=True))
     emit([e["name"] for e in inv.active()])
 """
     )
