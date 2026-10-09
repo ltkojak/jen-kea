@@ -356,7 +356,7 @@ class TestTheHaQuestionIsAskedRarely:
         view = ctx.read_log(MAC, allowed=True)
         assert sorted(servers["asked"]) == [1, 2] and view["server"]["name"] == "kea-b"
         probes = len(counted)
-        assert [s["id"] for s in ctx._evidence_servers()] == [2, 1], "the memoised order is the HA-active-first one"
+        assert [s["id"] for s in _order()] == [2, 1], "the memoised order is the HA-active-first one"
         assert len(counted) == probes
 
     def test_a_single_server_never_asks_the_ha_question(self, servers, counted, monkeypatch):
@@ -387,6 +387,12 @@ class _InFlight:
         deadline = time.monotonic() + timeout
         while self.n > 0 and time.monotonic() < deadline:
             time.sleep(0.01)
+
+
+def _order():
+    """The reading order for the servers as configured now (what `read_log` computes from its snapshot)."""
+    snapshot = [dict(s) for s in extensions.KEA_SERVERS]
+    return ctx._evidence_plan(time.monotonic() + ctx.EVIDENCE_BUDGET_S, snapshot)[0]
 
 
 def _exchange(at, cid, tid, host):
@@ -1266,15 +1272,13 @@ class TestExplainKeysItsServersByIdNotByObject:
         calls = len(evidence["ha_calls"])
         view = ctx.read_log(OTHER, allowed=True)  # a different client: no exception
         assert view["state"] == "ok" and view["server"]["name"] == "kea-b"
-        assert {oid for oid, _host in seen} == {id(s) for s in new_objects}, (
-            "the tails were asked of the CURRENT objects, not the memo's"
+        assert len(seen) == 4 and {host for _oid, host in seen} == {s["ssh_host"] for s in new_objects}, (
+            "every current server was tailed"
         )
         assert len(evidence["ha_calls"]) == calls, (
             "the signature is unchanged, so the order memo was kept (and rebuilt from the new objects)"
         )
-        assert [s["id"] for s in ctx._evidence_servers()] == [2, 1, 3, 4], (
-            "the HA-active server first, then configured order"
-        )
+        assert [s["id"] for s in _order()] == [2, 1, 3, 4], "the HA-active server first, then configured order"
 
     def test_an_ssh_host_changed_under_the_same_id_invalidates_the_memo_and_the_new_host_is_tailed(
         self, evidence, monkeypatch
@@ -1291,20 +1295,16 @@ class TestExplainKeysItsServersByIdNotByObject:
 
     def test_a_server_added_or_removed_changes_the_order_and_the_pool_follows(self, evidence, monkeypatch):
         ctx.read_log(MAC, allowed=True)
-        assert [s["id"] for s in ctx._evidence_servers()] == [1, 2, 3, 4]
+        assert [s["id"] for s in _order()] == [1, 2, 3, 4]
         grown = self._rebuilt() + [{"id": i, "name": f"kea-{i}", "ssh_host": f"10.0.0.{i}"} for i in range(5, 11)]
         monkeypatch.setattr(extensions, "KEA_SERVERS", grown)
         self._forget_views()
         ctx.read_log(OTHER, allowed=True)
-        assert [s["id"] for s in ctx._evidence_servers()] == list(
-            range(1, 11)
-        ) and ctx._evidence_pool._max_workers == 16
+        assert [s["id"] for s in _order()] == list(range(1, 11)) and ctx._evidence_pool._max_workers == 16
         monkeypatch.setattr(extensions, "KEA_SERVERS", [s for s in grown if s["id"] not in (2, 5)])
         self._forget_views()
         ctx.read_log(MAC, allowed=True)
-        assert [s["id"] for s in ctx._evidence_servers()] == [1, 3, 4, 6, 7, 8, 9, 10], (
-            "removed servers are gone from the order"
-        )
+        assert [s["id"] for s in _order()] == [1, 3, 4, 6, 7, 8, 9, 10], "removed servers are gone from the order"
         assert ctx._evidence_pool._max_workers == 16, "and the pool never shrinks"
 
     def test_two_overlapping_reads_during_a_config_change_both_complete(self, evidence, monkeypatch):
@@ -1345,7 +1345,9 @@ class TestExplainKeysItsServersByIdNotByObject:
     def test_a_server_in_the_plan_that_was_never_submitted_is_not_checked_not_an_exception(self, evidence, monkeypatch):
         ghost = {"id": 99, "name": "kea-ghost", "ssh_host": "10.0.0.99"}
         real = ctx._evidence_plan
-        monkeypatch.setattr(ctx, "_evidence_plan", lambda deadline: (real(deadline)[0] + [ghost], None))
+        monkeypatch.setattr(
+            ctx, "_evidence_plan", lambda deadline, servers: (real(deadline, servers)[0] + [ghost], None)
+        )
         evidence["logs"][1] = _good("10:00:01.110", "0x1", "host-1")
         view = ctx.read_log(MAC, allowed=True)
         assert view["server"]["name"] == "kea-a" and view["not_checked"] == ["kea-ghost"]
@@ -1370,3 +1372,113 @@ class TestExplainKeysItsServersByIdNotByObject:
             ("3", None, "10.0.0.3"),
             ("4", None, "10.0.0.4"),
         )
+
+
+class TestOneServerSnapshotPerExplainRequest:
+    """Item 4: `read_log` read `KEA_SERVERS` and then `_evidence_plan` read it AGAIN. A configuration reload between the two, with the same ids, mapped the future
+    that was read from the OLD host onto the NEW server dict's name and clock offset: wrong provenance, and no exception to say so. The request now takes ONE
+    snapshot of copies and passes it down; `_evidence_plan` never reads the configuration; a later request takes a later snapshot."""
+
+    @staticmethod
+    def _renamed(sid, **fields):
+        servers = [
+            {"id": i, "name": f"kea-{n}", "ssh_host": f"10.0.0.{i}"}
+            for i, n in ((1, "a"), (2, "b"), (3, "c"), (4, "d"))
+        ]
+        servers[sid - 1].update(fields)
+        return servers
+
+    def test_the_same_ids_with_refreshed_dicts_between_requests(self, evidence, monkeypatch):
+        evidence["logs"][1] = _good("10:00:01.110", "0x1", "host-1")
+        first = ctx.read_log(MAC, allowed=True)
+        monkeypatch.setattr(extensions, "KEA_SERVERS", self._renamed(1))
+        ctx._log_cache.clear()
+        from jen.services import log_tail
+
+        log_tail.clear()
+        again = ctx.read_log(MAC, allowed=True)
+        assert first["server"] == again["server"] == {"id": 1, "name": "kea-a"}
+
+    def test_an_ssh_host_changed_before_a_request_is_the_host_that_request_reads(self, evidence, monkeypatch):
+        from jen.services import log_tail
+
+        asked = []
+        real = evidence["tail"]
+        monkeypatch.setattr(
+            "jen.services.kea_host.tail_log",
+            lambda server, path, lines, timeout=None, helper_only=False: (
+                asked.append(server["ssh_host"]) or real(server, path, lines, timeout, helper_only)
+            ),
+        )
+        ctx.read_log(MAC, allowed=True)
+        monkeypatch.setattr(extensions, "KEA_SERVERS", self._renamed(1, ssh_host="10.9.9.9", name="kea-moved"))
+        ctx._log_cache.clear()
+        log_tail.clear()
+        asked.clear()
+        view = ctx.read_log(OTHER, allowed=True)
+        assert "10.9.9.9" in asked and "10.0.0.1" not in asked and view["server"]["name"] == "kea-moved"
+
+    def test_an_ssh_host_changed_during_a_request_names_the_host_that_was_read(self, evidence, monkeypatch):
+        """The fake swaps KEA_SERVERS INSIDE the tail of server 1, and server 1's log is the only one with an exchange. The view names the server as it was
+        configured when the request began - the host whose log was read - not the one the swapped configuration calls server 1."""
+        real = evidence["tail"]
+
+        def tail(server, path, lines, timeout=None, helper_only=False):
+            if server["id"] == 1 and server["ssh_host"] == "10.0.0.1":
+                monkeypatch.setattr(extensions, "KEA_SERVERS", self._renamed(1, ssh_host="10.9.9.9", name="kea-moved"))
+            return real(server, path, lines, timeout, helper_only)
+
+        monkeypatch.setattr("jen.services.kea_host.tail_log", tail)
+        evidence["logs"][1] = _good("10:00:01.110", "0x1", "host-1")
+        view = ctx.read_log(MAC, allowed=True)
+        assert view["server"] == {"id": 1, "name": "kea-a"}, "the provenance is the host that was READ"
+        assert view["query"]["hostname"] == "host-1"
+        # the next request takes a later snapshot
+        ctx.clear_log_cache()
+        assert extensions.KEA_SERVERS[0]["name"] == "kea-moved"
+        assert ctx.read_log(OTHER, allowed=True)["server"] == {"id": 1, "name": "kea-moved"}
+
+    def test_a_server_removed_during_a_request_is_still_reported_from_the_snapshot(self, evidence, monkeypatch):
+        real = evidence["tail"]
+
+        def tail(server, path, lines, timeout=None, helper_only=False):
+            if server["id"] == 2:
+                monkeypatch.setattr(extensions, "KEA_SERVERS", [s for s in self._renamed(1) if s["id"] != 2])
+            return real(server, path, lines, timeout, helper_only)
+
+        monkeypatch.setattr("jen.services.kea_host.tail_log", tail)
+        evidence["logs"][2] = _good("10:00:02.110", "0x2", "host-2")
+        view = ctx.read_log(MAC, allowed=True)
+        assert view["state"] == "ok" and view["server"] == {"id": 2, "name": "kea-b"}, (
+            "it was configured when the request began, and its log was read"
+        )
+        assert [s["id"] for s in extensions.KEA_SERVERS] == [1, 3, 4]
+
+    def test_two_overlapping_requests_across_a_reload_each_keep_their_own_snapshot(self, evidence, monkeypatch):
+        import threading
+
+        evidence["logs"][1] = _good("10:00:01.110", "0x1", "host-1")
+        evidence["log_delay"] = {1: 0.4, 2: 0.4, 3: 0.4, 4: 0.4}
+        results = {}
+
+        def read(key, mac):
+            results[key] = ctx.read_log(mac, allowed=True)
+
+        first = threading.Thread(target=read, args=("first", MAC))
+        first.start()
+        time.sleep(0.15)
+        monkeypatch.setattr(extensions, "KEA_SERVERS", self._renamed(1, name="kea-renamed"))
+        second = threading.Thread(target=read, args=("second", OTHER))
+        second.start()
+        first.join(10)
+        second.join(10)
+        assert results["first"]["server"] == {"id": 1, "name": "kea-a"}, "the first request began before the reload"
+        assert results["second"]["server"]["name"] == "kea-renamed", "the second began after it"
+
+    def test_the_plan_never_reads_the_configuration_and_read_log_reads_it_once(self):
+        import inspect
+
+        source = inspect.getsource(ctx)
+        assert source.count("extensions.KEA_SERVERS") == 1, "one site: read_log's snapshot (self-check b)"
+        plan = inspect.getsource(ctx._evidence_plan)
+        assert "extensions" not in plan and "servers: list[dict]" in plan

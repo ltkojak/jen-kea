@@ -187,7 +187,7 @@ def _signature(servers: list[dict]) -> tuple:
     return tuple((_server_key(s), s.get("api_url"), s.get("ssh_host")) for s in servers)
 
 
-def _evidence_plan(deadline: float) -> tuple[list[dict], str | None]:
+def _evidence_plan(deadline: float, servers: list[dict]) -> tuple[list[dict], str | None]:
     """(servers in the order to read them, ha_order): the HA-ACTIVE server(s) first, then every other configured server in order. With one server (the
     usual case) that is the server and no HA question is asked. `ha_order` is None when the order is known, "partial" when some servers' HA probes did
     not answer in time (those are ordered after the ones that did, in configured order) and "unknown" when none did.
@@ -198,9 +198,13 @@ def _evidence_plan(deadline: float) -> tuple[list[dict], str | None]:
     server is seen at once - and (Q159) it stores whatever was LEARNED, partial or not.
 
     v5.68.0-beta.24 (Q159, item 5): the probes ran sequentially BEFORE the log budget started - N unreachable Control Agents cost 10 s each on top of
-    the 20 s. They now run on the evidence pool concurrently, against the SAME `deadline` the log reads use, capped at HA_PROBE_BUDGET_S."""
+    the 20 s. They now run on the evidence pool concurrently, against the SAME `deadline` the log reads use, capped at HA_PROBE_BUDGET_S.
+
+    v5.68.0-beta.26 (Q161, item 4): `servers` is the SNAPSHOT of the configuration that `read_log` took for this request, and this function never reads
+    the server configuration itself. It used to read it again after `read_log` had read it: a configuration reload between the two, with the same ids,
+    mapped the future that was read from the OLD host onto the NEW server's name and clock offset - wrong provenance, and no exception to say so."""
     global _evidence_memo
-    servers = list(extensions.KEA_SERVERS or [])
+    servers = list(servers)
     if len(servers) < 2:
         return servers, None
     signature = _signature(servers)
@@ -238,11 +242,6 @@ def _evidence_plan(deadline: float) -> tuple[list[dict], str | None]:
     _evidence_memo = (time.monotonic(), signature, keys, ha_order)
     by_key = {_server_key(s): s for s in servers}
     return [by_key[k] for k in keys], ha_order
-
-
-def _evidence_servers() -> list[dict]:
-    """The servers in reading order (see `_evidence_plan`), without the `ha_order` note."""
-    return _evidence_plan(time.monotonic() + EVIDENCE_BUDGET_S)[0]
 
 
 def _clock_offset_s(server: dict) -> float | None:
@@ -322,10 +321,13 @@ def read_log(mac: str, *, allowed: bool, fetch: bool = True) -> dict:
     if not allowed:
         return {**empty, "state": "not-allowed", "message": ""}
     # v5.68.0-beta.21 (Q156): `allowed`, the cache and `fetch` are decided BEFORE anything asks a server a question. The order of the servers
-    # (`_evidence_servers`) needs an HA `status-get` per server - a 10 s timeout for one whose Control Agent is down - and it used to be computed
+    # (`_evidence_plan`) needs an HA `status-get` per server - a 10 s timeout for one whose Control Agent is down - and it used to be computed
     # first, so the Overview's "never a fresh round trip" read (`fetch=False`) and every cached read paid for it. The two states that only need the
     # CONFIGURED servers, not their order, are still answered from the configuration alone.
-    configured = list(extensions.KEA_SERVERS or [])
+    # v5.68.0-beta.26 (Q161, item 4): the configuration is read ONCE per request, here, as a snapshot of copies. Everything below - the tails that are
+    # submitted, the order the probes give, the names and clock offsets the view reports - is taken from THIS list, so a configuration reload in the middle
+    # of a request cannot attach a result that was read from one host to a server that is now another. The next request takes a later snapshot.
+    configured = [dict(s) for s in (extensions.KEA_SERVERS or [])]
     if not configured:
         return {**empty, "state": "no-server", "message": "No Kea server is configured."}
     if not any(s.get("ssh_host") for s in configured):
@@ -340,10 +342,9 @@ def read_log(mac: str, *, allowed: bool, fetch: bool = True) -> dict:
     # are submitted at once with them - a probe that never answers cannot start the clock late. Every SSH server is asked AT ONCE (v5.68.0-beta.23,
     # Q158); the loop below reads the answers in the order the probes gave, each against the same deadline.
     deadline = time.monotonic() + EVIDENCE_BUDGET_S
-    configured_servers = list(extensions.KEA_SERVERS or [])
-    ssh_servers = [server for server in configured_servers if server.get("ssh_host")]
-    pending = {_server_key(server): _pool(len(configured_servers)).submit(_tail_one, server) for server in ssh_servers}
-    servers, ha_order = _evidence_plan(deadline)
+    ssh_servers = [server for server in configured if server.get("ssh_host")]
+    pending = {_server_key(server): _pool(len(configured)).submit(_tail_one, server) for server in ssh_servers}
+    servers, ha_order = _evidence_plan(deadline, configured)
     complete = []  # (server, tx, utc time or None) for every reachable server whose log holds a COMPLETE exchange of the client
     first_ok = None  # a server whose log was read but never named the client
     fallback = None  # an exchange that has no class list or packet dump (the client id only)
