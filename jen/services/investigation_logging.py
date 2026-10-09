@@ -87,11 +87,30 @@ _ENTRY_STR_FIELDS = ("ssh_host", "kea_conf", "by", "mode", "error", "seen", "obs
 _ENTRY_BOOL_FIELDS = ("removed", "marker_invalid", "contradiction", "restarted")
 
 
+_LEGACY_ABSENT_KEYS = ("observed_at", "seen", "reload_tries", "restarted", "contradiction")
+_legacy_logged: set = set()
+
+
+def _is_legacy_entry(e) -> bool:
+    """An entry written before beta.9 (no file / daemon) or beta.23 (no observations): it carries none of the keys those releases added. `_record`
+    normalises it; anything else that lacks `file` or `daemon` is damaged (v5.68.0-beta.26, Q161, item 3)."""
+    return isinstance(e, dict) and not any(k in e for k in _LEGACY_ABSENT_KEYS)
+
+
 def _valid_entry(e) -> bool:
     """Is `e` an index entry this module could have written? (v5.68.0-beta.25, Q160, item 4.) `_record` used to validate the outer shape only, so
     `{"servers": {"2": {}}}` or `{"servers": {"2": null}}` read as healthy and `turn_on`'s `others = [e["name"] ...]` raised, as did every reader of
     `entry.get(...)` on a non-dict. Every field is either absent or of the type `_entry_for` / `observe` write."""
     if not isinstance(e, dict) or not isinstance(e.get("name"), str) or not isinstance(e.get("until"), str):
+        return False
+    # v5.68.0-beta.26 (Q161, item 3): the fields that DECIDE what Jen does are checked for meaning, not just type. `until` any string passed (and an
+    # unreadable one reads as "due now", so the sweep would restore a live session), `restore` any dict passed (`{}` is not a way back), `file` and `daemon`
+    # could be absent (and default to "debug"), and `reload_tries` any int (a negative one is more reloads than the bound allows).
+    if _edit._parse_until(e["until"]) is None:
+        return False
+    if "restore" in e and _edit.restore_problem(e["restore"]):
+        return False
+    if ("file" not in e or "daemon" not in e) and not _is_legacy_entry(e):
         return False
     if e.get("file", "debug") not in ("debug", "restored"):
         return False
@@ -103,7 +122,11 @@ def _valid_entry(e) -> bool:
         return False
     if any(k in e and not isinstance(e[k], bool) for k in _ENTRY_BOOL_FIELDS):
         return False
-    if "reload_tries" in e and (isinstance(e["reload_tries"], bool) or not isinstance(e["reload_tries"], int)):
+    if "reload_tries" in e and (
+        isinstance(e["reload_tries"], bool)
+        or not isinstance(e["reload_tries"], int)
+        or not 0 <= e["reload_tries"] <= RELOAD_TRIES + 1
+    ):
         return False
     if "restore" in e and not isinstance(e["restore"], dict):
         return False
@@ -134,6 +157,20 @@ def _record() -> dict:
             str(sid) for sid, e in data["servers"].items() if not _valid_entry(e)
         ]  # Q160 item 4: every entry, not just the outer shape
         damaged = bool(bad)
+        if not damaged:
+            for sid, e in data["servers"].items():
+                if (
+                    "file" not in e or "daemon" not in e
+                ):  # the defined legacy shape (Q161): normalised, and said once per server
+                    e.setdefault("file", "debug")
+                    e.setdefault("daemon", "debug")
+                    e.setdefault("pending", None)
+                    if sid not in _legacy_logged:
+                        _legacy_logged.add(sid)
+                        logger.info(
+                            "investigation_logging: the entry for server %s predates the file/daemon fields; read as file=debug daemon=debug",
+                            sid,
+                        )
     servers = data["servers"] if (raw != "" and not damaged) else {}
     return {"servers": servers, "damaged": damaged, "raw": raw if damaged else "", "bad": bad}
 
@@ -966,7 +1003,13 @@ def blocking_removal(server_ids) -> list[dict]:
     still owed - for the settings routes that would stop Jen from reaching them. Removing such a server is refused until turn_off
     succeeds: Jen would otherwise lose the only way it has to put the log level back."""
     wanted = {str(i) for i in server_ids}
-    return [{"server_id": sid, **entry} for sid, entry in _record()["servers"].items() if sid in wanted]
+    record = _record()
+    if record.get("damaged"):
+        # v5.68.0-beta.26 (Q161, item 1): an unreadable record is not evidence that this server is NOT at investigation DEBUG. beta.24 made the record
+        # `damaged` and this reader still read its empty server map as "nothing blocks the removal" - so a server running DEBUG 55 whose entry was in the
+        # unreadable value could be removed, and with it the only way to put it back.
+        return [{"server_id": sid, "name": f"Server {sid}", "damaged_record": True} for sid in sorted(wanted)]
+    return [{"server_id": sid, **entry} for sid, entry in record["servers"].items() if sid in wanted]
 
 
 def removal_refusal(server_ids, actor: str = "") -> str:
@@ -974,6 +1017,17 @@ def removal_refusal(server_ids, actor: str = "") -> str:
     blocked = blocking_removal(server_ids)
     if not blocked:
         return ""
+    if any(b.get("damaged_record") for b in blocked):
+        _audit(
+            "INVESTIGATION_LOGGING_REMOVAL_REFUSED",
+            ", ".join(b["name"] for b in blocked),
+            "removal refused while Jen's record of investigation logging is unreadable"
+            + (f" (by {actor})" if actor else ""),
+        )
+        return (
+            "Jen's record of investigation logging cannot be read, so it cannot tell whether this server is at investigation DEBUG. Repair the record "
+            "first (Health → DEBUG logging left on) — removing the server now could leave its Kea at DEBUG with no way for Jen to put it back."
+        )
     names = ", ".join(b.get("name") or f"Server {b['server_id']}" for b in blocked)
     _audit(
         "INVESTIGATION_LOGGING_REMOVAL_REFUSED",
@@ -1005,6 +1059,8 @@ def forget(server_id, actor: str = "") -> bool:
     really gone."""
     with _lock:
         record = _record()
+        if record.get("damaged"):
+            return False  # nothing in an unreadable record can be forgotten (Q161): it is rebuilt first
         entry = record["servers"].get(str(server_id))
         if not entry:
             return False
@@ -1154,6 +1210,12 @@ def _file_carries_marker(server: dict) -> bool | None:
 _recovery_status: dict = {"at": "", "problems": [], "rebuilt": None}
 
 
+def record_banner() -> dict:
+    """What the Servers page needs about the record: whether it is unreadable, and what the last rebuild could not examine."""
+    status = recovery_status()
+    return {"damaged": bool(_record().get("damaged")), "problems": status["problems"], "at": status["at"]}
+
+
 def recovery_status() -> dict:
     return {
         "at": _recovery_status["at"],
@@ -1218,6 +1280,30 @@ def _recovery_candidates(known: dict, now: datetime) -> tuple[dict, list[str]]:
     return entries, problems
 
 
+def acknowledge_damaged(actor: str, *, all_subnets: bool = False) -> bool:
+    """A person's decision that the unreadable record may be replaced by an empty one (v5.68.0-beta.26, Q161, item 2). Allowed only for an admin with
+    access to every subnet (the caller says so), only while the record is damaged, and only when the last rebuild recorded something it could not examine
+    - there is a thing a person had to decide about. The old value is kept in `investigation_logging.damaged`, an EMPTY record is written, the problems
+    and the actor go into the audit row, and the recovery status is cleared. Returns True when the record was replaced."""
+    if not all_subnets:
+        return False
+    with _lock:
+        record = _record()
+        problems = list(_recovery_status["problems"])
+        if not record.get("damaged") or not problems:
+            return False
+        if not _save({"servers": {}, "damaged": True, "raw": record["raw"]}):
+            return False
+        _recovery_status.update(at="", problems=[], rebuilt=None)
+    _audit(
+        "INVESTIGATION_LOGGING_RECORD_ACKNOWLEDGED",
+        actor or "an admin",
+        "replaced Jen's unreadable record of investigation logging with an empty one; could not be examined: "
+        + "; ".join(problems),
+    )
+    return True
+
+
 def _recover(record: dict, known: dict, now: datetime, summary: dict) -> dict:
     """The damaged-index recovery (v5.68.0-beta.25, Q160, items 1 and 2): a SEPARATE phase that writes nothing until it is complete. beta.24 rebuilt the
     record inside the ordinary full scan, where every discovery was written at once and the first write cleared the damaged flag - one adopted server
@@ -1225,7 +1311,20 @@ def _recover(record: dict, known: dict, now: datetime, summary: dict) -> dict:
     daemon could not be read counted as examined. Now every server's file and daemon are examined into a candidate; if any could not be, NOTHING is
     written and the record stays damaged (turn-on refused, Health naming the server, the next minute's sweep trying again); if all were, ONE `_save`
     stores the candidate, keeping the old value in `investigation_logging.damaged` first."""
+    no_ssh = [
+        f"{_name(s)}: no SSH, so its file and daemon cannot be examined"
+        for s in (extensions.KEA_SERVERS or [])
+        if not s.get("ssh_host")
+    ]
+    if not known:
+        # v5.68.0-beta.26 (Q161, item 2): with no SSH server there is nothing to examine, and "nothing examined" used to read as "nothing found": the
+        # damaged value was replaced by an empty healthy record. It stays damaged until a PERSON says (acknowledge_damaged).
+        problems = ["no Kea server with SSH is configured, so nothing could be examined"] + no_ssh
+        _recovery_status.update(at=_iso(now), problems=problems, rebuilt=False)
+        summary["errors"].extend(problems)
+        return summary
     entries, problems = _recovery_candidates(known, now)
+    problems = problems + no_ssh  # a half-configured server (no ssh_host) holds the damaged state too
     if problems:
         _recovery_status.update(at=_iso(now), problems=problems, rebuilt=False)
         summary["errors"].extend(problems)

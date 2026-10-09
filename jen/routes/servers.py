@@ -264,6 +264,7 @@ def servers():
             for e in __inv.active()
             if e.get("marker_invalid") and not e.get("removed")
         ],
+        investigation_record=__inv.record_banner(),
         # fixup 4 (F1/F3/F5): an entry whose config file is restored and whose running Kea is at neither level, or that Jen has stopped trying to move, is
         # for a PERSON - with the Forget button, which looks before it lets go
         investigation_hand=[
@@ -339,6 +340,28 @@ def investigation_logging(server_id, action):
             "success",
         )
     return done()
+
+
+@bp.route("/servers/investigation-logging/acknowledge-damaged", methods=["POST"])
+@login_required
+@_admin_required
+def investigation_logging_acknowledge_damaged():
+    """v5.68.0-beta.26 (Q161, item 2) - the explicit decision. Jen's record of investigation logging is unreadable and its rebuild could not examine every
+    Kea server (none has SSH, or one was unreachable); an admin with access to every subnet who has checked each Kea's kea-dhcp4 logger by hand says so, and
+    the record is replaced by an empty one (the old value is kept, the decision is audited)."""
+    if not current_user.all_subnets:
+        flash("Only an admin with access to all subnets can do this.", "error")
+    elif __inv.acknowledge_damaged(current_user.username, all_subnets=current_user.all_subnets):
+        flash(
+            "Done. Jen's record of investigation logging was replaced by an empty one; the old value is kept in the settings table.",
+            "success",
+        )
+    else:
+        flash(
+            "Nothing to acknowledge: the record is readable, or the rebuild has not recorded a server it could not examine.",
+            "error",
+        )
+    return redirect(url_for("servers.servers"))
 
 
 @bp.route("/servers/investigation-logging/forget/<int:server_id>", methods=["POST"])

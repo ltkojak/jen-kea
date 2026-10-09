@@ -69,6 +69,22 @@
 </div>
 {% endif %}
 
+{% if history_allowed and investigation_record and investigation_record.damaged %}
+{# v5.68.0-beta.26 (Q161): Jen's record of investigation logging is unreadable; an admin who has checked every Kea by hand can say so #}
+<div class="alert alert-warning u-3bceda">
+    <div>
+    {{ icon("siren") }} <strong>Jen's record of investigation logging is unreadable.</strong>
+    Turning logging on or off, and removing a Kea server, are refused until it is rebuilt from the servers.
+    {% if investigation_record.problems %}The last rebuild attempt{% if investigation_record.at %} ({{ investigation_record.at }}){% endif %} could not examine: {{ investigation_record.problems|join("; ") }}.
+    <form method="POST" action="/servers/investigation-logging/acknowledge-damaged" class="u-8a77e5">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-sm btn-secondary" data-confirm="I have checked every Kea's kea-dhcp4 logger by hand and none is at investigation DEBUG. Replace Jen's unreadable record with an empty one? The old value is kept in the settings table.">I checked every Kea by hand</button>
+    </form>
+    {% else %}The rebuild has not found anything it could not examine yet; it retries every minute.{% endif %}
+    </div>
+</div>
+{% endif %}
+
 {% if history_allowed and investigation_hand %}
 {# v5.68.0-beta.23 (Q158 fixup 4): the config file is restored but the running Kea is at neither level (or Jen has tried its reloads and its one restart); a person decides #}
 <div class="alert alert-warning u-3bceda">

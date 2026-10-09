@@ -312,8 +312,9 @@ def _debug_logging_left_on(ctx) -> Check:
             "`investigation_logging.damaged`. Turning logging on or off is refused until then."
         )
         c.fix_hint = (
-            "Fix whatever stops Jen reading the server named (SSH, or the Kea Control Agent); the next minute's scan retries. The old value is in the "
-            "settings table."
+            "Fix whatever stops Jen reading the server named (SSH, or the Kea Control Agent); the next minute's scan retries. If no server can be examined "
+            "(none has SSH), an admin with access to every subnet who has checked each Kea by hand presses the button on the Servers page. The old value is in "
+            "the settings table."
         )
         return c
     entries = __inv.active()

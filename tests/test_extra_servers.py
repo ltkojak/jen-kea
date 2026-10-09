@@ -507,3 +507,55 @@ class TestRemovingAServerWithInvestigationLoggingOn:
             assert b"turn it off from Servers first" in r.data
         finally:
             self._clear()
+
+
+class TestRemovingAServerWhileTheInvestigationRecordIsUnreadable:
+    """v5.68.0-beta.26 (Q161, item 1): an unreadable record is not evidence that a server is NOT at investigation DEBUG. Both settings routes already stop on a
+    non-empty refusal; `blocking_removal` now returns one for a damaged record."""
+
+    @staticmethod
+    def _damage(raw="{broken"):
+        from jen.models import user as _user
+
+        _user.set_global_setting("investigation_logging", raw)
+
+    @staticmethod
+    def _clear():
+        from jen.models import user as _user
+
+        _user.set_global_setting("investigation_logging", "")
+
+    def test_removing_an_extra_server_is_refused_with_the_sentence_and_nothing_is_written(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        _seed((2, {"api_url": "http://s2:8000", "name": "Standby", "ssh_host": "10.0.0.2"}))
+        self._damage()
+        try:
+            r = logged_in_client.post(
+                "/settings/infrastructure/save-extra-servers", data=_rows(), follow_redirects=True
+            )
+            assert b"cannot be read, so it cannot tell whether this server is at investigation DEBUG" in r.data
+            assert _on_disk(isolated_config).has_section("kea_server_2"), "nothing was written"
+            with db.cursor() as cur:
+                cur.execute("SELECT COUNT(*) AS n FROM audit_log WHERE action='INVESTIGATION_LOGGING_REMOVAL_REFUSED'")
+                assert cur.fetchone()["n"] == 1
+        finally:
+            self._clear()
+
+    def test_blanking_the_primary_ssh_host_is_refused(self, logged_in_client, db, mock_kea, isolated_config):
+        self._damage('{"servers": []}')
+        try:
+            r = logged_in_client.post(
+                "/settings/infrastructure/save-ssh",
+                data={"host": "", "user": "", "kea_conf": ""},
+                follow_redirects=True,
+            )
+            assert b"cannot be read, so it cannot tell whether this server is at investigation DEBUG" in r.data
+        finally:
+            self._clear()
+
+    def test_a_valid_empty_record_allows_the_removal(self, logged_in_client, db, mock_kea, isolated_config):
+        _seed((2, {"api_url": "http://s2:8000", "name": "Standby", "ssh_host": "10.0.0.2"}))
+        self._clear()
+        logged_in_client.post("/settings/infrastructure/save-extra-servers", data=_rows(), follow_redirects=True)
+        assert not _on_disk(isolated_config).has_section("kea_server_2")

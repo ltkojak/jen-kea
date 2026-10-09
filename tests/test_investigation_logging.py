@@ -264,6 +264,10 @@ def world(monkeypatch):
     monkeypatch.setattr(inv._changeset, "apply_change", fake_apply)
     monkeypatch.setattr(inv, "_now", lambda: NOW)
     inv._runs["n"] = 0
+    inv._recovery_status.update(
+        at="", problems=[], rebuilt=None
+    )  # module state: one test's rebuild attempt is not the next one's
+    inv._legacy_logged.clear()
     return type("World", (), {"store": store, "servers": servers, "daemons": daemons, "db": db})
 
 
@@ -2309,8 +2313,9 @@ class TestEveryStoredEntryIsValidated:
 
     def test_the_malformed_entry_is_never_read_by_row_or_readers(self, world):
         world.store[inv.RECORD_KEY] = '{"servers": {"1": {"name": "kea-a", "until": "x"}, "2": null}}'
-        assert inv.blocking_removal([1, 2]) == [], "no reader reaches the entries of a damaged record"
-        assert inv.removal_refusal([1]) == "" and inv.forget(2) is False
+        # (Q161 flipped this: the removal decision used to read the empty map of a damaged record as "nothing blocks it")
+        assert [b["server_id"] for b in inv.blocking_removal([1, 2])] == ["1", "2"]
+        assert inv.removal_refusal([1]) != "" and inv.forget(2) is False
 
 
 class TestTheRecoveryBlockHasNoWrites:
@@ -2339,3 +2344,420 @@ class TestTheRecoveryBlockHasNoWrites:
         record = inv._record()
         assert inv._put(record, 1, {"name": "x", "until": ""}) is False and inv._drop(record, 1) is True
         assert world.store[inv.RECORD_KEY] == "{broken"
+
+
+class TestRemovalIsRefusedWhileTheRecordIsDamaged:
+    """Item 1: `blocking_removal` read `_record()["servers"]`, got `{}` from a damaged record, and `removal_refusal` answered "" - so a server at DEBUG 55 whose
+    entry was in the unreadable value could be removed from Settings, and with it the only way to put it back. Every assertion is on the stored record and the
+    audit row, not only the return."""
+
+    DAMAGED = "{this was the record"
+
+    @staticmethod
+    def _audits(world, action):
+        return [a for a in world.store.get("_audit", []) if a[0] == action]
+
+    def test_removing_the_primary_ssh_server_is_refused_and_audited(self, world):
+        world.store[inv.RECORD_KEY] = self.DAMAGED
+        text = inv.removal_refusal([1], actor="alice")
+        assert "cannot be read, so it cannot tell whether this server is at investigation DEBUG" in text
+        assert (
+            "Repair the record first (Health → DEBUG logging left on)" in text
+            and "no way for Jen to put it back" in text
+        )
+        (row,) = self._audits(world, "INVESTIGATION_LOGGING_REMOVAL_REFUSED")
+        assert (
+            row[1] == "Server 1"
+            and "removal refused while Jen's record of investigation logging is unreadable (by alice)" in row[2]
+        )
+        assert world.store[inv.RECORD_KEY] == self.DAMAGED, "nothing was written"
+
+    def test_removing_an_extra_server_is_refused(self, world):
+        world.store[inv.RECORD_KEY] = '{"servers": []}'
+        assert inv.removal_refusal([2], actor="alice") != ""
+        assert (
+            len(self._audits(world, "INVESTIGATION_LOGGING_REMOVAL_REFUSED")) == 1
+            and world.store[inv.RECORD_KEY] == '{"servers": []}'
+        )
+
+    def test_removing_one_of_several_is_refused_and_all_are_named(self, world):
+        world.store[inv.RECORD_KEY] = self.DAMAGED
+        assert [b["server_id"] for b in inv.blocking_removal([2, 3, 4])] == ["2", "3", "4"]
+        assert all(b["damaged_record"] for b in inv.blocking_removal([2, 3, 4]))
+        assert inv.removal_refusal([2, 3, 4]) != ""
+        (row,) = self._audits(world, "INVESTIGATION_LOGGING_REMOVAL_REFUSED")
+        assert row[1] == "Server 2, Server 3, Server 4"
+
+    def test_a_valid_empty_record_allows_removal(self, world):
+        for raw in ("", '{"servers": {}}'):
+            world.store[inv.RECORD_KEY] = raw
+            assert inv.removal_refusal([1], actor="alice") == "" and inv.blocking_removal([1]) == []
+        assert self._audits(world, "INVESTIGATION_LOGGING_REMOVAL_REFUSED") == []
+
+    def test_a_valid_record_with_no_entry_for_the_target_allows_removal(self, world):
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        stored = world.store[inv.RECORD_KEY]
+        assert inv.removal_refusal([2]) == "" and world.store[inv.RECORD_KEY] == stored
+        assert inv.removal_refusal([1]) != "", "and the server WITH an entry is still refused"
+
+    def test_a_rebuilt_record_allows_removal_again(self, world):
+        world.store[inv.RECORD_KEY] = self.DAMAGED
+        assert inv.removal_refusal([1]) != ""
+        inv.sweep(now=NOW, full=True)  # every server examined, nothing found: rebuilt
+        assert inv._record()["damaged"] is False and world.store[inv.RECORD_KEY] == ""
+        assert inv.removal_refusal([1]) == ""
+
+    def test_forget_and_turn_off_decline_a_damaged_record_too(self, world):
+        world.store[inv.RECORD_KEY] = self.DAMAGED
+        assert inv.forget(1) is False and inv.turn_off(world.servers[0])["ok"] is False
+        assert world.store[inv.RECORD_KEY] == self.DAMAGED
+
+
+class TestZeroServersIsNotARecovery:
+    """Item 2: `_recover` over an empty set of SSH servers found no entries and no problems, and `_save` wrote an empty healthy record - nothing had been
+    examined. It stays damaged until a PERSON says so."""
+
+    DAMAGED = "{this was the record"
+
+    @staticmethod
+    def _audits(world, action):
+        return [a for a in world.store.get("_audit", []) if a[0] == action]
+
+    def test_no_ssh_server_at_all_stays_damaged_and_health_says_so(self, world):
+        from jen.services import health
+
+        world.store[inv.RECORD_KEY] = self.DAMAGED
+        world.servers.clear()
+        out = inv.sweep(now=NOW, full=True)
+        assert out["errors"] == ["no Kea server with SSH is configured, so nothing could be examined"]
+        assert world.store[inv.RECORD_KEY] == self.DAMAGED and inv.DAMAGED_KEY not in world.store
+        c = health._debug_logging_left_on({})
+        assert c.status == "fail" and "no Kea server with SSH is configured" in c.detail
+
+    def test_only_servers_without_ssh_stay_damaged_naming_each(self, world):
+        world.store[inv.RECORD_KEY] = self.DAMAGED
+        for s in world.servers:
+            s["ssh_host"] = ""
+        out = inv.sweep(now=NOW, full=True)
+        assert "no Kea server with SSH is configured, so nothing could be examined" in out["errors"]
+        assert "kea-a: no SSH, so its file and daemon cannot be examined" in out["errors"]
+        assert "kea-b: no SSH, so its file and daemon cannot be examined" in out["errors"]
+        assert world.store[inv.RECORD_KEY] == self.DAMAGED
+
+    def test_a_half_configured_server_holds_the_damaged_state(self, world):
+        world.store[inv.RECORD_KEY] = self.DAMAGED
+        world.servers[1]["ssh_host"] = ""  # kea-b has no SSH; kea-a is examined fine
+        out = inv.sweep(now=NOW, full=True)
+        assert out["errors"] == ["kea-b: no SSH, so its file and daemon cannot be examined"]
+        assert world.store[inv.RECORD_KEY] == self.DAMAGED and inv._record()["damaged"] is True
+        world.servers[1]["ssh_host"] = "10.0.0.2"  # fixed: the next minute rebuilds it
+        inv.sweep(now=NOW + timedelta(minutes=1), full=True)
+        assert world.store[inv.RECORD_KEY] == "" and inv._record()["damaged"] is False
+
+    def test_every_server_verified_with_no_markers_clears_it(self, world):
+        world.store[inv.RECORD_KEY] = self.DAMAGED
+        assert inv.sweep(now=NOW, full=True)["errors"] == []
+        assert world.store[inv.RECORD_KEY] == "" and world.store[inv.DAMAGED_KEY] == self.DAMAGED
+
+    def test_a_verified_daemon_at_debug_is_adopted(self, world):
+        world.store[inv.RECORD_KEY] = self.DAMAGED
+        world.daemons[1].loaded = _marked_logger("DEBUG", 55)
+        assert inv.sweep(now=NOW, full=True)["adopted"] == ["kea-a"]
+        assert list(_servers_of(world.store[inv.RECORD_KEY])) == ["1"]
+
+    def test_the_acknowledgement_by_a_restricted_admin_is_refused(self, world):
+        world.store[inv.RECORD_KEY] = self.DAMAGED
+        world.servers.clear()
+        inv.sweep(now=NOW, full=True)
+        assert inv.acknowledge_damaged("bob", all_subnets=False) is False and inv.acknowledge_damaged("bob") is False
+        assert (
+            world.store[inv.RECORD_KEY] == self.DAMAGED
+            and self._audits(world, "INVESTIGATION_LOGGING_RECORD_ACKNOWLEDGED") == []
+        )
+
+    def test_the_acknowledgement_by_an_all_subnets_admin_writes_an_empty_record_and_audits_it(self, world):
+        from jen.services import health
+
+        world.store[inv.RECORD_KEY] = self.DAMAGED
+        world.servers.clear()
+        inv.sweep(now=NOW, full=True)
+        assert health._debug_logging_left_on({}).status == "fail"
+        assert inv.acknowledge_damaged("alice", all_subnets=True) is True
+        assert world.store[inv.RECORD_KEY] == "" and world.store[inv.DAMAGED_KEY] == self.DAMAGED, (
+            "empty record written, old value kept"
+        )
+        (row,) = self._audits(world, "INVESTIGATION_LOGGING_RECORD_ACKNOWLEDGED")
+        assert row[1] == "alice" and "no Kea server with SSH is configured, so nothing could be examined" in row[2]
+        assert inv.recovery_status() == {"at": "", "problems": [], "rebuilt": None}
+        assert inv._record()["damaged"] is False and health._debug_logging_left_on({}).status == "ok"
+        print(f"ACK audit row: {row}")
+
+    def test_the_acknowledgement_is_refused_when_nothing_is_damaged_or_no_problem_was_recorded(self, world):
+        assert inv.acknowledge_damaged("alice", all_subnets=True) is False, "nothing damaged"
+        world.store[inv.RECORD_KEY] = self.DAMAGED
+        assert inv.acknowledge_damaged("alice", all_subnets=True) is False, (
+            "damaged, but the rebuild has not recorded anything it could not examine"
+        )
+        assert (
+            world.store[inv.RECORD_KEY] == self.DAMAGED
+            and self._audits(world, "INVESTIGATION_LOGGING_RECORD_ACKNOWLEDGED") == []
+        )
+
+    def test_after_the_acknowledgement_logging_works_again(self, world):
+        world.store[inv.RECORD_KEY] = self.DAMAGED
+        world.servers[1]["ssh_host"] = ""
+        inv.sweep(now=NOW, full=True)
+        assert inv.acknowledge_damaged("alice", all_subnets=True)
+        assert inv.turn_on(world.servers[0], 5)["ok"] and [e["name"] for e in inv.active()] == ["kea-a"]
+
+    def test_the_servers_page_banner_shows_the_button_only_with_recorded_problems(self, world):
+        world.store[inv.RECORD_KEY] = self.DAMAGED
+        assert inv.record_banner() == {"damaged": True, "problems": [], "at": ""}
+        world.servers.clear()
+        inv.sweep(now=NOW, full=True)
+        banner = inv.record_banner()
+        assert banner["damaged"] and banner["problems"] == [
+            "no Kea server with SSH is configured, so nothing could be examined"
+        ]
+
+
+class TestTheEntryValidatorChecksWhatTheFieldsMean:
+    """Item 3: `_valid_entry` checked types only: `until: "gibberish"` passed (and `_parse_until` reads it as due now), `restore: {}` passed although it is no
+    way back, `file` and `daemon` could be absent (and defaulted), `reload_tries` was any int. The fields that decide what Jen does are validated for meaning."""
+
+    @staticmethod
+    def _entry(**over):
+        base = {
+            "name": "kea-a",
+            "until": FUTURE,
+            "file": "debug",
+            "daemon": "debug",
+            "pending": None,
+            "ssh_host": "10.0.0.1",
+        }
+        base.update(over)
+        return base
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            {"until": "gibberish"},
+            {"until": ""},
+            {"until": 5},
+            {"restore": {}},
+            {"restore": {"severity": "INFO"}},
+            {"restore": {"created": False}},
+            {"observed_at": "2026-10-04T12:00:00+00:00", "file": None},
+            {"reload_tries": -1},
+            {"reload_tries": 99},
+            {"reload_tries": 2, "daemon": None},
+        ],
+        ids=[
+            "until-gibberish",
+            "until-empty",
+            "until-not-text",
+            "restore-empty",
+            "restore-missing-debuglevel",
+            "restore-created-false",
+            "file-not-a-state",
+            "reload-tries-negative",
+            "reload-tries-beyond-the-bound",
+            "daemon-not-a-state",
+        ],
+    )
+    def test_each_of_the_ten_cases_is_damaged_and_nothing_raises(self, world, bad):
+        import json
+
+        from jen.services import health
+
+        entry = self._entry(**bad)
+        world.store[inv.RECORD_KEY] = json.dumps({"servers": {"2": entry}})
+        record = inv._record()
+        assert record["damaged"] is True and record["bad"] == ["2"] and record["servers"] == {}
+        assert inv.turn_on(world.servers[0], 5)["ok"] is False, "a second session is refused"
+        assert health._debug_logging_left_on({}).status == "fail" and inv.active() == []
+        inv.sweep(now=NOW)  # does not raise: it is the recovery, and it repairs it
+        assert inv._record()["damaged"] is False and world.store[inv.RECORD_KEY] == ""
+
+    def test_an_entry_written_by_entry_for_today_is_valid(self, world):
+        entry = inv._entry_for(world.servers[0], FUTURE, "alice")
+        assert inv._valid_entry(entry) and not inv._is_legacy_entry({**entry, "reload_tries": 1})
+
+    def test_the_bound_is_inclusive(self):
+        assert inv._valid_entry(self._entry(reload_tries=0)) and inv._valid_entry(
+            self._entry(reload_tries=inv.RELOAD_TRIES + 1)
+        )
+        assert not inv._valid_entry(self._entry(reload_tries=inv.RELOAD_TRIES + 2))
+
+    def test_the_legacy_shape_is_normalised_not_damaged(self, world, caplog):
+        import json
+        import logging
+
+        legacy = {
+            "name": "kea-a",
+            "until": FUTURE,
+            "ssh_host": "10.0.0.1",
+            "by": "alice",
+        }  # before beta.9: no file, no daemon, no observations
+        assert inv._valid_entry(legacy) and inv._is_legacy_entry(legacy)
+        world.store[inv.RECORD_KEY] = json.dumps({"servers": {"1": legacy}})
+        inv._legacy_logged.discard("1")
+        with caplog.at_level(logging.INFO, logger=inv.logger.name):
+            record = inv._record()
+            inv._record()
+        assert record["damaged"] is False
+        assert (
+            record["servers"]["1"]["file"],
+            record["servers"]["1"]["daemon"],
+            record["servers"]["1"]["pending"],
+        ) == ("debug", "debug", None)
+        assert caplog.text.count("predates the file/daemon fields") == 1, "said once"
+        (row,) = inv.active(NOW)
+        assert row["file"] == "debug" and row["daemon"] == "debug" and row["stuck"] is False
+
+    def test_a_file_less_entry_that_has_observation_keys_is_not_legacy(self):
+        assert not inv._valid_entry({"name": "kea-a", "until": FUTURE, "seen": "INFO / debuglevel 0"})
+        assert not inv._valid_entry({"name": "kea-a", "until": FUTURE, "restarted": True, "daemon": "debug"})
+
+
+# ── v5.68.0-beta.26 (Q161): an unreadable record is never evidence of anything - enforced over EVERY reader ──────────────────────────
+
+
+#: Readers of `_record()` that may read an empty server map without checking `damaged`, each with why it is safe. A function NOT on this list that reads the
+#: record must test `damaged` before it uses `["servers"]`. `blocking_removal` is deliberately not here: it DECIDES, and an empty map is the wrong answer.
+_READ_ONLY_RECORD_READERS = {
+    "active": "it renders (banners, the Servers page, the Health row's list) and decides nothing; a damaged record has no rows to show, and the Health row, "
+    "turn-on, turn-off, removal and the sweep each test `damaged` themselves",
+}
+
+
+class TestEveryReaderOfTheRecordHandlesDamaged:
+    """Items 1 and 2 were one mistake: `damaged` (beta.24) was applied to the readers of the index the spec named and not to all of them - `blocking_removal`
+    read `_record()["servers"]`, got `{}`, and let a server at DEBUG 55 be removed. The lease definition of beta.17 had the same shape and was closed by a
+    whole-tree source test; this is that test for the record, so the next state cannot miss a reader without CI going red."""
+
+    @staticmethod
+    def _tree(relpath):
+        import ast
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        return ast.parse((root / relpath).read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _is_record_call(node):
+        import ast
+
+        f = node.func if isinstance(node, ast.Call) else None
+        return (isinstance(f, ast.Name) and f.id == "_record") or (isinstance(f, ast.Attribute) and f.attr == "_record")
+
+    @staticmethod
+    def _damaged_check_line(fn):
+        """The first line in `fn` that tests `damaged` (`.get("damaged")` or `["damaged"]`), or None."""
+        import ast
+
+        lines = []
+        for n in ast.walk(fn):
+            is_get = isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "get"
+            if is_get and n.args and isinstance(n.args[0], ast.Constant) and n.args[0].value == "damaged":
+                lines.append(n.lineno)
+            if isinstance(n, ast.Subscript) and isinstance(n.slice, ast.Constant) and n.slice.value == "damaged":
+                lines.append(n.lineno)
+        return min(lines) if lines else None
+
+    @staticmethod
+    def _first_servers_use(fn):
+        import ast
+
+        lines = [
+            n.lineno
+            for n in ast.walk(fn)
+            if isinstance(n, ast.Subscript) and isinstance(n.slice, ast.Constant) and n.slice.value == "servers"
+        ]
+        return min(lines) if lines else None
+
+    def _readers(self, relpath):
+        import ast
+
+        out = []
+        for fn in ast.walk(self._tree(relpath)):
+            if (
+                isinstance(fn, ast.FunctionDef)
+                and fn.name != "_record"
+                and any(self._is_record_call(n) for n in ast.walk(fn))
+            ):
+                out.append(fn)
+        return sorted(out, key=lambda f: f.lineno)
+
+    def test_every_reader_in_the_service_checks_damaged_before_it_uses_the_servers_or_is_on_the_read_only_list(self):
+        readers = self._readers("jen/services/investigation_logging.py")
+        names = [f.name for f in readers]
+        print(f"READERS of _record() in investigation_logging.py ({len(names)}): {', '.join(names)}")
+        assert len(names) >= 6, f"the walk found {names}: the test has lost its power"
+        bad = []
+        for fn in readers:
+            if fn.name in _READ_ONLY_RECORD_READERS:
+                continue
+            checked, used = self._damaged_check_line(fn), self._first_servers_use(fn)
+            if checked is None or (used is not None and checked > used):
+                bad.append(fn.name)
+        assert not bad, (
+            f"these readers of the record use it without testing `damaged` first: {bad}; readers seen: {names}"
+        )
+        stale = set(_READ_ONLY_RECORD_READERS) - set(names)
+        assert not stale, f"read-only allowlist entries that no longer read the record: {sorted(stale)}"
+
+    def test_health_checks_damaged_where_it_reads_the_record(self):
+        readers = self._readers("jen/services/health.py")
+        print(f"READERS of _record() in health.py: {', '.join(f.name for f in readers)}")
+        assert [f.name for f in readers] == ["_debug_logging_left_on"]
+        assert self._damaged_check_line(readers[0]) is not None
+
+    def test_no_route_or_other_module_reads_the_record_directly(self):
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parent.parent / "jen"
+        offenders = []
+        for path in root.rglob("*.py"):
+            rel = path.relative_to(root.parent).as_posix()
+            if rel in ("jen/services/investigation_logging.py", "jen/services/health.py"):
+                continue
+            if "_record()" in path.read_text(encoding="utf-8") and "investigation_logging" in path.read_text(
+                encoding="utf-8"
+            ):
+                offenders.append(rel)
+        assert not offenders, f"read the investigation record without going through the service: {offenders}"
+
+    def test_every_route_that_asks_for_a_removal_refusal_stops_on_a_non_empty_one(self):
+        import ast
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        callers = []
+        for path in sorted((root / "jen" / "routes").rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for fn in ast.walk(tree):
+                if not isinstance(fn, ast.FunctionDef):
+                    continue
+                for n in ast.walk(fn):
+                    if isinstance(n, ast.Assign) and isinstance(n.value, ast.Call):
+                        f = n.value.func
+                        if isinstance(f, ast.Attribute) and f.attr in ("removal_refusal", "blocking_removal"):
+                            var = n.targets[0].id
+                            callers.append(f"{path.relative_to(root).as_posix()}::{fn.name}")
+                            stops = [
+                                i
+                                for i in ast.walk(fn)
+                                if isinstance(i, ast.If)
+                                and isinstance(i.test, ast.Name)
+                                and i.test.id == var
+                                and any(
+                                    isinstance(b, ast.Return)
+                                    for b in ast.walk(ast.Module(body=i.body, type_ignores=[]))
+                                )
+                            ]
+                            assert stops, (
+                                f"{path.name}::{fn.name} asks {f.attr} and does not stop on a non-empty answer"
+                            )
+        print(f"ROUTES that ask for a removal refusal: {', '.join(callers)}")
+        assert len(callers) >= 2, callers

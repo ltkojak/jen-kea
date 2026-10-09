@@ -336,3 +336,79 @@ class TestADamagedMarkerOnAServerJenCanStillReach:
 
         restricted_client(client, db, allowed_subnets=[1], role="admin", username="_inv_damaged_scoped")
         assert "10.9.9.8" not in self._page(client, monkeypatch)
+
+
+class TestTheAcknowledgeDamagedRoute:
+    """v5.68.0-beta.26 (Q161, item 2): the explicit decision to replace an unreadable record when the rebuild could not examine every server. The service is
+    stubbed (it is tested without a database in tests/test_investigation_logging.py); what is under test is who may press it and what the page offers."""
+
+    URL = "/servers/investigation-logging/acknowledge-damaged"
+    PROBLEMS = ["no Kea server with SSH is configured, so nothing could be examined"]
+
+    @pytest.fixture
+    def acknowledge(self, monkeypatch):
+        from jen.services import investigation_logging as inv
+
+        calls = []
+        monkeypatch.setattr(
+            inv,
+            "acknowledge_damaged",
+            lambda actor, *, all_subnets=False: calls.append((actor, all_subnets)) or True,
+        )
+        return calls
+
+    def test_anonymous_is_sent_to_login(self, client, acknowledge):
+        r = client.post(self.URL)
+        assert r.status_code in (301, 302, 308) and "login" in r.headers["Location"].lower() and acknowledge == []
+
+    def test_an_admin_scoped_to_some_subnets_is_refused_and_the_service_is_not_asked(self, client, db, acknowledge):
+        from tests.conftest import restricted_client
+
+        restricted_client(client, db, allowed_subnets=[1], role="admin", username="_ack_scoped_admin")
+        r = client.post(self.URL, follow_redirects=True)
+        assert b"Only an admin with access to all subnets can do this" in r.data and acknowledge == []
+
+    def test_a_viewer_cannot(self, client, db, acknowledge):
+        from tests.conftest import restricted_client
+
+        restricted_client(client, db, allowed_subnets=None, role="viewer", username="_ack_viewer")
+        r = client.post(self.URL)
+        assert r.status_code in (302, 403) and acknowledge == []
+
+    def test_an_unrestricted_admin_reaches_the_service_with_all_subnets_true(self, logged_in_client, acknowledge):
+        r = logged_in_client.post(self.URL, follow_redirects=True)
+        assert b"replaced by an empty one" in r.data
+        assert len(acknowledge) == 1 and acknowledge[0][1] is True
+
+    def test_a_refusal_from_the_service_is_said(self, logged_in_client, monkeypatch):
+        from jen.services import investigation_logging as inv
+
+        monkeypatch.setattr(inv, "acknowledge_damaged", lambda actor, *, all_subnets=False: False)
+        r = logged_in_client.post(self.URL, follow_redirects=True)
+        assert b"Nothing to acknowledge" in r.data
+
+    def test_the_button_is_on_the_servers_page_only_with_a_damaged_record_and_recorded_problems(
+        self, logged_in_client, stubs, mock_kea, monkeypatch
+    ):
+        from jen.services import investigation_logging as inv
+        from jen.services import kea
+
+        entry = {"server": dict(SERVER), "up": True, "ha_state": None, "version": "3.0.3", "role": "primary"}
+        monkeypatch.setattr(kea, "get_all_server_status", lambda: [entry])
+        monkeypatch.setattr(inv, "record_banner", lambda: {"damaged": False, "problems": [], "at": ""})
+        assert "acknowledge-damaged" not in logged_in_client.get("/servers").data.decode()
+        monkeypatch.setattr(inv, "record_banner", lambda: {"damaged": True, "problems": [], "at": ""})
+        page = logged_in_client.get("/servers").data.decode()
+        assert (
+            "Jen&#39;s record of investigation logging is unreadable" in page
+            or "record of investigation logging is unreadable" in page
+        )
+        assert "acknowledge-damaged" not in page and "it retries every minute" in page
+        monkeypatch.setattr(
+            inv,
+            "record_banner",
+            lambda: {"damaged": True, "problems": self.PROBLEMS, "at": "2026-10-09T10:00:00+00:00"},
+        )
+        page = logged_in_client.get("/servers").data.decode()
+        assert "acknowledge-damaged" in page and "no Kea server with SSH is configured" in page
+        assert "I have checked every Kea" in page, "the confirm names what the person is asserting"
