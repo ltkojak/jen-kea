@@ -273,6 +273,18 @@ swallowing wrapper, is gone; the one filesystem-cannot-fsync-a-directory case is
 its three files as a SET (`_commit_file_set`): every member is staged private under a unique name, every live member is read into memory WITHOUT being moved,
 each is then replaced, and on any failure every member already replaced is put back byte-for-byte (a member that did not exist is removed) - a failure at
 any step used to leave a new `server.key` beside an old `server.crt`. A change of behaviour inside the existing envelope: `HELPER_VERSION` stays 7.
+
+Build 15 (v5.68.0-beta.29, Q165) - the Kea HOST owns the restore of investigation logging. Eight reviews found a sequence after which Kea sat at DEBUG 55 and nothing
+restored it, because the restore lived on the wrong machine and depended on Jen, Jen's database, Jen's config, the Control Agent and a marker in Kea's file. The DEBUG is
+HERE and this helper already runs here as root. Three ops and one argv mode: `investigation-arm {service: "dhcp4", path, until, restore}` writes
+`/var/lib/jen-kea-helper/investigation-dhcp4.json` (root 0600 in a root 0700 directory) and installs the timer (below); `investigation-disarm {service, path}` runs the
+restore NOW; `investigation-status {service}` reads the state; `jen-kea-helper --self-restore [--now]` (argv, no stdin) restores every armed state whose `until` has
+passed (every armed state with `--now`). The restore reads the config, puts the `kea-dhcp4` logger back from the STATE's `restore` object (never from the marker, which a
+person or another tool can damage), deletes the marker, validates with `-t` as the daemon, writes the file privately, and asks the daemon to re-read it with SIGHUP (a restart
+- at most ONE per state - when the unit is not active afterwards). It needs no Jen, no database, no API and no marker. The timer is a systemd oneshot service + timer
+(`jen-kea-investigation.*`, boot + every 60 s) written by `investigation-arm` itself, running this file as root: NO sudoers change (the one-line grant is untouched). A host with
+no systemd reports `timer: "none"` and Jen refuses to turn logging on there. `tests/vectors/investigation_restore.json` is the logger transformation both this file and
+`kea_config_edit.clear_investigation_logging` are tested against. A change of behaviour plus ops inside the existing envelope: `HELPER_VERSION` stays 7.
 """
 
 from __future__ import annotations
@@ -281,6 +293,7 @@ import base64
 import binascii
 import collections
 import contextlib
+import copy
 import errno
 import hashlib
 import json
@@ -289,13 +302,16 @@ import posixpath
 import re
 import secrets
 import shutil
+import signal
 import stat
 import subprocess  # nosec B404 — every call is a fixed argv list, shell=False
 import sys
 import tempfile
+import time
+from datetime import datetime, timedelta, timezone
 
 HELPER_VERSION = 7
-HELPER_BUILD = 14
+HELPER_BUILD = 15
 # v5.66.0-beta.2 (Q104) — HELPER_BUILD is bumped on EVERY change to this file, never by
 # HELPER_VERSION alone; op_update's own _HELPER_BUILD_RE parses "^HELPER_BUILD = (\d+)$" out
 # of a candidate's raw bytes, so this line (like HELPER_VERSION's own, just above) must never
@@ -1346,6 +1362,379 @@ def op_update(payload):
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+# ── Build 15 (v5.68.0-beta.29, Q165): the host owns the restore of investigation logging ─────────────────────────────────────────────────────────
+
+_STATE_DIR = "/var/lib/jen-kea-helper"  # root 0700; holds one `investigation-<service>.json` (root 0600) per armed service
+_SYSTEMD_DIR = "/etc/systemd/system"
+_TIMER_NAME = "jen-kea-investigation"
+_STATE_FILE_RE = re.compile(r"^investigation-(dhcp4)\.json$")
+_ARM_MAX_AHEAD = timedelta(hours=24, minutes=1)
+_HUP_WAIT_S = 5.0  # how long a reloaded unit gets to be `active` before it is restarted instead
+_TIMER_SERVICE_TEXT = (
+    "[Unit]\n"
+    "Description=Jen: put the Kea logger back when investigation logging is over\n"
+    "\n"
+    "[Service]\n"
+    "Type=oneshot\n"
+    "ExecStart=/usr/local/sbin/jen-kea-helper --self-restore\n"
+)
+_TIMER_TEXT = (
+    "[Unit]\n"
+    "Description=Jen: look every minute for investigation logging that is over\n"
+    "\n"
+    "[Timer]\n"
+    "OnBootSec=30s\n"
+    "OnUnitActiveSec=60s\n"
+    "Persistent=true\n"
+    "\n"
+    "[Install]\n"
+    "WantedBy=timers.target\n"
+)
+_SIGHUP = getattr(signal, "SIGHUP", 1)  # (1 on every POSIX host; the name does not exist on the Windows dev box that imports this file for its tests)
+_INV_LOGGER = "kea-dhcp4"
+_INV_KEY = "jen-investigation"
+
+
+def _now():  # a name the tests replace
+    return datetime.now(timezone.utc)
+
+
+def _sleep(seconds):  # a name the tests replace
+    time.sleep(seconds)
+
+
+def _parse_iso(text):
+    """An aware UTC datetime from an ISO-8601 string, or None. A naive time is read as UTC."""
+    if not isinstance(text, str):
+        return None
+    try:
+        when = datetime.fromisoformat(text.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+
+
+def _restore_shape_ok(restore):
+    """True iff `restore` is exactly `{"created": true}` or exactly `{"severity": ..., "debuglevel": ...}`, each either the literal "absent" or a real
+    value (a non-empty string severity, an integer debuglevel). The same rule as `kea_config_edit.restore_problem`, stricter on extra keys."""
+    if not isinstance(restore, dict):
+        return False
+    if set(restore) == {"created"}:
+        return restore["created"] is True
+    if set(restore) != {"severity", "debuglevel"}:
+        return False
+    severity, level = restore["severity"], restore["debuglevel"]
+    if not (severity == "absent" or (isinstance(severity, str) and severity.strip())):
+        return False
+    return level == "absent" or (isinstance(level, int) and not isinstance(level, bool))
+
+
+def _restore_logger(cfg, restore):
+    """Put the `kea-dhcp4` logger of `cfg` back from `restore` - `{"created": true}` (remove the entry) or `{"severity", "debuglevel"}` (each restored, or removed when
+    "absent") - and delete the `jen-investigation` marker. A port of `kea_config_edit.clear_investigation_logging`, kept identical by the shared vector file
+    `tests/vectors/investigation_restore.json`. Unlike that function it does not need the marker: the logger is put back when it carries the marker OR still sits at
+    DEBUG 55 (a person deleted only the marker); a logger that has neither was changed on purpose since and is left alone. Returns (new_cfg, "ok" | "nothing")."""
+    cfg = copy.deepcopy(cfg)
+    section = cfg.get("Dhcp4") if isinstance(cfg, dict) else None
+    loggers = section.get("loggers") if isinstance(section, dict) else None
+    if not isinstance(loggers, list):
+        return cfg, "nothing"
+    entry = next((x for x in loggers if isinstance(x, dict) and x.get("name") == _INV_LOGGER), None)
+    if entry is None:
+        return cfg, "nothing"
+    context = entry.get("user-context")
+    has_marker = isinstance(context, dict) and _INV_KEY in context
+    at_level = str(entry.get("severity") or "").upper() == "DEBUG" and entry.get("debuglevel") == 55
+    if not has_marker and not at_level:
+        return cfg, "nothing"
+    if restore.get("created"):
+        loggers.remove(entry)
+        return cfg, "ok"
+    for key in ("severity", "debuglevel"):
+        old = restore[key]
+        if old == "absent":
+            entry.pop(key, None)
+        else:
+            entry[key] = old
+    if has_marker:
+        del context[_INV_KEY]
+        if not context:
+            del entry["user-context"]
+    return cfg, "ok"
+
+
+def _root_ids():
+    """(uid, gid) to give a file this helper creates for the system: root:root when it runs as root; (None, None) - leave it - for a test run by an ordinary user."""
+    return (0, 0) if hasattr(os, "geteuid") and os.geteuid() == 0 else (None, None)
+
+
+def _state_path(service):
+    return os.path.join(_STATE_DIR, f"investigation-{service}.json")
+
+
+def _ensure_state_dir():
+    os.makedirs(_STATE_DIR, mode=0o700, exist_ok=True)
+    if os.path.islink(_STATE_DIR):
+        raise OSError(errno.ELOOP, "the state directory is a symlink", _STATE_DIR)
+    uid, gid = _root_ids()
+    if uid is not None:
+        os.chown(_STATE_DIR, uid, gid)
+    os.chmod(_STATE_DIR, 0o700)
+
+
+def _load_state(service):
+    """The parsed state file of `service`, or None when there is none (or it is not a JSON object)."""
+    try:
+        with open(_state_path(service), "rb") as f:
+            state = json.loads(f.read().decode("utf-8"))
+    except (OSError, ValueError):
+        return None
+    return state if isinstance(state, dict) else None
+
+
+def _save_state(service, state):
+    uid, gid = _root_ids()
+    _install_private(_state_path(service), json.dumps(state, indent=2).encode("utf-8"), uid, gid, 0o600)
+
+
+def _state_usable(state):
+    """A state file is acted on only if every field the restore uses is still what `investigation-arm` could have written."""
+    return (
+        isinstance(state, dict)
+        and state.get("service") == "dhcp4"
+        and _allowed_conf_path(state.get("path"))
+        and _restore_shape_ok(state.get("restore"))
+    )
+
+
+def _ensure_timer():
+    """(timer, detail): install the timer units (written only when they differ) and start the timer. "systemd" when `systemctl` accepted it and reports it active; "none"
+    - with the reason - on a host that has no systemd (a container) or that refuses. Jen turns logging on only for "systemd"."""
+    if _find_bin("systemctl") is None:
+        return "none", "systemctl not found under _BIN_DIRS"
+    uid, gid = _root_ids()
+    changed = False
+    try:
+        for name, text in ((f"{_TIMER_NAME}.service", _TIMER_SERVICE_TEXT), (f"{_TIMER_NAME}.timer", _TIMER_TEXT)):
+            unit_path = os.path.join(_SYSTEMD_DIR, name)
+            try:
+                with open(unit_path, "rb") as f:
+                    current = f.read()
+            except FileNotFoundError:
+                current = None
+            if current != text.encode("utf-8"):
+                os.makedirs(_SYSTEMD_DIR, exist_ok=True)
+                _install_private(unit_path, text.encode("utf-8"), uid, gid, 0o644)
+                changed = True
+    except OSError as e:
+        return "none", f"the timer units could not be written: {e}"
+    if changed:
+        proc = _run_bin("systemctl", ["daemon-reload"], capture_output=True, text=True)
+        if proc is None or proc.returncode != 0:
+            return "none", "systemctl daemon-reload failed"
+    proc = _run_bin("systemctl", ["enable", "--now", f"{_TIMER_NAME}.timer"], capture_output=True, text=True)
+    if proc is None or proc.returncode != 0:
+        return "none", "systemctl could not enable the timer: " + "\n".join(((proc.stderr if proc else "") or "").splitlines()[-2:])
+    proc = _run_bin("systemctl", ["is-active", f"{_TIMER_NAME}.timer"], capture_output=True, text=True)
+    if proc is None or proc.stdout.strip() != "active":
+        return "none", "the timer did not become active"
+    return "systemd", ""
+
+
+def _unit_main_pid(unit):
+    proc = _run_bin("systemctl", ["show", "-p", "MainPID", "--value", unit], capture_output=True, text=True)
+    text = (proc.stdout or "").strip() if proc else ""
+    return int(text) if text.isdigit() else 0
+
+
+def _reload_daemon(service, state):
+    """Make the running daemon re-read its file: SIGHUP to the unit's main process; if the unit is not `active` _HUP_WAIT_S later - or has no process to signal - ONE
+    restart per state file (`state["restarts"]`, never more). Returns (how, error): how is "reload" or "restart", error None on success."""
+    unit = _resolve_unit(service, "status")
+    if unit is None:
+        return None, "no Kea unit was found on this host"
+    pid = _unit_main_pid(unit)
+    if pid > 0:
+        try:
+            os.kill(pid, _SIGHUP)
+        except OSError:
+            pid = 0  # no such process: the unit is not really running; fall through to the restart
+        else:
+            waited = 0.0
+            while waited < _HUP_WAIT_S:
+                _sleep(0.5)
+                waited += 0.5
+                if _unit_state(unit) == "active":
+                    return "reload", None
+    if int(state.get("restarts") or 0) >= 1:
+        return None, "the daemon did not stay active after the reload and it was already restarted once for this state: not restarting again"
+    state["restarts"] = int(state.get("restarts") or 0) + 1
+    proc = _run_bin("systemctl", ["restart", unit], capture_output=True, text=True)
+    if proc is None or proc.returncode != 0:
+        tail = "\n".join(((proc.stderr or proc.stdout) if proc else "").splitlines()[-3:])
+        return None, f"systemctl restart {unit} failed: {tail}"
+    return "restart", None
+
+
+def _restore_state(service, state):
+    """The restore routine - shared by `investigation-disarm`, the timer and boot. Reads the config, puts the logger back from the STATE's `restore`, validates with
+    `-t` as the daemon, writes the file privately (the previous one kept as `.jen_backup`) and asks the daemon to re-read it. Updates and saves the state: `restored_at` and
+    `how` on success, `last_error` on failure (the next tick retries). Returns (ok, how, detail)."""
+    path = state["path"]
+    with _locked(path):
+        try:
+            with open(path, "rb") as f:
+                raw = f.read()
+            st = os.stat(path)
+            config = json.loads(raw.decode("utf-8"))
+        except (OSError, ValueError) as e:
+            return _restore_failed(service, state, f"the config could not be read: {e}")
+        if not isinstance(config, dict):
+            return _restore_failed(service, state, "the config is not a JSON object")
+        new_cfg, code = _restore_logger(config, state["restore"])
+        if code == "ok":
+            ok, result = _run_kea_test(service, path, new_cfg, [])
+            if not ok:
+                return _restore_failed(service, state, f"{result.get('error')}: {result.get('detail', '')}".strip(": "))
+            try:
+                _install_private(path + ".jen_backup", raw, st.st_uid, st.st_gid, st.st_mode & 0o777)
+                _install_private(path, json.dumps(new_cfg, indent=2).encode("utf-8"), st.st_uid, st.st_gid, st.st_mode & 0o777)
+            except OSError as e:
+                return _restore_failed(service, state, f"the config could not be written: {e}")
+        how, error = _reload_daemon(service, state)
+        if error:
+            return _restore_failed(service, state, error)
+        state.update(restored_at=_now().isoformat(timespec="seconds"), how=how, last_error=None)
+        _save_state(service, state)
+        return True, how, ""
+
+
+def _restore_failed(service, state, detail):
+    state["last_error"] = str(detail)[:500]
+    with contextlib.suppress(OSError):  # the failure is returned either way; the state file is the report, not the safety
+        _save_state(service, state)
+    return False, None, state["last_error"]
+
+
+def _arm_fields(payload):
+    """Validate an `investigation-arm` payload: (state dict, None) or (None, error token)."""
+    service, path = payload.get("service"), payload.get("path")
+    if service != "dhcp4" or not _allowed_conf_path(path):
+        return None, "not-allowed"
+    until = _parse_iso(payload.get("until"))
+    if until is None or until > _now() + _ARM_MAX_AHEAD:
+        return None, "bad-until"
+    restore = payload.get("restore")
+    if not _restore_shape_ok(restore):
+        return None, "bad-restore"
+    jen = payload.get("jen")
+    if jen is not None and (
+        not isinstance(jen, dict)
+        or set(jen) - {"server_id", "name"}
+        or any(not isinstance(v, (str, int)) or len(str(v)) > 200 for v in jen.values())
+    ):
+        return None, "bad-jen"
+    return {
+        "service": service,
+        "path": path,
+        "until": until.isoformat(timespec="seconds"),
+        "restore": restore,
+        "armed_at": _now().isoformat(timespec="seconds"),
+        "restored_at": None,
+        "how": None,
+        "last_error": None,
+        "restarts": 0,
+        "jen": jen or {},
+    }, None
+
+
+def op_investigation_arm(payload):
+    state, error = _arm_fields(payload)
+    if state is None:
+        return {"ok": False, "error": error}, None
+    path = state["path"]
+    with _locked(path):
+        try:
+            _ensure_state_dir()
+            _save_state("dhcp4", state)  # replaces the previous state, restored or not: a new session
+        except OSError as e:
+            return {"ok": False, "error": "write-failed", "detail": str(e)}, path
+        timer, detail = _ensure_timer()
+    reply = {"ok": True, "timer": timer, "until": state["until"]}
+    if detail:
+        reply["detail"] = detail
+    return reply, path
+
+
+def op_investigation_disarm(payload):
+    service, path = payload.get("service"), payload.get("path")
+    if service != "dhcp4" or not _allowed_conf_path(path):
+        return {"ok": False, "error": "not-allowed"}, None
+    state = _load_state(service)
+    if state is None:
+        return {"ok": True, "restored": False, "how": "nothing", "detail": "not armed"}, path
+    if not _state_usable(state) or state["path"] != path:
+        return {"ok": False, "error": "bad-state", "detail": "the state file is not one this helper wrote for this config"}, path
+    if state.get("restored_at"):
+        return {"ok": True, "restored": False, "how": state.get("how") or "nothing", "detail": "already restored"}, path
+    ok, how, detail = _restore_state(service, state)
+    if not ok:
+        return {"ok": False, "error": "restore-failed", "detail": detail}, path
+    return {"ok": True, "restored": True, "how": how, "detail": ""}, path
+
+
+def _status_view(state):
+    return {
+        "armed": bool(state) and not state.get("restored_at"),
+        "path": state.get("path"),
+        "until": state.get("until"),
+        "armed_at": state.get("armed_at"),
+        "restored_at": state.get("restored_at"),
+        "how": state.get("how"),
+        "last_error": state.get("last_error"),
+        "restore": state.get("restore"),
+        "jen": state.get("jen") or {},
+    }
+
+
+def op_investigation_status(payload):
+    service = payload.get("service")
+    if service != "dhcp4":
+        return {"ok": False, "error": "not-allowed"}, None
+    state = _load_state(service)
+    if state is None:
+        return {"ok": True, "armed": False}, None
+    return {"ok": True, **_status_view(state)}, state.get("path")
+
+
+def _self_restore(force=False):
+    """The timer's tick (and `--self-restore --now` by hand): for every armed state whose `until` has passed - every armed state with `force` - run the restore routine.
+    A state file that is not one `investigation-arm` could have written is reported and never acted on."""
+    results = []
+    try:
+        names = sorted(os.listdir(_STATE_DIR))
+    except OSError:
+        return {"ok": True, "checked": 0, "restored": [], "failed": []}
+    failed = []
+    for name in names:
+        m = _STATE_FILE_RE.match(name)
+        if not m:
+            continue
+        service = m.group(1)
+        state = _load_state(service)
+        if not _state_usable(state):
+            failed.append({"service": service, "error": "the state file is not usable"})
+            continue
+        if state.get("restored_at"):
+            continue
+        due = _parse_iso(state.get("until"))
+        if not force and due is not None and due > _now():
+            continue
+        ok, how, detail = _restore_state(service, state)
+        (results if ok else failed).append({"service": service, "how": how} if ok else {"service": service, "error": detail})
+    return {"ok": not failed, "checked": len(names), "restored": results, "failed": failed}
+
+
 _OPS = {
     "version": op_version,
     "read-config": op_read_config,
@@ -1357,6 +1746,9 @@ _OPS = {
     "install-package": op_install_package,
     "install-tls": op_install_tls,
     "update": op_update,
+    "investigation-arm": op_investigation_arm,
+    "investigation-disarm": op_investigation_disarm,
+    "investigation-status": op_investigation_status,
 }
 
 
@@ -1386,6 +1778,14 @@ def main(argv=None, stdin=None, stdout=None, stderr=None):
     stderr = sys.stderr if stderr is None else stderr
 
     op = argv[1] if len(argv) > 1 else ""
+
+    if op == "--self-restore":
+        # build 15: the timer's tick - argv only, no stdin, nothing to parse; `--now` restores every armed state without waiting for its `until`
+        try:
+            result = _self_restore(force="--now" in argv[2:])
+        except Exception as e:  # noqa: BLE001 - a tick must report, never traceback
+            result = {"ok": False, "error": "helper-exception", "detail": str(e)}
+        return _emit(stdout, stderr, op, result, 0)
 
     raw = stdin.read(MAX_STDIN + 1)
     if len(raw) > MAX_STDIN:

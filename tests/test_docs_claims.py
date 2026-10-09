@@ -76,6 +76,9 @@ class TestTheHelpersOperationsAreAllNamedOnTheAboutPage:
         "install-package": "install\n  the Kea packages",
         "install-tls": "a TLS certificate",
         "update": "update itself",
+        "investigation-arm": "arm, disarm and\n  report a self-restore of the log level",
+        "investigation-disarm": "arm, disarm and\n  report a self-restore of the log level",
+        "investigation-status": "arm, disarm and\n  report a self-restore of the log level",
     }
 
     def test_the_phrase_table_covers_exactly_the_helpers_ops(self):

@@ -3031,3 +3031,29 @@ class TestEveryReaderOfTheRecordHandlesDamaged:
                             )
         print(f"ROUTES that ask for a removal refusal: {', '.join(callers)}")
         assert len(callers) >= 2, callers
+
+
+# ── v5.68.0-beta.29 (Q165): the host's restore and Jen's are one transformation ─────────────────────────────────────────────────────────────────────
+
+
+def _restore_vectors():
+    import json
+    import pathlib
+
+    path = pathlib.Path(__file__).resolve().parent / "vectors" / "investigation_restore.json"
+    return json.loads(path.read_text(encoding="utf-8"))["cases"]
+
+
+class TestJensRestoreMatchesTheSharedVectors:
+    """`tests/vectors/investigation_restore.json` holds the logger transformation of a restore. `jen-kea-helper`'s `_restore_logger` (tests/test_kea_helper_investigation.py) and
+    `kea_config_edit.clear_investigation_logging` are both run against it, so the host and Jen can never put a logger back two different ways."""
+
+    @pytest.mark.parametrize("case", [c for c in _restore_vectors() if c["both"]], ids=lambda c: c["name"][:60])
+    def test_clear_investigation_logging_gives_the_vectors_after(self, case):
+        out, code = ed.clear_investigation_logging(copy.deepcopy(case["before"]))
+        assert out == case["after"]
+        assert code in ("ok", "nochange")
+
+    def test_the_vector_file_is_not_empty_and_has_both_kinds(self):
+        cases = _restore_vectors()
+        assert len(cases) >= 10 and any(c["both"] for c in cases) and any(not c["both"] for c in cases)

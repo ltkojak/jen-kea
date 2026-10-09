@@ -446,6 +446,90 @@ def test_config_reload_applies_the_investigation_log_level_without_a_restart(fin
     assert record["observed_after_restore"]["state"] == "restored", record
 
 
+# ── Q165: does SIGHUP re-read the config file (the self-restore's reload)? ──────────────────────────────────────────
+
+
+def _hup(pid):
+    return _sh("docker", "exec", "-u", "root", "kea", "kill", "-HUP", str(pid), check=False)
+
+
+def _wait_for(predicate, seconds=8.0):
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.5)
+    return predicate()
+
+
+def _logger_now() -> dict:
+    from jen.services import kea
+
+    shown = kea.kea_command("config-get").get("arguments", {}).get("Dhcp4", {}).get("loggers", [])
+    entry = next((x for x in shown if x.get("name") == "kea-dhcp4"), {})
+    return {k: entry.get(k) for k in ("severity", "debuglevel", "user-context")}
+
+
+def test_sighup_reloads_the_logger(findings):
+    """v5.68.0-beta.29 (Q165, verify first) - the Kea HOST puts the logger back by itself (jen-kea-helper `--self-restore`): it rewrites the config file and sends the
+    unit's main process SIGHUP, with a restart only as the fallback. This records, per Kea version, whether SIGHUP re-reads the file - the new level shows in `config-get` with
+    the process (pid) unchanged - and that putting the level back works the same way. A version that does NOT reload on SIGHUP is not a failure of the product: the helper restarts the unit when it is not active afterwards, and a version recorded here as not reloading would be named in the helper so it restarts at once - the record says which."""
+    from jen.services import kea
+    from jen.services import kea_config_edit as ed
+
+    _restart("INFO", None)
+    record = {}
+    findings["sighup"] = record
+    conf_path = os.path.join(CONF_DIR, "kea-dhcp4.conf")
+    before = _status()
+    record["pid_before"] = before["pid"]
+    assert before["pid"], "status-get reports the daemon's pid"
+    with open(conf_path) as fh:
+        conf = json.load(fh)
+    mutated, code = ed.set_investigation_logging(conf, "2099-01-01T00:00:00+00:00")
+    assert code == "ok"
+    with open(conf_path, "w") as fh:
+        json.dump(mutated, fh, indent=2)
+    sent = _hup(before["pid"])
+    record["kill_returncode"] = sent.returncode
+    reloaded = _wait_for(
+        lambda: (
+            "jen-investigation" in (_logger_now().get("user-context") or {}) and _logger_now().get("debuglevel") == 55
+        )
+    )
+    after = _status()
+    record["process_survived"] = after["pid"] == before["pid"]
+    record["answers_after_hup"] = kea.kea_command("version-get").get("result") == 0
+    record["reloads_on_hup"] = bool(reloaded)
+    record["logger_after_hup"] = _logger_now()
+
+    # putting it back the same way
+    restored, code = ed.clear_investigation_logging(mutated)
+    assert code == "ok"
+    with open(conf_path, "w") as fh:
+        json.dump(restored, fh, indent=2)
+    _hup(after["pid"])
+    back = _wait_for(lambda: "jen-investigation" not in (_logger_now().get("user-context") or {}))
+    record["restore_reloads_on_hup"] = bool(back)
+    record["logger_after_restore"] = _logger_now()
+    record["process_survived_restore"] = _status()["pid"] == before["pid"]
+
+    # what is asserted is what the product depends on: a HUP never kills the daemon, and when it does reload, the restore is exactly the inverse
+    assert record["kill_returncode"] == 0, record
+    assert record["process_survived"] and record["answers_after_hup"] and record["process_survived_restore"], record
+    assert isinstance(record["reloads_on_hup"], bool)
+    assert record["restore_reloads_on_hup"] == record["reloads_on_hup"], record
+    if record["reloads_on_hup"]:
+        shown = record["logger_after_hup"]
+        assert str(shown["severity"]).upper() == "DEBUG" and shown["debuglevel"] == 55, record
+        back_logger = record["logger_after_restore"]
+        assert "jen-investigation" not in (back_logger["user-context"] or {}), record
+        assert not (str(back_logger["severity"]).upper() == "DEBUG" and back_logger["debuglevel"] == 55), record
+    print(
+        f"SIGHUP RECORD {IMAGE}: reloads_on_hup={record['reloads_on_hup']} restore_reloads={record['restore_reloads_on_hup']} pid_kept={record['process_survived']}"
+    )
+
+
 def test_what_a_ddns_failure_line_carries(findings):
     """v5.68.0-beta.9 (Q144, verify first) - the Problems sweep attributes a DHCP4_DDNS_REQUEST_SEND_FAILED line to the client the
     log showed getting the address it names, preferring the same transaction. Whether that line carries a transaction id (or a client

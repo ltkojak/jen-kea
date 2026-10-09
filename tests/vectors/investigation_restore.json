@@ -1,0 +1,538 @@
+{
+ "about": "The logger transformation of investigation logging's restore. Each case: restore `before` using `restore`, get `after`. `both` cases are run through jen.services.kea_config_edit.clear_investigation_logging (the marker's own restore object) AND jen-kea-helper's _restore_logger; the others only through the helper (it restores from its state file and needs no marker). Q165.",
+ "cases": [
+  {
+   "name": "an entry Jen created is removed again",
+   "both": true,
+   "note": "",
+   "before": {
+    "Dhcp4": {
+     "valid-lifetime": 3600,
+     "subnet4": [],
+     "loggers": [
+      {
+       "name": "kea-dhcp4",
+       "severity": "DEBUG",
+       "debuglevel": 55,
+       "user-context": {
+        "jen-investigation": {
+         "until": "2099-01-01T00:00:00+00:00",
+         "restore": {
+          "created": true
+         }
+        }
+       }
+      }
+     ]
+    }
+   },
+   "restore": {
+    "created": true
+   },
+   "after": {
+    "Dhcp4": {
+     "valid-lifetime": 3600,
+     "subnet4": [],
+     "loggers": []
+    }
+   }
+  },
+  {
+   "name": "an existing entry gets its severity and debuglevel back and keeps its output options",
+   "both": true,
+   "note": "",
+   "before": {
+    "Dhcp4": {
+     "valid-lifetime": 3600,
+     "subnet4": [],
+     "loggers": [
+      {
+       "name": "kea-dhcp4",
+       "output-options": [
+        {
+         "output": "/var/log/kea/kea-dhcp4.log",
+         "maxsize": 2048000,
+         "maxver": 4,
+         "flush": true
+        }
+       ],
+       "severity": "DEBUG",
+       "debuglevel": 55,
+       "user-context": {
+        "jen-investigation": {
+         "until": "2099-01-01T00:00:00+00:00",
+         "restore": {
+          "severity": "WARN",
+          "debuglevel": 0
+         }
+        }
+       }
+      },
+      {
+       "name": "kea-dhcp4.hosts",
+       "severity": "INFO"
+      }
+     ]
+    }
+   },
+   "restore": {
+    "severity": "WARN",
+    "debuglevel": 0
+   },
+   "after": {
+    "Dhcp4": {
+     "valid-lifetime": 3600,
+     "subnet4": [],
+     "loggers": [
+      {
+       "name": "kea-dhcp4",
+       "output-options": [
+        {
+         "output": "/var/log/kea/kea-dhcp4.log",
+         "maxsize": 2048000,
+         "maxver": 4,
+         "flush": true
+        }
+       ],
+       "severity": "WARN",
+       "debuglevel": 0
+      },
+      {
+       "name": "kea-dhcp4.hosts",
+       "severity": "INFO"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "keys the original did not have are removed, not set to defaults",
+   "both": true,
+   "note": "",
+   "before": {
+    "Dhcp4": {
+     "valid-lifetime": 3600,
+     "subnet4": [],
+     "loggers": [
+      {
+       "name": "kea-dhcp4",
+       "output-options": [
+        {
+         "output": "stdout"
+        }
+       ],
+       "severity": "DEBUG",
+       "debuglevel": 55,
+       "user-context": {
+        "jen-investigation": {
+         "until": "2099-01-01T00:00:00+00:00",
+         "restore": {
+          "severity": "absent",
+          "debuglevel": "absent"
+         }
+        }
+       }
+      }
+     ]
+    }
+   },
+   "restore": {
+    "severity": "absent",
+    "debuglevel": "absent"
+   },
+   "after": {
+    "Dhcp4": {
+     "valid-lifetime": 3600,
+     "subnet4": [],
+     "loggers": [
+      {
+       "name": "kea-dhcp4",
+       "output-options": [
+        {
+         "output": "stdout"
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "one key absent and one present",
+   "both": true,
+   "note": "",
+   "before": {
+    "Dhcp4": {
+     "valid-lifetime": 3600,
+     "subnet4": [],
+     "loggers": [
+      {
+       "name": "kea-dhcp4",
+       "severity": "DEBUG",
+       "debuglevel": 55,
+       "user-context": {
+        "jen-investigation": {
+         "until": "2099-01-01T00:00:00+00:00",
+         "restore": {
+          "severity": "INFO",
+          "debuglevel": "absent"
+         }
+        }
+       }
+      }
+     ]
+    }
+   },
+   "restore": {
+    "severity": "INFO",
+    "debuglevel": "absent"
+   },
+   "after": {
+    "Dhcp4": {
+     "valid-lifetime": 3600,
+     "subnet4": [],
+     "loggers": [
+      {
+       "name": "kea-dhcp4",
+       "severity": "INFO"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "other user-context keys survive and only the marker goes",
+   "both": true,
+   "note": "",
+   "before": {
+    "Dhcp4": {
+     "valid-lifetime": 3600,
+     "subnet4": [],
+     "loggers": [
+      {
+       "name": "kea-dhcp4",
+       "severity": "DEBUG",
+       "debuglevel": 55,
+       "user-context": {
+        "owner": "netops",
+        "jen-investigation": {
+         "until": "2099-01-01T00:00:00+00:00",
+         "restore": {
+          "severity": "INFO",
+          "debuglevel": 0
+         }
+        }
+       }
+      }
+     ]
+    }
+   },
+   "restore": {
+    "severity": "INFO",
+    "debuglevel": 0
+   },
+   "after": {
+    "Dhcp4": {
+     "valid-lifetime": 3600,
+     "subnet4": [],
+     "loggers": [
+      {
+       "name": "kea-dhcp4",
+       "severity": "INFO",
+       "debuglevel": 0,
+       "user-context": {
+        "owner": "netops"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "a logger left at DEBUG 30 under the marker is put back too",
+   "both": true,
+   "note": "",
+   "before": {
+    "Dhcp4": {
+     "valid-lifetime": 3600,
+     "subnet4": [],
+     "loggers": [
+      {
+       "name": "kea-dhcp4",
+       "severity": "DEBUG",
+       "debuglevel": 30,
+       "user-context": {
+        "jen-investigation": {
+         "until": "2099-01-01T00:00:00+00:00",
+         "restore": {
+          "severity": "WARN",
+          "debuglevel": 0
+         }
+        }
+       }
+      }
+     ]
+    }
+   },
+   "restore": {
+    "severity": "WARN",
+    "debuglevel": 0
+   },
+   "after": {
+    "Dhcp4": {
+     "valid-lifetime": 3600,
+     "subnet4": [],
+     "loggers": [
+      {
+       "name": "kea-dhcp4",
+       "severity": "WARN",
+       "debuglevel": 0
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "the rest of the config is byte-for-byte what it was",
+   "both": true,
+   "note": "",
+   "before": {
+    "Dhcp4": {
+     "valid-lifetime": 3600,
+     "subnet4": [
+      {
+       "id": 7,
+       "subnet": "10.7.0.0/24"
+      }
+     ],
+     "loggers": [
+      {
+       "name": "kea-dhcp4",
+       "severity": "DEBUG",
+       "debuglevel": 55,
+       "user-context": {
+        "jen-investigation": {
+         "until": "2099-01-01T00:00:00+00:00",
+         "restore": {
+          "created": true
+         }
+        }
+       }
+      }
+     ],
+     "interfaces-config": {
+      "interfaces": [
+       "eth0"
+      ]
+     },
+     "lease-database": {
+      "type": "mysql",
+      "name": "kea"
+     }
+    }
+   },
+   "restore": {
+    "created": true
+   },
+   "after": {
+    "Dhcp4": {
+     "valid-lifetime": 3600,
+     "subnet4": [
+      {
+       "id": 7,
+       "subnet": "10.7.0.0/24"
+      }
+     ],
+     "loggers": [],
+     "interfaces-config": {
+      "interfaces": [
+       "eth0"
+      ]
+     },
+     "lease-database": {
+      "type": "mysql",
+      "name": "kea"
+     }
+    }
+   }
+  },
+  {
+   "name": "nothing marked and not at DEBUG 55 is left alone",
+   "both": true,
+   "note": "a logger someone set on purpose after the session is not touched",
+   "before": {
+    "Dhcp4": {
+     "valid-lifetime": 3600,
+     "subnet4": [],
+     "loggers": [
+      {
+       "name": "kea-dhcp4",
+       "severity": "WARN",
+       "debuglevel": 0
+      }
+     ]
+    }
+   },
+   "restore": {
+    "severity": "INFO",
+    "debuglevel": 0
+   },
+   "after": {
+    "Dhcp4": {
+     "valid-lifetime": 3600,
+     "subnet4": [],
+     "loggers": [
+      {
+       "name": "kea-dhcp4",
+       "severity": "WARN",
+       "debuglevel": 0
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "no loggers at all is left alone",
+   "both": true,
+   "note": "",
+   "before": {
+    "Dhcp4": {
+     "valid-lifetime": 3600,
+     "subnet4": []
+    }
+   },
+   "restore": {
+    "created": true
+   },
+   "after": {
+    "Dhcp4": {
+     "valid-lifetime": 3600,
+     "subnet4": []
+    }
+   }
+  },
+  {
+   "name": "no kea-dhcp4 logger entry is left alone",
+   "both": true,
+   "note": "",
+   "before": {
+    "Dhcp4": {
+     "valid-lifetime": 3600,
+     "subnet4": [],
+     "loggers": [
+      {
+       "name": "kea-dhcp4.hosts",
+       "severity": "INFO"
+      }
+     ]
+    }
+   },
+   "restore": {
+    "created": true
+   },
+   "after": {
+    "Dhcp4": {
+     "valid-lifetime": 3600,
+     "subnet4": [],
+     "loggers": [
+      {
+       "name": "kea-dhcp4.hosts",
+       "severity": "INFO"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "the marker was deleted by hand but the logger still sits at DEBUG 55: the helper puts it back, from the state, not from the marker",
+   "both": false,
+   "note": "Jen's marker-based routine refuses a config with no marker; the host does not need one",
+   "before": {
+    "Dhcp4": {
+     "valid-lifetime": 3600,
+     "subnet4": [],
+     "loggers": [
+      {
+       "name": "kea-dhcp4",
+       "output-options": [
+        {
+         "output": "/var/log/kea/kea-dhcp4.log",
+         "maxsize": 2048000,
+         "maxver": 4,
+         "flush": true
+        }
+       ],
+       "severity": "DEBUG",
+       "debuglevel": 55
+      }
+     ]
+    }
+   },
+   "restore": {
+    "severity": "WARN",
+    "debuglevel": 0
+   },
+   "after": {
+    "Dhcp4": {
+     "valid-lifetime": 3600,
+     "subnet4": [],
+     "loggers": [
+      {
+       "name": "kea-dhcp4",
+       "output-options": [
+        {
+         "output": "/var/log/kea/kea-dhcp4.log",
+         "maxsize": 2048000,
+         "maxver": 4,
+         "flush": true
+        }
+       ],
+       "severity": "WARN",
+       "debuglevel": 0
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "a marker that lost its restore object is restored from the state",
+   "both": false,
+   "note": "Jen reports marker-invalid and changes nothing; the host holds the way back itself",
+   "before": {
+    "Dhcp4": {
+     "valid-lifetime": 3600,
+     "subnet4": [],
+     "loggers": [
+      {
+       "name": "kea-dhcp4",
+       "severity": "DEBUG",
+       "debuglevel": 55,
+       "user-context": {
+        "jen-investigation": {
+         "until": "2099-01-01T00:00:00+00:00"
+        }
+       }
+      }
+     ]
+    }
+   },
+   "restore": {
+    "severity": "INFO",
+    "debuglevel": 0
+   },
+   "after": {
+    "Dhcp4": {
+     "valid-lifetime": 3600,
+     "subnet4": [],
+     "loggers": [
+      {
+       "name": "kea-dhcp4",
+       "severity": "INFO",
+       "debuglevel": 0
+      }
+     ]
+    }
+   }
+  }
+ ]
+}

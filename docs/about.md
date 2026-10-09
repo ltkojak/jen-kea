@@ -25,11 +25,14 @@ Public License v3. The source is at
 - Jen does not require an agent on the Kea host. It connects out to
   Kea's existing HTTP API and database, and over SSH for config
   changes; nothing is installed on the Kea server except an optional
-  helper script (`jen-kea-helper`) that runs only when Jen invokes it and
-  performs a fixed set of operations: report its version, read, test and
+  helper script (`jen-kea-helper`) that runs only when Jen invokes it - plus,
+  once you have turned investigation logging on, a systemd timer of its own
+  that wakes it every minute to put the Kea logger back when the time is up -
+  and performs a fixed set of operations: report its version, read, test and
   apply a Kea config, remove a config file Jen itself just created (the
   undo of authoring a new one), control the Kea service, tail a Kea log, install
-  the Kea packages, install a TLS certificate and update itself.
+  the Kea packages, install a TLS certificate, update itself, and arm, disarm and
+  report a self-restore of the log level.
 - Jen is not a DNS server, and does not manage BIND or other DNS
   software directly — it can push DHCP hostnames into a handful of
   third-party DNS/DHCP-aware tools (Pi-hole, AdGuard Home) through an
