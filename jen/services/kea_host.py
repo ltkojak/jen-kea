@@ -954,6 +954,58 @@ def remove_config(server: dict, service: str, expect_sha256: str | None) -> dict
     return {"ok": False, "code": "error", "detail": resp.get("detail") or str(err), "via": "helper"}
 
 
+INVESTIGATION_MIN_HELPER_BUILD = (
+    15  # v5.68.0-beta.29 (Q165): investigation-arm / -disarm / -status and the self-restore timer arrive in build 15
+)
+
+
+def _investigation_op(server: dict, op: str, payload: dict) -> dict:
+    """One investigation-* helper op, normalised: `{"ok": bool, "code": "ok" | "missing" | "old" | "error", "detail": str, ...the helper's own fields}`. Never raises.
+    There is no legacy engine for these: the whole point is a root-owned routine on the Kea host (v5.68.0-beta.29, Q165), so a host without the helper - or with one
+    older than build 15 - answers `missing` / `old` and the caller says to press Update helper."""
+    try:
+        resp = helper_call(server, op, payload)
+    except HelperMissing:
+        _flag_legacy(server)
+        return {"ok": False, "code": "missing", "detail": HELPER_REQUIRED}
+    except HelperError as e:
+        return {"ok": False, "code": "error", "detail": str(e)}
+    _record_from_resp(server.get("id"), resp)
+    if resp.get("ok"):
+        return {**resp, "ok": True, "code": "ok", "detail": resp.get("detail") or ""}
+    err = resp.get("error")
+    if err == "unknown-op":
+        return {
+            "ok": False,
+            "code": "old",
+            "detail": "the Kea host helper on this host is older than build 15 - press Update helper",
+        }
+    return {"ok": False, "code": "error", "detail": resp.get("detail") or str(err or "the helper refused")}
+
+
+def investigation_arm(server: dict, until: str, restore: dict, jen: dict | None = None) -> dict:
+    """Ask the host to put the kea-dhcp4 logger back BY ITSELF at `until` (`restore` is the marker's own object): the helper writes its state file and makes sure its
+    systemd timer is running. `{"ok", "code", "detail", "timer": "systemd" | "none"}` - a "none" timer is a host that will not do it, and the caller must not turn
+    logging on."""
+    reply = _investigation_op(
+        server,
+        "investigation-arm",
+        {"service": "dhcp4", "path": _conf_path(server, "dhcp4"), "until": until, "restore": restore, "jen": jen or {}},
+    )
+    reply.setdefault("timer", "none")
+    return reply
+
+
+def investigation_disarm(server: dict) -> dict:
+    """Run the host's restore NOW (the same routine its timer runs): file, `-t`, and a SIGHUP to the daemon. `{"ok", "code", "detail", "restored", "how"}`."""
+    return _investigation_op(server, "investigation-disarm", {"service": "dhcp4", "path": _conf_path(server, "dhcp4")})
+
+
+def investigation_status(server: dict) -> dict:
+    """What the host knows of its self-restore: `{"ok", "code", "detail", "armed", "until", "restored_at", "how", "last_error", ...}`."""
+    return _investigation_op(server, "investigation-status", {"service": "dhcp4"})
+
+
 def _record_revision_after_apply(server, service, cfg, sha, summary, source):
     try:
         from jen.services import config_revisions as _rev

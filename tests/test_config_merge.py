@@ -11,6 +11,8 @@ import configparser
 import importlib.util
 import pathlib
 
+import pytest
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 _spec = importlib.util.spec_from_file_location("config_merge", ROOT / "tools" / "config_merge.py")
 cm = importlib.util.module_from_spec(_spec)
@@ -348,3 +350,98 @@ class TestAMultiLineValueTravelsOnOneLine:
         cm.main(["--answers", str(f)])
         out = capsys.readouterr().out.splitlines()
         assert out == ["JEN_KEA_API_URL=http://x", "JEN_KEA_API_PASS=one\\ntwo"]
+
+
+class TestTheIdentityDiff:
+    """v5.68.0-beta.29 (Q165, edge 1): `--identity-diff BEFORE AFTER` lists every change to WHICH Kea Jen reaches. The installer refuses a `--configure` that makes one
+    without `--change-endpoints` (tests/test_install_endpoint_guard.py), so this has to be exactly the set Jen's own guard protects (`jen.config.identity_view`)."""
+
+    LIVE = """[kea]
+api_url = http://1.1.1.1:8000
+connection_mode = ca
+
+[kea_ssh]
+host = kea-a.lan
+user = jen
+kea_conf = /etc/kea/kea-dhcp4.conf
+
+[kea_server_2]
+name = kea-b
+api_url = http://2.2.2.2:8000
+ssh_host = kea-b.lan
+ssh_user = jen
+
+[jen_db]
+password = secret
+"""
+
+    def test_nothing_changed_prints_nothing(self):
+        assert cm.identity_diff(self.LIVE, self.LIVE) == []
+
+    @pytest.mark.parametrize(
+        "old,new,line",
+        [
+            (
+                "api_url = http://1.1.1.1:8000",
+                "api_url = http://9.9.9.9:8000",
+                "[kea] api_url: http://1.1.1.1:8000 -> http://9.9.9.9:8000",
+            ),
+            ("connection_mode = ca", "connection_mode = direct", "[kea] connection_mode: ca -> direct"),
+            ("host = kea-a.lan", "host = kea-z.lan", "[kea_ssh] host: kea-a.lan -> kea-z.lan"),
+            ("user = jen\nkea_conf", "user = ops\nkea_conf", "[kea_ssh] user: jen -> ops"),
+            (
+                "kea_conf = /etc/kea/kea-dhcp4.conf",
+                "kea_conf = /srv/kea.conf",
+                "[kea_ssh] kea_conf: /etc/kea/kea-dhcp4.conf -> /srv/kea.conf",
+            ),
+            ("ssh_host = kea-b.lan", "ssh_host = kea-q.lan", "[kea_server_2] ssh_host: kea-b.lan -> kea-q.lan"),
+        ],
+    )
+    def test_each_identity_field_is_reported(self, old, new, line):
+        assert old in self.LIVE
+        assert cm.identity_diff(self.LIVE, self.LIVE.replace(old, new)) == [line]
+
+    def test_credentials_the_name_and_the_database_are_not_identity(self):
+        changed = self.LIVE.replace("password = secret", "password = other-secret").replace(
+            "name = kea-b", "name = renamed"
+        )
+        assert cm.identity_diff(self.LIVE, changed) == []
+
+    def test_a_blank_config_path_is_the_default_one(self):
+        blank = self.LIVE.replace("kea_conf = /etc/kea/kea-dhcp4.conf\n", "kea_conf =\n")
+        assert cm.identity_diff(self.LIVE, blank) == []
+
+    def test_a_server_removed_or_added_is_one_line(self):
+        gone = self.LIVE.split("[kea_server_2]")[0] + "[jen_db]\npassword = secret\n"
+        assert cm.identity_diff(self.LIVE, gone) == ["[kea_server_2] removed"]
+        assert cm.identity_diff(gone, self.LIVE) == ["[kea_server_2] added"]
+
+    def test_the_command_line_prints_the_lines_and_exits_zero(self, tmp_path, capsys):
+        before, after = tmp_path / "before.ini", tmp_path / "after.ini"
+        before.write_text(self.LIVE)
+        after.write_text(self.LIVE.replace("connection_mode = ca", "connection_mode = direct"))
+        assert cm.main(["--identity-diff", str(before), str(after)]) == 0
+        assert capsys.readouterr().out == "[kea] connection_mode: ca -> direct\n"
+        assert cm.main(["--identity-diff", str(before), str(before)]) == 0
+        assert capsys.readouterr().out == ""
+
+    def test_it_agrees_with_the_identity_the_apps_own_guard_compares(self):
+        """The same set of changes as `jen.config.identity_view`: the installer's check is not a second opinion about what identity is."""
+        import jen.config as jconfig
+
+        def view(text):
+            parser = configparser.ConfigParser(interpolation=None)
+            parser.read_string(text)
+            parser.set("kea", "api_user", "u") if parser.has_section("kea") else None
+            return jconfig.identity_view(parser)
+
+        variants = [
+            self.LIVE.replace("api_url = http://1.1.1.1:8000", "api_url = http://9.9.9.9:8000"),
+            self.LIVE.replace("connection_mode = ca", "connection_mode = direct"),
+            self.LIVE.replace("host = kea-a.lan", "host = kea-z.lan"),
+            self.LIVE.replace("ssh_user = jen", "ssh_user = ops"),
+            self.LIVE.replace("password = secret", "password = x"),
+            self.LIVE.replace("name = kea-b", "name = renamed"),
+        ]
+        for variant in variants:
+            assert bool(cm.identity_diff(self.LIVE, variant)) == (view(self.LIVE) != view(variant)), variant

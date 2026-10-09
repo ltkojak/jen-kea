@@ -156,7 +156,7 @@ def trace_page():
                 if not any(e["level"] == "DEBUG" for e in events) and str(server.get("id")) not in ctx["investigation"]:
                     ctx["note"] += (
                         f" Investigation logging on {server.get('name')} (the card above) adds the classes Kea assigned, subnet "
-                        "selection and each packet's options for a few minutes, and Jen puts the level back by itself."
+                        "selection and each packet's options for a few minutes, and the Kea host puts the level back by itself."
                     )
 
             chosen = next(iter(known_subnets & set(subnet_map)), None)

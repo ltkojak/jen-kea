@@ -18,6 +18,11 @@ step log, and `JEN_MODEL_SEED=<n> pytest --noconftest tests/test_investigation_m
     JEN_MODEL_SEEDS=500 pytest --noconftest tests/test_investigation_model.py -q
     JEN_MODEL_SEED=17 JEN_MODEL_STEPS=400 pytest --noconftest tests/test_investigation_model.py -q -k walk
 
+v5.68.0-beta.29 (Q165): the Kea HOST is part of the world. Each physical fake carries the state file and the timer of jen-kea-helper build 15 (the fake restores a logger with
+the helper's OWN `_restore_logger`), a `HostTimer` actor fires every fake's timer every 60 s of the walk's clock WITHOUT any call from Jen, and invariant I10 says what the
+guarantee now is: a daemon the host was armed for is never at investigation DEBUG more than 120 s after its deadline - however the rest of the walk went: Jen's database
+unavailable or garbage, an identity changed under the entry, or Jen not running at all (`jen_dead_from`).
+
 Where it lives in the process (CLAUDE.md, "Test environment notes"): any change under jen/services/investigation_logging.py, jen/services/explain_context.py or the Kea
 settings routes runs this file locally before the push, and a new operation, state or fault in those modules is added to the walk in the same commit.
 """
@@ -111,8 +116,14 @@ class Walk:
         "idle": 3,
     }
 
-    def __init__(self, seed, steps, world, tmp_path, monkeypatch):
+    #: Q165: the HostTimer actor. False is the mutation check of I10 - the walk must go red without the host's timer.
+    HOST_TIMER = True
+
+    def __init__(self, seed, steps, world, tmp_path, monkeypatch, jen_dead_from=None):
         self.seed, self.steps = seed, steps
+        self.jen_dead_from = (
+            jen_dead_from  # from this step on Jen does NOTHING (no operation, no sweep): only the hosts' timers run
+        )
         self.rng = random.Random(seed)
         self.world, self.tmp_path = world, tmp_path
         self.log: list[str] = []
@@ -173,6 +184,9 @@ class Walk:
         }
         for host, fake in self.physical.items():
             fake.host = host
+            fake.next_tick = NOW + timedelta(
+                seconds=rng.randint(1, 60)
+            )  # when this host's timer fires next (the timer is the host's own clock)
             if rng.random() < 0.35:
                 fake.commands = ["version-get"]  # a daemon that answers and lacks config-reload
         self.original = {host: copy.deepcopy(f.file) for host, f in self.physical.items()}
@@ -200,6 +214,10 @@ class Walk:
         monkeypatch.setattr(kea_host, "service_action", self._service_action)
         monkeypatch.setattr(kea_host, "read_config_versioned", self._read_config)
         monkeypatch.setattr(kea_host, "helper_call", self._helper_call)
+        monkeypatch.setattr(kea_host, "helper_build", self._host_build)
+        monkeypatch.setattr(kea_host, "investigation_arm", self._host_arm)
+        monkeypatch.setattr(kea_host, "investigation_disarm", self._host_disarm)
+        monkeypatch.setattr(kea_host, "investigation_status", self._host_status)
         monkeypatch.setattr(kea_host, "test_config", lambda server, service, cfg, **kw: {"ok": True, "code": "ok"})
         monkeypatch.setattr(kea_host, "_record_from_resp", lambda *a, **k: None)
         monkeypatch.setattr(kea_host, "_record_revision_after_apply", lambda *a, **k: None)
@@ -282,6 +300,48 @@ class Walk:
             return None, None
         return copy.deepcopy(fake.file), "sha"
 
+    # the Kea host's investigation ops (build 15): answered by the physical fake at the server's SSH host, or "no route" when there is none
+    _NO_ROUTE = {"ok": False, "code": "error", "detail": "ssh: no route to host"}
+
+    def _host_build(self, server):
+        fake = self.ssh_fake(server)
+        if fake is None:
+            return {"code": "unreachable", "version": None, "build": None, "detail": "ssh: no route to host"}
+        return fake.helper_build_info(server)
+
+    def _host_arm(self, server, until, restore, jen=None):
+        fake = self.ssh_fake(server)
+        return dict(self._NO_ROUTE) if fake is None else fake.investigation_arm(server, until, restore, jen)
+
+    def _host_disarm(self, server):
+        fake = self.ssh_fake(server)
+        return dict(self._NO_ROUTE) if fake is None else fake.investigation_disarm(server)
+
+    def _host_status(self, server):
+        fake = self.ssh_fake(server)
+        return dict(self._NO_ROUTE) if fake is None else fake.investigation_status(server)
+
+    def _host_timers(self):
+        """The HostTimer actor: every host's timer fires every 60 s of the walk's clock, at the moment it fires, whether or not Jen runs, is reachable or is right about
+        anything (`jen-kea-helper --self-restore` reads only its own state file and the Kea config). Jen's clock is the host's clock, so the tick sees the time it fired at."""
+        if not self.HOST_TIMER:
+            return
+        for host, fake in self.physical.items():
+            while fake.next_tick <= self.now:
+                at, kept = fake.next_tick, self.now
+                self.now = at
+                try:
+                    result = fake.host_tick()
+                finally:
+                    self.now = kept
+                if result is not None and not result[0]:
+                    fake.last_failed_tick = at
+                if result is not None:
+                    self.say(
+                        f"  host timer on {host} fired at {at.isoformat(timespec='seconds')}: restore ok={result[0]} how={result[1]}"
+                    )
+                fake.next_tick = at + timedelta(seconds=60)
+
     def _helper_call(self, server, op, payload=None, timeout=60):
         fake = self.ssh_fake(server)
         if fake is None:
@@ -360,7 +420,8 @@ class Walk:
                 f"kea {host}: loaded_debug={at_debug(f.loaded)} file_marker={has_marker(f.file)} reload={'config-reload' in f.commands} "
                 f"restarts={f.calls.count('restart:dhcp4')} reloads={f.calls.count('config-reload')} faults="
                 f"{[k for k in ('reload_applied_but_lost', 'api_silent', 'list_unreachable', 'reload_ignored', 'restart_ignored', 'rollback_fails') if getattr(f, k, False)]}"
-                f"{'' if f.restart_ok else ' restart_ok=False'}{'' if not f.reload_result else ' reload_refused'} last calls: {f.calls[-10:]}"
+                f"{'' if f.restart_ok else ' restart_ok=False'}{'' if not f.reload_result else ' reload_refused'} host_state="
+                f"{None if f.helper_state is None else {k: f.helper_state[k] for k in ('until', 'restored_at', 'how', 'last_error')}} last calls: {f.calls[-10:]}"
             )
         return "\n".join(lines)
 
@@ -375,6 +436,7 @@ class Walk:
         for n in range(self.steps):
             self.step_no = n
             self._tick()
+            self._host_timers()
             self.answered_get = set()
             self.writes.clear()
             self.applies.clear()
@@ -382,6 +444,8 @@ class Walk:
             self.exempt_i7 = False
             self._faults()
             self.op = self.rng.choices(names, weights)[0]
+            if self.jen_dead_from is not None and n >= self.jen_dead_from:
+                self.op = "idle"  # Jen is not running: no sweep, no page, no scheduler job - the clock moves and the hosts' timers fire
             self.start_kind, self.start_entries = self.raw_state()
             self.start_counts = {h: self._counts(f) for h, f in self.physical.items()}
             self.start_audits = {
@@ -415,6 +479,10 @@ class Walk:
             self.went_back = True
             step = -self.rng.randint(5, 900)  # the clock steps backwards once
             self.say(f"clock steps BACK {-step}s")
+            for fake in self.physical.values():
+                fake.next_tick += timedelta(
+                    seconds=step
+                )  # a systemd timer is MONOTONIC: it fires 60 s of elapsed time after the last run, whatever the wall clock was set to
         self.now = self.now + timedelta(seconds=step)
 
     # ── faults ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -441,6 +509,9 @@ class Walk:
             "reload_ignored": 2,
             "reload_refused": 2,
             "restart_ignored": 2,
+            "host_down": 2,
+            "host_restore_fails": 2,
+            "hup_ignored": 2,
         }
         kinds = [
             "reload_applied_but_lost",
@@ -462,6 +533,9 @@ class Walk:
             "hand_reload",
             "rebuild_servers",
             "hand_remove_server",
+            "host_down",
+            "host_restore_fails",
+            "hup_ignored",
         ]
         kind = self.rng.choices(kinds, [weights.get(k, 1) for k in kinds])[0]
         getattr(self, "fault_" + kind)()
@@ -526,6 +600,16 @@ class Walk:
         self.i1_open = True  # a Kea that is reloaded while the API lies cannot be SEEN at DEBUG: the first healthy full scan afterwards is what finds it
         other = self.physical[self.rng.choice([h for h in HOSTS if h != fake.host])]
         self._timed(fake, "second", copy.deepcopy(other.loaded), "second (API answers for another daemon)")
+
+    def fault_host_down(self):
+        """The helper cannot be asked (SSH to the host fails for its investigation ops): arm is refused, status and disarm do not answer. The host's TIMER does not need Jen to reach it."""
+        self._timed(self._fake(), "host_down", True, "host_down (the helper does not answer)")
+
+    def fault_host_restore_fails(self):
+        self._timed(self._fake(), "host_restore_fails", True, "host_restore_fails (-t refuses the restored config)")
+
+    def fault_hup_ignored(self):
+        self._timed(self._fake(), "hup_ignored", True, "hup_ignored (the daemon does not re-read on SIGHUP)")
 
     def fault_db_fails(self):
         self.db_fail_budget = self.rng.randint(1, 4)
@@ -625,6 +709,17 @@ class Walk:
         restarts = (sfake.calls.count("restart:dhcp4") if sfake else 0) - restarts0
         self.say(f"turn_on {server['id']} {minutes}m -> ok={out['ok']} {out['lines'][-1][:90] if out['lines'] else ''}")
         self.turn_on_listed = listed
+        if out["ok"]:
+            state = sfake.helper_state if sfake else None
+            if (
+                state is None
+                or ed._parse_until(state["until"]) != ed._parse_until(out["until"])
+                or state["restored_at"]
+            ):
+                self.fail(
+                    "I10",
+                    f"turn_on of {server['id']} succeeded and the Kea host is not armed for {out['until']}: {state}",
+                )
         if listed and restarts:
             self.fail(
                 "I3", f"turn_on of {server['id']} restarted the daemon {restarts}x although it lists config-reload"
@@ -940,10 +1035,40 @@ class Walk:
             candidate["Dhcp4"]["subnet4"] = [{"id": self.rng.randint(1, 9), "subnet": "10.1.0.0/24"}]
         else:
             candidate = copy.deepcopy(self.original[fake.host])
-        state, outstanding = self.outstanding()
-        entry = outstanding.get(str(server["id"]))
+        state, everything = self.raw_state()
+        sid_here = str(server["id"])
+
+        def same_kea(e):
+            conf = e.get("kea_conf") or ""
+            return e.get("ssh_host") == server.get("ssh_host") and (
+                not conf or conf == (server.get("kea_conf") or DEFAULT_CONF)
+            )
+
+        # (Q165, found by the walk) the entry is about a KEA: this server's own live entry, or one under another id that names the same SSH host and config path
+        owed = [
+            e
+            for k, e in everything.items()
+            if (k == sid_here and not e.get("removed")) or (k != sid_here and same_kea(e))
+        ]
+        entry = next((e for e in owed if e.get("file", "debug") == "debug"), None)
         carries = has_marker(candidate)
-        expected = state != "ok" or bool(entry and entry.get("file", "debug") == "debug" and not carries)
+        # (Q165, edge 2) a candidate that carries a marker whose restore object or deadline is not the one the entry recorded is refused too - compared, not validated
+        theirs = (_logger_of(candidate).get("user-context") or {}).get("jen-investigation") if carries else None
+        differs = bool(
+            entry
+            and isinstance(theirs, dict)
+            and not ed.validate_investigation_marker(candidate)
+            and not entry.get("marker_invalid")
+            and (
+                ("restore" in entry and theirs.get("restore") != entry["restore"])
+                or (
+                    not entry.get("deadline_malformed")
+                    and ed._parse_until(entry.get("until")) is not None
+                    and ed._parse_until(theirs.get("until")) != ed._parse_until(entry.get("until"))
+                )
+            )
+        )
+        expected = state != "ok" or bool(entry and entry.get("file", "debug") == "debug" and (not carries or differs))
         res = kea_host.apply_config(
             server, "dhcp4", candidate, summary="walk", source=self.rng.choice(["jen", "restore"])
         )
@@ -1146,8 +1271,43 @@ class Walk:
                         )
         # I3 - the daemon step is bounded
         self._i3(entries, kind)
+        # I10 - DEBUG never outlives its deadline (v5.68.0-beta.29, Q165)
+        self._i10()
         self.prev_entries = entries if kind == "ok" else {}
         self.prev_kind, self.prev_raw = kind, raw
+
+    I10_GRACE_S = 120  # the host's timer fires every 60 s; this is the allowance past the deadline
+
+    def _i10(self):
+        """I10 - DEBUG never outlives its deadline. A daemon whose RUNNING config is at investigation DEBUG with the marker, for a session the Kea host was armed for, is
+        restored within `I10_GRACE_S` of the marker's own `until` - read from the daemon, not from Jen's record - whatever happened to Jen: its database unavailable or
+        holding garbage, an identity changed under the entry, no sweep at all. The one thing that excuses a late restore is the host itself failing (its `-t` refuses the
+        restored config, the daemon ignores SIGHUP and cannot be restarted), and then the host's state file must SAY so (`last_error`): a failure is reported, never silent."""
+        for host, fake in self.physical.items():
+            if not at_debug(fake.loaded):
+                continue
+            context = _logger_of(fake.loaded).get("user-context") or {}
+            due = ed._parse_until((context.get("jen-investigation") or {}).get("until"))
+            state = fake.helper_state
+            if due is None or state is None or ed._parse_until(state["until"]) != due:
+                continue  # a session the host was never armed for: the host has no promise to keep
+            late = (self.now - due).total_seconds()
+            if late <= self.I10_GRACE_S:
+                continue
+            failing = fake.host_restore_fails or (
+                (fake.reload_ignored or fake.hup_ignored) and (state["restarts"] >= 1 or not fake.restart_ok)
+            )
+            retrying = getattr(fake, "last_failed_tick", None)
+            retrying = (
+                retrying is not None and (self.now - retrying).total_seconds() <= self.I10_GRACE_S
+            )  # (the fault just ended: the next tick retries)
+            if (failing or retrying) and state["last_error"] and not state["restored_at"]:
+                continue
+            self.fail(
+                "I10",
+                f"the Kea at {host} is still at investigation DEBUG {late:.0f} s after its deadline {due.isoformat()}; the host's state: {state}, host timer running: "
+                f"{fake.timer_running and self.HOST_TIMER}",
+            )
 
     def _new_life(self, entry):
         return {"host": entry.get("ssh_host"), "auto_restarts": 0, "auto_reloads": 0}
@@ -1187,7 +1347,7 @@ class Walk:
 
 @pytest.fixture
 def walk_world(world, monkeypatch, tmp_path):
-    return lambda seed, steps: Walk(seed, steps, world, tmp_path, monkeypatch)
+    return lambda seed, steps, **kw: Walk(seed, steps, world, tmp_path, monkeypatch, **kw)
 
 
 def _seeds():
@@ -1225,6 +1385,7 @@ class TestTheWalk:
         "observe_from": "through the damaged-record recovery (sweep while damaged)",
         "turn_on": "op:turn_on",
         "turn_off": "op:turn_off",
+        "helper_gate": "through turn_on (the build check before anything is written)",
         "blocking_removal": "op:views",
         "removal_refusal": "op:removal",
         "identity_guard": "through the config writer: op:identity (preflight_identity_change and mutate)",
@@ -1272,6 +1433,28 @@ class TestTheWalk:
                     "identity_guard",
                     "file_write_refusal",
                 ), f"{name}: op_{op} does not call it"
+
+
+class TestTheKeaHostKeepsTheDeadline:
+    """I10 (v5.68.0-beta.29, Q165): a daemon the Kea host was armed for is never at investigation DEBUG more than 120 s past its deadline - with Jen alive, or not running at all.
+    The mutation check is the first test: take the HostTimer actor away and the same walks go red. (In a probe of 30 seeds, 21 went red without the timer; the ten named here all did.)"""
+
+    STEPS = 400
+    RED_WITHOUT_THE_TIMER = list(range(10))
+
+    @pytest.mark.parametrize("seed", RED_WITHOUT_THE_TIMER)
+    def test_i10_is_red_when_the_hosts_timer_is_taken_away(self, seed, walk_world, monkeypatch):
+        monkeypatch.setattr(Walk, "HOST_TIMER", False)
+        with pytest.raises(InvariantViolated) as red:
+            walk_world(seed, self.STEPS, jen_dead_from=self.STEPS // 3).run()
+        assert "I10 violated" in str(red.value)
+
+    @pytest.mark.parametrize("seed", RED_WITHOUT_THE_TIMER + list(range(10, 24)))
+    def test_with_jen_stopped_after_a_third_of_the_walk_every_session_is_still_restored(self, seed, walk_world):
+        walk_world(seed, self.STEPS, jen_dead_from=self.STEPS // 3).run()
+
+    def test_the_grace_is_two_timer_periods_not_a_loophole(self):
+        assert Walk.I10_GRACE_S == 120 and Walk.HOST_TIMER is True
 
 
 class TestSeedsThatCaughtARealDefect:
@@ -1605,6 +1788,7 @@ class TestTheWalkWouldHaveCaught:
         assert out["restored"] == ["kea-a"] and not self._on_at_debug(kea) and not inv.active()
         assert kea.calls.count("restart:dhcp4") == 0, "and finishing it never needed a restart"
 
+    @pytest.mark.usefixtures("legacy_entries")
     def test_beta23_a_daemon_that_ignores_reloads_and_restarts_is_not_asked_every_minute__I3(self, world):
         """beta.23 (Q158, before its fixup): the file was restored, the daemon ignored both a reload and a restart and stayed at DEBUG 55 - and the sweep asked
         again every minute, for ever. I3: the daemon step is bounded (RELOAD_TRIES reloads, ONE restart per entry), then a person is told."""
@@ -1735,6 +1919,7 @@ def _stored_servers(world):
 class TestWhatTheWalkFound:
     """The first 500-seed run of the walk over beta.27 + Q164 found two defects in code nobody had touched in this Q. Each is the failing sequence, named."""
 
+    @pytest.mark.usefixtures("legacy_entries")
     def test_a_restore_restart_that_fails_is_spent_once__seed_449_and_ten_more(self, world):
         """I3. A daemon with no `config-reload` is restored by a RESTART folded into the change set; a restart that fails is rolled back (the marker is
         written back, the daemon restarted AGAIN) and the entry stays due - and the sweep did the same every minute: two restarts a minute of a production

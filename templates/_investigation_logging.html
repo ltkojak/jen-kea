@@ -18,7 +18,7 @@
 </form>
 {%- else -%}
 {%- for minutes in (5, 15, 60) %}
-<form method="POST" action="/servers/{{ server.id }}/investigation-logging/on" class="u-cccfa4"{% if minutes == 60 %} data-confirm="Turn on DEBUG logging on {{ server.name }} for 60 minutes? Kea will write a packet dump for every client for an hour, which can fill the disk on a busy server. Jen puts the level back by itself."{% endif %}>
+<form method="POST" action="/servers/{{ server.id }}/investigation-logging/on" class="u-cccfa4"{% if minutes == 60 %} data-confirm="Turn on DEBUG logging on {{ server.name }} for 60 minutes? Kea will write a packet dump for every client for an hour, which can fill the disk on a busy server. The Kea host puts the level back by itself."{% endif %}>
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="back" value="{{ back }}">
     <input type="hidden" name="mac" value="{{ mac }}">

@@ -24,6 +24,11 @@ else EMPTY), so an interactive `--configure` wrote them blank - and a blank diff
 disconnected from Kea and lost its DDNS token. `--answers` lists the fifteen answers the file already holds so `install.sh --configure` can seed the
 wizard with them before it runs; an answers file or an environment variable still wins over the seed.
 
+v5.68.0-beta.29 (Q165, edge 1): `--identity-diff BEFORE AFTER` prints one line for every change to WHICH Kea Jen reaches - the connection mode, each server's API URL,
+SSH host, SSH user and config path, and a server added or removed - between two jen.config files, and nothing when there is none. `install.sh --configure` compares the live
+file with the merged result before it writes: a changed endpoint while investigation logging may be on (on the OLD Kea, which the new settings would stop Jen reaching)
+needs `--change-endpoints`. It reads the INI only - no database, no running Jen - so the guard holds exactly when Jen's own is not running to refuse.
+
 Comments are not kept (Jen's own writer, `configparser`, does not keep them either). Exit status: 0 merged text on stdout; 2 usage; 3 a file
 could not be read as an INI.
 """
@@ -51,6 +56,54 @@ def _read(path):
             return f.read()
     except FileNotFoundError:
         return ""
+
+
+DEFAULT_KEA_CONF = "/etc/kea/kea-dhcp4.conf"
+_PRIMARY_IDENTITY = (("kea", "api_url"), ("kea_ssh", "host"), ("kea_ssh", "user"), ("kea_ssh", "kea_conf"))
+_EXTRA_IDENTITY = ("api_url", "ssh_host", "ssh_user", "kea_conf")
+
+
+def identity_view(text, label="the file"):
+    """{label: value} for everything that decides WHICH Kea Jen reaches: the connection mode, the primary's API URL / SSH host / SSH user / config path, and the same four for
+    every `[kea_server_N]` (N >= 2). Stripped; a blank config path is the default one; the mode is "direct" or "ca" as Jen reads it. The same values
+    `jen.config.identity_view` compares (tests/test_config_merge.py holds the two together)."""
+    parser = _parse(text, label)
+    view = {}
+    mode = parser.get("kea", "connection_mode", fallback="ca").strip().lower() if parser.has_section("kea") else "ca"
+    view["[kea] connection_mode"] = mode if mode in ("ca", "direct") else "ca"
+    for section, key in _PRIMARY_IDENTITY:
+        value = parser.get(section, key, fallback="").strip() if parser.has_section(section) else ""
+        view[f"[{section}] {key}"] = value or (DEFAULT_KEA_CONF if key == "kea_conf" else "")
+    for section in parser.sections():
+        if (
+            section.startswith("kea_server_")
+            and section[len("kea_server_") :].isdigit()
+            and int(section[len("kea_server_") :]) >= 2
+        ):
+            for key in _EXTRA_IDENTITY:
+                value = parser.get(section, key, fallback="").strip()
+                view[f"[{section}] {key}"] = value or (DEFAULT_KEA_CONF if key == "kea_conf" else "")
+            view[f"[{section}]"] = "present"
+    return view
+
+
+def identity_diff(before_text, after_text):
+    """The lines that say how the Kea Jen reaches differs between two files: `[section] key: old -> new`, `[kea_server_2] removed` / `added`. Empty when nothing does."""
+    before, after = identity_view(before_text, "the live file"), identity_view(after_text, "the new file")
+    lines = []
+    for key in sorted(set(before) | set(after)):
+        old, new = before.get(key), after.get(key)
+        if old == new:
+            continue
+        if key.endswith("]"):  # a whole server section
+            lines.append(f"{key} {'added' if old is None else 'removed'}")
+        elif key.split("] ")[0].startswith("[kea_server_") and (old is None or new is None):
+            continue  # said once, by the section line
+        else:
+            lines.append(
+                f"{key}: {old if old not in (None, '') else '(not set)'} -> {new if new not in (None, '') else '(not set)'}"
+            )
+    return lines
 
 
 def merge(snapshot_text, live_text, wizard_text):
@@ -139,7 +192,18 @@ def main(argv=None):
         default=None,
         help="print the wizard's answers (JEN_NAME=value lines) that this live file already holds, and exit",
     )
+    ap.add_argument(
+        "--identity-diff",
+        nargs=2,
+        metavar=("BEFORE", "AFTER"),
+        help="print how the Kea Jen reaches differs between two config files (nothing when it does not), and exit",
+    )
     args = ap.parse_args(argv)
+    if args.identity_diff:
+        before, after = (_read(path) for path in args.identity_diff)
+        for line in identity_diff(before, after):
+            sys.stdout.write(line + "\n")
+        return 0
     if args.answers is not None:
         text = _read(args.answers)
         for name, value in [*answers_from(text), *defaults_from(text)]:

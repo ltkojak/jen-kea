@@ -10,7 +10,10 @@ fixture's value (the beta.27 CI failure). The only fixture is `world`.
 """
 
 import copy
+import importlib.util
+import pathlib
 from datetime import datetime, timedelta, timezone
+from importlib.machinery import SourceFileLoader
 
 import pytest
 
@@ -20,6 +23,21 @@ from jen.services.kea_changeset import ChangeSetResult
 NOW = datetime(2026, 10, 4, 12, 0, tzinfo=timezone.utc)
 FUTURE = (NOW + timedelta(minutes=10)).isoformat()
 PAST = (NOW - timedelta(minutes=3)).isoformat()
+
+
+_helper_module = None
+
+
+def helper():
+    """jen-kea-helper itself, loaded once: the fake host below restores a logger with the helper's OWN routine (`_restore_logger`), not a copy of it."""
+    global _helper_module
+    if _helper_module is None:
+        path = pathlib.Path(__file__).resolve().parent.parent / "jen-kea-helper"
+        loader = SourceFileLoader("jen_kea_helper_world", str(path))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        _helper_module = importlib.util.module_from_spec(spec)
+        loader.exec_module(_helper_module)
+    return _helper_module
 
 
 def _cfg(loggers="absent"):
@@ -49,6 +67,22 @@ class FakeKea:
         self.reload_ignored = False  # config-reload answers 0 and the daemon does not move
         self.restart_ignored = False  # the restart succeeds and the daemon does not move
         self.second = None  # config-get answers from ANOTHER daemon (api_url and ssh_host are not the same Kea)
+        # v5.68.0-beta.29 (Q165): the Kea HOST - jen-kea-helper build 15 with its state file and its timer. `host_down` is a host Jen cannot reach over SSH at all.
+        self.build = 15
+        self.helper_code = "ok"  # "missing" | "unreachable" | "error": what `helper_build` answers
+        self.timer = "systemd"  # what `investigation-arm` reports ("none" = a host that cannot run the timer)
+        self.arm_fails = None  # a detail string: `investigation-arm` answers not-ok with it
+        self.host_down = False
+        self.host_restore_fails = (
+            False  # the host's restore routine fails (its `-t` refuses, or the file cannot be written)
+        )
+        self.hup_ignored = (
+            False  # the daemon does not re-read its config on SIGHUP (the host then falls back to ONE restart)
+        )
+        self.helper_state = (
+            None  # the host's state file: {"until", "restore", "restored_at", "how", "last_error", "restarts", "jen"}
+        )
+        self.timer_running = True  # False: the host's timer never fires (the walk's "no HostTimer" case)
 
     def kea_command(self, command, **kw):
         self.calls.append(command)
@@ -118,6 +152,128 @@ class FakeKea:
     def read_config_versioned(self, server, service):
         return copy.deepcopy(self.file), "sha"
 
+    # ── the Kea host (jen-kea-helper build 15) ─────────────────────────────────────────────────────────────────────
+
+    def _host_error(self):
+        return {"ok": False, "code": "error", "detail": "ssh: connection refused"}
+
+    def _too_old(self):
+        return {
+            "ok": False,
+            "code": "old",
+            "detail": "the Kea host helper on this host is older than build 15 - press Update helper",
+        }
+
+    def helper_build_info(self, server):
+        if self.host_down:
+            return {"code": "unreachable", "version": None, "build": None, "detail": "ssh: connection refused"}
+        if self.helper_code != "ok":
+            return {"code": self.helper_code, "version": None, "build": None, "detail": self.helper_code}
+        return {"code": "ok", "version": 7, "build": self.build, "detail": ""}
+
+    def investigation_arm(self, server, until, restore, jen=None):
+        self.calls.append("host:arm")
+        if self.host_down:
+            return self._host_error()
+        if self.build < 15:
+            return self._too_old()
+        if self.arm_fails:
+            return {"ok": False, "code": "error", "detail": self.arm_fails}
+        self.helper_state = {
+            "until": until,
+            "restore": copy.deepcopy(restore),
+            "restored_at": None,
+            "how": None,
+            "last_error": None,
+            "restarts": 0,
+            "jen": jen or {},
+        }
+        return {
+            "ok": True,
+            "code": "ok",
+            "timer": self.timer,
+            "until": until,
+            "detail": "" if self.timer == "systemd" else "no systemd here",
+        }
+
+    def investigation_status(self, server):
+        self.calls.append("host:status")
+        if self.host_down:
+            return self._host_error()
+        if self.build < 15:
+            return self._too_old()
+        st = self.helper_state
+        if st is None:
+            return {"ok": True, "code": "ok", "armed": False}
+        return {"ok": True, "code": "ok", "armed": not st["restored_at"], **copy.deepcopy(st)}
+
+    def _hup_or_restart(self, st):
+        if not (self.reload_ignored or self.hup_ignored):
+            self.loaded = copy.deepcopy(self.file)
+            return "reload", None
+        if st["restarts"] >= 1:
+            return (
+                None,
+                "the daemon did not stay active after the reload and it was already restarted once for this state: not restarting again",
+            )
+        st["restarts"] += 1
+        if not self.restart_ok:
+            return None, "systemctl restart kea-dhcp4-server failed"
+        self.loaded = copy.deepcopy(
+            self.file
+        )  # a real restart re-reads the file (`restart_ignored` models an API that answers for a different daemon)
+        self.list_unreachable = False
+        return "restart", None
+
+    def host_restore(self):
+        """The helper's restore routine (shared by disarm, the timer and boot): (ok, how, detail). The logger is put back from the STATE's `restore`, by the helper's
+        own `_restore_logger`; the daemon is told by SIGHUP, with ONE restart as the fallback."""
+        st = self.helper_state
+        if self.host_restore_fails:
+            st["last_error"] = "kea-dhcp4 -t refused the restored config"
+            return False, None, st["last_error"]
+        new, code = helper()._restore_logger(self.file, st["restore"])
+        if code == "ok":
+            self.file = new
+        how, error = self._hup_or_restart(st)
+        if error:
+            st["last_error"] = error
+            return False, None, error
+        st.update(restored_at=inv._now().isoformat(timespec="seconds"), how=how, last_error=None)
+        return True, how, ""
+
+    def investigation_disarm(self, server):
+        self.calls.append("host:disarm")
+        if self.host_down:
+            return self._host_error()
+        if self.build < 15:
+            return self._too_old()
+        st = self.helper_state
+        if st is None:
+            return {"ok": True, "code": "ok", "restored": False, "how": "nothing", "detail": "not armed"}
+        if st["restored_at"]:
+            return {
+                "ok": True,
+                "code": "ok",
+                "restored": False,
+                "how": st["how"] or "nothing",
+                "detail": "already restored",
+            }
+        ok, how, detail = self.host_restore()
+        if not ok:
+            return {"ok": False, "code": "error", "detail": detail}
+        return {"ok": True, "code": "ok", "restored": True, "how": how, "detail": ""}
+
+    def host_tick(self):
+        """The host's timer firing (`jen-kea-helper --self-restore`): restores when an armed state's `until` has passed. Needs nothing of Jen."""
+        st = self.helper_state
+        if not self.timer_running or st is None or st["restored_at"]:
+            return None
+        due = inv._edit._parse_until(st["until"])
+        if due is not None and due > inv._now():
+            return None
+        return self.host_restore()
+
 
 @pytest.fixture
 def world(monkeypatch):
@@ -184,6 +340,14 @@ def world(monkeypatch):
     monkeypatch.setattr(
         inv._host, "read_config_versioned", lambda server, service: pick(server).read_config_versioned(server, service)
     )
+    monkeypatch.setattr(inv._host, "helper_build", lambda server: pick(server).helper_build_info(server))
+    monkeypatch.setattr(
+        inv._host,
+        "investigation_arm",
+        lambda server, until, restore, jen=None: pick(server).investigation_arm(server, until, restore, jen),
+    )
+    monkeypatch.setattr(inv._host, "investigation_disarm", lambda server: pick(server).investigation_disarm(server))
+    monkeypatch.setattr(inv._host, "investigation_status", lambda server: pick(server).investigation_status(server))
 
     def fake_apply(service, mutate_fn, summary, **kw):
         return pick(kw["servers"][0]).apply_change(service, mutate_fn, summary, **kw)
@@ -198,3 +362,13 @@ def world(monkeypatch):
     if hasattr(inv, "_legacy_logged"):
         inv._legacy_logged.clear()
     return type("World", (), {"store": store, "servers": servers, "daemons": daemons, "db": db})
+
+
+@pytest.fixture
+def legacy_entries(world, monkeypatch):
+    """Entries as beta.28 wrote them: nothing behind them on the Kea host (no state file, no timer), so Jen's own file-writing restore is the only one there is
+    (v5.68.0-beta.29, Q165). That path is still the one for an entry made before build 15, and the fallback when the host cannot restore; the tests of its state
+    machine run under this fixture, and the host's own restore has its own classes (TestTheKeaHostOwnsTheRestore)."""
+    monkeypatch.setattr(inv, "_arm_host", lambda server, entry, until: (True, [], False))
+    monkeypatch.setattr(inv, "_host_phase", lambda known, record, now: set())
+    return world

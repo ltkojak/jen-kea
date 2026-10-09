@@ -369,8 +369,18 @@ def _debug_logging_left_on(ctx) -> Check:
     unconfirmed = [e for e in entries if e["daemon"] in ("unknown", "other") and not e["not_loaded"]]
     not_loaded = [e for e in entries if e["not_loaded"]]
     c.status = "warn" if (unconfirmed or not_loaded) else "ok"
+    hosted = [e for e in entries if e["host_error"] and not e["removed"]]
+    if hosted:
+        c.status = "warn"
     c.detail = "; ".join(
         f"{e['name']}: on until {e['until']}"
+        # v5.68.0-beta.29 (Q165): the guarantee is the host's, and what the host last said went wrong is shown beside the entry
+        + (
+            " - the Kea host puts the logger back by itself then (within about a minute), whatever happens to Jen"
+            if e["armed"]
+            else ""
+        )
+        + (f" - {e['host_error'][:200]}" if e["host_error"] else "")
         + (" (its marker's deadline was unreadable, so it was treated as due)" if e.get("deadline_malformed") else "")
         + (
             f" (Kea's running log level is unconfirmed since {e['observed_at'] or 'it was turned on'} - Jen looks again every minute)"

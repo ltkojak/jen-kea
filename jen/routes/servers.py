@@ -300,7 +300,7 @@ def dismiss_changeset_attention():
 @_admin_required
 def investigation_logging(server_id, action):
     """v5.68.0-beta.3 (Q138) - turn investigation logging (the kea-dhcp4 logger at DEBUG 55) on for 5, 15 or 60 minutes on ONE server,
-    or off now. Jen puts it back by itself when the time is up. Needs an admin with access to every subnet - the same rule as Trace and
+    or off now. The Kea host puts it back by itself when the time is up (Q165). Needs an admin with access to every subnet - the same rule as Trace and
     config history: the log this turns on spans every client. Never reachable by API key or `--unattended`: this is a session POST."""
     back = request.form.get("back")
     mac = (request.form.get("mac") or "").strip().lower()[:17]
@@ -336,7 +336,7 @@ def investigation_logging(server_id, action):
         flash(line, "success" if result["ok"] else "error")
     if result["ok"] and action == "on":
         flash(
-            f"Investigation logging is on for {server['name']} until {result['until']}; Jen puts the log level back by itself.",
+            f"Investigation logging is on for {server['name']} until {result['until']}; the Kea host puts the log level back by itself.",
             "success",
         )
     return done()

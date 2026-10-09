@@ -869,11 +869,11 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
     </div>
     {% endif %}
     {% if investigation_banner %}
-    {# v5.68.0-beta.3 (Q138): DEBUG logging is on for a bounded time and Jen restores it by itself #}
+    {# v5.68.0-beta.3 (Q138): DEBUG logging is on for a bounded time; since beta.29 (Q165) the Kea HOST restores it by itself (`e.armed`) #}
     <div class="alert alert-warning">
         {% for e in investigation_banner %}
         <div>{{ icon("eye") }} <strong>Investigation logging is on for {{ e.name }}</strong> — Kea is writing a packet dump for every client until {{ e.until }}
-            ({{ (e.remaining_s // 60) }} min left); Jen puts the log level back by itself.{% if e.overdue %} <strong>The time is up and it has not been put back yet.</strong>{% endif %}
+            ({{ (e.remaining_s // 60) }} min left); {% if e.armed %}the Kea host puts the log level back by itself at that time, whatever happens to Jen{% else %}Jen puts the log level back by itself{% endif %}.{% if e.host_error %} <em>{{ e.host_error }}</em>{% endif %}{% if e.overdue %} <strong>The time is up and it has not been put back yet.</strong>{% endif %}
             {% if current_user.all_subnets %}<form method="POST" action="/servers/{{ e.server_id }}/investigation-logging/off" class="u-cccfa4">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="back" value="servers">
                 <button type="submit" class="btn btn-sm btn-secondary">{{ icon("eye-off") }} Turn it off now</button></form>{% endif %}</div>

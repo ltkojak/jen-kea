@@ -4,12 +4,14 @@ jen/routes/settings/infrastructure.py
 Kea / database / SSH / DDNS / HA / ports / metrics settings.
 """
 
+import functools
 import ipaddress
 import logging
 import os
 import re
 import subprocess
 import time
+from copy import deepcopy as _deepcopy
 from urllib.parse import urlparse
 
 from flask import flash, jsonify, redirect, render_template, request, url_for
@@ -1076,9 +1078,63 @@ def _servers_not_on_direct_sockets(except_id) -> list[str]:
     return names
 
 
+def _holding_identity_lock(view):
+    """Run the whole view under `identity_lock` (v5.68.0-beta.29, Q165, edge 3). The two direct-socket routes act on the Kea HOST first (the daemon is reconfigured and
+    restarted) and write Jen's own settings LAST, and beta.28 asked the identity question of a copy at the start. Between that question and the final write another
+    request - `turn_on`, which records an entry against the old identity - could commit, and the write would then be refused with the Kea already changed. Held from
+    the first line, the check, the remote changes and the write are one critical section: `turn_on` (and every other config writer) waits behind it, for as long as
+    the helper's own timeouts allow, and whichever comes second sees the first's result. Lock order is the one in jen/config.py: this is the outer lock."""
+
+    @functools.wraps(view)
+    def locked(*args, **kwargs):
+        with __config.identity_lock:
+            return view(*args, **kwargs)
+
+    locked.__holds_identity_lock__ = (
+        True  # (copied outward by the decorators above it; tests/test_direct_socket_lock.py reads it)
+    )
+    return locked
+
+
+def _undo_remote_change(server: dict, service: str, undo, summary: str, sentence: str, *, what: str, by_hand: str):
+    """The compensation for a late refusal (v5.68.0-beta.29, Q165, edge 3): the Kea host was changed and Jen's own settings write was then refused by the config writer
+    (`sentence`). Put the host back - one change through the same change set, the daemon restarted - and say so. When that fails too the lines name the partial state and
+    what a person does about it; nothing is left half done without being said."""
+    from jen.services import kea_changeset as __changeset
+
+    name = server.get("name") or f"Kea Server {server.get('id')}"
+    flash(sentence, "error")
+    result = __changeset.apply_change(
+        service,
+        undo,
+        summary,
+        servers=[server],
+        restart=True,
+        code_messages={"nochange": f"{name} is already as it was before"},
+        daemon_label=_DAEMON_NAME[service],
+    )
+    for style, text in result.lines:
+        flash(text, style)
+    if result.status in ("ok", "nothing"):
+        flash(
+            f"{what} on {name} was undone and the daemon restarted, so the Kea host and Jen's settings agree again. Nothing else was changed.",
+            "info",
+        )
+        __user.audit("DIRECT_SOCKET_COMPENSATED", "kea_api", f"server={name} service={service} {summary}")
+        return
+    flash(
+        f"PARTIAL STATE on {name}: {what} was done on the Kea host and Jen's settings were refused, and Jen could not undo it ({result.status}). {by_hand}",
+        "error",
+    )
+    __user.audit(
+        "DIRECT_SOCKET_PARTIAL", "kea_api", f"server={name} service={service} {summary} compensation={result.status}"
+    )
+
+
 @bp.route("/settings/infrastructure/direct-socket/<int:server_id>/<service>", methods=["POST"])
 @login_required
 @_superadmin_required
+@_holding_identity_lock
 def setup_direct_socket(server_id, service):
     """v5.29.0 (Q29, B1) — give one daemon on one server its own http
     control socket, the way an operator would by hand, but with the
@@ -1310,7 +1366,25 @@ def setup_direct_socket(server_id, service):
         return back
 
     was_ca = __caps.is_ca()
-    written = _write_direct_socket_config(server, service, new_url, user, password, tls=(scheme == "https"))
+    try:
+        written = _write_direct_socket_config(server, service, new_url, user, password, tls=(scheme == "https"))
+    except __config.ConfigChangeRefused as refused:
+        # v5.68.0-beta.29 (Q165, edge 3): refused AFTER the remote change (the record became unreadable between the check and the write, or a hand edit): a socket THIS
+        # request added is taken out again; one that was already there (`nochange`) is not Jen's to remove
+        if result.status == "ok":
+            _undo_remote_change(
+                server,
+                service,
+                lambda cfg: __edit.remove_control_socket(cfg, service),
+                f"removed the control socket added on {address}:{port} (Jen's settings were refused)",
+                refused.sentence,
+                what=f"the {scheme} control socket on {address}:{port}",
+                by_hand=f"Remove it with 'Remove socket' for {daemon} on this page, or delete the http/https entry under control-sockets in {conf} and restart {daemon}.",
+            )
+        else:
+            flash(refused.sentence, "error")
+            flash(f"Nothing was changed on {name}: the socket was already in {conf}.", "info")
+        return back
     __user.set_global_setting("restart_pending", "true")
     flash(f"{daemon} on {name} answers directly at {new_url} — written: {written}.", "success")
     if service != "dhcp4" and __caps.is_ca():
@@ -1481,6 +1555,7 @@ def rotate_kea_ca():
 @bp.route("/settings/infrastructure/direct-socket/<int:server_id>/<service>/remove", methods=["POST"])
 @login_required
 @_superadmin_required
+@_holding_identity_lock
 def remove_direct_socket(server_id, service):
     """v5.29.0 (Q29, B2) — the reverse of setup_direct_socket for ONE
     daemon on ONE server: drop the http/https entry from the daemon's
@@ -1556,9 +1631,21 @@ def remove_direct_socket(server_id, service):
         return back
     changed.clear()  # the preflight ran the callback on a copy; the real run below fills the list the flash reads
 
+    removed_sockets: list = []
+
+    def _remove(cfg):
+        section = cfg.get(_DAEMON_KEY[service]) if isinstance(cfg, dict) else None
+        listed = section.get("control-sockets") if isinstance(section, dict) else None
+        removed_sockets[:] = [
+            _deepcopy(x)
+            for x in (listed if isinstance(listed, list) else [])
+            if isinstance(x, dict) and x.get("socket-type") in __edit._API_SOCKET_TYPES
+        ]
+        return __edit.remove_control_socket(cfg, service)
+
     result = __changeset.apply_change(
         service,
-        lambda cfg: __edit.remove_control_socket(cfg, service),
+        _remove,
         f"removed the {daemon} http control socket",
         servers=[server],
         restart=True,
@@ -1577,7 +1664,24 @@ def remove_direct_socket(server_id, service):
         flash("Jen's own settings were not changed.", "info")
         return back
 
-    __config.app_config.mutate(_apply)
+    try:
+        __config.app_config.mutate(_apply)
+    except __config.ConfigChangeRefused as refused:
+        # v5.68.0-beta.29 (Q165, edge 3): refused AFTER the socket was taken out of the daemon's config - put it back as it was, the daemon restarted
+        if result.status == "ok" and removed_sockets:
+            _undo_remote_change(
+                server,
+                service,
+                lambda cfg: __edit.set_control_socket(cfg, service, removed_sockets[0]),
+                f"put the {daemon} control socket back (Jen's settings were refused)",
+                refused.sentence,
+                what="the removal of the control socket",
+                by_hand=f"Add the control socket back to {conf} by hand (the entry that was removed: {removed_sockets[0]}) and restart {daemon}, or press Remove socket again once Jen's settings can be changed.",
+            )
+        else:
+            flash(refused.sentence, "error")
+            flash(f"Nothing was changed on {name}: there was no socket to remove.", "info")
+        return back
     __user.set_global_setting("restart_pending", "true")
     flash(f"{daemon} on {name}: {'; '.join(changed)}.", "success")
     if keep_direct:

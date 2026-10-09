@@ -7,6 +7,15 @@
 #    sudo ./install.sh               Auto-detect fresh install or upgrade
 #    sudo ./install.sh --upgrade     Non-interactive upgrade, keep config
 #    sudo ./install.sh --configure   Re-run config wizard only
+#    sudo ./install.sh --configure --change-endpoints
+#                                    Allow the wizard to change WHERE Jen reaches a
+#                                    Kea (API URL, connection mode, SSH host/user,
+#                                    config path). Without it a change is refused
+#                                    and listed: the old Kea may still be running
+#                                    investigation logging that Jen can then no
+#                                    longer put back (the Kea host restores it by
+#                                    itself; Jen keeps showing its old entry until
+#                                    you press Forget on Servers).
 #    sudo ./install.sh --repair      Reinstall files + restart, keep config
 #    sudo ./install.sh --unattended  Fully silent upgrade (CI/CD)
 #    sudo ./install.sh --docker      Docker installation path
@@ -71,6 +80,7 @@ LAYOUT_FILE="/etc/jen-layout.conf"
 # ── Mode flags ────────────────────────────────────────────────────────────────
 MODE_UPGRADE=false
 MODE_CONFIGURE=false
+MODE_CHANGE_ENDPOINTS=false   # v5.68.0-beta.29 (Q165): --configure may change which Kea Jen reaches only with --change-endpoints (see _guard_endpoint_changes)
 MODE_REPAIR=false
 MODE_UNATTENDED=false
 MODE_DOCKER=false
@@ -113,6 +123,15 @@ Usage:
   sudo ./install.sh               Auto-detect fresh install or upgrade
   sudo ./install.sh --upgrade     Non-interactive upgrade, keep config
   sudo ./install.sh --configure   Re-run config wizard only
+  sudo ./install.sh --configure --change-endpoints
+                                   Allow the wizard to change WHERE Jen reaches
+                                   a Kea (API URL, connection mode, SSH host/
+                                   user, config path). Without it a change is
+                                   refused and listed: the old Kea may still be
+                                   running investigation logging that Jen can
+                                   then no longer put back (the Kea host restores
+                                   it by itself; Jen keeps showing its old entry
+                                   until you press Forget on Servers).
   sudo ./install.sh --repair      Reinstall files + restart, keep config
   sudo ./install.sh --unattended  Fully silent upgrade (CI/CD)
   sudo ./install.sh --docker      Docker installation path
@@ -159,6 +178,7 @@ while [[ $# -gt 0 ]]; do
         --help|-h)     print_help; exit 0 ;;
         --upgrade)     MODE_UPGRADE=true ;;
         --configure)   MODE_CONFIGURE=true ;;
+        --change-endpoints) MODE_CHANGE_ENDPOINTS=true ;;
         --repair)      MODE_REPAIR=true ;;
         --unattended)  MODE_UNATTENDED=true ;;
         --docker)      MODE_DOCKER=true ;;
@@ -1577,6 +1597,31 @@ _configure_ports() {
 }
 
 # ── Write config ──────────────────────────────────────────────────────────────
+# v5.68.0-beta.29 (Q165, edge 1) - `--configure` rewrites jen.config from OUTSIDE the running Jen, so none of Jen's own identity guards (which refuse a change to where a Kea
+# is reached while investigation logging is on or owed a restore) can see it. This one needs no database and no running Jen: it compares the LIVE file with the text about to
+# replace it (`tools/config_merge.py --identity-diff`) and, when any of the connection mode, a server's API URL, SSH host, SSH user or config path differ, refuses unless
+# the operator said --change-endpoints. $1 = the live file, $2 = the merged text.
+_guard_endpoint_changes() {
+    local live="$1" merged="$2" changes
+    [[ -f "$live" ]] || return 0
+    changes="$("$PYBIN_FOR_LAYOUT" "$SCRIPT_DIR/tools/config_merge.py" --identity-diff "$live" <(printf '%s\n' "$merged"))" \
+        || fatal "Could not compare the new answers with the live $live"
+    [[ -z "$changes" ]] && return 0
+    echo -e "\n  ${B}These answers change which Kea Jen reaches:${NC}"
+    while IFS= read -r line; do
+        echo -e "      ${DIM}${line}${NC}"
+    done <<< "$changes"
+    if [[ "$MODE_CHANGE_ENDPOINTS" != "true" ]]; then
+        err "Nothing was written."
+        echo -e "  If investigation logging (DEBUG) is on at the old Kea, Jen could no longer reach it to put the level back. The Kea host restores it by itself at"
+        echo -e "  the deadline (jen-kea-helper's timer), and Jen keeps showing the old entry until you press Forget on Servers. Turn it off from Servers first, or run"
+        echo -e "      ${B}sudo ./install.sh --configure --change-endpoints${NC}"
+        fatal "Refused: --configure would change where Jen reaches a Kea; add --change-endpoints to go ahead."
+    fi
+    warn "--change-endpoints given: the settings above will be written. A Kea at investigation DEBUG restores itself at its deadline; press Forget on Servers once it has."
+    return 0
+}
+
 write_config() {
     [[ "$CONFIGURE" == "false" ]] && return
 
@@ -1658,6 +1703,7 @@ CONFEOF
         final_text="$("$PYBIN_FOR_LAYOUT" "$SCRIPT_DIR/tools/config_merge.py" \
             --snapshot <(printf '%s\n' "$CONFIG_SNAPSHOT_TEXT") --live "$CONFIG_FILE" <<< "$wizard_text")" \
             || fatal "Could not merge the wizard's answers into the live $CONFIG_FILE"
+        _guard_endpoint_changes "$CONFIG_FILE" "$final_text"
     fi
     printf '%s\n' "$final_text" | _private_write "$CONFIG_FILE" --owner "$jen_owner" --mode 0600 --trusted-root "$CONFIG_DIR" ${_cfg_lock_args[@]+"${_cfg_lock_args[@]}"} \
         || fatal "Could not write $CONFIG_FILE (a symlink there is refused)"

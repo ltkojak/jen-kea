@@ -190,6 +190,7 @@ class TestTurnOff:
         assert out["ok"] and world.daemons[1].file == original and not inv.active()
         assert [a[0] for a in world.store["_audit"]] == ["INVESTIGATION_LOGGING_ON", "INVESTIGATION_LOGGING_OFF"]
 
+    @pytest.mark.usefixtures("legacy_entries")
     def test_a_failed_restore_keeps_the_entry_so_it_is_retried(self, world):
         inv.turn_on(world.servers[0], 15)
         world.daemons[1].reload_result, world.daemons[1].restart_ok = 1, False
@@ -214,6 +215,7 @@ class TestSweep:
         assert out["restored"] == ["kea-a"] and world.daemons[1].file == original and not inv.active()
         assert world.store["_audit"][-1][0] == "INVESTIGATION_LOGGING_OFF"
 
+    @pytest.mark.usefixtures("legacy_entries")
     def test_a_failed_restore_stays_indexed_with_its_error_and_turns_the_health_row_red(self, world):
         self._on(world)
         world.daemons[1].reload_result, world.daemons[1].restart_ok = 1, False
@@ -282,6 +284,7 @@ def _daemon_at_debug(fake):
     return _level(fake.loaded) == ("DEBUG", 55)
 
 
+@pytest.mark.usefixtures("legacy_entries")
 class TestARestoreTheDaemonNeverTookIsNotForgotten:
     def _on(self, world):
         assert inv.turn_on(world.servers[0], 5)["ok"]
@@ -382,6 +385,7 @@ class TestTurnOnTakesResponsibilityBeforeTheDaemonIsAsked:
         assert entry["file"] == "debug" and entry["pending"] == "restart" and entry["error"]
 
 
+@pytest.mark.usefixtures("legacy_entries")
 class TestAServerRemovedFromJenKeepsItsEntry:
     def test_the_sweep_marks_the_entry_removed_and_audits_it_once(self, world):
         assert inv.turn_on(world.servers[0], 5)["ok"]
@@ -442,6 +446,7 @@ class TestAdoptionIsAuditedAndTheRowNamesTheServer:
         inv.sweep(now=NOW, full=True)
         assert world.store["_audit"][-1][0] == "INVESTIGATION_LOGGING_ADOPTED" and "kea-b" in world.store["_audit"][-1]
 
+    @pytest.mark.usefixtures("legacy_entries")
     def test_the_health_row_names_the_server_when_a_restore_is_still_owed(self, world):
         from jen.services import health
 
@@ -561,6 +566,7 @@ class TestADamagedMarkerIsNeverReadAsProofTheKeysNeverExisted:
         assert ed.restore_problem(None) != "" and ed.restore_problem([]) != ""
 
 
+@pytest.mark.usefixtures("legacy_entries")
 class TestADamagedMarkerIsSaidOutLoud:
     """The sweep records the unreadable marker as the entry's error, the Health row goes red naming the server with the by-hand text, and
     turn_off says the same - and none of them changes the config."""
@@ -779,6 +785,7 @@ class TestTheMacroSeesTheRequestContext:
             assert re.search(r"import investigation_controls with context %\}", text), p.name
 
 
+@pytest.mark.usefixtures("legacy_entries")
 class TestAControlAgentThatDidNotAnswer:
     """v5.68.0-beta.21 (Q156, item 4): `_supports_reload` was `result == 0 and "config-reload" in arguments`, and `kea_command` returns result 1 on a
     connection failure or timeout - so a Control Agent that was DOWN read as "this daemon has no config-reload", `_change` passed `restart=True`, and
@@ -848,6 +855,7 @@ class TestAControlAgentThatDidNotAnswer:
         assert any("did not answer" in line for line in out["lines"])
 
 
+@pytest.mark.usefixtures("legacy_entries")
 class TestTurningOnNeverRestartsKea:
     """v5.68.0-beta.22 (Q157, item 1): the matrix. `turn_on` calls Kea's API twice - `list-commands`, then `config-reload` - and beta.21 handled only a
     silence on the FIRST. Every way the second can fail is the same reply shape (`result` 1 with a text), so none of them may become a restart over SSH:
@@ -1017,6 +1025,7 @@ class TestTheRunningLoggerIsRead:
         assert inv.observe(world.servers[0], entry, wait_s=0) == "unknown" and sleeps == [], "no waiting unless asked"
 
 
+@pytest.mark.usefixtures("legacy_entries")
 class TestALostReloadReplyIsNotAFailure:
     """The reviewer's P1: a `config-reload` Kea APPLIED whose HTTP reply was lost came back as a failure; the file was put back, the entry dropped,
     and the daemon stayed at DEBUG 55 with nothing left that knew. Turning on now reverts the file WITHOUT a restart and then LOOKS."""
@@ -1082,6 +1091,7 @@ class TestALostReloadReplyIsNotAFailure:
         assert out["ok"] and out["mode"] == "restart" and "restart:dhcp4" in kea.calls and not inv.active()
 
 
+@pytest.mark.usefixtures("legacy_entries")
 class TestAnEntryIsDroppedOnlyWhenTheDaemonWasSeenRestored:
     def test_a_restore_that_reports_ok_but_leaves_the_daemon_at_debug_keeps_the_entry(self, world):
         kea = world.daemons[1]
@@ -1340,6 +1350,7 @@ def _restarts(kea):
     return _count(kea, "restart:dhcp4")
 
 
+@pytest.mark.usefixtures("legacy_entries")
 class TestTheDaemonStepIsBounded:
     """F1: `_restore`'s "nothing" branch skipped the daemon step only for `unknown`; `other` and a `debug` that never lands fell through to a reload EVERY
     sweep and a RESTART every sweep whenever the reload was refused or lost (or the daemon had no config-reload). No counter; the prose said "Jen has left it".
@@ -1515,6 +1526,7 @@ class TestContradictoryEvidenceIsNamedNotIndexedAsNothing:
         out = inv.turn_on(world.servers[0], 5)
         assert out["ok"] is False and not inv.active() and not _daemon_at_debug(kea)
 
+    @pytest.mark.usefixtures("legacy_entries")
     def test_the_contradiction_survives_the_sweeps_and_only_forget_ends_it(self, world):
         """F10 (fixup 5): the entry is `file=restored`, so it is due every minute, and the restore's nothing branch observed the SAME wrong daemon,
         which shows the captured original level, read "restored" and dropped it - one sweep later. Nothing is reloaded or restarted for it and no
@@ -1689,6 +1701,7 @@ class TestAMovedDaemonWithASilentApiIsFinishedWhenTheApiReturns:
     """F9: Kea APPLIED the reload, the reply was lost, AND the API then stopped answering. Nothing may be reloaded or restarted on a guess while it is
     silent; when it returns: seen at DEBUG -> one reload -> seen restored -> dropped."""
 
+    @pytest.mark.usefixtures("legacy_entries")
     def test_silent_then_back(self, world):
         kea = world.daemons[1]
         kea.reload_applied_but_lost = True
@@ -2559,6 +2572,7 @@ class TestAnEndpointChangeKeepsTheServerIdentity:
         assert inv.turn_off(w.servers[0])["ok"]
         assert inv.endpoint_change_refusal(1, {"ssh_host": "10.9.9.9"}, actor="alice") == ""
 
+    @pytest.mark.usefixtures("legacy_entries")
     def test_10_a_restore_that_is_not_finished_still_holds_the_identity(self, w):
         kea = w.daemons[1]
         assert inv.turn_on(w.servers[0], 5)["ok"]
