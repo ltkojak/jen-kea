@@ -2809,7 +2809,7 @@ class TestTheRealTransactionIsAllOrNothing:
     context rolls back what the connection held)."""
 
     @pytest.fixture
-    def db(self, monkeypatch):
+    def fake_db(self, monkeypatch):
         import contextlib
 
         from jen.models import db as dbmod
@@ -2872,36 +2872,38 @@ class TestTheRealTransactionIsAllOrNothing:
         monkeypatch.setattr(usermod, "_invalidate_settings_cache", invalidated)
         return world
 
-    def test_both_rows_are_written_with_the_same_columns_audit_writes(self, db):
+    def test_both_rows_are_written_with_the_same_columns_audit_writes(self, fake_db):
         from jen.models import user as usermod
 
         assert usermod.set_global_setting_and_audit("k", "v", "SOME_ACTION", "ent", "details") is True
-        assert db["settings"] == {"k": "v"} and db["audit"] == [
+        assert fake_db["settings"] == {"k": "v"} and fake_db["audit"] == [
             (7, "alice", "SOME_ACTION", "ent", "details", "10.1.1.1")
         ]
-        assert db.get("invalidated") == 1
+        assert fake_db.get("invalidated") == 1
 
-    def test_the_audit_insert_raising_rolls_the_setting_back_too(self, db):
+    def test_the_audit_insert_raising_rolls_the_setting_back_too(self, fake_db):
         from jen.models import user as usermod
 
-        db["audit_raises"] = True
+        fake_db["audit_raises"] = True
         assert usermod.set_global_setting_and_audit("k", "v", "A", "e", "d") is False
-        assert db["settings"] == {} and db["audit"] == []
+        assert fake_db["settings"] == {} and fake_db["audit"] == []
 
-    def test_the_commit_raising_leaves_neither_row(self, db):
+    def test_the_commit_raising_leaves_neither_row(self, fake_db):
         from jen.models import user as usermod
 
-        db["commit_raises"] = True
+        fake_db["commit_raises"] = True
         assert usermod.set_global_setting_and_audit("k", "v", "A", "e", "d") is False
-        assert db["settings"] == {} and db["audit"] == []
-        assert db.get("invalidated") is None, "the settings cache is not invalidated for a write that did not happen"
+        assert fake_db["settings"] == {} and fake_db["audit"] == []
+        assert fake_db.get("invalidated") is None, (
+            "the settings cache is not invalidated for a write that did not happen"
+        )
 
-    def test_the_settings_upsert_raising_writes_no_audit_row(self, db):
+    def test_the_settings_upsert_raising_writes_no_audit_row(self, fake_db):
         from jen.models import user as usermod
 
-        db["settings_raises"] = True
+        fake_db["settings_raises"] = True
         assert usermod.set_global_setting_and_audit("k", "v", "A", "e", "d") is False
-        assert db["audit"] == []
+        assert fake_db["audit"] == []
 
 
 class TestEverySaveRouteThatWritesAnEndpointIsGuarded:
