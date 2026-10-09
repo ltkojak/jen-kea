@@ -187,6 +187,10 @@ writes to disk *and* re-derives every global atomically, so disk and memory can'
 Every writer holds ONE lock for its whole read-modify-replace: the class-level `RLock` (threads) and an advisory `flock` on `<config>.lock`
 (processes - `install.sh --configure` holds the same one, and merges its wizard's answers into the live file through `tools/config_merge.py`).
 A writer called from inside a `mutate` callback raises; edit the parser you were given.
+Identity-changing writes - which Kea a server is reached on (`api_url`, `ssh_host`, `ssh_user`, `kea_conf`) and the global connection mode - are guarded in `_write_parser`
+(`register_identity_guard`; `app_config.preflight_identity_change` asks the same question on a copy for a route that acts on the Kea host first), and writes of the Kea
+config FILE in `kea_host.apply_config` (`investigation_writer()` is the only way past it); never add a route-level check for either - `tests/test_identity_guard.py`
+walks the whole tree and fails the one that does.
 
 ### App factory and request pipeline
 

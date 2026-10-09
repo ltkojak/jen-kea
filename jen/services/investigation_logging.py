@@ -452,17 +452,20 @@ def _change(server: dict, mutate_fn, summary: str, unsupported: str, *, refuse_u
     if support == "unknown" and refuse_unknown:
         return None, False, support
     use_reload = support == "yes"
-    result = _changeset.apply_change(
-        "dhcp4",
-        mutate_fn,
-        summary,
-        servers=[server],
-        restart=not use_reload,
-        code_messages={
-            "unsupported": unsupported,
-            "marker-invalid": "the investigation-logging marker is unreadable, so nothing was changed",
-        },
-    )
+    with (
+        _host.investigation_writer()
+    ):  # Q164: the one writer that may add and remove the marker; apply_config refuses every other that would remove it
+        result = _changeset.apply_change(
+            "dhcp4",
+            mutate_fn,
+            summary,
+            servers=[server],
+            restart=not use_reload,
+            code_messages={
+                "unsupported": unsupported,
+                "marker-invalid": "the investigation-logging marker is unreadable, so nothing was changed",
+            },
+        )
     return result, use_reload, support
 
 
@@ -586,14 +589,15 @@ def _drop(record: dict, sid) -> bool:
 
 def _revert_file(server: dict, summary: str) -> tuple[bool, list[str]]:
     """Put the file back WITHOUT touching the daemon (it never took the change). (restored, lines)."""
-    result = _changeset.apply_change(
-        "dhcp4",
-        lambda cfg: _edit.clear_investigation_logging(cfg),
-        summary,
-        servers=[server],
-        restart=False,
-        code_messages={},
-    )
+    with _host.investigation_writer():  # Q164 (see `_change`)
+        result = _changeset.apply_change(
+            "dhcp4",
+            lambda cfg: _edit.clear_investigation_logging(cfg),
+            summary,
+            servers=[server],
+            restart=False,
+            code_messages={},
+        )
     return result.status in ("ok", "nothing"), [text for _kind, text in result.lines]
 
 
@@ -1224,6 +1228,51 @@ def endpoint_change_refusal(server_id, proposed: dict, actor: str = "") -> str:
 
 
 _config.register_identity_guard(identity_guard)
+
+
+def file_write_refusal(server: dict, cfg) -> str:
+    """The Kea-FILE half of the identity invariant (v5.68.0-beta.28, Q164): "" when `cfg` may be written over `server`'s kea-dhcp4 config by a writer that is not
+    investigation logging, else the sentence `kea_host.apply_config` returns as its `detail` (code `investigation-on`).
+
+    A config-history restore (`servers.py`), the import push (`subnets.py`) and Author Kea Config (`authoring.py`) each wrote a candidate over a file that carried
+    the investigation-logging marker - the only record of what to put back - while the daemon stayed at DEBUG 55. Refused: a candidate WITHOUT the marker for a
+    server whose entry says the file still carries it, and any write while Jen's record is unreadable or unavailable (it cannot be told whether the server has an
+    entry). A candidate that keeps the marker - an ordinary subnet or option edit, which starts from the config it just read - is not touched by any of this; a
+    marker that is itself damaged counts as carried (a write that leaves it alone does not remove it)."""
+    record = _record()
+    by = _actor_suffix()
+    label = _name(server)
+    if record.get("damaged"):
+        why = (
+            "the settings could not be read"
+            if record.get("unavailable")
+            else "Jen's record of investigation logging is unreadable"
+        )
+        _audit(
+            "INVESTIGATION_LOGGING_FILE_WRITE_REFUSED",
+            label,
+            f"a write of kea-dhcp4's config was refused while {why}{by}",
+        )
+        if record.get("unavailable"):
+            return (
+                "Jen's settings could not be read (its database is unavailable), so it cannot tell whether this Kea is at investigation DEBUG; writes to a Kea "
+                "config are refused until they can be read - the write could remove the marker that tells Jen what to put back."
+            )
+        return (
+            "Jen's record of investigation logging cannot be read, so it cannot tell whether this Kea is at investigation DEBUG; repair the record first "
+            "(Health → DEBUG logging left on) - this write could remove the marker that tells Jen what to put back."
+        )
+    entry = record["servers"].get(str(server.get("id")))
+    if not entry or entry.get("removed") or entry.get("file", "debug") != "debug":
+        return ""
+    if _edit.investigation_marker(cfg) is not None or _edit.validate_investigation_marker(cfg):
+        return ""
+    _audit(
+        "INVESTIGATION_LOGGING_FILE_WRITE_REFUSED",
+        label,
+        f"a write of kea-dhcp4's config that would remove the investigation-logging marker was refused{by}",
+    )
+    return f"Investigation logging is on for {label}: this write would remove the marker that tells Jen what to put back. Turn it off from Servers first."
 
 
 def forget(server_id, actor: str = "") -> bool:

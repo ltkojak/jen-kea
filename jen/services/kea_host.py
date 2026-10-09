@@ -26,6 +26,7 @@ import json
 import logging
 import re
 import shlex
+import threading
 from datetime import datetime, timezone
 
 from flask import flash, g, has_request_context
@@ -789,6 +790,24 @@ def _flash_no_atomic_guard(server: dict) -> None:
     flash(f"No atomic guard on {name}: helper v1 / legacy — the write proceeded on a best-effort check.", "warning")
 
 
+#: v5.68.0-beta.28 (Q164): set, per thread, by `investigation_writer()` - the only code allowed to write a Kea config file that carries (or removes) the
+#: investigation-logging marker. Every other writer is checked in `apply_config` (below).
+_investigation_writer = threading.local()
+
+
+@contextlib.contextmanager
+def investigation_writer():
+    """The writes inside this block are investigation logging's own (turn on, turn off, the sweep's restore, the undo of an activation): they add and remove the
+    marker on purpose. Nothing else may remove it - `apply_config` refuses a dhcp4 write that would, while an entry says Jen owes that server a restore. The flag is
+    per thread (a change set commits sequentially on the calling thread) and restored on exit, so blocks nest."""
+    previous = getattr(_investigation_writer, "on", False)
+    _investigation_writer.on = True
+    try:
+        yield
+    finally:
+        _investigation_writer.on = previous
+
+
 def apply_config(
     server: dict,
     service: str,
@@ -819,7 +838,19 @@ def apply_config(
     legacy path's check already ran first; it's unchanged in spirit,
     just moved up to sit beside the helper case. A raw sha (v2 helper)
     is unaffected — it still goes straight into the payload and the
-    helper enforces it atomically under its own file lock."""
+    helper enforces it atomically under its own file lock.
+
+    v5.68.0-beta.28 (Q164): THE Kea-file choke point of the investigation invariant. A config-history restore, the import push and Author Kea Config each wrote a
+    candidate config over a file that carried the investigation-logging marker, erasing the only record of what to put back while the daemon stayed at DEBUG 55.
+    Every dhcp4 write passes here, so the question is asked here, before anything is sent: a write that is not investigation logging's own (`investigation_writer()`)
+    and would remove the marker of a server Jen owes a restore - or is made while Jen's record of that is unreadable or unavailable - returns
+    `{"ok": False, "code": "investigation-on", ...}` and writes nothing; `kea_changeset` reports it like any other failed apply and reverts what it committed."""
+    if service == "dhcp4" and not getattr(_investigation_writer, "on", False):
+        from jen.services import investigation_logging as _inv  # lazy: that module imports this one
+
+        refusal = _inv.file_write_refusal(server, cfg)
+        if refusal:
+            return {"ok": False, "code": "investigation-on", "detail": refusal, "via": "guard"}
     if expect_sha256 is not None and expect_sha256.startswith(_CANONICAL_SENTINEL_PREFIX):
         conflict = _jen_side_conflict(server, service, expect_sha256)
         if conflict is not None:

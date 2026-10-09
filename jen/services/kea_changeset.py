@@ -140,6 +140,9 @@ def _failure_line(name: str, res: dict, daemon_label: str) -> str:
         from jen.services.kea_host import missing_binary_text
 
         return f"❌ {name}: {missing_binary_text(res, advice=True)}."
+    if code == "investigation-on":
+        # v5.68.0-beta.28 (Q164): kea_host.apply_config refused a write that would erase the investigation-logging marker; nothing was sent to this host
+        return f"❌ {name}: {res.get('detail')} (nothing was written to {name})"
     if code == "testerror":
         return (
             f"❌ {name}: config validation failed — {daemon_label} NOT restarted, "

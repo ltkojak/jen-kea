@@ -829,3 +829,398 @@ class TestTheErrorHandlerAndTheWholeAppAreWiredCI:
             assert disk.get("kea_ssh", "host") == "10.0.0.5"
         finally:
             _clear_record()
+
+
+# ── v5.68.0-beta.28 (Q164) part 2: the Kea FILE choke point - `kea_host.apply_config` ─────────────────────────────────────────────────────────
+
+import copy  # noqa: E402
+
+from jen.services import kea_changeset as _changeset_mod  # noqa: E402
+from jen.services import kea_config_edit as ed  # noqa: E402
+from jen.services import kea_host  # noqa: E402
+
+_REAL_APPLY_CHANGE = (
+    _changeset_mod.apply_change
+)  # the `world` fixture replaces it with the fake daemon's; these tests want the REAL change set
+
+
+@pytest.fixture
+def host_world(world, monkeypatch):
+    """`world` with the REAL `kea_changeset.apply_change` and the REAL `kea_host.apply_config`; only the wire is fake: `helper_call` writes the payload into the
+    fake daemon's FILE (as the helper would), `test_config` always passes."""
+    monkeypatch.setattr(inv._changeset, "apply_change", _REAL_APPLY_CHANGE)
+    monkeypatch.setattr(_changeset_mod._events, "emit", lambda *a, **k: None)
+    monkeypatch.setattr(kea_host, "test_config", lambda server, service, cfg, **kw: {"ok": True, "code": "ok"})
+    monkeypatch.setattr(kea_host, "_record_from_resp", lambda *a, **k: None)
+    monkeypatch.setattr(kea_host, "_record_revision_after_apply", lambda *a, **k: None)
+    monkeypatch.setattr(kea_host, "_conf_path", lambda server, service: "/etc/kea/kea-dhcp4.conf")
+    sent = []
+
+    def helper_call(server, op, payload=None, timeout=60):
+        assert op == "apply-config", op
+        sent.append((server["id"], payload["service"]))
+        world.daemons[server["id"]].file = copy.deepcopy(payload["config"])
+        return {"ok": True, "sha256": "applied"}
+
+    monkeypatch.setattr(kea_host, "helper_call", helper_call)
+    world.sent = sent
+    return world
+
+
+def _marker(cfg):
+    return ed.investigation_marker(cfg)
+
+
+def _without_marker(cfg):
+    out, _code = ed.clear_investigation_logging(copy.deepcopy(cfg))
+    return out
+
+
+class TestTheKeaFileWriterRefusesToEraseTheMarker:
+    """The three writers that were not investigation logging - a config-history restore, the import push, Author Kea Config - wrote a candidate over a file that
+    carried the marker. Their call shapes are exercised through the REAL `apply_config`."""
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {
+                "expect_sha256": "applied",
+                "summary": "restore of #7",
+                "source": "restore",
+            },  # servers.py: config-history restore
+            {"expect_sha256": "applied", "summary": "Windows DHCP import"},  # subnets.py: the import push
+            {
+                "allow_overwrite": False,
+                "summary": "authored",
+                "helper_only": True,
+            },  # authoring.py: Author Kea Config (through the change set)
+        ],
+        ids=["config-history-restore", "import-push", "author-kea-config"],
+    )
+    def test_each_writer_is_refused_with_investigation_on_and_nothing_is_sent(self, host_world, kwargs):
+        w = host_world
+        assert inv.turn_on(_server(w, 1), 5)["ok"]
+        sent_before = len(w.sent)
+        candidate = _without_marker(w.daemons[1].file)
+        res = kea_host.apply_config(_server(w, 1), "dhcp4", candidate, **kwargs)
+        assert res["ok"] is False and res["code"] == "investigation-on" and res["via"] == "guard"
+        assert "Investigation logging is on for kea-a" in res["detail"] and "would remove the marker" in res["detail"]
+        assert len(w.sent) == sent_before, "nothing reached the host"
+        assert _marker(w.daemons[1].file) is not None, "the marker is still in the file"
+        (row,) = _audits(w, "INVESTIGATION_LOGGING_FILE_WRITE_REFUSED")
+        assert row[1] == "kea-a"
+
+    def test_after_turn_off_the_same_write_goes_through(self, host_world):
+        w = host_world
+        assert inv.turn_on(_server(w, 1), 5)["ok"]
+        candidate = _without_marker(w.daemons[1].file)
+        assert kea_host.apply_config(_server(w, 1), "dhcp4", candidate)["code"] == "investigation-on"
+        assert inv.turn_off(_server(w, 1))["ok"]
+        assert kea_host.apply_config(_server(w, 1), "dhcp4", candidate)["ok"] is True
+
+    def test_an_ordinary_edit_that_keeps_the_marker_is_not_touched(self, host_world):
+        """A subnet or option edit starts from the config it just read, which carries the marker: nothing is lost, so nothing is refused."""
+        w = host_world
+        assert inv.turn_on(_server(w, 1), 5)["ok"]
+        edited = copy.deepcopy(w.daemons[1].file)
+        edited["Dhcp4"]["subnet4"] = [{"id": 5, "subnet": "10.5.0.0/24"}]
+        assert kea_host.apply_config(_server(w, 1), "dhcp4", edited)["ok"] is True
+        assert _marker(w.daemons[1].file) is not None and w.daemons[1].file["Dhcp4"]["subnet4"]
+
+    def test_investigation_loggings_own_writes_pass_and_the_flag_does_not_leak(self, host_world):
+        w = host_world
+        assert inv.turn_on(_server(w, 1), 5)["ok"] and _marker(w.daemons[1].file) is not None
+        assert inv.turn_off(_server(w, 1))["ok"] and _marker(w.daemons[1].file) is None
+        assert getattr(kea_host._investigation_writer, "on", False) is False
+        # nested blocks restore what they found
+        with kea_host.investigation_writer():
+            with kea_host.investigation_writer():
+                assert kea_host._investigation_writer.on is True
+            assert kea_host._investigation_writer.on is True
+        assert kea_host._investigation_writer.on is False
+
+    def test_the_flag_belongs_to_one_thread(self, host_world):
+        import threading
+
+        seen = {}
+        with kea_host.investigation_writer():
+            t = threading.Thread(target=lambda: seen.update(other=getattr(kea_host._investigation_writer, "on", False)))
+            t.start()
+            t.join(5)
+        assert seen == {"other": False}
+
+    def test_other_services_and_other_servers_are_not_in_scope(self, host_world):
+        w = host_world
+        assert inv.turn_on(_server(w, 1), 5)["ok"]
+        sent_before = len(w.sent)
+        assert kea_host.apply_config(_server(w, 1), "dhcp6", {"Dhcp6": {}})["ok"] is True, (
+            "only kea-dhcp4's file carries the marker"
+        )
+        assert kea_host.apply_config(_server(w, 2), "dhcp4", _without_marker(w.daemons[2].file))["ok"] is True, (
+            "server 2 has no entry"
+        )
+        assert len(w.sent) == sent_before + 2
+
+    def test_a_restore_that_is_not_finished_has_a_clean_file_so_there_is_nothing_to_protect(self, host_world):
+        w = host_world
+        assert inv.turn_on(_server(w, 1), 5)["ok"]
+        record = inv._record()
+        record["servers"]["1"]["file"] = "restored"
+        assert inv._save(record)
+        assert kea_host.apply_config(_server(w, 1), "dhcp4", _without_marker(w.daemons[1].file))["ok"] is True
+
+    def test_a_damaged_marker_that_the_write_leaves_alone_is_not_removed_by_it(self, host_world):
+        w = host_world
+        assert inv.turn_on(_server(w, 1), 5)["ok"]
+        damaged = copy.deepcopy(w.daemons[1].file)
+        logger_entry = next(x for x in damaged["Dhcp4"]["loggers"] if x["name"] == "kea-dhcp4")
+        logger_entry["user-context"]["jen-investigation"].pop("restore")
+        assert ed.validate_investigation_marker(damaged), "the marker lost its restore object: damaged, but still there"
+        assert kea_host.apply_config(_server(w, 1), "dhcp4", damaged)["ok"] is True
+
+    def test_an_unreadable_or_unavailable_record_refuses_every_dhcp4_write(self, host_world):
+        w = host_world
+        w.store[inv.RECORD_KEY] = "{broken"
+        res = kea_host.apply_config(_server(w, 2), "dhcp4", w.daemons[2].file)
+        assert (
+            res["code"] == "investigation-on"
+            and "cannot be read, so it cannot tell whether this Kea is at investigation DEBUG" in res["detail"]
+        )
+        w.store[inv.RECORD_KEY] = ""
+        w.db["unavailable"] = True
+        res = kea_host.apply_config(_server(w, 2), "dhcp4", w.daemons[2].file)
+        assert res["code"] == "investigation-on" and "settings could not be read" in res["detail"]
+        w.db["unavailable"] = False
+        assert kea_host.apply_config(_server(w, 2), "dhcp4", w.daemons[2].file)["ok"] is True
+        assert _audits(w, "INVESTIGATION_LOGGING_FILE_WRITE_REFUSED") and w.sent[-1] == (2, "dhcp4")
+
+
+class TestTheChangeSetReportsAndRevertsARefusedTarget:
+    def test_a_refused_target_aborts_the_change_set_before_any_write(self, host_world):
+        w = host_world
+        assert inv.turn_on(_server(w, 1), 5)["ok"]
+        sent_before = len(w.sent)
+        result = _changeset_mod.apply_change(
+            "dhcp4",
+            lambda cfg: (_without_marker(cfg), "ok"),
+            "config-history restore",
+            servers=[_server(w, 1)],
+            restart=False,
+        )
+        assert result.status == "aborted" and result.last_code == "investigation-on"
+        text = " ".join(t for _k, t in result.lines)
+        assert "Investigation logging is on for kea-a" in text and "(nothing was written to kea-a)" in text
+        assert len(w.sent) == sent_before and _marker(w.daemons[1].file) is not None
+
+    def test_a_server_already_committed_is_put_back_when_a_later_target_is_refused(self, host_world):
+        w = host_world
+        assert inv.turn_on(_server(w, 1), 5)["ok"]
+        original_b = copy.deepcopy(w.daemons[2].file)
+
+        def edit(cfg):
+            out = _without_marker(cfg)
+            out["Dhcp4"]["valid-lifetime"] = 1234
+            return out, "ok"
+
+        result = _changeset_mod.apply_change(
+            "dhcp4", edit, "authored", servers=[_server(w, 2), _server(w, 1)], restart=False
+        )
+        assert result.status == "aborted" and result.last_code == "investigation-on"
+        assert "reverted 1 server(s) that had already been updated: kea-b" in " ".join(t for _k, t in result.lines)
+        assert w.daemons[2].file == original_b, "kea-b is exactly what it was"
+        assert _marker(w.daemons[1].file) is not None
+
+    def test_the_change_set_of_investigation_logging_itself_is_never_refused(self, host_world):
+        w = host_world
+        assert inv.turn_on(_server(w, 1), 15)["ok"]
+        assert inv.turn_on(_server(w, 1), 5)["ok"], "moving the deadline rewrites the marker: investigation's own write"
+        assert inv.turn_off(_server(w, 1))["ok"]
+
+
+def _scoped_calls(tree):
+    """[(call, name of the innermost enclosing function or "")] for every Call in `tree`."""
+    out = []
+
+    def walk(node, scope):
+        for child in ast.iter_child_nodes(node):
+            inner = child.name if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) else scope
+            if isinstance(child, ast.Call):
+                out.append((child, scope))
+            walk(child, inner)
+
+    walk(tree, "")
+    return out
+
+
+def _call_name(call):
+    return (
+        call.func.id
+        if isinstance(call.func, ast.Name)
+        else call.func.attr
+        if isinstance(call.func, ast.Attribute)
+        else ""
+    )
+
+
+class TestTheKeaFileHasOneChokePointInTheSource:
+    def test_04_the_helpers_write_op_and_the_legacy_write_script_are_used_only_inside_apply_config(self):
+        sites = set()
+        for path in sorted((ROOT / "jen").rglob("*.py")):
+            rel = path.relative_to(ROOT).as_posix()
+            for call, scope in _scoped_calls(ast.parse(path.read_text(encoding="utf-8"))):
+                if any(isinstance(a, ast.Constant) and a.value == "apply-config" for a in call.args):
+                    sites.add((rel, scope, "apply-config"))
+                if _call_name(call) == "render_author_config_script" and any(
+                    k.arg == "dry_run" and isinstance(k.value, ast.Constant) and k.value.value is False
+                    for k in call.keywords
+                ):
+                    sites.add((rel, scope, "legacy write script"))
+        assert sites == {
+            ("jen/services/kea_host.py", "apply_config", "apply-config"),
+            ("jen/services/kea_host.py", "apply_config", "legacy write script"),
+        }, sites
+
+    def test_04b_apply_config_asks_before_anything_is_sent(self):
+        fn = next(f for f in _functions(_parse("jen/services/kea_host.py")) if f.name == "apply_config")
+        lines = {}
+        for call, _scope in _scoped_calls(fn):
+            lines.setdefault(_call_name(call), call.lineno)
+        assert lines["file_write_refusal"] < min(
+            lines["_jen_side_conflict"], lines["helper_call"], lines["_legacy_python3"]
+        )
+
+    def test_04c_every_apply_change_of_investigation_logging_is_inside_investigation_writer(self):
+        tree = _parse("jen/services/investigation_logging.py")
+        inside = 0
+        for with_ in (n for n in ast.walk(tree) if isinstance(n, ast.With)):
+            if any(
+                isinstance(i.context_expr, ast.Call) and _call_name(i.context_expr) == "investigation_writer"
+                for i in with_.items
+            ):
+                inside += sum(1 for c in ast.walk(with_) if isinstance(c, ast.Call) and _call_name(c) == "apply_change")
+        total = sum(1 for c in ast.walk(tree) if isinstance(c, ast.Call) and _call_name(c) == "apply_change")
+        assert total >= 2 and inside == total, (
+            f"{total - inside} of {total} apply_change calls in investigation_logging.py are outside `with _host.investigation_writer()`"
+        )
+
+    def test_05_the_direct_socket_routes_preflight_before_any_remote_write(self):
+        tree = _parse("jen/routes/settings/infrastructure.py")
+        remote = {
+            "apply_change",
+            "apply_config",
+            "service_action",
+            "install_tls",
+            "issue_server_cert",
+            "ensure_ca",
+            "issue_client_cert",
+        }
+        for name in ("setup_direct_socket", "remove_direct_socket"):
+            fn = next(f for f in _functions(tree) if f.name == name)
+            calls = [(c.lineno, _call_name(c)) for c, _s in _scoped_calls(fn)]
+            preflight = min(line for line, n in calls if n == "preflight_identity_change")
+            first_remote = min(line for line, n in calls if n in remote)
+            assert preflight < first_remote, (
+                f"{name}: preflight_identity_change (line {preflight}) must come before the first remote act (line {first_remote})"
+            )
+
+
+class TestARefusedDirectSocketRouteTouchesNothingCI:
+    """CI-only: the whole route with the REAL config writer; the Kea host is a recording stub that fails the test if it is touched."""
+
+    @pytest.fixture
+    def hostile(self, monkeypatch):
+        touched = []
+        for target in (
+            "jen.services.kea_changeset.apply_change",
+            "jen.services.kea_host.service_action",
+            "jen.services.kea_host.install_tls",
+        ):
+            monkeypatch.setattr(target, lambda *a, _t=target, **k: touched.append(_t) or {"ok": True})
+        return touched
+
+    def test_setup_is_refused_before_the_daemon_is_reconfigured_and_nothing_is_written(
+        self, logged_in_client, db, mock_kea, ci_config, hostile, monkeypatch
+    ):
+        monkeypatch.setattr(
+            extensions,
+            "KEA_SERVERS",
+            [
+                {
+                    "id": 1,
+                    "name": "Primary",
+                    "ssh_host": "10.0.0.5",
+                    "api_url": "http://1.2.3.4:8000",
+                    "api_user": "u4",
+                    "api_pass": "p4",
+                }
+            ],
+        )
+        _record_for(1)
+        try:
+            before = ci_config.read_bytes()
+            r = logged_in_client.post(
+                "/settings/infrastructure/direct-socket/1/dhcp4",
+                data={"scheme": "http", "address": "10.0.0.5", "port": "8004", "user": "u", "password": "p"},
+                follow_redirects=True,
+            )
+            assert b"Investigation logging is on for Primary" in r.data and b"connection mode" in r.data
+            assert hostile == [], f"the Kea host was touched: {hostile}"
+            assert ci_config.read_bytes() == before
+        finally:
+            _clear_record()
+
+    def test_removal_is_refused_before_the_daemon_is_reconfigured(
+        self, logged_in_client, db, mock_kea, ci_config, hostile, monkeypatch
+    ):
+        app_config.write_values(
+            [
+                ("kea", "connection_mode", "direct"),
+                ("kea", "api_url", "http://1.2.3.4:8004"),
+                ("kea", "api_url_prev", "http://1.2.3.4:8000"),
+            ]
+        )
+        monkeypatch.setattr(
+            extensions,
+            "KEA_SERVERS",
+            [
+                {
+                    "id": 1,
+                    "name": "Primary",
+                    "ssh_host": "10.0.0.5",
+                    "api_url": "http://1.2.3.4:8004",
+                    "api_user": "u4",
+                    "api_pass": "p4",
+                }
+            ],
+        )
+        _record_for(1)
+        try:
+            before = ci_config.read_bytes()
+            r = logged_in_client.post("/settings/infrastructure/direct-socket/1/dhcp4/remove", follow_redirects=True)
+            assert b"Investigation logging is on for Primary" in r.data
+            assert hostile == [] and ci_config.read_bytes() == before
+        finally:
+            _clear_record()
+
+    def test_config_history_restore_is_refused_through_the_real_apply_config(
+        self, logged_in_client, db, mock_kea, monkeypatch
+    ):
+        from jen.services import config_revisions as rev
+
+        server = {"id": 77, "name": "kea-hist", "ssh_host": "10.0.0.5", "ssh_user": "kea"}
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [server])
+        old = rev.record(77, "dhcp4", {"Dhcp4": {"subnet4": []}}, "sha-old", "rev 1", hash_kind="raw")
+        wire = []
+        monkeypatch.setattr("jen.services.kea_host.test_config", lambda *a, **k: {"ok": True})
+        monkeypatch.setattr("jen.services.kea_host.helper_call", lambda *a, **k: wire.append(a[1]) or {"ok": True})
+        monkeypatch.setattr(
+            "jen.services.kea_host.service_action", lambda *a, **k: wire.append("restart") or {"ok": True}
+        )
+        monkeypatch.setattr("jen.services.kea_host.read_config_versioned", lambda *a, **k: ({"Dhcp4": {}}, "live-sha"))
+        _record_for(77, name="kea-hist")
+        try:
+            r = logged_in_client.post(f"/servers/77/config-history/{old}/restore", follow_redirects=True)
+            assert b"Restore failed on kea-hist" in r.data and b"would remove the marker" in r.data
+            assert wire == [], f"nothing reached the host: {wire}"
+        finally:
+            _clear_record()

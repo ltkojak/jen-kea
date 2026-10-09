@@ -21,6 +21,15 @@ from jen.services import kea_changeset as cs
 from jen.services import kea_host
 from tests._author_world import FORM, URL, A, B, World
 
+
+@pytest.fixture(autouse=True)
+def _no_investigation_guard(monkeypatch):
+    """`apply_config` asks `investigation_logging.file_write_refusal` before it sends anything (v5.68.0-beta.28, Q164), which reads Jen's settings. This file is about
+    the change set's own plan / preflight / commit / revert, not that question - it has its own tests (tests/test_identity_guard.py, through the REAL change set and
+    `apply_config`) - so it answers "no refusal" here and the tests need no database."""
+    monkeypatch.setattr("jen.services.investigation_logging.file_write_refusal", lambda server, cfg: "")
+
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 

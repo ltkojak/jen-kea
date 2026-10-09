@@ -976,9 +976,10 @@ def _daemon_creds(server: dict, service: str) -> tuple[str, str]:
     return server.get("api_user", ""), server.get("api_pass", "")
 
 
-def _write_direct_socket_config(
-    server: dict, service: str, url: str, user: str, password: str, tls: bool = False
-) -> str:
+def _direct_socket_edit(server: dict, service: str, url: str, user: str, password: str, tls: bool = False):
+    """(fn, changed): the edit `_write_direct_socket_config` makes to Jen's own config, as a `mutate`-style callback, and the list of phrases it fills in when
+    it runs. The setup route hands the SAME callback to `preflight_identity_change` before it touches the Kea host (v5.68.0-beta.28, Q164), so the
+    question "would the config writer refuse this?" is asked about exactly what will be written."""
     """Point Jen at the daemon socket that just answered. dhcp4 also
     flips `[kea] connection_mode` to direct (the mode is global — see
     the flash the caller adds when other servers aren't there yet);
@@ -1048,7 +1049,15 @@ def _write_direct_socket_config(
             cfg.set("kea", "connection_mode", "direct")
             changed.append("Jen switched to direct mode")
 
-    __config.app_config.mutate(_apply)
+    return _apply, changed
+
+
+def _write_direct_socket_config(
+    server: dict, service: str, url: str, user: str, password: str, tls: bool = False
+) -> str:
+    """Point Jen at the daemon socket that just answered (see `_direct_socket_edit`). Returns the phrase the caller flashes."""
+    apply_fn, changed = _direct_socket_edit(server, service, url, user, password, tls)
+    __config.app_config.mutate(apply_fn)
     return ", ".join(changed)
 
 
@@ -1168,6 +1177,17 @@ def setup_direct_socket(server_id, service):
                 "error",
             )
             return back
+
+    # v5.68.0-beta.28 (Q164): this route's first act is on the Kea HOST (the daemon is reconfigured and restarted) and Jen's own settings are written LAST. For
+    # dhcp4 that write changes the server's API URL and the global connection mode - an identity change the config writer refuses while an investigation
+    # entry exists - so the same question is asked of a copy BEFORE anything is sent: refused here, nothing was touched. (Not "probe, then find out".)
+    try:
+        _edit_fn, _unused = _direct_socket_edit(server, service, new_url, user, password, tls=(scheme == "https"))
+        __config.app_config.preflight_identity_change(_edit_fn)
+    except __config.ConfigChangeRefused as refused:
+        flash(refused.sentence, "error")
+        flash(f"Nothing was changed on {name}.", "info")
+        return back
 
     # Kea version: per-daemon control sockets exist from 2.7.2. Only
     # blocking when the CURRENT endpoint actually answers — a Kea 3.2 box
@@ -1487,27 +1507,6 @@ def remove_direct_socket(server_id, service):
         flash(f"{name} has no SSH host configured — Jen edits {conf} over SSH.", "error")
         return back
 
-    result = __changeset.apply_change(
-        service,
-        lambda cfg: __edit.remove_control_socket(cfg, service),
-        f"removed the {daemon} http control socket",
-        servers=[server],
-        restart=True,
-        code_messages={
-            "unsupported": f"{conf} has no {_DAEMON_KEY[service]} block — is this the right file? Nothing was changed.",
-            "nochange": f"{conf} has no http/https control socket to remove — only Jen's own settings change",
-        },
-        daemon_label=daemon,
-    )
-    if result.status == "noservers":
-        flash(f"{name} has no SSH host configured.", "error")
-        return back
-    for style, text in result.lines:
-        flash(text, style)
-    if result.status in __changeset.NOT_APPLIED:
-        flash("Jen's own settings were not changed.", "info")
-        return back
-
     sid = server.get("id")
     changed: list[str] = []
     # Computed once, outside the mutate: does any OTHER server still
@@ -1546,6 +1545,37 @@ def remove_direct_socket(server_id, service):
                 changed.append(f"[{sec}] {url_key} cleared — inherits the v4 URL in Control Agent mode")
             if sid == 1 and cfg.has_section(sec) and not cfg.options(sec):
                 cfg.remove_section(sec)
+
+    # v5.68.0-beta.28 (Q164): Jen's own side of this (the dhcp4 URL put back, the global mode returned to `ca`) is an identity change, and the route's first act is
+    # on the Kea host - so the config writer's question is asked of a COPY before the first remote write.
+    try:
+        __config.app_config.preflight_identity_change(_apply)
+    except __config.ConfigChangeRefused as refused:
+        flash(refused.sentence, "error")
+        flash(f"Nothing was changed on {name}.", "info")
+        return back
+    changed.clear()  # the preflight ran the callback on a copy; the real run below fills the list the flash reads
+
+    result = __changeset.apply_change(
+        service,
+        lambda cfg: __edit.remove_control_socket(cfg, service),
+        f"removed the {daemon} http control socket",
+        servers=[server],
+        restart=True,
+        code_messages={
+            "unsupported": f"{conf} has no {_DAEMON_KEY[service]} block — is this the right file? Nothing was changed.",
+            "nochange": f"{conf} has no http/https control socket to remove — only Jen's own settings change",
+        },
+        daemon_label=daemon,
+    )
+    if result.status == "noservers":
+        flash(f"{name} has no SSH host configured.", "error")
+        return back
+    for style, text in result.lines:
+        flash(text, style)
+    if result.status in __changeset.NOT_APPLIED:
+        flash("Jen's own settings were not changed.", "info")
+        return back
 
     __config.app_config.mutate(_apply)
     __user.set_global_setting("restart_pending", "true")

@@ -42,6 +42,14 @@ _REAL_HELPER_STATUS = kea_host.helper_status
 _REAL_RECORD = kea_host.record_helper_status
 
 
+@pytest.fixture(autouse=True)
+def _no_investigation_guard(monkeypatch):
+    """`apply_config` asks `investigation_logging.file_write_refusal` before it sends anything (v5.68.0-beta.28, Q164), which reads Jen's settings. These tests are
+    about the helper and legacy mechanics of the write, not that question - it has its own tests (tests/test_identity_guard.py, through the REAL `apply_config`) -
+    so it answers "no refusal" here and the tests need no database."""
+    monkeypatch.setattr("jen.services.investigation_logging.file_write_refusal", lambda server, cfg: "")
+
+
 @pytest.fixture
 def quiet_status(monkeypatch):
     """No settings-table or history writes for the transport tests."""
