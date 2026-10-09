@@ -671,3 +671,81 @@ def test_which_option_77_and_circuit_id_forms_kea_matches(findings):
 
 def li_has(lines, mac: str, message_id: str) -> bool:
     return any(message_id in line and mac.lower() in line.lower() for line in lines)
+
+
+# ── Q167: what does Kea itself write when a SIGHUP reload starts, completes or fails? ─────────────────────────────────────────────────────────────────
+
+
+def _dhcp4_ids(lines):
+    """The DHCP4_* / DCTL_* message ids of `lines`, in order, each once."""
+    seen = []
+    for line in lines:
+        for found in re.findall(r"\b((?:DHCP4|DCTL|CTRL_AGENT|COMMAND)_[A-Z0-9_]+)\b", line):
+            if found not in seen:
+                seen.append(found)
+    return seen
+
+
+def _hup_and_read(pid: int, text: str, seconds: float = 5.0):
+    """Write `text` as the daemon's config file, send it SIGHUP and return the daemon's own log lines written meanwhile (what `docker logs` gained)."""
+    conf_path = os.path.join(CONF_DIR, "kea-dhcp4.conf")
+    before = len(_daemon_log())
+    with open(conf_path, "w") as fh:
+        fh.write(text)
+    sent = _hup(pid)
+    assert sent.returncode == 0, sent.stderr
+    time.sleep(seconds)
+    return _daemon_log()[before:]
+
+
+def test_sighup_reload_log_lines(findings):
+    """v5.68.0-beta.30 (Q167, verify first) - the Kea host puts the logger back and sends the daemon SIGHUP; "the unit is active" says nothing about whether Kea re-read the file, so
+    the helper will look for Kea's OWN log lines past the offset it noted before the signal. Which ids does each supported Kea write when the reload (a) starts and applies at a
+    DEBUG-55 logger, (b) is restored to INFO, (c) is restored to WARN (the original level decides whether the daemon's log shows the completion at all) and (d) is refused because
+    the file is broken? This records them per image; the helper's constants and the assertions below are what it recorded."""
+    from jen.services import kea_config_edit as ed
+
+    _restart("INFO", None)
+    record = findings.setdefault("sighup_log", {})
+    conf_path = os.path.join(CONF_DIR, "kea-dhcp4.conf")
+    with open(conf_path) as fh:
+        base = json.load(fh)
+    pid = _status()["pid"]
+    assert pid, "status-get reports the daemon's pid"
+    until = "2099-01-01T00:00:00+00:00"
+
+    def dump(conf):
+        return json.dumps(conf, indent=2)
+
+    def logger_entry(conf):
+        return next(x for x in conf["Dhcp4"]["loggers"] if x["name"] == "kea-dhcp4")
+
+    scenarios = {}
+    on, code = ed.set_investigation_logging(base, until)
+    assert code == "ok"
+    scenarios["debug_55_applied"] = _hup_and_read(pid, dump(on))
+    scenarios["restored_to_info"] = _hup_and_read(pid, dump(base))
+
+    warn_base = json.loads(dump(base))
+    logger_entry(warn_base)["severity"] = "WARN"
+    warn_on, code = ed.set_investigation_logging(warn_base, until)
+    assert code == "ok"
+    _hup_and_read(pid, dump(warn_on))
+    scenarios["restored_to_warn"] = _hup_and_read(pid, dump(warn_base))
+
+    broken = json.loads(dump(base))
+    broken["Dhcp4"]["jen-no-such-parameter"] = 1
+    scenarios["refused_broken_file"] = _hup_and_read(pid, dump(broken))
+    _hup_and_read(pid, dump(base))  # leave a sane file and a sane daemon behind
+
+    for name, lines in scenarios.items():
+        record[name] = {
+            "ids": _dhcp4_ids(lines),
+            "lines": [ln[-220:] for ln in lines if re.search(r"DHCP4_|DCTL_|COMMAND_", ln)][:10],
+        }
+    record["process_survived"] = _status()["pid"] == pid
+    print(
+        f"RELOAD IDS {IMAGE}: "
+        + json.dumps({k: v["ids"] for k, v in record.items() if isinstance(v, dict) and "ids" in v}, sort_keys=True)
+    )
+    assert record["process_survived"], f"a SIGHUP reload, even of a broken file, never kills the daemon: {record}"
