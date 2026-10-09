@@ -42,7 +42,7 @@ class TestTurnOnNeedsTheHost:
         kea.build = 14
         out = inv.turn_on(world.servers[0], 5, actor="alice")
         assert not out["ok"] and out["until"] == ""
-        assert "build 15 or later" in out["lines"][0] and "Update helper" in out["lines"][0]
+        assert "build 16 or later" in out["lines"][0] and "Update helper" in out["lines"][0]
         assert kea.file == original and kea.writes == 0 and "host:arm" not in kea.calls
         assert not inv.active() and "_audit" not in world.store
 
@@ -239,7 +239,7 @@ class TestTheSweepAndTheHost:
         kea.build = 14
         inv.sweep(now=NOW)
         (row,) = inv.active()
-        assert row["armed"] is False and "build 15" in row["host_error"]
+        assert row["armed"] is False and "build 16" in row["host_error"]
 
     def test_a_legacy_entry_is_armed_by_the_first_sweep_after_the_upgrade(self, world, monkeypatch):
         kea = world.daemons[1]
@@ -371,6 +371,7 @@ class TestTheWrappersAroundTheHelperOps:
                     "until": "2026-10-10T12:15:00+00:00",
                     "restore": {"created": True},
                     "jen": {"server_id": "4", "name": "kea-d"},
+                    "log_path": "",
                 },
             )
         ]
@@ -385,7 +386,7 @@ class TestTheWrappersAroundTheHelperOps:
         host, _sent, replies = wire
         replies.append({"ok": False, "error": "unknown-op"})
         out = host.investigation_status(self.SERVER)
-        assert not out["ok"] and out["code"] == "old" and "build 15" in out["detail"]
+        assert not out["ok"] and out["code"] == "old" and "build 16" in out["detail"]
 
     def test_a_missing_helper_and_a_transport_error_are_told_apart(self, wire):
         host, _sent, replies = wire
@@ -403,4 +404,4 @@ class TestTheWrappersAroundTheHelperOps:
     def test_the_minimum_build_is_the_one_the_helper_ships(self):
         from jen.services import kea_host
 
-        assert kea_host.INVESTIGATION_MIN_HELPER_BUILD == 15 == kea_host.JEN_HELPER_SHIPPED_BUILD
+        assert kea_host.INVESTIGATION_MIN_HELPER_BUILD == 16 == kea_host.JEN_HELPER_SHIPPED_BUILD

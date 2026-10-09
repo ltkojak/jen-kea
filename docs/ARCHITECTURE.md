@@ -1031,7 +1031,7 @@ and held for the whole op; `expect_sha256` stays the optional comparison it is. 
 answer - true when ANY class may execute - so a `_kea`-owned file with `o+x` and no `u+x` passed and then failed to exec as `_kea`); a root-run `root:root` binary needs
 its owner bit; one run as the unit's account needs the group/other bit it will actually use (`_group_may_exec`). **`remove-config`** (the op list was then version, read-config,
 test-config, apply-config, remove-config, service, tail-log, install-package, install-tls, update; build 15 adds investigation-arm, investigation-disarm and
-investigation-status - see "The Kea host owns the restore of investigation logging" below): removes a config file only if it still hashes to exactly the
+investigation-status, build 16 investigation-timer - see "The Kea host owns the restore of investigation logging" below): removes a config file only if it still hashes to exactly the
 required `expect_sha256` (a 64-hex value, never "" - there is no removing "whatever is there"), under the same lock; it is the rollback of an Author Kea Config target that had
 no file (§3.11). The sudoers line is unchanged. `tests/test_kea_helper.py` proves it with a directory watcher that stats every entry in a tight loop while the real op runs
 120 times under umask 022, plus two concurrent test-configs that each validate their own candidate, a test-config that waits for an apply, and the lock taken on every op.
@@ -1183,7 +1183,18 @@ Now the host holds the promise. Three ops, one argv mode, one pair of systemd un
   and whose `restored_at` is empty, the restore routine. A state file that is not one `investigation-arm` could have written is reported and never acted on.
   `op_update` is unchanged; a host updated to build 15 gets the units the first time logging is turned on.
 
-Jen's side is display and audit: `turn_on` refuses below build 15 (`kea_host.INVESTIGATION_MIN_HELPER_BUILD`, "press Update helper"), writes the file through the change set, **arms the
+**Build 16 (v5.68.0-beta.30, Q167) makes the promise provable.** (1) *A restore is done when Kea's own log says so.* `_reload_daemon` notes the size of Kea's log (the path the arm
+recorded: the `kea-dhcp4` logger's file output, else `[kea] dhcp4_log_path`; the arm refuses a path that does not exist), sends SIGHUP and reads what Kea wrote past that offset
+(`_await_reload`): `DHCP4_DYNAMIC_RECONFIGURATION_SUCCESS` is completion; at a restored level that hides that INFO line, `DHCP4_DYNAMIC_RECONFIGURATION` (written by the old logger, always
+visible) followed by `_STARTED_SETTLE_S` of no failure id counts; a failure id (`DHCP4_DYNAMIC_RECONFIGURATION_FAIL`, `DHCP4_CONFIG_LOAD_FAIL`) is reported with Kea's line and is NOT followed by a
+restart (the file is the problem); silence earns the one restart, checked by `_await_restart` (unit active, no start-failure id). The ids are those recorded on Kea 3.0.3, 3.2.0 and 3.3.1 by
+`tests/kea_compat/test_log_levels.py::test_sighup_reload_log_lines`, which asserts the helper's constants against them. `restored_at` is written in exactly one place, behind a verified `how`
+(INV-007); a failed tick counts in `attempts` and ten set `needs_hand`. (2) *The host's record is authoritative* (INV-008): `investigation-arm` over an unresolved record is idempotent (same
+path, restore and deadline), an extension (same restore, later deadline, `extended_from`), or refused with `error: "armed"` and the record; an unreadable state file blocks an arm too. (3)
+`investigation-status` reports `timer_active` / `timer_enabled` (and `last_error: "Restoration timer is not active"` for an armed state without one); `investigation-timer {action: "ensure"}` re-asserts
+the units and the timer. (4) `--self-restore` exits 1 on a failed restore. A state armed by build 15 carries no log path and is verified the way build 15 did, once.
+
+Jen's side is display and audit: `turn_on` refuses below build 16 (`kea_host.INVESTIGATION_MIN_HELPER_BUILD`, "press Update helper"), writes the file through the change set, **arms the
 host after the write and before the daemon is asked**, and on a failed arm or a `"none"` timer reverts the file and refuses; `turn_off` and the sweep's restore call
 `investigation-disarm` (Jen's older file-writing path is the fallback when the host cannot); the sweep reads `investigation-status` for every live entry and shows the host's
 `last_error`. A hand step for an armed entry is one command on the host: `sudo jen-kea-helper --self-restore --now`.

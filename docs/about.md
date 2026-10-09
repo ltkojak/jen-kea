@@ -32,7 +32,7 @@ Public License v3. The source is at
   apply a Kea config, remove a config file Jen itself just created (the
   undo of authoring a new one), control the Kea service, tail a Kea log, install
   the Kea packages, install a TLS certificate, update itself, and arm, disarm and
-  report a self-restore of the log level.
+  report a self-restore of the log level (and keep the timer behind it running).
 - Jen is not a DNS server, and does not manage BIND or other DNS
   software directly — it can push DHCP hostnames into a handful of
   third-party DNS/DHCP-aware tools (Pi-hole, AdGuard Home) through an

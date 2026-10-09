@@ -309,9 +309,9 @@ class Walk:
             return {"code": "unreachable", "version": None, "build": None, "detail": "ssh: no route to host"}
         return fake.helper_build_info(server)
 
-    def _host_arm(self, server, until, restore, jen=None):
+    def _host_arm(self, server, until, restore, jen=None, log_path=""):
         fake = self.ssh_fake(server)
-        return dict(self._NO_ROUTE) if fake is None else fake.investigation_arm(server, until, restore, jen)
+        return dict(self._NO_ROUTE) if fake is None else fake.investigation_arm(server, until, restore, jen, log_path)
 
     def _host_disarm(self, server):
         fake = self.ssh_fake(server)

@@ -79,6 +79,7 @@ class TestTheHelpersOperationsAreAllNamedOnTheAboutPage:
         "investigation-arm": "arm, disarm and\n  report a self-restore of the log level",
         "investigation-disarm": "arm, disarm and\n  report a self-restore of the log level",
         "investigation-status": "arm, disarm and\n  report a self-restore of the log level",
+        "investigation-timer": "arm, disarm and\n  report a self-restore of the log level",
     }
 
     def test_the_phrase_table_covers_exactly_the_helpers_ops(self):

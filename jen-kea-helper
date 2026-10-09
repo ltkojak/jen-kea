@@ -274,6 +274,13 @@ its three files as a SET (`_commit_file_set`): every member is staged private un
 each is then replaced, and on any failure every member already replaced is put back byte-for-byte (a member that did not exist is removed) - a failure at
 any step used to leave a new `server.key` beside an old `server.crt`. A change of behaviour inside the existing envelope: `HELPER_VERSION` stays 7.
 
+Build 16 (v5.68.0-beta.30, Q167) - the host's promise made provable. (1) A restore is recorded as done (`restored_at`) only when Kea's OWN log, past the offset noted before the
+SIGHUP, shows the reload completed (`DHCP4_DYNAMIC_RECONFIGURATION_SUCCESS`) - or, when the restored level hides that INFO line, shows it STARTED (`DHCP4_DYNAMIC_RECONFIGURATION`) and no
+failure id within a settle window; `unit is active` was never evidence that Kea re-read anything. A refused reload is reported and kept pending (the file is the problem), an unconfirmed one
+gets the one restart and the same check; every failed tick counts (`attempts`) and ten of them set `needs_hand`. The arm records the Kea log path for this. (2) `investigation-arm`
+never overwrites an unresolved record: an identical re-arm is idempotent, the same restore with a later deadline is an extension, anything else answers `armed` with the record. (3)
+`investigation-status` reports the timer's own state (`timer_active`, `timer_enabled`) and a new op `investigation-timer` re-asserts it. (4) `--self-restore` exits 1 when a restore failed.
+
 Build 15 (v5.68.0-beta.29, Q165) - the Kea HOST owns the restore of investigation logging. Eight reviews found a sequence after which Kea sat at DEBUG 55 and nothing
 restored it, because the restore lived on the wrong machine and depended on Jen, Jen's database, Jen's config, the Control Agent and a marker in Kea's file. The DEBUG is
 HERE and this helper already runs here as root. Three ops and one argv mode: `investigation-arm {service: "dhcp4", path, until, restore}` writes
@@ -311,7 +318,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 HELPER_VERSION = 7
-HELPER_BUILD = 15
+HELPER_BUILD = 16
 # v5.66.0-beta.2 (Q104) — HELPER_BUILD is bumped on EVERY change to this file, never by
 # HELPER_VERSION alone; op_update's own _HELPER_BUILD_RE parses "^HELPER_BUILD = (\d+)$" out
 # of a candidate's raw bytes, so this line (like HELPER_VERSION's own, just above) must never
@@ -1369,7 +1376,16 @@ _SYSTEMD_DIR = "/etc/systemd/system"
 _TIMER_NAME = "jen-kea-investigation"
 _STATE_FILE_RE = re.compile(r"^investigation-(dhcp4)\.json$")
 _ARM_MAX_AHEAD = timedelta(hours=24, minutes=1)
-_HUP_WAIT_S = 5.0  # how long a reloaded unit gets to be `active` before it is restarted instead
+_HUP_WAIT_S = 5.0  # how long Kea's own log gets to show the reload before the one restart is used instead
+# build 16 (Q167): the ids Kea writes - recorded per image by tests/kea_compat/test_log_levels.py::test_sighup_reload_log_lines (3.0.3, 3.2.0, 3.3.1), asserted against these constants there
+_RELOAD_OK_IDS = ("DHCP4_DYNAMIC_RECONFIGURATION_SUCCESS",)  # logged at INFO by the NEW logger: absent when the level is restored to WARN or above
+_RELOAD_STARTED_IDS = ("DHCP4_DYNAMIC_RECONFIGURATION",)  # logged by the OLD logger (DEBUG 55) before the file is read: always visible
+_RELOAD_FAIL_IDS = ("DHCP4_DYNAMIC_RECONFIGURATION_FAIL", "DHCP4_CONFIG_LOAD_FAIL")  # ERROR: visible at every level
+_START_FAIL_IDS = ("DHCP4_CONFIG_LOAD_FAIL", "DHCP4_INIT_FAIL", "DHCP4_SERVER_FAILED")
+_STARTED_SETTLE_S = 3.0  # after the reload STARTED, how long Kea must stay free of a failure id before the reload counts as applied (when SUCCESS is hidden by the level)
+_RESTART_SETTLE_S = 3.0
+_MAX_UNCONFIRMED_TICKS = 10  # failed restore ticks before the state says a person has to act
+_LOG_READ_MAX = 1 << 20
 _TIMER_SERVICE_TEXT = (
     "[Unit]\n"
     "Description=Jen: put the Kea logger back when investigation logging is over\n"
@@ -1547,33 +1563,130 @@ def _unit_main_pid(unit):
     return int(text) if text.isdigit() else 0
 
 
+def _log_size(path):
+    try:
+        return os.stat(path).st_size
+    except OSError:
+        return None
+
+
+def _log_lines_after(path, offset):
+    """The lines Kea wrote to `path` past byte `offset` (from 0 when the file is shorter than that - it was rotated), at most `_LOG_READ_MAX` bytes; None when it cannot be read."""
+    try:
+        size = os.stat(path).st_size
+        start = offset if size >= offset else 0
+        with open(path, "rb") as f:
+            f.seek(start)
+            data = f.read(_LOG_READ_MAX)
+    except OSError:
+        return None
+    return data.decode("utf-8", "replace").splitlines()
+
+
+def _find_id(lines, ids):
+    for line in lines:
+        for ident in ids:
+            if re.search(r"\b" + re.escape(ident) + r"\b", line):
+                return line.strip()
+    return None
+
+
+def _await_reload(path, offset):
+    """What Kea's own log says about the SIGHUP, past `offset`: ("ok", line) - the reload completed, or started and stayed free of a failure for `_STARTED_SETTLE_S` (the restored level may
+    hide the completion line); ("fail", line) - Kea refused the file; ("none", None) - nothing within the wait; ("unreadable", None)."""
+    waited, started_at = 0.0, None
+    while True:
+        lines = _log_lines_after(path, offset)
+        if lines is None:
+            return "unreadable", None
+        failed = _find_id(lines, _RELOAD_FAIL_IDS)
+        if failed:
+            return "fail", failed
+        done = _find_id(lines, _RELOAD_OK_IDS)
+        if done:
+            return "ok", done
+        started = _find_id(lines, _RELOAD_STARTED_IDS)
+        if started and started_at is None:
+            started_at = waited
+        if started_at is not None and waited - started_at >= _STARTED_SETTLE_S:
+            return "ok", started
+        if waited >= _HUP_WAIT_S + _STARTED_SETTLE_S or (started_at is None and waited >= _HUP_WAIT_S):
+            return "none", None
+        _sleep(0.5)
+        waited += 0.5
+
+
+def _await_restart(unit, path, offset):
+    """After `systemctl restart`: ("ok", None) when the unit is active and Kea's log past `offset` carries no start-failure id; ("fail", line); ("none", None); ("unreadable", None)."""
+    waited = 0.0
+    while waited < _RESTART_SETTLE_S:
+        _sleep(0.5)
+        waited += 0.5
+        lines = _log_lines_after(path, offset)
+        if lines is None:
+            return "unreadable", None
+        failed = _find_id(lines, _START_FAIL_IDS)
+        if failed:
+            return "fail", failed
+    if _unit_state(unit) != "active":
+        return "none", None
+    return "ok", None
+
+
 def _reload_daemon(service, state):
-    """Make the running daemon re-read its file: SIGHUP to the unit's main process; if the unit is not `active` _HUP_WAIT_S later - or has no process to signal - ONE
-    restart per state file (`state["restarts"]`, never more). Returns (how, error): how is "reload" or "restart", error None on success."""
+    """Make the running daemon re-read its file AND PROVE IT from Kea's own log: note the log's size, SIGHUP the unit's main process, and look for the lines Kea writes past that offset
+    (`_await_reload`). A refusal is reported and nothing is restarted (the file is the problem); no confirmation within the wait gets ONE restart per state file, verified the same way
+    (`_await_restart`). Returns (how, error): how is "reload" or "restart" only when verified, error None on success. A state armed by build 15 carries no log path: it is verified the
+    way build 15 did (the unit is `active`), once, rather than never."""
     unit = _resolve_unit(service, "status")
     if unit is None:
         return None, "no Kea unit was found on this host"
+    log_path = state.get("log_path")
+    legacy = "log_path" not in state
+    if not legacy and not _allowed_log_path(log_path):
+        return None, "the arm recorded no usable Kea log path, so the host cannot verify that Kea re-read its config"
     pid = _unit_main_pid(unit)
     if pid > 0:
+        offset = 0 if legacy else _log_size(log_path)
+        if offset is None:
+            return None, f"the Kea log {log_path} could not be read, so the reload cannot be verified"
         try:
             os.kill(pid, _SIGHUP)
         except OSError:
             pid = 0  # no such process: the unit is not really running; fall through to the restart
         else:
-            waited = 0.0
-            while waited < _HUP_WAIT_S:
-                _sleep(0.5)
-                waited += 0.5
-                if _unit_state(unit) == "active":
+            if legacy:
+                waited = 0.0
+                while waited < _HUP_WAIT_S:
+                    _sleep(0.5)
+                    waited += 0.5
+                    if _unit_state(unit) == "active":
+                        return "reload", None
+            else:
+                verdict, line = _await_reload(log_path, offset)
+                if verdict == "ok":
                     return "reload", None
+                if verdict == "fail":
+                    return None, f"Kea refused the restored config: {line}"[:400]
+                # "none" / "unreadable": unconfirmed - the one restart below
     if int(state.get("restarts") or 0) >= 1:
-        return None, "the daemon did not stay active after the reload and it was already restarted once for this state: not restarting again"
+        return None, "Kea's log did not confirm the reload and the unit was already restarted once for this state: not restarting again"
     state["restarts"] = int(state.get("restarts") or 0) + 1
+    offset = 0 if legacy else _log_size(log_path)
+    if offset is None:
+        return None, f"the Kea log {log_path} could not be read, so the restart cannot be verified"
     proc = _run_bin("systemctl", ["restart", unit], capture_output=True, text=True)
     if proc is None or proc.returncode != 0:
         tail = "\n".join(((proc.stderr or proc.stdout) if proc else "").splitlines()[-3:])
         return None, f"systemctl restart {unit} failed: {tail}"
-    return "restart", None
+    if legacy:
+        return ("restart", None) if _unit_state(unit) == "active" else (None, "restarted, but the unit is not active")
+    verdict, line = _await_restart(unit, log_path, offset)
+    if verdict == "ok":
+        return "restart", None
+    if verdict == "fail":
+        return None, f"restarted, but Kea refused the restored config: {line}"[:400]
+    return None, "restarted, but Kea's log shows no completed configuration and the unit is not active"
 
 
 def _restore_state(service, state):
@@ -1602,15 +1715,19 @@ def _restore_state(service, state):
             except OSError as e:
                 return _restore_failed(service, state, f"the config could not be written: {e}")
         how, error = _reload_daemon(service, state)
-        if error:
-            return _restore_failed(service, state, error)
-        state.update(restored_at=_now().isoformat(timespec="seconds"), how=how, last_error=None)
+        if error or how not in ("reload", "restart"):
+            return _restore_failed(service, state, error or "the reload was not verified")
+        # the ONE place `restored_at` is written: after a VERIFIED how
+        state.update(restored_at=_now().isoformat(timespec="seconds"), how=how, last_error=None, needs_hand=False)
         _save_state(service, state)
         return True, how, ""
 
 
 def _restore_failed(service, state, detail):
     state["last_error"] = str(detail)[:500]
+    state["attempts"] = int(state.get("attempts") or 0) + 1
+    if state["attempts"] >= _MAX_UNCONFIRMED_TICKS:
+        state["needs_hand"] = True  # Jen's Health says so; `sudo jen-kea-helper --self-restore --now` is the by-hand step once the cause is fixed
     with contextlib.suppress(OSError):  # the failure is returned either way; the state file is the report, not the safety
         _save_state(service, state)
     return False, None, state["last_error"]
@@ -1627,6 +1744,9 @@ def _arm_fields(payload):
     restore = payload.get("restore")
     if not _restore_shape_ok(restore):
         return None, "bad-restore"
+    log_path = payload.get("log_path")
+    if not _allowed_log_path(log_path):
+        return None, "bad-log-path"  # build 16: the host verifies its restore from Kea's own log, so it must know where that is
     jen = payload.get("jen")
     if jen is not None and (
         not isinstance(jen, dict)
@@ -1644,6 +1764,9 @@ def _arm_fields(payload):
         "how": None,
         "last_error": None,
         "restarts": 0,
+        "attempts": 0,
+        "needs_hand": False,
+        "log_path": log_path,
         "jen": jen or {},
     }, None
 
@@ -1652,15 +1775,37 @@ def op_investigation_arm(payload):
     state, error = _arm_fields(payload)
     if state is None:
         return {"ok": False, "error": error}, None
+    if _log_size(state["log_path"]) is None:
+        return {"ok": False, "error": "bad-log-path", "detail": f"{state['log_path']} does not exist or cannot be read, so the host could not verify a restore from Kea's log"}, state["path"]
     path = state["path"]
     with _locked(path):
+        # build 16 (Q167): the host's record is authoritative. An UNRESOLVED one (no `restored_at`) is never replaced by whatever a caller sends - a Jen restored from an older backup, a
+        # second Jen, a stale sweep: the same session again is idempotent, the same restore with a LATER deadline is an extension, anything else is refused with the record.
+        existing = _load_state("dhcp4")
+        if existing is None and os.path.exists(_state_path("dhcp4")):
+            return {"ok": False, "error": "armed", "existing": {"unreadable": True}, "detail": "the host's state file exists and cannot be read; remove it by hand once it is understood"}, path
+        idempotent = False
+        if existing is not None and not existing.get("restored_at"):
+            same = existing.get("path") == state["path"] and existing.get("restore") == state["restore"]
+            old_until, new_until = _parse_iso(existing.get("until")), _parse_iso(state["until"])
+            if same and old_until is not None and new_until == old_until:
+                idempotent = True
+            elif same and old_until is not None and new_until is not None and new_until > old_until:
+                state["extended_from"] = existing.get("until")
+            else:
+                return {"ok": False, "error": "armed", "existing": existing}, path
         try:
             _ensure_state_dir()
-            _save_state("dhcp4", state)  # replaces the previous state, restored or not: a new session
+            if not idempotent:
+                _save_state("dhcp4", state)
         except OSError as e:
             return {"ok": False, "error": "write-failed", "detail": str(e)}, path
         timer, detail = _ensure_timer()
-    reply = {"ok": True, "timer": timer, "until": state["until"]}
+    reply = {"ok": True, "timer": timer, "until": existing["until"] if idempotent else state["until"]}
+    if idempotent:
+        reply["idempotent"] = True
+    if state.get("extended_from"):
+        reply["extended_from"] = state["extended_from"]
     if detail:
         reply["detail"] = detail
     return reply, path
@@ -1683,15 +1828,47 @@ def op_investigation_disarm(payload):
     return {"ok": True, "restored": True, "how": how, "detail": ""}, path
 
 
+def _timer_status():
+    """(active, enabled) of the host's own timer, asked of systemd now."""
+    active = _run_bin("systemctl", ["is-active", f"{_TIMER_NAME}.timer"], capture_output=True, text=True)
+    enabled = _run_bin("systemctl", ["is-enabled", f"{_TIMER_NAME}.timer"], capture_output=True, text=True)
+    return (
+        active is not None and active.stdout.strip() == "active",
+        enabled is not None and enabled.stdout.strip() in ("enabled", "enabled-runtime", "static", "alias"),
+    )
+
+
+def op_investigation_timer(payload):
+    """`{action: "ensure"}` - install (when different) and start the timer again: what the arm does, without touching the state. A timer someone stopped is what this repairs."""
+    if payload.get("action") != "ensure":
+        return {"ok": False, "error": "not-allowed"}, None
+    timer, detail = _ensure_timer()
+    reply = {"ok": timer == "systemd", "timer": timer}
+    if detail:
+        reply["detail"] = detail
+    return reply, None
+
+
 def _status_view(state):
+    armed = bool(state) and not state.get("restored_at")
+    timer_active, timer_enabled = _timer_status() if armed else (None, None)
+    last_error = state.get("last_error")
+    if armed and timer_active is False:
+        last_error = "Restoration timer is not active"
     return {
-        "armed": bool(state) and not state.get("restored_at"),
+        "armed": armed,
+        "timer_active": timer_active,
+        "timer_enabled": timer_enabled,
+        "needs_hand": bool(state.get("needs_hand")),
+        "attempts": state.get("attempts", 0),
+        "log_path": state.get("log_path"),
+        "extended_from": state.get("extended_from"),
         "path": state.get("path"),
         "until": state.get("until"),
         "armed_at": state.get("armed_at"),
         "restored_at": state.get("restored_at"),
         "how": state.get("how"),
-        "last_error": state.get("last_error"),
+        "last_error": last_error,
         "restore": state.get("restore"),
         "jen": state.get("jen") or {},
     }
@@ -1749,6 +1926,7 @@ _OPS = {
     "investigation-arm": op_investigation_arm,
     "investigation-disarm": op_investigation_disarm,
     "investigation-status": op_investigation_status,
+    "investigation-timer": op_investigation_timer,
 }
 
 
@@ -1785,7 +1963,8 @@ def main(argv=None, stdin=None, stdout=None, stderr=None):
             result = _self_restore(force="--now" in argv[2:])
         except Exception as e:  # noqa: BLE001 - a tick must report, never traceback
             result = {"ok": False, "error": "helper-exception", "detail": str(e)}
-        return _emit(stdout, stderr, op, result, 0)
+        # build 16: a failed restore is a failed unit (systemd keeps scheduling a oneshot that exited nonzero, so the next tick still runs)
+        return _emit(stdout, stderr, op, result, 0 if result.get("ok") else 1)
 
     raw = stdin.read(MAX_STDIN + 1)
     if len(raw) > MAX_STDIN:

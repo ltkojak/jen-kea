@@ -68,7 +68,7 @@ class FakeKea:
         self.restart_ignored = False  # the restart succeeds and the daemon does not move
         self.second = None  # config-get answers from ANOTHER daemon (api_url and ssh_host are not the same Kea)
         # v5.68.0-beta.29 (Q165): the Kea HOST - jen-kea-helper build 15 with its state file and its timer. `host_down` is a host Jen cannot reach over SSH at all.
-        self.build = 15
+        self.build = 16
         self.helper_code = "ok"  # "missing" | "unreachable" | "error": what `helper_build` answers
         self.timer = "systemd"  # what `investigation-arm` reports ("none" = a host that cannot run the timer)
         self.arm_fails = None  # a detail string: `investigation-arm` answers not-ok with it
@@ -161,7 +161,7 @@ class FakeKea:
         return {
             "ok": False,
             "code": "old",
-            "detail": "the Kea host helper on this host is older than build 15 - press Update helper",
+            "detail": "the Kea host helper on this host is older than build 16 - press Update helper",
         }
 
     def helper_build_info(self, server):
@@ -171,11 +171,11 @@ class FakeKea:
             return {"code": self.helper_code, "version": None, "build": None, "detail": self.helper_code}
         return {"code": "ok", "version": 7, "build": self.build, "detail": ""}
 
-    def investigation_arm(self, server, until, restore, jen=None):
+    def investigation_arm(self, server, until, restore, jen=None, log_path=""):
         self.calls.append("host:arm")
         if self.host_down:
             return self._host_error()
-        if self.build < 15:
+        if self.build < 16:
             return self._too_old()
         if self.arm_fails:
             return {"ok": False, "code": "error", "detail": self.arm_fails}
@@ -200,7 +200,7 @@ class FakeKea:
         self.calls.append("host:status")
         if self.host_down:
             return self._host_error()
-        if self.build < 15:
+        if self.build < 16:
             return self._too_old()
         st = self.helper_state
         if st is None:
@@ -246,7 +246,7 @@ class FakeKea:
         self.calls.append("host:disarm")
         if self.host_down:
             return self._host_error()
-        if self.build < 15:
+        if self.build < 16:
             return self._too_old()
         st = self.helper_state
         if st is None:
@@ -344,7 +344,9 @@ def world(monkeypatch):
     monkeypatch.setattr(
         inv._host,
         "investigation_arm",
-        lambda server, until, restore, jen=None: pick(server).investigation_arm(server, until, restore, jen),
+        lambda server, until, restore, jen=None, log_path="": pick(server).investigation_arm(
+            server, until, restore, jen, log_path
+        ),
     )
     monkeypatch.setattr(inv._host, "investigation_disarm", lambda server: pick(server).investigation_disarm(server))
     monkeypatch.setattr(inv._host, "investigation_status", lambda server: pick(server).investigation_status(server))

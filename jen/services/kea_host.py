@@ -252,7 +252,7 @@ JEN_HELPER_SHIPPED_VERSION = 7  # v7 (v5.66.0-beta.2, Q104): PATH hardening + pr
 # A helper below v7 never reports a build at all (record_helper_status's "build" stays
 # whatever it last was, usually None) — comparisons that matter fall back to version alone
 # in that case; see install_helper()'s already-check and helper_version_label() below.
-JEN_HELPER_SHIPPED_BUILD = 15  # v5.68.0-beta.29 (Q165): the Kea host owns the restore of investigation logging (investigation-arm / -disarm / -status, --self-restore, a systemd timer); build 14 (v5.68.0-beta.16, Q151): one identity resolver, a new config root:daemon-gid 0640 (never 0644), no swallowed chown, install-tls as a set commit; build 13 (Q150): every file the helper writes is private from its first byte, the lock is taken for every op, a daemon-owned binary needs u+x, and remove-config exists; build 12 (Q149): the unit is resolved BEFORE the binary is trusted, so a root-owned binary under User=_kea is validated as _kea (never root); build 11 (Q148): the validation copy is 0600 and the unit's own identity (Group=, SupplementaryGroups=) runs -t
+JEN_HELPER_SHIPPED_BUILD = 16  # v5.68.0-beta.30 (Q167): a restore is recorded only when Kea's own log shows the reload (build 16 also never overwrites an unresolved host record, reports its timer, exits 1 on a failed restore); build 15 (v5.68.0-beta.29, Q165): the Kea host owns the restore of investigation logging (investigation-arm / -disarm / -status, --self-restore, a systemd timer); build 14 (v5.68.0-beta.16, Q151): one identity resolver, a new config root:daemon-gid 0640 (never 0644), no swallowed chown, install-tls as a set commit; build 13 (Q150): every file the helper writes is private from its first byte, the lock is taken for every op, a daemon-owned binary needs u+x, and remove-config exists; build 12 (Q149): the unit is resolved BEFORE the binary is trusted, so a root-owned binary under User=_kea is validated as _kea (never root); build 11 (Q148): the validation copy is 0600 and the unit's own identity (Group=, SupplementaryGroups=) runs -t
 # v5.66.0 (Q103) — the version whose "Update helper" click needs no legacy grant at all: at
 # or above this, install_helper() takes the signed path (helper_signature() + the `update`
 # op) instead of the pre-5.11.0 sudo-python3 engine. A host below this still gets one last
@@ -954,9 +954,7 @@ def remove_config(server: dict, service: str, expect_sha256: str | None) -> dict
     return {"ok": False, "code": "error", "detail": resp.get("detail") or str(err), "via": "helper"}
 
 
-INVESTIGATION_MIN_HELPER_BUILD = (
-    15  # v5.68.0-beta.29 (Q165): investigation-arm / -disarm / -status and the self-restore timer arrive in build 15
-)
+INVESTIGATION_MIN_HELPER_BUILD = 16  # v5.68.0-beta.30 (Q167): the verified restore, the authoritative host record and the timer ops are build 16 (the self-restore itself arrived in build 15)
 
 
 def _investigation_op(server: dict, op: str, payload: dict) -> dict:
@@ -974,24 +972,46 @@ def _investigation_op(server: dict, op: str, payload: dict) -> dict:
     if resp.get("ok"):
         return {**resp, "ok": True, "code": "ok", "detail": resp.get("detail") or ""}
     err = resp.get("error")
+    if err == "armed":
+        # build 16 (Q167): the host holds an UNRESOLVED session this arm did not match - it is authoritative and was not touched
+        return {
+            "ok": False,
+            "code": "armed",
+            "detail": resp.get("detail") or "the Kea host reports an unresolved investigation session",
+            "existing": resp.get("existing") if isinstance(resp.get("existing"), dict) else {},
+        }
     if err == "unknown-op":
         return {
             "ok": False,
             "code": "old",
-            "detail": "the Kea host helper on this host is older than build 15 - press Update helper",
+            "detail": f"the Kea host helper on this host is older than build {INVESTIGATION_MIN_HELPER_BUILD} - press Update helper",
         }
     return {"ok": False, "code": "error", "detail": resp.get("detail") or str(err or "the helper refused")}
 
 
-def investigation_arm(server: dict, until: str, restore: dict, jen: dict | None = None) -> dict:
+def investigation_arm(server: dict, until: str, restore: dict, jen: dict | None = None, log_path: str = "") -> dict:
     """Ask the host to put the kea-dhcp4 logger back BY ITSELF at `until` (`restore` is the marker's own object): the helper writes its state file and makes sure its
     systemd timer is running. `{"ok", "code", "detail", "timer": "systemd" | "none"}` - a "none" timer is a host that will not do it, and the caller must not turn
     logging on."""
     reply = _investigation_op(
         server,
         "investigation-arm",
-        {"service": "dhcp4", "path": _conf_path(server, "dhcp4"), "until": until, "restore": restore, "jen": jen or {}},
+        {
+            "service": "dhcp4",
+            "path": _conf_path(server, "dhcp4"),
+            "until": until,
+            "restore": restore,
+            "jen": jen or {},
+            "log_path": log_path,
+        },
     )
+    reply.setdefault("timer", "none")
+    return reply
+
+
+def investigation_timer(server: dict) -> dict:
+    """Re-assert the host's investigation timer (build 16): install if different, enable and start it. `{"ok", "code", "detail", "timer"}`."""
+    reply = _investigation_op(server, "investigation-timer", {"action": "ensure"})
     reply.setdefault("timer", "none")
     return reply
 

@@ -736,16 +736,57 @@ def test_sighup_reload_log_lines(findings):
     broken = json.loads(dump(base))
     broken["Dhcp4"]["jen-no-such-parameter"] = 1
     scenarios["refused_broken_file"] = _hup_and_read(pid, dump(broken))
+    record["process_survived"] = _status()["pid"] == pid
     _hup_and_read(pid, dump(base))  # leave a sane file and a sane daemon behind
+
+    # a RESTART onto a broken file: the ids the daemon writes as it refuses to start (the helper's `_START_FAIL_IDS` must contain one)
+    with open(conf_path, "w") as fh:
+        fh.write(dump(broken))
+    before = len(_daemon_log())
+    _sh("docker", "restart", "kea", check=False)
+    time.sleep(6)
+    scenarios["restart_refused_broken_file"] = _daemon_log()[before:]
 
     for name, lines in scenarios.items():
         record[name] = {
             "ids": _dhcp4_ids(lines),
             "lines": [ln[-220:] for ln in lines if re.search(r"DHCP4_|DCTL_|COMMAND_", ln)][:10],
         }
-    record["process_survived"] = _status()["pid"] == pid
+    _restart(
+        "INFO", None
+    )  # leave a sane daemon behind (the process id changed: the survival check below was taken before the restart)
     print(
         f"RELOAD IDS {IMAGE}: "
         + json.dumps({k: v["ids"] for k, v in record.items() if isinstance(v, dict) and "ids" in v}, sort_keys=True)
     )
     assert record["process_survived"], f"a SIGHUP reload, even of a broken file, never kills the daemon: {record}"
+
+    # what the helper looks for (jen-kea-helper build 16) is what Kea wrote, on every supported image
+    import importlib.util
+    import pathlib
+    from importlib.machinery import SourceFileLoader
+
+    loader = SourceFileLoader(
+        "jen_kea_helper_probe", str(pathlib.Path(__file__).resolve().parents[2] / "jen-kea-helper")
+    )
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    helper = importlib.util.module_from_spec(spec)
+    loader.exec_module(helper)
+    ids = {name: set(record[name]["ids"]) for name in scenarios}
+    for name in ("debug_55_applied", "restored_to_info"):
+        assert set(helper._RELOAD_OK_IDS) <= ids[name], (
+            f"{name}: the completion id the helper waits for is missing: {record[name]}"
+        )
+    for name in ("debug_55_applied", "restored_to_info", "restored_to_warn"):
+        assert set(helper._RELOAD_STARTED_IDS) <= ids[name], (
+            f"{name}: the started id is always visible (the OLD logger writes it): {record[name]}"
+        )
+        assert not (set(helper._RELOAD_FAIL_IDS) & ids[name]), (
+            f"{name}: a successful reload writes no failure id: {record[name]}"
+        )
+    assert set(helper._RELOAD_FAIL_IDS) & ids["refused_broken_file"], (
+        f"a refused reload writes a failure id: {record['refused_broken_file']}"
+    )
+    assert set(helper._START_FAIL_IDS) & ids["restart_refused_broken_file"], (
+        f"a start onto a broken file writes a start-failure id: {record['restart_refused_broken_file']}"
+    )

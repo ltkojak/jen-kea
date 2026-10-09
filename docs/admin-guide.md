@@ -1058,7 +1058,7 @@ is your installed Jen version, shown on the About page; `7`/`9` are this
 release's `HELPER_VERSION`/`HELPER_BUILD`):
 
 ```bash
-d="$(mktemp -d)" && cd "$d" && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper.sig && printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && /usr/bin/python3 -I jen-kea-helper version </dev/null | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin);sys.exit(0 if d.get("ok") is True and d.get("helper_version")==7 and d.get("helper_build")==15 else 1)' && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
+d="$(mktemp -d)" && cd "$d" && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper.sig && printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && /usr/bin/python3 -I jen-kea-helper version </dev/null | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin);sys.exit(0 if d.get("ok") is True and d.get("helper_version")==7 and d.get("helper_build")==16 else 1)' && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
 ```
 
 then add the sudoers line above. **Settings → Kea → SSH** shows the
@@ -1077,7 +1077,7 @@ trust (`scp`, a USB drive), then run the same verify-then-install steps
 locally, in the directory holding both files:
 
 ```bash
-printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && /usr/bin/python3 -I jen-kea-helper version </dev/null | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin);sys.exit(0 if d.get("ok") is True and d.get("helper_version")==7 and d.get("helper_build")==15 else 1)' && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
+printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && /usr/bin/python3 -I jen-kea-helper version </dev/null | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin);sys.exit(0 if d.get("ok") is True and d.get("helper_version")==7 and d.get("helper_build")==16 else 1)' && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
 ```
 
 Never skip the verify step just because you trust the transport — it's
@@ -1240,6 +1240,16 @@ a file with only the other-execute bit set and then failed to start as that acco
 if it still is exactly the file Jen wrote (a sha is required), under the same lock - it is how Jen undoes an Author Kea Config on a server that had no
 file before when a later server fails. No sudoers change: it is still the one `/usr/local/sbin/jen-kea-helper` line. A host on an older helper keeps
 working, but a failed authoring there leaves the new file and the Servers banner says to delete it by hand.
+
+**Helper build 16 (v5.68.0-beta.30) — the host's restore is proven from Kea's own log. Press Update helper again on every Kea host that uses investigation logging.**
+Build 15 recorded a restore as done when the unit was `active` after the SIGHUP, which says nothing about whether Kea re-read the file. Build 16 notes the size of Kea's log (the path is
+recorded by the arm - the file the `kea-dhcp4` logger writes, else `[kea] dhcp4_log_path`), sends the signal, and writes `restored_at` only when Kea itself logged the reload as completed
+(`DHCP4_DYNAMIC_RECONFIGURATION_SUCCESS`) - or, when the restored level hides that line, logged it as started (`DHCP4_DYNAMIC_RECONFIGURATION`) and no failure id (`DHCP4_CONFIG_LOAD_FAIL`,
+`DHCP4_DYNAMIC_RECONFIGURATION_FAIL`) in the next seconds. A refused reload keeps the state pending with Kea's own line as the error (the file is the problem, so nothing is restarted); an
+unconfirmed one gets the one restart, checked the same way. Every failed tick is counted, and after ten the state says `needs_hand`: Health fails and the by-hand step is
+`sudo jen-kea-helper --self-restore --now` once the cause is fixed. The arm no longer replaces an unresolved record: the same session again is a no-op, the same restore with a later deadline
+is an extension, anything else is refused with the host's record (it restores itself at its deadline). The timer's own state is reported (`timer_active`, `timer_enabled`) and Jen repairs it with
+the new `investigation-timer` op; `--self-restore` exits 1 when a restore failed (systemd keeps scheduling a oneshot that exited nonzero, so the next minute still runs).
 
 **Helper build 15 (v5.68.0-beta.29) — the Kea host puts the logger back by itself. Press Update helper once on every Kea host before using investigation logging.**
 Investigation logging (below) used to rest on Jen alone: if Jen stopped, its database went away or its settings pointed somewhere else, nothing put the DEBUG level back.
@@ -1406,7 +1416,7 @@ host moved onto helper build 7–9 was; press Update helper to reach build 10. B
 config on a host that has it — the validation copy is `0600`, owned by the account that runs the check, and runs with the unit's `Group=` and
 `SupplementaryGroups=` — and the generated script of this path is unchanged. Build 12 (v5.68.0-beta.14) only changes which account the
 helper validates as when the unit names one; the generated script of this path still runs no `-t` check of its own and is unchanged again. Build 14 (v5.68.0-beta.16) changes only how the helper decides ownership and commits TLS files on a host that has it. Build 13 (v5.68.0-beta.15) changes only how the helper writes and locks files on a host that has it, and
-adds `remove-config`: the legacy path has no such op, so a failed Author Kea Config there leaves the file it created and says to delete it by hand. Build 15 (v5.68.0-beta.29) adds the three investigation-logging ops, which the legacy path has no engine for: investigation logging is refused on a host without the helper at build 15 or later.)
+adds `remove-config`: the legacy path has no such op, so a failed Author Kea Config there leaves the file it created and says to delete it by hand. Build 15 (v5.68.0-beta.29) adds the three investigation-logging ops, which the legacy path has no engine for: investigation logging is refused on a host without the helper at build 16 or later (build 16, v5.68.0-beta.30, adds a fourth, `investigation-timer`).)
 
 The grant is needed for **one run** to install the helper, and — below
 helper v6 — for **one more run** to reach v6 (Update helper copies the

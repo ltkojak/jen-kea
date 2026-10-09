@@ -72,6 +72,24 @@ connection mode do not change, and nothing but investigation logging may erase i
 - `tests/test_investigation_logging.py::TestTheDaemonStepIsBounded`
 - `tests/test_investigation_model.py::TestTheWalk` (invariant I3)
 
+### INV-007 - A host restore is recorded as done only when Kea's own log shows the reload or start completed
+**Rule.** The Kea host writes `restored_at` only after a VERIFIED reload or restart: Kea's own log, past the offset noted before the SIGHUP, shows the reload completed (or started and stayed
+free of a failure id when the restored level hides the completion line); "the unit is active" is not evidence that Kea re-read its file. A refused or unconfirmed restore is retried, counted, and
+after ten ticks says a person has to act.
+**Established.** Q167.
+**Enforced at.** `jen-kea-helper` `_reload_daemon` / `_restore_state` (the only writer of `restored_at`).
+**Tests.**
+- `tests/test_kea_helper_investigation.py::TestARestoreIsDoneWhenKeasOwnLogSaysSo`
+- `tests/kea_compat/test_log_levels.py::test_sighup_reload_log_lines`
+
+### INV-008 - An unresolved host record is never overwritten by an arm
+**Rule.** The Kea host's record of an unresolved investigation session is authoritative: an arm that does not match it (a Jen restored from an older backup, a second Jen, a stale sweep) is
+refused with the record; the same session again is a no-op and the same restore with a later deadline is an extension. Jen shows the conflict and refuses to turn logging on over it.
+**Established.** Q167.
+**Enforced at.** `jen-kea-helper` `op_investigation_arm`; `investigation_logging._host_phase` and `turn_on` for the display and the refusal.
+**Tests.**
+- `tests/test_kea_helper_investigation.py::TestAnUnresolvedHostRecordIsNeverOverwritten`
+
 ## Access control and shared definitions
 
 ### RBAC-001 - Stored data is judged by its own subnet; a hidden object never influences a visible answer

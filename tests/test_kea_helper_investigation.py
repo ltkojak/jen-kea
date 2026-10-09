@@ -75,6 +75,12 @@ class Host:
         self.unit_states = ["active"]  # what `is-active <kea unit>` answers, in turn (the last one repeats)
         self.restart_rc = 0
         self.main_pid = 4242
+        # build 16 (Q167): Kea's OWN log is the evidence. A SIGHUP appends what Kea writes for `reload_mode` ("success" | "started" - the restored level hides the completion line |
+        # "fail" | "silent"); a restart appends the start lines of `restart_mode` ("ok" | "fail" | "silent"). Every fake reload also bumps `reloads`.
+        self.log = tmp_path / "kea-dhcp4.log"
+        self.log.write_text("old line DHCP4_DYNAMIC_RECONFIGURATION_SUCCESS from long ago\n", encoding="utf-8")
+        self.reload_mode = "success"
+        self.restart_mode = "ok"
         self.kea_test = (True, {"ok": True})
         monkeypatch.setattr(helper, "_STATE_DIR", str(self.state_dir))
         monkeypatch.setattr(helper, "_SYSTEMD_DIR", str(self.units))
@@ -86,9 +92,33 @@ class Host:
         monkeypatch.setattr(helper, "_find_bin", self._find_bin)
         monkeypatch.setattr(helper, "_run_bin", self._run_bin)
         monkeypatch.setattr(helper, "_run_kea_test", lambda service, path, cfg, tls: self.kea_test)
-        monkeypatch.setattr(os, "kill", lambda pid, sig: self.signals.append((pid, sig)))
+        monkeypatch.setattr(os, "kill", self._kill)
+        monkeypatch.setattr(helper, "_allowed_log_path", lambda p: isinstance(p, str) and p.endswith(".log"))
         monkeypatch.setattr(os, "fchown", lambda *a: None, raising=False)
         monkeypatch.setattr(os, "chown", lambda *a: None, raising=False)
+
+    def _append(self, *lines):
+        with open(self.log, "a", encoding="utf-8") as f:
+            f.write("".join(line + "\n" for line in lines))
+
+    def _kill(self, pid, sig):
+        self.signals.append((pid, sig))
+        if self.reload_mode == "success":
+            self._append(
+                "2026-10-10 12:00:00.001 INFO  [kea-dhcp4.dhcp4/1] DHCP4_DYNAMIC_RECONFIGURATION initiate server reconfiguration using file: x",
+                "2026-10-10 12:00:00.090 INFO  [kea-dhcp4.dhcp4/1] DHCP4_CONFIG_COMPLETE DHCPv4 server has completed configuration",
+                "2026-10-10 12:00:00.095 INFO  [kea-dhcp4.dhcp4/1] DHCP4_DYNAMIC_RECONFIGURATION_SUCCESS dynamic server reconfiguration succeeded with file: x",
+            )
+        elif self.reload_mode == "started":
+            self._append(
+                "2026-10-10 12:00:00.001 INFO  [kea-dhcp4.dhcp4/1] DHCP4_DYNAMIC_RECONFIGURATION initiate server reconfiguration using file: x"
+            )
+        elif self.reload_mode == "fail":
+            self._append(
+                "2026-10-10 12:00:00.001 INFO  [kea-dhcp4.dhcp4/1] DHCP4_DYNAMIC_RECONFIGURATION initiate server reconfiguration using file: x",
+                "2026-10-10 12:00:00.050 ERROR [kea-dhcp4.dhcp4/1] DHCP4_CONFIG_LOAD_FAIL configuration error using file: x, reason: unsupported parameter",
+                "2026-10-10 12:00:00.051 ERROR [kea-dhcp4.dhcp4/1] DHCP4_DYNAMIC_RECONFIGURATION_FAIL dynamic server reconfiguration failed with file: x",
+            )
 
     def _find_bin(self, name):
         return None if (name == "systemctl" and self.timer == "no-systemctl") else f"/usr/bin/{name}"
@@ -110,6 +140,8 @@ class Host:
                 )
             state = self.unit_states[0] if len(self.unit_states) == 1 else self.unit_states.pop(0)
             return Proc(state + "\n", 0 if state == "active" else 3)
+        if args[:1] == ["is-enabled"]:
+            return Proc("enabled\n" if self.timer not in ("inactive", "enable-fails") else "disabled\n", 0)
         if args[:1] == ["enable"]:
             return Proc(
                 "",
@@ -119,6 +151,14 @@ class Host:
         if args[:1] == ["restart"]:
             if self.restart_rc == 0:
                 self.unit_states = ["active"]
+                if self.restart_mode == "ok":
+                    self._append(
+                        "2026-10-10 12:00:03.000 INFO  [kea-dhcp4.dhcp4/1] DHCP4_STARTED Kea DHCPv4 server version 3.0.3 started"
+                    )
+                elif self.restart_mode == "fail":
+                    self._append(
+                        "2026-10-10 12:00:03.000 ERROR [kea-dhcp4.dhcp4/1] DHCP4_CONFIG_LOAD_FAIL configuration error using file: x"
+                    )
             return Proc("", self.restart_rc, "Job failed" if self.restart_rc else "")
         return Proc()
 
@@ -137,6 +177,7 @@ class Host:
             "path": str(self.conf),
             "until": (self.now + timedelta(minutes=minutes)).isoformat(),
             "restore": dict(restore or RESTORE),
+            "log_path": str(self.log),
             **extra,
         }
         return self.op("investigation-arm", payload)
@@ -155,8 +196,10 @@ class Host:
         code = self.helper.main(
             argv=["jen-kea-helper", "--self-restore", *flags], stdin=io.StringIO(""), stdout=out, stderr=io.StringIO()
         )
-        assert code == 0
-        return json.loads(out.getvalue())
+        self.last_code = code
+        reply = json.loads(out.getvalue())
+        assert code == (0 if reply["ok"] else 1), "the exit status says whether a restore failed (build 16)"
+        return reply
 
     def restarts(self):
         return [c for c in self.calls if c[0] == "systemctl" and c[1][:1] == ["restart"]]
@@ -276,6 +319,8 @@ class TestArm:
             ({"restore": {"created": True, "severity": "INFO"}}, "bad-restore"),
             ({"jen": "x"}, "bad-jen"),
             ({"jen": {"other": 1}}, "bad-jen"),
+            ({"log_path": "/tmp/kea.txt"}, "bad-log-path"),
+            ({"log_path": None}, "bad-log-path"),
         ],
     )
     def test_a_bad_request_is_refused_and_writes_nothing(self, host, change, error):
@@ -284,6 +329,7 @@ class TestArm:
             "path": str(host.conf),
             "until": (NOW + timedelta(minutes=5)).isoformat(),
             "restore": dict(RESTORE),
+            "log_path": str(host.log),
             **change,
         }
         reply = host.op("investigation-arm", payload)
@@ -291,11 +337,18 @@ class TestArm:
         assert not (host.state_dir / "investigation-dhcp4.json").exists()
         assert host.calls == []
 
+    def test_a_log_that_does_not_exist_is_refused_up_front(self, host):
+        reply = host.arm(5, log_path=str(host.log) + ".missing.log")
+        assert reply["ok"] is False and reply["error"] == "bad-log-path" and "does not exist" in reply["detail"]
+        assert not (host.state_dir / "investigation-dhcp4.json").exists()
+
     def test_a_past_deadline_is_armed_and_due_at_the_next_tick(self, host):
         assert host.arm(-3)["ok"] is True
 
-    def test_arming_again_is_a_new_session(self, host):
+    def test_arming_after_the_last_session_was_restored_is_a_new_session(self, host):
+        host.write_config(_config())
         host.arm(5, restore={"created": True})
+        host.op("investigation-disarm", {"service": SERVICE, "path": str(host.conf)})
         host.arm(15, restore=RESTORE)
         state = host.state()
         assert (
@@ -316,7 +369,7 @@ class TestDisarm:
             "how": "reload",
             "detail": "",
             "helper_version": 7,
-            "helper_build": 15,
+            "helper_build": 16,
         }
         assert host.config() == _config(at_debug=False, marker=False)
         assert host.signals and host.signals[0][0] == 4242
@@ -397,7 +450,7 @@ class TestTheReload:
     def test_a_unit_that_is_not_active_after_the_hup_is_restarted(self, host):
         host.write_config(_config())
         host.arm()
-        host.unit_states = ["inactive"]  # the HUP left it down
+        host.reload_mode = "silent"  # the HUP left Kea saying nothing: not confirmed
         reply = host.op("investigation-disarm", {"service": SERVICE, "path": str(host.conf)})
         assert reply["ok"] is True and reply["how"] == "restart" and len(host.restarts()) == 1
         assert host.state()["restarts"] == 1
@@ -406,14 +459,13 @@ class TestTheReload:
         host.write_config(_config())
         host.arm()
         host.main_pid = 0
-        host.unit_states = ["inactive"]
         reply = host.op("investigation-disarm", {"service": SERVICE, "path": str(host.conf)})
         assert reply["how"] == "restart" and host.signals == []
 
     def test_a_restart_that_fails_is_recorded_and_never_repeated(self, host):
         host.write_config(_config())
         host.arm()
-        host.unit_states = ["inactive"]
+        host.reload_mode = "silent"
         host.restart_rc = 1
         first = host.op("investigation-disarm", {"service": SERVICE, "path": str(host.conf)})
         assert first["ok"] is False and "restart" in first["detail"] and len(host.restarts()) == 1
@@ -498,7 +550,7 @@ class TestSelfRestore:
             "restored": [],
             "failed": [],
             "helper_version": 7,
-            "helper_build": 15,
+            "helper_build": 16,
         }
 
     def test_a_state_file_the_helper_did_not_write_is_reported_and_never_acted_on(self, host):
@@ -536,10 +588,10 @@ class TestSelfRestore:
 
 
 class TestTheContract:
-    def test_the_ops_are_registered_and_the_build_is_15(self, helper):
-        for name in ("investigation-arm", "investigation-disarm", "investigation-status"):
+    def test_the_ops_are_registered_and_the_build_is_16(self, helper):
+        for name in ("investigation-arm", "investigation-disarm", "investigation-status", "investigation-timer"):
             assert name in helper._OPS
-        assert helper.HELPER_BUILD == 15 and helper.HELPER_VERSION == 7
+        assert helper.HELPER_BUILD == 16 and helper.HELPER_VERSION == 7
 
     def test_there_is_still_no_sudoers_change(self):
         root = _SCRIPT.parent
@@ -564,3 +616,236 @@ class TestTheContract:
         """`until` is the helper's own: the units carry no time and the tick reads only the state file."""
         host.arm(5)
         assert "2026" not in (host.units / "jen-kea-investigation.timer").read_text()
+
+
+class TestARestoreIsDoneWhenKeasOwnLogSaysSo:
+    """v5.68.0-beta.30 (Q167, INV-007): `restored_at` is written only after Kea's own log, past the offset noted before the SIGHUP, shows the reload completed - or started and stayed free
+    of a failure when the restored level hides the completion line. 'The unit is active' is not evidence that Kea re-read anything."""
+
+    def _disarm(self, host):
+        return host.op("investigation-disarm", {"service": SERVICE, "path": str(host.conf)})
+
+    def test_a_completed_reload_is_recorded(self, host):
+        host.write_config(_config())
+        host.arm()
+        reply = self._disarm(host)
+        assert reply["ok"] and reply["how"] == "reload" and host.restarts() == []
+        assert host.state()["restored_at"]
+
+    def test_a_reload_that_started_and_stayed_free_of_a_failure_is_recorded_when_the_level_hides_the_rest(self, host):
+        host.write_config(_config())
+        host.arm()
+        host.reload_mode = "started"
+        reply = self._disarm(host)
+        assert reply["ok"] and reply["how"] == "reload" and host.restarts() == []
+
+    def test_a_line_from_before_the_signal_is_not_evidence(self, host):
+        """The fixture's log already holds an old `..._SUCCESS` line: a reload that wrote nothing new is unconfirmed, and gets the one restart."""
+        host.write_config(_config())
+        host.arm()
+        host.reload_mode = "silent"
+        reply = self._disarm(host)
+        assert reply["ok"] and reply["how"] == "restart" and len(host.restarts()) == 1
+
+    def test_a_refused_reload_is_reported_not_restarted_and_not_recorded(self, host):
+        host.write_config(_config())
+        host.arm()
+        host.reload_mode = "fail"
+        reply = self._disarm(host)
+        assert (
+            reply["ok"] is False
+            and "Kea refused the restored config" in reply["detail"]
+            and "DHCP4_CONFIG_LOAD_FAIL" in reply["detail"]
+        )
+        assert host.restarts() == [], "the file is the problem: a restart would not help"
+        state = host.state()
+        assert state["restored_at"] is None and state["attempts"] == 1 and state["last_error"]
+        assert host.config() == _config(at_debug=False, marker=False), "the file itself was restored"
+
+    def test_an_unconfirmed_reload_gets_one_restart_and_a_restart_is_checked_too(self, host):
+        host.write_config(_config())
+        host.arm()
+        host.reload_mode = "silent"
+        host.restart_mode = "fail"
+        reply = self._disarm(host)
+        assert reply["ok"] is False and "restarted, but Kea refused" in reply["detail"]
+        assert host.state()["restored_at"] is None and host.state()["restarts"] == 1
+
+    def test_a_restart_that_leaves_the_unit_down_is_not_a_restore(self, host, monkeypatch):
+        host.write_config(_config())
+        host.arm()
+        host.reload_mode = "silent"
+        monkeypatch.setattr(host.helper, "_unit_state", lambda unit: "inactive")
+        reply = self._disarm(host)
+        assert (
+            reply["ok"] is False
+            and "no completed configuration" in reply["detail"]
+            and host.state()["restored_at"] is None
+        )
+
+    def test_an_unreadable_kea_log_is_a_failure_not_a_guess(self, host):
+        host.write_config(_config())
+        host.arm()
+        host.log.unlink()
+        reply = self._disarm(host)
+        assert reply["ok"] is False and "could not be read" in reply["detail"] and host.signals == [], (
+            "no signal is sent that could not be verified"
+        )
+        assert host.state()["restored_at"] is None
+
+    def test_a_rotated_log_is_read_from_its_start(self, host):
+        host.log.write_text("short\n", encoding="utf-8")
+        lines = host.helper._log_lines_after(str(host.log), 10_000)
+        assert lines == ["short"]
+        assert host.helper._log_lines_after(str(host.log) + ".nope", 0) is None
+
+    def test_the_wait_is_bounded_and_never_a_real_sleep_in_the_test(self, host):
+        host.write_config(_config())
+        host.arm()
+        host.reload_mode = "silent"
+        host.restart_mode = "silent"
+        self._disarm(host)  # returns: the loops count their own time
+
+    def test_ten_failed_ticks_say_a_person_has_to_act_and_a_later_success_clears_it(self, host):
+        host.write_config(_config())
+        host.arm(-1)
+        host.kea_test = (False, {"ok": False, "error": "testerror", "detail": "bad"})
+        for n in range(10):
+            out = host.tick()
+            assert out["ok"] is False and host.last_code == 1
+            assert host.state()["attempts"] == n + 1
+            assert host.state()["needs_hand"] is (n + 1 >= host.helper._MAX_UNCONFIRMED_TICKS)
+        status = host.op("investigation-status", {"service": SERVICE})
+        assert status["needs_hand"] is True and status["attempts"] == 10
+        host.kea_test = (True, {"ok": True})
+        assert host.tick()["ok"] is True and host.last_code == 0
+        assert host.state()["needs_hand"] is False and host.state()["restored_at"]
+
+    def test_a_state_armed_by_build_15_has_no_log_path_and_is_verified_the_old_way_once(self, host):
+        host.write_config(_config())
+        host.arm()
+        state = host.state()
+        del state["log_path"]
+        (host.state_dir / "investigation-dhcp4.json").write_text(json.dumps(state))
+        host.reload_mode = "silent"
+        reply = self._disarm(host)
+        assert reply["ok"] is True and reply["how"] == "reload", "the unit is active: the way build 15 judged it"
+
+    def test_restored_at_is_written_in_exactly_one_place_after_a_verified_how(self):
+        source = _SCRIPT.read_text(encoding="utf-8")
+        assert source.count("restored_at=") == 1, "one writer of restored_at"
+        a = source.index("restored_at=")
+        assert 'how not in ("reload", "restart")' in source[a - 600 : a], (
+            "and it sits behind the check that `how` is a verified reload or restart"
+        )
+
+
+class TestAnUnresolvedHostRecordIsNeverOverwritten:
+    """v5.68.0-beta.30 (Q167, INV-008): `investigation-arm` used to replace the previous state 'restored or not'. The record on the host is authoritative."""
+
+    def _record(self, host):
+        return json.loads((host.state_dir / "investigation-dhcp4.json").read_text(encoding="utf-8"))
+
+    def test_the_same_session_again_is_idempotent_and_writes_nothing(self, host):
+        host.arm(5, jen={"server_id": 1, "name": "kea-a"})
+        before = self._record(host)
+        reply = host.arm(5, jen={"server_id": 1, "name": "kea-a"})
+        assert reply["ok"] and reply.get("idempotent") is True
+        assert self._record(host) == before
+
+    def test_two_jens_with_the_same_session_do_not_change_whose_record_it_is(self, host):
+        host.arm(5, jen={"server_id": 1, "name": "kea-a"})
+        reply = host.arm(5, jen={"server_id": 9, "name": "second-jen"})
+        assert reply["ok"] and reply.get("idempotent") is True
+        assert self._record(host)["jen"] == {"server_id": 1, "name": "kea-a"}
+
+    def test_the_same_restore_with_a_later_deadline_is_an_extension(self, host):
+        host.arm(5)
+        reply = host.arm(15)
+        assert reply["ok"] and reply["extended_from"]
+        state = self._record(host)
+        assert (
+            datetime.fromisoformat(state["until"]) == NOW + timedelta(minutes=15)
+            and state["extended_from"] == reply["extended_from"]
+        )
+
+    def test_an_earlier_deadline_is_not_an_extension(self, host):
+        host.arm(15)
+        reply = host.arm(5)  # a Jen restored from an older backup
+        assert reply["ok"] is False and reply["error"] == "armed" and reply["existing"]["restore"] == RESTORE
+        assert datetime.fromisoformat(self._record(host)["until"]) == NOW + timedelta(minutes=15)
+
+    def test_a_different_restore_object_is_refused_with_the_record(self, host):
+        host.arm(5, restore=RESTORE)
+        reply = host.arm(5, restore={"created": True})
+        assert reply["ok"] is False and reply["error"] == "armed" and reply["existing"]["restore"] == RESTORE
+        assert self._record(host)["restore"] == RESTORE, "the original level is still the one the host holds"
+
+    def test_a_different_config_path_is_refused(self, host):
+        host.arm(5)
+        other = host.conf_dir / "other.conf"
+        reply = host.arm(5, path=str(other))
+        assert reply["ok"] is False and reply["error"] == "armed"
+
+    def test_a_record_waiting_for_a_person_is_still_unresolved(self, host):
+        host.write_config(_config())
+        host.arm(-1)
+        host.kea_test = (False, {"ok": False, "error": "testerror", "detail": "bad"})
+        for _ in range(10):
+            host.tick()
+        assert self._record(host)["needs_hand"] is True
+        assert host.arm(30, restore={"created": True})["error"] == "armed"
+
+    def test_once_it_is_restored_the_next_arm_is_a_new_session(self, host):
+        host.write_config(_config())
+        host.arm(5)
+        host.op("investigation-disarm", {"service": SERVICE, "path": str(host.conf)})
+        reply = host.arm(5, restore={"created": True})
+        assert reply["ok"] and not reply.get("idempotent")
+        assert self._record(host)["restore"] == {"created": True} and self._record(host)["restored_at"] is None
+
+    def test_a_state_file_that_cannot_be_read_blocks_an_arm_until_a_person_looks(self, host):
+        host.arm(5)
+        (host.state_dir / "investigation-dhcp4.json").write_text("not json")
+        reply = host.arm(5)
+        assert reply["ok"] is False and reply["error"] == "armed" and reply["existing"] == {"unreadable": True}
+
+    def test_the_arms_write_is_guarded_by_the_existing_state_check(self):
+        source = _SCRIPT.read_text(encoding="utf-8")
+        a = source.index("def op_investigation_arm(")
+        body = source[a : source.index("def op_investigation_disarm(")]
+        assert body.index("existing = _load_state") < body.index('_save_state("dhcp4", state)')
+
+
+class TestTheTimersOwnLiveness:
+    def test_an_armed_state_with_a_stopped_timer_says_so(self, host):
+        host.arm()
+        host.timer = "inactive"
+        status = host.op("investigation-status", {"service": SERVICE})
+        assert status["armed"] is True and status["timer_active"] is False and status["timer_enabled"] is False
+        assert status["last_error"] == "Restoration timer is not active"
+
+    def test_a_running_timer_is_reported_active_and_enabled(self, host):
+        host.arm()
+        status = host.op("investigation-status", {"service": SERVICE})
+        assert status["timer_active"] is True and status["timer_enabled"] is True and status["last_error"] is None
+
+    def test_nothing_armed_means_the_timer_is_not_asked_about(self, host):
+        status = host.op("investigation-status", {"service": SERVICE})
+        assert status["armed"] is False and not [c for c in host.calls if c[1][:1] == ["is-active"]]
+
+    def test_the_timer_op_re_asserts_it(self, host):
+        host.arm()
+        before = len([c for c in host.calls if c[1][:1] == ["enable"]])
+        reply = host.op("investigation-timer", {"action": "ensure"})
+        assert reply["ok"] is True and reply["timer"] == "systemd"
+        assert len([c for c in host.calls if c[1][:1] == ["enable"]]) == before + 1
+
+    def test_the_timer_op_reports_a_host_that_cannot(self, host):
+        host.timer = "no-systemctl"
+        reply = host.op("investigation-timer", {"action": "ensure"})
+        assert reply["ok"] is False and reply["timer"] == "none" and reply["detail"]
+
+    def test_the_timer_op_takes_one_action_only(self, host):
+        assert host.op("investigation-timer", {"action": "disable"})["error"] == "not-allowed"
+        assert host.op("investigation-timer", {})["error"] == "not-allowed"

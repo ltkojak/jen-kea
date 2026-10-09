@@ -104,6 +104,7 @@ _ENTRY_STR_FIELDS = (
     "host_timer",
     "host_error",
     "host_restored_at",
+    "log_path",
 )
 _ENTRY_BOOL_FIELDS = (
     "armed",
@@ -676,13 +677,32 @@ def helper_gate(server: dict) -> str:
     return ""
 
 
+def kea_log_path(cfg) -> str:
+    """Where the `kea-dhcp4` logger of `cfg` writes (its first file output), else the configured DHCP4 log: the file the host reads Kea's own reload lines from (v5.68.0-beta.30, Q167)."""
+    section = (cfg or {}).get("Dhcp4") if isinstance(cfg, dict) else None
+    loggers = section.get("loggers") if isinstance(section, dict) else None
+    for logger_entry in loggers if isinstance(loggers, list) else []:
+        if isinstance(logger_entry, dict) and logger_entry.get("name") == _edit.INVESTIGATION_LOGGER:
+            for option in logger_entry.get("output-options") or []:
+                out = option.get("output") if isinstance(option, dict) else None
+                if isinstance(out, str) and out.startswith("/"):
+                    return out
+    return extensions.DHCP4_LOG
+
+
 def _arm_host(server: dict, entry: dict, until: str) -> tuple[bool, list[str], bool]:
     """Ask the host to put the logger back at `until` by itself. (armed, lines, state_written): on success the entry gets `armed` and `host_timer`; a timer that
     is "none" is a refusal (the helper wrote its state but no timer will fire - `state_written` says the caller should disarm it again)."""
     restore = entry.get("restore")
     if not isinstance(restore, dict) or _edit.restore_problem(restore):
         return False, ["the marker Jen just wrote carries no restore object to arm the host with"], False
-    reply = _host.investigation_arm(server, until, restore, {"server_id": str(server.get("id")), "name": _name(server)})
+    reply = _host.investigation_arm(
+        server,
+        until,
+        restore,
+        {"server_id": str(server.get("id")), "name": _name(server)},
+        entry.get("log_path") or extensions.DHCP4_LOG,
+    )
     if not reply.get("ok"):
         return (
             False,
@@ -864,6 +884,7 @@ def turn_on(server: dict, minutes: int, actor: str = "") -> dict:
             marker = _edit.investigation_marker(new_cfg) if code == "ok" else None
             if marker is not None:  # what the logger WAS: the daemon is later judged "restored" against it
                 captured["restore"] = marker.get("restore")
+                captured["log_path"] = kea_log_path(cfg)
             return new_cfg, code
 
         result, use_reload, _support = _change(
@@ -888,6 +909,7 @@ def turn_on(server: dict, minutes: int, actor: str = "") -> dict:
         entry = _entry_for(server, until, actor)
         if captured.get("restore") is not None:
             entry["restore"] = captured["restore"]
+        entry["log_path"] = captured.get("log_path") or extensions.DHCP4_LOG
 
         if result.status == "rollback_failed":
             # the change set could not put the file back after a failed restart: the file may carry the marker and the daemon is
