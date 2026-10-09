@@ -925,6 +925,7 @@ def evidence(monkeypatch):
         "KEA_SERVERS",
         [{"id": i, "name": f"kea-{n}", "ssh_host": f"10.0.0.{i}"} for i, n in ((1, "a"), (2, "b"), (3, "c"), (4, "d"))],
     )
+    world["tail"] = tail
     yield world
     gate.set()
     inflight.drain()
@@ -1194,7 +1195,7 @@ class TestTheHaProbesSitInsideTheBudget:
         evidence["ha_hang"] = {1, 2}
         evidence["ha"][3] = self._active()
         ctx.read_log(MAC, allowed=True)
-        assert ctx._evidence_memo[3] == "partial" and [s["id"] for s in ctx._evidence_memo[2]][0] == 3
+        assert ctx._evidence_memo[3] == "partial" and ctx._evidence_memo[2][0] == "3"
         before = len(evidence["ha_calls"])
         ctx.read_log(OTHER, allowed=True)
         assert len(evidence["ha_calls"]) == before, "the partial answer is memoised, not re-probed per page"
@@ -1208,3 +1209,164 @@ class TestTheHaProbesSitInsideTheBudget:
             .render(ha_order="partial")
         )
         assert "HA order not determined; servers read in configured order." in text
+
+
+# ── v5.68.0-beta.25 (Q160): Explain keys its servers by id, not by object ──────────────────────────────────────────────────────────
+
+
+class TestExplainKeysItsServersByIdNotByObject:
+    """Item 3: `read_log` keyed its futures by `id(server)` over the CURRENT `KEA_SERVERS`, while `_evidence_plan` returned the memo's list - the dict objects of
+    up to 30 s ago, keyed by server ids only. After any config reload that rebuilt the server dicts with the same ids, `pending[id(server)]` raised KeyError.
+    The HA probes had the same keying. The memo now holds KEYS plus a signature of (id, api_url, ssh_host), and the list is rebuilt from the servers as
+    configured now."""
+
+    @staticmethod
+    def _rebuilt(**overrides):
+        """The same four servers as fresh dict objects (what a config reload does), optionally with a changed field on one id."""
+        servers = [
+            {"id": i, "name": f"kea-{n}", "ssh_host": f"10.0.0.{i}"}
+            for i, n in ((1, "a"), (2, "b"), (3, "c"), (4, "d"))
+        ]
+        for sid, fields in overrides.items():
+            servers[int(sid) - 1].update(fields)
+        return servers
+
+    @staticmethod
+    def _forget_views():
+        """Forget the per-client views and the 3 s shared tail cache, but NOT the 30 s order memo - what the tests are about."""
+        from jen.services import log_tail
+
+        ctx._log_cache.clear()
+        log_tail.clear()
+
+    @staticmethod
+    def _spy(evidence, monkeypatch):
+        """Record which server OBJECTS and hosts the tails were asked of."""
+        seen = []
+        real = evidence["tail"]
+
+        def tail(server, path, lines, timeout=None, helper_only=False):
+            seen.append((id(server), server["ssh_host"]))
+            return real(server, path, lines, timeout, helper_only)
+
+        monkeypatch.setattr("jen.services.kea_host.tail_log", tail)
+        return seen
+
+    def test_the_dicts_replaced_with_the_same_ids_after_the_memo_is_warm_raise_nothing_and_the_current_objects_are_read(
+        self, evidence, monkeypatch
+    ):
+        evidence["ha"][2] = {"local": {"role": "primary", "scopes": ["server1"], "state": "hot-standby"}, "remote": {}}
+        evidence["logs"][2] = _good("10:00:02.110", "0x2", "host-2")
+        first = ctx.read_log(MAC, allowed=True)
+        assert first["server"]["name"] == "kea-b" and ctx._evidence_memo is not None
+        new_objects = self._rebuilt()
+        monkeypatch.setattr(extensions, "KEA_SERVERS", new_objects)
+        self._forget_views()  # only the per-client view and the 3 s tail cache; the 30 s order memo stays warm
+        seen = self._spy(evidence, monkeypatch)
+        calls = len(evidence["ha_calls"])
+        view = ctx.read_log(OTHER, allowed=True)  # a different client: no exception
+        assert view["state"] == "ok" and view["server"]["name"] == "kea-b"
+        assert {oid for oid, _host in seen} == {id(s) for s in new_objects}, (
+            "the tails were asked of the CURRENT objects, not the memo's"
+        )
+        assert len(evidence["ha_calls"]) == calls, (
+            "the signature is unchanged, so the order memo was kept (and rebuilt from the new objects)"
+        )
+        assert [s["id"] for s in ctx._evidence_servers()] == [2, 1, 3, 4], (
+            "the HA-active server first, then configured order"
+        )
+
+    def test_an_ssh_host_changed_under_the_same_id_invalidates_the_memo_and_the_new_host_is_tailed(
+        self, evidence, monkeypatch
+    ):
+        evidence["logs"][1] = _good("10:00:01.110", "0x1", "host-1")
+        ctx.read_log(MAC, allowed=True)
+        probes = len(evidence["ha_calls"])
+        monkeypatch.setattr(extensions, "KEA_SERVERS", self._rebuilt(**{"1": {"ssh_host": "10.9.9.9"}}))
+        self._forget_views()
+        seen = self._spy(evidence, monkeypatch)
+        ctx.read_log(OTHER, allowed=True)
+        assert len(evidence["ha_calls"]) == probes + 4, "the signature changed: every server was probed again"
+        assert "10.9.9.9" in {host for _oid, host in seen} and "10.0.0.1" not in {host for _oid, host in seen}
+
+    def test_a_server_added_or_removed_changes_the_order_and_the_pool_follows(self, evidence, monkeypatch):
+        ctx.read_log(MAC, allowed=True)
+        assert [s["id"] for s in ctx._evidence_servers()] == [1, 2, 3, 4]
+        grown = self._rebuilt() + [{"id": i, "name": f"kea-{i}", "ssh_host": f"10.0.0.{i}"} for i in range(5, 11)]
+        monkeypatch.setattr(extensions, "KEA_SERVERS", grown)
+        self._forget_views()
+        ctx.read_log(OTHER, allowed=True)
+        assert [s["id"] for s in ctx._evidence_servers()] == list(
+            range(1, 11)
+        ) and ctx._evidence_pool._max_workers == 16
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [s for s in grown if s["id"] not in (2, 5)])
+        self._forget_views()
+        ctx.read_log(MAC, allowed=True)
+        assert [s["id"] for s in ctx._evidence_servers()] == [1, 3, 4, 6, 7, 8, 9, 10], (
+            "removed servers are gone from the order"
+        )
+        assert ctx._evidence_pool._max_workers == 16, "and the pool never shrinks"
+
+    def test_two_overlapping_reads_during_a_config_change_both_complete(self, evidence, monkeypatch):
+        import threading
+
+        evidence["logs"][1] = _good("10:00:01.110", "0x1", "host-1")
+        evidence["log_delay"] = {1: 0.4, 2: 0.4, 3: 0.4, 4: 0.4}
+        results, errors = {}, []
+
+        def read(key, mac):
+            try:
+                results[key] = ctx.read_log(mac, allowed=True)
+            except Exception as e:  # pragma: no cover
+                errors.append(e)
+
+        first = threading.Thread(target=read, args=("first", MAC))
+        first.start()
+        time.sleep(0.15)  # the first read is in flight against the old objects
+        monkeypatch.setattr(extensions, "KEA_SERVERS", self._rebuilt())  # a config reload rebuilds the server dicts
+        second = threading.Thread(target=read, args=("second", OTHER))
+        second.start()
+        first.join(10)
+        second.join(10)
+        assert errors == [] and set(results) == {"first", "second"}
+        assert results["first"]["server"]["name"] == "kea-a" and results["second"]["state"] == "ok"
+
+    def test_a_server_that_is_unreachable_after_the_replacement_is_still_disclosed(self, evidence, monkeypatch):
+        evidence["logs"][1] = _good("10:00:01.110", "0x1", "host-1")
+        ctx.read_log(MAC, allowed=True)
+        monkeypatch.setattr(extensions, "KEA_SERVERS", self._rebuilt())
+        self._forget_views()
+        evidence["logs"][2] = {"ok": False, "code": "error", "detail": "refused", "transport": True}
+        view = ctx.read_log(MAC, allowed=True)
+        assert view["server"]["name"] == "kea-a" and view["read_failures"] == [
+            {"server": "kea-b", "reason": "SSH failed"}
+        ]
+
+    def test_a_server_in_the_plan_that_was_never_submitted_is_not_checked_not_an_exception(self, evidence, monkeypatch):
+        ghost = {"id": 99, "name": "kea-ghost", "ssh_host": "10.0.0.99"}
+        real = ctx._evidence_plan
+        monkeypatch.setattr(ctx, "_evidence_plan", lambda deadline: (real(deadline)[0] + [ghost], None))
+        evidence["logs"][1] = _good("10:00:01.110", "0x1", "host-1")
+        view = ctx.read_log(MAC, allowed=True)
+        assert view["server"]["name"] == "kea-a" and view["not_checked"] == ["kea-ghost"]
+
+    def test_no_explain_code_keys_anything_by_object_identity(self):
+        """Self-check (b), as a test."""
+        import inspect
+
+        source = inspect.getsource(ctx)
+        assert "id(server" not in source and "id(s)" not in source, (
+            "a server is identified by `_server_key`, never by id(obj)"
+        )
+        assert "def _server_key" in source and "def _signature" in source
+
+    def test_the_memo_holds_keys_and_the_signature_not_the_old_objects(self, evidence):
+        ctx.read_log(MAC, allowed=True)
+        stamp, signature, keys, ha_order = ctx._evidence_memo
+        assert all(isinstance(k, str) for k in keys) and keys == ["1", "2", "3", "4"]
+        assert signature == (
+            ("1", None, "10.0.0.1"),
+            ("2", None, "10.0.0.2"),
+            ("3", None, "10.0.0.3"),
+            ("4", None, "10.0.0.4"),
+        )

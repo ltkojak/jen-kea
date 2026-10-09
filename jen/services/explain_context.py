@@ -171,7 +171,20 @@ def _serves_clients(server: dict) -> bool:
 #: other is named as also having logged the client.
 CLOCK_TIE_S = 5
 
-_evidence_memo: tuple | None = None  # (monotonic time, ids of the configured servers, the ordered list, ha_order)
+_evidence_memo: tuple | None = (
+    None  # (monotonic time, signature of the configured servers, ordered server KEYS, ha_order)
+)
+
+
+def _server_key(server: dict) -> str:
+    """A server's identity across config reloads: its id as text. Never the dict object - a reload that rebuilds `KEA_SERVERS` makes new dicts for the same
+    servers, and object identity then names nothing (v5.68.0-beta.25, Q160, item 3)."""
+    return str(server.get("id"))
+
+
+def _signature(servers: list[dict]) -> tuple:
+    """What the memoised order is a function of: each server's id, API URL and SSH host. A changed address under the same id invalidates the memo."""
+    return tuple((_server_key(s), s.get("api_url"), s.get("ssh_host")) for s in servers)
 
 
 def _evidence_plan(deadline: float) -> tuple[list[dict], str | None]:
@@ -190,31 +203,41 @@ def _evidence_plan(deadline: float) -> tuple[list[dict], str | None]:
     servers = list(extensions.KEA_SERVERS or [])
     if len(servers) < 2:
         return servers, None
-    ids = tuple(s.get("id") for s in servers)
+    signature = _signature(servers)
     now = time.monotonic()
-    if _evidence_memo is not None and _evidence_memo[1] == ids and now - _evidence_memo[0] < LOG_TTL_S:
-        return list(_evidence_memo[2]), _evidence_memo[3]
+    if _evidence_memo is not None and _evidence_memo[1] == signature and now - _evidence_memo[0] < LOG_TTL_S:
+        # v5.68.0-beta.25 (Q160, item 3): the memo holds KEYS, and the list is rebuilt from the servers as configured NOW - it used to hold the dict
+        # objects of 30 s ago, which `read_log` then looked up in a table built from the current ones (a KeyError after any reload that rebuilt them)
+        by_key = {_server_key(s): s for s in servers}
+        keys = _evidence_memo[2]
+        return [by_key[k] for k in keys if k in by_key] + [
+            s for s in servers if _server_key(s) not in keys
+        ], _evidence_memo[3]
     probe_deadline = min(deadline, now + HA_PROBE_BUDGET_S)
     pool = _pool(len(servers))
-    probes = {id(s): pool.submit(_serves_clients, s) for s in servers}
+    probes = {_server_key(s): pool.submit(_serves_clients, s) for s in servers}
     active, unanswered = [], []
     for s in servers:
+        key = _server_key(s)
         try:
-            if probes[id(s)].result(timeout=max(0.0, probe_deadline - time.monotonic())):
-                active.append(s)
+            if probes[key].result(timeout=max(0.0, probe_deadline - time.monotonic())):
+                active.append(key)
         except concurrent.futures.TimeoutError:
-            probes[id(s)].cancel()
-            unanswered.append(s)
+            probes[key].cancel()
+            unanswered.append(key)
         except Exception as e:  # `_serves_clients` catches its own; a pool fault is "did not answer"
             logger.warning(f"explain_context: HA probe for {_name(s)} raised {type(e).__name__}")
-            unanswered.append(s)
-    answered_rest = [s for s in servers if s not in active and s not in unanswered]
-    ordered = active + answered_rest + unanswered
+            unanswered.append(key)
+    answered_rest = [
+        _server_key(s) for s in servers if _server_key(s) not in active and _server_key(s) not in unanswered
+    ]
+    keys = active + answered_rest + unanswered
     ha_order = None if not unanswered else ("unknown" if len(unanswered) == len(servers) else "partial")
     if ha_order == "unknown":
-        ordered = list(servers)  # nothing was learned: configured order
-    _evidence_memo = (time.monotonic(), ids, ordered, ha_order)
-    return list(ordered), ha_order
+        keys = [_server_key(s) for s in servers]  # nothing was learned: configured order
+    _evidence_memo = (time.monotonic(), signature, keys, ha_order)
+    by_key = {_server_key(s): s for s in servers}
+    return [by_key[k] for k in keys], ha_order
 
 
 def _evidence_servers() -> list[dict]:
@@ -319,7 +342,7 @@ def read_log(mac: str, *, allowed: bool, fetch: bool = True) -> dict:
     deadline = time.monotonic() + EVIDENCE_BUDGET_S
     configured_servers = list(extensions.KEA_SERVERS or [])
     ssh_servers = [server for server in configured_servers if server.get("ssh_host")]
-    pending = {id(server): _pool(len(configured_servers)).submit(_tail_one, server) for server in ssh_servers}
+    pending = {_server_key(server): _pool(len(configured_servers)).submit(_tail_one, server) for server in ssh_servers}
     servers, ha_order = _evidence_plan(deadline)
     complete = []  # (server, tx, utc time or None) for every reachable server whose log holds a COMPLETE exchange of the client
     first_ok = None  # a server whose log was read but never named the client
@@ -336,7 +359,14 @@ def read_log(mac: str, *, allowed: bool, fetch: bool = True) -> dict:
             }
             read_failures.append({"server": _name(server), "reason": READ_FAILURE_PHRASES["no-ssh"]})
             continue
-        future = pending[id(server)]
+        future = pending.get(_server_key(server))
+        if future is None:
+            # a server in the plan that was not among the ones submitted (the configuration changed between the two reads): not checked, never an exception
+            not_checked.append(_name(server))
+            logger.warning(
+                f"explain_context: {_name(server)} was not in the set of logs submitted; reported as not checked"
+            )
+            continue
         try:
             res = future.result(timeout=max(0.0, deadline - time.monotonic()))
         except concurrent.futures.TimeoutError:
