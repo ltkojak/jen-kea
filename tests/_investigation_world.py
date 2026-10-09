@@ -143,7 +143,7 @@ def world(monkeypatch):
     monkeypatch.setattr(
         "jen.models.user.get_global_setting", lambda k, d="": d if db.get("unavailable") else store.get(k, d)
     )
-    monkeypatch.setattr("jen.models.user.settings_ever_loaded", lambda: not db.get("unavailable"))
+    monkeypatch.setattr("jen.models.user.settings_ever_loaded", lambda: not db.get("unavailable"), raising=False)
     monkeypatch.setattr("jen.models.user.set_global_setting", set_setting)
 
     def set_and_audit(key, value, action, entity, details=""):
@@ -158,9 +158,16 @@ def world(monkeypatch):
         store.setdefault("_audit", []).append((action, entity, details))
         return True
 
-    monkeypatch.setattr("jen.models.user.set_global_setting_and_audit", set_and_audit)
-    monkeypatch.setattr(inv, "_sleep", lambda seconds: None)
-    monkeypatch.setattr("jen.models.user.audit", lambda *a, **k: store.setdefault("_audit", []).append(a))
+    # (`raising=False`: tests/test_investigation_model.py runs its historical sequences against the releases they were found in, which lack some of these names)
+    monkeypatch.setattr("jen.models.user.set_global_setting_and_audit", set_and_audit, raising=False)
+    monkeypatch.setattr(inv, "_sleep", lambda seconds: None, raising=False)
+
+    def audit(*a, **k):
+        if db.get("audit_fails"):
+            raise RuntimeError("the audit row could not be written")
+        store.setdefault("_audit", []).append(a)
+
+    monkeypatch.setattr("jen.models.user.audit", audit)
     servers = [{"id": 1, "name": "kea-a", "ssh_host": "10.0.0.1"}, {"id": 2, "name": "kea-b", "ssh_host": "10.0.0.2"}]
     monkeypatch.setattr(extensions, "KEA_SERVERS", servers)
     daemons = {1: FakeKea(_cfg([{"name": "kea-dhcp4", "severity": "INFO"}])), 2: FakeKea(_cfg())}
@@ -184,8 +191,10 @@ def world(monkeypatch):
     monkeypatch.setattr(inv._changeset, "apply_change", fake_apply)
     monkeypatch.setattr(inv, "_now", lambda: NOW)
     inv._runs["n"] = 0
-    inv._recovery_status.update(
-        at="", problems=[], rebuilt=None
-    )  # module state: one test's rebuild attempt is not the next one's
-    inv._legacy_logged.clear()
+    if hasattr(inv, "_recovery_status"):
+        inv._recovery_status.update(
+            at="", problems=[], rebuilt=None
+        )  # module state: one test's rebuild attempt is not the next one's
+    if hasattr(inv, "_legacy_logged"):
+        inv._legacy_logged.clear()
     return type("World", (), {"store": store, "servers": servers, "daemons": daemons, "db": db})

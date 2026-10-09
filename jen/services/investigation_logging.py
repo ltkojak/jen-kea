@@ -85,7 +85,14 @@ DAMAGED_KEY = (
 
 
 _ENTRY_STR_FIELDS = ("ssh_host", "kea_conf", "by", "mode", "error", "seen", "observed_at", "server_id")
-_ENTRY_BOOL_FIELDS = ("removed", "marker_invalid", "contradiction", "restarted", "deadline_malformed")
+_ENTRY_BOOL_FIELDS = (
+    "removed",
+    "marker_invalid",
+    "contradiction",
+    "restarted",
+    "restore_restarted",
+    "deadline_malformed",
+)
 
 
 _LEGACY_ABSENT_KEYS = ("observed_at", "seen", "reload_tries", "restarted", "contradiction")
@@ -215,7 +222,11 @@ def _row(sid, entry: dict, now: datetime) -> dict:
     # a restore that cleaned the file but left the daemon at DEBUG 55 is the failure this module exists to prevent
     stuck = file_state == "restored" and daemon != "restored"
     contradiction = bool(entry.get("contradiction"))
-    exhausted = stuck and daemon == "debug" and tries >= RELOAD_TRIES and restarted
+    # (v5.68.0-beta.28, Q163) a daemon that cannot be asked to reload - no `config-reload`, or an API that did not answer - is out of attempts once the restore's
+    # one restart was spent, not after reload tries it never had
+    exhausted = (
+        stuck and daemon == "debug" and restarted and (tries >= RELOAD_TRIES or bool(entry.get("restore_restarted")))
+    )
     return {
         "server_id": sid,
         "name": entry.get("name") or f"Server {sid}",
@@ -275,7 +286,12 @@ def hand_text(e: dict) -> str:
             f"asked to read the DEBUG file and may still be running DEBUG 55: {by_hand_daemon(e)}"
         )
     if e.get("exhausted"):
-        return f"{name}: Jen reloaded {RELOAD_TRIES} times and restarted once; Kea is still at DEBUG 55 - restore it by hand: {by_hand_daemon(e)}"
+        tried = (
+            f"reloaded {RELOAD_TRIES} times and restarted once"
+            if e.get("reload_tries", 0) >= RELOAD_TRIES
+            else "restarted Kea once (it had no config-reload to try) and will not again"
+        )
+        return f"{name}: Jen {tried}; Kea is still at DEBUG 55 - restore it by hand: {by_hand_daemon(e)}"
     if e["daemon"] == "debug":
         return f"{name}: the config file is restored but Kea is still at DEBUG 55 - Jen keeps trying a reload or restart every minute (up to {RELOAD_TRIES} reloads and one restart)"
     if e["daemon"] == "other":
@@ -444,10 +460,15 @@ def _seen_line(entry: dict) -> str:
     return "Jen could not read Kea's running log level, so it does not know - it looks again every minute."
 
 
-def _change(server: dict, mutate_fn, summary: str, unsupported: str, *, refuse_unknown: bool = False):
+def _change(
+    server: dict, mutate_fn, summary: str, unsupported: str, *, refuse_unknown: bool = False, allow_restart: bool = True
+):
     """Step 1: write one mutation to ONE server through apply_change - with a restart folded in when the daemon has no
     `config-reload`. Returns (ChangeSetResult, use_reload, support); with `refuse_unknown` and Kea's API silent nothing is written and the
-    result is None. (Turning logging OFF never refuses: DEBUG 55 must come off, so there the restart is the fallback.)"""
+    result is None. (Turning logging OFF never refuses: DEBUG 55 must come off, so there the restart is the fallback.)
+
+    Passing False for `allow_restart` (v5.68.0-beta.28, Q163): the file is written WITHOUT the restart a daemon that lacks `config-reload` (or whose API is
+    silent) would otherwise get folded into the change set. The sweep does it once an entry has had its restore's one restart."""
     support = _reload_support(server)
     if support == "unknown" and refuse_unknown:
         return None, False, support
@@ -460,7 +481,7 @@ def _change(server: dict, mutate_fn, summary: str, unsupported: str, *, refuse_u
             mutate_fn,
             summary,
             servers=[server],
-            restart=not use_reload,
+            restart=(not use_reload) and allow_restart,
             code_messages={
                 "unsupported": unsupported,
                 "marker-invalid": "the investigation-logging marker is unreadable, so nothing was changed",
@@ -728,6 +749,24 @@ def turn_on(server: dict, minutes: int, actor: str = "") -> dict:
                 ],
                 "until": "",
             }
+        held = record["servers"].get(sid)
+        if held is not None and not _entry_matches(held, server):
+            # (v5.68.0-beta.28, Q163) writing a fresh entry under this id would REPLACE the one for the Kea that is still at DEBUG
+            return {"ok": False, "mode": "", "lines": [_other_kea_sentence(held, server)], "until": ""}
+        if held is not None and (
+            held.get("contradiction") or held.get("marker_invalid") or held.get("file", "debug") == "restored"
+        ):
+            # (v5.68.0-beta.28, Q163, seed 486) an unfinished restore - or one whose evidence is contradictory or whose marker is damaged - is not replaced by a
+            # fresh entry: the fresh one would be judged by the same unreliable observation, found "restored" and dropped while the Kea is still at DEBUG
+            return {
+                "ok": False,
+                "mode": "",
+                "lines": [
+                    f"The earlier investigation logging on {name} is not finished (Health → DEBUG logging left on says what is left): finish it - Turn it off, or "
+                    "restore it by hand and press Forget - before turning it on again."
+                ],
+                "until": "",
+            }
         until = _iso(_now() + timedelta(minutes=minutes))
         captured: dict = {}
 
@@ -875,7 +914,13 @@ def _restore(server: dict, record: dict, now: datetime | None, summary: str) -> 
             captured["restore"] = marker["restore"]
         return _edit.clear_investigation_logging(cfg, now=now)
 
-    result, use_reload, support = _change(server, mutate, summary, "")
+    # v5.68.0-beta.28 (Q163, found by the walk): for a daemon with no `config-reload` (or one whose API is silent) the restore folds a RESTART into the change set,
+    # and a restart that fails is rolled back - the marker is written back, the daemon restarted AGAIN - and the entry stays due. The sweep then did the same every
+    # minute: two restarts a minute of a production daemon whose unit will not start. `_daemon_phase` has always spent ONE restart per entry, "whether or not it
+    # worked"; this path now does too. A person pressing Turn off is the person's own act and is never held back.
+    allow_restart = now is None or not (entry and entry.get("restore_restarted"))
+    result, use_reload, support = _change(server, mutate, summary, "", allow_restart=allow_restart)
+    folded = (not use_reload) and allow_restart  # the change set restarted the daemon inside the write
     lines = [text for _kind, text in result.lines]
     if result.status == "aborted" and result.last_code == "marker-invalid":
         # v5.68.0-beta.13 (Q148): the marker's restore object is missing or malformed. Nothing was written (the change set aborted before
@@ -890,8 +935,8 @@ def _restore(server: dict, record: dict, now: datetime | None, summary: str) -> 
         entry = entry or _entry_for(server, _iso(now or _now()))
         if captured.get("restore") is not None and entry.get("restore") is None:
             entry["restore"] = captured["restore"]
-        if not use_reload:  # the change set restarted the daemon: both steps done - now look at it
-            entry.update(file="restored", pending=None, restarted=True)
+        if folded:  # the change set restarted the daemon: both steps done - now look at it
+            entry.update(file="restored", pending=None, restarted=True, restore_restarted=True)
             entry.pop("error", None)
             state = observe(server, entry, wait_s=OBSERVE_AFTER_RESTART_S)
             why = (
@@ -935,6 +980,10 @@ def _restore(server: dict, record: dict, now: datetime | None, summary: str) -> 
     else:
         if entry is not None:
             entry["error"] = (lines[-1] if lines else "restore failed")[:300]
+            if folded and result.last_code == "restart-failed":
+                # the restore's one restart was spent (and rolled back): the sweep does not try it again every minute. (`restarted` is the daemon step's own
+                # budget and a turn-on's restart counts there; this one is the restore's, so a no-reload daemon is restarted once to turn on and once to restore.)
+                entry.update(restarted=True, restore_restarted=True)
             _put(record, sid, entry)
         return {"ok": False, "mode": "", "lines": lines}
     return _daemon_phase(server, record, entry, lines, fresh=fresh)
@@ -1035,6 +1084,11 @@ def turn_off(server: dict, actor: str = "", reason: str = "investigation logging
                     "Jen's record of investigation logging cannot be read; the scan rebuilds it from the servers within a minute (see Health → DEBUG logging left on)"
                 ],
             }
+        held = record["servers"].get(str(server.get("id")))
+        if held is not None and not _entry_matches(held, server):
+            # (v5.68.0-beta.28, Q163) the server this id names is not the Kea the entry is about: restoring "through" it would see ITS level, find nothing to put
+            # back and drop the entry while the first Kea stays at DEBUG
+            return {"ok": False, "mode": "", "lines": [_other_kea_sentence(held, server)]}
         outcome = _restore(server, record, None, reason)
         if outcome["ok"]:
             _audit("INVESTIGATION_LOGGING_OFF", name, f"{reason} ({outcome['mode']}) by {actor or 'the sweep'}")
@@ -1140,16 +1194,21 @@ def identity_guard(before: dict, after: dict, actor: str = "") -> str:
     Beta.27 (Q162) asked this on three save routes and a review found six paths that write the same keys. A write is refused when the settings cannot be
     read (unreadable or unavailable record: "not on" cannot be told from "unknown"), when the GLOBAL connection mode changes while ANY server has an entry
     (the mode is how EVERY Kea is reached), when a server with an entry is removed, and when a server with an entry has one of its four fields changed. A
-    server with no entry, a server being ADDED, and every other key are not its business. It takes no lock and reads nothing but the settings."""
+    server with no entry, a server being ADDED, and every other key are not its business - except that a server ADDED under the number of a live entry must name
+    the Kea that entry is about (v5.68.0-beta.28, Q163: a server removed by hand-editing jen.config and the next one added usually get the same number). It
+    takes no lock and reads nothing but the settings."""
     removed = [sid for sid in before if sid != _MODE and sid not in after]
     changed = [sid for sid in before if sid != _MODE and sid in after and before[sid] != after[sid]]
     mode = (before.get(_MODE), after.get(_MODE)) if before.get(_MODE) != after.get(_MODE) else None
-    if not removed and not changed and mode is None:
+    added = [sid for sid in after if sid != _MODE and sid not in before]
+    if not removed and not changed and mode is None and not added:
         return ""
     by = _actor_suffix(actor)
     fields = sorted({k for sid in changed for k in IDENTITY_FIELDS if before[sid].get(k) != after[sid].get(k)})
     what = fields + (["removal"] if removed else []) + ([f"connection mode ({mode[0]} -> {mode[1]})"] if mode else [])
     record = _record()
+    if record.get("damaged") and not (removed or changed or mode is not None):
+        return ""  # a server ADDED while the record is unreadable changes nothing that any entry could be about
     if record.get("damaged"):
         names = ", ".join(_server_label(sid) for sid in removed + changed) or "the connection mode"
         why = (
@@ -1183,6 +1242,30 @@ def identity_guard(before: dict, after: dict, actor: str = "") -> str:
             f"removal of a Kea server refused while investigation logging is on or owed a restore{by}",
         )
         sentences.append(_removal_sentence(names))
+    # a server id ADDED with a live entry for it must still name the Kea the entry is about (a server removed by hand-editing jen.config and the next one added
+    # usually get the same number): the entry records the SSH host and config path it was turned on against
+    readded = [
+        sid
+        for sid in after
+        if sid != _MODE
+        and sid not in before
+        and sid in entries
+        and (
+            (entries[sid].get("ssh_host") or after[sid]["ssh_host"]) != after[sid]["ssh_host"]
+            or (entries[sid].get("kea_conf") or after[sid]["kea_conf"]) != after[sid]["kea_conf"]
+        )
+    ]
+    if readded:
+        names = ", ".join(entries[sid].get("name") or f"Server {sid}" for sid in readded)
+        _audit(
+            IDENTITY_ACTION,
+            names,
+            f"adding a server under the number of an unfinished investigation entry, for a different Kea, refused{by}",
+        )
+        sentences.append(
+            f"Investigation logging was turned on for {names} under that server number and its restore is not finished: the new server would be a different Kea. "
+            "Turn it off from Servers first (or restore it by hand and press Forget), or give the new server a new number."
+        )
     moved = [sid for sid in changed if sid in entries]
     if moved:
         names = ", ".join(entries[sid].get("name") or f"Server {sid}" for sid in moved)
@@ -1419,6 +1502,25 @@ def _ssh_servers() -> list[dict]:
     return [s for s in extensions.KEA_SERVERS or [] if s.get("ssh_host")]
 
 
+def _other_kea_sentence(entry: dict, server: dict) -> str:
+    return (
+        f"Investigation logging was turned on at {entry.get('ssh_host') or 'another Kea'} under server number {server.get('id')} and its restore is not finished "
+        f"there, but that number now names {server.get('ssh_host') or 'a different Kea'}: restore the first one by hand and press Forget on Servers, or give the "
+        "new server a new number. Nothing was changed."
+    )
+
+
+def _entry_matches(entry: dict, server: dict) -> bool:
+    """Is `server` the Kea this entry was made for? An entry is about a KEA - the SSH host and config path it was turned on against - and a server id is only
+    a number: after a server is removed (by hand-editing jen.config, which no route can refuse) and another is added, the next free id is often the same one
+    (v5.68.0-beta.28, Q163, found by the walk). An entry written before beta.9 carries no host and matches whatever the id now names."""
+    host = entry.get("ssh_host") or ""
+    if host and host != (server.get("ssh_host") or ""):
+        return False
+    conf = entry.get("kea_conf") or ""
+    return not conf or conf == (server.get("kea_conf") or _config.DEFAULT_KEA_CONF)
+
+
 def _file_carries_marker(server: dict) -> bool | None:
     """Does the config file on `server` carry a jen-investigation marker? None when it could not be read - never a guess."""
     try:
@@ -1627,6 +1729,31 @@ def sweep(now: datetime | None = None, full: bool = False) -> dict:
             # a damaged record is a STOP: nothing else runs (no restores, no cheap-path observation, no orphan marking) until it has been rebuilt from
             # the servers; those run on the next minute's sweep, once the record is healthy (v5.68.0-beta.25, Q160)
             return _recover(record, known, now, summary)
+        # v5.68.0-beta.28 (Q163, found by the walk): an entry is acted on only through the Kea it is about. A server id that now names a DIFFERENT Kea (the id of
+        # a server removed by hand-editing jen.config, given to the next one added) used to be restored through the new server - which has no marker, so it was
+        # "seen restored" and the entry dropped while the old Kea stayed at DEBUG - and a server that came back never lost the `removed` flag the sweep had set
+        # while it was gone, so nothing protected it. Now: the same Kea back (same SSH host and config path) resumes its entry; a different one leaves it orphaned.
+        elsewhere = {}
+        resumed = []
+        for sid, entry in record["servers"].items():
+            server = known.get(sid)
+            if server is None:
+                continue
+            if not _entry_matches(entry, server):
+                elsewhere[sid] = known.pop(sid)  # not this entry's Kea: nothing below touches it for this entry
+            elif entry.get("removed"):
+                entry.pop("removed", None)
+                entry.pop("error", None)
+                resumed.append(sid)
+        if resumed:
+            for sid in resumed:
+                _audit(
+                    "INVESTIGATION_LOGGING_RESUMED",
+                    record["servers"][sid].get("name") or sid,
+                    "its server is back in Jen with the same SSH host and config path; the entry is live again",
+                )
+            if not _save(record):
+                logger.warning("investigation_logging: the resumed entries %s could not be stored", resumed)
         due = [
             (sid, known[sid])
             for sid, entry in record["servers"].items()
@@ -1636,15 +1763,19 @@ def sweep(now: datetime | None = None, full: bool = False) -> dict:
         for sid, entry in record["servers"].items():
             if sid not in known and not entry.get("removed"):
                 entry["removed"] = True
-                entry["error"] = (
-                    f"{entry.get('name') or 'This server'} was removed from Jen while investigation logging was on; "
-                    "Jen cannot put its log level back"
-                )
-                _audit(
-                    "INVESTIGATION_LOGGING_ORPHANED",
-                    entry.get("name") or sid,
-                    "its server was removed from Jen with the log level not restored",
-                )
+                if sid in elsewhere:
+                    entry["error"] = (
+                        f"{entry.get('name') or 'This server'}: logging was turned on at {entry.get('ssh_host') or 'its host'}, but server {sid} now names "
+                        f"{elsewhere[sid].get('ssh_host') or 'another Kea'}; Jen cannot put the log level back on {entry.get('ssh_host') or 'the first one'}"
+                    )
+                    why = f"its server id now names another Kea ({elsewhere[sid].get('ssh_host')}); the log level on {entry.get('ssh_host')} is not restored"
+                else:
+                    entry["error"] = (
+                        f"{entry.get('name') or 'This server'} was removed from Jen while investigation logging was on; "
+                        "Jen cannot put its log level back"
+                    )
+                    why = "its server was removed from Jen with the log level not restored"
+                _audit("INVESTIGATION_LOGGING_ORPHANED", entry.get("name") or sid, why)
                 if not _save(record):
                     logger.warning(
                         "investigation_logging: the removed-server flag for %s could not be stored",

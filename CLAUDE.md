@@ -80,6 +80,13 @@ and as a gate on every tagged release (`release.yml`).
   `chown`/`replace`/`fsync` in the helper, S5 the legacy config script never runs for authoring,
   S9 root never copies anything into the app tree from the config or content dirs. A new
   violation fails CI; do not add to a sweep's reviewed allowlist without saying why in the test.
+- **The model test.** `tests/test_investigation_model.py` (Q163) is a seeded random walk over EVERY operation and fault of investigation logging, with nine
+  invariants (I1 no DEBUG without responsibility ... I9 unavailable is refused) checked after every step against the STORED record, plus a second walk over Explain's
+  log evidence (E1). Reviews kept finding SEQUENCES no path test named; this composes them. Any change under `jen/services/investigation_logging.py`,
+  `jen/services/explain_context.py` or the Kea settings routes runs it locally before the push
+  (`py -m pytest --noconftest tests/test_investigation_model.py -q`; `JEN_MODEL_SEEDS=500` widens it, `JEN_MODEL_SEED=<n>` replays one walk and a failure prints the
+  seed and the step log), and a new operation, state or fault in those modules is added to the walk in the SAME commit - the test that lists the service's public
+  functions fails until it is. A defect the walk finds is fixed and its sequence pinned by name beside it (`TestWhatTheWalkFound`).
 - **Probe, redirect and TLS behavior is tested against real local servers**, not a
   mocked `urlopen`. v5.8.3's SSL health-check bug shipped behind a test that mocked
   `urlopen` *raising* `HTTPError(302)` — a real redirect is followed, never raised. Stand
