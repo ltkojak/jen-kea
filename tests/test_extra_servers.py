@@ -589,7 +589,7 @@ class TestChangingWhereAServerIsReachedWhileInvestigationLoggingIsOn:
     def _refused_rows(db):
         with db.cursor() as cur:
             cur.execute(
-                "SELECT COUNT(*) AS n FROM audit_log WHERE action='INVESTIGATION_LOGGING_ENDPOINT_CHANGE_REFUSED'"
+                "SELECT COUNT(*) AS n FROM audit_log WHERE action='INVESTIGATION_LOGGING_IDENTITY_CHANGE_REFUSED'"
             )
             return cur.fetchone()["n"]
 

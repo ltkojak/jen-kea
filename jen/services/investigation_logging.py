@@ -43,6 +43,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 
+from jen import config as _config
 from jen import extensions
 from jen.services import kea as _kea
 from jen.services import kea_changeset as _changeset
@@ -144,6 +145,12 @@ def _record() -> dict:
     from jen.models import user as _user
 
     raw = _user.get_global_setting(RECORD_KEY, "") or ""
+    if not _user.settings_ever_loaded():
+        # v5.68.0-beta.28 (Q164, item 4): `get_global_setting` answers its DEFAULT until the settings table has been read once - on a cold start with the Jen
+        # database down that read as "no record, nothing on". Unreadable settings are the unreadable record, not an empty one: every `damaged` check refuses,
+        # `_save` writes nothing (there is no value to keep), and the recovery says why it cannot run. Asked AFTER the read: a cold start with the database up
+        # loads the table inside that very call.
+        return {"servers": {}, "damaged": True, "raw": "", "bad": [], "unavailable": True}
     data = None
     if raw != "":
         try:
@@ -183,6 +190,10 @@ def _save(record: dict) -> bool:
     is overwritten: a person may need the old value to see which server was meant."""
     from jen.models import user as _user
 
+    if record.get(
+        "unavailable"
+    ):  # Q164: the settings could not be read; there is nothing to keep and nothing that may be overwritten
+        return False
     keep = record.get("damaged") and record.get("raw") and not _user.get_global_setting(DAMAGED_KEY, "")
     if keep and _user.set_global_setting(DAMAGED_KEY, record["raw"]) is False:
         return False
@@ -607,6 +618,8 @@ CONTRADICTION = (
     "the daemon Kea's API answers for is not running the file Jen wrote (api_url and ssh_host may not be the same Kea)"
 )
 UNSTORED = "Jen could not record this (its database did not take the write); the ten-minute scan reads Kea's running logger and finishes it."
+#: v5.68.0-beta.28 (Q164): what is said when the settings table itself cannot be read (the record's `unavailable` flavour of damaged).
+SETTINGS_UNAVAILABLE = "Jen's settings could not be read (its database is unavailable)"
 
 
 def _did_not_take(server, record, sid, entry, lines, step_lines, *, contradiction=False) -> dict:
@@ -671,13 +684,34 @@ def turn_on(server: dict, minutes: int, actor: str = "") -> dict:
         return {"ok": False, "mode": "", "lines": [f"Choose {', '.join(map(str, DURATIONS))} minutes."], "until": ""}
     name = _name(server)
     sid = str(server.get("id"))
-    with _lock:
+    # v5.68.0-beta.28 (Q164, item 3): the whole of turn-on holds `identity_lock` (inside this module's `_lock`; the order everywhere is `_lock` ->
+    # `identity_lock` -> the config writer's locks). A Settings save that passed the identity check and was about to write cannot commit between "no entry"
+    # and this entry being recorded: the save waits, then the guard sees the entry and refuses. The cost is that a save of ANY config key waits for a running
+    # turn-on (seconds: its SSH round trips).
+    with _lock, _config.identity_lock:
         record = _record()
         if record.get("damaged"):
             return {
                 "ok": False,
                 "mode": "",
-                "lines": ["Jen's record of investigation logging cannot be read; see Health → DEBUG logging left on"],
+                "lines": [
+                    SETTINGS_UNAVAILABLE + "; investigation logging is refused until they can be read"
+                    if record.get("unavailable")
+                    else "Jen's record of investigation logging cannot be read; see Health → DEBUG logging left on"
+                ],
+                "until": "",
+            }
+        current = next((s for s in (extensions.KEA_SERVERS or []) if str(s.get("id")) == sid), None)
+        if current is None or _config.normalized_identity(current) != _config.normalized_identity(server):
+            # the other ordering of the same race: a save that held the lock first changed where this server is reached, and `server` is what the page read
+            # BEFORE it - turning logging on against it would edit one Kea's file and record another. Nothing is written.
+            return {
+                "ok": False,
+                "mode": "",
+                "lines": [
+                    f"The connection settings of {name} changed while this was starting (or the server was removed): nothing was changed - "
+                    "open Servers again and retry."
+                ],
                 "until": "",
             }
         others = [e["name"] for other, e in record["servers"].items() if other != sid]
@@ -1017,6 +1051,13 @@ def blocking_removal(server_ids) -> list[dict]:
     return [{"server_id": sid, **entry} for sid, entry in record["servers"].items() if sid in wanted]
 
 
+def _removal_sentence(names: str) -> str:
+    return (
+        f"Investigation logging is on for {names}, or its restore is not finished: turn it off from Servers first. Removing the "
+        "server now would leave its Kea at DEBUG with no way for Jen to put it back."
+    )
+
+
 def removal_refusal(server_ids, actor: str = "") -> str:
     """ "" when none of `server_ids` has an index entry, else the sentence a settings route flashes (and an audit row is written)."""
     blocked = blocking_removal(server_ids)
@@ -1039,10 +1080,7 @@ def removal_refusal(server_ids, actor: str = "") -> str:
         names,
         f"removal of a Kea server refused while investigation logging is on or owed a restore{' (by ' + actor + ')' if actor else ''}",
     )
-    return (
-        f"Investigation logging is on for {names}, or its restore is not finished: turn it off from Servers first. Removing the "
-        "server now would leave its Kea at DEBUG with no way for Jen to put it back."
-    )
+    return _removal_sentence(names)
 
 
 def _unconfirmed_for_an_hour(entry: dict) -> bool:
@@ -1056,58 +1094,136 @@ def _unconfirmed_for_an_hour(entry: dict) -> bool:
     )
 
 
-#: The four settings that say WHICH Kea Jen reaches for a server (v5.68.0-beta.27, Q162, item 1). Credentials (api_user, api_pass, the SSH key) and the
-#: display name are NOT identity: they change nothing about which Kea is reached, and a wrong one is corrected by changing it back (Health shows the server
-#: unreachable meanwhile).
-IDENTITY_FIELDS = ("ssh_host", "ssh_user", "kea_conf", "api_url")
-_DEFAULT_KEA_CONF = "/etc/kea/kea-dhcp4.conf"
+#: The four settings that say WHICH Kea Jen reaches for a server (v5.68.0-beta.27, Q162; moved to `jen.config.IDENTITY_KEYS`, with the guard that uses them,
+#: in v5.68.0-beta.28, Q164). Credentials (api_user, api_pass, the SSH key) and the display name are NOT identity: they change nothing about which Kea is
+#: reached, and a wrong one is corrected by changing it back (Health shows the server unreachable meanwhile).
+IDENTITY_FIELDS = _config.IDENTITY_KEYS
+_MODE = _config.MODE_KEY
+IDENTITY_ACTION = "INVESTIGATION_LOGGING_IDENTITY_CHANGE_REFUSED"
+UNREADABLE_IDENTITY_SENTENCE = (
+    "Jen's record of investigation logging cannot be read, so it cannot tell whether this server is at investigation DEBUG; repair the record first "
+    "(Health → DEBUG logging left on) — changing where Jen reaches this Kea could leave the old one at DEBUG with no way back."
+)
+UNAVAILABLE_IDENTITY_SENTENCE = (
+    "Jen's settings could not be read (its database is unavailable), so it cannot tell whether a server is at investigation DEBUG; changes to where Jen "
+    "reaches a Kea are refused until they can be read - changing them now could leave a Kea at DEBUG with no way back."
+)
+
+
+def _actor_suffix(actor: str = "") -> str:
+    """` (by alice)` - the explicit actor, else whoever the current request is; nothing outside a request."""
+    if not actor:
+        try:
+            from jen.models import user as _user
+
+            username = _user._audit_identity()[1]
+            actor = "" if username == "system" else (username or "")
+        except Exception:
+            actor = ""
+    return f" (by {actor})" if actor else ""
+
+
+def _server_label(sid) -> str:
+    server = next((s for s in (extensions.KEA_SERVERS or []) if str(s.get("id")) == str(sid)), None)
+    return _name(server) if server else f"Server {sid}"
+
+
+def identity_guard(before: dict, after: dict, actor: str = "") -> str:
+    """The config choke point's question (v5.68.0-beta.28, Q164): this write changes which Kea Jen reaches (`jen.config.identity_view` differs) - may it?
+    "" yes, else the sentence that refuses it, with an audit row. `before` and `after` are identity views: {server id: its four identity values,
+    "__mode__": the connection mode}.
+
+    Beta.27 (Q162) asked this on three save routes and a review found six paths that write the same keys. A write is refused when the settings cannot be
+    read (unreadable or unavailable record: "not on" cannot be told from "unknown"), when the GLOBAL connection mode changes while ANY server has an entry
+    (the mode is how EVERY Kea is reached), when a server with an entry is removed, and when a server with an entry has one of its four fields changed. A
+    server with no entry, a server being ADDED, and every other key are not its business. It takes no lock and reads nothing but the settings."""
+    removed = [sid for sid in before if sid != _MODE and sid not in after]
+    changed = [sid for sid in before if sid != _MODE and sid in after and before[sid] != after[sid]]
+    mode = (before.get(_MODE), after.get(_MODE)) if before.get(_MODE) != after.get(_MODE) else None
+    if not removed and not changed and mode is None:
+        return ""
+    by = _actor_suffix(actor)
+    fields = sorted({k for sid in changed for k in IDENTITY_FIELDS if before[sid].get(k) != after[sid].get(k)})
+    what = fields + (["removal"] if removed else []) + ([f"connection mode ({mode[0]} -> {mode[1]})"] if mode else [])
+    record = _record()
+    if record.get("damaged"):
+        names = ", ".join(_server_label(sid) for sid in removed + changed) or "the connection mode"
+        why = (
+            "the settings could not be read"
+            if record.get("unavailable")
+            else "Jen's record of investigation logging is unreadable"
+        )
+        _audit(IDENTITY_ACTION, names, f"change of {', '.join(what)} refused while {why}{by}")
+        return UNAVAILABLE_IDENTITY_SENTENCE if record.get("unavailable") else UNREADABLE_IDENTITY_SENTENCE
+    entries = {sid: e for sid, e in record["servers"].items() if not e.get("removed")}
+    if not entries:
+        return ""
+    sentences = []
+    if mode is not None:
+        names = ", ".join(e.get("name") or f"Server {sid}" for sid, e in entries.items())
+        _audit(
+            IDENTITY_ACTION,
+            names,
+            f"change of connection mode ({mode[0]} -> {mode[1]}) refused while investigation logging is on or owed a restore{by}",
+        )
+        sentences.append(
+            f"Investigation logging is on for {names}, or its restore is not finished: turn it off from Servers first. The connection mode is how Jen reaches "
+            "EVERY Kea, and changing it now could leave that one at DEBUG with no way back."
+        )
+    gone = [sid for sid in removed if sid in entries]
+    if gone:
+        names = ", ".join(entries[sid].get("name") or f"Server {sid}" for sid in gone)
+        _audit(
+            "INVESTIGATION_LOGGING_REMOVAL_REFUSED",
+            names,
+            f"removal of a Kea server refused while investigation logging is on or owed a restore{by}",
+        )
+        sentences.append(_removal_sentence(names))
+    moved = [sid for sid in changed if sid in entries]
+    if moved:
+        names = ", ".join(entries[sid].get("name") or f"Server {sid}" for sid in moved)
+        which = sorted({k for sid in moved for k in IDENTITY_FIELDS if before[sid].get(k) != after[sid].get(k)})
+        _audit(
+            IDENTITY_ACTION,
+            names,
+            f"change of {', '.join(which)} refused while investigation logging is on or owed a restore{by}",
+        )
+        sentences.append(
+            f"Investigation logging is on for {names}, or its restore is not finished: turn it off from Servers first. Changing its {', '.join(which)} now would "
+            "point Jen at a different Kea while this one is still at DEBUG."
+        )
+    return " ".join(sentences)
+
+
+def _identity_views_from_servers(server_id, proposed: dict) -> tuple[dict, dict]:
+    """(before, after) identity views for a PROPOSAL made against the servers Jen has loaded: `proposed` may carry any subset of the four fields of one server;
+    a field it does not carry is not being changed."""
+    before = {str(s.get("id")): _config.normalized_identity(s) for s in (extensions.KEA_SERVERS or [])}
+    before[_MODE] = "direct" if getattr(extensions, "KEA_CONNECTION_MODE", "ca") == "direct" else "ca"
+    after = {k: (dict(v) if isinstance(v, dict) else v) for k, v in before.items()}
+    key = str(server_id)
+    if key in after:
+        after[key] = _config.normalized_identity(
+            {**after[key], **{k: v for k, v in proposed.items() if k in IDENTITY_FIELDS}}
+        )
+    return before, after
 
 
 def endpoint_change_refusal(server_id, proposed: dict, actor: str = "") -> str:
-    """ "" when `proposed` leaves the server's identity alone, or the server has no outstanding investigation state; else the sentence a settings route flashes
-    (and an audit row is written).
+    """ "" when `proposed` leaves the server's identity alone, or the server has no outstanding investigation state; else the sentence a caller shows (and an audit
+    row is written). Since v5.68.0-beta.28 (Q164) NO route calls this - the config writer asks `identity_guard` for every write - it is the same question put
+    to the servers Jen has loaded, for a caller that wants the answer before it builds a change (and for the tests of the rule itself).
 
     v5.68.0-beta.27 (Q162, item 1): the removal guard (Q144) protects a server's PRESENCE. The same id with a new SSH host, SSH user, config path or API URL
-    passes it - and then every later observation, reload and restore goes to a DIFFERENT Kea, while the one that was at DEBUG 55 is left there. A server with
-    an entry (the log level on, or a restore not finished) or any server while the record is unreadable cannot have these four fields changed until
-    `turn_off` has succeeded or the record is rebuilt. `proposed` may carry any subset of the four; a field it does not carry is not being changed, and a blank
-    config path is the default one."""
-    current = next((s for s in (extensions.KEA_SERVERS or []) if str(s.get("id")) == str(server_id)), None)
-    if current is None:
+    passed it - and then every later observation, reload and restore went to a DIFFERENT Kea, while the one that was at DEBUG 55 was left there. `proposed` may
+    carry any subset of the four; a field it does not carry is not being changed, and a blank config path is the default one."""
+    if not any(str(s.get("id")) == str(server_id) for s in (extensions.KEA_SERVERS or [])):
         return ""
+    before, after = _identity_views_from_servers(server_id, proposed)
+    return identity_guard(before, after, actor)
 
-    def norm(key, value):
-        value = (value or "").strip()
-        return value or (_DEFAULT_KEA_CONF if key == "kea_conf" else "")
 
-    changed = [k for k in IDENTITY_FIELDS if k in proposed and norm(k, proposed[k]) != norm(k, current.get(k))]
-    if not changed:
-        return ""
-    name = _name(current)
-    by = f" (by {actor})" if actor else ""
-    record = _record()
-    if record.get("damaged"):
-        _audit(
-            "INVESTIGATION_LOGGING_ENDPOINT_CHANGE_REFUSED",
-            name,
-            f"change of {', '.join(changed)} refused while Jen's record of investigation logging is unreadable{by}",
-        )
-        return (
-            "Jen's record of investigation logging cannot be read, so it cannot tell whether this server is at investigation DEBUG; repair the record first "
-            "(Health → DEBUG logging left on) — changing where Jen reaches this Kea could leave the old one at DEBUG with no way back."
-        )
-    entry = record["servers"].get(str(server_id))
-    if entry is None or entry.get("removed"):
-        return ""
-    _audit(
-        "INVESTIGATION_LOGGING_ENDPOINT_CHANGE_REFUSED",
-        name,
-        f"change of {', '.join(changed)} refused while investigation logging is on or owed a restore{by}",
-    )
-    return (
-        f"Investigation logging is on for {name}, or its restore is not finished: turn it off from Servers first. Changing its {', '.join(changed)} now would "
-        "point Jen at a different Kea while this one is still at DEBUG."
-    )
+_config.register_identity_guard(identity_guard)
 
 
 def forget(server_id, actor: str = "") -> bool:
@@ -1369,8 +1485,8 @@ def acknowledge_damaged(actor: str, *, all_subnets: bool = False) -> bool:
         # re-read under the lock (v5.68.0-beta.27, Q162, item 3): a second concurrent call sees a healthy record and returns False
         record = _record()
         problems = list(_recovery_status["problems"])
-        if not record.get("damaged") or not problems:
-            return False
+        if not record.get("damaged") or record.get("unavailable") or not problems:
+            return False  # (an unavailable settings table is not a record a person can replace: there is nothing to keep and nowhere to write - Q164)
         # the old value first, once - as `_save` does - and nothing is overwritten if it cannot be kept
         if (
             record.get("raw")
@@ -1399,6 +1515,12 @@ def _recover(record: dict, known: dict, now: datetime, summary: dict) -> dict:
     daemon could not be read counted as examined. Now every server's file and daemon are examined into a candidate; if any could not be, NOTHING is
     written and the record stays damaged (turn-on refused, Health naming the server, the next minute's sweep trying again); if all were, ONE `_save`
     stores the candidate, keeping the old value in `investigation_logging.damaged` first."""
+    if record.get("unavailable"):
+        # v5.68.0-beta.28 (Q164, item 4): nothing can be stored or kept while the settings cannot be read, so there is nothing to rebuild INTO
+        problems = [SETTINGS_UNAVAILABLE]
+        _recovery_status.update(at=_iso(now), problems=problems, rebuilt=False)
+        summary["errors"].extend(problems)
+        return summary
     no_ssh = [
         f"{_name(s)}: no SSH, so its file and daemon cannot be examined"
         for s in (extensions.KEA_SERVERS or [])

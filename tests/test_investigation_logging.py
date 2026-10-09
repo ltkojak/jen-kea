@@ -8,24 +8,16 @@ No database and no Kea: the change set and the daemon are replaced by an in-memo
 """
 
 import copy
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 import pytest
 
 from jen.services import investigation_logging as inv
 from jen.services import kea_config_edit as ed
-from jen.services.kea_changeset import ChangeSetResult
+from tests._investigation_world import FUTURE, NOW, PAST, FakeKea, _cfg
 
-NOW = datetime(2026, 10, 4, 12, 0, tzinfo=timezone.utc)
-FUTURE = (NOW + timedelta(minutes=10)).isoformat()
-PAST = (NOW - timedelta(minutes=3)).isoformat()
-
-
-def _cfg(loggers="absent"):
-    section = {"valid-lifetime": 3600, "subnet4": []}
-    if loggers != "absent":
-        section["loggers"] = loggers
-    return {"Dhcp4": section}
+# the `world` fixture (and the fake Kea it builds) lives in tests/_investigation_world.py, shared with the other files that drive the service
+pytest_plugins = ("tests._investigation_world",)
 
 
 def _entry(cfg):
@@ -127,160 +119,6 @@ class TestSetAndClear:
 
 
 # ── the service: one fake Kea host, an in-memory settings table, a fake daemon ────────────────────────
-
-
-class FakeKea:
-    """One server's config file and daemon. `commands` is what `list-commands` answers; `reload` what config-reload returns."""
-
-    def __init__(self, cfg, commands=("config-reload", "version-get"), reload_result=0, restart_ok=True):
-        self.file = copy.deepcopy(cfg)
-        self.commands, self.reload_result, self.restart_ok = list(commands), reload_result, restart_ok
-        self.calls = []
-        self.writes = 0
-        self.loaded = copy.deepcopy(
-            cfg
-        )  # what the RUNNING daemon is configured with: only a reload or a restart moves it
-        self.fail_writes_after = None  # once this many writes have worked, every further change set fails
-        self.rollback_fails = False  # a failed restart cannot be rolled back either
-        self.list_unreachable = False  # the Control Agent does not answer (list-commands AND config-get)
-        self.reload_applied_but_lost = False  # config-reload takes effect and its reply is lost (result 1)
-        self.api_silent = False  # config-get never answers
-        self.silent_gets = 0  # ... or the first N config-gets do not
-        self.reload_ignored = False  # config-reload answers 0 and the daemon does not move
-        self.restart_ignored = False  # the restart succeeds and the daemon does not move
-        self.second = None  # config-get answers from ANOTHER daemon (api_url and ssh_host are not the same Kea)
-
-    def kea_command(self, command, **kw):
-        self.calls.append(command)
-        if command == "list-commands":
-            if getattr(
-                self, "list_unreachable", False
-            ):  # the Control Agent did not answer: kea_command's connection-failure reply
-                return {"result": 1, "text": "connection refused"}
-            return {"result": 0, "arguments": self.commands}
-        if command == "config-reload":
-            if self.reload_ignored:
-                return {"result": 0, "text": "reloaded"}
-            if self.reload_applied_but_lost:
-                # v5.68.0-beta.23 (Q158): Kea APPLIED the reload and the HTTP reply never arrived - the daemon moved, the caller is told it failed
-                self.loaded = copy.deepcopy(self.file)
-                return {"result": 1, "text": "timed out after 10 s"}
-            if not self.reload_result:
-                self.loaded = copy.deepcopy(self.file)
-            if self.reload_result:
-                return {"result": self.reload_result, "text": getattr(self, "reload_text", "reload refused")}
-            return {"result": 0, "text": "reloaded"}
-        if command == "config-get":
-            # the RUNNING daemon's configuration (`loaded`), never the file; `api_silent` is a Control Agent that does not answer at all
-            if (
-                self.api_silent or self.list_unreachable or self.silent_gets > 0
-            ):  # a Control Agent that is down answers neither command
-                self.silent_gets = max(0, self.silent_gets - 1)
-                return {"result": 1, "text": "connection refused"}
-            if self.second is not None:
-                return {"result": 0, "arguments": copy.deepcopy(self.second)}
-            return {"result": 0, "arguments": copy.deepcopy(self.loaded)}
-        return {"result": 0}
-
-    def service_action(self, server, service, action):
-        self.calls.append(f"{action}:{service}")
-        if self.restart_ok:
-            if not self.restart_ignored:
-                self.loaded = copy.deepcopy(self.file)
-            self.list_unreachable = False  # the restarted daemon answers on its control socket again
-        return {"ok": self.restart_ok, "detail": "" if self.restart_ok else "unit failed"}
-
-    def apply_change(self, service, mutate_fn, summary, **kw):
-        after, code = mutate_fn(self.file)
-        skip = kw.get("skip_codes", ("notfound", "nochange"))
-        assert kw["servers"] and len(kw["servers"]) == 1, "always exactly one target"
-        self.calls.append(f"apply(restart={kw.get('restart', True)}):{summary}")
-        if code in skip:
-            return ChangeSetResult("nothing", code, [("success", f"ℹ️ {code}")])
-        if code != "ok":
-            return ChangeSetResult("aborted", code, [("error", f"❌ {kw['code_messages'].get(code, code)}")])
-        if self.fail_writes_after is not None and self.writes >= self.fail_writes_after:
-            return ChangeSetResult("rolled_back", "error", [("error", "❌ the change could not be applied")])
-        before = self.file
-        self.file = after
-        self.writes += 1
-        if kw.get("restart", True):  # the real change set restarts the daemon inside apply_change
-            if self.restart_ok:
-                if not self.restart_ignored:
-                    self.loaded = copy.deepcopy(self.file)
-                self.list_unreachable = False  # the restarted daemon answers on its control socket again
-            else:
-                self.file = after if self.rollback_fails else before
-                status = "rollback_failed" if self.rollback_fails else "rolled_back"
-                return ChangeSetResult(status, "restart-failed", [("error", "❌ the daemon did not restart")])
-        return ChangeSetResult("ok", "ok", [("success", f"✅ {summary}")])
-
-    def read_config_versioned(self, server, service):
-        return copy.deepcopy(self.file), "sha"
-
-
-@pytest.fixture
-def world(monkeypatch):
-    """Servers 1 and 2, each its own FakeKea; settings in a dict; the clock fixed."""
-    from jen import extensions
-
-    store = {}
-    db = {
-        "fails": None
-    }  # a predicate on the investigation record being written: True = the Jen database does not take THIS write
-
-    def set_setting(key, value):
-        if key == inv.RECORD_KEY and db["fails"] is not None and db["fails"](value):
-            return (
-                False  # what jen.models.user.set_global_setting answers when the write did not happen (v5.68.0-beta.22)
-            )
-        store[key] = value
-        return True
-
-    monkeypatch.setattr("jen.models.user.get_global_setting", lambda k, d="": store.get(k, d))
-    monkeypatch.setattr("jen.models.user.set_global_setting", set_setting)
-
-    def set_and_audit(key, value, action, entity, details=""):
-        # the real one is ONE transaction: both rows or neither (v5.68.0-beta.27, Q162, item 3)
-        if key == inv.RECORD_KEY and db["fails"] is not None and db["fails"](value):
-            return False
-        if db.get("audit_fails"):
-            return False
-        store[key] = value
-        store.setdefault("_audit", []).append((action, entity, details))
-        return True
-
-    monkeypatch.setattr("jen.models.user.set_global_setting_and_audit", set_and_audit)
-    monkeypatch.setattr(inv, "_sleep", lambda seconds: None)
-    monkeypatch.setattr("jen.models.user.audit", lambda *a, **k: store.setdefault("_audit", []).append(a))
-    servers = [{"id": 1, "name": "kea-a", "ssh_host": "10.0.0.1"}, {"id": 2, "name": "kea-b", "ssh_host": "10.0.0.2"}]
-    monkeypatch.setattr(extensions, "KEA_SERVERS", servers)
-    daemons = {1: FakeKea(_cfg([{"name": "kea-dhcp4", "severity": "INFO"}])), 2: FakeKea(_cfg())}
-
-    def pick(server):
-        return daemons[server["id"]]
-
-    monkeypatch.setattr(inv._kea, "kea_command", lambda command, server=None, **kw: pick(server).kea_command(command))
-    monkeypatch.setattr(
-        inv._host,
-        "service_action",
-        lambda server, service, action: pick(server).service_action(server, service, action),
-    )
-    monkeypatch.setattr(
-        inv._host, "read_config_versioned", lambda server, service: pick(server).read_config_versioned(server, service)
-    )
-
-    def fake_apply(service, mutate_fn, summary, **kw):
-        return pick(kw["servers"][0]).apply_change(service, mutate_fn, summary, **kw)
-
-    monkeypatch.setattr(inv._changeset, "apply_change", fake_apply)
-    monkeypatch.setattr(inv, "_now", lambda: NOW)
-    inv._runs["n"] = 0
-    inv._recovery_status.update(
-        at="", problems=[], rebuilt=None
-    )  # module state: one test's rebuild attempt is not the next one's
-    inv._legacy_logged.clear()
-    return type("World", (), {"store": store, "servers": servers, "daemons": daemons, "db": db})
 
 
 class TestTurnOn:
@@ -2647,7 +2485,7 @@ class TestAnEndpointChangeKeepsTheServerIdentity:
         return world
 
     @staticmethod
-    def _audits(world, action="INVESTIGATION_LOGGING_ENDPOINT_CHANGE_REFUSED"):
+    def _audits(world, action="INVESTIGATION_LOGGING_IDENTITY_CHANGE_REFUSED"):
         return [a for a in world.store.get("_audit", []) if a[0] == action]
 
     def test_01_an_active_entry_and_the_ssh_host_pointed_elsewhere_is_refused_and_audited(self, w):
@@ -2904,78 +2742,6 @@ class TestTheRealTransactionIsAllOrNothing:
         fake_db["settings_raises"] = True
         assert usermod.set_global_setting_and_audit("k", "v", "A", "e", "d") is False
         assert fake_db["audit"] == []
-
-
-class TestEverySaveRouteThatWritesAnEndpointIsGuarded:
-    """Q161's source test grew a clause (Q162): the three routes that can change WHICH Kea Jen reaches for a server must ask the investigation service."""
-
-    GUARDS = ("removal_refusal", "endpoint_change_refusal")
-    #: Save routes that write the [kea] section but cannot change which Kea is reached, each with why. The test checks the reason still holds: such a
-    #: function writes no `kea_ssh`, no extra-server row and no identity key of [kea].
-    CANNOT_CHANGE_IDENTITY = {
-        "save_ha_settings": "it writes [kea] ha_mode and the display name only; neither says which Kea Jen reaches",
-    }
-
-    def test_every_save_function_that_writes_kea_kea_ssh_or_an_extra_server_references_a_guard(self):
-        import ast
-        import pathlib
-
-        root = pathlib.Path(__file__).resolve().parent.parent
-        tree = ast.parse((root / "jen" / "routes" / "settings" / "infrastructure.py").read_text(encoding="utf-8"))
-        writers, unguarded = [], []
-        for fn in ast.walk(tree):
-            if not (isinstance(fn, ast.FunctionDef) and fn.name.startswith("save_")):
-                continue
-            writes = False
-            for n in ast.walk(fn):
-                if (
-                    isinstance(n, ast.Constant)
-                    and isinstance(n.value, str)
-                    and (n.value == "kea_ssh" or n.value.startswith("kea_server_"))
-                ):
-                    writes = True
-                if (
-                    isinstance(n, ast.Tuple)
-                    and len(n.elts) >= 3
-                    and isinstance(n.elts[0], ast.Constant)
-                    and n.elts[0].value == "kea"
-                ):
-                    writes = True
-            if not writes:
-                continue
-            writers.append(fn.name)
-            attrs = {n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)}
-            if fn.name in self.CANNOT_CHANGE_IDENTITY:
-                consts = {n.value for n in ast.walk(fn) if isinstance(n, ast.Constant) and isinstance(n.value, str)}
-                assert not consts & {"kea_ssh", "api_url", "ssh_host", "ssh_user", "kea_conf"}, (
-                    f"{fn.name} writes an identity key: {consts}"
-                )
-                assert not any(c.startswith("kea_server_") for c in consts), fn.name
-                continue
-            if not attrs & set(self.GUARDS):
-                unguarded.append(fn.name)
-        print(f"SAVE ROUTES that write [kea], [kea_ssh] or an extra server: {', '.join(writers)}")
-        assert {"save_infra_kea", "save_infra_ssh", "save_extra_servers"} <= set(writers), writers
-        assert not unguarded, (
-            f"these save routes write an endpoint without asking the investigation service: {unguarded}"
-        )
-        assert set(self.CANNOT_CHANGE_IDENTITY) <= set(writers), (
-            "an allowlist entry that no longer writes the section is stale"
-        )
-
-    def test_the_three_routes_name_the_right_guards(self):
-        import ast
-        import pathlib
-
-        root = pathlib.Path(__file__).resolve().parent.parent
-        tree = ast.parse((root / "jen" / "routes" / "settings" / "infrastructure.py").read_text(encoding="utf-8"))
-        uses = {}
-        for fn in ast.walk(tree):
-            if isinstance(fn, ast.FunctionDef):
-                uses[fn.name] = {n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)}
-        assert "endpoint_change_refusal" in uses["save_infra_kea"]
-        assert {"endpoint_change_refusal", "removal_refusal"} <= uses["save_infra_ssh"]
-        assert {"endpoint_change_refusal", "removal_refusal"} <= uses["save_extra_servers"]
 
 
 class TestARebuiltEntryIsValidBeforeItIsWritten:

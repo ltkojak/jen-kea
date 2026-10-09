@@ -294,6 +294,17 @@ def _debug_logging_left_on(ctx) -> Check:
     from jen.services import investigation_logging as __inv
 
     record = __inv._record()
+    if record.get("unavailable"):
+        # v5.68.0-beta.28 (Q164, item 4): the settings table could not be read at all - not an empty record, not a damaged one: unknown
+        c.status = "fail"
+        c.detail = (
+            "Jen's settings could not be read (its database is unavailable); investigation logging and every change to a Kea's connection are refused "
+            "until they can be - Jen cannot tell whether any Kea is at investigation DEBUG."
+        )
+        c.fix_hint = (
+            "Restore Jen's own database (Health → Jen database); the next minute's scan reads the record again."
+        )
+        return c
     if record.get("damaged"):
         # v5.68.0-beta.24 (Q159, item 3): an unreadable index used to read as an empty one - "no server is at investigation logging" - while a Kea
         # might be running DEBUG 55. Fail closed. v5.68.0-beta.25 (Q160): and it says what the last rebuild attempt could not examine.

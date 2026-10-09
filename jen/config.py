@@ -290,8 +290,91 @@ def _file_lock(path):
         os.close(fd)  # closing the descriptor releases the flock
 
 
+class ConfigChangeRefused(RuntimeError):
+    """A config write a registered identity guard refused (v5.68.0-beta.28, Q164). The message is the sentence a person reads; nothing was written."""
+
+    @property
+    def sentence(self) -> str:
+        """The sentence a person reads. Only a guard raises this (its argument is Jen's own wording, never an exception's text), which is why the error handler
+        may show it - `str(e)` of an arbitrary exception is exactly what tests/test_no_raw_exception_leaks.py exists to keep out of a response."""
+        return str(self.args[0]) if self.args else "This change to the connection settings was refused."
+
+
+#: v5.68.0-beta.28 (Q164) - held by EVERY config write and by `investigation_logging.turn_on`, so "a save passed the identity check" and "turn_on recorded an
+#: entry against the old identity" cannot interleave: whichever comes second sees the other's result. Lock order, everywhere: investigation `_lock` ->
+#: `identity_lock` -> `AppConfig._write_lock` -> the config file's flock. A guard takes none of them.
+identity_lock = threading.RLock()
+_identity_guards: list = []
+
+#: The four settings of a Kea server that say WHICH Kea Jen reaches for it. Credentials (api_user, api_pass, the SSH key) and the display name are not identity.
+#: `jen/services/investigation_logging.py` reads this tuple; tests/test_identity_guard.py pins it to the keys `derive_kea_servers` reads.
+IDENTITY_KEYS = ("api_url", "ssh_host", "ssh_user", "kea_conf")
+MODE_KEY = "__mode__"
+DEFAULT_KEA_CONF = "/etc/kea/kea-dhcp4.conf"
+
+
+def register_identity_guard(fn) -> None:
+    """`fn(before, after) -> str` is asked, for every config write that changes a Kea server's identity (`identity_view` differs), whether it may go ahead:
+    "" yes, else the sentence that refuses it. Registering the same function twice is one registration."""
+    if fn not in _identity_guards:
+        _identity_guards.append(fn)
+
+
+def normalized_identity(server: dict) -> dict:
+    """One server's four identity values as the view compares them: stripped, a blank config path being the default one."""
+    out = {}
+    for key in IDENTITY_KEYS:
+        value = str((server or {}).get(key) or "").strip()
+        out[key] = value or (DEFAULT_KEA_CONF if key == "kea_conf" else "")
+    return out
+
+
+def _servers_for_view(parser) -> list:
+    try:
+        return AppConfig.derive_kea_servers(parser, quiet=True)
+    except configparser.Error:
+        # a parser with no `[kea]` credentials yet (a fresh install, a hand-made file): the view reads what is there, blank for what is not
+        lenient = configparser.ConfigParser(interpolation=None)
+        lenient.read_dict({s: dict(parser.items(s)) for s in parser.sections()})
+        if not lenient.has_section("kea"):
+            lenient.add_section("kea")
+        for key in ("api_url", "api_user", "api_pass"):
+            if not lenient.has_option("kea", key):
+                lenient.set("kea", key, "")
+        return AppConfig.derive_kea_servers(lenient, quiet=True)
+
+
+def identity_view(parser) -> dict:
+    """{server id (str): its four identity values, "__mode__": the connection mode} for the config in `parser` - what a config write may not change while a
+    Kea server has investigation state outstanding. The mode is global (it changes how EVERY server is reached) and is read as `apply()` reads it: anything
+    but "direct" is "ca"."""
+    view = {str(s["id"]): normalized_identity(s) for s in _servers_for_view(parser)}
+    mode = parser.get("kea", "connection_mode", fallback="ca").strip().lower() if parser.has_section("kea") else "ca"
+    view[MODE_KEY] = mode if mode in ("ca", "direct") else "ca"
+    return view
+
+
+def _run_identity_guards(before: dict, after: dict) -> None:
+    """Ask every registered guard, FAILING CLOSED: a guard that raises refuses the write, because "could not check" is not "nothing to protect"."""
+    if before == after:
+        return
+    for guard in list(_identity_guards):
+        try:
+            message = guard(before, after)
+        except ConfigChangeRefused:
+            raise
+        except Exception as e:  # the answer to "may this go ahead" must be an answer
+            logger.error(f"identity guard {getattr(guard, '__name__', guard)} raised {type(e).__name__}: {e}")
+            raise ConfigChangeRefused(
+                "Jen could not check whether a Kea server has investigation logging outstanding, so the change to its connection settings was refused - "
+                "try again, and see the server log if it persists."
+            ) from e
+        if message:
+            raise ConfigChangeRefused(message)
+
+
 def _serialized(fn):
-    """Run a writer while holding AppConfig's one lock - see AppConfig._write_lock - and the config file's advisory lock."""
+    """Run a writer while holding `identity_lock`, AppConfig's one lock - see AppConfig._write_lock - and the config file's advisory lock."""
 
     @functools.wraps(fn)
     def wrapper(self, *args, **kwargs):
@@ -300,7 +383,7 @@ def _serialized(fn):
             # called from inside it would write to disk and then be overwritten - silently - by the outer write of the parser read before.
             # The contract refuses what it cannot honour instead of advertising it.
             raise RuntimeError("mutate the parser you were given")
-        with AppConfig._write_lock, _file_lock(self.path):
+        with identity_lock, AppConfig._write_lock, _file_lock(self.path):
             return fn(self, *args, **kwargs)
 
     return wrapper
@@ -530,9 +613,34 @@ class AppConfig:
 
         from jen.services.private_files import write_private_file
 
+        # v5.68.0-beta.28 (Q164): the identity invariant lives HERE, where every config write already passes - not on a list of the routes that write. A write
+        # that changes which Kea Jen reaches for a server is put to every registered guard BEFORE the first byte; a refusal raises and writes nothing.
+        self._check_identity(self._read_parser(), parser)
         buf = io.StringIO()
         parser.write(buf)
         write_private_file(self.path, buf.getvalue(), 0o600)
+
+    @staticmethod
+    def _check_identity(before_parser, after_parser) -> None:
+        _run_identity_guards(identity_view(before_parser), identity_view(after_parser))
+
+    def preflight_identity_change(self, change) -> None:
+        """Would this change be refused? Raises `ConfigChangeRefused` exactly as the write would, and writes nothing (v5.68.0-beta.28, Q164). `change` is a list of
+        (section, key, value) tuples, applied the way `write_values` applies them, or a callable `fn(parser)` that edits a copy the way a `mutate` callback does.
+        A route whose first step is a change on a Kea host (the direct-socket setup restarts the daemon BEFORE it writes Jen's own settings) asks this first, so
+        the refusal comes before any remote write, not after it."""
+        with identity_lock:
+            before = self._read_parser()
+            after = configparser.ConfigParser(interpolation=None)
+            after.read_dict({s: dict(before.items(s)) for s in before.sections()})
+            if callable(change):
+                change(after)
+            else:
+                for section, key, value in change:
+                    if not after.has_section(section):
+                        after.add_section(section)
+                    after.set(section, key, value)
+            self._check_identity(before, after)
 
     @_serialized
     def write_value(self, section: str, key: str, value: str, reload: bool = True) -> None:
@@ -623,8 +731,9 @@ class AppConfig:
     # ── Derived structures ───────────────────────────────────────────────
 
     @staticmethod
-    def derive_kea_servers(cfg: configparser.ConfigParser) -> list:
-        """Return list of server dicts from config."""
+    def derive_kea_servers(cfg: configparser.ConfigParser, quiet: bool = False) -> list:
+        """Return list of server dicts from config. `quiet` (Q164) is for a parser that is only being compared - the identity view reads every write twice - so a
+        stray `[kea_server_1]` is not warned about on each."""
         primary_user = cfg.get("kea", "api_user")
         primary_pass = cfg.get("kea", "api_pass")
         servers = [
@@ -673,7 +782,8 @@ class AppConfig:
                 continue
             num = int(m.group(1))
             if num < 2:
-                logging.getLogger(__name__).warning(f"ignoring [{sec_name}] — server ids start at 2 ([kea] is 1)")
+                if not quiet:
+                    logging.getLogger(__name__).warning(f"ignoring [{sec_name}] — server ids start at 2 ([kea] is 1)")
                 continue
             nums.append(num)
         for n in sorted(nums):

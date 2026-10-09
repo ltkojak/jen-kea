@@ -18,7 +18,7 @@ from flask_login import LoginManager, current_user, logout_user
 from werkzeug.exceptions import HTTPException
 
 from jen import extensions
-from jen.config import app_config, ssl_configured
+from jen.config import ConfigChangeRefused, app_config, ssl_configured
 from jen.models.user import User, get_global_setting
 from jen.services import csp as csp_svc
 from jen.services import csrf as csrf_svc
@@ -102,6 +102,10 @@ def create_app() -> Flask:
     Loads config, initializes all globals, registers every blueprint.
     """
     # ── Config & globals ──────────────────────────────────────────────────────
+    # v5.68.0-beta.28 (Q164): the identity guard registers itself when its module is imported; import it here, explicitly, so a config write made before any
+    # route module was loaded (the setup wizard's, a plugin's) is guarded too - tests/test_identity_guard.py asserts it is registered after create_app().
+    from jen.services import investigation_logging as _investigation_logging  # noqa: F401
+
     app_config.reload()
 
     # ── User content (v5.13.0) — create the /var/lib/jen subtree, then a
@@ -726,6 +730,23 @@ def create_app() -> Flask:
         from flask import render_template
 
         return render_template("error.html", code=500, message="Internal server error."), 500
+
+    @app.errorhandler(ConfigChangeRefused)
+    def handle_config_change_refused(e):
+        # v5.68.0-beta.28 (Q164): a config write a guard refused (a Kea server with investigation logging outstanding may not change which Kea Jen reaches
+        # for it). The writer raised BEFORE the first byte, so nothing was saved; whichever route asked, the person reads the reason where they were. The
+        # message is Jen's own sentence (never an exception's text), so it is safe to show.
+        if request.is_json or request.accept_mimetypes.best == "application/json":
+            from flask import jsonify
+
+            return jsonify({"ok": False, "error": e.sentence}), 409
+        flash(e.sentence, "error")
+        from urllib.parse import urlparse
+
+        back = request.referrer or ""
+        if not back or urlparse(back).netloc != request.host:
+            back = url_for("settings.settings_kea")
+        return redirect(back)
 
     @app.errorhandler(HTTPException)
     def handle_http_exception(e):
