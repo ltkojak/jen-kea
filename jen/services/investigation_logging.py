@@ -84,7 +84,7 @@ DAMAGED_KEY = (
 
 
 _ENTRY_STR_FIELDS = ("ssh_host", "kea_conf", "by", "mode", "error", "seen", "observed_at", "server_id")
-_ENTRY_BOOL_FIELDS = ("removed", "marker_invalid", "contradiction", "restarted")
+_ENTRY_BOOL_FIELDS = ("removed", "marker_invalid", "contradiction", "restarted", "deadline_malformed")
 
 
 _LEGACY_ABSENT_KEYS = ("observed_at", "seen", "reload_tries", "restarted", "contradiction")
@@ -232,6 +232,8 @@ def _row(sid, entry: dict, now: datetime) -> dict:
         "reload_tries": tries,
         "restarted": restarted,
         "contradiction": contradiction,
+        # v5.68.0-beta.27 (Q162, item 2): the marker's deadline could not be read when the record was rebuilt, so the entry was made due NOW
+        "deadline_malformed": bool(entry.get("deadline_malformed")),
         "exhausted": exhausted,
         "needs_hand": stuck and (daemon == "other" or contradiction or exhausted),
         # (F6) the FILE carries investigation DEBUG and the daemon was seen NOT running it: "on" would be a false report
@@ -252,6 +254,9 @@ def hand_text(e: dict) -> str:
     """What the Health row and the Servers page say about an entry whose config file is restored and whose daemon was not SEEN restored (an `active()`
     row). It depends on what was OBSERVED, never on what is assumed."""
     name = e["name"]
+    if e.get("deadline_malformed"):
+        note = " (its marker's deadline was unreadable, so it was treated as due)"
+        return hand_text({**e, "deadline_malformed": False}).replace(name + ":", name + ":" + note, 1)
     if e.get("contradiction"):
         return (
             f"{name}: the Kea that Jen's API settings ([kea] api_url) answer for is not running the file Jen wrote on {e.get('ssh_host') or 'the Kea host'} "
@@ -1278,6 +1283,17 @@ def recovery_status() -> dict:
     }
 
 
+def _candidate_ready(entry: dict, now: datetime) -> bool:
+    """Make a rebuilt entry one `_record` will accept, or say it cannot be (v5.68.0-beta.27, Q162, item 2). The recovery copied an unparseable `until` from
+    the marker into the entry; `_valid_entry` rejects it, so the record it wrote read as damaged on the next load and the loop repeated. An unreadable deadline
+    is treated as DUE NOW (the entry carries `deadline_malformed` and the ordinary restore finishes it - it is never "no deadline, leave it on"); the
+    restore object is kept. Then the entry is validated before it can be written."""
+    if _edit._parse_until(entry["until"]) is None:
+        entry["until"] = _iso(now)
+        entry["deadline_malformed"] = True
+    return _valid_entry(entry)
+
+
 def _recovery_candidates(known: dict, now: datetime) -> tuple[dict, list[str]]:
     """Examine EVERY SSH server - its config file AND its running daemon - into an in-memory candidate record. Nothing is written here. A server whose
     config or whose daemon could not be read is recorded as a problem: it may be the one running DEBUG, so the record is not rebuilt without it.
@@ -1315,6 +1331,9 @@ def _recovery_candidates(known: dict, now: datetime) -> tuple[dict, list[str]]:
                 entry["restore"] = marker["restore"]
             observe_from(entry, seen)
             entry["pending"] = None if entry["daemon"] == "debug" else "reload"
+            if not _candidate_ready(entry, now):
+                problems.append(f"{name}: its marker cannot be read into a valid entry")
+                continue
             entries[sid] = entry
         elif seen["marker"] is not None and _at_investigation_level(seen):
             # the file is clean and the running Kea is at investigation DEBUG: the daemon step is owed, and the NEXT sweep (once the record is healthy)
@@ -1330,6 +1349,9 @@ def _recovery_candidates(known: dict, now: datetime) -> tuple[dict, list[str]]:
             )
             if not _edit.restore_problem(seen["marker"].get("restore")):
                 entry["restore"] = seen["marker"]["restore"]
+            if not _candidate_ready(entry, now):
+                problems.append(f"{name}: its marker cannot be read into a valid entry")
+                continue
             entries[sid] = entry
     return entries, problems
 
@@ -1391,6 +1413,10 @@ def _recover(record: dict, known: dict, now: datetime, summary: dict) -> dict:
         return summary
     entries, problems = _recovery_candidates(known, now)
     problems = problems + no_ssh  # a half-configured server (no ssh_host) holds the damaged state too
+    if not problems and not all(_valid_entry(e) for e in entries.values()):
+        problems = [
+            "a rebuilt entry failed validation, so the record was not written"
+        ]  # belt and braces: the write below is the one that counts
     if problems:
         _recovery_status.update(at=_iso(now), problems=problems, rebuilt=False)
         summary["errors"].extend(problems)

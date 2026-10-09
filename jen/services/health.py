@@ -360,6 +360,7 @@ def _debug_logging_left_on(ctx) -> Check:
     c.status = "warn" if (unconfirmed or not_loaded) else "ok"
     c.detail = "; ".join(
         f"{e['name']}: on until {e['until']}"
+        + (" (its marker's deadline was unreadable, so it was treated as due)" if e.get("deadline_malformed") else "")
         + (
             f" (Kea's running log level is unconfirmed since {e['observed_at'] or 'it was turned on'} - Jen looks again every minute)"
             if e in unconfirmed

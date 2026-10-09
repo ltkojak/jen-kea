@@ -2976,6 +2976,152 @@ class TestEverySaveRouteThatWritesAnEndpointIsGuarded:
         assert {"endpoint_change_refusal", "removal_refusal"} <= uses["save_extra_servers"]
 
 
+class TestARebuiltEntryIsValidBeforeItIsWritten:
+    """Item 2: `_recovery_candidates` copied an unparseable `until` from the marker into the entry; `_valid_entry` (Q161) requires it to parse, so `_recover` wrote
+    a candidate the next `_record()` read as damaged, and the loop repeated forever. An unreadable deadline is treated as DUE NOW (`deadline_malformed`, the
+    ordinary restore finishes it), and every candidate is validated before the one write. Each test asserts the STORED record."""
+
+    DAMAGED = "{this was the record"
+
+    @pytest.fixture
+    def w(self, world):
+        world.store[inv.RECORD_KEY] = self.DAMAGED
+        return world
+
+    @staticmethod
+    def _marker_on(world, sid, until):
+        cfg, _ = ed.set_investigation_logging(world.daemons[sid].file, FUTURE)
+        _entry(cfg)["user-context"]["jen-investigation"]["until"] = until
+        world.daemons[sid].file = world.daemons[sid].loaded = cfg
+
+    def test_a_valid_marker_with_a_valid_deadline_is_written_as_it_is(self, w):
+        self._marker_on(w, 1, FUTURE)
+        out = inv.sweep(now=NOW, full=True)
+        assert out["adopted"] == ["kea-a"] and out["errors"] == []
+        stored = _servers_of(w.store[inv.RECORD_KEY])["1"]
+        assert stored["until"] == FUTURE and "deadline_malformed" not in stored and inv._record()["damaged"] is False
+
+    def test_a_valid_restore_and_a_deadline_that_is_not_a_date_is_due_now_and_restored_by_the_next_sweep(self, w):
+        from jen.services import health
+
+        self._marker_on(w, 1, "not-a-date")
+        out = inv.sweep(now=NOW, full=True)
+        assert out["adopted"] == ["kea-a"] and out["errors"] == []
+        stored = _servers_of(w.store[inv.RECORD_KEY])["1"]
+        assert stored["until"] == inv._iso(NOW) and stored["deadline_malformed"] is True
+        assert stored["restore"] == {"severity": "INFO", "debuglevel": "absent"}, "the restore object is kept"
+        assert inv._record()["damaged"] is False, "the record the recovery wrote is one the next load accepts (no loop)"
+        (row,) = inv.active(NOW)
+        assert row["deadline_malformed"] is True
+        assert (
+            "its marker's deadline was unreadable, so it was treated as due" in health._debug_logging_left_on({}).detail
+        )
+        nxt = inv.sweep(now=NOW + timedelta(minutes=1))
+        assert (
+            nxt["restored"] == ["kea-a"]
+            and w.store[inv.RECORD_KEY] == ""
+            and ed.investigation_marker(w.daemons[1].file) is None
+        )
+        assert not _daemon_at_debug(w.daemons[1])
+
+    def test_a_marker_with_no_deadline_is_due_now_too(self, w):
+        cfg, _ = ed.set_investigation_logging(w.daemons[1].file, FUTURE)
+        _entry(cfg)["user-context"]["jen-investigation"].pop("until")
+        w.daemons[1].file = w.daemons[1].loaded = cfg
+        inv.sweep(now=NOW, full=True)
+        stored = _servers_of(w.store[inv.RECORD_KEY])["1"]
+        assert stored["until"] == inv._iso(NOW) and inv._record()["damaged"] is False
+
+    def test_an_expired_deadline_is_due_and_restored(self, w):
+        self._marker_on(w, 1, PAST)
+        inv.sweep(now=NOW, full=True)
+        assert _servers_of(w.store[inv.RECORD_KEY])["1"]["until"] == PAST
+        assert inv.sweep(now=NOW + timedelta(minutes=1))["restored"] == ["kea-a"] and w.store[inv.RECORD_KEY] == ""
+
+    def test_a_running_marker_with_a_clean_file_and_a_gibberish_deadline_is_adopted_due_now(self, w):
+        logger_ = _marked_logger("DEBUG", 55)
+        _entry(logger_)["user-context"]["jen-investigation"]["until"] = "gibberish"
+        w.daemons[1].loaded = logger_
+        inv.sweep(now=NOW, full=True)
+        stored = _servers_of(w.store[inv.RECORD_KEY])["1"]
+        assert (
+            stored["deadline_malformed"] is True and stored["until"] == inv._iso(NOW) and stored["file"] == "restored"
+        )
+        assert inv.sweep(now=NOW + timedelta(minutes=1))["restored"] == ["kea-a"] and not _daemon_at_debug(w.daemons[1])
+
+    def test_a_marker_whose_restore_is_malformed_is_flagged_for_a_person_not_guessed_at(self, w):
+        cfg, _ = ed.set_investigation_logging(w.daemons[1].file, FUTURE)
+        _entry(cfg)["user-context"]["jen-investigation"]["restore"] = {}
+        w.daemons[1].file = w.daemons[1].loaded = cfg
+        out = inv.sweep(now=NOW, full=True)
+        assert out["errors"] == [] and inv._record()["damaged"] is False
+        stored = _servers_of(w.store[inv.RECORD_KEY])["1"]
+        assert stored["marker_invalid"] is True and "restore" not in stored, (
+            "the established damaged-marker state: by-hand guidance, nothing changed"
+        )
+
+    def test_a_candidate_that_fails_validation_is_a_problem_nothing_is_written_and_it_stays_damaged(
+        self, w, monkeypatch
+    ):
+        self._marker_on(w, 1, FUTURE)
+        real = inv._valid_entry
+        monkeypatch.setattr(
+            inv, "_valid_entry", lambda e: False if (isinstance(e, dict) and e.get("name") == "kea-a") else real(e)
+        )
+        out = inv.sweep(now=NOW, full=True)
+        assert any("kea-a: its marker cannot be read into a valid entry" in e for e in out["errors"])
+        assert w.store[inv.RECORD_KEY] == self.DAMAGED and inv.DAMAGED_KEY not in w.store
+        monkeypatch.setattr(inv, "_valid_entry", real)
+        assert inv.sweep(now=NOW + timedelta(minutes=1), full=True)["errors"] == [], (
+            "and the next minute, readable again, it is rebuilt"
+        )
+        assert list(_servers_of(w.store[inv.RECORD_KEY])) == ["1"]
+
+    def test_the_final_check_before_the_write_refuses_an_invalid_entry_even_if_the_candidate_step_let_it_through(
+        self, w, monkeypatch
+    ):
+        self._marker_on(w, 1, FUTURE)
+        monkeypatch.setattr(inv, "_candidate_ready", lambda entry, now: True)  # a bug in the candidate step...
+        entry_names = []
+        real_valid = inv._valid_entry
+
+        def reject_kea_a_at_the_gate(e):
+            if isinstance(e, dict) and e.get("name") == "kea-a":
+                entry_names.append(e["name"])
+                return False
+            return real_valid(e)
+
+        monkeypatch.setattr(inv, "_valid_entry", reject_kea_a_at_the_gate)
+        out = inv.sweep(now=NOW, full=True)
+        assert entry_names and any("a rebuilt entry failed validation" in e for e in out["errors"])
+        assert w.store[inv.RECORD_KEY] == self.DAMAGED, "...is caught by the assertion in _recover: nothing is written"
+
+    def test_two_servers_one_malformed_deadline_one_unreadable_writes_nothing_and_one_ok_writes_both(
+        self, w, monkeypatch
+    ):
+        self._marker_on(w, 1, "gibberish")
+        real = inv._host.read_config_versioned
+
+        def b_unreadable(server, service):
+            if server["id"] == 2:
+                raise OSError("no route")
+            return real(server, service)
+
+        monkeypatch.setattr(inv._host, "read_config_versioned", b_unreadable)
+        out = inv.sweep(now=NOW, full=True)
+        assert any("kea-b: config unreadable" in e for e in out["errors"]) and w.store[inv.RECORD_KEY] == self.DAMAGED
+        monkeypatch.setattr(inv._host, "read_config_versioned", real)
+        self._marker_on(w, 2, FUTURE)
+        out = inv.sweep(now=NOW + timedelta(minutes=1), full=True)
+        stored = _servers_of(w.store[inv.RECORD_KEY])
+        assert (
+            sorted(stored) == ["1", "2"]
+            and stored["1"]["deadline_malformed"] is True
+            and "deadline_malformed" not in stored["2"]
+        )
+        assert inv._record()["damaged"] is False
+
+
 # ── v5.68.0-beta.26 (Q161): an unreadable record is never evidence of anything - enforced over EVERY reader ──────────────────────────
 
 
