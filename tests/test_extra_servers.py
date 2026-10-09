@@ -361,19 +361,23 @@ class TestExtraServerIdentity:
                 cur.execute("DELETE FROM kea_config_revisions WHERE server_id IN (3, 4)")
             db.commit()
 
-    def test_a_duplicated_id_only_claims_the_first_row(self, logged_in_client, db, mock_kea, isolated_config):
+    def test_a_duplicated_id_is_refused_outright_and_nothing_is_written(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        """v5.68.0-beta.27 (Q162): this used to give the first row the id and the second a fresh one. A submitted id that appears twice is a tampered form
+        (Jen's own page never sends one), and the identity of a server is its id: refused before any comparison, with the configuration untouched."""
         _seed((2, {"api_url": "http://s2:8000", "api_pass": "P2", "ssh_key": "/K2"}))
-        self._save(
+        r = self._save(
             logged_in_client,
             _rows(
                 {"extra_id[]": "2", "extra_api_url[]": "http://first:8000"},
                 {"extra_id[]": "2", "extra_api_url[]": "http://second:8000"},
             ),
         )
+        assert b"duplicate or unknown server id" in r.data
         disk = _on_disk(isolated_config)
-        assert disk.get("kea_server_2", "api_pass") == "P2"
-        assert disk.get("kea_server_3", "api_pass") == "p4"  # second claim refused
-        assert not disk.has_option("kea_server_3", "ssh_key")
+        assert disk.get("kea_server_2", "api_url") == "http://s2:8000" and disk.get("kea_server_2", "api_pass") == "P2"
+        assert not disk.has_section("kea_server_3"), "no second claim was turned into a new server"
 
     def test_missing_id_list_is_the_inconsistent_form_path(self, logged_in_client, db, mock_kea, isolated_config):
         _seed((2, {"api_url": "http://s2:8000"}))
@@ -559,3 +563,186 @@ class TestRemovingAServerWhileTheInvestigationRecordIsUnreadable:
         self._clear()
         logged_in_client.post("/settings/infrastructure/save-extra-servers", data=_rows(), follow_redirects=True)
         assert not _on_disk(isolated_config).has_section("kea_server_2")
+
+
+class TestChangingWhereAServerIsReachedWhileInvestigationLoggingIsOn:
+    """v5.68.0-beta.27 (Q162, item 1): the removal guard protects a server's presence; the same id with a new SSH host, SSH user, config path or API URL
+    passed it. Every assertion is on what is on disk, the flash, and the audit row."""
+
+    SERVER = {"api_url": "http://s2:8000", "name": "Standby", "ssh_host": "10.0.0.2"}
+    SAME_ROW = {
+        "extra_id[]": "2",
+        "extra_name[]": "Standby",
+        "extra_api_url[]": "http://s2:8000",
+        "extra_ssh_host[]": "10.0.0.2",
+    }
+
+    @staticmethod
+    def _entry(server_id, name="Standby"):
+        TestRemovingAServerWithInvestigationLoggingOn._entry_for(server_id, name)
+
+    @staticmethod
+    def _clear():
+        TestRemovingAServerWithInvestigationLoggingOn._clear()
+
+    @staticmethod
+    def _refused_rows(db):
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) AS n FROM audit_log WHERE action='INVESTIGATION_LOGGING_ENDPOINT_CHANGE_REFUSED'"
+            )
+            return cur.fetchone()["n"]
+
+    def _post_extra(self, client, **row):
+        return client.post(
+            "/settings/infrastructure/save-extra-servers", data=_rows({**self.SAME_ROW, **row}), follow_redirects=True
+        )
+
+    def test_the_primary_ssh_host_pointed_elsewhere_is_refused_not_written_and_audited(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        app_config.write_values([("kea_ssh", "host", "10.0.0.5"), ("kea_ssh", "user", "jen")])
+        self._entry(1, "Primary")
+        try:
+            r = logged_in_client.post(
+                "/settings/infrastructure/save-ssh",
+                data={"host": "10.9.9.9", "user": "jen", "kea_conf": ""},
+                follow_redirects=True,
+            )
+            assert b"Changing its ssh_host now would point Jen at a different Kea" in r.data
+            assert _on_disk(isolated_config).get("kea_ssh", "host") == "10.0.0.5", "nothing was written"
+            assert self._refused_rows(db) == 1
+        finally:
+            self._clear()
+
+    def test_the_primary_ssh_save_that_changes_nothing_identity_goes_through(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        app_config.write_values([("kea_ssh", "host", "10.0.0.5"), ("kea_ssh", "user", "jen")])
+        self._entry(1, "Primary")
+        try:
+            logged_in_client.post(
+                "/settings/infrastructure/save-ssh",
+                data={"host": "10.0.0.5", "user": "jen", "kea_conf": ""},
+                follow_redirects=True,
+            )
+            assert self._refused_rows(db) == 0
+        finally:
+            self._clear()
+
+    def test_an_extra_server_kept_with_a_new_host_is_refused(self, logged_in_client, db, mock_kea, isolated_config):
+        _seed((2, dict(self.SERVER)))
+        self._entry(2)
+        try:
+            r = self._post_extra(logged_in_client, **{"extra_ssh_host[]": "10.7.7.7"})
+            assert b"Changing its ssh_host now would point Jen at a different Kea" in r.data
+            assert _on_disk(isolated_config).get("kea_server_2", "ssh_host") == "10.0.0.2"
+            assert self._refused_rows(db) == 1
+        finally:
+            self._clear()
+
+    def test_a_changed_api_url_is_refused_for_the_primary_and_an_unchanged_one_is_not(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        self._entry(1, "Primary")
+        try:
+            r = logged_in_client.post(
+                "/settings/infrastructure/save-kea",
+                data={"api_url": "http://other:8000", "api_user": "u4", "connection_mode": "ca"},
+                follow_redirects=True,
+            )
+            assert b"Changing its api_url now would point Jen at a different Kea" in r.data
+            assert _on_disk(isolated_config).get("kea", "api_url") == "http://1.2.3.4:8000"
+            logged_in_client.post(
+                "/settings/infrastructure/save-kea",
+                data={"api_url": "http://1.2.3.4:8000", "api_user": "renamed-user", "connection_mode": "ca"},
+                follow_redirects=True,
+            )
+            assert _on_disk(isolated_config).get("kea", "api_user") == "renamed-user", "credentials are not identity"
+        finally:
+            self._clear()
+
+    def test_an_unreadable_record_refuses_any_endpoint_change(self, logged_in_client, db, mock_kea, isolated_config):
+        from jen.models import user as _user
+
+        _seed((2, dict(self.SERVER)))
+        _user.set_global_setting("investigation_logging", "{broken")
+        try:
+            r = self._post_extra(logged_in_client, **{"extra_api_url[]": "http://elsewhere:8000"})
+            assert b"cannot be read, so it cannot tell whether this server is at investigation DEBUG" in r.data
+            assert _on_disk(isolated_config).get("kea_server_2", "api_url") == "http://s2:8000"
+            assert self._refused_rows(db) == 1
+        finally:
+            self._clear()
+
+    def test_a_valid_empty_record_saves_the_change(self, logged_in_client, db, mock_kea, isolated_config):
+        _seed((2, dict(self.SERVER)))
+        self._clear()
+        self._post_extra(logged_in_client, **{"extra_ssh_host[]": "10.7.7.7"})
+        assert _on_disk(isolated_config).get("kea_server_2", "ssh_host") == "10.7.7.7"
+
+    def test_the_display_name_and_the_credentials_alone_are_saved_with_an_active_entry(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        _seed((2, dict(self.SERVER)))
+        self._entry(2)
+        try:
+            self._post_extra(logged_in_client, **{"extra_name[]": "Renamed", "extra_api_user[]": "new-user"})
+            disk = _on_disk(isolated_config)
+            assert disk.get("kea_server_2", "name") == "Renamed" and disk.get("kea_server_2", "api_user") == "new-user"
+            assert self._refused_rows(db) == 0
+        finally:
+            self._clear()
+
+    def test_a_duplicated_submitted_id_is_refused_outright(self, logged_in_client, db, mock_kea, isolated_config):
+        _seed((2, dict(self.SERVER)))
+        r = logged_in_client.post(
+            "/settings/infrastructure/save-extra-servers",
+            data=_rows(self.SAME_ROW, {**self.SAME_ROW, "extra_api_url[]": "http://second:8000"}),
+            follow_redirects=True,
+        )
+        assert b"duplicate or unknown server id" in r.data
+        disk = _on_disk(isolated_config)
+        assert disk.get("kea_server_2", "api_url") == "http://s2:8000" and not disk.has_section("kea_server_3"), (
+            "nothing was written"
+        )
+
+    def test_an_unknown_id_carrying_an_ssh_host_is_refused_outright_but_a_new_row_is_not(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        _seed((2, dict(self.SERVER)))
+        r = logged_in_client.post(
+            "/settings/infrastructure/save-extra-servers",
+            data=_rows(
+                self.SAME_ROW,
+                {
+                    **self.SAME_ROW,
+                    "extra_id[]": "7",
+                    "extra_api_url[]": "http://s7:8000",
+                    "extra_ssh_host[]": "10.0.0.7",
+                },
+            ),
+            follow_redirects=True,
+        )
+        assert b"duplicate or unknown server id" in r.data and not _on_disk(isolated_config).has_section("kea_server_3")
+        logged_in_client.post(
+            "/settings/infrastructure/save-extra-servers",
+            data=_rows(
+                self.SAME_ROW,
+                {
+                    "extra_id[]": "",
+                    "extra_name[]": "Fresh",
+                    "extra_api_url[]": "http://s9:8000",
+                    "extra_ssh_host[]": "10.0.0.9",
+                },
+            ),
+            follow_redirects=True,
+        )
+        assert _on_disk(isolated_config).get("kea_server_3", "ssh_host") == "10.0.0.9", "a blank id is a new row"
+
+    def test_after_turn_off_the_change_is_saved(self, logged_in_client, db, mock_kea, isolated_config):
+        _seed((2, dict(self.SERVER)))
+        self._entry(2)
+        self._clear()  # what a successful turn_off leaves
+        self._post_extra(logged_in_client, **{"extra_ssh_host[]": "10.7.7.7"})
+        assert _on_disk(isolated_config).get("kea_server_2", "ssh_host") == "10.7.7.7"

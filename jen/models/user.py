@@ -254,15 +254,7 @@ def audit(action: str, entity: str, details: str = "") -> None:
     response returned, and a test that checks "was this audited?" needed a
     sleep. A single INSERT is cheap; block on it.
     """
-    from flask import request
-    from flask_login import current_user
-
-    try:
-        user_id = current_user.id if current_user.is_authenticated else None
-        username = current_user.username if current_user.is_authenticated else "system"
-        ip = request.remote_addr if request else None
-    except Exception:
-        user_id, username, ip = None, "system", None
+    user_id, username, ip = _audit_identity()
 
     from jen.models.db import jen_db
 
@@ -279,3 +271,52 @@ def audit(action: str, entity: str, details: str = "") -> None:
             db.commit()
     except Exception as e:
         logger.error(f"audit({action}, {entity}): {e}")
+
+
+def _audit_identity() -> tuple:
+    """(user id, username, ip) of whoever the current request is, the way `audit()` has always resolved them; ("system" and no ip) outside a request."""
+    from flask import request
+    from flask_login import current_user
+
+    try:
+        user_id = current_user.id if current_user.is_authenticated else None
+        username = current_user.username if current_user.is_authenticated else "system"
+        ip = request.remote_addr if request else None
+    except Exception:
+        user_id, username, ip = None, "system", None
+    return user_id, username, ip
+
+
+def set_global_setting_and_audit(key: str, value: str, action: str, entity: str, details: str = "") -> bool:
+    """Write a setting AND its audit row in ONE transaction (v5.68.0-beta.27, Q162, item 3). `set_global_setting` then `audit()` are two commits, and `audit()`
+    logs and returns on failure: a decision that is only worth making if it is on record (the acknowledgement of an unreadable investigation record) could be
+    committed with no durable record of who asserted what. Here one connection carries both statements; any exception rolls BOTH back, is logged, and the
+    answer is False. True means the setting is stored AND the audit row is written. The settings cache is invalidated on success."""
+    user_id, username, ip = _audit_identity()
+
+    from jen.models.db import jen_db
+
+    try:
+        with jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO settings (setting_key, setting_value)
+                    VALUES (%s, %s)
+                    ON DUPLICATE KEY UPDATE setting_value=%s
+                """,
+                    (key, value, value),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO audit_log (user_id, username, action, entity, details, ip_address)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                    (user_id, username, action, entity, details, ip),
+                )
+            db.commit()
+        _invalidate_settings_cache()
+        return True
+    except Exception as e:
+        logger.error(f"set_global_setting_and_audit({key}, {action}): {e}")
+        return False

@@ -1051,6 +1051,60 @@ def _unconfirmed_for_an_hour(entry: dict) -> bool:
     )
 
 
+#: The four settings that say WHICH Kea Jen reaches for a server (v5.68.0-beta.27, Q162, item 1). Credentials (api_user, api_pass, the SSH key) and the
+#: display name are NOT identity: they change nothing about which Kea is reached, and a wrong one is corrected by changing it back (Health shows the server
+#: unreachable meanwhile).
+IDENTITY_FIELDS = ("ssh_host", "ssh_user", "kea_conf", "api_url")
+_DEFAULT_KEA_CONF = "/etc/kea/kea-dhcp4.conf"
+
+
+def endpoint_change_refusal(server_id, proposed: dict, actor: str = "") -> str:
+    """ "" when `proposed` leaves the server's identity alone, or the server has no outstanding investigation state; else the sentence a settings route flashes
+    (and an audit row is written).
+
+    v5.68.0-beta.27 (Q162, item 1): the removal guard (Q144) protects a server's PRESENCE. The same id with a new SSH host, SSH user, config path or API URL
+    passes it - and then every later observation, reload and restore goes to a DIFFERENT Kea, while the one that was at DEBUG 55 is left there. A server with
+    an entry (the log level on, or a restore not finished) or any server while the record is unreadable cannot have these four fields changed until
+    `turn_off` has succeeded or the record is rebuilt. `proposed` may carry any subset of the four; a field it does not carry is not being changed, and a blank
+    config path is the default one."""
+    current = next((s for s in (extensions.KEA_SERVERS or []) if str(s.get("id")) == str(server_id)), None)
+    if current is None:
+        return ""
+
+    def norm(key, value):
+        value = (value or "").strip()
+        return value or (_DEFAULT_KEA_CONF if key == "kea_conf" else "")
+
+    changed = [k for k in IDENTITY_FIELDS if k in proposed and norm(k, proposed[k]) != norm(k, current.get(k))]
+    if not changed:
+        return ""
+    name = _name(current)
+    by = f" (by {actor})" if actor else ""
+    record = _record()
+    if record.get("damaged"):
+        _audit(
+            "INVESTIGATION_LOGGING_ENDPOINT_CHANGE_REFUSED",
+            name,
+            f"change of {', '.join(changed)} refused while Jen's record of investigation logging is unreadable{by}",
+        )
+        return (
+            "Jen's record of investigation logging cannot be read, so it cannot tell whether this server is at investigation DEBUG; repair the record first "
+            "(Health → DEBUG logging left on) — changing where Jen reaches this Kea could leave the old one at DEBUG with no way back."
+        )
+    entry = record["servers"].get(str(server_id))
+    if entry is None or entry.get("removed"):
+        return ""
+    _audit(
+        "INVESTIGATION_LOGGING_ENDPOINT_CHANGE_REFUSED",
+        name,
+        f"change of {', '.join(changed)} refused while investigation logging is on or owed a restore{by}",
+    )
+    return (
+        f"Investigation logging is on for {name}, or its restore is not finished: turn it off from Servers first. Changing its {', '.join(changed)} now would "
+        "point Jen at a different Kea while this one is still at DEBUG."
+    )
+
+
 def forget(server_id, actor: str = "") -> bool:
     """Drop the index entry of a server that was removed from Jen, whose marker was damaged, or whose daemon Jen sees at neither level (or has not been
     able to see for over an hour), after a person put it right by hand. Refuses (False) any other entry: a live server with a readable marker is put
@@ -1287,20 +1341,32 @@ def acknowledge_damaged(actor: str, *, all_subnets: bool = False) -> bool:
     and the actor go into the audit row, and the recovery status is cleared. Returns True when the record was replaced."""
     if not all_subnets:
         return False
+    from jen.models import user as _user
+
     with _lock:
+        # re-read under the lock (v5.68.0-beta.27, Q162, item 3): a second concurrent call sees a healthy record and returns False
         record = _record()
         problems = list(_recovery_status["problems"])
         if not record.get("damaged") or not problems:
             return False
-        if not _save({"servers": {}, "damaged": True, "raw": record["raw"]}):
+        # the old value first, once - as `_save` does - and nothing is overwritten if it cannot be kept
+        if (
+            record.get("raw")
+            and not _user.get_global_setting(DAMAGED_KEY, "")
+            and _user.set_global_setting(DAMAGED_KEY, record["raw"]) is False
+        ):
+            return False
+        # the empty record AND the audit row are ONE transaction: the decision is on record or it did not happen. `_audit` is not used on this path.
+        if not _user.set_global_setting_and_audit(
+            RECORD_KEY,
+            "",
+            "INVESTIGATION_LOGGING_RECORD_ACKNOWLEDGED",
+            actor or "an admin",
+            "replaced Jen's unreadable record of investigation logging with an empty one; could not be examined: "
+            + "; ".join(problems),
+        ):
             return False
         _recovery_status.update(at="", problems=[], rebuilt=None)
-    _audit(
-        "INVESTIGATION_LOGGING_RECORD_ACKNOWLEDGED",
-        actor or "an admin",
-        "replaced Jen's unreadable record of investigation logging with an empty one; could not be examined: "
-        + "; ".join(problems),
-    )
     return True
 
 

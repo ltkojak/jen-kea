@@ -239,6 +239,18 @@ def world(monkeypatch):
 
     monkeypatch.setattr("jen.models.user.get_global_setting", lambda k, d="": store.get(k, d))
     monkeypatch.setattr("jen.models.user.set_global_setting", set_setting)
+
+    def set_and_audit(key, value, action, entity, details=""):
+        # the real one is ONE transaction: both rows or neither (v5.68.0-beta.27, Q162, item 3)
+        if key == inv.RECORD_KEY and db["fails"] is not None and db["fails"](value):
+            return False
+        if db.get("audit_fails"):
+            return False
+        store[key] = value
+        store.setdefault("_audit", []).append((action, entity, details))
+        return True
+
+    monkeypatch.setattr("jen.models.user.set_global_setting_and_audit", set_and_audit)
     monkeypatch.setattr(inv, "_sleep", lambda seconds: None)
     monkeypatch.setattr("jen.models.user.audit", lambda *a, **k: store.setdefault("_audit", []).append(a))
     servers = [{"id": 1, "name": "kea-a", "ssh_host": "10.0.0.1"}, {"id": 2, "name": "kea-b", "ssh_host": "10.0.0.2"}]
@@ -2618,6 +2630,350 @@ class TestTheEntryValidatorChecksWhatTheFieldsMean:
     def test_a_file_less_entry_that_has_observation_keys_is_not_legacy(self):
         assert not inv._valid_entry({"name": "kea-a", "until": FUTURE, "seen": "INFO / debuglevel 0"})
         assert not inv._valid_entry({"name": "kea-a", "until": FUTURE, "restarted": True, "daemon": "debug"})
+
+
+# ── v5.68.0-beta.27 (Q162): a server with outstanding state keeps its connection identity; the acknowledgement is one transaction ───────
+
+
+class TestAnEndpointChangeKeepsTheServerIdentity:
+    """Item 1: the removal guard (Q144) protects a server's PRESENCE. The same id with a new SSH host passed it - and every later observation, reload and
+    restore then went to a DIFFERENT Kea while the one at DEBUG 55 was left there. `endpoint_change_refusal` protects the four fields that say WHICH Kea:
+    ssh_host, ssh_user, kea_conf, api_url. Credentials and the display name are not identity."""
+
+    @pytest.fixture
+    def w(self, world):
+        for s, host in zip(world.servers, ("10.0.0.1", "10.0.0.2"), strict=True):
+            s.update(api_url=f"http://{host}:8000", ssh_user="jen", kea_conf="/etc/kea/kea-dhcp4.conf")
+        return world
+
+    @staticmethod
+    def _audits(world, action="INVESTIGATION_LOGGING_ENDPOINT_CHANGE_REFUSED"):
+        return [a for a in world.store.get("_audit", []) if a[0] == action]
+
+    def test_01_an_active_entry_and_the_ssh_host_pointed_elsewhere_is_refused_and_audited(self, w):
+        assert inv.turn_on(w.servers[0], 5)["ok"]
+        text = inv.endpoint_change_refusal(1, {"ssh_host": "10.9.9.9"}, actor="alice")
+        assert "Investigation logging is on for kea-a" in text and "turn it off from Servers first" in text
+        assert "Changing its ssh_host now would point Jen at a different Kea while this one is still at DEBUG" in text
+        (row,) = self._audits(w)
+        assert (
+            row[1] == "kea-a"
+            and "change of ssh_host refused while investigation logging is on or owed a restore (by alice)" in row[2]
+        )
+
+    def test_02_another_server_kept_with_a_new_host_is_refused(self, w):
+        assert inv.turn_on(w.servers[1], 5)["ok"]
+        assert "kea-b" in inv.endpoint_change_refusal(
+            2, {"api_url": "http://10.0.0.2:8000", "ssh_host": "10.7.7.7"}, actor="alice"
+        )
+        assert len(self._audits(w)) == 1
+
+    def test_03_a_changed_api_url_is_refused(self, w):
+        assert inv.turn_on(w.servers[0], 5)["ok"]
+        text = inv.endpoint_change_refusal(1, {"api_url": "http://elsewhere:8000"}, actor="alice")
+        assert "Changing its api_url" in text
+
+    def test_04_an_unreadable_record_refuses_any_endpoint_change_and_names_it(self, w):
+        w.store[inv.RECORD_KEY] = "{broken"
+        text = inv.endpoint_change_refusal(2, {"ssh_user": "someone-else"}, actor="alice")
+        assert "cannot be read, so it cannot tell whether this server is at investigation DEBUG" in text
+        assert "changing where Jen reaches this Kea could leave the old one at DEBUG with no way back" in text
+        (row,) = self._audits(w)
+        assert (
+            "change of ssh_user refused while Jen's record of investigation logging is unreadable (by alice)" in row[2]
+        )
+        assert w.store[inv.RECORD_KEY] == "{broken"
+
+    def test_05_a_valid_empty_record_allows_the_change(self, w):
+        for raw in ("", '{"servers": {}}'):
+            w.store[inv.RECORD_KEY] = raw
+            assert (
+                inv.endpoint_change_refusal(1, {"ssh_host": "10.9.9.9", "api_url": "http://x:1"}, actor="alice") == ""
+            )
+        assert self._audits(w) == []
+
+    def test_06_the_display_name_and_credentials_are_not_identity(self, w):
+        assert inv.turn_on(w.servers[0], 5)["ok"]
+        proposed = {"name": "Renamed", "api_user": "other", "api_pass": "p", "ssh_key": "/k"}
+        assert inv.endpoint_change_refusal(1, proposed, actor="alice") == ""
+        # and the identity fields UNCHANGED, however they are spelled, are no change either
+        same = {
+            "api_url": "http://10.0.0.1:8000",
+            "ssh_host": "10.0.0.1",
+            "ssh_user": "jen",
+            "kea_conf": "/etc/kea/kea-dhcp4.conf",
+        }
+        assert inv.endpoint_change_refusal(1, same, actor="alice") == "" and self._audits(w) == []
+
+    def test_07_a_blank_config_path_is_the_default_one_not_a_change(self, w):
+        assert inv.turn_on(w.servers[0], 5)["ok"]
+        assert inv.endpoint_change_refusal(1, {"kea_conf": ""}, actor="alice") == ""
+        assert "kea_conf" in inv.endpoint_change_refusal(1, {"kea_conf": "/opt/kea/dhcp4.conf"}, actor="alice")
+
+    def test_08_a_server_with_no_entry_is_free_to_change_while_another_is_on(self, w):
+        assert inv.turn_on(w.servers[0], 5)["ok"]
+        assert inv.endpoint_change_refusal(2, {"ssh_host": "10.7.7.7"}, actor="alice") == ""
+        assert inv.removal_refusal([2]) == "", "and a server with no entry can be removed"
+
+    def test_09_after_turn_off_the_change_is_allowed(self, w):
+        assert inv.turn_on(w.servers[0], 5)["ok"]
+        assert inv.endpoint_change_refusal(1, {"ssh_host": "10.9.9.9"}, actor="alice") != ""
+        assert inv.turn_off(w.servers[0])["ok"]
+        assert inv.endpoint_change_refusal(1, {"ssh_host": "10.9.9.9"}, actor="alice") == ""
+
+    def test_10_a_restore_that_is_not_finished_still_holds_the_identity(self, w):
+        kea = w.daemons[1]
+        assert inv.turn_on(w.servers[0], 5)["ok"]
+        kea.reload_ignored = kea.restart_ignored = True
+        assert inv.turn_off(w.servers[0])["ok"] is False and inv.active()[0]["stuck"]
+        assert "turn it off from Servers first" in inv.endpoint_change_refusal(
+            1, {"ssh_host": "10.9.9.9"}, actor="alice"
+        )
+
+    def test_an_unknown_server_has_nothing_to_protect(self, w):
+        assert inv.endpoint_change_refusal(99, {"ssh_host": "10.9.9.9"}, actor="alice") == ""
+
+
+class TestTheAcknowledgementAndItsAuditRowAreOneTransaction:
+    """Item 3: `_save(...)` then `_audit(...)`, and `user.audit` logs and returns on failure - the empty record was committed with no durable record of who
+    asserted what. `set_global_setting_and_audit` carries both statements on one connection; `acknowledge_damaged` re-reads the record under its lock and uses it."""
+
+    DAMAGED = "{this was the record"
+
+    @staticmethod
+    def _problems(world):
+        world.store[inv.RECORD_KEY] = TestTheAcknowledgementAndItsAuditRowAreOneTransaction.DAMAGED
+        world.servers.clear()
+        inv.sweep(now=NOW, full=True)
+
+    def test_state_and_audit_commit_together(self, world):
+        self._problems(world)
+        assert inv.acknowledge_damaged("alice", all_subnets=True) is True
+        assert world.store[inv.RECORD_KEY] == "" and world.store[inv.DAMAGED_KEY] == self.DAMAGED
+        rows = [a for a in world.store["_audit"] if a[0] == "INVESTIGATION_LOGGING_RECORD_ACKNOWLEDGED"]
+        assert len(rows) == 1 and rows[0][1] == "alice"
+
+    def test_the_audit_failing_leaves_the_damaged_record_the_copy_present_and_false_returned(self, world):
+        self._problems(world)
+        world.db["audit_fails"] = True
+        assert inv.acknowledge_damaged("alice", all_subnets=True) is False
+        assert world.store[inv.RECORD_KEY] == self.DAMAGED, "the record is still the damaged one"
+        assert world.store[inv.DAMAGED_KEY] == self.DAMAGED, "the old value was kept first"
+        assert not [a for a in world.store.get("_audit", []) if a[0] == "INVESTIGATION_LOGGING_RECORD_ACKNOWLEDGED"]
+        assert inv.recovery_status()["problems"], "and the decision is still open: the status is not cleared"
+        world.db["audit_fails"] = False
+        assert inv.acknowledge_damaged("alice", all_subnets=True) is True, "so a retry can complete it"
+
+    def test_two_concurrent_calls_make_one_true_one_false_and_one_audit_row(self, world):
+        import threading
+
+        self._problems(world)
+        results, barrier = [], threading.Barrier(2)
+
+        def go():
+            barrier.wait(5)
+            results.append(inv.acknowledge_damaged("alice", all_subnets=True))
+
+        threads = [threading.Thread(target=go) for _ in range(2)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join(10)
+        assert sorted(results) == [False, True]
+        assert len([a for a in world.store["_audit"] if a[0] == "INVESTIGATION_LOGGING_RECORD_ACKNOWLEDGED"]) == 1
+
+    def test_the_acknowledgement_does_not_use_the_ordinary_audit_helper(self):
+        import ast
+        import inspect
+
+        fn = next(
+            n
+            for n in ast.walk(ast.parse(inspect.getsource(inv)))
+            if isinstance(n, ast.FunctionDef) and n.name == "acknowledge_damaged"
+        )
+        assert "_audit" not in [
+            c.func.id for c in ast.walk(fn) if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)
+        ]
+
+    def test_the_three_existing_refusals_are_kept(self, world):
+        assert inv.acknowledge_damaged("alice", all_subnets=True) is False, "nothing damaged"
+        world.store[inv.RECORD_KEY] = self.DAMAGED
+        assert inv.acknowledge_damaged("alice", all_subnets=True) is False, "no problem recorded"
+        self._problems(world)
+        assert inv.acknowledge_damaged("bob", all_subnets=False) is False, "a restricted admin"
+        assert world.store[inv.RECORD_KEY] == self.DAMAGED
+
+
+class TestTheRealTransactionIsAllOrNothing:
+    """`set_global_setting_and_audit` itself, against a connection that has transaction semantics (rows reach the 'tables' only on commit; an exception in the
+    context rolls back what the connection held)."""
+
+    @pytest.fixture
+    def db(self, monkeypatch):
+        import contextlib
+
+        from jen.models import db as dbmod
+        from jen.models import user as usermod
+
+        world = {"settings": {}, "audit": [], "commit_raises": False, "audit_raises": False, "settings_raises": False}
+
+        class Cursor:
+            def __init__(self, conn):
+                self.conn = conn
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def execute(self, sql, params=()):
+                if "audit_log" in sql:
+                    if world["audit_raises"]:
+                        raise RuntimeError("audit insert failed")
+                    self.conn.pending.append(("audit", params))
+                else:
+                    if world["settings_raises"]:
+                        raise RuntimeError("settings upsert failed")
+                    self.conn.pending.append(("settings", params))
+
+        class Conn:
+            def __init__(self):
+                self.pending = []
+
+            def cursor(self):
+                return Cursor(self)
+
+            def commit(self):
+                if world["commit_raises"]:
+                    raise RuntimeError("commit failed")
+                for table, params in self.pending:
+                    if table == "audit":
+                        world["audit"].append(params)
+                    else:
+                        world["settings"][params[0]] = params[1]
+                self.pending = []
+
+        @contextlib.contextmanager
+        def jen_db():
+            conn = Conn()
+            try:
+                yield conn
+            except Exception:
+                conn.pending = []  # rollback
+                raise
+
+        monkeypatch.setattr(dbmod, "jen_db", jen_db)
+        monkeypatch.setattr(usermod, "_audit_identity", lambda: (7, "alice", "10.1.1.1"))
+
+        def invalidated():
+            world["invalidated"] = 1
+
+        monkeypatch.setattr(usermod, "_invalidate_settings_cache", invalidated)
+        return world
+
+    def test_both_rows_are_written_with_the_same_columns_audit_writes(self, db):
+        from jen.models import user as usermod
+
+        assert usermod.set_global_setting_and_audit("k", "v", "SOME_ACTION", "ent", "details") is True
+        assert db["settings"] == {"k": "v"} and db["audit"] == [
+            (7, "alice", "SOME_ACTION", "ent", "details", "10.1.1.1")
+        ]
+        assert db.get("invalidated") == 1
+
+    def test_the_audit_insert_raising_rolls_the_setting_back_too(self, db):
+        from jen.models import user as usermod
+
+        db["audit_raises"] = True
+        assert usermod.set_global_setting_and_audit("k", "v", "A", "e", "d") is False
+        assert db["settings"] == {} and db["audit"] == []
+
+    def test_the_commit_raising_leaves_neither_row(self, db):
+        from jen.models import user as usermod
+
+        db["commit_raises"] = True
+        assert usermod.set_global_setting_and_audit("k", "v", "A", "e", "d") is False
+        assert db["settings"] == {} and db["audit"] == []
+        assert db.get("invalidated") is None, "the settings cache is not invalidated for a write that did not happen"
+
+    def test_the_settings_upsert_raising_writes_no_audit_row(self, db):
+        from jen.models import user as usermod
+
+        db["settings_raises"] = True
+        assert usermod.set_global_setting_and_audit("k", "v", "A", "e", "d") is False
+        assert db["audit"] == []
+
+
+class TestEverySaveRouteThatWritesAnEndpointIsGuarded:
+    """Q161's source test grew a clause (Q162): the three routes that can change WHICH Kea Jen reaches for a server must ask the investigation service."""
+
+    GUARDS = ("removal_refusal", "endpoint_change_refusal")
+    #: Save routes that write the [kea] section but cannot change which Kea is reached, each with why. The test checks the reason still holds: such a
+    #: function writes no `kea_ssh`, no extra-server row and no identity key of [kea].
+    CANNOT_CHANGE_IDENTITY = {
+        "save_ha_settings": "it writes [kea] ha_mode and the display name only; neither says which Kea Jen reaches",
+    }
+
+    def test_every_save_function_that_writes_kea_kea_ssh_or_an_extra_server_references_a_guard(self):
+        import ast
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        tree = ast.parse((root / "jen" / "routes" / "settings" / "infrastructure.py").read_text(encoding="utf-8"))
+        writers, unguarded = [], []
+        for fn in ast.walk(tree):
+            if not (isinstance(fn, ast.FunctionDef) and fn.name.startswith("save_")):
+                continue
+            writes = False
+            for n in ast.walk(fn):
+                if (
+                    isinstance(n, ast.Constant)
+                    and isinstance(n.value, str)
+                    and (n.value == "kea_ssh" or n.value.startswith("kea_server_"))
+                ):
+                    writes = True
+                if (
+                    isinstance(n, ast.Tuple)
+                    and len(n.elts) >= 3
+                    and isinstance(n.elts[0], ast.Constant)
+                    and n.elts[0].value == "kea"
+                ):
+                    writes = True
+            if not writes:
+                continue
+            writers.append(fn.name)
+            attrs = {n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)}
+            if fn.name in self.CANNOT_CHANGE_IDENTITY:
+                consts = {n.value for n in ast.walk(fn) if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+                assert not consts & {"kea_ssh", "api_url", "ssh_host", "ssh_user", "kea_conf"}, (
+                    f"{fn.name} writes an identity key: {consts}"
+                )
+                assert not any(c.startswith("kea_server_") for c in consts), fn.name
+                continue
+            if not attrs & set(self.GUARDS):
+                unguarded.append(fn.name)
+        print(f"SAVE ROUTES that write [kea], [kea_ssh] or an extra server: {', '.join(writers)}")
+        assert {"save_infra_kea", "save_infra_ssh", "save_extra_servers"} <= set(writers), writers
+        assert not unguarded, (
+            f"these save routes write an endpoint without asking the investigation service: {unguarded}"
+        )
+        assert set(self.CANNOT_CHANGE_IDENTITY) <= set(writers), (
+            "an allowlist entry that no longer writes the section is stale"
+        )
+
+    def test_the_three_routes_name_the_right_guards(self):
+        import ast
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        tree = ast.parse((root / "jen" / "routes" / "settings" / "infrastructure.py").read_text(encoding="utf-8"))
+        uses = {}
+        for fn in ast.walk(tree):
+            if isinstance(fn, ast.FunctionDef):
+                uses[fn.name] = {n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)}
+        assert "endpoint_change_refusal" in uses["save_infra_kea"]
+        assert {"endpoint_change_refusal", "removal_refusal"} <= uses["save_infra_ssh"]
+        assert {"endpoint_change_refusal", "removal_refusal"} <= uses["save_extra_servers"]
 
 
 # ── v5.68.0-beta.26 (Q161): an unreadable record is never evidence of anything - enforced over EVERY reader ──────────────────────────

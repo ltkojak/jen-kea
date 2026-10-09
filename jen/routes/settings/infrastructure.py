@@ -405,6 +405,10 @@ def save_infra_kea():
         flash(f"TLS settings not saved: {tls_err}.", "error")
         return redirect(url_for("settings.settings_kea"))
 
+    refusal = __inv.endpoint_change_refusal(1, {"api_url": api_url}, actor=current_user.username)
+    if refusal:
+        flash(refusal, "error")
+        return redirect(url_for("settings.settings_kea"))
     items = [
         ("kea", "api_url", api_url),
         ("kea", "api_user", api_user),
@@ -1694,6 +1698,13 @@ def save_infra_ssh():
         if refusal:
             flash(refusal, "error")
             return redirect(url_for("settings.settings_kea"))
+    proposed = {"ssh_host": host, "ssh_user": user}
+    if kea_conf:  # a blank path keeps the current one (it is not written below), so it is not a proposed change
+        proposed["kea_conf"] = kea_conf
+    refusal = __inv.endpoint_change_refusal(1, proposed, actor=current_user.username)
+    if refusal:
+        flash(refusal, "error")
+        return redirect(url_for("settings.settings_kea"))
     items = [("kea_ssh", "host", host), ("kea_ssh", "user", user)]
     if kea_conf:
         items.append(("kea_ssh", "kea_conf", kea_conf))
@@ -1763,6 +1774,27 @@ def save_extra_servers():
     if refusal:
         flash(refusal, "error")
         return redirect(url_for("settings.settings_kea"))
+
+    # v5.68.0-beta.27 (Q162, item 1): the identity of a server is its id. A submitted id that appears twice, or an id that is not configured but carries
+    # an SSH host, is a tampered form (Jen's own page never sends either): refused outright, before any comparison. Then every row that keeps a configured id
+    # must leave its four identity fields alone while that server has outstanding investigation state (or the record is unreadable).
+    configured_extra = {s["id"] for s in extensions.KEA_SERVERS if s["id"] != 1}
+    submitted = [int(i.strip()) for i in ids if i.strip().isdigit()]
+    for i, host in zip(ids, ssh_hosts, strict=False):
+        n = int(i.strip()) if i.strip().isdigit() else None
+        if n is not None and (submitted.count(n) > 1 or (n not in configured_extra and host.strip())):
+            flash("Refused: duplicate or unknown server id in the submitted form.", "error")
+            return redirect(url_for("settings.settings_kea"))
+    for i, url, host, user, conf in zip(ids, api_urls, ssh_hosts, ssh_users, kea_confs, strict=False):
+        if i.strip().isdigit() and int(i.strip()) in configured_extra and url.strip():
+            refusal = __inv.endpoint_change_refusal(
+                int(i.strip()),
+                {"api_url": url.strip(), "ssh_host": host.strip(), "ssh_user": user.strip(), "kea_conf": conf.strip()},
+                actor=current_user.username,
+            )
+            if refusal:
+                flash(refusal, "error")
+                return redirect(url_for("settings.settings_kea"))
 
     def _rewrite_extra_servers(cfg):
         # v5.10.3 — snapshot every current [kea_server_N] so keys the form
