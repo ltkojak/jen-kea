@@ -293,15 +293,28 @@ def _debug_logging_left_on(ctx) -> Check:
     )
     from jen.services import investigation_logging as __inv
 
-    if __inv._record().get("damaged"):
+    record = __inv._record()
+    if record.get("damaged"):
         # v5.68.0-beta.24 (Q159, item 3): an unreadable index used to read as an empty one - "no server is at investigation logging" - while a Kea
-        # might be running DEBUG 55. Fail closed.
+        # might be running DEBUG 55. Fail closed. v5.68.0-beta.25 (Q160): and it says what the last rebuild attempt could not examine.
+        status = __inv.recovery_status()
+        if status["problems"]:
+            tried = f"the last rebuild attempt at {status['at']} could not examine: " + "; ".join(status["problems"])
+        elif status["at"]:
+            tried = f"the last rebuild attempt at {status['at']} examined every server"
+        else:
+            tried = "the rebuild has not run yet"
+        which = f" (the entry for server {', '.join(record['bad'])} is malformed)" if record.get("bad") else ""
         c.status = "fail"
         c.detail = (
-            "Jen's record of investigation logging (the `investigation_logging` setting) is unreadable; the ten-minute scan rebuilds it from the servers; "
-            "the old value is kept in `investigation_logging.damaged`. Turning logging on is refused until then."
+            f"Jen's record of investigation logging (the `investigation_logging` setting) is unreadable{which}; {tried}. The scan reads every server's config "
+            "and running Kea every minute until it can examine all of them, then rebuilds the record; the old value is kept in "
+            "`investigation_logging.damaged`. Turning logging on or off is refused until then."
         )
-        c.fix_hint = "Wait for the scan (or press Turn it off on Servers if you know a server is at DEBUG); the old value is in the settings table."
+        c.fix_hint = (
+            "Fix whatever stops Jen reading the server named (SSH, or the Kea Control Agent); the next minute's scan retries. The old value is in the "
+            "settings table."
+        )
         return c
     entries = __inv.active()
     if not entries:

@@ -83,8 +83,36 @@ DAMAGED_KEY = (
 )  # the unreadable value, kept once before anything overwrites it (v5.68.0-beta.24, Q159)
 
 
+_ENTRY_STR_FIELDS = ("ssh_host", "kea_conf", "by", "mode", "error", "seen", "observed_at", "server_id")
+_ENTRY_BOOL_FIELDS = ("removed", "marker_invalid", "contradiction", "restarted")
+
+
+def _valid_entry(e) -> bool:
+    """Is `e` an index entry this module could have written? (v5.68.0-beta.25, Q160, item 4.) `_record` used to validate the outer shape only, so
+    `{"servers": {"2": {}}}` or `{"servers": {"2": null}}` read as healthy and `turn_on`'s `others = [e["name"] ...]` raised, as did every reader of
+    `entry.get(...)` on a non-dict. Every field is either absent or of the type `_entry_for` / `observe` write."""
+    if not isinstance(e, dict) or not isinstance(e.get("name"), str) or not isinstance(e.get("until"), str):
+        return False
+    if e.get("file", "debug") not in ("debug", "restored"):
+        return False
+    if e.get("daemon", "debug") not in ("debug", "restored", "other", "unknown"):
+        return False
+    if e.get("pending") not in (None, "reload", "restart"):
+        return False
+    if any(k in e and not isinstance(e[k], str) for k in _ENTRY_STR_FIELDS):
+        return False
+    if any(k in e and not isinstance(e[k], bool) for k in _ENTRY_BOOL_FIELDS):
+        return False
+    if "reload_tries" in e and (isinstance(e["reload_tries"], bool) or not isinstance(e["reload_tries"], int)):
+        return False
+    if "restore" in e and not isinstance(e["restore"], dict):
+        return False
+    revision = e.get("history_revision")
+    return revision is None or (isinstance(revision, int) and not isinstance(revision, bool))
+
+
 def _record() -> dict:
-    """The index: {"servers": {...}, "damaged": bool, "raw": the unreadable value or ""}.
+    """The index: {"servers": {...}, "damaged": bool, "raw": the unreadable value or "", "bad": [server ids whose entry failed validation]}.
 
     v5.68.0-beta.24 (Q159, item 3): a stored value that is not a JSON object with a `servers` object - malformed JSON, a list, a string, an object
     without `servers` - used to read as an EMPTY index. The one-server rule then allowed a second session, the next write overwrote the damaged value,
@@ -100,8 +128,14 @@ def _record() -> dict:
         except ValueError:
             data = None
     damaged = raw != "" and not (isinstance(data, dict) and isinstance(data.get("servers"), dict))
+    bad = []
+    if raw != "" and not damaged:
+        bad = [
+            str(sid) for sid, e in data["servers"].items() if not _valid_entry(e)
+        ]  # Q160 item 4: every entry, not just the outer shape
+        damaged = bool(bad)
     servers = data["servers"] if (raw != "" and not damaged) else {}
-    return {"servers": servers, "damaged": damaged, "raw": raw if damaged else ""}
+    return {"servers": servers, "damaged": damaged, "raw": raw if damaged else "", "bad": bad}
 
 
 def _save(record: dict) -> bool:
@@ -324,6 +358,12 @@ def observe(server: dict, entry: dict, *, wait_s: float = 0.0) -> str:
     while seen is None and time.monotonic() < deadline:
         _sleep(1.0)
         seen = daemon_logger(server)
+    return observe_from(entry, seen)
+
+
+def observe_from(entry: dict, seen: dict | None) -> str:
+    """`observe`'s classification applied to a logger that was ALREADY read (v5.68.0-beta.25, Q160): the damaged-index recovery reads the file and the daemon
+    of every server into a candidate before it writes anything, and classifies with the same body `observe` uses."""
     entry["observed_at"] = _iso(_now())
     if seen is None:
         state, entry["seen"] = "unknown", ""
@@ -468,6 +508,10 @@ def _entry_for(server: dict, until: str, by: str = "") -> dict:
 
 def _put(record: dict, sid, entry: dict) -> bool:
     """Index `entry` for `sid`. True when it was STORED (v5.68.0-beta.23, Q158): turn_on does not ask the daemon on an unstored entry."""
+    if record.get("damaged"):
+        # v5.68.0-beta.25 (Q160): a damaged record is never written piecemeal - the one write that replaces it is the recovery's, after every server was examined
+        logger.error("investigation_logging: refused to write an entry into a damaged record (a programming error)")
+        return False
     record["servers"][str(sid)] = entry
     return _save(record)
 
@@ -478,6 +522,9 @@ def _drop(record: dict, sid) -> bool:
     gone = record["servers"].pop(str(sid), None)
     if gone is None:
         return True
+    if record.get("damaged"):  # never overwrite a damaged value from here (Q160)
+        record["servers"][str(sid)] = gone
+        return False
     if _save(record):
         return True
     record["servers"][str(sid)] = gone
@@ -900,6 +947,14 @@ def turn_off(server: dict, actor: str = "", reason: str = "investigation logging
     name = _name(server)
     with _lock:
         record = _record()
+        if record.get("damaged"):
+            return {
+                "ok": False,
+                "mode": "",
+                "lines": [
+                    "Jen's record of investigation logging cannot be read; the scan rebuilds it from the servers within a minute (see Health → DEBUG logging left on)"
+                ],
+            }
         outcome = _restore(server, record, None, reason)
         if outcome["ok"]:
             _audit("INVESTIGATION_LOGGING_OFF", name, f"{reason} ({outcome['mode']}) by {actor or 'the sweep'}")
@@ -1095,6 +1150,105 @@ def _file_carries_marker(server: dict) -> bool | None:
     return _edit.investigation_marker(cfg) is not None
 
 
+#: What the last recovery attempt could and could not examine - read by the Health row (v5.68.0-beta.25, Q160). {"at", "problems", "rebuilt"}.
+_recovery_status: dict = {"at": "", "problems": [], "rebuilt": None}
+
+
+def recovery_status() -> dict:
+    return {
+        "at": _recovery_status["at"],
+        "problems": list(_recovery_status["problems"]),
+        "rebuilt": _recovery_status["rebuilt"],
+    }
+
+
+def _recovery_candidates(known: dict, now: datetime) -> tuple[dict, list[str]]:
+    """Examine EVERY SSH server - its config file AND its running daemon - into an in-memory candidate record. Nothing is written here. A server whose
+    config or whose daemon could not be read is recorded as a problem: it may be the one running DEBUG, so the record is not rebuilt without it.
+    Returns (entries by server id, problems)."""
+    entries: dict = {}
+    problems: list[str] = []
+    for sid, server in known.items():
+        name = _name(server)
+        try:
+            cfg, _sha = _host.read_config_versioned(server, "dhcp4")
+        except Exception as e:
+            problems.append(f"{name}: config unreadable ({type(e).__name__})")
+            continue
+        if not cfg:
+            problems.append(f"{name}: config unreadable")
+            continue
+        try:
+            seen = daemon_logger(server)
+        except Exception as e:
+            problems.append(f"{name}: running daemon not observed ({type(e).__name__})")
+            continue
+        if seen is None:
+            problems.append(f"{name}: running daemon not observed (Kea's API did not answer)")
+            continue
+        marker = _edit.investigation_marker(cfg)
+        damaged_marker = _edit.validate_investigation_marker(cfg)
+        if marker is not None or damaged_marker:
+            until = str((marker or {}).get("until") or _iso(now))
+            entry = _entry_for(server, until)
+            entry["mode"] = "adopted"
+            if damaged_marker:
+                entry["marker_invalid"] = True
+                entry["error"] = marker_invalid_text(server, entry)[:900]
+            elif not _edit.restore_problem(marker.get("restore")):
+                entry["restore"] = marker["restore"]
+            observe_from(entry, seen)
+            entry["pending"] = None if entry["daemon"] == "debug" else "reload"
+            entries[sid] = entry
+        elif seen["marker"] is not None and _at_investigation_level(seen):
+            # the file is clean and the running Kea is at investigation DEBUG: the daemon step is owed, and the NEXT sweep (once the record is healthy)
+            # asks for it
+            entry = _entry_for(server, str(seen["marker"].get("until") or _iso(now)))
+            entry.update(
+                file="restored",
+                daemon="debug",
+                pending="reload",
+                mode="adopted",
+                observed_at=_iso(now),
+                seen=_describe(seen),
+            )
+            if not _edit.restore_problem(seen["marker"].get("restore")):
+                entry["restore"] = seen["marker"]["restore"]
+            entries[sid] = entry
+    return entries, problems
+
+
+def _recover(record: dict, known: dict, now: datetime, summary: dict) -> dict:
+    """The damaged-index recovery (v5.68.0-beta.25, Q160, items 1 and 2): a SEPARATE phase that writes nothing until it is complete. beta.24 rebuilt the
+    record inside the ordinary full scan, where every discovery was written at once and the first write cleared the damaged flag - one adopted server
+    plus one unreadable server left the index healthy with one entry, and the unreadable server may have been the one at DEBUG 55; and a clean file whose
+    daemon could not be read counted as examined. Now every server's file and daemon are examined into a candidate; if any could not be, NOTHING is
+    written and the record stays damaged (turn-on refused, Health naming the server, the next minute's sweep trying again); if all were, ONE `_save`
+    stores the candidate, keeping the old value in `investigation_logging.damaged` first."""
+    entries, problems = _recovery_candidates(known, now)
+    if problems:
+        _recovery_status.update(at=_iso(now), problems=problems, rebuilt=False)
+        summary["errors"].extend(problems)
+        return summary
+    final = {"servers": entries, "damaged": True, "raw": record["raw"]}
+    if not _save(final):
+        note = "the rebuilt record could not be stored"
+        _recovery_status.update(at=_iso(now), problems=[note], rebuilt=False)
+        summary["errors"].append(
+            "Jen's record of investigation logging could not be rebuilt (its database did not take the write)"
+        )
+        return summary
+    _recovery_status.update(at=_iso(now), problems=[], rebuilt=True)
+    for entry in entries.values():
+        summary["adopted"].append(entry["name"])
+        _audit(
+            "INVESTIGATION_LOGGING_ADOPTED",
+            entry["name"],
+            "found while rebuilding Jen's unreadable record of investigation logging (until " + entry["until"] + ")",
+        )
+    return summary
+
+
 def sweep(now: datetime | None = None, full: bool = False) -> dict:
     """Restore every expired investigation marker, and finish every restore that left the daemon behind. The cheap path looks only at
     the index; `full=True` also reads every SSH server's config (so a marker this Jen did not index - another Jen, a restored
@@ -1107,6 +1261,10 @@ def sweep(now: datetime | None = None, full: bool = False) -> dict:
     with _lock:
         record = _record()
         known = {str(s.get("id")): s for s in _ssh_servers()}
+        if record.get("damaged"):
+            # a damaged record is a STOP: nothing else runs (no restores, no cheap-path observation, no orphan marking) until it has been rebuilt from
+            # the servers; those run on the next minute's sweep, once the record is healthy (v5.68.0-beta.25, Q160)
+            return _recover(record, known, now, summary)
         due = [
             (sid, known[sid])
             for sid, entry in record["servers"].items()
@@ -1256,17 +1414,12 @@ def sweep(now: datetime | None = None, full: bool = False) -> dict:
                     entry["error"] = text[:300]
                     _put(record, sid, entry)
                 summary["errors"].append(f"{name}: {text}")
-        # v5.68.0-beta.24 (Q159, item 3): every SSH server was read (and whatever it held was adopted or restored above) and the stored value is still the
-        # damaged one: replace it with the record that was rebuilt - `_save` keeps the old value in `investigation_logging.damaged`. A scan that could not
-        # read a server leaves it damaged: that server may be the one running DEBUG.
-        if full and record.get("damaged") and not summary["errors"] and not _save(record):
-            summary["errors"].append(
-                "Jen's record of investigation logging could not be rebuilt (its database did not take the write)"
-            )
     return summary
 
 
 def run_sweep_job() -> dict:
     """What the one-minute scheduler job calls: a full scan every FULL_SCAN_EVERY-th run, the cheap path otherwise."""
     _runs["n"] += 1
-    return sweep(full=(_runs["n"] % FULL_SCAN_EVERY == 1))
+    # a damaged record is rebuilt by a full read of every server on EVERY tick until it is healthy again (v5.68.0-beta.25, Q160), not every tenth
+    damaged = _record().get("damaged")
+    return sweep(full=bool(damaged) or (_runs["n"] % FULL_SCAN_EVERY == 1))

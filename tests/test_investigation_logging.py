@@ -1963,7 +1963,7 @@ class TestADamagedRecordFailsClosed:
         world.store[inv.RECORD_KEY] = raw
 
     def test_an_empty_value_and_an_empty_record_are_not_damaged(self, world):
-        assert inv._record() == {"servers": {}, "damaged": False, "raw": ""}
+        assert inv._record() == {"servers": {}, "damaged": False, "raw": "", "bad": []}
         self._damage(world, '{"servers": {}}')
         assert inv._record()["damaged"] is False and inv.turn_on(world.servers[0], 5)["ok"]
 
@@ -2007,9 +2007,9 @@ class TestADamagedRecordFailsClosed:
 
     def test_the_damaged_value_is_kept_once_before_anything_overwrites_it(self, world):
         self._damage(world, "{broken")
-        inv.sweep(now=NOW)  # the cheap path writes nothing for a damaged record
-        assert inv.DAMAGED_KEY not in world.store and world.store[inv.RECORD_KEY] == "{broken"
-        inv.sweep(now=NOW, full=True)  # every server was read, none holds a marker: the record is rebuilt (empty)
+        inv.sweep(
+            now=NOW
+        )  # while damaged EVERY sweep is the recovery phase (Q160), full or not: every server was read, none holds a marker
         assert world.store[inv.DAMAGED_KEY] == "{broken", "the old value, kept"
         assert world.store[inv.RECORD_KEY] == "" and inv._record()["damaged"] is False
         self._damage(world, "[1, 2]")  # damaged again: the first copy is NOT replaced
@@ -2065,3 +2065,277 @@ class TestADamagedRecordFailsClosed:
         assert inv.sweep(now=NOW + timedelta(minutes=2))["errors"] == [], "the next sweep"
         assert _daemon_at_debug(kea), "the adopted logging is still on, and still indexed"
         assert inv.turn_off(world.servers[0])["ok"] and not inv.active() and not _daemon_at_debug(kea)
+
+
+# ── v5.68.0-beta.25 (Q160): the damaged-index recovery is a separate phase that writes nothing until every server was examined ────────
+
+
+class TestTheRecoveryWritesNothingUntilEveryServerWasExamined:
+    """Items 1 and 2: beta.24 rebuilt a damaged index inside the ordinary full scan, where every discovery was written at once and the first write cleared
+    the damaged flag - one adopted server plus one unreadable server left the index healthy with one entry, and the unreadable server may be the one at
+    DEBUG 55; and a clean file whose daemon could not be read counted as examined. Recovery is its own phase now: every SSH server's file AND running daemon
+    are read into an in-memory candidate, a server that could not be examined is a problem, and unless there are none NOTHING is written. Every test below
+    asserts the STORED value (and the setting that keeps the old one), not the return."""
+
+    DAMAGED = "{this was the record"
+
+    @pytest.fixture
+    def three(self, world):
+        """A third server, so one can be refused while two are examined."""
+        world.daemons[3] = FakeKea(_cfg())
+        world.servers.append({"id": 3, "name": "kea-c", "ssh_host": "10.0.0.3"})
+        world.store[inv.RECORD_KEY] = self.DAMAGED
+        return world
+
+    @staticmethod
+    def _unreadable(world, monkeypatch, sid):
+        real = inv._host.read_config_versioned
+
+        def read(server, service):
+            if server["id"] == sid:
+                raise OSError("no route")
+            return real(server, service)
+
+        monkeypatch.setattr(inv._host, "read_config_versioned", read)
+
+    @staticmethod
+    def _stored_servers(world):
+        return _servers_of(world.store.get(inv.RECORD_KEY, ""))
+
+    def test_a_marker_on_a_and_an_unreadable_config_on_b_writes_nothing_and_turn_on_stays_refused(
+        self, three, monkeypatch
+    ):
+        from jen.services import health
+
+        live, _ = ed.set_investigation_logging(three.daemons[1].file, FUTURE)
+        three.daemons[1].file = three.daemons[1].loaded = live
+        self._unreadable(three, monkeypatch, 2)
+        out = inv.sweep(now=NOW, full=True)
+        assert out["adopted"] == [] and any("kea-b: config unreadable" in e for e in out["errors"])
+        assert three.store[inv.RECORD_KEY] == self.DAMAGED and inv.DAMAGED_KEY not in three.store, (
+            "nothing was written, not even for the server that WAS readable"
+        )
+        assert inv._record()["damaged"] is True
+        refused = inv.turn_on(three.servers[2], 5)
+        assert refused["ok"] is False and "cannot be read" in refused["lines"][0] and three.daemons[3].writes == 0
+        c = health._debug_logging_left_on({})
+        assert c.status == "fail" and "kea-b: config unreadable" in c.detail and "could not examine" in c.detail
+
+    def test_a_live_marker_on_a_and_a_damaged_marker_on_b_are_both_written_once_with_b_flagged(self, three):
+        live, _ = ed.set_investigation_logging(three.daemons[1].file, FUTURE)
+        three.daemons[1].file = three.daemons[1].loaded = live
+        bad, _ = ed.set_investigation_logging(three.daemons[2].file, FUTURE)
+        _entry(bad)["user-context"]["jen-investigation"].pop("restore")
+        three.daemons[2].file = three.daemons[2].loaded = bad
+        out = inv.sweep(now=NOW, full=True)
+        assert sorted(out["adopted"]) == ["kea-a", "kea-b"] and out["errors"] == []
+        stored = self._stored_servers(three)
+        assert (
+            sorted(stored) == ["1", "2"]
+            and stored["2"]["marker_invalid"] is True
+            and "marker_invalid" not in stored["1"]
+        )
+        assert stored["1"]["daemon"] == "debug" and stored["1"]["restore"] == {
+            "severity": "INFO",
+            "debuglevel": "absent",
+        }
+        assert three.store[inv.DAMAGED_KEY] == self.DAMAGED and inv._record()["damaged"] is False
+
+    def test_every_server_examined_is_one_write_with_the_old_value_kept(self, three, monkeypatch):
+        live, _ = ed.set_investigation_logging(three.daemons[1].file, FUTURE)
+        three.daemons[1].file = three.daemons[1].loaded = live
+        import jen.models.user as usermod
+
+        writes, original = [], usermod.set_global_setting
+
+        def counting(key, value):
+            writes.append(key)
+            return original(key, value)
+
+        monkeypatch.setattr(usermod, "set_global_setting", counting)
+        out = inv.sweep(now=NOW, full=True)
+        assert out["adopted"] == ["kea-a"]
+        assert writes == [inv.DAMAGED_KEY, inv.RECORD_KEY], writes  # the old value, then ONE write of the record
+        assert three.store[inv.DAMAGED_KEY] == self.DAMAGED
+        assert list(self._stored_servers(three)) == ["1"] and inv._record()["damaged"] is False
+        assert [e["name"] for e in inv.active(NOW)] == ["kea-a"]
+
+    def test_the_database_failing_at_the_final_write_leaves_the_damaged_value_stored(self, three):
+        live, _ = ed.set_investigation_logging(three.daemons[1].file, FUTURE)
+        three.daemons[1].file = three.daemons[1].loaded = live
+        three.db["fails"] = lambda value: True
+        out = inv.sweep(now=NOW, full=True)
+        assert any("could not be rebuilt" in e for e in out["errors"])
+        assert three.store[inv.RECORD_KEY] == self.DAMAGED and inv._record()["damaged"] is True
+
+    def test_a_clean_file_with_an_unreachable_daemon_is_not_examined(self, three):
+        from jen.services import health
+
+        three.daemons[2].api_silent = True
+        out = inv.sweep(now=NOW, full=True)
+        assert any("kea-b: running daemon not observed" in e for e in out["errors"])
+        assert three.store[inv.RECORD_KEY] == self.DAMAGED and inv._record()["damaged"] is True
+        assert "kea-b: running daemon not observed" in health._debug_logging_left_on({}).detail
+
+    def test_a_clean_file_with_the_daemon_at_debug_is_adopted_and_restored_on_the_next_sweep(self, three):
+        kea = three.daemons[1]
+        kea.loaded = _marked_logger("DEBUG", 55)  # the file is clean, the daemon runs DEBUG 55 under the marker
+        out = inv.sweep(now=NOW, full=True)
+        assert out["adopted"] == ["kea-a"] and out["restored"] == []
+        stored = self._stored_servers(three)["1"]
+        assert (stored["file"], stored["daemon"], stored["pending"]) == ("restored", "debug", "reload")
+        assert _daemon_at_debug(kea), "the recovery itself restored nothing"
+        nxt = inv.sweep(now=NOW + timedelta(minutes=1))
+        assert nxt["restored"] == ["kea-a"] and not _daemon_at_debug(kea) and self._stored_servers(three) == {}
+
+    def test_a_marker_in_the_file_with_an_unreachable_daemon_stays_damaged(self, three):
+        live, _ = ed.set_investigation_logging(three.daemons[1].file, FUTURE)
+        three.daemons[1].file = live
+        three.daemons[1].api_silent = True
+        inv.sweep(now=NOW, full=True)
+        assert three.store[inv.RECORD_KEY] == self.DAMAGED and inv._record()["damaged"] is True
+
+    def test_mixed_known_and_unknown_daemons_stay_damaged(self, three):
+        three.daemons[1].loaded = _marked_logger("DEBUG", 55)
+        three.daemons[3].api_silent = True
+        inv.sweep(now=NOW, full=True)
+        assert three.store[inv.RECORD_KEY] == self.DAMAGED and inv.DAMAGED_KEY not in three.store
+        three.daemons[3].api_silent = False  # the next minute: everything is readable
+        inv.sweep(now=NOW + timedelta(minutes=1), full=True)
+        assert list(self._stored_servers(three)) == ["1"] and inv._record()["damaged"] is False
+
+    def test_a_scan_interrupted_mid_way_writes_nothing(self, three, monkeypatch):
+        real = inv.daemon_logger
+
+        def blows_up_on_b(server):
+            if server["id"] == 2:
+                raise RuntimeError("the fake raised mid-scan")
+            return real(server)
+
+        monkeypatch.setattr(inv, "daemon_logger", blows_up_on_b)
+        three.daemons[1].loaded = _marked_logger("DEBUG", 55)
+        out = inv.sweep(now=NOW, full=True)
+        assert any("kea-b: running daemon not observed (RuntimeError)" in e for e in out["errors"])
+        assert three.store[inv.RECORD_KEY] == self.DAMAGED and inv.DAMAGED_KEY not in three.store
+
+    def test_the_full_scan_runs_on_every_tick_while_damaged_and_on_every_tenth_otherwise(self, three, monkeypatch):
+        reads = []
+        real = inv._host.read_config_versioned
+        monkeypatch.setattr(inv._host, "read_config_versioned", lambda s, svc: reads.append(s["id"]) or real(s, svc))
+        three.daemons[3].api_silent = True  # recovery cannot finish: it stays damaged, tick after tick
+        for _ in range(3):
+            inv.run_sweep_job()
+        assert len(reads) == 3 * 3, reads  # three servers read on EACH of the three ticks
+        three.daemons[3].api_silent = False
+        inv.run_sweep_job()  # the tick that rebuilds it
+        assert inv._record()["damaged"] is False
+        reads.clear()
+        for _ in range(3):
+            inv.run_sweep_job()
+        assert reads == [], "healthy again: the cheap path, no full reads until every tenth run"
+
+    def test_the_next_sweep_after_a_recovery_does_the_ordinary_work(self, three):
+        """The trace for `_recovery_status`: a failed attempt is shown by Health; a successful one ends the damaged state and the status says rebuilt."""
+        from jen.services import health
+
+        three.daemons[2].api_silent = True
+        inv.sweep(now=NOW, full=True)
+        assert inv.recovery_status()["rebuilt"] is False and inv.recovery_status()["problems"]
+        assert health._debug_logging_left_on({}).status == "fail"
+        three.daemons[2].api_silent = False
+        inv.sweep(now=NOW + timedelta(minutes=1), full=True)
+        assert inv.recovery_status() == {"at": inv._iso(NOW + timedelta(minutes=1)), "problems": [], "rebuilt": True}
+        assert health._debug_logging_left_on({}).status == "ok"
+
+
+class TestEveryStoredEntryIsValidated:
+    """Item 4: `_record` validated the outer shape only: `{"servers": {"2": {}}}` or `{"servers": {"2": null}}` read as healthy, and `turn_on`'s
+    `others = [e["name"] ...]` raised KeyError / TypeError, as did every reader of `entry.get(...)` on a non-dict."""
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            '{"servers": {"2": {}}}',
+            '{"servers": {"2": null}}',
+            '{"servers": {"2": []}}',
+            '{"servers": {"2": {"name": 42}}}',
+        ],
+        ids=["empty-entry", "null-entry", "list-entry", "name-not-a-string"],
+    )
+    def test_a_malformed_entry_is_damaged_nothing_raises_and_recovery_repairs_it(self, world, raw):
+        from jen.services import health
+
+        world.store[inv.RECORD_KEY] = raw
+        record = inv._record()
+        assert record["damaged"] is True and record["bad"] == ["2"] and record["servers"] == {}
+        assert inv.active() == []
+        assert inv.turn_on(world.servers[0], 5)["ok"] is False, "a second session is refused"
+        assert inv.turn_on(world.servers[1], 5)["ok"] is False
+        c = health._debug_logging_left_on({})
+        assert c.status == "fail" and "entry for server 2 is malformed" in c.detail
+        assert (
+            inv.sweep(now=NOW)["errors"] == []
+        )  # does not raise: the recovery examined both servers, found nothing, rebuilt
+        assert world.store[inv.RECORD_KEY] == "" and world.store[inv.DAMAGED_KEY] == raw
+        assert inv._record()["damaged"] is False and health._debug_logging_left_on({}).status == "ok"
+
+    def test_a_valid_entry_of_every_shape_this_module_writes_is_accepted(self, world):
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        stored = _servers_of(world.store[inv.RECORD_KEY])["1"]
+        assert inv._valid_entry(stored) and inv._record()["damaged"] is False
+        for field, value in (
+            ("reload_tries", 2),
+            ("restarted", True),
+            ("contradiction", False),
+            ("history_revision", None),
+            ("history_revision", 41),
+            ("restore", {"created": True}),
+            ("error", "text"),
+            ("seen", "INFO / debuglevel 0"),
+        ):
+            assert inv._valid_entry({**stored, field: value}), field
+        for field, value in (
+            ("reload_tries", True),
+            ("reload_tries", "2"),
+            ("restarted", 1),
+            ("restore", "x"),
+            ("ssh_host", 5),
+            ("file", "elsewhere"),
+            ("daemon", "asleep"),
+            ("pending", "later"),
+            ("history_revision", "41"),
+        ):
+            assert not inv._valid_entry({**stored, field: value}), (field, value)
+
+    def test_the_malformed_entry_is_never_read_by_row_or_readers(self, world):
+        world.store[inv.RECORD_KEY] = '{"servers": {"1": {"name": "kea-a", "until": "x"}, "2": null}}'
+        assert inv.blocking_removal([1, 2]) == [], "no reader reaches the entries of a damaged record"
+        assert inv.removal_refusal([1]) == "" and inv.forget(2) is False
+
+
+class TestTheRecoveryBlockHasNoWrites:
+    """Self-check (a), as a test: the block that examines the servers calls no write helper at all, and the phase that follows it has exactly one `_save`
+    and no `_put` / `_drop` - a damaged record is replaced by ONE write, never piecemeal."""
+
+    @staticmethod
+    def _calls(name):
+        import ast
+        import inspect
+
+        fn = next(
+            n for n in ast.walk(ast.parse(inspect.getsource(inv))) if isinstance(n, ast.FunctionDef) and n.name == name
+        )
+        return [c.func.id for c in ast.walk(fn) if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)]
+
+    def test_examining_calls_no_write_helper(self):
+        assert not {"_put", "_save", "_drop"} & set(self._calls("_recovery_candidates"))
+
+    def test_the_phase_has_one_save_and_no_put(self):
+        calls = self._calls("_recover")
+        assert calls.count("_save") == 1 and "_put" not in calls and "_drop" not in calls
+
+    def test_put_and_drop_refuse_a_damaged_record(self, world):
+        world.store[inv.RECORD_KEY] = "{broken"
+        record = inv._record()
+        assert inv._put(record, 1, {"name": "x", "until": ""}) is False and inv._drop(record, 1) is True
+        assert world.store[inv.RECORD_KEY] == "{broken"
