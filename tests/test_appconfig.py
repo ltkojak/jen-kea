@@ -411,6 +411,7 @@ class TestWritersAreSerialized:
         import jen.config as config_module
 
         monkeypatch.setattr(AppConfig, "_write_lock", NoLock())
+        monkeypatch.setattr(config_module, "identity_lock", NoLock())  # v5.68.0-beta.28 (Q164): every writer takes this one FIRST - it serialises threads too
         monkeypatch.setattr(
             config_module, "fcntl", None
         )  # v5.68.0-beta.18: the file lock serialises threads too; remove both
