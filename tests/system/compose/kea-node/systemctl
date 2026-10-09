@@ -5,8 +5,39 @@
 #   systemctl show -p User --value <unit>        -> nothing (no unit, so no User=)
 #   systemctl restart <unit>                     -> restart the daemon
 #   systemctl is-active <unit>                   -> "active" / "inactive"
+# v5.68.0-beta.29 (Q165) - the investigation-logging timer. The helper's `investigation-arm` writes jen-kea-investigation.service/.timer and then runs
+#   systemctl daemon-reload
+#   systemctl enable --now jen-kea-investigation.timer
+#   systemctl is-active jen-kea-investigation.timer
+# and the timer's whole job is `jen-kea-helper --self-restore` every minute. There is no systemd here, so "enable --now" starts that loop in the background (a pidfile
+# says whether it runs) - the SAME helper code path, driven by a sleep instead of systemd. The period is 60 s on a real host; here it is 5 s (JEN_TIMER_INTERVAL; `sudo` strips the
+# environment, so the default lives in this file) to keep the scenario short. The loop belongs to the host: it does not know that Jen exists.
+TIMER=jen-kea-investigation.timer
+TIMER_PID=/run/jen-kea-investigation.timer.pid
+timer_running() { [ -f "$TIMER_PID" ] && kill -0 "$(cat "$TIMER_PID")" 2>/dev/null; }
+timer_start() {
+  if timer_running; then return 0; fi
+  setsid nohup sh -c 'while sleep "${JEN_TIMER_INTERVAL:-5}"; do /usr/local/sbin/jen-kea-helper --self-restore >>/var/log/jen-kea-investigation.log 2>&1; done' >/dev/null 2>&1 &
+  echo $! > "$TIMER_PID"
+}
+daemon_pid() {
+  for p in $(pgrep -x kea-dhcp4 2>/dev/null); do
+    st=$(awk '{print $3}' "/proc/$p/stat" 2>/dev/null)
+    if [ -n "$st" ] && [ "$st" != Z ]; then echo "$p"; return 0; fi
+  done
+  echo 0
+}
+
 case "$1" in
+  enable)
+    for a in "$@"; do
+      if [ "$a" = "$TIMER" ]; then timer_start; exit 0; fi
+    done
+    exit 0
+    ;;
   show)
+    # `show -p MainPID --value <unit>` (the self-restore sends the daemon SIGHUP): the live kea-dhcp4 process, or 0
+    if [ "$3" = "MainPID" ]; then daemon_pid; exit 0; fi
     # `show -p User --value <unit>` (the helper asks for the daemon's account; v5.68.0-beta.6, Q141): this node's daemon is
     # started by keactl, not by a unit, so there is no User= to report - an empty answer, as a unit with none would give
     if [ "$3" = "User" ]; then exit 0; fi
@@ -14,6 +45,11 @@ case "$1" in
     exit 0
     ;;
   is-active)
+    if [ "$2" = "$TIMER" ]; then
+      if timer_running; then echo active; exit 0; fi
+      echo inactive
+      exit 3
+    fi
     if /usr/local/bin/keactl running; then echo active; exit 0; fi
     echo inactive
     exit 3

@@ -1947,3 +1947,147 @@ def test_17_a_client_kea_naks_is_in_the_problems_inbox_within_one_sweep(stack):
             "        cur.execute(\"DELETE FROM settings WHERE setting_key LIKE 'client_problems_wm:%' OR setting_key LIKE 'client_problems_clock:%'\")\n",
             check=False,
         )
+
+
+# ── 19. the Kea host puts investigation logging back by itself ─────────────────
+# v5.68.0-beta.29 (Q165). Nine betas restored the logger FROM JEN; this scenario takes Jen away three different ways after logging is on and asserts the HOST does it. The
+# stand-ins, named: there is no systemd in a container, so `enable --now jen-kea-investigation.timer` starts a background loop that runs the real
+# `jen-kea-helper --self-restore` every 5 s (tests/system/compose/kea-node/systemctl), and the clock is faked forward by rewriting the deadline in the host's own state file
+# (a 5-minute session cannot be waited out). Everything else is real: Jen turns logging on through the web page, the helper is the one Jen installed, the restore is the
+# real routine and the daemon re-reads its file on a real SIGHUP.
+
+S19_LOGGER = r"""
+import base64, json, urllib.request
+req = urllib.request.Request("http://127.0.0.1:8004/", data=json.dumps({"command": "config-get"}).encode(),
+                             headers={"Content-Type": "application/json", "Authorization": "Basic " + base64.b64encode(b"jen:jen_api_pw").decode()})
+out = json.load(urllib.request.urlopen(req, timeout=8))
+out = out[0] if isinstance(out, list) else out
+loggers = (out.get("arguments") or {}).get("Dhcp4", {}).get("loggers", [])
+entry = next((x for x in loggers if x.get("name") == "kea-dhcp4"), {})
+print(json.dumps({"severity": entry.get("severity"), "debuglevel": entry.get("debuglevel"), "marker": "jen-investigation" in (entry.get("user-context") or {})}))
+"""
+S19_STATE = "/var/lib/jen-kea-helper/investigation-dhcp4.json"
+S19_PAST = r"""
+import json, datetime
+p = "/var/lib/jen-kea-helper/investigation-dhcp4.json"
+state = json.load(open(p))
+state["until"] = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=1)).isoformat(timespec="seconds")
+json.dump(state, open(p, "w"))
+print(state["until"])
+"""
+
+
+def _s19_logger():
+    return json.loads(st.dexec(st.KEA_A, "python3", "-", input=S19_LOGGER).stdout.strip().splitlines()[-1])
+
+
+def _s19_state():
+    p = st.dexec(st.KEA_A, "cat", S19_STATE, check=False)
+    return json.loads(p.stdout) if p.returncode == 0 and p.stdout.strip() else None
+
+
+def _s19_on(web):
+    r = web.post("/servers/1/investigation-logging/on", data={"minutes": "5", "back": "servers"}, page="/servers")
+    assert r.status_code == 200
+    conf = st.kea_conf_bytes(st.KEA_A)
+    assert '"jen-investigation"' in conf, f"INVARIANT: turning it on writes the marker: {conf[-400:]}"
+    logger = _s19_logger()
+    assert logger["severity"] == "DEBUG" and logger["debuglevel"] == 55 and logger["marker"], (
+        f"INVARIANT: the running daemon is at DEBUG 55: {logger}"
+    )
+    state = _s19_state()
+    assert state and not state["restored_at"] and state["restore"], (
+        f"INVARIANT: the Kea host holds its own record of the original level: {state}"
+    )
+    assert (
+        st.dexec(st.KEA_A, "systemctl", "is-active", "jen-kea-investigation.timer", check=False).stdout.strip()
+        == "active"
+    ), "INVARIANT: the host's timer is running"
+
+
+def _s19_deadline_passes():
+    st.dexec(st.KEA_A, "python3", "-", input=S19_PAST)
+
+
+def _s19_host_restored(pid):
+    def done():
+        logger = _s19_logger()
+        state = _s19_state()
+        conf = st.kea_conf_bytes(st.KEA_A)
+        return (
+            logger["severity"] != "DEBUG"
+            and not logger["marker"]
+            and '"jen-investigation"' not in conf
+            and state
+            and state["restored_at"]
+            and state["how"] == "reload"
+        )
+
+    st.wait_for(done, timeout=60, interval=2, what="the Kea host to restore the logger by itself")
+    assert st.dexec(st.KEA_A, "pgrep", "-x", "kea-dhcp4").stdout.split() == pid, (
+        "INVARIANT: the host told the running daemon by SIGHUP - the process is the same one"
+    )
+
+
+def _s19_jen_back_and_clean(web):
+    """Bring Jen back and let it settle: its sweep sees that the host already restored and drops the entry."""
+    st.wait_jen_healthy(timeout=180)
+    out, _p = st.jen_py(
+        """
+from jen.services import investigation_logging as inv
+with app.app_context():
+    emit(inv.sweep(full=True))
+    emit([e["name"] for e in inv.active()])
+"""
+    )
+    assert out[1] == [], f"INVARIANT: once Jen is back the host's restore is recognised and the entry goes: {out}"
+
+
+def test_19_the_kea_host_puts_investigation_logging_back_with_jen_stopped_or_its_database_down_or_pointed_elsewhere(
+    stack,
+):
+    """The Kea host restores investigation logging by itself: with Jen stopped, with Jen's database stopped, and with Jen's [kea_ssh] host pointed at another Kea."""
+    web = st.Web().login()
+    pid = st.dexec(st.KEA_A, "pgrep", "-x", "kea-dhcp4").stdout.split()
+    assert pid, "kea-dhcp4 is running on kea-a"
+    try:
+        # case 1 - Jen is not running at all
+        _s19_on(web)
+        _s19_deadline_passes()
+        st.run(["docker", "stop", st.JEN])
+        _s19_host_restored(pid)
+        st.run(["docker", "start", st.JEN])
+        _s19_jen_back_and_clean(web)
+
+        # case 2 - Jen runs, its database does not (it cannot read its own record, let alone sweep)
+        web = st.Web().login()
+        _s19_on(web)
+        _s19_deadline_passes()
+        st.run(["docker", "stop", st.MARIADB])
+        _s19_host_restored(pid)
+        st.run(["docker", "start", st.MARIADB])
+        st.wait_for(
+            lambda: (
+                st.dexec(st.MARIADB, "healthcheck.sh", "--connect", "--innodb_initialized", check=False).returncode == 0
+            ),
+            timeout=90,
+            what="mariadb healthy again",
+        )
+        _s19_jen_back_and_clean(web)
+
+        # case 3 - Jen's [kea_ssh] host is hand-edited to point at the OTHER Kea (kea-b): its settings no longer reach this one at all
+        web = st.Web().login()
+        _s19_on(web)
+        _s19_deadline_passes()
+        st.sh(st.JEN, "sed -i 's/^host = kea-a$/host = kea-b/' /etc/jen/jen.config")
+        st.run(["docker", "restart", st.JEN])
+        _s19_host_restored(pid)
+        st.sh(st.JEN, "sed -i 's/^host = kea-b$/host = kea-a/' /etc/jen/jen.config")
+        st.run(["docker", "restart", st.JEN])
+        _s19_jen_back_and_clean(web)
+    finally:
+        st.dexec(st.JEN, "sed", "-i", "s/^host = kea-b$/host = kea-a/", "/etc/jen/jen.config", check=False)
+        for container in (st.MARIADB, st.JEN):
+            st.run(["docker", "start", container], check=False)
+        with contextlib.suppress(Exception):
+            st.wait_jen_healthy(timeout=180)

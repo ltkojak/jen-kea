@@ -231,6 +231,8 @@ Two failure signatures, both meaning "Jen fell back to the legacy root
   offline procedure there works straight from the Jen host's own tree,
   no network needed on either side).
 
+**"The Kea host helper on <host> must be build 15 or later" when turning investigation logging on (v5.68.0-beta.29).** Investigation logging now needs the helper's self-restore: Jen arms a systemd timer on the Kea host (`jen-kea-investigation.timer`, running `jen-kea-helper --self-restore` as root) so the host puts the logger back at the deadline without Jen. A helper older than build 15 cannot, a host without systemd cannot (the arm answers `timer: none` and Jen reverts the file), and the legacy `sudo python3` path has no such op. Press **Settings → Kea → SSH → Update helper** (from v6 that needs no grant), then try again. Nothing was changed on the host when this is refused. To see what the host holds: `sudo cat /var/lib/jen-kea-helper/investigation-dhcp4.json` (its `last_error` is what the Health row shows); to run its restore by hand: `sudo jen-kea-helper --self-restore --now`; `systemctl list-timers jen-kea-investigation.timer` shows the timer. The legacy-grant fallback has no engine for these ops.
+
 Legacy grant: the old `python3` = root file is `/etc/sudoers.d/jen-kea`. Jen
 needs it for one run to install the helper, and — below helper v6 — for one
 more run to reach v6; after that, press **Remove legacy grant** in Settings →
@@ -930,7 +932,7 @@ are fixed by the same update.
 
 ## "DEBUG logging left on" (v5.68.0-beta.3)
 
-Investigation logging (Trace or Servers) puts a Kea server's logger at DEBUG for 5, 15 or 60 minutes and Jen's sweep restores it every minute. The Health Center row **DEBUG logging left on** fails when a server's time is up and the restore has not happened — Kea is then writing a packet dump for every client.
+Investigation logging (Trace or Servers) puts a Kea server's logger at DEBUG for 5, 15 or 60 minutes and the Kea host puts it back by itself at the deadline (since 5.68.0-beta.29: helper build 15 arms a timer on that host; Jen's sweep also checks every minute and shows what the host reports). The Health Center row **DEBUG logging left on** fails when a server's time is up and the restore has not happened — Kea is then writing a packet dump for every client.
 
 1. **Press *Turn it off now*** on Trace or Servers. It is the same restore with no waiting; the flash line says whether the daemon took it by `config-reload` or a restart, and what failed if it did not.
 2. **If the button fails too**, the cause is the same one the sweep keeps hitting — usually SSH to the host or the Kea host helper (Settings → Kea → SSH), or a config that changed under it. The banner and the Health row quote the error.

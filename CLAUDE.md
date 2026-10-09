@@ -148,7 +148,7 @@ fixture, so every test errors without a reachable MariaDB. What works locally:
   and `tests/system/conftest.py` overrides the unit suite's autouse DB fixtures the way
   `tests/kea_compat/conftest.py` does. It belongs to its own workflow,
   `.github/workflows/system-tests.yml` (weekly, `workflow_dispatch` with an optional `-k`
-  selector, any `-rc.` tag, and — the critical subset only, `test_00/01/02/03/11/12` — any `-beta.` tag;
+  selector, any `-rc.` tag, and — the critical subset only, `test_00/01/02/03/11/12/14/16/17/19` — any `-beta.` tag;
   NOT called from ci.yml/release.yml, so a slow boundary
   test can't redden a push or a tag). It has no Docker or WSL here, so a change to it
   is verified by dispatching the workflow (`gh workflow run system-tests.yml`, ~10 min a
@@ -266,6 +266,12 @@ warning and recording a null status. Config mutation is pure (`jen/services/kea_
 - Kea's systemd unit is `kea-dhcpX-server` on ISC packages and `isc-kea-dhcpX-server` on
   older Debian/Ubuntu packages — the helper (`_resolve_unit`) and the legacy fallback
   both try both.
+- **The Kea host owns the restore of investigation logging (v5.68.0-beta.29, Q165).** `jen-kea-helper` build 15 arms a root-owned systemd timer (`investigation-arm`;
+  `--self-restore [--now]`; state in `/var/lib/jen-kea-helper/`) when logging goes on and puts the `kea-dhcp4` logger back at the deadline with Jen stopped, its database down or
+  its settings pointed elsewhere. Jen's index, marker, sweep and observation are **display and audit** - a new investigation *state* on Jen's side is display and is held to
+  that, and the property to defend is the walk's I10 (`tests/test_investigation_model.py`): a daemon the host was armed for is never at DEBUG 55 past its deadline + 120 s.
+  The restore transformation exists twice (`kea_config_edit.clear_investigation_logging`, the helper's `_restore_logger`) and is held identical by
+  `tests/vectors/investigation_restore.json`; a change to either runs the other's test.
 - Anything interpolated into a remote command string is validated on save
   (`valid_remote_path()`, `valid_ssh_target()`, `valid_unix_username()` in
   `jen/services/auth.py`) **and** `shlex.quote`d at the call site. Local `subprocess`
