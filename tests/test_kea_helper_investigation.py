@@ -88,7 +88,12 @@ class Host:
         self.log.write_text("old line DHCP4_DYNAMIC_RECONFIGURATION_SUCCESS from long ago\n", encoding="utf-8")
         self.reload_mode = "success"
         self.restart_mode = "ok"
-        self.socket_mode = "answers"
+        self.socket_mode = "answers"  # or a LIST consumed one entry per `config-get` (the last one repeats): ["at-debug", "silent", "silent"]; "at-debug" = the daemon answers with the DEBUG-55 + marker logger, "hang" = it accepts and never answers (two socket waits of the fake clock)
+        self.asks, self.log_on_ask = (
+            0,
+            None,
+        )  # `log_on_ask=(n, [lines])`: the lines are appended when the n-th question is asked
+        self.clock = 0.0  # the fake wall clock: `_sleep` advances it and `_monotonic` reads it, so every wait of the helper is measured in time, not in sleeps
         self.loaded = None
         self.pid_after_restart = None
         self.kea_test = (True, {"ok": True})
@@ -98,7 +103,8 @@ class Host:
             helper, "_allowed_conf_path", lambda p: isinstance(p, str) and p.endswith(".conf") and ".." not in p
         )
         monkeypatch.setattr(helper, "_now", lambda: self.now)
-        monkeypatch.setattr(helper, "_sleep", lambda s: None)
+        monkeypatch.setattr(helper, "_sleep", self._sleep)
+        monkeypatch.setattr(helper, "_monotonic", lambda: self.clock)
         monkeypatch.setattr(helper, "_find_bin", self._find_bin)
         monkeypatch.setattr(helper, "_run_bin", self._run_bin)
         monkeypatch.setattr(helper, "_run_kea_test", lambda service, path, cfg, tls: self.kea_test)
@@ -106,7 +112,7 @@ class Host:
         monkeypatch.setattr(
             helper,
             "_control_socket",
-            lambda config: None if self.socket_mode == "absent" else ("unix", str(tmp_path / "kea4-ctrl.sock")),
+            lambda config: None if self._peek_mode() == "absent" else ("unix", str(tmp_path / "kea4-ctrl.sock")),
         )
         monkeypatch.setattr(helper, "_ask_daemon", self._ask)
         monkeypatch.setattr(helper, "_allowed_log_path", lambda p: isinstance(p, str) and p.endswith(".log"))
@@ -123,13 +129,44 @@ class Host:
         except (OSError, ValueError):
             return None
 
+    def _sleep(self, seconds):
+        self.clock += seconds
+
+    def _cursor_of(self):
+        """The mode source in force: a plain value, a list, or {"before": ..., "after": ...} (before / after the one restart was issued)."""
+        if isinstance(self.socket_mode, dict):
+            return self.socket_mode, ("after" if self.restarts() else "before")
+        return None, None
+
+    def _peek_mode(self):
+        holder, key = self._cursor_of()
+        value = holder[key] if holder else self.socket_mode
+        return value[0] if isinstance(value, list) else value
+
+    def _next_mode(self):
+        holder, key = self._cursor_of()
+        value = holder[key] if holder else self.socket_mode
+        if isinstance(value, list):
+            return value.pop(0) if len(value) > 1 else value[0]
+        return value
+
     def _ask(self, spec, command):
         """What the daemon's own control socket answers (in-process: the transport has its own tests, with real sockets)."""
-        if self.socket_mode != "answers":
+        self.asks += 1
+        if self.log_on_ask is not None and self.asks == self.log_on_ask[0]:
+            self._append(
+                *self.log_on_ask[1]
+            )  # a line that lands in Kea's log between two questions (another instance of Kea wrote it)
+        mode = self._next_mode()
+        if mode == "hang":
+            self.clock += 2 * self.helper._SOCKET_WAIT_S  # the connect and the read each wait the full time
+            return None
+        if mode not in ("answers", "at-debug"):
             return None
         if command != "config-get":
             return {"result": 1, "text": "unsupported"}
-        section = copy.deepcopy((self.loaded or {}).get("Dhcp4", {}))
+        source = _config() if mode == "at-debug" else self.loaded
+        section = copy.deepcopy((source or {}).get("Dhcp4", {}))
         return {"result": 0, "arguments": {"Dhcp4": section}}
 
     def daemon_runs(self, cfg):
@@ -1139,6 +1176,251 @@ class TestABuild15RecordIsVerifiedLikeAnyOther:
         assert host.tick("--now")["ok"] is False and host.state()["restored_at"] is None, (
             "an active unit is not a restore, whatever build armed it"
         )
+
+
+class TestADaemonThatAnsweredOnceIsJudgedByItsAnswer:
+    """The release audit's two P1s (Q168 fixup): the socket is the arbiter for the WHOLE verification. A daemon that answered once - with the investigation level still running - and then
+    went silent is never rescued by a completion line in the log (another instance wrote it) or by a fresh process (a unit whose `-c` is not this file)."""
+
+    def _disarm(self, host):
+        return host.op("investigation-disarm", {"service": SERVICE, "path": str(host.conf)})
+
+    def _armed_at_debug(self, host):
+        host.write_config(_config())
+        host.arm()
+
+    def test_f1_a_restarted_daemon_that_answered_at_debug_and_then_went_silent_is_not_a_restore(self, host):
+        self._armed_at_debug(host)
+        host.reload_mode = "silent"  # the reload is not taken: the one restart decides
+        host.restart_mode = "fresh_but_old"  # a new pid that still runs the old config
+        host.socket_mode = {
+            "before": "silent",
+            "after": ["at-debug", "silent"],
+        }  # after the restart: one answer at DEBUG 55 with the marker, then silence
+        reply = self._disarm(host)
+        assert reply["ok"] is False and host.state()["restored_at"] is None, reply
+        assert len(host.restarts()) == 1
+
+    def test_f1_the_same_restart_with_the_socket_silent_from_the_start_is_process_evidence(self, host):
+        self._armed_at_debug(host)
+        host.reload_mode = "silent"
+        host.socket_mode = "silent"
+        reply = self._disarm(host)
+        assert reply["ok"] and reply["how"] == "restart" and host.state()["evidence"] == "process"
+
+    def test_f2_a_completion_line_after_a_socket_that_answered_at_debug_is_not_evidence(self, host):
+        """Poll 1 the daemon answers DEBUG/55 + marker; poll 2 its socket times out while the completion line lands (written by another instance of Kea)."""
+        self._armed_at_debug(host)
+        host.reload_mode = "started_not_applied"
+        host.restart_mode = "same_pid"
+        host.socket_mode = ["at-debug", "at-debug", "silent"]  # the pre-check, poll 1, then silence
+        host.log_on_ask = (
+            3,
+            [
+                "2026-10-10 12:00:00.095 INFO  [kea-dhcp4.dhcp4/1] DHCP4_DYNAMIC_RECONFIGURATION_SUCCESS dynamic server reconfiguration succeeded with file: x"
+            ],
+        )  # lands as poll 2 is asked
+        reply = self._disarm(host)
+        assert reply["ok"] is False and host.state()["restored_at"] is None, reply
+        assert len(host.restarts()) == 1, "the log line was not taken for the answer: the one restart was spent"
+
+    def test_f2_the_same_with_no_socket_at_all_is_log_evidence(self, host):
+        self._armed_at_debug(host)
+        host.socket_mode = "absent"
+        reply = self._disarm(host)
+        assert reply["ok"] and reply["how"] == "reload" and host.state()["evidence"] == "log" and host.restarts() == []
+
+
+class TestTheMatcherAcceptsTheOperatorsOwnDebug:
+    """F3: the restore object may itself be DEBUG/55 (the operator's own level when logging was turned on); after the restore the FILE says so and the daemon shows the same."""
+
+    def test_a_file_that_is_itself_debug_55_without_a_marker_matches_a_daemon_showing_exactly_that(self, helper):
+        file_entry = {"name": "kea-dhcp4", "severity": "DEBUG", "debuglevel": 55}
+        seen = {"present": True, "severity": "DEBUG", "debuglevel": 55, "marker": None}
+        assert helper._daemon_matches(seen, file_entry) is True
+
+    def test_the_same_daemon_with_the_marker_still_carried_is_not_a_match(self, helper):
+        file_entry = {"name": "kea-dhcp4", "severity": "DEBUG", "debuglevel": 55}
+        seen = {"present": True, "severity": "DEBUG", "debuglevel": 55, "marker": {"until": "x"}}
+        assert helper._daemon_matches(seen, file_entry) is False
+
+    def test_a_file_without_a_level_does_not_match_a_daemon_at_the_investigation_level(self, helper):
+        seen = {"present": True, "severity": "DEBUG", "debuglevel": 55, "marker": None}
+        assert helper._daemon_matches(seen, {"name": "kea-dhcp4"}) is False
+
+    def test_an_end_to_end_restore_to_the_operators_own_debug_55_is_recorded_by_the_daemons_answer(self, host):
+        host.write_config(_config())
+        own = {"severity": "DEBUG", "debuglevel": 55}
+        host.arm(5, restore=own)
+        reply = host.op("investigation-disarm", {"service": SERVICE, "path": str(host.conf)})
+        assert reply["ok"] and host.state()["how"] == "reload" and host.state()["evidence"] == "config-get", reply
+        assert host.restarts() == [], "no restart was spent on a restore that was already right"
+
+
+class TestTheRestartBudgetIsSpentOnDiskFirst:
+    """F4 and F5: the one restart is recorded BEFORE it is issued, and an extension of the session does not forget it."""
+
+    def test_f4_the_state_on_disk_already_says_restarts_1_when_the_restart_itself_blows_up(self, host, monkeypatch):
+        host.write_config(_config())
+        host.arm()
+        host.reload_mode = "silent"
+        host.socket_mode = "silent"
+        real = host._run_bin
+
+        def dies_on_restart(name, args, **kw):
+            if name == "systemctl" and args[:1] == ["restart"]:
+                raise KeyboardInterrupt("the helper was killed between the restart and the end of the restore")
+            return real(name, args, **kw)
+
+        monkeypatch.setattr(host.helper, "_run_bin", dies_on_restart)
+        with pytest.raises(KeyboardInterrupt):
+            host.op("investigation-disarm", {"service": SERVICE, "path": str(host.conf)})
+        assert host.state()["restarts"] == 1, "the budget was spent on disk before systemctl was asked"
+
+    def test_f4_the_next_tick_does_not_restart_kea_again(self, host, monkeypatch):
+        host.write_config(_config())
+        host.arm()
+        state = host.state()
+        state["restarts"] = 1
+        (host.state_dir / "investigation-dhcp4.json").write_text(json.dumps(state), encoding="utf-8")
+        host.reload_mode = "silent"
+        host.socket_mode = "silent"
+        host.now = NOW + timedelta(minutes=6)
+        out = host.tick()
+        assert out["ok"] is False and host.restarts() == []
+
+    def test_f5_an_extension_keeps_the_spent_restart_the_failures_and_the_hand_flag(self, host):
+        host.write_config(_config())
+        host.arm(5)
+        state = host.state()
+        state.update(restarts=1, attempts=4, needs_hand=True, last_error="nothing shows it", verified_by_build=17)
+        (host.state_dir / "investigation-dhcp4.json").write_text(json.dumps(state), encoding="utf-8")
+        reply = host.arm(15)
+        assert reply["ok"] and reply.get("extended_from"), reply
+        after = host.state()
+        assert (after["restarts"], after["attempts"], after["needs_hand"], after["last_error"]) == (
+            1,
+            4,
+            True,
+            "nothing shows it",
+        )
+        assert after["extended_from"] == state["until"] and after["verified_by_build"] == 17
+
+
+class TestEveryWaitIsBoundedByTheClock:
+    """F6: the waits are measured in time, not in sleeps - a socket that accepts and never answers costs two socket waits a poll, and the verification still ends on its deadline."""
+
+    def test_await_reload_ends_within_the_hup_wait_plus_two_socket_waits_against_a_hanging_socket(self, host):
+        host.write_config(_config())
+        host.socket_mode = "hang"
+        before = host.clock
+        verdict = host.helper._await_reload(
+            ("unix", "x"), None, host.helper._logger_entry(_config(at_debug=False, marker=False))
+        )
+        assert verdict == ("none", None, None)
+        assert host.clock - before <= host.helper._HUP_WAIT_S + 2 * host.helper._SOCKET_WAIT_S + 0.5
+
+    def test_await_restart_ends_within_the_restart_wait_plus_two_socket_waits_against_a_hanging_socket(self, host):
+        host.write_config(_config())
+        host.socket_mode = "hang"
+        host.main_pid = 9001  # a new, active process
+        before = host.clock
+        verdict = host.helper._await_restart(
+            UNIT, 4242, ("unix", "x"), None, host.helper._logger_entry(_config(at_debug=False, marker=False))
+        )
+        assert verdict == ("ok", "process", None), (
+            "a daemon that NEVER answered is judged by the process: a new active pid, settled"
+        )
+        assert host.clock - before <= host.helper._RESTART_WAIT_S + 2 * host.helper._SOCKET_WAIT_S + 0.5
+
+    def test_the_socket_wait_is_two_seconds(self, helper):
+        assert helper._SOCKET_WAIT_S == 2.0
+
+
+class TestATamperedCounterIsBadState:
+    """F8: a counter the arm never writes as anything but an integer is not a state this helper wrote - never a traceback."""
+
+    @pytest.mark.parametrize("bad", ["x", None, True, 1.5, [1]])
+    def test_all_four_ops_say_bad_state(self, host, bad):
+        host.write_config(_config())
+        host.arm()
+        state = host.state()
+        state["restarts"] = bad
+        (host.state_dir / "investigation-dhcp4.json").write_text(json.dumps(state), encoding="utf-8")
+        payload = {"service": SERVICE, "path": str(host.conf)}
+        status = host.op("investigation-status", {"service": SERVICE})
+        assert status["ok"] is False and status["error"] == "bad-state"
+        disarm = host.op("investigation-disarm", payload)
+        assert disarm["ok"] is False and disarm["error"] == "bad-state"
+        arm = host.arm()
+        assert arm["ok"] is False and arm["error"] == "armed" and arm["existing"]["unreadable"] is True
+        tick = host.tick("--now")
+        assert tick["ok"] is False and tick["failed"] and "not usable" in tick["failed"][0]["error"]
+
+
+class TestTheStoredLogPathFallsBackToTheFilesOwnOutput:
+    """F10: a stored `log_path` that no longer reads must not cost the log evidence the file's own logger can give."""
+
+    def test_a_stored_path_that_is_gone_and_a_file_logger_that_exists_is_log_evidence(self, host, monkeypatch):
+        cfg = _config()
+        cfg["Dhcp4"]["loggers"][0]["output-options"] = [{"output": str(host.log)}]
+        host.write_config(cfg)
+        host.arm(log_path=str(host.log))
+        state = host.state()
+        state["log_path"] = str(host.tmp_path / "gone.log")
+        (host.state_dir / "investigation-dhcp4.json").write_text(json.dumps(state), encoding="utf-8")
+        host.socket_mode = "absent"
+        reply = host.op("investigation-disarm", {"service": SERVICE, "path": str(host.conf)})
+        assert reply["ok"] and reply["how"] == "reload" and host.state()["evidence"] == "log", reply
+
+
+class TestEveryVerifiedRestoreNamesTheBuildThatVerifiedIt:
+    """F7: `verified_by_build` is written with the one `restored_at`, whatever armed the record."""
+
+    def test_a_record_that_already_had_a_log_path_still_gets_it(self, host):
+        host.write_config(_config())
+        host.arm()
+        assert "verified_by_build" not in host.state() or host.state()["verified_by_build"] is None
+        host.op("investigation-disarm", {"service": SERVICE, "path": str(host.conf)})
+        assert host.state()["verified_by_build"] == host.helper.HELPER_BUILD
+
+
+class TestALineIsNeverCutAcrossReads:
+    """F11: an id split across two 1 MiB reads is found (and counted once)."""
+
+    def test_the_completion_id_split_across_the_read_boundary_is_found_once(self, helper, tmp_path, monkeypatch):
+        monkeypatch.setattr(helper, "_LOG_READ_MAX", 64)
+        log = tmp_path / "k.log"
+        log.write_text("start\n", encoding="utf-8")
+        cursor = helper._LogCursor(str(log))
+        line = "2026-10-10 12:00:00.095 INFO  [kea-dhcp4.dhcp4/1] DHCP4_DYNAMIC_RECONFIGURATION_SUCCESS dynamic server reconfiguration succeeded\n"
+        with open(log, "a", encoding="utf-8") as f:
+            f.write("x" * 40 + "\n" + line)
+        lines = cursor.new_lines()
+        found = [ln for ln in lines if "DHCP4_DYNAMIC_RECONFIGURATION_SUCCESS" in ln]
+        assert len(found) == 1 and found[0].endswith("succeeded"), lines
+
+    def test_a_partial_line_is_kept_until_it_is_finished(self, helper, tmp_path):
+        log = tmp_path / "k.log"
+        log.write_text("", encoding="utf-8")
+        cursor = helper._LogCursor(str(log))
+        with open(log, "a", encoding="utf-8") as f:
+            f.write("DHCP4_DYNAMIC_RECON")
+        assert cursor.new_lines() == []
+        with open(log, "a", encoding="utf-8") as f:
+            f.write("FIGURATION_SUCCESS ok\n")
+        assert cursor.new_lines() == ["DHCP4_DYNAMIC_RECONFIGURATION_SUCCESS ok"]
+
+    def test_the_unfinished_tail_of_a_rotated_file_is_flushed_through_the_same_splitter(self, helper, tmp_path):
+        log = tmp_path / "k.log"
+        log.write_text("", encoding="utf-8")
+        cursor = helper._LogCursor(str(log))
+        with open(log, "a", encoding="utf-8") as f:
+            f.write("whole line\ntail without newline")
+        assert cursor.new_lines() == ["whole line"]
+        os.replace(log, str(log) + ".1")
+        log.write_text("fresh\n", encoding="utf-8")
+        assert cursor.new_lines() == ["tail without newline", "fresh"]
 
 
 class TestTwoRestoresAtOnce:

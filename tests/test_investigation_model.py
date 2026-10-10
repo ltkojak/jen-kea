@@ -529,6 +529,7 @@ class Walk:
             "socket_silent": 2,
             "state_bad": 2,
             "log_rotated": 2,
+            "socket_flaky": 2,
         }
         kinds = [
             "reload_applied_but_lost",
@@ -558,6 +559,7 @@ class Walk:
             "socket_silent",
             "state_bad",
             "log_rotated",
+            "socket_flaky",
         ]
         kind = self.rng.choices(kinds, [weights.get(k, 1) for k in kinds])[0]
         getattr(self, "fault_" + kind)()
@@ -640,6 +642,13 @@ class Walk:
     def fault_socket_silent(self):
         """The daemon's control socket does not answer (Q168): the host's evidence falls to Kea's completion line, or - where the restored level hides it - to the one restart."""
         self._timed(self._fake(), "socket_silent", True, "socket_silent (the daemon's control socket does not answer)")
+
+    def fault_socket_flaky(self):
+        """A control socket that answers some questions and not others, on a daemon that does not take the reload (the audit's F2: the second instance, the stall): the host must judge
+        it by its answer alone, never by a completion line that lands while the socket is silent."""
+        fake = self._fake()
+        self._timed(fake, "socket_flaky", True, "socket_flaky (the control socket answers some questions, not others)")
+        self._timed(fake, "hup_ignored", True, "hup_ignored (the daemon does not re-read on SIGHUP)")
 
     def fault_state_bad(self):
         """The host's state file exists and cannot be read (Q168, INV-009): arm answers `armed`/unreadable, status and disarm answer `bad-state`, the tick fails and restores nothing."""
@@ -1330,10 +1339,11 @@ class Walk:
                         )
         # I3 - the daemon step is bounded
         self._i3(entries, kind)
+        # I11 - a host record marked restored is about a daemon that is not at DEBUG 55 (v5.68.0-beta.31, Q168). Asked BEFORE I10: a restore recorded for a daemon that is still at DEBUG is the
+        # more specific finding, and I10 would otherwise name the same sequence a step later as "DEBUG past its deadline"
+        self._i11()
         # I10 - DEBUG never outlives its deadline (v5.68.0-beta.29, Q165)
         self._i10()
-        # I11 - a host record marked restored is about a daemon that is not at DEBUG 55 (v5.68.0-beta.31, Q168)
-        self._i11()
         self.prev_entries = entries if kind == "ok" else {}
         self.prev_kind, self.prev_raw = kind, raw
 
@@ -2183,6 +2193,37 @@ class TestTheDaemonsAnswerIsTheEvidence:
         except InvariantViolated as red:
             assert "I11 violated" in str(red), f"seed {seed}: the beta.30 rule may only break I11:\n{str(red)[:600]}"
             TestTheDaemonsAnswerIsTheEvidence.RED.append(seed)
+
+    RED_PER_POLL = []
+
+    @staticmethod
+    def _per_poll_rule(monkeypatch):
+        """The committed (pre-fixup) per-poll rule: the evidence is judged on the LAST poll only. A daemon that answered at DEBUG and then went silent as a completion line landed (another
+        instance wrote it) is recorded as restored from the log while `loaded` is still at DEBUG - the release audit's F2."""
+        original = FakeKea._hup_or_restart
+
+        def judged_on_the_last_poll(self, st):
+            if (self.hup_ignored or self.reload_ignored) and self.socket_flaky and not self.hup_refused:
+                return "reload", "log", None
+            return original(self, st)
+
+        monkeypatch.setattr(FakeKea, "_hup_or_restart", judged_on_the_last_poll)
+
+    @pytest.mark.parametrize("seed", range(60))
+    def test_beta31_a_daemon_that_answered_once_is_judged_by_its_answer(self, seed, walk_world, monkeypatch):
+        """The second mutation check: with the per-poll rule put back a walk goes red on I11 and on nothing else (or never has the sequence)."""
+        self._per_poll_rule(monkeypatch)
+        try:
+            walk_world(seed, 400).run()
+        except InvariantViolated as red:
+            assert "I11 violated" in str(red), f"seed {seed}: the per-poll rule may only break I11:\n{str(red)[:600]}"
+            TestTheDaemonsAnswerIsTheEvidence.RED_PER_POLL.append(seed)
+
+    def test_the_per_poll_rule_goes_red_often_enough_to_mean_something(self):
+        print(
+            f"MODEL I11 PER-POLL MUTATION: {len(TestTheDaemonsAnswerIsTheEvidence.RED_PER_POLL)} of 60 seeds red: {TestTheDaemonsAnswerIsTheEvidence.RED_PER_POLL}"
+        )
+        assert len(TestTheDaemonsAnswerIsTheEvidence.RED_PER_POLL) >= 1, TestTheDaemonsAnswerIsTheEvidence.RED_PER_POLL
 
     def test_the_beta30_rule_goes_red_often_enough_to_mean_something(self):
         print(

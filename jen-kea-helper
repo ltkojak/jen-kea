@@ -1388,7 +1388,7 @@ _ARM_MAX_AHEAD = timedelta(hours=24, minutes=1)
 _HUP_WAIT_S = 8.0  # how long Kea gets to show the reload before the one restart
 _RESTART_WAIT_S = 8.0  # how long a restarted daemon gets to show the file
 _RESTART_SETTLE_S = 3.0  # a new active process must stay free of a start-failure id this long (when no socket can say)
-_SOCKET_WAIT_S = 4.0  # one question to the daemon's own socket
+_SOCKET_WAIT_S = 2.0  # one question to the daemon's own socket (the compat record: real Kea answers in ~1 ms)
 _SOCKET_READ_MAX = 8 << 20
 # the ids Kea writes - recorded per image by tests/kea_compat/test_log_levels.py (3.0.3, 3.2.0, 3.3.1) and asserted against these constants there
 _RELOAD_OK_IDS = ("DHCP4_DYNAMIC_RECONFIGURATION_SUCCESS",)  # logged at INFO by the NEW logger: absent when the level is restored to WARN or above
@@ -1430,6 +1430,9 @@ def _now():  # a name the tests replace
 
 def _sleep(seconds):  # a name the tests replace
     time.sleep(seconds)
+
+
+_monotonic = time.monotonic  # a name the tests replace (with `_sleep` advancing it): every wait below is wall-clock bounded, not a count of sleeps
 
 
 def _parse_iso(text):
@@ -1548,6 +1551,7 @@ def _state_usable(state):
         and state.get("service") == "dhcp4"
         and _allowed_conf_path(state.get("path"))
         and _restore_shape_ok(state.get("restore"))
+        and all(isinstance(state.get(k, 0), int) and not isinstance(state.get(k, 0), bool) for k in ("restarts", "attempts"))
     )
 
 
@@ -1755,28 +1759,29 @@ def _daemon_logger_now(sock_spec):
 
 def _daemon_matches(seen, file_entry):
     """Does the RUNNING logger (`seen`, from config-get) show the logger the restored FILE has (`file_entry`, `_logger_entry` of the file the helper wrote)? Jen's `_is_original` asks the
-    same of the marker's restore object; here the target is the FILE, so a logger a person changed since is verified too. A marker still carried, or the investigation level still
-    running, is never a match. A key the file does not have is Kea's default: all that can be said is that it is not the investigation value."""
+    same of the marker's restore object; here the target is the FILE, so a logger a person changed since is verified too, and a file that itself says DEBUG/55 (the operator's own level,
+    recorded as the restore object) matches a daemon that shows exactly that. A marker still carried is never a match. A key the file does not have is Kea's default: all that can be said
+    is that it is not the investigation value."""
     if seen is None or seen.get("marker") is not None:
         return False
-    shown = str(seen.get("severity") or "").upper()
-    at_level = shown == "DEBUG" and seen.get("debuglevel") == 55
     if file_entry is None:
         return not seen["present"]
     if not seen["present"]:
         return False
+    shown = str(seen.get("severity") or "").upper()
     want_sev, want_lvl = file_entry.get("severity"), file_entry.get("debuglevel")
     sev_ok = (shown != "DEBUG") if want_sev is None else shown == str(want_sev).upper()
     lvl_ok = (seen.get("debuglevel") != 55) if want_lvl is None else seen.get("debuglevel") == want_lvl
-    return sev_ok and lvl_ok and not at_level
+    return sev_ok and lvl_ok
 
 
 class _LogCursor:
     """Kea's log as evidence: where the file was before the signal, and what has been written since - following the file by IDENTITY (device, inode), not by name alone, and reading
-    incrementally so a flood at DEBUG 55 cannot push the one line that matters past a fixed window. Bounded: `_LOG_READ_MAX` per read, `_LOG_SCAN_MAX` per verification."""
+    incrementally so a flood at DEBUG 55 cannot push the one line that matters past a fixed window. Bounded: `_LOG_READ_MAX` per read, `_LOG_SCAN_MAX` per verification. A line is counted
+    once and an id is never cut: the unterminated tail of one read is kept and joined to the next (and flushed when the file it belonged to is rotated away)."""
 
     def __init__(self, path):
-        self.path, self.scanned, self.exhausted = path, 0, False
+        self.path, self.scanned, self.exhausted, self.partial = path, 0, False, b""
         st = self._stat(path)
         self.usable = st is not None
         self.ident = (st.st_dev, st.st_ino) if st else None
@@ -1790,7 +1795,7 @@ class _LogCursor:
             return None
 
     def _read(self, path, start):
-        """(lines, bytes read) past `start`, or (None, 0) when the file cannot be read."""
+        """(bytes, count) past `start`, or (None, 0) when the file cannot be read."""
         try:
             with open(path, "rb") as f:
                 f.seek(start)
@@ -1798,7 +1803,16 @@ class _LogCursor:
         except OSError:
             return None, 0
         self.scanned += len(data)
-        return data.decode("utf-8", "replace").splitlines(), len(data)
+        return data, len(data)
+
+    def _split(self, data, final=False):
+        """The complete lines of `self.partial + data`; the unterminated tail stays in `partial` (unless `final`: its file will not grow any more)."""
+        pieces = (self.partial + data).split(b"\n")
+        self.partial = pieces.pop()
+        if final and self.partial:
+            pieces.append(self.partial)
+            self.partial = b""
+        return [p.decode("utf-8", "replace").rstrip("\r") for p in pieces]
 
     def new_lines(self):
         """The lines written since the last call (all of them, in as many reads as it takes). None when the log cannot be read. Once `_LOG_SCAN_MAX` bytes have been scanned `exhausted`
@@ -1812,17 +1826,27 @@ class _LogCursor:
         if self.ident is not None and (st.st_dev, st.st_ino) != self.ident:
             # rotated by rename (logrotate; Kea's own maxsize/maxver): the file we were reading is now `<path>.1` - finish it from where we were, then the new file from its start
             old = self._stat(self.path + ".1")
+            rest = b""
             if old is not None and (old.st_dev, old.st_ino) == self.ident:
-                rest, _n = self._read(self.path + ".1", self.pos)
-                lines += rest or []
+                at = self.pos
+                while True:
+                    chunk, n = self._read(self.path + ".1", at)
+                    if not chunk:
+                        break
+                    rest += chunk
+                    at += n
+                    if n < _LOG_READ_MAX:
+                        break
+            lines += self._split(rest, final=True)
             self.ident, self.pos = (st.st_dev, st.st_ino), 0
         elif st.st_size < self.pos:
+            lines += self._split(b"", final=True)
             self.pos = 0  # truncated in place (copytruncate)
         while True:
             chunk, n = self._read(self.path, self.pos)
             if chunk is None:
                 return None
-            lines += chunk
+            lines += self._split(chunk)
             self.pos += n
             if self.scanned >= _LOG_SCAN_MAX:
                 self.exhausted = True
@@ -1833,11 +1857,13 @@ class _LogCursor:
 
 
 def _await_reload(sock, cursor, file_entry):
-    """After the SIGHUP: ("ok", evidence, None) | ("fail", None, line) | ("none", None, started_line). The socket is the arbiter when it answers; the log's completion id counts only when
-    no socket answered; a started line alone is never evidence."""
-    waited, started = 0.0, None
+    """After the SIGHUP: ("ok", evidence, None) | ("fail", None, line) | ("none", None, started_line). The socket is the arbiter for the WHOLE verification: once the daemon has
+    answered even once, only its answer can verify - a completion line in the log after that, or a silence after that, is not evidence. The log's completion id counts only when the
+    daemon never answered. Wall-clock bounded."""
+    deadline, answered, started = _monotonic() + _HUP_WAIT_S, False, None
     while True:
         seen = _daemon_logger_now(sock) if sock is not None else None
+        answered = answered or seen is not None
         if seen is not None and _daemon_matches(seen, file_entry):
             return "ok", "config-get", None
         if cursor is not None:
@@ -1847,40 +1873,37 @@ def _await_reload(sock, cursor, file_entry):
                 if failed:
                     return "fail", None, failed
                 started = started or _find_id(lines, _RELOAD_STARTED_IDS)
-                done = _find_id(lines, _RELOAD_OK_IDS)
-                if done and seen is None:
+                if not answered and _find_id(lines, _RELOAD_OK_IDS):
                     return "ok", "log", None
-        if waited >= _HUP_WAIT_S:
+        if _monotonic() >= deadline:
             return "none", None, started
         _sleep(0.5)
-        waited += 0.5
 
 
 def _await_restart(unit, before_pid, sock, cursor, file_entry):
-    """After `systemctl restart`: ("ok", "config-get" | "process", None) | ("fail", None, line) | ("none", None, None). A new main pid that is active, free of a start-failure id for
-    `_RESTART_SETTLE_S`, is the process evidence (a fresh process can only run the file on disk); when the socket answers it must agree."""
-    waited, new_since = 0.0, None
-    while waited < _RESTART_WAIT_S:
+    """After `systemctl restart`: ("ok", "config-get" | "process", None) | ("fail", None, line) | ("none", None, None). `process` - a NEW active main pid, free of a start-failure id for
+    `_RESTART_SETTLE_S` - is evidence ONLY for a daemon that never answered during this verification: one that answered is judged by its answer alone. Wall-clock bounded."""
+    deadline, answered, fresh_since = _monotonic() + _RESTART_WAIT_S, False, None
+    while True:
         _sleep(0.5)
-        waited += 0.5
         if cursor is not None:
             lines = cursor.new_lines()
             failed = _find_id(lines, _START_FAIL_IDS) if lines else None
             if failed:
                 return "fail", None, failed
         pid = _unit_main_pid(unit)
-        fresh = pid > 0 and pid != before_pid and _unit_state(unit) == "active"
-        new_since = (new_since if new_since is not None else waited) if fresh else None
-        if not fresh:
-            continue
-        seen = _daemon_logger_now(sock) if sock is not None else None
-        if seen is not None:
-            if _daemon_matches(seen, file_entry):
+        if pid > 0 and pid != before_pid and _unit_state(unit) == "active":
+            fresh_since = fresh_since if fresh_since is not None else _monotonic()
+            seen = _daemon_logger_now(sock) if sock is not None else None
+            answered = answered or seen is not None
+            if seen is not None and _daemon_matches(seen, file_entry):
                 return "ok", "config-get", None
-            continue  # the daemon answered and does not run the file: keep looking, never "process"
-        if waited - new_since >= _RESTART_SETTLE_S:
-            return "ok", "process", None
-    return "none", None, None
+            if not answered and _monotonic() - fresh_since >= _RESTART_SETTLE_S:
+                return "ok", "process", None
+        else:
+            fresh_since = None
+        if _monotonic() >= deadline:
+            return "none", None, None
 
 
 def _reload_daemon(service, state, config):
@@ -1892,12 +1915,13 @@ def _reload_daemon(service, state, config):
         return None, None, "no Kea unit was found on this host"
     sock = _control_socket(config)
     file_entry = _logger_entry(config)
-    log_path = state.get("log_path") or _file_log_path(config)
-    if not _allowed_log_path(log_path):
-        log_path = None
-    cursor = _LogCursor(log_path) if log_path else None
-    if cursor is not None and not cursor.usable:
-        cursor = None
+    cursor = None
+    for candidate in (state.get("log_path"), _file_log_path(config)):  # the stored path first; the file's own output when that no longer reads
+        if candidate and _allowed_log_path(candidate):
+            trial = _LogCursor(candidate)
+            if trial.usable:
+                cursor = trial
+                break
     if sock is None and cursor is None:
         return None, None, (
             "the host has no way to see whether Kea re-read its file: no unix or local http control socket in the config and no readable log file"
@@ -1922,6 +1946,8 @@ def _reload_daemon(service, state, config):
     if int(state.get("restarts") or 0) >= 1:
         return None, None, "nothing shows Kea re-read the restored file and the unit was already restarted once for this state: not restarting again" + note
     state["restarts"] = int(state.get("restarts") or 0) + 1
+    with contextlib.suppress(OSError):  # the budget is spent ON DISK before the restart is issued: a helper killed between the restart and the end of this restore does not restart Kea again
+        _save_state(service, state)
     proc = _run_bin("systemctl", ["restart", unit], capture_output=True, text=True)
     if proc is None or proc.returncode != 0:
         tail = "\n".join(((proc.stderr or proc.stdout) if proc else "").splitlines()[-3:])
@@ -1973,7 +1999,14 @@ def _restore_state(service, state):
         if error or how not in ("reload", "restart") or evidence not in _EVIDENCE:
             return _restore_failed(service, state, error or "the reload was not verified")
         # the ONE place `restored_at` is written: after a VERIFIED how AND the evidence that verified it
-        state.update(restored_at=_now().isoformat(timespec="seconds"), how=how, evidence=evidence, last_error=None, needs_hand=False)
+        state.update(
+            restored_at=_now().isoformat(timespec="seconds"),
+            how=how,
+            evidence=evidence,
+            verified_by_build=HELPER_BUILD,
+            last_error=None,
+            needs_hand=False,
+        )
         _save_state(service, state)
         return True, how, ""
 
@@ -2063,6 +2096,9 @@ def op_investigation_arm(payload):
                 idempotent = True
             elif same and old_until is not None and new_until is not None and new_until > old_until:
                 state["extended_from"] = existing.get("until")
+                for k in ("restarts", "attempts", "needs_hand", "last_error", "verified_by_build"):  # an extension is the same session: its spent restart and its failures are not forgotten
+                    if k in existing:
+                        state[k] = existing[k]
             else:
                 return {"ok": False, "error": "armed", "existing": existing}, path
         try:

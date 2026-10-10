@@ -1202,7 +1202,7 @@ answered; an exhausted or unreadable log is unconfirmed, never success); `proces
 `_restore_state` and nowhere else, after `how` and `evidence`; `_restore_state` re-reads the record under the lock, so a record someone else restored is "already restored" (no signal, no restart). There is no
 legacy branch: a record armed by build 15 or 16 is verified by this contract (it gets `log_path` and `verified_by_build` at its first tick). `_read_state` is the one loader and has three answers (a record, none, bad):
 arm, disarm, status and `--self-restore` all use it, and a state file that exists and cannot be read is never "no session" (`bad-state`; INV-009). The arm needs no `log_path` but refuses `no-evidence` when
-neither a socket nor a readable log could ever prove the restore. The ops list and the sudoers line are unchanged. Jen's side: `_investigation_op` turns `bad-state` into a code, `_host_phase` treats it as an unreadable
+neither a socket nor a readable log could ever prove the restore. A daemon that has answered once during a verification is judged only by its answer: a completion line in the log or a fresh process counts only for a daemon that never answered, every wait is bounded by the wall clock (`_monotonic`, `_SOCKET_WAIT_S` 2 s), and the one restart is recorded on disk before it is issued. The ops list and the sudoers line are unchanged. Jen's side: `_investigation_op` turns `bad-state` into a code, `_host_phase` treats it as an unreadable
 host conflict (Health fails, turn-on refused) and `INVESTIGATION_MIN_HELPER_BUILD` is 17. The walk (`tests/test_investigation_model.py`) adds the evidence channel and invariant I11: a host record marked
 restored is about a daemon that is not at DEBUG 55.
 

@@ -77,7 +77,7 @@ restore object or deadline, or is malformed (`restore: {}`, a string, a list, no
 ### INV-007 - A host restore is recorded as done only on the daemon's own answer
 **Rule.** The Kea host writes `restored_at` only on one of three recorded evidences: the running daemon's own `config-get` (asked on its control socket) shows the logger the restored FILE has;
 Kea's own completion id (`DHCP4_DYNAMIC_RECONFIGURATION_SUCCESS`), read across rotation, when no socket answered; or a NEW active process running the validated file after the one restart. A
-reload-START line is never completion, "the unit is active" is not evidence that Kea re-read its file, and the absence of a complaint is not evidence. A refused or unconfirmed restore is retried,
+reload-START line is never completion, "the unit is active" is not evidence that Kea re-read its file, and the absence of a complaint is not evidence. A daemon that has answered once during a verification is judged only by its answer for the rest of that verification: no log line and no fresh process rescues it. A refused or unconfirmed restore is retried,
 counted, and after ten ticks says a person has to act.
 **Established.** Q167 (the log), rewritten by Q168 after the beta.30 review found a started line accepted as completion.
 **Enforced at.** `jen-kea-helper` `_reload_daemon` / `_restore_state` (the only writer of `restored_at`, beside `evidence`).

@@ -1246,7 +1246,7 @@ Build 16 read Kea's log, and a log line is not the daemon: a reload-start line p
 completion line. Build 17 asks the running daemon. The helper finds the daemon's control socket in the file it just wrote (a unix socket, or the local HTTP one) and sends `config-get`; the restore
 is recorded as done (`restored_at`, with `evidence` beside it) only when the running daemon reports the logger the restored file has (`config-get`), or Kea's own completion line
 (`DHCP4_DYNAMIC_RECONFIGURATION_SUCCESS`) is found in its log - read incrementally and followed across a rotation - when no socket answered (`log`), or, after the one restart, a **new** active
-process free of a start-failure id is running (`process`). A reload-start line is never evidence. A state file that exists and cannot be read is never "no session": arm, disarm, status and the
+process free of a start-failure id is running (`process`). A reload-start line is never evidence, and a daemon that answered even once during a verification is judged only by its answer - no log line and no fresh process rescues it. A state file that exists and cannot be read is never "no session": arm, disarm, status and the
 timer tick all say so (`bad-state`; Health fails with the file's path - remove it by hand or run `sudo jen-kea-helper --self-restore --now`). A Kea with no local control socket and no readable log
 is refused at the arm (`no-evidence`) because nothing could prove its restore, and `log_path` is optional in the arm. A record armed by build 15 or 16 is verified by this same contract at its next tick.
 No sudoers change: it is still the one `/usr/local/sbin/jen-kea-helper` line.

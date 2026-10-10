@@ -74,6 +74,7 @@ class FakeKea:
         # ("process"); a reload-start line is never evidence. `socket` is what the daemon has ("unix" | None); `socket_silent` and `log_rotated` and `state_bad` are the faults.
         self.socket = "unix"
         self.socket_silent = False  # the control socket does not answer (refuses / times out)
+        self.socket_flaky = False  # the control socket answers some questions and not others (a stall, a second instance): a daemon that answered ONCE is judged only by its answer (the audit F1/F2)
         self.log_rotated = (
             False  # the log evidence of a tick is lost (rotated away, exhausted or unreadable): unconfirmed
         )
@@ -287,6 +288,7 @@ class FakeKea:
         }
 
     def _answering(self):
+        """Does the daemon answer at all during one verification? A flaky socket answers on some of its polls, so it counts: and once it has answered, its answer is the only evidence."""
         return self.socket == "unix" and not self.socket_silent
 
     def _hides_info(self):
