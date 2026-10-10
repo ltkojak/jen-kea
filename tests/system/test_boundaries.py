@@ -2006,12 +2006,40 @@ def _s19_state():
     return json.loads(p.stdout) if p.returncode == 0 and p.stdout.strip() else None
 
 
+def _s19_flashes(html):
+    """The sentences of the page that read like Jen's answer to a button (the flash and the card), scripts and markup removed."""
+    text = re.sub(r"<script.*?</script>|<style.*?</style>", " ", html, flags=re.S)
+    text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text))
+    found = re.findall(
+        r"[^.]{0,200}(?:Nothing was changed|refused|not finished|must be build|cannot read|does not recognise)[^.]{0,200}\.",
+        text,
+    )
+    return found[:4] or text[:300]
+
+
+def _s19_diag():
+    """Only run when an assertion has already failed: what Jen holds and what the host says, for the failure message."""
+    try:
+        out, _p = st.jen_py(
+            """
+from jen.services import investigation_logging as inv, kea_host
+with app.app_context():
+    server = next(s for s in inv._ssh_servers() if str(s.get("id")) == "1")
+    emit({"enabled": inv.enabled(), "active": inv.active(), "status": kea_host.investigation_status(server), "gate": inv.helper_gate(server)})
+""",
+            check=False,
+        )
+        return json.dumps(out, default=str)[:1500]
+    except Exception as e:  # a diagnostic must never hide the failure it describes
+        return f"(no diagnosis: {e})"
+
+
 def _s19_on(web):
     r = web.post("/servers/1/investigation-logging/on", data={"minutes": "5", "back": "servers"}, page="/servers")
     assert r.status_code == 200
     conf = st.kea_conf_bytes(st.KEA_A)
     assert '"jen-investigation"' in conf, (
-        f"INVARIANT: turning it on writes the marker: what Jen said: {re.sub(r'<[^>]+>', ' ', r.text)[-600:]!r}; the file's tail: {conf[-200:]}"
+        f"INVARIANT: turning it on writes the marker: what Jen said: {_s19_flashes(r.text)}; Jen's own view: {_s19_diag()}; the file's tail: {conf[-200:]}"
     )
     logger = _s19_logger()
     assert logger["severity"] == "DEBUG" and logger["debuglevel"] == 55 and logger["marker"], (
