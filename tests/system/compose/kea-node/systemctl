@@ -44,6 +44,14 @@ case "$1" in
     echo loaded
     exit 0
     ;;
+  is-enabled)
+    if [ "$2" = "$TIMER" ]; then
+      if timer_running; then echo enabled; exit 0; fi
+      echo disabled
+      exit 1
+    fi
+    exit 0
+    ;;
   is-active)
     if [ "$2" = "$TIMER" ]; then
       if timer_running; then echo active; exit 0; fi

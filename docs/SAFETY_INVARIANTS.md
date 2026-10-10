@@ -55,12 +55,14 @@ fails closed, nothing is written over it, and the old value is kept.
 
 ### INV-005 - A server with outstanding investigation state keeps its connection identity
 **Rule.** While investigation state is outstanding for a Kea server, the settings that say which Kea Jen reaches for it (`api_url`, `ssh_host`, `ssh_user`, `kea_conf`) and the global
-connection mode do not change, and nothing but investigation logging may erase its marker from the Kea config file.
-**Established.** Q162, Q164 (and the installer's `--configure` guard, Q165).
+connection mode do not change, and nothing but investigation logging may erase, replace or DAMAGE its marker in the Kea config file: a candidate whose marker is absent, carries a different
+restore object or deadline, or is malformed (`restore: {}`, a string, a list, not an object) is refused whenever the entry recorded a valid restore.
+**Established.** Q162, Q164 (and the installer's `--configure` guard, Q165; the malformed-marker rows, Q167).
 **Enforced at.** `AppConfig._write_parser` (the config) and `kea_host.apply_config` (the Kea file); `install.sh _guard_endpoint_changes` for the installer.
 **Tests.**
 - `tests/test_identity_guard.py::TestTheConfigWriterRefusesAnIdentityChange`
 - `tests/test_identity_guard.py::TestTheKeaFileWriterRefusesToEraseTheMarker`
+- `tests/test_investigation_host.py::TestTheElevenRowsOfTheCandidateMarker`
 - `tests/test_install_endpoint_guard.py::TestTheInstallerRefusesAnEndpointChangeWithoutTheFlag`
 - `tests/test_investigation_model.py::TestTheWalk` (invariants I4, I8)
 

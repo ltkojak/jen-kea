@@ -516,6 +516,9 @@ S10_ALLOWED = {
     ("jen/services/investigation_logging.py", "_file_carries_marker", "Exception", "return None"): (
         "None means 'could not be read' and every caller treats it as unknown, never as 'the marker is gone' (sweep: `carries is False` is the only branch that acts)"
     ),
+    ("jen/services/investigation_logging.py", "_raw_marker_text", "(TypeError, ValueError)", 'return ""'): (
+        "a marker that cannot be serialised reads as no text; the Kea-file guard only lets a malformed marker through when its text EQUALS the one recorded at adoption, and a recorded text is never empty, so this refuses"
+    ),
     ("jen/config.py", "apply", "Exception", "pass"): (
         "a capability-cache drop after a config load; nothing is decided on it, and a stale cache is re-derived on the next read"
     ),

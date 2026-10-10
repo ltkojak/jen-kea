@@ -159,7 +159,7 @@
               data-confirm="Restart Kea on {{ s.server.name }}? DHCP will be briefly unavailable."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-secondary">{{ icon("refresh-cw") }} Restart Kea</button>
         </form>
-        {% if history_allowed %}<span class="form-hint">Investigation logging:</span> {{ investigation_controls(s.server, investigation.get(s.server.id|string), "servers") }}{% endif %}
+        {% if history_allowed and (investigation_logging_enabled or investigation.get(s.server.id|string)) %}<span class="form-hint">Investigation logging:</span> {{ investigation_controls(s.server, investigation.get(s.server.id|string), "servers") }}{% endif %}
         {% if history_allowed %}
         <a href="{{ url_for('servers.config_history', server_id=s.server.id) }}" class="btn btn-secondary">{{ icon("file-clock") }} Config history ({{ history_counts.get(s.server.id, 0) }})</a>
         {% endif %}
@@ -227,7 +227,7 @@
               data-confirm="Restart Kea on {{ s.server.name }}?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-sm btn-secondary">{{ icon("refresh-cw") }} Restart</button>
         </form>
-        {% if history_allowed %}<span class="form-hint">Investigation logging:</span> {{ investigation_controls(s.server, investigation.get(s.server.id|string), "servers") }}{% endif %}
+        {% if history_allowed and (investigation_logging_enabled or investigation.get(s.server.id|string)) %}<span class="form-hint">Investigation logging:</span> {{ investigation_controls(s.server, investigation.get(s.server.id|string), "servers") }}{% endif %}
         {% if history_allowed %}
         <a href="{{ url_for('servers.config_history', server_id=s.server.id) }}" class="btn btn-sm btn-secondary">{{ icon("file-clock") }} History ({{ history_counts.get(s.server.id, 0) }})</a>
         {% endif %}

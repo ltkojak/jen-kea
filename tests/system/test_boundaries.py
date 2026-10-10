@@ -1755,6 +1755,17 @@ def test_15_bundled_plugin_data_survives_a_full_recovery_restore(stack):
 
 # ── 16. investigation logging: on, reloaded, watched, put back ───────────────
 
+
+def _s_enable_investigation_logging(web):
+    """The superadmin's toggle (v5.68.0-beta.30, Q167): investigation logging is early access and off by default."""
+    r = web.post(
+        "/settings/infrastructure/investigation-logging-enabled", data={"enable": "true"}, page="/settings/kea"
+    )
+    assert r.status_code == 200 and "switched on" in r.text, (
+        "INVARIANT: the superadmin can switch investigation logging on"
+    )
+
+
 S16_MAC = "02:50:00:00:16:01"
 S16_SEND = r"""
 import socket, struct
@@ -1787,8 +1798,17 @@ def test_16_investigation_logging_turns_on_reloads_shows_the_classes_and_is_put_
     """Investigation logging: turned on for one server through apply_change it reaches the running daemon by
     config-reload (same process, no restart), a real DISCOVER then shows its class assignments in Trace and its packet
     options in Explain, and the sweep puts the level back after the deadline (the clock is the one stand-in: the
-    sweep is called with a time six minutes on instead of waiting them out)."""
+    sweep is called with a time six minutes on instead of waiting them out). Since 5.68.0-beta.30 it is opt-in: off by default, switched on by a superadmin under Settings -> Kea."""
     web = st.Web().login()
+    off = web.post("/servers/1/investigation-logging/on", data={"minutes": "5", "back": "servers"}, page="/servers")
+    assert "not switched on" in off.text, (
+        "INVARIANT: investigation logging is off by default and turning it on is refused"
+    )
+    assert "investigation-logging/on" not in web.get("/servers").text, (
+        "INVARIANT: with it off, no Turn on button is rendered"
+    )
+    _s_enable_investigation_logging(web)
+    assert "investigation-logging/on" in web.get("/servers").text, "INVARIANT: switched on, the buttons are there"
     pids = _s16_pids()
     assert pids, "kea-dhcp4 is running on kea-a"
     before_classes = _s16_count("DHCP4_CLASSES_ASSIGNED")
@@ -2050,6 +2070,7 @@ def test_19_the_kea_host_puts_investigation_logging_back_with_jen_stopped_or_its
 ):
     """The Kea host restores investigation logging by itself: with Jen stopped, with Jen's database stopped, and with Jen's [kea_ssh] host pointed at another Kea."""
     web = st.Web().login()
+    _s_enable_investigation_logging(web)
     pid = st.dexec(st.KEA_A, "pgrep", "-x", "kea-dhcp4").stdout.split()
     assert pid, "kea-dhcp4 is running on kea-a"
     try:
@@ -2093,3 +2114,40 @@ def test_19_the_kea_host_puts_investigation_logging_back_with_jen_stopped_or_its
             st.run(["docker", "start", container], check=False)
         with contextlib.suppress(Exception):
             st.wait_jen_healthy(timeout=180)
+
+
+# ── 20. a failed tick does not stop the next one ────────────────────────────────────────────────────────────────────
+def test_20_a_failed_restore_tick_exits_nonzero_and_the_next_tick_still_runs_and_finishes_the_job(stack):
+    """v5.68.0-beta.30 (Q167): `--self-restore` exits 1 when a restore failed, and a systemd timer keeps scheduling a oneshot that exited nonzero (OnUnitActiveSec counts from the last activation,
+    whatever its result). The stand-in loop does the same (the stand-in is named in scenario 19). The config the host must rewrite is moved away: every tick fails and says so in the host's state
+    (`attempts` climbs, `last_error`), nothing is recorded as restored; moved back, the very next tick puts the logger back and the same daemon re-reads it."""
+    web = st.Web().login()
+    _s_enable_investigation_logging(web)
+    pid = st.dexec(st.KEA_A, "pgrep", "-x", "kea-dhcp4").stdout.split()
+    assert pid, "kea-dhcp4 is running on kea-a"
+    held = st.KEA_CONF + ".held"
+    try:
+        _s19_on(web)
+        _s19_deadline_passes()
+        st.dexec(st.KEA_A, "mv", st.KEA_CONF, held)
+        st.wait_for(
+            lambda: (_s19_state() or {}).get("attempts", 0) >= 3,
+            timeout=90,
+            interval=2,
+            what="three failed ticks (each one ran although the previous exited 1)",
+        )
+        state = _s19_state()
+        assert not state["restored_at"] and state["last_error"], (
+            f"INVARIANT: a failed restore is never recorded as done: {state}"
+        )
+        assert _s19_logger()["severity"] == "DEBUG", (
+            "INVARIANT: the daemon is still at DEBUG while the restore cannot be done"
+        )
+    finally:
+        st.dexec(st.KEA_A, "sh", "-c", f"[ -f {held} ] && mv {held} {st.KEA_CONF} || true", check=False)
+    _s19_host_restored(pid)
+    state = _s19_state()
+    assert state["attempts"] >= 3 and state["needs_hand"] is False, (
+        f"INVARIANT: a later success clears the hand flag: {state}"
+    )
+    _s19_jen_back_and_clean(web)

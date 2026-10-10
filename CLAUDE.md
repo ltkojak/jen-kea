@@ -277,6 +277,9 @@ warning and recording a null status. Config mutation is pure (`jen/services/kea_
   that, and the property to defend is the walk's I10 (`tests/test_investigation_model.py`): a daemon the host was armed for is never at DEBUG 55 past its deadline + 120 s.
   The restore transformation exists twice (`kea_config_edit.clear_investigation_logging`, the helper's `_restore_logger`) and is held identical by
   `tests/vectors/investigation_restore.json`; a change to either runs the other's test.
+- **Investigation logging on demand is opt-in (v5.68.0-beta.30, Q167).** `investigation_logging_enabled` (default off, superadmin toggle under Settings -> Kea) gates turning logging ON only (the buttons, the route's `on`, `turn_on`); never gate
+  `turn_off`, the sweep, `forget`, `acknowledge`, Health or the host's timer - a session that exists is always restored and shown (`tests/test_investigation_host.py::TestInvestigationLoggingIsOptIn` pins who may read the switch).
+  The Kea host's record of an unresolved session is authoritative (INV-008): Jen shows a conflict and refuses to arm over it, never overwrites.
 - Anything interpolated into a remote command string is validated on save
   (`valid_remote_path()`, `valid_ssh_target()`, `valid_unix_username()` in
   `jen/services/auth.py`) **and** `shlex.quote`d at the call site. Local `subprocess`

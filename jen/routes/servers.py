@@ -313,6 +313,13 @@ def investigation_logging(server_id, action):
 
     if action not in ("on", "off"):
         abort(404)
+    if action == "on" and not __inv.enabled():
+        # v5.68.0-beta.30 (Q167): opt-in. Only TURNING ON is gated - turning off, the sweep, forget and Health are never
+        flash(
+            "Investigation logging is not switched on (early access in 5.68, off by default). A superadmin turns it on under Settings → Kea.",
+            "error",
+        )
+        return done()
     if not current_user.all_subnets:
         flash("Investigation logging needs access to all subnets: the log it turns on names every client.", "error")
         return done()

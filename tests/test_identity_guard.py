@@ -969,14 +969,17 @@ class TestTheKeaFileWriterRefusesToEraseTheMarker:
         assert inv._save(record)
         assert kea_host.apply_config(_server(w, 1), "dhcp4", _without_marker(w.daemons[1].file))["ok"] is True
 
-    def test_a_damaged_marker_that_the_write_leaves_alone_is_not_removed_by_it(self, host_world):
+    def test_a_malformed_marker_over_an_entry_with_a_valid_restore_is_refused(self, host_world):
+        """v5.68.0-beta.30 (Q167): beta.29 let this through as 'carried' - the one write that damages the record of what to put back. The eleven rows are in
+        tests/test_investigation_host.py::TestTheElevenRowsOfTheCandidateMarker."""
         w = host_world
         assert inv.turn_on(_server(w, 1), 5)["ok"]
         damaged = copy.deepcopy(w.daemons[1].file)
         logger_entry = next(x for x in damaged["Dhcp4"]["loggers"] if x["name"] == "kea-dhcp4")
         logger_entry["user-context"]["jen-investigation"].pop("restore")
         assert ed.validate_investigation_marker(damaged), "the marker lost its restore object: damaged, but still there"
-        assert kea_host.apply_config(_server(w, 1), "dhcp4", damaged)["ok"] is True
+        res = kea_host.apply_config(_server(w, 1), "dhcp4", damaged)
+        assert res["code"] == "investigation-on" and "is malformed" in res["detail"]
 
     def test_an_unreadable_or_unavailable_record_refuses_every_dhcp4_write(self, host_world):
         w = host_world
@@ -1032,8 +1035,10 @@ class TestTheChangeSetReportsAndRevertsARefusedTarget:
 
     def test_the_change_set_of_investigation_logging_itself_is_never_refused(self, host_world):
         w = host_world
-        assert inv.turn_on(_server(w, 1), 15)["ok"]
-        assert inv.turn_on(_server(w, 1), 5)["ok"], "moving the deadline rewrites the marker: investigation's own write"
+        assert inv.turn_on(_server(w, 1), 5)["ok"]
+        assert inv.turn_on(_server(w, 1), 15)["ok"], (
+            "moving the deadline rewrites the marker: investigation's own write"
+        )
         assert inv.turn_off(_server(w, 1))["ok"]
 
 

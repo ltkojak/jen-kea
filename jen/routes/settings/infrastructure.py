@@ -1695,6 +1695,25 @@ def remove_direct_socket(server_id, service):
     return back
 
 
+@bp.route("/settings/infrastructure/investigation-logging-enabled", methods=["POST"])
+@login_required
+@_superadmin_required
+def toggle_investigation_logging():
+    """v5.68.0-beta.30 (Q167) - investigation logging on demand is early access, off by default. Switching it on or off changes only whether the Turn on buttons exist and `turn_on`
+    answers: turning off, the sweep, forget, acknowledge, Health and the Kea host's own timer are never gated, so a session that is already on is still restored and shown."""
+    enable = request.form.get("enable", "").strip() == "true"
+    __user.set_global_setting(__inv.ENABLED_KEY, "true" if enable else "false")
+    __user.audit("INVESTIGATION_LOGGING_ENABLED_CHANGED", __inv.ENABLED_KEY, f"enabled={enable}")
+    if enable:
+        flash("Investigation logging is switched on (early access). Servers and Trace now offer Turn on.", "success")
+    else:
+        flash(
+            "Investigation logging is switched off. A session that is already on is still restored by the Kea host and shown until it ends.",
+            "success",
+        )
+    return redirect(url_for("settings.settings_kea"))
+
+
 @bp.route("/settings/infrastructure/toggle-ipv6", methods=["POST"])
 @login_required
 @_superadmin_required

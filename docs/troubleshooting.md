@@ -231,6 +231,8 @@ Two failure signatures, both meaning "Jen fell back to the legacy root
   offline procedure there works straight from the Jen host's own tree,
   no network needed on either side).
 
+**"Investigation logging is not switched on (early access in 5.68, off by default)" (v5.68.0-beta.30).** Turning logging on is opt-in: a superadmin switches it on under **Settings → Kea → Investigation logging**. Nothing else is affected - a session that is already on is still restored and shown.
+
 **"The Kea host reports an unresolved investigation session Jen does not recognise" / "needs hand" (v5.68.0-beta.30, helper build 16).** The host's record under `/var/lib/jen-kea-helper/investigation-dhcp4.json`
 is authoritative: Jen will not arm over a session it did not start (a second Jen, a Jen restored from an older backup, a hand edit). It restores itself at its deadline; to end it now run
 `sudo jen-kea-helper --self-restore --now` on that host. `needs_hand` means ten restore ticks in a row could not be confirmed from Kea's own log - read `last_error` in that file (usually

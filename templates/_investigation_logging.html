@@ -16,7 +16,7 @@
     <span class="form-hint">{{ icon("eye") }} Investigation logging is ON for {{ server.name }} until {{ active_entry.until }} ({{ (active_entry.remaining_s // 60) }} min left).</span>
     <button type="submit" class="btn btn-sm btn-secondary">{{ icon("eye-off") }} Turn it off now</button>
 </form>
-{%- else -%}
+{%- elif investigation_logging_enabled -%}
 {%- for minutes in (5, 15, 60) %}
 <form method="POST" action="/servers/{{ server.id }}/investigation-logging/on" class="u-cccfa4"{% if minutes == 60 %} data-confirm="Turn on DEBUG logging on {{ server.name }} for 60 minutes? Kea will write a packet dump for every client for an hour, which can fill the disk on a busy server. The Kea host puts the level back by itself."{% endif %}>
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

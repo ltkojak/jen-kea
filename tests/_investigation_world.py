@@ -76,6 +76,9 @@ class FakeKea:
         self.host_restore_fails = (
             False  # the host's restore routine fails (its `-t` refuses, or the file cannot be written)
         )
+        self.hup_refused = (
+            False  # Kea logs a failure for the restored file (build 16: reported, kept pending, NOT restarted)
+        )
         self.hup_ignored = (
             False  # the daemon does not re-read its config on SIGHUP (the host then falls back to ONE restart)
         )
@@ -179,6 +182,27 @@ class FakeKea:
             return self._too_old()
         if self.arm_fails:
             return {"ok": False, "code": "error", "detail": self.arm_fails}
+        existing = self.helper_state
+        if existing is not None and not existing["restored_at"]:
+            # build 16 (Q167, INV-008): an unresolved record is never overwritten - the same session is a no-op, the same restore with a later deadline an extension
+            old_until, new_until = inv._edit._parse_until(existing["until"]), inv._edit._parse_until(until)
+            same = existing["restore"] == restore
+            if same and old_until == new_until:
+                return {
+                    "ok": True,
+                    "code": "ok",
+                    "timer": self.timer,
+                    "until": existing["until"],
+                    "idempotent": True,
+                    "detail": "",
+                }
+            if not (same and old_until is not None and new_until is not None and new_until > old_until):
+                return {
+                    "ok": False,
+                    "code": "armed",
+                    "detail": "the Kea host reports an unresolved investigation session",
+                    "existing": copy.deepcopy(existing),
+                }
         self.helper_state = {
             "until": until,
             "restore": copy.deepcopy(restore),
@@ -186,6 +210,10 @@ class FakeKea:
             "how": None,
             "last_error": None,
             "restarts": 0,
+            "attempts": 0,
+            "needs_hand": False,
+            "log_path": log_path,
+            "armed_at": inv._now().isoformat(timespec="seconds"),
             "jen": jen or {},
         }
         return {
@@ -196,6 +224,17 @@ class FakeKea:
             "detail": "" if self.timer == "systemd" else "no systemd here",
         }
 
+    def investigation_timer(self, server):
+        self.calls.append("host:timer")
+        if self.host_down:
+            return self._host_error()
+        if self.build < 16:
+            return self._too_old()
+        if self.timer != "systemd":
+            return {"ok": False, "code": "ok", "timer": "none", "detail": "no systemd here"}
+        self.timer_running = True
+        return {"ok": True, "code": "ok", "timer": "systemd", "detail": ""}
+
     def investigation_status(self, server):
         self.calls.append("host:status")
         if self.host_down:
@@ -205,9 +244,19 @@ class FakeKea:
         st = self.helper_state
         if st is None:
             return {"ok": True, "code": "ok", "armed": False}
-        return {"ok": True, "code": "ok", "armed": not st["restored_at"], **copy.deepcopy(st)}
+        armed = not st["restored_at"]
+        return {
+            "ok": True,
+            "code": "ok",
+            "armed": armed,
+            "timer_active": self.timer_running if armed else None,
+            "timer_enabled": self.timer_running if armed else None,
+            **copy.deepcopy(st),
+        }
 
     def _hup_or_restart(self, st):
+        if self.hup_refused:
+            return None, "Kea refused the restored config: DHCP4_CONFIG_LOAD_FAIL"
         if not (self.reload_ignored or self.hup_ignored):
             self.loaded = copy.deepcopy(self.file)
             return "reload", None
@@ -231,6 +280,8 @@ class FakeKea:
         st = self.helper_state
         if self.host_restore_fails:
             st["last_error"] = "kea-dhcp4 -t refused the restored config"
+            st["attempts"] += 1
+            st["needs_hand"] = st["attempts"] >= 10
             return False, None, st["last_error"]
         new, code = helper()._restore_logger(self.file, st["restore"])
         if code == "ok":
@@ -238,8 +289,10 @@ class FakeKea:
         how, error = self._hup_or_restart(st)
         if error:
             st["last_error"] = error
+            st["attempts"] += 1
+            st["needs_hand"] = st["attempts"] >= 10
             return False, None, error
-        st.update(restored_at=inv._now().isoformat(timespec="seconds"), how=how, last_error=None)
+        st.update(restored_at=inv._now().isoformat(timespec="seconds"), how=how, last_error=None, needs_hand=False)
         return True, how, ""
 
     def investigation_disarm(self, server):
@@ -280,7 +333,7 @@ def world(monkeypatch):
     """Servers 1 and 2, each its own FakeKea; settings in a dict; the clock fixed."""
     from jen import extensions
 
-    store = {}
+    store = {inv.ENABLED_KEY: "true"}  # (Q167) investigation logging on demand is opt-in; the world has it switched on
     db = {
         "fails": None
     }  # a predicate on the investigation record being written: True = the Jen database does not take THIS write
@@ -349,6 +402,7 @@ def world(monkeypatch):
         ),
     )
     monkeypatch.setattr(inv._host, "investigation_disarm", lambda server: pick(server).investigation_disarm(server))
+    monkeypatch.setattr(inv._host, "investigation_timer", lambda server: pick(server).investigation_timer(server))
     monkeypatch.setattr(inv._host, "investigation_status", lambda server: pick(server).investigation_status(server))
 
     def fake_apply(service, mutate_fn, summary, **kw):
@@ -371,6 +425,6 @@ def legacy_entries(world, monkeypatch):
     """Entries as beta.28 wrote them: nothing behind them on the Kea host (no state file, no timer), so Jen's own file-writing restore is the only one there is
     (v5.68.0-beta.29, Q165). That path is still the one for an entry made before build 15, and the fallback when the host cannot restore; the tests of its state
     machine run under this fixture, and the host's own restore has its own classes (TestTheKeaHostOwnsTheRestore)."""
-    monkeypatch.setattr(inv, "_arm_host", lambda server, entry, until: (True, [], False))
+    monkeypatch.setattr(inv, "_arm_host", lambda server, entry, until: (True, [], False, None))
     monkeypatch.setattr(inv, "_host_phase", lambda known, record, now: set())
     return world

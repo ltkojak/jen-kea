@@ -61,6 +61,10 @@ from jen.services import kea_host as _host
 logger = logging.getLogger(__name__)
 
 RECORD_KEY = "investigation_logging"
+#: v5.68.0-beta.30 (Q167): investigation logging on demand is opt-in, off by default (a superadmin turns it on under Settings -> Kea). It gates ONLY turning logging on
+#: (`turn_on` and the buttons that call it); turning off, the sweep, forget, acknowledge, Health and the host's own timer are never gated - a session that exists is
+#: always restored and shown.
+ENABLED_KEY = "investigation_logging_enabled"
 DURATIONS = (5, 15, 60)  # minutes; 60 is offered with a confirm that names the disk
 FULL_SCAN_EVERY = 10  # sweep runs between reads of every server's config
 OVERDUE_GRACE_S = 120  # how long past `until` before the Health row calls it left on
@@ -70,6 +74,13 @@ RELOAD_TRIES = (
 OBSERVE_AFTER_RESTART_S = 8  # a restarted daemon takes a few seconds to answer on its control socket: look for this long before saying "unknown"
 _lock = threading.Lock()
 _runs = {"n": 0}
+
+
+def enabled() -> bool:
+    """Is investigation logging on demand switched on? Off unless a superadmin said so; an unreadable settings table answers its default, which is off."""
+    from jen.models import user as _user
+
+    return str(_user.get_global_setting(ENABLED_KEY, "false") or "false").strip().lower() == "true"
 
 
 def _now() -> datetime:
@@ -105,9 +116,11 @@ _ENTRY_STR_FIELDS = (
     "host_error",
     "host_restored_at",
     "log_path",
+    "damaged_marker",
 )
 _ENTRY_BOOL_FIELDS = (
     "armed",
+    "host_needs_hand",
     "removed",
     "marker_invalid",
     "contradiction",
@@ -159,6 +172,12 @@ def _valid_entry(e) -> bool:
     ):
         return False
     if "restore" in e and not isinstance(e["restore"], dict):
+        return False
+    if "host_conflict" in e and not isinstance(e["host_conflict"], dict):
+        return False
+    if "timer_down" in e and (
+        isinstance(e["timer_down"], bool) or not isinstance(e["timer_down"], int) or e["timer_down"] < 0
+    ):
         return False
     revision = e.get("history_revision")
     return revision is None or (isinstance(revision, int) and not isinstance(revision, bool))
@@ -284,6 +303,11 @@ def _row(sid, entry: dict, now: datetime) -> dict:
         "host_timer": entry.get("host_timer", ""),
         "host_error": entry.get("host_error", ""),
         "host_restored_at": entry.get("host_restored_at", ""),
+        # v5.68.0-beta.30 (Q167): the host holds an unresolved session this entry is not (host_conflict), says a person has to act (host_needs_hand), and how many sweeps in a row
+        # found its timer not running (timer_down)
+        "host_conflict": entry.get("host_conflict") if isinstance(entry.get("host_conflict"), dict) else None,
+        "host_needs_hand": bool(entry.get("host_needs_hand")),
+        "timer_down": int(entry.get("timer_down") or 0),
         "needs_hand": stuck and (daemon == "other" or contradiction or exhausted),
         # (F6) the FILE carries investigation DEBUG and the daemon was seen NOT running it: "on" would be a false report
         "not_loaded": file_state == "debug"
@@ -652,9 +676,24 @@ def _revert_file(server: dict, summary: str) -> tuple[bool, list[str]]:
 # ── turn on / off ────────────────────────────────────────────────────────────
 
 
-def helper_gate(server: dict) -> str:
-    """ "" when the host's helper can arm a self-restore (build `INVESTIGATION_MIN_HELPER_BUILD` or later), else the sentence that refuses turning logging on
-    (v5.68.0-beta.29, Q165). Asked BEFORE anything is written: Jen no longer turns on a DEBUG logger that only Jen can put back."""
+def conflict_sentence(existing: dict) -> str:
+    """What Jen says about an unresolved investigation session on the Kea host that it did not start (v5.68.0-beta.30, Q167, INV-008)."""
+    existing = existing if isinstance(existing, dict) else {}
+    if existing.get("unreadable"):
+        return (
+            "the Kea host has an investigation-session state file it cannot read; Jen will not overwrite it - look at /var/lib/jen-kea-helper/investigation-dhcp4.json on that host "
+            "(or remove it once you know it is stale)"
+        )
+    return (
+        f"the Kea host reports an unresolved investigation session Jen does not recognise (armed {existing.get('armed_at') or 'at an unknown time'}, until "
+        f"{existing.get('until') or 'an unknown time'}); Jen will not overwrite it - it restores itself at its deadline, or run `{HOST_COMMAND}` on that host"
+    )
+
+
+def helper_gate(server: dict, held: dict | None = None) -> str:
+    """ "" when the host's helper can arm a self-restore (build `INVESTIGATION_MIN_HELPER_BUILD` or later) and holds no unresolved session that is not `held`'s own, else the sentence that
+    refuses turning logging on (v5.68.0-beta.29, Q165; the session check is v5.68.0-beta.30, Q167). Asked BEFORE anything is written: Jen no longer turns on a DEBUG logger that only Jen
+    can put back, and it never arms over a record the host holds for something else."""
     need = _host.INVESTIGATION_MIN_HELPER_BUILD
     info = _host.helper_build(server)
     name = _name(server)
@@ -674,6 +713,11 @@ def helper_gate(server: dict) -> str:
             f"The Kea host helper on {name} must be build {need} or later so the host can put the logger back by itself (it is build {build if build is not None else 'unknown'}): "
             "Settings → Kea → SSH → Update helper, then try again. Nothing was changed."
         )
+    status = _host.investigation_status(server)
+    if status.get("ok") and status.get("armed"):
+        own = held is not None and held.get("restore") is not None and status.get("restore") == held.get("restore")
+        if not own:
+            return f"{name}: {conflict_sentence(status)}. Nothing was changed."
     return ""
 
 
@@ -690,12 +734,13 @@ def kea_log_path(cfg) -> str:
     return extensions.DHCP4_LOG
 
 
-def _arm_host(server: dict, entry: dict, until: str) -> tuple[bool, list[str], bool]:
-    """Ask the host to put the logger back at `until` by itself. (armed, lines, state_written): on success the entry gets `armed` and `host_timer`; a timer that
-    is "none" is a refusal (the helper wrote its state but no timer will fire - `state_written` says the caller should disarm it again)."""
+def _arm_host(server: dict, entry: dict, until: str) -> tuple[bool, list[str], bool, dict | None]:
+    """Ask the host to put the logger back at `until` by itself. (armed, lines, state_written, conflict): on success the entry gets `armed` and `host_timer`; a timer that
+    is "none" is a refusal (the helper wrote its state but no timer will fire - `state_written` says the caller should disarm it again); `conflict` is the host's own record when it
+    refused because it holds an unresolved session this arm does not match (v5.68.0-beta.30, Q167: the host's record is authoritative and was not touched)."""
     restore = entry.get("restore")
     if not isinstance(restore, dict) or _edit.restore_problem(restore):
-        return False, ["the marker Jen just wrote carries no restore object to arm the host with"], False
+        return False, ["the marker Jen just wrote carries no restore object to arm the host with"], False, None
     reply = _host.investigation_arm(
         server,
         until,
@@ -704,10 +749,14 @@ def _arm_host(server: dict, entry: dict, until: str) -> tuple[bool, list[str], b
         entry.get("log_path") or extensions.DHCP4_LOG,
     )
     if not reply.get("ok"):
+        if reply.get("code") == "armed":
+            existing = reply.get("existing") if isinstance(reply.get("existing"), dict) else {}
+            return False, [conflict_sentence(existing)], False, existing
         return (
             False,
             [f"the Kea host could not arm its self-restore: {reply.get('detail') or reply.get('code')}"],
             False,
+            None,
         )
     if reply.get("timer") != "systemd":
         why = reply.get("detail") or "no systemd timer could be started"
@@ -717,10 +766,12 @@ def _arm_host(server: dict, entry: dict, until: str) -> tuple[bool, list[str], b
                 f"the Kea host cannot restore the log level by itself ({why}), and Jen will not turn on a level only it can put back"
             ],
             True,
+            None,
         )
     entry.update(armed=True, host_timer="systemd")
     entry.pop("host_error", None)
-    return True, [], True
+    entry.pop("host_conflict", None)
+    return True, [], True, None
 
 
 def _abandon_host_arm(server: dict) -> None:
@@ -811,6 +862,25 @@ def turn_on(server: dict, minutes: int, actor: str = "") -> dict:
     DEBUG, the entry is kept (file restored, daemon debug, reload owed) and the sweep finishes it; not seen, it is kept as unknown. A daemon seen
     at neither level after a restart or reload did not take it (the file is put back, no second restart), and a daemon seen at its ORIGINAL level
     right after a reload or restart that succeeded is a contradiction, not a refusal: it is not the daemon whose file Jen edited."""
+    if not enabled():
+        from jen.models import user as _user
+
+        if not _user.settings_ever_loaded():
+            # the switch itself could not be read: that is the reason, not "off" (Q164: unavailable is not empty)
+            return {
+                "ok": False,
+                "mode": "",
+                "lines": [SETTINGS_UNAVAILABLE + "; investigation logging is refused until they can be read"],
+                "until": "",
+            }
+        return {
+            "ok": False,
+            "mode": "",
+            "lines": [
+                "Investigation logging is not switched on (early access in 5.68, off by default): a superadmin turns it on under Settings -> Kea. Nothing was changed."
+            ],
+            "until": "",
+        }
     if minutes not in DURATIONS:
         return {"ok": False, "mode": "", "lines": [f"Choose {', '.join(map(str, DURATIONS))} minutes."], "until": ""}
     name = _name(server)
@@ -873,10 +943,23 @@ def turn_on(server: dict, minutes: int, actor: str = "") -> dict:
                 ],
                 "until": "",
             }
-        gate = helper_gate(server)
+        gate = helper_gate(server, held)
         if gate:
             return {"ok": False, "mode": "", "lines": [gate], "until": ""}
         until = _iso(_now() + timedelta(minutes=minutes))
+        running_until = _edit._parse_until(held.get("until")) if held is not None else None
+        if running_until is not None and running_until > _edit._parse_until(until):
+            # (v5.68.0-beta.30, Q167, found by the walk) a session is only ever EXTENDED: the host's record does not accept an earlier deadline (INV-008), and an attempt that got as far as
+            # the arm would have had to put the whole session back. Turn it off first to shorten it.
+            return {
+                "ok": False,
+                "mode": "",
+                "lines": [
+                    f"Investigation logging is already on for {name} until {_iso(running_until)}, later than {minutes} minutes from now: a running session is only extended. "
+                    "Turn it off first to end it sooner. Nothing was changed."
+                ],
+                "until": "",
+            }
         captured: dict = {}
 
         def mutate(cfg):
@@ -925,7 +1008,7 @@ def turn_on(server: dict, minutes: int, actor: str = "") -> dict:
 
         # (v5.68.0-beta.29, Q165) the file carries DEBUG 55: before the daemon is asked to read it - and before anything else can fail - the HOST is asked to put it
         # back by itself. If it will not, the file is reverted and nothing is on (a daemon already restarted onto the file by the change set is looked at, as ever).
-        armed, arm_lines, written = _arm_host(server, entry, until)
+        armed, arm_lines, written, _conflict = _arm_host(server, entry, until)
         if not armed:
             if written:
                 _abandon_host_arm(server)
@@ -1058,6 +1141,17 @@ def _restore_via_host(server: dict, record: dict, sid: str, entry: dict):
 
 
 def _restore(server: dict, record: dict, now: datetime | None, summary: str) -> dict:
+    """Put `server`'s logger back (see `_restore_core`). When the HOST could not do it and Jen's own file-writing path did, the host's record is still unresolved and would block the next
+    session until its deadline: ask it once more, best effort, so a clean file and a verified reload resolve it (v5.68.0-beta.30, Q167)."""
+    held = record["servers"].get(str(server.get("id")))
+    was_armed = bool(held and held.get("armed"))
+    outcome = _restore_core(server, record, now, summary)
+    if outcome.get("ok") and was_armed and not outcome.get("hosted"):
+        _abandon_host_arm(server)
+    return outcome
+
+
+def _restore_core(server: dict, record: dict, now: datetime | None, summary: str) -> dict:
     """Put `server`'s logger back and make the daemon take it. `now=None` restores unconditionally (the button); a datetime
     restores only what is due (the sweep). The entry is dropped only when the file is restored AND the daemon was SEEN restored (v5.68.0-beta.23,
     Q158): every reload and restart is followed by a `config-get`, and a daemon Jen could not see, or saw at anything else, keeps the entry pending.
@@ -1072,6 +1166,7 @@ def _restore(server: dict, record: dict, now: datetime | None, summary: str) -> 
     if entry is not None and entry.get("armed"):
         done = _restore_via_host(server, record, sid, entry)
         if isinstance(done, dict):
+            done["hosted"] = True
             return done
         host_lines = done  # the host could not: what it said, and Jen's own path below carries on
     captured: dict = {}
@@ -1080,6 +1175,8 @@ def _restore(server: dict, record: dict, now: datetime | None, summary: str) -> 
         marker = _edit.investigation_marker(cfg)
         if marker is not None and not _edit.restore_problem(marker.get("restore")):
             captured["restore"] = marker["restore"]
+        if _edit.validate_investigation_marker(cfg):
+            captured["raw_marker"] = _raw_marker_text(cfg)
         return _edit.clear_investigation_logging(cfg, now=now)
 
     # v5.68.0-beta.28 (Q163, found by the walk): for a daemon with no `config-reload` (or one whose API is silent) the restore folds a RESTART into the change set,
@@ -1096,6 +1193,10 @@ def _restore(server: dict, record: dict, now: datetime | None, summary: str) -> 
         entry = entry or _entry_for(server, _iso(now or _now()))
         text = marker_invalid_text(server, entry)
         entry.update(marker_invalid=True, error=text[:900])
+        if captured.get("raw_marker") and "damaged_marker" not in entry:
+            entry["damaged_marker"] = captured[
+                "raw_marker"
+            ]  # (Q167) the Kea-file guard lets this very text through and nothing else
         _put(record, sid, entry)
         return {"ok": False, "mode": "", "lines": [f"❌ {text}"]}
     fresh = False
@@ -1481,6 +1582,19 @@ def endpoint_change_refusal(server_id, proposed: dict, actor: str = "") -> str:
 _config.register_identity_guard(identity_guard)
 
 
+def _raw_marker_text(cfg) -> str:
+    """The `jen-investigation` marker of `cfg` as canonical JSON, whatever type it is (a string, a list, an object); "" when there is none."""
+    _section, loggers = _edit._dhcp4_loggers(cfg, create=False)
+    logger_entry = _edit._logger_entry(loggers or [])
+    context = logger_entry.get("user-context") if isinstance(logger_entry, dict) else None
+    if not isinstance(context, dict) or _edit.INVESTIGATION_KEY not in context:
+        return ""
+    try:
+        return json.dumps(context[_edit.INVESTIGATION_KEY], sort_keys=True)[:2000]
+    except (TypeError, ValueError):
+        return ""
+
+
 def file_write_refusal(server: dict, cfg) -> str:
     """The Kea-FILE half of the identity invariant (v5.68.0-beta.28, Q164): "" when `cfg` may be written over `server`'s kea-dhcp4 config by a writer that is not
     investigation logging, else the sentence `kea_host.apply_config` returns as its `detail` (code `investigation-on`).
@@ -1526,7 +1640,34 @@ def file_write_refusal(server: dict, cfg) -> str:
     if entry is None:
         return ""
     marker = _edit.investigation_marker(cfg)
-    if marker is not None and not _edit.validate_investigation_marker(cfg):
+    problem = _edit.validate_investigation_marker(cfg)
+    recorded_restore = "restore" in entry and not _edit.restore_problem(entry["restore"])
+    if problem:
+        # v5.68.0-beta.30 (Q167): a MALFORMED marker in the candidate (`restore: {}`, a string, a list, an unreadable object) used to count as "carried" and was let through over a file
+        # whose entry recorded a valid restore - the one write that damages the record of what to put back. Refused whenever the entry has a valid restore to compare with. An entry that
+        # is itself `marker_invalid` has none: it lets through only the very marker it recorded as damaged at adoption (`damaged_marker`), nothing else.
+        if entry.get("marker_invalid"):
+            if entry.get("damaged_marker") is not None and _raw_marker_text(cfg) == entry["damaged_marker"]:
+                return ""
+            what = (
+                "differs from the damaged marker Jen recorded"
+                if entry.get("damaged_marker") is not None
+                else "cannot be compared with a damaged marker Jen did not record"
+            )
+        elif recorded_restore:
+            what = f"is malformed ({problem})"
+        else:
+            return ""  # a legacy entry with no recorded restore and no damage flag: nothing to compare with, as before
+        _audit(
+            "INVESTIGATION_LOGGING_FILE_WRITE_REFUSED",
+            label,
+            f"a write of kea-dhcp4's config whose investigation-logging marker {what} was refused{by}",
+        )
+        return (
+            f"Investigation logging is on for {label}: the candidate's investigation-logging marker {what}; this write would damage the record of what to put back. "
+            "Turn it off from Servers first."
+        )
+    if marker is not None:
         # v5.68.0-beta.29 (Q165, edge 2): a marker that is PRESENT is not enough - a config-history restore of a revision recorded during an EARLIER session carries that
         # session's marker, with its own restore object and deadline, over the file the entry (and the Kea host's state) describe. Compared, not validated: whatever the
         # candidate's marker says must be what was recorded when logging went on. An entry that never recorded a restore (an adopted one whose object was unreadable) or whose
@@ -1548,8 +1689,6 @@ def file_write_refusal(server: dict, cfg) -> str:
             f"Investigation logging is on for {label}: this config carries an investigation-logging marker with a different {' and '.join(different)} than the one Jen "
             "and the Kea host recorded when it was turned on (a config from an earlier session?). Turn it off from Servers first."
         )
-    if marker is not None or _edit.validate_investigation_marker(cfg):
-        return ""  # a marker that is itself damaged counts as carried: a write that leaves it alone does not remove it, and there is nothing readable to compare
     _audit(
         "INVESTIGATION_LOGGING_FILE_WRITE_REFUSED",
         label,
@@ -1818,6 +1957,8 @@ def _recovery_candidates(known: dict, now: datetime) -> tuple[dict, list[str]]:
             entry["mode"] = "adopted"
             if damaged_marker:
                 entry["marker_invalid"] = True
+                if _raw_marker_text(cfg):
+                    entry["damaged_marker"] = _raw_marker_text(cfg)
                 entry["error"] = marker_invalid_text(server, entry)[:900]
             elif not _edit.restore_problem(marker.get("restore")):
                 entry["restore"] = marker["restore"]
@@ -1939,11 +2080,21 @@ def _recover(record: dict, known: dict, now: datetime, summary: dict) -> dict:
 
 
 def _host_phase(known: dict, record: dict, now: datetime) -> set:
-    """(v5.68.0-beta.29, Q165) Read the host's own report (`investigation-status`) for every live entry: the host's `last_error` is shown beside the entry, an entry whose
-    host is not armed for THIS session is armed again while there is time left (an entry from before build 15, an adopted one, a state file somebody removed), and a
-    host that has already restored is returned so the sweep finishes the entry now (observe the daemon, drop the entry) rather than at the entry's own deadline.
-    Returns the server ids whose host reports the restore done."""
+    """(v5.68.0-beta.29, Q165; v5.68.0-beta.30, Q167) Read the host's own report (`investigation-status`) for every live entry: the host's `last_error` is shown beside the entry; an entry
+    the host is not armed for is armed again while there is time left (an entry from before build 15, an adopted one, a state file somebody removed) - unless the host holds an unresolved
+    session that is NOT this entry's, which is recorded as `host_conflict` and never overwritten (INV-008); a timer that is not running is started again (`investigation-timer`), once per
+    sweep, and counted (`timer_down`: Health warns, then fails after three sweeps); a host that says a person has to act (`needs_hand`) is shown; and a host that has already restored is
+    returned so the sweep finishes the entry now (observe the daemon, drop the entry) rather than at the entry's own deadline. Returns the server ids whose host reports the restore done."""
     done: set = set()
+    watched = (
+        "armed",
+        "host_error",
+        "host_restored_at",
+        "host_timer",
+        "host_conflict",
+        "host_needs_hand",
+        "timer_down",
+    )
     for sid, entry in record["servers"].items():
         server = known.get(sid)
         if (
@@ -1953,7 +2104,7 @@ def _host_phase(known: dict, record: dict, now: datetime) -> set:
             or entry.get("file", "debug") != "debug"
         ):
             continue
-        before = (entry.get("armed"), entry.get("host_error"), entry.get("host_restored_at"), entry.get("host_timer"))
+        before = tuple(repr(entry.get(k)) for k in watched)
         status = _host.investigation_status(server)
         due = _edit._parse_until(entry.get("until"))
         if not status.get("ok"):
@@ -1963,24 +2114,40 @@ def _host_phase(known: dict, record: dict, now: datetime) -> set:
             if status.get("code") in ("missing", "old"):
                 entry["armed"] = False
         else:
-            mine = _edit._parse_until(status.get("until") or "") == due and due is not None
+            same_restore = "restore" not in entry or status.get("restore") == entry.get("restore")
+            mine = due is not None and _edit._parse_until(status.get("until") or "") == due and same_restore
             if status.get("restored_at") and mine:
                 entry["host_restored_at"] = str(
                     status["restored_at"]
                 )  # (`armed` stays: the restore asks the host once more, which answers "already restored")
                 entry.pop("host_error", None)
+                entry.pop("host_conflict", None)
                 done.add(sid)
             elif status.get("armed") and mine:
                 entry["armed"] = True
                 entry.setdefault("host_timer", "systemd")
+                entry.pop("host_conflict", None)
                 if status.get("last_error"):
                     entry["host_error"] = (
                         f"the Kea host's restore failed and is retried every minute: {status['last_error']}"[:300]
                     )
                 else:
                     entry.pop("host_error", None)
+                entry["host_needs_hand"] = bool(status.get("needs_hand"))
+                if status.get("timer_active") is False:
+                    entry["timer_down"] = int(entry.get("timer_down") or 0) + 1
+                    _host.investigation_timer(server)  # the next report says whether it took
+                else:
+                    entry.pop("timer_down", None)
+            elif status.get("armed"):
+                # an UNRESOLVED session on the host that is not this entry's: the host's record is authoritative and is not touched
+                entry["host_conflict"] = {
+                    k: status.get(k) for k in ("armed_at", "until", "restore", "jen", "log_path") if k in status
+                }
+                entry["armed"] = False
+                entry["host_error"] = conflict_sentence(status)[:300]
             elif due is not None and due > now:
-                armed, lines, written = _arm_host(server, entry, entry["until"])
+                armed, lines, written, conflict = _arm_host(server, entry, entry["until"])
                 if armed:
                     entry.pop("host_error", None)
                 else:
@@ -1988,8 +2155,9 @@ def _host_phase(known: dict, record: dict, now: datetime) -> set:
                         _abandon_host_arm(server)
                     entry["armed"] = False
                     entry["host_error"] = (lines[0] if lines else "the Kea host could not be armed")[:300]
-        after = (entry.get("armed"), entry.get("host_error"), entry.get("host_restored_at"), entry.get("host_timer"))
-        if after != before and not _put(record, sid, entry):
+                    if conflict is not None:
+                        entry["host_conflict"] = conflict
+        if tuple(repr(entry.get(k)) for k in watched) != before and not _put(record, sid, entry):
             logger.warning("investigation_logging: the host's report for %s could not be stored", _name(server))
     return done
 
@@ -2110,6 +2278,8 @@ def sweep(now: datetime | None = None, full: bool = False) -> dict:
                     entry = record["servers"].get(sid) or _entry_for(server, _iso(now))
                     first_time = not entry.get("marker_invalid")
                     entry["marker_invalid"] = True
+                    if _raw_marker_text(cfg) and "damaged_marker" not in entry:
+                        entry["damaged_marker"] = _raw_marker_text(cfg)
                     entry["error"] = marker_invalid_text(server, entry)[:900]
                     _put(record, sid, entry)
                     if first_time:

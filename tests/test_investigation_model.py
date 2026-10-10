@@ -155,6 +155,7 @@ class Walk:
         self._seen_kind = "ok"
         self.hand_removed: set = set()  # server ids a person removed from jen.config by hand: the identity baseline of an id starts over when it is added again
         self.last_turn_on = (None, True)
+        self.foreign: dict = {}  # host -> the foreign session a fault put there (INV-008: it is never overwritten)
         self.prev_ident, self.prev_mode = {}, "ca"
         self._build(monkeypatch)
         self.prev_ident, self.prev_mode = self.identity()
@@ -218,6 +219,7 @@ class Walk:
         monkeypatch.setattr(kea_host, "investigation_arm", self._host_arm)
         monkeypatch.setattr(kea_host, "investigation_disarm", self._host_disarm)
         monkeypatch.setattr(kea_host, "investigation_status", self._host_status)
+        monkeypatch.setattr(kea_host, "investigation_timer", self._host_timer_ensure)
         monkeypatch.setattr(kea_host, "test_config", lambda server, service, cfg, **kw: {"ok": True, "code": "ok"})
         monkeypatch.setattr(kea_host, "_record_from_resp", lambda *a, **k: None)
         monkeypatch.setattr(kea_host, "_record_revision_after_apply", lambda *a, **k: None)
@@ -316,6 +318,10 @@ class Walk:
     def _host_disarm(self, server):
         fake = self.ssh_fake(server)
         return dict(self._NO_ROUTE) if fake is None else fake.investigation_disarm(server)
+
+    def _host_timer_ensure(self, server):
+        fake = self.ssh_fake(server)
+        return dict(self._NO_ROUTE) if fake is None else fake.investigation_timer(server)
 
     def _host_status(self, server):
         fake = self.ssh_fake(server)
@@ -512,6 +518,8 @@ class Walk:
             "host_down": 2,
             "host_restore_fails": 2,
             "hup_ignored": 2,
+            "hup_refused": 2,
+            "foreign_session": 2,
         }
         kinds = [
             "reload_applied_but_lost",
@@ -536,6 +544,8 @@ class Walk:
             "host_down",
             "host_restore_fails",
             "hup_ignored",
+            "hup_refused",
+            "foreign_session",
         ]
         kind = self.rng.choices(kinds, [weights.get(k, 1) for k in kinds])[0]
         getattr(self, "fault_" + kind)()
@@ -610,6 +620,31 @@ class Walk:
 
     def fault_hup_ignored(self):
         self._timed(self._fake(), "hup_ignored", True, "hup_ignored (the daemon does not re-read on SIGHUP)")
+
+    def fault_hup_refused(self):
+        """Kea logs a failure for the restored file: the host reports it and keeps it pending (build 16: verified from Kea's own log; the file is the problem, so no restart)."""
+        self._timed(self._fake(), "hup_refused", True, "hup_refused (Kea refuses the restored config)")
+
+    def fault_foreign_session(self):
+        """The host holds an UNRESOLVED session Jen did not start (a second Jen, an older backup): Jen must refuse to turn on over it and never overwrite it (INV-008)."""
+        fake = self._fake()
+        if fake.helper_state is not None and not fake.helper_state["restored_at"]:
+            return
+        fake.helper_state = {
+            "until": (self.now + timedelta(minutes=self.rng.randint(1, 20))).isoformat(timespec="seconds"),
+            "restore": {"severity": "WARN", "debuglevel": 0},
+            "restored_at": None,
+            "how": None,
+            "last_error": None,
+            "restarts": 0,
+            "attempts": 0,
+            "needs_hand": False,
+            "log_path": "/var/log/kea/kea-dhcp4.log",
+            "armed_at": self.now.isoformat(timespec="seconds"),
+            "jen": {"server_id": "9", "name": "another jen"},
+        }
+        self.foreign[fake.host] = dict(fake.helper_state)
+        self.say(f"FAULT the host {fake.host} holds an unresolved session Jen did not start")
 
     def fault_db_fails(self):
         self.db_fail_budget = self.rng.randint(1, 4)
@@ -1294,8 +1329,10 @@ class Walk:
             late = (self.now - due).total_seconds()
             if late <= self.I10_GRACE_S:
                 continue
-            failing = fake.host_restore_fails or (
-                (fake.reload_ignored or fake.hup_ignored) and (state["restarts"] >= 1 or not fake.restart_ok)
+            failing = (
+                fake.host_restore_fails
+                or fake.hup_refused
+                or ((fake.reload_ignored or fake.hup_ignored) and (state["restarts"] >= 1 or not fake.restart_ok))
             )
             retrying = getattr(fake, "last_failed_tick", None)
             retrying = (
@@ -1385,7 +1422,10 @@ class TestTheWalk:
         "observe_from": "through the damaged-record recovery (sweep while damaged)",
         "turn_on": "op:turn_on",
         "turn_off": "op:turn_off",
-        "helper_gate": "through turn_on (the build check before anything is written)",
+        "helper_gate": "through turn_on (the build check and the unresolved-session check before anything is written)",
+        "conflict_sentence": "through helper_gate and the sweep's host phase (op:sweep, the foreign_session fault)",
+        "enabled": "through turn_on (the opt-in); tests/test_investigation_host.py::TestInvestigationLoggingIsOptIn",
+        "kea_log_path": "through turn_on (the file the host verifies its restore from)",
         "blocking_removal": "op:views",
         "removal_refusal": "op:removal",
         "identity_guard": "through the config writer: op:identity (preflight_identity_change and mutate)",
@@ -1437,19 +1477,32 @@ class TestTheWalk:
 
 class TestTheKeaHostKeepsTheDeadline:
     """I10 (v5.68.0-beta.29, Q165): a daemon the Kea host was armed for is never at investigation DEBUG more than 120 s past its deadline - with Jen alive, or not running at all.
-    The mutation check is the first test: take the HostTimer actor away and the same walks go red. (In a probe of 30 seeds, 21 went red without the timer; the ten named here all did.)"""
+    The mutation check is the first test: take the HostTimer actor away and the same walks go red."""
 
     STEPS = 400
-    RED_WITHOUT_THE_TIMER = list(range(10))
+    RED = []  # the seeds (of the first sixty) that went red without the timer, filled by the parametrised test below and read by the one after it
 
-    @pytest.mark.parametrize("seed", RED_WITHOUT_THE_TIMER)
+    @pytest.mark.parametrize("seed", range(60))
     def test_i10_is_red_when_the_hosts_timer_is_taken_away(self, seed, walk_world, monkeypatch):
+        """The mutation check: with the HostTimer actor taken away (and Jen stopped a third of the way through) a walk either never has a session on or goes red on I10 and on nothing else."""
         monkeypatch.setattr(Walk, "HOST_TIMER", False)
-        with pytest.raises(InvariantViolated) as red:
+        monkeypatch.setattr(
+            Walk, "fault_foreign_session", lambda self: None
+        )  # (a foreign session nothing restores would block every later turn-on: not what this check is about)
+        try:
             walk_world(seed, self.STEPS, jen_dead_from=self.STEPS // 3).run()
-        assert "I10 violated" in str(red.value)
+        except InvariantViolated as red:
+            assert "I10 violated" in str(red), "without the timer the walk may only break the deadline invariant"
+            TestTheKeaHostKeepsTheDeadline.RED.append(seed)
 
-    @pytest.mark.parametrize("seed", RED_WITHOUT_THE_TIMER + list(range(10, 24)))
+    def test_without_the_timer_the_deadline_invariant_goes_red_often_enough_to_mean_something(self):
+        """Of the first sixty seeds at least ten break I10 once the timer is gone (about a fifth do: the rest never get a session on, or Jen's own sweep happens to restore it in time)."""
+        print(
+            f"MODEL I10 MUTATION: {len(TestTheKeaHostKeepsTheDeadline.RED)} of 60 seeds red without the timer: {TestTheKeaHostKeepsTheDeadline.RED}"
+        )
+        assert len(TestTheKeaHostKeepsTheDeadline.RED) >= 10, TestTheKeaHostKeepsTheDeadline.RED
+
+    @pytest.mark.parametrize("seed", range(24))
     def test_with_jen_stopped_after_a_third_of_the_walk_every_session_is_still_restored(self, seed, walk_world):
         walk_world(seed, self.STEPS, jen_dead_from=self.STEPS // 3).run()
 
@@ -1462,7 +1515,7 @@ class TestSeedsThatCaughtARealDefect:
     when the fix of a defect the walk found is taken out again (the mutation check): 13 and 165 when the restore's one restart is unbounded, 24 and 98 when
     an entry is acted on through whichever server now has its id. 98 and 165 lie outside the 40 seeds CI runs, which is why they are named here."""
 
-    @pytest.mark.parametrize("seed", [13, 24, 98, 165])
+    @pytest.mark.parametrize("seed", [13, 24, 98, 165, 280])
     def test_the_walk_that_found_it_stays_green(self, seed, walk_world):
         walk_world(seed, STEPS).run()
 

@@ -544,6 +544,26 @@
     {{ direct_socket_setup(1, 'd2', 'kea-dhcp-ddns', 'kea-dhcp-ddns.conf', infra.ssh_host, infra.bind_default, infra.d2_api_user or infra.kea_api_user, 53001, infra.d2_api_url, 'SSH to the Kea host (above)', infra.tls_supported) }}
 </div>
 
+<!-- Investigation logging on demand: early access, off by default (v5.68.0-beta.30, Q167) -->
+<div class="card" id="kea-investigation-logging">
+    <div class="card-header"><span class="card-title">{{ icon("eye") }} Investigation logging <span class="form-hint">(early access)</span></span></div>
+    <div class="form-hint u-da12f2">Early access in 5.68: temporary DEBUG 55 logging on one Kea server, restored by the Kea host itself at the deadline. Off by default. It needs the Kea host helper at build 16 or later on that server (Update helper above). Switching it off removes the Turn on buttons; a session that is already on is still restored and shown.</div>
+    {% if current_user.role == 'superadmin' %}
+    <form method="POST" action="/settings/infrastructure/investigation-logging-enabled">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {% if investigation_logging_enabled %}
+            <input type="hidden" name="enable" value="false">
+            <button type="submit" class="btn btn-sm btn-warning">Switch investigation logging off</button>
+        {% else %}
+            <input type="hidden" name="enable" value="true">
+            <button type="submit" class="btn btn-sm btn-primary">Switch investigation logging on (early access)</button>
+        {% endif %}
+    </form>
+    {% else %}
+    <div class="form-hint">{% if investigation_logging_enabled %}Switched on.{% else %}Switched off.{% endif %} A superadmin changes this.</div>
+    {% endif %}
+</div>
+
 <!-- Kea package install status (v5.1.2) -->
 <div class="card" id="kea-packages">
     <div class="card-header"><span class="card-title">{{ icon("package") }} Kea Package Status</span></div>

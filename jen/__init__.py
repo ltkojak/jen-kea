@@ -609,6 +609,14 @@ def create_app() -> Flask:
                     investigation_banner = []
         from flask import g
 
+        def _investigation_logging_enabled():
+            try:
+                from jen.services import investigation_logging as _inv
+
+                return bool(current_user and current_user.is_authenticated and _inv.enabled())
+            except Exception:
+                return False
+
         return {
             "investigation_banner": investigation_banner,
             "branding_name": "Jen",
@@ -620,6 +628,7 @@ def create_app() -> Flask:
             "venv_migration_incomplete": _VENV_MIGRATION_INCOMPLETE,
             "content_dir_incomplete": _CONTENT_DIR_INCOMPLETE,
             "ipv6_enabled": ipv6_enabled,
+            "investigation_logging_enabled": _investigation_logging_enabled(),
             "jen_layout": extensions.layout(),
             "kea_legacy_hosts": kea_legacy_hosts,
             "csrf_token": lambda: csrf_svc.generate_csrf_token(app),

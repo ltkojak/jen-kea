@@ -34,10 +34,10 @@
     </form>
 </div>
 
-{% if server %}
+{% if server and (investigation_logging_enabled or investigation.get(server.id|string)) %}
 <div class="card">
-    <div class="card-header"><span class="card-title">{{ icon("eye") }} Investigation logging</span></div>
-    <p class="form-hint">At Kea's default level this log names the client on packets, offers and allocations and nothing of the decision. Turning investigation logging on puts the <span class="mono">kea-dhcp4</span> logger at DEBUG (debuglevel 55) on <strong>{{ server.name }}</strong> for a bounded time: the classes Kea assigned, subnet selection and each packet's options then appear here and feed Explain. Jen restores the level itself when the time is up; it can fill a busy server's disk meanwhile.</p>
+    <div class="card-header"><span class="card-title">{{ icon("eye") }} Investigation logging <span class="form-hint">(early access)</span></span></div>
+    <p class="form-hint">At Kea's default level this log names the client on packets, offers and allocations and nothing of the decision. Turning investigation logging on puts the <span class="mono">kea-dhcp4</span> logger at DEBUG (debuglevel 55) on <strong>{{ server.name }}</strong> for a bounded time: the classes Kea assigned, subnet selection and each packet's options then appear here and feed Explain. The Kea host restores the level itself when the time is up; it can fill a busy server's disk meanwhile.</p>
     <div class="u-012c80">{{ investigation_controls(server, investigation.get(server.id|string), "trace", mac) }}</div>
 </div>
 {% endif %}

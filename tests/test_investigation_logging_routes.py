@@ -51,6 +51,7 @@ def stubs(monkeypatch):
         ),
     )
     monkeypatch.setattr(inv, "active", lambda now=None: [])
+    monkeypatch.setattr(inv, "enabled", lambda: True)  # (Q167) the opt-in is on here; the class below turns it off
     return calls
 
 
@@ -412,3 +413,92 @@ class TestTheAcknowledgeDamagedRoute:
         page = logged_in_client.get("/servers").data.decode()
         assert "acknowledge-damaged" in page and "no Kea server with SSH is configured" in page
         assert "I have checked every Kea" in page, "the confirm names what the person is asserting"
+
+
+class TestItIsOptIn:
+    """v5.68.0-beta.30 (Q167): early access, off by default. The switch gates turning ON (the three buttons, the POST, `turn_on`) and nothing else: a session that exists is always shown, restored
+    and turned off."""
+
+    @pytest.fixture
+    def off(self, stubs, monkeypatch):
+        from jen.services import investigation_logging as inv
+
+        monkeypatch.setattr(inv, "enabled", lambda: False)
+        return stubs
+
+    def _servers_page(self, client, monkeypatch):
+        from jen.services import kea
+
+        entry = {"server": dict(SERVER), "up": True, "ha_state": None, "version": "3.0.3", "role": "primary"}
+        monkeypatch.setattr(kea, "get_all_server_status", lambda: [entry])
+        return client.get("/servers").data.decode()
+
+    def test_off_the_post_is_refused_with_the_reason_and_the_service_is_not_called(self, logged_in_client, off):
+        r = logged_in_client.post(
+            "/servers/1/investigation-logging/on", data={"minutes": "15", "back": "servers"}, follow_redirects=True
+        )
+        assert b"not switched on" in r.data and b"early access" in r.data
+        assert off == [], "turn_on was never reached"
+
+    def test_off_there_is_no_turn_on_button_on_the_servers_page(self, logged_in_client, off, mock_kea, monkeypatch):
+        page = self._servers_page(logged_in_client, monkeypatch)
+        assert "/servers/1/investigation-logging/on" not in page
+
+    def test_off_a_running_session_still_shows_its_card_and_can_be_turned_off(
+        self, logged_in_client, off, mock_kea, monkeypatch
+    ):
+        from jen.services import investigation_logging as inv
+
+        monkeypatch.setattr(inv, "active", lambda now=None: [ON])
+        page = self._servers_page(logged_in_client, monkeypatch)
+        assert "/servers/1/investigation-logging/off" in page and "/servers/1/investigation-logging/on" not in page
+        r = logged_in_client.post("/servers/1/investigation-logging/off", data={"back": "servers"})
+        assert r.status_code == 302 and off == [("off", 1, "admin")]
+
+    def test_the_trace_card_is_absent_when_off_and_nothing_runs(self, logged_in_client, off, mock_kea, monkeypatch):
+        from jen import extensions as ext
+
+        monkeypatch.setattr(ext, "KEA_SERVERS", [dict(SERVER)])
+        page = logged_in_client.get("/tools/trace?server=1").data.decode()
+        assert "investigation-logging/on" not in page
+
+    def test_the_superadmin_toggle_switches_it_on_and_off_and_audits_it(self, logged_in_client, db):
+        from jen.models import user as _user
+
+        try:
+            r = logged_in_client.post(
+                "/settings/infrastructure/investigation-logging-enabled", data={"enable": "true"}, follow_redirects=True
+            )
+            assert r.status_code == 200 and b"switched on" in r.data
+            assert _user.get_global_setting("investigation_logging_enabled", "false") == "true"
+            r = logged_in_client.post(
+                "/settings/infrastructure/investigation-logging-enabled",
+                data={"enable": "false"},
+                follow_redirects=True,
+            )
+            assert b"switched off" in r.data
+            assert _user.get_global_setting("investigation_logging_enabled", "false") == "false"
+            with db.cursor() as cur:
+                cur.execute(
+                    "SELECT COUNT(*) AS n FROM audit_log WHERE action=%s", ("INVESTIGATION_LOGGING_ENABLED_CHANGED",)
+                )
+                assert cur.fetchone()["n"] >= 2
+        finally:
+            _user.set_global_setting("investigation_logging_enabled", "false")
+
+    def test_the_toggle_is_for_a_superadmin_only(self, client, db):
+        from tests.conftest import restricted_client
+
+        restricted_client(client, db, ["1"], role="admin", username="optin_admin")
+        r = client.post("/settings/infrastructure/investigation-logging-enabled", data={"enable": "true"})
+        assert r.status_code in (302, 403)
+        from jen.models import user as _user
+
+        assert _user.get_global_setting("investigation_logging_enabled", "false") != "true"
+
+    def test_the_default_is_off_for_a_fresh_install(self, logged_in_client, db):
+        from jen.models import user as _user
+        from jen.services import investigation_logging as inv
+
+        _user.set_global_setting("investigation_logging_enabled", "")
+        assert inv.enabled() is False

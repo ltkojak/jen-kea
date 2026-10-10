@@ -340,7 +340,12 @@ def _debug_logging_left_on(ctx) -> Check:
         for e in entries
         if not e["removed"] and not e["marker_invalid"] and (e["overdue"] or (e["error"] and e["remaining_s"] == 0))
     ]
-    if orphaned or damaged or stuck or overdue:
+    # v5.68.0-beta.30 (Q167): what the Kea HOST reports - an unresolved session Jen does not recognise (never overwritten), a restore it could not confirm from Kea's own log after
+    # ten attempts, and a restoration timer that has stayed down for three sweeps (the first two only warn: Jen asks the helper to start it again every sweep)
+    conflicted = [e for e in entries if e["host_conflict"] and not e["removed"]]
+    needs_hand = [e for e in entries if e["host_needs_hand"] and not e["removed"]]
+    timer_dead = [e for e in entries if e["timer_down"] >= 3 and not e["removed"]]
+    if orphaned or damaged or stuck or overdue or conflicted or needs_hand or timer_dead:
         c.status = "fail"
         parts = [
             # v5.68.0-beta.13 (Q148): the marker lost its restore object; Jen changed nothing and will not guess
@@ -360,6 +365,17 @@ def _debug_logging_left_on(ctx) -> Check:
             for e in overdue
             if e not in stuck
         ]
+        parts += [f"{e['name']}: {__inv.conflict_sentence(e['host_conflict'])}" for e in conflicted]
+        parts += [
+            f"{e['name']}: the Kea host could not confirm its restore from Kea's own log after repeated attempts ({(e['host_error'] or 'see the host state file')[:160]}) - "
+            f"on that host run `{__inv.HOST_COMMAND}` once the cause is fixed"
+            for e in needs_hand
+        ]
+        parts += [
+            f"{e['name']}: the Kea host's restoration timer has not been running for {e['timer_down']} sweeps and Jen could not start it again - "
+            "`sudo systemctl enable --now jen-kea-investigation.timer` on that host"
+            for e in timer_dead
+        ]
         c.detail = "; ".join(parts)
         c.fix_hint = (
             "The sweep retries every minute. If it keeps failing, turn logging off from Trace or Servers, or set the kea-dhcp4 logger's "
@@ -369,7 +385,7 @@ def _debug_logging_left_on(ctx) -> Check:
     unconfirmed = [e for e in entries if e["daemon"] in ("unknown", "other") and not e["not_loaded"]]
     not_loaded = [e for e in entries if e["not_loaded"]]
     c.status = "warn" if (unconfirmed or not_loaded) else "ok"
-    hosted = [e for e in entries if e["host_error"] and not e["removed"]]
+    hosted = [e for e in entries if (e["host_error"] or e["timer_down"]) and not e["removed"]]
     if hosted:
         c.status = "warn"
     c.detail = "; ".join(
@@ -381,6 +397,11 @@ def _debug_logging_left_on(ctx) -> Check:
             else ""
         )
         + (f" - {e['host_error'][:200]}" if e["host_error"] else "")
+        + (
+            f" - the Kea host's restoration timer is not running (sweep {e['timer_down']} of 3); Jen asks the helper to start it again every minute"
+            if e["timer_down"]
+            else ""
+        )
         + (" (its marker's deadline was unreadable, so it was treated as due)" if e.get("deadline_malformed") else "")
         + (
             f" (Kea's running log level is unconfirmed since {e['observed_at'] or 'it was turned on'} - Jen looks again every minute)"
