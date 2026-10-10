@@ -115,18 +115,24 @@ jobs:
 
       - name: Start kea-dhcp4
         run: |
-          mkdir -p kea-conf results
+          mkdir -p kea-conf kea-run results
+          # v5.68.0-beta.31 (Q168): the daemon's runtime directory is a bind mount, not a tmpfs, so the runner can reach its unix control socket
+          # (the helper asks the running Kea `config-get` on that socket; tests/kea_compat/test_log_levels.py records what it answers)
+          chmod 777 kea-run
           python -m tests.kea_compat.kea_config > kea-conf/kea-dhcp4.conf
           printf '%s' jen > kea-conf/jen-api.user
           printf '%s' jen_api_pw > kea-conf/jen-api.pw
           chmod 644 kea-conf/jen-api.user kea-conf/jen-api.pw
-          docker run -d --name kea --network host --tmpfs /var/run/kea \
+          docker run -d --name kea --network host \
             -e MARIADB_TLS_DISABLE_PEER_VERIFICATION=1 \
+            -v "$PWD/kea-run:/var/run/kea" \
             -v "$PWD/kea-conf:/etc/kea:ro" "$IMAGE"
           for i in $(seq 1 30); do
             if curl -sf -m 2 -H 'Content-Type: application/json' \
                  -u jen:jen_api_pw -d '{"command":"version-get"}' http://127.0.0.1:8004/ >/dev/null; then
-              echo "kea-dhcp4 answered after ${i}s"; exit 0
+              echo "kea-dhcp4 answered after ${i}s"
+              docker exec -u root kea chmod 666 /var/run/kea/kea4-ctrl.sock || true
+              exit 0
             fi
             sleep 1
           done
@@ -171,6 +177,7 @@ jobs:
           KEA_COMPAT_VERSION: ${{ matrix.kea }}
           KEA_COMPAT_IMAGE: ${{ env.IMAGE }}
           KEA_COMPAT_CONF_DIR: ${{ github.workspace }}/kea-conf
+          KEA_COMPAT_RUN_DIR: ${{ github.workspace }}/kea-run
           KEA_COMPAT_LOG_DIR: ${{ github.workspace }}/results/logs-${{ matrix.kea }}
           KEA_COMPAT_LOG_OUT: ${{ github.workspace }}/results/log-levels-${{ matrix.kea }}.json
           KEA_COMPAT_DB_HOST: 127.0.0.1

@@ -32,6 +32,9 @@ pytestmark = pytest.mark.kea_log
 
 IMAGE = os.environ.get("KEA_COMPAT_IMAGE", "")
 CONF_DIR = os.environ.get("KEA_COMPAT_CONF_DIR", "")
+RUN_DIR = os.environ.get(
+    "KEA_COMPAT_RUN_DIR", ""
+)  # v5.68.0-beta.31 (Q168): the daemon's /var/run/kea, bind-mounted so the runner can reach its unix control socket
 LOG_DIR = os.environ.get("KEA_COMPAT_LOG_DIR", "")
 OUT = os.environ.get("KEA_COMPAT_LOG_OUT", "")
 
@@ -142,8 +145,7 @@ def _restart(severity, debuglevel, ddns=False, forms=False):
         "kea",
         "--network",
         "host",
-        "--tmpfs",
-        "/var/run/kea",
+        *(("-v", f"{RUN_DIR}:/var/run/kea") if RUN_DIR else ("--tmpfs", "/var/run/kea")),
         "-e",
         "MARIADB_TLS_DISABLE_PEER_VERIFICATION=1",
         "-v",
@@ -157,6 +159,18 @@ def _restart(severity, debuglevel, ddns=False, forms=False):
     for _ in range(40):
         try:
             if requests.post(url, json={"command": "version-get"}, auth=auth, timeout=2).status_code == 200:
+                if RUN_DIR:  # test-only: the runner connects as itself, the helper on a real host connects as root
+                    _sh(
+                        "docker",
+                        "exec",
+                        "-u",
+                        "root",
+                        "kea",
+                        "chmod",
+                        "666",
+                        "/var/run/kea/kea4-ctrl.sock",
+                        check=False,
+                    )
                 return
         except requests.RequestException:
             pass
@@ -789,4 +803,216 @@ def test_sighup_reload_log_lines(findings):
     )
     assert set(helper._START_FAIL_IDS) & ids["restart_refused_broken_file"], (
         f"a start onto a broken file writes a start-failure id: {record['restart_refused_broken_file']}"
+    )
+
+
+# ── Q168: does the daemon's OWN control socket answer the question "what logger are you running"? ────────────────────────────────────────────────────
+
+
+def _logger_from(reply):
+    """{"present", "severity", "debuglevel", "marker"} of the kea-dhcp4 logger a `config-get` reply shows, or None when the reply is not a usable config-get."""
+    if not isinstance(reply, dict) or reply.get("result") != 0:
+        return None
+    section = (reply.get("arguments") or {}).get("Dhcp4")
+    if not isinstance(section, dict):
+        return None
+    loggers = section.get("loggers") or []
+    entry = next((x for x in loggers if isinstance(x, dict) and x.get("name") == "kea-dhcp4"), None)
+    if entry is None:
+        return {
+            "present": False,
+            "severity": None,
+            "debuglevel": None,
+            "marker": None,
+            "loggers": [x.get("name") for x in loggers if isinstance(x, dict)],
+        }
+    context = entry.get("user-context")
+    marker = context.get("jen-investigation") if isinstance(context, dict) else None
+    return {
+        "present": True,
+        "severity": entry.get("severity"),
+        "debuglevel": entry.get("debuglevel"),
+        "marker": marker if isinstance(marker, dict) else None,
+    }
+
+
+def _ask_raw_unix(path, command="config-get", wait=6.0):
+    """(reply | None, seconds to answer, closed_by_the_daemon_after_the_reply). One command to the unix control socket, read until it parses."""
+    started = time.monotonic()
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(wait)
+    try:
+        s.connect(path)
+        s.sendall(json.dumps({"command": command}).encode())
+        buf = b""
+        reply = None
+        while time.monotonic() - started < wait:
+            chunk = s.recv(65536)
+            if not chunk:
+                break
+            buf += chunk
+            try:
+                reply = json.loads(buf.decode())
+                break
+            except ValueError:
+                continue
+        took = time.monotonic() - started
+        closed = None
+        if reply is not None:
+            s.settimeout(1.5)
+            try:
+                closed = s.recv(1) == b""
+            except socket.timeout:
+                closed = False
+        return reply, took, closed
+    except OSError:
+        return None, time.monotonic() - started, None
+    finally:
+        s.close()
+
+
+def _ask_raw_http(address, port, user, password, command="config-get", wait=6.0):
+    import base64
+
+    started = time.monotonic()
+    try:
+        s = socket.create_connection((address, port), timeout=wait)
+    except OSError:
+        return None, 0.0
+    try:
+        body = json.dumps({"command": command}).encode()
+        token = base64.b64encode(f"{user}:{password}".encode()).decode()
+        head = f"POST / HTTP/1.0\r\nHost: {address}\r\nContent-Type: application/json\r\nAuthorization: Basic {token}\r\nContent-Length: {len(body)}\r\n\r\n"
+        s.sendall(head.encode() + body)
+        buf = b""
+        while time.monotonic() - started < wait:
+            chunk = s.recv(65536)
+            if not chunk:
+                break
+            buf += chunk
+        text = buf.partition(b"\r\n\r\n")[2]
+        reply = json.loads(text.decode())
+        return (reply[0] if isinstance(reply, list) and reply else reply), time.monotonic() - started
+    except (OSError, ValueError):
+        return None, time.monotonic() - started
+    finally:
+        s.close()
+
+
+def _wait_logger(sock_path, predicate, seconds=8.0):
+    deadline = time.monotonic() + seconds
+    seen = None
+    while time.monotonic() < deadline:
+        reply, _took, _closed = _ask_raw_unix(sock_path)
+        seen = _logger_from(reply)
+        if seen is not None and predicate(seen):
+            return seen
+        time.sleep(0.4)
+    return seen
+
+
+def test_the_daemons_own_control_socket_answers_config_get(findings):
+    """v5.68.0-beta.31 (Q168, verify first) - the Kea host will ask the RUNNING daemon, on its own unix (or local http) control socket, whether it runs the logger the restored file has: the
+    one answer that does not depend on the log level, the API, the Control Agent or Jen. This records, per image, the reply's shape, whether the daemon closes the connection, how long it
+    takes, what it shows after a SIGHUP onto the DEBUG-55 file, back at INFO, back at WARN (where the completion line is hidden from the log - the beta.30 P1 on a real daemon), and onto a
+    file with NO kea-dhcp4 logger (does Kea list a default one? it decides how the host judges a restore of a logger Jen created); the http form answers the same."""
+    if not RUN_DIR:
+        pytest.skip("KEA_COMPAT_RUN_DIR not set - the daemon's /var/run/kea is not bind-mounted for the runner")
+    from jen.services import kea_config_edit as ed
+
+    _restart("INFO", None)
+    record = findings.setdefault("control_socket", {})
+    sock_path = os.path.join(RUN_DIR, "kea4-ctrl.sock")
+    conf_path = os.path.join(CONF_DIR, "kea-dhcp4.conf")
+    with open(conf_path) as fh:
+        base = json.load(fh)
+    pid = _status()["pid"]
+    until = "2099-01-01T00:00:00+00:00"
+
+    def dump(conf):
+        return json.dumps(conf, indent=2)
+
+    reply, took, closed = _ask_raw_unix(sock_path)
+    assert reply is not None, (
+        "the unix control socket answered nothing: is /var/run/kea bind-mounted and the socket mode 666?"
+    )
+    record["reply_shape"] = {
+        "type": type(reply).__name__,
+        "keys": sorted(reply) if isinstance(reply, dict) else None,
+        "result": reply.get("result") if isinstance(reply, dict) else None,
+        "arguments_keys": sorted((reply.get("arguments") or {}).keys()) if isinstance(reply, dict) else None,
+    }
+    record["seconds_to_answer"] = round(took, 3)
+    record["closed_after_reply"] = closed
+    assert isinstance(reply, dict) and reply.get("result") == 0 and _logger_from(reply) is not None, record
+
+    http_reply, http_took = _ask_raw_http("127.0.0.1", 8004, "jen", "jen_api_pw")
+    record["http_shape"] = {
+        "type": type(http_reply).__name__,
+        "result": http_reply.get("result") if isinstance(http_reply, dict) else None,
+    }
+    record["http_logger_at_info"] = _logger_from(http_reply)
+    assert _logger_from(http_reply) is not None, (
+        f"the plain local http socket answers config-get with the same shape: {record['http_shape']}"
+    )
+
+    rows = {}
+    on, code = ed.set_investigation_logging(base, until)
+    assert code == "ok"
+    _hup_and_read(pid, dump(on), seconds=1.0)
+    rows["debug_55"] = _wait_logger(sock_path, lambda s: s["marker"] is not None)
+    _hup_and_read(pid, dump(base), seconds=1.0)
+    rows["restored_info"] = _wait_logger(
+        sock_path, lambda s: s["marker"] is None and str(s["severity"]).upper() == "INFO"
+    )
+
+    warn_base = json.loads(dump(base))
+    next(x for x in warn_base["Dhcp4"]["loggers"] if x["name"] == "kea-dhcp4")["severity"] = "WARN"
+    warn_on, code = ed.set_investigation_logging(warn_base, until)
+    assert code == "ok"
+    _hup_and_read(pid, dump(warn_on), seconds=1.0)
+    before = len(_daemon_log())
+    with open(conf_path, "w") as fh:
+        fh.write(dump(warn_base))
+    _hup(pid)
+    rows["restored_warn"] = _wait_logger(
+        sock_path, lambda s: s["marker"] is None and str(s["severity"]).upper() == "WARN"
+    )
+    time.sleep(2.0)
+    warn_lines = _daemon_log()[before:]
+    record["warn_log_ids"] = _dhcp4_ids(warn_lines)
+    record["warn_row_completion_line_in_log"] = any("DHCP4_DYNAMIC_RECONFIGURATION_SUCCESS" in ln for ln in warn_lines)
+
+    created = json.loads(dump(base))
+    created["Dhcp4"].pop("loggers", None)
+    _hup_and_read(pid, dump(on), seconds=1.0)
+    _hup_and_read(pid, dump(created), seconds=3.0)
+    reply, _took, _closed = _ask_raw_unix(sock_path)
+    record["created_case_reply_loggers"] = ((reply or {}).get("arguments") or {}).get("Dhcp4", {}).get("loggers")
+    rows["created_no_logger_in_file"] = _logger_from(reply)
+
+    _hup_and_read(pid, dump(base), seconds=2.0)  # a sane file and a sane daemon behind
+    record["rows"] = rows
+    record["process_survived"] = _status()["pid"] == pid
+    print(f"CONTROL SOCKET {IMAGE}: " + json.dumps(record, sort_keys=True, default=str))
+
+    assert record["process_survived"], record
+    assert (
+        rows["debug_55"]
+        and rows["debug_55"]["marker"] is not None
+        and str(rows["debug_55"]["severity"]).upper() == "DEBUG"
+        and rows["debug_55"]["debuglevel"] == 55
+    ), rows
+    assert (
+        rows["restored_info"]
+        and rows["restored_info"]["marker"] is None
+        and str(rows["restored_info"]["severity"]).upper() == "INFO"
+    ), rows
+    assert (
+        rows["restored_warn"]
+        and rows["restored_warn"]["marker"] is None
+        and str(rows["restored_warn"]["severity"]).upper() == "WARN"
+    ), rows
+    assert record["warn_row_completion_line_in_log"] is False, (
+        f"the P1 row on a real Kea: restored to WARN the completion line is NOT in the log, yet the socket shows the file's logger: {record['warn_log_ids']}"
     )
