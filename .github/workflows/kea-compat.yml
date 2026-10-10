@@ -118,7 +118,7 @@ jobs:
           mkdir -p kea-conf kea-run results
           # v5.68.0-beta.31 (Q168): the daemon's runtime directory is a bind mount, not a tmpfs, so the runner can reach its unix control socket
           # (the helper asks the running Kea `config-get` on that socket; tests/kea_compat/test_log_levels.py records what it answers)
-          chmod 777 kea-run
+          chmod 750 kea-run  # Kea refuses a socket directory more relaxed than 750 ("has more relaxed permissions than 750")
           python -m tests.kea_compat.kea_config > kea-conf/kea-dhcp4.conf
           printf '%s' jen > kea-conf/jen-api.user
           printf '%s' jen_api_pw > kea-conf/jen-api.pw
