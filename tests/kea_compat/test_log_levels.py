@@ -137,6 +137,9 @@ def _restart(severity, debuglevel, ddns=False, forms=False):
     with open(os.path.join(CONF_DIR, "kea-dhcp4.conf"), "w") as fh:
         json.dump(conf, fh, indent=2)
     _sh("docker", "rm", "-f", "kea", check=False)
+    if RUN_DIR:  # a bind mount outlives the container (a tmpfs did not): the dead daemon's pid file would read as "already running" and its socket as a live one
+        for name in os.listdir(RUN_DIR):
+            os.unlink(os.path.join(RUN_DIR, name))
     _sh(
         "docker",
         "run",
