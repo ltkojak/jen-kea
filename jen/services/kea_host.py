@@ -387,7 +387,11 @@ def _legacy_suffix(result: dict) -> dict:
 
 
 def _legacy_python3(server: dict, script: str, timeout: int = 30) -> tuple[str, str, int]:
-    """`echo <b64> | base64 -d | sudo python3` — the pre-5.11.0 path.
+    """`base64 -d | sudo python3` with the base64 script on STDIN — the pre-5.11.0 path.
+
+    v5.68.0-beta.30 (Q167): the script used to travel as an ARGUMENT (`echo <b64> | base64 -d | ...`), and Linux caps one argument at 128 KiB (MAX_ARG_STRLEN): once the helper
+    passed ~96 KB the install script's base64 no longer fit and "Install helper" failed with `/bin/sh: Argument list too long` (found by the system stack at build 16). Stdin has no
+    such cap. The command string is the same pipeline, so the legacy grant (`/usr/bin/python3`) and the source guard are unchanged.
 
     v5.28.0 (Q24, B1) — returns the remote command's real exit status
     too, read AFTER stdout/stderr (paramiko's `recv_exit_status()`
@@ -401,7 +405,12 @@ def _legacy_python3(server: dict, script: str, timeout: int = 30) -> tuple[str, 
     ssh = __kea6._connect_ssh(server)
     try:
         enc = base64.b64encode(script.encode()).decode()
-        _stdin, stdout, stderr = ssh.exec_command(f"echo {enc} | base64 -d | sudo python3", timeout=timeout)
+        stdin, stdout, stderr = ssh.exec_command("base64 -d | sudo python3", timeout=timeout)
+        try:
+            stdin.write(enc)
+            stdin.channel.shutdown_write()
+        except (OSError, AttributeError):
+            pass  # the remote command already ended; its own output and exit status are what is read below
         out = stdout.read().decode("utf-8", "replace").strip()
         err = stderr.read().decode("utf-8", "replace").strip()
         return out, err, stdout.channel.recv_exit_status()

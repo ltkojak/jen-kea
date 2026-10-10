@@ -512,6 +512,72 @@ class TestDocsCarryTheSameByHandLine:
         assert self._local_only() in text
 
 
+class TestTheLegacyScriptTravelsOnStdinNotInAnArgument:
+    """v5.68.0-beta.30 (Q167): `echo <base64> | base64 -d | sudo python3` put the whole script into ONE command-line argument, and Linux caps an argument at 131072 bytes
+    (MAX_ARG_STRLEN). The helper passed ~96 KB at build 16 and 'Install helper' failed with `/bin/sh: Argument list too long` - found by the system stack."""
+
+    class _Channel:
+        def __init__(self):
+            self.shut = False
+
+        def shutdown_write(self):
+            self.shut = True
+
+        def recv_exit_status(self):
+            return 0
+
+    class _Stream:
+        def __init__(self, text="ok:1", channel=None):
+            self._text, self.channel = text, channel
+
+        def read(self):
+            return self._text.encode()
+
+    class _Stdin:
+        def __init__(self, channel):
+            self.sent, self.channel = [], channel
+
+        def write(self, data):
+            self.sent.append(data)
+
+    def _run(self, monkeypatch, script):
+        import base64
+
+        seen = {}
+        channel = self._Channel()
+        stdin = self._Stdin(channel)
+
+        class Ssh:
+            def exec_command(self, command, timeout=None):
+                seen["command"] = command
+                return (
+                    stdin,
+                    TestTheLegacyScriptTravelsOnStdinNotInAnArgument._Stream("ok:1", channel),
+                    TestTheLegacyScriptTravelsOnStdinNotInAnArgument._Stream("", channel),
+                )
+
+            def close(self):
+                seen["closed"] = True
+
+        monkeypatch.setattr(kea_host.__dict__["__kea6"], "_connect_ssh", lambda server: Ssh())
+        out = kea_host._legacy_python3({"id": 1}, script)
+        seen["stdin"] = "".join(stdin.sent)
+        seen["decoded"] = base64.b64decode(seen["stdin"]).decode()
+        seen["out"] = out
+        seen["shut"] = channel.shut
+        return seen
+
+    def test_the_command_carries_no_payload_and_the_script_arrives_whole_on_stdin(self, monkeypatch):
+        script = "print('x')\n" + "# padding\n" * 40_000  # ~440 KB, base64 ~590 KB: far past one argument's cap
+        seen = self._run(monkeypatch, script)
+        assert seen["command"] == "base64 -d | sudo python3" and len(seen["command"]) < 100
+        assert seen["decoded"] == script and seen["shut"] is True and seen["closed"] is True
+        assert seen["out"] == ("ok:1", "", 0)
+
+    def test_no_command_string_is_built_around_the_script_any_more(self):
+        assert "echo {enc}" not in (_REPO_ROOT / "jen" / "services" / "kea_host.py").read_text(encoding="utf-8")
+
+
 class TestHelperDeployment:
     def test_render_install_helper_script_embeds_source_and_sudoers_line(self):
         from jen.services.kea_authoring import render_install_helper_script

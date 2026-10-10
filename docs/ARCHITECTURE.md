@@ -1192,7 +1192,7 @@ restart (the file is the problem); silence earns the one restart, checked by `_a
 (INV-007); a failed tick counts in `attempts` and ten set `needs_hand`. (2) *The host's record is authoritative* (INV-008): `investigation-arm` over an unresolved record is idempotent (same
 path, restore and deadline), an extension (same restore, later deadline, `extended_from`), or refused with `error: "armed"` and the record; an unreadable state file blocks an arm too. (3)
 `investigation-status` reports `timer_active` / `timer_enabled` (and `last_error: "Restoration timer is not active"` for an armed state without one); `investigation-timer {action: "ensure"}` re-asserts
-the units and the timer. (4) `--self-restore` exits 1 on a failed restore. A state armed by build 15 carries no log path and is verified the way build 15 did, once.
+the units and the timer. (4) `--self-restore` exits 1 on a failed restore. A state armed by build 15 carries no log path and is verified the way build 15 did, once. (Found by the system stack at build 16: the legacy install script travelled as ONE command argument, and Linux caps an argument at 128 KiB, so "Install helper" failed with `Argument list too long` once the helper passed ~96 KB; `_legacy_python3` now sends the base64 script on stdin - the same pipeline, so the legacy grant is unchanged.)
 
 Jen's side is display and audit: `turn_on` refuses below build 16 (`kea_host.INVESTIGATION_MIN_HELPER_BUILD`, "press Update helper"), writes the file through the change set, **arms the
 host after the write and before the daemon is asked**, and on a failed arm or a `"none"` timer reverts the file and refuses; `turn_off` and the sweep's restore call
