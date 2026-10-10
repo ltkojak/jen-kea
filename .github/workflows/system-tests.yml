@@ -72,7 +72,7 @@ jobs:
           # 00 the stack boots, 01 restore, 02 change set when a server dies, 03 failed-restart rollback,
           # 11 /api/v1/health with Kea frozen, 12 a revert whose restart fails is a persistent rollback_failed,
           # 14 the helper's signed update needs no sudoers grant at all, 19 the Kea host restores investigation logging by itself
-          CRITICAL: 'test_00 or test_01 or test_02 or test_03 or test_11 or test_12 or test_14 or test_16 or test_17 or test_19'
+          CRITICAL: 'test_00 or test_01 or test_02 or test_03 or test_11 or test_12 or test_14 or test_16 or test_17 or test_19 or test_21'
         run: |
           mkdir -p system-results
           if [ -z "$SELECT" ] && [ "$EVENT" = "push" ] && [[ "$REF_NAME" == *-beta.* ]]; then

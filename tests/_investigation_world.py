@@ -68,7 +68,22 @@ class FakeKea:
         self.restart_ignored = False  # the restart succeeds and the daemon does not move
         self.second = None  # config-get answers from ANOTHER daemon (api_url and ssh_host are not the same Kea)
         # v5.68.0-beta.29 (Q165): the Kea HOST - jen-kea-helper build 15 with its state file and its timer. `host_down` is a host Jen cannot reach over SSH at all.
-        self.build = 16
+        self.build = 17
+        # v5.68.0-beta.31 (Q168): the host's EVIDENCE channel. A restore is recorded as done only on the daemon's own answer ("config-get" on its control socket), Kea's completion
+        # id in its log ("log": only when no socket answered AND the restored level does not hide that line AND the log was not lost) or a NEW active process after the one restart
+        # ("process"); a reload-start line is never evidence. `socket` is what the daemon has ("unix" | None); `socket_silent` and `log_rotated` and `state_bad` are the faults.
+        self.socket = "unix"
+        self.socket_silent = False  # the control socket does not answer (refuses / times out)
+        self.log_rotated = (
+            False  # the log evidence of a tick is lost (rotated away, exhausted or unreadable): unconfirmed
+        )
+        self.state_bad = False  # the host's state file exists and cannot be read (INV-009)
+        self.last_bad_state_tick = (
+            None  # when a tick last found it unreadable: the next tick after the file is readable again restores
+        )
+        self.restored_while_debug = (
+            None  # I11: set when the host RECORDED a restore while its daemon was at investigation DEBUG
+        )
         self.helper_code = "ok"  # "missing" | "unreachable" | "error": what `helper_build` answers
         self.timer = "systemd"  # what `investigation-arm` reports ("none" = a host that cannot run the timer)
         self.arm_fails = None  # a detail string: `investigation-arm` answers not-ok with it
@@ -164,7 +179,7 @@ class FakeKea:
         return {
             "ok": False,
             "code": "old",
-            "detail": "the Kea host helper on this host is older than build 16 - press Update helper",
+            "detail": "the Kea host helper on this host is older than build 17 - press Update helper",
         }
 
     def helper_build_info(self, server):
@@ -182,6 +197,13 @@ class FakeKea:
             return self._too_old()
         if self.arm_fails:
             return {"ok": False, "code": "error", "detail": self.arm_fails}
+        if self.state_bad:
+            return {
+                "ok": False,
+                "code": "armed",
+                "detail": "the host's investigation state file cannot be trusted",
+                "existing": {"unreadable": True, "detail": "the state file is not valid JSON"},
+            }
         existing = self.helper_state
         if existing is not None and not existing["restored_at"]:
             # build 16 (Q167, INV-008): an unresolved record is never overwritten - the same session is a no-op, the same restore with a later deadline an extension
@@ -241,6 +263,8 @@ class FakeKea:
             return self._host_error()
         if self.build < 16:
             return self._too_old()
+        if self.state_bad:
+            return self._bad_state()
         st = self.helper_state
         if st is None:
             return {"ok": True, "code": "ok", "armed": False}
@@ -254,25 +278,59 @@ class FakeKea:
             **copy.deepcopy(st),
         }
 
+    def _bad_state(self):
+        return {
+            "ok": False,
+            "code": "bad-state",
+            "detail": "the host's investigation state file exists and cannot be trusted (not valid JSON)",
+            "state_file": "/var/lib/jen-kea-helper/investigation-dhcp4.json",
+        }
+
+    def _answering(self):
+        return self.socket == "unix" and not self.socket_silent
+
+    def _hides_info(self):
+        """The restored logger's level hides Kea's INFO completion line (WARN and above): the log then proves nothing about a reload that applied."""
+        entry = helper()._logger_entry(self.file)
+        return str((entry or {}).get("severity") or "").upper() in ("WARN", "ERROR", "FATAL", "NONE")
+
     def _hup_or_restart(self, st):
+        """(how, evidence, error). The signal is taken (`loaded` moves) unless ignored; whether the host can SAY so is the evidence channel: the socket answering is `config-get`;
+        without it the completion id in the log is `log` - only when the restored level shows it and the log was not lost. Anything else is unconfirmed, and an unconfirmed
+        reload gets the ONE restart (confirmed by `config-get` when the socket answers, else by a NEW active process)."""
         if self.hup_refused:
-            return None, "Kea refused the restored config: DHCP4_CONFIG_LOAD_FAIL"
+            return None, None, "Kea refused the restored config: DHCP4_CONFIG_LOAD_FAIL"
         if not (self.reload_ignored or self.hup_ignored):
             self.loaded = copy.deepcopy(self.file)
-            return "reload", None
+            if self._answering():
+                return "reload", "config-get", None
+            if not self._hides_info() and not self.log_rotated:
+                return "reload", "log", None
         if st["restarts"] >= 1:
             return (
+                None,
                 None,
                 "the daemon did not stay active after the reload and it was already restarted once for this state: not restarting again",
             )
         st["restarts"] += 1
         if not self.restart_ok:
-            return None, "systemctl restart kea-dhcp4-server failed"
+            return None, None, "systemctl restart kea-dhcp4-server failed"
         self.loaded = copy.deepcopy(
             self.file
         )  # a real restart re-reads the file (`restart_ignored` models an API that answers for a different daemon)
         self.list_unreachable = False
-        return "restart", None
+        return "restart", "config-get" if self._answering() else "process", None
+
+    def _at_debug(self):
+        entry = helper()._logger_entry(self.loaded)
+        context = (entry or {}).get("user-context")
+        return (
+            bool(entry)
+            and str(entry.get("severity") or "").upper() == "DEBUG"
+            and entry.get("debuglevel") == 55
+            and isinstance(context, dict)
+            and "jen-investigation" in context
+        )
 
     def host_restore(self):
         """The helper's restore routine (shared by disarm, the timer and boot): (ok, how, detail). The logger is put back from the STATE's `restore`, by the helper's
@@ -286,13 +344,21 @@ class FakeKea:
         new, code = helper()._restore_logger(self.file, st["restore"])
         if code == "ok":
             self.file = new
-        how, error = self._hup_or_restart(st)
+        how, evidence, error = self._hup_or_restart(st)
         if error:
             st["last_error"] = error
             st["attempts"] += 1
             st["needs_hand"] = st["attempts"] >= 10
             return False, None, error
-        st.update(restored_at=inv._now().isoformat(timespec="seconds"), how=how, last_error=None, needs_hand=False)
+        if self._at_debug():
+            self.restored_while_debug = dict(st)  # I11: the host is about to record a restore the daemon has not made
+        st.update(
+            restored_at=inv._now().isoformat(timespec="seconds"),
+            how=how,
+            evidence=evidence,
+            last_error=None,
+            needs_hand=False,
+        )
         return True, how, ""
 
     def investigation_disarm(self, server):
@@ -301,6 +367,8 @@ class FakeKea:
             return self._host_error()
         if self.build < 16:
             return self._too_old()
+        if self.state_bad:
+            return self._bad_state()
         st = self.helper_state
         if st is None:
             return {"ok": True, "code": "ok", "restored": False, "how": "nothing", "detail": "not armed"}
@@ -325,6 +393,9 @@ class FakeKea:
         due = inv._edit._parse_until(st["until"])
         if due is not None and due > inv._now():
             return None
+        if self.state_bad:  # the tick cannot read its own record: nothing is restored by the host, and it says so (`--self-restore` exits 1)
+            self.last_bad_state_tick = inv._now()
+            return False, None, "the state file is not usable"
         return self.host_restore()
 
 

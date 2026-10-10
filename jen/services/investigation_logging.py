@@ -714,6 +714,8 @@ def helper_gate(server: dict, held: dict | None = None) -> str:
             "Settings → Kea → SSH → Update helper, then try again. Nothing was changed."
         )
     status = _host.investigation_status(server)
+    if status.get("code") == "bad-state":
+        return f"{name}: {conflict_sentence({'unreadable': True})}. Nothing was changed."
     if status.get("ok") and status.get("armed"):
         own = held is not None and held.get("restore") is not None and status.get("restore") == held.get("restore")
         if not own:
@@ -2113,6 +2115,11 @@ def _host_phase(known: dict, record: dict, now: datetime) -> set:
             )
             if status.get("code") in ("missing", "old"):
                 entry["armed"] = False
+            elif status.get("code") == "bad-state":
+                # build 17 (Q168, INV-009): the host's record exists and cannot be read - an unreadable conflict, not "no session" (Health fails through `conflicted`)
+                entry["host_conflict"] = {"unreadable": True, "detail": status.get("detail")}
+                entry["armed"] = False
+                entry["host_error"] = conflict_sentence(entry["host_conflict"])[:300]
         else:
             same_restore = "restore" not in entry or status.get("restore") == entry.get("restore")
             mine = due is not None and _edit._parse_until(status.get("until") or "") == due and same_restore

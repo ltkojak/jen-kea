@@ -277,6 +277,9 @@ warning and recording a null status. Config mutation is pure (`jen/services/kea_
   that, and the property to defend is the walk's I10 (`tests/test_investigation_model.py`): a daemon the host was armed for is never at DEBUG 55 past its deadline + 120 s.
   The restore transformation exists twice (`kea_config_edit.clear_investigation_logging`, the helper's `_restore_logger`) and is held identical by
   `tests/vectors/investigation_restore.json`; a change to either runs the other's test.
+  **The host's evidence is the daemon's own answer (v5.68.0-beta.31, Q168, helper build 17).** `restored_at` is written in one place (`_restore_state`), only with an `evidence`: the running daemon's `config-get` on
+  its control socket shows the logger the FILE has, Kea's completion id read across rotation (only when no socket answered), or a NEW active process after the one restart; a reload-START line is never evidence and
+  a state file that exists and cannot be read is `bad-state`, never "no session" (INV-007, INV-009..011; the walk's I11 and `tests/kea_compat/test_log_levels.py::test_the_daemons_own_control_socket_answers_config_get`).
 - **Investigation logging on demand is opt-in (v5.68.0-beta.30, Q167).** `investigation_logging_enabled` (default off, superadmin toggle under Settings -> Kea) gates turning logging ON only (the buttons, the route's `on`, `turn_on`); never gate
   `turn_off`, the sweep, `forget`, `acknowledge`, Health or the host's timer - a session that exists is always restored and shown (`tests/test_investigation_host.py::TestInvestigationLoggingIsOptIn` pins who may read the switch).
   The Kea host's record of an unresolved session is authoritative (INV-008): Jen shows a conflict and refuses to arm over it, never overwrites.

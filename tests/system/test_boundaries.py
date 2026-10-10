@@ -2041,6 +2041,7 @@ def _s19_host_restored(pid):
             and state
             and state["restored_at"]
             and state["how"] == "reload"
+            and state.get("evidence") == "config-get"
         )
 
     st.wait_for(done, timeout=60, interval=2, what="the Kea host to restore the logger by itself")
@@ -2108,7 +2109,28 @@ def test_19_the_kea_host_puts_investigation_logging_back_with_jen_stopped_or_its
         st.sh(st.JEN, "sed -i 's/^host = kea-b$/host = kea-a/' /etc/jen/jen.config")
         st.run(["docker", "restart", st.JEN])
         _s19_jen_back_and_clean(web)
+
+        # case 4 - the level to put back is WARN (Q168): Kea does NOT write its completion line at that level, so a restore proven from the log alone (beta.30) could only ever have
+        # guessed. The host asks the RUNNING daemon instead, and the evidence it records is the daemon's own answer.
+        web = st.Web().login()
+        _s21_set_original_level("WARN")
+        _s19_on(web)
+        before = _s21_success_lines()
+        _s19_deadline_passes()
+        _s19_host_restored(pid)
+        logger, state = _s19_logger(), _s19_state()
+        assert logger["severity"] == "WARN" and not logger["marker"], (
+            f"INVARIANT: the running daemon is back at the WARN the file had: {logger}"
+        )
+        assert state["evidence"] == "config-get" and state["how"] == "reload", (
+            f"INVARIANT: the host recorded the daemon's own answer, not a log line: {state}"
+        )
+        assert _s21_success_lines() == before, (
+            "INVARIANT: at WARN Kea writes no completion line - the host's restore did not rest on one"
+        )
+        _s19_jen_back_and_clean(web)
     finally:
+        _s21_set_original_level("INFO", check=False)
         st.dexec(st.JEN, "sed", "-i", "s/^host = kea-b$/host = kea-a/", "/etc/jen/jen.config", check=False)
         for container in (st.MARIADB, st.JEN):
             st.run(["docker", "start", container], check=False)
@@ -2151,3 +2173,95 @@ def test_20_a_failed_restore_tick_exits_nonzero_and_the_next_tick_still_runs_and
         f"INVARIANT: a later success clears the hand flag: {state}"
     )
     _s19_jen_back_and_clean(web)
+
+
+S21_ORIGINAL = r"""
+import json, os, signal, subprocess, sys
+p = "/etc/kea/kea-dhcp4.conf"
+cfg = json.load(open(p))
+for entry in cfg["Dhcp4"]["loggers"]:
+    if entry["name"] == "kea-dhcp4":
+        entry["severity"] = sys.argv[1]
+json.dump(cfg, open(p, "w"), indent=2)
+for pid in subprocess.run(["pgrep", "-x", "kea-dhcp4"], capture_output=True, text=True).stdout.split():
+    os.kill(int(pid), signal.SIGHUP)
+"""
+
+
+def _s21_set_original_level(severity, check=True):
+    """What a person (or the packages) left the `kea-dhcp4` logger at: edited into the file and re-read by the running daemon, as a person would."""
+    st.dexec(st.KEA_A, "python3", "-", severity, input=S21_ORIGINAL, check=check)
+    time.sleep(2)
+
+
+def _s21_success_lines():
+    out = st.dexec(
+        st.KEA_A, "sh", "-c", f"grep -c DHCP4_DYNAMIC_RECONFIGURATION_SUCCESS {st.KEA_LOG} || true"
+    ).stdout.strip()
+    return int(out or 0)
+
+
+# ── 21. a state file the host cannot read is never "no session" ─────────────────────────────────────────────────────────
+def test_21_an_unreadable_host_record_is_reported_never_taken_for_no_session(stack):
+    """v5.68.0-beta.31 (Q168, INV-009): the state file under /var/lib/jen-kea-helper is garbled while a session is on. The helper's status says `bad-state` (not `armed: false`), Health fails and
+    says why, turning logging on is refused, the host's own tick exits 1 and restores nothing, and the daemon stays at DEBUG until Jen's own sweep restores it at the deadline - the host
+    never overwrote the file and never claimed a restore it did not make. The stand-in is the one of scenario 19 (no systemd, a loop running the real `--self-restore`)."""
+    web = st.Web().login()
+    _s_enable_investigation_logging(web)
+    pid = st.dexec(st.KEA_A, "pgrep", "-x", "kea-dhcp4").stdout.split()
+    assert pid, "kea-dhcp4 is running on kea-a"
+    try:
+        _s19_on(web)
+        st.dexec(st.KEA_A, "sh", "-c", f"printf '%s' '{{not json' > {S19_STATE} && chmod 600 {S19_STATE}")
+        out, _p = st.jen_py(
+            """
+from jen.services import investigation_logging as inv, kea_host, health
+with app.app_context():
+    server = next(s for s in inv._ssh_servers() if str(s.get("id")) == "1")
+    emit(kea_host.investigation_status(server))
+    inv.sweep(full=True)
+    check = health._debug_logging_left_on({})
+    emit({"status": check.status, "detail": check.detail})
+    emit(inv.turn_on(server, 15))
+    emit([dict(armed=e.get("armed"), conflict=e.get("host_conflict")) for e in inv.active()])
+"""
+        )
+        status, check, turn_on, entries = out
+        assert status["ok"] is False and status["code"] == "bad-state" and status["state_file"] == S19_STATE, (
+            f"INVARIANT: an unreadable record is reported as such, not as nothing armed: {status}"
+        )
+        assert check["status"] == "fail" and "cannot read" in check["detail"], (
+            f"INVARIANT: Health fails and says what is wrong: {check}"
+        )
+        assert turn_on["ok"] is False and "Nothing was changed" in " ".join(turn_on["lines"]), (
+            f"INVARIANT: turning logging on is refused while the host's record cannot be trusted: {turn_on}"
+        )
+        assert entries and entries[0]["armed"] is False and entries[0]["conflict"]["unreadable"] is True, entries
+        # the host's own tick: exit 1, nothing restored, the file left exactly as found
+        tick = st.dexec(st.KEA_A, "/usr/local/sbin/jen-kea-helper", "--self-restore", "--now", check=False)
+        assert tick.returncode == 1, (
+            f"INVARIANT: a tick that could not restore exits non-zero: {tick.returncode} {tick.stdout} {tick.stderr}"
+        )
+        assert st.dexec(st.KEA_A, "cat", S19_STATE).stdout == "{not json", (
+            "INVARIANT: the helper never overwrote the file"
+        )
+        assert _s19_logger()["severity"] == "DEBUG", "INVARIANT: nothing was restored behind the unreadable record"
+        # the person removes the file; the deadline passes; Jen's own sweep finishes the job through its own path
+        st.dexec(st.KEA_A, "rm", "-f", S19_STATE)
+        out, _p = st.jen_py(
+            """
+from datetime import datetime, timedelta, timezone
+from jen.services import investigation_logging as inv
+with app.app_context():
+    emit(inv.sweep(now=datetime.now(timezone.utc) + timedelta(minutes=10), full=True))
+    emit([e["name"] for e in inv.active()])
+"""
+        )
+        assert out[1] == [], f"INVARIANT: Jen restores at the deadline when the host could not: {out}"
+        logger = _s19_logger()
+        assert logger["severity"] != "DEBUG" and not logger["marker"], f"INVARIANT: the daemon is back: {logger}"
+        assert '"jen-investigation"' not in st.kea_conf_bytes(st.KEA_A)
+    finally:
+        st.dexec(st.KEA_A, "rm", "-f", S19_STATE, check=False)
+        with contextlib.suppress(Exception):
+            st.wait_jen_healthy(timeout=180)

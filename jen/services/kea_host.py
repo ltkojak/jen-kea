@@ -963,7 +963,7 @@ def remove_config(server: dict, service: str, expect_sha256: str | None) -> dict
     return {"ok": False, "code": "error", "detail": resp.get("detail") or str(err), "via": "helper"}
 
 
-INVESTIGATION_MIN_HELPER_BUILD = 16  # v5.68.0-beta.30 (Q167): the verified restore, the authoritative host record and the timer ops are build 16 (the self-restore itself arrived in build 15)
+INVESTIGATION_MIN_HELPER_BUILD = 17  # v5.68.0-beta.31 (Q168): the restore verified from the daemon's own answer and the one state loader are build 17 (build 16: the authoritative host record and the timer ops; build 15: the self-restore itself)
 
 
 def _investigation_op(server: dict, op: str, payload: dict) -> dict:

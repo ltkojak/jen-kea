@@ -190,6 +190,12 @@ class Walk:
             )  # when this host's timer fires next (the timer is the host's own clock)
             if rng.random() < 0.35:
                 fake.commands = ["version-get"]  # a daemon that answers and lacks config-reload
+        socket_rng = random.Random(self.seed ^ 0x168)
+        for fake in self.physical.values():
+            if socket_rng.random() < 0.25:
+                fake.socket = (
+                    None  # Kea 3.0+ with no local control socket: the host's evidence is then the log (or the process)
+                )
         self.original = {host: copy.deepcopy(f.file) for host, f in self.physical.items()}
         ini = configparser.ConfigParser(interpolation=None)
         ini["kea"] = {"name": "kea-a", "api_url": "http://10.0.0.1:8000", "api_user": "u", "api_pass": "p"}
@@ -520,6 +526,9 @@ class Walk:
             "hup_ignored": 2,
             "hup_refused": 2,
             "foreign_session": 2,
+            "socket_silent": 2,
+            "state_bad": 2,
+            "log_rotated": 2,
         }
         kinds = [
             "reload_applied_but_lost",
@@ -546,6 +555,9 @@ class Walk:
             "hup_ignored",
             "hup_refused",
             "foreign_session",
+            "socket_silent",
+            "state_bad",
+            "log_rotated",
         ]
         kind = self.rng.choices(kinds, [weights.get(k, 1) for k in kinds])[0]
         getattr(self, "fault_" + kind)()
@@ -624,6 +636,18 @@ class Walk:
     def fault_hup_refused(self):
         """Kea logs a failure for the restored file: the host reports it and keeps it pending (build 16: verified from Kea's own log; the file is the problem, so no restart)."""
         self._timed(self._fake(), "hup_refused", True, "hup_refused (Kea refuses the restored config)")
+
+    def fault_socket_silent(self):
+        """The daemon's control socket does not answer (Q168): the host's evidence falls to Kea's completion line, or - where the restored level hides it - to the one restart."""
+        self._timed(self._fake(), "socket_silent", True, "socket_silent (the daemon's control socket does not answer)")
+
+    def fault_state_bad(self):
+        """The host's state file exists and cannot be read (Q168, INV-009): arm answers `armed`/unreadable, status and disarm answer `bad-state`, the tick fails and restores nothing."""
+        self._timed(self._fake(), "state_bad", True, "state_bad (the host's state file cannot be read)")
+
+    def fault_log_rotated(self):
+        """The log evidence of a tick is lost (Q168, INV-010): rotated away, exhausted or unreadable - unconfirmed, never success."""
+        self._timed(self._fake(), "log_rotated", True, "log_rotated (the log evidence is lost)")
 
     def fault_foreign_session(self):
         """The host holds an UNRESOLVED session Jen did not start (a second Jen, an older backup): Jen must refuse to turn on over it and never overwrite it (INV-008)."""
@@ -1308,10 +1332,30 @@ class Walk:
         self._i3(entries, kind)
         # I10 - DEBUG never outlives its deadline (v5.68.0-beta.29, Q165)
         self._i10()
+        # I11 - a host record marked restored is about a daemon that is not at DEBUG 55 (v5.68.0-beta.31, Q168)
+        self._i11()
         self.prev_entries = entries if kind == "ok" else {}
         self.prev_kind, self.prev_raw = kind, raw
 
     I10_GRACE_S = 120  # the host's timer fires every 60 s; this is the allowance past the deadline
+
+    def _i11(self):
+        """I11 - a host record marked restored is about a daemon that is not at DEBUG 55. The fake notes the moment the host RECORDS a restore (`restored_at` with its `evidence`) while its
+        running config is still at investigation DEBUG - the beta.30 defect, where a reload-START line in Kea's log was taken for completion. A record may never say restored about a daemon
+        that has not restored; and every recorded restore names the evidence it rests on."""
+        for host, fake in self.physical.items():
+            if fake.restored_while_debug is not None:
+                self.fail(
+                    "I11",
+                    f"the Kea host at {host} recorded a restore ({fake.restored_while_debug}) while its daemon was still at investigation DEBUG 55",
+                )
+            state = fake.helper_state
+            if (
+                state is not None
+                and state["restored_at"]
+                and state.get("evidence") not in ("config-get", "log", "process")
+            ):
+                self.fail("I11", f"the Kea host at {host} recorded a restore without evidence: {state}")
 
     def _i10(self):
         """I10 - DEBUG never outlives its deadline. A daemon whose RUNNING config is at investigation DEBUG with the marker, for a session the Kea host was armed for, is
@@ -1329,6 +1373,9 @@ class Walk:
             late = (self.now - due).total_seconds()
             if late <= self.I10_GRACE_S:
                 continue
+            bad_tick = fake.last_bad_state_tick
+            if fake.state_bad or (bad_tick is not None and (self.now - bad_tick).total_seconds() <= self.I10_GRACE_S):
+                continue  # INV-009: the host cannot read its record, says `bad-state` (Health fails), and Jen's own sweep restores at the deadline; its next tick after the file reads again does too
             failing = (
                 fake.host_restore_fails
                 or fake.hup_refused
@@ -2106,3 +2153,39 @@ class TestWhatTheWalkFound:
         stored = _stored_servers(world)
         assert stored["1"]["contradiction"] is True, "the entry is still there, still a contradiction"
         assert at_debug(kea.loaded), "and the real Kea is still at DEBUG"
+
+
+class TestTheDaemonsAnswerIsTheEvidence:
+    """I11 (v5.68.0-beta.31, Q168): a host record marked restored is about a daemon that is not at DEBUG 55. The first test is the beta.30 defect put back, so the invariant is shown to be
+    able to go red; the rest are what the walk's evidence channel found."""
+
+    RED = []
+
+    @staticmethod
+    def _beta30_rule(monkeypatch):
+        """The beta.30 rule: Kea's reload-START line is completion. A daemon that began the reload and never applied it (`hup_ignored`) is recorded as restored, from the log, while
+        `loaded` stays at DEBUG."""
+        original = FakeKea._hup_or_restart
+
+        def started_line_is_completion(self, st):
+            if (self.hup_ignored or self.reload_ignored) and not self.hup_refused:
+                return "reload", "log", None
+            return original(self, st)
+
+        monkeypatch.setattr(FakeKea, "_hup_or_restart", started_line_is_completion)
+
+    @pytest.mark.parametrize("seed", range(60))
+    def test_beta30_a_started_line_is_not_completion(self, seed, walk_world, monkeypatch):
+        """The mutation check: with the beta.30 rule put back, a walk goes red on I11 and on nothing else (or never has the sequence)."""
+        self._beta30_rule(monkeypatch)
+        try:
+            walk_world(seed, 400).run()
+        except InvariantViolated as red:
+            assert "I11 violated" in str(red), f"seed {seed}: the beta.30 rule may only break I11:\n{str(red)[:600]}"
+            TestTheDaemonsAnswerIsTheEvidence.RED.append(seed)
+
+    def test_the_beta30_rule_goes_red_often_enough_to_mean_something(self):
+        print(
+            f"MODEL I11 MUTATION: {len(TestTheDaemonsAnswerIsTheEvidence.RED)} of 60 seeds red: {TestTheDaemonsAnswerIsTheEvidence.RED}"
+        )
+        assert len(TestTheDaemonsAnswerIsTheEvidence.RED) >= 1, TestTheDaemonsAnswerIsTheEvidence.RED

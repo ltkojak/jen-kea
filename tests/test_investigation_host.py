@@ -42,7 +42,7 @@ class TestTurnOnNeedsTheHost:
         kea.build = 14
         out = inv.turn_on(world.servers[0], 5, actor="alice")
         assert not out["ok"] and out["until"] == ""
-        assert "build 16 or later" in out["lines"][0] and "Update helper" in out["lines"][0]
+        assert "build 17 or later" in out["lines"][0] and "Update helper" in out["lines"][0]
         assert kea.file == original and kea.writes == 0 and "host:arm" not in kea.calls
         assert not inv.active() and "_audit" not in world.store
 
@@ -249,7 +249,7 @@ class TestTheSweepAndTheHost:
         kea.build = 14
         inv.sweep(now=NOW)
         (row,) = inv.active()
-        assert row["armed"] is False and "build 16" in row["host_error"]
+        assert row["armed"] is False and "build 17" in row["host_error"]
 
     def test_a_legacy_entry_is_armed_by_the_first_sweep_after_the_upgrade(self, world, monkeypatch):
         kea = world.daemons[1]
@@ -390,7 +390,7 @@ class TestTheWrappersAroundTheHelperOps:
         host, _sent, replies = wire
         replies.append({"ok": False, "error": "unknown-op"})
         out = host.investigation_status(self.SERVER)
-        assert not out["ok"] and out["code"] == "old" and "build 16" in out["detail"]
+        assert not out["ok"] and out["code"] == "old" and "build 17" in out["detail"]
 
     def test_a_missing_helper_and_a_transport_error_are_told_apart(self, wire):
         host, _sent, replies = wire
@@ -422,6 +422,29 @@ class TestTheWrappersAroundTheHelperOps:
         )
         assert out["ok"] is False and out["code"] == "armed" and out["existing"] == record
 
+    def test_a_state_file_the_host_cannot_trust_is_its_own_code_never_no_session(self, wire):
+        """build 17 (Q168, INV-009): the helper's `bad-state` keeps its sentence and the file's path; it is not `error` and it is certainly not an unarmed host."""
+        host, _sent, replies = wire
+        replies.append(
+            {
+                "ok": False,
+                "error": "bad-state",
+                "armed": None,
+                "detail": "the state file cannot be trusted",
+                "state_file": "/var/lib/jen-kea-helper/x.json",
+            }
+        )
+        out = host.investigation_status(self.SERVER)
+        assert out == {
+            "ok": False,
+            "code": "bad-state",
+            "detail": "the state file cannot be trusted",
+            "state_file": "/var/lib/jen-kea-helper/x.json",
+        }
+        replies.append({"ok": False, "error": "bad-state"})
+        out = host.investigation_disarm(self.SERVER)
+        assert out["code"] == "bad-state" and out["detail"] and out["state_file"] == ""
+
     def test_the_timer_wrapper_sends_ensure_and_reads_none_when_the_host_does_not_say(self, wire):
         host, sent, replies = wire
         replies.append({"ok": True})
@@ -431,7 +454,7 @@ class TestTheWrappersAroundTheHelperOps:
     def test_the_minimum_build_is_the_one_the_helper_ships(self):
         from jen.services import kea_host
 
-        assert kea_host.INVESTIGATION_MIN_HELPER_BUILD == 16 and kea_host.JEN_HELPER_SHIPPED_BUILD == 17
+        assert kea_host.INVESTIGATION_MIN_HELPER_BUILD == 17 == kea_host.JEN_HELPER_SHIPPED_BUILD
 
 
 class TestTheElevenRowsOfTheCandidateMarker:
@@ -617,6 +640,49 @@ class TestAnUnresolvedSessionOnTheHostIsNeverOverwritten:
         assert inv.turn_off(world.servers[0])["ok"], "Jen's own file-writing path finished it"
         assert kea.helper_state["restored_at"], "and the host was asked once more, so its record is resolved"
         assert inv.turn_on(world.servers[0], 5)["ok"], "a new session is not blocked by the old record"
+
+
+class TestAStateFileTheHostCannotReadIsAConflictNotNoSession:
+    """v5.68.0-beta.31 (Q168, INV-009): a host whose state file exists and cannot be read answers `bad-state` to status and disarm and `armed`/unreadable to an arm. Jen shows it as an
+    unreadable conflict (Health fails, turning logging on is refused with the same sentence) and still restores at the deadline by its own path."""
+
+    def test_turn_on_is_refused_before_anything_is_written(self, world):
+        kea = world.daemons[1]
+        kea.state_bad = True
+        original = copy.deepcopy(kea.file)
+        out = inv.turn_on(world.servers[0], 5)
+        assert not out["ok"] and "cannot read" in out["lines"][0] and "Nothing was changed" in out["lines"][0]
+        assert kea.file == original and kea.writes == 0 and "host:arm" not in kea.calls and not inv.active()
+
+    def test_the_sweep_shows_it_as_an_unreadable_conflict_and_health_fails(self, world):
+        from jen.services import health
+
+        kea = world.daemons[1]
+        assert inv.turn_on(world.servers[0], 15)["ok"]
+        kea.state_bad = True
+        inv.sweep(now=NOW)
+        (row,) = inv.active()
+        assert (
+            row["host_conflict"]["unreadable"] is True and row["armed"] is False and "cannot read" in row["host_error"]
+        )
+        check = health._debug_logging_left_on({})
+        assert check.status == "fail" and "kea-a" in check.detail
+
+    def test_a_disarm_that_answers_bad_state_takes_jens_own_path(self, world):
+        """The host cannot restore (its record is unusable): Jen's own file-writing path finishes the restore and says why it did not use the host's."""
+        kea = world.daemons[1]
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        kea.state_bad = True
+        out = inv.turn_off(world.servers[0])
+        assert out["ok"] and not _at_debug(kea.file) and not _at_debug(kea.loaded), out["lines"]
+
+    def test_a_sweep_past_the_deadline_restores_it_when_the_hosts_tick_cannot(self, world):
+        kea = world.daemons[1]
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        kea.state_bad = True
+        assert kea.host_tick() is None or kea.host_tick()[0] is False
+        inv.sweep(now=NOW + timedelta(minutes=6))
+        assert not inv.active() and not _at_debug(kea.loaded)
 
 
 class TestTheRestorationTimersLiveness:
