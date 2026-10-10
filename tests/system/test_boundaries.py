@@ -2240,6 +2240,9 @@ def test_21_an_unreadable_host_record_is_reported_never_taken_for_no_session(sta
     _s_enable_investigation_logging(web)
     pid = st.dexec(st.KEA_A, "pgrep", "-x", "kea-dhcp4").stdout.split()
     assert pid, "kea-dhcp4 is running on kea-a"
+    # scenario 20 leaves the host a record of its own: Jen kept running there, and its sweep (real clock) re-armed the host after the host restored, because the scenarios fake the HOST's
+    # deadline into the past and Jen's own entry still had real time left. That is an artefact of the clock stand-in, not of a real session, so this scenario starts from a clean host.
+    st.dexec(st.KEA_A, "rm", "-f", S19_STATE)
     try:
         _s19_on(web)
         st.dexec(st.KEA_A, "sh", "-c", f"printf '%s' '{{not json' > {S19_STATE} && chmod 600 {S19_STATE}")
