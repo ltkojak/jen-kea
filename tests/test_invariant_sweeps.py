@@ -540,6 +540,9 @@ S10_ALLOWED = {
     ("jen/services/kea_host.py", "helper_call", "(OSError, AttributeError)", "pass"): (
         "stdin of an SSH exec channel that already closed: the helper's own answer (or its absence, which is raised below as HelperError) decides"
     ),
+    ("jen/services/kea_host.py", "_legacy_python3", "(OSError, AttributeError)", "pass"): (
+        "stdin of an SSH exec channel whose remote command already ended: the command's own output and exit status, read next, decide - a script that did not run is never read as success"
+    ),
     ("jen/services/kea_host.py", "helper_call", "ValueError", "pass"): (
         "output that is not JSON falls through to the HelperMissing / HelperError raise below: a garbled answer is never read as success"
     ),

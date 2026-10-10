@@ -681,7 +681,7 @@ def conflict_sentence(existing: dict) -> str:
     existing = existing if isinstance(existing, dict) else {}
     if existing.get("unreadable"):
         return (
-            "the Kea host has an investigation-session state file it cannot read; Jen will not overwrite it - look at /var/lib/jen-kea-helper/investigation-dhcp4.json on that host "
+            "the Kea host has an investigation-session state file it cannot read; Jen will not overwrite it - look at the investigation state file in the helper's directory under /var/lib on that host "
             "(or remove it once you know it is stale)"
         )
     return (
