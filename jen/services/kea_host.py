@@ -252,7 +252,7 @@ JEN_HELPER_SHIPPED_VERSION = 7  # v7 (v5.66.0-beta.2, Q104): PATH hardening + pr
 # A helper below v7 never reports a build at all (record_helper_status's "build" stays
 # whatever it last was, usually None) — comparisons that matter fall back to version alone
 # in that case; see install_helper()'s already-check and helper_version_label() below.
-JEN_HELPER_SHIPPED_BUILD = 16  # v5.68.0-beta.30 (Q167): a restore is recorded only when Kea's own log shows the reload (build 16 also never overwrites an unresolved host record, reports its timer, exits 1 on a failed restore); build 15 (v5.68.0-beta.29, Q165): the Kea host owns the restore of investigation logging (investigation-arm / -disarm / -status, --self-restore, a systemd timer); build 14 (v5.68.0-beta.16, Q151): one identity resolver, a new config root:daemon-gid 0640 (never 0644), no swallowed chown, install-tls as a set commit; build 13 (Q150): every file the helper writes is private from its first byte, the lock is taken for every op, a daemon-owned binary needs u+x, and remove-config exists; build 12 (Q149): the unit is resolved BEFORE the binary is trusted, so a root-owned binary under User=_kea is validated as _kea (never root); build 11 (Q148): the validation copy is 0600 and the unit's own identity (Group=, SupplementaryGroups=) runs -t
+JEN_HELPER_SHIPPED_BUILD = 17  # v5.68.0-beta.31 (Q168): a restore is recorded only on the daemon's own answer (config-get on its control socket), Kea's completion id read across rotation, or a NEW active process - a reload-start line is never evidence, an unreadable state file is never "no session"; build 16: v5.68.0-beta.30 (Q167): a restore is recorded only when Kea's own log shows the reload (build 16 also never overwrites an unresolved host record, reports its timer, exits 1 on a failed restore); build 15 (v5.68.0-beta.29, Q165): the Kea host owns the restore of investigation logging (investigation-arm / -disarm / -status, --self-restore, a systemd timer); build 14 (v5.68.0-beta.16, Q151): one identity resolver, a new config root:daemon-gid 0640 (never 0644), no swallowed chown, install-tls as a set commit; build 13 (Q150): every file the helper writes is private from its first byte, the lock is taken for every op, a daemon-owned binary needs u+x, and remove-config exists; build 12 (Q149): the unit is resolved BEFORE the binary is trusted, so a root-owned binary under User=_kea is validated as _kea (never root); build 11 (Q148): the validation copy is 0600 and the unit's own identity (Group=, SupplementaryGroups=) runs -t
 # v5.66.0 (Q103) — the version whose "Update helper" click needs no legacy grant at all: at
 # or above this, install_helper() takes the signed path (helper_signature() + the `update`
 # op) instead of the pre-5.11.0 sudo-python3 engine. A host below this still gets one last
@@ -988,6 +988,14 @@ def _investigation_op(server: dict, op: str, payload: dict) -> dict:
             "code": "armed",
             "detail": resp.get("detail") or "the Kea host reports an unresolved investigation session",
             "existing": resp.get("existing") if isinstance(resp.get("existing"), dict) else {},
+        }
+    if err == "bad-state":
+        # build 17 (Q168): the host's state file EXISTS and cannot be trusted - never "no session" (INV-009); the sentence names the file and the by-hand steps
+        return {
+            "ok": False,
+            "code": "bad-state",
+            "detail": resp.get("detail") or "the Kea host's investigation state file cannot be trusted",
+            "state_file": resp.get("state_file") or "",
         }
     if err == "unknown-op":
         return {

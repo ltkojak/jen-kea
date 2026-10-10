@@ -914,6 +914,20 @@ def _wait_logger(sock_path, predicate, seconds=8.0):
     return seen
 
 
+def _load_helper():
+    import importlib.util
+    import pathlib
+    from importlib.machinery import SourceFileLoader
+
+    loader = SourceFileLoader(
+        "jen_kea_helper_probe17", str(pathlib.Path(__file__).resolve().parents[2] / "jen-kea-helper")
+    )
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
 def test_the_daemons_own_control_socket_answers_config_get(findings):
     """v5.68.0-beta.31 (Q168, verify first) - the Kea host will ask the RUNNING daemon, on its own unix (or local http) control socket, whether it runs the logger the restored file has: the
     one answer that does not depend on the log level, the API, the Control Agent or Jen. This records, per image, the reply's shape, whether the daemon closes the connection, how long it
@@ -959,15 +973,41 @@ def test_the_daemons_own_control_socket_answers_config_get(findings):
         f"the plain local http socket answers config-get with the same shape: {record['http_shape']}"
     )
 
+    # the helper's OWN functions, against the real daemon: the spec it builds from the config file, the question it asks, the way it reads the answer and the judgement it makes
+    helper = _load_helper()
+    spec_from_file = helper._control_socket(base)
+    record["helper_spec_kind"] = spec_from_file[0] if spec_from_file else None
+    assert spec_from_file is not None and spec_from_file[0] == "unix", (
+        f"the helper finds the daemon's unix control socket in the config Jen authors: {spec_from_file}"
+    )
+    unix_spec = (
+        "unix",
+        sock_path,
+    )  # the runner reaches the bind-mounted socket; the helper on a real host uses the file's own path as root
+    http_spec = ("http", ("127.0.0.1", 8004, "jen", "jen_api_pw"))
+    helper_checks = record.setdefault("helper_checks", {})
+
+    def helper_judges(label, file_conf, expect_match):
+        """The helper asks the running daemon on BOTH transports and compares with the logger of `file_conf` (None: a file without the logger)."""
+        file_entry = helper._logger_entry(file_conf)
+        seen = {kind: helper._daemon_logger_now(spec) for kind, spec in (("unix", unix_spec), ("http", http_spec))}
+        verdicts = {kind: helper._daemon_matches(sn, file_entry) for kind, sn in seen.items()}
+        helper_checks[label] = {"seen": seen, "match": verdicts, "file_entry_present": file_entry is not None}
+        assert seen["unix"] is not None and seen["http"] is not None, helper_checks[label]
+        assert seen["unix"] == seen["http"], f"{label}: the two transports disagree: {seen}"
+        assert verdicts["unix"] is expect_match and verdicts["http"] is expect_match, helper_checks[label]
+
     rows = {}
     on, code = ed.set_investigation_logging(base, until)
     assert code == "ok"
     _hup_and_read(pid, dump(on), seconds=1.0)
     rows["debug_55"] = _wait_logger(sock_path, lambda s: s["marker"] is not None)
+    helper_judges("debug_55_vs_the_restored_file", base, False)  # the daemon still runs DEBUG 55: never a match
     _hup_and_read(pid, dump(base), seconds=1.0)
     rows["restored_info"] = _wait_logger(
         sock_path, lambda s: s["marker"] is None and str(s["severity"]).upper() == "INFO"
     )
+    helper_judges("restored_info", base, True)
 
     warn_base = json.loads(dump(base))
     next(x for x in warn_base["Dhcp4"]["loggers"] if x["name"] == "kea-dhcp4")["severity"] = "WARN"
@@ -981,6 +1021,10 @@ def test_the_daemons_own_control_socket_answers_config_get(findings):
     rows["restored_warn"] = _wait_logger(
         sock_path, lambda s: s["marker"] is None and str(s["severity"]).upper() == "WARN"
     )
+    helper_judges("restored_warn", warn_base, True)
+    helper_judges(
+        "restored_warn_vs_an_info_file", base, False
+    )  # a daemon at WARN is not at the INFO the file would say
     time.sleep(2.0)
     warn_lines = _daemon_log()[before:]
     record["warn_log_ids"] = _dhcp4_ids(warn_lines)
@@ -993,6 +1037,8 @@ def test_the_daemons_own_control_socket_answers_config_get(findings):
     reply, _took, _closed = _ask_raw_unix(sock_path)
     record["created_case_reply_loggers"] = ((reply or {}).get("arguments") or {}).get("Dhcp4", {}).get("loggers")
     rows["created_no_logger_in_file"] = _logger_from(reply)
+    # a file the helper restored by REMOVING the logger Jen created: the daemon lists none, and that is a match; a daemon that still lists the investigation logger is not
+    helper_judges("created_no_logger_in_file", created, True)
 
     _hup_and_read(pid, dump(base), seconds=2.0)  # a sane file and a sane daemon behind
     record["rows"] = rows

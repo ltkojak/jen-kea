@@ -9,12 +9,15 @@ here needs systemd, a Kea or root. The logger transformation itself is tested ag
     pytest --noconftest tests/test_kea_helper_investigation.py
 """
 
+import base64
 import copy
 import importlib.util
 import io
 import json
 import os
 import pathlib
+import socket
+import time
 from datetime import datetime, timedelta, timezone
 from importlib.machinery import SourceFileLoader
 
@@ -75,12 +78,19 @@ class Host:
         self.unit_states = ["active"]  # what `is-active <kea unit>` answers, in turn (the last one repeats)
         self.restart_rc = 0
         self.main_pid = 4242
-        # build 16 (Q167): Kea's OWN log is the evidence. A SIGHUP appends what Kea writes for `reload_mode` ("success" | "started" - the restored level hides the completion line |
-        # "fail" | "silent"); a restart appends the start lines of `restart_mode` ("ok" | "fail" | "silent"). Every fake reload also bumps `reloads`.
+        # build 17 (Q168): the evidence is the daemon's own ANSWER. `loaded` is what the RUNNING daemon runs (the first config written is what it was started with); `socket_mode` says whether
+        # its control socket "answers" config-get from `loaded`, is "silent" (refuses / times out) or is "absent" from the config. A SIGHUP does what `reload_mode` says -
+        #   "success" (loaded := the file; Kea logs started + completion), "applied_hidden" (loaded := the file; the restored level hides the completion line: only the START is in the log),
+        #   "started_not_applied" (Kea logs the START and never applies the file: THE beta.30 P1 sequence), "fail" (Kea logs a refusal; loaded unchanged), "silent" (nothing at all);
+        # a restart does what `restart_mode` says - "ok" (a NEW pid, loaded := the file), "same_pid" (the restart was absorbed: same pid, loaded unchanged), "fail" (a start-failure id, no
+        # process), "fresh_but_old" (a new pid still running the OLD config).
         self.log = tmp_path / "kea-dhcp4.log"
         self.log.write_text("old line DHCP4_DYNAMIC_RECONFIGURATION_SUCCESS from long ago\n", encoding="utf-8")
         self.reload_mode = "success"
         self.restart_mode = "ok"
+        self.socket_mode = "answers"
+        self.loaded = None
+        self.pid_after_restart = None
         self.kea_test = (True, {"ok": True})
         monkeypatch.setattr(helper, "_STATE_DIR", str(self.state_dir))
         monkeypatch.setattr(helper, "_SYSTEMD_DIR", str(self.units))
@@ -93,6 +103,12 @@ class Host:
         monkeypatch.setattr(helper, "_run_bin", self._run_bin)
         monkeypatch.setattr(helper, "_run_kea_test", lambda service, path, cfg, tls: self.kea_test)
         monkeypatch.setattr(os, "kill", self._kill)
+        monkeypatch.setattr(
+            helper,
+            "_control_socket",
+            lambda config: None if self.socket_mode == "absent" else ("unix", str(tmp_path / "kea4-ctrl.sock")),
+        )
+        monkeypatch.setattr(helper, "_ask_daemon", self._ask)
         monkeypatch.setattr(helper, "_allowed_log_path", lambda p: isinstance(p, str) and p.endswith(".log"))
         monkeypatch.setattr(os, "fchown", lambda *a: None, raising=False)
         monkeypatch.setattr(os, "chown", lambda *a: None, raising=False)
@@ -101,24 +117,71 @@ class Host:
         with open(self.log, "a", encoding="utf-8") as f:
             f.write("".join(line + "\n" for line in lines))
 
+    def _file_config(self):
+        try:
+            return json.loads(self.conf.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+
+    def _ask(self, spec, command):
+        """What the daemon's own control socket answers (in-process: the transport has its own tests, with real sockets)."""
+        if self.socket_mode != "answers":
+            return None
+        if command != "config-get":
+            return {"result": 1, "text": "unsupported"}
+        section = copy.deepcopy((self.loaded or {}).get("Dhcp4", {}))
+        return {"result": 0, "arguments": {"Dhcp4": section}}
+
+    def daemon_runs(self, cfg):
+        self.loaded = copy.deepcopy(cfg)
+
     def _kill(self, pid, sig):
         self.signals.append((pid, sig))
+        started = "2026-10-10 12:00:00.001 INFO  [kea-dhcp4.dhcp4/1] DHCP4_DYNAMIC_RECONFIGURATION initiate server reconfiguration using file: x"
+        if self.reload_mode in ("success", "applied_hidden"):
+            self.loaded = copy.deepcopy(self._file_config())
         if self.reload_mode == "success":
             self._append(
-                "2026-10-10 12:00:00.001 INFO  [kea-dhcp4.dhcp4/1] DHCP4_DYNAMIC_RECONFIGURATION initiate server reconfiguration using file: x",
+                started,
                 "2026-10-10 12:00:00.090 INFO  [kea-dhcp4.dhcp4/1] DHCP4_CONFIG_COMPLETE DHCPv4 server has completed configuration",
                 "2026-10-10 12:00:00.095 INFO  [kea-dhcp4.dhcp4/1] DHCP4_DYNAMIC_RECONFIGURATION_SUCCESS dynamic server reconfiguration succeeded with file: x",
             )
-        elif self.reload_mode == "started":
+        elif self.reload_mode in ("applied_hidden", "started_not_applied"):
+            self._append(started)
+        elif (
+            self.reload_mode == "logged_but_not_loaded"
+        ):  # Kea logs the whole success and the daemon is still running the old config: the log and the daemon DISAGREE
             self._append(
-                "2026-10-10 12:00:00.001 INFO  [kea-dhcp4.dhcp4/1] DHCP4_DYNAMIC_RECONFIGURATION initiate server reconfiguration using file: x"
+                started,
+                "2026-10-10 12:00:00.090 INFO  [kea-dhcp4.dhcp4/1] DHCP4_CONFIG_COMPLETE DHCPv4 server has completed configuration",
+                "2026-10-10 12:00:00.095 INFO  [kea-dhcp4.dhcp4/1] DHCP4_DYNAMIC_RECONFIGURATION_SUCCESS dynamic server reconfiguration succeeded with file: x",
             )
         elif self.reload_mode == "fail":
             self._append(
-                "2026-10-10 12:00:00.001 INFO  [kea-dhcp4.dhcp4/1] DHCP4_DYNAMIC_RECONFIGURATION initiate server reconfiguration using file: x",
+                started,
                 "2026-10-10 12:00:00.050 ERROR [kea-dhcp4.dhcp4/1] DHCP4_CONFIG_LOAD_FAIL configuration error using file: x, reason: unsupported parameter",
                 "2026-10-10 12:00:00.051 ERROR [kea-dhcp4.dhcp4/1] DHCP4_DYNAMIC_RECONFIGURATION_FAIL dynamic server reconfiguration failed with file: x",
             )
+
+    # ── the log, rotated and flooded the way a real one is ─────────────────────────────────────────────────────────────
+    def log_rotate(self, rename=True, then=""):
+        """Rotate Kea's log: by rename (the old file becomes `<log>.1`, a new one starts) or by truncation in place; `then` is written into the new/emptied file."""
+        if rename:
+            os.replace(self.log, str(self.log) + ".1")
+            self.log.write_text(then, encoding="utf-8")
+        else:
+            self.log.write_text(then, encoding="utf-8")
+
+    def log_flood(self, nbytes, last_line=""):
+        """Append `nbytes` of unrelated DEBUG lines and then `last_line`."""
+        filler = "2026-10-10 12:00:01.000 DEBUG [kea-dhcp4.packets/1] DHCP4_PACKET_RECEIVED noise noise noise noise noise noise noise noise\n"
+        with open(self.log, "a", encoding="utf-8") as f:
+            written = 0
+            while written < nbytes:
+                f.write(filler)
+                written += len(filler)
+            if last_line:
+                f.write(last_line + "\n")
 
     def _find_bin(self, name):
         return None if (name == "systemctl" and self.timer == "no-systemctl") else f"/usr/bin/{name}"
@@ -151,11 +214,17 @@ class Host:
         if args[:1] == ["restart"]:
             if self.restart_rc == 0:
                 self.unit_states = ["active"]
-                if self.restart_mode == "ok":
+                new_pid = self.pid_after_restart or self.main_pid + 1
+                if self.restart_mode in ("ok", "fresh_but_old"):
+                    self.main_pid = new_pid
+                    if self.restart_mode == "ok":
+                        self.loaded = copy.deepcopy(self._file_config())
                     self._append(
                         "2026-10-10 12:00:03.000 INFO  [kea-dhcp4.dhcp4/1] DHCP4_STARTED Kea DHCPv4 server version 3.0.3 started"
                     )
                 elif self.restart_mode == "fail":
+                    self.unit_states = ["inactive"]
+                    self.main_pid = 0
                     self._append(
                         "2026-10-10 12:00:03.000 ERROR [kea-dhcp4.dhcp4/1] DHCP4_CONFIG_LOAD_FAIL configuration error using file: x"
                     )
@@ -164,6 +233,8 @@ class Host:
 
     def write_config(self, cfg):
         self.conf.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        if self.loaded is None:
+            self.loaded = copy.deepcopy(cfg)  # the first file written is what the daemon was started with
 
     def config(self):
         return json.loads(self.conf.read_text(encoding="utf-8"))
@@ -320,7 +391,6 @@ class TestArm:
             ({"jen": "x"}, "bad-jen"),
             ({"jen": {"other": 1}}, "bad-jen"),
             ({"log_path": "/tmp/kea.txt"}, "bad-log-path"),
-            ({"log_path": None}, "bad-log-path"),
         ],
     )
     def test_a_bad_request_is_refused_and_writes_nothing(self, host, change, error):
@@ -337,10 +407,31 @@ class TestArm:
         assert not (host.state_dir / "investigation-dhcp4.json").exists()
         assert host.calls == []
 
-    def test_a_log_that_does_not_exist_is_refused_up_front(self, host):
-        reply = host.arm(5, log_path=str(host.log) + ".missing.log")
-        assert reply["ok"] is False and reply["error"] == "bad-log-path" and "does not exist" in reply["detail"]
+    def test_the_log_path_is_optional_when_the_daemon_has_a_control_socket(self, host):
+        """Build 17 (Q168): a Kea that logs to syslog or stdout has no log file, but its control socket can answer the question directly."""
+        reply = host.arm(5, log_path=None)
+        assert reply["ok"] is True and host.state()["log_path"] is None
+
+    def test_a_log_that_does_not_exist_is_fine_while_the_daemon_can_be_asked(self, host):
+        assert host.arm(5, log_path=str(host.log) + ".missing.log")["ok"] is True
+
+    def test_no_socket_and_no_log_is_refused_because_nothing_could_be_verified(self, host):
+        host.socket_mode = "absent"
+        host.log.unlink()
+        reply = host.arm(5, log_path=None)
+        assert reply["ok"] is False and reply["error"] == "no-evidence" and "no way to see" in reply["detail"]
         assert not (host.state_dir / "investigation-dhcp4.json").exists()
+
+    def test_no_socket_but_a_readable_log_is_enough(self, host):
+        host.socket_mode = "absent"
+        assert host.arm(5)["ok"] is True
+
+    def test_the_log_path_is_found_from_the_files_own_logger_when_the_caller_sent_none(self, host):
+        host.write_config(
+            {"Dhcp4": {"loggers": [{"name": "kea-dhcp4", "output-options": [{"output": str(host.log)}]}]}}
+        )
+        host.socket_mode = "absent"
+        assert host.arm(5, log_path=None)["ok"] is True and host.state()["log_path"] == str(host.log)
 
     def test_a_past_deadline_is_armed_and_due_at_the_next_tick(self, host):
         assert host.arm(-3)["ok"] is True
@@ -369,7 +460,7 @@ class TestDisarm:
             "how": "reload",
             "detail": "",
             "helper_version": 7,
-            "helper_build": 16,
+            "helper_build": 17,
         }
         assert host.config() == _config(at_debug=False, marker=False)
         assert host.signals and host.signals[0][0] == 4242
@@ -380,9 +471,10 @@ class TestDisarm:
             "the previous file is kept"
         )
 
-    def test_a_file_that_is_already_restored_still_gets_a_reload(self, host):
-        """Jen (or a person) cleaned the file but the daemon may never have re-read it: the host makes sure."""
+    def test_a_file_that_is_already_restored_still_gets_a_reload_when_the_daemon_is_not_running_it(self, host):
+        """Jen (or a person) cleaned the file but the daemon never re-read it: the host makes sure."""
         host.write_config(_config(at_debug=False, marker=False))
+        host.daemon_runs(_config())  # the daemon is still at DEBUG 55
         host.arm()
         reply = host.op("investigation-disarm", {"service": SERVICE, "path": str(host.conf)})
         assert reply["restored"] is True and reply["how"] == "reload" and host.signals
@@ -550,7 +642,7 @@ class TestSelfRestore:
             "restored": [],
             "failed": [],
             "helper_version": 7,
-            "helper_build": 16,
+            "helper_build": 17,
         }
 
     def test_a_state_file_the_helper_did_not_write_is_reported_and_never_acted_on(self, host):
@@ -560,7 +652,7 @@ class TestSelfRestore:
         state["path"] = "/etc/passwd"  # tampered
         (host.state_dir / "investigation-dhcp4.json").write_text(json.dumps(state))
         out = host.tick()
-        assert out["ok"] is False and out["failed"][0]["error"] == "the state file is not usable"
+        assert out["ok"] is False and out["failed"][0]["error"].startswith("the state file is not usable")
         assert host.config() == _config() and host.signals == []
 
     def test_an_unreadable_state_file_is_reported(self, host):
@@ -588,10 +680,10 @@ class TestSelfRestore:
 
 
 class TestTheContract:
-    def test_the_ops_are_registered_and_the_build_is_16(self, helper):
+    def test_the_ops_are_registered_and_the_build_is_17(self, helper):
         for name in ("investigation-arm", "investigation-disarm", "investigation-status", "investigation-timer"):
             assert name in helper._OPS
-        assert helper.HELPER_BUILD == 16 and helper.HELPER_VERSION == 7
+        assert helper.HELPER_BUILD == 17 and helper.HELPER_VERSION == 7
 
     def test_there_is_still_no_sudoers_change(self):
         root = _SCRIPT.parent
@@ -618,38 +710,90 @@ class TestTheContract:
         assert "2026" not in (host.units / "jen-kea-investigation.timer").read_text()
 
 
-class TestARestoreIsDoneWhenKeasOwnLogSaysSo:
-    """v5.68.0-beta.30 (Q167, INV-007): `restored_at` is written only after Kea's own log, past the offset noted before the SIGHUP, shows the reload completed - or started and stayed free
-    of a failure when the restored level hides the completion line. 'The unit is active' is not evidence that Kea re-read anything."""
+class TestARestoreIsDoneWhenTheDaemonSaysSo:
+    """v5.68.0-beta.31 (Q168, INV-007): `restored_at` is written on exactly one of three pieces of evidence - the running daemon's own `config-get` shows the file's logger, Kea's own
+    completion id (only when no socket answered), a NEW active process after the one restart - and the state says which. A reload-START line is never completion: that was the beta.30 P1
+    (a restored WARN level hides the INFO completion line, and "started, nothing failed for three seconds" was recorded as a restore)."""
 
     def _disarm(self, host):
         return host.op("investigation-disarm", {"service": SERVICE, "path": str(host.conf)})
 
-    def test_a_completed_reload_is_recorded(self, host):
+    def _armed_at_debug(self, host, **arm):
         host.write_config(_config())
-        host.arm()
+        host.arm(**arm)
+
+    # ── the daemon's own answer ─────────────────────────────────────────────────────────────────────────────────────────
+    def test_the_p1_row_the_socket_says_restored_while_the_log_shows_only_the_started_line(self, host):
+        self._armed_at_debug(host)
+        host.reload_mode = (
+            "applied_hidden"  # the restored level hides the completion line: the log has the START and nothing else
+        )
         reply = self._disarm(host)
         assert reply["ok"] and reply["how"] == "reload" and host.restarts() == []
-        assert host.state()["restored_at"]
+        assert host.state()["evidence"] == "config-get" and host.state()["restored_at"]
 
-    def test_a_reload_that_started_and_stayed_free_of_a_failure_is_recorded_when_the_level_hides_the_rest(self, host):
-        host.write_config(_config())
-        host.arm()
-        host.reload_mode = "started"
+    def test_the_socket_alone_is_enough_when_there_is_no_log_file_at_all(self, host):
+        self._armed_at_debug(host, log_path=None)
+        host.log.unlink()
+        host.reload_mode = "applied_hidden"
         reply = self._disarm(host)
-        assert reply["ok"] and reply["how"] == "reload" and host.restarts() == []
+        assert reply["ok"] and host.state()["evidence"] == "config-get", "no log was readable and none was needed"
 
-    def test_a_line_from_before_the_signal_is_not_evidence(self, host):
-        """The fixture's log already holds an old `..._SUCCESS` line: a reload that wrote nothing new is unconfirmed, and gets the one restart."""
-        host.write_config(_config())
+    def test_a_daemon_that_already_runs_the_file_is_accepted_without_a_signal(self, host):
+        host.write_config(
+            _config(at_debug=False, marker=False)
+        )  # the daemon was started with (or has been reloaded onto) the clean file
         host.arm()
-        host.reload_mode = "silent"
         reply = self._disarm(host)
-        assert reply["ok"] and reply["how"] == "restart" and len(host.restarts()) == 1
+        assert reply["ok"] and host.signals == [] and host.restarts() == []
+        assert host.state()["evidence"] == "config-get"
 
-    def test_a_refused_reload_is_reported_not_restarted_and_not_recorded(self, host):
+    def test_a_logger_somebody_changed_on_purpose_is_verified_against_the_file_not_the_restore_object(self, host):
+        """The state says "created" (remove the logger); the file's logger is WARN with no marker (a person set it since): `_restore_logger` answers "nothing", and the daemon is judged by the FILE."""
         host.write_config(_config())
-        host.arm()
+        host.arm(5, restore={"created": True})
+        host.write_config(_config(at_debug=False, marker=False))
+        host.reload_mode = "applied_hidden"
+        reply = self._disarm(host)
+        assert reply["ok"] and host.state()["evidence"] == "config-get", reply
+
+    # ── the log, only when no socket answered ───────────────────────────────────────────────────────────────────────────
+    def test_no_socket_and_a_completion_line_is_log_evidence(self, host):
+        self._armed_at_debug(host)
+        host.socket_mode = "silent"
+        reply = self._disarm(host)
+        assert reply["ok"] and reply["how"] == "reload" and host.state()["evidence"] == "log" and host.restarts() == []
+
+    def test_a_silent_socket_and_only_a_started_line_is_not_a_restore_the_one_restart_decides(self, host):
+        self._armed_at_debug(host)
+        host.socket_mode = "silent"
+        host.reload_mode = "started_not_applied"
+        reply = self._disarm(host)
+        assert len(host.restarts()) == 1, "the started line is not evidence: the one restart was taken"
+        assert reply["ok"] and reply["how"] == "restart" and host.state()["evidence"] == "process"
+
+    def test_the_started_line_is_quoted_in_the_error_when_nothing_ever_confirms(self, host):
+        self._armed_at_debug(host)
+        host.socket_mode = "silent"
+        host.reload_mode = "started_not_applied"
+        host.restart_mode = "same_pid"
+        reply = self._disarm(host)
+        assert (
+            reply["ok"] is False
+            and "the reload started (" in reply["detail"]
+            and "nothing shows it completed" in reply["detail"]
+        )
+        assert host.state()["restored_at"] is None
+
+    def test_the_socket_still_at_debug_while_the_log_shows_completion_is_a_contradiction_not_a_restore(self, host):
+        self._armed_at_debug(host)
+        host.reload_mode = "logged_but_not_loaded"
+        host.restart_mode = "fresh_but_old"
+        reply = self._disarm(host)
+        assert reply["ok"] is False and host.state()["restored_at"] is None
+
+    def test_a_refused_reload_is_reported_with_kea_s_line_and_nothing_is_restarted(self, host):
+        self._armed_at_debug(host)
         host.reload_mode = "fail"
         reply = self._disarm(host)
         assert (
@@ -657,87 +801,608 @@ class TestARestoreIsDoneWhenKeasOwnLogSaysSo:
             and "Kea refused the restored config" in reply["detail"]
             and "DHCP4_CONFIG_LOAD_FAIL" in reply["detail"]
         )
-        assert host.restarts() == [], "the file is the problem: a restart would not help"
-        state = host.state()
-        assert state["restored_at"] is None and state["attempts"] == 1 and state["last_error"]
-        assert host.config() == _config(at_debug=False, marker=False), "the file itself was restored"
+        assert host.restarts() == [] and host.state()["restored_at"] is None and host.state()["attempts"] == 1
 
-    def test_an_unconfirmed_reload_gets_one_restart_and_a_restart_is_checked_too(self, host):
-        host.write_config(_config())
-        host.arm()
+    # ── the one restart ─────────────────────────────────────────────────────────────────────────────────────────────────
+    def test_a_restart_gives_a_new_active_process_and_that_is_process_evidence_when_no_socket_answers(self, host):
+        self._armed_at_debug(host)
+        host.socket_mode = "absent"
+        host.reload_mode = "silent"
+        reply = self._disarm(host)
+        assert reply["ok"] and reply["how"] == "restart" and host.state()["evidence"] == "process"
+
+    def test_a_restart_that_was_absorbed_keeps_the_same_pid_and_is_not_a_restore(self, host):
+        self._armed_at_debug(host)
+        host.socket_mode = "absent"
+        host.reload_mode = "silent"
+        host.restart_mode = "same_pid"
+        reply = self._disarm(host)
+        assert reply["ok"] is False and host.state()["restored_at"] is None and len(host.restarts()) == 1
+
+    def test_a_restart_with_a_start_failure_id_is_not_a_restore(self, host):
+        self._armed_at_debug(host)
         host.reload_mode = "silent"
         host.restart_mode = "fail"
         reply = self._disarm(host)
-        assert reply["ok"] is False and "restarted, but Kea refused" in reply["detail"]
-        assert host.state()["restored_at"] is None and host.state()["restarts"] == 1
+        assert reply["ok"] is False and "restarted, but Kea refused the restored config" in reply["detail"]
+        assert host.state()["restarts"] == 1 and host.state()["restored_at"] is None
 
-    def test_a_restart_that_leaves_the_unit_down_is_not_a_restore(self, host, monkeypatch):
-        host.write_config(_config())
-        host.arm()
+    def test_a_restart_the_socket_confirms_is_config_get_evidence(self, host):
+        self._armed_at_debug(host)
         host.reload_mode = "silent"
-        monkeypatch.setattr(host.helper, "_unit_state", lambda unit: "inactive")
         reply = self._disarm(host)
-        assert (
-            reply["ok"] is False
-            and "no completed configuration" in reply["detail"]
-            and host.state()["restored_at"] is None
-        )
+        assert reply["ok"] and reply["how"] == "restart" and host.state()["evidence"] == "config-get"
 
-    def test_an_unreadable_kea_log_is_a_failure_not_a_guess(self, host):
-        host.write_config(_config())
-        host.arm()
-        host.log.unlink()
-        reply = self._disarm(host)
-        assert reply["ok"] is False and "could not be read" in reply["detail"] and host.signals == [], (
-            "no signal is sent that could not be verified"
-        )
-        assert host.state()["restored_at"] is None
-
-    def test_a_rotated_log_is_read_from_its_start(self, host):
-        host.log.write_text("short\n", encoding="utf-8")
-        lines = host.helper._log_lines_after(str(host.log), 10_000)
-        assert lines == ["short"]
-        assert host.helper._log_lines_after(str(host.log) + ".nope", 0) is None
-
-    def test_the_wait_is_bounded_and_never_a_real_sleep_in_the_test(self, host):
-        host.write_config(_config())
-        host.arm()
+    def test_a_new_process_the_socket_says_is_still_at_debug_is_not_a_restore(self, host):
+        self._armed_at_debug(host)
         host.reload_mode = "silent"
-        host.restart_mode = "silent"
-        self._disarm(host)  # returns: the loops count their own time
+        host.restart_mode = "fresh_but_old"
+        reply = self._disarm(host)
+        assert reply["ok"] is False and host.state()["restored_at"] is None
 
-    def test_ten_failed_ticks_say_a_person_has_to_act_and_a_later_success_clears_it(self, host):
-        host.write_config(_config())
-        host.arm(-1)
-        host.kea_test = (False, {"ok": False, "error": "testerror", "detail": "bad"})
+    def test_a_restart_that_fails_outright_is_recorded_and_never_repeated(self, host):
+        self._armed_at_debug(host)
+        host.reload_mode = "silent"
+        host.restart_rc = 1
+        assert self._disarm(host)["ok"] is False
+        for _ in range(3):
+            host.tick("--now")
+        assert len(host.restarts()) == 1 and "not restarting again" in host.state()["last_error"]
+
+    # ── bookkeeping ─────────────────────────────────────────────────────────────────────────────────────────────────────
+    def test_ten_unconfirmed_ticks_say_a_person_has_to_act_and_a_later_success_clears_it(self, host):
+        self._armed_at_debug(host)
+        host.socket_mode = "silent"
+        host.reload_mode = "started_not_applied"
+        host.restart_mode = "same_pid"
         for n in range(10):
-            out = host.tick()
+            out = host.tick("--now")
             assert out["ok"] is False and host.last_code == 1
             assert host.state()["attempts"] == n + 1
-            assert host.state()["needs_hand"] is (n + 1 >= host.helper._MAX_UNCONFIRMED_TICKS)
-        status = host.op("investigation-status", {"service": SERVICE})
-        assert status["needs_hand"] is True and status["attempts"] == 10
-        host.kea_test = (True, {"ok": True})
-        assert host.tick()["ok"] is True and host.last_code == 0
-        assert host.state()["needs_hand"] is False and host.state()["restored_at"]
+        assert host.state()["needs_hand"] is True
+        host.socket_mode, host.reload_mode = "answers", "success"
+        assert host.tick("--now")["ok"] is True
+        assert host.state()["needs_hand"] is False and host.state()["evidence"] == "config-get"
 
-    def test_a_state_armed_by_build_15_has_no_log_path_and_is_verified_the_old_way_once(self, host):
-        host.write_config(_config())
-        host.arm()
-        state = host.state()
-        del state["log_path"]
-        (host.state_dir / "investigation-dhcp4.json").write_text(json.dumps(state))
-        host.reload_mode = "silent"
-        reply = self._disarm(host)
-        assert reply["ok"] is True and reply["how"] == "reload", "the unit is active: the way build 15 judged it"
-
-    def test_restored_at_is_written_in_exactly_one_place_after_a_verified_how(self):
+    def test_restored_at_and_its_evidence_are_written_in_exactly_one_place(self):
         source = _SCRIPT.read_text(encoding="utf-8")
         assert source.count("restored_at=") == 1, "one writer of restored_at"
         a = source.index("restored_at=")
-        assert 'how not in ("reload", "restart")' in source[a - 600 : a], (
-            "and it sits behind the check that `how` is a verified reload or restart"
+        before = source[a - 900 : a]
+        assert 'how not in ("reload", "restart")' in before and "evidence not in _EVIDENCE" in before, (
+            "after a verified how AND the evidence that verified it"
         )
+        assert "evidence=evidence" in source[a : a + 200]
+
+    def test_there_is_no_legacy_branch_and_no_settle_heuristic_left(self):
+        source = _SCRIPT.read_text(encoding="utf-8")
+        section = source[source.index("# ── Build 15") :]
+        for gone in ("_load_state", "_STARTED_SETTLE_S", "_log_lines_after", '"log_path" not in state', "legacy ="):
+            assert gone not in section, gone
+
+
+class TestOneAnswerAboutTheStateFile:
+    """v5.68.0-beta.31 (Q168, INV-009): an existing state file that cannot be trusted is never "no session". Arm, disarm, status and the tick give ONE answer."""
+
+    BAD = {
+        "malformed JSON": "{ nope",
+        "a JSON list": "[1, 2]",
+        "an object with missing fields": '{"service": "dhcp4"}',
+        "a bad restore object": None,  # filled from a real state below
+    }
+
+    def _write(self, host, kind):
+        host.write_config(_config())
+        if kind == "absent":
+            return
+        host.arm()
+        path = host.state_dir / "investigation-dhcp4.json"
+        if kind == "pending":
+            return
+        if kind == "restored":
+            state = host.state()
+            state.update(restored_at="2026-10-10T12:05:00+00:00", how="reload", evidence="config-get")
+            path.write_text(json.dumps(state))
+            return
+        if kind == "a bad restore object":
+            state = host.state()
+            state["restore"] = {"severity": 5}
+            path.write_text(json.dumps(state))
+            return
+        path.write_text(self.BAD[kind])
+
+    @pytest.mark.parametrize(
+        "kind", ["malformed JSON", "a JSON list", "an object with missing fields", "a bad restore object"]
+    )
+    def test_a_file_that_exists_and_cannot_be_trusted_is_bad_state_everywhere(self, host, kind):
+        self._write(host, kind)
+        status = host.op("investigation-status", {"service": SERVICE})
+        assert status["ok"] is False and status["error"] == "bad-state" and status["armed"] is None
+        assert (
+            "cannot be trusted" in status["detail"]
+            and "--self-restore --now" in status["detail"]
+            and status["state_file"].endswith("investigation-dhcp4.json")
+        )
+        disarm = host.op("investigation-disarm", {"service": SERVICE, "path": str(host.conf)})
+        assert disarm["ok"] is False and disarm["error"] == "bad-state" and "cannot be trusted" in disarm["detail"]
+        arm = host.arm(5)
+        assert (
+            arm["ok"] is False
+            and arm["error"] == "armed"
+            and arm["existing"]["unreadable"] is True
+            and "cannot be trusted" in arm["detail"]
+        )
+        tick = host.tick("--now")
+        assert (
+            tick["ok"] is False
+            and tick["failed"][0]["error"].startswith("the state file is not usable")
+            and host.last_code == 1
+        )
+        assert host.signals == [] and host.config() == _config(), "nothing was restored, signalled or overwritten"
+
+    def test_an_absent_file_is_no_session_everywhere(self, host):
+        self._write(host, "absent")
+        status = host.op("investigation-status", {"service": SERVICE})
+        assert status["ok"] is True and status["armed"] is False
+        assert host.op("investigation-disarm", {"service": SERVICE, "path": str(host.conf)})["detail"] == "not armed"
+        assert host.tick("--now")["checked"] == 0
+        assert host.arm(5)["ok"] is True
+
+    def test_a_pending_file_is_a_session_everywhere(self, host):
+        self._write(host, "pending")
+        assert host.op("investigation-status", {"service": SERVICE})["armed"] is True
+        assert host.arm(5)["idempotent"] is True
+        assert host.tick("--now")["restored"] == [{"service": "dhcp4", "how": "reload"}]
+
+    def test_a_restored_file_is_a_finished_session_everywhere(self, host):
+        self._write(host, "restored")
+        status = host.op("investigation-status", {"service": SERVICE})
+        assert status["armed"] is False and status["restored_at"] and status["evidence"] == "config-get"
+        assert (
+            host.op("investigation-disarm", {"service": SERVICE, "path": str(host.conf)})["detail"]
+            == "already restored"
+        )
+        assert host.tick("--now")["restored"] == []
+        assert host.arm(5)["ok"] is True
+
+    @pytest.mark.skipif(
+        os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+        reason="needs a POSIX non-root user to make a file unreadable",
+    )
+    def test_an_unreadable_file_is_bad_state_too(self, host):
+        self._write(host, "pending")
+        path = host.state_dir / "investigation-dhcp4.json"
+        path.chmod(0)
+        try:
+            assert host.op("investigation-status", {"service": SERVICE})["error"] == "bad-state"
+            assert host.op("investigation-disarm", {"service": SERVICE, "path": str(host.conf)})["error"] == "bad-state"
+            assert host.arm(5)["error"] == "armed"
+            assert host.tick("--now")["failed"]
+        finally:
+            path.chmod(0o600)
+
+    def test_a_dangling_symlink_is_a_file_that_exists_and_cannot_be_read(self, host):
+        if os.name == "nt":
+            pytest.skip("symlinks need privileges on Windows")
+        host.state_dir.mkdir(parents=True, exist_ok=True)
+        (host.state_dir / "investigation-dhcp4.json").symlink_to(host.tmp_path / "nowhere")
+        assert host.op("investigation-status", {"service": SERVICE})["error"] == "bad-state"
+
+
+class TestTheLogIsFollowedNotAssumed:
+    """v5.68.0-beta.31 (Q168, INV-010): log evidence follows the file's identity across rotation and is read incrementally; an exhausted or unreadable log is unconfirmed, never success."""
+
+    OK = "2026-10-10 12:00:00.095 INFO  [kea-dhcp4.dhcp4/1] DHCP4_DYNAMIC_RECONFIGURATION_SUCCESS dynamic server reconfiguration succeeded"
+
+    def _cursor(self, host):
+        return host.helper._LogCursor(str(host.log))
+
+    def test_appended_lines_are_read(self, host):
+        cursor = self._cursor(host)
+        host._append("new line one", self.OK)
+        assert cursor.new_lines()[-1] == self.OK
+        assert cursor.new_lines() == [], "and only once"
+
+    def test_a_truncation_in_place_is_read_from_the_start(self, host):
+        host.log_flood(
+            2000
+        )  # (a file the truncation makes SMALLER than the offset: the same inode grown past it again cannot be told from an append - the socket is the arbiter then)
+        cursor = self._cursor(host)
+        host.log_rotate(rename=False, then=self.OK + "\n")
+        assert cursor.new_lines() == [self.OK]
+
+    def test_a_rename_with_a_smaller_new_file(self, host):
+        cursor = self._cursor(host)
+        host.log_rotate(rename=True, then=self.OK + "\n")
+        assert self.OK in cursor.new_lines()
+
+    def test_a_rename_with_a_new_file_LARGER_than_the_old_offset_is_read_from_its_start(self, host):
+        """Beta.30 read a rotated file from the OLD offset whenever it had grown past it: the completion line at byte 10 of the new file was never seen."""
+        cursor = self._cursor(host)
+        size_before = os.path.getsize(host.log)
+        host.log_rotate(rename=True, then=self.OK + "\n" + "x" * (size_before * 3) + "\n")
+        assert self.OK in cursor.new_lines()
+
+    def test_the_completion_line_written_to_the_old_file_just_before_the_rotation_is_found_in_dot_1(self, host):
+        cursor = self._cursor(host)
+        host._append(self.OK)
+        host.log_rotate(rename=True, then="a fresh line\n")
+        lines = cursor.new_lines()
+        assert self.OK in lines and "a fresh line" in lines
+
+    def test_two_mebibytes_of_noise_before_the_one_line_that_matters(self, host):
+        cursor = self._cursor(host)
+        host.log_flood(2 << 20, last_line=self.OK)
+        lines = cursor.new_lines()
+        assert lines[-1] == self.OK and cursor.scanned > host.helper._LOG_READ_MAX
+
+    def test_sixty_five_mebibytes_exhaust_the_scan(self, host):
+        cursor = self._cursor(host)
+        host.log_flood(65 << 20, last_line=self.OK)
+        cursor.new_lines()
+        assert cursor.exhausted is True and cursor.new_lines() == []
+
+    def test_an_exhausted_log_is_unconfirmed_never_success_and_the_restart_is_taken(self, host, monkeypatch):
+        monkeypatch.setattr(host.helper, "_LOG_SCAN_MAX", 3 << 20)
+        host.write_config(_config())
+        host.arm()
+        host.socket_mode = "silent"
+        host.reload_mode = "silent"
+        host.restart_mode = "same_pid"
+        real_kill = host._kill
+
+        def flood_then_complete(pid, sig):
+            real_kill(pid, sig)
+            host.log_flood(4 << 20, last_line=self.OK)  # the completion line is past the scan budget
+
+        monkeypatch.setattr(os, "kill", flood_then_complete)
+        reply = host.op("investigation-disarm", {"service": SERVICE, "path": str(host.conf)})
+        assert reply["ok"] is False and host.state()["restored_at"] is None and len(host.restarts()) == 1
+
+    def test_a_log_deleted_during_the_wait_reads_as_unreadable(self, host):
+        cursor = self._cursor(host)
+        host.log.unlink()
+        assert cursor.new_lines() is None
+
+    def test_a_log_replaced_by_a_new_file_without_the_line_is_unconfirmed(self, host):
+        cursor = self._cursor(host)
+        host.log_rotate(rename=True, then="nothing of interest\n")
+        assert self.OK not in (cursor.new_lines() or [])
+
+    def test_an_unreadable_log_before_the_signal_means_no_cursor_and_the_socket_decides(self, host):
+        host.write_config(_config())
+        host.arm()
+        host.log.unlink()
+        reply = host.op("investigation-disarm", {"service": SERVICE, "path": str(host.conf)})
+        assert reply["ok"] and host.state()["evidence"] == "config-get"
+
+
+class TestABuild15RecordIsVerifiedLikeAnyOther:
+    """v5.68.0-beta.31 (Q168, INV-011): every host record is verified by the one contract, whatever build armed it."""
+
+    def _as_armed_by_build_15(self, host, **arm):
+        host.write_config(
+            {
+                "Dhcp4": {
+                    **_config()["Dhcp4"],
+                    "loggers": [{**_config()["Dhcp4"]["loggers"][0], "output-options": [{"output": str(host.log)}]}],
+                }
+            }
+        )
+        host.arm(**arm)
+        state = host.state()
+        state.pop("log_path", None)
+        for key in ("attempts", "needs_hand", "evidence", "verified_by_build"):
+            state.pop(key, None)
+        (host.state_dir / "investigation-dhcp4.json").write_text(json.dumps(state))
+        return state
+
+    def test_with_a_socket_it_is_verified_by_the_daemons_answer_and_the_log_path_is_recorded(self, host):
+        before = self._as_armed_by_build_15(host)
+        host.reload_mode = "applied_hidden"
+        reply = host.tick("--now")
+        assert reply["ok"] and host.state()["evidence"] == "config-get"
+        after = host.state()
+        assert after["log_path"] == str(host.log) and after["verified_by_build"] == host.helper.HELPER_BUILD
+        assert (after["until"], after["restore"], after["armed_at"]) == (
+            before["until"],
+            before["restore"],
+            before["armed_at"],
+        )
+
+    def test_with_only_a_log_it_is_verified_by_the_completion_line(self, host):
+        self._as_armed_by_build_15(host)
+        host.socket_mode = "absent"
+        assert host.tick("--now")["ok"] and host.state()["evidence"] == "log"
+
+    def test_with_neither_there_is_no_evidence_and_the_record_is_otherwise_untouched(self, host):
+        before = self._as_armed_by_build_15(host)
+        host.socket_mode = "absent"
+        host.log.unlink()
+        for n in range(3):
+            out = host.tick("--now")
+            assert out["ok"] is False and "no way to see whether Kea re-read its file" in out["failed"][0]["error"]
+            assert host.state()["attempts"] == n + 1
+        after = host.state()
+        assert (after["until"], after["restore"], after["armed_at"]) == (
+            before["until"],
+            before["restore"],
+            before["armed_at"],
+        )
+        assert after["restored_at"] is None and host.signals == []
+
+    def test_a_weaker_rule_is_never_presented_as_verification(self, host):
+        self._as_armed_by_build_15(host)
+        host.socket_mode = "silent"
+        host.reload_mode = "silent"
+        host.restart_mode = "same_pid"
+        assert host.tick("--now")["ok"] is False and host.state()["restored_at"] is None, (
+            "an active unit is not a restore, whatever build armed it"
+        )
+
+
+class TestTwoRestoresAtOnce:
+    def test_a_restore_that_finds_the_session_already_restored_under_the_lock_does_nothing(self, host):
+        host.write_config(_config())
+        host.arm()
+        stale = host.state()  # what a caller loaded BEFORE it took the lock
+        assert host.op("investigation-disarm", {"service": SERVICE, "path": str(host.conf)})["restored"] is True
+        signals, restarts = len(host.signals), len(host.restarts())
+        ok, how, detail = host.helper._restore_state("dhcp4", stale)
+        assert (ok, how, detail) == (True, "reload", "already restored")
+        assert len(host.signals) == signals and len(host.restarts()) == restarts, (
+            "no second signal, and the one restart is not spent"
+        )
+
+    def test_a_state_file_that_became_unreadable_underneath_is_not_overwritten_by_the_restore(self, host):
+        host.write_config(_config())
+        host.arm()
+        stale = host.state()
+        (host.state_dir / "investigation-dhcp4.json").write_text("{ garbage")
+        ok, how, detail = host.helper._restore_state("dhcp4", stale)
+        assert ok is False and "changed underneath" in detail
+        assert (host.state_dir / "investigation-dhcp4.json").read_text() == "{ garbage"
+
+
+class TestTheControlSocketIsFoundInTheConfig:
+    def _c(self, helper, sockets=None, singular=None):
+        section = {}
+        if sockets is not None:
+            section["control-sockets"] = sockets
+        if singular is not None:
+            section["control-socket"] = singular
+        return helper._control_socket({"Dhcp4": section})
+
+    def test_a_unix_socket_is_preferred(self, helper):
+        got = self._c(
+            helper,
+            [
+                {
+                    "socket-type": "http",
+                    "socket-address": "127.0.0.1",
+                    "socket-port": 8000,
+                    "authentication": {"type": "basic", "clients": [{"user": "u", "password": "p"}]},
+                },
+                {"socket-type": "unix", "socket-name": "/run/kea/k4.sock"},
+            ],
+        )
+        assert got == ("unix", "/run/kea/k4.sock")
+
+    def test_a_plain_local_http_socket_with_inline_credentials(self, helper):
+        entry = {
+            "socket-type": "http",
+            "socket-address": "0.0.0.0",
+            "socket-port": 8004,
+            "authentication": {"type": "basic", "clients": [{"user": "jen", "password": "pw"}]},
+        }
+        assert self._c(helper, [entry]) == ("http", ("127.0.0.1", 8004, "jen", "pw"))
+
+    def test_a_plain_local_http_socket_with_credential_files_under_directory(self, helper, tmp_path):
+        (tmp_path / "u").write_text("jen\n")
+        (tmp_path / "p").write_text("secret\n")
+        entry = {
+            "socket-type": "http",
+            "socket-address": "::",
+            "socket-port": 8005,
+            "authentication": {
+                "type": "basic",
+                "directory": str(tmp_path),
+                "clients": [{"user-file": "u", "password-file": "p"}],
+            },
+        }
+        assert self._c(helper, [entry]) == ("http", ("::1", 8005, "jen", "secret"))
+
+    def test_the_directory_defaults_to_etc_kea(self, helper, monkeypatch):
+        opened = []
+
+        def fake_open(path, *a, **k):
+            opened.append(path)
+            raise OSError("no")
+
+        entry = {
+            "socket-type": "http",
+            "socket-address": "127.0.0.1",
+            "socket-port": 8004,
+            "authentication": {"type": "basic", "clients": [{"user-file": "u", "password-file": "p"}]},
+        }
+        with monkeypatch.context() as m:
+            m.setattr("builtins.open", fake_open)
+            assert self._c(helper, [entry]) is None
+        assert os.path.join("/etc/kea", "u") in opened
+
+    def test_a_remote_address_is_no_socket_evidence(self, helper):
+        entry = {
+            "socket-type": "http",
+            "socket-address": "10.1.2.3",
+            "socket-port": 8004,
+            "authentication": {"type": "basic", "clients": [{"user": "a", "password": "b"}]},
+        }
+        assert self._c(helper, [entry]) is None
+
+    def test_https_is_no_socket_evidence(self, helper):
+        entry = {
+            "socket-type": "http",
+            "socket-address": "127.0.0.1",
+            "socket-port": 8004,
+            "trust-anchor": "/etc/kea/ca.pem",
+            "cert-file": "/c",
+            "key-file": "/k",
+            "authentication": {"type": "basic", "clients": [{"user": "a", "password": "b"}]},
+        }
+        assert self._c(helper, [entry]) is None
+
+    def test_http_without_basic_auth_is_no_socket_evidence(self, helper):
+        assert self._c(helper, [{"socket-type": "http", "socket-address": "127.0.0.1", "socket-port": 8004}]) is None
+
+    def test_the_singular_pre_2_7_2_map_is_a_one_entry_list(self, helper):
+        assert self._c(helper, singular={"socket-type": "unix", "socket-name": "/run/kea/old.sock"}) == (
+            "unix",
+            "/run/kea/old.sock",
+        )
+
+    def test_neither_is_none(self, helper):
+        assert (
+            self._c(helper) is None
+            and helper._control_socket(None) is None
+            and helper._control_socket({"Dhcp4": {"control-sockets": "x"}}) is None
+        )
+        assert self._c(helper, [{"socket-type": "unix", "socket-name": "relative.sock"}]) is None
+
+
+class TestAskingTheDaemon:
+    """`_ask_daemon` against real sockets: a reply the daemon keeps the connection open after, one it closes after, a list (the Control Agent's wrapping), garbage, nothing listening."""
+
+    REPLY = {"result": 0, "arguments": {"Dhcp4": {"loggers": []}}}
+
+    def _serve_http(self, reply_bytes, close_after=True, expect_auth=None):
+        import threading
+
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        seen = {}
+
+        def run():
+            conn, _ = server.accept()
+            with conn:
+                data = b""
+                while b"\r\n\r\n" not in data:
+                    data += conn.recv(4096)
+                head, _, rest = data.partition(b"\r\n\r\n")
+                length = int(
+                    [h.split(b":")[1] for h in head.split(b"\r\n") if h.lower().startswith(b"content-length")][0]
+                )
+                while len(rest) < length:
+                    rest += conn.recv(4096)
+                seen["head"], seen["body"] = head.decode(), rest
+                conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n" + reply_bytes)
+                if not close_after:
+                    time.sleep(1.5)  # a daemon that keeps the connection open
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        return server, seen, thread
+
+    def test_http_with_basic_auth_a_reply_that_closes(self, helper):
+        server, seen, thread = self._serve_http(json.dumps([self.REPLY]).encode())
+        reply = helper._ask_daemon(("http", ("127.0.0.1", server.getsockname()[1], "jen", "pw")), "config-get")
+        thread.join(3)
+        server.close()
+        assert reply == self.REPLY and json.loads(seen["body"]) == {"command": "config-get"}
+        assert "Authorization: Basic " + base64.b64encode(b"jen:pw").decode() in seen["head"]
+
+    def test_http_a_reply_the_daemon_keeps_the_connection_open_after(self, helper):
+        server, _seen, thread = self._serve_http(json.dumps(self.REPLY).encode(), close_after=False)
+        started = time.monotonic()
+        reply = helper._ask_daemon(("http", ("127.0.0.1", server.getsockname()[1], "jen", "pw")), "config-get")
+        assert reply == self.REPLY and time.monotonic() - started < 1.4, (
+            "returned as soon as the reply parsed, not when the connection closed"
+        )
+        thread.join(3)
+        server.close()
+
+    def test_garbage_is_none(self, helper):
+        server, _seen, thread = self._serve_http(b"<html>not json</html>")
+        assert helper._ask_daemon(("http", ("127.0.0.1", server.getsockname()[1], "jen", "pw")), "config-get") is None
+        thread.join(3)
+        server.close()
+
+    def test_nothing_listening_is_none(self, helper):
+        probe = socket.socket()
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+        probe.close()
+        assert helper._ask_daemon(("http", ("127.0.0.1", port, "a", "b")), "config-get") is None
+
+    @pytest.mark.skipif(not hasattr(socket, "AF_UNIX"), reason="no unix sockets here")
+    def test_a_unix_socket_a_plain_json_reply_and_a_list_reply(self, helper, tmp_path):
+        import threading
+
+        for payload in (self.REPLY, [self.REPLY]):
+            path = str(tmp_path / f"k{type(payload).__name__}.sock")
+            server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            server.bind(path)
+            server.listen(1)
+
+            def run(server=server, payload=payload):
+                conn, _ = server.accept()
+                with conn:
+                    conn.recv(4096)
+                    conn.sendall(json.dumps(payload).encode())
+                    time.sleep(0.5)
+
+            thread = threading.Thread(target=run, daemon=True)
+            thread.start()
+            assert helper._ask_daemon(("unix", path), "config-get") == self.REPLY
+            thread.join(3)
+            server.close()
+        assert helper._ask_daemon(("unix", str(tmp_path / "nothing.sock")), "config-get") is None
+
+
+class TestWhatTheDaemonMustShowToMatchTheFile:
+    """`_daemon_matches`: the running logger against the logger of the FILE the helper wrote."""
+
+    def _seen(self, severity="INFO", level=None, marker=None, present=True):
+        return {"present": present, "severity": severity, "debuglevel": level, "marker": marker}
+
+    @pytest.mark.parametrize(
+        "seen,file_entry,expected",
+        [
+            (
+                {"present": True, "severity": "WARN", "debuglevel": 0, "marker": None},
+                {"severity": "WARN", "debuglevel": 0},
+                True,
+            ),
+            (
+                {"present": True, "severity": "warn", "debuglevel": 0, "marker": None},
+                {"severity": "WARN", "debuglevel": 0},
+                True,
+            ),
+            (
+                {"present": True, "severity": "DEBUG", "debuglevel": 55, "marker": None},
+                {"severity": "WARN", "debuglevel": 0},
+                False,
+            ),
+            (
+                {"present": True, "severity": "WARN", "debuglevel": 0, "marker": {"until": "x"}},
+                {"severity": "WARN", "debuglevel": 0},
+                False,
+            ),
+            (
+                {"present": True, "severity": "INFO", "debuglevel": 0, "marker": None},
+                {"severity": "WARN", "debuglevel": 0},
+                False,
+            ),
+            ({"present": True, "severity": "INFO", "debuglevel": 0, "marker": None}, {"output-options": []}, True),
+            ({"present": True, "severity": "DEBUG", "debuglevel": 55, "marker": None}, {"output-options": []}, False),
+            ({"present": False, "severity": None, "debuglevel": None, "marker": None}, None, True),
+            ({"present": True, "severity": "INFO", "debuglevel": 0, "marker": None}, None, False),
+            ({"present": False, "severity": None, "debuglevel": None, "marker": None}, {"severity": "INFO"}, False),
+            (None, {"severity": "INFO"}, False),
+        ],
+    )
+    def test_the_table(self, helper, seen, file_entry, expected):
+        assert helper._daemon_matches(seen, file_entry) is expected
 
 
 class TestAnUnresolvedHostRecordIsNeverOverwritten:
@@ -808,13 +1473,18 @@ class TestAnUnresolvedHostRecordIsNeverOverwritten:
         host.arm(5)
         (host.state_dir / "investigation-dhcp4.json").write_text("not json")
         reply = host.arm(5)
-        assert reply["ok"] is False and reply["error"] == "armed" and reply["existing"] == {"unreadable": True}
+        assert (
+            reply["ok"] is False
+            and reply["error"] == "armed"
+            and reply["existing"]["unreadable"] is True
+            and "cannot be trusted" in reply["detail"]
+        )
 
     def test_the_arms_write_is_guarded_by_the_existing_state_check(self):
         source = _SCRIPT.read_text(encoding="utf-8")
         a = source.index("def op_investigation_arm(")
         body = source[a : source.index("def op_investigation_disarm(")]
-        assert body.index("existing = _load_state") < body.index('_save_state("dhcp4", state)')
+        assert body.index('_read_state("dhcp4")') < body.index('_save_state("dhcp4", state)')
 
 
 class TestTheTimersOwnLiveness:

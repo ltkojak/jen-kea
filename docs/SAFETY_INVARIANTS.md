@@ -74,15 +74,18 @@ restore object or deadline, or is malformed (`restore: {}`, a string, a list, no
 - `tests/test_investigation_logging.py::TestTheDaemonStepIsBounded`
 - `tests/test_investigation_model.py::TestTheWalk` (invariant I3)
 
-### INV-007 - A host restore is recorded as done only when Kea's own log shows the reload or start completed
-**Rule.** The Kea host writes `restored_at` only after a VERIFIED reload or restart: Kea's own log, past the offset noted before the SIGHUP, shows the reload completed (or started and stayed
-free of a failure id when the restored level hides the completion line); "the unit is active" is not evidence that Kea re-read its file. A refused or unconfirmed restore is retried, counted, and
-after ten ticks says a person has to act.
-**Established.** Q167.
-**Enforced at.** `jen-kea-helper` `_reload_daemon` / `_restore_state` (the only writer of `restored_at`).
+### INV-007 - A host restore is recorded as done only on the daemon's own answer
+**Rule.** The Kea host writes `restored_at` only on one of three recorded evidences: the running daemon's own `config-get` (asked on its control socket) shows the logger the restored FILE has;
+Kea's own completion id (`DHCP4_DYNAMIC_RECONFIGURATION_SUCCESS`), read across rotation, when no socket answered; or a NEW active process running the validated file after the one restart. A
+reload-START line is never completion, "the unit is active" is not evidence that Kea re-read its file, and the absence of a complaint is not evidence. A refused or unconfirmed restore is retried,
+counted, and after ten ticks says a person has to act.
+**Established.** Q167 (the log), rewritten by Q168 after the beta.30 review found a started line accepted as completion.
+**Enforced at.** `jen-kea-helper` `_reload_daemon` / `_restore_state` (the only writer of `restored_at`, beside `evidence`).
 **Tests.**
-- `tests/test_kea_helper_investigation.py::TestARestoreIsDoneWhenKeasOwnLogSaysSo`
+- `tests/test_kea_helper_investigation.py::TestARestoreIsDoneWhenTheDaemonSaysSo`
+- `tests/kea_compat/test_log_levels.py::test_the_daemons_own_control_socket_answers_config_get`
 - `tests/kea_compat/test_log_levels.py::test_sighup_reload_log_lines`
+- `tests/test_investigation_model.py::TestWhatTheWalkFound` (invariant I11)
 
 ### INV-008 - An unresolved host record is never overwritten by an arm
 **Rule.** The Kea host's record of an unresolved investigation session is authoritative: an arm that does not match it (a Jen restored from an older backup, a second Jen, a stale sweep) is
@@ -91,6 +94,29 @@ refused with the record; the same session again is a no-op and the same restore 
 **Enforced at.** `jen-kea-helper` `op_investigation_arm`; `investigation_logging._host_phase` and `turn_on` for the display and the refusal.
 **Tests.**
 - `tests/test_kea_helper_investigation.py::TestAnUnresolvedHostRecordIsNeverOverwritten`
+
+### INV-009 - A host record that cannot be read is never reported as no session
+**Rule.** A state file that exists and cannot be read is `bad-state`, not "nothing armed": arm, disarm, status and the timer's tick give one answer about it, none of them overwrites it, and Jen shows
+it as an unreadable conflict (Health fails, turning logging on is refused) while the sweep still restores at the deadline.
+**Established.** Q168.
+**Enforced at.** `jen-kea-helper` `_read_state` (the one loader, three answers); `kea_host._investigation_op` and `investigation_logging._host_phase` / `helper_gate` for the display and the refusal.
+**Tests.**
+- `tests/test_kea_helper_investigation.py::TestOneAnswerAboutTheStateFile`
+
+### INV-010 - Log evidence follows the file's identity and is never assumed
+**Rule.** Kea's log is read incrementally and followed by the file's identity (device and inode) across rotation and truncation; an exhausted, rotated-away or unreadable log is unconfirmed, never success.
+**Established.** Q168.
+**Enforced at.** `jen-kea-helper` `_LogCursor`, `_await_reload`.
+**Tests.**
+- `tests/test_kea_helper_investigation.py::TestTheLogIsFollowedNotAssumed`
+
+### INV-011 - Every host record is verified by the one contract
+**Rule.** Whatever build armed a record, its restore is verified by the same contract (INV-007); a record is never presented as verified by a weaker rule, and one nothing can verify is refused at the arm
+(`no-evidence`), not accepted.
+**Established.** Q168.
+**Enforced at.** `jen-kea-helper` `_restore_state` and `op_investigation_arm`.
+**Tests.**
+- `tests/test_kea_helper_investigation.py::TestABuild15RecordIsVerifiedLikeAnyOther`
 
 ## Access control and shared definitions
 

@@ -1058,7 +1058,7 @@ is your installed Jen version, shown on the About page; `7`/`9` are this
 release's `HELPER_VERSION`/`HELPER_BUILD`):
 
 ```bash
-d="$(mktemp -d)" && cd "$d" && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper.sig && printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && /usr/bin/python3 -I jen-kea-helper version </dev/null | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin);sys.exit(0 if d.get("ok") is True and d.get("helper_version")==7 and d.get("helper_build")==16 else 1)' && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
+d="$(mktemp -d)" && cd "$d" && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper && curl -fsSLO https://github.com/ltkojak/jen-kea/releases/download/vX.Y.Z/jen-kea-helper.sig && printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && /usr/bin/python3 -I jen-kea-helper version </dev/null | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin);sys.exit(0 if d.get("ok") is True and d.get("helper_version")==7 and d.get("helper_build")==17 else 1)' && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
 ```
 
 then add the sudoers line above. **Settings → Kea → SSH** shows the
@@ -1077,7 +1077,7 @@ trust (`scp`, a USB drive), then run the same verify-then-install steps
 locally, in the directory holding both files:
 
 ```bash
-printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && /usr/bin/python3 -I jen-kea-helper version </dev/null | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin);sys.exit(0 if d.get("ok") is True and d.get("helper_version")==7 and d.get("helper_build")==16 else 1)' && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
+printf '%s\n' 'release@jen ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFXk5NbQwUy85pHCzLfOwPisL0JGLCOrHuRjRZSf25vD' > allowed_signers && ssh-keygen -Y verify -f allowed_signers -I release@jen -n jen-kea-helper -s jen-kea-helper.sig < jen-kea-helper && /usr/bin/python3 -I jen-kea-helper version </dev/null | /usr/bin/python3 -c 'import json,sys;d=json.load(sys.stdin);sys.exit(0 if d.get("ok") is True and d.get("helper_version")==7 and d.get("helper_build")==17 else 1)' && sudo install -o root -g root -m 0755 jen-kea-helper /usr/local/sbin/jen-kea-helper
 ```
 
 Never skip the verify step just because you trust the transport — it's
@@ -1240,6 +1240,16 @@ a file with only the other-execute bit set and then failed to start as that acco
 if it still is exactly the file Jen wrote (a sha is required), under the same lock - it is how Jen undoes an Author Kea Config on a server that had no
 file before when a later server fails. No sudoers change: it is still the one `/usr/local/sbin/jen-kea-helper` line. A host on an older helper keeps
 working, but a failed authoring there leaves the new file and the Servers banner says to delete it by hand.
+
+**Helper build 17 (v5.68.0-beta.31) — the host's restore is proven from the running daemon's own answer. Press Update helper again on every Kea host that uses investigation logging.**
+Build 16 read Kea's log, and a log line is not the daemon: a reload-start line proves Kea began to re-read the file, not that it finished, and at a restored level of WARN or above Kea hides its own
+completion line. Build 17 asks the running daemon. The helper finds the daemon's control socket in the file it just wrote (a unix socket, or the local HTTP one) and sends `config-get`; the restore
+is recorded as done (`restored_at`, with `evidence` beside it) only when the running daemon reports the logger the restored file has (`config-get`), or Kea's own completion line
+(`DHCP4_DYNAMIC_RECONFIGURATION_SUCCESS`) is found in its log - read incrementally and followed across a rotation - when no socket answered (`log`), or, after the one restart, a **new** active
+process free of a start-failure id is running (`process`). A reload-start line is never evidence. A state file that exists and cannot be read is never "no session": arm, disarm, status and the
+timer tick all say so (`bad-state`; Health fails with the file's path - remove it by hand or run `sudo jen-kea-helper --self-restore --now`). A Kea with no local control socket and no readable log
+is refused at the arm (`no-evidence`) because nothing could prove its restore, and `log_path` is optional in the arm. A record armed by build 15 or 16 is verified by this same contract at its next tick.
+No sudoers change: it is still the one `/usr/local/sbin/jen-kea-helper` line.
 
 **Helper build 16 (v5.68.0-beta.30) — the host's restore is proven from Kea's own log. Press Update helper again on every Kea host that uses investigation logging.**
 Build 15 recorded a restore as done when the unit was `active` after the SIGHUP, which says nothing about whether Kea re-read the file. Build 16 notes the size of Kea's log (the path is

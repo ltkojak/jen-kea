@@ -274,6 +274,14 @@ its three files as a SET (`_commit_file_set`): every member is staged private un
 each is then replaced, and on any failure every member already replaced is put back byte-for-byte (a member that did not exist is removed) - a failure at
 any step used to leave a new `server.key` beside an old `server.crt`. A change of behaviour inside the existing envelope: `HELPER_VERSION` stays 7.
 
+Build 17 (v5.68.0-beta.31, Q168) - the host's evidence is the daemon's own ANSWER. Build 16 treated "Kea logged that it started reloading, and nothing failed for three seconds" as a completed
+reload; the completion line is INFO and a restored WARN level hides it, so a reload that never took was recorded as a restore. A restore is now recorded as done on exactly one of three
+pieces of evidence, preferred in this order, and the state says which (`evidence`): `config-get` - the RUNNING daemon, asked on its own control socket (unix, or plain local http), shows
+the logger the restored FILE has; `log` - Kea's own completion id past the pre-signal position, read incrementally and across rotation, only when no socket answered; `process` - after the
+ONE restart, a NEW active main process free of a start-failure id. A reload-start line is never evidence. An existing state file that cannot be read is never "no session": arm, disarm,
+status and the tick give one answer (`bad-state`). Every record is verified by this one contract, whatever build armed it (no legacy branch), the state is re-read under the lock (two
+restores at once cannot spend the one restart), the target is the FILE the helper wrote, and a Kea that logs to syslog but has a local control socket can have investigation logging.
+
 Build 16 (v5.68.0-beta.30, Q167) - the host's promise made provable. (1) A restore is recorded as done (`restored_at`) only when Kea's OWN log, past the offset noted before the
 SIGHUP, shows the reload completed (`DHCP4_DYNAMIC_RECONFIGURATION_SUCCESS`) - or, when the restored level hides that INFO line, shows it STARTED (`DHCP4_DYNAMIC_RECONFIGURATION`) and no
 failure id within a settle window; `unit is active` was never evidence that Kea re-read anything. A refused reload is reported and kept pending (the file is the problem), an unconfirmed one
@@ -310,6 +318,7 @@ import re
 import secrets
 import shutil
 import signal
+import socket
 import stat
 import subprocess  # nosec B404 — every call is a fixed argv list, shell=False
 import sys
@@ -318,7 +327,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 HELPER_VERSION = 7
-HELPER_BUILD = 16
+HELPER_BUILD = 17
 # v5.66.0-beta.2 (Q104) — HELPER_BUILD is bumped on EVERY change to this file, never by
 # HELPER_VERSION alone; op_update's own _HELPER_BUILD_RE parses "^HELPER_BUILD = (\d+)$" out
 # of a candidate's raw bytes, so this line (like HELPER_VERSION's own, just above) must never
@@ -1376,16 +1385,20 @@ _SYSTEMD_DIR = "/etc/systemd/system"
 _TIMER_NAME = "jen-kea-investigation"
 _STATE_FILE_RE = re.compile(r"^investigation-(dhcp4)\.json$")
 _ARM_MAX_AHEAD = timedelta(hours=24, minutes=1)
-_HUP_WAIT_S = 5.0  # how long Kea's own log gets to show the reload before the one restart is used instead
-# build 16 (Q167): the ids Kea writes - recorded per image by tests/kea_compat/test_log_levels.py::test_sighup_reload_log_lines (3.0.3, 3.2.0, 3.3.1), asserted against these constants there
+_HUP_WAIT_S = 8.0  # how long Kea gets to show the reload before the one restart
+_RESTART_WAIT_S = 8.0  # how long a restarted daemon gets to show the file
+_RESTART_SETTLE_S = 3.0  # a new active process must stay free of a start-failure id this long (when no socket can say)
+_SOCKET_WAIT_S = 4.0  # one question to the daemon's own socket
+_SOCKET_READ_MAX = 8 << 20
+# the ids Kea writes - recorded per image by tests/kea_compat/test_log_levels.py (3.0.3, 3.2.0, 3.3.1) and asserted against these constants there
 _RELOAD_OK_IDS = ("DHCP4_DYNAMIC_RECONFIGURATION_SUCCESS",)  # logged at INFO by the NEW logger: absent when the level is restored to WARN or above
-_RELOAD_STARTED_IDS = ("DHCP4_DYNAMIC_RECONFIGURATION",)  # logged by the OLD logger (DEBUG 55) before the file is read: always visible
+_RELOAD_STARTED_IDS = ("DHCP4_DYNAMIC_RECONFIGURATION",)  # logged by the OLD logger before the file is read: quoted in an error, NEVER evidence (build 17)
 _RELOAD_FAIL_IDS = ("DHCP4_DYNAMIC_RECONFIGURATION_FAIL", "DHCP4_CONFIG_LOAD_FAIL")  # ERROR: visible at every level
 _START_FAIL_IDS = ("DHCP4_CONFIG_LOAD_FAIL", "DHCP4_INIT_FAIL", "DHCP4_SERVER_FAILED")
-_STARTED_SETTLE_S = 3.0  # after the reload STARTED, how long Kea must stay free of a failure id before the reload counts as applied (when SUCCESS is hidden by the level)
-_RESTART_SETTLE_S = 3.0
 _MAX_UNCONFIRMED_TICKS = 10  # failed restore ticks before the state says a person has to act
-_LOG_READ_MAX = 1 << 20
+_LOG_READ_MAX = 1 << 20  # per read
+_LOG_SCAN_MAX = 64 << 20  # per verification: past this the log is "exhausted" (unconfirmed, never a guess)
+_EVIDENCE = ("config-get", "log", "process")
 _TIMER_SERVICE_TEXT = (
     "[Unit]\n"
     "Description=Jen: put the Kea logger back when investigation logging is over\n"
@@ -1498,14 +1511,29 @@ def _ensure_state_dir():
     os.chmod(_STATE_DIR, 0o700)
 
 
-def _load_state(service):
-    """The parsed state file of `service`, or None when there is none (or it is not a JSON object)."""
+def _read_state(service):
+    """("absent", None) - no file; ("ok", state) - a usable state file; ("bad", detail) - a file that exists and cannot be trusted (unreadable, not JSON, not an object, not a shape
+    `investigation-arm` writes). FOUR callers (arm, disarm, status, --self-restore), ONE answer: an existing file is never "no session"."""
+    path = _state_path(service)
+    if not os.path.lexists(path):
+        return "absent", None
     try:
-        with open(_state_path(service), "rb") as f:
+        with open(path, "rb") as f:
             state = json.loads(f.read().decode("utf-8"))
-    except (OSError, ValueError):
-        return None
-    return state if isinstance(state, dict) else None
+    except OSError as e:
+        return "bad", f"unreadable: {e.strerror or e}"
+    except ValueError as e:
+        return "bad", f"not JSON: {e}"
+    if not _state_usable(state):
+        return "bad", "not a state this helper writes"
+    return "ok", state
+
+
+def _bad_state_sentence(detail):
+    return (
+        f"the host's investigation state file exists and cannot be trusted ({detail}); nothing is known about the session it records - look at {_state_path('dhcp4')}, "
+        "then remove it or run `jen-kea-helper --self-restore --now`"
+    )
 
 
 def _save_state(service, state):
@@ -1563,26 +1591,6 @@ def _unit_main_pid(unit):
     return int(text) if text.isdigit() else 0
 
 
-def _log_size(path):
-    try:
-        return os.stat(path).st_size
-    except OSError:
-        return None
-
-
-def _log_lines_after(path, offset):
-    """The lines Kea wrote to `path` past byte `offset` (from 0 when the file is shorter than that - it was rotated), at most `_LOG_READ_MAX` bytes; None when it cannot be read."""
-    try:
-        size = os.stat(path).st_size
-        start = offset if size >= offset else 0
-        with open(path, "rb") as f:
-            f.seek(start)
-            data = f.read(_LOG_READ_MAX)
-    except OSError:
-        return None
-    return data.decode("utf-8", "replace").splitlines()
-
-
 def _find_id(lines, ids):
     for line in lines:
         for ident in ids:
@@ -1591,110 +1599,354 @@ def _find_id(lines, ids):
     return None
 
 
-def _await_reload(path, offset):
-    """What Kea's own log says about the SIGHUP, past `offset`: ("ok", line) - the reload completed, or started and stayed free of a failure for `_STARTED_SETTLE_S` (the restored level may
-    hide the completion line); ("fail", line) - Kea refused the file; ("none", None) - nothing within the wait; ("unreadable", None)."""
-    waited, started_at = 0.0, None
+def _logger_entry(config):
+    """The `kea-dhcp4` logger of `config`, or None when the file has none."""
+    section = config.get("Dhcp4") if isinstance(config, dict) else None
+    loggers = section.get("loggers") if isinstance(section, dict) else None
+    if not isinstance(loggers, list):
+        return None
+    return next((x for x in loggers if isinstance(x, dict) and x.get("name") == _INV_LOGGER), None)
+
+
+def _file_log_path(config):
+    """The first file output of the kea-dhcp4 logger under /var/log, else None (a daemon that logs to syslog or stdout has no log file to read)."""
+    entry = _logger_entry(config) or {}
+    for option in entry.get("output-options") or []:
+        out = option.get("output") if isinstance(option, dict) else None
+        if _allowed_log_path(out):
+            return out
+    return None
+
+
+_LOCAL_ADDRESSES = {"127.0.0.1": "127.0.0.1", "localhost": "127.0.0.1", "::1": "::1", "0.0.0.0": "127.0.0.1", "::": "::1"}  # nosec B104 - read, never bound
+
+
+def _http_credentials(entry):
+    """(user, password) of the first basic-auth client of an http control socket entry, inline (`user`/`password`) or in files (`user-file`/`password-file` under `directory`, default /etc/kea)."""
+    auth = entry.get("authentication")
+    if not isinstance(auth, dict) or str(auth.get("type") or "").lower() != "basic":
+        return None
+    directory = auth.get("directory") if isinstance(auth.get("directory"), str) else "/etc/kea"
+    for client in auth.get("clients") or []:
+        if not isinstance(client, dict):
+            continue
+        if isinstance(client.get("user"), str) and isinstance(client.get("password"), str):
+            return client["user"], client["password"]
+        if isinstance(client.get("user-file"), str) and isinstance(client.get("password-file"), str):
+            try:
+                with open(os.path.join(directory, client["user-file"]), encoding="utf-8") as f:
+                    user = f.read().strip()
+                with open(os.path.join(directory, client["password-file"]), encoding="utf-8") as f:
+                    password = f.read().strip()
+            except OSError:
+                continue
+            if user:
+                return user, password
+    return None
+
+
+def _control_socket(config):
+    """The dhcp4 daemon's own control socket from its config: ("unix", path) for a unix socket (preferred), ("http", (address, port, user, password)) for a PLAIN http socket bound to
+    a local address with basic auth whose credentials are inline or in files - the two shapes Jen authors - else None (https, a remote address, no auth: no socket evidence; the log
+    and the process remain). `control-socket` (singular, pre-2.7.2) is read as a one-entry list. 0.0.0.0 and :: are asked at 127.0.0.1 / ::1."""
+    section = config.get("Dhcp4") if isinstance(config, dict) else None
+    if not isinstance(section, dict):
+        return None
+    entries = section.get("control-sockets")
+    if entries is None and isinstance(section.get("control-socket"), dict):
+        entries = [section["control-socket"]]
+    if not isinstance(entries, list):
+        return None
+    entries = [e for e in entries if isinstance(e, dict)]
+    for entry in entries:
+        name = entry.get("socket-name")
+        if str(entry.get("socket-type") or "").lower() == "unix" and isinstance(name, str) and name.startswith("/"):
+            return "unix", name
+    for entry in entries:
+        if str(entry.get("socket-type") or "").lower() != "http":
+            continue
+        if any(k in entry for k in ("trust-anchor", "cert-file", "key-file", "cert-required")):
+            continue  # https: the helper does not speak TLS to the daemon
+        address = _LOCAL_ADDRESSES.get(str(entry.get("socket-address") or "127.0.0.1").lower())
+        port = entry.get("socket-port", 8000)
+        credentials = _http_credentials(entry)
+        if address and isinstance(port, int) and not isinstance(port, bool) and 0 < port < 65536 and credentials:
+            return "http", (address, port, credentials[0], credentials[1])
+    return None
+
+
+def _ask_daemon(sock_spec, command):
+    """One command to the daemon's own control socket -> the reply dict, or None (no socket, refused, timeout, not JSON, not an object). Never raises. The reply is read until it parses as
+    JSON (Kea may keep the connection open), bounded by `_SOCKET_WAIT_S` and `_SOCKET_READ_MAX`; a list reply (the Control Agent's wrapping) is unwrapped."""
+    kind, where = sock_spec
+    body = json.dumps({"command": command}).encode("utf-8")
+    s = None
+    try:
+        if kind == "unix":
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.settimeout(_SOCKET_WAIT_S)
+            s.connect(where)
+            s.sendall(body)
+        else:
+            address, port, user, password = where
+            s = socket.create_connection((address, port), timeout=_SOCKET_WAIT_S)
+            token = base64.b64encode(f"{user}:{password}".encode("utf-8")).decode("ascii")
+            head = (
+                f"POST / HTTP/1.0\r\nHost: {address}\r\nContent-Type: application/json\r\nAuthorization: Basic {token}\r\nContent-Length: {len(body)}\r\n\r\n"
+            )
+            s.sendall(head.encode("ascii") + body)
+        buf, deadline = b"", time.monotonic() + _SOCKET_WAIT_S
+        while time.monotonic() < deadline and len(buf) < _SOCKET_READ_MAX:
+            try:
+                chunk = s.recv(65536)
+            except socket.timeout:
+                break
+            if not chunk:
+                break
+            buf += chunk
+            if kind == "http" and b"\r\n\r\n" not in buf:
+                continue
+            text = buf.partition(b"\r\n\r\n")[2] if kind == "http" else buf
+            try:
+                reply = json.loads(text.decode("utf-8"))
+            except ValueError:
+                continue
+            if isinstance(reply, list) and reply:
+                reply = reply[0]
+            return reply if isinstance(reply, dict) else None
+        if kind == "http" and b"\r\n\r\n" in buf:  # the daemon closed after its reply: whatever it sent is the whole body
+            try:
+                reply = json.loads(buf.partition(b"\r\n\r\n")[2].decode("utf-8"))
+            except ValueError:
+                return None
+            if isinstance(reply, list) and reply:
+                reply = reply[0]
+            return reply if isinstance(reply, dict) else None
+        return None
+    except (OSError, ValueError):
+        return None
+    finally:
+        if s is not None:
+            with contextlib.suppress(OSError):
+                s.close()
+
+
+def _daemon_logger_now(sock_spec):
+    """What the RUNNING kea-dhcp4 says its logger is: {"present", "severity", "debuglevel", "marker"} - the port of Jen's `daemon_logger` - or None when it could not be asked.
+    None is "could not see", never "restored"."""
+    reply = _ask_daemon(sock_spec, "config-get")
+    if reply is None or reply.get("result") != 0:
+        return None
+    arguments = reply.get("arguments")
+    section = arguments.get("Dhcp4") if isinstance(arguments, dict) else None
+    if not isinstance(section, dict):
+        return None
+    loggers = section.get("loggers")
+    loggers = [] if loggers is None else loggers
+    if not isinstance(loggers, list):
+        return None
+    entry = next((x for x in loggers if isinstance(x, dict) and x.get("name") == _INV_LOGGER), None)
+    if entry is None:
+        return {"present": False, "severity": None, "debuglevel": None, "marker": None}
+    context = entry.get("user-context")
+    marker = context.get(_INV_KEY) if isinstance(context, dict) else None
+    return {"present": True, "severity": entry.get("severity"), "debuglevel": entry.get("debuglevel"), "marker": marker if isinstance(marker, dict) else None}
+
+
+def _daemon_matches(seen, file_entry):
+    """Does the RUNNING logger (`seen`, from config-get) show the logger the restored FILE has (`file_entry`, `_logger_entry` of the file the helper wrote)? Jen's `_is_original` asks the
+    same of the marker's restore object; here the target is the FILE, so a logger a person changed since is verified too. A marker still carried, or the investigation level still
+    running, is never a match. A key the file does not have is Kea's default: all that can be said is that it is not the investigation value."""
+    if seen is None or seen.get("marker") is not None:
+        return False
+    shown = str(seen.get("severity") or "").upper()
+    at_level = shown == "DEBUG" and seen.get("debuglevel") == 55
+    if file_entry is None:
+        return not seen["present"]
+    if not seen["present"]:
+        return False
+    want_sev, want_lvl = file_entry.get("severity"), file_entry.get("debuglevel")
+    sev_ok = (shown != "DEBUG") if want_sev is None else shown == str(want_sev).upper()
+    lvl_ok = (seen.get("debuglevel") != 55) if want_lvl is None else seen.get("debuglevel") == want_lvl
+    return sev_ok and lvl_ok and not at_level
+
+
+class _LogCursor:
+    """Kea's log as evidence: where the file was before the signal, and what has been written since - following the file by IDENTITY (device, inode), not by name alone, and reading
+    incrementally so a flood at DEBUG 55 cannot push the one line that matters past a fixed window. Bounded: `_LOG_READ_MAX` per read, `_LOG_SCAN_MAX` per verification."""
+
+    def __init__(self, path):
+        self.path, self.scanned, self.exhausted = path, 0, False
+        st = self._stat(path)
+        self.usable = st is not None
+        self.ident = (st.st_dev, st.st_ino) if st else None
+        self.pos = st.st_size if st else 0
+
+    @staticmethod
+    def _stat(path):
+        try:
+            return os.stat(path)
+        except OSError:
+            return None
+
+    def _read(self, path, start):
+        """(lines, bytes read) past `start`, or (None, 0) when the file cannot be read."""
+        try:
+            with open(path, "rb") as f:
+                f.seek(start)
+                data = f.read(_LOG_READ_MAX)
+        except OSError:
+            return None, 0
+        self.scanned += len(data)
+        return data.decode("utf-8", "replace").splitlines(), len(data)
+
+    def new_lines(self):
+        """The lines written since the last call (all of them, in as many reads as it takes). None when the log cannot be read. Once `_LOG_SCAN_MAX` bytes have been scanned `exhausted`
+        is True and nothing more is returned: the verification is then unconfirmed, never guessed."""
+        if self.exhausted:
+            return []
+        st = self._stat(self.path)
+        if st is None:
+            return None
+        lines = []
+        if self.ident is not None and (st.st_dev, st.st_ino) != self.ident:
+            # rotated by rename (logrotate; Kea's own maxsize/maxver): the file we were reading is now `<path>.1` - finish it from where we were, then the new file from its start
+            old = self._stat(self.path + ".1")
+            if old is not None and (old.st_dev, old.st_ino) == self.ident:
+                rest, _n = self._read(self.path + ".1", self.pos)
+                lines += rest or []
+            self.ident, self.pos = (st.st_dev, st.st_ino), 0
+        elif st.st_size < self.pos:
+            self.pos = 0  # truncated in place (copytruncate)
+        while True:
+            chunk, n = self._read(self.path, self.pos)
+            if chunk is None:
+                return None
+            lines += chunk
+            self.pos += n
+            if self.scanned >= _LOG_SCAN_MAX:
+                self.exhausted = True
+                break
+            if n < _LOG_READ_MAX:
+                break
+        return lines
+
+
+def _await_reload(sock, cursor, file_entry):
+    """After the SIGHUP: ("ok", evidence, None) | ("fail", None, line) | ("none", None, started_line). The socket is the arbiter when it answers; the log's completion id counts only when
+    no socket answered; a started line alone is never evidence."""
+    waited, started = 0.0, None
     while True:
-        lines = _log_lines_after(path, offset)
-        if lines is None:
-            return "unreadable", None
-        failed = _find_id(lines, _RELOAD_FAIL_IDS)
-        if failed:
-            return "fail", failed
-        done = _find_id(lines, _RELOAD_OK_IDS)
-        if done:
-            return "ok", done
-        started = _find_id(lines, _RELOAD_STARTED_IDS)
-        if started and started_at is None:
-            started_at = waited
-        if started_at is not None and waited - started_at >= _STARTED_SETTLE_S:
-            return "ok", started
-        if waited >= _HUP_WAIT_S + _STARTED_SETTLE_S or (started_at is None and waited >= _HUP_WAIT_S):
-            return "none", None
+        seen = _daemon_logger_now(sock) if sock is not None else None
+        if seen is not None and _daemon_matches(seen, file_entry):
+            return "ok", "config-get", None
+        if cursor is not None:
+            lines = cursor.new_lines()
+            if lines:
+                failed = _find_id(lines, _RELOAD_FAIL_IDS)
+                if failed:
+                    return "fail", None, failed
+                started = started or _find_id(lines, _RELOAD_STARTED_IDS)
+                done = _find_id(lines, _RELOAD_OK_IDS)
+                if done and seen is None:
+                    return "ok", "log", None
+        if waited >= _HUP_WAIT_S:
+            return "none", None, started
         _sleep(0.5)
         waited += 0.5
 
 
-def _await_restart(unit, path, offset):
-    """After `systemctl restart`: ("ok", None) when the unit is active and Kea's log past `offset` carries no start-failure id; ("fail", line); ("none", None); ("unreadable", None)."""
-    waited = 0.0
-    while waited < _RESTART_SETTLE_S:
+def _await_restart(unit, before_pid, sock, cursor, file_entry):
+    """After `systemctl restart`: ("ok", "config-get" | "process", None) | ("fail", None, line) | ("none", None, None). A new main pid that is active, free of a start-failure id for
+    `_RESTART_SETTLE_S`, is the process evidence (a fresh process can only run the file on disk); when the socket answers it must agree."""
+    waited, new_since = 0.0, None
+    while waited < _RESTART_WAIT_S:
         _sleep(0.5)
         waited += 0.5
-        lines = _log_lines_after(path, offset)
-        if lines is None:
-            return "unreadable", None
-        failed = _find_id(lines, _START_FAIL_IDS)
-        if failed:
-            return "fail", failed
-    if _unit_state(unit) != "active":
-        return "none", None
-    return "ok", None
+        if cursor is not None:
+            lines = cursor.new_lines()
+            failed = _find_id(lines, _START_FAIL_IDS) if lines else None
+            if failed:
+                return "fail", None, failed
+        pid = _unit_main_pid(unit)
+        fresh = pid > 0 and pid != before_pid and _unit_state(unit) == "active"
+        new_since = (new_since if new_since is not None else waited) if fresh else None
+        if not fresh:
+            continue
+        seen = _daemon_logger_now(sock) if sock is not None else None
+        if seen is not None:
+            if _daemon_matches(seen, file_entry):
+                return "ok", "config-get", None
+            continue  # the daemon answered and does not run the file: keep looking, never "process"
+        if waited - new_since >= _RESTART_SETTLE_S:
+            return "ok", "process", None
+    return "none", None, None
 
 
-def _reload_daemon(service, state):
-    """Make the running daemon re-read its file AND PROVE IT from Kea's own log: note the log's size, SIGHUP the unit's main process, and look for the lines Kea writes past that offset
-    (`_await_reload`). A refusal is reported and nothing is restarted (the file is the problem); no confirmation within the wait gets ONE restart per state file, verified the same way
-    (`_await_restart`). Returns (how, error): how is "reload" or "restart" only when verified, error None on success. A state armed by build 15 carries no log path: it is verified the
-    way build 15 did (the unit is `active`), once, rather than never."""
+def _reload_daemon(service, state, config):
+    """Make the running daemon re-read its file AND PROVE IT - (how, evidence, error). `config` is the file the helper has on disk (the restored one): the target is THAT, so a logger a
+    person changed since is verified too. The proof, in order: the running daemon's own `config-get` shows the file's logger; Kea's completion id past the pre-signal position (only when no
+    socket answered); after the ONE restart, a NEW active process. A daemon that already runs the file is accepted without a signal."""
     unit = _resolve_unit(service, "status")
     if unit is None:
-        return None, "no Kea unit was found on this host"
-    log_path = state.get("log_path")
-    legacy = "log_path" not in state
-    if not legacy and not _allowed_log_path(log_path):
-        return None, "the arm recorded no usable Kea log path, so the host cannot verify that Kea re-read its config"
+        return None, None, "no Kea unit was found on this host"
+    sock = _control_socket(config)
+    file_entry = _logger_entry(config)
+    log_path = state.get("log_path") or _file_log_path(config)
+    if not _allowed_log_path(log_path):
+        log_path = None
+    cursor = _LogCursor(log_path) if log_path else None
+    if cursor is not None and not cursor.usable:
+        cursor = None
+    if sock is None and cursor is None:
+        return None, None, (
+            "the host has no way to see whether Kea re-read its file: no unix or local http control socket in the config and no readable log file"
+        )
+    if sock is not None and _daemon_matches(_daemon_logger_now(sock), file_entry):
+        return "reload", "config-get", None  # the daemon runs the file already: a person reloaded, or the other of two concurrent restores did
     pid = _unit_main_pid(unit)
+    started = None
     if pid > 0:
-        offset = 0 if legacy else _log_size(log_path)
-        if offset is None:
-            return None, f"the Kea log {log_path} could not be read, so the reload cannot be verified"
         try:
             os.kill(pid, _SIGHUP)
         except OSError:
             pid = 0  # no such process: the unit is not really running; fall through to the restart
         else:
-            if legacy:
-                waited = 0.0
-                while waited < _HUP_WAIT_S:
-                    _sleep(0.5)
-                    waited += 0.5
-                    if _unit_state(unit) == "active":
-                        return "reload", None
-            else:
-                verdict, line = _await_reload(log_path, offset)
-                if verdict == "ok":
-                    return "reload", None
-                if verdict == "fail":
-                    return None, f"Kea refused the restored config: {line}"[:400]
-                # "none" / "unreadable": unconfirmed - the one restart below
+            verdict, evidence, extra = _await_reload(sock, cursor, file_entry)
+            if verdict == "ok":
+                return "reload", evidence, None
+            if verdict == "fail":
+                return None, None, f"Kea refused the restored config: {extra}"[:400]
+            started = extra  # quoted below, never evidence
+    note = f"; the reload started ({started.strip()[:160]}) and nothing shows it completed" if started else ""
     if int(state.get("restarts") or 0) >= 1:
-        return None, "Kea's log did not confirm the reload and the unit was already restarted once for this state: not restarting again"
+        return None, None, "nothing shows Kea re-read the restored file and the unit was already restarted once for this state: not restarting again" + note
     state["restarts"] = int(state.get("restarts") or 0) + 1
-    offset = 0 if legacy else _log_size(log_path)
-    if offset is None:
-        return None, f"the Kea log {log_path} could not be read, so the restart cannot be verified"
     proc = _run_bin("systemctl", ["restart", unit], capture_output=True, text=True)
     if proc is None or proc.returncode != 0:
         tail = "\n".join(((proc.stderr or proc.stdout) if proc else "").splitlines()[-3:])
-        return None, f"systemctl restart {unit} failed: {tail}"
-    if legacy:
-        return ("restart", None) if _unit_state(unit) == "active" else (None, "restarted, but the unit is not active")
-    verdict, line = _await_restart(unit, log_path, offset)
+        return None, None, f"systemctl restart {unit} failed: {tail}"
+    verdict, evidence, extra = _await_restart(unit, pid, sock, cursor, file_entry)
     if verdict == "ok":
-        return "restart", None
+        return "restart", evidence, None
     if verdict == "fail":
-        return None, f"restarted, but Kea refused the restored config: {line}"[:400]
-    return None, "restarted, but Kea's log shows no completed configuration and the unit is not active"
+        return None, None, f"restarted, but Kea refused the restored config: {extra}"[:400]
+    return None, None, "restarted, but neither Kea's own answer, its log nor a fresh active process shows the restored file running" + note
 
 
 def _restore_state(service, state):
-    """The restore routine - shared by `investigation-disarm`, the timer and boot. Reads the config, puts the logger back from the STATE's `restore`, validates with
-    `-t` as the daemon, writes the file privately (the previous one kept as `.jen_backup`) and asks the daemon to re-read it. Updates and saves the state: `restored_at` and
-    `how` on success, `last_error` on failure (the next tick retries). Returns (ok, how, detail)."""
+    """The restore routine - shared by `investigation-disarm`, the timer and boot. Under the lock it RE-READS the state (two restores in the same second must not both act: the second would
+    spend the one restart on a daemon that is already restored), reads the config, puts the logger back from the STATE's `restore`, validates with `-t` as the daemon, writes the file
+    privately (the previous one kept as `.jen_backup`) and asks the daemon to re-read it, verified by `_reload_daemon`'s contract. Updates and saves the state: `restored_at`, `how`
+    and `evidence` on success, `last_error` on failure (the next tick retries). Returns (ok, how, detail)."""
     path = state["path"]
     with _locked(path):
+        kind, fresh = _read_state(service)
+        if kind != "ok":
+            return False, None, "the state file changed underneath this restore" + (f" ({fresh})" if kind == "bad" else "")
+        if fresh.get("restored_at"):
+            return True, fresh.get("how"), "already restored"
+        state = fresh
         try:
             with open(path, "rb") as f:
                 raw = f.read()
@@ -1704,6 +1956,9 @@ def _restore_state(service, state):
             return _restore_failed(service, state, f"the config could not be read: {e}")
         if not isinstance(config, dict):
             return _restore_failed(service, state, "the config is not a JSON object")
+        if not state.get("log_path"):
+            state["log_path"] = _file_log_path(config)  # a record armed by build 15 (or without a log): the log path comes from the file's own logger
+            state["verified_by_build"] = HELPER_BUILD
         new_cfg, code = _restore_logger(config, state["restore"])
         if code == "ok":
             ok, result = _run_kea_test(service, path, new_cfg, [])
@@ -1714,11 +1969,11 @@ def _restore_state(service, state):
                 _install_private(path, json.dumps(new_cfg, indent=2).encode("utf-8"), st.st_uid, st.st_gid, st.st_mode & 0o777)
             except OSError as e:
                 return _restore_failed(service, state, f"the config could not be written: {e}")
-        how, error = _reload_daemon(service, state)
-        if error or how not in ("reload", "restart"):
+        how, evidence, error = _reload_daemon(service, state, new_cfg if code == "ok" else config)
+        if error or how not in ("reload", "restart") or evidence not in _EVIDENCE:
             return _restore_failed(service, state, error or "the reload was not verified")
-        # the ONE place `restored_at` is written: after a VERIFIED how
-        state.update(restored_at=_now().isoformat(timespec="seconds"), how=how, last_error=None, needs_hand=False)
+        # the ONE place `restored_at` is written: after a VERIFIED how AND the evidence that verified it
+        state.update(restored_at=_now().isoformat(timespec="seconds"), how=how, evidence=evidence, last_error=None, needs_hand=False)
         _save_state(service, state)
         return True, how, ""
 
@@ -1745,8 +2000,9 @@ def _arm_fields(payload):
     if not _restore_shape_ok(restore):
         return None, "bad-restore"
     log_path = payload.get("log_path")
-    if not _allowed_log_path(log_path):
-        return None, "bad-log-path"  # build 16: the host verifies its restore from Kea's own log, so it must know where that is
+    if log_path not in (None, "") and not _allowed_log_path(log_path):
+        return None, "bad-log-path"  # (build 17: optional - the daemon's own socket can answer without a log - but a malformed one is still refused)
+    log_path = log_path or None
     jen = payload.get("jen")
     if jen is not None and (
         not isinstance(jen, dict)
@@ -1775,15 +2031,30 @@ def op_investigation_arm(payload):
     state, error = _arm_fields(payload)
     if state is None:
         return {"ok": False, "error": error}, None
-    if _log_size(state["log_path"]) is None:
-        return {"ok": False, "error": "bad-log-path", "detail": f"{state['log_path']} does not exist or cannot be read, so the host could not verify a restore from Kea's log"}, state["path"]
     path = state["path"]
+    try:
+        with open(path, "rb") as f:
+            config = json.loads(f.read().decode("utf-8"))
+    except (OSError, ValueError):
+        config = None
+    log_path = state["log_path"] or (_file_log_path(config) if isinstance(config, dict) else None)
+    cursor = _LogCursor(log_path) if log_path else None
+    has_log = cursor is not None and cursor.usable
+    if _control_socket(config) is None and not has_log:
+        return {
+            "ok": False,
+            "error": "no-evidence",
+            "detail": "the host would have no way to see whether Kea re-read its file: no unix or local http control socket in the config and no readable log file for the kea-dhcp4 logger",
+        }, path
+    if has_log and not state["log_path"]:
+        state["log_path"] = log_path
     with _locked(path):
         # build 16 (Q167): the host's record is authoritative. An UNRESOLVED one (no `restored_at`) is never replaced by whatever a caller sends - a Jen restored from an older backup, a
         # second Jen, a stale sweep: the same session again is idempotent, the same restore with a LATER deadline is an extension, anything else is refused with the record.
-        existing = _load_state("dhcp4")
-        if existing is None and os.path.exists(_state_path("dhcp4")):
-            return {"ok": False, "error": "armed", "existing": {"unreadable": True}, "detail": "the host's state file exists and cannot be read; remove it by hand once it is understood"}, path
+        kind, existing = _read_state("dhcp4")
+        if kind == "bad":
+            return {"ok": False, "error": "armed", "existing": {"unreadable": True, "detail": existing}, "detail": _bad_state_sentence(existing)}, path
+        existing = existing if kind == "ok" else None
         idempotent = False
         if existing is not None and not existing.get("restored_at"):
             same = existing.get("path") == state["path"] and existing.get("restore") == state["restore"]
@@ -1815,10 +2086,12 @@ def op_investigation_disarm(payload):
     service, path = payload.get("service"), payload.get("path")
     if service != "dhcp4" or not _allowed_conf_path(path):
         return {"ok": False, "error": "not-allowed"}, None
-    state = _load_state(service)
-    if state is None:
+    kind, state = _read_state(service)
+    if kind == "absent":
         return {"ok": True, "restored": False, "how": "nothing", "detail": "not armed"}, path
-    if not _state_usable(state) or state["path"] != path:
+    if kind == "bad":
+        return {"ok": False, "error": "bad-state", "detail": _bad_state_sentence(state)}, path
+    if state["path"] != path:
         return {"ok": False, "error": "bad-state", "detail": "the state file is not one this helper wrote for this config"}, path
     if state.get("restored_at"):
         return {"ok": True, "restored": False, "how": state.get("how") or "nothing", "detail": "already restored"}, path
@@ -1862,6 +2135,8 @@ def _status_view(state):
         "needs_hand": bool(state.get("needs_hand")),
         "attempts": state.get("attempts", 0),
         "log_path": state.get("log_path"),
+        "evidence": state.get("evidence"),
+        "verified_by_build": state.get("verified_by_build"),
         "extended_from": state.get("extended_from"),
         "path": state.get("path"),
         "until": state.get("until"),
@@ -1878,9 +2153,17 @@ def op_investigation_status(payload):
     service = payload.get("service")
     if service != "dhcp4":
         return {"ok": False, "error": "not-allowed"}, None
-    state = _load_state(service)
-    if state is None:
+    kind, state = _read_state(service)
+    if kind == "absent":
         return {"ok": True, "armed": False}, None
+    if kind == "bad":
+        return {
+            "ok": False,
+            "error": "bad-state",
+            "armed": None,
+            "detail": _bad_state_sentence(state),
+            "state_file": _state_path(service),
+        }, _state_path(service)
     return {"ok": True, **_status_view(state)}, state.get("path")
 
 
@@ -1898,9 +2181,11 @@ def _self_restore(force=False):
         if not m:
             continue
         service = m.group(1)
-        state = _load_state(service)
-        if not _state_usable(state):
-            failed.append({"service": service, "error": "the state file is not usable"})
+        kind, state = _read_state(service)
+        if kind == "absent":
+            continue
+        if kind == "bad":
+            failed.append({"service": service, "error": f"the state file is not usable: {state}"})
             continue
         if state.get("restored_at"):
             continue

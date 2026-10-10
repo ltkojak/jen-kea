@@ -1194,7 +1194,19 @@ path, restore and deadline), an extension (same restore, later deadline, `extend
 `investigation-status` reports `timer_active` / `timer_enabled` (and `last_error: "Restoration timer is not active"` for an armed state without one); `investigation-timer {action: "ensure"}` re-asserts
 the units and the timer. (4) `--self-restore` exits 1 on a failed restore. A state armed by build 15 carries no log path and is verified the way build 15 did, once. (Found by the system stack at build 16: the legacy install script travelled as ONE command argument, and Linux caps an argument at 128 KiB, so "Install helper" failed with `Argument list too long` once the helper passed ~96 KB; `_legacy_python3` now sends the base64 script on stdin - the same pipeline, so the legacy grant is unchanged.)
 
-Jen's side is display and audit: `turn_on` refuses below build 16 (`kea_host.INVESTIGATION_MIN_HELPER_BUILD`, "press Update helper"), writes the file through the change set, **arms the
+**Build 17 (v5.68.0-beta.31, Q168) asks the daemon.** A log line is not the daemon: beta.30 treated a reload-START line as completion and could record a restore the daemon had not made. The evidence is now
+the running daemon's own answer, found through `_control_socket(config)` (a unix socket, or an http one on a local address, from the FILE the helper wrote) and asked by `_ask_daemon`
+(`config-get`): `_daemon_matches` compares the logger the daemon reports with the logger the FILE has (the file is the target - not the restore object). Three evidences are accepted and recorded in
+`state["evidence"]`: `config-get`; `log` (`DHCP4_DYNAMIC_RECONFIGURATION_SUCCESS`, read by `_LogCursor` incrementally and following the file's identity across rotation, used only when no socket
+answered; an exhausted or unreadable log is unconfirmed, never success); `process` (after the one restart: `_await_restart` requires a NEW active main pid and no start-failure id). `restored_at` is written in
+`_restore_state` and nowhere else, after `how` and `evidence`; `_restore_state` re-reads the record under the lock, so a record someone else restored is "already restored" (no signal, no restart). There is no
+legacy branch: a record armed by build 15 or 16 is verified by this contract (it gets `log_path` and `verified_by_build` at its first tick). `_read_state` is the one loader and has three answers (a record, none, bad):
+arm, disarm, status and `--self-restore` all use it, and a state file that exists and cannot be read is never "no session" (`bad-state`; INV-009). The arm needs no `log_path` but refuses `no-evidence` when
+neither a socket nor a readable log could ever prove the restore. The ops list and the sudoers line are unchanged. Jen's side: `_investigation_op` turns `bad-state` into a code, `_host_phase` treats it as an unreadable
+host conflict (Health fails, turn-on refused) and `INVESTIGATION_MIN_HELPER_BUILD` is 17. The walk (`tests/test_investigation_model.py`) adds the evidence channel and invariant I11: a host record marked
+restored is about a daemon that is not at DEBUG 55.
+
+Jen's side is display and audit: `turn_on` refuses below build 17 (`kea_host.INVESTIGATION_MIN_HELPER_BUILD`, "press Update helper"), writes the file through the change set, **arms the
 host after the write and before the daemon is asked**, and on a failed arm or a `"none"` timer reverts the file and refuses; `turn_off` and the sweep's restore call
 `investigation-disarm` (Jen's older file-writing path is the fallback when the host cannot); the sweep reads `investigation-status` for every live entry and shows the host's
 `last_error`. A hand step for an armed entry is one command on the host: `sudo jen-kea-helper --self-restore --now`.

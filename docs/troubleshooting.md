@@ -233,6 +233,15 @@ Two failure signatures, both meaning "Jen fell back to the legacy root
 
 **"Investigation logging is not switched on (early access in 5.68, off by default)" (v5.68.0-beta.30).** Turning logging on is opt-in: a superadmin switches it on under **Settings → Kea → Investigation logging**. Nothing else is affected - a session that is already on is still restored and shown.
 
+**"The Kea host's investigation state file cannot be trusted" (v5.68.0-beta.31, helper build 17, `bad-state`).** A file exists at `/var/lib/jen-kea-helper/investigation-dhcp4.json` and the helper cannot read
+it as its own record (not valid JSON, unreadable, not a record this helper wrote). Nothing is known about the session it describes, so Health fails and turning logging on is refused; the helper
+never reports this as "no session" and never overwrites it. Look at the file; if it is a stale or damaged record, remove it (`sudo rm /var/lib/jen-kea-helper/investigation-dhcp4.json`) or run
+`sudo jen-kea-helper --self-restore --now` on that host - Jen's own sweep also restores the logger at the deadline. If the `kea-dhcp4` logger is still at DEBUG after that, press **Investigation → Turn off**.
+
+**"No way to see Kea's restore" (v5.68.0-beta.31, helper build 17, `no-evidence`).** The arm is refused when the helper could not later prove a restore: the daemon has no control socket the helper can reach
+(`control-socket` missing, or only a socket with `socket-type: http` on a non-local address) *and* no readable log file (Kea logging to syslog or stdout). Add a local unix `control-socket` to the
+Kea config (the Kea packages' default), or log to a file, then try again. Nothing was changed on the host.
+
 **"The Kea host reports an unresolved investigation session Jen does not recognise" / "needs hand" (v5.68.0-beta.30, helper build 16).** The host's record under `/var/lib/jen-kea-helper/investigation-dhcp4.json`
 is authoritative: Jen will not arm over a session it did not start (a second Jen, a Jen restored from an older backup, a hand edit). It restores itself at its deadline; to end it now run
 `sudo jen-kea-helper --self-restore --now` on that host. `needs_hand` means ten restore ticks in a row could not be confirmed from Kea's own log - read `last_error` in that file (usually
