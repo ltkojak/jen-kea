@@ -862,7 +862,7 @@ def _ask_raw_unix(path, command="config-get", wait=6.0):
             s.settimeout(1.5)
             try:
                 closed = s.recv(1) == b""
-            except socket.timeout:
+            except TimeoutError:
                 closed = False
         return reply, took, closed
     except OSError:
