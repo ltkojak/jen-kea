@@ -52,6 +52,8 @@ E2E_SUBNETS = {
 # this module never imports demo_data unless asked to.
 DATASET = os.environ.get("JEN_E2E_DATASET", "default")
 
+LIVE_APP = None  # set by live_server; read by the GUI tour
+
 
 def _current_subnets() -> dict:
     if DATASET == "demo":
@@ -205,6 +207,8 @@ def live_server(fake_kea):
 
     app = jen_pkg.create_app()
     app.config.update(TESTING=True, SECRET_KEY="e2e-secret-not-for-production")
+    global LIVE_APP
+    LIVE_APP = app  # the GUI tour (tests/e2e/test_gui_tour.py) walks this app's url_map
     # WTF_CSRF_ENABLED is deliberately left at its default (True) — the
     # whole point of this suite is exercising the real page, CSRF token
     # included.

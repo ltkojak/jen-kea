@@ -215,6 +215,28 @@ jobs:
           JEN_DOCS_FORBIDDEN_REQUIRED: ${{ github.actor != 'dependabot[bot]' && github.event.pull_request.head.repo.fork != true && '1' || '' }}
         run: python -m pytest tests/e2e/test_docs_screenshots.py -m e2e -v
 
+      # Hygiene audit (2026-10-10): the GUI tour - every GET route Jen and its plugins register, opened as a
+      # superadmin, an admin with every subnet, an admin restricted to one subnet and a viewer, on the demo
+      # dataset; status, console/page errors, failure markers and a screenshot per page land in artifacts/tour/
+      # (tests/e2e/test_gui_tour.py). Fails only on a 5xx, an uncaught page error or a failure marker.
+      - name: Run GUI tour
+        env:
+          JEN_DB_HOST: 127.0.0.1
+          JEN_DB_USER: jen
+          JEN_DB_PASS: ci_jen_pw
+          JEN_E2E_DATASET: demo
+          JEN_E2E_TOUR: '1'
+        run: python -m pytest tests/e2e/test_gui_tour.py -m e2e -v
+
+      - name: Upload GUI tour
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gui-tour
+          path: artifacts/tour/
+          retention-days: 30
+          if-no-files-found: warn
+
       - name: Upload docs screenshots
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
