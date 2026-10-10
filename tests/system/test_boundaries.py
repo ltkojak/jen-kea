@@ -2010,7 +2010,9 @@ def _s19_on(web):
     r = web.post("/servers/1/investigation-logging/on", data={"minutes": "5", "back": "servers"}, page="/servers")
     assert r.status_code == 200
     conf = st.kea_conf_bytes(st.KEA_A)
-    assert '"jen-investigation"' in conf, f"INVARIANT: turning it on writes the marker: {conf[-400:]}"
+    assert '"jen-investigation"' in conf, (
+        f"INVARIANT: turning it on writes the marker: what Jen said: {re.sub(r'<[^>]+>', ' ', r.text)[-600:]!r}; the file's tail: {conf[-200:]}"
+    )
     logger = _s19_logger()
     assert logger["severity"] == "DEBUG" and logger["debuglevel"] == 55 and logger["marker"], (
         f"INVARIANT: the running daemon is at DEBUG 55: {logger}"
