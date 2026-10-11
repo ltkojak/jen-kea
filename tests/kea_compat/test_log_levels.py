@@ -980,6 +980,18 @@ def test_the_daemons_own_control_socket_answers_config_get(findings):
     assert spec_from_file is not None and spec_from_file[0] == "unix", (
         f"the helper finds the daemon's unix control socket in the config Jen authors: {spec_from_file}"
     )
+    # build 18 (Q170): the walls hold against a REAL daemon's config - the same config with its unix socket moved outside the three directories Kea's packages use, and with its
+    # credential files pointed at `/`, yields no socket at all (never one the helper would connect to or read from as root)
+    walled = json.loads(json.dumps(base))
+    for entry in walled["Dhcp4"].get("control-sockets") or []:
+        if entry.get("socket-type") == "unix":
+            entry["socket-name"] = "/root/jen-compat-socket"
+        elif isinstance(entry.get("authentication"), dict):
+            entry["authentication"]["directory"] = "/"
+    record["helper_walls_hold"] = helper._control_socket(walled) is None
+    assert record["helper_walls_hold"], (
+        f"the helper must not derive a socket from a config that points outside its walls: {helper._control_socket(walled)}"
+    )
     unix_spec = (
         "unix",
         sock_path,

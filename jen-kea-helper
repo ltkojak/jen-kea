@@ -327,7 +327,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 HELPER_VERSION = 7
-HELPER_BUILD = 17
+HELPER_BUILD = 18
 # v5.66.0-beta.2 (Q104) — HELPER_BUILD is bumped on EVERY change to this file, never by
 # HELPER_VERSION alone; op_update's own _HELPER_BUILD_RE parses "^HELPER_BUILD = (\d+)$" out
 # of a candidate's raw bytes, so this line (like HELPER_VERSION's own, just above) must never
@@ -366,6 +366,23 @@ _ALLOWED_CONF_DIRS = ("/etc/kea", "/usr/local/etc/kea")
 _CONF_BASENAME_RE = re.compile(r"^[A-Za-z0-9._-]+\.conf$")
 
 _ALLOWED_SERVICES = ("dhcp4", "dhcp6", "d2")
+
+# build 18 (Q170): the walls of what the helper reads as root on the word of a config the daemon's account may own. A credential file is read only from here (a path
+# whose realpath is under it), and a unix control socket is connected to only in one of these directories - the places Kea's own packages put them.
+_CRED_ROOT = "/etc/kea"
+_SOCKET_DIRS = ("/run/kea", "/var/run/kea", "/tmp")  # nosec B108 - a directory the daemon's socket may be in, never one the helper writes
+_CRED_MAX = 4096
+
+
+def _is_under(path, root):
+    """Is `path` - symlinks resolved - `root` itself or inside it (`root` resolved too)? Separator-agnostic (`commonpath`), so the Windows dev box that imports this file for its tests agrees."""
+    try:
+        real_root = os.path.realpath(root)
+        return os.path.commonpath([os.path.realpath(path), real_root]) == real_root
+    except ValueError:
+        return False
+
+_LOCK_WAIT_S = 60.0  # how long a RESTORE waits for the per-config lock before the tick fails loudly (the other ops block, bounded by Jen's own SSH timeout)
 
 # service -> (binary name, systemd unit family). d2's unit family is
 # "dhcp-ddns", not "d2" — Kea's own package/unit naming, not Jen's service
@@ -409,13 +426,34 @@ def _valid_service(service):
     return service in _ALLOWED_SERVICES
 
 
-def _file_sha256(path):
-    """Hex SHA-256 of a file's raw bytes, or None if it can't be read."""
+class _ConfLink(OSError):
+    """The path is a symlink, or not a regular file: refused, never followed (build 18, Q170)."""
+
+
+def _open_conf(path):
+    """(raw bytes, os.stat_result) of a config file, opened `O_RDONLY | O_NOFOLLOW | O_NOCTTY` and checked `S_ISREG` on the DESCRIPTOR. `_allowed_conf_path` is a string wall; a
+    daemon-owned /etc/kea lets its account plant a symlink at an allowed name, so every reader opens through here. A symlink or a non-regular file is `_ConfLink`; a missing file
+    is `FileNotFoundError`; anything else is the OSError it is."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NOCTTY", 0) | getattr(os, "O_BINARY", 0)
     try:
-        with open(path, "rb") as f:
-            return hashlib.sha256(f.read()).hexdigest()
-    except OSError:
-        return None
+        fd = os.open(path, flags)
+    except OSError as e:
+        if e.errno == errno.ELOOP:
+            raise _ConfLink(errno.ELOOP, "a symlink is never followed", path) from e
+        raise
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise _ConfLink(errno.EINVAL, "not a regular file", path)
+        chunks = []
+        while True:
+            chunk = os.read(fd, 1 << 20)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks), st
+    finally:
+        os.close(fd)
 
 
 def _bin_owner_ok(path):
@@ -478,7 +516,7 @@ def _unit_account(service):
     `SupplementaryGroups=`, as gids - exactly the identity systemd gives the daemon, so what `-t` can read is what the daemon can read.
     `User=` may be a name or a numeric uid (build 12, Q149). A user or group the unit names that this host does not have is
     `{"refused": reason}`, never a guess and never root. Never raises: a host without systemd, `pwd` or `grp` simply has no answer."""
-    unit = _resolve_unit(service, "status")
+    unit = _resolve_unit(service)
     if not unit:
         return None
     proc = _run_bin(
@@ -487,8 +525,12 @@ def _unit_account(service):
         capture_output=True,
         text=True,
     )
+    if proc is None or proc.returncode != 0:
+        # build 18 (Q170): a `show` that failed says nothing about the unit's identity; "no User=" would be a guess and the guess is root
+        tail = "\n".join(((proc.stderr or proc.stdout) if proc else "").splitlines()[-2:])
+        return {"refused": f"systemctl show {unit} failed ({tail.strip() or 'no output'}), so the account its unit runs as is not known"}
     props = {}
-    for line in (proc.stdout or "").splitlines() if proc else []:
+    for line in (proc.stdout or "").splitlines():
         key, sep, value = line.partition("=")
         if sep:
             props[key.strip()] = value.strip()
@@ -507,17 +549,24 @@ def _unit_account(service):
     if pw.pw_uid == 0:
         return None
 
+    missing = []
+
     def gid_of(group):
         # `Group=` / `SupplementaryGroups=` take a name or a numeric gid
-        return int(group) if group.isdigit() else grp.getgrnam(group).gr_gid
+        if group.isdigit():
+            return int(group)
+        try:
+            return grp.getgrnam(group).gr_gid
+        except KeyError:
+            missing.append(group)
+            return None
 
     gid, extra = pw.pw_gid, []
-    try:
-        if props.get("Group"):
-            gid = gid_of(props["Group"])
-        extra = [gid_of(g) for g in props.get("SupplementaryGroups", "").split() if g]
-    except KeyError as e:
-        return {"refused": f"its unit names the group {e.args[0]!r}, which does not exist on this host"}
+    if props.get("Group"):
+        gid = gid_of(props["Group"])
+    extra = [gid_of(g) for g in props.get("SupplementaryGroups", "").split() if g]
+    if missing:
+        return {"refused": f"its unit names the group {missing[0]!r}, which does not exist on this host"}
     return {"name": pw.pw_name, "uid": pw.pw_uid, "gid": gid, "extra_groups": _with_memberships(pw.pw_name, gid, extra)}
 
 
@@ -581,6 +630,21 @@ def _refusal_reason(path, unit_account):
     return f"is owned by {owner}, which cannot be used as the daemon's user"
 
 
+def _daemon_account_name():
+    """`_kea` or `kea` when this host has that account, else None: the names Kea's packages give the daemon's user (build 18, Q170)."""
+    try:
+        import pwd
+    except ImportError:  # not a POSIX host (only ever the test harness)
+        return None
+    for name in ("_kea", "kea"):
+        try:
+            pwd.getpwnam(name)
+        except KeyError:
+            continue
+        return name
+    return None
+
+
 def _find_kea(service):
     """Resolve the Kea daemon binary and WHO runs it (v5.68.0-beta.6, Q141; identity first since build 12, Q149). Returns None when no
     candidate exists under _BIN_DIRS at all, else a dict: {"binary", "user", "group", "extra_groups"} on success - user/group None means
@@ -609,6 +673,15 @@ def _find_kea(service):
         if unit_account is not None and "refused" in unit_account:
             return {"refused": unit_account["refused"]}  # a user or group that does not exist is a refusal with its reason, not root
         root_owned = _bin_owner_ok(cand) and os.access(cand, os.X_OK)
+        if root_owned and unit_account is None and _resolve_unit(service) is None:
+            # build 18 (Q170): NO unit of either name was found. The documented no-unit case is a host with no daemon account either; where `_kea` or `kea` exists, "no unit" is a
+            # unit this helper does not know (a hand-written `kea-dhcp4.service`), and checking as root a config the daemon will read as `_kea` is the guess that cost build 11 its P1.
+            name_found = _daemon_account_name()
+            if name_found:
+                return {
+                    "refused": f"no Kea unit named kea-{_SERVICE_UNIT_FAM.get(service, 'dhcp6')}-server or isc-kea-{_SERVICE_UNIT_FAM.get(service, 'dhcp6')}-server was found, "
+                    f"and the daemon account {name_found} exists: the check will not run as root"
+                }
         if root_owned and unit_account is None:
             # run as root: the owner (root) bit is the one that will be used (build 13)
             if os.stat(cand).st_mode & stat.S_IXUSR:
@@ -659,24 +732,20 @@ def _group_may_exec(path, unit_account):
     return bool(st.st_mode & 0o010) and st.st_gid in {unit_account["gid"], *unit_account["extra_groups"]}
 
 
-def _kea_binary(service):
-    """Absolute path to the kea-dhcp4/6/dhcp-ddns binary a root-run or daemon-run test would use, or
-    None - kept for callers that only need the path; the run itself goes through _find_kea."""
-    found = _find_kea(service)
-    return found.get("binary") if found else None
-
-
 # ── private files and the per-path lock (build 13, Q150) ─────────────────────
 
 
-def _private_tempfile(directory, prefix):
+def _private_tempfile(directory, prefix, dir_fd=None):
     """(fd, path): a NEW file in `directory` - the target's own directory - with a unique name, created `O_CREAT | O_EXCL | O_NOFOLLOW`
     with mode 0600 whatever the umask (it can only remove bits), opened for writing. Every file this helper writes is created here, so a
-    secret is private from its first byte and two helper processes never share a path. The caller owns the file and removes it on failure."""
+    secret is private from its first byte and two helper processes never share a path. The caller owns the file and removes it on failure.
+    With `dir_fd` (build 18) `directory` is ignored and `path` is the bare name RELATIVE to that descriptor."""
     for _ in range(64):
-        path = os.path.join(directory, f".{prefix}.{secrets.token_hex(8)}.jen_tmp")
+        name = f".{prefix}.{secrets.token_hex(8)}.jen_tmp"
+        path = name if dir_fd is not None else os.path.join(directory, name)
+        kw = {"dir_fd": dir_fd} if dir_fd is not None else {}
         try:
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600, **kw)
         except FileExistsError:
             continue
         return fd, path
@@ -706,10 +775,13 @@ def _finish_private(fd, uid=None, gid=None, mode=0o600, path=None):
         os.close(fd)
 
 
-def _install_private(path, data, uid=None, gid=None, mode=0o600):
+def _install_private(path, data, uid=None, gid=None, mode=0o600, sync_dir=False, dir_fd=None):
     """Write `data` (bytes) to `path` atomically and private from the first byte: unique O_EXCL 0600 temp in the same directory, written
-    and fsynced, final owner/group/mode applied to the descriptor, `os.replace`. Removes the temp on any failure and re-raises."""
-    fd, tmp = _private_tempfile(os.path.dirname(path) or ".", os.path.basename(path))
+    and fsynced, final owner/group/mode applied to the descriptor, `os.replace`. Removes the temp on any failure and re-raises. `sync_dir`
+    (build 18) fsyncs the directory after the replace, so "written" survives a power loss too, and raises when that fails. With `dir_fd`,
+    `path` is a bare name relative to the descriptor."""
+    fd, tmp = _private_tempfile(os.path.dirname(path) or ".", os.path.basename(path), dir_fd)
+    kw = {"src_dir_fd": dir_fd, "dst_dir_fd": dir_fd} if dir_fd is not None else {}
     try:
         try:
             _write_all(fd, data)
@@ -717,11 +789,13 @@ def _install_private(path, data, uid=None, gid=None, mode=0o600):
             os.close(fd)
             raise
         _finish_private(fd, uid, gid, mode, tmp)
-        os.replace(tmp, path)
+        os.replace(tmp, path, **kw)
     except BaseException:
         with contextlib.suppress(OSError):
-            os.unlink(tmp)
+            os.unlink(tmp, **({"dir_fd": dir_fd} if dir_fd is not None else {}))
         raise
+    if sync_dir:
+        _fsync_dir(os.path.dirname(path) or ".")
 
 
 def _fsync_dir(directory):
@@ -740,8 +814,9 @@ def _fsync_dir(directory):
         os.close(fd)
 
 
-def _commit_file_set(members):
-    """Install a SET of files all-or-nothing (build 14, Q151). `members` = [(path, data: bytes, uid, gid, mode)] in install order.
+def _commit_file_set(members, dir_fd=None):
+    """Install a SET of files all-or-nothing (build 14, Q151). `members` = [(path, data: bytes, uid, gid, mode)] in install order. With `dir_fd` (build 18, Q170) every `path`
+    is a bare NAME relative to that directory descriptor and nothing is resolved by pathname: a symlink swapped in for the directory after it was opened cannot redirect a write.
 
     1. STAGE every member: a unique private temp in its own directory (`_private_tempfile`, 0600 from the first byte), written, fsynced, given its
        final owner/group/mode on the descriptor. A failure here has touched no live file.
@@ -751,11 +826,14 @@ def _commit_file_set(members):
     unreplaced temp is removed, and the original error is re-raised - or, if a restore ALSO failed, an OSError naming every path that is now wrong.
     A symlink at a live path is refused up front."""
     staged, snapshots, replaced = [], {}, []
+    at = {"dir_fd": dir_fd} if dir_fd is not None else {}
+    swap = {"src_dir_fd": dir_fd, "dst_dir_fd": dir_fd} if dir_fd is not None else {}
     try:
         for path, data, uid, gid, mode in members:
-            if os.path.islink(path):
+            link = stat.S_ISLNK(os.lstat(path, **at).st_mode) if _exists_at(path, dir_fd) else False
+            if link:
                 raise OSError(errno.ELOOP, "refusing to replace a symlink", path)
-            fd, tmp = _private_tempfile(os.path.dirname(path) or ".", os.path.basename(path))
+            fd, tmp = _private_tempfile(os.path.dirname(path) or ".", os.path.basename(path), dir_fd)
             staged.append((path, tmp))
             try:
                 _write_all(fd, data)
@@ -765,13 +843,18 @@ def _commit_file_set(members):
             _finish_private(fd, uid, gid, mode, tmp)
         for path, _tmp in staged:
             try:
-                with open(path, "rb") as f:
-                    st = os.fstat(f.fileno())
-                    snapshots[path] = (f.read(), st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode))
+                rfd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0), **at)
             except FileNotFoundError:
                 snapshots[path] = None
+                continue
+            try:
+                st = os.fstat(rfd)
+                with os.fdopen(rfd, "rb", closefd=False) as f:
+                    snapshots[path] = (f.read(), st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode))
+            finally:
+                os.close(rfd)
         for path, tmp in staged:
-            os.replace(tmp, path)
+            os.replace(tmp, path, **swap)
             replaced.append(path)
     except BaseException as original:
         wrong = []
@@ -779,40 +862,76 @@ def _commit_file_set(members):
             snap = snapshots.get(path)
             try:
                 if snap is None:
-                    os.unlink(path)
+                    os.unlink(path, **at)
                 else:
-                    _install_private(path, snap[0], snap[1], snap[2], snap[3])
+                    _install_private(path, snap[0], snap[1], snap[2], snap[3], dir_fd=dir_fd)
             except OSError as e:
                 wrong.append(f"{path} ({e})")
         for _path, tmp in staged:
             with contextlib.suppress(OSError):
-                os.unlink(tmp)
+                os.unlink(tmp, **at)
         if wrong:
             raise OSError(0, "the set could not be put back; these paths are now wrong: " + ", ".join(wrong)) from original
         raise
     for _path, tmp in staged:
         with contextlib.suppress(OSError):
-            os.unlink(tmp)  # already renamed away on success: nothing left to remove
+            os.unlink(tmp, **at)  # already renamed away on success: nothing left to remove
+
+
+def _exists_at(path, dir_fd):
+    """Does `path` exist WITHOUT following a final symlink (a dangling link exists)? `path` is relative to `dir_fd` when one is given."""
+    try:
+        os.lstat(path, **({"dir_fd": dir_fd} if dir_fd is not None else {}))
+    except FileNotFoundError:
+        return False
+    return True
+
+
+class _LockBusy(Exception):
+    """A bounded lock was not obtained in time (build 18, Q170)."""
+
+
+def _lock_dir():
+    return os.path.join(_STATE_DIR, "locks")
 
 
 @contextlib.contextmanager
-def _locked(path):
-    """Hold an exclusive `flock` on `<path>.jen_lock` (created 0600) for the whole operation on `path`. EVERY test-config, apply-config,
-    remove-config and install-tls takes it (build 13): it used to be taken only when an `expect_sha256` was given, so a validation never
-    waited for an apply of the same file. A held lock is released when the descriptor closes, including when this process dies."""
+def _locked(path, wait_s=None):
+    """Hold an exclusive `flock` for the whole operation on `path`. EVERY test-config, apply-config, remove-config and install-tls takes it (build 13). Build 18 (Q170): the lock
+    file is `/var/lib/jen-kea-helper/locks/<sha256(path)[:16]>.lock` - a root-only directory the daemon's account cannot reach - and the old `<path>.jen_lock` (in a directory the
+    daemon may own) is taken SECOND and held too, for this one build, so a build-17 helper mid-operation and a build-18 helper never run concurrently on one file (build 19 drops it).
+    `wait_s=None` blocks (the operations Jen bounds with its own SSH timeout); a number polls `LOCK_NB` every half second and raises `_LockBusy` at that many seconds on the
+    clock - a hung holder cannot hold a restore forever. A held lock is released when the descriptor closes, including when this process dies."""
     try:
         import fcntl  # Linux-only: the helper only ever runs there
     except ImportError:  # the Windows dev box that imports this file for its tests: no flock, so no lock
         yield
         return
-    fd = os.open(path + ".jen_lock", os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    _ensure_state_dir()
+    new_path = os.path.join(_lock_dir(), hashlib.sha256(path.encode("utf-8")).hexdigest()[:16] + ".lock")
+    fds = []
     try:
-        with contextlib.suppress(OSError):
-            os.fchmod(fd, 0o600)
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        for lock_path in (new_path, path + ".jen_lock"):
+            fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            fds.append(fd)
+            with contextlib.suppress(OSError):
+                os.fchmod(fd, 0o600)
+            if wait_s is None:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                continue
+            deadline = _monotonic() + wait_s
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError as e:
+                    if _monotonic() >= deadline:
+                        raise _LockBusy(lock_path) from e
+                    _sleep(0.5)
         yield
     finally:
-        os.close(fd)
+        for fd in fds:
+            os.close(fd)
 
 
 # ── Kea config test (shared by test-config and apply-config) ─────────────────
@@ -846,9 +965,15 @@ def _run_kea_test(service, path, config, tls_paths):
         else:
             _finish_private(fd, None, None, 0o600, tmp)
 
+        if tls_paths is not None and not isinstance(tls_paths, list):
+            return False, {"ok": False, "error": "bad-tls-paths"}
         for entry in tls_paths or []:
+            if not isinstance(entry, (list, tuple)) or not entry or not isinstance(entry[0], str) or (len(entry) > 1 and entry[1] not in ("file", "dir")):
+                return False, {"ok": False, "error": "bad-tls-paths"}
             tp, kind = entry[0], (entry[1] if len(entry) > 1 else "file")
-            present = os.path.isdir(tp) if kind == "dir" else os.path.isfile(tp)
+            # build 18 (Q170): only under the TLS root, by realpath; a path outside it is "missing" without being looked at - the helper is not an existence oracle for the filesystem
+            real = os.path.realpath(tp)
+            present = _is_under(tp, _TLS_ROOT) and (os.path.isdir(real) if kind == "dir" else os.path.isfile(real))
             if not present:
                 return False, {"ok": False, "error": "tlsmissing", "path": tp}
 
@@ -885,13 +1010,17 @@ def op_read_config(payload):
     path = payload.get("path")
     if not _valid_service(service) or not _allowed_conf_path(path):
         return {"ok": False, "error": "not-allowed"}, None
-    if not os.path.isfile(path):
-        return {"ok": False, "error": "missing"}, path
     try:
-        with open(path, "rb") as f:
-            raw = f.read()
+        raw, _st = _open_conf(path)
+    except _ConfLink:
+        return {"ok": False, "error": "symlink", "path": path}, path
+    except FileNotFoundError:
+        return {"ok": False, "error": "missing"}, path
+    except OSError as e:
+        return {"ok": False, "error": "invalid-json", "detail": str(e)}, path
+    try:
         return {"ok": True, "config": json.loads(raw), "sha256": hashlib.sha256(raw).hexdigest()}, path
-    except (OSError, ValueError) as e:
+    except (ValueError, RecursionError) as e:
         return {"ok": False, "error": "invalid-json", "detail": str(e)}, path
 
 
@@ -922,8 +1051,15 @@ def op_apply_config(payload):
     expect = payload.get("expect_sha256")
 
     with _locked(path):  # held until the end; taken for EVERY apply since build 13, `expect` or not
+        # ONE read of the existing file, through the wall (build 18): its bytes are the sha the guard compares, the backup, and the owner and mode the replacement keeps
+        try:
+            previous, st = _open_conf(path)
+        except FileNotFoundError:
+            previous, st = None, None
+        except _ConfLink:
+            return {"ok": False, "error": "symlink", "path": path}, path
         if expect is not None:
-            current = _file_sha256(path)  # None when the file is absent
+            current = hashlib.sha256(previous).hexdigest() if previous is not None else None  # None when the file is absent
             conflict = (current is not None) if expect == "" else (current != expect)
             if conflict:
                 return {"ok": False, "error": "conflict", "sha256": current or ""}, path
@@ -932,7 +1068,7 @@ def op_apply_config(payload):
         if not ok:
             return result, path
 
-        exists = os.path.exists(path)
+        exists = previous is not None
         if exists and not allow_overwrite:
             return {"ok": False, "error": "exists"}, path
 
@@ -940,13 +1076,17 @@ def op_apply_config(payload):
         backup = None
         if exists:
             backup = path + ".jen_backup"
-            st = os.stat(path)
-            with open(path, "rb") as f:
-                previous = f.read()
             # the backup is the whole previous config (credentials too): private from its first byte, the same owner and mode as it had
             _install_private(backup, previous, st.st_uid, st.st_gid, st.st_mode & 0o777)
-            # the replacement keeps the destination's owner and mode, and is 0600 until it is complete (build 13)
-            _install_private(path, data, st.st_uid, st.st_gid, st.st_mode & 0o777)
+            # the replacement keeps the destination's owner and mode, and is 0600 until it is complete (build 13) - except that a config anyone can read
+            # (0644, 0664: it carries `lease-database.password`) is tightened to root:<the daemon's group> 0640 (build 18, Q170)
+            uid, gid, mode = st.st_uid, st.st_gid, st.st_mode & 0o777
+            if mode & 0o007:
+                account = _unit_account(service)
+                if account is not None and "refused" in account:
+                    return {"ok": False, "error": "unit-account", "detail": account["refused"]}, path
+                uid, gid, mode = (0, 0, 0o600) if account is None else (0, account["gid"], 0o640)
+            _install_private(path, data, uid, gid, mode)
         else:
             # A brand-new config (build 14, Q151): it carries `lease-database.password`, so never 0644. The identity is the unit's own
             # (`_unit_account`, the one resolver): root:<the daemon's effective gid> 0640 when the unit names a non-root account (it can read
@@ -958,7 +1098,7 @@ def op_apply_config(payload):
                 _install_private(path, data, 0, 0, 0o600)
             else:
                 _install_private(path, data, 0, account["gid"], 0o640)
-        return {"ok": True, "backup": backup, "sha256": _file_sha256(path)}, path
+        return {"ok": True, "backup": backup, "sha256": hashlib.sha256(data).hexdigest()}, path
 
 
 def op_remove_config(payload):
@@ -973,16 +1113,20 @@ def op_remove_config(payload):
     if not isinstance(expect, str) or not re.fullmatch(r"[0-9a-f]{64}", expect):
         return {"ok": False, "error": "not-allowed"}, path
     with _locked(path):
-        current = _file_sha256(path)
-        if current is None:
+        try:
+            current_raw, _st = _open_conf(path)
+        except FileNotFoundError:
             return {"ok": True, "removed": False}, path  # already gone: the state wanted
+        except _ConfLink:
+            return {"ok": False, "error": "symlink", "path": path}, path
+        current = hashlib.sha256(current_raw).hexdigest()
         if current != expect:
             return {"ok": False, "error": "conflict", "sha256": current}, path
         os.unlink(path)
         return {"ok": True, "removed": True}, path
 
 
-def _resolve_unit(service, action):
+def _resolve_unit(service):
     """The installed unit name for `service` — `kea-{fam}-server` on ISC
     packages, `isc-kea-{fam}-server` on older Debian/Ubuntu ones (`fam` is
     "dhcp4"/"dhcp6"/"dhcp-ddns" — Kea's own unit-naming family, not Jen's
@@ -1013,7 +1157,7 @@ def op_service(payload):
     if not _valid_service(service) or action not in ("restart", "enable", "disable", "status"):
         return {"ok": False, "error": "not-allowed"}, None
 
-    unit = _resolve_unit(service, action)
+    unit = _resolve_unit(service)
     if unit is None:
         return {"ok": False, "error": "no-unit"}, None
 
@@ -1042,12 +1186,20 @@ def op_tail_log(payload):
     except (TypeError, ValueError):
         lines = 200
     lines = max(1, min(lines, 1000))
-    if not os.path.isfile(path):
-        return {"ok": False, "error": "missing"}, path
+    # build 18 (Q170): opened `O_NOFOLLOW` and checked regular ON THE DESCRIPTOR - a log that was a regular file when the string wall looked is not followed to anything else now
     try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NOCTTY", 0) | getattr(os, "O_BINARY", 0))
+    except FileNotFoundError:
+        return {"ok": False, "error": "missing"}, path
+    except OSError as e:
+        return {"ok": False, "error": "unreadable", "detail": str(e)}, path
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            os.close(fd)
+            return {"ok": False, "error": "missing"}, path
         # Bounded memory: only the last `lines` lines are ever held, decoded
         # per line with errors="replace", however large the log file is.
-        with open(path, encoding="utf-8", errors="replace") as f:
+        with os.fdopen(fd, encoding="utf-8", errors="replace") as f:
             content = [ln.rstrip("\r\n") for ln in collections.deque(f, maxlen=lines)]
     except OSError as e:
         return {"ok": False, "error": "unreadable", "detail": str(e)}, path
@@ -1099,12 +1251,6 @@ def op_install_tls(payload):
             return {"ok": False, "error": "bad-pem", "file": name}, None
 
     target_dir = os.path.join(_TLS_ROOT, service)  # a real fs path (remote = Linux), not a validated one
-    for p in (_TLS_ROOT, target_dir):
-        if os.path.islink(p):
-            return {"ok": False, "error": "symlink", "path": p}, p
-    for name in _TLS_FILES:
-        if os.path.islink(os.path.join(target_dir, name)):
-            return {"ok": False, "error": "symlink", "path": os.path.join(target_dir, name)}, os.path.join(target_dir, name)
 
     # build 14 (Q151): the key's group is the one `_unit_account` gives (the effective gid after `Group=`), the same identity validation runs as;
     # a daemon that runs as root (no unit `User=`) gets root:root
@@ -1121,21 +1267,43 @@ def op_install_tls(payload):
         except (ImportError, KeyError):
             group = str(gid)
 
-    os.makedirs(target_dir, mode=0o755, exist_ok=True)
-    os.chown(_TLS_ROOT, 0, 0)  # build 14: never swallowed - root cannot chown its own directory is a real fault, not a skip
-    os.chown(target_dir, 0, 0)
-    os.chmod(_TLS_ROOT, 0o755)
-    os.chmod(target_dir, 0o755)
-
-    members = [
-        (os.path.join(target_dir, name), files[name].encode("utf-8"), 0, gid, 0o640 if name == "server.key" else 0o644)
-        for name in _TLS_FILES
-    ]
-    with _locked(target_dir):  # build 13: two installs for one service never interleave
+    # build 18 (Q170): by DESCRIPTOR. /etc/kea may be the daemon's: every directory below it is opened `O_DIRECTORY | O_NOFOLLOW` relative to the one above, created with `mkdirat`
+    # when absent, and owned and moded through its descriptor - a symlink put in the way (before or after this point) is refused or never reached, never followed as root.
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    opened = []
+    try:
         try:
-            _commit_file_set(members)  # build 14: all three or none - a failure puts every replaced member back
+            parent_fd = os.open(os.path.dirname(_TLS_ROOT), flags)
+            opened.append(parent_fd)
+            level_fds = []
+            for name in (os.path.basename(_TLS_ROOT), service):
+                try:
+                    os.mkdir(name, 0o755, dir_fd=opened[-1])
+                except FileExistsError:
+                    pass
+                fd = os.open(name, flags, dir_fd=opened[-1])
+                opened.append(fd)
+                level_fds.append(fd)
         except OSError as e:
-            return {"ok": False, "error": "write-failed", "path": target_dir, "detail": str(e)}, target_dir
+            if e.errno in (errno.ELOOP, errno.ENOTDIR):
+                return {"ok": False, "error": "symlink", "path": target_dir}, target_dir
+            raise
+        for fd in level_fds:
+            os.fchown(fd, 0, 0)  # build 14: never swallowed - root cannot chown its own directory is a real fault, not a skip
+            os.fchmod(fd, 0o755)
+        svc_fd = level_fds[-1]
+
+        members = [(name, files[name].encode("utf-8"), 0, gid, 0o640 if name == "server.key" else 0o644) for name in _TLS_FILES]
+        with _locked(target_dir):  # build 13: two installs for one service never interleave
+            try:
+                _commit_file_set(members, dir_fd=svc_fd)  # build 14: all three or none - a failure puts every replaced member back
+            except OSError as e:
+                if e.errno == errno.ELOOP:
+                    return {"ok": False, "error": "symlink", "path": target_dir, "detail": str(e)}, target_dir
+                return {"ok": False, "error": "write-failed", "path": target_dir, "detail": str(e)}, target_dir
+    finally:
+        for fd in opened:
+            os.close(fd)
     return {"ok": True, "paths": {name: os.path.join(target_dir, name) for name in _TLS_FILES}, "owner": f"root:{group}"}, target_dir
 
 
@@ -1148,7 +1316,8 @@ _EXTRA_SIGNERS = "/etc/jen-kea-helper/allowed_signers"
 _UPDATE_SIGNATURE_IDENTITY = "release@jen"
 _UPDATE_SIGNATURE_NAMESPACE = "jen-kea-helper"
 _UPDATE_MAX_HELPER = 512 * 1024
-_UPDATE_MAX_SIGNERS = 8 * 1024
+_UPDATE_MAX_SIGNERS = 8 * 1024  # the optional allowed_signers file
+_UPDATE_MAX_SIGNATURE = 8 * 1024  # the detached signature of a candidate
 _HELPER_VERSION_RE = re.compile(rb"^HELPER_VERSION = (\d+)$", re.M)
 _HELPER_BUILD_RE = re.compile(rb"^HELPER_BUILD = (\d+)$", re.M)
 # v5.66.0-beta.2 (Q104) — the candidate's own preflight/postflight probe. /usr/bin/python3
@@ -1238,7 +1407,7 @@ def op_update(payload):
         signature = base64.b64decode(signature_b64, validate=True)
     except (binascii.Error, ValueError):
         return {"ok": False, "error": "not-allowed"}, None
-    if not candidate or len(candidate) > _UPDATE_MAX_HELPER or len(signature) > _UPDATE_MAX_SIGNERS:
+    if not candidate or len(candidate) > _UPDATE_MAX_HELPER or len(signature) > _UPDATE_MAX_SIGNATURE:
         return {"ok": False, "error": "not-allowed"}, None
 
     keygen = _find_bin("ssh-keygen")
@@ -1405,6 +1574,7 @@ _TIMER_SERVICE_TEXT = (
     "\n"
     "[Service]\n"
     "Type=oneshot\n"
+    "TimeoutStartSec=120\n"
     "ExecStart=/usr/local/sbin/jen-kea-helper --self-restore\n"
 )
 _TIMER_TEXT = (
@@ -1414,7 +1584,6 @@ _TIMER_TEXT = (
     "[Timer]\n"
     "OnBootSec=30s\n"
     "OnUnitActiveSec=60s\n"
-    "Persistent=true\n"
     "\n"
     "[Install]\n"
     "WantedBy=timers.target\n"
@@ -1505,13 +1674,14 @@ def _state_path(service):
 
 
 def _ensure_state_dir():
-    os.makedirs(_STATE_DIR, mode=0o700, exist_ok=True)
-    if os.path.islink(_STATE_DIR):
-        raise OSError(errno.ELOOP, "the state directory is a symlink", _STATE_DIR)
-    uid, gid = _root_ids()
-    if uid is not None:
-        os.chown(_STATE_DIR, uid, gid)
-    os.chmod(_STATE_DIR, 0o700)
+    for directory in (_STATE_DIR, _lock_dir()):
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+        if os.path.islink(directory):
+            raise OSError(errno.ELOOP, "the state directory is a symlink", directory)
+        uid, gid = _root_ids()
+        if uid is not None:
+            os.chown(directory, uid, gid)
+        os.chmod(directory, 0o700)
 
 
 def _read_state(service):
@@ -1521,11 +1691,13 @@ def _read_state(service):
     if not os.path.lexists(path):
         return "absent", None
     try:
-        with open(path, "rb") as f:
-            state = json.loads(f.read().decode("utf-8"))
+        raw, _st = _open_conf(path)  # opened `O_NOFOLLOW`, judged on the descriptor: a record that is a link is not a record
+        state = json.loads(raw.decode("utf-8"))
+    except _ConfLink:
+        return "bad", "unreadable: not a regular file"
     except OSError as e:
         return "bad", f"unreadable: {e.strerror or e}"
-    except ValueError as e:
+    except (ValueError, RecursionError) as e:
         return "bad", f"not JSON: {e}"
     if not _state_usable(state):
         return "bad", "not a state this helper writes"
@@ -1541,18 +1713,33 @@ def _bad_state_sentence(detail):
 
 def _save_state(service, state):
     uid, gid = _root_ids()
-    _install_private(_state_path(service), json.dumps(state, indent=2).encode("utf-8"), uid, gid, 0o600)
+    _install_private(_state_path(service), json.dumps(state, indent=2).encode("utf-8"), uid, gid, 0o600, sync_dir=True)  # build 18: the directory too, so "on disk" survives a power loss
+
+
+def _non_negative_int(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 def _state_usable(state):
-    """A state file is acted on only if every field the restore uses is still what `investigation-arm` could have written."""
-    return (
+    """A state file is acted on only if every field the restore uses is still what `investigation-arm` could have written - and, since build 18 (Q170), every field that says it
+    is DONE is a completion this helper could have recorded. `until` parses; the counters are non-negative integers; `restored_at` is absent or a timestamp; a record with
+    `restored_at` has a `how` of reload or restart, and, if it carries an `evidence` key, one of the three the helper writes (a completed build-15/16 record has NO evidence key and
+    is still usable: `_status_view` calls it `legacy-unverified` - never synthesised, never damaged); a record without `restored_at` carries no completion fields at all."""
+    if not (
         isinstance(state, dict)
         and state.get("service") == "dhcp4"
         and _allowed_conf_path(state.get("path"))
         and _restore_shape_ok(state.get("restore"))
-        and all(isinstance(state.get(k, 0), int) and not isinstance(state.get(k, 0), bool) for k in ("restarts", "attempts"))
-    )
+        and _parse_iso(state.get("until")) is not None
+        and all(_non_negative_int(state.get(k, 0)) for k in ("restarts", "attempts"))
+    ):
+        return False
+    restored_at = state.get("restored_at")
+    if restored_at is None:
+        return state.get("how") is None and state.get("evidence") is None
+    if _parse_iso(restored_at) is None or state.get("how") not in ("reload", "restart"):
+        return False
+    return "evidence" not in state or state["evidence"] in _EVIDENCE
 
 
 def _ensure_timer():
@@ -1625,34 +1812,72 @@ def _file_log_path(config):
 _LOCAL_ADDRESSES = {"127.0.0.1": "127.0.0.1", "localhost": "127.0.0.1", "::1": "::1", "0.0.0.0": "127.0.0.1", "::": "::1"}  # nosec B104 - read, never bound
 
 
+def _credential_file_ok(st):
+    """May the helper take a credential from a file with these `fstat` results (build 18, Q170)? A regular file, at most `_CRED_MAX` bytes, owned by root or by the account the
+    daemon runs as, and writable by neither group nor everyone. In its own function so a test, whose files are never root-owned, monkeypatches it as `_bin_owner_ok` is."""
+    if not stat.S_ISREG(st.st_mode) or st.st_size > _CRED_MAX or st.st_mode & 0o022:
+        return False
+    if st.st_uid == 0:
+        return True
+    account = _unit_account("dhcp4")
+    return account is not None and "uid" in account and st.st_uid == account["uid"]
+
+
+def _read_credential(directory, name):
+    """The first line, stripped, of the credential file `name` in `directory` - or None. The directory must resolve (realpath) to `_CRED_ROOT` or below it; the name is a bare file name;
+    the file is opened `O_NOFOLLOW` and judged on its descriptor. Nothing is read from a path the wall does not name (build 18, Q170)."""
+    if not isinstance(directory, str) or not isinstance(name, str) or not name or "/" in name or name in (".", ".."):
+        return None
+    if not _is_under(directory, _CRED_ROOT):
+        return None
+    real_dir = os.path.realpath(directory)
+    try:
+        fd = os.open(os.path.join(real_dir, name), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NOCTTY", 0) | getattr(os, "O_BINARY", 0))
+    except OSError:
+        return None
+    try:
+        if not _credential_file_ok(os.fstat(fd)):
+            return None
+        data = os.read(fd, _CRED_MAX + 1)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    if len(data) > _CRED_MAX:
+        return None
+    lines = data.decode("utf-8", "replace").splitlines()
+    return lines[0].strip() if lines else ""
+
+
 def _http_credentials(entry):
-    """(user, password) of the first basic-auth client of an http control socket entry, inline (`user`/`password`) or in files (`user-file`/`password-file` under `directory`, default /etc/kea)."""
+    """(user, password) of the first basic-auth client of an http control socket entry, inline (`user`/`password`) or in files (`user-file`/`password-file` under `directory`, default
+    /etc/kea - walled to `_CRED_ROOT`, see `_read_credential`)."""
     auth = entry.get("authentication")
     if not isinstance(auth, dict) or str(auth.get("type") or "").lower() != "basic":
         return None
-    directory = auth.get("directory") if isinstance(auth.get("directory"), str) else "/etc/kea"
+    directory = auth.get("directory") if isinstance(auth.get("directory"), str) else _CRED_ROOT
     for client in auth.get("clients") or []:
         if not isinstance(client, dict):
             continue
         if isinstance(client.get("user"), str) and isinstance(client.get("password"), str):
             return client["user"], client["password"]
         if isinstance(client.get("user-file"), str) and isinstance(client.get("password-file"), str):
-            try:
-                with open(os.path.join(directory, client["user-file"]), encoding="utf-8") as f:
-                    user = f.read().strip()
-                with open(os.path.join(directory, client["password-file"]), encoding="utf-8") as f:
-                    password = f.read().strip()
-            except OSError:
-                continue
-            if user:
+            user = _read_credential(directory, client["user-file"])
+            password = _read_credential(directory, client["password-file"]) if user else None
+            if user and password is not None:
                 return user, password
     return None
 
 
+def _socket_path_ok(name):
+    """May the helper, as root, connect to the unix socket `name`? Only inside the directories Kea's own packages put it (`_SOCKET_DIRS`), by realpath (build 18, Q170)."""
+    return any(_is_under(name, d) for d in _SOCKET_DIRS)
+
+
 def _control_socket(config):
     """The dhcp4 daemon's own control socket from its config: ("unix", path) for a unix socket (preferred), ("http", (address, port, user, password)) for a PLAIN http socket bound to
-    a local address with basic auth whose credentials are inline or in files - the two shapes Jen authors - else None (https, a remote address, no auth: no socket evidence; the log
-    and the process remain). `control-socket` (singular, pre-2.7.2) is read as a one-entry list. 0.0.0.0 and :: are asked at 127.0.0.1 / ::1."""
+    a local address with basic auth whose credentials are inline or in files - the two shapes Jen authors - else None (https, a remote address, no auth, a socket or a credential
+    file outside the walls: no socket evidence; the log and the process remain). Called ONLY with a config that passed `-t` in this process or is the file the helper wrote itself. `control-socket` (singular, pre-2.7.2) is read as a one-entry list. 0.0.0.0 and :: are asked at 127.0.0.1 / ::1."""
     section = config.get("Dhcp4") if isinstance(config, dict) else None
     if not isinstance(section, dict):
         return None
@@ -1664,7 +1889,7 @@ def _control_socket(config):
     entries = [e for e in entries if isinstance(e, dict)]
     for entry in entries:
         name = entry.get("socket-name")
-        if str(entry.get("socket-type") or "").lower() == "unix" and isinstance(name, str) and name.startswith("/"):
+        if str(entry.get("socket-type") or "").lower() == "unix" and isinstance(name, str) and name.startswith("/") and _socket_path_ok(name):
             return "unix", name
     for entry in entries:
         if str(entry.get("socket-type") or "").lower() != "http":
@@ -1797,11 +2022,16 @@ class _LogCursor:
     def _read(self, path, start):
         """(bytes, count) past `start`, or (None, 0) when the file cannot be read."""
         try:
-            with open(path, "rb") as f:
-                f.seek(start)
-                data = f.read(_LOG_READ_MAX)
+            fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NOCTTY", 0) | getattr(os, "O_BINARY", 0))
         except OSError:
             return None, 0
+        try:
+            os.lseek(fd, start, os.SEEK_SET)
+            data = os.read(fd, _LOG_READ_MAX)
+        except OSError:
+            return None, 0
+        finally:
+            os.close(fd)
         self.scanned += len(data)
         return data, len(data)
 
@@ -1910,7 +2140,7 @@ def _reload_daemon(service, state, config):
     """Make the running daemon re-read its file AND PROVE IT - (how, evidence, error). `config` is the file the helper has on disk (the restored one): the target is THAT, so a logger a
     person changed since is verified too. The proof, in order: the running daemon's own `config-get` shows the file's logger; Kea's completion id past the pre-signal position (only when no
     socket answered); after the ONE restart, a NEW active process. A daemon that already runs the file is accepted without a signal."""
-    unit = _resolve_unit(service, "status")
+    unit = _resolve_unit(service)
     if unit is None:
         return None, None, "no Kea unit was found on this host"
     sock = _control_socket(config)
@@ -1926,8 +2156,10 @@ def _reload_daemon(service, state, config):
         return None, None, (
             "the host has no way to see whether Kea re-read its file: no unix or local http control socket in the config and no readable log file"
         )
+    state.pop("signalled", None)
     if sock is not None and _daemon_matches(_daemon_logger_now(sock), file_entry):
-        return "reload", "config-get", None  # the daemon runs the file already: a person reloaded, or the other of two concurrent restores did
+        state["signalled"] = False  # nothing was sent: the daemon runs the file already (a person reloaded, or the other of two concurrent restores did) - Jen's line says so
+        return "reload", "config-get", None
     pid = _unit_main_pid(unit)
     started = None
     if pid > 0:
@@ -1946,8 +2178,13 @@ def _reload_daemon(service, state, config):
     if int(state.get("restarts") or 0) >= 1:
         return None, None, "nothing shows Kea re-read the restored file and the unit was already restarted once for this state: not restarting again" + note
     state["restarts"] = int(state.get("restarts") or 0) + 1
-    with contextlib.suppress(OSError):  # the budget is spent ON DISK before the restart is issued: a helper killed between the restart and the end of this restore does not restart Kea again
-        _save_state(service, state)
+    try:
+        _save_state(service, state)  # the budget is spent ON DISK (the file and its directory synced) before the restart is issued
+    except OSError as e:
+        state["restarts"] -= 1
+        return None, None, (
+            f"restart refused: the restart budget could not be recorded on disk ({e.strerror or e}); the session stays unresolved and the next tick retries"
+        )
     proc = _run_bin("systemctl", ["restart", unit], capture_output=True, text=True)
     if proc is None or proc.returncode != 0:
         tail = "\n".join(((proc.stderr or proc.stdout) if proc else "").splitlines()[-3:])
@@ -1964,51 +2201,61 @@ def _restore_state(service, state):
     """The restore routine - shared by `investigation-disarm`, the timer and boot. Under the lock it RE-READS the state (two restores in the same second must not both act: the second would
     spend the one restart on a daemon that is already restored), reads the config, puts the logger back from the STATE's `restore`, validates with `-t` as the daemon, writes the file
     privately (the previous one kept as `.jen_backup`) and asks the daemon to re-read it, verified by `_reload_daemon`'s contract. Updates and saves the state: `restored_at`, `how`
-    and `evidence` on success, `last_error` on failure (the next tick retries). Returns (ok, how, detail)."""
+    and `evidence` on success, `last_error` on failure (the next tick retries). The lock is BOUNDED (build 18): a holder that never lets go fails this tick, loudly, and the next one
+    tries again. Returns (ok, how, detail)."""
     path = state["path"]
-    with _locked(path):
-        kind, fresh = _read_state(service)
-        if kind != "ok":
-            return False, None, "the state file changed underneath this restore" + (f" ({fresh})" if kind == "bad" else "")
-        if fresh.get("restored_at"):
-            return True, fresh.get("how"), "already restored"
-        state = fresh
+    try:
+        with _locked(path, wait_s=_LOCK_WAIT_S):
+            return _restore_locked(service, state, path)
+    except _LockBusy as e:
+        return _restore_failed(service, state, f"the config lock is held by another process ({e}); the next tick retries")
+
+
+def _restore_locked(service, state, path):
+    kind, fresh = _read_state(service)
+    if kind != "ok":
+        return False, None, "the state file changed underneath this restore" + (f" ({fresh})" if kind == "bad" else "")
+    if fresh.get("restored_at"):
+        return True, fresh.get("how"), "already restored"
+    state = fresh
+    try:
+        raw, st = _open_conf(path)
+        config = json.loads(raw.decode("utf-8"))
+    except _ConfLink:
+        return _restore_failed(service, state, "the config is a symlink or not a regular file: it is not followed")
+    except (OSError, ValueError, RecursionError) as e:
+        return _restore_failed(service, state, f"the config could not be read: {e}")
+    if not isinstance(config, dict):
+        return _restore_failed(service, state, "the config is not a JSON object")
+    if not state.get("log_path"):
+        state["log_path"] = _file_log_path(config)  # a record armed by build 15 (or without a log): the log path comes from the file's own logger
+        state["verified_by_build"] = HELPER_BUILD
+    new_cfg, code = _restore_logger(config, state["restore"])
+    # build 18 (Q170): a socket, a credential file or a port is derived from a config only after `-t` has passed on it in THIS process. The written file passed on the way out; the
+    # "nothing" branch writes nothing, so the file as read is checked here, before `_reload_daemon` can ask it for anything.
+    ok, result = _run_kea_test(service, path, new_cfg if code == "ok" else config, [])
+    if not ok:
+        return _restore_failed(service, state, f"{result.get('error')}: {result.get('detail', '')}".strip(": "))
+    if code == "ok":
         try:
-            with open(path, "rb") as f:
-                raw = f.read()
-            st = os.stat(path)
-            config = json.loads(raw.decode("utf-8"))
-        except (OSError, ValueError) as e:
-            return _restore_failed(service, state, f"the config could not be read: {e}")
-        if not isinstance(config, dict):
-            return _restore_failed(service, state, "the config is not a JSON object")
-        if not state.get("log_path"):
-            state["log_path"] = _file_log_path(config)  # a record armed by build 15 (or without a log): the log path comes from the file's own logger
-            state["verified_by_build"] = HELPER_BUILD
-        new_cfg, code = _restore_logger(config, state["restore"])
-        if code == "ok":
-            ok, result = _run_kea_test(service, path, new_cfg, [])
-            if not ok:
-                return _restore_failed(service, state, f"{result.get('error')}: {result.get('detail', '')}".strip(": "))
-            try:
-                _install_private(path + ".jen_backup", raw, st.st_uid, st.st_gid, st.st_mode & 0o777)
-                _install_private(path, json.dumps(new_cfg, indent=2).encode("utf-8"), st.st_uid, st.st_gid, st.st_mode & 0o777)
-            except OSError as e:
-                return _restore_failed(service, state, f"the config could not be written: {e}")
-        how, evidence, error = _reload_daemon(service, state, new_cfg if code == "ok" else config)
-        if error or how not in ("reload", "restart") or evidence not in _EVIDENCE:
-            return _restore_failed(service, state, error or "the reload was not verified")
-        # the ONE place `restored_at` is written: after a VERIFIED how AND the evidence that verified it
-        state.update(
-            restored_at=_now().isoformat(timespec="seconds"),
-            how=how,
-            evidence=evidence,
-            verified_by_build=HELPER_BUILD,
-            last_error=None,
-            needs_hand=False,
-        )
-        _save_state(service, state)
-        return True, how, ""
+            _install_private(path + ".jen_backup", raw, st.st_uid, st.st_gid, st.st_mode & 0o777)
+            _install_private(path, json.dumps(new_cfg, indent=2).encode("utf-8"), st.st_uid, st.st_gid, st.st_mode & 0o777)
+        except OSError as e:
+            return _restore_failed(service, state, f"the config could not be written: {e}")
+    how, evidence, error = _reload_daemon(service, state, new_cfg if code == "ok" else config)
+    if error or how not in ("reload", "restart") or evidence not in _EVIDENCE:
+        return _restore_failed(service, state, error or "the reload was not verified")
+    # the ONE place `restored_at` is written: after a VERIFIED how AND the evidence that verified it
+    state.update(
+        restored_at=_now().isoformat(timespec="seconds"),
+        how=how,
+        evidence=evidence,
+        verified_by_build=HELPER_BUILD,
+        last_error=None,
+        needs_hand=False,
+    )
+    _save_state(service, state)
+    return True, how, ""
 
 
 def _restore_failed(service, state, detail):
@@ -2065,10 +2312,24 @@ def op_investigation_arm(payload):
     if state is None:
         return {"ok": False, "error": error}, None
     path = state["path"]
+    with _locked(path):
+        return _arm_locked(state, path)
+
+
+def _arm_locked(state, path):
     try:
-        with open(path, "rb") as f:
-            config = json.loads(f.read().decode("utf-8"))
-    except (OSError, ValueError):
+        raw, _st = _open_conf(path)
+        config = json.loads(raw.decode("utf-8"))
+    except _ConfLink:
+        return {"ok": False, "error": "symlink", "path": path}, path
+    except (OSError, ValueError, RecursionError):
+        config = None
+    if isinstance(config, dict):
+        # build 18 (Q170): no socket or credential is derived from a file `-t` has not passed in this process
+        ok, result = _run_kea_test("dhcp4", path, config, [])
+        if not ok:
+            return result, path
+    else:
         config = None
     log_path = state["log_path"] or (_file_log_path(config) if isinstance(config, dict) else None)
     cursor = _LogCursor(log_path) if log_path else None
@@ -2081,33 +2342,32 @@ def op_investigation_arm(payload):
         }, path
     if has_log and not state["log_path"]:
         state["log_path"] = log_path
-    with _locked(path):
-        # build 16 (Q167): the host's record is authoritative. An UNRESOLVED one (no `restored_at`) is never replaced by whatever a caller sends - a Jen restored from an older backup, a
-        # second Jen, a stale sweep: the same session again is idempotent, the same restore with a LATER deadline is an extension, anything else is refused with the record.
-        kind, existing = _read_state("dhcp4")
-        if kind == "bad":
-            return {"ok": False, "error": "armed", "existing": {"unreadable": True, "detail": existing}, "detail": _bad_state_sentence(existing)}, path
-        existing = existing if kind == "ok" else None
-        idempotent = False
-        if existing is not None and not existing.get("restored_at"):
-            same = existing.get("path") == state["path"] and existing.get("restore") == state["restore"]
-            old_until, new_until = _parse_iso(existing.get("until")), _parse_iso(state["until"])
-            if same and old_until is not None and new_until == old_until:
-                idempotent = True
-            elif same and old_until is not None and new_until is not None and new_until > old_until:
-                state["extended_from"] = existing.get("until")
-                for k in ("restarts", "attempts", "needs_hand", "last_error", "verified_by_build"):  # an extension is the same session: its spent restart and its failures are not forgotten
-                    if k in existing:
-                        state[k] = existing[k]
-            else:
-                return {"ok": False, "error": "armed", "existing": existing}, path
-        try:
-            _ensure_state_dir()
-            if not idempotent:
-                _save_state("dhcp4", state)
-        except OSError as e:
-            return {"ok": False, "error": "write-failed", "detail": str(e)}, path
-        timer, detail = _ensure_timer()
+    # build 16 (Q167): the host's record is authoritative. An UNRESOLVED one (no `restored_at`) is never replaced by whatever a caller sends - a Jen restored from an older backup, a
+    # second Jen, a stale sweep: the same session again is idempotent, the same restore with a LATER deadline is an extension, anything else is refused with the record.
+    kind, existing = _read_state("dhcp4")
+    if kind == "bad":
+        return {"ok": False, "error": "armed", "existing": {"unreadable": True, "detail": existing}, "detail": _bad_state_sentence(existing)}, path
+    existing = existing if kind == "ok" else None
+    idempotent = False
+    if existing is not None and not existing.get("restored_at"):
+        same = existing.get("path") == state["path"] and existing.get("restore") == state["restore"]
+        old_until, new_until = _parse_iso(existing.get("until")), _parse_iso(state["until"])
+        if same and old_until is not None and new_until == old_until:
+            idempotent = True
+        elif same and old_until is not None and new_until is not None and new_until > old_until:
+            state["extended_from"] = existing.get("until")
+            for k in ("restarts", "attempts", "needs_hand", "last_error", "verified_by_build"):  # an extension is the same session: its spent restart and its failures are not forgotten
+                if k in existing:
+                    state[k] = existing[k]
+        else:
+            return {"ok": False, "error": "armed", "existing": existing}, path
+    try:
+        _ensure_state_dir()
+        if not idempotent:
+            _save_state("dhcp4", state)
+    except OSError as e:
+        return {"ok": False, "error": "write-failed", "detail": str(e)}, path
+    timer, detail = _ensure_timer()
     reply = {"ok": True, "timer": timer, "until": existing["until"] if idempotent else state["until"]}
     if idempotent:
         reply["idempotent"] = True
@@ -2134,7 +2394,9 @@ def op_investigation_disarm(payload):
     ok, how, detail = _restore_state(service, state)
     if not ok:
         return {"ok": False, "error": "restore-failed", "detail": detail}, path
-    return {"ok": True, "restored": True, "how": how, "detail": ""}, path
+    kind, after = _read_state(service)
+    signalled = after.get("signalled", True) if kind == "ok" else True
+    return {"ok": True, "restored": True, "how": how, "signalled": signalled, "detail": ""}, path
 
 
 def _timer_status():
@@ -2161,9 +2423,10 @@ def op_investigation_timer(payload):
 def _status_view(state):
     armed = bool(state) and not state.get("restored_at")
     timer_active, timer_enabled = _timer_status() if armed else (None, None)
-    last_error = state.get("last_error")
-    if armed and timer_active is False:
-        last_error = "Restoration timer is not active"
+    timer_error = "Restoration timer is not active" if armed and timer_active is False else None
+    evidence = state.get("evidence")
+    if evidence is None and state.get("restored_at"):
+        evidence = "legacy-unverified"  # a completed build-15/16 record: nothing says what verified it, and nothing is made up (build 18)
     return {
         "armed": armed,
         "timer_active": timer_active,
@@ -2171,7 +2434,7 @@ def _status_view(state):
         "needs_hand": bool(state.get("needs_hand")),
         "attempts": state.get("attempts", 0),
         "log_path": state.get("log_path"),
-        "evidence": state.get("evidence"),
+        "evidence": evidence,
         "verified_by_build": state.get("verified_by_build"),
         "extended_from": state.get("extended_from"),
         "path": state.get("path"),
@@ -2179,7 +2442,8 @@ def _status_view(state):
         "armed_at": state.get("armed_at"),
         "restored_at": state.get("restored_at"),
         "how": state.get("how"),
-        "last_error": last_error,
+        "last_error": state.get("last_error"),
+        "timer_error": timer_error,
         "restore": state.get("restore"),
         "jen": state.get("jen") or {},
     }
@@ -2209,13 +2473,23 @@ def _self_restore(force=False):
     results = []
     try:
         names = sorted(os.listdir(_STATE_DIR))
-    except OSError:
-        return {"ok": True, "checked": 0, "restored": [], "failed": []}
+    except FileNotFoundError:
+        return {"ok": True, "checked": 0, "restored": [], "failed": []}  # no state directory: nothing was ever armed here
+    except OSError as e:
+        # build 18 (Q170): failing to ENUMERATE the records is never proof that none exist - a directory that cannot be read is a tick that failed
+        return {
+            "ok": False,
+            "checked": 0,
+            "restored": [],
+            "failed": [{"service": "dhcp4", "error": f"the state directory cannot be read: {e.strerror or e}"}],
+        }
     failed = []
+    checked = 0
     for name in names:
         m = _STATE_FILE_RE.match(name)
         if not m:
             continue
+        checked += 1
         service = m.group(1)
         kind, state = _read_state(service)
         if kind == "absent":
@@ -2230,7 +2504,7 @@ def _self_restore(force=False):
             continue
         ok, how, detail = _restore_state(service, state)
         (results if ok else failed).append({"service": service, "how": how} if ok else {"service": service, "error": detail})
-    return {"ok": not failed, "checked": len(names), "restored": results, "failed": failed}
+    return {"ok": not failed, "checked": checked, "restored": results, "failed": failed}
 
 
 _OPS = {
@@ -2293,7 +2567,7 @@ def main(argv=None, stdin=None, stdout=None, stderr=None):
 
     try:
         payload = json.loads(raw) if raw.strip() else {}
-    except ValueError as e:
+    except (ValueError, RecursionError) as e:
         return _emit(stdout, stderr, op, {"ok": False, "error": "bad-json", "detail": str(e)}, 2)
     if not isinstance(payload, dict):
         return _emit(stdout, stderr, op, {"ok": False, "error": "bad-json", "detail": "stdin is not a JSON object"}, 2)

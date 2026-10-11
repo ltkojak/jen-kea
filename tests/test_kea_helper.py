@@ -50,6 +50,15 @@ def helper():
 
 
 @pytest.fixture(autouse=True)
+def _a_state_directory_of_its_own(request, monkeypatch, tmp_path_factory):
+    """Build 18 (Q170): the per-config lock lives in `<state dir>/locks` (a root-only directory), so every test that takes a lock needs a state directory it may create."""
+    if "helper" in request.fixturenames:
+        monkeypatch.setattr(
+            request.getfixturevalue("helper"), "_STATE_DIR", str(tmp_path_factory.mktemp("jen-kea-helper-state"))
+        )
+
+
+@pytest.fixture(autouse=True)
 def _no_real_chown(monkeypatch):
     """The helper runs as root; these tests do not. Build 14 (Q151) stopped swallowing a failed chown/fchown (a requested ownership that cannot be applied
     ABORTS the install), so a test that is not root stubs the CALL - it no longer relies on the failure being ignored. A test that cares about the
@@ -194,7 +203,7 @@ class TestVersion:
         assert code == 0
         assert out["ok"] is True
         assert out["helper_version"] == helper.HELPER_VERSION == 7
-        assert out["helper_build"] == helper.HELPER_BUILD == 17
+        assert out["helper_build"] == helper.HELPER_BUILD == 18
         assert out["python"].count(".") == 2
         assert err.startswith("jen-kea-helper: version ok")
 
@@ -366,6 +375,8 @@ def _fake_kea_bin(helper, monkeypatch, tmp_path, name, exit_code=0, stdout="", s
     # the file; stubbed True for the same reason _bin_owner_ok is above (this tmp_path
     # directory is never really root-owned, since the test itself doesn't run as root).
     monkeypatch.setattr(helper, "_bin_dir_ok", lambda d: True)
+    # build 18 (Q170): a host with a daemon account and no unit of either name is refused a root check; these tests are not that host
+    monkeypatch.setattr(helper, "_daemon_account_name", lambda: None)
     return str(d)
 
 
@@ -787,7 +798,7 @@ class TestRunAsTheDaemonsOwnAccount:
         import pwd
         import types
 
-        monkeypatch.setattr(helper, "_resolve_unit", lambda service, action: "kea-dhcp4-server")
+        monkeypatch.setattr(helper, "_resolve_unit", lambda service: "kea-dhcp4-server")
         kea = {"name": "_kea", "uid": 105, "gid": 106, "extra_groups": []}
         for answer, expect in (
             ("User=_kea\nGroup=\nSupplementaryGroups=\n", kea),
@@ -799,7 +810,9 @@ class TestRunAsTheDaemonsOwnAccount:
             ),
         ):
             monkeypatch.setattr(
-                helper, "_run_bin", lambda name, args, answer=answer, **kw: types.SimpleNamespace(stdout=answer)
+                helper,
+                "_run_bin",
+                lambda name, args, answer=answer, **kw: types.SimpleNamespace(stdout=answer, stderr="", returncode=0),
             )
 
             def getpwnam(n):
@@ -809,7 +822,7 @@ class TestRunAsTheDaemonsOwnAccount:
 
             monkeypatch.setattr(pwd, "getpwnam", getpwnam)
             assert helper._unit_account("dhcp4") == expect, answer
-        monkeypatch.setattr(helper, "_resolve_unit", lambda service, action: None)
+        monkeypatch.setattr(helper, "_resolve_unit", lambda service: None)
         assert helper._unit_account("dhcp4") is None
 
 
@@ -830,11 +843,11 @@ class TestTheUnitsOwnIdentityIsWhatValidationRunsAs:
         import types
 
         asked = []
-        monkeypatch.setattr(helper, "_resolve_unit", lambda service, action: "kea-dhcp4-server")
+        monkeypatch.setattr(helper, "_resolve_unit", lambda service: "kea-dhcp4-server")
 
         def run_bin(name, args, **kw):
             asked.append((name, list(args)))
-            return types.SimpleNamespace(stdout=show_output)
+            return types.SimpleNamespace(stdout=show_output, stderr="", returncode=0)
 
         monkeypatch.setattr(helper, "_run_bin", run_bin)
         kea = types.SimpleNamespace(pw_name="_kea", pw_uid=105, pw_gid=106)
@@ -1278,6 +1291,7 @@ def _tls_files(**over):
     return files
 
 
+@win  # build 18 (Q170): install-tls works by directory descriptor (`openat`, `mkdirat`), which the Windows dev box does not have; CI runs it
 class TestInstallTls:
     """The op's whole path wall is "these three basenames under
     /etc/kea/tls/<service>/": the payload never carries a path, and the
@@ -1707,7 +1721,7 @@ class TestUpdateOp:
 
     def test_oversize_signature_is_not_allowed(self, helper):
         candidate = _candidate_bytes(99)
-        code, out, _err = self._update(helper, candidate, b"x" * (helper._UPDATE_MAX_SIGNERS + 1))
+        code, out, _err = self._update(helper, candidate, b"x" * (helper._UPDATE_MAX_SIGNATURE + 1))
         assert out == {"ok": False, "error": "not-allowed"}
 
     @pytest.mark.skipif(sys.platform == "win32", reason="needs a real symlink")
@@ -2503,3 +2517,297 @@ class TestFsyncOfADirectory:
         monkeypatch.setattr(os, "fsync", lambda fd: (_ for _ in ()).throw(OSError(errno.EIO, "Input/output error")))
         with pytest.raises(OSError):
             helper._fsync_dir(str(tmp_path))
+
+
+# ── helper build 18 (Q170): symlinks, identity, descriptors, walls ─────────────────────────────────────────────────────────────────────────────
+
+
+def _conf_stub(helper, monkeypatch, tmp_path, name="kea-dhcp4"):
+    monkeypatch.setattr(helper, "_ALLOWED_CONF_DIRS", (str(tmp_path),))
+    _fake_kea_bin(helper, monkeypatch, tmp_path, name, exit_code=0)
+    monkeypatch.setattr(helper, "_unit_account", lambda service: None)
+    monkeypatch.setattr(
+        helper,
+        "_find_kea",
+        lambda service: {"binary": str(tmp_path / "bin" / name), "user": None, "group": None, "extra_groups": []},
+    )
+
+
+@win
+class TestASymlinkAtAConfigPathIsNeverFollowed:
+    """Build 18 (Q170). `_allowed_conf_path` is a string wall; a daemon-owned /etc/kea lets its account plant a symlink at an allowed name. Every reader opens `O_NOFOLLOW`."""
+
+    def _link(self, helper, tmp_path, monkeypatch):
+        _conf_stub(helper, monkeypatch, tmp_path)
+        target = tmp_path / "elsewhere.json"
+        target.write_text('{"secret": true}')
+        p = tmp_path / "kea-dhcp4.conf"
+        os.symlink(target, p)
+        return p, target
+
+    def test_read_config_says_symlink_and_returns_nothing_of_the_target(self, helper, tmp_path, monkeypatch):
+        p, _t = self._link(helper, tmp_path, monkeypatch)
+        _code, out, _ = _run(helper, "read-config", {"service": "dhcp4", "path": str(p)})
+        assert out == {"ok": False, "error": "symlink", "path": str(p)}
+
+    def test_apply_config_refuses_and_leaves_the_target_and_the_link_alone(self, helper, tmp_path, monkeypatch):
+        p, target = self._link(helper, tmp_path, monkeypatch)
+        _code, out, _ = _run(helper, "apply-config", {"service": "dhcp4", "path": str(p), "config": {"Dhcp4": {}}})
+        assert out["ok"] is False and out["error"] == "symlink"
+        assert target.read_text() == '{"secret": true}' and os.path.islink(p)
+        assert not (tmp_path / "kea-dhcp4.conf.jen_backup").exists()
+
+    def test_remove_config_refuses_a_link_even_with_the_right_sha(self, helper, tmp_path, monkeypatch):
+        import hashlib
+
+        p, target = self._link(helper, tmp_path, monkeypatch)
+        sha = hashlib.sha256(target.read_bytes()).hexdigest()
+        _code, out, _ = _run(helper, "remove-config", {"service": "dhcp4", "path": str(p), "expect_sha256": sha})
+        assert out["ok"] is False and out["error"] == "symlink" and target.exists() and os.path.islink(p)
+
+    def test_a_directory_at_the_path_is_not_a_config_either(self, helper, tmp_path, monkeypatch):
+        _conf_stub(helper, monkeypatch, tmp_path)
+        (tmp_path / "kea-dhcp4.conf").mkdir()
+        _code, out, _ = _run(helper, "read-config", {"service": "dhcp4", "path": str(tmp_path / "kea-dhcp4.conf")})
+        assert out["ok"] is False and out["error"] == "symlink"
+
+
+@win
+class TestApplyTightensAConfigAnyoneCouldRead:
+    """Build 18 (Q170). An existing config that is world-readable (0644 / 0664 - it carries `lease-database.password`) is replaced `root:<the daemon's group>` 0640 (`root:root` 0600
+    for a daemon that runs as root); one that is already stricter keeps its owner and mode."""
+
+    def _apply(self, helper, tmp_path, monkeypatch, mode, account):
+        _conf_stub(helper, monkeypatch, tmp_path)
+        monkeypatch.setattr(helper, "_unit_account", lambda service: account)
+        p = tmp_path / "kea-dhcp4.conf"
+        p.write_text(json.dumps({"old": True}))
+        os.chmod(p, mode)
+        chowns = []
+        monkeypatch.setattr(os, "fchown", lambda fd, uid, gid: chowns.append((uid, gid)))
+        _code, out, _ = _run(helper, "apply-config", {"service": "dhcp4", "path": str(p), "config": {"new": True}})
+        assert out["ok"] is True, out
+        return p, out, chowns
+
+    @pytest.mark.parametrize("mode", [0o644, 0o664, 0o666, 0o604])
+    def test_world_readable_becomes_0640_for_the_daemons_group(self, helper, tmp_path, monkeypatch, mode):
+        p, _out, chowns = self._apply(
+            helper, tmp_path, monkeypatch, mode, {"name": "_kea", "uid": 105, "gid": 106, "extra_groups": []}
+        )
+        assert stat.S_IMODE(os.stat(p).st_mode) == 0o640 and chowns[-1] == (0, 106)
+
+    def test_a_root_daemon_gets_root_0600(self, helper, tmp_path, monkeypatch):
+        p, _out, chowns = self._apply(helper, tmp_path, monkeypatch, 0o644, None)
+        assert stat.S_IMODE(os.stat(p).st_mode) == 0o600 and chowns[-1] == (0, 0)
+
+    @pytest.mark.parametrize("mode", [0o640, 0o600, 0o660])
+    def test_a_stricter_mode_is_kept_with_its_owner(self, helper, tmp_path, monkeypatch, mode):
+        p, _out, chowns = self._apply(
+            helper, tmp_path, monkeypatch, mode, {"name": "_kea", "uid": 105, "gid": 106, "extra_groups": []}
+        )
+        assert stat.S_IMODE(os.stat(p).st_mode) == mode and chowns[-1] == (os.stat(p).st_uid, os.stat(p).st_gid)
+
+    def test_the_reply_carries_the_sha_of_the_bytes_that_were_written(self, helper, tmp_path, monkeypatch):
+        import hashlib
+
+        p, out, _chowns = self._apply(helper, tmp_path, monkeypatch, 0o640, None)
+        assert out["sha256"] == hashlib.sha256(p.read_bytes()).hexdigest()
+
+
+class TestIdentityNeverFallsBackToRootOnAGuess:
+    """Build 18 (Q170). An unknown unit name, or a `systemctl show` that failed, used to mean "no User=": the check ran as root on a config the daemon will read as `_kea`."""
+
+    def test_a_show_that_failed_is_a_refusal_not_root(self, helper, monkeypatch):
+        import types
+
+        monkeypatch.setattr(helper, "_resolve_unit", lambda service: "kea-dhcp4-server")
+        monkeypatch.setattr(
+            helper,
+            "_run_bin",
+            lambda name, args, **kw: types.SimpleNamespace(
+                stdout="", stderr="Failed to connect to bus: No such file or directory\n", returncode=1
+            ),
+        )
+        got = helper._unit_account("dhcp4")
+        assert (
+            got is not None
+            and "systemctl show kea-dhcp4-server failed" in got["refused"]
+            and "Failed to connect to bus" in got["refused"]
+        )
+
+    def test_a_show_that_works_and_names_no_user_is_still_root(self, helper, monkeypatch):
+        import types
+
+        monkeypatch.setattr(helper, "_resolve_unit", lambda service: "kea-dhcp4-server")
+        monkeypatch.setattr(
+            helper,
+            "_run_bin",
+            lambda name, args, **kw: types.SimpleNamespace(
+                stdout="User=\nGroup=\nSupplementaryGroups=\n", stderr="", returncode=0
+            ),
+        )
+        assert helper._unit_account("dhcp4") is None
+
+    @win
+    def test_no_unit_of_either_name_and_a_daemon_account_refuses_a_root_owned_binary(
+        self, helper, tmp_path, monkeypatch
+    ):
+        _fake_kea_bin(helper, monkeypatch, tmp_path, "kea-dhcp4")
+        monkeypatch.setattr(helper, "_unit_account", lambda service: None)
+        monkeypatch.setattr(helper, "_resolve_unit", lambda service: None)
+        monkeypatch.setattr(helper, "_daemon_account_name", lambda: "_kea")
+        got = helper._find_kea("dhcp4")
+        assert "binary" not in got
+        assert "no Kea unit named kea-dhcp4-server or isc-kea-dhcp4-server was found" in got["refused"]
+        assert "the daemon account _kea exists: the check will not run as root" in got["refused"]
+
+    @win
+    def test_no_unit_and_no_daemon_account_keeps_the_pre_5_68_root_rule(self, helper, tmp_path, monkeypatch):
+        _fake_kea_bin(helper, monkeypatch, tmp_path, "kea-dhcp4")
+        monkeypatch.setattr(helper, "_unit_account", lambda service: None)
+        monkeypatch.setattr(helper, "_resolve_unit", lambda service: None)
+        monkeypatch.setattr(helper, "_daemon_account_name", lambda: None)
+        got = helper._find_kea("dhcp4")
+        assert got["user"] is None and got["binary"].endswith("kea-dhcp4")
+
+    @win
+    def test_a_known_unit_that_names_root_is_not_an_unknown_unit(self, helper, tmp_path, monkeypatch):
+        _fake_kea_bin(helper, monkeypatch, tmp_path, "kea-dhcp4")
+        monkeypatch.setattr(helper, "_unit_account", lambda service: None)
+        monkeypatch.setattr(helper, "_resolve_unit", lambda service: "kea-dhcp4-server")
+        monkeypatch.setattr(helper, "_daemon_account_name", lambda: "_kea")
+        assert helper._find_kea("dhcp4")["user"] is None
+
+    @win
+    def test_a_group_the_unit_names_that_does_not_exist_is_named_alone(self, helper, monkeypatch):
+        import grp
+        import pwd
+        import types
+
+        monkeypatch.setattr(helper, "_resolve_unit", lambda service: "kea-dhcp4-server")
+        monkeypatch.setattr(
+            helper,
+            "_run_bin",
+            lambda name, args, **kw: types.SimpleNamespace(
+                stdout="User=_kea\nGroup=nogroup-here\nSupplementaryGroups=\n", stderr="", returncode=0
+            ),
+        )
+        kea = types.SimpleNamespace(pw_name="_kea", pw_uid=105, pw_gid=106)
+        monkeypatch.setattr(pwd, "getpwnam", lambda n: kea)
+        monkeypatch.setattr(
+            grp, "getgrnam", lambda n: (_ for _ in ()).throw(KeyError("getgrnam(): name not found: 'nogroup-here'"))
+        )
+        got = helper._unit_account("dhcp4")
+        assert got == {"refused": "its unit names the group 'nogroup-here', which does not exist on this host"}
+
+
+@win
+class TestInstallTlsByDescriptor:
+    """Build 18 (Q170). Every directory below /etc/kea is opened `O_DIRECTORY | O_NOFOLLOW` relative to the one above, and the members are written through the last descriptor: a
+    symlink put in the way - before the open or after it - is refused or never reached, and nothing is written outside."""
+
+    @pytest.fixture
+    def tls_root(self, helper, tmp_path, monkeypatch):
+        root = tmp_path / "tls"
+        monkeypatch.setattr(helper, "_TLS_ROOT", str(root))
+        monkeypatch.setattr(helper, "_unit_account", lambda service: None)
+        return root
+
+    @pytest.fixture
+    def outside(self, tmp_path):
+        d = tmp_path / "outside"
+        d.mkdir()
+        return d
+
+    def test_a_symlink_as_the_tls_root_is_refused_and_nothing_is_written_outside(self, helper, tls_root, outside):
+        os.symlink(outside, tls_root)
+        _code, out, _ = _run(helper, "install-tls", {"service": "dhcp4", "files": _tls_files()})
+        assert out["ok"] is False and out["error"] == "symlink"
+        assert os.listdir(outside) == []
+
+    def test_a_symlink_as_the_service_directory_is_refused(self, helper, tls_root, outside):
+        tls_root.mkdir()
+        os.symlink(outside, tls_root / "dhcp4")
+        _code, out, _ = _run(helper, "install-tls", {"service": "dhcp4", "files": _tls_files()})
+        assert out["ok"] is False and out["error"] == "symlink" and os.listdir(outside) == []
+
+    def test_a_symlink_swapped_in_after_the_first_look_is_still_refused(self, helper, tls_root, outside, monkeypatch):
+        """The window the pathname version had: between the check of the directory and the write."""
+        import shutil
+
+        tls_root.mkdir()
+        (tls_root / "dhcp4").mkdir()
+
+        def swap(service):
+            shutil.rmtree(tls_root / "dhcp4")
+            os.symlink(outside, tls_root / "dhcp4")
+            return None
+
+        monkeypatch.setattr(helper, "_unit_account", swap)
+        _code, out, _ = _run(helper, "install-tls", {"service": "dhcp4", "files": _tls_files()})
+        assert out["ok"] is False and out["error"] == "symlink" and os.listdir(outside) == []
+
+    def test_a_symlink_at_a_member_is_refused_and_the_set_is_left_as_it_was(self, helper, tls_root, outside):
+        (tls_root / "dhcp4").mkdir(parents=True)
+        (outside / "target").write_text("do not touch")
+        os.symlink(outside / "target", tls_root / "dhcp4" / "server.key")
+        _code, out, _ = _run(helper, "install-tls", {"service": "dhcp4", "files": _tls_files()})
+        assert out["ok"] is False and (outside / "target").read_text() == "do not touch"
+        assert not (tls_root / "dhcp4" / "ca.crt").exists(), "all three or none"
+
+    def test_a_plain_install_still_works_and_reports_its_paths(self, helper, tls_root):
+        _code, out, _ = _run(helper, "install-tls", {"service": "dhcp4", "files": _tls_files()})
+        assert out["ok"] is True and sorted(os.listdir(tls_root / "dhcp4")) == ["ca.crt", "server.crt", "server.key"]
+        assert out["paths"]["server.key"] == str(tls_root / "dhcp4" / "server.key")
+
+
+class TestTailLogOpensByDescriptor:
+    @win
+    def test_a_symlinked_log_is_not_followed(self, helper, tmp_path, monkeypatch):
+        monkeypatch.setattr(helper, "_allowed_log_path", lambda p: True)
+        real = tmp_path / "real.log"
+        real.write_text("secret line\n")
+        link = tmp_path / "k.log"
+        os.symlink(real, link)
+        _code, out, _ = _run(helper, "tail-log", {"path": str(link)})
+        assert out["ok"] is False and "lines" not in out
+
+    @win
+    def test_a_directory_is_not_a_log(self, helper, tmp_path, monkeypatch):
+        monkeypatch.setattr(helper, "_allowed_log_path", lambda p: True)
+        (tmp_path / "d.log").mkdir()
+        _code, out, _ = _run(helper, "tail-log", {"path": str(tmp_path / "d.log")})
+        assert out["ok"] is False
+
+
+class TestTlsPathsAreWalled:
+    """Build 18 (Q170). `tls_paths` are `[path, kind]` pairs, each under the TLS root by realpath; a path outside it is "missing" without the filesystem being asked."""
+
+    @win
+    def test_the_rows(self, helper, tmp_path, monkeypatch):
+        _fake_kea_bin(helper, monkeypatch, tmp_path, "kea-dhcp4", exit_code=0)
+        monkeypatch.setattr(helper, "_unit_account", lambda service: None)
+        root = tmp_path / "tls"
+        (root / "dhcp4").mkdir(parents=True)
+        (root / "dhcp4" / "ca.crt").write_text("x")
+        outside = tmp_path / "outside.crt"
+        outside.write_text("x")
+        monkeypatch.setattr(helper, "_TLS_ROOT", str(root))
+        asked = []
+        real_isfile = os.path.isfile
+        monkeypatch.setattr(os.path, "isfile", lambda p: asked.append(str(p)) or real_isfile(p))
+
+        def run(tls_paths):
+            return helper._run_kea_test("dhcp4", str(tmp_path / "kea-dhcp4.conf"), {"Dhcp4": {}}, tls_paths)
+
+        ok, result = run([[str(root / "dhcp4" / "ca.crt"), "file"], [str(root / "dhcp4"), "dir"]])
+        assert ok is True, result
+        asked.clear()
+        ok, result = run([[str(outside), "file"]])
+        assert ok is False and result == {"ok": False, "error": "tlsmissing", "path": str(outside)}
+        assert str(outside) not in asked, "a path outside the wall is not looked at"
+        ok, result = run([[str(root / ".." / "outside.crt"), "file"]])
+        assert result["error"] == "tlsmissing"
+        for bad in ("a string", [["x", "socket"]], [None], [[]], [[1, "file"]]):
+            ok, result = run(bad)
+            assert ok is False and result == {"ok": False, "error": "bad-tls-paths"}, bad

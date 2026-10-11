@@ -17,6 +17,7 @@ import json
 import os
 import pathlib
 import socket
+import stat
 import time
 from datetime import datetime, timedelta, timezone
 from importlib.machinery import SourceFileLoader
@@ -395,7 +396,13 @@ class TestArm:
         host.arm()
         assert (host.units / "jen-kea-investigation.service").read_text().count("--self-restore") == 1
         timer = (host.units / "jen-kea-investigation.timer").read_text()
-        assert "OnBootSec=30s" in timer and "OnUnitActiveSec=60s" in timer and "Persistent=true" in timer
+        service = (host.units / "jen-kea-investigation.service").read_text()
+        assert (
+            "OnBootSec=30s" in timer
+            and "OnUnitActiveSec=60s" in timer
+            and "Persistent=true" not in timer
+            and "TimeoutStartSec=120" in service
+        )
         assert host.calls.count(("systemctl", ["daemon-reload"])) == 1
         if os.name == "nt":
             pytest.skip(
@@ -495,9 +502,10 @@ class TestDisarm:
             "ok": True,
             "restored": True,
             "how": "reload",
+            "signalled": True,
             "detail": "",
             "helper_version": 7,
-            "helper_build": 17,
+            "helper_build": 18,
         }
         assert host.config() == _config(at_debug=False, marker=False)
         assert host.signals and host.signals[0][0] == 4242
@@ -609,7 +617,7 @@ class TestTheReload:
     def test_a_host_with_no_kea_unit_reports_it(self, host, monkeypatch):
         host.write_config(_config())
         host.arm()
-        monkeypatch.setattr(host.helper, "_resolve_unit", lambda service, action: None)
+        monkeypatch.setattr(host.helper, "_resolve_unit", lambda service: None)
         reply = host.op("investigation-disarm", {"service": SERVICE, "path": str(host.conf)})
         assert reply["ok"] is False and "no Kea unit" in reply["detail"]
 
@@ -679,7 +687,7 @@ class TestSelfRestore:
             "restored": [],
             "failed": [],
             "helper_version": 7,
-            "helper_build": 17,
+            "helper_build": 18,
         }
 
     def test_a_state_file_the_helper_did_not_write_is_reported_and_never_acted_on(self, host):
@@ -713,14 +721,16 @@ class TestSelfRestore:
     def test_two_services_worth_of_files_are_not_a_thing(self, host):
         host.arm(-1)
         (host.state_dir / "investigation-dhcp6.json").write_text("{}")
-        assert host.tick()["checked"] == 2, "only dhcp4 state files are ever acted on (the other name does not match)"
+        assert host.tick()["checked"] == 1, (
+            "only dhcp4 state files are ever acted on and counted (the other name does not match)"
+        )
 
 
 class TestTheContract:
-    def test_the_ops_are_registered_and_the_build_is_17(self, helper):
+    def test_the_ops_are_registered_and_the_build_is_18(self, helper):
         for name in ("investigation-arm", "investigation-disarm", "investigation-status", "investigation-timer"):
             assert name in helper._OPS
-        assert helper.HELPER_BUILD == 17 and helper.HELPER_VERSION == 7
+        assert helper.HELPER_BUILD == 18 and helper.HELPER_VERSION == 7
 
     def test_there_is_still_no_sudoers_change(self):
         root = _SCRIPT.parent
@@ -1479,7 +1489,9 @@ class TestTheControlSocketIsFoundInTheConfig:
         }
         assert self._c(helper, [entry]) == ("http", ("127.0.0.1", 8004, "jen", "pw"))
 
-    def test_a_plain_local_http_socket_with_credential_files_under_directory(self, helper, tmp_path):
+    def test_a_plain_local_http_socket_with_credential_files_under_directory(self, helper, tmp_path, monkeypatch):
+        monkeypatch.setattr(helper, "_CRED_ROOT", str(tmp_path))
+        monkeypatch.setattr(helper, "_credential_file_ok", lambda st: True)
         (tmp_path / "u").write_text("jen\n")
         (tmp_path / "p").write_text("secret\n")
         entry = {
@@ -1494,23 +1506,21 @@ class TestTheControlSocketIsFoundInTheConfig:
         }
         assert self._c(helper, [entry]) == ("http", ("::1", 8005, "jen", "secret"))
 
-    def test_the_directory_defaults_to_etc_kea(self, helper, monkeypatch):
-        opened = []
-
-        def fake_open(path, *a, **k):
-            opened.append(path)
-            raise OSError("no")
-
+    def test_the_directory_defaults_to_etc_kea(self, helper, tmp_path, monkeypatch):
+        assert helper._CRED_ROOT == "/etc/kea"
+        monkeypatch.setattr(
+            helper, "_CRED_ROOT", str(tmp_path)
+        )  # the default IS the wall's root: files placed there are found with no `directory` key
+        monkeypatch.setattr(helper, "_credential_file_ok", lambda st: True)
+        (tmp_path / "u").write_text("jen\n")
+        (tmp_path / "p").write_text("pw\n")
         entry = {
             "socket-type": "http",
             "socket-address": "127.0.0.1",
             "socket-port": 8004,
             "authentication": {"type": "basic", "clients": [{"user-file": "u", "password-file": "p"}]},
         }
-        with monkeypatch.context() as m:
-            m.setattr("builtins.open", fake_open)
-            assert self._c(helper, [entry]) is None
-        assert os.path.join("/etc/kea", "u") in opened
+        assert self._c(helper, [entry]) == ("http", ("127.0.0.1", 8004, "jen", "pw"))
 
     def test_a_remote_address_is_no_socket_evidence(self, helper):
         entry = {
@@ -1741,6 +1751,10 @@ class TestAnUnresolvedHostRecordIsNeverOverwritten:
         for _ in range(10):
             host.tick()
         assert self._record(host)["needs_hand"] is True
+        host.kea_test = (
+            True,
+            {"ok": True},
+        )  # (the arm now checks the file with `-t` before anything else: it must pass for the record to be what refuses)
         assert host.arm(30, restore={"created": True})["error"] == "armed"
 
     def test_once_it_is_restored_the_next_arm_is_a_new_session(self, host):
@@ -1775,7 +1789,9 @@ class TestTheTimersOwnLiveness:
         host.timer = "inactive"
         status = host.op("investigation-status", {"service": SERVICE})
         assert status["armed"] is True and status["timer_active"] is False and status["timer_enabled"] is False
-        assert status["last_error"] == "Restoration timer is not active"
+        assert status["timer_error"] == "Restoration timer is not active" and status["last_error"] is None, (
+            "the timer line is its own field: the restore's reason is never overwritten"
+        )
 
     def test_a_running_timer_is_reported_active_and_enabled(self, host):
         host.arm()
@@ -1801,3 +1817,440 @@ class TestTheTimersOwnLiveness:
     def test_the_timer_op_takes_one_action_only(self, host):
         assert host.op("investigation-timer", {"action": "disable"})["error"] == "not-allowed"
         assert host.op("investigation-timer", {})["error"] == "not-allowed"
+
+
+# ── Q170 (helper build 18): the four registry rules INV-012..015, and the walls around the restore ───────────────────────────────────────────────
+
+posix = pytest.mark.skipif(os.name == "nt", reason="needs POSIX file semantics (symlinks, flock, O_NOFOLLOW)")
+
+
+class TestARestartIsIssuedOnlyAfterItsBudgetIsOnDisk:
+    """INV-012 (build 18, Q170). The one restart is recorded BEFORE it is issued - and a budget that cannot be recorded (the file or its directory) is a restart that is not issued:
+    a helper killed between the restart and the end of the restore must never restart Kea a second time, and a helper that cannot write must not restart it at all."""
+
+    def _stuck(self, host):
+        host.write_config(_config())
+        host.arm()
+        host.reload_mode = "silent"  # the signal is not taken: the one restart decides
+        host.socket_mode = "silent"
+
+    def _disarm(self, host):
+        return host.op("investigation-disarm", {"service": SERVICE, "path": str(host.conf)})
+
+    def test_a_budget_that_cannot_be_saved_refuses_the_restart(self, host, monkeypatch):
+        self._stuck(host)
+        real = host.helper._save_state
+
+        def refuses(service, state):
+            if state.get("restarts"):
+                raise OSError(28, "No space left on device")
+            return real(service, state)
+
+        monkeypatch.setattr(host.helper, "_save_state", refuses)
+        reply = self._disarm(host)
+        assert (
+            reply["ok"] is False
+            and "restart refused" in reply["detail"]
+            and "No space left on device" in reply["detail"]
+        ), reply
+        assert host.restarts() == [], "Kea was not restarted"
+        state = host.state()
+        assert state["restored_at"] is None and state["restarts"] == 0, (
+            "the session stays unresolved and the budget was given back"
+        )
+
+    def test_the_state_directory_is_synced_after_every_state_write(self, host, monkeypatch):
+        synced = []
+        monkeypatch.setattr(host.helper, "_fsync_dir", lambda directory: synced.append(directory))
+        host.write_config(_config())
+        host.arm()
+        assert str(host.state_dir) in synced
+
+    def test_a_failed_directory_sync_refuses_the_restart_too(self, host, monkeypatch):
+        self._stuck(host)
+
+        def fails(directory):
+            raise OSError(5, "Input/output error")
+
+        monkeypatch.setattr(host.helper, "_fsync_dir", fails)
+        reply = self._disarm(host)
+        assert reply["ok"] is False and "restart refused" in reply["detail"] and host.restarts() == []
+
+    def test_the_budget_is_on_disk_when_the_restart_itself_dies(self, host, monkeypatch):
+        self._stuck(host)
+        real = host._run_bin
+
+        def dies(name, args, **kw):
+            if name == "systemctl" and args[:1] == ["restart"]:
+                raise KeyboardInterrupt("killed between the restart and the end of the restore")
+            return real(name, args, **kw)
+
+        monkeypatch.setattr(host.helper, "_run_bin", dies)
+        with pytest.raises(KeyboardInterrupt):
+            self._disarm(host)
+        assert host.state()["restarts"] == 1
+
+
+class TestAnUnreadableStateDirectoryIsAFailedTick:
+    """INV-013 (build 18, Q170). Failing to ENUMERATE the host's records is never proof that none exist."""
+
+    def test_a_directory_that_cannot_be_listed_fails_the_tick_and_says_why(self, host, monkeypatch):
+        host.write_config(_config())
+        host.arm(-1)
+        real = os.listdir
+        state_dir = str(host.state_dir)
+
+        def listdir(path="."):
+            if str(path) == state_dir:
+                raise PermissionError(13, "Permission denied")
+            return real(path)
+
+        monkeypatch.setattr(os, "listdir", listdir)
+        out = host.tick()  # (the harness asserts the exit status is 1 for a failed tick)
+        assert out["ok"] is False and out["checked"] == 0 and out["restored"] == []
+        assert (
+            "the state directory cannot be read" in out["failed"][0]["error"]
+            and "Permission denied" in out["failed"][0]["error"]
+        )
+
+    def test_a_directory_that_does_not_exist_is_nothing_armed_yet(self, host):
+        out = host.tick()
+        assert out["ok"] is True and out["checked"] == 0 and out["failed"] == []
+
+    def test_checked_counts_state_files_only(self, host):
+        host.write_config(_config())
+        host.arm(-1)
+        (host.state_dir / "locks-and-other-things.txt").write_text("x")
+        assert host.tick()["checked"] == 1
+
+
+class TestTheCompletionValidator:
+    """INV-014 (build 18, Q170). A record that says it is DONE must be a completion this helper could have written; a malformed one is `bad-state` from all four ops and is
+    never acted on. A completed build-15/16 record has no `evidence` key: it is usable, reported as `legacy-unverified`, and never given an evidence it did not have."""
+
+    TS = "2026-10-10T12:03:00+00:00"
+    GONE = object()
+    # (name, changes to a valid pending record, usable?)
+    ROWS = [
+        ("valid pending", {}, True),
+        ("completed by build 17", {"restored_at": TS, "how": "reload", "evidence": "config-get"}, True),
+        ("legacy pending", {"verified_by_build": GONE, "log_path": GONE, "evidence": GONE}, True),
+        ("legacy completed", {"restored_at": TS, "how": "reload", "evidence": GONE}, True),
+        ("missing deadline", {"until": GONE}, False),
+        ("malformed deadline", {"until": "tomorrow"}, False),
+        ("malformed completion timestamp", {"restored_at": "yesterday", "how": "reload", "evidence": "log"}, False),
+        ("negative restarts", {"restarts": -1}, False),
+        ("negative attempts", {"attempts": -3}, False),
+        ("completed with a missing how", {"restored_at": TS, "evidence": "log"}, False),
+        ("completed with an invalid evidence", {"restored_at": TS, "how": "reload", "evidence": "magic"}, False),
+        ("pending with completion fields", {"how": "reload", "evidence": "log"}, False),
+    ]
+
+    def _make(self, host, changes):
+        host.write_config(_config())
+        host.arm(5)
+        state = host.state()
+        for key, value in changes.items():
+            if value is self.GONE:
+                state.pop(key, None)
+            else:
+                state[key] = value
+        (host.state_dir / "investigation-dhcp4.json").write_text(json.dumps(state), encoding="utf-8")
+        return state
+
+    @pytest.mark.parametrize("name,changes,usable", ROWS, ids=[r[0] for r in ROWS])
+    def test_the_twelve_rows(self, host, name, changes, usable):
+        state = self._make(host, changes)
+        assert host.helper._state_usable(state) is usable, name
+        status = host.op("investigation-status", {"service": SERVICE})
+        if usable:
+            assert status["ok"] is True, (name, status)
+            return
+        assert status["ok"] is False and status["error"] == "bad-state", (name, status)
+        disarm = host.op("investigation-disarm", {"service": SERVICE, "path": str(host.conf)})
+        assert disarm["ok"] is False and disarm["error"] == "bad-state", (name, disarm)
+        arm = host.arm(5)
+        assert arm["ok"] is False and arm["error"] == "armed" and arm["existing"]["unreadable"] is True, (name, arm)
+        tick = host.tick("--now")
+        assert tick["ok"] is False and "not usable" in tick["failed"][0]["error"], (name, tick)
+
+    def test_a_legacy_completed_record_is_reported_legacy_unverified_and_never_synthesised(self, host):
+        self._make(host, {"restored_at": self.TS, "how": "reload", "evidence": self.GONE})
+        status = host.op("investigation-status", {"service": SERVICE})
+        assert status["armed"] is False and status["evidence"] == "legacy-unverified"
+        assert "evidence" not in host.state(), (
+            "the status view reports it; the file is not rewritten with an evidence it never had"
+        )
+
+    def test_a_completed_record_with_evidence_reports_that_evidence(self, host):
+        self._make(host, {"restored_at": self.TS, "how": "restart", "evidence": "process"})
+        assert host.op("investigation-status", {"service": SERVICE})["evidence"] == "process"
+
+
+class TestTheCredentialAndSocketWalls:
+    """INV-015 (build 18, Q170). The helper, as root, reads a credential or connects to a socket only at a path inside its walls - and only from a config it validated (`-t` in
+    this process). The release audit's P1: a daemon-owned /etc/kea let the daemon's account point `directory` at `/`, name `root/.ssh/id_ed25519` as the password file and a
+    local port as the socket, and the next armed tick sent root's key there."""
+
+    @pytest.fixture
+    def cred(self, helper, tmp_path, monkeypatch):
+        root = tmp_path / "etc-kea"
+        root.mkdir()
+        monkeypatch.setattr(helper, "_CRED_ROOT", str(root))
+        monkeypatch.setattr(
+            helper, "_credential_file_ok", lambda st: True
+        )  # (ownership is its own test below: these files are the test user's)
+        return root
+
+    def _opened(self, monkeypatch):
+        seen = []
+        real = os.open
+
+        def spy(path, *a, **k):
+            seen.append(str(path))
+            return real(path, *a, **k)
+
+        monkeypatch.setattr(os, "open", spy)
+        return seen
+
+    def test_a_file_inside_the_wall_is_read_first_line_only(self, helper, cred):
+        (cred / "u").write_text("jen\nsecond line\n")
+        assert helper._read_credential(str(cred), "u") == "jen"
+
+    def test_directory_slash_reads_nothing_and_opens_nothing(self, helper, cred, monkeypatch):
+        opened = self._opened(monkeypatch)
+        assert helper._read_credential("/", "etc/passwd") is None
+        assert helper._read_credential("/", "u") is None
+        assert opened == []
+
+    @pytest.mark.parametrize("name", ["../../root/x", "../secret", "/etc/shadow", "sub/dir", "", ".", ".."])
+    def test_a_file_name_that_is_not_a_bare_name_reads_nothing(self, helper, cred, monkeypatch, name):
+        opened = self._opened(monkeypatch)
+        assert helper._read_credential(str(cred), name) is None
+        assert opened == []
+
+    def test_a_directory_that_resolves_outside_the_wall_reads_nothing(self, helper, cred, tmp_path, monkeypatch):
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "u").write_text("root\n")
+        opened = self._opened(monkeypatch)
+        assert helper._read_credential(str(cred / ".." / "outside"), "u") is None
+        assert opened == []
+
+    @posix
+    def test_a_symlink_inside_the_wall_is_never_followed(self, helper, cred, tmp_path):
+        outside = tmp_path / "root-home"
+        outside.mkdir()
+        (outside / "id_ed25519").write_text("PRIVATE KEY\n")
+        os.symlink(outside / "id_ed25519", cred / "password")
+        assert helper._read_credential(str(cred), "password") is None
+
+    @posix
+    def test_a_directory_symlink_that_leaves_the_wall_reads_nothing(self, helper, cred, tmp_path):
+        outside = tmp_path / "root-home"
+        outside.mkdir()
+        (outside / "u").write_text("root\n")
+        os.symlink(outside, cred / "d")
+        assert helper._read_credential(str(cred / "d"), "u") is None
+
+    def test_a_file_over_the_cap_is_not_read(self, helper, cred):
+        (cred / "big").write_bytes(b"x" * (1 << 20))
+        assert helper._read_credential(str(cred), "big") is None
+
+    @pytest.mark.parametrize(
+        "mode,size,uid,expect",
+        [
+            (0o100644, 10, 0, True),  # root's own, readable
+            (0o100664, 10, 0, False),  # group-writable
+            (0o100666, 10, 0, False),
+            (0o100600, 5000, 0, False),  # over the cap
+            (0o040755, 10, 0, False),  # a directory
+            (0o120777, 10, 0, False),  # a link
+            (0o100640, 10, 105, True),  # the daemon's account (below)
+            (0o100640, 10, 1000, False),  # somebody else
+        ],
+    )
+    def test_the_ownership_and_mode_rule(self, helper, monkeypatch, mode, size, uid, expect):
+        import types
+
+        monkeypatch.setattr(
+            helper, "_unit_account", lambda service: {"name": "_kea", "uid": 105, "gid": 106, "extra_groups": []}
+        )
+        st = types.SimpleNamespace(st_mode=mode, st_size=size, st_uid=uid)
+        assert helper._credential_file_ok(st) is expect
+
+    def test_with_the_root_daemon_only_root_owns_a_credential(self, helper, monkeypatch):
+        import types
+
+        monkeypatch.setattr(helper, "_unit_account", lambda service: None)
+        assert helper._credential_file_ok(types.SimpleNamespace(st_mode=0o100640, st_size=1, st_uid=105)) is False
+
+    def test_the_socket_rows(self, helper):
+        def sock(name):
+            return helper._control_socket(
+                {"Dhcp4": {"control-sockets": [{"socket-type": "unix", "socket-name": name}]}}
+            )
+
+        assert sock("/run/kea/kea4-ctrl.sock") == ("unix", "/run/kea/kea4-ctrl.sock")
+        assert sock("/var/run/kea/kea4-ctrl.sock") == ("unix", "/var/run/kea/kea4-ctrl.sock")
+        assert sock("/tmp/kea.sock") == ("unix", "/tmp/kea.sock")
+        assert sock("/root/s") is None
+        assert sock("/etc/kea/s") is None
+        assert sock("/run/kea/../../root/s") is None, "a traversal is resolved before the wall looks"
+        assert sock("/var/lib/kea/kea4-ctrl.sock") is None
+
+    def test_an_http_socket_whose_credentials_lie_outside_the_wall_is_no_socket(self, helper, cred):
+        entry = {
+            "socket-type": "http",
+            "socket-address": "127.0.0.1",
+            "socket-port": 8004,
+            "authentication": {
+                "type": "basic",
+                "directory": "/",
+                "clients": [{"user-file": "u", "password-file": "root/.ssh/id_ed25519"}],
+            },
+        }
+        assert helper._control_socket({"Dhcp4": {"control-sockets": [entry]}}) is None
+
+    def test_the_restore_checks_the_file_with_t_before_any_socket_on_the_nothing_branch(self, host, monkeypatch):
+        """The branch that writes nothing (a person changed the logger since): nothing had validated the file the helper is about to derive a socket from."""
+        cfg = _config(
+            at_debug=False, marker=False
+        )  # a logger that is neither marked nor at DEBUG 55: `_restore_logger` answers "nothing"
+        host.write_config(cfg)
+        host.arm(-1)
+        asked = []
+        real = host.helper._control_socket
+        monkeypatch.setattr(host.helper, "_control_socket", lambda config: asked.append(1) or real(config))
+        host.kea_test = (False, {"ok": False, "error": "testerror", "detail": "unknown parameter"})
+        reply = host.op("investigation-disarm", {"service": SERVICE, "path": str(host.conf)})
+        assert reply["ok"] is False and "testerror" in reply["detail"], reply
+        assert asked == [] and host.asks == 0 and host.signals == [], (
+            "no socket was derived from, or asked, on a file that failed -t"
+        )
+
+    def test_the_arm_checks_the_file_with_t_before_any_socket(self, host, monkeypatch):
+        host.write_config(_config())
+        asked = []
+        real = host.helper._control_socket
+        monkeypatch.setattr(host.helper, "_control_socket", lambda config: asked.append(1) or real(config))
+        host.kea_test = (False, {"ok": False, "error": "testerror", "detail": "unknown parameter"})
+        reply = host.arm()
+        assert reply["ok"] is False and reply["error"] == "testerror"
+        assert asked == [] and not (host.state_dir / "investigation-dhcp4.json").exists()
+
+
+@posix
+class TestARestoreCannotBeHeldForever:
+    """Build 18 (Q170). The restore's lock is bounded and lives where the daemon's account cannot reach it; the unit has a start timeout."""
+
+    def _lock_files(self, host):
+        import hashlib
+
+        new = host.state_dir / "locks" / (hashlib.sha256(str(host.conf).encode()).hexdigest()[:16] + ".lock")
+        return new, pathlib.Path(str(host.conf) + ".jen_lock")
+
+    def _holding(self, path):
+        import fcntl
+
+        fd = os.open(path, os.O_RDWR)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        return fd
+
+    @pytest.mark.parametrize("which", [0, 1], ids=["the new lock", "the old lock, held one more build"])
+    def test_a_lock_held_by_somebody_else_fails_the_tick_loudly_within_the_bound(self, host, which):
+        host.write_config(_config())
+        host.arm(-1)
+        fd = self._holding(self._lock_files(host)[which])
+        try:
+            out = host.tick()
+        finally:
+            os.close(fd)
+        assert out["ok"] is False and "the config lock is held by another process" in out["failed"][0]["error"], out
+        assert host.clock >= host.helper._LOCK_WAIT_S and host.restarts() == [] and host.signals == []
+        state = host.state()
+        assert state["attempts"] == 1 and state["restored_at"] is None
+
+    def test_the_next_tick_after_the_holder_lets_go_finishes_the_job(self, host):
+        host.write_config(_config())
+        host.arm(-1)
+        fd = self._holding(self._lock_files(host)[0])
+        assert host.tick()["ok"] is False
+        os.close(fd)
+        out = host.tick()
+        assert out["ok"] is True and host.state()["restored_at"]
+
+    def test_the_lock_lives_in_a_root_only_directory_and_the_old_one_is_taken_too(self, host):
+        host.write_config(_config())
+        host.arm(5)
+        host.op("investigation-disarm", {"service": SERVICE, "path": str(host.conf)})
+        new, old = self._lock_files(host)
+        assert new.exists() and old.exists(), "both locks are taken for this one build"
+        assert stat.S_IMODE(os.stat(new.parent).st_mode) == 0o700 and stat.S_IMODE(os.stat(new).st_mode) == 0o600
+
+    def test_the_unit_has_a_start_timeout_and_no_persistent_clause(self, host):
+        host.arm()
+        service = (host.units / "jen-kea-investigation.service").read_text()
+        timer = (host.units / "jen-kea-investigation.timer").read_text()
+        assert "TimeoutStartSec=120" in service and "Persistent" not in timer
+
+
+@posix
+class TestSymlinksNeverLeaveTheWall:
+    """Build 18 (Q170). `_allowed_conf_path` is a string wall; a daemon-owned /etc/kea lets its account plant a symlink at an allowed name. Every reader opens `O_NOFOLLOW`."""
+
+    def _link(self, host):
+        target = host.tmp_path / "somewhere-else.conf"
+        target.write_text(json.dumps(_config()))
+        os.symlink(target, host.conf)
+        return target
+
+    def test_the_arm_refuses_a_symlinked_config(self, host):
+        self._link(host)
+        reply = host.arm()
+        assert reply["ok"] is False and reply["error"] == "symlink"
+        assert not (host.state_dir / "investigation-dhcp4.json").exists()
+
+    def test_the_restore_does_not_follow_a_symlink_planted_after_the_arm(self, host):
+        host.write_config(_config())
+        host.arm(-1)
+        os.unlink(host.conf)
+        target = self._link(host)
+        before = target.read_bytes()
+        out = host.tick()
+        assert out["ok"] is False and "symlink" in out["failed"][0]["error"]
+        assert target.read_bytes() == before and host.signals == [] and host.restarts() == []
+
+
+class TestEveryRemainingP3OfTheHelperItems:
+    """The register's one-liners (Q170 item 12)."""
+
+    def test_a_deeply_nested_payload_is_a_json_error_not_a_traceback(self, host):
+        out = io.StringIO()
+        code = host.helper.main(
+            argv=["jen-kea-helper", "investigation-status"],
+            stdin=io.StringIO("[" * 100000),
+            stdout=out,
+            stderr=io.StringIO(),
+        )
+        assert code == 2 and json.loads(out.getvalue())["error"] == "bad-json"
+
+    def test_a_daemon_that_already_runs_the_restored_file_is_reported_as_not_signalled(self, host):
+        host.write_config(_config(at_debug=False, marker=False))
+        host.arm()
+        reply = host.op("investigation-disarm", {"service": SERVICE, "path": str(host.conf)})
+        assert reply["ok"] is True and reply["how"] == "reload" and reply["signalled"] is False
+        assert host.signals == []
+
+    def test_a_restore_that_sent_a_signal_says_so(self, host):
+        host.write_config(_config())
+        host.arm()
+        reply = host.op("investigation-disarm", {"service": SERVICE, "path": str(host.conf)})
+        assert reply["signalled"] is True and host.signals
+
+    def test_the_dead_code_is_gone(self, helper):
+        assert not hasattr(helper, "_kea_binary")
+        import inspect
+
+        assert list(inspect.signature(helper._resolve_unit).parameters) == ["service"]
+        assert helper._UPDATE_MAX_SIGNATURE == helper._UPDATE_MAX_SIGNERS == 8 * 1024
