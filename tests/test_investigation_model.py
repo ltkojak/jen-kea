@@ -1483,6 +1483,7 @@ class TestTheWalk:
         "conflict_sentence": "through helper_gate and the sweep's host phase (op:sweep, the foreign_session fault)",
         "enabled": "through turn_on (the opt-in); tests/test_investigation_host.py::TestInvestigationLoggingIsOptIn",
         "kea_log_path": "through turn_on (the file the host verifies its restore from)",
+        "host_log_path": "through kea_log_path and _arm_host (turn_on): the rule the helper applies to a log it reads",
         "blocking_removal": "op:views",
         "removal_refusal": "op:removal",
         "identity_guard": "through the config writer: op:identity (preflight_identity_change and mutate)",

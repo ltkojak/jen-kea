@@ -233,6 +233,22 @@ Two failure signatures, both meaning "Jen fell back to the legacy root
 
 **"Investigation logging is not switched on (early access in 5.68, off by default)" (v5.68.0-beta.30).** Turning logging on is opt-in: a superadmin switches it on under **Settings → Kea → Investigation logging**. Nothing else is affected - a session that is already on is still restored and shown.
 
+**"restart refused: the restart budget could not be recorded on disk" (v5.69.0-beta.1, helper build 18).** The helper spends a session's one restart of Kea only after it has written that
+fact to `/var/lib/jen-kea-helper/investigation-dhcp4.json` and synced the directory, so a helper killed between the restart and the end of its work can never restart Kea a second time. This
+message means the write failed (a full disk, a read-only `/var/lib`, an I/O error - the text names it): nothing was restarted, the session stays unresolved and the next minute's tick tries again.
+Free the space or fix the filesystem; to end the session now once the cause is fixed, `sudo jen-kea-helper --self-restore --now`.
+
+**"the state directory cannot be read" (v5.69.0-beta.1, helper build 18).** The timer's tick could not list `/var/lib/jen-kea-helper` (permissions, an I/O error). It used to read as "nothing is
+armed"; it is now a failed tick (the unit shows `failed`, exit status 1, and the next minute tries again) because not being able to look is not proof that nothing is there. Check the directory
+(`root:root`, mode 0700) and run `sudo jen-kea-helper --self-restore --now` once it can be read.
+
+**"the config lock is held by another process" (v5.69.0-beta.1, helper build 18).** The restore waited up to a minute for the helper's per-config lock (now
+`/var/lib/jen-kea-helper/locks/<hash>.lock`, plus, for this one build, the older `<config>.jen_lock` beside the config) and gave up for this tick: some other process holds it - usually a hung
+`kea-dhcp4 -t`. Find it with `sudo fuser -v` on the file the message names; the next tick retries by itself, and a hung process that is the daemon's own is the thing to deal with.
+
+**`symlink` from the helper (v5.69.0-beta.1, helper build 18).** A config, state, log or TLS path is a symbolic link (or not a regular file), and the helper no longer follows one. Look at who made
+it; replace it with the real file, then try again. `install-tls` says the same when `/etc/kea/tls` or the service's directory is a link.
+
 **"The Kea host's investigation state file cannot be trusted" (v5.68.0-beta.31, helper build 17, `bad-state`).** A file exists at `/var/lib/jen-kea-helper/investigation-dhcp4.json` and the helper cannot read
 it as its own record (not valid JSON, unreadable, not a record this helper wrote). Nothing is known about the session it describes, so Health fails and turning logging on is refused; the helper
 never reports this as "no session" and never overwrites it. Look at the file; if it is a stale or damaged record, remove it (`sudo rm /var/lib/jen-kea-helper/investigation-dhcp4.json`) or run
@@ -249,7 +265,7 @@ is authoritative: Jen will not arm over a session it did not start (a second Jen
 **Settings → Kea → SSH → Check** or wait a minute - Jen asks the helper to start the timer again (`investigation-timer`); `systemctl list-timers jen-kea-investigation.timer` shows it.
 Build 17 is required (it verifies the restore from the daemon's own answer); press **Update helper** if Jen says the helper is older.
 
-**"The Kea host helper on <host> must be build 17 or later" when turning investigation logging on (v5.68.0-beta.29).** Investigation logging now needs the helper's self-restore: Jen arms a systemd timer on the Kea host (`jen-kea-investigation.timer`, running `jen-kea-helper --self-restore` as root) so the host puts the logger back at the deadline without Jen. A helper older than build 15 cannot, a host without systemd cannot (the arm answers `timer: none` and Jen reverts the file), and the legacy `sudo python3` path has no such op. Press **Settings → Kea → SSH → Update helper** (from v6 that needs no grant), then try again. Nothing was changed on the host when this is refused. To see what the host holds: `sudo cat /var/lib/jen-kea-helper/investigation-dhcp4.json` (its `last_error` is what the Health row shows); to run its restore by hand: `sudo jen-kea-helper --self-restore --now`; `systemctl list-timers jen-kea-investigation.timer` shows the timer. The legacy-grant fallback has no engine for these ops.
+**"The Kea host helper on <host> must be build 18 or later" when turning investigation logging on (v5.68.0-beta.29).** Investigation logging now needs the helper's self-restore: Jen arms a systemd timer on the Kea host (`jen-kea-investigation.timer`, running `jen-kea-helper --self-restore` as root) so the host puts the logger back at the deadline without Jen. A helper older than build 15 cannot, a host without systemd cannot (the arm answers `timer: none` and Jen reverts the file), and the legacy `sudo python3` path has no such op. Press **Settings → Kea → SSH → Update helper** (from v6 that needs no grant), then try again. Nothing was changed on the host when this is refused. To see what the host holds: `sudo cat /var/lib/jen-kea-helper/investigation-dhcp4.json` (its `last_error` is what the Health row shows); to run its restore by hand: `sudo jen-kea-helper --self-restore --now`; `systemctl list-timers jen-kea-investigation.timer` shows the timer. The legacy-grant fallback has no engine for these ops.
 
 Legacy grant: the old `python3` = root file is `/etc/sudoers.d/jen-kea`. Jen
 needs it for one run to install the helper, and — below helper v6 — for one

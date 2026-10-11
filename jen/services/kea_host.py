@@ -963,7 +963,7 @@ def remove_config(server: dict, service: str, expect_sha256: str | None) -> dict
     return {"ok": False, "code": "error", "detail": resp.get("detail") or str(err), "via": "helper"}
 
 
-INVESTIGATION_MIN_HELPER_BUILD = 17  # v5.68.0-beta.31 (Q168): the restore verified from the daemon's own answer and the one state loader are build 17 (build 16: the authoritative host record and the timer ops; build 15: the self-restore itself)
+INVESTIGATION_MIN_HELPER_BUILD = 18  # v5.69.0-beta.1 (Q170): the walls around what the helper reads and connects to as root, the completion validator and the bounded restore are build 18; v5.68.0-beta.31 (Q168): the restore verified from the daemon's own answer and the one state loader are build 17 (build 16: the authoritative host record and the timer ops; build 15: the self-restore itself)
 
 
 def _investigation_op(server: dict, op: str, payload: dict) -> dict:

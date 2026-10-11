@@ -118,6 +118,39 @@ it as an unreadable conflict (Health fails, turning logging on is refused) while
 **Tests.**
 - `tests/test_kea_helper_investigation.py::TestABuild15RecordIsVerifiedLikeAnyOther`
 
+### INV-012 - A restart is issued only after its budget is recorded on disk
+**Rule.** The one restart a restore session may spend is written to the host's state file, and the directory synced, BEFORE `systemctl restart` is issued; a budget that cannot be recorded means
+the restart is not issued and the session stays unresolved. A helper killed between the restart and the end of its work never restarts Kea a second time.
+**Established.** Q168 (the save), Q170 (a failed save refuses the restart; the directory is synced).
+**Enforced at.** `jen-kea-helper` `_reload_daemon` and `_save_state`.
+**Tests.**
+- `tests/test_kea_helper_investigation.py::TestARestartIsIssuedOnlyAfterItsBudgetIsOnDisk`
+
+### INV-013 - Failure to enumerate the host's records is never proof that none exist
+**Rule.** A state directory that cannot be read is a failed tick (exit 1, reported), not "nothing armed"; `checked` counts only matched state files.
+**Established.** Q170.
+**Enforced at.** `jen-kea-helper` `_self_restore`.
+**Tests.**
+- `tests/test_kea_helper_investigation.py::TestAnUnreadableStateDirectoryIsAFailedTick`
+
+### INV-014 - Malformed completion metadata is never a completed restore
+**Rule.** A record that says it is done must be a completion the helper could have written (a deadline that parses, counters that are non-negative integers, a timestamp, a `how` of reload or
+restart, an evidence of the three it writes); otherwise it is `bad-state` from all four ops. A completed record from before evidence existed is usable and is reported `legacy-unverified`,
+never given an evidence it did not have.
+**Established.** Q170.
+**Enforced at.** `jen-kea-helper` `_state_usable` (through `_read_state`, the one loader).
+**Tests.**
+- `tests/test_kea_helper_investigation.py::TestTheCompletionValidator`
+
+### INV-015 - The helper reads a credential or opens a socket only inside its walls, and only from a config it validated
+**Rule.** A credential file named by a config is read only from under `/etc/kea` (bare name, regular file, bounded, owned by root or the daemon's account, not group- or world-writable, no symlink);
+a unix control socket is used only under `/run/kea`, `/var/run/kea` or `/tmp`; and neither is derived from a config until `-t` has passed on it in this process.
+**Established.** Q170 (after the release audit of Q168 proved the helper could be made to send a root-readable file to a local port).
+**Enforced at.** `jen-kea-helper` `_read_credential`, `_socket_path_ok`, `_restore_locked` and `_arm_locked`.
+**Tests.**
+- `tests/test_kea_helper_investigation.py::TestTheCredentialAndSocketWalls`
+- `tests/kea_compat/test_log_levels.py::test_the_daemons_own_control_socket_answers_config_get`
+
 ## Access control and shared definitions
 
 ### RBAC-001 - Stored data is judged by its own subnet; a hidden object never influences a visible answer

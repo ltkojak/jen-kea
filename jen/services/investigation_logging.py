@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import json
 import logging
+import posixpath
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -723,8 +724,23 @@ def helper_gate(server: dict, held: dict | None = None) -> str:
     return ""
 
 
+def host_log_path(path) -> str:
+    """`path` when the Kea host's helper would accept it as a log to read - an absolute, normalised `*.log` under /var/log (the helper's `_allowed_log_path`, without the symlink
+    resolution only the host can do) - else "" (v5.69.0-beta.1, Q170). Anything else made the arm refuse with `bad-log-path` even where the control socket could answer on its own."""
+    if (
+        isinstance(path, str)
+        and path.startswith("/var/log/")
+        and path.endswith(".log")
+        and posixpath.normpath(path) == path
+        and ".." not in path.split("/")
+    ):
+        return path
+    return ""
+
+
 def kea_log_path(cfg) -> str:
-    """Where the `kea-dhcp4` logger of `cfg` writes (its first file output), else the configured DHCP4 log: the file the host reads Kea's own reload lines from (v5.68.0-beta.30, Q167)."""
+    """Where the `kea-dhcp4` logger of `cfg` writes (its first file output), else the configured DHCP4 log - when the host's helper would accept it (`host_log_path`), else "": the file the
+    host reads Kea's own reload lines from (v5.68.0-beta.30, Q167; the rule is v5.69.0-beta.1, Q170)."""
     section = (cfg or {}).get("Dhcp4") if isinstance(cfg, dict) else None
     loggers = section.get("loggers") if isinstance(section, dict) else None
     for logger_entry in loggers if isinstance(loggers, list) else []:
@@ -732,8 +748,8 @@ def kea_log_path(cfg) -> str:
             for option in logger_entry.get("output-options") or []:
                 out = option.get("output") if isinstance(option, dict) else None
                 if isinstance(out, str) and out.startswith("/"):
-                    return out
-    return extensions.DHCP4_LOG
+                    return host_log_path(out)
+    return host_log_path(extensions.DHCP4_LOG)
 
 
 def _arm_host(server: dict, entry: dict, until: str) -> tuple[bool, list[str], bool, dict | None]:
@@ -748,7 +764,9 @@ def _arm_host(server: dict, entry: dict, until: str) -> tuple[bool, list[str], b
         until,
         restore,
         {"server_id": str(server.get("id")), "name": _name(server)},
-        entry.get("log_path") or extensions.DHCP4_LOG,
+        host_log_path(
+            entry.get("log_path")
+        ),  # "" when it is not one the helper would read: the helper then finds the file's own logger output, or relies on the socket
     )
     if not reply.get("ok"):
         if reply.get("code") == "armed":
@@ -994,7 +1012,7 @@ def turn_on(server: dict, minutes: int, actor: str = "") -> dict:
         entry = _entry_for(server, until, actor)
         if captured.get("restore") is not None:
             entry["restore"] = captured["restore"]
-        entry["log_path"] = captured.get("log_path") or extensions.DHCP4_LOG
+        entry["log_path"] = captured.get("log_path") or ""
 
         if result.status == "rollback_failed":
             # the change set could not put the file back after a failed restart: the file may carry the marker and the daemon is
@@ -1122,6 +1140,14 @@ def _restore_via_host(server: dict, record: dict, sid: str, entry: dict):
         text = f"the Kea host could not restore the log level itself ({reply.get('detail') or reply.get('code')}); Jen tries it from here."
         entry["host_error"] = text[:300]
         return [text]
+    if reply.get("how") == "nothing" and not reply.get("restored"):
+        # (v5.69.0-beta.1, Q170) "not armed" is an OK answer and not a restore: the host holds no session - its state file was removed by hand after the deadline, say - and the
+        # file may still carry DEBUG 55. Reading it as "the host already put the logger back" recorded a restore nobody had made; Jen's own path is the one that finishes it.
+        text = (
+            f"the Kea host holds no session to restore ({reply.get('detail') or 'not armed'}); Jen tries it from here."
+        )
+        entry["host_error"] = text[:300]
+        return [text]
     how = reply.get("how") or "reload"
     entry.pop("error", None)
     entry.pop("host_error", None)
@@ -1136,6 +1162,8 @@ def _restore_via_host(server: dict, record: dict, sid: str, entry: dict):
         "reload": "The Kea host put the logger back and told Kea to re-read its config.",
         "restart": "The Kea host put the logger back and restarted Kea.",
     }.get(how, "The Kea host had already put the logger back.")
+    if how == "reload" and reply.get("signalled") is False:
+        said = "The Kea host put the logger back and found Kea already running the restored file."
     if state == "debug":
         # the host answered ok and the daemon still shows DEBUG: Jen's bounded reload and restart finish it, as they always did
         return _daemon_phase(server, record, entry, [said], fresh=True)
@@ -2138,6 +2166,10 @@ def _host_phase(known: dict, record: dict, now: datetime) -> set:
                     entry["host_error"] = (
                         f"the Kea host's restore failed and is retried every minute: {status['last_error']}"[:300]
                     )
+                elif status.get("timer_error"):
+                    entry["host_error"] = str(status["timer_error"])[
+                        :300
+                    ]  # (build 18: the timer's own line, never the restore's reason overwritten by it)
                 else:
                     entry.pop("host_error", None)
                 entry["host_needs_hand"] = bool(status.get("needs_hand"))

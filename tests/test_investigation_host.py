@@ -42,7 +42,7 @@ class TestTurnOnNeedsTheHost:
         kea.build = 14
         out = inv.turn_on(world.servers[0], 5, actor="alice")
         assert not out["ok"] and out["until"] == ""
-        assert "build 17 or later" in out["lines"][0] and "Update helper" in out["lines"][0]
+        assert "build 18 or later" in out["lines"][0] and "Update helper" in out["lines"][0]
         assert kea.file == original and kea.writes == 0 and "host:arm" not in kea.calls
         assert not inv.active() and "_audit" not in world.store
 
@@ -249,7 +249,7 @@ class TestTheSweepAndTheHost:
         kea.build = 14
         inv.sweep(now=NOW)
         (row,) = inv.active()
-        assert row["armed"] is False and "build 17" in row["host_error"]
+        assert row["armed"] is False and "build 18" in row["host_error"]
 
     def test_a_legacy_entry_is_armed_by_the_first_sweep_after_the_upgrade(self, world, monkeypatch):
         kea = world.daemons[1]
@@ -390,7 +390,7 @@ class TestTheWrappersAroundTheHelperOps:
         host, _sent, replies = wire
         replies.append({"ok": False, "error": "unknown-op"})
         out = host.investigation_status(self.SERVER)
-        assert not out["ok"] and out["code"] == "old" and "build 17" in out["detail"]
+        assert not out["ok"] and out["code"] == "old" and "build 18" in out["detail"]
 
     def test_a_missing_helper_and_a_transport_error_are_told_apart(self, wire):
         host, _sent, replies = wire
@@ -454,7 +454,7 @@ class TestTheWrappersAroundTheHelperOps:
     def test_the_minimum_build_is_the_one_the_helper_ships(self):
         from jen.services import kea_host
 
-        assert kea_host.INVESTIGATION_MIN_HELPER_BUILD == 17 and kea_host.JEN_HELPER_SHIPPED_BUILD == 18
+        assert kea_host.INVESTIGATION_MIN_HELPER_BUILD == 18 == kea_host.JEN_HELPER_SHIPPED_BUILD
 
 
 class TestTheElevenRowsOfTheCandidateMarker:
@@ -848,3 +848,92 @@ class TestInvestigationLoggingIsOptIn:
         )
         on = self._render(True, None)
         assert on.count("investigation-logging/on") == 3 and "investigation-logging/off" not in on
+
+
+class TestTheHostHelperItemsOfBuild18:
+    """v5.69.0-beta.1 (Q170) - Jen's side of helper build 18: "not armed" is not a restore, the log path sent to the host is one it would accept, the timer's own line is its own, and
+    a daemon found already running the restored file is said so."""
+
+    def test_a_host_that_holds_no_session_is_not_counted_as_having_restored(self, world):
+        """The state file was removed by hand after the deadline: the helper's disarm answers ok / not armed, and the file still carries DEBUG 55. Reading that as "the host already put
+        the logger back" recorded a restore nobody had made."""
+        kea = world.daemons[1]
+        assert inv.turn_on(world.servers[0], 15)["ok"]
+        kea.helper_state = None
+        assert _at_debug(kea.file) and _at_debug(kea.loaded)
+        out = inv.turn_off(world.servers[0])
+        assert out["ok"], out["lines"]
+        assert "host:disarm" in kea.calls, "the host was asked"
+        assert not _at_debug(kea.file) and not _at_debug(kea.loaded), "and Jen's own path put the logger back"
+        assert not inv.active()
+
+    def test_the_line_names_the_missing_session(self, world):
+        kea = world.daemons[1]
+        inv.turn_on(world.servers[0], 15)
+        kea.helper_state = None
+        out = inv.turn_off(world.servers[0])
+        assert any("holds no session to restore" in line or "put the logger back" in line for line in out["lines"]), (
+            out["lines"]
+        )
+
+    def test_a_daemon_already_running_the_restored_file_is_said_so(self, world):
+        kea = world.daemons[1]
+        inv.turn_on(world.servers[0], 15)
+        kea.signalled = False
+        out = inv.turn_off(world.servers[0])
+        assert out["ok"] and any("already running the restored file" in line for line in out["lines"]), out["lines"]
+
+    @pytest.mark.parametrize(
+        "output,expect",
+        [
+            ("/var/log/kea/kea-dhcp4.log", "/var/log/kea/kea-dhcp4.log"),
+            ("/var/log/kea-dhcp4.log", "/var/log/kea-dhcp4.log"),
+            ("/var/lib/kea/kea-dhcp4.log", ""),
+            ("/var/log/kea/kea-dhcp4.txt", ""),
+            ("/var/log/../etc/shadow.log", ""),
+            ("/var/log//kea.log", ""),
+            ("/var/log", ""),
+            ("kea.log", ""),
+            ("stdout", ""),
+            ("syslog", ""),
+        ],
+    )
+    def test_the_log_path_sent_to_the_host_is_one_it_would_accept(self, output, expect, monkeypatch):
+        from jen import extensions
+
+        monkeypatch.setattr(
+            extensions, "DHCP4_LOG", ""
+        )  # (no configured log to fall back to: only the logger's own output is being judged)
+        cfg = {"Dhcp4": {"loggers": [{"name": "kea-dhcp4", "output-options": [{"output": output}]}]}}
+        assert inv.kea_log_path(cfg) == expect
+
+    def test_with_no_file_logger_the_configured_log_is_sent_only_when_it_passes_the_same_rule(self, monkeypatch):
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "DHCP4_LOG", "/var/log/kea/kea-dhcp4.log")
+        assert inv.kea_log_path({"Dhcp4": {}}) == "/var/log/kea/kea-dhcp4.log"
+        monkeypatch.setattr(extensions, "DHCP4_LOG", "/srv/kea/kea.log")
+        assert inv.kea_log_path({"Dhcp4": {}}) == ""
+
+    def test_turn_on_sends_the_host_an_empty_log_path_for_a_log_outside_var_log(self, world, monkeypatch):
+        kea = world.daemons[1]
+        sent = []
+        real = kea.investigation_arm
+        monkeypatch.setattr(
+            kea,
+            "investigation_arm",
+            lambda server, until, restore, jen=None, log_path="": (
+                sent.append(log_path) or real(server, until, restore, jen, log_path)
+            ),
+        )
+        monkeypatch.setattr(inv, "kea_log_path", lambda cfg: inv.host_log_path("/var/lib/kea/kea-dhcp4.log"))
+        assert inv.turn_on(world.servers[0], 5)["ok"]
+        assert sent == [""], sent
+
+    def test_the_timers_own_line_is_the_host_error_and_the_restores_reason_is_not_overwritten(self, world):
+        kea = world.daemons[1]
+        assert inv.turn_on(world.servers[0], 15)["ok"]
+        kea.timer_running = False
+        inv.sweep(now=NOW)
+        (row,) = inv.active()
+        assert row["host_error"] == "Restoration timer is not active", row

@@ -68,7 +68,7 @@ class FakeKea:
         self.restart_ignored = False  # the restart succeeds and the daemon does not move
         self.second = None  # config-get answers from ANOTHER daemon (api_url and ssh_host are not the same Kea)
         # v5.68.0-beta.29 (Q165): the Kea HOST - jen-kea-helper build 15 with its state file and its timer. `host_down` is a host Jen cannot reach over SSH at all.
-        self.build = 17
+        self.build = 18
         # v5.68.0-beta.31 (Q168): the host's EVIDENCE channel. A restore is recorded as done only on the daemon's own answer ("config-get" on its control socket), Kea's completion
         # id in its log ("log": only when no socket answered AND the restored level does not hide that line AND the log was not lost) or a NEW active process after the one restart
         # ("process"); a reload-start line is never evidence. `socket` is what the daemon has ("unix" | None); `socket_silent` and `log_rotated` and `state_bad` are the faults.
@@ -77,6 +77,9 @@ class FakeKea:
         self.socket_flaky = False  # the control socket answers some questions and not others (a stall, a second instance): a daemon that answered ONCE is judged only by its answer (the audit F1/F2)
         self.log_rotated = (
             False  # the log evidence of a tick is lost (rotated away, exhausted or unreadable): unconfirmed
+        )
+        self.signalled = (
+            True  # False: the host found the daemon already running the restored file and sent no signal (build 18)
         )
         self.state_bad = False  # the host's state file exists and cannot be read (INV-009)
         self.last_bad_state_tick = (
@@ -180,7 +183,7 @@ class FakeKea:
         return {
             "ok": False,
             "code": "old",
-            "detail": "the Kea host helper on this host is older than build 17 - press Update helper",
+            "detail": "the Kea host helper on this host is older than build 18 - press Update helper",
         }
 
     def helper_build_info(self, server):
@@ -276,6 +279,7 @@ class FakeKea:
             "armed": armed,
             "timer_active": self.timer_running if armed else None,
             "timer_enabled": self.timer_running if armed else None,
+            "timer_error": "Restoration timer is not active" if armed and not self.timer_running else None,
             **copy.deepcopy(st),
         }
 
@@ -385,7 +389,7 @@ class FakeKea:
         ok, how, detail = self.host_restore()
         if not ok:
             return {"ok": False, "code": "error", "detail": detail}
-        return {"ok": True, "code": "ok", "restored": True, "how": how, "detail": ""}
+        return {"ok": True, "code": "ok", "restored": True, "how": how, "signalled": self.signalled, "detail": ""}
 
     def host_tick(self):
         """The host's timer firing (`jen-kea-helper --self-restore`): restores when an armed state's `until` has passed. Needs nothing of Jen."""

@@ -1194,6 +1194,22 @@ path, restore and deadline), an extension (same restore, later deadline, `extend
 `investigation-status` reports `timer_active` / `timer_enabled` (and `last_error: "Restoration timer is not active"` for an armed state without one); `investigation-timer {action: "ensure"}` re-asserts
 the units and the timer. (4) `--self-restore` exits 1 on a failed restore. A state armed by build 15 carries no log path and is verified the way build 15 did, once. (Found by the system stack at build 16: the legacy install script travelled as ONE command argument, and Linux caps an argument at 128 KiB, so "Install helper" failed with `Argument list too long` once the helper passed ~96 KB; `_legacy_python3` now sends the base64 script on stdin - the same pipeline, so the legacy grant is unchanged.)
 
+**Build 18 (v5.69.0-beta.1, Q170) puts walls round what the helper does as root.** A config in a daemon-owned `/etc/kea` is the daemon account's to write, so everything the helper
+derives from one is bounded. (1) *Credentials and sockets*: `_http_credentials` reads a credential file only from a `directory` whose realpath is under `/etc/kea` (`_CRED_ROOT`), as a bare
+file name, opened `O_NOFOLLOW`, regular, at most 4 KiB, owned by root or the daemon's account and writable by neither group nor everyone, first line only; `_control_socket` takes a unix
+socket only under `/run/kea`, `/var/run/kea` or `/tmp` by realpath. Neither is ever derived from a config `-t` has not passed in this process: the restore's "nothing" branch (nothing written)
+runs `-t` on the file as read before `_reload_daemon` can ask it for anything, and the arm does the same before it looks for an evidence channel. (2) *Symlinks*: `_open_conf` opens
+every config reader (`read-config`, `apply-config`, `remove-config`, the restore, the arm, the state record) `O_RDONLY|O_NOFOLLOW|O_NOCTTY` and checks `S_ISREG` on the descriptor;
+`tail-log` and the log cursor do the same; `install-tls` opens `/etc/kea`, `tls` and `tls/<service>` by descriptor (`openat`, `mkdirat`) and `_commit_file_set(dir_fd=...)` writes through
+the last one, so a link swapped in at any moment is refused or never reached. `tls_paths` are `[path, kind]` pairs under `/etc/kea/tls` by realpath and anything else is `tlsmissing`
+without a look. (3) *Locks*: `_locked` keeps `<state dir>/locks/<sha256(path)[:16]>.lock` (root 0700, out of the daemon's reach) and, for this one build, the old `<path>.jen_lock` too (so a
+build-17 helper mid-operation and a build-18 helper never run concurrently; build 19 drops it); the restore's form is bounded (`LOCK_NB` polled to `_LOCK_WAIT_S` of the clock, then
+`_LockBusy` is a failed tick) and the unit has `TimeoutStartSec=120`, so one hung holder cannot silence the timer (INV-001's 120 s). (4) *The one restart is recorded first*: `_save_state`
+fsyncs the directory, and a budget that cannot be recorded refuses the restart (INV-012); an unreadable state directory is a failed tick, never "nothing armed" (INV-013); `_state_usable`
+validates completion metadata and a completed build-15/16 record is `legacy-unverified` (INV-014); the credential and socket walls are INV-015. (5) *Identity never falls back to root on a
+guess*: a failed `systemctl show` and "no unit of either name while `_kea` or `kea` exists" are refusals, and the replacement of a config anyone could read is `root:<daemon group>` 0640.
+The ops list and the sudoers line are unchanged.
+
 **Build 17 (v5.68.0-beta.31, Q168) asks the daemon.** A log line is not the daemon: beta.30 treated a reload-START line as completion and could record a restore the daemon had not made. The evidence is now
 the running daemon's own answer, found through `_control_socket(config)` (a unix socket, or an http one on a local address, from the FILE the helper wrote) and asked by `_ask_daemon`
 (`config-get`): `_daemon_matches` compares the logger the daemon reports with the logger the FILE has (the file is the target - not the restore object). Three evidences are accepted and recorded in
