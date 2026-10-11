@@ -673,16 +673,15 @@ def _find_kea(service):
         if unit_account is not None and "refused" in unit_account:
             return {"refused": unit_account["refused"]}  # a user or group that does not exist is a refusal with its reason, not root
         root_owned = _bin_owner_ok(cand) and os.access(cand, os.X_OK)
-        if root_owned and unit_account is None and _resolve_unit(service) is None:
+        if root_owned and unit_account is None:
             # build 18 (Q170): NO unit of either name was found. The documented no-unit case is a host with no daemon account either; where `_kea` or `kea` exists, "no unit" is a
             # unit this helper does not know (a hand-written `kea-dhcp4.service`), and checking as root a config the daemon will read as `_kea` is the guess that cost build 11 its P1.
-            name_found = _daemon_account_name()
-            if name_found:
+            account_name = _daemon_account_name()
+            if account_name and _resolve_unit(service) is None:
+                fam = _SERVICE_UNIT_FAM.get(service, "dhcp6")
                 return {
-                    "refused": f"no Kea unit named kea-{_SERVICE_UNIT_FAM.get(service, 'dhcp6')}-server or isc-kea-{_SERVICE_UNIT_FAM.get(service, 'dhcp6')}-server was found, "
-                    f"and the daemon account {name_found} exists: the check will not run as root"
+                    "refused": f"no Kea unit named kea-{fam}-server or isc-kea-{fam}-server was found, and the daemon account {account_name} exists: the check will not run as root"
                 }
-        if root_owned and unit_account is None:
             # run as root: the owner (root) bit is the one that will be used (build 13)
             if os.stat(cand).st_mode & stat.S_IXUSR:
                 return {"binary": cand, "user": None, "group": None, "extra_groups": []}

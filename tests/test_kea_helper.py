@@ -1470,7 +1470,8 @@ class TestInstallTls:
         monkeypatch.setattr(os, "fchown", lambda fd, uid, gid: chowns.append((uid, gid)))
         _code, out, _ = _run(helper, "install-tls", {"service": "dhcp4", "files": _tls_files()})
         assert out["ok"] is True and out["owner"] == expected_owner
-        assert chowns == [(0, expected_gid)] * 3, "every member is root:<that group>"
+        assert chowns[:2] == [(0, 0), (0, 0)], "the two directory descriptors (tls, tls/<service>) are root:root"
+        assert chowns[2:] == [(0, expected_gid)] * 3, "every member is root:<that group>"
 
     @win
     def test_a_unit_account_that_cannot_be_resolved_refuses_the_install(self, helper, tls_root, monkeypatch):
@@ -2356,9 +2357,14 @@ class TestAFailedOwnershipAbortsBeforeTheReplace:
         root = tmp_path / "tls"
         monkeypatch.setattr(helper, "_TLS_ROOT", str(root))
         monkeypatch.setattr(helper, "_unit_account", lambda service: None)
-        monkeypatch.setattr(
-            os, "fchown", lambda fd, uid, gid: (_ for _ in ()).throw(PermissionError(1, "Operation not permitted"))
-        )
+
+        def refuse_files(fd, uid, gid):
+            if not stat.S_ISDIR(
+                os.fstat(fd).st_mode
+            ):  # (the directories are chowned by descriptor first and succeed; the members are what fails)
+                raise PermissionError(1, "Operation not permitted")
+
+        monkeypatch.setattr(os, "fchown", refuse_files)
         _code, out, _ = _run(helper, "install-tls", {"service": "dhcp4", "files": _tls_files()})
         assert out["ok"] is False and out["error"] == "write-failed"
         assert sorted(n for n in os.listdir(root / "dhcp4") if not n.endswith(".jen_lock")) == []
@@ -2379,8 +2385,8 @@ class TestAFailedOwnershipAbortsBeforeTheReplace:
         monkeypatch.setattr(helper, "_TLS_ROOT", str(root))
         monkeypatch.setattr(helper, "_unit_account", lambda service: None)
         monkeypatch.setattr(
-            os, "chown", lambda path, uid, gid: (_ for _ in ()).throw(PermissionError(1, "Operation not permitted"))
-        )
+            os, "fchown", lambda fd, uid, gid: (_ for _ in ()).throw(PermissionError(1, "Operation not permitted"))
+        )  # (build 18: by descriptor, so the directories' ownership is `fchown` too)
         _code, out, _ = _run(helper, "install-tls", {"service": "dhcp4", "files": _tls_files()})
         assert out["ok"] is False and out["error"] == "helper-exception"
 
@@ -2429,7 +2435,7 @@ class TestInstallTlsIsASetCommit:
         real = os.replace
 
         def failing(src, dst, *a, **k):
-            if str(dst) == str(installed / order[n]):
+            if os.path.basename(str(dst)) == order[n]:
                 raise OSError(28, "No space left on device")
             return real(src, dst, *a, **k)
 
@@ -2444,11 +2450,11 @@ class TestInstallTlsIsASetCommit:
         real = helper._private_tempfile
         calls = {"n": 0}
 
-        def failing(directory, prefix):
+        def failing(directory, prefix, dir_fd=None):
             calls["n"] += 1
             if calls["n"] == n + 1:
                 raise OSError(5, "Input/output error")
-            return real(directory, prefix)
+            return real(directory, prefix, dir_fd)
 
         monkeypatch.setattr(helper, "_private_tempfile", failing)
         _code, out, _ = _run(helper, "install-tls", {"service": "dhcp4", "files": self.NEW})
@@ -2461,7 +2467,7 @@ class TestInstallTlsIsASetCommit:
         for failing_member in ("ca.crt", "server.crt", "server.key"):
 
             def failing(src, dst, *a, failing_member=failing_member, **k):
-                if str(dst) == str(installed / failing_member):
+                if os.path.basename(str(dst)) == failing_member:
                     raise OSError(28, "No space left on device")
                 return real(src, dst, *a, **k)
 
@@ -2477,14 +2483,14 @@ class TestInstallTlsIsASetCommit:
         real_install = helper._install_private
 
         def fail_the_third(src, dst, *a, **k):
-            if str(dst) == str(installed / "server.key"):
+            if os.path.basename(str(dst)) == "server.key":
                 raise OSError(28, "No space left on device")
             return real_replace(src, dst, *a, **k)
 
-        def fail_restoring_the_ca(path, data, uid=None, gid=None, mode=0o600):
-            if str(path) == str(installed / "ca.crt"):
+        def fail_restoring_the_ca(path, data, uid=None, gid=None, mode=0o600, **kw):
+            if os.path.basename(str(path)) == "ca.crt":
                 raise OSError(5, "Input/output error")
-            return real_install(path, data, uid, gid, mode)
+            return real_install(path, data, uid, gid, mode, **kw)
 
         monkeypatch.setattr(os, "replace", fail_the_third)
         monkeypatch.setattr(helper, "_install_private", fail_restoring_the_ca)
