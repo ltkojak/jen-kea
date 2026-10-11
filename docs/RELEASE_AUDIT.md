@@ -73,6 +73,28 @@ transaction become invisible? (`tests/test_invariant_sweeps.py` S10 lists the `e
 **(m) Prove or keep apart.** A finding is *proved* when it has a `file:line`, the invariant it violates and the triggering sequence, ideally as a failing test. Anything less is a *hypothesis*, kept in a separate list
 and never reported as a defect.
 
+## The second pass, as the prompt
+
+The author of a release candidate runs the second pass THEMSELVES, as a subagent (the Agent tool), after the code commits are pushed and CI is green, and before the release commit.
+The prompt is below, verbatim; replace `<repo root>` and `<previous tag>` and change nothing else (the method is the prompt - a paraphrase loses the questions).
+
+```
+You are an independent adversarial release reviewer for Jen at <repo root>. Read-only: change no file; report findings only. Scope: `git diff <previous tag>..HEAD`
+(run it). Read docs/RELEASE_AUDIT.md first and apply its steps (h)-(m). Read the WHOLE diff, then the CURRENT text of every changed function in full - never the hunk alone.
+For every piece of evidence, guard or check the diff adds, ask what else could produce the same observation without the thing it is taken to prove; for every
+check-then-act, name what could change between the two; for every except, say whether a failure reads as success; for every new state or field, find every reader and
+writer; for every multi-step operation, inject a failure at each step and say what state is left and whether it is visible. Compare what the tests pin with what the
+code does: name a test that pins a weak rule as desired and a behaviour no test asserts. Output a numbered list, most severe first, each with: severity (P1 = a scoped
+or lower-role account reads or changes data it may not, auth or CSRF bypass, root reads or writes outside a wall, data loss, a daemon left in a wrong state, a loop
+that dies silently, a 500 any user can trigger with ordinary input; P2 = wrong behaviour a user sees, a failure read as success, inconsistent answers, a missing
+validation with no exploit; P3 = nit), the exact file:line in the CURRENT tree, a concrete triggering sequence, and whether a test pins the current behaviour. Then a
+short list of what you checked and found correct. Keep hypotheses in a separate list. No padding: say so when nothing is at a severity.
+```
+
+The author's rule: a P1 or P2 from the second pass is fixed in a fixup commit before the release commit (and CI is green again); a P3 is fixed when it is a one-liner, else added
+to the register; the release report names the second pass's findings by number and says what was done with each. A finding that turns out wrong is said to be wrong, with the
+`file:line` that refutes it - it is not silently dropped.
+
 ## The output
 
 The chart Fable already produces - each finding **confirmed** or **refuted** with `file:line` - plus the registry ids touched, with the second pass's findings marked by source. A release goes to a reviewer

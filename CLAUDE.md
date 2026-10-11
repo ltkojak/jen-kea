@@ -249,6 +249,8 @@ Two logical databases, possibly on different hosts:
 Access via context managers in `jen/models/db.py`: `jen_db()`, `kea_db()`, `kea6_db()`.
 Each yields a pooled connection and auto commit/rollback/return. `kea6_db()` reuses the
 `kea_db` pool when v6 targets the same database (the common case).
+**Every connection runs in UTC** (v5.69.0-beta.3: `SESSION_TIME_ZONE_INIT` is an `init_command` on every pool, direct fallback and export helper; a connection opened any other way
+fails `tests/test_db_session.py`), so `NOW()` in SQL and `datetime.now(timezone.utc)` in Python are one clock - never `date.today()` or a naive local time for anything stored or compared.
 
 ### Kea hosts (SSH)
 

@@ -114,6 +114,14 @@ behind a `[subnets6]` section: with the flag off the lease, device and reservati
 page gets a fixed sentence and the Jen log gets the exception (LEAK-001, sweep S11). (6) What root writes by pathname inside a service-writable directory is written by `mkstemp` + `os.replace`
 (the updater's layout-check cache), and the legacy `sudo tail` is handed only a `*.log` under /var/log, the same wall the helper has.
 
+**What the hygiene audit settled about data, the clock and alerts (v5.69.0-beta.3, Q172).** Every connection Jen opens runs in UTC (`SET time_zone = '+00:00'`
+as `init_command` on the three pools, the three direct fallbacks and the export helpers): Python is UTC throughout and Kea writes `lease4.expire` in UTC, so `NOW()` in a query and
+`datetime.now(utc)` are one clock whatever zone the database host is in (TIME-001). A Problems sweep is one transaction per server - events, the alert attempt of each due key and the
+watermark - committed BEFORE the send, with only a delivered alert writing again, so a database failure after delivery is "attempted, outcome unknown" and never a second alert or a
+second count of the same lines. The alert kinds that remembered their state in a Python variable (`stale_reservation`, `config_drift_*`, `kea_down`) keep it in `settings` and are judged by
+what `send_alert` answered, like every threshold alert (ALERT-001); the first sweep after this release can re-send each of them once, because the old state was memory. A channel's
+token, URL or password never lands in text. A change set keys its bookkeeping by server id (two servers may share a name). A plugin is registered whole or not at all (PLUG-001).
+
 **Step-up auth (v5.17.0 / Q6).** A live session is not enough for the
 routes that manage a user's own MFA (enroll a second factor, regenerate
 backup codes, add/remove a trusted device, an admin's MFA reset).

@@ -201,22 +201,45 @@ that made the change is rebuilt and stays. `token_version` moves in the same sta
 
 ### DEF-002 - Pool use is the leases inside the pools, everywhere it is derived
 **Rule.** A pool's use is the number of leases inside the pools, on every surface that shows or alerts on it; an unmeasured pool use is never replaced by another number.
-**Established.** Q154, Q155.
+**Established.** Q154, Q155, Q172 (Health's "near exhaustion" is the alert's own `pool_exhaustion_free` free addresses, no longer a flat 95 %).
 **Enforced at.** The pool-use derivation and its whole-tree source test.
 **Tests.**
 - `tests/test_pool_used.py::TestNoPathReadsActiveLeasesAsPoolUse`
 - `tests/test_pool_used.py::TestAnUnmeasuredPoolUseIsNeverReplacedByAnotherNumber`
+- `tests/test_health_center.py::TestPoolUtilization`
 
 ## Delivery, configuration, files, migrations, transactions, liveness
 
 ### ALERT-001 - Attempted, delivered and recorded are different states
 **Rule.** An alert's date or state is persisted only on delivery: a channel that failed leaves the alert due again, and a recovery follows a delivered warning.
-**Established.** Q154, Q155, Q156, Q157.
-**Enforced at.** `jen/services/alerts.py` (`notify_condition`, the daily summary).
+**Established.** Q154, Q155, Q156, Q157, Q172 (every kind: `stale_reservation`, `config_drift_*` and `kea_down` / `kea_up` now go through `notify_condition` and its persisted state; the Problems sweep marks an alert attempted in the same transaction as its events and watermark, before the send).
+**Enforced at.** `jen/services/alerts.py` (`notify_condition`, the daily summary, `check_kea_status_alert`, `check_stale_reservation_alerts`, `check_drift_alerts`), `jen/services/client_problems.py::sweep`.
 **Tests.**
 - `tests/test_alert_delivery.py::TestEveryChannelFails`
+- `tests/test_alert_delivery.py::TestEventStyleAlertsRemember`
+- `tests/test_client_problems_db.py::TestASweepIsOneTransaction`
 - `tests/test_alert_delivery.py::TestTheDailySummaryIsDueAtOrAfterItsTime`
 - `tests/test_alert_delivery.py::TestTheRecoveryFollowsADeliveredWarning`
+
+### TIME-001 - Jen's clock is UTC, in SQL and in Python
+**Rule.** Every connection Jen opens - the pooled ones, the direct fallbacks, the export and migration helpers - runs `SET time_zone = '+00:00'`, so `NOW()`, `CURRENT_TIMESTAMP` and Kea's own `lease4.expire`
+are read on the clock Python uses; "today" is the UTC date; the Problems sweep's `now` is whole seconds (its columns are DATETIME(0)). A database host's zone changes nothing Jen shows or decides.
+**Established.** Q172.
+**Enforced at.** `jen/models/db.py` (`SESSION_TIME_ZONE_INIT` on all six connection sites) and `jen/services/dbexport.py`; `client_problems._now()` / `sweep`; `capacity.forecast`.
+**Tests.**
+- `tests/test_db_session.py::TestEveryConnectionIsUtc`
+- `tests/test_db_session.py::TestNoConnectionIsOpenedWithoutIt`
+- `tests/test_client_problems_db.py::TestTheSweepsClockIsWholeSeconds`
+
+### PLUG-001 - A plugin is registered whole or not at all
+**Rule.** A plugin's blueprints are registered only after its `register(app)` returned: a `register` that raises leaves no route, no job and a per-process failure marker (`plugin_load_failed`, the exception CLASS only)
+that the Plugins page shows. A required OS package counts as present when any binary it provides is on PATH (`OS_PACKAGE_BINARIES`), and every package a bundled manifest declares is in that map and in the root
+updater's allowlist.
+**Established.** Q172.
+**Enforced at.** `jen/services/plugins.py` (`_run_register_blueprints_last`, `_load_plugin`, `missing_os_packages`).
+**Tests.**
+- `tests/test_plugin_registry.py::TestBlueprintsAreRegisteredLast`
+- `tests/test_plugin_registry.py::TestOsPackageBinaryMap`
 
 ### CFG-001 - Every config write holds one lock across read-modify-replace, and the installer honours the same flock
 **Rule.** Jen's config file is written under one lock for the whole read-modify-replace (a thread lock and an advisory `flock` on the lock file), and `install.sh --configure` takes the same one.
@@ -255,6 +278,7 @@ later one fails; a revert that cannot finish is a persistent, named rollback fai
 **Tests.**
 - `tests/test_kea_changeset.py::TestApplyChangeRevert`
 - `tests/test_kea_changeset.py::TestFailedRestartRollsBack`
+- `tests/test_kea_changeset.py::TestTwoServersWithOneNameAreTwoTargets`
 - `tests/test_author_config_changeset.py::TestAnAuthoredChangeIsAllOrNothing`
 
 ### BG-001 - Health reports what is proven, never what was once attempted
@@ -278,11 +302,12 @@ fails CLOSED there (a refusal, not a permission). A failed settings read answers
 ### LEAK-001 - A route never shows what a broad `except` caught
 **Rule.** In `jen/routes/`, the name bound by `except Exception as e` is used only to log or to name its class: the text of a driver, `requests` or SSH error carries URLs with their query strings, account and
 host names and paths. The reviewed list is empty.
-**Established.** Q171 (sweep S11; the older line scanner in `test_no_raw_exception_leaks.py` stays).
+**Established.** Q171 (sweep S11; the older line scanner in `test_no_raw_exception_leaks.py` stays), Q172 (an alert channel's token, webhook URL or password is redacted from `alert_log.error`, the event detail, the log and the test button; a transport error is stored by class).
 **Enforced at.** The route that catches: `logger.exception(...)` and a fixed sentence.
 **Tests.**
 - `tests/test_invariant_sweeps.py::TestS11ARouteNeverShowsWhatABroadExceptCaught`
 - `tests/test_q171_access.py::TestDdnsLookupErrorNeverCarriesTheProviderUrl`
+- `tests/test_alert_delivery.py::TestAChannelsSecretNeverLandsInText`
 - `tests/test_no_raw_exception_leaks.py::TestNoUnexplainedRawExceptionLeaksInRoutes`
 
 ### STATE-001 - A new state on a stored object is a definition
