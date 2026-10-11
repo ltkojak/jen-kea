@@ -28,3 +28,21 @@ cannot see a Kea unit of either name the packages use, the existing owner and mo
 A restore that cannot be held up: the timer's unit now stops after two minutes, the restore waits at most a minute for the helper's lock (now in `/var/lib/jen-kea-helper/locks`, with the old
 one beside the config still taken for this one build) and fails that minute's tick loudly if it cannot, and a restart is recorded on disk before it is issued. A symlink at a config, log or
 TLS path is refused (`symlink` in the helper's reply) instead of followed.
+
+## Access control and secrets: the database cards are the superadmin's, and a password change signs out the account's older sessions
+
+One step (5.69.0-beta.2), and nothing to do for it: this release closes the places where a role or a subnet scope was weaker than the page said. What you will notice:
+
+**The database cards, the Kea6 card and the restart are the superadmin's, with a fresh password.** Where Jen's own database, Kea's database and Kea's IPv6 database point, and the **Restart Jen** button, now need a superadmin who confirmed their password in the last ten minutes (Jen asks for it the first time). An admin still sees where each database points, and the restart banner tells them a superadmin restarts Jen. An admin who changed these before has to ask a superadmin now. Creating a subnet needs access to every subnet: an admin limited to some subnets gets a sentence saying so.
+
+**DDNS: scoped users get the Status tab alone.** A user whose account is limited to some subnets sees the dhcp4 to D2 table on the DDNS page and nothing more: no log tail, no Mode and Log card, no hostname lookup, and no Verify tab (it resolves any name or address through the Jen host). Viewers see Status only, as before. Everyone else keeps every tab.
+
+**`[ddns] log_path` must be a `.log` file under `/var/log`.** The Settings form refuses anything else, and so does the legacy read over SSH (the Kea host helper already did). If you hand-edited the path in `jen.config` to a file that does not end in `.log`, move the log or rename the setting's target. A blank field in the DDNS form now clears its setting, and the API token is kept unless you tick **Remove the saved API token**.
+
+**The MFA policy only gets stricter for an admin.** An admin may raise it (Optional, Required for Admins, Required for All Users) and keep it, never lower it; stepping down, including to Off, is the superadmin's, and the page greys out the options an admin may not pick.
+
+**The API answers a hidden object like a missing one.** With a key limited to some subnets, `DELETE /api/v1/reservations/<id>` and `PATCH /api/v1/devices/<mac>` for an object outside those subnets now return the same 404 as an id or MAC that does not exist, where they returned 403. A script that treated 403 as "not allowed" should treat 404 the same way. The pages say "not found" the same way for a lease, reservation, device or subnet a restricted admin cannot see.
+
+**One sign-out after a password change.** When a password is changed, the account's older sessions, in any browser, end at their next request and sign in again; the session that made the change stays. Sessions that are open when you upgrade are not signed out.
+
+**IPv6 pages follow the IPv6 switch.** With IPv6 switched off, `?view=v6` shows the IPv4 page and the IPv6 add and edit routes answer 404, even when the config has a `[subnets6]` section.
