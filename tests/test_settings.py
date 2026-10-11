@@ -5,6 +5,8 @@ Tests for global settings — branding, session timeout, MFA mode,
 alert templates, and the settings cache.
 """
 
+import pytest
+
 from jen.models.user import _invalidate_settings_cache, get_global_setting, set_global_setting
 
 
@@ -543,3 +545,127 @@ class TestActionMenuUnifiedUI:
             assert b'"btn-act-edit' not in resp.data
             assert b'"btn-act-pin' not in resp.data
             assert b'"btn-act-del' not in resp.data
+
+
+class TestTheDailySummaryTimeIsHHMMInUtc:
+    """v5.69.0-beta.3 (Q172, item 3): "7am" was saved and silently never matched; the field is HH:MM, in UTC, and a refusal is audited."""
+
+    def test_7am_is_refused_and_audited_and_nothing_is_saved(self, logged_in_client, db):
+        set_global_setting("daily_summary_time", "06:30")
+        _invalidate_settings_cache()
+        r = logged_in_client.post(
+            "/settings/alerts/save-global",
+            data={"summary_time": "7am", "pool_exhaustion_free": "5", "alert_threshold_pct": "80"},
+            follow_redirects=True,
+        )
+        assert b"HH:MM in UTC" in r.data
+        assert get_global_setting("daily_summary_time") == "06:30"
+        with db.cursor() as cur:
+            cur.execute("SELECT details FROM audit_log WHERE action='SAVE_ALERT_GLOBAL_REFUSED'")
+            rows = cur.fetchall()
+        assert len(rows) == 1 and "7am" in rows[0]["details"]
+
+    @pytest.mark.parametrize("bad", ["24:00", "7:5", "07:60", "", "07:00:00", "noon"])
+    def test_every_other_shape_is_refused_too(self, logged_in_client, bad):
+        set_global_setting("daily_summary_time", "06:30")
+        _invalidate_settings_cache()
+        logged_in_client.post(
+            "/settings/alerts/save-global",
+            data={"summary_time": bad, "pool_exhaustion_free": "5", "alert_threshold_pct": "80"},
+        )
+        assert get_global_setting("daily_summary_time") == "06:30"
+
+    def test_a_valid_time_is_saved_and_audited(self, logged_in_client, db):
+        logged_in_client.post(
+            "/settings/alerts/save-global",
+            data={"summary_time": "07:45", "pool_exhaustion_free": "5", "alert_threshold_pct": "80"},
+        )
+        _invalidate_settings_cache()
+        assert get_global_setting("daily_summary_time") == "07:45"
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) c FROM audit_log WHERE action='SAVE_ALERT_GLOBAL'")
+            assert cur.fetchone()["c"] == 1
+
+    def test_the_label_says_utc(self, logged_in_client):
+        body = logged_in_client.get("/settings/alerts").get_data(as_text=True)
+        assert "in UTC (HH:MM)" in body and "server local time" not in body
+
+
+class TestAWriteDuringAReloadIsNotHidden:
+    """v5.69.0-beta.3 (Q172, item 10): a write that lands while a reload's SELECT is in flight invalidates the cache; the reload must not then stamp the (older) rows fresh."""
+
+    def test_a_reload_that_a_write_overtook_is_not_stamped_fresh(self, monkeypatch):
+        import contextlib
+
+        from jen.models import db as dbmod
+        from jen.models import user as usermod
+
+        monkeypatch.setattr(
+            usermod, "_settings_cache", {}
+        )  # restored afterwards: the fake rows must not outlive the test
+        monkeypatch.setattr(usermod, "_settings_cache_ts", 0)
+        monkeypatch.setattr(usermod, "_settings_next_try_mono", 0)
+
+        class Cur:
+            def execute(self, *a, **k):
+                usermod._invalidate_settings_cache()  # a write lands, and invalidates, while the SELECT is in flight
+
+            def fetchall(self):
+                return [{"setting_key": "q172_probe", "setting_value": "old"}]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        class Conn:
+            def cursor(self):
+                return Cur()
+
+        @contextlib.contextmanager
+        def fake_jen_db():
+            yield Conn()
+
+        monkeypatch.setattr(dbmod, "jen_db", fake_jen_db)
+        assert usermod.get_global_setting("q172_probe", "dflt") == "old"
+        assert usermod._settings_cache_ts == 0, (
+            "stamped fresh although a write overtook the SELECT: the write would be hidden for a TTL"
+        )
+
+    def test_an_undisturbed_reload_is_stamped(self, monkeypatch):
+        import contextlib
+
+        from jen.models import db as dbmod
+        from jen.models import user as usermod
+
+        monkeypatch.setattr(
+            usermod, "_settings_cache", {}
+        )  # restored afterwards: the fake rows must not outlive the test
+        monkeypatch.setattr(usermod, "_settings_cache_ts", 0)
+
+        class Cur:
+            def execute(self, *a, **k):
+                pass
+
+            def fetchall(self):
+                return [{"setting_key": "q172_probe", "setting_value": "v"}]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        class Conn:
+            def cursor(self):
+                return Cur()
+
+        @contextlib.contextmanager
+        def fake_jen_db():
+            yield Conn()
+
+        monkeypatch.setattr(dbmod, "jen_db", fake_jen_db)
+        usermod.get_global_setting("q172_probe", "dflt")
+        assert usermod._settings_cache_ts > 0
+        usermod._invalidate_settings_cache()

@@ -492,6 +492,38 @@ def encode_channel_config(config):
     return json.dumps(crypto.encrypt_secret(json.dumps(config)))
 
 
+# v5.69.0-beta.3 (Q172, item 4): a channel's token, webhook URL or password rides in the REQUEST (a Telegram token is in the URL path, a Slack or Discord webhook IS a URL),
+# and `requests` puts the URL in its error text. That text was stored in alert_log.error, in the event detail, in the log and - for the test button - flashed to the page, and
+# /settings/logs?tab=alerts shows alert_log. Nothing a channel's config holds as a secret is written as text any more.
+_SECRET_KEY_HINTS = ("token", "pass", "secret", "key", "url", "webhook", "auth", "header_value")
+
+
+def redact(text, config=None) -> str:
+    """`text` with every secret-looking value of a channel's `config` (a key naming a token, key, password, secret, URL, webhook or header value - four characters or
+    longer) replaced by `***`, in its plain and its percent-encoded forms, longest first."""
+    from urllib.parse import quote
+
+    out = str(text)
+    values = set()
+    for name, value in (config or {}).items():
+        if isinstance(value, str) and len(value) >= 4 and any(hint in str(name).lower() for hint in _SECRET_KEY_HINTS):
+            values.update((value, quote(value, safe=""), quote(value)))
+    for value in sorted(values, key=len, reverse=True):
+        out = out.replace(value, "***")
+    return out
+
+
+def _transport_error_text(error, config=None) -> str:
+    """What is stored and shown for a failed send. A transport error (anything `requests` or the socket layer raised: its text is a URL, an address, a certificate
+    path) is stored as its CLASS - `ConnectionError`, `Timeout`, `SSLError`. A message Jen's own sender wrote about a reply (`Telegram error: Bad Request: ...`) is
+    kept, redacted."""
+    import smtplib
+
+    if isinstance(error, (requests.RequestException, OSError, smtplib.SMTPException)):
+        return type(error).__name__
+    return redact(str(error), config)
+
+
 def send_alert(alert_type, log_result=True, subnet_id=None, scoped=False, **kwargs):
     """Send alert to all enabled channels that handle this alert type.
 
@@ -533,8 +565,8 @@ def send_alert(alert_type, log_result=True, subnet_id=None, scoped=False, **kwar
             elif ctype == "discord":
                 ok = _send_discord_channel(message, config)
         except Exception as e:
-            error = str(e)
-            logger.error(f"Alert send error ({ctype}): {e}")
+            error = _transport_error_text(e, config)
+            logger.error(f"Alert send error ({ctype}): {error}")
         if log_result:
             try:
                 with __jen_db_ctx() as db:
@@ -615,16 +647,19 @@ def _send_email_channel(message, alert_type, config):
     port = int(config.get("smtp_port", 587))
     user = config.get("smtp_user", "")
     password = config.get("smtp_pass", "")
-    from_addr = config.get("from_addr", user)
-    to_addr = config.get("to_addr", "")
-    if not host or not to_addr:
+    # a stored-but-empty from_addr is no from_addr (`config.get("from_addr", user)` returned "" for it); `to_addr` may list several recipients (v5.69.0-beta.3, Q172)
+    from_addr = (config.get("from_addr") or "").strip() or user
+    recipients = [a.strip() for a in str(config.get("to_addr", "")).split(",") if a.strip()]
+    if not host or not recipients:
         return False
+    if port == 465:
+        raise Exception("Port 465 (implicit TLS) is not supported - use 587 with STARTTLS, or 25")
     # Strip HTML tags for email subject, keep for body
     subject_text = re.sub(r"<[^>]+>", "", message.split("\n")[0])
     msg = MIMEMultipart("alternative")
     msg["Subject"] = f"Jen Alert: {subject_text}"
     msg["From"] = from_addr
-    msg["To"] = to_addr
+    msg["To"] = ", ".join(recipients)
     # Plain text version
     plain = re.sub(r"<[^>]+>", "", message).replace("\n", "\n")
     # HTML version
@@ -638,7 +673,7 @@ def _send_email_channel(message, alert_type, config):
             server.starttls()
         if user and password:
             server.login(user, password)
-        server.sendmail(from_addr, to_addr, msg.as_string())
+        server.sendmail(from_addr, recipients, msg.as_string())
     return True
 
 
@@ -658,7 +693,7 @@ def _send_slack_channel(message, config):
     slack_text = html.unescape(slack_text)
     resp = requests.post(webhook_url, json={"text": slack_text}, timeout=10)
     if resp.status_code != 200:
-        raise Exception(f"Slack error {resp.status_code}: {resp.text}")
+        raise Exception(f"Slack error {resp.status_code}: {resp.text[:200]}")
     return True
 
 
@@ -1324,6 +1359,7 @@ def check_utilization_alerts(cur, dhcp4_cfg) -> None:
     threshold = int(__get_global_setting("alert_threshold_pct", "80"))
     exhaustion = int(__get_global_setting("pool_exhaustion_free", "5"))
     recover_at = exhaustion + max(2, exhaustion // 5)
+    present = set()  # subnets Jen knows AND Kea's config has with a pool: the ones a state may stay active for
     for s, _sn in __iter_subnet4(dhcp4_cfg):
         sid = s["id"]
         info = extensions.SUBNET_MAP.get(sid)
@@ -1332,6 +1368,7 @@ def check_utilization_alerts(cur, dhcp4_cfg) -> None:
         pool_size = __pools.total_pool_size(s.get("pools", []))
         if pool_size <= 0:
             continue
+        present.add(sid)
         used = __pools.consumption(cur, sid, s.get("pools", []))
         pct = round(used / pool_size * 100)
         free = pool_size - used
@@ -1348,9 +1385,50 @@ def check_utilization_alerts(cur, dhcp4_cfg) -> None:
         exhausted = free <= exhaustion or (alert_state("pool_exhaustion", sid) and free < recover_at)
         warn = {"subnet": info["name"], "cidr": info["cidr"], "free": free, "subnet_id": sid}
         notify_condition("pool_exhaustion", sid, exhausted, kwargs=warn, ok_type="pool_exhaustion_ok")
+    _end_states_of_departed_subnets(present)
     # a subnet that is no longer in Jen's map keeps no state (v5.68.0-beta.21, Q156)
     for orphan_type in ("utilization_high", "pool_exhaustion"):
         _clear_orphan_states(orphan_type, extensions.SUBNET_MAP)
+
+
+def _end_states_of_departed_subnets(present) -> None:
+    """A subnet Jen still lists that has left Kea's config (or lost its pools) keeps `utilization_high` / `pool_exhaustion` ACTIVE for ever: the loop above never
+    visits it, so its condition is never judged false and the operator is never told it is over (v5.69.0-beta.3, Q172). Each such state is ended through
+    `notify_condition(..., False)` - the `_ok` is sent only if the warning was delivered, and a recovery nobody took is retried - with the sentence on the subnet's name."""
+    for alert_type, ok_type in (("utilization_high", "utilization_ok"), ("pool_exhaustion", "pool_exhaustion_ok")):
+        for key in _state_keys(alert_type):
+            try:
+                sid = int(key)
+            except ValueError:
+                continue
+            info = extensions.SUBNET_MAP.get(sid)
+            if sid in present or info is None:
+                continue  # still judged by the loop, or not in Jen's map at all (the orphan cleanup's)
+            state = _load_state(alert_type, key)
+            if not (state["a"] or state["r"]):
+                continue
+            gone = {
+                "subnet": f"{info['name']} (no longer in Kea's config)",
+                "cidr": info["cidr"],
+                "pct": "n/a",
+                "used": "-",
+                "total": "-",
+                "free": "n/a",
+                "subnet_id": sid,
+            }
+            notify_condition(alert_type, key, False, kwargs=gone, ok_type=ok_type, ok_kwargs=gone)
+
+
+def _state_keys(alert_type) -> list:
+    """The keys that have a stored `alert_state:<alert_type>:<key>` row."""
+    prefix = f"alert_state:{alert_type}:"
+    try:
+        with __jen_db_ctx() as jdb, jdb.cursor() as jcur:
+            jcur.execute("SELECT setting_key FROM settings WHERE setting_key LIKE %s", (prefix + "%",))
+            return [r["setting_key"][len(prefix) :] for r in jcur.fetchall() if r["setting_key"].startswith(prefix)]
+    except Exception as e:
+        logger.error(f"alert state: could not list {alert_type} keys: {e}")
+        return []
 
 
 def _check_packet_health_alerts() -> None:
@@ -1427,9 +1505,15 @@ def _build_daily_summary() -> str:
     return "\n".join(lines)
 
 
+def _summary_audience() -> bool:
+    """Does any enabled channel handle `daily_summary`?"""
+    return any(channel_handles_alert(c, "daily_summary") for c in get_active_channels())
+
+
 def send_daily_summary() -> str:
     """Build (once per day) and send the daily summary. Returns "delivered" (at least one ELIGIBLE channel took it), "undelivered" (it was built
-    and nobody did - every channel failed, or none handles `daily_summary`) or "failed" (it could not be built).
+    and nobody did - every channel that handles it failed), "quiet" (no channel handles `daily_summary`: nothing is built, nothing is warned about, the day is
+    simply done) or "failed" (it could not be built).
 
     v5.68.0-beta.22 (Q157): it returned True after `send_alert(...)` whatever the channels answered, and the loop then recorded the day as sent -
     every other notification since beta.19 is judged by `_delivered(...)`, this one was not. The built text is kept in `_pending_summary` so a retry
@@ -1437,6 +1521,11 @@ def send_daily_summary() -> str:
     global _pending_summary
     today = _utcnow().date()
     try:
+        # eligibility BEFORE building (v5.69.0-beta.3, Q172): with no channel that handles `daily_summary` there is nobody to tell - a quiet day, not a warning an hour
+        # for ever and a query-heavy summary built to be thrown away
+        if not _summary_audience():
+            _pending_summary = None
+            return "quiet"
         if _pending_summary is None or _pending_summary[0] != today:
             _pending_summary = (today, _build_daily_summary())
         results = send_alert("daily_summary", summary=_pending_summary[1])
@@ -1724,6 +1813,171 @@ def _seed_known_macs(known_macs: set) -> bool:
     return True
 
 
+_DEVICE_UPSERT = """
+    INSERT INTO devices (mac, last_ip, last_hostname, last_subnet_id, last_seen, manufacturer, device_type, device_icon)
+    VALUES (%s, %s, %s, %s, NOW(), %s, %s, %s)
+    ON DUPLICATE KEY UPDATE
+        last_ip=%s, last_hostname=%s, last_subnet_id=%s, last_seen=NOW(),
+        manufacturer=IF(manufacturer_override IS NULL, %s, manufacturer),
+        device_type=IF(manufacturer_override IS NULL, %s, device_type),
+        device_icon=IF(manufacturer_override IS NULL, %s, device_icon)
+"""
+DEVICE_COMMIT_EVERY = 200
+
+
+def update_device_inventory(leases) -> dict:
+    """Upsert the device inventory from the current leases (v5.69.0-beta.3, Q172 item 2; extracted from `check_alerts` so it can be tested).
+
+    It used to be ONE transaction for every lease, and `format_mac` joins every byte: a lease whose hardware address is longer than six bytes (a client id that fits
+    `lease4.hwaddr`, VARBINARY(20)) made `devices.mac` VARCHAR(17) raise, the whole batch rolled back every thirty seconds, and every device's `last_seen` froze until
+    the stale-reservation alerts stormed. A lease whose address is not six bytes is now SKIPPED, with one warning per sweep that counts them; each row is its own `try`,
+    so a row that fails (a value too long for its column, a lock) costs only itself; and the batch commits every 200 rows so a late failure cannot undo the early ones.
+    Returns {"updated", "skipped", "failed"}."""
+    result = {"updated": 0, "skipped": 0, "failed": 0}
+    try:
+        with __jen_db_ctx() as jdb:
+            with jdb.cursor() as jcur:
+                since_commit = 0
+                for row in leases:
+                    hw = row.get("hwaddr")
+                    if not hw or len(hw) != 6:
+                        result["skipped"] += 1
+                        continue
+                    mac = __format_mac(hw)
+                    try:
+                        manufacturer, device_type, device_icon = __classify_device(mac, row["hostname"] or "")
+                        jcur.execute(
+                            _DEVICE_UPSERT,
+                            (
+                                mac,
+                                row["ip"],
+                                row["hostname"],
+                                row["subnet_id"],
+                                manufacturer,
+                                device_type,
+                                device_icon,
+                                row["ip"],
+                                row["hostname"],
+                                row["subnet_id"],
+                                manufacturer,
+                                device_type,
+                                device_icon,
+                            ),
+                        )
+                        result["updated"] += 1
+                    except Exception as e:
+                        result["failed"] += 1
+                        logger.error(f"Device tracking: {mac} was not updated: {type(e).__name__}")
+                    since_commit += 1
+                    if since_commit >= DEVICE_COMMIT_EVERY:
+                        jdb.commit()
+                        since_commit = 0
+            jdb.commit()
+    except Exception as e:
+        logger.error(f"Device tracking error: {e}")
+    if result["skipped"]:
+        logger.warning(
+            f"Device tracking: {result['skipped']} lease(s) skipped this sweep - the hardware address is not six bytes, so it is not a MAC"
+        )
+    return result
+
+
+def check_kea_status_alert(srv, srv_up) -> str:
+    """`kea_down` / `kea_up` for one server, through the same persisted state every threshold alert has (v5.69.0-beta.3, Q172). It was `last_kea_status`, a dict in this
+    process: a restart forgot that Kea was down and said so again, and `send_alert`'s answer was never looked at - a `kea_down` nobody took was never retried, and its
+    `kea_up` was sent for a warning nobody had received."""
+    name = srv["name"]
+    return notify_condition(
+        "kea_down",
+        srv["id"],
+        not srv_up,
+        kwargs={"server_name": name},
+        ok_type="kea_up",
+        ok_kwargs={"server_name": name},
+    )
+
+
+def check_stale_reservation_alerts(cur) -> None:
+    """`stale_reservation` for every device not seen for `stale_device_days` that has a reservation, once - recorded as told only when a channel TOOK it. The set of
+    macs already told was `alerted_stale_macs`, local to `check_alerts`: a restart told every one of them again, and an alert nobody received was recorded as sent.
+    `cur` is an open Kea-database cursor (the reservation lookup)."""
+    stale_days = int(__get_global_setting("stale_device_days", "30"))
+    with __jen_db_ctx() as jdb, jdb.cursor() as jcur:
+        jcur.execute(
+            "SELECT mac, last_seen, DATEDIFF(NOW(), last_seen) as days FROM devices WHERE last_seen < DATE_SUB(NOW(), INTERVAL %s DAY)",
+            (stale_days,),
+        )
+        stale_rows = jcur.fetchall()
+    live = set()
+    for row in stale_rows:
+        # the reservation is by hardware address (identifier type 0): the same bytes as another identifier type would be another client
+        cur.execute(
+            "SELECT inet_ntoa(ipv4_address) AS ip, hostname, dhcp4_subnet_id FROM hosts WHERE dhcp_identifier=UNHEX(%s) AND dhcp_identifier_type=0",
+            (row["mac"].replace(":", ""),),
+        )
+        res = cur.fetchone()
+        if not res:
+            continue
+        live.add(row["mac"])
+        notify_condition(
+            "stale_reservation",
+            row["mac"],
+            True,
+            kwargs={
+                "ip": res["ip"] or "",
+                "mac": row["mac"],
+                "hostname": safe_text(res["hostname"]) if res["hostname"] else "",
+                "days": row["days"],
+                "subnet_id": res["dhcp4_subnet_id"],
+            },
+        )
+    # a device that was seen again, lost its reservation or was removed is no longer stale: its record goes, and it may be told about again later
+    _clear_orphan_states("stale_reservation", live)
+
+
+_DRIFT_KNOWN = "alert_state:event:drift_issues"
+
+
+def check_drift_alerts(issues=None) -> None:
+    """`config_drift_detected` once when an issue appears and `config_drift_resolved` once when it ends, through the persisted state (v5.69.0-beta.3, Q172) - the
+    issues last seen were `last_drift_issues`, local to `check_alerts`, so a restart re-announced every standing issue, and neither send was checked. The message of
+    each issue is kept beside its state (the issue is gone when its resolution is told) until that resolution is delivered or never needed."""
+    import json
+
+    from jen.services.config_drift import check_config_drift, issue_key
+
+    current = {issue_key(i): i for i in (check_config_drift() if issues is None else issues)}
+    try:
+        known = json.loads(__get_global_setting(_DRIFT_KNOWN, "") or "{}")
+        if not isinstance(known, dict):
+            known = {}
+    except (TypeError, ValueError):
+        known = {}
+    kept = {}
+    for key, issue in current.items():
+        if key not in known or known[key].get("gone"):
+            __emit_event("drift.detected", subnet_id=issue["subnet_id"], detail=issue["message"])
+        details = {"message": issue["message"], "subnet_id": issue["subnet_id"]}
+        notify_condition(
+            "config_drift_detected", key, True, kwargs=details, ok_type="config_drift_resolved", ok_kwargs=details
+        )
+        kept[key] = {"message": issue["message"], "subnet_id": issue["subnet_id"]}
+    for key, old in known.items():
+        if key in current:
+            continue
+        if not old.get("gone"):
+            __emit_event("drift.resolved", subnet_id=old.get("subnet_id"), detail=old.get("message", ""))
+        details = {"message": old.get("message", ""), "subnet_id": old.get("subnet_id")}
+        notify_condition(
+            "config_drift_detected", key, False, kwargs=details, ok_type="config_drift_resolved", ok_kwargs=details
+        )
+        state = _load_state("config_drift_detected", key)
+        if state["a"] or state["r"]:  # a resolution still owed: keep the message until it lands
+            kept[key] = {**old, "gone": True}
+    if kept != known:
+        __set_global_setting(_DRIFT_KNOWN, json.dumps(kept, separators=(",", ":")))
+
+
 def check_alerts():
     import time
     from datetime import timedelta
@@ -1731,7 +1985,6 @@ def check_alerts():
     last_kea_status = {}
     last_seen_leases = {}  # ip -> {mac, hostname, subnet_id, is_reserved} — see diff_leases()
     known_macs = set()
-    alerted_stale_macs = set()
     first_run = True
     last_summary_date = (
         _summary_sent_date()
@@ -1744,7 +1997,6 @@ def check_alerts():
     )
     last_snapshot_time = 0
     last_ha_states = {}  # server_id -> last known HA state
-    last_drift_issues = {}  # issue_key -> issue dict, for detected-once/resolved-once alerting
 
     # Seed known_macs from devices table so restarts don't flood with "new device" alerts for every known device. v5.68.0-beta.21 (Q156): the seed
     # is retried at the top of each cycle until it succeeds - it ran once before the loop, so a Jen database that was down at start left it empty for the
@@ -1774,11 +2026,7 @@ def check_alerts():
                 for srv in extensions.KEA_SERVERS:
                     srv_id = srv["id"]
                     srv_up = __kea_is_up(server=srv)
-                    prev_status = last_kea_status.get(srv_id, True)
-                    if not srv_up and prev_status:
-                        send_alert("kea_down", server_name=srv["name"])
-                    elif srv_up and not prev_status:
-                        send_alert("kea_up", server_name=srv["name"])
+                    check_kea_status_alert(srv, srv_up)
                     last_kea_status[srv_id] = srv_up
 
                     # ── HA state monitoring ──
@@ -1796,6 +2044,7 @@ def check_alerts():
                                 )
                             last_ha_states[srv_id] = new_state
                 time.sleep(5)
+            _clear_orphan_states("kea_down", [srv["id"] for srv in extensions.KEA_SERVERS or []])
 
             kea_up = any(last_kea_status.values()) if last_kea_status else True
 
@@ -1854,45 +2103,7 @@ def check_alerts():
                             FROM lease4 l WHERE {active_lease4("l")}
                         """)
                     all_leases = cur.fetchall()
-                    try:
-                        with __jen_db_ctx() as jdb:
-                            with jdb.cursor() as jcur:
-                                for row in all_leases:
-                                    mac = __format_mac(row["hwaddr"])
-                                    manufacturer, device_type, device_icon = __classify_device(
-                                        mac, row["hostname"] or ""
-                                    )
-                                    jcur.execute(
-                                        """
-                                            INSERT INTO devices (mac, last_ip, last_hostname, last_subnet_id, last_seen,
-                                                                 manufacturer, device_type, device_icon)
-                                            VALUES (%s, %s, %s, %s, NOW(), %s, %s, %s)
-                                            ON DUPLICATE KEY UPDATE
-                                                last_ip=%s, last_hostname=%s,
-                                                last_subnet_id=%s, last_seen=NOW(),
-                                                manufacturer=IF(manufacturer_override IS NULL, %s, manufacturer),
-                                                device_type=IF(manufacturer_override IS NULL, %s, device_type),
-                                                device_icon=IF(manufacturer_override IS NULL, %s, device_icon)
-                                        """,
-                                        (
-                                            mac,
-                                            row["ip"],
-                                            row["hostname"],
-                                            row["subnet_id"],
-                                            manufacturer,
-                                            device_type,
-                                            device_icon,
-                                            row["ip"],
-                                            row["hostname"],
-                                            row["subnet_id"],
-                                            manufacturer,
-                                            device_type,
-                                            device_icon,
-                                        ),
-                                    )
-                            jdb.commit()
-                    except Exception as e:
-                        logger.error(f"Device tracking error: {e}")
+                    update_device_inventory(all_leases)
 
                     # ── Event stream + new-lease alerts (Q43) ──
                     # diff_leases() (pure, factored out) does the actual
@@ -1998,34 +2209,7 @@ def check_alerts():
 
                     # ── Stale reservation alerts ──
                     try:
-                        stale_days = int(__get_global_setting("stale_device_days", "30"))
-                        with __jen_db_ctx() as jdb, jdb.cursor() as jcur:
-                            jcur.execute(f"""
-                                        SELECT mac, last_seen, DATEDIFF(NOW(), last_seen) as days
-                                        FROM devices
-                                        WHERE last_seen < DATE_SUB(NOW(), INTERVAL {stale_days} DAY)
-                                    """)
-                            stale_rows = jcur.fetchall()
-                        for row in stale_rows:
-                            if row["mac"] not in alerted_stale_macs:
-                                # Check if has reservation
-                                mac_hex = row["mac"].replace(":", "")
-                                cur.execute(
-                                    "SELECT inet_ntoa(ipv4_address) AS ip, hostname, dhcp4_subnet_id "
-                                    "FROM hosts WHERE HEX(dhcp_identifier)=%s",
-                                    (mac_hex,),
-                                )
-                                res = cur.fetchone()
-                                if res:
-                                    send_alert(
-                                        "stale_reservation",
-                                        ip=res["ip"] or "",
-                                        mac=row["mac"],
-                                        hostname=safe_text(res["hostname"]) if res["hostname"] else "",
-                                        days=row["days"],
-                                        subnet_id=res["dhcp4_subnet_id"],
-                                    )
-                                    alerted_stale_macs.add(row["mac"])
+                        check_stale_reservation_alerts(cur)
                     except Exception as e:
                         logger.error(f"Stale reservation check error: {e}")
 
@@ -2044,20 +2228,7 @@ def check_alerts():
                     # pairing pattern as kea_down/kea_up and
                     # utilization_high/utilization_ok.
                     try:
-                        current_issues = {__drift_issue_key(i): i for i in __check_config_drift()}
-                        for key, issue in current_issues.items():
-                            if key not in last_drift_issues:
-                                send_alert(
-                                    "config_drift_detected", message=issue["message"], subnet_id=issue["subnet_id"]
-                                )
-                                __emit_event("drift.detected", subnet_id=issue["subnet_id"], detail=issue["message"])
-                        for key, issue in last_drift_issues.items():
-                            if key not in current_issues:
-                                send_alert(
-                                    "config_drift_resolved", message=issue["message"], subnet_id=issue["subnet_id"]
-                                )
-                                __emit_event("drift.resolved", subnet_id=issue["subnet_id"], detail=issue["message"])
-                        last_drift_issues = current_issues
+                        check_drift_alerts(__check_config_drift())
                     except Exception as e:
                         logger.error(f"Config drift check error: {e}")
 
@@ -2093,7 +2264,12 @@ def check_alerts():
                 if summary_due and (last_summary_try is None or now - last_summary_try >= summary_wait):
                     last_summary_try = now
                     outcome = send_daily_summary()
-                    if outcome == "delivered":
+                    if outcome == "quiet":
+                        last_summary_date = (
+                            today  # in memory only: if a channel is added today, tomorrow's summary is the first
+                        )
+                        summary_attempts, summary_wait = 0, dt.timedelta(minutes=15)
+                    elif outcome == "delivered":
                         last_summary_date = today
                         summary_attempts, summary_wait = 0, dt.timedelta(minutes=15)
                         if not __set_global_setting("daily_summary_sent", today.isoformat()):

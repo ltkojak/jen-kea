@@ -6,6 +6,7 @@ Alert channels, templates, and the alert-tuning settings.
 
 import json
 import logging
+import re
 
 from flask import flash, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
@@ -261,7 +262,8 @@ def delete_alert_channel(channel_id):
 @login_required
 @_admin_required
 def test_alert_channel(channel_id):
-
+    config = {}
+    name = "that channel"
     try:
         with __db.jen_db() as db, db.cursor() as cur:
             cur.execute("SELECT * FROM alert_channels WHERE id=%s", (channel_id,))
@@ -270,6 +272,7 @@ def test_alert_channel(channel_id):
             flash("Channel not found.", "error")
             return redirect(url_for("settings.settings_alerts"))
         config = __alerts.get_channel_config(channel)
+        name = channel["channel_name"]
         ctype = channel["channel_type"]
         test_msg = f"🔔 <b>Jen Test</b>\nTest message from channel: {channel['channel_name']}"
         if ctype == "telegram":
@@ -290,10 +293,11 @@ def test_alert_channel(channel_id):
             flash(f"Test message sent successfully to '{channel['channel_name']}'.", "success")
         else:
             flash(f"Test failed for '{channel['channel_name']}'.", "error")
-    except Exception:
-        # v5.69.0-beta.2 (Q171): requests puts the URL (a bot token, a webhook secret) in its error text; the flash says only that it failed
-        logger.exception("alert channel test failed")
-        flash(f"Test failed for '{channel['channel_name']}' - the reason is in the Jen log.", "error")
+    except Exception as e:
+        # v5.69.0-beta.2 (Q171) / v5.69.0-beta.3 (Q172): requests puts the URL (a bot token, a webhook secret) in its error text. The flash says only that it failed; the
+        # log keeps the reason with the channel's secrets redacted (a plain `logger.exception` would write the traceback's text, token and all)
+        logger.error(f"alert channel test failed ({name}): {__alerts._transport_error_text(e, config)}")
+        flash(f"Test failed for '{name}' - the reason is in the Jen log.", "error")
     return redirect(url_for("settings.settings_alerts"))
 
 
@@ -354,6 +358,12 @@ def save_alert_global():
     pool_free = request.form.get("pool_exhaustion_free", "5").strip()
     threshold = request.form.get("alert_threshold_pct", "80").strip()
     reserved_lease_mode = request.form.get("reserved_lease_mode", "always").strip()
+    # v5.69.0-beta.3 (Q172, item 3): the summary time is HH:MM in UTC. "7am" used to be saved and silently never matched, so the summary never came; a refusal is audited
+    # like a save (the setting decides whether an alert is ever sent)
+    if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", summary_time):
+        flash("The daily summary time must be HH:MM in UTC, for example 07:00.", "error")
+        __user.audit("SAVE_ALERT_GLOBAL_REFUSED", "settings", f"daily summary time {summary_time[:20]!r} is not HH:MM")
+        return redirect(url_for("settings.settings_alerts"))
     if not pool_free.isdigit() or int(pool_free) < 1:
         flash("Pool exhaustion threshold must be a positive number.", "error")
         return redirect(url_for("settings.settings_alerts"))

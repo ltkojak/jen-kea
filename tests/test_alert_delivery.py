@@ -20,6 +20,13 @@ OK = [("telegram", True, "")]
 DOWN = [("telegram", False, "HTTP 502")]
 
 
+@pytest.fixture(autouse=True)
+def _a_summary_audience(monkeypatch):
+    """The daily summary is built only when a channel handles it (v5.69.0-beta.3, Q172). These tests replace `send_alert` and have no channel rows, so the audience is
+    stated here; the tests of the quiet day set it False themselves."""
+    monkeypatch.setattr(alerts, "_summary_audience", lambda: True)
+
+
 class Sender:
     """Answers each send_alert with the next scripted result (the last one repeats) and records what was sent."""
 
@@ -92,6 +99,104 @@ class TestEveryChannelFails:
         monkeypatch.setattr(alerts, "send_alert", boom)
         assert _notify(True, T0) == "pending"
         assert alerts.alert_delivery("utilization_high", 7)["attempts"] == 1
+
+
+class TestAChannelsSecretNeverLandsInText:
+    """Item 4: `alerts.redact(text, config)` replaces every configured token, webhook URL and password with `***`; `send_alert` passes every
+    error through it before the log row, the event, the log line and the test-route flash."""
+
+    def test_redact_covers_token_url_and_password(self):
+        cfg = {"bot_token": "123:ABC-def", "webhook_url": "https://hooks.example/T/B/xyz", "smtp_password": "s3cret"}
+        text = "HTTPSConnectionPool: url: /bot123:ABC-def/sendMessage; https://hooks.example/T/B/xyz; pass s3cret"
+        out = alerts.redact(text, cfg)
+        assert "123:ABC-def" not in out and "hooks.example/T/B/xyz" not in out and "s3cret" not in out and "***" in out
+
+    def test_a_percent_encoded_secret_is_covered_too(self):
+        out = alerts.redact("GET /x?auth=a%2Fb%3Dc%20d failed", {"api_token": "a/b=c d"})
+        assert "a%2Fb%3Dc%20d" not in out and "***" in out
+
+    def test_a_value_that_is_not_a_secret_is_left_alone(self):
+        assert alerts.redact("chat 12345 failed", {"chat_id": "12345", "bot_token": "999:ZZZZ"}) == "chat 12345 failed"
+
+    def test_a_transport_error_is_stored_by_class_not_text(self, db, monkeypatch):
+        import requests
+
+        def boom(*a, **k):
+            raise requests.ConnectionError("url: /bot123:ABC/sendMessage")
+
+        monkeypatch.setattr(alerts, "_send_telegram_channel", boom)
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM alert_channels WHERE channel_name='t-redact'")
+            cur.execute(
+                "INSERT INTO alert_channels (channel_type, channel_name, enabled, config, alert_types) VALUES ('telegram','t-redact',1,%s,%s)",
+                (alerts.encode_channel_config({"token": "123:ABC", "chat_id": "1"}), '["kea_down"]'),
+            )
+        db.commit()
+        try:
+            alerts.send_alert("kea_down", server_name="x")
+            with db.cursor() as cur:
+                db.commit()
+                cur.execute("SELECT error FROM alert_log WHERE alert_type='kea_down' ORDER BY id DESC LIMIT 1")
+                error = cur.fetchone()["error"]
+                cur.execute("SELECT detail FROM events WHERE kind='alert.sent' ORDER BY id DESC LIMIT 1")
+                event = cur.fetchone()
+            assert "123:ABC" not in error and "ConnectionError" in error
+            assert event is None or "123:ABC" not in (event["detail"] or "")
+        finally:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM alert_channels WHERE channel_name='t-redact'")
+            db.commit()
+
+    def test_a_message_jen_wrote_about_a_reply_is_kept_but_redacted(self):
+        error = alerts._transport_error_text(Exception("Webhook error 400: bad token 123:ABC"), {"token": "123:ABC"})
+        assert error == "Webhook error 400: bad token ***"
+
+    def test_the_log_line_carries_no_secret(self, db, monkeypatch, caplog):
+        import requests
+
+        def boom(*a, **k):
+            raise requests.ConnectionError("https://hooks.example/T/B/xyz")
+
+        monkeypatch.setattr(alerts, "_send_slack_channel", boom)
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM alert_channels WHERE channel_name='s-redact'")
+            cur.execute(
+                "INSERT INTO alert_channels (channel_type, channel_name, enabled, config, alert_types) VALUES ('slack','s-redact',1,%s,%s)",
+                (alerts.encode_channel_config({"webhook_url": "https://hooks.example/T/B/xyz"}), '["kea_down"]'),
+            )
+        db.commit()
+        try:
+            with caplog.at_level("ERROR"):
+                alerts.send_alert("kea_down", server_name="x")
+            assert "hooks.example/T/B/xyz" not in caplog.text
+        finally:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM alert_channels WHERE channel_name='s-redact'")
+            db.commit()
+
+    def test_the_test_button_flashes_no_secret_and_logs_none(self, logged_in_client, db, monkeypatch, caplog):
+        import requests
+
+        def boom(*a, **k):
+            raise requests.ConnectionError("url: /bot123:ABC/sendMessage")
+
+        monkeypatch.setattr(alerts, "_send_telegram_channel", boom)
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM alert_channels WHERE channel_name='t-button'")
+            cur.execute(
+                "INSERT INTO alert_channels (channel_type, channel_name, enabled, config, alert_types) VALUES ('telegram','t-button',1,%s,%s)",
+                (alerts.encode_channel_config({"token": "123:ABC", "chat_id": "1"}), '["kea_down"]'),
+            )
+            channel_id = cur.lastrowid
+        db.commit()
+        try:
+            with caplog.at_level("ERROR"):
+                r = logged_in_client.post(f"/settings/alerts/test-channel/{channel_id}", follow_redirects=True)
+            assert "123:ABC" not in r.get_data(as_text=True) and "123:ABC" not in caplog.text
+        finally:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM alert_channels WHERE channel_name='t-button'")
+            db.commit()
 
 
 class TestNoChannelIsEligibleYet:
@@ -999,3 +1104,253 @@ def time_now_plus():
     import time
 
     return time.time() + 3600  # a cache that is "fresh" so no reload is attempted
+
+
+class TestEventStyleAlertsRemember:
+    """Item 5 (Q172): `stale_reservation`, `config_drift_*` and `kea_down` / `kea_up` keep their state in `settings` (the alert-state family) and are judged by what
+    `send_alert` answered - a restart re-sends nothing, and an alert nobody took is retried with the backoff every other condition has."""
+
+    MAC = "aa:bb:cc:dd:ee:71"
+
+    @pytest.fixture(autouse=True)
+    def _clean(self, db):
+        self._wipe(db)
+        yield
+        self._wipe(db)
+
+    def _wipe(self, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM devices WHERE mac=%s", (self.MAC,))
+            cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier)='AABBCCDDEE71'")
+            cur.execute(
+                "DELETE FROM settings WHERE setting_key LIKE 'alert_state:stale_reservation:%' OR setting_key LIKE 'alert_state:kea_down:%' "
+                "OR setting_key LIKE 'alert_state:config_drift_detected:%' OR setting_key LIKE 'alert_state:event:%' "
+                "OR setting_key LIKE 'alert_state:utilization_high:%' OR setting_key LIKE 'alert_state:pool_exhaustion:%'"
+            )
+        db.commit()
+        from jen.models.user import _invalidate_settings_cache
+
+        _invalidate_settings_cache()
+
+    def _stale_device(self, db, hostid_type=0):
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO devices (mac, last_ip, last_subnet_id, first_seen, last_seen) "
+                "VALUES (%s, '10.0.0.71', 1, DATE_SUB(NOW(), INTERVAL 90 DAY), DATE_SUB(NOW(), INTERVAL 60 DAY))",
+                (self.MAC,),
+            )
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
+                "VALUES (UNHEX('AABBCCDDEE71'), %s, 1, INET_ATON('10.0.0.71'), 'old-box')",
+                (hostid_type,),
+            )
+        db.commit()
+
+    def test_a_restart_resends_no_stale_reservation_for_a_device_already_alerted(self, db, monkeypatch, send):
+        monkeypatch.setattr(alerts, "_utcnow", lambda: T0)
+        self._stale_device(db)
+        sender = send(OK)
+        with db.cursor() as cur:
+            alerts.check_stale_reservation_alerts(cur)
+        assert sender.sent == ["stale_reservation"]
+        # a restart: the function keeps nothing in memory, so a second call IS a fresh process
+        sender2 = send(OK)
+        with db.cursor() as cur:
+            alerts.check_stale_reservation_alerts(cur)
+        assert sender2.sent == []
+
+    def test_a_stale_alert_nobody_took_is_retried_with_the_backoff_and_then_recorded(self, db, monkeypatch, send):
+        self._stale_device(db)
+        monkeypatch.setattr(alerts, "_utcnow", lambda: T0)
+        sender = send(DOWN)
+        with db.cursor() as cur:
+            alerts.check_stale_reservation_alerts(cur)
+            alerts.check_stale_reservation_alerts(cur)  # the next pass, 0 s later: backing off
+        assert sender.sent == ["stale_reservation"]
+        monkeypatch.setattr(alerts, "_utcnow", lambda: T0 + timedelta(minutes=2))
+        sender2 = send(OK)
+        with db.cursor() as cur:
+            alerts.check_stale_reservation_alerts(cur)
+            alerts.check_stale_reservation_alerts(cur)
+        assert sender2.sent == ["stale_reservation"], "retried once, delivered, then quiet"
+
+    def test_a_device_seen_again_loses_its_record_and_may_be_told_about_later(self, db, monkeypatch, send):
+        monkeypatch.setattr(alerts, "_utcnow", lambda: T0)
+        self._stale_device(db)
+        send(OK)
+        with db.cursor() as cur:
+            alerts.check_stale_reservation_alerts(cur)
+            cur.execute("UPDATE devices SET last_seen=NOW() WHERE mac=%s", (self.MAC,))
+        db.commit()
+        with db.cursor() as cur:
+            alerts.check_stale_reservation_alerts(cur)
+        assert alerts._load_state("stale_reservation", self.MAC)["a"] is False
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) c FROM settings WHERE setting_key=%s", (f"alert_state:stale_reservation:{self.MAC}",)
+            )
+            assert cur.fetchone()["c"] == 0
+
+    def test_a_reservation_by_another_identifier_type_is_not_this_clients(self, db, monkeypatch, send):
+        monkeypatch.setattr(alerts, "_utcnow", lambda: T0)
+        self._stale_device(db, hostid_type=1)  # the same bytes, as a DUID: not a hardware address
+        sender = send(OK)
+        with db.cursor() as cur:
+            alerts.check_stale_reservation_alerts(cur)
+        assert sender.sent == []
+
+    DRIFT = {"family": "subnet", "type": "missing", "subnet_id": 3, "message": "Subnet 3 is not in Kea"}
+
+    def test_a_standing_drift_issue_is_told_once_across_a_restart_and_its_end_is_told_once(self, db, monkeypatch, send):
+        monkeypatch.setattr(alerts, "_utcnow", lambda: T0)
+        sender = send(OK)
+        alerts.check_drift_alerts([self.DRIFT])
+        assert sender.sent == ["config_drift_detected"]
+        sender2 = send(OK)
+        alerts.check_drift_alerts([self.DRIFT])  # after a restart: nothing is re-told
+        assert sender2.sent == []
+        sender3 = send(OK)
+        alerts.check_drift_alerts([])  # the issue is gone - and its message is still known, from the stored record
+        alerts.check_drift_alerts([])
+        assert sender3.sent == ["config_drift_resolved"]
+
+    def test_a_drift_alert_nobody_took_is_retried_and_its_resolution_is_not_sent_for_a_warning_nobody_got(
+        self, db, monkeypatch, send
+    ):
+        monkeypatch.setattr(alerts, "_utcnow", lambda: T0)
+        sender = send(DOWN)
+        alerts.check_drift_alerts([self.DRIFT])
+        assert sender.sent == ["config_drift_detected"]
+        sender2 = send(OK)
+        alerts.check_drift_alerts([])  # ended before anyone was told it began: no recovery for a warning nobody got
+        assert sender2.sent == []
+
+    def test_kea_down_is_told_once_across_a_restart_and_kea_up_follows_a_delivered_down(self, db, monkeypatch, send):
+        srv = {"id": 1, "name": "kea-a"}
+        monkeypatch.setattr(alerts, "_utcnow", lambda: T0)
+        sender = send(OK)
+        alerts.check_kea_status_alert(srv, False)
+        alerts.check_kea_status_alert(srv, False)
+        assert sender.sent == ["kea_down"]
+        sender2 = send(OK)
+        alerts.check_kea_status_alert(srv, False)  # a restarted Jen finds Kea still down: it was told
+        assert sender2.sent == []
+        alerts.check_kea_status_alert(srv, True)
+        alerts.check_kea_status_alert(srv, True)
+        assert sender2.sent == ["kea_up"]
+
+    def test_a_kea_down_nobody_took_is_retried_and_no_kea_up_is_sent_for_it(self, db, monkeypatch, send):
+        srv = {"id": 1, "name": "kea-a"}
+        monkeypatch.setattr(alerts, "_utcnow", lambda: T0)
+        sender = send(DOWN)
+        alerts.check_kea_status_alert(srv, False)
+        monkeypatch.setattr(alerts, "_utcnow", lambda: T0 + timedelta(minutes=2))
+        alerts.check_kea_status_alert(srv, False)
+        assert sender.sent == ["kea_down", "kea_down"]
+        sender2 = send(OK)
+        alerts.check_kea_status_alert(srv, True)
+        assert sender2.sent == []
+
+    def test_a_subnet_removed_from_keas_config_gets_one_ok_and_its_state_is_cleared(self, db, monkeypatch, send):
+        monkeypatch.setattr(alerts, "_utcnow", lambda: T0)
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {61: {"name": "Gone", "cidr": "10.61.0.0/24"}})
+        sent_kwargs = []
+        sender = Sender(OK)
+
+        def spy(alert_type, *a, **kw):
+            sent_kwargs.append((alert_type, kw))
+            return sender(alert_type, *a, **kw)
+
+        monkeypatch.setattr(alerts, "send_alert", spy)
+        done = {"a": True, "n": True, "t": T0.isoformat(), "c": 0, "d": T0.isoformat(), "r": False}
+        alerts._save_state("utilization_high", 61, done)
+        alerts._save_state("pool_exhaustion", 61, done)
+        with db.cursor() as cur:
+            alerts.check_utilization_alerts(cur, {"subnet4": []})  # Kea's config no longer has subnet 61
+            alerts.check_utilization_alerts(cur, {"subnet4": []})
+        assert sorted(sender.sent) == ["pool_exhaustion_ok", "utilization_ok"], "one _ok each, not one per pass"
+        assert all("no longer in Kea's config" in kw["subnet"] for _t, kw in sent_kwargs)
+        assert (
+            alerts.alert_state("utilization_high", 61) is False and alerts.alert_state("pool_exhaustion", 61) is False
+        )
+
+    def test_a_subnet_that_lost_its_pools_ends_its_state_too(self, db, monkeypatch, send):
+        monkeypatch.setattr(alerts, "_utcnow", lambda: T0)
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {62: {"name": "Pool-less", "cidr": "10.62.0.0/24"}})
+        sender = send(OK)
+        alerts._save_state(
+            "utilization_high", 62, {"a": True, "n": True, "t": T0.isoformat(), "c": 0, "d": T0.isoformat(), "r": False}
+        )
+        with db.cursor() as cur:
+            alerts.check_utilization_alerts(cur, {"subnet4": [{"id": 62, "subnet": "10.62.0.0/24", "pools": []}]})
+        assert sender.sent == ["utilization_ok"]
+
+    def test_a_departed_subnet_whose_warning_was_never_delivered_is_cleared_without_an_ok(self, db, monkeypatch, send):
+        monkeypatch.setattr(alerts, "_utcnow", lambda: T0)
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {63: {"name": "Quiet", "cidr": "10.63.0.0/24"}})
+        sender = send(OK)
+        alerts._save_state("utilization_high", 63, {"a": True, "n": False, "t": None, "c": 2, "d": None, "r": False})
+        with db.cursor() as cur:
+            alerts.check_utilization_alerts(cur, {"subnet4": []})
+        assert sender.sent == [] and alerts.alert_state("utilization_high", 63) is False
+
+
+class TestTheNoSubscriberSummaryIsAQuietDay:
+    def test_with_no_channel_handling_it_nothing_is_built_and_the_day_is_quiet(self, db, monkeypatch):
+        built = []
+        monkeypatch.setattr(alerts, "_summary_audience", lambda: False)
+        monkeypatch.setattr(alerts, "_pending_summary", None)
+        monkeypatch.setattr(alerts, "_build_daily_summary", lambda: built.append(1) or "text")
+        assert alerts.send_daily_summary() == "quiet" and built == []
+
+    def test_the_audience_is_a_channel_that_handles_daily_summary(self, db, monkeypatch):
+        monkeypatch.setattr(alerts, "get_active_channels", lambda: [{"alert_types": '["kea_down"]'}])
+        assert alerts._summary_audience() is False
+        monkeypatch.setattr(alerts, "get_active_channels", lambda: [{"alert_types": '["daily_summary"]'}])
+        assert alerts._summary_audience() is True
+
+
+class TestAnEmailGoesToEveryRecipient:
+    def _smtp(self, monkeypatch):
+        import smtplib
+
+        sent = {}
+
+        class FakeSMTP:
+            def __init__(self, host, port, timeout=0):
+                sent["port"] = port
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def starttls(self):
+                pass
+
+            def login(self, *a):
+                pass
+
+            def sendmail(self, frm, to, body):
+                sent.update(frm=frm, to=to, body=body)
+
+        monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
+        return sent
+
+    def test_a_comma_list_is_split_and_an_empty_from_falls_back_to_the_user(self, monkeypatch):
+        sent = self._smtp(monkeypatch)
+        cfg = {
+            "smtp_host": "h",
+            "smtp_port": 587,
+            "smtp_user": "jen@example",
+            "from_addr": "",
+            "to_addr": "a@x.test, b@x.test,, ",
+        }
+        assert alerts._send_email_channel("hello", "kea_down", cfg) is True
+        assert sent["to"] == ["a@x.test", "b@x.test"] and sent["frm"] == "jen@example"
+
+    def test_port_465_is_refused_with_a_sentence(self, monkeypatch):
+        self._smtp(monkeypatch)
+        with pytest.raises(Exception, match="Port 465"):
+            alerts._send_email_channel("hello", "kea_down", {"smtp_host": "h", "smtp_port": 465, "to_addr": "a@x.test"})
