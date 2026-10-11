@@ -82,7 +82,8 @@ class TestAddSubnetNeedsEverySubnet:
     ):
         c, _ = restricted_client(client, db, None, role="admin", username="q171_all_post")
         r = c.post("/subnets/add", data=self.FORM, follow_redirects=True)
-        assert "overlaps with existing subnet 'ZZ-SECRET-B'" in r.get_data(as_text=True)
+        body = r.get_data(as_text=True)
+        assert "overlaps with existing subnet" in body and "ZZ-SECRET-B" in body and "10.77.0.0/24" in body
 
 
 # ── 2. Jen's own database, Kea's database and the restart: superadmin and step-up ───────────────────────────────────────────────────────────
@@ -436,6 +437,7 @@ class TestAPasswordChangeEndsTheOtherSessions:
     def test_token_version_moves_with_the_password_in_both_routes(self, app, db):
         uid = _make_user(db, "q171_pw_tv")
         c = self._login(app, "q171_pw_tv", "oldpassword1")
+        db.commit()
         with db.cursor() as cur:
             cur.execute("SELECT token_version FROM users WHERE id=%s", (uid,))
             before = cur.fetchone()["token_version"]
@@ -447,6 +449,7 @@ class TestAPasswordChangeEndsTheOtherSessions:
                 "confirm_password": "newpassword2",
             },
         )
+        db.commit()
         with db.cursor() as cur:
             cur.execute("SELECT token_version FROM users WHERE id=%s", (uid,))
             mid = cur.fetchone()["token_version"]
@@ -458,6 +461,7 @@ class TestAPasswordChangeEndsTheOtherSessions:
         _invalidate_settings_cache()
         c2 = self._login_forced(app, "q171_pw_tv", "newpassword2")
         c2.post("/force-password-change", data={"new_password": "thirdpassword3", "confirm_password": "thirdpassword3"})
+        db.commit()
         with db.cursor() as cur:
             cur.execute("SELECT token_version FROM users WHERE id=%s", (uid,))
             assert cur.fetchone()["token_version"] == mid + 1
@@ -556,7 +560,8 @@ class TestOneMfaResetRoute:
         uid = _make_user(db, "q171_mfa_target2")
         self._seed(db, uid)
         r = logged_in_client.post(f"/mfa/admin-reset/{uid}", follow_redirects=True)
-        assert "MFA reset for user 'q171_mfa_target2'" in r.get_data(as_text=True)
+        body = r.get_data(as_text=True)
+        assert "MFA reset for user" in body and "q171_mfa_target2" in body and "They will need to re-enroll." in body
         assert self._methods(db, uid) == 0
 
     def test_an_id_that_is_not_an_account_says_so(self, logged_in_client):

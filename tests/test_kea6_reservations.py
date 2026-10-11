@@ -430,7 +430,6 @@ class TestDeleteReservation6Route:
         assert captured["duid"] == "00:03:00:01:aa:bb:cc:dd:ee:ff"
 
 
-@pytest.mark.usefixtures("ipv6_flag_on")
 class TestReservationsV6View:
     def _insert_host_with_reservations(
         self, db, duid=b"\x00\x03\x00\x01\x00\x1a\x2b\x3c\x4d\x5e", subnet_id=1, hostname="v6-host", reservations=()
@@ -468,11 +467,13 @@ class TestReservationsV6View:
         assert resp.status_code == 200
         assert b"segmented-control" not in resp.data
 
+    @pytest.mark.usefixtures("ipv6_flag_on")
     def test_v6_view_redirects_when_no_v6_subnets(self, logged_in_client, monkeypatch, db):
         monkeypatch.setattr(extensions, "SUBNET6_MAP", {})
         resp = logged_in_client.get("/reservations?view=v6", follow_redirects=False)
         assert resp.status_code == 302
 
+    @pytest.mark.usefixtures("ipv6_flag_on")
     def test_v6_view_renders_one_to_many_reservations(self, logged_in_client, monkeypatch, db):
         monkeypatch.setattr(
             extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}

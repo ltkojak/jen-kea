@@ -187,7 +187,8 @@ class TestGroupPagesRender:
         r = c.get("/settings/databases?tab=backups")
         assert r.status_code == 200
         body = r.data.decode()
-        assert "Save Jen DB" in body  # connections tab forced
+        assert "Jen MySQL Database" in body  # connections tab forced
+        assert "Save Jen DB" not in body  # v5.69.0-beta.2 (Q171): the connection forms are the superadmin's
         assert "Run Backup Now" not in body
         assert "superadmin access required" not in body.lower()
 

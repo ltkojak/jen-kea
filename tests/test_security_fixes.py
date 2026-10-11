@@ -51,7 +51,8 @@ class TestSubnetRestrictionOnMutations:
         _restricted_client(client, db, allowed_subnets=[999])
         r = client.get(f"/reservations/edit/{host_id}", follow_redirects=True)
         assert r.status_code == 200
-        assert b"do not have access" in r.data.lower()
+        # v5.69.0-beta.2 (Q171): a reservation in a hidden subnet is answered as one that does not exist
+        assert b"reservation not found" in r.data.lower()
 
         r = client.post(
             f"/reservations/edit/{host_id}",
@@ -61,7 +62,7 @@ class TestSubnetRestrictionOnMutations:
             follow_redirects=True,
         )
         assert r.status_code == 200
-        assert b"do not have access" in r.data.lower()
+        assert b"reservation not found" in r.data.lower()
 
     def test_delete_reservation_rejected_for_out_of_scope_subnet(self, client, db, mock_kea):
         with db.cursor() as cur:
@@ -99,7 +100,7 @@ class TestSubnetRestrictionOnMutations:
         _restricted_client(client, db, allowed_subnets=[999])
         r = client.post("/subnets/delete/1", follow_redirects=True)
         assert r.status_code == 200
-        assert b"do not have access" in r.data.lower()
+        assert b"subnet not found" in r.data.lower()  # v5.69.0-beta.2 (Q171): one answer for hidden and nonexistent
 
     def test_add_reservation_allowed_within_scope(self, client, db, mock_kea):
         """Sanity check: the fix doesn't block legitimate in-scope access."""
@@ -358,7 +359,10 @@ class TestDatabaseSuperadminOnly:
         self._admin_client(client, db)
         r = client.get("/database", follow_redirects=True)
         assert r.status_code == 200
-        assert b"Save Jen DB" in r.data
+        # v5.69.0-beta.2 (Q171): an admin SEES where the databases point, and the forms are the superadmin's (RBAC-003)
+        assert b"Jen MySQL Database" in r.data
+        assert b"Save Jen DB" not in r.data and b"Save Kea DB" not in r.data
+        assert b"Only a superadmin changes where Jen keeps its own data." in r.data
         assert b"Run Backup Now" not in r.data
         assert b"Download Jen Export" not in r.data
 
