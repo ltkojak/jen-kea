@@ -1,5 +1,26 @@
 # Host Watchdog Plugin — Changelog
 
+## [1.1.2] - 2026-10-11
+
+Fix. `requires_jen` (5.68.0) and `plugin_api` (3) are unchanged.
+
+### Fixed: an alert is sent only for a transition that was stored
+
+A check run records its results in one transaction: for every target that answered or did not, a `wd_checks` row and the new `wd_state`, and
+when a target crossed its threshold the alert for it is queued to be sent once the recording is finished. The queue was filled inside the same
+`try` as the INSERTs, and the loop that sends it ran after the `finally` whatever had happened before. So when one INSERT failed (a lock wait
+timeout, a connection that went away) the transaction was rolled back, the new state of every target in that run was gone, and the alerts for
+the targets recorded before the failure were still sent: an alert for a state the table never held, and a second alert for the same
+transition on the next check, which finds the transition again because the table still holds the old state. The alerts and the Timeline events now follow
+a successful `commit()` and nothing else. A recording that fails rolls back explicitly, sends nothing, and leaves the transition to be detected
+and announced once by the next check; a commit that itself fails is handled the same way. A target that stays down, and a new target answering
+for the first time, still send no alert.
+
+The harness runs the real `_record_results` against a transactional fake database, where writes are held until `commit()` and dropped by a
+rollback or a close, so "nothing stored" is read from what a later reader would find: a second target's INSERT that raises after the first target
+crossed its threshold sends nothing and commits nothing, the next call with a working database sends exactly one alert and commits both
+targets' state, the alert follows the commit and the close in that order, and a commit that raises sends nothing.
+
 ## [1.1.1] - 2026-10-11
 
 Fix. `requires_jen` stays 5.68.0; the `scoped` argument of `send_alert` this release uses is in Jen 5.68.0-beta.9 and later.

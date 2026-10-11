@@ -75,6 +75,9 @@
                 {% if p.migration_failed %}
                 <div style="margin-top:4px;font-size:10px;color:var(--danger);">migration failed — not enabled: {{ p.migration_failed[:120] }}</div>
                 {% endif %}
+                {% if p.load_failed %}
+                <div class="u-15f77e" title="Jen could not start this plugin; its pages are not available. The server log has the reason.">{{ icon("triangle-alert") }} Failed to load ({{ p.load_failed }})</div>
+                {% endif %}
                 {% if p.missing_os_packages %}
                 <div class="u-15f77e">needs on the Jen host: {{ p.missing_os_packages|join(', ') }}</div>
                 {% endif %}

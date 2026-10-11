@@ -67,6 +67,9 @@ def plugins_page():
         # binary isn't on this host; the template offers Install (systemd)
         # or the apt command (anything else).
         p["missing_os_packages"] = __plugins.missing_os_packages(p)
+        # v5.69.0-beta.3 (Q172) - the exception CLASS that stopped this plugin loading in this process; only an
+        # enabled plugin was tried, so only an enabled one shows it
+        p["load_failed"] = __plugins.plugin_load_failed(p["id"]) if p.get("enabled") else ""
 
     # Annotate registry entries with install/update status
     for entry in registry:

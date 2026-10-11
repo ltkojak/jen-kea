@@ -446,6 +446,7 @@ def _record_results(by_id, results):
         return
     db = None
     to_alert = []  # v1.0.4 — collected here, sent after commit/close: see below
+    committed = False
     try:
         db = _get_db()
         with db.cursor() as cur:
@@ -485,11 +486,24 @@ def _record_results(by_id, results):
                 "DELETE FROM wd_checks WHERE checked_at < UTC_TIMESTAMP() - INTERVAL %s DAY", (_KEEP_CHECKS_DAYS,)
             )
         db.commit()
+        committed = True
     except Exception as e:
         logger.error(f"Watchdog: recording results failed: {e}")
+        if db:
+            try:
+                db.rollback()  # nothing of this tick is stored; the pool would reset the connection anyway
+            except Exception as rollback_error:
+                logger.warning(f"Watchdog: could not roll back the failed recording: {rollback_error}")
     finally:
         if db:
             db.close()
+    # v1.1.2 - an alert is sent only for a transition that was STORED. The loop above fills to_alert from inside the
+    # same try that does the INSERTs, and this loop used to run after the `finally` whatever happened, so a later
+    # INSERT that failed rolled the state back and the alerts for the targets before it were still sent: an alert for
+    # a state that was never recorded, sent a second time by the next tick, which finds the same transition again.
+    # Now nothing is sent unless db.commit() returned; the next tick detects the transition and sends it once.
+    if not committed:
+        return
     # v1.0.4 — sending an alert (send_alert/emit) is network/DB I/O of its own; doing it INSIDE the open
     # cursor loop above held the whole tick's transaction/connection open for as long as every alert took
     # to send. Collected during the loop, sent only after the connection that recorded them is closed.

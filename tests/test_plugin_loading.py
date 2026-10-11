@@ -71,6 +71,9 @@ def test_every_bundled_plugin_registers(app, monkeypatch, tmp_path, caplog):
 
         failed = [r.message for r in caplog.records if "Failed to load plugin" in r.message]
         assert not failed, f"plugin(s) logged a load failure: {failed}"
+        # v5.69.0-beta.3 (Q172): the loader's own marker (what the Plugins page prints as "Failed to load") agrees with the log
+        marked = {plugin_id: plugins_svc.plugin_load_failed(plugin_id) for plugin_id in shipped}
+        assert not any(marked.values()), f"plugin(s) marked as failed to load: {marked}"
 
         # v5.68.0-beta.4 (Q139): every bundled plugin contributes exactly one investigation provider (the registry is keyed by
         # plugin id, so "exactly one" is "one key per plugin and no key that is not a plugin"), and each one really RUNS against

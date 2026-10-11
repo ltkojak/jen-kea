@@ -64,17 +64,24 @@ plain `X.Y.Z`.
 
 ### OS packages — `"os_packages": ["nmap"]`
 
-Debian/Ubuntu package names whose binary of the same name the plugin
-shells out to. Jen never runs `apt` from the web process: Settings →
+Debian/Ubuntu package names whose binary the plugin shells out to. Jen
+never runs `apt` from the web process: Settings →
 Plugins shows *"needs on the Jen host: nmap"* with an **Install**
 button on a systemd host (the root-run `jen-plugin-install.service`
 installs it — the same request/execute split as plugin installs, and
 only packages in the root script's built-in allowlist, currently
-`nmap`, are ever installed; ask for the list to be widened in a Jen
-release before declaring anything else) or the `apt install` command
-elsewhere. Put the same list in the plugin's registry entry — the root
-side reads the registry, not the marker. In code, check for the binary
-at call time (`shutil.which("nmap")`), never at import.
+`nmap`, `iputils-ping` and `snmp`, are ever installed; ask for the list
+to be widened in a Jen release before declaring anything else) or the
+`apt install` command elsewhere. Put the same list in the plugin's
+registry entry — the root side reads the registry, not the marker.
+A package is reported present when one of its binaries is on `PATH`, and a
+package is not always named like its binary (`iputils-ping` ships `ping`,
+`snmp` ships `snmpbulkwalk`), so Jen keeps a package-to-binaries map
+(`OS_PACKAGE_BINARIES` in `jen/services/plugins.py`); a package that is
+in the allowlist and not in the map would be reported missing forever, and
+`tests/test_plugin_registry.py::TestOsPackageBinaryMap` fails on it. In
+code, check for the binary at call time (`shutil.which("nmap")`), never at
+import.
 
 ### Periodic jobs — `register_periodic(plugin_id, name, fn, every_minutes)`
 
@@ -88,7 +95,16 @@ after startup). The floor is `PERIODIC_MIN_MINUTES` (5, in
 raise `ValueError` at register time, which fails your `register(app)`: Jen logs "Failed to load plugin"
 and the plugin does not load (none of its
 routes exist). Do not catch that error to carry on with a
-shorter loop; register at five or more. Each run is wrapped — an exception is
+shorter loop; register at five or more.
+
+That is the loader's rule for any `register(app)` that raises (v5.69.0-beta.3). Jen runs
+`register(app)` with `app.register_blueprint` held back and registers the blueprints your
+plugin asked for, in the order it asked, only after `register(app)` returned: a raise at any
+point leaves the plugin with no route at all, drops a periodic job it had already registered,
+and shows *Failed to load (ExceptionClass)* on Settings → Plugins (the class name only; the
+message is in the log). Write `register(app)` as you always did, `app.register_blueprint(bp)`
+with any `url_prefix` or `name` keywords; the call is replayed unchanged. The marker lives in the
+process, so the next start tries the plugin again. Each run is wrapped — an exception is
 logged and recorded on the job, never propagated — and a run still in
 progress when the next tick comes is skipped, not stacked.
 `periodic_jobs()` lists what's registered.

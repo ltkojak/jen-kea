@@ -22,11 +22,16 @@ checksum or a tag-pinned download_url fails CI immediately.
 """
 
 import hashlib
+import importlib.util
 import json
 import os
 import pathlib
 import re
+import sys
+import textwrap
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from jen import extensions
 from jen.services import plugins as plugins_svc
@@ -1112,6 +1117,87 @@ class TestOsPackages:
             assert cur.fetchone() is not None
 
 
+class TestOsPackageBinaryMap:
+    """v5.69.0-beta.3 (Q172) - a package is not always named like its binary. `iputils-ping` ships `ping` and `snmp`
+    ships `snmpbulkwalk`; `shutil.which("<package>")` reported both missing forever on a host that had them, and the
+    page offered to install what was installed. OS_PACKAGE_BINARIES says which binaries a package provides."""
+
+    @staticmethod
+    def _which(present):
+        return lambda name: f"/usr/bin/{name}" if name in present else None
+
+    def test_ping_and_snmpbulkwalk_on_path_report_nothing_missing(self, monkeypatch):
+        monkeypatch.setattr("shutil.which", self._which({"ping", "snmpbulkwalk"}))
+        manifest = {"os_packages": ["iputils-ping", "snmp"]}
+        assert plugins_svc.missing_os_packages(manifest) == []
+
+    def test_without_the_binaries_exactly_those_two_are_missing(self, monkeypatch):
+        monkeypatch.setattr("shutil.which", self._which(set()))
+        manifest = {"os_packages": ["iputils-ping", "snmp"]}
+        assert plugins_svc.missing_os_packages(manifest) == ["iputils-ping", "snmp"]
+
+    def test_the_package_name_alone_on_path_is_not_the_package(self, monkeypatch):
+        """A binary that happens to share the PACKAGE's name is not what the plugin runs."""
+        monkeypatch.setattr("shutil.which", self._which({"iputils-ping", "snmp"}))
+        manifest = {"os_packages": ["iputils-ping", "snmp"]}
+        assert plugins_svc.missing_os_packages(manifest) == ["iputils-ping", "snmp"]
+
+    def test_one_of_a_packages_binaries_is_enough(self, monkeypatch):
+        monkeypatch.setitem(plugins_svc.OS_PACKAGE_BINARIES, "two-tools", ("tool-a", "tool-b"))
+        monkeypatch.setattr("shutil.which", self._which({"tool-b"}))
+        assert plugins_svc.missing_os_packages({"os_packages": ["two-tools"]}) == []
+        monkeypatch.setattr("shutil.which", self._which(set()))
+        assert plugins_svc.missing_os_packages({"os_packages": ["two-tools"]}) == ["two-tools"]
+
+    def test_a_package_with_no_map_entry_is_looked_up_under_its_own_name(self, monkeypatch):
+        monkeypatch.setattr("shutil.which", self._which({"arp-scan"}))
+        assert plugins_svc.missing_os_packages({"os_packages": ["arp-scan"]}) == []
+        monkeypatch.setattr("shutil.which", self._which(set()))
+        assert plugins_svc.missing_os_packages({"os_packages": ["arp-scan"]}) == ["arp-scan"]
+
+    @staticmethod
+    def _updater_allowlist():
+        """jen-update-root.py is a standalone script; load it by path the way tests/test_jen_update_root.py does."""
+        script = pathlib.Path(__file__).resolve().parent.parent / "jen-update-root.py"
+        spec = importlib.util.spec_from_file_location("jen_update_root_for_os_packages", script)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return frozenset(module._DEPS_ALLOWED_PACKAGES)
+
+    def test_every_bundled_manifest_package_is_in_the_map_and_in_the_updaters_allowlist(self):
+        """A plugin cannot declare a package Jen cannot check (no map entry: reported missing forever) or the root
+        service would refuse to install (no allowlist entry: the Install button fails)."""
+        root = pathlib.Path(__file__).resolve().parent.parent / "plugins"
+        allowed = self._updater_allowlist()
+        checked = set()
+        for manifest_path in sorted(root.glob("*/manifest.json")):
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            for package in manifest.get("os_packages", []):
+                checked.add(package)
+                where = f"{manifest_path.parent.name}: os_packages entry {package!r}"
+                assert package in plugins_svc.OS_PACKAGE_BINARIES, (
+                    f"{where} has no entry in OS_PACKAGE_BINARIES (jen/services/plugins.py)"
+                )
+                assert package in allowed, f"{where} is not in _DEPS_ALLOWED_PACKAGES (jen-update-root.py)"
+        assert {"nmap", "iputils-ping", "snmp"} <= checked, (
+            f"a vacuous pass would hide a broken glob: {sorted(checked)}"
+        )
+
+    def test_every_registry_entry_package_is_in_the_map_too(self):
+        registry = json.loads(
+            (pathlib.Path(__file__).resolve().parent.parent / "plugins" / "registry.json").read_text(encoding="utf-8")
+        )
+        for entry in registry:
+            for package in entry.get("os_packages", []):
+                assert package in plugins_svc.OS_PACKAGE_BINARIES, f"{entry['id']}: {package!r}"
+
+    def test_the_map_and_the_allowlist_name_the_same_packages(self):
+        """The README's rule: a package in the allowlist and not in the map is reported missing forever."""
+        assert set(plugins_svc.OS_PACKAGE_BINARIES) == set(self._updater_allowlist())
+        for package, binaries in plugins_svc.OS_PACKAGE_BINARIES.items():
+            assert binaries and all(isinstance(b, str) and b for b in binaries), package
+
+
 class TestDepsRoute:
     def _installed(self, monkeypatch, tmp_path, os_packages):
         root = tmp_path / "root"
@@ -1227,3 +1313,239 @@ class TestNavIcons:
             assert plugins_svc.get_nav_items()[-1]["icon"] == "puzzle"
         finally:
             plugins_svc._loaded_plugins.pop("iconless", None)
+
+
+class TestBlueprintsAreRegisteredLast:
+    """v5.69.0-beta.3 (Q172) - the loader runs a plugin's register(app) with `app.register_blueprint` held back and
+    registers what it asked for only after register returned. Every bundled plugin registers its blueprint FIRST and
+    then registers jobs, alert types and providers that can raise (the Q89 bug), so a raise used to leave the plugin's
+    pages live and the plugin half loaded."""
+
+    @pytest.fixture(autouse=True)
+    def _clean(self):
+        from jen.services import background
+
+        yield
+        plugins_svc._loaded_plugins.pop("demo", None)
+        plugins_svc._load_failed.pop("demo", None)
+        background.unregister_periodic("demo")
+        sys.modules.pop("jen_plugin_demo", None)
+
+    @staticmethod
+    def _plugin(tmp_path, register_body):
+        """A plugin directory whose plugin.py declares two blueprints and a register(app) with the given body."""
+        folder = tmp_path / "demo"
+        folder.mkdir(exist_ok=True)
+        source = (
+            textwrap.dedent(
+                """
+            from flask import Blueprint
+
+            bp = Blueprint("demo_bp", __name__)
+            other_bp = Blueprint("demo_other", __name__)
+            SEEN_DURING_REGISTER = []
+
+
+            @bp.route("/demo/ping")
+            def ping():
+                return "pong"
+
+
+            @other_bp.route("/x")
+            def other_x():
+                return "x"
+
+
+            def register(app):
+            """
+            )
+            + textwrap.indent(textwrap.dedent(register_body).strip("\n"), "    ")
+            + "\n"
+        )
+        (folder / "plugin.py").write_text(source, encoding="utf-8")
+        return {"id": "demo", "path": str(folder), "nav": []}
+
+    @staticmethod
+    def _rules(app):
+        return {rule.rule for rule in app.url_map.iter_rules()}
+
+    def test_a_register_that_raises_after_its_blueprint_registers_no_route(self, tmp_path, caplog):
+        from flask import Flask
+
+        manifest = self._plugin(
+            tmp_path,
+            """
+            app.register_blueprint(bp)
+            raise RuntimeError("secret detail at /etc/jen/jen.config")
+            """,
+        )
+        app = Flask("loader-test")
+        with caplog.at_level("ERROR", logger="jen.services.plugins"):
+            assert plugins_svc._load_plugin(app, manifest) is False
+        assert "demo_bp" not in app.blueprints
+        assert "/demo/ping" not in self._rules(app)
+        assert "demo" not in plugins_svc.get_loaded_plugins()
+        assert "Failed to load plugin 'demo'" in caplog.text  # the log keeps the text, for the operator
+        assert "secret detail" in caplog.text
+
+    def test_the_failure_is_marked_by_class_name_only(self, tmp_path):
+        from flask import Flask
+
+        manifest = self._plugin(
+            tmp_path,
+            """
+            app.register_blueprint(bp)
+            raise RuntimeError("secret detail at /etc/jen/jen.config")
+            """,
+        )
+        assert plugins_svc.plugin_load_failed("demo") == ""
+        plugins_svc._load_plugin(Flask("loader-test"), manifest)
+        marker = plugins_svc.plugin_load_failed("demo")
+        assert marker == "RuntimeError"
+        assert "secret" not in marker and "/" not in marker
+
+    def test_the_app_is_left_as_it_was_after_a_raise(self, tmp_path):
+        from flask import Flask
+
+        manifest = self._plugin(tmp_path, "app.register_blueprint(bp)\nraise ValueError('x')")
+        app = Flask("loader-test")
+        plugins_svc._load_plugin(app, manifest)
+        assert "register_blueprint" not in vars(app)  # the recorder is gone, the class method answers again
+        app.register_blueprint(self._blueprint("later"))
+        assert "later" in app.blueprints
+
+    @staticmethod
+    def _blueprint(name):
+        from flask import Blueprint
+
+        return Blueprint(name, __name__)
+
+    def test_a_register_that_returns_registers_every_blueprint_in_order_with_its_options(self, tmp_path):
+        from flask import Flask
+
+        manifest = self._plugin(
+            tmp_path,
+            """
+            app.register_blueprint(bp, url_prefix="/a")
+            SEEN_DURING_REGISTER.append(sorted(app.blueprints))
+            app.register_blueprint(other_bp, name="renamed", url_prefix="/b")
+            """,
+        )
+        app = Flask("loader-test")
+        assert plugins_svc._load_plugin(app, manifest) is True
+        assert plugins_svc.plugin_load_failed("demo") == ""
+        assert "demo" in plugins_svc.get_loaded_plugins()
+        assert {"/a/demo/ping", "/b/x"} <= self._rules(app)
+        assert "renamed" in app.blueprints and "demo_bp" in app.blueprints
+        # nothing was on the app while register(app) was still running: the blueprints come LAST
+        assert sys.modules["jen_plugin_demo"].SEEN_DURING_REGISTER == [[]]
+        assert [r.endpoint for r in app.url_map.iter_rules() if r.rule in ("/a/demo/ping", "/b/x")]  # both routable
+
+    def test_a_raise_after_a_periodic_job_drops_the_job_too(self, tmp_path):
+        from flask import Flask
+
+        from jen.services import background
+
+        manifest = self._plugin(
+            tmp_path,
+            """
+            from jen.services.background import register_periodic
+
+            app.register_blueprint(bp)
+            register_periodic("demo", "tick", lambda: None, 5)
+            raise RuntimeError("after the job")
+            """,
+        )
+        assert plugins_svc._load_plugin(Flask("loader-test"), manifest) is False
+        assert [j for j in background.periodic_jobs() if j["plugin_id"] == "demo"] == []
+
+    def test_a_blueprint_that_cannot_be_registered_is_a_failed_load_too(self, tmp_path):
+        """A name already taken makes the replayed registration raise: the load fails and is marked, not swallowed."""
+        from flask import Flask
+
+        manifest = self._plugin(
+            tmp_path,
+            """
+            app.register_blueprint(bp)
+            app.register_blueprint(other_bp, name="demo_bp")
+            """,
+        )
+        assert plugins_svc._load_plugin(Flask("loader-test"), manifest) is False
+        assert plugins_svc.plugin_load_failed("demo") == "ValueError"
+
+    def test_a_fixed_plugin_loaded_again_clears_the_marker(self, tmp_path):
+        from flask import Flask
+
+        broken = self._plugin(tmp_path, "raise RuntimeError('first start')")
+        assert plugins_svc._load_plugin(Flask("loader-test"), broken) is False
+        assert plugins_svc.plugin_load_failed("demo") == "RuntimeError"
+        fixed = self._plugin(tmp_path, "app.register_blueprint(bp)")
+        assert plugins_svc._load_plugin(Flask("loader-test-2"), fixed) is True
+        assert plugins_svc.plugin_load_failed("demo") == ""
+
+    def test_a_test_double_app_gets_its_own_method_back_and_the_replayed_call(self, tmp_path):
+        manifest = self._plugin(tmp_path, "app.register_blueprint(bp, url_prefix='/p')")
+        app = MagicMock()
+        original = app.register_blueprint
+        assert plugins_svc._load_plugin(app, manifest) is True
+        assert app.register_blueprint is original
+        original.assert_called_once()
+        assert original.call_args.kwargs == {"url_prefix": "/p"}
+
+
+class TestThePluginsPageShowsALoadFailure:
+    """v5.69.0-beta.3 (Q172) - Settings -> Plugins says "Failed to load (<class>)" for an enabled plugin whose
+    register(app) raised in this process, and never prints the exception text."""
+
+    @pytest.fixture(autouse=True)
+    def _clean(self):
+        yield
+        plugins_svc._loaded_plugins.pop("demo", None)
+        plugins_svc._load_failed.pop("demo", None)
+        sys.modules.pop("jen_plugin_demo", None)
+
+    def _install(self, tmp_path, monkeypatch, enabled=True):
+        root = tmp_path / "root"
+        (root / "demo").mkdir(parents=True)
+        (root / "demo" / "manifest.json").write_text(
+            json.dumps(
+                {"id": "demo", "name": "Demo Plugin", "version": "1.0.0", "description": "x", "requires_jen": "0.0.0"}
+            ),
+            encoding="utf-8",
+        )
+        (root / "demo" / "plugin.py").write_text(
+            "def register(app):\n    raise OSError('private text /etc/jen/secret')\n", encoding="utf-8"
+        )
+        for attr in ("PLUGIN_DIR", "PLUGIN_DIR_BUNDLED"):
+            monkeypatch.setattr(extensions, attr, str(tmp_path / "absent" / attr))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_ROOT", str(root))
+        monkeypatch.setattr(extensions, "CONTENT_PLUGINS_ENABLED_DIR", str(tmp_path / "en"))
+        monkeypatch.setattr(extensions, "CONTENT_PLUGIN_REQUESTS_DIR", str(tmp_path / "requests"))
+        monkeypatch.setattr(plugins_svc, "fetch_registry", lambda: ([], None))
+        if enabled:
+            plugins_svc.enable_plugin("demo")
+        manifest = next(m for m in plugins_svc.discover_plugins() if m["id"] == "demo")
+        from flask import Flask
+
+        assert plugins_svc._load_plugin(Flask("page-test"), manifest) is False
+
+    def test_an_enabled_plugin_that_failed_is_shown_by_class_name(self, logged_in_client, tmp_path, monkeypatch):
+        self._install(tmp_path, monkeypatch)
+        r = logged_in_client.get("/settings/plugins")
+        assert r.status_code == 200
+        assert b"Failed to load (OSError)" in r.data
+        assert b"private text" not in r.data and b"/etc/jen/secret" not in r.data
+
+    def test_a_disabled_plugin_does_not_show_a_failure(self, logged_in_client, tmp_path, monkeypatch):
+        self._install(tmp_path, monkeypatch, enabled=False)
+        assert plugins_svc.plugin_load_failed("demo") == "OSError"  # it was tried, in this process
+        r = logged_in_client.get("/settings/plugins")
+        assert r.status_code == 200
+        assert b"Demo Plugin" in r.data and b"Failed to load" not in r.data
+
+    def test_a_plugin_that_loaded_shows_no_failure(self, logged_in_client, tmp_path, monkeypatch):
+        self._install(tmp_path, monkeypatch)
+        plugins_svc._load_failed.pop("demo", None)
+        r = logged_in_client.get("/settings/plugins")
+        assert r.status_code == 200
+        assert b"Demo Plugin" in r.data and b"Failed to load" not in r.data

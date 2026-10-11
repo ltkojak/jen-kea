@@ -78,6 +78,20 @@ logger = logging.getLogger(__name__)
 # In-memory registry of loaded plugin metadata
 _loaded_plugins: dict[str, dict] = {}
 
+# v5.69.0-beta.3 (Q172) - plugin_id -> the exception CLASS NAME its register(app) raised (never the text:
+# the text is in the log, an exception message can carry a path or a credential). Per-process state, not
+# a DB write: a plugin that failed to load failed in THIS process, and the next start tries again and
+# either clears it (_load_plugin) or sets it afresh. The Plugins page reads it through
+# plugin_load_failed(); only a plugin that is enabled shows it.
+_load_failed: dict[str, str] = {}
+
+
+def plugin_load_failed(plugin_id: str) -> str:
+    """The exception class name that stopped this plugin loading in this process, or "" when it loaded
+    (or was never tried). Pure read of the per-process marker."""
+    return _load_failed.get(plugin_id, "")
+
+
 # Registry-installed plugins go to extensions.PLUGIN_DIR (CONTENT_DIR); a
 # same-id copy there wins over the bundled one. Uninstalling a shipped
 # plugin only disables it. Which ids Jen ships is shipped_plugin_ids()
@@ -414,10 +428,52 @@ def sanitize_nav_icons(manifest: dict) -> None:
             item["icon"] = checked_nav_icon(item["icon"], f"plugin {manifest.get('id', '?')}")
 
 
+def _run_register_blueprints_last(app, register) -> None:
+    """v5.69.0-beta.3 (Q172) - run `register(app)` with `app.register_blueprint` swapped for a recorder, and
+    register what it recorded ONLY if `register` returned normally.
+
+    Every bundled plugin calls `app.register_blueprint(bp)` as its FIRST statement and then registers its
+    periodic jobs, alert types and providers, any of which can raise (the Q89 bug: a periodic job below the
+    floor). The blueprint was already on the app by then, so a plugin whose register() raised was half
+    loaded - its pages answered, its job and nav did not. Doing the deferral here, once, is the same
+    guarantee as moving the call to the end of each plugin's register() without editing and re-releasing
+    all of them; a third-party plugin gets it too.
+
+    The calls are replayed unchanged (`url_prefix`, `name`, ... pass through as keywords), in the order
+    the plugin made them, against the ORIGINAL bound method captured before the swap. The swap is undone
+    in a `finally`: a raise leaves the app exactly as it was. If a replayed registration itself raises
+    (a blueprint name already taken), the ones before it stay - Flask cannot unregister a blueprint."""
+    recorded: list[tuple] = []
+    original = app.register_blueprint
+    # A real Flask app has register_blueprint on its class: remove the instance override afterwards so the
+    # app is bit-for-bit what it was. Anything else (a test double) gets the original put back.
+    own = "register_blueprint" in getattr(app, "__dict__", {})
+    on_class = hasattr(type(app), "register_blueprint")
+
+    def _record(blueprint, **options):
+        recorded.append((blueprint, options))
+
+    app.register_blueprint = _record
+    try:
+        register(app)
+    finally:
+        if on_class and not own:
+            del app.register_blueprint
+        else:
+            app.register_blueprint = original
+    for blueprint, options in recorded:
+        original(blueprint, **options)
+
+
 def _load_plugin(app, manifest: dict) -> bool:
     """
     Load a single plugin: run its plugin.py register(app) if present.
     Returns True on success.
+
+    v5.69.0-beta.3 (Q172) - the plugin's blueprints are registered only after its register(app) returned
+    (_run_register_blueprints_last). A raise registers NO route from that plugin, drops any periodic job it
+    had already registered, is logged ("Failed to load plugin", with the text), and is marked for the
+    Plugins page by exception class name only (plugin_load_failed).
     """
     plugin_id = manifest["id"]
     path = manifest["path"]
@@ -431,7 +487,7 @@ def _load_plugin(app, manifest: dict) -> bool:
             sys.modules[f"jen_plugin_{plugin_id}"] = module
             spec.loader.exec_module(module)
             if hasattr(module, "register"):
-                module.register(app)
+                _run_register_blueprints_last(app, module.register)
                 logger.info(f"Plugin '{plugin_id}' registered successfully")
             else:
                 logger.warning(f"Plugin '{plugin_id}' has plugin.py but no register() function")
@@ -440,10 +496,22 @@ def _load_plugin(app, manifest: dict) -> bool:
         # No need to manually append to searchpath
 
         _loaded_plugins[plugin_id] = manifest
+        _load_failed.pop(plugin_id, None)
         return True
 
     except Exception as e:
         logger.error(f"Failed to load plugin '{plugin_id}': {e}")
+        _load_failed[plugin_id] = type(e).__name__
+        _loaded_plugins.pop(plugin_id, None)
+        # a job registered before the raise would keep running for a plugin that did not load
+        try:
+            from jen.services.background import unregister_periodic
+
+            unregister_periodic(plugin_id)
+        except Exception as cleanup_error:
+            logger.warning(
+                f"Could not drop the periodic jobs of the plugin '{plugin_id}' that failed to load: {cleanup_error}"
+            )
         return False
 
 
@@ -628,13 +696,26 @@ _RESULT_RE = re.compile(r"^(?P<id>[a-z0-9][a-z0-9-]{0,63})\.(?P<action>install|r
 
 # ── OS-package dependencies (v5.30.0, Q30, A1) ──────────────────────────────
 # A manifest may declare `"os_packages": ["nmap"]` — Debian/Ubuntu package
-# names whose binary of the same name the plugin shells out to. Jen only
+# names whose binary the plugin shells out to. Jen only
 # ever REPORTS what's missing (shutil.which) and, on a systemd host, asks
 # the root-run request processor to install them; that script re-derives
 # the list from the registry and applies its own allowlist. Nothing here
 # runs apt.
 
 _PKG_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9.+-]{0,63}$")
+
+# v5.69.0-beta.3 (Q172) - a package is NOT always named like its binary: `iputils-ping` ships `ping` and `snmp`
+# ships `snmpbulkwalk`, so `shutil.which("<package>")` reported both missing forever and the page offered to
+# install what was installed. One entry per package in the root service's allowlist
+# (`_DEPS_ALLOWED_PACKAGES` in jen-update-root.py); tests/test_plugin_registry.py::TestOsPackageBinaryMap holds
+# every bundled manifest's `os_packages` to this map AND to that allowlist, so a plugin cannot declare a package
+# Jen cannot check. A package with no entry is looked up under its own name; one is present when ANY of its
+# binaries is on PATH.
+OS_PACKAGE_BINARIES: dict[str, tuple[str, ...]] = {
+    "iputils-ping": ("ping",),
+    "snmp": ("snmpbulkwalk",),
+    "nmap": ("nmap",),
+}
 
 
 def os_packages_of(manifest: dict) -> list[str]:
@@ -648,12 +729,10 @@ def os_packages_of(manifest: dict) -> list[str]:
 
 
 def missing_os_packages(manifest: dict) -> list[str]:
-    """The declared packages whose binary isn't on this host's PATH. The
-    binary is assumed to be named like the package (true for nmap — the
-    only package in the root script's allowlist today)."""
-    import shutil
-
-    return [p for p in os_packages_of(manifest) if shutil.which(p) is None]
+    """The declared packages none of whose binaries is on this host's PATH
+    (OS_PACKAGE_BINARIES says which binaries a package provides; a package
+    not in the map is looked up under its own name)."""
+    return [p for p in os_packages_of(manifest) if not any(shutil.which(b) for b in OS_PACKAGE_BINARIES.get(p, (p,)))]
 
 
 def request_plugin_deps(plugin_id: str) -> tuple[bool, str]:
@@ -1055,11 +1134,13 @@ def uninstall_plugin(plugin_id: str) -> tuple[bool, str]:
         if plugin_id in shipped_plugin_ids():
             disable_plugin(plugin_id)
             _loaded_plugins.pop(plugin_id, None)
+            _load_failed.pop(plugin_id, None)
             return True, f"'{plugin_id}' is a built-in plugin and can't be removed — it has been disabled instead."
         return False, "Plugin not found."
     try:
         shutil.rmtree(path)
         _loaded_plugins.pop(plugin_id, None)
+        _load_failed.pop(plugin_id, None)
         if _plugin_dir(plugin_id) is None:  # no shipped or root-owned copy left either
             mark_plugin_uninstalled(plugin_id)
         logger.info(f"Plugin '{plugin_id}' uninstalled")
