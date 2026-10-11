@@ -1,5 +1,27 @@
 # Host Watchdog Plugin — Changelog
 
+## [1.1.1] - 2026-10-11
+
+Fix. `requires_jen` stays 5.68.0; the `scoped` argument of `send_alert` this release uses is in Jen 5.68.0-beta.9 and later.
+
+### Fixed: an alert about a target in no Kea subnet no longer goes to channels limited to some subnets
+
+A target whose address is in no Kea subnet has no subnet id, and `send_alert(..., subnet_id=None)` means "not about one subnet", which Jen
+delivers to every channel, a channel the operator limited to particular subnets included. Such a channel is the operator's statement of which
+hosts they want to hear about, and a host in no subnet at all is not one of them. The down and up alerts for a target with no subnet id are
+now sent with `scoped=True`, which Jen reads as "about one host Jen could not place": only channels with no subnet scope receive it. A target
+that has a subnet is sent exactly as before, and the alert text, the Timeline event and the page are unchanged.
+
+### Fixed: adding a target says one thing when the address is out of reach
+
+The *Add target* form refused an address with one sentence when it was inside a Kea subnet the caller cannot see, and another when it was in
+no Kea subnet at all, so a scoped admin could ask the form which addresses are inside any Kea subnet. Both are now *That address is not in a
+subnet you can access.*, which does not say which it was. The *Watch this host* row action, which already refused both with one sentence,
+uses the same words.
+
+The harness runs the real `_alert_transition`, `add_target` and `watch_from_row`: the alert carries `scoped=True` exactly when the target has
+no subnet, for both the down and the up alert, and the two refusals are the very same text with nothing written.
+
 ## [1.1.0] - 2026-10-04
 
 Requires Jen 5.68.0 (a 5.68.0 beta satisfies it): this release registers an **investigation provider**.

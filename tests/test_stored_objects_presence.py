@@ -111,3 +111,33 @@ class TestDirection2TrackedInAClientNowInB:
         login(pclient, db, "admin_A")
         pclient.post(f"{PR}/move/{D_MAC}", data={"subnet_id": "2"})
         assert _owner(db, D_MAC) == 1
+
+
+class TestQ171OneRefusalForAHiddenRowAndAHiddenClient:
+    """v5.69.0-beta.2 (Q171) - Presence 1.2.4: tracking a MAC whose tracked row belongs to a subnet the caller cannot see, and tracking a MAC that is not in the caller's subnets at all,
+    are ONE sentence - the two used to differ, which told a scoped caller whether a hidden client was already tracked."""
+
+    SENTENCE = "That tracked entry is not yours to change."
+
+    def _flashed(self, pclient, db, mac):
+        r = pclient.post(f"{PR}/track", data={"mac": mac, "label": "x"}, follow_redirects=True)
+        body = r.get_data(as_text=True)
+        assert_no_marker(body, ignore=(mac,))
+        return self.SENTENCE in body, "subnet you can access" in body
+
+    def test_hidden_row_and_hidden_client_get_the_same_sentence(self, pclient, db, stored_objects):
+        from tests.test_authz_matrix import B2_MAC
+
+        login(pclient, db, "admin_A")
+        hidden_row = self._flashed(pclient, db, A_MAC)  # tracked by B, the client is in A
+        hidden_client = self._flashed(pclient, db, B2_MAC)  # not tracked, the client is in B
+        assert hidden_row == hidden_client == (True, False), (hidden_row, hidden_client)
+        assert _owner(db, A_MAC) == 2 and _owner(db, B2_MAC) is None
+
+    def test_a_visible_client_is_still_tracked(self, pclient, db, stored_objects):
+        from tests.test_authz_matrix import A2_MAC
+
+        login(pclient, db, "admin_A")
+        r = pclient.post(f"{PR}/track", data={"mac": A2_MAC, "label": "mine"}, follow_redirects=True)
+        assert "Now tracking" in r.get_data(as_text=True)
+        assert _owner(db, A2_MAC) == 1

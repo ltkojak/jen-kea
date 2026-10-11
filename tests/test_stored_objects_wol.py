@@ -141,3 +141,48 @@ class TestDirection2StoredInAClientNowInB:
             "/api/v1/plugins/wol/wake", data=json.dumps({"mac": D_MAC}), headers=headers, follow_redirects=False
         )
         assert r.status_code in (403, 404) and packets == []
+
+
+class TestQ171AWakeStampsOnlyAFavouriteTheCallerMaySee:
+    """v5.69.0-beta.2 (Q171) - Wake & Actions 1.1.5: `last_woken_at/by` is written only for a favourite judged visible to the caller, so a wake of the host never tells the
+    owner of a hidden favourite which account woke it, and the refusal for a favourite that is not the caller's says so without a claim about the MAC."""
+
+    def _stamp(self, db, mac):
+        return one(db, "SELECT last_woken_at, last_woken_by FROM wol_hosts WHERE mac=%s", (mac,))
+
+    def test_a_scoped_callers_wake_of_the_host_does_not_stamp_the_hidden_favourite(
+        self, pclient, db, stored_objects, packets
+    ):
+        login(pclient, db, "admin_A")
+        pclient.post(f"{WOL}/wake?mac={A_MAC}")
+        assert [m for m, _c, _s in packets] == [A_MAC], "the host is in A: the wake itself goes ahead"
+        stamp = self._stamp(db, A_MAC)
+        assert stamp["last_woken_at"] is None and stamp["last_woken_by"] is None, stamp
+
+    def test_the_same_wake_by_an_unrestricted_caller_stamps_it(self, pclient, db, stored_objects, packets):
+        login(pclient, db, "admin_all")
+        pclient.post(f"{WOL}/wake?mac={A_MAC}")
+        stamp = self._stamp(db, A_MAC)
+        assert stamp["last_woken_at"] is not None and stamp["last_woken_by"] == "authz_admin_all"
+
+    def test_a_scoped_keys_wake_does_not_stamp_it_either(self, pclient, db, stored_objects, packets):
+        headers = login(pclient, db, "key_write")
+        r = pclient.post(
+            "/api/v1/plugins/wol/wake", data=json.dumps({"mac": A_MAC}), headers=headers, follow_redirects=False
+        )
+        assert r.status_code == 200
+        assert self._stamp(db, A_MAC)["last_woken_by"] is None
+
+    def test_add_over_a_favourite_that_is_not_the_callers_says_so_and_nothing_about_the_mac(
+        self, pclient, db, stored_objects
+    ):
+        login(pclient, db, "admin_A")
+        r = pclient.post(
+            WOL + "/favourites/add",
+            data={"mac": A_MAC, "label": "hijacked", "secureon": ""},
+            follow_redirects=True,
+        )
+        body = r.get_data(as_text=True)
+        assert "That favourite is not yours to change." in body
+        assert "subnet you can access" not in body
+        assert_no_marker(body)

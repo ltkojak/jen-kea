@@ -497,6 +497,11 @@ def _record_results(by_id, results):
         _alert_transition(target, new_state)
 
 
+# v1.1.1 - ONE refusal for an address the caller may not add: 1.1.0 had two sentences, one for an address in a Kea subnet the caller
+# cannot see and one for an address in no Kea subnet, so a scoped admin could probe which addresses are inside ANY Kea subnet.
+ADDRESS_REFUSAL = "That address is not in a subnet you can access."
+
+
 def _alert_transition(target, new_state):
     alert_type = "watchdog_down" if new_state == "down" else "watchdog_up"
     label = target.get("label") or target["ip"]
@@ -504,12 +509,18 @@ def _alert_transition(target, new_state):
     try:
         from jen.plugin_api import send_alert
 
+        # v1.1.1 - a target in no Kea subnet has no subnet to scope the alert by. Without `scoped=True` such an alert went to EVERY
+        # channel, a subnet-scoped one included (the scope reads "no subnet" as "not about a subnet"); with it only a channel that
+        # has no subnet scope receives it, which is what the operator who limited a channel to some subnets asked for. A target
+        # that has a subnet is sent exactly as before.
+        extra = {"scoped": True} if target.get("subnet_id") is None else {}
         send_alert(
             alert_type,
             subnet_id=target.get("subnet_id"),
             label=label,
             ip=target["ip"],
             subnet=subnet_name or "no Kea subnet",
+            **extra,
         )
     except Exception as e:
         logger.warning(f"Watchdog: could not send {alert_type} alert: {e}")
@@ -776,12 +787,7 @@ def add_target():
 
     subnet_id = derive_subnet_id(ip, _subnet_map())
     if not _can(subnet_id):
-        flash(
-            "That address is outside your accessible subnets."
-            if subnet_id is not None
-            else "That address isn't in any subnet you have full access to.",
-            "error",
-        )
+        flash(ADDRESS_REFUSAL, "error")
         return redirect(url_for("watchdog.index"))
 
     db = None
@@ -920,7 +926,7 @@ def watch_from_row():
     # against one subnet and watch a host in another.
     subnet_id = derive_subnet_id(ip, _subnet_map())
     if not _can(subnet_id):
-        flash("That address is outside your accessible subnets.", "error")
+        flash(ADDRESS_REFUSAL, "error")
         return redirect(url_for("watchdog.index"))
 
     db = None
