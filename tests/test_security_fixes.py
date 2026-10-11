@@ -36,7 +36,7 @@ class TestSubnetRestrictionOnMutations:
             },
         )
         assert r.status_code == 400
-        assert b"do not have access" in r.data.lower()
+        assert b"subnet not found" in r.data.lower()  # v5.69.0-beta.2 (Q171 fixup, G8)
 
     def test_edit_reservation_rejected_for_out_of_scope_subnet(self, client, db, mock_kea):
         with db.cursor() as cur:

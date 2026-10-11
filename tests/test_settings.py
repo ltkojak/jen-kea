@@ -392,9 +392,12 @@ class TestMfaPolicyIsNeverWeakenedByAnAdmin:
     def _option_tags(body):
         import re
 
+        # only the MFA policy select: the rate-limit select on the same page also has an option called "off"
+        start = body.index('name="mfa_mode"')
+        select = body[start : body.index("</select>", start)]
         return {
             m.group(1): m.group(0)
-            for m in re.finditer(r'<option value="(off|optional|required_admins|required_all)"[^>]*>', body)
+            for m in re.finditer(r'<option value="(off|optional|required_admins|required_all)"[^>]*>', select)
         }
 
     def test_the_page_disables_the_weaker_options_for_an_admin(self, client, db):

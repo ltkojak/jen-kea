@@ -308,7 +308,7 @@ class TestAddReservation6Route:
             },
         )
         assert resp.status_code == 400
-        assert b"do not have access" in resp.data
+        assert b"Subnet not found." in resp.data  # v5.69.0-beta.2 (Q171 fixup, G8)
 
     def test_post_rejects_missing_address_and_prefix(self, logged_in_client, monkeypatch):
         monkeypatch.setattr(

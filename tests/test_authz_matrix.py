@@ -399,7 +399,8 @@ SURFACES = [
         f"/api/v1/devices/{B_MAC}",
         {"name": "hijack"},
         {"key_read": {403}, "key_write": {403, 404}},
-        (),
+        # the 404 says "No device with MAC <the MAC in the URL>" - the answer for a MAC that is not there, naming only what the caller typed (Q171 fixup, G6)
+        (B_MAC,),
     ),
     (
         # v5.56.1 (Q68l) — the events_feed catalog widget now filters in

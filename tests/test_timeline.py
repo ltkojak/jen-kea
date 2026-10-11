@@ -236,17 +236,19 @@ class TestTimelinePage:
         db.commit()
         c, _uid = restricted_client(client, db, allowed_subnets=[1], role="viewer", username="tl_viewer_one_sentence")
 
+        from markupsafe import escape
+
         def asked(mac, headers=None):
             r = c.get(f"/timeline?mac={mac}", headers=headers or {})
-            with c.session_transaction() as sess:
-                flashed = [m for _cat, m in sess.pop("_flashes", [])]
-            return r.status_code, flashed, r.get_data(as_text=True)
+            return r.status_code, r.get_data(as_text=True)
 
+        # the page renders the flash it was handed (so it is read from the body, apostrophe escaped), and says it for both
         hidden = asked("aa:bb:cc:dd:ee:01")
         unknown = asked("aa:bb:cc:dd:ee:99")
-        assert hidden[:2] == unknown[:2] == (200, [NO_MATCH])
+        assert hidden[0] == unknown[0] == 200
+        assert str(escape(NO_MATCH)) in hidden[1] and str(escape(NO_MATCH)) in unknown[1]
         hx = {"HX-Request": "true"}
-        assert asked("aa:bb:cc:dd:ee:01", hx)[2] == asked("aa:bb:cc:dd:ee:99", hx)[2] == f"<p>{NO_MATCH}</p>"
+        assert asked("aa:bb:cc:dd:ee:01", hx) == asked("aa:bb:cc:dd:ee:99", hx) == (200, f"<p>{NO_MATCH}</p>")
 
     def test_restricted_user_allowed_when_subnet_accessible(self, client, db):
         from tests.conftest import restricted_client
