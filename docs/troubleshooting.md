@@ -233,6 +233,16 @@ Two failure signatures, both meaning "Jen fell back to the legacy root
 
 **"Investigation logging is not switched on (early access in 5.68, off by default)" (v5.68.0-beta.30).** Turning logging on is opt-in: a superadmin switches it on under **Settings → Kea → Investigation logging**. Nothing else is affected - a session that is already on is still restored and shown.
 
+**"the helper could not ask Kea directly" (v5.69.0-beta.1, helper build 18, `socket_note`).** Beside a failed restore, Health names why the helper did not ask the running Kea for its logger:
+"the credential file is not one the helper reads" means the control socket's `user-file` / `password-file` is not a regular file with ONE link directly in `/etc/kea`, owned by root or by Kea's own
+account, and writable by neither group nor everyone (`sudo chown root:root /etc/kea/<file>; sudo chmod 640 /etc/kea/<file>` - and no second hard link to it); "the unix socket is outside the
+directories the helper connects to" means `socket-name` is not under `/run/kea`, `/var/run/kea` or `/tmp`; "the http socket is https or not local" means the helper only speaks plain HTTP to this host.
+Restores still finish from Kea's log or a fresh process; this is the reason they cannot be confirmed from the daemon's own answer.
+
+**"the Kea host helper would not run the check as root" (v5.69.0-beta.1, helper build 18).** When no systemd unit of the two names Kea's packages use (`kea-dhcp4-server`, `isc-kea-dhcp4-server`) is
+found and a `_kea` or `kea` account exists, the helper refuses to validate a config as root, because the daemon will read it as that account. A daemon run under another account name, or from a unit named
+otherwise, is outside what the helper can tell: the fix is for the unit to carry one of the two names (a `[kea_ssh]` setting that names the unit is planned).
+
 **"restart refused: the restart budget could not be recorded on disk" (v5.69.0-beta.1, helper build 18).** The helper spends a session's one restart of Kea only after it has written that
 fact to `/var/lib/jen-kea-helper/investigation-dhcp4.json` and synced the directory, so a helper killed between the restart and the end of its work can never restart Kea a second time. This
 message means the write failed (a full disk, a read-only `/var/lib`, an I/O error - the text names it): nothing was restarted, the session stays unresolved and the next minute's tick tries again.

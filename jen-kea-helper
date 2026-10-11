@@ -372,6 +372,12 @@ _ALLOWED_SERVICES = ("dhcp4", "dhcp6", "d2")
 _CRED_ROOT = "/etc/kea"
 _SOCKET_DIRS = ("/run/kea", "/var/run/kea", "/tmp")  # nosec B108 - a directory the daemon's socket may be in, never one the helper writes
 _CRED_MAX = 4096
+# every read-only open the helper judges on its DESCRIPTOR is non-blocking (build 18, Q170 fixup): a FIFO or a device at a path the helper opens must be seen by `fstat` before any read can wait
+# on it. `O_NONBLOCK` changes nothing for a regular file.
+_DIR_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NOCTTY", 0)
+_READ_FLAGS = (
+    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOCTTY", 0) | getattr(os, "O_BINARY", 0)
+)
 
 
 def _is_under(path, root):
@@ -434,9 +440,8 @@ def _open_conf(path):
     """(raw bytes, os.stat_result) of a config file, opened `O_RDONLY | O_NOFOLLOW | O_NOCTTY` and checked `S_ISREG` on the DESCRIPTOR. `_allowed_conf_path` is a string wall; a
     daemon-owned /etc/kea lets its account plant a symlink at an allowed name, so every reader opens through here. A symlink or a non-regular file is `_ConfLink`; a missing file
     is `FileNotFoundError`; anything else is the OSError it is."""
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NOCTTY", 0) | getattr(os, "O_BINARY", 0)
     try:
-        fd = os.open(path, flags)
+        fd = os.open(path, _READ_FLAGS)
     except OSError as e:
         if e.errno == errno.ELOOP:
             raise _ConfLink(errno.ELOOP, "a symlink is never followed", path) from e
@@ -843,12 +848,14 @@ def _commit_file_set(members, dir_fd=None, label_dir=None):
             _finish_private(fd, uid, gid, mode, tmp)
         for path, _tmp in staged:
             try:
-                rfd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0), **at)
+                rfd = os.open(path, _READ_FLAGS, **at)
             except FileNotFoundError:
                 snapshots[path] = None
                 continue
             try:
                 st = os.fstat(rfd)
+                if not stat.S_ISREG(st.st_mode):
+                    raise OSError(errno.EINVAL, "refusing to replace what is not a regular file", path)
                 with os.fdopen(rfd, "rb", closefd=False) as f:
                     snapshots[path] = (f.read(), st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode))
             finally:
@@ -896,12 +903,13 @@ def _lock_dir():
 
 
 @contextlib.contextmanager
-def _locked(path, wait_s=None):
+def _locked(path, wait_s=None, old_lock=True):
     """Hold an exclusive `flock` for the whole operation on `path`. EVERY test-config, apply-config, remove-config and install-tls takes it (build 13). Build 18 (Q170): the lock
     file is `/var/lib/jen-kea-helper/locks/<sha256(path)[:16]>.lock` - a root-only directory the daemon's account cannot reach - and the old `<path>.jen_lock` (in a directory the
     daemon may own) is taken SECOND and held too, for this one build, so a build-17 helper mid-operation and a build-18 helper never run concurrently on one file (build 19 drops it).
-    `wait_s=None` blocks (the operations Jen bounds with its own SSH timeout); a number polls `LOCK_NB` every half second and raises `_LockBusy` at that many seconds on the
-    clock - a hung holder cannot hold a restore forever. A held lock is released when the descriptor closes, including when this process dies."""
+    `old_lock=False` (install-tls: the set commit is all-or-nothing and nothing in build 17 locked the TLS directory in a way that matters) takes the new lock only. `wait_s=None` blocks
+    (the operations Jen bounds with its own SSH timeout); a number polls `LOCK_NB` every half second and raises `_LockBusy` at that many seconds on the clock - ONE deadline across both
+    locks - so a hung holder cannot hold a restore forever. A held lock is released when the descriptor closes, including when this process dies."""
     try:
         import fcntl  # Linux-only: the helper only ever runs there
     except ImportError:  # the Windows dev box that imports this file for its tests: no flock, so no lock
@@ -910,8 +918,9 @@ def _locked(path, wait_s=None):
     _ensure_state_dir()
     new_path = os.path.join(_lock_dir(), hashlib.sha256(path.encode("utf-8")).hexdigest()[:16] + ".lock")
     fds = []
+    deadline = _monotonic() + wait_s if wait_s is not None else None
     try:
-        for lock_path in (new_path, path + ".jen_lock"):
+        for lock_path in (new_path, path + ".jen_lock") if old_lock else (new_path,):
             fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
             fds.append(fd)
             with contextlib.suppress(OSError):
@@ -919,7 +928,6 @@ def _locked(path, wait_s=None):
             if wait_s is None:
                 fcntl.flock(fd, fcntl.LOCK_EX)
                 continue
-            deadline = _monotonic() + wait_s
             while True:
                 try:
                     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -1017,7 +1025,7 @@ def op_read_config(payload):
     except FileNotFoundError:
         return {"ok": False, "error": "missing"}, path
     except OSError as e:
-        return {"ok": False, "error": "invalid-json", "detail": str(e)}, path
+        return {"ok": False, "error": "unreadable", "detail": str(e)}, path
     try:
         return {"ok": True, "config": json.loads(raw), "sha256": hashlib.sha256(raw).hexdigest()}, path
     except (ValueError, RecursionError) as e:
@@ -1081,7 +1089,7 @@ def op_apply_config(payload):
             # the replacement keeps the destination's owner and mode, and is 0600 until it is complete (build 13) - except that a config anyone can read
             # (0644, 0664: it carries `lease-database.password`) is tightened to root:<the daemon's group> 0640 (build 18, Q170)
             uid, gid, mode = st.st_uid, st.st_gid, st.st_mode & 0o777
-            if mode & 0o007:
+            if mode & 0o007 and _resolve_unit(service) is not None:  # (no unit seen: `_unit_account` would say root, and the daemon's account could not read the file back)
                 account = _unit_account(service)
                 if account is not None and "refused" in account:
                     return {"ok": False, "error": "unit-account", "detail": account["refused"]}, path
@@ -1188,7 +1196,7 @@ def op_tail_log(payload):
     lines = max(1, min(lines, 1000))
     # build 18 (Q170): opened `O_NOFOLLOW` and checked regular ON THE DESCRIPTOR - a log that was a regular file when the string wall looked is not followed to anything else now
     try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NOCTTY", 0) | getattr(os, "O_BINARY", 0))
+        fd = os.open(path, _READ_FLAGS)
     except FileNotFoundError:
         return {"ok": False, "error": "missing"}, path
     except OSError as e:
@@ -1294,7 +1302,7 @@ def op_install_tls(payload):
         svc_fd = level_fds[-1]
 
         members = [(name, files[name].encode("utf-8"), 0, gid, 0o640 if name == "server.key" else 0o644) for name in _TLS_FILES]
-        with _locked(target_dir):  # build 13: two installs for one service never interleave
+        with _locked(target_dir, old_lock=False):  # build 13: two installs for one service never interleave
             try:
                 _commit_file_set(members, dir_fd=svc_fd, label_dir=target_dir)  # build 14: all three or none - a failure puts every replaced member back
             except OSError as e:
@@ -1813,9 +1821,10 @@ _LOCAL_ADDRESSES = {"127.0.0.1": "127.0.0.1", "localhost": "127.0.0.1", "::1": "
 
 
 def _credential_file_ok(st):
-    """May the helper take a credential from a file with these `fstat` results (build 18, Q170)? A regular file, at most `_CRED_MAX` bytes, owned by root or by the account the
-    daemon runs as, and writable by neither group nor everyone. In its own function so a test, whose files are never root-owned, monkeypatches it as `_bin_owner_ok` is."""
-    if not stat.S_ISREG(st.st_mode) or st.st_size > _CRED_MAX or st.st_mode & 0o022:
+    """May the helper take a credential from a file with these `fstat` results (build 18, Q170)? A regular file with exactly ONE link (a hard link to a root-readable file is the same
+    inode and the same owner), at most `_CRED_MAX` bytes, owned by root or by the account the daemon runs as, and writable by neither group nor everyone. In its own function so a
+    test, whose files are never root-owned, monkeypatches it as `_bin_owner_ok` is."""
+    if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or st.st_size > _CRED_MAX or st.st_mode & 0o022:
         return False
     if st.st_uid == 0:
         return True
@@ -1824,25 +1833,32 @@ def _credential_file_ok(st):
 
 
 def _read_credential(directory, name):
-    """The first line, stripped, of the credential file `name` in `directory` - or None. The directory must resolve (realpath) to `_CRED_ROOT` or below it; the name is a bare file name;
-    the file is opened `O_NOFOLLOW` and judged on its descriptor. Nothing is read from a path the wall does not name (build 18, Q170)."""
+    """The first line, stripped, of the credential file `name` in `directory` - or None. `directory` must be `_CRED_ROOT` itself (the one directory Jen authors; its parent is root's);
+    it is opened `O_DIRECTORY | O_NOFOLLOW` and the bare file name is opened relative to THAT descriptor, `O_NOFOLLOW | O_NONBLOCK`, and judged on its own descriptor. No path is resolved
+    twice, so nothing the daemon's account can rename between a look and a read is followed (build 18, Q170 and its fixup)."""
     if not isinstance(directory, str) or not isinstance(name, str) or not name or "/" in name or name in (".", ".."):
         return None
-    if not _is_under(directory, _CRED_ROOT):
+    if posixpath.normpath(directory) != _CRED_ROOT:
         return None
-    real_dir = os.path.realpath(directory)
     try:
-        fd = os.open(os.path.join(real_dir, name), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NOCTTY", 0) | getattr(os, "O_BINARY", 0))
+        dir_fd = os.open(_CRED_ROOT, _DIR_FLAGS)
     except OSError:
         return None
     try:
-        if not _credential_file_ok(os.fstat(fd)):
+        try:
+            fd = os.open(name, _READ_FLAGS, dir_fd=dir_fd)
+        except OSError:
             return None
-        data = os.read(fd, _CRED_MAX + 1)
-    except OSError:
-        return None
+        try:
+            if not _credential_file_ok(os.fstat(fd)):
+                return None
+            data = os.read(fd, _CRED_MAX + 1)
+        except OSError:
+            return None
+        finally:
+            os.close(fd)
     finally:
-        os.close(fd)
+        os.close(dir_fd)
     if len(data) > _CRED_MAX:
         return None
     lines = data.decode("utf-8", "replace").splitlines()
@@ -1874,34 +1890,52 @@ def _socket_path_ok(name):
     return any(_is_under(name, d) for d in _SOCKET_DIRS)
 
 
+_NOTE_NO_SOCKET = "no control socket in the config"
+_NOTE_UNIX_WALL = "the unix socket is outside the directories the helper connects to"
+_NOTE_CREDENTIAL = (
+    "the credential file is not one the helper reads (it must be in /etc/kea, a regular file with one link, owned by root or the daemon's account, not group- or world-writable)"
+)
+_NOTE_HTTP = "the http socket is https or not local"
+
+
 def _control_socket(config):
-    """The dhcp4 daemon's own control socket from its config: ("unix", path) for a unix socket (preferred), ("http", (address, port, user, password)) for a PLAIN http socket bound to
-    a local address with basic auth whose credentials are inline or in files - the two shapes Jen authors - else None (https, a remote address, no auth, a socket or a credential
-    file outside the walls: no socket evidence; the log and the process remain). Called ONLY with a config that passed `-t` in this process or is the file the helper wrote itself. `control-socket` (singular, pre-2.7.2) is read as a one-entry list. 0.0.0.0 and :: are asked at 127.0.0.1 / ::1."""
+    """(spec, note). `spec` is the dhcp4 daemon's own control socket from its config: ("unix", path) for a unix socket (preferred), ("http", (address, port, user, password)) for a PLAIN
+    http socket bound to a local address with basic auth whose credentials are inline or in files - the two shapes Jen authors - else None, and then `note` says why the helper will not
+    use a socket (build 18 fixup: a restore that falls back to the log or the process says what it could not ask, instead of looking like a daemon that never answered). Called ONLY with
+    a config that passed `-t` in this process or is the file the helper wrote itself. `control-socket` (singular, pre-2.7.2) is read as a one-entry list. 0.0.0.0 and :: are asked at
+    127.0.0.1 / ::1."""
     section = config.get("Dhcp4") if isinstance(config, dict) else None
     if not isinstance(section, dict):
-        return None
+        return None, _NOTE_NO_SOCKET
     entries = section.get("control-sockets")
     if entries is None and isinstance(section.get("control-socket"), dict):
         entries = [section["control-socket"]]
     if not isinstance(entries, list):
-        return None
+        return None, _NOTE_NO_SOCKET
     entries = [e for e in entries if isinstance(e, dict)]
+    notes = []
     for entry in entries:
         name = entry.get("socket-name")
-        if str(entry.get("socket-type") or "").lower() == "unix" and isinstance(name, str) and name.startswith("/") and _socket_path_ok(name):
-            return "unix", name
+        if str(entry.get("socket-type") or "").lower() == "unix" and isinstance(name, str) and name.startswith("/"):
+            if _socket_path_ok(name):
+                return ("unix", name), ""
+            notes.append(_NOTE_UNIX_WALL)
     for entry in entries:
         if str(entry.get("socket-type") or "").lower() != "http":
             continue
         if any(k in entry for k in ("trust-anchor", "cert-file", "key-file", "cert-required")):
-            continue  # https: the helper does not speak TLS to the daemon
+            notes.append(_NOTE_HTTP)  # https: the helper does not speak TLS to the daemon
+            continue
         address = _LOCAL_ADDRESSES.get(str(entry.get("socket-address") or "127.0.0.1").lower())
         port = entry.get("socket-port", 8000)
+        if not (address and isinstance(port, int) and not isinstance(port, bool) and 0 < port < 65536):
+            notes.append(_NOTE_HTTP)
+            continue
         credentials = _http_credentials(entry)
-        if address and isinstance(port, int) and not isinstance(port, bool) and 0 < port < 65536 and credentials:
-            return "http", (address, port, credentials[0], credentials[1])
-    return None
+        if credentials:
+            return ("http", (address, port, credentials[0], credentials[1])), ""
+        notes.append(_NOTE_CREDENTIAL)
+    return None, (notes[0] if notes else _NOTE_NO_SOCKET)
 
 
 def _ask_daemon(sock_spec, command):
@@ -2022,10 +2056,12 @@ class _LogCursor:
     def _read(self, path, start):
         """(bytes, count) past `start`, or (None, 0) when the file cannot be read."""
         try:
-            fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NOCTTY", 0) | getattr(os, "O_BINARY", 0))
+            fd = os.open(path, _READ_FLAGS)
         except OSError:
             return None, 0
         try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                return None, 0
             os.lseek(fd, start, os.SEEK_SET)
             data = os.read(fd, _LOG_READ_MAX)
         except OSError:
@@ -2143,7 +2179,11 @@ def _reload_daemon(service, state, config):
     unit = _resolve_unit(service)
     if unit is None:
         return None, None, "no Kea unit was found on this host"
-    sock = _control_socket(config)
+    sock, socket_note = _control_socket(config)
+    if sock is None:
+        state["socket_note"] = socket_note  # (shown by status; Jen appends it to a failed restore's line)
+    else:
+        state.pop("socket_note", None)
     file_entry = _logger_entry(config)
     cursor = None
     for candidate in (state.get("log_path"), _file_log_path(config)):  # the stored path first; the file's own output when that no longer reads
@@ -2207,8 +2247,9 @@ def _restore_state(service, state):
     try:
         with _locked(path, wait_s=_LOCK_WAIT_S):
             return _restore_locked(service, state, path)
-    except _LockBusy as e:
-        return _restore_failed(service, state, f"the config lock is held by another process ({e}); the next tick retries")
+    except (_LockBusy, OSError) as e:
+        # (a lock held by another process, or one that cannot be opened at all - a link planted where it lives, a full disk: `_restore_locked` handles its own file errors)
+        return _restore_failed(service, state, f"the config lock could not be taken ({e}); the next tick retries")
 
 
 def _restore_locked(service, state, path):
@@ -2254,7 +2295,10 @@ def _restore_locked(service, state, path):
         last_error=None,
         needs_hand=False,
     )
-    _save_state(service, state)
+    try:
+        _save_state(service, state)
+    except OSError as e:
+        return _restore_failed(service, state, f"Kea was restored but the record of it could not be saved ({e.strerror or e}); the next tick checks again")
     return True, how, ""
 
 
@@ -2334,7 +2378,10 @@ def _arm_locked(state, path):
     log_path = state["log_path"] or (_file_log_path(config) if isinstance(config, dict) else None)
     cursor = _LogCursor(log_path) if log_path else None
     has_log = cursor is not None and cursor.usable
-    if _control_socket(config) is None and not has_log:
+    sock_spec, socket_note = _control_socket(config)
+    if sock_spec is None:
+        state["socket_note"] = socket_note
+    if sock_spec is None and not has_log:
         return {
             "ok": False,
             "error": "no-evidence",
@@ -2444,6 +2491,7 @@ def _status_view(state):
         "how": state.get("how"),
         "last_error": state.get("last_error"),
         "timer_error": timer_error,
+        "socket_note": state.get("socket_note"),
         "restore": state.get("restore"),
         "jen": state.get("jen") or {},
     }

@@ -975,7 +975,7 @@ def test_the_daemons_own_control_socket_answers_config_get(findings):
 
     # the helper's OWN functions, against the real daemon: the spec it builds from the config file, the question it asks, the way it reads the answer and the judgement it makes
     helper = _load_helper()
-    spec_from_file = helper._control_socket(base)
+    spec_from_file = helper._control_socket(base)[0]
     record["helper_spec_kind"] = spec_from_file[0] if spec_from_file else None
     assert spec_from_file is not None and spec_from_file[0] == "unix", (
         f"the helper finds the daemon's unix control socket in the config Jen authors: {spec_from_file}"
@@ -988,7 +988,7 @@ def test_the_daemons_own_control_socket_answers_config_get(findings):
             entry["socket-name"] = "/root/jen-compat-socket"
         elif isinstance(entry.get("authentication"), dict):
             entry["authentication"]["directory"] = "/"
-    record["helper_walls_hold"] = helper._control_socket(walled) is None
+    record["helper_walls_hold"] = helper._control_socket(walled)[0] is None
     assert record["helper_walls_hold"], (
         f"the helper must not derive a socket from a config that points outside its walls: {helper._control_socket(walled)}"
     )

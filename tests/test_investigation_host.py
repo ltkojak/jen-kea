@@ -937,3 +937,40 @@ class TestTheHostHelperItemsOfBuild18:
         inv.sweep(now=NOW)
         (row,) = inv.active()
         assert row["host_error"] == "Restoration timer is not active", row
+
+
+class TestTheHostLineIsTrueWhenTheTimerIsDownAndWhenTheSocketWasNotUsed:
+    """F9 and F7 (build 18 fixup)."""
+
+    def test_a_failed_restore_with_the_timer_down_does_not_claim_a_retry_every_minute(self, world):
+        kea = world.daemons[1]
+        assert inv.turn_on(world.servers[0], 15)["ok"]
+        kea.timer_running = False
+        kea.helper_state["last_error"] = "kea-dhcp4 -t refused the restored config"
+        inv.sweep(now=NOW)
+        (row,) = inv.active()
+        assert (
+            "Restoration timer is not active; the last restore attempt failed: kea-dhcp4 -t refused"
+            in row["host_error"]
+        ), row
+        assert "retried every minute" not in row["host_error"]
+
+    def test_a_failed_restore_with_the_timer_up_still_says_it_is_retried(self, world):
+        kea = world.daemons[1]
+        assert inv.turn_on(world.servers[0], 15)["ok"]
+        kea.helper_state["last_error"] = "nothing shows Kea re-read the restored file"
+        inv.sweep(now=NOW)
+        (row,) = inv.active()
+        assert "retried every minute: nothing shows Kea re-read the restored file" in row["host_error"]
+
+    def test_the_socket_note_is_shown_only_beside_a_failed_restore(self, world):
+        kea = world.daemons[1]
+        assert inv.turn_on(world.servers[0], 15)["ok"]
+        kea.helper_state["socket_note"] = "no control socket in the config"
+        inv.sweep(now=NOW)
+        (row,) = inv.active()
+        assert not row.get("host_error"), "a working log/process restore stays quiet"
+        kea.helper_state["last_error"] = "the reload started and nothing shows it completed"
+        inv.sweep(now=NOW)
+        (row,) = inv.active()
+        assert "the host could not ask Kea directly: no control socket in the config" in row["host_error"], row

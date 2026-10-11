@@ -1250,7 +1250,10 @@ lives in `/var/lib/jen-kea-helper/locks` (root only) and is bounded: a holder th
 `TimeoutStartSec=120`. The one restart a session may spend is recorded on disk, directory synced, before it is issued - a budget that cannot be recorded means no restart. An unreadable state
 directory fails the tick instead of reading as "nothing armed", and a state record that claims a restore it could not have made is `bad-state`. `apply-config` over a config anyone could read
 (0644 or 0664) writes it `root:<the daemon's group>` 0640 (`root:root` 0600 for a root daemon); one that is already stricter keeps its owner and mode. A host with no unit of the two names
-Kea's packages use, but with a `_kea` or `kea` account, is refused a root-run check ("the check will not run as root") instead of being guessed at. No sudoers change.
+Kea's packages use, but with a `_kea` or `kea` account, is refused a root-run check ("the check will not run as root") instead of being guessed at. When the helper could not ask the running Kea
+what its logger is (the config's control socket is outside `/run/kea`, `/var/run/kea` and `/tmp`, it is https or not local, or its credential file is not a regular file with one link in `/etc/kea`
+owned by root or the daemon's account and writable by neither group nor everyone) it says so in `socket_note`, and Health shows that beside a restore that also failed; a restore that worked
+from Kea's log or a fresh process stays quiet. No sudoers change.
 
 **Helper build 17 (v5.68.0-beta.31) — the host's restore is proven from the running daemon's own answer. Press Update helper again on every Kea host that uses investigation logging.**
 Build 16 read Kea's log, and a log line is not the daemon: a reload-start line proves Kea began to re-read the file, not that it finished, and at a restored level of WARN or above Kea hides its own

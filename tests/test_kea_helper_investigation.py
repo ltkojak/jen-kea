@@ -31,6 +31,9 @@ NOW = datetime(2026, 10, 10, 12, 0, tzinfo=timezone.utc)
 SERVICE = "dhcp4"
 RESTORE = {"severity": "WARN", "debuglevel": 0}
 UNIT = "kea-dhcp4-server"
+posix = pytest.mark.skipif(
+    os.name == "nt", reason="needs POSIX file semantics (symlinks, flock, O_NOFOLLOW, FIFOs, descriptors)"
+)
 
 
 def _load():
@@ -113,7 +116,11 @@ class Host:
         monkeypatch.setattr(
             helper,
             "_control_socket",
-            lambda config: None if self._peek_mode() == "absent" else ("unix", str(tmp_path / "kea4-ctrl.sock")),
+            lambda config: (
+                (None, "no control socket in the config")
+                if self._peek_mode() == "absent"
+                else (("unix", str(tmp_path / "kea4-ctrl.sock")), "")
+            ),
         )
         monkeypatch.setattr(helper, "_ask_daemon", self._ask)
         monkeypatch.setattr(helper, "_allowed_log_path", lambda p: isinstance(p, str) and p.endswith(".log"))
@@ -1463,7 +1470,7 @@ class TestTheControlSocketIsFoundInTheConfig:
             section["control-sockets"] = sockets
         if singular is not None:
             section["control-socket"] = singular
-        return helper._control_socket({"Dhcp4": section})
+        return helper._control_socket({"Dhcp4": section})[0]
 
     def test_a_unix_socket_is_preferred(self, helper):
         got = self._c(
@@ -1489,6 +1496,7 @@ class TestTheControlSocketIsFoundInTheConfig:
         }
         assert self._c(helper, [entry]) == ("http", ("127.0.0.1", 8004, "jen", "pw"))
 
+    @pytest.mark.skipif(os.name == "nt", reason="a credential is read through a directory descriptor")
     def test_a_plain_local_http_socket_with_credential_files_under_directory(self, helper, tmp_path, monkeypatch):
         monkeypatch.setattr(helper, "_CRED_ROOT", str(tmp_path))
         monkeypatch.setattr(helper, "_credential_file_ok", lambda st: True)
@@ -1506,6 +1514,7 @@ class TestTheControlSocketIsFoundInTheConfig:
         }
         assert self._c(helper, [entry]) == ("http", ("::1", 8005, "jen", "secret"))
 
+    @pytest.mark.skipif(os.name == "nt", reason="a credential is read through a directory descriptor")
     def test_the_directory_defaults_to_etc_kea(self, helper, tmp_path, monkeypatch):
         assert helper._CRED_ROOT == "/etc/kea"
         monkeypatch.setattr(
@@ -1555,8 +1564,8 @@ class TestTheControlSocketIsFoundInTheConfig:
     def test_neither_is_none(self, helper):
         assert (
             self._c(helper) is None
-            and helper._control_socket(None) is None
-            and helper._control_socket({"Dhcp4": {"control-sockets": "x"}}) is None
+            and helper._control_socket(None)[0] is None
+            and helper._control_socket({"Dhcp4": {"control-sockets": "x"}})[0] is None
         )
         assert self._c(helper, [{"socket-type": "unix", "socket-name": "relative.sock"}]) is None
 
@@ -1821,8 +1830,6 @@ class TestTheTimersOwnLiveness:
 
 # ── Q170 (helper build 18): the four registry rules INV-012..015, and the walls around the restore ───────────────────────────────────────────────
 
-posix = pytest.mark.skipif(os.name == "nt", reason="needs POSIX file semantics (symlinks, flock, O_NOFOLLOW)")
-
 
 class TestARestartIsIssuedOnlyAfterItsBudgetIsOnDisk:
     """INV-012 (build 18, Q170). The one restart is recorded BEFORE it is issued - and a budget that cannot be recorded (the file or its directory) is a restart that is not issued:
@@ -2013,6 +2020,7 @@ class TestTheCredentialAndSocketWalls:
         monkeypatch.setattr(os, "open", spy)
         return seen
 
+    @pytest.mark.skipif(os.name == "nt", reason="a credential is read through a directory descriptor")
     def test_a_file_inside_the_wall_is_read_first_line_only(self, helper, cred):
         (cred / "u").write_text("jen\nsecond line\n")
         assert helper._read_credential(str(cred), "u") == "jen"
@@ -2053,6 +2061,7 @@ class TestTheCredentialAndSocketWalls:
         os.symlink(outside, cred / "d")
         assert helper._read_credential(str(cred / "d"), "u") is None
 
+    @pytest.mark.skipif(os.name == "nt", reason="a credential is read through a directory descriptor")
     def test_a_file_over_the_cap_is_not_read(self, helper, cred):
         (cred / "big").write_bytes(b"x" * (1 << 20))
         assert helper._read_credential(str(cred), "big") is None
@@ -2076,20 +2085,23 @@ class TestTheCredentialAndSocketWalls:
         monkeypatch.setattr(
             helper, "_unit_account", lambda service: {"name": "_kea", "uid": 105, "gid": 106, "extra_groups": []}
         )
-        st = types.SimpleNamespace(st_mode=mode, st_size=size, st_uid=uid)
+        st = types.SimpleNamespace(st_mode=mode, st_size=size, st_uid=uid, st_nlink=1)
         assert helper._credential_file_ok(st) is expect
 
     def test_with_the_root_daemon_only_root_owns_a_credential(self, helper, monkeypatch):
         import types
 
         monkeypatch.setattr(helper, "_unit_account", lambda service: None)
-        assert helper._credential_file_ok(types.SimpleNamespace(st_mode=0o100640, st_size=1, st_uid=105)) is False
+        assert (
+            helper._credential_file_ok(types.SimpleNamespace(st_mode=0o100640, st_size=1, st_uid=105, st_nlink=1))
+            is False
+        )
 
     def test_the_socket_rows(self, helper):
         def sock(name):
             return helper._control_socket(
                 {"Dhcp4": {"control-sockets": [{"socket-type": "unix", "socket-name": name}]}}
-            )
+            )[0]
 
         assert sock("/run/kea/kea4-ctrl.sock") == ("unix", "/run/kea/kea4-ctrl.sock")
         assert sock("/var/run/kea/kea4-ctrl.sock") == ("unix", "/var/run/kea/kea4-ctrl.sock")
@@ -2110,7 +2122,7 @@ class TestTheCredentialAndSocketWalls:
                 "clients": [{"user-file": "u", "password-file": "root/.ssh/id_ed25519"}],
             },
         }
-        assert helper._control_socket({"Dhcp4": {"control-sockets": [entry]}}) is None
+        assert helper._control_socket({"Dhcp4": {"control-sockets": [entry]}})[0] is None
 
     def test_the_restore_checks_the_file_with_t_before_any_socket_on_the_nothing_branch(self, host, monkeypatch):
         """The branch that writes nothing (a person changed the logger since): nothing had validated the file the helper is about to derive a socket from."""
@@ -2254,3 +2266,286 @@ class TestEveryRemainingP3OfTheHelperItems:
 
         assert list(inspect.signature(helper._resolve_unit).parameters) == ["service"]
         assert helper._UPDATE_MAX_SIGNATURE == helper._UPDATE_MAX_SIGNERS == 8 * 1024
+
+
+# ── the fixup of the release audit (F1-F9) ───────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+def _within(seconds, fn):
+    """Run `fn()` on a thread and fail the test, not the run, when it has not returned in `seconds` (a read that waits on a FIFO would hang for ever)."""
+    import threading
+
+    box = {}
+    t = threading.Thread(target=lambda: box.setdefault("v", fn()), daemon=True)
+    t.start()
+    t.join(seconds)
+    assert not t.is_alive(), "the call did not return: it is waiting on a file that is not a regular file"
+    return box.get("v")
+
+
+class TestACredentialIsReadFromADescriptorOfEtcKeaWithOneLink:
+    """F1 (build 18 fixup). The directory is `_CRED_ROOT` itself, opened by descriptor; the name is opened relative to it; a file with a second link is refused."""
+
+    @pytest.fixture
+    def cred(self, helper, tmp_path, monkeypatch):
+        root = tmp_path / "etc-kea"
+        root.mkdir()
+        monkeypatch.setattr(helper, "_CRED_ROOT", str(root))
+        monkeypatch.setattr(helper, "_unit_account", lambda service: None)
+        return root
+
+    def test_a_directory_below_the_root_is_not_the_root(self, helper, cred):
+        (cred / "sub").mkdir()
+        (cred / "sub" / "u").write_text("jen\n")
+        assert helper._read_credential(str(cred / "sub"), "u") is None
+
+    @posix
+    def test_a_file_with_two_links_is_refused(self, helper, cred, monkeypatch):
+        (cred / "u").write_text("jen\n")
+        os.link(cred / "u", cred / "u2")
+        import types
+
+        real = helper._credential_file_ok
+
+        def own_by_root(st):
+            return real(types.SimpleNamespace(st_mode=st.st_mode, st_size=st.st_size, st_uid=0, st_nlink=st.st_nlink))
+
+        monkeypatch.setattr(helper, "_credential_file_ok", own_by_root)
+        assert helper._read_credential(str(cred), "u") is None, (
+            "the same inode under two names is the same file anywhere"
+        )
+        assert helper._read_credential(str(cred), "u2") is None
+        os.unlink(cred / "u2")
+        assert helper._read_credential(str(cred), "u") == "jen"
+
+    def test_the_link_count_is_part_of_the_rule(self, helper, monkeypatch):
+        import types
+
+        monkeypatch.setattr(helper, "_unit_account", lambda service: None)
+        ok = types.SimpleNamespace(st_mode=0o100644, st_size=3, st_uid=0, st_nlink=1)
+        assert helper._credential_file_ok(ok) is True
+        assert (
+            helper._credential_file_ok(types.SimpleNamespace(st_mode=0o100644, st_size=3, st_uid=0, st_nlink=2))
+            is False
+        )
+
+    @posix
+    def test_a_fifo_as_a_credential_is_refused_without_waiting(self, helper, cred, monkeypatch):
+        monkeypatch.setattr(helper, "_credential_file_ok", lambda st: stat.S_ISREG(st.st_mode))
+        os.mkfifo(cred / "u")
+        assert _within(5, lambda: helper._read_credential(str(cred), "u")) is None
+
+
+@posix
+class TestEveryDescriptorJudgedOpenIsNonBlocking:
+    """F2 (build 18 fixup). A FIFO at a config path, a log path, a log cursor's path or a TLS member is seen by `fstat` before any read can wait on it."""
+
+    def test_the_five_read_sites_carry_the_flag(self, helper):
+        source = _SCRIPT.read_text(encoding="utf-8")
+        assert source.count("_READ_FLAGS") >= 6  # the definition and the five sites
+        assert helper._READ_FLAGS & os.O_NONBLOCK
+
+    def test_a_fifo_at_the_config_path(self, helper, tmp_path):
+        fifo = tmp_path / "kea-dhcp4.conf"
+        os.mkfifo(fifo)
+        with pytest.raises(helper._ConfLink):
+            _within(5, lambda: helper._open_conf(str(fifo)))
+
+    def test_a_fifo_at_a_log_path_for_tail_log(self, helper, tmp_path, monkeypatch):
+        fifo = tmp_path / "k.log"
+        os.mkfifo(fifo)
+        monkeypatch.setattr(helper, "_allowed_log_path", lambda p: True)
+        out = io.StringIO()
+        code = _within(
+            5,
+            lambda: helper.main(
+                argv=["jen-kea-helper", "tail-log"],
+                stdin=io.StringIO(json.dumps({"path": str(fifo)})),
+                stdout=out,
+                stderr=io.StringIO(),
+            ),
+        )
+        assert code == 0 and json.loads(out.getvalue())["error"] == "missing"
+
+    def test_a_fifo_under_the_log_cursor(self, helper, tmp_path):
+        fifo = tmp_path / "k.log"
+        os.mkfifo(fifo)
+        cursor = helper._LogCursor(str(fifo))
+        assert _within(5, cursor.new_lines) is None
+
+    def test_a_fifo_as_a_member_of_the_tls_set(self, helper, tmp_path, monkeypatch):
+        d = tmp_path / "set"
+        d.mkdir()
+        os.mkfifo(d / "server.crt")
+        fd = os.open(d, os.O_RDONLY)
+        try:
+            with pytest.raises(OSError):
+                _within(5, lambda: helper._commit_file_set([("server.crt", b"x", None, None, 0o644)], dir_fd=fd))
+        finally:
+            os.close(fd)
+
+
+class TestALockTheTickCannotTakeIsARecordedFailure:
+    """F3 and F6 (build 18 fixup)."""
+
+    @posix
+    def test_a_lock_that_raises_oserror_is_a_failed_attempt_on_the_record(self, host, monkeypatch):
+        import contextlib
+
+        host.write_config(_config())
+        host.arm(-1)
+
+        @contextlib.contextmanager
+        def broken(path, wait_s=None, old_lock=True):
+            raise OSError(40, "Too many levels of symbolic links")
+            yield
+
+        monkeypatch.setattr(host.helper, "_locked", broken)
+        out = host.tick()
+        assert out["ok"] is False and "the config lock could not be taken" in out["failed"][0]["error"]
+        state = host.state()
+        assert (
+            state["attempts"] == 1
+            and "the config lock could not be taken" in state["last_error"]
+            and state["restored_at"] is None
+        )
+
+    @posix
+    def test_the_two_bounded_waits_share_one_deadline(self, host, monkeypatch):
+        import fcntl
+        import hashlib
+
+        host.write_config(_config())
+        host.arm(-1)
+        new = host.state_dir / "locks" / (hashlib.sha256(str(host.conf).encode()).hexdigest()[:16] + ".lock")
+        old = pathlib.Path(str(host.conf) + ".jen_lock")
+        fd_new, fd_old = os.open(new, os.O_RDWR), os.open(old, os.O_RDWR)
+        fcntl.flock(fd_new, fcntl.LOCK_EX)
+        fcntl.flock(fd_old, fcntl.LOCK_EX)
+        released = []
+        real_sleep = host._sleep
+
+        def sleeper(seconds):
+            real_sleep(seconds)
+            if (
+                host.clock >= 30 and not released
+            ):  # the holder of the NEW lock lets go half way through the wait; the OLD one never does
+                os.close(fd_new)
+                released.append(1)
+
+        monkeypatch.setattr(host.helper, "_sleep", sleeper)
+        try:
+            out = host.tick()
+        finally:
+            os.close(fd_old)
+        assert out["ok"] is False and "config lock" in out["failed"][0]["error"]
+        assert host.clock <= host.helper._LOCK_WAIT_S + 1.0, f"one deadline for both locks, not one each: {host.clock}"
+
+
+@posix
+class TestInstallTlsTakesTheNewLockOnly:
+    """F4 (build 18 fixup)."""
+
+    def test_no_jen_lock_appears_beside_the_tls_directory(self, helper, tmp_path, monkeypatch):
+        root = tmp_path / "tls"
+        monkeypatch.setattr(helper, "_TLS_ROOT", str(root))
+        monkeypatch.setattr(helper, "_unit_account", lambda service: None)
+        monkeypatch.setattr(helper, "_STATE_DIR", str(tmp_path / "state"))
+        monkeypatch.setattr(os, "fchown", lambda fd, uid, gid: None, raising=False)
+        pem = "-----BEGIN CERTIFICATE-----\nZm9v\n-----END CERTIFICATE-----\n"
+        key = "-----BEGIN PRIVATE KEY-----\nZm9v\n-----END PRIVATE KEY-----\n"
+        out = io.StringIO()
+        files = {"ca.crt": pem, "server.crt": pem, "server.key": key}
+        helper.main(
+            argv=["jen-kea-helper", "install-tls"],
+            stdin=io.StringIO(json.dumps({"service": "dhcp4", "files": files})),
+            stdout=out,
+            stderr=io.StringIO(),
+        )
+        assert json.loads(out.getvalue())["ok"] is True, out.getvalue()
+        assert not list(root.rglob("*.jen_lock")) and not (root / "dhcp4.jen_lock").exists()
+        assert list((tmp_path / "state" / "locks").glob("*.lock")), (
+            "the lock it took is the one in the root-only directory"
+        )
+
+
+class TestTheSocketNote:
+    """F7 (build 18 fixup): the reason a socket was not used is recorded, reported, and shown by Jen only beside a failed restore."""
+
+    def _entry(self, **kw):
+        return {"socket-type": "http", "socket-address": "127.0.0.1", "socket-port": 8004, **kw}
+
+    def test_the_notes(self, helper):
+        def note(sockets):
+            return helper._control_socket({"Dhcp4": {"control-sockets": sockets}})[1]
+
+        assert note([]) == "no control socket in the config"
+        assert helper._control_socket(None)[1] == "no control socket in the config"
+        assert (
+            note([{"socket-type": "unix", "socket-name": "/root/s"}])
+            == "the unix socket is outside the directories the helper connects to"
+        )
+        assert note([self._entry(**{"cert-file": "x"})]) == "the http socket is https or not local"
+        assert (
+            note(
+                [
+                    self._entry(
+                        **{
+                            "socket-address": "10.1.2.3",
+                            "authentication": {"type": "basic", "clients": [{"user": "a", "password": "b"}]},
+                        }
+                    )
+                ]
+            )
+            == "the http socket is https or not local"
+        )
+        assert note(
+            [
+                self._entry(
+                    authentication={
+                        "type": "basic",
+                        "directory": "/",
+                        "clients": [{"user-file": "u", "password-file": "p"}],
+                    }
+                )
+            ]
+        ).startswith(
+            "the credential file is not one the helper reads (it must be in /etc/kea, a regular file with one link"
+        )
+        spec, ok_note = helper._control_socket(
+            {"Dhcp4": {"control-sockets": [{"socket-type": "unix", "socket-name": "/run/kea/k.sock"}]}}
+        )
+        assert spec == ("unix", "/run/kea/k.sock") and ok_note == ""
+
+    def test_status_reports_the_note_after_an_arm_without_a_socket(self, host):
+        host.write_config(_config())
+        host.socket_mode = "absent"
+        assert host.arm()["ok"] is True
+        status = host.op("investigation-status", {"service": SERVICE})
+        assert status["socket_note"] == "no control socket in the config"
+
+    def test_a_restore_that_had_a_socket_carries_no_note(self, host):
+        host.write_config(_config())
+        host.arm()
+        host.op("investigation-disarm", {"service": SERVICE, "path": str(host.conf)})
+        assert host.op("investigation-status", {"service": SERVICE})["socket_note"] is None
+
+
+class TestReadConfigNamesAnUnreadableFile:
+    """F8 (build 18 fixup)."""
+
+    @pytest.mark.skipif(os.name == "nt", reason="the POSIX path wall")
+    def test_an_oserror_is_unreadable_not_invalid_json(self, helper, tmp_path, monkeypatch):
+        monkeypatch.setattr(helper, "_ALLOWED_CONF_DIRS", (str(tmp_path),))
+        monkeypatch.setattr(
+            helper, "_open_conf", lambda path: (_ for _ in ()).throw(PermissionError(13, "Permission denied"))
+        )
+        out = io.StringIO()
+        helper.main(
+            argv=["jen-kea-helper", "read-config"],
+            stdin=io.StringIO(json.dumps({"service": "dhcp4", "path": str(tmp_path / "kea-dhcp4.conf")})),
+            stdout=out,
+            stderr=io.StringIO(),
+        )
+        reply = json.loads(out.getvalue())
+        assert reply["ok"] is False and reply["error"] == "unreadable" and "Permission denied" in reply["detail"]

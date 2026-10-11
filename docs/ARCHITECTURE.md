@@ -1195,8 +1195,9 @@ path, restore and deadline), an extension (same restore, later deadline, `extend
 the units and the timer. (4) `--self-restore` exits 1 on a failed restore. A state armed by build 15 carries no log path and is verified the way build 15 did, once. (Found by the system stack at build 16: the legacy install script travelled as ONE command argument, and Linux caps an argument at 128 KiB, so "Install helper" failed with `Argument list too long` once the helper passed ~96 KB; `_legacy_python3` now sends the base64 script on stdin - the same pipeline, so the legacy grant is unchanged.)
 
 **Build 18 (v5.69.0-beta.1, Q170) puts walls round what the helper does as root.** A config in a daemon-owned `/etc/kea` is the daemon account's to write, so everything the helper
-derives from one is bounded. (1) *Credentials and sockets*: `_http_credentials` reads a credential file only from a `directory` whose realpath is under `/etc/kea` (`_CRED_ROOT`), as a bare
-file name, opened `O_NOFOLLOW`, regular, at most 4 KiB, owned by root or the daemon's account and writable by neither group nor everyone, first line only; `_control_socket` takes a unix
+derives from one is bounded. (1) *Credentials and sockets*: `_http_credentials` reads a credential file only when `directory` is `/etc/kea` itself (`_CRED_ROOT`): that directory is opened by descriptor
+(`O_DIRECTORY|O_NOFOLLOW`) and the bare file name is opened relative to it, `O_NOFOLLOW|O_NONBLOCK`, regular with exactly one link, at most 4 KiB, owned by root or the daemon's account and
+writable by neither group nor everyone, first line only (no path is resolved twice, so nothing the daemon's account can rename in between is followed); `_control_socket` takes a unix
 socket only under `/run/kea`, `/var/run/kea` or `/tmp` by realpath. Neither is ever derived from a config `-t` has not passed in this process: the restore's "nothing" branch (nothing written)
 runs `-t` on the file as read before `_reload_daemon` can ask it for anything, and the arm does the same before it looks for an evidence channel. (2) *Symlinks*: `_open_conf` opens
 every config reader (`read-config`, `apply-config`, `remove-config`, the restore, the arm, the state record) `O_RDONLY|O_NOFOLLOW|O_NOCTTY` and checks `S_ISREG` on the descriptor;

@@ -2068,9 +2068,9 @@ class TestTheLockIsTakenForEveryOp:
         real = helper._locked
 
         @contextlib.contextmanager
-        def spy(path):
+        def spy(path, *a, **kw):
             paths.append(path)
-            with real(path):
+            with real(path, *a, **kw):
                 yield
 
         monkeypatch.setattr(helper, "_locked", spy)
@@ -2586,6 +2586,7 @@ class TestApplyTightensAConfigAnyoneCouldRead:
     def _apply(self, helper, tmp_path, monkeypatch, mode, account):
         _conf_stub(helper, monkeypatch, tmp_path)
         monkeypatch.setattr(helper, "_unit_account", lambda service: account)
+        monkeypatch.setattr(helper, "_resolve_unit", lambda service: "kea-dhcp4-server")  # the unit WAS seen
         p = tmp_path / "kea-dhcp4.conf"
         p.write_text(json.dumps({"old": True}))
         os.chmod(p, mode)
@@ -2612,6 +2613,20 @@ class TestApplyTightensAConfigAnyoneCouldRead:
             helper, tmp_path, monkeypatch, mode, {"name": "_kea", "uid": 105, "gid": 106, "extra_groups": []}
         )
         assert stat.S_IMODE(os.stat(p).st_mode) == mode and chowns[-1] == (os.stat(p).st_uid, os.stat(p).st_gid)
+
+    @pytest.mark.parametrize("mode", [0o644, 0o664])
+    def test_with_no_unit_seen_the_existing_owner_and_mode_are_kept(self, helper, tmp_path, monkeypatch, mode):
+        """F5 (fixup): `_unit_account` answers None for "no unit", which reads as "a root daemon": tightening to root:root 0600 would lock out the account that really runs Kea."""
+        _conf_stub(helper, monkeypatch, tmp_path)
+        monkeypatch.setattr(helper, "_resolve_unit", lambda service: None)
+        p = tmp_path / "kea-dhcp4.conf"
+        p.write_text(json.dumps({"old": True}))
+        os.chmod(p, mode)
+        chowns = []
+        monkeypatch.setattr(os, "fchown", lambda fd, uid, gid: chowns.append((uid, gid)))
+        _code, out, _ = _run(helper, "apply-config", {"service": "dhcp4", "path": str(p), "config": {"new": True}})
+        assert out["ok"] is True and stat.S_IMODE(os.stat(p).st_mode) == mode
+        assert chowns[-1] == (os.stat(p).st_uid, os.stat(p).st_gid)
 
     def test_the_reply_carries_the_sha_of_the_bytes_that_were_written(self, helper, tmp_path, monkeypatch):
         import hashlib

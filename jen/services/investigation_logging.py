@@ -2162,14 +2162,21 @@ def _host_phase(known: dict, record: dict, now: datetime) -> set:
                 entry["armed"] = True
                 entry.setdefault("host_timer", "systemd")
                 entry.pop("host_conflict", None)
-                if status.get("last_error"):
-                    entry["host_error"] = (
-                        f"the Kea host's restore failed and is retried every minute: {status['last_error']}"[:300]
-                    )
-                elif status.get("timer_error"):
-                    entry["host_error"] = str(status["timer_error"])[
-                        :300
-                    ]  # (build 18: the timer's own line, never the restore's reason overwritten by it)
+                last_error, timer_error = status.get("last_error"), status.get("timer_error")
+                if last_error and timer_error:
+                    # (build 18 fixup) the timer is down AND the restore failed: "retried every minute" would be false - nothing runs the retry
+                    line = f"{timer_error}; the last restore attempt failed: {last_error}"
+                elif last_error:
+                    line = f"the Kea host's restore failed and is retried every minute: {last_error}"
+                elif timer_error:
+                    line = str(timer_error)  # the timer's own line, never the restore's reason overwritten by it
+                else:
+                    line = ""
+                if line and last_error and status.get("socket_note"):
+                    # the host fell back to the log or the process because it could not ask Kea: said only when the restore also failed, so a working restore stays quiet
+                    line += f" (the host could not ask Kea directly: {status['socket_note']})"
+                if line:
+                    entry["host_error"] = line[:300]
                 else:
                     entry.pop("host_error", None)
                 entry["host_needs_hand"] = bool(status.get("needs_hand"))
