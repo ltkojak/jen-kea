@@ -2158,6 +2158,18 @@ def save_ha_settings():
     """Save HA mode for primary Kea server."""
     ha_mode = request.form.get("ha_mode", "").strip()
     server_name = request.form.get("server_name", "").strip()
+    if server_name:
+        # the same rules as the extra servers' names (the second pass, Q172, finding 7): one short line, and not a name another server already has - the primary renamed to
+        # an extra server's name was the duplicate state `Target.key` survives, and it locked the extra-servers form out ("two servers are named ...")
+        if "\n" in server_name or "\r" in server_name or len(server_name) > 100:
+            flash("Refused: a server name is one line of at most 100 characters.", "error")
+            return redirect(url_for("settings.settings_kea"))
+        taken = {str(s.get("name", "")).strip().casefold() for s in extensions.KEA_SERVERS if s.get("id") != 1}
+        if server_name.casefold() in taken:
+            flash(
+                f'Refused: another server is already named "{server_name}" - every server needs its own name.', "error"
+            )
+            return redirect(url_for("settings.settings_kea"))
     items = []
     if ha_mode in ("hot-standby", "load-balancing", "passive-backup", ""):
         items.append(("kea", "ha_mode", ha_mode))

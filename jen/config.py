@@ -456,10 +456,6 @@ class AppConfig:
             _caps.invalidate()
         except Exception:  # never let a cache drop break a config load
             pass
-        # v5.69.0-beta.3 (Q172): the same goes for the server Jen last chose to talk to (a 10 s cache in `jen.services.kea.get_active_kea_server`): after a config write
-        # it can name a server that has been removed or whose URL has changed, and the next request would be sent there. Reset in place - readers hold the dict.
-        extensions._active_server_cache.update(server=None, ts=0)
-
         extensions.KEA_API_URL = cfg.get("kea", "api_url")
         extensions.KEA_API_USER = cfg.get("kea", "api_user")
         extensions.KEA_API_PASS = cfg.get("kea", "api_pass")
@@ -580,6 +576,10 @@ class AppConfig:
         extensions.OIDC_SUBNET_MAP_DEFAULT = cfg.get("oidc", "subnet_map_default", fallback="none").strip().lower()
 
         extensions.KEA_SERVERS = self.derive_kea_servers(cfg)
+        # v5.69.0-beta.3 (Q172): the same goes for the server Jen last chose to talk to (a 10 s cache in `jen.services.kea.get_active_kea_server`): after a config write it
+        # can name a server that has been removed or whose URL has changed, and the next request would be sent there. Reset in place - readers hold the dict - and AFTER
+        # the new list is in place, so a reader that chooses in between chooses from the new one (the second pass, finding 9).
+        extensions._active_server_cache.update(server=None, ts=0)
         extensions.SUBNET_MAP = self.derive_subnet_map(cfg)
         extensions.SUBNET6_MAP = self.derive_subnet_map(cfg, section="subnets6")
 

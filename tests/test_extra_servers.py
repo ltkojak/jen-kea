@@ -828,3 +828,30 @@ class TestServerNamesAndConfigFilenames:
             follow_redirects=True,
         )
         assert _on_disk(isolated_config).get("kea_ssh", "kea_conf") == "/etc/kea/kea-dhcp4-prod.conf"
+
+
+class TestThePrimarysNameFollowsTheSameRules:
+    """The second pass (Q172, finding 7): the HA form renames the primary; it was refused nothing, so it could take an extra server's name (locking the extra-servers form out)
+    or be a multi-line value."""
+
+    def _save(self, client, name):
+        return client.post(
+            "/settings/infrastructure/save-ha", data={"ha_mode": "", "server_name": name}, follow_redirects=True
+        )
+
+    def test_a_name_an_extra_server_already_has_is_refused(self, logged_in_client, db, mock_kea, isolated_config):
+        _seed((2, {"name": "Kea-B", "api_url": "http://s2:8000"}))
+        r = self._save(logged_in_client, "kea-b")
+        assert b"every server needs its own name" in r.data
+        assert not _on_disk(isolated_config).has_option("kea", "name")
+
+    @pytest.mark.parametrize("bad", ["two\nlines", "x" * 101])
+    def test_a_name_that_is_not_one_short_line_is_refused(self, logged_in_client, db, mock_kea, isolated_config, bad):
+        r = self._save(logged_in_client, bad)
+        assert b"one line of at most 100 characters" in r.data
+        assert not _on_disk(isolated_config).has_option("kea", "name")
+
+    def test_a_fresh_name_is_saved(self, logged_in_client, db, mock_kea, isolated_config):
+        _seed((2, {"name": "Kea-B", "api_url": "http://s2:8000"}))
+        self._save(logged_in_client, "kea-a")
+        assert _on_disk(isolated_config).get("kea", "name") == "kea-a"

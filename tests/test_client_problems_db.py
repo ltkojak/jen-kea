@@ -1053,6 +1053,23 @@ class TestASweepIsOneTransaction:
             miss = cur.fetchone()
         assert miss is None or miss["setting_value"] in ("0", ""), "the log was read; nothing was missed"
 
+    def test_a_failure_that_keeps_happening_after_a_good_read_does_count(self, db, stack, monkeypatch):
+        """The second pass (Q172, finding 4): only a database blip is excused. An error in the sweep itself would otherwise leave Health green for a server whose sweep never completes."""
+        logs, calls = stack
+        prime(logs)
+        logs[1] = [nak(1), nak(2), nak(3)]
+
+        def boom(cur, server_id, groups, limit=cp.MAX_NEW_KEYS_PER_SWEEP):
+            raise ValueError("a bug in the sweep")
+
+        monkeypatch.setattr(cp, "_cap_new_keys", boom)
+        cp.sweep(NOW, servers=[SERVER_A])
+        cp.sweep(NOW + timedelta(minutes=5), servers=[SERVER_A])
+        with db.cursor() as cur:
+            db.commit()
+            cur.execute("SELECT setting_value FROM settings WHERE setting_key='client_problems_miss:1'")
+            assert cur.fetchone()["setting_value"] == "2"
+
 
 class TestTheSweepRecordsWhetherItCanReadEachServer:
     """v5.68.0-beta.17 (Q152, item e) - a log that could not be read used to be a line in the sweep's summary. The sweep now keeps the

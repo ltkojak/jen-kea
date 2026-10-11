@@ -276,3 +276,48 @@ class TestAMalformedPacketHealthRowDoesNotBreakTheWidget:
         monkeypatch.setattr(dc, "__db", FakeDb)
         out = dc.packet_health_widget([{"id": 1, "name": "kea-a"}])
         assert [r["server_id"] for r in out] == [1]
+
+
+class TestAPacketHealthRowThatIsNotAnObjectIsSkippedToo:
+    """The second pass (Q172, finding H4): a JSON `null` or scalar is valid JSON and not a stats object."""
+
+    def test_null_and_scalar_rows_are_skipped(self, monkeypatch):
+        import contextlib
+        from datetime import datetime, timedelta
+
+        from jen.services import dashboard_catalog as dc
+
+        now = datetime(2026, 10, 11, 12, 0, 0)
+        rows = [
+            {"snapshot_time": now - timedelta(minutes=30), "stats": '{"pkt4-received": 100, "pkt4-receive-drop": 0}'},
+            {"snapshot_time": now - timedelta(minutes=20), "stats": "null"},
+            {"snapshot_time": now - timedelta(minutes=10), "stats": "42"},
+            {"snapshot_time": now - timedelta(minutes=5), "stats": None},
+            {"snapshot_time": now, "stats": '{"pkt4-received": 200, "pkt4-receive-drop": 0}'},
+        ]
+
+        class Cur:
+            def execute(self, *a, **k):
+                pass
+
+            def fetchall(self):
+                return rows
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        class Conn:
+            def cursor(self):
+                return Cur()
+
+        class FakeDb:
+            @staticmethod
+            @contextlib.contextmanager
+            def jen_db():
+                yield Conn()
+
+        monkeypatch.setattr(dc, "__db", FakeDb)
+        assert [r["server_id"] for r in dc.packet_health_widget([{"id": 1, "name": "kea-a"}])] == [1]

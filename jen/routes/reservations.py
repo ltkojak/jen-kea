@@ -520,6 +520,75 @@ def edit_reservation(host_id):
     )
 
 
+# What a reservation carries beyond its address, hostname and DNS option, that an edit (Kea's delete + add) must not drop (the second pass, Q172, finding 3).
+_KEPT_RESERVATION_KEYS = ("client-classes", "boot-file-name", "next-server", "server-hostname", "user-context")
+
+
+def _is_dns_option(option):
+    return isinstance(option, dict) and (option.get("name") == "domain-name-servers" or option.get("code") == 6)
+
+
+def _capture_reservation(host, mac):
+    """The settings of a reservation Kea holds that the edit form does not show - client classes, boot file, next server, user context and every option other than the DNS
+    servers - read back with `reservation-get` BEFORE the delete, so the new reservation and a restored original both carry them. {} when Kea does not answer (the edit then
+    carries the address, the hostname and the DNS option only, as it always did)."""
+    import copy
+
+    try:
+        got = __kea.kea_command(
+            "reservation-get",
+            arguments={"subnet-id": host["subnet_id"], "identifier-type": "hw-address", "identifier": mac},
+        )
+    except Exception:
+        return {}
+    args = got.get("arguments") if isinstance(got, dict) and got.get("result") == 0 else None
+    if not isinstance(args, dict) or args.get("ip-address") != host["ip"]:
+        return {}
+    kept = {k: copy.deepcopy(args[k]) for k in _KEPT_RESERVATION_KEYS if args.get(k) not in (None, "", [], {})}
+    options = [copy.deepcopy(o) for o in args.get("option-data") or [] if isinstance(o, dict) and not _is_dns_option(o)]
+    if options:
+        kept["option-data"] = options
+    return kept
+
+
+def _host_present(host_id):
+    """True / False / None (could not tell): is the `hosts` row still there? Read on a FRESH connection - Kea writes over its own."""
+    try:
+        with __db.kea_db() as kdb, kdb.cursor() as kcur:
+            kcur.execute("SELECT 1 AS present FROM hosts WHERE host_id=%s", (host_id,))
+            return kcur.fetchone() is not None
+    except Exception as e:
+        logger.error(f"Could not look for reservation {host_id}: {e}")
+        return None
+
+
+def _reservation_present(subnet_id, ip):
+    """True / False / None: is there a reservation of this address in this subnet NOW (any host_id)? Fresh connection, as `_host_present`."""
+    try:
+        with __db.kea_db() as kdb, kdb.cursor() as kcur:
+            kcur.execute(
+                "SELECT 1 AS present FROM hosts WHERE dhcp4_subnet_id=%s AND inet_ntoa(ipv4_address)=%s LIMIT 1",
+                (subnet_id, ip),
+            )
+            return kcur.fetchone() is not None
+    except Exception as e:
+        logger.error(f"Could not look for the reservation of {ip}: {e}")
+        return None
+
+
+def _with_options(base, dns):
+    """`base` (what was captured, without its DNS option) plus one DNS option when there is one."""
+    out = dict(base)
+    options = list(out.get("option-data") or [])
+    if dns:
+        options.append({"name": "domain-name-servers", "data": dns})
+    if options:
+        out["option-data"] = options
+    else:
+        out.pop("option-data", None)
+    return out
+
+
 def _move_note_to_the_new_host_id(old_host_id, subnet_id, ip):
     """Kea's reservation-del + reservation-add gives the reservation a new host_id; the note Jen keeps for it is keyed by that id. After an edit that failed and was
     put back, the note follows the reservation to its new id (a fresh Kea connection, for the reason the success path of the edit explains). Never raises."""
@@ -561,52 +630,81 @@ def edit_reservation_post(host_id):
             mac = ":".join(host["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if host["mac_hex"] else ""
             # v5.69.0-beta.3 (Q172): the edit is Kea's delete and add, so a value Kea will refuse must be refused HERE, before the delete - with the validators the add
             # route uses. A refusal after the delete left the reservation gone: the client lost its address on the strength of a typo.
-            invalid = []
-            if hostname and not __auth.valid_hostname(hostname):
-                invalid.append(f"Invalid hostname: {hostname}")
-            if dns_override and not __auth.valid_dns(dns_override):
-                invalid.append(f"Invalid DNS: {dns_override}")
-            if invalid:
-                for message in invalid:
-                    flash(message, "error")
-                return redirect(url_for("reservations.edit_reservation", host_id=host_id))
-            # what the reservation is NOW, captured before the delete, so a failed add can put exactly this back
             cur.execute(
                 "SELECT formatted_value FROM dhcp4_options WHERE host_id=%s AND code=6 ORDER BY option_id LIMIT 1",
                 (host_id,),
             )
             original_dns = cur.fetchone()
-            original = {
-                "subnet-id": host["subnet_id"],
-                "hw-address": mac,
-                "ip-address": host["ip"],
-                "hostname": host["hostname"] or "",
-            }
-            if original_dns and original_dns["formatted_value"]:
-                original["option-data"] = [{"name": "domain-name-servers", "data": original_dns["formatted_value"]}]
+            original_dns_value = (original_dns["formatted_value"] if original_dns else "") or ""
+            # only a value the person CHANGED is held to the add route's rules: a reservation that came from Kea's own file (a hostname with an underscore) must stay editable
+            invalid = []
+            if hostname and hostname != (host["hostname"] or "") and not __auth.valid_hostname(hostname):
+                invalid.append(f"Invalid hostname: {hostname}")
+            if dns_override and dns_override != original_dns_value and not __auth.valid_dns(dns_override):
+                invalid.append(f"Invalid DNS: {dns_override}")
+            if invalid:
+                for message in invalid:
+                    flash(message, "error")
+                return redirect(url_for("reservations.edit_reservation", host_id=host_id))
+            # what the reservation is NOW, captured before the delete, so a failed add can put exactly this back - and what the form does not show (classes, boot file,
+            # options) travels with it, in the edit and in the restore alike
+            carried = _capture_reservation(host, mac)
+            original = _with_options(
+                {
+                    "subnet-id": host["subnet_id"],
+                    "hw-address": mac,
+                    "ip-address": host["ip"],
+                    "hostname": host["hostname"] or "",
+                    **carried,
+                },
+                original_dns_value,
+            )
             deleted = __kea.kea_command(
                 "reservation-del",
                 arguments={"subnet-id": host["subnet_id"], "identifier-type": "hw-address", "identifier": mac},
             )
-            if deleted.get("result") != 0:  # nothing was removed, so there is nothing to add or to put back
-                flash(f"Kea error: {deleted.get('text')} - the reservation was not changed.", "error")
-                return redirect(url_for("reservations.edit_reservation", host_id=host_id))
-            res = {
-                "subnet-id": host["subnet_id"],
-                "hw-address": mac,
-                "ip-address": host["ip"],
-                "hostname": hostname,
-            }
-            if dns_override:
-                res["option-data"] = [{"name": "domain-name-servers", "data": dns_override}]
+            if deleted.get("result") != 0:
+                # A refusal and a lost reply look the same here (`kea_command` turns a timeout or a 5xx into result 1), and a reply that never came may have been APPLIED:
+                # ask the database whether the row is still there before deciding that nothing happened.
+                still_there = _host_present(host_id)
+                if still_there is not False:
+                    if still_there is None:
+                        flash(
+                            f"Kea error: {deleted.get('text')} - Jen could not tell whether the reservation for {host['ip']} was removed. Check the reservations list.",
+                            "error",
+                        )
+                    else:
+                        flash(f"Kea error: {deleted.get('text')} - the reservation was not changed.", "error")
+                    return redirect(url_for("reservations.edit_reservation", host_id=host_id))
+                logger.warning(
+                    f"reservation-del for {host['ip']} answered an error but the reservation is gone: the reply was lost"
+                )
+            res = _with_options(
+                {
+                    "subnet-id": host["subnet_id"],
+                    "hw-address": mac,
+                    "ip-address": host["ip"],
+                    "hostname": hostname,
+                    **carried,
+                },
+                dns_override,
+            )
             result = __kea.kea_command("reservation-add", arguments={"reservation": res})
+            if result.get("result") != 0 and _reservation_present(host["subnet_id"], host["ip"]):
+                # the add was applied and its reply was lost: the edited reservation exists, and putting the original "back" would only fail as a duplicate
+                logger.warning(
+                    f"reservation-add for {host['ip']} answered an error but the reservation exists: the reply was lost"
+                )
+                result = {"result": 0}
             if result.get("result") != 0:
                 # the delete went through and the add did not: put the ORIGINAL back, and say which of the two states the client is in
                 restored = __kea.kea_command("reservation-add", arguments={"reservation": original})
+                if restored.get("result") != 0 and _reservation_present(host["subnet_id"], host["ip"]):
+                    restored = {"result": 0}
                 if restored.get("result") == 0:
                     _move_note_to_the_new_host_id(host_id, host["subnet_id"], host["ip"])
                     flash(
-                        f"Kea error: {result.get('text')} - the reservation for {host['ip']} was put back as it was.",
+                        f"Kea error: {result.get('text')} - the reservation for {host['ip']} was put back with its address, hostname and options.",
                         "error",
                     )
                 else:

@@ -53,6 +53,8 @@ import logging
 import threading
 from datetime import datetime, timedelta, timezone
 
+import pymysql
+
 from jen import extensions
 from jen.services import kea_host as _host
 from jen.services import kea_log_trace as _klt
@@ -901,7 +903,9 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
             except Exception as e:
                 logger.error(f"client_problems: server {server.get('name')!r}: {type(e).__name__}: {e}")
                 summary["errors"].append(f"{server.get('name')}: {type(e).__name__}")
-                if not log_read:
+                # a database blip after a good read is not a missed read (the log WAS read); anything else - a deterministic error in the sweep itself, a row that can
+                # never be inserted - is counted, or Health would stay green for a server whose sweep never completes (the second pass, Q172, finding 4)
+                if not (log_read and isinstance(e, (pymysql.err.OperationalError, pymysql.err.InterfaceError))):
                     _note_server(sid, False, type(e).__name__, now)
         try:
             state = from_declined(_declined_rows()) + from_held(_held_rows())

@@ -96,6 +96,8 @@ def packet_health_widget(servers) -> list[dict]:
                 stats = r["stats"]
                 if isinstance(stats, str):
                     stats = json.loads(stats)
+                if not isinstance(stats, dict):
+                    raise ValueError("stats is not an object")
             except (TypeError, ValueError):
                 # v5.69.0-beta.3 (Q172): one malformed server_stats row was a 500 for the whole dashboard; it is skipped, the rest still make a reading
                 logger.warning(

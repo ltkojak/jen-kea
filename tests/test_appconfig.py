@@ -485,3 +485,15 @@ class TestWritersAreSerialized:
             app_config.mutate(boom, reload=False)
         app_config.write_value("race", "after", "1", reload=False)  # an ordinary writer works again
         assert "after" in self._present(isolated_config)
+
+
+class TestTheActiveServerCacheIsResetAfterTheNewListIsInPlace:
+    """The second pass (Q172, finding 9): reset before `KEA_SERVERS` is reassigned, a reader choosing in between chose from the OLD list and the cache kept it for ten seconds."""
+
+    def test_the_reset_follows_the_assignment_in_apply(self):
+        import inspect
+
+        from jen.config import AppConfig
+
+        src = inspect.getsource(AppConfig.apply)
+        assert src.index("extensions.KEA_SERVERS = ") < src.index("extensions._active_server_cache.update")

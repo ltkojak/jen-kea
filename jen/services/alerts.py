@@ -378,13 +378,17 @@ def safe_text(value):
     return html.escape(str(value), quote=False)
 
 
+def _active_channels_or_raise():
+    """Every enabled alert channel; a database failure RAISES (the daily summary's audience question must not read "no channels" for "the database did not answer")."""
+    with __jen_db_ctx() as db, db.cursor() as cur:
+        cur.execute("SELECT * FROM alert_channels WHERE enabled=1")
+        return cur.fetchall()
+
+
 def get_active_channels():
     """Get all enabled alert channels."""
     try:
-        with __jen_db_ctx() as db, db.cursor() as cur:
-            cur.execute("SELECT * FROM alert_channels WHERE enabled=1")
-            channels = cur.fetchall()
-        return channels
+        return _active_channels_or_raise()
     except Exception as e:
         logger.error(f"get_active_channels error: {e}")
         return []
@@ -1148,6 +1152,8 @@ def _load_state(alert_type, key) -> dict:
     possible single duplicate beats a missed warning."""
     import json
 
+    if _alert_state_key(alert_type, key) in _unsaved_states:
+        return dict(_unsaved_states[_alert_state_key(alert_type, key)])
     raw = __get_global_setting(_alert_state_key(alert_type, key), "") or ""
     if raw in ("1", "0"):
         return {"a": raw == "1", "n": False, "t": None, "c": 0, "d": None, "r": False}
@@ -1167,11 +1173,20 @@ def _load_state(alert_type, key) -> dict:
     }
 
 
+# State a write could not store (the Jen database down): kept here so the NEXT pass of this process reads it back. Without it a condition read as inactive again and
+# was re-sent on every pass - `kea_down` is checked every five seconds, and the database is often down when Kea is (the second pass, Q172, finding 6).
+_unsaved_states: dict = {}
+
+
 def _save_state(alert_type, key, state) -> None:
     import json
 
-    if not __set_global_setting(_alert_state_key(alert_type, key), json.dumps(state, separators=(",", ":"))):
-        # v5.68.0-beta.22 (Q157): the write failed (it is logged by the setter); the state is now only in memory of this pass, so a restart may repeat a notification
+    k = _alert_state_key(alert_type, key)
+    if __set_global_setting(k, json.dumps(state, separators=(",", ":"))):
+        _unsaved_states.pop(k, None)
+    else:
+        # v5.68.0-beta.22 (Q157): the write failed (it is logged by the setter); the state lives in this process's memory until a write lands, so a restart may repeat a notification
+        _unsaved_states[k] = dict(state)
         logger.warning(f"alert state {alert_type}:{key} could not be stored: a restart may repeat this notification")
 
 
@@ -1506,8 +1521,9 @@ def _build_daily_summary() -> str:
 
 
 def _summary_audience() -> bool:
-    """Does any enabled channel handle `daily_summary`?"""
-    return any(channel_handles_alert(c, "daily_summary") for c in get_active_channels())
+    """Does any enabled channel handle `daily_summary`? A database error raises: `send_daily_summary` answers "failed" and the loop retries in fifteen minutes, rather than
+    reading an unreachable database as "nobody to tell" and dropping the day (the second pass, Q172, finding 5)."""
+    return any(channel_handles_alert(c, "daily_summary") for c in _active_channels_or_raise())
 
 
 def send_daily_summary() -> str:
@@ -1823,6 +1839,7 @@ _DEVICE_UPSERT = """
         device_icon=IF(manufacturer_override IS NULL, %s, device_icon)
 """
 DEVICE_COMMIT_EVERY = 200
+STALE_PASS_EVERY_S = 600
 
 
 def update_device_inventory(leases) -> dict:
@@ -1833,6 +1850,8 @@ def update_device_inventory(leases) -> dict:
     the stale-reservation alerts stormed. A lease whose address is not six bytes is now SKIPPED, with one warning per sweep that counts them; each row is its own `try`,
     so a row that fails (a value too long for its column, a lock) costs only itself; and the batch commits every 200 rows so a late failure cannot undo the early ones.
     Returns {"updated", "skipped", "failed"}."""
+    import pymysql
+
     result = {"updated": 0, "skipped": 0, "failed": 0}
     try:
         with __jen_db_ctx() as jdb:
@@ -1865,6 +1884,22 @@ def update_device_inventory(leases) -> dict:
                             ),
                         )
                         result["updated"] += 1
+                    except pymysql.err.OperationalError as e:
+                        code = e.args[0] if e.args and isinstance(e.args[0], int) else 0
+                        if code in (1213, 1205):
+                            # a deadlock or lock wait: InnoDB rolled the OPEN transaction back, so the rows counted since the last commit are lost with this one
+                            result["updated"] -= since_commit
+                            result["failed"] += since_commit + 1
+                            since_commit = 0
+                            logger.error(
+                                f"Device tracking: a lock rolled back the open batch ({code}); the next sweep updates those devices"
+                            )
+                            continue
+                        result["failed"] += 1
+                        logger.error(
+                            f"Device tracking: the connection failed at {mac} ({code}): the rest of this sweep is skipped"
+                        )
+                        break
                     except Exception as e:
                         result["failed"] += 1
                         logger.error(f"Device tracking: {mac} was not updated: {type(e).__name__}")
@@ -1997,6 +2032,7 @@ def check_alerts():
     )
     last_snapshot_time = 0
     last_ha_states = {}  # server_id -> last known HA state
+    last_stale_pass = None  # time.time() of the last stale-reservation pass
 
     # Seed known_macs from devices table so restarts don't flood with "new device" alerts for every known device. v5.68.0-beta.21 (Q156): the seed
     # is retried at the top of each cycle until it succeeds - it ran once before the loop, so a Jen database that was down at start left it empty for the
@@ -2208,10 +2244,13 @@ def check_alerts():
                         check_utilization_alerts(cur, kea_cfg["arguments"].get("Dhcp4", {}))
 
                     # ── Stale reservation alerts ──
-                    try:
-                        check_stale_reservation_alerts(cur)
-                    except Exception as e:
-                        logger.error(f"Stale reservation check error: {e}")
+                    # (every ten minutes: one reservation lookup per stale device is not a thirty-second job - the second pass, Q172, finding 13)
+                    if last_stale_pass is None or time.time() - last_stale_pass >= STALE_PASS_EVERY_S:
+                        last_stale_pass = time.time()
+                        try:
+                            check_stale_reservation_alerts(cur)
+                        except Exception as e:
+                            logger.error(f"Stale reservation check error: {e}")
 
                     # ── Config drift check (v5.2.0) ──
                     # Jen's own subnet map is a manually-maintained

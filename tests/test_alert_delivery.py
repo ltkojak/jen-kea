@@ -20,6 +20,9 @@ OK = [("telegram", True, "")]
 DOWN = [("telegram", False, "HTTP 502")]
 
 
+_REAL_SUMMARY_AUDIENCE = alerts._summary_audience
+
+
 @pytest.fixture(autouse=True)
 def _a_summary_audience(monkeypatch):
     """The daily summary is built only when a channel handles it (v5.69.0-beta.3, Q172). These tests replace `send_alert` and have no channel rows, so the audience is
@@ -1304,10 +1307,25 @@ class TestTheNoSubscriberSummaryIsAQuietDay:
         assert alerts.send_daily_summary() == "quiet" and built == []
 
     def test_the_audience_is_a_channel_that_handles_daily_summary(self, db, monkeypatch):
-        monkeypatch.setattr(alerts, "get_active_channels", lambda: [{"alert_types": '["kea_down"]'}])
+        monkeypatch.setattr(alerts, "_summary_audience", _REAL_SUMMARY_AUDIENCE)
+        monkeypatch.setattr(alerts, "_active_channels_or_raise", lambda: [{"alert_types": '["kea_down"]'}])
         assert alerts._summary_audience() is False
-        monkeypatch.setattr(alerts, "get_active_channels", lambda: [{"alert_types": '["daily_summary"]'}])
+        monkeypatch.setattr(alerts, "_active_channels_or_raise", lambda: [{"alert_types": '["daily_summary"]'}])
         assert alerts._summary_audience() is True
+
+    def test_a_database_that_does_not_answer_is_a_failed_attempt_not_a_quiet_day(self, db, monkeypatch):
+        """The second pass (Q172, finding 5): `get_active_channels` swallows an error and answers []: read as "nobody to tell", the day was dropped."""
+        monkeypatch.setattr(
+            alerts, "_summary_audience", _REAL_SUMMARY_AUDIENCE
+        )  # the module's autouse stub would hide the question
+        import pymysql
+
+        def down():
+            raise pymysql.err.OperationalError(2013, "lost connection")
+
+        monkeypatch.setattr(alerts, "_active_channels_or_raise", down)
+        monkeypatch.setattr(alerts, "_pending_summary", None)
+        assert alerts.send_daily_summary() == "failed"
 
 
 class TestAnEmailGoesToEveryRecipient:
@@ -1354,3 +1372,83 @@ class TestAnEmailGoesToEveryRecipient:
         self._smtp(monkeypatch)
         with pytest.raises(Exception, match="Port 465"):
             alerts._send_email_channel("hello", "kea_down", {"smtp_host": "h", "smtp_port": 465, "to_addr": "a@x.test"})
+
+
+class TestAStateThatCouldNotBeStoredIsNotForgotten:
+    """The second pass (Q172, finding 6): with the Jen database down the write of a condition's state failed, the next pass read "inactive" again and `kea_down` - checked
+    every five seconds - went out on every pass for the length of the outage."""
+
+    def test_kea_down_is_not_resent_on_every_pass_while_the_state_cannot_be_written(self, db, monkeypatch, send):
+        monkeypatch.setattr(alerts, "_unsaved_states", {})
+        monkeypatch.setattr(alerts, "_utcnow", lambda: T0)
+        monkeypatch.setitem(alerts.__dict__, "__set_global_setting", lambda *a, **k: False)
+        srv = {"id": 41, "name": "kea-x"}
+        sender = send(OK)
+        for _ in range(5):
+            alerts.check_kea_status_alert(srv, False)
+        assert sender.sent == ["kea_down"], "told once, remembered in memory"
+
+    def test_a_state_that_is_stored_later_leaves_the_memory(self, db, monkeypatch, send):
+        monkeypatch.setattr(alerts, "_unsaved_states", {})
+        key = alerts._alert_state_key("kea_down", 42)
+        alerts._unsaved_states[key] = {"a": True, "n": True, "t": None, "c": 0, "d": None, "r": False}
+        alerts._save_state("kea_down", 42, {"a": False, "n": False, "t": None, "c": 0, "d": None, "r": False})
+        assert key not in alerts._unsaved_states
+
+
+class TestADeviceInventoryLockDoesNotLoseRowsSilently:
+    """The second pass (Q172, finding 11): a deadlock rolls the OPEN transaction back; the rows counted since the last commit are lost with it, and were still counted as updated."""
+
+    @staticmethod
+    def _fake(monkeypatch, fail_on, code):
+        import contextlib
+
+        import pymysql
+
+        calls = {"n": 0}
+
+        class Cur:
+            def execute(self, *a, **k):
+                calls["n"] += 1
+                if calls["n"] == fail_on:
+                    raise pymysql.err.OperationalError(code, "boom")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        class Conn:
+            def cursor(self):
+                return Cur()
+
+            def commit(self):
+                pass
+
+        @contextlib.contextmanager
+        def ctx():
+            yield Conn()
+
+        monkeypatch.setitem(alerts.__dict__, "__jen_db_ctx", ctx)
+
+    @staticmethod
+    def _leases(n):
+        return [
+            {"ip": f"10.0.0.{i}", "hwaddr": bytes.fromhex(f"aabbccddee{i:02x}"), "hostname": "h", "subnet_id": 1}
+            for i in range(1, n + 1)
+        ]
+
+    def test_a_deadlock_takes_the_open_batch_with_it_and_says_so(self, monkeypatch):
+        self._fake(monkeypatch, fail_on=3, code=1213)
+        result = alerts.update_device_inventory(self._leases(5))
+        assert result == {"updated": 2, "skipped": 0, "failed": 3}, (
+            result
+        )  # rows 4 and 5 landed; 1 and 2 were rolled back with 3
+
+    def test_a_lost_connection_ends_the_sweep_with_one_error_not_one_per_lease(self, monkeypatch, caplog):
+        self._fake(monkeypatch, fail_on=2, code=2013)
+        with caplog.at_level("ERROR"):
+            result = alerts.update_device_inventory(self._leases(50))
+        assert result["updated"] == 1 and result["failed"] == 1
+        assert caplog.text.count("the connection failed") == 1

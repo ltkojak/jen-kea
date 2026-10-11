@@ -427,13 +427,25 @@ class TestARefusedEditLeavesTheReservationAlone:
         """Records every call; `refuse_hostnames` makes reservation-add answer an error for those names (Kea's own refusal), `refuse_restore` for the original too."""
         from jen.services import kea as kea_svc
 
-        state = {"calls": [], "refuse_hostnames": set(), "refuse_restore": False, "delete_result": 0}
+        state = {
+            "calls": [],
+            "refuse_hostnames": set(),
+            "refuse_restore": False,
+            "delete_result": 0,
+            "delete_applies_but_errors": False,  # a lost reply: Kea removed the row, `kea_command` says result 1
+            "add_applies_but_errors": False,  # likewise for the new reservation
+            "held": None,  # what `reservation-get` answers (the reservation as Kea holds it)
+        }
 
         def command(cmd, *a, **kw):
             args = kw.get("arguments") or {}
             state["calls"].append((cmd, args))
+            if cmd == "reservation-get":
+                if state["held"] is None:
+                    return {"result": 3, "text": "not found"}
+                return {"result": 0, "arguments": state["held"]}
             if cmd == "reservation-del":
-                if state["delete_result"] == 0:
+                if state["delete_result"] == 0 or state["delete_applies_but_errors"]:
                     with db.cursor() as cur:
                         cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier)=%s", (self.MAC_HEX.upper(),))
                     db.commit()
@@ -447,6 +459,7 @@ class TestARefusedEditLeavesTheReservationAlone:
                     state["refuse_restore"] and res.get("hostname") == "original-host"
                 ):
                     return {"result": 1, "text": "Kea refused the reservation"}
+                lost = state["add_applies_but_errors"] and res.get("hostname") == "renamed"
                 with db.cursor() as cur:
                     cur.execute(
                         "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
@@ -454,7 +467,7 @@ class TestARefusedEditLeavesTheReservationAlone:
                         (self.MAC_HEX, self.IP, res.get("hostname", "")),
                     )
                 db.commit()
-                return {"result": 0, "text": "added"}
+                return {"result": 1, "text": "timed out"} if lost else {"result": 0, "text": "added"}
             return {"result": 0, "arguments": {}}
 
         monkeypatch.setattr(kea_svc, "kea_command", command)
@@ -501,7 +514,7 @@ class TestARefusedEditLeavesTheReservationAlone:
             data={"hostname": "renamed", "dns_override": "10.99.0.2", "notes": "edited note"},
             follow_redirects=True,
         )
-        assert b"put back as it was" in r.data
+        assert b"put back with its address, hostname and options" in r.data
         adds = [a["reservation"] for c, a in kea["calls"] if c == "reservation-add"]
         assert len(adds) == 2 and adds[0]["hostname"] == "renamed"
         assert adds[1] == {
@@ -535,8 +548,94 @@ class TestARefusedEditLeavesTheReservationAlone:
             f"/reservations/edit/{reservation}", data={"hostname": "renamed", "dns_override": ""}, follow_redirects=True
         )
         assert b"the reservation was not changed" in r.data
-        assert [c for c, _a in kea["calls"]] == ["reservation-del"]
+        assert [c for c, _a in kea["calls"]] == ["reservation-get", "reservation-del"]
         assert [x["hostname"] for x in self._hosts(db)] == ["original-host"]
+
+    def test_a_lost_reply_on_the_delete_does_not_strand_the_client_without_an_address(
+        self, logged_in_client, db, reservation, kea
+    ):
+        """The second pass (finding 1): Kea APPLIED the delete and the reply was lost - `kea_command` says result 1. The row is gone, so the edit goes on and adds."""
+        kea["delete_applies_but_errors"] = True
+        kea["delete_result"] = 1
+        r = logged_in_client.post(
+            f"/reservations/edit/{reservation}",
+            data={"hostname": "renamed", "dns_override": "", "notes": "edited note"},
+            follow_redirects=True,
+        )
+        assert b"not changed" not in r.data and b"Reservation updated" in r.data
+        assert [x["hostname"] for x in self._hosts(db)] == ["renamed"], "the reservation exists, edited"
+
+    def test_a_lost_reply_on_the_add_is_a_success_not_a_put_back(self, logged_in_client, db, reservation, kea):
+        """The second pass (finding 2): Kea applied the NEW reservation and the reply was lost. It exists; the original is not put back on top of it."""
+        kea["add_applies_but_errors"] = True
+        r = logged_in_client.post(
+            f"/reservations/edit/{reservation}",
+            data={"hostname": "renamed", "dns_override": "", "notes": "edited note"},
+            follow_redirects=True,
+        )
+        assert b"could NOT be put back" not in r.data and b"Reservation updated" in r.data
+        adds = [a["reservation"] for c, a in kea["calls"] if c == "reservation-add"]
+        assert len(adds) == 1, "the original was not added on top of the new one"
+        rows = self._hosts(db)
+        assert [x["hostname"] for x in rows] == ["renamed"]
+        with db.cursor() as cur:
+            cur.execute("SELECT notes FROM reservation_notes WHERE host_id=%s", (rows[0]["host_id"],))
+            assert cur.fetchone()["notes"] == "edited note"
+        db.commit()
+
+    def test_what_the_form_does_not_show_travels_with_the_edit_and_with_a_restore(
+        self, logged_in_client, db, reservation, kea
+    ):
+        """The second pass (finding 3): client classes, a boot file and an option other than the DNS servers were dropped by the edit and by the put-back."""
+        kea["held"] = {
+            "ip-address": self.IP,
+            "hw-address": "aa:bb:cc:dd:ee:77",
+            "hostname": "original-host",
+            "client-classes": ["voip"],
+            "boot-file-name": "pxelinux.0",
+            "option-data": [
+                {"name": "domain-name-servers", "data": "10.99.0.1"},
+                {"name": "ntp-servers", "data": "10.99.0.9"},
+            ],
+        }
+        logged_in_client.post(
+            f"/reservations/edit/{reservation}",
+            data={"hostname": "renamed", "dns_override": "10.99.0.2", "notes": ""},
+            follow_redirects=True,
+        )
+        (new,) = [a["reservation"] for c, a in kea["calls"] if c == "reservation-add"]
+        assert new["client-classes"] == ["voip"] and new["boot-file-name"] == "pxelinux.0"
+        assert {"name": "ntp-servers", "data": "10.99.0.9"} in new["option-data"]
+        assert [o["data"] for o in new["option-data"] if o["name"] == "domain-name-servers"] == ["10.99.0.2"]
+        kea["calls"].clear()
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier)=%s", (self.MAC_HEX.upper(),))
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
+                "VALUES (UNHEX(%s), 0, 1, INET_ATON(%s), 'original-host')",
+                (self.MAC_HEX, self.IP),
+            )
+            host_id = cur.lastrowid
+        db.commit()
+        kea["refuse_hostnames"] = {"renamed"}
+        logged_in_client.post(
+            f"/reservations/edit/{host_id}", data={"hostname": "renamed", "dns_override": ""}, follow_redirects=True
+        )
+        restore = [a["reservation"] for c, a in kea["calls"] if c == "reservation-add"][-1]
+        assert restore["hostname"] == "original-host" and restore["client-classes"] == ["voip"]
+        assert {"name": "ntp-servers", "data": "10.99.0.9"} in restore["option-data"]
+
+    def test_a_hostname_the_reservation_already_had_stays_editable(self, logged_in_client, db, reservation, kea):
+        """The second pass (finding 10): a hostname Kea's own config gave the reservation (an underscore) is not re-judged unless the person changed it."""
+        with db.cursor() as cur:
+            cur.execute("UPDATE hosts SET hostname='old_style_name' WHERE host_id=%s", (reservation,))
+        db.commit()
+        r = logged_in_client.post(
+            f"/reservations/edit/{reservation}",
+            data={"hostname": "old_style_name", "dns_override": "", "notes": "edited note"},
+            follow_redirects=True,
+        )
+        assert b"Invalid hostname" not in r.data
 
 
 class TestTheListAndTheExportAskForNotesAndDnsOnce:
