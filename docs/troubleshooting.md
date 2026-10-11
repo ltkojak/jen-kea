@@ -252,7 +252,7 @@ Free the space or fix the filesystem; to end the session now once the cause is f
 armed"; it is now a failed tick (the unit shows `failed`, exit status 1, and the next minute tries again) because not being able to look is not proof that nothing is there. Check the directory
 (`root:root`, mode 0700) and run `sudo jen-kea-helper --self-restore --now` once it can be read.
 
-**"the config lock is held by another process" (v5.69.0-beta.1, helper build 18).** The restore waited up to a minute for the helper's per-config lock (now
+**"the config lock could not be taken" (v5.69.0-beta.1, helper build 18).** The restore waited up to a minute for the helper's per-config lock (now
 `/var/lib/jen-kea-helper/locks/<hash>.lock`, plus, for this one build, the older `<config>.jen_lock` beside the config) and gave up for this tick: some other process holds it - usually a hung
 `kea-dhcp4 -t`. Find it with `sudo fuser -v` on the file the message names; the next tick retries by itself, and a hung process that is the daemon's own is the thing to deal with.
 

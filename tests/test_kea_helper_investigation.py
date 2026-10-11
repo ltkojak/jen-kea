@@ -2178,7 +2178,7 @@ class TestARestoreCannotBeHeldForever:
             out = host.tick()
         finally:
             os.close(fd)
-        assert out["ok"] is False and "the config lock is held by another process" in out["failed"][0]["error"], out
+        assert out["ok"] is False and "the config lock could not be taken" in out["failed"][0]["error"], out
         assert host.clock >= host.helper._LOCK_WAIT_S and host.restarts() == [] and host.signals == []
         state = host.state()
         assert state["attempts"] == 1 and state["restored_at"] is None
@@ -2272,14 +2272,23 @@ class TestEveryRemainingP3OfTheHelperItems:
 
 
 def _within(seconds, fn):
-    """Run `fn()` on a thread and fail the test, not the run, when it has not returned in `seconds` (a read that waits on a FIFO would hang for ever)."""
+    """Run `fn()` on a thread and fail the test, not the run, when it has not returned in `seconds` (a read that waits on a FIFO would hang for ever). What `fn` raised is raised here."""
     import threading
 
     box = {}
-    t = threading.Thread(target=lambda: box.setdefault("v", fn()), daemon=True)
+
+    def run():
+        try:
+            box["v"] = fn()
+        except BaseException as e:
+            box["e"] = e
+
+    t = threading.Thread(target=run, daemon=True)
     t.start()
     t.join(seconds)
     assert not t.is_alive(), "the call did not return: it is waiting on a file that is not a regular file"
+    if "e" in box:
+        raise box["e"]
     return box.get("v")
 
 
