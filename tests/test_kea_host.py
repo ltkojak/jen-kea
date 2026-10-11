@@ -1323,6 +1323,63 @@ class TestReadConfigVersioned:
         assert cfg == {"Dhcp4": {"n": 1}}
         assert sha == kea_host._canonical_sentinel({"Dhcp4": {"n": 1}})
 
+    # ── v5.69.0-beta.3 (Q172): only "not there" is absent ────────────────
+    def test_a_non_ok_reply_other_than_missing_is_an_error_the_caller_can_show(self, monkeypatch, quiet_status):
+        _connect_seq(
+            monkeypatch,
+            [(json.dumps({"ok": False, "error": "invalid-json", "detail": "Expecting ',' at line 3"}), "")],
+        )
+        errors = []
+        cfg, sha = kea_host.read_config_versioned(SERVER, "dhcp4", errors=errors)
+        assert cfg is None and sha is None
+        assert errors and "invalid-json" in errors[0] and "line 3" in errors[0]
+
+    @pytest.mark.parametrize("error", ["unreadable", "symlink", "not-allowed"])
+    def test_every_refusal_but_missing_is_an_error_even_without_a_detail(self, monkeypatch, quiet_status, error):
+        _connect_seq(monkeypatch, [(json.dumps({"ok": False, "error": error}), "")])
+        errors = []
+        assert kea_host.read_config_versioned(SERVER, "dhcp4", errors=errors) == (None, None)
+        assert len(errors) == 1 and errors[0].startswith(error) and "/etc/kea/kea-dhcp4.conf" in errors[0]
+
+    def test_a_missing_file_is_absent_and_says_nothing(self, monkeypatch, quiet_status):
+        _connect_seq(monkeypatch, [(json.dumps({"ok": False, "error": "missing"}), "")])
+        errors = []
+        assert kea_host.read_config_versioned(SERVER, "dhcp4", errors=errors) == (None, None)
+        assert errors == []
+
+    def test_a_caller_that_passed_no_list_still_gets_none_and_none(self, monkeypatch, quiet_status):
+        _connect_seq(monkeypatch, [(json.dumps({"ok": False, "error": "invalid-json", "detail": "x"}), "")])
+        assert kea_host.read_config_versioned(SERVER, "dhcp4") == (None, None)
+
+    @pytest.mark.parametrize(
+        "cat_output,reason",
+        [
+            ("cat: /etc/kea/kea-dhcp4.conf: Permission denied\n", "Permission denied"),
+            ("{not json", "not valid JSON"),
+        ],
+    )
+    def test_the_legacy_read_tells_an_unusable_file_from_an_absent_one(
+        self, monkeypatch, app, quiet_status, cat_output, reason
+    ):
+        _connect_seq(monkeypatch, [("", "sudo: a password is required")], [(cat_output, "")])
+        monkeypatch.setattr(kea_host, "_flag_legacy", lambda srv: None)
+        errors = []
+        with app.test_request_context("/"):
+            assert kea_host.read_config_versioned(SERVER, "dhcp4", errors=errors) == (None, None)
+        assert len(errors) == 1 and reason in errors[0]
+
+    def test_the_legacy_read_of_an_absent_file_says_nothing(self, monkeypatch, app, quiet_status):
+        _connect_seq(
+            monkeypatch,
+            [("", "sudo: a password is required")],
+            [("cat: /etc/kea/kea-dhcp4.conf: No such file or directory\n", "")],
+        )
+        monkeypatch.setattr(kea_host, "_flag_legacy", lambda srv: None)
+        errors = []
+        with app.test_request_context("/"):
+            assert kea_host.read_config_versioned(SERVER, "dhcp4", errors=errors) == (None, None)
+        assert errors == []
+
     # ── v5.20.0: baseline + hash_kind ────────────────────────────────────
     def test_first_v2_read_records_a_raw_baseline(self, monkeypatch, quiet_status):
         _connect_seq(monkeypatch, [(json.dumps({"ok": True, "config": {"Dhcp4": {"n": 1}}, "sha256": "abc"}), "")])

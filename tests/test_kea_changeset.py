@@ -497,6 +497,78 @@ class TestFailedRestartRollsBack:
         assert set(cs.NOT_APPLIED) == {"aborted", "rolled_back", "rollback_failed"}
 
 
+class TestTwoServersWithOneNameAreTwoTargets:
+    """v5.69.0-beta.3 (Q172, item 6): the restart, revert and needs-hands bookkeeping is keyed by server id, never by the free-text name. `restarts` was a dict
+    keyed by `t.name`, so two servers called the same thing shared one entry and the second server's clean restart overwrote the first's failure: the change
+    was reported ok with a daemon down."""
+
+    A = {"id": 1, "name": "kea", "ssh_host": "10.0.0.1"}
+    B = {"id": 2, "name": "kea", "ssh_host": "10.0.0.2"}
+
+    def _failing_first(self, fake):
+        fake.responses["test-config"] = {"ok": True}
+        fake.responses["apply-config"] = {"ok": True, "sha256": "new", "helper_version": 2}
+
+        def service(server, op, payload):
+            if server["id"] == 1:
+                return {"ok": False, "error": "systemctl failed", "detail": "Job failed"}
+            return {"ok": True, "unit": "kea-dhcp4-server", "state": "active"}
+
+        fake.responses["service"] = service
+
+    def test_a_failed_restart_on_the_first_of_two_same_named_servers_is_not_masked(self, fake):
+        self._failing_first(fake)
+        result = cs.apply_change("dhcp4", _mutate_add_pool, "test change", servers=[self.A, self.B])
+        assert result.status in ("rolled_back", "rollback_failed"), (
+            "a failed restart was masked by the other server's name"
+        )
+        assert result.last_code == "restart-failed"
+        assert not any(k == "success" for k, _t in result.lines)
+
+    def test_the_server_that_needs_hands_is_named_and_identified_by_id(self, fake):
+        self._failing_first(fake)  # its second restart (after the rollback) fails as well
+        result = cs.apply_change("dhcp4", _mutate_add_pool, "test change", servers=[self.A, self.B])
+        assert result.status == "rollback_failed"
+        assert result.needs_hands == ["kea"] and result.needs_hands_ids == [1]  # server 2 restarted fine both times
+
+    def test_a_clean_run_on_the_second_same_named_server_does_not_resolve_the_first_ones_incident(self, monkeypatch):
+        data = {}
+        from jen.models import user as user_mod
+
+        monkeypatch.setattr(user_mod, "get_global_setting", lambda k, d="": data.get(k, d))
+        monkeypatch.setattr(user_mod, "set_global_setting", lambda k, v: data.__setitem__(k, v))
+        monkeypatch.setattr(user_mod, "audit", lambda *a, **k: None)
+        _REAL_RECORD_OUTCOME(
+            cs.ChangeSetResult("rollback_failed", "x", [("error", "boom")], needs_hands=["kea"], needs_hands_ids=[1]),
+            "dhcp4",
+            "edit",
+        )
+        # server 2, also called "kea", changed and restarted cleanly: by NAME that would look like server 1 being covered
+        _REAL_RECORD_OUTCOME(
+            cs.ChangeSetResult("ok", "ok", [], covered=["kea"], covered_ids=[2]), "dhcp4", "edit again"
+        )
+        assert [i["needs_hands_ids"] for i in cs.attention()["incidents"]] == [[1]]
+        _REAL_RECORD_OUTCOME(cs.ChangeSetResult("ok", "ok", [], covered=["kea"], covered_ids=[1]), "dhcp4", "fix")
+        assert cs.attention() is None
+
+    def test_the_not_found_line_names_the_configured_file_not_a_default(self, fake):
+        """v5.69.0-beta.3 (Q172): the file Jen looks for on a server is the one configured for it; the line that says it is missing names that one."""
+        server = {"id": 3, "name": "kea-c", "ssh_host": "10.0.0.3", "kea_conf": "/etc/kea/kea-dhcp4-prod.conf"}
+        result = cs.apply_change(
+            "dhcp4", _mutate_add_pool, "test change", servers=[server]
+        )  # the fake has no config for server 3
+        assert result.status == "aborted" and result.last_code == "notfound-conf"
+        assert any("kea-dhcp4-prod.conf not found on this server" in text for _k, text in result.lines)
+        assert fake.payload_for("read-config")["path"] == "/etc/kea/kea-dhcp4-prod.conf"
+
+    def test_an_ok_run_reports_the_ids_it_covered(self, fake):
+        fake.responses["test-config"] = {"ok": True}
+        fake.responses["apply-config"] = {"ok": True, "sha256": "new", "helper_version": 2}
+        fake.responses["service"] = {"ok": True, "unit": "kea-dhcp4-server", "state": "active"}
+        result = cs.apply_change("dhcp4", _mutate_add_pool, "test change", servers=[self.A, self.B])
+        assert result.status == "ok" and result.covered == ["kea", "kea"] and result.covered_ids == [1, 2]
+
+
 class TestOutcomeReachesTheServersPage:
     """The Servers page keeps a rolled-back / failed-rollback outcome in front of the operator."""
 

@@ -155,7 +155,7 @@ class TestOverwriteMeansTheFileThatWasPreviewed:
         monkeypatch.setattr(kea_host, "helper_call", unreachable)
         flashes = _post(logged_in_client, world, base_sha_1="", base_sha_2="")
         assert world.calls("apply-config") == [] and not world.has(1)
-        assert any("could not read its config" in f and "timed out" in f for f in flashes)
+        assert any("could not be read" in f and "timed out" in f for f in flashes)
 
 
 class TestThePreviewCarriesTheFileItShowed:

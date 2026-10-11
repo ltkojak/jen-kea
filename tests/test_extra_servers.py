@@ -746,3 +746,85 @@ class TestChangingWhereAServerIsReachedWhileInvestigationLoggingIsOn:
         self._clear()  # what a successful turn_off leaves
         self._post_extra(logged_in_client, **{"extra_ssh_host[]": "10.7.7.7"})
         assert _on_disk(isolated_config).get("kea_server_2", "ssh_host") == "10.7.7.7"
+
+
+class TestServerNamesAndConfigFilenames:
+    """v5.69.0-beta.3 (Q172, items 6 and 7): two servers never share a name (the change set's restart and revert bookkeeping is keyed by id, but every line a person reads
+    names a server by it), a name is one line of at most 100 characters, and the configured Kea config file is a `*.conf` file (it IS the dhcp4 file Jen reads and writes)."""
+
+    def _save(self, client, form):
+        return client.post("/settings/infrastructure/save-extra-servers", data=form, follow_redirects=True)
+
+    def test_two_rows_with_one_name_are_refused_and_nothing_is_written(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        r = self._save(
+            logged_in_client,
+            _rows(
+                {"extra_name[]": "Standby", "extra_api_url[]": "http://a:8000"},
+                {"extra_name[]": "standby", "extra_api_url[]": "http://b:8000"},
+            ),
+        )
+        assert b"every server needs its own name" in r.data
+        assert not _on_disk(isolated_config).has_section("kea_server_2")
+
+    def test_a_name_equal_to_the_primarys_is_refused(self, logged_in_client, db, mock_kea, isolated_config):
+        app_config.write_value("kea", "name", "Main")
+        r = self._save(logged_in_client, _rows({"extra_name[]": "main", "extra_api_url[]": "http://a:8000"}))
+        assert b"every server needs its own name" in r.data
+        assert not _on_disk(isolated_config).has_section("kea_server_2")
+
+    def test_a_name_over_one_hundred_characters_is_refused(self, logged_in_client, db, mock_kea, isolated_config):
+        r = self._save(logged_in_client, _rows({"extra_name[]": "n" * 101, "extra_api_url[]": "http://a:8000"}))
+        assert b"one line of at most 100 characters" in r.data
+        assert not _on_disk(isolated_config).has_section("kea_server_2")
+
+    def test_a_name_with_a_newline_is_refused(self, logged_in_client, db, mock_kea, isolated_config):
+        r = self._save(
+            logged_in_client, _rows({"extra_name[]": "Standby\nrole = primary", "extra_api_url[]": "http://a:8000"})
+        )
+        assert b"one line of at most 100 characters" in r.data
+        assert not _on_disk(isolated_config).has_section("kea_server_2")
+
+    def test_distinct_names_and_blank_names_are_saved(self, logged_in_client, db, mock_kea, isolated_config):
+        self._save(
+            logged_in_client,
+            _rows(
+                {"extra_name[]": "", "extra_api_url[]": "http://a:8000"},
+                {"extra_name[]": "", "extra_api_url[]": "http://b:8000"},
+                {"extra_name[]": "n" * 100, "extra_api_url[]": "http://c:8000"},
+            ),
+        )
+        disk = _on_disk(isolated_config)
+        assert disk.get("kea_server_2", "name") == "Kea Server 2" and disk.get("kea_server_3", "name") == "Kea Server 3"
+        assert disk.get("kea_server_4", "name") == "n" * 100
+
+    def test_an_extra_servers_config_file_must_be_a_dot_conf_file(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        r = self._save(
+            logged_in_client, _rows({"extra_api_url[]": "http://a:8000", "extra_kea_conf[]": "/etc/kea/kea-dhcp4.json"})
+        )
+        assert b"must end in .conf" in r.data
+        assert not _on_disk(isolated_config).has_section("kea_server_2")
+
+    def test_the_primarys_ssh_save_refuses_a_config_file_that_is_not_dot_conf(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        r = logged_in_client.post(
+            "/settings/infrastructure/save-ssh",
+            data={"host": "10.0.0.5", "user": "jen", "kea_conf": "/etc/kea/kea-dhcp4.json"},
+            follow_redirects=True,
+        )
+        assert b"must end in .conf" in r.data
+        assert not _on_disk(isolated_config).has_section("kea_ssh")
+
+    def test_the_primarys_ssh_save_accepts_a_renamed_dot_conf_file(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        logged_in_client.post(
+            "/settings/infrastructure/save-ssh",
+            data={"host": "10.0.0.5", "user": "jen", "kea_conf": "/etc/kea/kea-dhcp4-prod.conf"},
+            follow_redirects=True,
+        )
+        assert _on_disk(isolated_config).get("kea_ssh", "kea_conf") == "/etc/kea/kea-dhcp4-prod.conf"

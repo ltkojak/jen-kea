@@ -55,6 +55,17 @@ class TestAppConfig:
         on_disk.read(str(isolated_config))
         assert on_disk.get("kea", "api_url") == "http://5.6.7.8:8000"
 
+    def test_a_config_write_resets_the_active_server_cache(self, isolated_config):
+        """v5.69.0-beta.3 (Q172): the 10-second cache of the server Jen last chose survived a config write, so a removed or re-pointed server was still the one asked."""
+        extensions._active_server_cache.update(server={"id": 1, "api_url": "http://old"}, ts=10**12)
+        app_config.write_value("kea", "api_url", "http://5.6.7.8:8000")
+        assert extensions._active_server_cache["server"] is None and extensions._active_server_cache["ts"] == 0
+
+    def test_a_reload_resets_the_active_server_cache(self, isolated_config):
+        extensions._active_server_cache.update(server={"id": 1}, ts=10**12)
+        app_config.reload()
+        assert extensions._active_server_cache["server"] is None
+
     def test_legacy_write_config_value_wrapper_reloads(self, isolated_config):
         write_config_value("server", "http_port", "6000")
         assert extensions.HTTP_PORT == 6000

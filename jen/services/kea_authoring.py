@@ -38,6 +38,7 @@ Deliberately excluded from generation, always:
 import json
 import logging
 import os
+import posixpath
 import shlex
 
 from jen import extensions
@@ -63,16 +64,18 @@ _CONF_FILENAMES = {"dhcp4": "kea-dhcp4.conf", "dhcp6": "kea-dhcp6.conf", "d2": "
 
 def conf_path_for(server: dict, service: str) -> str:
     """
-    Derive the path for `service`'s config file from the server's known
-    kea_conf (always the v4 path today — see jen/services/kea6.py's
-    _kea6_conf_path(), same convention reused here for symmetry). All
-    three config files (dhcp4, dhcp6, and D2's kea-dhcp-ddns.conf —
-    v5.23.0, Q19) live side-by-side in the same directory.
+    The path of `service`'s config file on `server` - the one definition every read, write, removal, revert and helper payload goes through.
+
+    The server's configured `kea_conf` IS the dhcp4 file, whatever it is called (v5.69.0-beta.3, Q172: a host whose file is `kea-dhcp4-prod.conf` used to be
+    read, written and rolled back as `kea-dhcp4.conf` - a file that does not exist there, or worse one that does). dhcp6 and D2's `kea-dhcp-ddns.conf`
+    (v5.23.0, Q19) are the siblings in the same directory, under Kea's own file names - see jen/services/kea6.py's _kea6_conf_path(), the same rule.
     """
     kea4_conf = server.get("kea_conf") or extensions.KEA_CONF
-    dirname = os.path.dirname(kea4_conf)
+    if service == "dhcp4":
+        return kea4_conf
+    dirname = posixpath.dirname(kea4_conf)  # a path on the Kea host: always POSIX, whatever Jen runs on
     filename = _CONF_FILENAMES.get(service, "kea-dhcp6.conf")
-    return os.path.join(dirname, filename)
+    return posixpath.join(dirname, filename)
 
 
 def ca_conf_path_for(server: dict) -> str:
@@ -81,25 +84,41 @@ def ca_conf_path_for(server: dict) -> str:
     path each service is expected to use, so a freshly-authored config
     is actually reachable through the same CA Jen already talks to."""
     kea4_conf = server.get("kea_conf") or extensions.KEA_CONF
-    return os.path.join(os.path.dirname(kea4_conf), "kea-ctrl-agent.conf")
+    return posixpath.join(posixpath.dirname(kea4_conf), "kea-ctrl-agent.conf")
 
 
-def read_remote_json(ssh, path: str):
+def read_remote_json(ssh, path: str, errors: list | None = None):
     """cat a remote JSON file over SSH and parse it. Returns None if the
     file doesn't exist or isn't valid JSON — never raises, since "the
     file isn't there" is an expected, common outcome here (that's
     exactly the case this whole module exists to help with), not an
-    error condition."""
+    error condition.
+
+    `errors` (v5.69.0-beta.3, Q172) - pass a list and a file that IS there but could not be used (permission denied, not valid JSON) is told apart from
+    one that is not: the reason is appended and None still returned, so the caller that offers to create an absent file can refuse for an unreadable one.
+    (Without it the command keeps `2>/dev/null` and every failure reads as absent, which is what the sibling-config probes want.)"""
     try:
         # path is validated on save (valid_remote_path) — quoted here too,
         # defense-in-depth, since it's interpolated into a remote shell.
-        _, stdout, _ = ssh.exec_command(f"cat {shlex.quote(path)} 2>/dev/null")
+        redirect = "2>/dev/null" if errors is None else "2>&1"
+        _, stdout, _ = ssh.exec_command(f"cat {shlex.quote(path)} {redirect}")
         raw = stdout.read().decode()
         if not raw.strip():
             return None
+        if errors is not None and raw.startswith("cat: "):
+            if "No such file or directory" not in raw:
+                errors.append(raw.strip().splitlines()[0][:300])
+            return None
         return json.loads(raw)
+    except ValueError as e:  # not valid JSON (json.JSONDecodeError, or bytes that are not UTF-8)
+        logger.warning(f"read_remote_json({path}): {e}")
+        if errors is not None:
+            errors.append(f"not valid JSON: {e}")
+        return None
     except Exception as e:
         logger.warning(f"read_remote_json({path}): {e}")
+        if errors is not None:
+            errors.append(f"could not be read ({type(e).__name__})")
         return None
 
 

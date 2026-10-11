@@ -536,13 +536,23 @@ def _canonical_sentinel(cfg: dict) -> str:
     return _CANONICAL_SENTINEL_PREFIX + hashlib.sha256(_rev.canonical(cfg).encode()).hexdigest()
 
 
+def _read_refusal(resp: dict, path: str) -> str:
+    """The reason a helper's `read-config` answered `ok: false` (anything but `missing`), as one sentence fragment for a person: its `error` code, then its own
+    `detail` when it gave one ("invalid-json: Expecting ',' delimiter: line 3 column 5"), else the path it was asked for."""
+    code = str(resp.get("error") or "refused")
+    detail = str(resp.get("detail") or "").strip()
+    return f"{code}: {detail}" if detail else f"{code} - {path}"
+
+
 def read_config_versioned(server: dict, service: str, *, errors: list | None = None) -> tuple[dict | None, str | None]:
     """(parsed config, sha256-of-raw-bytes or a canonical sentinel).
 
     `errors` (v5.67.0-beta.8, Q120, item a) — pass a list and the reason a read came back
     (None, None) is appended to it as a sentence ("SSH to kea@host failed — ...", "the helper
     answered badly: ..."), for the one caller that shows it (the setup wizard) without every
-    other caller learning a new return shape.
+    other caller learning a new return shape. Since v5.69.0-beta.3 (Q172) that includes a helper
+    that answered `ok: false` with anything but `missing` ("invalid-json: ...", "unreadable: ...",
+    "not-allowed"): only a file that is not THERE reads as absent (no error appended).
 
     v5.28.0 (Q24, B2) — a v1 helper or the legacy path returns no raw
     sha; this used to return `None` for it, which meant a caller's
@@ -573,6 +583,10 @@ def read_config_versioned(server: dict, service: str, *, errors: list | None = N
         if resp.get("ok"):
             cfg = resp.get("config")
             sha = resp.get("sha256")
+        elif errors is not None and resp.get("error") != "missing":
+            # v5.69.0-beta.3 (Q172): "the file is not there" is the one refusal that means absent. A file the helper could not open, a symlink, a path it will
+            # not serve or one that is not valid JSON is a file that may well be there - the caller (Author Kea Config) must not read it as absent and offer to create it
+            errors.append(_read_refusal(resp, path))
     except HelperMissing:
         _flag_legacy(server)
         try:
@@ -583,7 +597,7 @@ def read_config_versioned(server: dict, service: str, *, errors: list | None = N
                 errors.append(str(e))
             return None, None
         try:
-            cfg = __authoring.read_remote_json(ssh, path)
+            cfg = __authoring.read_remote_json(ssh, path, errors=errors)
         finally:
             with contextlib.suppress(Exception):
                 ssh.close()

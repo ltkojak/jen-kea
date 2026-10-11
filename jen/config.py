@@ -456,6 +456,9 @@ class AppConfig:
             _caps.invalidate()
         except Exception:  # never let a cache drop break a config load
             pass
+        # v5.69.0-beta.3 (Q172): the same goes for the server Jen last chose to talk to (a 10 s cache in `jen.services.kea.get_active_kea_server`): after a config write
+        # it can name a server that has been removed or whose URL has changed, and the next request would be sent there. Reset in place - readers hold the dict.
+        extensions._active_server_cache.update(server=None, ts=0)
 
         extensions.KEA_API_URL = cfg.get("kea", "api_url")
         extensions.KEA_API_USER = cfg.get("kea", "api_user")

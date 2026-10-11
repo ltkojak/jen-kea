@@ -1864,6 +1864,9 @@ def save_infra_ssh():
     if kea_conf and not __auth.valid_remote_path(kea_conf):
         flash("Invalid Kea config path — must be an absolute path with no special characters.", "error")
         return redirect(url_for("settings.settings_kea"))
+    if kea_conf and not kea_conf.endswith(".conf"):
+        flash(f"Invalid Kea config path — the file name must end in .conf: {kea_conf}", "error")
+        return redirect(url_for("settings.settings_kea"))
     if not host:
         # v5.68.0-beta.9 (Q144): without an SSH host Jen cannot put a log level back on the primary
         refusal = __inv.removal_refusal([1], actor=current_user.username)
@@ -1916,6 +1919,9 @@ def save_extra_servers():
         if kc.strip() and not __auth.valid_remote_path(kc.strip()):
             flash(f"Invalid Kea config path: {kc.strip()}", "error")
             return redirect(url_for("settings.settings_kea"))
+        if kc.strip() and not kc.strip().endswith(".conf"):
+            flash(f"Invalid Kea config path — the file name must end in .conf: {kc.strip()}", "error")
+            return redirect(url_for("settings.settings_kea"))
     _require_port = __caps.is_direct()
     for u in api_urls:
         if u.strip() and not __auth.valid_api_url(u.strip(), require_port=_require_port):
@@ -1950,6 +1956,23 @@ def save_extra_servers():
         if n is not None and (submitted.count(n) > 1 or (n not in configured_extra and host.strip())):
             flash("Refused: duplicate or unknown server id in the submitted form.", "error")
             return redirect(url_for("settings.settings_kea"))
+
+    # v5.69.0-beta.3 (Q172, item 6): a server's name is what a person reads in every flash line, banner and history row, so two servers may not share one, and it
+    # is one short line (a newline would write a second key into the section's own line). A blank name is not checked: it is given "Kea Server <id>", which is
+    # unique by construction. A row without an API URL is dropped by the rewrite below and is not a server, so its name is not counted.
+    primary_name = extensions.cfg.get("kea", "name", fallback="Kea Server 1").strip().casefold()
+    seen_names = {primary_name}
+    for name, api_url in zip(names, api_urls, strict=False):
+        shown = name.strip()
+        if not shown or not api_url.strip():
+            continue
+        if "\n" in name or "\r" in name or len(shown) > 100:
+            flash("Refused: a server name is one line of at most 100 characters.", "error")
+            return redirect(url_for("settings.settings_kea"))
+        if shown.casefold() in seen_names:
+            flash(f'Refused: two servers are named "{shown}" - every server needs its own name.', "error")
+            return redirect(url_for("settings.settings_kea"))
+        seen_names.add(shown.casefold())
 
     def _rewrite_extra_servers(cfg):
         # v5.10.3 — snapshot every current [kea_server_N] so keys the form

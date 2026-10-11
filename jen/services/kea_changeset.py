@@ -49,17 +49,15 @@ never calls `flash()`.
 """
 
 import logging
+import os
 from dataclasses import dataclass, field
 
 from jen import extensions
 from jen.services import events as _events
 from jen.services import kea_host as _host
+from jen.services.kea_authoring import conf_path_for as _conf_path_for
 
 logger = logging.getLogger(__name__)
-
-# Matches jen/services/kea_authoring.py's _CONF_FILENAMES — d2's file is
-# kea-dhcp-ddns.conf, not "kea-d2.conf".
-_CONF_FILENAMES = {"dhcp4": "kea-dhcp4.conf", "dhcp6": "kea-dhcp6.conf", "d2": "kea-dhcp-ddns.conf"}
 
 
 @dataclass
@@ -79,6 +77,14 @@ class Target:
     allow_overwrite: bool = True
     tls_paths: tuple = ()
 
+    @property
+    def key(self):
+        """What identifies this target in every piece of bookkeeping (v5.69.0-beta.3, Q172): the server's id, which Jen assigns and keeps unique. The
+        `name` is free text an operator types - two servers may carry the same one - so a dict, a set or an `in` test keyed by it merges two targets
+        into one and a failed restart on the first is read as the second's success. The name is for the lines a person reads, never for the bookkeeping."""
+        sid = self.server.get("id")
+        return sid if sid is not None else self.name
+
 
 @dataclass
 class ChangeSetResult:
@@ -92,6 +98,9 @@ class ChangeSetResult:
     # the servers an "ok" run actually changed and restarted (v5.65.8): what record_outcome checks
     # before it lets a run clear a rollback_failed banner
     covered: list[str] = field(default_factory=list)
+    # the same two lists by server id (v5.69.0-beta.3, Q172): names are what a person reads, ids are what is compared - two servers may share a name
+    needs_hands_ids: list = field(default_factory=list)
+    covered_ids: list = field(default_factory=list)
 
 
 # The statuses after which the change did NOT happen (or is half-applied): callers must not write
@@ -279,10 +288,12 @@ def _run_change(
                         "",
                     )  # the host answered and has no config file: the expected state of a target to author
                 elif absent_is_expected:
-                    lines.append(("error", f"❌ {name}: could not read its config — {read_errors[0]}"))
+                    lines.append(("error", f"❌ {name}: its config could not be read ({read_errors[0]})"))
                     return ChangeSetResult("aborted", "error", lines)
                 else:
-                    conf_name = _CONF_FILENAMES.get(service, f"kea-{service}.conf")
+                    conf_name = os.path.basename(
+                        _conf_path_for(server, service)
+                    )  # the file Jen looked for, which is the configured one
                     lines.append(("error", f"❌ {name}: {conf_name} not found on this server"))
                     return ChangeSetResult("aborted", "notfound-conf", lines)
 
@@ -366,12 +377,12 @@ def _run_change(
         else:
             lines.append(("error", _failure_line(t.name, res, daemon_label)))
 
-        revert_failed = []  # the revert call itself failed: still on the NEW config
-        restart_stuck = []  # the previous config is back but the daemon would not restart on it
+        revert_failed: list[Target] = []  # the revert call itself failed: still on the NEW config
+        restart_stuck: list[Target] = []  # the previous config is back but the daemon would not restart on it
         for done in reversed(committed):
             rres = _restore_target(done, service, summary, helper_only)
             if not rres.get("ok"):
-                revert_failed.append(done.name)
+                revert_failed.append(done)
                 continue
             if restart:
                 rres_restart = _safe(_host.service_action, done.server, service, "restart")
@@ -381,7 +392,7 @@ def _run_change(
                     # that Kea is DOWN on a server that was rolled back. It is the same state as the
                     # restart-phase rollback below, so it gets the same treatment: an error line,
                     # rollback_failed, needs_hands, and the persisted banner.
-                    restart_stuck.append(done.name)
+                    restart_stuck.append(done)
                     lines.append(
                         (
                             "error",
@@ -398,8 +409,9 @@ def _run_change(
             # operator reading it for recovery instructions the
             # opposite of reality.
             if revert_failed:
-                still_new = revert_failed
-                rolled_back = [d.name for d in committed if d.name not in revert_failed]
+                failed_keys = {d.key for d in revert_failed}  # by id: two servers may share a name
+                still_new = [d.name for d in revert_failed]
+                rolled_back = [d.name for d in committed if d.key not in failed_keys]
                 untouched = t.name
                 lines.append(
                     (
@@ -410,9 +422,14 @@ def _run_change(
                     )
                 )
             if restart_stuck:
-                lines.append(("error", "🛑 ROLLBACK FAILED — " + _by_hand(restart_stuck)))
+                lines.append(("error", "🛑 ROLLBACK FAILED — " + _by_hand([d.name for d in restart_stuck])))
+            needs = revert_failed + restart_stuck
             return ChangeSetResult(
-                "rollback_failed", res.get("code", "error"), lines, needs_hands=revert_failed + restart_stuck
+                "rollback_failed",
+                res.get("code", "error"),
+                lines,
+                needs_hands=[d.name for d in needs],
+                needs_hands_ids=[d.key for d in needs],
             )
 
         if committed:
@@ -424,8 +441,10 @@ def _run_change(
     # `config.applied` is emitted only once the change stands: a restart failure below (or a finalize
     # failure, phase 5) rolls it back, and a timeline entry saying it was applied would be false.
     if restart:
-        restarts = {t.name: _safe(_host.service_action, t.server, service, "restart") for t in targets}
-        failed = [t for t in targets if not restarts[t.name].get("ok")]
+        restarts = {
+            t.key: _safe(_host.service_action, t.server, service, "restart") for t in targets
+        }  # by id, never by the free-text name
+        failed = [t for t in targets if not restarts[t.key].get("ok")]
         if failed:
             # A restart failed although the config passed preflight and was written: the daemon
             # cannot start from what it was just handed (and the restart already stopped the old
@@ -438,7 +457,7 @@ def _run_change(
                     (
                         "error",
                         f"❌ {t.name}: {daemon_label} did NOT restart on the new config "
-                        f"({_tail(restarts[t.name].get('detail'))})",
+                        f"({_tail(restarts[t.key].get('detail'))})",
                     )
                 )
             stuck = _put_everything_back(
@@ -446,8 +465,15 @@ def _run_change(
             )
             names = [t.name for t in failed]
             if stuck:
-                lines.append(("error", "🛑 ROLLBACK FAILED — " + _by_hand(stuck)))
-                return ChangeSetResult("rollback_failed", "restart-failed", lines, names, stuck)
+                lines.append(("error", "🛑 ROLLBACK FAILED — " + _by_hand([s.name for s in stuck])))
+                return ChangeSetResult(
+                    "rollback_failed",
+                    "restart-failed",
+                    lines,
+                    names,
+                    [s.name for s in stuck],
+                    needs_hands_ids=[s.key for s in stuck],
+                )
             lines.append(
                 (
                     "error",
@@ -466,7 +492,11 @@ def _run_change(
     # server had already committed.
     if finalize is not None:
         try:
-            finalize(ChangeSetResult("ok", "ok", list(lines), covered=[t.name for t in targets]))
+            finalize(
+                ChangeSetResult(
+                    "ok", "ok", list(lines), covered=[t.name for t in targets], covered_ids=[t.key for t in targets]
+                )
+            )
         except Exception as e:
             logger.warning(f"kea_changeset: finalize raised {type(e).__name__}: {e}")
             lines.append(
@@ -480,8 +510,15 @@ def _run_change(
                 targets, service, summary, daemon_label, lines, restart=restart, helper_only=helper_only
             )
             if stuck:
-                lines.append(("error", "🛑 ROLLBACK FAILED — " + _by_hand(stuck)))
-                return ChangeSetResult("rollback_failed", "finalize-failed", lines, [], stuck)
+                lines.append(("error", "🛑 ROLLBACK FAILED — " + _by_hand([s.name for s in stuck])))
+                return ChangeSetResult(
+                    "rollback_failed",
+                    "finalize-failed",
+                    lines,
+                    [],
+                    [s.name for s in stuck],
+                    needs_hands_ids=[s.key for s in stuck],
+                )
             lines.append(
                 (
                     "error",
@@ -494,18 +531,18 @@ def _run_change(
     for t in targets:
         _events.emit("config.applied", server=t.name, detail=summary)
         lines.append(("success", f"✅ {t.name}: {summary}" + (f", {daemon_label} restarted" if restart else "")))
-    return ChangeSetResult("ok", "ok", lines, covered=[t.name for t in targets])
+    return ChangeSetResult("ok", "ok", lines, covered=[t.name for t in targets], covered_ids=[t.key for t in targets])
 
 
-def _put_everything_back(targets, service, summary, daemon_label, lines, *, restart, helper_only=False) -> list[str]:
+def _put_everything_back(targets, service, summary, daemon_label, lines, *, restart, helper_only=False) -> list[Target]:
     """Put EVERY target back as it was (reverse order): the previous config re-applied, or the file Jen created removed again; with
-    `restart` the daemon is restarted on it. Appends one error line per target that could not be put back. Returns the names that are
-    stuck (a revert or the second restart that failed)."""
-    stuck: list[str] = []
+    `restart` the daemon is restarted on it. Appends one error line per target that could not be put back. Returns the TARGETS that are
+    stuck (a revert or the second restart that failed) - the caller names them for a person and keys them by id."""
+    stuck: list[Target] = []
     for t in reversed(targets):
         rres = _restore_target(t, service, summary, helper_only)
         if not rres.get("ok"):
-            stuck.append(t.name)
+            stuck.append(t)
             lines.append(
                 ("error", f"❌ {t.name}: could not put the previous config back ({_tail(rres.get('detail'))})")
             )
@@ -514,7 +551,7 @@ def _put_everything_back(targets, service, summary, daemon_label, lines, *, rest
             continue
         again = _safe(_host.service_action, t.server, service, "restart")
         if not again.get("ok"):
-            stuck.append(t.name)
+            stuck.append(t)
             lines.append(
                 (
                     "error",
@@ -562,6 +599,11 @@ def _incidents_of(raw) -> list[dict]:
     return [data] if data.get("status") else []
 
 
+def _incident_servers(incident: dict) -> list[str]:
+    """The servers an incident is about, as a sortable list of strings: their ids when the incident carries them (v5.69.0-beta.3, Q172), else the names."""
+    return sorted(str(x) for x in (incident.get("needs_hands_ids") or incident.get("needs_hands") or []))
+
+
 def _incident_cleared(incident: dict, result: ChangeSetResult, service: str) -> bool:
     """Does this clean run resolve `incident`? (v5.65.8, Q97; per incident since v5.65.10.)
 
@@ -574,7 +616,12 @@ def _incident_cleared(incident: dict, result: ChangeSetResult, service: str) -> 
         return True
     if incident.get("service") != service:
         return False
-    return set(incident.get("needs_hands") or []) <= set(result.covered)
+    needs_ids = incident.get("needs_hands_ids")
+    if needs_ids and result.covered_ids:  # compared by server id (v5.69.0-beta.3, Q172): two servers may share a name
+        return set(needs_ids) <= set(result.covered_ids)
+    return set(incident.get("needs_hands") or []) <= set(
+        result.covered
+    )  # an incident recorded before ids were kept, or a result built without them
 
 
 def record_outcome(result: ChangeSetResult, service: str, summary: str) -> None:
@@ -601,14 +648,13 @@ def record_outcome(result: ChangeSetResult, service: str, summary: str) -> None:
                 "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "failed_restart": list(result.restart_failures),
                 "needs_hands": list(result.needs_hands),
+                "needs_hands_ids": list(result.needs_hands_ids),
                 "lines": [text for kind, text in result.lines if kind == "error"][-6:],
             }
             incidents = _incidents_of(_user.get_global_setting(ATTENTION_KEY, ""))
             # the same trouble again (same kind, service and servers) refreshes its incident, it does not pile up
-            same = (incident["status"], service, sorted(incident["needs_hands"]))
-            incidents = [
-                i for i in incidents if (i.get("status"), i.get("service"), sorted(i.get("needs_hands") or [])) != same
-            ]
+            same = (incident["status"], service, _incident_servers(incident))
+            incidents = [i for i in incidents if (i.get("status"), i.get("service"), _incident_servers(i)) != same]
             incidents.append(incident)
             while len(incidents) > _MAX_INCIDENTS:
                 # v5.65.10 (Q99) preferred evicting a resolved `rolled_back` note; v5.66.0-beta.3

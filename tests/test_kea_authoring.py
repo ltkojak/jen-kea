@@ -41,6 +41,49 @@ class TestConfPathFor:
         server = {"kea_conf": "/etc/kea/kea-dhcp4.conf"}
         assert conf_path_for(server, "d2") == "/etc/kea/kea-dhcp-ddns.conf"
 
+    def test_the_configured_dhcp4_filename_is_honoured_and_the_siblings_keep_the_directory(self):
+        """v5.69.0-beta.3 (Q172): `kea_conf` IS the dhcp4 file. It used to be reduced to its directory and the file name replaced by `kea-dhcp4.conf`, so a host whose
+        file is called anything else was read, written and rolled back as a file that does not exist there."""
+        from jen.services.kea_authoring import conf_path_for
+
+        server = {"kea_conf": "/etc/kea/kea-dhcp4-prod.conf"}
+        assert conf_path_for(server, "dhcp4") == "/etc/kea/kea-dhcp4-prod.conf"
+        assert conf_path_for(server, "dhcp6") == "/etc/kea/kea-dhcp6.conf"
+        assert conf_path_for(server, "d2") == "/etc/kea/kea-dhcp-ddns.conf"
+
+    def test_the_dhcp4_fallback_is_the_configured_primary_file(self, monkeypatch):
+        from jen.services.kea_authoring import conf_path_for
+
+        monkeypatch.setattr(extensions, "KEA_CONF", "/opt/kea/kea-v4.conf")
+        assert conf_path_for({}, "dhcp4") == "/opt/kea/kea-v4.conf"
+
+    def test_every_kea_host_operation_reads_and_writes_the_configured_file(self, monkeypatch):
+        """The helper payload of a read, a write, a validation and a removal - and so a revert, which is the same two calls - carries the one function's answer."""
+        from jen.services import kea_host
+
+        server = {"id": 1, "name": "k", "ssh_host": "h", "kea_conf": "/etc/kea/kea-dhcp4-prod.conf"}
+        seen = []
+
+        def helper_call(server, op, payload=None, timeout=60):
+            seen.append((op, (payload or {}).get("path")))
+            if op == "read-config":
+                return {"ok": True, "config": {"Dhcp4": {}}, "sha256": "s"}
+            return {"ok": True, "sha256": "s"}
+
+        monkeypatch.setattr(kea_host, "helper_call", helper_call)
+        monkeypatch.setattr(kea_host, "record_helper_status", lambda *a, **k: None)
+        monkeypatch.setattr(kea_host, "helper_status", dict)
+        monkeypatch.setattr("jen.services.config_revisions.latest", lambda *a, **k: None)
+        monkeypatch.setattr("jen.services.config_revisions.record", lambda *a, **k: None)
+        monkeypatch.setattr("jen.services.investigation_logging.file_write_refusal", lambda server, cfg: "")
+        kea_host.read_config_versioned(server, "dhcp4")
+        kea_host.test_config(server, "dhcp4", {"Dhcp4": {}})
+        kea_host.apply_config(server, "dhcp4", {"Dhcp4": {}}, expect_sha256="s")
+        kea_host.remove_config(server, "dhcp4", expect_sha256="s")
+        paths = {p for _op, p in seen if p}
+        assert paths == {"/etc/kea/kea-dhcp4-prod.conf"}, seen
+        assert {op for op, _p in seen} >= {"read-config", "test-config", "apply-config", "remove-config"}
+
 
 class TestCaConfPathFor:
     def test_sibling_to_kea_conf_dir(self):
