@@ -408,7 +408,7 @@ class TestARefusedEditLeavesTheReservationAlone:
             )
             host_id = cur.lastrowid
             cur.execute(
-                "INSERT INTO dhcp4_options (code, formatted_value, space, scope_id, host_id) VALUES (6, '10.99.0.1', 'dhcp4', 3, %s)",
+                "INSERT INTO dhcp4_options (code, formatted_value, space, scope_id, host_id, client_classes) VALUES (6, '10.99.0.1', 'dhcp4', 3, %s, '')",
                 (host_id,),
             )
             cur.execute(
@@ -655,7 +655,7 @@ class TestTheListAndTheExportAskForNotesAndDnsOnce:
                 host_id = cur.lastrowid
                 if n < 2:
                     cur.execute(
-                        "INSERT INTO dhcp4_options (code, formatted_value, space, scope_id, host_id) VALUES (6, %s, 'dhcp4', 3, %s)",
+                        "INSERT INTO dhcp4_options (code, formatted_value, space, scope_id, host_id, client_classes) VALUES (6, %s, 'dhcp4', 3, %s, '')",
                         (f"10.99.0.{n + 1}", host_id),
                     )
                 cur.execute(

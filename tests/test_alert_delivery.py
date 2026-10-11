@@ -194,8 +194,11 @@ class TestAChannelsSecretNeverLandsInText:
         db.commit()
         try:
             with caplog.at_level("ERROR"):
-                r = logged_in_client.post(f"/settings/alerts/test-channel/{channel_id}", follow_redirects=True)
-            assert "123:ABC" not in r.get_data(as_text=True) and "123:ABC" not in caplog.text
+                logged_in_client.post(f"/settings/alerts/test-channel/{channel_id}")
+            # the flash, not the page it redirects to: the alerts page embeds each channel's config for its edit form (an admin's own page, by design)
+            with logged_in_client.session_transaction() as sess:
+                flashed = str(sess.get("_flashes"))
+            assert "Test failed" in flashed and "123:ABC" not in flashed and "123:ABC" not in caplog.text
         finally:
             with db.cursor() as cur:
                 cur.execute("DELETE FROM alert_channels WHERE channel_name='t-button'")

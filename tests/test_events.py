@@ -353,6 +353,7 @@ class TestAHostnameLongerThanTheColumnIsTruncatedNotLost:
             "lease.new", mac="aa:bb:cc:dd:ee:72", ip="10.0.0.72", hostname="h" * 255, detail="first lease"
         )
         assert event_id is not None
+        db.commit()  # end this connection's snapshot: read what emit committed
         with db.cursor() as cur:
             cur.execute("SELECT hostname, detail FROM events WHERE id=%s", (event_id,))
             row = cur.fetchone()
@@ -365,6 +366,7 @@ class TestAHostnameLongerThanTheColumnIsTruncatedNotLost:
         from jen.services import events
 
         event_id = events.emit("lease.new", mac="aa:bb:cc:dd:ee:73", ip="10.0.0.73", hostname="printer", detail="x")
+        db.commit()
         with db.cursor() as cur:
             cur.execute("SELECT hostname, detail FROM events WHERE id=%s", (event_id,))
             row = cur.fetchone()
