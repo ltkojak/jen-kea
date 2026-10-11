@@ -245,6 +245,7 @@ class TestDeleteV6Reservation:
         assert captured["args"]["identifier"] == "00:03:00:01:aa:bb:cc:dd:ee:ff"
 
 
+@pytest.mark.usefixtures("ipv6_flag_on")
 class TestAddReservation6Route:
     def test_requires_admin(self, client, db):
         from tests.conftest import restricted_client
@@ -395,6 +396,7 @@ class TestAddReservation6Route:
         assert '<option value="1" selected' in body
 
 
+@pytest.mark.usefixtures("ipv6_flag_on")
 class TestDeleteReservation6Route:
     def test_requires_admin(self, client, db):
         from tests.conftest import restricted_client
@@ -428,6 +430,7 @@ class TestDeleteReservation6Route:
         assert captured["duid"] == "00:03:00:01:aa:bb:cc:dd:ee:ff"
 
 
+@pytest.mark.usefixtures("ipv6_flag_on")
 class TestReservationsV6View:
     def _insert_host_with_reservations(
         self, db, duid=b"\x00\x03\x00\x01\x00\x1a\x2b\x3c\x4d\x5e", subnet_id=1, hostname="v6-host", reservations=()

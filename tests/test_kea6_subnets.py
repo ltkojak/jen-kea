@@ -6,6 +6,8 @@ DHCPv6 subnet editing: the v6 Subnets view, reading subnet6 data from Kea, build
 Split out of the monolithic tests/test_kea6.py in v5.6.1.
 """
 
+import pytest
+
 from jen import extensions
 
 
@@ -237,6 +239,7 @@ class TestParseAndValidateSubnet6EditForm:
         assert error is not None
 
 
+@pytest.mark.usefixtures("ipv6_flag_on")
 class TestEditSubnet6Route:
     def test_requires_admin(self, client, db):
         from tests.conftest import restricted_client
@@ -276,6 +279,7 @@ class TestEditSubnet6Route:
         assert b"Edit IPv6 Subnet" in resp.data
 
 
+@pytest.mark.usefixtures("ipv6_flag_on")
 class TestEditSubnet6PostRoute:
     def test_requires_admin(self, client, db):
         from tests.conftest import restricted_client
@@ -346,6 +350,7 @@ class TestEditSubnet6PostRoute:
         assert "service" not in fake.ops()  # never attempted a restart
 
 
+@pytest.mark.usefixtures("ipv6_flag_on")
 class TestEditSubnet6PreviewRoute:
     def test_requires_admin(self, client, db):
         from tests.conftest import restricted_client
@@ -390,6 +395,7 @@ class TestEditSubnet6PreviewRoute:
         assert "apply-config" not in fake.ops() and "service" not in fake.ops()
 
 
+@pytest.mark.usefixtures("ipv6_flag_on")
 class TestEditSubnet6FormBaseSha:
     """v5.19.1 (14B) — mirrors TestEditFormBaseSha in test_subnets.py for
     the v6 edit form: one base_sha_<server id> per SSH server, each

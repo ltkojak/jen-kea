@@ -197,12 +197,14 @@ class TestEditSubnetPreviewRoute:
         assert r.status_code == 404
         assert r.get_json()["ok"] is False
 
-    def test_out_of_scope_subnet_returns_403(self, client, db):
+    def test_out_of_scope_subnet_is_answered_as_not_found(self, client, db):
         from tests.conftest import restricted_client as _restricted_client
 
         _restricted_client(client, db, allowed_subnets=[999], role="admin", username="preview_restricted1")
         r = client.post("/subnets/edit/1/preview")
-        assert r.status_code == 403
+        # v5.69.0-beta.2 (Q171): a hidden subnet and one that does not exist are one answer
+        assert r.status_code == 404
+        assert r.get_json()["error"] == "Subnet not found."
 
     def test_invalid_form_returns_400_with_same_message_as_real_submit(self, logged_in_client):
         r = logged_in_client.post("/subnets/edit/1/preview", data={"pool": "garbage"})
@@ -789,7 +791,7 @@ class TestSharedNetworks:
         fake = self._wire(monkeypatch, self._NESTED)
         _rc(client, db, allowed_subnets=[1], role="admin", username="sn_restricted")
         r = client.post("/subnets/move/70", data={"shared_network": "iot"}, follow_redirects=True)
-        assert b"do not have access" in r.data
+        assert b"Subnet not found." in r.data
         assert "apply-config" not in fake.ops()
 
     def test_restricted_admin_cannot_delete_a_network(self, client, db, monkeypatch, mock_kea):

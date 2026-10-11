@@ -446,6 +446,7 @@ class TestLeasesV6View:
         finally:
             set_global_setting("ipv6_enabled", "false")
 
+    @pytest.mark.usefixtures("ipv6_flag_on")
     def test_v6_view_redirects_when_no_v6_subnets_configured(self, logged_in_client, monkeypatch, db):
         """Direct/bookmarked ?view=v6 hit with no v6 subnets must not 500
         or silently show an empty v4-shaped page — it redirects back."""
@@ -453,6 +454,7 @@ class TestLeasesV6View:
         resp = logged_in_client.get("/leases?view=v6", follow_redirects=False)
         assert resp.status_code == 302
 
+    @pytest.mark.usefixtures("ipv6_flag_on")
     def test_v6_view_lists_lease6_rows(self, logged_in_client, monkeypatch, db):
         monkeypatch.setattr(extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64"}})
         with db.cursor() as cur:
@@ -473,6 +475,7 @@ class TestLeasesV6View:
         assert b"2001:db8::10" in resp.data
         assert b"v6-host" in resp.data
 
+    @pytest.mark.usefixtures("ipv6_flag_on")
     def test_v6_view_subnet_filter_rejects_v4_only_id(self, logged_in_client, monkeypatch, db):
         """A subnet id that's valid in SUBNET_MAP but not SUBNET6_MAP is a 404 (v5.68.0-beta.8, Q143) - it used to fall back to
         'all', and a fallback is exactly where a scoped user's explicit-but-forbidden subnet leaked."""
@@ -500,11 +503,13 @@ class TestDevicesV6View:
         assert resp.status_code == 200
         assert b"segmented-control" not in resp.data
 
+    @pytest.mark.usefixtures("ipv6_flag_on")
     def test_v6_view_redirects_when_no_v6_subnets(self, logged_in_client, monkeypatch, db):
         monkeypatch.setattr(extensions, "SUBNET6_MAP", {})
         resp = logged_in_client.get("/devices?view=v6", follow_redirects=False)
         assert resp.status_code == 302
 
+    @pytest.mark.usefixtures("ipv6_flag_on")
     def test_v6_view_renders_devices(self, logged_in_client, monkeypatch, db):
         monkeypatch.setattr(
             extensions, "SUBNET6_MAP", {1: {"name": "V6LAN", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}

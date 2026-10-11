@@ -339,7 +339,9 @@ class TestUnplacedDevices:
         try:
             c = _restricted(client, db, "moved_edit_restricted1")
             r = c.post(f"/devices/edit/{device_id}", data={"device_name": "HIJACKED", "owner": "x", "notes": "x"})
-            assert r.status_code == 403
+            assert (
+                r.status_code == 404
+            )  # v5.69.0-beta.2 (Q171): a device the caller may not touch answers as one that is not there
             with db.cursor() as cur:
                 cur.execute("SELECT device_name FROM devices WHERE id=%s", (device_id,))
                 assert cur.fetchone()["device_name"] == "Moved device"
@@ -351,7 +353,9 @@ class TestUnplacedDevices:
         try:
             c = _restricted(client, db, "moved_del_restricted1")
             r = c.post(f"/devices/delete/{device_id}", follow_redirects=True)
-            assert b"do not have access" in r.data
+            assert (
+                b"Device not found." in r.data
+            )  # v5.69.0-beta.2 (Q171): the same sentence as an id that does not exist
             with db.cursor() as cur:
                 cur.execute("SELECT COUNT(*) AS n FROM devices WHERE id=%s", (device_id,))
                 assert cur.fetchone()["n"] == 1

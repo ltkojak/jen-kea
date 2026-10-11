@@ -1208,7 +1208,8 @@ class TestCheckKeaBinariesRoute:
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["servers"][0]["ok"] is False
-        assert "no route to host" in data["servers"][0]["error"]
+        # v5.69.0-beta.2 (Q171): the SSH error text is for the log; the response carries one sentence
+        assert data["servers"][0]["error"] == "Could not check - see the Jen log."
 
 
 class TestInstallKeaBinaryRoute:

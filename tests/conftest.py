@@ -505,8 +505,11 @@ def clean_tables(db):
         cur.execute("DELETE FROM alert_log")
         from jen.models.user import _invalidate_settings_cache, hash_password
 
+        # v5.69.0-beta.2 (Q171): token_version and must_change_password are part of the admin's state too. A forced password change now bumps token_version (so a fixture
+        # session, which carries version 0, falls to the slow path and sees the row), and the seeded admin row is flagged: neither was ever reset between tests.
         cur.execute(
-            "UPDATE users SET password=%s, role='superadmin', session_timeout=NULL WHERE username='admin'",
+            "UPDATE users SET password=%s, role='superadmin', session_timeout=NULL, must_change_password=0, token_version=0 "
+            "WHERE username='admin'",
             (hash_password("admin"),),
         )
         cur.execute("DELETE FROM users WHERE username != 'admin'")
@@ -528,6 +531,18 @@ def logged_in_client(client):
         sess["last_active"] = now
         sess["auth_at"] = now  # v5.17.0 — recent_auth_required treats this session as freshly authed
     return client
+
+
+@pytest.fixture
+def ipv6_flag_on():
+    """v5.69.0-beta.2 (Q171) - the v6 routes follow the `ipv6_enabled` flag, not the presence of `[subnets6]`: a test of a v6 page or write route switches it on and puts it back."""
+    from jen.models.user import _invalidate_settings_cache, set_global_setting
+
+    set_global_setting("ipv6_enabled", "true")
+    _invalidate_settings_cache()
+    yield
+    set_global_setting("ipv6_enabled", "false")
+    _invalidate_settings_cache()
 
 
 @pytest.fixture
