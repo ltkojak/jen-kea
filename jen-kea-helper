@@ -813,9 +813,10 @@ def _fsync_dir(directory):
         os.close(fd)
 
 
-def _commit_file_set(members, dir_fd=None):
+def _commit_file_set(members, dir_fd=None, label_dir=None):
     """Install a SET of files all-or-nothing (build 14, Q151). `members` = [(path, data: bytes, uid, gid, mode)] in install order. With `dir_fd` (build 18, Q170) every `path`
-    is a bare NAME relative to that directory descriptor and nothing is resolved by pathname: a symlink swapped in for the directory after it was opened cannot redirect a write.
+    is a bare NAME relative to that directory descriptor and nothing is resolved by pathname: a symlink swapped in for the directory after it was opened cannot redirect a write
+    (`label_dir` is only the directory's name for the error text: the paths that are now wrong are named in full).
 
     1. STAGE every member: a unique private temp in its own directory (`_private_tempfile`, 0600 from the first byte), written, fsynced, given its
        final owner/group/mode on the descriptor. A failure here has touched no live file.
@@ -865,7 +866,7 @@ def _commit_file_set(members, dir_fd=None):
                 else:
                     _install_private(path, snap[0], snap[1], snap[2], snap[3], dir_fd=dir_fd)
             except OSError as e:
-                wrong.append(f"{path} ({e})")
+                wrong.append(f"{os.path.join(label_dir, path) if label_dir else path} ({e})")
         for _path, tmp in staged:
             with contextlib.suppress(OSError):
                 os.unlink(tmp, **at)
@@ -1295,7 +1296,7 @@ def op_install_tls(payload):
         members = [(name, files[name].encode("utf-8"), 0, gid, 0o640 if name == "server.key" else 0o644) for name in _TLS_FILES]
         with _locked(target_dir):  # build 13: two installs for one service never interleave
             try:
-                _commit_file_set(members, dir_fd=svc_fd)  # build 14: all three or none - a failure puts every replaced member back
+                _commit_file_set(members, dir_fd=svc_fd, label_dir=target_dir)  # build 14: all three or none - a failure puts every replaced member back
             except OSError as e:
                 if e.errno == errno.ELOOP:
                     return {"ok": False, "error": "symlink", "path": target_dir, "detail": str(e)}, target_dir
