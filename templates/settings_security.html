@@ -31,10 +31,13 @@
     <form method="POST" action="/settings/system/save-mfa-mode"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
             <label>MFA Policy</label>
+            {# v5.69.0-beta.2 (Q171 fixup, G5): an admin may make the policy stricter, never less strict - an option ranked below the current policy is disabled for them #}
+            {% set mfa_rank = {'off': 0, 'optional': 1, 'required_admins': 2, 'required_all': 3} %}
+            {% set mfa_floor = mfa_rank.get(mfa_mode, 1) if current_user.role != 'superadmin' else 0 %}
             <select name="mfa_mode" style="max-width:280px;">
-                <option value="off" {% if mfa_mode=='off' %}selected{% endif %} {% if current_user.role != 'superadmin' %}disabled{% endif %}>Off — MFA not required{% if current_user.role != 'superadmin' %} (superadmin only){% endif %}</option>
-                <option value="optional" {% if mfa_mode=='optional' %}selected{% endif %}>Optional — users can enroll if they want</option>
-                <option value="required_admins" {% if mfa_mode=='required_admins' %}selected{% endif %}>Required for Admins</option>
+                <option value="off" {% if mfa_mode=='off' %}selected{% endif %} {% if mfa_rank['off'] < mfa_floor %}disabled{% endif %}>Off — MFA not required{% if mfa_rank['off'] < mfa_floor %} (superadmin only){% endif %}</option>
+                <option value="optional" {% if mfa_mode=='optional' %}selected{% endif %} {% if mfa_rank['optional'] < mfa_floor %}disabled{% endif %}>Optional — users can enroll if they want{% if mfa_rank['optional'] < mfa_floor %} (superadmin only){% endif %}</option>
+                <option value="required_admins" {% if mfa_mode=='required_admins' %}selected{% endif %} {% if mfa_rank['required_admins'] < mfa_floor %}disabled{% endif %}>Required for Admins{% if mfa_rank['required_admins'] < mfa_floor %} (superadmin only){% endif %}</option>
                 <option value="required_all" {% if mfa_mode=='required_all' %}selected{% endif %}>Required for All Users</option>
             </select>
             <div class="form-hint">When required, users without MFA enrolled will be forced to enroll on next login.</div>

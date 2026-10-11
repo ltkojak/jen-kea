@@ -1921,7 +1921,8 @@ def save_subnet_note():
     except (ValueError, TypeError):
         return jsonify({"ok": False, "error": "Invalid subnet ID"})
     if not current_user.can_access_subnet(subnet_id):
-        return jsonify({"ok": False, "error": "You do not have access to that subnet."}), 403
+        # v5.69.0-beta.2 (Q171 fixup, G8): one answer for a hidden subnet and one that is not there
+        return jsonify({"ok": False, "error": "Subnet not found."}), 404
     notes = request.form.get("notes", "").strip()[:1000]
     try:
         with __db.jen_db() as db:

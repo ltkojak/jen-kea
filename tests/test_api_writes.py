@@ -158,7 +158,9 @@ class TestReservations:
             kdb.commit()
         try:
             r = client.delete(f"/api/v1/reservations/{host_id}", headers=_h(RAW_SCOPED))
-            assert r.status_code == 403
+            assert (
+                r.status_code == 404
+            )  # v5.69.0-beta.2 (Q171 fixup, G6): a hidden reservation is answered as one that is not there
             r = client.delete(f"/api/v1/reservations/{host_id}", headers=_h(RAW_RW))
             assert r.status_code == 200, r.data
             assert r.get_json()["mac"] == "aa:bb:cc:dd:ee:02"
@@ -207,7 +209,56 @@ class TestDevices:
     def test_patch_respects_subnet_scope(self, client, keys, mock_kea, db):
         self._seed(db, "aa:bb:cc:00:00:02", subnet_id=1)
         r = client.patch("/api/v1/devices/aa:bb:cc:00:00:02", data=json.dumps({"name": "x"}), headers=_h(RAW_SCOPED))
-        assert r.status_code == 403
+        assert r.status_code == 404  # v5.69.0-beta.2 (Q171 fixup, G6)
+
+
+class TestAHiddenObjectIsAnsweredAsOneThatIsNotThere:
+    """v5.69.0-beta.2 (Q171 fixup, G6; RBAC-002): the API's reservation delete and device patch answer a scoped key's hidden object with the status AND body of a
+    host_id / MAC that does not exist."""
+
+    def test_reservation_delete_hidden_equals_nonexistent(self, client, keys, mock_kea, db):
+        with kea_db() as kdb, kdb.cursor() as cur:
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
+                "VALUES (UNHEX('AABBCCDDEE07'), 0, 2, INET_ATON('10.77.0.7'), '_probe_hidden')"
+            )
+            hidden = cur.lastrowid
+            kdb.commit()
+        ghost = hidden + 100000
+        try:
+            a = client.delete(f"/api/v1/reservations/{hidden}", headers=_h(RAW_SCOPED))
+            b = client.delete(f"/api/v1/reservations/{ghost}", headers=_h(RAW_SCOPED))
+            assert a.status_code == b.status_code == 404
+            assert a.get_json()["error"].replace(str(hidden), "N") == b.get_json()["error"].replace(str(ghost), "N")
+            with kea_db() as kdb, kdb.cursor() as cur:
+                cur.execute("SELECT COUNT(*) c FROM hosts WHERE host_id=%s", (hidden,))
+                assert cur.fetchone()["c"] == 1, "a hidden reservation was deleted"
+        finally:
+            with kea_db() as kdb, kdb.cursor() as cur:
+                cur.execute("DELETE FROM hosts WHERE host_id=%s", (hidden,))
+                kdb.commit()
+
+    def test_device_patch_hidden_and_unplaced_equal_nonexistent(self, client, keys, mock_kea, db):
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO devices (mac, device_name, owner, notes, last_subnet_id) VALUES "
+                "('aa:bb:cc:00:00:01', 'old', 'o', 'n', 1), ('aa:bb:cc:00:00:02', 'old', 'o', 'n', NULL)"
+            )
+        db.commit()
+        body = json.dumps({"name": "x"})
+        answers = [
+            client.patch(f"/api/v1/devices/{mac}", data=body, headers=_h(RAW_SCOPED))
+            for mac in ("aa:bb:cc:00:00:01", "aa:bb:cc:00:00:02", "aa:bb:cc:00:00:99")
+        ]
+        assert [r.status_code for r in answers] == [404, 404, 404]
+        shapes = [
+            r.get_json()["error"].replace(mac, "MAC")
+            for r, mac in zip(answers, ("aa:bb:cc:00:00:01", "aa:bb:cc:00:00:02", "aa:bb:cc:00:00:99"), strict=True)
+        ]
+        assert len(set(shapes)) == 1, shapes
+        with db.cursor() as cur:
+            cur.execute("SELECT device_name FROM devices WHERE mac IN ('aa:bb:cc:00:00:01','aa:bb:cc:00:00:02')")
+            assert [row["device_name"] for row in cur.fetchall()] == ["old", "old"]
 
 
 class TestScopedKeyOnUnplacedDevice:
@@ -225,8 +276,8 @@ class TestScopedKeyOnUnplacedDevice:
     def test_scoped_key_refused(self, client, keys, mock_kea, db):
         self._seed_unplaced(db)
         r = client.patch("/api/v1/devices/aa:bb:cc:00:00:01", data=json.dumps({"name": "x"}), headers=_h(RAW_SCOPED))
-        assert r.status_code == 403
-        assert b"no known subnet" in r.data
+        assert r.status_code == 404  # v5.69.0-beta.2 (Q171 fixup, G6): one answer, not "no known subnet"
+        assert b"No device with MAC" in r.data
         with db.cursor() as cur:
             cur.execute("SELECT device_name FROM devices WHERE mac='aa:bb:cc:00:00:01'")
             assert cur.fetchone()["device_name"] == "old"

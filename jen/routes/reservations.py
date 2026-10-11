@@ -414,7 +414,7 @@ def add_reservation_post():
     except ValueError:
         return _refuse("Invalid subnet.")
     if subnet_id not in subnet_map:
-        return _refuse("You do not have access to that subnet.")
+        return _refuse("Subnet not found.")
 
     errors = []
     if not __auth.valid_ip(ip):
@@ -704,7 +704,7 @@ def add_reservation6_post():
     # SUBNET6_MAP: the old check only verified the subnet existed, never that a subnet-restricted
     # admin could actually see it (ARCHITECTURE §2 — found on the way, same shape as the v4 bug).
     if subnet_id not in subnet6_map:
-        return _refuse("You do not have access to that subnet.")
+        return _refuse("Subnet not found.")
 
     errors = []
     try:

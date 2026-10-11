@@ -343,6 +343,79 @@ class TestMfaModeAndNavLogoRoutesRegression:
         assert b"admin access required" in r.data.lower()
 
 
+class TestMfaPolicyIsNeverWeakenedByAnAdmin:
+    """v5.69.0-beta.2 (Q171 fixup, G5): an admin makes the MFA policy stricter and never less strict; only a superadmin steps it down."""
+
+    def _admin(self, client, db):
+        from tests.conftest import restricted_client as _restricted_client
+
+        return _restricted_client(client, db, allowed_subnets=None, role="admin", username="mfarank_admin")[0]
+
+    def test_an_admin_cannot_step_required_all_down_to_optional(self, client, db):
+        set_global_setting("mfa_mode", "required_all")
+        _invalidate_settings_cache()
+        r = self._admin(client, db).post(
+            "/settings/system/save-mfa-mode", data={"mfa_mode": "optional"}, follow_redirects=True
+        )
+        assert b"Only a superadmin can make the MFA policy less strict." in r.data
+        assert get_global_setting("mfa_mode") == "required_all"
+
+    def test_an_admin_cannot_switch_it_off(self, client, db):
+        set_global_setting("mfa_mode", "optional")
+        _invalidate_settings_cache()
+        self._admin(client, db).post("/settings/system/save-mfa-mode", data={"mfa_mode": "off"}, follow_redirects=True)
+        assert get_global_setting("mfa_mode") == "optional"
+
+    def test_an_admin_can_make_it_stricter(self, client, db):
+        set_global_setting("mfa_mode", "optional")
+        _invalidate_settings_cache()
+        self._admin(client, db).post(
+            "/settings/system/save-mfa-mode", data={"mfa_mode": "required_all"}, follow_redirects=True
+        )
+        assert get_global_setting("mfa_mode") == "required_all"
+
+    def test_an_admin_can_keep_the_current_policy(self, client, db):
+        set_global_setting("mfa_mode", "required_admins")
+        _invalidate_settings_cache()
+        self._admin(client, db).post(
+            "/settings/system/save-mfa-mode", data={"mfa_mode": "required_admins"}, follow_redirects=True
+        )
+        assert get_global_setting("mfa_mode") == "required_admins"
+
+    def test_a_superadmin_can_switch_it_off(self, logged_in_client):
+        set_global_setting("mfa_mode", "required_all")
+        _invalidate_settings_cache()
+        logged_in_client.post("/settings/system/save-mfa-mode", data={"mfa_mode": "off"}, follow_redirects=True)
+        assert get_global_setting("mfa_mode") == "off"
+
+    @staticmethod
+    def _option_tags(body):
+        import re
+
+        return {
+            m.group(1): m.group(0)
+            for m in re.finditer(r'<option value="(off|optional|required_admins|required_all)"[^>]*>', body)
+        }
+
+    def test_the_page_disables_the_weaker_options_for_an_admin(self, client, db):
+        set_global_setting("mfa_mode", "required_admins")
+        _invalidate_settings_cache()
+        tags = self._option_tags(self._admin(client, db).get("/settings/security").get_data(as_text=True))
+        assert "disabled" in tags["off"] and "disabled" in tags["optional"]
+        assert "disabled" not in tags["required_admins"] and "disabled" not in tags["required_all"]
+
+    def test_the_page_disables_nothing_for_a_superadmin(self, logged_in_client):
+        set_global_setting("mfa_mode", "required_admins")
+        _invalidate_settings_cache()
+        tags = self._option_tags(logged_in_client.get("/settings/security").get_data(as_text=True))
+        assert len(tags) == 4 and all("disabled" not in tag for tag in tags.values())
+
+    def test_the_rank_table_is_one_ladder(self):
+        from jen.routes.settings import _MFA_RANK
+
+        assert sorted(_MFA_RANK, key=_MFA_RANK.get) == ["off", "optional", "required_admins", "required_all"]
+
+
 class TestAuditLog:
     """Audit logging."""
 

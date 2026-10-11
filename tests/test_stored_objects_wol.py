@@ -186,3 +186,33 @@ class TestQ171AWakeStampsOnlyAFavouriteTheCallerMaySee:
         assert "That favourite is not yours to change." in body
         assert "subnet you can access" not in body
         assert_no_marker(body)
+
+
+class TestQ171FixupOneRefusalForAFavouriteThatIsNotTheCallers:
+    """v5.69.0-beta.2 (Q171 fixup, G10) - Wake & Actions 1.1.6: saving a favourite over a hidden favourite and saving one for a MAC whose subnet the caller cannot
+    see are ONE sentence, so a scoped caller cannot tell which MACs have a favourite stored in a subnet they cannot see."""
+
+    def _flashed(self, pclient, db, mac):
+        r = pclient.post(
+            WOL + "/favourites/add", data={"mac": mac, "label": "probe", "secureon": ""}, follow_redirects=True
+        )
+        body = r.get_data(as_text=True)
+        assert_no_marker(body, ignore=(mac,))
+        return "That favourite is not yours to change." in body, "subnet you can access" in body
+
+    def test_a_hidden_favourite_and_a_hidden_mac_get_the_same_answer(self, pclient, db, stored_objects):
+        from tests.test_authz_matrix import B2_MAC
+
+        login(pclient, db, "admin_A")
+        hidden_favourite = self._flashed(pclient, db, A_MAC)  # stored in B, the client is in A
+        hidden_mac = self._flashed(pclient, db, B2_MAC)  # no favourite, the client is in B
+        assert hidden_favourite == hidden_mac == (True, False), (hidden_favourite, hidden_mac)
+        assert _favourite(db, B2_MAC) is None, "nothing was written for the hidden MAC"
+
+    def test_a_wake_of_a_mac_in_a_hidden_subnet_keeps_the_mac_sentence(self, pclient, db, stored_objects, packets):
+        from tests.test_authz_matrix import B2_MAC
+
+        login(pclient, db, "admin_A")
+        r = pclient.post(f"{WOL}/wake?mac={B2_MAC}", follow_redirects=True)
+        assert "That MAC is not on a subnet you can access." in r.get_data(as_text=True)
+        assert packets == []

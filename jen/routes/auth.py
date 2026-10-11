@@ -142,13 +142,19 @@ def login():
             old_hash = row["password"]
             if not old_hash.startswith("scrypt:") or __user.needs_rehash(old_hash):
                 try:
+                    new_hash = __user.hash_password(password)
                     with __db.jen_db() as db2:
                         with db2.cursor() as cur:
                             cur.execute(
                                 "UPDATE users SET password=%s WHERE id=%s AND password=%s",
-                                (__user.hash_password(password), row["id"], old_hash),
+                                (new_hash, row["id"], old_hash),
                             )
+                            rehashed = cur.rowcount == 1
                         db2.commit()
+                    if rehashed:
+                        # v5.69.0-beta.2 (Q171 fixup, G1): the session below fingerprints the row's hash, so it must be the one now stored - with the old one the first request
+                        # after login saw a changed password and ended the session (one silent bounce per account still on a legacy hash)
+                        row["password"] = new_hash
                 except Exception as e:
                     logger.error(f"Password rehash error: {e}")
 

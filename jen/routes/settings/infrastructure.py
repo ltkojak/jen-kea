@@ -460,9 +460,13 @@ def save_infra_kea_db():
 
 @bp.route("/settings/infrastructure/save-kea6", methods=["POST"])
 @login_required
-@_admin_required
+@_superadmin_required
+@_recent_auth_required(minutes=10)
 def save_infra_kea6():
     """
+    v5.69.0-beta.2 (Q171 fixup, G2) - the sibling of `save_infra_kea_db`: it writes `[kea6_db]` (host, user, password, database), which decides where Jen reads Kea's IPv6
+    data, so it is superadmin + step-up like the other two database routes.
+
     v5.0 Phase 1 / v5.10.2 — [kea6] / [kea6_db] connection override, with
     inheritance that actually works.
 
@@ -2069,15 +2073,22 @@ def save_extra_servers():
 DDNS_PROVIDERS = ("technitium", "pihole", "adguard", "ssh", "generic", "none")
 
 
+def _provider_field(name, provider):
+    """The provider's own copy of a DDNS form field: the page renders one block per provider and submits them all, so the plain `name` would be the first block's
+    value, not the visible one. A form that sends the plain name alone still works."""
+    key = f"{name}_{provider}"
+    return request.form.get(key if key in request.form else name, "").strip()
+
+
 @bp.route("/settings/infrastructure/save-ddns", methods=["POST"])
 @login_required
 @_admin_required
 def save_infra_ddns():
     log_path = request.form.get("log_path", "").strip()
     dns_provider = request.form.get("dns_provider", "technitium").strip()
-    api_url = request.form.get("api_url", "").strip()
-    api_user = request.form.get("api_user", "").strip()
-    api_token = request.form.get("api_token", "").strip()
+    api_url = _provider_field("api_url", dns_provider)
+    api_user = _provider_field("api_user", dns_provider)
+    api_token = _provider_field("api_token", dns_provider)
     forward_zone = request.form.get("forward_zone", "").strip()
     if log_path and not __auth.valid_log_path(log_path):
         flash("Invalid log path — must be an absolute path to a .log file under /var/log.", "error")

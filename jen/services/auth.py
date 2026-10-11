@@ -144,7 +144,7 @@ def valid_remote_path(value):
 
 
 def valid_log_path(value):
-    """A log file Jen may ask a Kea host to read (v5.69.0-beta.2, Q171): an absolute, already-normalised `*.log` path directly under /var/log - the rule the Kea host
+    """A log file Jen may ask a Kea host to read (v5.69.0-beta.2, Q171): an absolute, already-normalised `*.log` path under /var/log at any depth (the default, /var/log/kea/kea-ddns.log, is nested) - the rule the Kea host
     helper's `_allowed_log_path` applies (it also resolves symlinks, which only the host can do), so a path Jen accepts here is one the helper accepts and a path outside
     /var/log is never handed to the legacy `sudo tail`, which has no wall of its own."""
     import posixpath

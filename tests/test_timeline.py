@@ -221,7 +221,32 @@ class TestTimelinePage:
         c, _uid = restricted_client(client, db, allowed_subnets=[2], role="viewer", username="tl_viewer1")
         r = c.get("/timeline?mac=aa:bb:cc:dd:ee:01")
         assert r.status_code == 200
-        assert b"do not have access" in r.data
+        assert b"No client matched that MAC or IP" in r.data  # v5.69.0-beta.2 (Q171 fixup, G7)
+
+    def test_a_hidden_client_and_an_unknown_one_get_one_sentence(self, client, db):
+        """G7 (the release audit): the page and the Investigation tab's HX partial say the same thing for both."""
+        from jen.routes.timeline import NO_MATCH
+        from tests.conftest import restricted_client
+
+        _clean(db)
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO devices (mac, last_ip, last_subnet_id) VALUES ('aa:bb:cc:dd:ee:01', '10.0.0.5', 2)"
+            )
+        db.commit()
+        c, _uid = restricted_client(client, db, allowed_subnets=[1], role="viewer", username="tl_viewer_one_sentence")
+
+        def asked(mac, headers=None):
+            r = c.get(f"/timeline?mac={mac}", headers=headers or {})
+            with c.session_transaction() as sess:
+                flashed = [m for _cat, m in sess.pop("_flashes", [])]
+            return r.status_code, flashed, r.get_data(as_text=True)
+
+        hidden = asked("aa:bb:cc:dd:ee:01")
+        unknown = asked("aa:bb:cc:dd:ee:99")
+        assert hidden[:2] == unknown[:2] == (200, [NO_MATCH])
+        hx = {"HX-Request": "true"}
+        assert asked("aa:bb:cc:dd:ee:01", hx)[2] == asked("aa:bb:cc:dd:ee:99", hx)[2] == f"<p>{NO_MATCH}</p>"
 
     def test_restricted_user_allowed_when_subnet_accessible(self, client, db):
         from tests.conftest import restricted_client
@@ -235,7 +260,7 @@ class TestTimelinePage:
         c, _uid = restricted_client(client, db, allowed_subnets=[1], role="viewer", username="tl_viewer2")
         r = c.get("/timeline?mac=aa:bb:cc:dd:ee:01")
         assert r.status_code == 200
-        assert b"do not have access" not in r.data
+        assert b"No client matched that MAC or IP" not in r.data
 
 
 class TestRestrictedTimelineSeams:

@@ -191,7 +191,7 @@ class TestTimelinePageMovedClient:
         try:
             c = _restricted(client, db, "moved_tl_restricted3")
             body = c.get(f"/timeline?mac={MAC}").data.decode()
-            assert "do not have access" in body
+            assert "No client matched that MAC or IP" in body  # v5.69.0-beta.2 (Q171 fixup, G7): one sentence
             for leaked in DENIED:
                 assert leaked not in body
         finally:

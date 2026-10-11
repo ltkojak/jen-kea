@@ -107,7 +107,7 @@ dashboard totals, the Subnets page) leaked.
 **What the whole-tree hygiene audit of 5.68.0 settled (v5.69.0-beta.2, Q171).** Six rules, each held by a test named in `docs/SAFETY_INVARIANTS.md`.
 (1) The settings that decide who the superadmins are - where Jen's own database and Kea's database point - and the restart that applies them are superadmin and step-up; an admin who could repoint
 `[jen_db]` and restart would be whatever role that database says (RBAC-003). Creating a subnet, and the DDNS log tail and hostname lookup, need access to every subnet: a log has no per-line subnet
-boundary and the lookup asks the DNS provider about any name. (2) A password change ends every other session of the account: the cached session carries a fingerprint of the password hash it was
+boundary and the lookup asks the DNS provider about any name, and the Verify tab resolves any name and address through the Jen host. An admin makes the MFA policy stricter and never less strict. (2) A password change ends every other session of the account: the cached session carries a fingerprint of the password hash it was
 opened under and `load_user` compares it on each request; `token_version` only refreshes a cached role and subnet list and never ends a session (AUTH-001). (3) A request for an object the caller may
 not see answers exactly as one for an object that is not there, on the v4 per-object admin routes as it already did on their v6 twins (RBAC-002). (4) IPv6 is behind the `ipv6_enabled` flag and not
 behind a `[subnets6]` section: with the flag off the lease, device and reservation lists are the v4 page and every v6 write route is a 404. (5) A route never shows what a broad `except` caught - the

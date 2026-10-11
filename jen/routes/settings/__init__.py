@@ -349,6 +349,9 @@ def save_config_revision_keep():
     return redirect(url_for("settings.settings_system"))
 
 
+_MFA_RANK = {"off": 0, "optional": 1, "required_admins": 2, "required_all": 3}
+
+
 @bp.route("/settings/system/save-mfa-mode", methods=["POST"])
 @login_required
 @_admin_required
@@ -357,9 +360,11 @@ def save_mfa_mode():
     if mode not in ("off", "optional", "required_admins", "required_all"):
         flash("Invalid MFA mode.", "error")
         return redirect(url_for("settings.settings_security"))
-    # v5.69.0-beta.2 (Q171): an admin may make the policy STRICTER, never switch it off - "off" lifts the second factor from every account including the superadmins'
-    if mode == "off" and current_user.role != "superadmin":
-        flash("Only a superadmin can switch MFA off.", "error")
+    # v5.69.0-beta.2 (Q171, G5 of the release audit): an admin makes the policy STRICTER only. "off" lifts the second factor from every account, and so does any step down
+    # (required_all -> optional stops enrollment being demanded of anyone); the rank table says which is which.
+    current = __mfa.get_mfa_mode()
+    if current_user.role != "superadmin" and _MFA_RANK[mode] < _MFA_RANK.get(current, 1):
+        flash("Only a superadmin can make the MFA policy less strict.", "error")
         return redirect(url_for("settings.settings_security"))
     __user.set_global_setting("mfa_mode", mode)
     labels = {

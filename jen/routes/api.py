@@ -702,7 +702,8 @@ def api_v1_reservation_delete(host_id):
     if not host:
         return api_error(f"No reservation with host_id {host_id}.", 404)
     if not _api_scope_allows(key, host["subnet_id"] or 0):
-        return api_error("This key has no access to that subnet.", 403)
+        # v5.69.0-beta.2 (Q171 fixup, G6): a reservation the key may not see is answered as one that does not exist (RBAC-002) - the same status and body
+        return api_error(f"No reservation with host_id {host_id}.", 404)
     mac = ":".join(host["mac_hex"][i : i + 2] for i in range(0, 12, 2)).lower() if host["mac_hex"] else ""
     result = __kea.kea_command(
         "reservation-del",
@@ -751,14 +752,14 @@ def api_v1_device_patch(mac):
             row = cur.fetchone()
             if not row:
                 return api_error(f"No device with MAC {mac}.", 404)
-            if _api_key_subnet_ids(key) is not None:
-                # A subnet-scoped key may only touch a device Jen has placed in
-                # a subnet the key covers; an unplaced device has no subnet to
-                # check, so it is refused rather than waved through.
-                if row.get("last_subnet_id") is None:
-                    return api_error("This key is scoped to subnets and this device has no known subnet.", 403)
-                if not _api_scope_allows(key, row["last_subnet_id"]):
-                    return api_error("This key has no access to that device's subnet.", 403)
+            # A subnet-scoped key may only touch a device Jen has placed in
+            # a subnet the key covers; an unplaced device has no subnet to
+            # check, so it is refused rather than waved through.
+            # (v5.69.0-beta.2, Q171 fixup, G6: both refusals are the answer for a MAC that is not there - RBAC-002)
+            if _api_key_subnet_ids(key) is not None and (
+                row.get("last_subnet_id") is None or not _api_scope_allows(key, row["last_subnet_id"])
+            ):
+                return api_error(f"No device with MAC {mac}.", 404)
             # One fixed statement: IF(flag, new, old) per column, so no SQL is
             # built from strings and an unsent field is left untouched.
             cur.execute(

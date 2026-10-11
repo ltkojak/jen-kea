@@ -94,6 +94,7 @@ class TestDatabaseCardsAndRestartAreSuperadminWithStepUp:
     ROUTES = [
         "/settings/infrastructure/save-jen-db",
         "/settings/infrastructure/save-kea-db",
+        "/settings/infrastructure/save-kea6",
         "/settings/infrastructure/restart",
     ]
 
@@ -104,6 +105,7 @@ class TestDatabaseCardsAndRestartAreSuperadminWithStepUp:
 
         calls = {"write": [], "restart": []}
         monkeypatch.setattr(config.app_config, "write_values", lambda items: calls["write"].append(items))
+        monkeypatch.setattr(config.app_config, "mutate", lambda fn, reload=True: calls["write"].append(fn))
         monkeypatch.setattr(runtime, "restart_service", lambda *a, **k: calls["restart"].append(1) or "systemd")
         return calls
 
@@ -194,6 +196,26 @@ class TestDdnsStatusIsScoped:
         c, _ = restricted_client(client, db, [1], role="admin", username="q171_ddns_admin")
         body = c.get("/ddns").get_data(as_text=True)
         assert "Recent Log Activity" not in body and "DDNS-LINE-FOR-B" not in body and log == []
+
+    def test_a_scoped_admin_cannot_open_the_verify_tab_and_no_resolver_is_asked(
+        self, client, db, mock_kea, log, monkeypatch
+    ):
+        """G3 (the release audit): Verify resolves any name and reverse-resolves any address through the Jen host's resolver."""
+        import socket
+
+        def boom(*a, **k):
+            pytest.fail("the Jen host's resolver was asked on behalf of a scoped caller")
+
+        monkeypatch.setattr(socket, "gethostbyaddr", boom)
+        monkeypatch.setattr(socket, "getaddrinfo", boom)
+        c, _ = restricted_client(client, db, [1], role="admin", username="q171_ddns_verify")
+        body = c.get("/ddns?tab=verify&ip=10.0.0.5&hostname=hidden.example").get_data(as_text=True)
+        assert "dhcp4 → D2" in body, "the answer is the Status tab"
+        assert "tab=verify" not in body and "Verify</a>" not in body
+
+    def test_an_unrestricted_admin_still_has_the_verify_tab(self, client, db, mock_kea, log):
+        a, _ = restricted_client(client, db, None, role="admin", username="q171_ddns_verify_all")
+        assert "tab=verify" in a.get("/ddns").get_data(as_text=True)
 
     def test_a_viewer_sees_no_tab_strip_and_an_admin_sees_all_five(self, client, db, mock_kea, log):
         v, _ = restricted_client(client, db, [1], role="viewer", username="q171_ddns_strip_v")
@@ -346,6 +368,59 @@ class TestSaveDdnsClearsWhatIsBlank:
         )
         assert not cfg.has_option("ddns", "api_token")
 
+    def test_each_provider_block_is_read_by_its_own_name(self, logged_in_client, cfg):
+        """G4 (the release audit): every provider's block is submitted; the visible one is the selected provider's."""
+        logged_in_client.post(
+            "/settings/infrastructure/save-ddns",
+            data={
+                "dns_provider": "pihole",
+                "api_url_technitium": "http://old",
+                "api_token_technitium": "OLD",
+                "api_url_pihole": "http://new",
+                "api_token_pihole": "NEWTOKEN",
+            },
+        )
+        assert cfg.get("ddns", "api_url") == "http://new"
+        assert cfg.get("ddns", "api_token") == "NEWTOKEN"
+
+    def test_a_blank_in_the_selected_providers_block_clears_the_key_whatever_another_block_holds(
+        self, logged_in_client, cfg
+    ):
+        logged_in_client.post(
+            "/settings/infrastructure/save-ddns",
+            data={"dns_provider": "pihole", "api_url_technitium": "http://old", "api_url_pihole": ""},
+        )
+        assert not cfg.has_option("ddns", "api_url")
+
+    def test_adguards_user_is_its_own_field(self, logged_in_client, cfg):
+        logged_in_client.post(
+            "/settings/infrastructure/save-ddns",
+            data={"dns_provider": "adguard", "api_url_adguard": "http://ag:3000", "api_user_adguard": "root"},
+        )
+        assert cfg.get("ddns", "api_user") == "root" and cfg.get("ddns", "api_url") == "http://ag:3000"
+
+    def test_a_form_that_sends_the_plain_names_alone_still_works(self, logged_in_client, cfg):
+        logged_in_client.post(
+            "/settings/infrastructure/save-ddns", data={"dns_provider": "technitium", "api_url": "http://plain"}
+        )
+        assert cfg.get("ddns", "api_url") == "http://plain"
+
+    def test_the_page_has_no_plain_named_provider_input_and_each_suffixed_name_once(self):
+        import re
+
+        text = pathlib.Path("templates/settings_alerts.html").read_text(encoding="utf-8")
+        assert re.findall(r'name="(api_url|api_user|api_token)"', text) == []
+        for name in (
+            "api_url_technitium",
+            "api_token_technitium",
+            "api_url_pihole",
+            "api_token_pihole",
+            "api_url_adguard",
+            "api_user_adguard",
+            "api_token_adguard",
+        ):
+            assert text.count(f'name="{name}"') == 1, name
+
     def test_an_unknown_provider_and_a_bad_url_are_refused(self, logged_in_client, cfg):
         logged_in_client.post("/settings/infrastructure/save-ddns", data={"dns_provider": "evil"})
         logged_in_client.post(
@@ -486,6 +561,24 @@ class TestAPasswordChangeEndsTheOtherSessions:
         assert c.get("/profile").status_code == 200
         with c.session_transaction() as sess:
             assert sess["_user_cache"].get("pw_fp"), "the first request did not adopt the row's fingerprint"
+
+    def test_a_login_that_rehashed_a_legacy_hash_stays_signed_in(self, client, db):
+        """G1 (the release audit): the rehash writes a new hash, and the session fingerprints the one now stored."""
+        from werkzeug.security import generate_password_hash
+
+        legacy = generate_password_hash("legacy-pass-1", method="pbkdf2:sha256")
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM users WHERE username='q171_legacy'")
+            cur.execute("INSERT INTO users (username, password, role) VALUES ('q171_legacy', %s, 'viewer')", (legacy,))
+        db.commit()
+        assert client.post("/login", data={"username": "q171_legacy", "password": "legacy-pass-1"}).status_code == 302
+        # the profile is a page every signed-in role has: a bounce to /login would be a 302 here
+        assert client.get("/profile").status_code == 200
+        assert client.get("/profile").status_code == 200
+        db.commit()
+        with db.cursor() as cur:
+            cur.execute("SELECT password FROM users WHERE username='q171_legacy'")
+            assert cur.fetchone()["password"].startswith("scrypt:")
 
     def test_the_fingerprint_is_one_way_and_empty_for_no_password(self):
         from jen.models.user import password_fingerprint

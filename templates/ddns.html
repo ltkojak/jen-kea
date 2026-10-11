@@ -12,7 +12,7 @@
 {% set ddns_tabs = ddns_tabs + [
     {'id': 'naming', 'label': 'Naming (dhcp4)', 'url': '/ddns?tab=naming'},
     {'id': 'd2config', 'label': 'D2 Configuration', 'url': '/ddns?tab=d2config'},
-    {'id': 'verify', 'label': 'Verify', 'url': '/ddns?tab=verify'},
+] + ([{'id': 'verify', 'label': 'Verify', 'url': '/ddns?tab=verify'}] if current_user.all_subnets else []) + [
     {'id': 'reconcile', 'label': 'Reconcile', 'url': '/ddns/reconcile'},
 ] %}
 {% endif %}

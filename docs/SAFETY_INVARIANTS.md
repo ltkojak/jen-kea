@@ -164,23 +164,25 @@ caller can.
 
 ### RBAC-002 - A denial and a not-found are one message
 **Rule.** A request for an object the caller may not see answers exactly as one for an object that does not exist; there is no oracle for what a hidden subnet holds.
-**Established.** Q145, Q156, Q171 (the v4 per-object admin routes: lease release, reservation edit and delete, device edit and delete, subnet delete, edit, preview and move).
+**Established.** Q145, Q156, Q171 (the v4 per-object admin routes: lease release, reservation edit and delete, device edit and delete, subnet delete, edit, preview and move; the fixup: the API's reservation delete and device patch, Timeline, the subnet note and the reservation-add refusals).
 **Enforced at.** The routes' shared refusal wording and `access.py`.
 **Tests.**
 - `tests/test_explain_route.py::TestAReservationInAHiddenSubnetIsNotAnOracle`
 - `tests/test_q171_access.py::TestHiddenAndNonexistentAreOneAnswer`
+- `tests/test_api_writes.py::TestAHiddenObjectIsAnsweredAsOneThatIsNotThere`
 
 ### RBAC-003 - The settings that decide who the superadmins are, and the restart that applies them, are superadmin and step-up
 **Rule.** Where Jen's own database and Kea's database point, and the restart of Jen, are changed only by a superadmin whose password was confirmed in the last ten minutes: an admin who could
 repoint `[jen_db]` at a database of their own and restart Jen would be whatever role that database says. Subnet creation, and the DDNS log and hostname lookup, are for a caller who may see
-every subnet.
+every subnet (the DDNS Verify tab too: it resolves any name and address through the Jen host). An admin makes the MFA policy stricter and never less strict.
 **Established.** Q171.
-**Enforced at.** `@_superadmin_required` + `@_recent_auth_required` on `save_infra_jen_db`, `save_infra_kea_db` and `restart_jen`; `current_user.all_subnets` in `add_subnet`, `add_subnet_post` and
-the DDNS status context.
+**Enforced at.** `@_superadmin_required` + `@_recent_auth_required` on `save_infra_jen_db`, `save_infra_kea_db`, `save_infra_kea6` and `restart_jen`; `current_user.all_subnets` in `add_subnet`, `add_subnet_post`,
+the DDNS status context and `ddns()` (the Verify tab); the rank table in `save_mfa_mode`.
 **Tests.**
 - `tests/test_q171_access.py::TestDatabaseCardsAndRestartAreSuperadminWithStepUp`
 - `tests/test_q171_access.py::TestAddSubnetNeedsEverySubnet`
 - `tests/test_q171_access.py::TestDdnsStatusIsScoped`
+- `tests/test_settings.py::TestMfaPolicyIsNeverWeakenedByAnAdmin`
 
 ### AUTH-001 - A password change ends every other session of the account
 **Rule.** A session carries a fingerprint of the password hash it was opened under; `load_user` ends the session on its next request when the row's fingerprint is no longer the same, and the session

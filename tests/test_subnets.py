@@ -9,10 +9,10 @@ class TestSaveSubnetNoteAccessControl:
 
         _restricted_client(client, db, allowed_subnets=[999], role="admin", username="subnetnote_restricted1")
         r = client.post("/subnets/save-note", data={"subnet_id": "1", "notes": "should not be allowed"})
-        assert r.status_code == 403
+        assert r.status_code == 404  # v5.69.0-beta.2 (Q171 fixup, G8): one answer for hidden and nonexistent
         data = r.get_json()
         assert data["ok"] is False
-        assert "access" in data["error"].lower()
+        assert data["error"] == "Subnet not found."
 
     def test_allowed_within_scope(self, logged_in_client):
         r = logged_in_client.post("/subnets/save-note", data={"subnet_id": "1", "notes": "allowed note"})

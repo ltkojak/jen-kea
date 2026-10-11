@@ -18,6 +18,9 @@ from jen.services.timeline import build_timeline
 logger = logging.getLogger(__name__)
 bp = Blueprint("timeline", __name__)
 
+# v5.69.0-beta.2 (Q171 fixup, G7): a client the caller may not see and one no table knows are ONE sentence (RBAC-002) - on the page and in the Investigation tab
+NO_MATCH = "No client matched that MAC or IP, or you don't have access to it."
+
 
 @bp.route("/timeline")
 @login_required
@@ -43,10 +46,10 @@ def timeline_page():
         # the design applies to the page as a whole below.
         if result["subnet_id"] is not None:
             if not current_user.can_access_subnet(result["subnet_id"]):
-                flash("You do not have access to that subnet.", "error")
+                flash(NO_MATCH, "error")
                 result = None
         elif not current_user.all_subnets:
-            flash("You do not have access to that client.", "error")
+            flash(NO_MATCH, "error")
             result = None
         if result is not None and not current_user.all_subnets:
             # Mirrors the API: a restricted user sees only rows that carry a
@@ -64,7 +67,7 @@ def timeline_page():
     # exact result via htmx, same pattern as Trace's own HX-partial branch.
     if request.headers.get("HX-Request") == "true":
         if result is None:
-            return "<p>No client matched that MAC or IP, or you don't have access to it.</p>"
+            return f"<p>{NO_MATCH}</p>"
         return render_template("_timeline_rows.html", result=result, kinds=kinds)
     return render_template(
         "timeline.html",

@@ -365,9 +365,11 @@ def ddns():
     tab = request.args.get("tab", "status")
     if tab not in TABS:
         tab = "status"
-    if tab != "status" and current_user.role == "viewer":
+    if tab != "status" and (current_user.role == "viewer" or (tab == "verify" and not current_user.all_subnets)):
         # Viewers see Status only (v5.23.0) — the other tabs are all
         # write surfaces or things a viewer has no matching action for.
+        # v5.69.0-beta.2 (Q171 fixup, G3): Verify resolves any name and reverse-resolves any address through the Jen host's resolver - it is for a caller who may see
+        # every subnet, like the log and the lookup (a scoped caller could read the PTR of a hidden client).
         tab = "status"
 
     ctx = {"tab": tab, "tabs": TABS}

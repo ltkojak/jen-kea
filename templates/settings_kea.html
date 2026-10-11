@@ -452,6 +452,9 @@
     {% if infra.kea_connection_mode == 'direct' and ipv6_enabled and not infra.kea6_api_url %}
     <div class="alert alert-warning">{{ icon("triangle-alert") }} IPv6 is enabled and Jen is in <code>direct</code> mode, but no kea-dhcp6 control socket URL is set. v6 API calls will fail until you set the API URL below.</div>
     {% endif %}
+    {% if current_user.role != 'superadmin' %}
+    <p class="u-ec76a1">Only a superadmin changes where Jen reads Kea's IPv6 data.</p>
+    {% else %}
     <form method="POST" action="/settings/infrastructure/save-kea6"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
@@ -495,6 +498,7 @@
         </div>
         <button type="submit" class="btn btn-primary">Save Kea6 API</button>
     </form>
+    {% endif %}
     {{ direct_socket_setup(1, 'dhcp6', 'kea-dhcp6', 'kea-dhcp6.conf', infra.ssh_host, infra.bind_default, infra.kea6_api_user or infra.kea_api_user, 8006, infra.kea6_api_url, 'SSH to the Kea host (above)', infra.tls_supported) }}
     <div class="u-10a65a">
         <a href="/settings/infrastructure/author-kea/dhcp6" class="btn btn-sm btn-secondary">{{ icon("file-pen") }} Author a starting kea-dhcp6.conf</a>
