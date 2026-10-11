@@ -469,3 +469,13 @@ class TestTheKea6PoolIsThrottledToo:
         for fn in (dbmod.get_jen_db, dbmod.get_kea_db, dbmod.get_kea6_db):
             source = inspect.getsource(fn)
             assert "_pool_recently_failed(" in source and "_pool_failed_at[" in source, fn.__name__
+
+
+class TestTheSessionZoneIsUtc:
+    """v5.69.0-beta.3 (Q172, item 3): the outage fallbacks open direct connections; those run in UTC like the pooled ones (the zone test against a real server
+    is tests/test_db_session.py)."""
+
+    def test_the_init_command_sets_utc(self):
+        from jen.models import db as dbmod
+
+        assert dbmod.SESSION_TIME_ZONE_INIT == "SET time_zone = '+00:00'"

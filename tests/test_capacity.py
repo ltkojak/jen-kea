@@ -282,3 +282,16 @@ class TestPoolUsedIsTheConsumptionSeries:
         assert cap.used({"pool_used": None, "active_leases": 99}) is None
         assert cap.used({"active_leases": 99}) is None, "no path reads active_leases as pool use"
         assert cap.used({}) is None
+
+
+class TestTodayIsTheUtcDate:
+    """v5.69.0-beta.3 (Q172, item 3): the snapshot rows are UTC; `today` is UTC's date, not the host's."""
+
+    def test_the_default_today_is_not_the_hosts_local_date(self):
+        import inspect
+
+        src = inspect.getsource(cap.forecast) if hasattr(cap, "forecast") else inspect.getsource(cap)
+        assert "date.today()" not in inspect.getsource(cap), "capacity.py asked the host's clock for today"
+        assert "datetime.now(timezone.utc).date()" in src or "datetime.now(timezone.utc).date()" in inspect.getsource(
+            cap
+        )

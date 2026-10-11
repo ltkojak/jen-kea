@@ -700,6 +700,10 @@ def _pool_utilization(ctx) -> Check:
     except (TypeError, ValueError):
         threshold = 80
     try:
+        exhaustion = int(__get_setting("pool_exhaustion_free", "5"))
+    except (TypeError, ValueError):
+        exhaustion = 5
+    try:
         rows = _latest_lease_history()
     except Exception as e:
         _log_err("pool_utilization", e)
@@ -720,7 +724,9 @@ def _pool_utilization(ctx) -> Check:
         measured += 1
         pct = 100.0 * (r["pool_used"] or 0) / size
         label = f"{_subnet_label(r['subnet_id'])} {pct:.0f}%"
-        if pct >= 95:
+        # v5.69.0-beta.3 (Q172): "near exhaustion" is the alert's own definition (DEF-002) - `pool_exhaustion_free` addresses or fewer left - not a third one (a flat 95 %,
+        # which on a /24 pool of 20 addresses was "near" at one free address and on a /16 pool of 60,000 at three thousand)
+        if size - (r["pool_used"] or 0) <= exhaustion:
             crit.append(label)
         elif pct >= threshold:
             warn.append(label)

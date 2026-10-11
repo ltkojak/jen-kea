@@ -34,7 +34,7 @@ projection and every other chart showed a struck-out legend entry.
 from __future__ import annotations
 
 import math
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 WINDOW_DAYS = 30
 MIN_DAYS = 7
@@ -142,7 +142,8 @@ def forecast(
     beyond_horizon (bool), projection ([[iso_date, value], …] whenever the fit
     exists — rising, flat or falling — each value clamped to [0, pool]; empty
     for "insufficient" and "no-pool")."""
-    today = today or date.today()
+    # the UTC date: the snapshot rows carry UTC times (every connection runs in UTC since v5.69.0-beta.3), so "today" is UTC's, not the host's
+    today = today or datetime.now(timezone.utc).date()
     pool = current_pool_size(rows)
     out = {
         "trend": "insufficient",

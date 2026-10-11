@@ -39,6 +39,12 @@ it reads but never alerts: a backlog is not news. The watermark stays in the log
 
 DELIVERED vs ATTEMPTED. `alerted_at` is set only when a channel actually took the alert; `alert_attempted_at` (migration 31) records
 every try, and a failing alert is retried once per 30 minutes until it lands.
+
+ONE TRANSACTION, THEN THE SEND (v5.69.0-beta.3, Q172). A server's events, the qualification decisions, `alert_attempted_at` of every key that is due and the
+watermark are ONE transaction, committed BEFORE any network I/O. The send follows; only a DELIVERED alert writes again (`alerted_at`, the qualification cleared). So a
+database failure after the send is "attempted, outcome unknown": the attempt and the watermark are already on disk, the same lines are never counted twice, and the
+alert is retried no sooner than the 30-minute rule says - never a second alert at once and never a count of the same lines again. TIME: the sweep's `now` is in whole
+seconds (the columns are DATETIME(0)).
 """
 
 from __future__ import annotations
@@ -101,8 +107,9 @@ _lock = threading.Lock()
 
 
 def _now() -> datetime:
-    """Naive UTC, the way every datetime column of this table is stored."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    """Naive UTC, in WHOLE SECONDS, the way every datetime column of this table is stored (DATETIME(0)). A `now` with microseconds compared against a column that has
+    none is later than what was just written to it: the two database kinds were resolved in the very sweep that recorded them (v5.69.0-beta.3, Q172)."""
+    return datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
 
 
 # ── Pure ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -334,15 +341,19 @@ def _wm_get(server_id) -> datetime | None:
         return None
 
 
+def _wm_set_on(cur, server_id, value: datetime) -> None:
+    """The watermark, written on the CALLER's cursor so it is part of the caller's transaction (the sweep's, Q172)."""
+    cur.execute(
+        "INSERT INTO settings (setting_key, setting_value) VALUES (%s, %s) ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)",
+        (_wm_key(server_id), value.isoformat()),
+    )
+
+
 def _wm_set(server_id, value: datetime) -> None:
     from jen.models import db as __db
 
     with __db.jen_db() as db, db.cursor() as cur:
-        cur.execute(
-            "INSERT INTO settings (setting_key, setting_value) VALUES (%s, %s) "
-            "ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)",
-            (_wm_key(server_id), value.isoformat()),
-        )
+        _wm_set_on(cur, server_id, value)
 
 
 # ── The sweep's own record of whether it is reading each server (v5.68.0-beta.17, Q152) ──────────────────────────────────────
@@ -710,7 +721,7 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
     "errors": [text]}. A server that cannot be read adds an error and nothing else; one server's failure never stops the next."""
     from jen.models import db as __db
 
-    now = now or _now()
+    now = (now or _now()).replace(microsecond=0)
     summary = {
         "servers": 0,
         "events": 0,
@@ -728,12 +739,16 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
             servers = [s for s in extensions.KEA_SERVERS or [] if s.get("ssh_host")]
         for server in servers:
             sid = server.get("id")
+            log_read = (
+                False  # the miss counter is about the LOG: a database failure after a good read is not a missed read
+            )
             try:
                 res = _host.tail_log(server, extensions.DHCP4_LOG, TAIL_LINES, timeout=TAIL_TIMEOUT_S, helper_only=True)
                 if not res.get("ok"):
                     summary["errors"].append(f"{server.get('name')}: {res.get('code') or 'error'}")
                     _note_server(sid, False, str(res.get("code") or "error"), now)
                     continue
+                log_read = True
                 wm = _wm_get(sid)
                 lines = res.get("lines", [])
                 offset_s, _how = server_clock(sid, lines)
@@ -838,6 +853,16 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                         ):
                             continue
                         alerts_due.append((kind, mac, rows[0]["ip"], subnet, q_count, q_at))
+                    # still the SAME transaction (Q172): every key that is due is marked attempted BEFORE its send, and the watermark moves with the events it
+                    # covers - so nothing below can make the next sweep count these lines again or alert for them at once
+                    for kind, mac, _ip, subnet_id, _count, _q_at in alerts_due:
+                        cur.execute(
+                            "UPDATE client_problems SET alert_attempted_at=%s "
+                            "WHERE server_id=%s AND kind=%s AND mac=%s AND subnet_id <=> %s AND resolved_at IS NULL",
+                            (now, sid, kind, mac, subnet_id),
+                        )
+                    if new_wm is not None:
+                        _wm_set_on(cur, sid, new_wm)
                 for (
                     kind,
                     mac,
@@ -854,25 +879,30 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                     delivered = any(ok for _ctype, ok, _err in results)
                     summary["alerts_attempted"] += 1
                     summary["alerts" if delivered else "alerts_failed"] += 1
-                    with __db.jen_db() as db, db.cursor() as cur:
-                        # `alerted_at` ONLY for a delivered alert: it is what the once-a-day rule reads, so a failed
-                        # delivery no longer silences the client for 24 hours
-                        # a delivered alert leaves NO pending qualification behind (Q149): `qualified_at` / `qualified_count` are what a
-                        # retry reads, and there is nothing left to retry. A failed one keeps them for the next try.
-                        cur.execute(
-                            "UPDATE client_problems SET alert_attempted_at=%s, alerted_at=IF(%s, %s, alerted_at), "
-                            "qualified_at=IF(%s, NULL, qualified_at), qualified_count=IF(%s, NULL, qualified_count) "
-                            "WHERE server_id=%s AND kind=%s AND mac=%s AND subnet_id <=> %s AND resolved_at IS NULL",
-                            (now, delivered, now, delivered, delivered, sid, kind, mac, subnet_id),
+                    if not delivered:
+                        continue  # the attempt is already on disk (above); a failed one keeps its qualification for the next try
+                    try:
+                        with __db.jen_db() as db, db.cursor() as cur:
+                            # `alerted_at` ONLY for a delivered alert: it is what the once-a-day rule reads, so a failed delivery no longer silences the client for
+                            # 24 hours. A delivered alert leaves NO pending qualification behind (Q149): `qualified_at` / `qualified_count` are what a retry reads.
+                            cur.execute(
+                                "UPDATE client_problems SET alerted_at=%s, qualified_at=NULL, qualified_count=NULL "
+                                "WHERE server_id=%s AND kind=%s AND mac=%s AND subnet_id <=> %s AND resolved_at IS NULL",
+                                (now, sid, kind, mac, subnet_id),
+                            )
+                    except Exception as e:
+                        # delivered, but not recorded: "attempted, outcome unknown" - the 30-minute retry rule is what stands between this and a second alert
+                        logger.error(
+                            f"client_problems: an alert was delivered but not recorded: {type(e).__name__}: {e}"
                         )
-                if new_wm is not None:
-                    _wm_set(sid, new_wm)
+                        summary["errors"].append(f"{server.get('name')}: alert delivered, not recorded")
                 summary["servers"] += 1
                 _note_server(sid, True, "", now)
             except Exception as e:
                 logger.error(f"client_problems: server {server.get('name')!r}: {type(e).__name__}: {e}")
                 summary["errors"].append(f"{server.get('name')}: {type(e).__name__}")
-                _note_server(sid, False, type(e).__name__, now)
+                if not log_read:
+                    _note_server(sid, False, type(e).__name__, now)
         try:
             state = from_declined(_declined_rows()) + from_held(_held_rows())
             with __db.jen_db() as db, db.cursor() as cur:

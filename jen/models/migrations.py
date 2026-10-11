@@ -1256,6 +1256,22 @@ def _m034_lease_history_pool_used(db):
             cur.execute("ALTER TABLE lease_history ADD COLUMN pool_used INT NULL DEFAULT NULL AFTER reserved_leases")
 
 
+_LEGACY_TELEGRAM_KEYS = ("telegram_token", "telegram_chat_id", "telegram_enabled")
+
+
+def _m035_remove_legacy_telegram_settings(db):
+    """
+    v5.69.0-beta.3 (Q172, item 11) - the dead `/settings/save-telegram` route (removed in v5.69.0-beta.2, Q171 item 14) wrote a PLAINTEXT bot token into `settings`
+    under `telegram_token` (with `telegram_chat_id` and `telegram_enabled`) that nothing reads: migration 7 copied those keys into `alert_channels` once, where the token is
+    encrypted, and no sender has looked at the old keys since. They go now - a database export carried the token in the clear for as long as they stayed.
+
+    One DELETE per key, each safe to repeat: a crash between them is finished by the next start, and a database that never had them changes nothing. Adds nothing else.
+    """
+    with db.cursor() as cur:
+        for key in _LEGACY_TELEGRAM_KEYS:
+            cur.execute("DELETE FROM settings WHERE setting_key=%s", (key,))
+
+
 def _m033_client_problems_scope_key(db):
     """
     v5.68.0-beta.14 (Q149; guard rewritten in Q150) - the subnet is part of a Problems row's IDENTITY. Migration 30's unique key was (server_id, kind, mac, ip), and
@@ -1369,6 +1385,11 @@ MIGRATIONS = [
         34,
         "lease_history.pool_used: the leases inside the pools, what the forecast and every capacity figure read (v5.68.0-beta.19, Q154)",
         _m034_lease_history_pool_used,
+    ),
+    (
+        35,
+        "settings: the legacy plaintext telegram_token / telegram_chat_id / telegram_enabled keys removed (v5.69.0-beta.3, Q172)",
+        _m035_remove_legacy_telegram_settings,
     ),
 ]
 

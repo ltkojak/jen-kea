@@ -168,11 +168,16 @@ _SETTINGS_CACHE_TTL: float = 30.0  # seconds
 #: call reloaded again - and with the Jen database down each attempt costs a pool creation (10 s) and a direct connect (10 s): `check_session_timeout`
 #: on every request and ~4 reads per subnet per alert-loop pass made a pass take minutes and the 5 s kea_down cadence was lost.
 _SETTINGS_RETRY_S: float = 5.0
+#: v5.69.0-beta.3 (Q172): bumped by every invalidation. A reload remembers the version it started under; if a write invalidated the cache while its SELECT was in flight,
+#: what it read may predate that write, so it does NOT stamp the cache fresh - the next read reloads (the write used to be hidden for a whole TTL: ipv6_enabled, the
+#: investigation switch, the session timeout).
+_settings_version: int = 0
 
 
 def _invalidate_settings_cache() -> None:
     """Call after any set_global_setting to flush the cache immediately."""
-    global _settings_cache_ts, _settings_next_try_mono
+    global _settings_cache_ts, _settings_next_try_mono, _settings_version
+    _settings_version += 1
     _settings_cache_ts = 0
     _settings_next_try_mono = 0
 
@@ -213,11 +218,13 @@ def get_global_setting(key: str, default=None):
             if now - _settings_cache_ts > _SETTINGS_CACHE_TTL and time.monotonic() >= _settings_next_try_mono:
                 from jen.models.db import jen_db
 
+                started_under = _settings_version
                 try:
                     with jen_db() as db, db.cursor() as cur:
                         cur.execute("SELECT setting_key, setting_value FROM settings")
                         _settings_cache = {r["setting_key"]: r["setting_value"] for r in cur.fetchall()}
-                    _settings_cache_ts = now
+                    # a write that landed while the SELECT was in flight invalidated the cache: what was read may predate it, so it is served but not stamped fresh
+                    _settings_cache_ts = now if started_under == _settings_version else 0
                     _settings_next_try_mono = 0
                     _settings_ever_loaded = True
                 except Exception as e:

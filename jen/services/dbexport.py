@@ -175,7 +175,7 @@ def _validate_tables(requested, known):
 
 
 def _direct_jen_conn():
-    from jen.models.db import _ssl_kwargs
+    from jen.models.db import SESSION_TIME_ZONE_INIT, _ssl_kwargs
 
     return pymysql.connect(
         host=extensions.JEN_DB_HOST,
@@ -185,12 +185,13 @@ def _direct_jen_conn():
         cursorclass=pymysql.cursors.DictCursor,
         connect_timeout=10,
         charset="utf8mb4",
+        init_command=SESSION_TIME_ZONE_INIT,
         **_ssl_kwargs(extensions.JEN_DB_SSL_CA),
     )
 
 
 def _direct_kea_conn():
-    from jen.models.db import _ssl_kwargs
+    from jen.models.db import SESSION_TIME_ZONE_INIT, _ssl_kwargs
 
     return pymysql.connect(
         host=extensions.KEA_DB_HOST,
@@ -201,6 +202,7 @@ def _direct_kea_conn():
         cursorclass=pymysql.cursors.DictCursor,
         connect_timeout=10,
         charset="utf8mb4",
+        init_command=SESSION_TIME_ZONE_INIT,
         **_ssl_kwargs(extensions.KEA_DB_SSL_CA),
     )
 
@@ -209,7 +211,7 @@ def _direct_conn(host, port, user, password, database, ssl_ca=""):
     """`ssl_ca` (v5.67.0-beta.8, Q120, item g) — empty (every migration target, as before) passes no ssl
     kwarg at all; the setup wizard's Connect test passes [kea_db] ssl_ca so it tests the connection the
     pool will actually make."""
-    from jen.models.db import _ssl_kwargs
+    from jen.models.db import SESSION_TIME_ZONE_INIT, _ssl_kwargs
 
     return pymysql.connect(
         host=host,
@@ -220,6 +222,7 @@ def _direct_conn(host, port, user, password, database, ssl_ca=""):
         cursorclass=pymysql.cursors.DictCursor,
         connect_timeout=10,
         charset="utf8mb4",
+        init_command=SESSION_TIME_ZONE_INIT,
         **_ssl_kwargs(ssl_ca),
     )
 

@@ -46,7 +46,16 @@ def start_scheduler(app):
 
     _scheduler = BackgroundScheduler(daemon=True)
     # Run every hour — the job itself checks frequency/hour settings
-    _scheduler.add_job(_run_backup_job, CronTrigger(minute=0), id="jen_backup", replace_existing=True, args=[app])
+    # misfire_grace_time=600 (Q172): APScheduler's default is one second, so a worker that woke a few seconds late skipped the hour's tick - and with it the day's backup
+    _scheduler.add_job(
+        _run_backup_job,
+        CronTrigger(minute=0),
+        id="jen_backup",
+        replace_existing=True,
+        args=[app],
+        misfire_grace_time=600,
+        coalesce=True,
+    )
     _scheduler.add_job(
         _run_audit_cleanup, CronTrigger(hour=0, minute=5), id="jen_audit_cleanup", replace_existing=True, args=[app]
     )

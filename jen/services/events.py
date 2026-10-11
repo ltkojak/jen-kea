@@ -41,6 +41,7 @@ KINDS = (
 )
 
 KIND_MAX_LENGTH = 40  # events.kind is VARCHAR(40) (jen/models/migrations.py)
+HOSTNAME_MAX_LENGTH = 253  # events.hostname is VARCHAR(253); Kea allows 255 (Q172)
 
 # v5.57.0 (Q73) — a plugin kind emit() will accept, lowercase, matching a
 # manifest id's own charset (letters/digits/hyphens) for the plugin id.
@@ -262,6 +263,10 @@ def emit(kind, *, mac=None, ip=None, subnet_id=None, hostname=None, server=None,
             f"events.emit(): refusing kind {kind!r}: {len(kind)} characters, the column holds {KIND_MAX_LENGTH}"
         )
         return None
+    if hostname and len(hostname) > HOSTNAME_MAX_LENGTH:
+        # events.hostname is VARCHAR(253) but Kea accepts 255: the INSERT failed in strict mode and the row was lost without a word (v5.69.0-beta.3, Q172)
+        hostname = hostname[:HOSTNAME_MAX_LENGTH]
+        detail = f"{detail} [hostname truncated to {HOSTNAME_MAX_LENGTH} characters]".strip()
     event_id = None
     try:
         from jen.models.db import jen_db

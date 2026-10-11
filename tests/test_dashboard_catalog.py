@@ -232,3 +232,47 @@ class TestEventsFeedWidgetShape:
             with db.cursor() as cur:
                 cur.execute("DELETE FROM events WHERE kind='test.kind'")
             db.commit()
+
+
+class TestAMalformedPacketHealthRowDoesNotBreakTheWidget:
+    """v5.69.0-beta.3 (Q172, item 10): `json.loads(stats)` sat outside the try, so one malformed server_stats row was a 500 for the whole dashboard."""
+
+    def test_the_bad_row_is_skipped_and_the_rest_make_a_reading(self, monkeypatch):
+        import contextlib
+        from datetime import datetime, timedelta
+
+        from jen.services import dashboard_catalog as dc
+
+        now = datetime(2026, 10, 11, 12, 0, 0)
+        rows = [
+            {"snapshot_time": now - timedelta(minutes=30), "stats": '{"pkt4-received": 100, "pkt4-receive-drop": 0}'},
+            {"snapshot_time": now - timedelta(minutes=20), "stats": "{this is not json"},
+            {"snapshot_time": now, "stats": '{"pkt4-received": 200, "pkt4-receive-drop": 0}'},
+        ]
+
+        class Cur:
+            def execute(self, *a, **k):
+                pass
+
+            def fetchall(self):
+                return rows
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        class Conn:
+            def cursor(self):
+                return Cur()
+
+        class FakeDb:
+            @staticmethod
+            @contextlib.contextmanager
+            def jen_db():
+                yield Conn()
+
+        monkeypatch.setattr(dc, "__db", FakeDb)
+        out = dc.packet_health_widget([{"id": 1, "name": "kea-a"}])
+        assert [r["server_id"] for r in out] == [1]

@@ -46,6 +46,12 @@ def _pool_recently_failed(name: str) -> bool:
     return failed is not None and time.monotonic() - failed < _POOL_RETRY_S
 
 
+# v5.69.0-beta.3 (Q172, item 3): EVERY connection Jen opens runs in UTC - the pooled ones and the direct fallbacks. Python here is UTC throughout (`datetime.now(utc)`,
+# naive-UTC columns, Kea's own writes of `lease4.expire`), and `NOW()`, `CURRENT_TIMESTAMP` and `DATETIME DEFAULT` columns used the SESSION zone: on a database host east or
+# west of UTC the health freshness check, the once-a-day backup guard and the capacity day all compared two different clocks.
+SESSION_TIME_ZONE_INIT = "SET time_zone = '+00:00'"
+
+
 def _ssl_kwargs(ca_path: str) -> dict:
     """v4.4.5 — opt-in TLS for MySQL/MariaDB connections. Empty ca_path
     (the default) means no ssl= kwarg is passed at all, so this is a
@@ -78,6 +84,7 @@ def _make_jen_pool():
         cursorclass=pymysql.cursors.DictCursor,
         connect_timeout=10,
         charset="utf8mb4",
+        init_command=SESSION_TIME_ZONE_INIT,
         **_ssl_kwargs(extensions.JEN_DB_SSL_CA),
     )
 
@@ -101,6 +108,7 @@ def _make_kea_pool():
         cursorclass=pymysql.cursors.DictCursor,
         connect_timeout=10,
         charset="utf8mb4",
+        init_command=SESSION_TIME_ZONE_INIT,
         **_ssl_kwargs(extensions.KEA_DB_SSL_CA),
     )
 
@@ -137,6 +145,8 @@ def get_jen_db() -> pymysql.connections.Connection:
                 database=extensions.JEN_DB_NAME,
                 cursorclass=pymysql.cursors.DictCursor,
                 connect_timeout=10,
+                charset="utf8mb4",
+                init_command=SESSION_TIME_ZONE_INIT,
                 **_ssl_kwargs(extensions.JEN_DB_SSL_CA),
             )
     return _jen_pool.connection()
@@ -172,6 +182,8 @@ def get_kea_db() -> pymysql.connections.Connection:
                 database=extensions.KEA_DB_NAME,
                 cursorclass=pymysql.cursors.DictCursor,
                 connect_timeout=10,
+                charset="utf8mb4",
+                init_command=SESSION_TIME_ZONE_INIT,
                 **_ssl_kwargs(extensions.KEA_DB_SSL_CA),
             )
     return _kea_pool.connection()
@@ -222,6 +234,7 @@ def _make_kea6_pool():
         cursorclass=pymysql.cursors.DictCursor,
         connect_timeout=10,
         charset="utf8mb4",
+        init_command=SESSION_TIME_ZONE_INIT,
         **_ssl_kwargs(extensions.KEA6_DB_SSL_CA),
     )
 
@@ -264,6 +277,8 @@ def get_kea6_db() -> pymysql.connections.Connection:
                 database=extensions.KEA6_DB_NAME,
                 cursorclass=pymysql.cursors.DictCursor,
                 connect_timeout=10,
+                charset="utf8mb4",
+                init_command=SESSION_TIME_ZONE_INIT,
                 **_ssl_kwargs(extensions.KEA6_DB_SSL_CA),
             )
     return _kea6_pool.connection()

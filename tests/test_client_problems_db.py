@@ -10,6 +10,7 @@ records instead of sending; everything else - the tables, the watermark in `sett
 
 from datetime import datetime, timedelta
 
+import pymysql
 import pytest
 
 from jen import extensions
@@ -964,6 +965,93 @@ class TestTheDatabaseKinds:
             )
         db.commit()
         assert cp.sweep(NOW, servers=[])["state_rows"] == 0
+
+
+class TestTheSweepsClockIsWholeSeconds:
+    """Item 1: `last_seen` is DATETIME(0); a `now` with microseconds compared against it resolved the two database kinds in the sweep that
+    recorded them (the test NOW has zero microseconds, so it never saw it)."""
+
+    def test_now_has_no_microseconds(self):
+        assert cp._now().microsecond == 0
+
+    def test_a_declined_lease_recorded_with_a_fractional_now_stays_open(self, db, stack):
+        TestTheDatabaseKinds._declined(self, db)
+        cp.sweep(NOW.replace(microsecond=123456), servers=[])
+        (row,) = rows(db, "kind='declined-lease'")
+        assert row["resolved_at"] is None, "recorded and resolved in the same sweep"
+        assert [r["kind"] for r in cp.fetch_open([], [])] == ["declined-lease"]
+
+
+class TestASweepIsOneTransaction:
+    """Item 1: the events, the alert attempt and the watermark are one transaction; a failure after delivery is 'attempted, outcome unknown'
+    and throttled, never a second alert or a second count of the same lines."""
+
+    def test_a_database_failure_after_delivery_does_not_re_alert_or_re_count(self, db, stack, monkeypatch):
+        import jen.models.db as dbmod
+
+        logs, calls = stack
+        prime(logs)
+        logs[1] = [nak(1), nak(2), nak(3)]
+        real_jen_db = dbmod.jen_db
+        state = {"failed": False}
+
+        def jen_db_failing_once_after_the_send():
+            if calls["alerts"] and not state["failed"]:
+                state["failed"] = True
+                raise pymysql.err.OperationalError(2013, "lost connection")
+            return real_jen_db()
+
+        monkeypatch.setattr(dbmod, "jen_db", jen_db_failing_once_after_the_send)
+        cp.sweep(NOW, servers=[SERVER_A])
+        cp.sweep(NOW + timedelta(minutes=5), servers=[SERVER_A])
+        assert len(calls["alerts"]) == 1, "the operator was told once"
+        (row,) = rows(db, "kind='nak'")
+        assert row["count"] == 3, "the same lines were not counted twice"
+        assert row["alert_attempted_at"] is not None
+
+    def test_the_attempt_and_the_watermark_are_on_disk_before_the_send(self, db, stack):
+        logs, calls = stack
+        prime(logs)
+        logs[1] = [nak(1), nak(2), nak(3)]
+        seen = {}
+
+        def send_and_look(alert_type, log_result=True, subnet_id=None, **kw):
+            with db.cursor() as cur:
+                db.commit()  # end this connection's snapshot: read what the sweep has COMMITTED so far
+                cur.execute("SELECT alert_attempted_at, alerted_at FROM client_problems WHERE kind='nak'")
+                seen["row"] = cur.fetchone()
+                cur.execute("SELECT setting_value FROM settings WHERE setting_key='client_problems_wm:1'")
+                seen["wm"] = cur.fetchone()
+            calls["alerts"].append((alert_type, subnet_id, kw))
+            return [("telegram", True, "")]
+
+        import jen.services.alerts as alerts_mod
+
+        original = alerts_mod.send_alert
+        alerts_mod.send_alert = send_and_look
+        try:
+            cp.sweep(NOW, servers=[SERVER_A])
+        finally:
+            alerts_mod.send_alert = original
+        assert seen["row"]["alert_attempted_at"] is not None and seen["row"]["alerted_at"] is None
+        assert seen["wm"] and seen["wm"]["setting_value"], "the watermark moved with the events, before the send"
+
+    def test_a_database_failure_after_a_good_read_is_not_a_missed_read(self, db, stack, monkeypatch):
+        logs, calls = stack
+        prime(logs)
+        logs[1] = [nak(1), nak(2), nak(3)]
+
+        def boom(cur, server_id, groups, limit=cp.MAX_NEW_KEYS_PER_SWEEP):
+            raise pymysql.err.OperationalError(2013, "lost connection")
+
+        monkeypatch.setattr(cp, "_cap_new_keys", boom)
+        summary = cp.sweep(NOW, servers=[SERVER_A])
+        assert summary["errors"] and calls["alerts"] == []
+        with db.cursor() as cur:
+            db.commit()
+            cur.execute("SELECT setting_value FROM settings WHERE setting_key='client_problems_miss:1'")
+            miss = cur.fetchone()
+        assert miss is None or miss["setting_value"] in ("0", ""), "the log was read; nothing was missed"
 
 
 class TestTheSweepRecordsWhetherItCanReadEachServer:

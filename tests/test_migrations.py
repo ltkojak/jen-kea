@@ -1046,3 +1046,60 @@ class TestMigration34LeaseHistoryPoolUsed:
             db.commit()
             cur.execute("SHOW COLUMNS FROM lease_history LIKE 'pool_used'")
             assert cur.fetchone() is not None
+
+
+class TestMigration35RemovesTheLegacyTelegramKeys:
+    """v5.69.0-beta.3 (Q172, item 11) - the plaintext bot token the dead save-telegram route wrote goes; nothing else does."""
+
+    KEYS = ("telegram_token", "telegram_chat_id", "telegram_enabled")
+
+    @staticmethod
+    def _put(cur, key, value):
+        cur.execute(
+            "INSERT INTO settings (setting_key, setting_value) VALUES (%s, %s) ON DUPLICATE KEY UPDATE setting_value=%s",
+            (key, value, value),
+        )
+
+    @staticmethod
+    def _present(cur):
+        cur.execute(
+            "SELECT setting_key FROM settings WHERE setting_key IN ('telegram_token', 'telegram_chat_id', 'telegram_enabled', 'q172_keep')"
+        )
+        return sorted(r["setting_key"] for r in cur.fetchall())
+
+    def test_migration_recorded_and_it_is_a_new_numbered_one(self):
+        assert 35 in applied_versions()
+        by_version = {v: fn.__name__ for v, _d, fn in MIGRATIONS}
+        assert by_version[35] == "_m035_remove_legacy_telegram_settings" and MIGRATIONS[-1][0] >= 35
+
+    def test_it_removes_the_three_keys_and_nothing_else(self):
+        from jen.models.migrations import _m035_remove_legacy_telegram_settings
+
+        with jen_db() as db, db.cursor() as cur:
+            for key in self.KEYS:
+                self._put(cur, key, "x")
+            self._put(cur, "q172_keep", "kept")
+            db.commit()
+            _m035_remove_legacy_telegram_settings(db)
+            db.commit()
+            assert self._present(cur) == ["q172_keep"]
+            cur.execute("DELETE FROM settings WHERE setting_key='q172_keep'")
+            db.commit()
+
+    def test_an_interruption_between_its_statements_is_finished_by_the_next_run(self):
+        from jen.models.migrations import _m035_remove_legacy_telegram_settings
+
+        with jen_db() as db, db.cursor() as cur:
+            for key in self.KEYS:
+                self._put(cur, key, "x")
+            cur.execute(
+                "DELETE FROM settings WHERE setting_key='telegram_token'"
+            )  # the state a crash after the first DELETE leaves
+            db.commit()
+            assert self._present(cur) == ["telegram_chat_id", "telegram_enabled"]
+            _m035_remove_legacy_telegram_settings(db)
+            db.commit()
+            assert self._present(cur) == []
+            _m035_remove_legacy_telegram_settings(db)  # and a run on a database that has none of them changes nothing
+            db.commit()
+            assert self._present(cur) == []

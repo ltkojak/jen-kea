@@ -385,6 +385,21 @@ class TestPoolUtilization:
         c = health._pool_utilization(_ctx())
         assert c.status == "fail"
 
+    def test_near_exhaustion_is_the_alerts_own_definition_free_addresses_not_a_flat_95_percent(self, db):
+        """v5.69.0-beta.3 (Q172, item 10; DEF-002): `pool_exhaustion_free` addresses or fewer left is exhaustion - five of a small pool, not 95 % of a large one."""
+        from jen.models.user import _invalidate_settings_cache, set_global_setting
+
+        set_global_setting("pool_exhaustion_free", "5")
+        _invalidate_settings_cache()
+        self._seed(db, [(1, 15, 20, 5)])  # 75 %, five free: exhausted
+        assert health._pool_utilization(_ctx()).status == "fail"
+        self._seed(db, [(1, 9600, 10000, 5)])  # 96 %, four hundred free: over the utilization threshold, not exhausted
+        c = health._pool_utilization(_ctx())
+        assert c.status == "warn" and "near exhaustion" not in c.detail
+        set_global_setting("pool_exhaustion_free", "500")
+        _invalidate_settings_cache()
+        assert health._pool_utilization(_ctx()).status == "fail", "the setting is the alert's own"
+
     def test_restricted_viewer_only_sees_own(self, db):
         self._seed(db, [(1, 98, 100, 5), (2, 10, 100, 5)])
         c = health._pool_utilization(_ctx(subnet_filter=lambda sid: sid == 2))

@@ -338,3 +338,36 @@ class TestDispatcherStopRace:
         finally:
             release.set()
             wedged.join(5)
+
+
+class TestAHostnameLongerThanTheColumnIsTruncatedNotLost:
+    """v5.69.0-beta.3 (Q172, item 10): events.hostname is VARCHAR(253) and Kea accepts 255; the INSERT failed in strict mode and the row was lost without a word."""
+
+    def test_a_255_character_hostname_is_stored_truncated_with_a_note(self, db):
+        from jen.services import events
+
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM events WHERE mac='aa:bb:cc:dd:ee:72'")
+        db.commit()
+        event_id = events.emit(
+            "lease.new", mac="aa:bb:cc:dd:ee:72", ip="10.0.0.72", hostname="h" * 255, detail="first lease"
+        )
+        assert event_id is not None
+        with db.cursor() as cur:
+            cur.execute("SELECT hostname, detail FROM events WHERE id=%s", (event_id,))
+            row = cur.fetchone()
+            cur.execute("DELETE FROM events WHERE id=%s", (event_id,))
+        db.commit()
+        assert len(row["hostname"]) == 253
+        assert row["detail"].startswith("first lease") and "hostname truncated to 253" in row["detail"]
+
+    def test_a_short_hostname_is_untouched(self, db):
+        from jen.services import events
+
+        event_id = events.emit("lease.new", mac="aa:bb:cc:dd:ee:73", ip="10.0.0.73", hostname="printer", detail="x")
+        with db.cursor() as cur:
+            cur.execute("SELECT hostname, detail FROM events WHERE id=%s", (event_id,))
+            row = cur.fetchone()
+            cur.execute("DELETE FROM events WHERE id=%s", (event_id,))
+        db.commit()
+        assert row == {"hostname": "printer", "detail": "x"}

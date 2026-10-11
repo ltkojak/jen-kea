@@ -92,9 +92,16 @@ def packet_health_widget(servers) -> list[dict]:
             continue
         rows = []
         for r in raw_rows:
-            stats = r["stats"]
-            if isinstance(stats, str):
-                stats = json.loads(stats)
+            try:
+                stats = r["stats"]
+                if isinstance(stats, str):
+                    stats = json.loads(stats)
+            except (TypeError, ValueError):
+                # v5.69.0-beta.3 (Q172): one malformed server_stats row was a 500 for the whole dashboard; it is skipped, the rest still make a reading
+                logger.warning(
+                    f"dashboard packet_health widget (server {s.get('id')}): a snapshot row's stats is not JSON, skipped"
+                )
+                continue
             rows.append({"snapshot_time": r["snapshot_time"], "stats": stats})
         if len(rows) < 2:
             continue
