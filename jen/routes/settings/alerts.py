@@ -7,7 +7,6 @@ Alert channels, templates, and the alert-tuning settings.
 import json
 import logging
 
-import requests
 from flask import flash, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 
@@ -291,8 +290,10 @@ def test_alert_channel(channel_id):
             flash(f"Test message sent successfully to '{channel['channel_name']}'.", "success")
         else:
             flash(f"Test failed for '{channel['channel_name']}'.", "error")
-    except Exception as e:
-        flash(f"Test error: {str(e)}", "error")
+    except Exception:
+        # v5.69.0-beta.2 (Q171): requests puts the URL (a bot token, a webhook secret) in its error text; the flash says only that it failed
+        logger.exception("alert channel test failed")
+        flash(f"Test failed for '{channel['channel_name']}' - the reason is in the Jen log.", "error")
     return redirect(url_for("settings.settings_alerts"))
 
 
@@ -338,6 +339,7 @@ def reset_alert_template():
                 cur.execute("DELETE FROM alert_templates WHERE alert_type=%s", (alert_type,))
             db.commit()
         flash("Template reset to default.", "success")
+        __user.audit("RESET_ALERT_TEMPLATE", alert_type, "Template reset to the default")
     except Exception as e:
         logger.error(f"Error resetting alert template '{alert_type}': {e}")
         flash("Error resetting template. Check server logs for details.", "error")
@@ -365,68 +367,13 @@ def save_alert_global():
     __user.set_global_setting("alert_threshold_pct", threshold)
     __user.set_global_setting("reserved_lease_mode", reserved_lease_mode)
     flash("Global alert settings saved.", "success")
+    __user.audit(
+        "SAVE_ALERT_GLOBAL",
+        "settings",
+        f"summary_time={summary_time} pool_exhaustion_free={pool_free} threshold={threshold}% reserved_lease_mode={reserved_lease_mode}",
+    )
     return redirect(url_for("settings.settings_alerts"))
 
 
-@bp.route("/settings/save-telegram", methods=["POST"])
-@login_required
-@_admin_required
-def save_telegram():
-    token = request.form.get("token", "").strip()
-    chat_id = request.form.get("chat_id", "").strip()
-    threshold = request.form.get("threshold_pct", "80").strip()
-
-    if not threshold.isdigit() or not (1 <= int(threshold) <= 100):
-        flash("Utilization threshold must be between 1 and 100.", "error")
-        return redirect(url_for("settings.settings"))
-
-    settings_map = {
-        "telegram_enabled": "true" if request.form.get("enabled") else "false",
-        "telegram_token": token,
-        "telegram_chat_id": chat_id,
-        "alert_kea_down": "true" if request.form.get("alert_kea_down") else "false",
-        "alert_new_lease": "true" if request.form.get("alert_new_lease") else "false",
-        "alert_utilization": "true" if request.form.get("alert_utilization") else "false",
-        "alert_threshold_pct": threshold,
-    }
-    for k, v in settings_map.items():
-        __user.set_global_setting(k, v)
-    flash("Telegram settings saved.", "success")
-    __user.audit("SAVE_SETTINGS", "telegram", "Telegram settings updated")
-    return redirect(url_for("settings.settings"))
-
-
-@bp.route("/settings/test-telegram", methods=["POST"])
-@login_required
-@_admin_required
-def test_telegram():
-    token = __user.get_global_setting("telegram_token")
-    chat_id = __user.get_global_setting("telegram_chat_id")
-    if not token or not chat_id:
-        flash("Telegram not configured — enter a token and chat ID first.", "error")
-        return redirect(url_for("settings.settings"))
-    try:
-        resp = requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={
-                "chat_id": chat_id,
-                "text": "🔔 <b>Jen Test</b>\nTelegram alerts are working correctly!",
-                "parse_mode": "HTML",
-            },
-            timeout=10,
-        )
-        data = resp.json()
-        if data.get("ok"):
-            flash("Test message sent successfully.", "success")
-        else:
-            error_desc = data.get("description", "Unknown error")
-            error_code = data.get("error_code", "")
-            flash(f"Telegram error {error_code}: {error_desc}", "error")
-    except requests.exceptions.ConnectionError:
-        flash("Could not connect to Telegram API. Check your internet connection.", "error")
-    except requests.exceptions.Timeout:
-        flash("Telegram API request timed out.", "error")
-    except Exception as e:
-        logger.error(f"Unexpected error testing Telegram: {e}")
-        flash("Unexpected error. Check server logs for details.", "error")
-    return redirect(url_for("settings.settings"))
+# v5.69.0-beta.2 (Q171): `/settings/save-telegram` and `/settings/test-telegram` are gone. No template has posted to them since the alert channels moved to the channel table, and
+# they wrote a plaintext bot token into `settings` that no sender reads.

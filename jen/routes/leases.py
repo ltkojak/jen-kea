@@ -40,7 +40,8 @@ def __ip_to_int(ip):
 @login_required
 def leases():
     view_mode = request.args.get("view", "v4")
-    if view_mode == "v6":
+    # v5.69.0-beta.2 (Q171): IPv6 is off until the superadmin turns it on, and a `[subnets6]` section in the config does not turn it on - the view falls back to the v4 page
+    if view_mode == "v6" and __kea6.is_ipv6_enabled():
         return _leases_v6()
 
     subnet_filter = request.args.get("subnet", "all")
@@ -314,7 +315,8 @@ def release_lease():
                     flash(f"No active lease found for {ip}.", "warning")
                     return redirect(url_for("leases.leases"))
                 if not current_user.can_access_subnet(row["subnet_id"]):
-                    flash("You do not have access to that subnet.", "error")
+                    # v5.69.0-beta.2 (Q171): the same sentence and status as an IP with no lease - a different one told a restricted admin which hidden addresses are leased
+                    flash(f"No active lease found for {ip}.", "warning")
                     return redirect(url_for("leases.leases"))
                 cur.execute("UPDATE lease4 SET state=1 WHERE inet_ntoa(address)=%s", (ip,))
                 affected = cur.rowcount

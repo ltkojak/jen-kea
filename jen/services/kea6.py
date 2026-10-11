@@ -36,9 +36,9 @@ logger = logging.getLogger(__name__)
 
 def is_ipv6_enabled() -> bool:
     """
-    The v6 *display* gate — checked before SUBNET6_MAP is ever populated,
-    before any v6 nav item is injected, before any v6 route does anything
-    beyond returning "IPv6 support is not enabled."
+    The v6 gate. `extensions.SUBNET6_MAP` is derived from the config whether or not IPv6 is on (a `[subnets6]` section is enough), so it says what is
+    CONFIGURED, never what is enabled: every v6 view, nav item and write route asks this first (v5.69.0-beta.2, Q171 - the lease, device and reservation lists
+    fall back to their v4 page, and the add/delete reservation and subnet-edit routes answer 404, while it is off).
 
     Deliberately NOT cached on jen.extensions the way KEA_SERVERS etc. are:
     this is a settings-table value (get_global_setting already has its own

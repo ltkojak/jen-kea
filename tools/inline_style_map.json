@@ -54,6 +54,7 @@
  "display:flex;align-items:center;gap:12px": "u-95fd83",
  "display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer": "u-fbdb05",
  "display:flex;align-items:center;gap:8px": "u-015a5e",
+ "display:flex;align-items:center;gap:8px;font-weight:400;cursor:pointer": "u-3a9859",
  "display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px": "u-1bcfaf",
  "display:flex;align-items:flex-start;gap:12px": "u-bae250",
  "display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px;border-radius:6px;cursor:pointer;min-width:52px;border:1px solid var(--border)": "u-d7df59",

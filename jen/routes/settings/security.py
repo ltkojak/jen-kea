@@ -8,7 +8,7 @@ import logging
 import os
 
 from flask import flash, redirect, request, url_for
-from flask_login import login_required
+from flask_login import current_user, login_required
 
 import jen.config as __config
 import jen.models.db as __db
@@ -194,6 +194,8 @@ def remove_cert():
     for f in [extensions.SSL_CERT, extensions.SSL_KEY, extensions.SSL_CA, extensions.SSL_COMBINED]:
         if os.path.exists(f):
             os.remove(f)
+    # v5.69.0-beta.2 (Q171): removing the certificate takes the site back to HTTP - an event the audit log carries like every other change of the serving setup
+    __user.audit("REMOVE_CERT", "ssl", f"Certificate removed by {current_user.username}")
     if __runtime.restart_service() == "none":
         flash("Certificate removed. " + __runtime.RESTART_BY_HAND, "warning")
     else:

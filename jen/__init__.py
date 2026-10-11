@@ -266,7 +266,7 @@ def create_app() -> Flask:
             tv_row = None
             try:
                 with jen_db() as db, db.cursor() as cur:
-                    cur.execute("SELECT token_version FROM users WHERE id=%s", (user_id,))
+                    cur.execute("SELECT token_version, password FROM users WHERE id=%s", (user_id,))
                     tv_row = cur.fetchone()
                 have_current = True
             except Exception as e:
@@ -278,7 +278,19 @@ def create_app() -> Flask:
                     # describes a deleted user.
                     session.pop("_user_cache", None)
                     return None
+                # v5.69.0-beta.2 (Q171): a bump of token_version only REFRESHES a session's cached role and subnets (below), so it can never end a session. A password
+                # change must: the cache carries a fingerprint of the password hash it was opened under, and a session whose fingerprint is not the row's ends here.
+                # A session opened before this release has none: it adopts the row's (one-time) rather than being logged out.
+                from jen.models.user import password_fingerprint
+
+                db_fp = password_fingerprint(tv_row.get("password"))
+                sess_fp = sess_user.get("pw_fp")
+                if sess_fp and sess_fp != db_fp:
+                    session.clear()
+                    return None
                 if tv_row["token_version"] == sess_user.get("token_version", 0):
+                    if not sess_fp:
+                        session["_user_cache"] = {**sess_user, "pw_fp": db_fp}
                     user = User(
                         sess_user["id"],
                         sess_user["username"],
@@ -301,11 +313,13 @@ def create_app() -> Flask:
             with jen_db() as db, db.cursor() as cur:
                 cur.execute(
                     "SELECT id, username, role, session_timeout, subnet_access, "
-                    "token_version, must_change_password FROM users WHERE id=%s",
+                    "token_version, must_change_password, password FROM users WHERE id=%s",
                     (user_id,),
                 )
                 row = cur.fetchone()
             if row:
+                from jen.models.user import password_fingerprint
+
                 user = User(
                     row["id"],
                     row["username"],
@@ -322,6 +336,7 @@ def create_app() -> Flask:
                     "subnet_access": row["subnet_access"],
                     "token_version": row["token_version"],
                     "must_change_password": bool(row["must_change_password"]),
+                    "pw_fp": password_fingerprint(row.get("password")),
                 }
                 _g._cached_user = user
                 return user

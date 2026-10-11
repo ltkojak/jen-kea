@@ -297,7 +297,7 @@ def establish_session(row: dict, detail: str) -> None:
     from flask import session
     from flask_login import login_user
 
-    from jen.models.user import User, audit
+    from jen.models.user import User, audit, password_fingerprint
 
     user = User(
         row["id"],
@@ -320,5 +320,7 @@ def establish_session(row: dict, detail: str) -> None:
         "subnet_access": row.get("subnet_access"),
         "token_version": row.get("token_version", 0),
         "must_change_password": bool(row.get("must_change_password")),
+        # v5.69.0-beta.2 (Q171): the password this session was opened under (`load_user` ends the session when it changes); "" for an SSO row, which never selected one
+        "pw_fp": password_fingerprint(row.get("password")),
     }
     audit("LOGIN", "auth", detail)

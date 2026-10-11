@@ -104,6 +104,16 @@ is written or displayed as configuration. This is the same most-common-bug class
 carried a private copy of the rule, and the ones that carried none (delete-reservation, the three subnet-edit routes, the
 dashboard totals, the Subnets page) leaked.
 
+**What the whole-tree hygiene audit of 5.68.0 settled (v5.69.0-beta.2, Q171).** Six rules, each held by a test named in `docs/SAFETY_INVARIANTS.md`.
+(1) The settings that decide who the superadmins are - where Jen's own database and Kea's database point - and the restart that applies them are superadmin and step-up; an admin who could repoint
+`[jen_db]` and restart would be whatever role that database says (RBAC-003). Creating a subnet, and the DDNS log tail and hostname lookup, need access to every subnet: a log has no per-line subnet
+boundary and the lookup asks the DNS provider about any name. (2) A password change ends every other session of the account: the cached session carries a fingerprint of the password hash it was
+opened under and `load_user` compares it on each request; `token_version` only refreshes a cached role and subnet list and never ends a session (AUTH-001). (3) A request for an object the caller may
+not see answers exactly as one for an object that is not there, on the v4 per-object admin routes as it already did on their v6 twins (RBAC-002). (4) IPv6 is behind the `ipv6_enabled` flag and not
+behind a `[subnets6]` section: with the flag off the lease, device and reservation lists are the v4 page and every v6 write route is a 404. (5) A route never shows what a broad `except` caught - the
+page gets a fixed sentence and the Jen log gets the exception (LEAK-001, sweep S11). (6) What root writes by pathname inside a service-writable directory is written by `mkstemp` + `os.replace`
+(the updater's layout-check cache), and the legacy `sudo tail` is handed only a `*.log` under /var/log, the same wall the helper has.
+
 **Step-up auth (v5.17.0 / Q6).** A live session is not enough for the
 routes that manage a user's own MFA (enroll a second factor, regenerate
 backup codes, add/remove a trusted device, an admin's MFA reset).

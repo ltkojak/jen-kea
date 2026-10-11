@@ -174,7 +174,9 @@
         <span class="card-title">{{ icon("refresh-cw") }} Restart Jen</span>
         {% if restart_pending %}<span class="badge u-9741b3">Restart pending</span>{% endif %}
     </div>
-    {% if is_systemd_host %}
+    {% if is_systemd_host and current_user.role != 'superadmin' %}
+    <p class="u-ec76a1">Only a superadmin restarts Jen.</p>
+    {% elif is_systemd_host %}
     <p class="u-ec76a1">Restarts the <code>jen</code> service. Takes a few seconds; in-flight requests finish first.</p>
     <form method="POST" action="/settings/infrastructure/restart" data-confirm="Restart Jen now?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn {% if restart_pending %}btn-warning{% else %}btn-secondary{% endif %}">{{ icon("refresh-cw") }} Restart Jen</button>

@@ -256,7 +256,7 @@ function openAddModal() {
 function openEditModal(id, username, role, subnetIds, timeout, mfaEnrolled, isSelf, isOidc, externalId) {
     document.getElementById('edit-username-label').textContent = username;
     document.getElementById('edit-form').action = '/users/edit/' + id;
-    document.getElementById('reset-mfa-form').action = '/users/reset-mfa/' + id;
+    document.getElementById('reset-mfa-form').action = '/mfa/admin-reset/' + id;
     document.getElementById('delete-form').action = '/users/delete/' + id;
     document.getElementById('link-sso-form').action = '/users/link-sso/' + id;
 

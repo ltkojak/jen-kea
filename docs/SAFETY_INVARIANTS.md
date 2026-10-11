@@ -164,10 +164,31 @@ caller can.
 
 ### RBAC-002 - A denial and a not-found are one message
 **Rule.** A request for an object the caller may not see answers exactly as one for an object that does not exist; there is no oracle for what a hidden subnet holds.
-**Established.** Q145, Q156.
+**Established.** Q145, Q156, Q171 (the v4 per-object admin routes: lease release, reservation edit and delete, device edit and delete, subnet delete, edit, preview and move).
 **Enforced at.** The routes' shared refusal wording and `access.py`.
 **Tests.**
 - `tests/test_explain_route.py::TestAReservationInAHiddenSubnetIsNotAnOracle`
+- `tests/test_q171_access.py::TestHiddenAndNonexistentAreOneAnswer`
+
+### RBAC-003 - The settings that decide who the superadmins are, and the restart that applies them, are superadmin and step-up
+**Rule.** Where Jen's own database and Kea's database point, and the restart of Jen, are changed only by a superadmin whose password was confirmed in the last ten minutes: an admin who could
+repoint `[jen_db]` at a database of their own and restart Jen would be whatever role that database says. Subnet creation, and the DDNS log and hostname lookup, are for a caller who may see
+every subnet.
+**Established.** Q171.
+**Enforced at.** `@_superadmin_required` + `@_recent_auth_required` on `save_infra_jen_db`, `save_infra_kea_db` and `restart_jen`; `current_user.all_subnets` in `add_subnet`, `add_subnet_post` and
+the DDNS status context.
+**Tests.**
+- `tests/test_q171_access.py::TestDatabaseCardsAndRestartAreSuperadminWithStepUp`
+- `tests/test_q171_access.py::TestAddSubnetNeedsEverySubnet`
+- `tests/test_q171_access.py::TestDdnsStatusIsScoped`
+
+### AUTH-001 - A password change ends every other session of the account
+**Rule.** A session carries a fingerprint of the password hash it was opened under; `load_user` ends the session on its next request when the row's fingerprint is no longer the same, and the session
+that made the change is rebuilt and stays. `token_version` moves in the same statement (it refreshes a cached role or subnet list; it never ends a session by itself).
+**Established.** Q171.
+**Enforced at.** `jen/__init__.py` `load_user`, `jen/models/user.py` `password_fingerprint`, `jen/services/oidc.py` `establish_session`.
+**Tests.**
+- `tests/test_q171_access.py::TestAPasswordChangeEndsTheOtherSessions`
 
 ### DEF-001 - One definition of a current lease, used everywhere
 **Rule.** What counts as a current lease is spelled one way (`jen/services/leases_sql.py`) and every query that means it uses that spelling.
@@ -210,7 +231,9 @@ caller can.
 **Tests.**
 - `tests/test_invariant_sweeps.py::TestS1SecretsArePrivateFromTheirFirstByte`
 - `tests/test_invariant_sweeps.py::TestS2NoLiveFileIsMovedAwayBeforeItsReplacementExists`
-- `tests/test_invariant_sweeps.py::TestS9TheRootInstallerTrustsOnlyTheTarballAndItsOwnSnapshots`
+- `tests/test_invariant_sweeps.py::TestS9TheRootInstallerTrustsOnlyTheTarballAndItsOwnSnapshots` (Q171: the updater opens no path for writing that is not reviewed; the layout-check cache is written by `mkstemp` + `os.replace`)
+- `tests/test_jen_update_root.py::TestLayoutCheckCacheIsWrittenByReplacement`
+- `tests/test_q171_access.py::TestDdnsLogPathStaysInsideVarLog` (the legacy `sudo tail` is handed only a `*.log` under /var/log)
 - `tests/test_private_write_tool.py::TestItRefusesToFollowOrReplaceALink`
 
 ### MIG-001 - Every DDL statement has its own guard, and an interrupted migration re-runs to the final schema
@@ -249,6 +272,16 @@ fails CLOSED there (a refusal, not a permission). A failed settings read answers
 **Enforced at.** The sweep S10 over the listed modules; `settings_ever_loaded` in `jen/models/user.py`.
 **Tests.**
 - `tests/test_invariant_sweeps.py::TestS10FailedReadsOnSecurityPathsAreNotEmptyResults`
+
+### LEAK-001 - A route never shows what a broad `except` caught
+**Rule.** In `jen/routes/`, the name bound by `except Exception as e` is used only to log or to name its class: the text of a driver, `requests` or SSH error carries URLs with their query strings, account and
+host names and paths. The reviewed list is empty.
+**Established.** Q171 (sweep S11; the older line scanner in `test_no_raw_exception_leaks.py` stays).
+**Enforced at.** The route that catches: `logger.exception(...)` and a fixed sentence.
+**Tests.**
+- `tests/test_invariant_sweeps.py::TestS11ARouteNeverShowsWhatABroadExceptCaught`
+- `tests/test_q171_access.py::TestDdnsLookupErrorNeverCarriesTheProviderUrl`
+- `tests/test_no_raw_exception_leaks.py::TestNoUnexplainedRawExceptionLeaksInRoutes`
 
 ### STATE-001 - A new state on a stored object is a definition
 **Rule.** Adding a state, flag or field to a stored object changes what the object means: every reader handles it, pinned by a source test over every reader of the object.

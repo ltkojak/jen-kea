@@ -196,7 +196,12 @@ def setup_connect():
             for a in guessed:
                 flash(f"Also tried {a['url']} (a control socket's default port): {a['error']}.", "error")
         if not db_ok:
-            flash(f"Could not reach Kea's database: {db_info}.", "error")
+            # v5.69.0-beta.2 (Q171): a driver message names the account and the host the probe tried; the page says which part failed, the log says why
+            logger.warning("setup: Kea's database was not reachable: %s", db_info)
+            flash(
+                "Could not reach Kea's database - check the host, port, account and password; the reason is in the Jen log.",
+                "error",
+            )
         return render_template("setup_connect.html", progress=_progress(), **retry_ctx)
 
     __setup.save_connection(

@@ -7,14 +7,16 @@
     <p>Kea's DNS-update pipeline — provider integrations and D2 (kea-dhcp-ddns), side by side.</p>
 </div>
 
-{% set ddns_tabs = [
-    {'id': 'status', 'label': 'Status', 'url': '/ddns?tab=status'},
+{% set ddns_tabs = [{'id': 'status', 'label': 'Status', 'url': '/ddns?tab=status'}] %}
+{% if current_user.role != 'viewer' %}
+{% set ddns_tabs = ddns_tabs + [
     {'id': 'naming', 'label': 'Naming (dhcp4)', 'url': '/ddns?tab=naming'},
     {'id': 'd2config', 'label': 'D2 Configuration', 'url': '/ddns?tab=d2config'},
     {'id': 'verify', 'label': 'Verify', 'url': '/ddns?tab=verify'},
     {'id': 'reconcile', 'label': 'Reconcile', 'url': '/ddns/reconcile'},
 ] %}
-{{ subtabs(ddns_tabs, tab) }}
+{% endif %}
+{% if ddns_tabs|length > 1 %}{{ subtabs(ddns_tabs, tab) }}{% endif %}
 
 {% if tab == 'naming' %}
 
@@ -351,6 +353,7 @@
 
 {% else %}
 
+{% if show_log %}
 <div class="u-911b26">
 
 <div class="card">
@@ -409,6 +412,7 @@
 </div>
 
 </div>
+{% endif %}
 
 <div class="card">
     <div class="card-header"><span class="card-title">{{ icon("radio-tower") }} dhcp4 → D2</span></div>
@@ -444,6 +448,7 @@
     {% endif %}
 </div>
 
+{% if show_log %}
 <div class="card">
     <div class="card-header"><span class="card-title">{{ icon("file-text") }} Recent Log Activity</span></div>
     {% if lines %}
@@ -457,6 +462,7 @@
     <div class="u-c92bea">No log data available. Check that the DDNS log path is configured correctly.</div>
     {% endif %}
 </div>
+{% endif %}
 
 {% endif %}
 {% endblock %}

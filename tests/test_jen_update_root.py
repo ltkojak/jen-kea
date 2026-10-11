@@ -3365,3 +3365,49 @@ class TestPluginDepsRequests:
         # as jen-kea-helper's op table: a registry entry can only ever ask
         # for a package this exact Jen version already agreed to install.
         assert frozenset({"nmap", "iputils-ping", "snmp"}) == jen_update_root._DEPS_ALLOWED_PACKAGES
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks and fchmod are POSIX")
+class TestLayoutCheckCacheIsWrittenByReplacement:
+    """v5.69.0-beta.2 (Q171): root writes the layout-check cache inside the service-owned data directory; a planted symlink at that name must not make root truncate or re-mode
+    whatever it points at."""
+
+    def _point(self, jen_update_root, monkeypatch, tmp_path):
+        data = tmp_path / "data"
+        data.mkdir()
+        cache = data / ".layout-check-result"
+        monkeypatch.setattr(jen_update_root, "LAYOUT_CHECK_CACHE", str(cache))
+        return data, cache
+
+    def test_a_symlink_at_the_cache_path_leaves_its_target_untouched(self, jen_update_root, monkeypatch, tmp_path):
+        data, cache = self._point(jen_update_root, monkeypatch, tmp_path)
+        target = tmp_path / "sudoers"
+        target.write_text("root ALL=(ALL) ALL\n")
+        os.chmod(target, 0o440)
+        os.symlink(target, cache)
+        jen_update_root._write_layout_check_cache(True, "")
+        assert target.read_text() == "root ALL=(ALL) ALL\n"
+        assert stat.S_IMODE(os.stat(target).st_mode) == 0o440
+        assert os.path.islink(cache), "the planted link was followed or replaced"
+        assert [p.name for p in data.iterdir()] == [".layout-check-result"], "a temp file was left behind"
+
+    def test_a_directory_or_fifo_at_the_cache_path_is_refused(self, jen_update_root, monkeypatch, tmp_path):
+        data, cache = self._point(jen_update_root, monkeypatch, tmp_path)
+        cache.mkdir()
+        jen_update_root._write_layout_check_cache(True, "")
+        assert cache.is_dir() and list(cache.iterdir()) == []
+
+    def test_a_regular_file_is_replaced_whole_and_is_0644(self, jen_update_root, monkeypatch, tmp_path):
+        data, cache = self._point(jen_update_root, monkeypatch, tmp_path)
+        cache.write_text("error: old and longer than the new text\n")
+        os.chmod(cache, 0o600)
+        jen_update_root._write_layout_check_cache(True, "")
+        assert cache.read_text() == "ok\n"
+        assert stat.S_IMODE(os.stat(cache).st_mode) == 0o644
+        jen_update_root._write_layout_check_cache(False, "no")
+        assert cache.read_text() == "error: no\n"
+        assert [p.name for p in data.iterdir()] == [".layout-check-result"]
+
+    def test_a_missing_directory_is_advisory(self, jen_update_root, monkeypatch, tmp_path):
+        monkeypatch.setattr(jen_update_root, "LAYOUT_CHECK_CACHE", str(tmp_path / "nope" / ".layout-check-result"))
+        jen_update_root._write_layout_check_cache(True, "")

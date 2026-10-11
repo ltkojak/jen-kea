@@ -143,6 +143,22 @@ def valid_remote_path(value):
     return bool(SAFE_REMOTE_PATH_RE.match(value))
 
 
+def valid_log_path(value):
+    """A log file Jen may ask a Kea host to read (v5.69.0-beta.2, Q171): an absolute, already-normalised `*.log` path directly under /var/log - the rule the Kea host
+    helper's `_allowed_log_path` applies (it also resolves symlinks, which only the host can do), so a path Jen accepts here is one the helper accepts and a path outside
+    /var/log is never handed to the legacy `sudo tail`, which has no wall of its own."""
+    import posixpath
+
+    return (
+        isinstance(value, str)
+        and valid_remote_path(value)
+        and value.startswith("/var/log/")
+        and value.endswith(".log")
+        and posixpath.normpath(value) == value
+        and ".." not in value.split("/")
+    )
+
+
 def valid_shared_network_name(value):
     """A Kea shared-network name (v5.15.0). Travels only in POST form
     fields, never a URL segment — letters/digits/`_.-`, 1-64 chars,
@@ -268,11 +284,14 @@ def record_login_attempt(ip, username):
 def clear_login_attempts(ip, username):
     """v5.17.0 (Q6 6F) — synchronous. A single scoped DELETE; the
     fire-and-forget thread only saved microseconds and made "did the
-    lockout counter actually reset?" untestable without a sleep."""
+    lockout counter actually reset?" untestable without a sleep.
+
+    v5.69.0-beta.2 (Q171): the (ip, username) PAIR only. It used to be `ip OR username`, so one person's success from a shared or NAT address wiped the failures
+    recorded against every other account from that address - a brute force against `admin` was reset by a viewer logging in from the same office."""
     try:
         with __jen_db_ctx() as db:
             with db.cursor() as cur:
-                cur.execute("DELETE FROM login_attempts WHERE ip_address=%s OR username=%s", (ip, username))
+                cur.execute("DELETE FROM login_attempts WHERE ip_address=%s AND username=%s", (ip, username))
             db.commit()
     except Exception as e:
         logger.error(f"Rate limit clear error: {e}")

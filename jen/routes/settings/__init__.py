@@ -357,6 +357,10 @@ def save_mfa_mode():
     if mode not in ("off", "optional", "required_admins", "required_all"):
         flash("Invalid MFA mode.", "error")
         return redirect(url_for("settings.settings_security"))
+    # v5.69.0-beta.2 (Q171): an admin may make the policy STRICTER, never switch it off - "off" lifts the second factor from every account including the superadmins'
+    if mode == "off" and current_user.role != "superadmin":
+        flash("Only a superadmin can switch MFA off.", "error")
+        return redirect(url_for("settings.settings_security"))
     __user.set_global_setting("mfa_mode", mode)
     labels = {
         "off": "Off",

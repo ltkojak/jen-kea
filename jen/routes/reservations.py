@@ -12,6 +12,7 @@ import logging
 from flask import (
     Blueprint,
     Response,
+    abort,
     flash,
     redirect,
     render_template,
@@ -53,7 +54,8 @@ def __ip_to_int(ip):
 @login_required
 def reservations():
     view_mode = request.args.get("view", "v4")
-    if view_mode == "v6":
+    # v5.69.0-beta.2 (Q171): IPv6 is off until the superadmin turns it on, and a `[subnets6]` section in the config does not turn it on - the view falls back to the v4 page
+    if view_mode == "v6" and __kea6.is_ipv6_enabled():
         return _reservations_v6()
 
     subnet_filter = request.args.get("subnet", "all")
@@ -477,11 +479,9 @@ def edit_reservation(host_id):
                 (host_id,),
             )
             host = cur.fetchone()
-            if not host:
+            # v5.69.0-beta.2 (Q171): a reservation in a subnet the caller may not see is answered exactly as one that does not exist
+            if not host or not current_user.can_access_subnet(host["subnet_id"]):
                 flash("Reservation not found.", "error")
-                return redirect(url_for("reservations.reservations"))
-            if not current_user.can_access_subnet(host["subnet_id"]):
-                flash("You do not have access to that subnet.", "error")
                 return redirect(url_for("reservations.reservations"))
             mac = ":".join(host["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if host["mac_hex"] else ""
             cur.execute("SELECT formatted_value FROM dhcp4_options WHERE host_id=%s AND code=6", (host_id,))
@@ -515,11 +515,9 @@ def edit_reservation_post(host_id):
                 (host_id,),
             )
             host = cur.fetchone()
-            if not host:
+            # v5.69.0-beta.2 (Q171): a reservation in a subnet the caller may not see is answered exactly as one that does not exist
+            if not host or not current_user.can_access_subnet(host["subnet_id"]):
                 flash("Reservation not found.", "error")
-                return redirect(url_for("reservations.reservations"))
-            if not current_user.can_access_subnet(host["subnet_id"]):
-                flash("You do not have access to that subnet.", "error")
                 return redirect(url_for("reservations.reservations"))
             mac = ":".join(host["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if host["mac_hex"] else ""
             __kea.kea_command(
@@ -584,13 +582,14 @@ def delete_reservation(host_id):
                 (host_id,),
             )
             host = cur.fetchone()
-            if host and not current_user.can_access_subnet(host["subnet_id"]):
+            # v5.69.0-beta.2 (Q171): hidden and nonexistent are ONE answer (the same sentence, the same status, the same redirect)
+            if not host or not current_user.can_access_subnet(host["subnet_id"]):
                 if is_htmx:
                     return (
-                        '<tr><td colspan="7" style="color:var(--danger);padding:8px;">You do not have access to that subnet.</td></tr>',
-                        403,
+                        '<tr><td colspan="7" style="color:var(--danger);padding:8px;">Reservation not found.</td></tr>',
+                        404,
                     )
-                flash("You do not have access to that subnet.", "error")
+                flash("Reservation not found.", "error")
                 return redirect(url_for("reservations.reservations"))
             if host:
                 mac = ":".join(host["mac_hex"][i : i + 2] for i in range(0, 12, 2)) if host["mac_hex"] else ""
@@ -630,12 +629,19 @@ def delete_reservation(host_id):
 # ── v6 write-side (Phase 3) ──────────────────────────────────────────────────
 
 
+def _require_ipv6():
+    """A v6 write answers 404 while IPv6 is off, whatever `[subnets6]` says (v5.69.0-beta.2, Q171): these routes edit Kea's dhcp6 reservations."""
+    if not __kea6.is_ipv6_enabled():
+        abort(404)
+
+
 @bp.route("/reservations/add6")
 @login_required
 @_admin_required
 def add_reservation6():
     """v5.0 Phase 3 — add a v6 host reservation form. Superadmin/admin
     only, same gating as the v4 add flow."""
+    _require_ipv6()
     subnet6_map = accessible_subnet6_map()
     if not subnet6_map:
         flash("No IPv6 subnets are configured.", "error")
@@ -664,6 +670,7 @@ def add_reservation6_post():
     (IA_PD), or both on the same DUID at once — the genuine one-to-many
     shape the read side already represents, not retrofitted here.
     """
+    _require_ipv6()
     duid = request.form.get("duid", "").strip()
     hostname = request.form.get("hostname", "").strip()[:253]
     address = request.form.get("address", "").strip()
@@ -749,6 +756,7 @@ def delete_reservation6():
     v4 delete flow's host_id-in-URL pattern but keyed differently since
     v6 reservations don't have a single-column host_id shortcut exposed
     in the read layer today)."""
+    _require_ipv6()
     duid = request.form.get("duid", "").strip()
     try:
         subnet_id = int(request.form.get("subnet_id", 0))

@@ -285,8 +285,14 @@ def mfa_enroll():
             if not secret or not code:
                 flash("Missing secret or code.", "error")
                 return redirect(url_for("mfa_routes.mfa_enroll"))
-            totp = pyotp.TOTP(secret)
-            if not totp.verify(code, valid_window=1):
+            # v5.69.0-beta.2 (Q171): `secret` is a form field; one that is not base32 made pyotp raise out of the view (a 500 for any signed-in user)
+            try:
+                totp = pyotp.TOTP(secret)
+                code_ok = totp.verify(code, valid_window=1)
+            except Exception:
+                flash("The secret is not valid base32.", "error")
+                return redirect(url_for("mfa_routes.mfa_enroll"))
+            if not code_ok:
                 flash("Invalid verification code. Please try again.", "error")
                 return redirect(url_for("mfa_routes.mfa_enroll"))
             try:
@@ -658,16 +664,23 @@ def revoke_all_trusted_devices():
 @_superadmin_required
 @_recent_auth_required()
 def admin_reset_mfa(user_id):
+    """The one route that wipes a user's MFA enrollment so they can re-enroll on next login (v5.69.0-beta.2, Q171: the Users page posts here; the second, step-up-less
+    `/users/reset-mfa/<id>` was removed). Every method is DELETED, passkeys, backup codes and trusted devices with it; an id that is not an account says so."""
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
+                cur.execute("SELECT username FROM users WHERE id=%s", (user_id,))
+                row = cur.fetchone()
+                if not row:
+                    flash("User not found.", "error")
+                    return redirect(url_for("users.users"))
                 cur.execute("DELETE FROM mfa_methods WHERE user_id=%s", (user_id,))
                 cur.execute("DELETE FROM webauthn_credentials WHERE user_id=%s", (user_id,))  # v5.31.0
                 cur.execute("DELETE FROM mfa_backup_codes WHERE user_id=%s", (user_id,))
                 cur.execute("DELETE FROM mfa_trusted_devices WHERE user_id=%s", (user_id,))
             db.commit()
-        flash(f"MFA reset for user ID {user_id}.", "success")
-        __user.audit("ADMIN_RESET_MFA", str(user_id), f"Reset by {current_user.username}")
+        flash(f"MFA reset for user '{row['username']}'. They will need to re-enroll.", "success")
+        __user.audit("ADMIN_RESET_MFA", row["username"], f"Reset by {current_user.username}")
     except Exception as e:
         logger.error(f"Error resetting MFA for user {user_id}: {e}")
         flash("Error resetting MFA. Check server logs for details.", "error")

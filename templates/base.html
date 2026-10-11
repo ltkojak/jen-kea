@@ -862,10 +862,14 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         <span style="font-size:13px;">
             {{ icon("triangle-alert") }} <strong>Jen restart required</strong> — changes will not take effect until Jen is restarted.
         </span>
+        {% if current_user.role == 'superadmin' %}
         <form method="POST" action="/settings/infrastructure/restart" style="margin:0;">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-sm btn-warning">{{ icon("refresh-cw") }} Restart Jen Now</button>
         </form>
+        {% else %}
+        <span>A superadmin restarts Jen.</span>
+        {% endif %}
     </div>
     {% endif %}
     {% if investigation_banner %}

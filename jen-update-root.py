@@ -380,10 +380,29 @@ LAYOUT_CHECK_CACHE = os.path.join(CONTENT_DIR, ".layout-check-result")
 
 
 def _write_layout_check_cache(ok, result):
+    """v5.69.0-beta.2 (Q171): CONTENT_DIR is service-owned and this runs as root, so the file is never opened by its pathname: an existing entry that is not a regular file
+    (a symlink the service planted, a directory, a FIFO) is left alone and logged, and the new content is written to a fresh `mkstemp` file in the same directory, made 0644
+    on its own descriptor, and moved over the name with `os.replace` - a rename replaces what is AT the name and never follows it, so nothing the service pointed a link at is
+    truncated or re-moded. A failure stays advisory."""
     try:
-        with open(LAYOUT_CHECK_CACHE, "w", encoding="utf-8") as f:
-            f.write("ok\n" if ok else f"error: {result}\n")
-        os.chmod(LAYOUT_CHECK_CACHE, 0o644)
+        try:
+            existing = os.lstat(LAYOUT_CHECK_CACHE)
+        except FileNotFoundError:
+            existing = None
+        if existing is not None and not stat.S_ISREG(existing.st_mode):
+            log(f"WARNING: {LAYOUT_CHECK_CACHE} is not a regular file - the layout-check cache was not written.")
+            return
+        fd, tmp = tempfile.mkstemp(prefix=".layout-check-", dir=os.path.dirname(LAYOUT_CHECK_CACHE))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write("ok\n" if ok else f"error: {result}\n")
+                f.flush()
+                os.fchmod(f.fileno(), 0o644)
+            os.replace(tmp, LAYOUT_CHECK_CACHE)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+            raise
     except OSError:
         pass  # advisory cache — never let a write failure block the real check
 

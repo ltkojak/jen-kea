@@ -14,6 +14,7 @@ from flask import Blueprint, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 
 import jen.services.onboarding as __onboarding
+from jen.services.access import _same_origin_path
 from jen.services.access import admin_required as _admin_required
 from jen.services.access import is_superadmin as _is_superadmin
 from jen.services.access import superadmin_required as _superadmin_required
@@ -36,4 +37,5 @@ def getting_started():
 @_superadmin_required
 def dismiss():
     __onboarding.dismiss()
-    return redirect(request.referrer or url_for("onboarding.getting_started"))
+    # v5.69.0-beta.2 (Q171): the Referer header is the caller's to set; only a path on this host is followed back
+    return redirect(_same_origin_path(request.referrer) or url_for("onboarding.getting_started"))

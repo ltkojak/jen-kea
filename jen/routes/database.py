@@ -581,8 +581,10 @@ def backup_now():
             dbexport._write_meta_sidecar(path, meta)
             results.append((True, f"Jen backup saved: {os.path.basename(path)}"))
             __user.audit("DB_BACKUP_MANUAL", "jen", path)
-        except Exception as e:
-            results.append((False, f"Jen backup failed: {e}"))
+        except Exception:
+            # v5.69.0-beta.2 (Q171): the page gets a fixed sentence; the reason (a path, a driver message) is in the Jen log
+            logger.exception("manual Jen backup failed")
+            results.append((False, "Jen backup failed - the reason is in the Jen log."))
     if "kea" in include:
         try:
             # v5.67.0-beta.11 (Q123) — the reservations_all group (IPv4 and IPv6), streamed through
@@ -593,8 +595,9 @@ def backup_now():
             dbexport._write_meta_sidecar(path, meta)
             results.append((True, f"{dbexport.KEA_BACKUP_LABEL} backup saved: {os.path.basename(path)}"))
             __user.audit("DB_BACKUP_MANUAL", "kea", path)
-        except Exception as e:
-            results.append((False, f"{dbexport.KEA_BACKUP_LABEL} backup failed: {e}"))
+        except Exception:
+            logger.exception("manual Kea backup failed")
+            results.append((False, f"{dbexport.KEA_BACKUP_LABEL} backup failed - the reason is in the Jen log."))
     for ok, msg in results:
         flash(msg, "success" if ok else "error")
     return redirect(url_for("database.database", tab="backups"))
@@ -929,8 +932,10 @@ def migrate_run():
                 results = dbexport.migrate_kea(host, port, user, pw, db, kea_grp, _progress, target_ssl_ca=ca)
             q.put(("done", results))
             __user.audit("DB_MIGRATE", which, f"target={host}/{db} tables={tables or 'all'}")
-        except Exception as e:
-            q.put(("error", str(e)))
+        except Exception:
+            # the stream is read by the browser: a driver message can name the target host's account and schema (v5.69.0-beta.2, Q171)
+            logger.exception("database migration failed")
+            q.put(("error", "failed: see the Jen log"))
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()

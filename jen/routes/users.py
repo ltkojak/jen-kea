@@ -270,10 +270,12 @@ def add_user():
     subnet_ids_raw = request.form.getlist("subnet_ids")
     subnet_access = None
     if subnet_ids_raw and "all" not in subnet_ids_raw and role != "superadmin":
-        try:
-            subnet_access = _json.dumps([int(s) for s in subnet_ids_raw])
-        except Exception:
-            subnet_access = None
+        # v5.69.0-beta.2 (Q171): a value that is not a whole number used to raise and fall back to None - an UNRESTRICTED account - while the edit routes read the same
+        # list as "no access". Fail closed: the form is refused whole, and what is stored is only ever a list of the numbers submitted.
+        if not all(s.isdigit() for s in subnet_ids_raw):
+            flash("Subnet ids must be numbers.", "error")
+            return users(), 400
+        subnet_access = _json.dumps([int(s) for s in subnet_ids_raw])
     timeout_val = None
     if timeout_raw and timeout_raw.isdigit() and 1 <= int(timeout_raw) <= 1440:
         timeout_val = int(timeout_raw)
@@ -389,12 +391,14 @@ def change_password():
     new_pw = request.form.get("new_password", "")
     confirm_pw = request.form.get("confirm_password", "")
 
+    # v5.69.0-beta.2 (Q171): a failure goes back to the profile this form lives on - the Users page is superadmin-only, so a viewer or admin got "SuperAdmin access
+    # required" and never saw why their change was refused.
     if new_pw != confirm_pw:
         flash("New passwords do not match.", "error")
-        return redirect(url_for("users.users"))
+        return redirect(url_for("users.user_profile"))
     if len(new_pw) < 8:
         flash("New password must be at least 8 characters.", "error")
-        return redirect(url_for("users.users"))
+        return redirect(url_for("users.user_profile"))
 
     try:
         with __db.jen_db() as db:
@@ -403,9 +407,10 @@ def change_password():
                 row = cur.fetchone()
                 if not row or not __user.verify_password(row["password"], current_pw):
                     flash("Current password is incorrect.", "error")
-                    return redirect(url_for("users.users"))
+                    return redirect(url_for("users.user_profile"))
+                # token_version moves in the same statement, and `load_user` ends every OTHER session whose password fingerprint is no longer the row's
                 cur.execute(
-                    "UPDATE users SET password=%s, must_change_password=0 WHERE id=%s",
+                    "UPDATE users SET password=%s, must_change_password=0, token_version=token_version+1 WHERE id=%s",
                     (__user.hash_password(new_pw), current_user.id),
                 )
             db.commit()
@@ -684,27 +689,5 @@ def edit_user(user_id):
     return redirect(url_for("users.users"))
 
 
-@bp.route("/users/reset-mfa/<int:user_id>", methods=["POST"])
-@login_required
-@_superadmin_required
-def reset_user_mfa(user_id):
-    """SuperAdmin wipes a user's MFA enrollment so they can re-enroll on next login."""
-    try:
-        with __db.jen_db() as db:
-            with db.cursor() as cur:
-                cur.execute("SELECT username FROM users WHERE id=%s", (user_id,))
-                row = cur.fetchone()
-                if not row:
-                    flash("User not found.", "error")
-                    return redirect(url_for("users.users"))
-                cur.execute("UPDATE mfa_methods SET enabled=0 WHERE user_id=%s", (user_id,))
-                cur.execute("DELETE FROM webauthn_credentials WHERE user_id=%s", (user_id,))  # v5.31.0
-                cur.execute("DELETE FROM mfa_backup_codes WHERE user_id=%s", (user_id,))
-                cur.execute("DELETE FROM mfa_trusted_devices WHERE user_id=%s", (user_id,))
-            db.commit()
-        flash(f"MFA for '{row['username']}' has been reset. They will need to re-enroll.", "success")
-        __user.audit("RESET_MFA", row["username"], f"MFA reset by {current_user.username}")
-    except Exception as e:
-        logger.error(f"Error resetting MFA for user {user_id}: {e}")
-        flash("Error resetting MFA. Check server logs for details.", "error")
-    return redirect(url_for("users.users"))
+# v5.69.0-beta.2 (Q171): `/users/reset-mfa/<id>` is gone. It was the route the Users page posted to - superadmin, but with no step-up and with different semantics
+# (the methods disabled, not deleted) from `/mfa/admin-reset/<id>`, the twin that asks for a recent password. There is one route now, in mfa_routes.py.

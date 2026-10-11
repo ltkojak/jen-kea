@@ -90,6 +90,15 @@ class User(UserMixin):
 _SCRYPT_METHOD = "scrypt:32768:8:1"
 
 
+def password_fingerprint(password_hash) -> str:
+    """A short, one-way tag of a stored password hash (v5.69.0-beta.2, Q171). A login's cached session carries it; `load_user` compares it with the row on every request, so a
+    session opened before a password was changed ends on its next request. It reveals nothing: it is the first 16 hex digits of SHA-256 over a salted scrypt hash, and "" for an
+    account with no usable password (a row the caller did not read the password of)."""
+    if not password_hash:
+        return ""
+    return hashlib.sha256(str(password_hash).encode("utf-8")).hexdigest()[:16]
+
+
 def hash_password(p: str) -> str:
     """
     Hash a password with scrypt (werkzeug's current default KDF), pinned

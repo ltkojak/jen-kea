@@ -17,6 +17,8 @@ sweeps re-run, plus the ones the new code needs.
       directory (Q151 / Q119).
   S10 a failed read on a security or safety path is not an empty result: every `except` in the modules that make those decisions whose body returns an
       empty value or passes is on a reviewed list, with the reason it fails CLOSED there (Q166; docs/SAFETY_INVARIANTS.md FAIL-001).
+  S11 a route never shows what a broad `except` caught: the name bound by `except Exception as e` in `jen/routes/` is used only to log or to name its class; the reviewed list is
+      empty (Q171; docs/SAFETY_INVARIANTS.md LEAK-001).
 
 The sweep tests were written FIRST (before the fixes) and are un-xfailed as each fix lands; the commit that lands a fix removes its marker.
 """
@@ -417,6 +419,58 @@ class TestS9TheRootInstallerTrustsOnlyTheTarballAndItsOwnSnapshots:
         text = _read("install.sh")
         assert "_trusted_snapshot" in text and "_root_owned" in text
 
+    # Q171: root writing a file BY PATHNAME opens whatever a service-planted symlink at that name points at (the layout-check cache in the service-owned data
+    # directory truncated and re-moded any file on the box). Every `open(<path>, "w"/"wb"/"a")` in the updater is on this list with the reason its directory is not
+    # the service's to write in; a new one fails until it is argued on, a listed one that is gone fails too. The service-writable data directory's own file is
+    # written by `mkstemp` + `os.replace` (`_write_layout_check_cache`) and is deliberately NOT here.
+    UPDATER_WRITES = {
+        "out_path": "the rendered systemd unit: written into the unit directory root owns, from a template in the release tarball",
+        "signers_path": "inside `tempfile.TemporaryDirectory()`, which root just made 0700",
+        "sig_path": "inside `tempfile.TemporaryDirectory()`, which root just made 0700",
+        "sig_dest": "`<release dir>/jen-kea-helper.sig`: the release directory was extracted by root and is root-owned",
+        "os.path.join(release_dir, '.failed')": "a marker inside the release directory root extracted and owns",
+        "os.path.join(snapshot_dir, KEEP_MARKER)": "a marker inside root's own rollback snapshot directory",
+        "os.path.join(prev_dir, KEEP_MARKER)": "a marker inside a previous release directory, root-owned",
+    }
+
+    def _updater_opens_for_writing(self):
+        import ast
+
+        tree = ast.parse(_read("jen-update-root.py"))
+        found = {}
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "open"):
+                continue
+            mode = None
+            if len(node.args) > 1 and isinstance(node.args[1], ast.Constant):
+                mode = node.args[1].value
+            for kw in node.keywords:
+                if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
+                    mode = kw.value.value
+            if isinstance(mode, str) and mode[:1] in ("w", "a", "x"):
+                found.setdefault(ast.unparse(node.args[0]), []).append(node.lineno)
+        return found
+
+    def test_the_updater_opens_no_path_for_writing_that_is_not_reviewed(self):
+        found = self._updater_opens_for_writing()
+        unreviewed = {k: v for k, v in found.items() if k not in self.UPDATER_WRITES}
+        assert not unreviewed, (
+            "jen-update-root.py runs as root: write by mkstemp + os.replace (or an O_NOFOLLOW|O_EXCL descriptor) when the directory is "
+            f"service-writable, or argue the path onto UPDATER_WRITES: {unreviewed}"
+        )
+
+    def test_the_reviewed_updater_writes_all_still_exist(self):
+        stale = sorted(set(self.UPDATER_WRITES) - set(self._updater_opens_for_writing()))
+        assert not stale, f"UPDATER_WRITES names a write that is gone: {stale}"
+
+    def test_the_layout_check_cache_is_not_written_by_pathname(self):
+        text = _read("jen-update-root.py")
+        body = text[
+            text.index("def _write_layout_check_cache") : text.index("# Mirrors jen/services/plugins.py::_PLUGIN_ID_RE")
+        ]
+        assert "mkstemp" in body and "os.replace" in body and "os.lstat" in body
+        assert "open(LAYOUT_CHECK_CACHE" not in body
+
 
 # ── S10: a failed read on a security or safety path is not an empty result (Q166, FAIL-001) ──────────────────────────────────────────────────────────────
 #
@@ -651,3 +705,82 @@ class TestS10FailedReadsOnSecurityPathsAreNotEmptyResults:
             ("c", "(A, B)", "pass"),
             ("d", "Exception", "return default"),
         }, found
+
+
+# ── S11: a route never shows what a broad `except` caught (Q171) ───────────────────────────────────────────────────────────────────────────────────
+#
+# `str(e)` of a driver, `requests` or SSH error carries URLs with their query strings (a Technitium token, a Telegram bot token), account and host names, file paths. A route that
+# catches `Exception` and then flashes, returns or `put`s it hands those to whoever is looking at the page, and a log is the right place for them. In `jen/routes/` the name bound by
+# `except Exception as e` (or `BaseException`, or a tuple containing either) may be used only to LOG (a `logger.*` / `log.*` call) or to name its class (`type(e)`). Exceptions Jen
+# raises itself with a sentence written for the person (`ConfigChangeRefused`, `GuardedImportError`, `ValueError` from a validator) are caught by their own class and are not this rule's.
+# The reviewed list is EMPTY and stays empty: a site that needs the text of a broad catch does not exist; it needs a narrower except.
+
+S11_ALLOWED: dict = {}
+
+
+def s11_sites(source, rel="<source>"):
+    """[(rel, line, name)] for each use of a broad handler's exception name outside a logging call or `type(...)`."""
+    tree = ast.parse(source)
+    out = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.ExceptHandler) and node.name and node.type is not None):
+            continue
+        caught = [ast.unparse(x) for x in (node.type.elts if isinstance(node.type, ast.Tuple) else [node.type])]
+        if not {"Exception", "BaseException"} & set(caught):
+            continue
+        parents = {}
+        for outer in ast.walk(node):
+            for child in ast.iter_child_nodes(outer):
+                parents[child] = outer
+        for use in ast.walk(node):
+            if not (isinstance(use, ast.Name) and use.id == node.name and isinstance(use.ctx, ast.Load)):
+                continue
+            cur, safe = use, False
+            while cur is not node and cur in parents:
+                cur = parents[cur]
+                if isinstance(cur, ast.Call):
+                    fn = cur.func
+                    if (
+                        isinstance(fn, ast.Attribute)
+                        and isinstance(fn.value, ast.Name)
+                        and fn.value.id in ("logger", "log")
+                    ):
+                        safe = True
+                        break
+                    if isinstance(fn, ast.Name) and fn.id == "type":
+                        safe = True
+                        break
+            if not safe:
+                out.append((rel, use.lineno, node.name))
+    return out
+
+
+class TestS11ARouteNeverShowsWhatABroadExceptCaught:
+    def _sites(self):
+        found = []
+        for path in sorted((ROOT / "jen" / "routes").rglob("*.py")):
+            rel = path.relative_to(ROOT).as_posix()
+            found += s11_sites(path.read_text(encoding="utf-8"), rel)
+        return found
+
+    def test_no_route_uses_a_broad_exceptions_text(self):
+        sites = [s for s in self._sites() if f"{s[0]}:{s[1]}" not in S11_ALLOWED]
+        assert not sites, (
+            "a route uses the exception caught by `except Exception` outside a log call (flash, JSON, a queue, a result row): log it with logger.exception(...) and "
+            f"answer with a fixed sentence, or catch the narrower class Jen raised itself: {sites}"
+        )
+
+    def test_the_reviewed_list_is_empty(self):
+        assert S11_ALLOWED == {}, "S11 has no reviewed exceptions: narrow the except instead"
+
+    def test_the_detector_finds_what_it_is_for(self):
+        src = (
+            "def a():\n try:\n  x()\n except Exception as e:\n  flash(f'bad {e}')\n"
+            "def b():\n try:\n  x()\n except Exception as e:\n  return jsonify(error=str(e))\n"
+            "def c():\n try:\n  x()\n except (OSError, Exception) as e:\n  q.put(('error', str(e)))\n"
+            "def d():\n try:\n  x()\n except Exception as e:\n  logger.warning('no %s', e)\n  flash('fixed')\n"
+            "def e():\n try:\n  x()\n except Exception as e:\n  logger.error(f'no {e}')\n  flash(type(e).__name__)\n"
+            "def f():\n try:\n  x()\n except ValueError as e:\n  flash(str(e))\n"
+            "def g():\n try:\n  x()\n except Exception:\n  logger.exception('no')\n"
+        )
+        assert [(line, name) for _r, line, name in s11_sites(src)] == [(5, "e"), (10, "e"), (15, "e")]

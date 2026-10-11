@@ -500,6 +500,11 @@ var JEN_CHANNELS = {
             </div>
         </div>
 
+        <div class="form-group">
+            <label class="u-3a9859">
+                <input type="checkbox" name="clear_api_token" value="1"> Remove the saved API token / password
+            </label>
+        </div>
         <button type="submit" class="btn btn-primary u-1b0f49">Save DDNS</button>
     </form>
 </div>
@@ -532,7 +537,7 @@ var JEN_CHANNELS = {
             <div class="form-hint">Scrape with: <code>curl -H "Authorization: Bearer &lt;token&gt;" https://.../metrics</code></div>
         </div>
         <div class="form-group">
-            <label style="display:flex;align-items:center;gap:8px;font-weight:400;cursor:pointer;">
+            <label class="u-3a9859">
                 <input type="checkbox" name="metrics_open" value="1" {% if metrics_open %}checked{% endif %}>
                 Allow open access (no token required) — only if <code>/metrics</code> is already restricted at the network or reverse-proxy level
             </label>

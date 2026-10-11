@@ -32,7 +32,7 @@
         <div class="form-group">
             <label>MFA Policy</label>
             <select name="mfa_mode" style="max-width:280px;">
-                <option value="off" {% if mfa_mode=='off' %}selected{% endif %}>Off — MFA not required</option>
+                <option value="off" {% if mfa_mode=='off' %}selected{% endif %} {% if current_user.role != 'superadmin' %}disabled{% endif %}>Off — MFA not required{% if current_user.role != 'superadmin' %} (superadmin only){% endif %}</option>
                 <option value="optional" {% if mfa_mode=='optional' %}selected{% endif %}>Optional — users can enroll if they want</option>
                 <option value="required_admins" {% if mfa_mode=='required_admins' %}selected{% endif %}>Required for Admins</option>
                 <option value="required_all" {% if mfa_mode=='required_all' %}selected{% endif %}>Required for All Users</option>

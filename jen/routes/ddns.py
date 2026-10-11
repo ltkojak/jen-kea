@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 bp = Blueprint("ddns", __name__)
 
 TABS = ("status", "naming", "d2config", "verify")
+LOOKUP_FAILED = "Lookup failed (the provider did not answer)."
 
 
 def _stat_value(args: dict, key: str) -> int:
@@ -83,7 +84,12 @@ def _status_tab_context():
     lines = []
     log_status = "ok"
     log_message = ""
-    if not extensions.KEA_SSH_HOST:
+    # v5.69.0-beta.2 (Q171): D2's log has no per-line subnet boundary Jen can trust, and the Hostname Lookup asks the DNS provider about any name - both are
+    # for a caller who may see every subnet (docs/ARCHITECTURE.md section 2, the rule Trace follows). Everyone else gets the dhcp4 -> D2 table alone.
+    show_log = bool(current_user.all_subnets)
+    if not show_log:
+        pass
+    elif not extensions.KEA_SSH_HOST:
         log_status = "error"
         log_message = "SSH host not configured. Set it in Settings → Kea → SSH."
     else:
@@ -114,7 +120,7 @@ def _status_tab_context():
             log_message = "Could not read DDNS log. Check server logs for details."
             logger.error(f"DDNS error: {e}")
 
-    lookup_host = request.args.get("host", "").strip()
+    lookup_host = request.args.get("host", "").strip() if show_log else ""
     lookup_result = ""
     if lookup_host and not __auth.valid_dns_lookup_host(lookup_host):
         lookup_result = "Invalid hostname or IP address."
@@ -177,11 +183,12 @@ def _status_tab_context():
 
     return {
         "lines": lines,
+        "show_log": show_log,
         "lookup_host": lookup_host,
         "lookup_result": lookup_result,
         "log_status": log_status,
         "log_message": log_message,
-        "ddns_log": extensions.DDNS_LOG,
+        "ddns_log": extensions.DDNS_LOG if show_log else "",
         "dns_provider": extensions.cfg.get("ddns", "dns_provider", fallback="technitium"),
         "mode": mode,
         "server_updates": server_updates,
@@ -284,7 +291,10 @@ def _provider_lookup(lookup_host: str):
 
         return "DNS lookup not configured."
     except Exception as e:
-        return f"Lookup error: {str(e)}"
+        # v5.69.0-beta.2 (Q171): requests puts the URL, query string included, in a ConnectionError's text, and Technitium's token and Pi-hole's auth ride in the
+        # query. The page gets one sentence for every failure; the log gets the class only.
+        logger.warning("DDNS lookup failed (%s)", type(e).__name__)
+        return LOOKUP_FAILED
 
 
 # Kea's own documented defaults for the naming knobs — used to fill in

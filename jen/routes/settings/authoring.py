@@ -73,8 +73,12 @@ def _author_kea_detect(service: str):
                 detected_addresses = __authoring.autodetect_addresses(ssh)
         finally:
             ssh.close()
-    except Exception as e:
-        flash(f"Could not connect to {target_server.get('name', target_server.get('ssh_host'))}: {e}", "error")
+    except Exception:
+        logger.exception("authoring: could not connect to %s", target_server.get("name", target_server.get("ssh_host")))
+        flash(
+            f"Could not connect to {target_server.get('name', target_server.get('ssh_host'))} - the reason is in the Jen log.",
+            "error",
+        )
     return target_server, detected, autodetected_interfaces, ca_socket, detected_addresses
 
 
@@ -549,8 +553,9 @@ def author_kea_config_preview(service):
             server_results.append(row)
             if first_config is None and row["ok"]:
                 first_config = row["config"]
-        except Exception as e:
-            server_results.append({"name": name, "ok": False, "message": str(e)})
+        except Exception:
+            logger.exception("authoring: the check failed on %s", name)
+            server_results.append({"name": name, "ok": False, "message": "The check failed - see the Jen log."})
 
     all_passed = all(r["ok"] for r in server_results) if server_results else True
     return jsonify({"ok": True, "config": first_config, "servers": server_results, "all_passed": all_passed})
@@ -719,8 +724,9 @@ def check_kea_binaries():
             finally:
                 ssh.close()
             results.append({"name": name, "ok": True, **installed})
-        except Exception as e:
-            results.append({"name": name, "ok": False, "error": str(e)})
+        except Exception:
+            logger.exception("authoring: could not list the installed Kea services on %s", name)
+            results.append({"name": name, "ok": False, "error": "Could not check - see the Jen log."})
     return jsonify({"servers": results})
 
 
@@ -746,8 +752,9 @@ def install_kea_binary(service):
         try:
             res = __host.install_package(server, service)
             results.append({"name": name, "ok": res["ok"], "output": res.get("output", res.get("detail", ""))})
-        except Exception as e:
-            results.append({"name": name, "ok": False, "output": str(e)})
+        except Exception:
+            logger.exception("authoring: the Kea package install failed on %s", name)
+            results.append({"name": name, "ok": False, "output": "The install failed - see the Jen log."})
 
     all_ok = bool(results) and all(r["ok"] for r in results)
     __user.audit("INSTALL_KEA_BINARY", service, f"all_ok={all_ok} servers={len(results)}")

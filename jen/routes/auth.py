@@ -450,8 +450,9 @@ def force_password_change():
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
+                # v5.69.0-beta.2 (Q171): token_version moves in the same statement, like every other admin-side change to an account
                 cur.execute(
-                    "UPDATE users SET password=%s, must_change_password=0 WHERE id=%s",
+                    "UPDATE users SET password=%s, must_change_password=0, token_version=token_version+1 WHERE id=%s",
                     (__user.hash_password(new_pw), current_user.id),
                 )
             db.commit()

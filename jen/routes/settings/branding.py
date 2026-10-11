@@ -66,6 +66,7 @@ def upload_favicon():
     os.makedirs(os.path.dirname(extensions.FAVICON_PATH), exist_ok=True)
     try:
         favicon_file.save(extensions.FAVICON_PATH)
+        __user.audit("UPLOAD_FAVICON", "branding", f"Favicon replaced by {current_user.username}")
         flash("Favicon updated.", "success")
     except Exception as e:
         logger.error(f"Error saving favicon: {e}")
@@ -79,6 +80,7 @@ def upload_favicon():
 def remove_favicon():
     if os.path.exists(extensions.FAVICON_PATH):
         os.remove(extensions.FAVICON_PATH)
+        __user.audit("REMOVE_FAVICON", "branding", f"Custom favicon removed by {current_user.username}")
     flash("Custom favicon removed — the default is back.", "success")
     return redirect(url_for("settings.settings_appearance"))
 

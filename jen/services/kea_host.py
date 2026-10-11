@@ -33,6 +33,7 @@ from flask import flash, g, has_request_context
 
 import jen.services.kea6 as __kea6
 import jen.services.kea_authoring as __authoring
+from jen.services.auth import valid_log_path
 
 logger = logging.getLogger(__name__)
 
@@ -1208,6 +1209,10 @@ def _tail_log(server: dict, path: str, lines: int, timeout: int | None, helper_o
                 "detail": "the Kea host helper is not installed on this host",
                 "via": "helper",
             }
+        # v5.69.0-beta.2 (Q171): the legacy grant is `sudo tail` with whatever path it is given, so the wall the helper has is applied here before the command is built -
+        # a [ddns] log_path edited by hand into /etc/shadow is a refusal, never a read.
+        if not valid_log_path(path):
+            raise HelperError(f"legacy tail refused: {path} is outside /var/log") from None
         # v5.28.0 (Q24, B1) — rc replaces the old "err and not out"
         # stdout/stderr-shape guess.
         out, err, rc = _legacy_ssh(server, f"sudo tail -{int(lines)} {shlex.quote(path)}", timeout=timeout or 30)

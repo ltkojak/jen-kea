@@ -241,7 +241,8 @@ def settings_kea():
     infra = {
         "kea_api_url": extensions.cfg.get("kea", "api_url", fallback=""),
         "kea_api_user": extensions.cfg.get("kea", "api_user", fallback=""),
-        "kea_api_pass": extensions.cfg.get("kea", "api_pass", fallback=""),
+        # v5.69.0-beta.2 (Q171): whether a password is saved, never the password - every other password field on these pages already works this way, and the save below keeps a blank
+        "kea_api_pass_set": bool(extensions.cfg.get("kea", "api_pass", fallback="")),
         # v5.10.0 — Kea 3 control plane
         "kea_connection_mode": extensions.cfg.get("kea", "connection_mode", fallback="ca"),
         "kea_api_ca": extensions.cfg.get("kea", "api_ca", fallback=""),
@@ -435,8 +436,11 @@ def save_infra_kea():
 
 @bp.route("/settings/infrastructure/save-kea-db", methods=["POST"])
 @login_required
-@_admin_required
+@_superadmin_required
+@_recent_auth_required(minutes=10)
 def save_infra_kea_db():
+    """v5.69.0-beta.2 (Q171) - which database Jen reads Kea's leases and reservations from is superadmin and step-up, like Jen's own database: an admin who could repoint
+    either would read or write data they were never given."""
     host = request.form.get("host", "").strip()
     user = request.form.get("user", "").strip()
     password = request.form.get("password", "").strip()
@@ -1702,8 +1706,19 @@ def toggle_investigation_logging():
     """v5.68.0-beta.30 (Q167) - investigation logging on demand is early access, off by default. Switching it on or off changes only whether the Turn on buttons exist and `turn_on`
     answers: turning off, the sweep, forget, acknowledge, Health and the Kea host's own timer are never gated, so a session that is already on is still restored and shown."""
     enable = request.form.get("enable", "").strip() == "true"
-    __user.set_global_setting(__inv.ENABLED_KEY, "true" if enable else "false")
-    __user.audit("INVESTIGATION_LOGGING_ENABLED_CHANGED", __inv.ENABLED_KEY, f"enabled={enable}")
+    # v5.69.0-beta.2 (Q171): the setting and its audit row are ONE transaction and the answer is what happened - the page used to say "switched on" when the write had failed
+    if not __user.set_global_setting_and_audit(
+        __inv.ENABLED_KEY,
+        "true" if enable else "false",
+        "INVESTIGATION_LOGGING_ENABLED_CHANGED",
+        __inv.ENABLED_KEY,
+        f"enabled={enable}",
+    ):
+        flash(
+            "The investigation logging switch could not be saved - nothing was changed. The reason is in the Jen log.",
+            "error",
+        )
+        return redirect(url_for("settings.settings_kea"))
     if enable:
         flash("Investigation logging is switched on (early access). Servers and Trace now offer Turn on.", "success")
     else:
@@ -1807,8 +1822,11 @@ def check_config_drift_route():
 
 @bp.route("/settings/infrastructure/save-jen-db", methods=["POST"])
 @login_required
-@_admin_required
+@_superadmin_required
+@_recent_auth_required(minutes=10)
 def save_infra_jen_db():
+    """v5.69.0-beta.2 (Q171) - Jen's own database holds the users table. An admin who could repoint [jen_db] at a database they control and restart Jen would be whatever
+    role that database says: superadmin, and step-up, because this is the one setting that decides who the superadmins are."""
     host = request.form.get("host", "").strip()
     user = request.form.get("user", "").strip()
     password = request.form.get("password", "").strip()
@@ -2048,6 +2066,9 @@ def save_extra_servers():
     return redirect(url_for("settings.settings_kea"))
 
 
+DDNS_PROVIDERS = ("technitium", "pihole", "adguard", "ssh", "generic", "none")
+
+
 @bp.route("/settings/infrastructure/save-ddns", methods=["POST"])
 @login_required
 @_admin_required
@@ -2058,21 +2079,39 @@ def save_infra_ddns():
     api_user = request.form.get("api_user", "").strip()
     api_token = request.form.get("api_token", "").strip()
     forward_zone = request.form.get("forward_zone", "").strip()
-    if log_path and not __auth.valid_remote_path(log_path):
-        flash("Invalid log path — must be an absolute path with no special characters.", "error")
+    if log_path and not __auth.valid_log_path(log_path):
+        flash("Invalid log path — must be an absolute path to a .log file under /var/log.", "error")
         return redirect(url_for("settings.settings_alerts"))
-    items = [("ddns", "dns_provider", dns_provider)]
-    if log_path:
-        items.append(("ddns", "log_path", log_path))
-    if api_url:
-        items.append(("ddns", "api_url", api_url))
-    if api_user:
-        items.append(("ddns", "api_user", api_user))
-    if api_token:
-        items.append(("ddns", "api_token", api_token))
-    if forward_zone:
-        items.append(("ddns", "forward_zone", forward_zone))
-    __config.app_config.write_values(items)
+    if dns_provider not in DDNS_PROVIDERS:
+        flash("Unknown DNS provider.", "error")
+        return redirect(url_for("settings.settings_alerts"))
+    if api_url and not __auth.valid_api_url(api_url):
+        flash("The DNS provider's API URL must start with http:// or https://.", "error")
+        return redirect(url_for("settings.settings_alerts"))
+    # v5.69.0-beta.2 (Q171): a blank field clears its key - the page used to say "saved" and keep the old value, so a provider's URL, user, zone or log path could never
+    # be unset. The token is the one secret here and the page promises "leave blank to keep": it is replaced when typed and removed only by its own checkbox.
+    clear_token = request.form.get("clear_api_token", "") == "1"
+
+    def _apply(cfg):
+        if not cfg.has_section("ddns"):
+            cfg.add_section("ddns")
+        cfg.set("ddns", "dns_provider", dns_provider)
+        for key, value in (
+            ("log_path", log_path),
+            ("api_url", api_url),
+            ("api_user", api_user),
+            ("forward_zone", forward_zone),
+        ):
+            if value:
+                cfg.set("ddns", key, value)
+            else:
+                cfg.remove_option("ddns", key)
+        if api_token:
+            cfg.set("ddns", "api_token", api_token)
+        elif clear_token:
+            cfg.remove_option("ddns", "api_token")
+
+    __config.app_config.mutate(_apply)
     flash("DDNS settings saved.", "success")
     __user.audit("SAVE_INFRA", "ddns", f"log={log_path} provider={dns_provider}")
     return redirect(url_for("settings.settings_alerts"))
@@ -2099,7 +2138,8 @@ def save_ha_settings():
 
 @bp.route("/settings/infrastructure/restart", methods=["POST"])
 @login_required
-@_admin_required
+@_superadmin_required
+@_recent_auth_required(minutes=10)
 def restart_jen():
     # v5.67.0-beta.10 (Q122) — jen.services.runtime.restart_service() picks the restart by deployment
     # (systemd or Docker); on a host that is neither, it says so instead of claiming a restart.

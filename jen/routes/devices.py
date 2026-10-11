@@ -39,7 +39,8 @@ def __ip_to_int(ip):
 @diagnostic_surface(subject="client")
 def devices():
     view_mode = request.args.get("view", "v4")
-    if view_mode == "v6":
+    # v5.69.0-beta.2 (Q171): IPv6 is off until the superadmin turns it on, and a `[subnets6]` section in the config does not turn it on - the view falls back to the v4 page
+    if view_mode == "v6" and __kea6.is_ipv6_enabled():
         return _devices_v6()
 
     # Pagination — default is "all". User can opt-in via per_page param.
@@ -323,8 +324,9 @@ def edit_device(device_id):
             with db.cursor() as cur:
                 cur.execute("SELECT last_subnet_id FROM devices WHERE id=%s", (device_id,))
                 existing = cur.fetchone()
-                if existing and not _may_touch_device(existing.get("last_subnet_id")):
-                    return jsonify({"ok": False, "error": "You do not have access to that device."}), 403
+                # v5.69.0-beta.2 (Q171): a device the caller may not touch is answered as one that does not exist - and an id that does not exist is no longer a success
+                if not existing or not _may_touch_device(existing.get("last_subnet_id")):
+                    return jsonify({"ok": False, "error": "Device not found."}), 404
                 if type_override == "auto" or type_override == "":
                     # Clear manual override (but keep icon override if set)
                     if icon_override:
@@ -417,8 +419,8 @@ def delete_device(device_id):
             with db.cursor() as cur:
                 cur.execute("SELECT last_subnet_id FROM devices WHERE id=%s", (device_id,))
                 existing = cur.fetchone()
-                if existing and not _may_touch_device(existing.get("last_subnet_id")):
-                    flash("You do not have access to that device.", "error")
+                if not existing or not _may_touch_device(existing.get("last_subnet_id")):
+                    flash("Device not found.", "error")
                     return redirect(url_for("devices.devices"))
                 cur.execute("DELETE FROM devices WHERE id=%s", (device_id,))
             db.commit()

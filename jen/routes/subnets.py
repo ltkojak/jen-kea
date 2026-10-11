@@ -10,7 +10,7 @@ import re
 import time
 import uuid
 
-from flask import Blueprint, flash, jsonify, redirect, render_template, request, session, url_for
+from flask import Blueprint, abort, flash, jsonify, redirect, render_template, request, session, url_for
 from flask_login import current_user, login_required
 
 import jen.config as __config
@@ -324,10 +324,38 @@ def _get_kea_subnet_ids():
     return set()
 
 
+_ADD_SUBNET_REFUSED = "Adding a subnet needs access to all subnets."
+
+
+def _overlap_message(network, new_cidr, user=None):
+    """The refusal sentence for a CIDR that overlaps a subnet Jen already knows, or None. A subnet the caller may not see is never named and its CIDR is
+    never printed (docs/ARCHITECTURE.md section 2: naming a subnet is access to it); the route is all-subnets only today, so this is the second wall."""
+    import ipaddress
+
+    who = user if user is not None else current_user
+    hidden = False
+    for sid, info in extensions.SUBNET_MAP.items():
+        try:
+            existing_net = ipaddress.IPv4Network(info["cidr"], strict=False)
+        except Exception:
+            continue
+        if not network.overlaps(existing_net):
+            continue
+        if who.can_access_subnet(sid):
+            return f"CIDR {new_cidr} overlaps with existing subnet '{info['name']}' ({info['cidr']})."
+        hidden = True
+    if hidden:
+        return f"CIDR {new_cidr} overlaps a subnet you do not have access to."
+    return None
+
+
 @bp.route("/subnets/add")
 @login_required
 @_admin_required
 def add_subnet():
+    if not current_user.all_subnets:
+        flash(_ADD_SUBNET_REFUSED, "error")
+        return redirect(url_for("subnets.subnets"))
     existing_ids = _get_kea_subnet_ids() | set(extensions.SUBNET_MAP.keys())
     suggested_id = max(existing_ids, default=0) + 1
     ssh_ready = os.path.exists(extensions.SSH_KEY_PATH) and bool(extensions.KEA_SSH_HOST)
@@ -349,6 +377,10 @@ def add_subnet():
 @_admin_required
 def add_subnet_post():
     import ipaddress
+
+    if not current_user.all_subnets:
+        flash(_ADD_SUBNET_REFUSED, "error")
+        return redirect(url_for("subnets.subnets"))
 
     def _valid_ip(addr):
         try:
@@ -393,14 +425,10 @@ def add_subnet_post():
         return redirect(url_for("subnets.add_subnet"))
 
     # Check for CIDR overlap against every subnet Jen already knows about
-    for _sid, info in extensions.SUBNET_MAP.items():
-        try:
-            existing_net = ipaddress.IPv4Network(info["cidr"], strict=False)
-            if network.overlaps(existing_net):
-                flash(f"CIDR {new_cidr} overlaps with existing subnet '{info['name']}' ({info['cidr']}).", "error")
-                return redirect(url_for("subnets.add_subnet"))
-        except Exception:
-            continue
+    overlap = _overlap_message(network, new_cidr)
+    if overlap:
+        flash(overlap, "error")
+        return redirect(url_for("subnets.add_subnet"))
 
     if not new_pool or not re.match(r"^\d+\.\d+\.\d+\.\d+\s*-\s*\d+\.\d+\.\d+\.\d+$", new_pool):
         flash("Pool range is required — format: start–end e.g. 10.10.80.50-10.10.80.250", "error")
@@ -497,7 +525,7 @@ def delete_subnet(subnet_id):
         flash("Subnet not found.", "error")
         return redirect(url_for("subnets.subnets"))
     if not current_user.can_access_subnet(subnet_id):
-        flash("You do not have access to that subnet.", "error")
+        flash("Subnet not found.", "error")
         return redirect(url_for("subnets.subnets"))
 
     subnet_name = extensions.SUBNET_MAP[subnet_id]["name"]
@@ -566,7 +594,7 @@ def edit_subnet(subnet_id):
         flash("Subnet not found.", "error")
         return redirect(url_for("subnets.subnets"))
     if not current_user.can_access_subnet(subnet_id):
-        flash("You do not have access to that subnet.", "error")
+        flash("Subnet not found.", "error")
         return redirect(url_for("subnets.subnets"))
     kea_data = _get_subnet_kea_data(subnet_id)
     kea_data["base_shas"] = _config_shas("dhcp4")
@@ -701,7 +729,7 @@ def edit_subnet_preview(subnet_id):
     if subnet_id not in extensions.SUBNET_MAP:
         return jsonify({"ok": False, "error": "Subnet not found."}), 404
     if not current_user.can_access_subnet(subnet_id):
-        return jsonify({"ok": False, "error": "Access denied."}), 403
+        return jsonify({"ok": False, "error": "Subnet not found."}), 404
 
     fields, error = _parse_and_validate_subnet_edit_form(request.form)
     if error:
@@ -754,8 +782,9 @@ def edit_subnet_preview(subnet_id):
                 )
             else:
                 server_results.append({"name": name, "ok": False, "message": res["detail"] or "Unknown error"})
-        except Exception as e:
-            server_results.append({"name": name, "ok": False, "message": str(e)})
+        except Exception:
+            logger.exception("subnet edit check failed on %s", name)
+            server_results.append({"name": name, "ok": False, "message": "The check failed - see the Jen log."})
 
     all_passed = all(r["ok"] for r in server_results) if server_results else True
     return jsonify({"ok": True, "no_changes": False, "diff": diff, "servers": server_results, "all_passed": all_passed})
@@ -769,7 +798,7 @@ def edit_subnet_post(subnet_id):
         flash("Subnet not found.", "error")
         return redirect(url_for("subnets.subnets"))
     if not current_user.can_access_subnet(subnet_id):
-        flash("You do not have access to that subnet.", "error")
+        flash("Subnet not found.", "error")
         return redirect(url_for("subnets.subnets"))
 
     fields, error = _parse_and_validate_subnet_edit_form(request.form)
@@ -911,7 +940,7 @@ def move_subnet(subnet_id):
         flash("Subnet not found.", "error")
         return redirect(url_for("subnets.subnets"))
     if not current_user.can_access_subnet(subnet_id):
-        flash("You do not have access to that subnet.", "error")
+        flash("Subnet not found.", "error")
         return redirect(url_for("subnets.subnets"))
     target = request.form.get("shared_network", "").strip()
     if target and not __auth.valid_shared_network_name(target):
@@ -1736,10 +1765,17 @@ def _compute_subnet6_edit_diff(subnet_id, fields):
     return diff
 
 
+def _require_ipv6():
+    """A v6 subnet edit answers 404 while IPv6 is off, whatever `[subnets6]` says (v5.69.0-beta.2, Q171): these routes rewrite kea-dhcp6.conf."""
+    if not __kea6.is_ipv6_enabled():
+        abort(404)
+
+
 @bp.route("/subnets/edit6/<int:subnet_id>")
 @login_required
 @_admin_required
 def edit_subnet6(subnet_id):
+    _require_ipv6()
     assert_subnet6_access(subnet_id)
     kea_data = __kea6.get_subnet6_kea_data(subnet_id)
     kea_data["base_shas"] = _config_shas("dhcp6")
@@ -1756,6 +1792,7 @@ def edit_subnet6_preview(subnet_id):
     preview endpoint: kea_host.test_config() `kea-dhcp6 -t`s the
     candidate on each server and never touches the live kea-dhcp6.conf
     under any outcome."""
+    _require_ipv6()
     if not can_access_subnet6(subnet_id):
         return jsonify({"ok": False, "error": "IPv6 subnet not found."}), 404
 
@@ -1810,8 +1847,9 @@ def edit_subnet6_preview(subnet_id):
                 )
             else:
                 server_results.append({"name": name, "ok": False, "message": res["detail"] or "Unknown error"})
-        except Exception as e:
-            server_results.append({"name": name, "ok": False, "message": str(e)})
+        except Exception:
+            logger.exception("subnet edit check failed on %s", name)
+            server_results.append({"name": name, "ok": False, "message": "The check failed - see the Jen log."})
 
     all_passed = all(r["ok"] for r in server_results) if server_results else True
     return jsonify({"ok": True, "no_changes": False, "diff": diff, "servers": server_results, "all_passed": all_passed})
@@ -1821,6 +1859,7 @@ def edit_subnet6_preview(subnet_id):
 @login_required
 @_admin_required
 def edit_subnet6_post(subnet_id):
+    _require_ipv6()
     assert_subnet6_access(subnet_id)
 
     fields, error = _parse_and_validate_subnet6_edit_form(request.form)

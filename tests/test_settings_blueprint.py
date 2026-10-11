@@ -56,8 +56,6 @@ EXPECTED_ENDPOINTS = {
     "settings.save_ports",
     "settings.save_metrics_settings",
     "settings.generate_ssh_key",
-    "settings.save_telegram",
-    "settings.test_telegram",
     "settings.save_session_settings",
     "settings.save_rate_limit",
     "settings.clear_lockouts",

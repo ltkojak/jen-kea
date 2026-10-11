@@ -442,6 +442,10 @@ def api_stats():
         result = __kea.kea_command("config-get", server=__kea.get_active_kea_server())
         if result.get("result") == 0:
             for s, _sn in __view.iter_subnet4(result["arguments"].get("Dhcp4", {})):
+                # v5.69.0-beta.2 (Q171): Kea's config lists EVERY subnet; `stats` three lines up is the caller's own. A restricted caller got the id and pool size of
+                # each subnet they cannot see in `pool_sizes` - built here only for the subnets the caller may see (an unrestricted one still gets all of Kea's).
+                if not (current_user.all_subnets or s["id"] in accessible):
+                    continue
                 # v5.68.0-beta.18 (Q153): total of every pool (ranges and CIDRs), judged per subnet; pool_used = active leases INSIDE them
                 size = __pools.total_pool_size(s.get("pools", []))
                 if size:
@@ -526,6 +530,16 @@ def api_stats():
         )
 
 
+def _int_arg(name, default, low, high):
+    """A query-string integer clamped into [low, high]; absent or not a number is `default` (v5.69.0-beta.2, Q171 - `days=abc` used to raise out of the view as a 500 and
+    `days=-1` reached the SQL window)."""
+    try:
+        value = int(str(request.args.get(name, default)).strip())
+    except (TypeError, ValueError):
+        return default
+    return max(low, min(value, high))
+
+
 @bp.route("/api/lease-history")
 @login_required
 def api_lease_history():
@@ -534,7 +548,7 @@ def api_lease_history():
     Used by sparkline charts on subnet stat cards.
     Returns hourly buckets (or closest snapshot) for each subnet.
     """
-    days = min(int(request.args.get("days", 7)), 90)
+    days = _int_arg("days", 7, 1, 90)
     subnet_id = request.args.get("subnet")
     # v4.4.9: this endpoint had no subnet-access check at all — a
     # subnet-restricted user could pass ?subnet=<any_id> for a specific

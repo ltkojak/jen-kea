@@ -64,7 +64,7 @@
 </div>
 
 {% if restart_pending %}
-<div class="alert alert-warning">{{ icon("triangle-alert") }} Kea connection changes require a Jen restart to take effect. <form method="POST" action="/settings/infrastructure/restart" class="u-cccfa4"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-sm btn-warning u-5dd2a6">Restart Now</button></form></div>
+<div class="alert alert-warning">{{ icon("triangle-alert") }} Kea connection changes require a Jen restart to take effect. {% if current_user.role == 'superadmin' %}<form method="POST" action="/settings/infrastructure/restart" class="u-cccfa4"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-sm btn-warning u-5dd2a6">Restart Now</button></form>{% else %}A superadmin restarts Jen.{% endif %}</div>
 {% endif %}
 
 {% set toc = [('kea-api', 'Control Plane'), ('kea-ssh', 'SSH'), ('kea-servers', 'Servers & HA')] %}
@@ -109,7 +109,7 @@
             </div>
             <div class="form-group">
                 <label>API Password</label>
-                <input type="password" name="api_pass" value="{{ infra.kea_api_pass }}" placeholder="(unchanged)">
+                <input type="password" name="api_pass" value="" placeholder="{% if infra.kea_api_pass_set %}(saved — leave blank to keep it){% else %}(not set){% endif %}" autocomplete="new-password">
                 <div class="form-hint">Leave blank to keep existing password</div>
             </div>
         </div>
