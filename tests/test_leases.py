@@ -134,6 +134,45 @@ class TestIpMapPoolBlocks:
         assert blocks[0]["start"] == "10.0.0.1"
 
 
+class TestIpMapRendersACidrPool:
+    """v5.69.0-beta.3 (Q172, item 10): `_get_pools` kept only a pool written `a - b`; Kea also accepts `10.0.0.0/25`, which then had no cells on the map and the page said it could not
+    determine the pool. `jen.services.pools.parse_pool` is the one reader of what a pool is."""
+
+    @staticmethod
+    def _config(monkeypatch, pools):
+        from jen import extensions
+        from jen.services import kea as kea_svc
+
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {1: {"name": "CIDR-NET", "cidr": "10.0.0.0/24"}})
+        monkeypatch.setattr(
+            kea_svc,
+            "kea_command",
+            lambda *a, **kw: {
+                "result": 0,
+                "arguments": {
+                    "Dhcp4": {"subnet4": [{"id": 1, "subnet": "10.0.0.0/24", "pools": [{"pool": p} for p in pools]}]}
+                },
+            },
+        )
+        monkeypatch.setattr(kea_svc, "get_active_kea_server", lambda: {"id": 1})
+
+    def test_a_cidr_pool_renders_one_cell_per_address(self, logged_in_client, db, monkeypatch):
+        self._config(monkeypatch, ["10.0.0.0/25"])
+        body = logged_in_client.get("/ipmap?subnet=1").get_data(as_text=True)
+        assert body.count('class="ip-cell ip-') == 128
+        assert "10.0.0.0 — 10.0.0.127" in body
+
+    def test_a_range_pool_and_a_cidr_pool_render_together(self, logged_in_client, db, monkeypatch):
+        self._config(monkeypatch, ["10.0.0.10 - 10.0.0.19", "10.0.0.192/28"])
+        body = logged_in_client.get("/ipmap?subnet=1").get_data(as_text=True)
+        assert body.count('class="ip-cell ip-') == 10 + 16
+
+    def test_an_unreadable_pool_is_left_out_not_fatal(self, logged_in_client, db, monkeypatch):
+        self._config(monkeypatch, ["not a pool", "10.0.0.20-10.0.0.22"])
+        body = logged_in_client.get("/ipmap?subnet=1").get_data(as_text=True)
+        assert body.count('class="ip-cell ip-') == 3
+
+
 class TestIpMapForAUserWhoMaySeeNoSubnet:
     """v5.68.0-beta.22 (Q157, item 8): `default_subnet` fell back to the first CONFIGURED subnet when the user's own map was empty, and the page then
     queried and printed that subnet's leases, reservations and CIDR - reachable for a restricted account whose access list names only subnets that

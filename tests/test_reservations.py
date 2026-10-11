@@ -388,6 +388,339 @@ class TestEditReservation:
         assert stale_row is None, "orphaned note under the old host_id was not cleaned up"
 
 
+class TestARefusedEditLeavesTheReservationAlone:
+    """v5.69.0-beta.3 (Q172, item 8): the edit is Kea's reservation-del followed by reservation-add. The hostname and the DNS override were validated only by Kea, AFTER the
+    delete, so a typo in either removed the reservation and the client lost its address. Now they are checked first, with the add route's own validators, and an add Kea refuses
+    anyway puts the ORIGINAL back."""
+
+    MAC_HEX = "aabbccddee77"
+    IP = "10.99.0.77"
+
+    @pytest.fixture
+    def reservation(self, db):
+        """One reservation with a DNS override and a note, and a Kea stand-in that keeps `hosts` in step: a delete removes the row, an add inserts one (a new host_id)."""
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier)=%s", (self.MAC_HEX.upper(),))
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
+                "VALUES (UNHEX(%s), 0, 1, INET_ATON(%s), 'original-host')",
+                (self.MAC_HEX, self.IP),
+            )
+            host_id = cur.lastrowid
+            cur.execute(
+                "INSERT INTO dhcp4_options (code, formatted_value, space, scope_id, host_id) VALUES (6, '10.99.0.1', 'dhcp4', 3, %s)",
+                (host_id,),
+            )
+            cur.execute(
+                "INSERT INTO reservation_notes (host_id, notes) VALUES (%s, 'original note') ON DUPLICATE KEY UPDATE notes='original note'",
+                (host_id,),
+            )
+        db.commit()
+        yield host_id
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier)=%s", (self.MAC_HEX.upper(),))
+            cur.execute("DELETE FROM reservation_notes WHERE notes IN ('original note', 'edited note')")
+        db.commit()
+
+    @pytest.fixture
+    def kea(self, db, monkeypatch):
+        """Records every call; `refuse_hostnames` makes reservation-add answer an error for those names (Kea's own refusal), `refuse_restore` for the original too."""
+        from jen.services import kea as kea_svc
+
+        state = {"calls": [], "refuse_hostnames": set(), "refuse_restore": False, "delete_result": 0}
+
+        def command(cmd, *a, **kw):
+            args = kw.get("arguments") or {}
+            state["calls"].append((cmd, args))
+            if cmd == "reservation-del":
+                if state["delete_result"] == 0:
+                    with db.cursor() as cur:
+                        cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier)=%s", (self.MAC_HEX.upper(),))
+                    db.commit()
+                return {
+                    "result": state["delete_result"],
+                    "text": "deleted" if state["delete_result"] == 0 else "not deleted",
+                }
+            if cmd == "reservation-add":
+                res = args["reservation"]
+                if res.get("hostname") in state["refuse_hostnames"] or (
+                    state["refuse_restore"] and res.get("hostname") == "original-host"
+                ):
+                    return {"result": 1, "text": "Kea refused the reservation"}
+                with db.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
+                        "VALUES (UNHEX(%s), 0, 1, INET_ATON(%s), %s)",
+                        (self.MAC_HEX, self.IP, res.get("hostname", "")),
+                    )
+                db.commit()
+                return {"result": 0, "text": "added"}
+            return {"result": 0, "arguments": {}}
+
+        monkeypatch.setattr(kea_svc, "kea_command", command)
+        monkeypatch.setattr(kea_svc, "kea_is_up", lambda *a, **kw: True)
+        monkeypatch.setattr(kea_svc, "get_active_kea_server", lambda: {"id": 1})
+        return state
+
+    def _hosts(self, db):
+        with db.cursor() as cur:
+            cur.execute("SELECT host_id, hostname FROM hosts WHERE HEX(dhcp_identifier)=%s", (self.MAC_HEX.upper(),))
+            rows = cur.fetchall()
+        db.commit()  # end this connection's snapshot: the next read sees what the request committed
+        return rows
+
+    def test_a_dns_override_that_is_not_an_ip_is_refused_before_the_delete(
+        self, logged_in_client, db, reservation, kea
+    ):
+        r = logged_in_client.post(
+            f"/reservations/edit/{reservation}",
+            data={"hostname": "renamed", "dns_override": "not-an-ip", "notes": "edited note"},
+            follow_redirects=True,
+        )
+        assert b"Invalid DNS: not-an-ip" in r.data
+        assert [c for c, _a in kea["calls"] if c in ("reservation-del", "reservation-add")] == [], "Kea was never asked"
+        rows = self._hosts(db)
+        assert [(x["host_id"], x["hostname"]) for x in rows] == [(reservation, "original-host")]
+
+    def test_a_hostname_that_is_not_one_is_refused_before_the_delete(self, logged_in_client, db, reservation, kea):
+        r = logged_in_client.post(
+            f"/reservations/edit/{reservation}",
+            data={"hostname": "bad_host!", "dns_override": "", "notes": ""},
+            follow_redirects=True,
+        )
+        assert b"Invalid hostname: bad_host!" in r.data
+        assert not kea["calls"]
+        assert [x["hostname"] for x in self._hosts(db)] == ["original-host"]
+
+    def test_an_add_that_kea_refuses_after_the_delete_puts_the_original_back(
+        self, logged_in_client, db, reservation, kea
+    ):
+        kea["refuse_hostnames"] = {"renamed"}
+        r = logged_in_client.post(
+            f"/reservations/edit/{reservation}",
+            data={"hostname": "renamed", "dns_override": "10.99.0.2", "notes": "edited note"},
+            follow_redirects=True,
+        )
+        assert b"put back as it was" in r.data
+        adds = [a["reservation"] for c, a in kea["calls"] if c == "reservation-add"]
+        assert len(adds) == 2 and adds[0]["hostname"] == "renamed"
+        assert adds[1] == {
+            "subnet-id": 1,
+            "hw-address": "aa:bb:cc:dd:ee:77",
+            "ip-address": self.IP,
+            "hostname": "original-host",
+            "option-data": [{"name": "domain-name-servers", "data": "10.99.0.1"}],
+        }, "the original, including the DNS override it had"
+        rows = self._hosts(db)
+        assert [x["hostname"] for x in rows] == ["original-host"]
+        # the note followed the reservation to its new id
+        with db.cursor() as cur:
+            cur.execute("SELECT notes FROM reservation_notes WHERE host_id=%s", (rows[0]["host_id"],))
+            note = cur.fetchone()
+        db.commit()
+        assert note and note["notes"] == "original note"
+
+    def test_when_the_original_cannot_be_put_back_the_flash_says_so(self, logged_in_client, db, reservation, kea):
+        kea["refuse_hostnames"] = {"renamed"}
+        kea["refuse_restore"] = True
+        r = logged_in_client.post(
+            f"/reservations/edit/{reservation}", data={"hostname": "renamed", "dns_override": ""}, follow_redirects=True
+        )
+        assert b"could NOT be put back" in r.data and self.IP.encode() in r.data
+        assert self._hosts(db) == []
+
+    def test_a_delete_kea_refuses_adds_nothing(self, logged_in_client, db, reservation, kea):
+        kea["delete_result"] = 1
+        r = logged_in_client.post(
+            f"/reservations/edit/{reservation}", data={"hostname": "renamed", "dns_override": ""}, follow_redirects=True
+        )
+        assert b"the reservation was not changed" in r.data
+        assert [c for c, _a in kea["calls"]] == ["reservation-del"]
+        assert [x["hostname"] for x in self._hosts(db)] == ["original-host"]
+
+
+class TestTheListAndTheExportAskForNotesAndDnsOnce:
+    """v5.69.0-beta.3 (Q172, item 10): the list page and the CSV export read each row's DNS override and note with one query per row. One `IN (...)` query each now."""
+
+    @pytest.fixture
+    def three(self, db):
+        macs = ["aabbccddee81", "aabbccddee82", "aabbccddee83"]
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM hosts WHERE dhcp4_subnet_id IS NOT NULL")
+            for n, mac in enumerate(macs):
+                cur.execute(
+                    "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
+                    "VALUES (UNHEX(%s), 0, 1, INET_ATON(%s), %s)",
+                    (mac, f"10.99.0.{81 + n}", f"many-{n}"),
+                )
+                host_id = cur.lastrowid
+                if n < 2:
+                    cur.execute(
+                        "INSERT INTO dhcp4_options (code, formatted_value, space, scope_id, host_id) VALUES (6, %s, 'dhcp4', 3, %s)",
+                        (f"10.99.0.{n + 1}", host_id),
+                    )
+                cur.execute(
+                    "INSERT INTO reservation_notes (host_id, notes) VALUES (%s, %s) ON DUPLICATE KEY UPDATE notes=VALUES(notes)",
+                    (host_id, f"note-number-{n}"),
+                )
+        db.commit()
+        yield
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM hosts WHERE dhcp4_subnet_id IS NOT NULL")
+            cur.execute("DELETE FROM reservation_notes WHERE notes LIKE 'note-number-%'")
+        db.commit()
+
+    @staticmethod
+    def _count(monkeypatch):
+        import pymysql.cursors
+
+        seen = []
+        real = pymysql.cursors.Cursor.execute
+
+        def counting(self, query, args=None):
+            seen.append(str(query))
+            return real(self, query, args)
+
+        monkeypatch.setattr(pymysql.cursors.Cursor, "execute", counting)
+        return seen
+
+    def test_the_list_page_shows_every_note_and_override_from_one_query_each(
+        self, logged_in_client, three, mock_kea_reservations, monkeypatch
+    ):
+        seen = self._count(monkeypatch)
+        body = logged_in_client.get("/reservations").get_data(as_text=True)
+        for n in range(3):
+            assert f"note-number-{n}" in body
+        assert body.count("● Override") == 2
+        assert len([q for q in seen if "FROM dhcp4_options" in q]) == 1
+        assert len([q for q in seen if "FROM reservation_notes" in q]) == 1
+
+    def test_the_export_carries_every_note_and_override_from_one_query_each(
+        self, logged_in_client, three, mock_kea_reservations, monkeypatch
+    ):
+        import csv
+        import io
+
+        seen = self._count(monkeypatch)
+        text = logged_in_client.get("/reservations/export").get_data(as_text=True)
+        rows = list(csv.DictReader(io.StringIO(text)))
+        by_ip = {r["ip"]: r for r in rows}
+        assert by_ip["10.99.0.81"]["dns_override"] == "10.99.0.1" and by_ip["10.99.0.81"]["notes"] == "note-number-0"
+        assert by_ip["10.99.0.82"]["dns_override"] == "10.99.0.2" and by_ip["10.99.0.82"]["notes"] == "note-number-1"
+        assert by_ip["10.99.0.83"]["dns_override"] == "" and by_ip["10.99.0.83"]["notes"] == "note-number-2"
+        assert len([q for q in seen if "FROM dhcp4_options" in q]) == 1
+        assert len([q for q in seen if "FROM reservation_notes" in q]) == 1
+
+
+class TestImportReservations:
+    """v5.69.0-beta.3 (Q172, item 8): the CSV import wrote straight into Kea's `hosts` table with whatever the file said - `garbage` as an address, a 5-digit "MAC" - checking only that the MAC had
+    twelve characters, and its dry run skipped the duplicate check, so a preview promised rows the real run skipped. Every value is checked per row, a bad row is named by the file's own
+    line and inserts nothing, and the dry run asks the same duplicate question. (The first test of this route.)"""
+
+    HEADER = "ip,mac,hostname,subnet_id\n"
+
+    @pytest.fixture(autouse=True)
+    def _clean_hosts(self, db):
+        def wipe():
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM hosts WHERE dhcp4_subnet_id IS NOT NULL")
+            db.commit()
+
+        wipe()
+        yield
+        wipe()
+
+    @staticmethod
+    def _post(client, body, dry_run=False):
+        import io
+
+        return client.post(
+            "/reservations/import" + ("?dry_run=1" if dry_run else ""),
+            data={"csv_file": (io.BytesIO(body.encode()), "reservations.csv")},
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+
+    @staticmethod
+    def _count(db):
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS n FROM hosts WHERE dhcp4_subnet_id IS NOT NULL")
+            n = cur.fetchone()["n"]
+        db.commit()
+        return n
+
+    def test_a_bad_address_is_reported_by_its_line_and_inserts_nothing(
+        self, logged_in_client, db, mock_kea_reservations
+    ):
+        r = self._post(logged_in_client, self.HEADER + "garbage,aa:bb:cc:dd:ee:ff,host-a,1\n")
+        assert b"line 2: not an IPv4 address" in r.data
+        assert self._count(db) == 0
+
+    def test_each_kind_of_bad_row_is_named_and_the_good_rows_around_it_are_imported(
+        self, logged_in_client, db, mock_kea_reservations
+    ):
+        body = (
+            self.HEADER
+            + "10.99.0.20,aa:bb:cc:dd:ee:20,good-one,1\n"  # line 2
+            + "10.99.0.21,aa:bb:cc:dd:ee,short-mac,1\n"  # line 3
+            + "10.99.0.22,zz:bb:cc:dd:ee:22,not-hex,1\n"  # line 4
+            + "10.99.0.23,aa:bb:cc:dd:ee:23,bad_host!,1\n"  # line 5
+            + "10.99.0.24,aa:bb:cc:dd:ee:24,no-subnet,\n"  # line 6
+            + "10.99.0.25,aa:bb:cc:dd:ee:25,wrong-subnet,9\n"  # line 7
+            + "192.0.2.26,aa:bb:cc:dd:ee:26,outside,1\n"  # line 8
+            + "10.99.0.27,aa-bb-cc-dd-ee-27,good-two,1\n"  # line 9
+        )
+        r = self._post(logged_in_client, body)
+        text = r.get_data(as_text=True)
+        assert "line 3: not a MAC address" in text
+        assert "line 4: not a MAC address" in text
+        assert "line 5: not a valid hostname" in text
+        assert "line 6: invalid subnet_id" in text
+        assert "line 7: unknown subnet_id 9" in text
+        assert "line 8: 192.0.2.26 is not inside" in text
+        assert "Import complete: 2 added" in text
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT inet_ntoa(ipv4_address) AS ip, HEX(dhcp_identifier) AS mac FROM hosts ORDER BY ipv4_address"
+            )
+            rows = cur.fetchall()
+        db.commit()
+        assert [(x["ip"], x["mac"]) for x in rows] == [("10.99.0.20", "AABBCCDDEE20"), ("10.99.0.27", "AABBCCDDEE27")]
+
+    def test_the_dry_run_reports_a_duplicate_and_inserts_nothing(self, logged_in_client, db, mock_kea_reservations):
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
+                "VALUES (UNHEX('aabbccddee30'), 0, 1, INET_ATON('10.99.0.30'), 'already-there')"
+            )
+        db.commit()
+        body = (
+            self.HEADER
+            + "10.99.0.30,aa:bb:cc:dd:ee:31,takes-the-address,1\n"
+            + "10.99.0.32,aa:bb:cc:dd:ee:32,new-one,1\n"
+        )
+        r = self._post(logged_in_client, body, dry_run=True)
+        text = r.get_data(as_text=True)
+        assert "Dry run: 1 would be added, 1 skipped" in text
+        assert "line 2: 10.99.0.30 is already reserved" in text
+        assert self._count(db) == 1, "the dry run inserted nothing"
+
+    def test_the_dry_run_and_the_real_run_agree_on_a_repeated_row_and_a_repeated_mac(
+        self, logged_in_client, db, mock_kea_reservations
+    ):
+        body = (
+            self.HEADER
+            + "10.99.0.40,aa:bb:cc:dd:ee:40,first,1\n"
+            + "10.99.0.40,aa:bb:cc:dd:ee:41,same-address,1\n"
+            + "10.99.0.42,aa:bb:cc:dd:ee:40,same-mac,1\n"
+        )
+        dry = self._post(logged_in_client, body, dry_run=True).get_data(as_text=True)
+        assert "Dry run: 1 would be added, 2 skipped" in dry
+        real = self._post(logged_in_client, body).get_data(as_text=True)
+        assert "Import complete: 1 added, 2 skipped" in real
+        assert self._count(db) == 1
+
+
 class TestDeleteReservation:
     """Delete reservation."""
 

@@ -145,34 +145,40 @@ def devices():
             )
             rows = cur.fetchall()
 
-            with kdb.cursor() as kcur:
-                for row in rows:
-                    mac_hex = row["mac"].replace(":", "")
+            # v5.69.0-beta.3 (Q172): every row's reservations in ONE query (it was one per row), grouped by MAC in the order the per-row query returned them
+            reservations_by_mac: dict = {}
+            mac_hexes = sorted({row["mac"].replace(":", "").upper() for row in rows})
+            if mac_hexes:
+                marks = ",".join(["%s"] * len(mac_hexes))
+                with kdb.cursor() as kcur:
                     kcur.execute(
-                        "SELECT host_id, inet_ntoa(ipv4_address) AS ip, dhcp4_subnet_id AS subnet_id "
-                        "FROM hosts WHERE HEX(dhcp_identifier)=%s",
-                        (mac_hex,),
+                        f"SELECT host_id, HEX(dhcp_identifier) AS mac_hex, inet_ntoa(ipv4_address) AS ip, dhcp4_subnet_id AS subnet_id "  # nosec B608 - %s placeholders only
+                        f"FROM hosts WHERE HEX(dhcp_identifier) IN ({marks}) ORDER BY host_id",
+                        mac_hexes,
                     )
-                    # A client that moved subnets can have a reservation in a
-                    # subnet this user cannot see: only a reservation in an
-                    # accessible subnet is shown (unrestricted users see all).
-                    res = next(
-                        (
-                            h
-                            for h in kcur.fetchall()
-                            if current_user.all_subnets or current_user.can_access_subnet(h["subnet_id"])
-                        ),
-                        None,
-                    )
-                    row["has_reservation"] = bool(res)
-                    row["reservation_ip"] = res["ip"] if res else None
-                    row["subnet_name"] = (
-                        extensions.SUBNET_MAP.get(row["last_subnet_id"], {}).get("name", "")
-                        if row["last_subnet_id"]
-                        else ""
-                    )
-                    row["is_stale"] = row["days_since_seen"] >= stale_days
-                    devices_list.append(row)
+                    for h in kcur.fetchall():
+                        reservations_by_mac.setdefault(h["mac_hex"].upper(), []).append(h)
+            for row in rows:
+                # A client that moved subnets can have a reservation in a
+                # subnet this user cannot see: only a reservation in an
+                # accessible subnet is shown (unrestricted users see all).
+                res = next(
+                    (
+                        h
+                        for h in reservations_by_mac.get(row["mac"].replace(":", "").upper(), [])
+                        if current_user.all_subnets or current_user.can_access_subnet(h["subnet_id"])
+                    ),
+                    None,
+                )
+                row["has_reservation"] = bool(res)
+                row["reservation_ip"] = res["ip"] if res else None
+                row["subnet_name"] = (
+                    extensions.SUBNET_MAP.get(row["last_subnet_id"], {}).get("name", "")
+                    if row["last_subnet_id"]
+                    else ""
+                )
+                row["is_stale"] = row["days_since_seen"] >= stale_days
+                devices_list.append(row)
     except Exception as e:
         logger.error(f"Devices error: {e}")
         flash("Could not load device inventory. Check server logs for details.", "error")

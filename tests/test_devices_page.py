@@ -226,3 +226,34 @@ class TestBulkDeleteDevices:
         assert 'id="bulk-form"' in body
         assert 'action="/devices/bulk-delete"' in body
         assert f'name="device_ids[]" value="{device_id}"' in body
+
+
+class TestTheReservationLookupIsOneQuery:
+    """v5.69.0-beta.3 (Q172, item 10): the page asked the `hosts` table once per device row. One `IN (...)` query now, and every row still finds its own reservation."""
+
+    def test_three_devices_ask_the_hosts_table_once(self, logged_in_client, db, monkeypatch):
+        import pymysql.cursors
+
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM devices")
+            cur.execute("DELETE FROM hosts WHERE dhcp4_subnet_id IS NOT NULL")
+        db.commit()
+        _insert_device(db, mac_hex="aabbccddee61", last_ip="10.10.10.61")
+        _insert_device(db, mac_hex="aabbccddee62", last_ip="10.10.10.62")
+        _insert_device(db, mac_hex="aabbccddee63", last_ip="10.10.10.63")
+        _insert_reservation(db, mac_hex="aabbccddee61", ip="10.10.10.61")
+        _insert_reservation(db, mac_hex="aabbccddee63", ip="10.10.10.63")
+        db.commit()
+
+        seen = []
+        real = pymysql.cursors.Cursor.execute
+
+        def counting(self, query, args=None):
+            seen.append(str(query))
+            return real(self, query, args)
+
+        monkeypatch.setattr(pymysql.cursors.Cursor, "execute", counting)
+        resp = logged_in_client.get("/devices")
+        assert resp.status_code == 200
+        assert resp.data.count(b"Reservation exists") == 2
+        assert len([q for q in seen if "FROM hosts WHERE HEX(dhcp_identifier)" in q]) == 1

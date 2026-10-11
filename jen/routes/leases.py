@@ -20,6 +20,7 @@ from jen import extensions
 from jen.services.access import accessible_subnet6_map, assert_subnet6_access
 from jen.services.access import admin_required as _admin_required
 from jen.services.leases_sql import ACTIVE_LEASE4, active_lease4
+from jen.services.pools import parse_pool
 
 logger = logging.getLogger(__name__)
 bp = Blueprint("leases", __name__)
@@ -420,9 +421,11 @@ def _get_pools(subnet_id):
                 if s["id"] == subnet_id:
                     for p in s.get("pools", []):
                         pool_str = p.get("pool", "") if isinstance(p, dict) else str(p)
-                        if pool_str and "-" in pool_str:
-                            start, end = [x.strip() for x in pool_str.split("-", 1)]
-                            pools.append((start, end))
+                        # v5.69.0-beta.3 (Q172): what a pool IS is `jen.services.pools.parse_pool`'s question (`a - b`, `a-b` or a CIDR); this used to keep only
+                        # the strings with a "-" in them, so a pool written as `10.0.0.0/25` - which Kea accepts - had no cells on the map at all
+                        span = parse_pool(pool_str)
+                        if span is not None:
+                            pools.append((str(ipaddress.IPv4Address(span[0])), str(ipaddress.IPv4Address(span[1]))))
     except Exception:
         pass
     return pools
