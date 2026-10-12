@@ -388,9 +388,10 @@ class TestApiKeySubnetScope:
 
     def test_explicit_out_of_scope_subnet_filter_is_still_clamped(self, client, db, mock_kea, monkeypatch):
         """?subnet=2 on a key scoped to [1] must not widen the scope. Subnet
-        2 has to exist in SUBNET_MAP for the filter to resolve at all — an
-        unknown ?subnet= is ignored (the scope clamp still holds either
-        way, which is what the second assertion pins)."""
+        2 has to exist in SUBNET_MAP for the filter to resolve at all.
+        v5.69.0-beta.5 (Q174): a subnet the key cannot see is refused exactly as one that does not
+        exist is - a 400 naming the filter - instead of an empty list (which told a scoped key which
+        ids exist) or, for an unknown one, everything in scope."""
         from jen import extensions
 
         monkeypatch.setitem(extensions.SUBNET_MAP, 2, {"name": "Second Net", "cidr": "10.10.2.0/24"})
@@ -398,9 +399,13 @@ class TestApiKeySubnetScope:
         db.commit()
         self._seed(db)
         headers = self._scoped_key(db, admin_id, [1])
-        assert client.get("/api/v1/leases?subnet=2", headers=headers).get_json()["leases"] == []
-        unknown = client.get("/api/v1/leases?subnet=999", headers=headers).get_json()["leases"]
-        assert {lease["subnet_id"] for lease in unknown} <= {1}
+        hidden = client.get("/api/v1/leases?subnet=2", headers=headers)
+        unknown = client.get("/api/v1/leases?subnet=999", headers=headers)
+        assert hidden.status_code == unknown.status_code == 400
+        assert hidden.get_json() == unknown.get_json(), "a hidden subnet and one that is not there are one answer"
+        assert {lease["subnet_id"] for lease in client.get("/api/v1/leases", headers=headers).get_json()["leases"]} <= {
+            1
+        }
 
     def test_by_mac_routes_404_outside_scope(self, client, db, mock_kea):
         admin_id = _insert_admin_user(db, "scope_admin_3")

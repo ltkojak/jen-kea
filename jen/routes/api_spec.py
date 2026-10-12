@@ -136,7 +136,10 @@ def build_spec(version: str, base_url: str = "") -> dict:
                 },
                 "SubnetList": {
                     "type": "object",
-                    "properties": {"subnets": {"type": "array", "items": {"$ref": "#/components/schemas/Subnet"}}},
+                    "properties": {
+                        "subnets": {"type": "array", "items": {"$ref": "#/components/schemas/Subnet"}},
+                        "count": {"type": "integer"},
+                    },
                 },
                 "PacketHealth": {
                     "type": "object",

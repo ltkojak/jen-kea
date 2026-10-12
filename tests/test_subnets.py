@@ -22,7 +22,9 @@ class TestSaveSubnetNoteAccessControl:
 
     def test_rejects_non_integer_subnet_id(self, logged_in_client):
         r = logged_in_client.post("/subnets/save-note", data={"subnet_id": "not-a-number", "notes": "x"})
-        assert r.status_code == 200
+        assert (
+            r.status_code == 400
+        )  # v5.69.0-beta.5 (Q174): a request that cannot be understood is a 400, not a 200 with ok:false
         data = r.get_json()
         assert data["ok"] is False
 

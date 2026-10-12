@@ -112,7 +112,7 @@ class TestMigrationRoutes:
                 "ssl_ca": "/no/ca",
             },
         )
-        assert b"event: error" in r.data and b"CA bundle path not found" in r.data
+        assert b"event: error" in r.data and b"the file does not exist or Jen cannot read it" in r.data
 
     @pytest.mark.parametrize("which", ["jen", "kea"])
     def test_the_run_hands_the_ca_to_the_migration(self, logged_in_client, monkeypatch, ca_file, which):
@@ -169,7 +169,7 @@ class TestSetupSavesAndTestsIt:
     def test_a_path_that_is_not_a_file_is_refused_before_anything_is_tested(self, logged_in_client, monkeypatch):
         seen = self._capture(monkeypatch)
         r = logged_in_client.post("/setup/connect", data=dict(self.FORM, kea_db_ssl_ca="/no/such/ca.pem"))
-        assert r.status_code == 200 and b"Database CA bundle path not found" in r.data
+        assert r.status_code == 200 and b"database CA bundle cannot be used" in r.data
         assert seen["db"] == [] and seen["save"] == []
         assert b"/no/such/ca.pem" in r.data, "the typed value comes back in the form"
 
