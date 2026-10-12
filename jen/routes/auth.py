@@ -27,9 +27,12 @@ def _JEN_VERSION():
     return JEN_VERSION
 
 
-def __ip_to_int(ip):
-    parts = ip.split(".")
-    return sum(int(p) << (8 * (3 - i)) for i, p in enumerate(parts))
+def _safe_next(raw) -> str:
+    """`raw` (a ?next= value) when it is a path on this host - one slash, no scheme, no backslash (a browser reads a slash-backslash start as `//host`) - else ''."""
+    raw = raw or ""
+    if raw and (raw.startswith("//") or "://" in raw or "\\" in raw or not raw.startswith("/")):
+        return ""
+    return raw
 
 
 def _now_iso():
@@ -166,9 +169,7 @@ def login():
                 mfa_mode == "required_admins" and row["role"] in ("admin", "superadmin")
             )
             if mfa_enrolled or needs_mfa:
-                _next = request.args.get("next", "")
-                if _next and (_next.startswith("//") or "://" in _next or not _next.startswith("/")):
-                    _next = ""
+                _next = _safe_next(request.args.get("next", ""))
                 if mfa_enrolled and not __mfa.is_trusted_device(row["id"], request):
                     session["mfa_pending_user_id"] = row["id"]
                     session["mfa_pending_username"] = username
@@ -198,7 +199,8 @@ def login():
             # moved to oidc.establish_session() so the OIDC callback can
             # share it exactly, rather than keeping its own copy in sync.
             __oidc.establish_session(row, f"User {username} logged in from {ip}")
-            return redirect(url_for("dashboard.dashboard"))
+            # v5.69.0-beta.5 (Q174): the page the person was sent from (Flask-Login's ?next=), as the MFA and OIDC paths always honoured - a plain login dropped it
+            return redirect(_safe_next(request.args.get("next", "")) or url_for("dashboard.dashboard"))
 
         # Failed login — record attempt (async, don't block response)
         __auth.record_login_attempt(ip, username)
@@ -220,9 +222,7 @@ def login_oidc():
 
     from jen import extensions
 
-    _next = request.args.get("next", "")
-    if _next and (_next.startswith("//") or "://" in _next or not _next.startswith("/")):
-        _next = ""
+    _next = _safe_next(request.args.get("next", ""))
     session["oidc_next"] = _next
 
     redirect_uri = extensions.OIDC_REDIRECT_URI or url_for("auth.login_oidc_callback", _external=True)

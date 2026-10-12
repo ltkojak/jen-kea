@@ -1422,12 +1422,40 @@ def applied_versions() -> set:
         return {r["version"] for r in cur.fetchall()}
 
 
+MIGRATION_LOCK_NAME = "jen.migrations"
+#: how long a second Jen waits for the first to finish its migrations before it gives up (seconds)
+MIGRATION_LOCK_WAIT_S = 60
+
+
 def run_migrations() -> int:
     """
     Apply all pending migrations in order. Returns the number applied.
     Raises on failure so app startup aborts rather than serving a
     half-migrated schema.
+
+    v5.69.0-beta.5 (Q174): ONE process at a time, by a MariaDB/MySQL advisory lock (`GET_LOCK`) held on its own connection for the whole run. Two Jens started
+    together (a restart overlapping a systemd start, a second container on the same database) each read "applied", each ran migration N, and the loser failed
+    loudly half way; the second now waits up to `MIGRATION_LOCK_WAIT_S` for the first and then finds nothing left to do - or, if the first never finishes, raises.
     """
+    from jen.models.db import jen_db
+
+    with jen_db() as lock_db:
+        with lock_db.cursor() as cur:
+            cur.execute("SELECT GET_LOCK(%s, %s) AS got", (MIGRATION_LOCK_NAME, MIGRATION_LOCK_WAIT_S))
+            row = cur.fetchone()
+        if not row or row.get("got") != 1:
+            raise RuntimeError("another Jen is running the migrations")
+        try:
+            return _run_migrations_locked()
+        finally:
+            try:
+                with lock_db.cursor() as cur:
+                    cur.execute("SELECT RELEASE_LOCK(%s)", (MIGRATION_LOCK_NAME,))
+            except Exception as e:  # the connection going away releases the lock too
+                logger.warning(f"could not release the migration lock: {type(e).__name__}")
+
+
+def _run_migrations_locked() -> int:
     from jen.models.db import jen_db
 
     with jen_db() as db, db.cursor() as cur:

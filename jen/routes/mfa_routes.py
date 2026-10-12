@@ -113,11 +113,6 @@ def _JEN_VERSION():
     return JEN_VERSION
 
 
-def __ip_to_int(ip):
-    parts = ip.split(".")
-    return sum(int(p) << (8 * (3 - i)) for i, p in enumerate(parts))
-
-
 @bp.route("/mfa/verify", methods=["GET", "POST"])
 def mfa_verify():
     # At this point the user has passed password auth but is not yet logged in.

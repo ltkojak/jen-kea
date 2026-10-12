@@ -85,9 +85,18 @@ def explain_page():
     subnet_id = None
     chosen_how = ""
     raw_subnet = (request.args.get("subnet") or "").strip()
+    is_hx = request.headers.get("HX-Request") == "true"
+    notes = []
+
+    def say(message):
+        """A sentence for the person. A page flashes it; an htmx partial carries it IN the partial - a flash queued by a partial is shown on the NEXT full page, about something else."""
+        if is_hx:
+            notes.append(message)
+        else:
+            flash(message, "error")
 
     if client["mac"] and not __auth.valid_mac(client["mac"].lower()):
-        flash("That isn't a MAC address (expected aa:bb:cc:dd:ee:ff).", "error")
+        say("That isn't a MAC address (expected aa:bb:cc:dd:ee:ff).")
         client["mac"] = ""
 
     typed = dict(client)
@@ -133,11 +142,11 @@ def explain_page():
             subnet_id = next(iter(subnet_map))
             chosen_how = "first subnet you can see — pick one above if that's wrong"
         if subnet_id is not None and subnet_id not in subnet_map:
-            flash("You do not have access to that subnet.", "error")
+            say("You do not have access to that subnet.")
             subnet_id = None
         cfg = dhcp4_config() if subnet_id is not None else None
         if subnet_id is not None and not cfg:
-            flash("Could not read the Kea configuration (config-get failed) — see Settings → Kea → Probe.", "error")
+            say("Could not read the Kea configuration (config-get failed) — see Settings → Kea → Probe.")
         elif subnet_id is not None:
             result = __ctx.run(
                 cfg,
@@ -148,7 +157,7 @@ def explain_page():
                 accessible_ids=None if current_user.all_subnets else set(subnet_map),
             )
             if not result.get("ok"):
-                flash(result.get("error", "Could not explain this client."), "error")
+                say(result.get("error", "Could not explain this client."))
                 result = None
 
     # v5.63.0 (Q82) — the Investigation page's Explain tab embeds this
@@ -172,6 +181,7 @@ def explain_page():
             result=result,
             form=form,
             link_q=embed_q,
+            notes=notes,
             **extra,
         )
     return render_template(

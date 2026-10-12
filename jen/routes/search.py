@@ -31,11 +31,6 @@ _GOES_TO_CLIENT_PAGE = frozenset({"mac", "ipv4"})
 _GOES_WHEN_V6_IS_ON = frozenset({"ipv6", "duid"})
 
 
-def __ip_to_int(ip):
-    parts = ip.split(".")
-    return sum(int(p) << (8 * (3 - i)) for i, p in enumerate(parts))
-
-
 @bp.route("/search")
 @login_required
 @diagnostic_surface(subject="client")

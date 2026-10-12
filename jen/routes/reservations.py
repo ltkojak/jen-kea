@@ -46,11 +46,6 @@ def _JEN_VERSION():
     return JEN_VERSION
 
 
-def __ip_to_int(ip):
-    parts = ip.split(".")
-    return sum(int(p) << (8 * (3 - i)) for i, p in enumerate(parts))
-
-
 def _dns_and_notes_by_host(kea_cur, jen_db, host_ids):
     """`({host_id: dhcp4_options row}, {host_id: reservation_notes row})` for `host_ids`, one query each (v5.69.0-beta.3, Q172): the DNS override (option 6, Kea's own table -
     the first row of a host stands) and the note (Jen's own). Empty dicts for no ids."""
@@ -226,7 +221,7 @@ def reservations():
         logger.error(f"Could not load reservations: {e}")
         flash("Could not load reservations. Check server logs for details.", "error")
     pages = max(1, (total + per_page - 1) // per_page) if per_page else 1
-    stale_days = int(__user.get_global_setting("stale_device_days", "30"))
+    stale_days = __user.get_stale_device_days()
     mac_list = [h["mac"] for h in hosts if h.get("mac")]
     device_info = __fp.get_device_info_map(mac_list)
     template_vars = {

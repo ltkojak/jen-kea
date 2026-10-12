@@ -30,11 +30,20 @@ def timeline_page():
     raw_ip = (request.args.get("ip") or "").strip()
     mac = raw_mac if raw_mac and __auth.valid_mac(raw_mac) else ""
     ip = raw_ip if raw_ip and __auth.valid_ip(raw_ip) else ""
+    is_hx = request.headers.get("HX-Request") == "true"
+    notes = []
+
+    def say(message):
+        """A page flashes the sentence; an htmx partial returns it in the partial (a flash queued by a partial is shown on the NEXT full page, about something else)."""
+        if is_hx:
+            notes.append(message)
+        else:
+            flash(message, "error")
 
     if raw_mac and not mac:
-        flash("That isn't a MAC address (expected aa:bb:cc:dd:ee:ff).", "error")
+        say("That isn't a MAC address (expected aa:bb:cc:dd:ee:ff).")
     if raw_ip and not ip:
-        flash("That isn't an IP address.", "error")
+        say("That isn't an IP address.")
 
     result = None
     if mac or ip:
@@ -46,10 +55,10 @@ def timeline_page():
         # the design applies to the page as a whole below.
         if result["subnet_id"] is not None:
             if not current_user.can_access_subnet(result["subnet_id"]):
-                flash(NO_MATCH, "error")
+                say(NO_MATCH)
                 result = None
         elif not current_user.all_subnets:
-            flash(NO_MATCH, "error")
+            say(NO_MATCH)
             result = None
         if result is not None and not current_user.all_subnets:
             # Mirrors the API: a restricted user sees only rows that carry a
@@ -65,9 +74,10 @@ def timeline_page():
 
     # v5.63.0 (Q82) — the Investigation page's Timeline tab embeds this
     # exact result via htmx, same pattern as Trace's own HX-partial branch.
-    if request.headers.get("HX-Request") == "true":
+    if is_hx:
         if result is None:
-            return f"<p>{NO_MATCH}</p>"
+            # the sentences are this module's own constants, never request text
+            return "".join(f"<p>{n}</p>" for n in (notes or [NO_MATCH]))
         return render_template("_timeline_rows.html", result=result, kinds=kinds)
     return render_template(
         "timeline.html",

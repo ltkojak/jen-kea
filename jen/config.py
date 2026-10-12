@@ -456,9 +456,9 @@ class AppConfig:
             _caps.invalidate()
         except Exception:  # never let a cache drop break a config load
             pass
-        extensions.KEA_API_URL = cfg.get("kea", "api_url")
-        extensions.KEA_API_USER = cfg.get("kea", "api_user")
-        extensions.KEA_API_PASS = cfg.get("kea", "api_pass")
+        extensions.KEA_API_URL = cfg.get("kea", "api_url", fallback="")
+        extensions.KEA_API_USER = cfg.get("kea", "api_user", fallback="")
+        extensions.KEA_API_PASS = cfg.get("kea", "api_pass", fallback="")
 
         # v5.10.0 — Control-Agent-less mode. Default 'ca' = every prior
         # release's behavior, unchanged; an unrecognized value is treated
@@ -474,9 +474,9 @@ class AppConfig:
         extensions.KEA_API_CLIENT_CERT = cfg.get("kea", "api_client_cert", fallback="").strip()
         extensions.KEA_API_CLIENT_KEY = cfg.get("kea", "api_client_key", fallback="").strip()
 
-        extensions.KEA_DB_HOST = cfg.get("kea_db", "host")
-        extensions.KEA_DB_USER = cfg.get("kea_db", "user")
-        extensions.KEA_DB_PASS = cfg.get("kea_db", "password")
+        extensions.KEA_DB_HOST = cfg.get("kea_db", "host", fallback="")
+        extensions.KEA_DB_USER = cfg.get("kea_db", "user", fallback="")
+        extensions.KEA_DB_PASS = cfg.get("kea_db", "password", fallback="")
         extensions.KEA_DB_NAME = cfg.get("kea_db", "database", fallback="kea")
         extensions.KEA_DB_PORT = _db_port(cfg, "kea_db", 3306)
         extensions.KEA_DB_SSL_CA = cfg.get("kea_db", "ssl_ca", fallback="")
@@ -737,13 +737,13 @@ class AppConfig:
     def derive_kea_servers(cfg: configparser.ConfigParser, quiet: bool = False) -> list:
         """Return list of server dicts from config. `quiet` (Q164) is for a parser that is only being compared - the identity view reads every write twice - so a
         stray `[kea_server_1]` is not warned about on each."""
-        primary_user = cfg.get("kea", "api_user")
-        primary_pass = cfg.get("kea", "api_pass")
+        primary_user = cfg.get("kea", "api_user", fallback="")
+        primary_pass = cfg.get("kea", "api_pass", fallback="")
         servers = [
             {
                 "id": 1,
                 "name": cfg.get("kea", "name", fallback="Kea Server 1"),
-                "api_url": cfg.get("kea", "api_url"),
+                "api_url": cfg.get("kea", "api_url", fallback=""),
                 # v5.10.0 — the kea-dhcp6 control-socket URL for `direct`
                 # mode. Blank on the primary means "use [kea6] api_url"
                 # (jen/services/kea.py::_endpoint_for); v6 API is

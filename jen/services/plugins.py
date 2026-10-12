@@ -321,6 +321,12 @@ def discover_plugins() -> list[dict]:
             try:
                 with open(manifest_path) as f:
                     manifest = json.load(f)
+                if manifest.get("id") != name:
+                    # a directory is the plugin it is named for: one whose manifest claims another id (a hand-copied tree) would shadow that plugin's own - v5.69.0-beta.5, Q174
+                    logger.warning(
+                        f"Plugin directory '{name}' declares id {str(manifest.get('id'))[:60]!r}: ignored (the directory name and the manifest id must be the same)"
+                    )
+                    continue
                 manifest["path"] = path
                 manifest["bundled"] = bundled
                 manifest["root_owned"] = root_owned
@@ -933,6 +939,36 @@ def consume_plugin_results() -> list[dict]:
     return results
 
 
+#: a plugin package is code and templates: nothing real is near this, and the download is held in memory (v5.69.0-beta.5, Q174)
+MAX_PLUGIN_ZIP_BYTES = 50 * 1024 * 1024
+
+
+class _ZipTooBig(Exception):
+    pass
+
+
+def _read_capped(resp, cap: int) -> bytes:
+    """The body of `resp`, refusing - before reading it all - one that declares or turns out to be more than `cap` bytes."""
+    try:
+        declared = int(resp.headers.get("Content-Length"))
+    except (TypeError, ValueError):
+        declared = None
+    if declared is not None and declared > cap:
+        raise _ZipTooBig()
+    if isinstance(resp, requests.Response):  # streamed: stop at the cap instead of buffering whatever the server sends
+        chunks, total = [], 0
+        for chunk in resp.iter_content(65536):
+            total += len(chunk)
+            if total > cap:
+                raise _ZipTooBig()
+            chunks.append(chunk)
+        return b"".join(chunks)
+    body = resp.content  # a test double
+    if len(body) > cap:
+        raise _ZipTooBig()
+    return body
+
+
 def install_plugin(plugin_id: str, registry_entry: dict) -> tuple[bool, str]:
     """
     Download and install a plugin from its registry entry.
@@ -1018,14 +1054,21 @@ def install_plugin(plugin_id: str, registry_entry: dict) -> tuple[bool, str]:
     dest = os.path.join(extensions.PLUGIN_DIR, plugin_id)
 
     try:
-        resp = requests.get(zip_url, timeout=30)
+        resp = requests.get(zip_url, timeout=30, stream=True)
         if resp.status_code != 200:
             return False, f"Download failed: HTTP {resp.status_code}"
 
         expected_sha256 = registry_entry.get("sha256", "").strip().lower()
         if not expected_sha256:
             return False, "Registry entry has no checksum — refusing to install."
-        actual_sha256 = hashlib.sha256(resp.content).hexdigest()
+        try:
+            zip_body = _read_capped(resp, MAX_PLUGIN_ZIP_BYTES)
+        except _ZipTooBig:
+            return (
+                False,
+                f"The plugin package is larger than {MAX_PLUGIN_ZIP_BYTES // (1024 * 1024)} MB: refusing to install.",
+            )
+        actual_sha256 = hashlib.sha256(zip_body).hexdigest()
         if actual_sha256 != expected_sha256:
             logger.error(
                 f"Plugin '{plugin_id}' checksum mismatch: expected {expected_sha256}, "
@@ -1039,7 +1082,7 @@ def install_plugin(plugin_id: str, registry_entry: dict) -> tuple[bool, str]:
         tmp_dest = dest + "_tmp"
         if os.path.isdir(tmp_dest):
             shutil.rmtree(tmp_dest)
-        with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+        with zipfile.ZipFile(io.BytesIO(zip_body)) as zf:
             _safe_extract(zf, tmp_dest)
 
         # Validate manifest exists in extracted content

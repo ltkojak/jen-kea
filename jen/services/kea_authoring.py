@@ -107,7 +107,7 @@ def read_remote_json(ssh, path: str, errors: list | None = None):
             return None
         if errors is not None and raw.startswith("cat: "):
             if "No such file or directory" not in raw:
-                errors.append(raw.strip().splitlines()[0][:300])
+                errors.append((raw.strip().splitlines() or [""])[0][:300])
             return None
         return json.loads(raw)
     except ValueError as e:  # not valid JSON (json.JSONDecodeError, or bytes that are not UTF-8)

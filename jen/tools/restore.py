@@ -340,7 +340,7 @@ def check_kea_major(manifest: dict, bundle_dir: Path) -> list[str]:
             if r.get("result") != 0:
                 warnings.append(f"{name}: unreachable — Kea version check skipped for this server")
                 continue
-            live_text = r.get("arguments", {}).get("extended", r.get("text", ""))
+            live_text = (r.get("arguments") or {}).get("extended", r.get("text", ""))
             live_version = live_text.splitlines()[0] if live_text else ""
             recorded_version = recorded.get(name, "")
             if not recorded_version:

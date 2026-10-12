@@ -45,11 +45,6 @@ def _JEN_VERSION():
     return JEN_VERSION
 
 
-def __ip_to_int(ip):
-    parts = ip.split(".")
-    return sum(int(p) << (8 * (3 - i)) for i, p in enumerate(parts))
-
-
 # ── Optimistic concurrency (v5.16.0 — Q11; per-server v5.19.1 — Q14) ────────
 #
 # The edit forms carry one `base_sha_<server id>` per SSH-capable server —
@@ -1778,6 +1773,8 @@ def edit_subnet6(subnet_id):
     _require_ipv6()
     assert_subnet6_access(subnet_id)
     kea_data = __kea6.get_subnet6_kea_data(subnet_id)
+    if kea_data.get("error"):
+        flash(kea_data["error"], "warning")
     kea_data["base_shas"] = _config_shas("dhcp6")
     return render_template(
         "edit_subnet.html", family="v6", subnet_id=subnet_id, subnet=extensions.SUBNET6_MAP[subnet_id], kea=kea_data
@@ -1919,9 +1916,9 @@ def save_subnet_note():
     try:
         subnet_id = int(request.form.get("subnet_id"))
     except (ValueError, TypeError):
-        return jsonify({"ok": False, "error": "Invalid subnet ID"})
-    if not current_user.can_access_subnet(subnet_id):
-        # v5.69.0-beta.2 (Q171 fixup, G8): one answer for a hidden subnet and one that is not there
+        return jsonify({"ok": False, "error": "Invalid subnet ID"}), 400
+    if subnet_id not in extensions.SUBNET_MAP or not current_user.can_access_subnet(subnet_id):
+        # v5.69.0-beta.2 (Q171 fixup, G8): one answer for a hidden subnet and one that is not there - and (Q174) a note is never stored for an id Jen does not list
         return jsonify({"ok": False, "error": "Subnet not found."}), 404
     notes = request.form.get("notes", "").strip()[:1000]
     try:
@@ -1939,7 +1936,7 @@ def save_subnet_note():
         return jsonify({"ok": True})
     except Exception as e:
         logger.error(f"Error saving note for subnet {subnet_id}: {e}")
-        return jsonify({"ok": False, "error": "Could not save note."})
+        return jsonify({"ok": False, "error": "Could not save note."}), 500
 
 
 def _diff_rows(diff_lines):

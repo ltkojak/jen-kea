@@ -380,7 +380,9 @@ def _fetch_version(server: dict | None, server_id=None) -> str | None:
     try:
         r = __kea.kea_command("version-get", server=server, timeout=3)
         if r.get("result") == 0:
-            text = (r.get("arguments", {}).get("extended", "") or r.get("text", "")).splitlines()[0].strip()
+            text = (((r.get("arguments") or {}).get("extended", "") or r.get("text", "")).splitlines() or [""])[
+                0
+            ].strip()
     except Exception as e:
         logger.warning(f"capabilities: version-get failed for server {key}: {e}")
     _version_cache[key] = {"at": time.monotonic(), "text": text}

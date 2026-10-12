@@ -135,18 +135,18 @@ def setup_connect():
     if not kea_db_host or not kea_db_user:
         flash("Kea's database host and username are required.", "error")
         return render_template("setup_connect.html", progress=_progress(), **retry_ctx)
-    if api_ca and not os.path.isfile(api_ca):
-        flash(f"CA bundle path not found on the Jen host: {api_ca}", "error")
+    if api_ca and not __auth.usable_file(api_ca):
+        flash(__auth.unusable_file_message("CA bundle", api_ca), "error")
         return render_template("setup_connect.html", progress=_progress(), **retry_ctx)
-    if kea_db_ssl_ca and not os.path.isfile(kea_db_ssl_ca):
-        flash(f"Database CA bundle path not found on the Jen host: {kea_db_ssl_ca}", "error")
+    if kea_db_ssl_ca and not __auth.usable_file(kea_db_ssl_ca):
+        flash(__auth.unusable_file_message("database CA bundle", kea_db_ssl_ca), "error")
         return render_template("setup_connect.html", progress=_progress(), **retry_ctx)
     if bool(api_client_cert) != bool(api_client_key):
         flash("Set both the client certificate and key, or neither.", "error")
         return render_template("setup_connect.html", progress=_progress(), **retry_ctx)
     for label, path in (("client certificate", api_client_cert), ("client key", api_client_key)):
-        if path and not os.path.isfile(path):
-            flash(f"Client {label} not found on the Jen host: {path}", "error")
+        if path and not __auth.usable_file(path):
+            flash(__auth.unusable_file_message(f"client {label}", path), "error")
             return render_template("setup_connect.html", progress=_progress(), **retry_ctx)
     tls_err = __kea.validate_client_tls_material(api_client_cert, api_client_key, api_ca)
     if tls_err:

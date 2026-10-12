@@ -421,7 +421,7 @@ def discover() -> dict:
     try:
         result = __kea.kea_command("config-get")
         if result.get("result") == 0:
-            dhcp4_cfg = result.get("arguments", {}).get("Dhcp4")
+            dhcp4_cfg = (result.get("arguments") or {}).get("Dhcp4")
     except Exception as e:
         logger.warning(f"setup_wizard.discover: config-get failed: {e}")
 
@@ -549,7 +549,9 @@ def probe_v6(url: str, user: str, password: str, *, omit_service: bool) -> dict:
     if version_result is None:
         return {"ok": False, "error": err, **empty}
 
-    version_text = (version_result.get("arguments", {}).get("extended", "") or version_result.get("text", "")).strip()
+    version_text = (
+        (version_result.get("arguments") or {}).get("extended", "") or version_result.get("text", "")
+    ).strip()
     v = parse_kea_version(version_text)
     version = ".".join(str(n) for n in v) if v else ""
     known = {"version": version, "version_text": version_text}

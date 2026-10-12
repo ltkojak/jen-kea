@@ -24,7 +24,13 @@ import jen.services.kea6 as __kea6
 import jen.services.kea_config_view as __view
 import jen.services.pools as __pools
 from jen import extensions
-from jen.services.access import accessible_subnet6_map, diagnostic_surface, paired_v4_id, subnet6_visible
+from jen.services.access import (
+    accessible_subnet6_map,
+    add_subnet_restriction,
+    diagnostic_surface,
+    paired_v4_id,
+    subnet6_visible,
+)
 from jen.services.fingerprint import DEVICE_TYPE_DISPLAY
 from jen.services.leases_sql import ACTIVE_LEASE4, active_lease4
 
@@ -36,11 +42,6 @@ def _JEN_VERSION():
     from jen import JEN_VERSION
 
     return JEN_VERSION
-
-
-def __ip_to_int(ip):
-    parts = ip.split(".")
-    return sum(int(p) << (8 * (3 - i)) for i, p in enumerate(parts))
 
 
 def _get_ipv6_dashboard_summary(visible6):
@@ -166,7 +167,7 @@ def dashboard():
         kea_cfg = __kea.kea_command("config-get", server=__kea.get_active_kea_server())
         kea_subnets = {}
         if isinstance(kea_cfg, dict) and kea_cfg.get("result") == 0:
-            for s, _sn in __view.iter_subnet4(kea_cfg.get("arguments", {}).get("Dhcp4", {})):
+            for s, _sn in __view.iter_subnet4((kea_cfg.get("arguments") or {}).get("Dhcp4", {})):
                 sid = s.get("id")
                 routers = ""
                 dns_servers = ""
@@ -199,17 +200,9 @@ def dashboard():
         with __db.kea_db() as db:
             window_seconds = int(hours * 3600)
             with db.cursor() as cur:
-                # Filter recent leases to accessible subnets
-                subnet_clause = ""
-                subnet_params = []
-                if not current_user.all_subnets:
-                    ids = current_user.accessible_subnet_ids(extensions.SUBNET_MAP)
-                    if ids:
-                        placeholders = ",".join(["%s"] * len(ids))
-                        subnet_clause = f"AND l.subnet_id IN ({placeholders})"
-                        subnet_params = ids
-                    else:
-                        subnet_clause = "AND 1=0"
+                # Filter recent leases to accessible subnets: the one helper every other list uses (a hand-rolled IN clause here was the one copy that could drift)
+                restriction, subnet_params = add_subnet_restriction([], [], "l", "subnet_id")
+                subnet_clause = ("AND " + restriction[0]) if restriction else ""
                 cur.execute(
                     f"""
                     SELECT inet_ntoa(l.address) AS ip, l.hostname,
@@ -262,30 +255,6 @@ def dashboard():
     if request.headers.get("HX-Request") == "true":
         return render_template("_recent_leases_rows.html", **template_vars), 200
     return render_template("dashboard.html", **template_vars)
-
-
-# ─────────────────────────────────────────
-# Leases
-# ─────────────────────────────────────────
-
-
-@bp.route("/api/saved-searches")
-@login_required
-def api_saved_searches():
-    page = request.args.get("page", "")
-    try:
-        with __db.jen_db() as db, db.cursor() as cur:
-            if page:
-                cur.execute(
-                    "SELECT * FROM saved_searches WHERE user_id=%s AND page=%s ORDER BY name",
-                    (current_user.id, page),
-                )
-            else:
-                cur.execute("SELECT * FROM saved_searches WHERE user_id=%s ORDER BY name", (current_user.id,))
-            searches = cur.fetchall()
-        return jsonify([dict(s) for s in searches])
-    except Exception:
-        return jsonify([])
 
 
 # ─────────────────────────────────────────
@@ -460,7 +429,7 @@ def api_stats():
         kea_version = ""
         ver_result = __kea.kea_command("version-get")
         if ver_result.get("result") == 0:
-            kea_version = ver_result.get("arguments", {}).get("extended", ver_result.get("text", ""))
+            kea_version = (ver_result.get("arguments") or {}).get("extended", ver_result.get("text", ""))
             kea_version = kea_version.splitlines()[0] if kea_version else ""
         server_statuses = [
             {
@@ -498,12 +467,12 @@ def api_stats():
                         "ha-heartbeat", server=next(s for s in extensions.KEA_SERVERS if s["id"] == srv["id"])
                     )
                     if ha.get("result") == 0:
-                        srv["ha_state"] = ha.get("arguments", {}).get("state", "")
+                        srv["ha_state"] = (ha.get("arguments") or {}).get("state", "")
                 ver = __kea.kea_command(
                     "version-get", server=next(s for s in extensions.KEA_SERVERS if s["id"] == srv["id"])
                 )
                 if ver.get("result") == 0:
-                    v = ver.get("arguments", {}).get("extended", ver.get("text", ""))
+                    v = (ver.get("arguments") or {}).get("extended", ver.get("text", ""))
                     srv["version"] = v.splitlines()[0] if v else ""
         return jsonify(
             {
@@ -757,7 +726,6 @@ def api_recent_leases():
             # v4.4.9: this widget had no subnet filtering at all — any
             # logged-in user saw the 50 most recent leases system-wide,
             # including subnets they're restricted away from.
-            from jen.services.access import add_subnet_restriction
 
             where, params = (
                 [

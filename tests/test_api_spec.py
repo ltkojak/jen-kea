@@ -127,3 +127,99 @@ class TestNoInstanceDataBeyondVersionAndServerUrl:
         text = r.get_data(as_text=True).replace(JEN_VERSION, "")
         for marker in ("Test Kea", "Test Network", "10.99.0.0", "ipam", "network-discovery"):
             assert marker not in text, f"fixture/instance marker {marker!r} leaked into the public API spec"
+
+
+class TestEveryDocumentedResponseMatchesTheSchema:
+    """v5.69.0-beta.5 (Q174): the document drifted from the code in quiet ways (a Subnet `reserved` that was `reservations`, a Lease with no `obtained`, a Device `name` that was `device_name`).
+    Each documented GET without a path parameter is called with a real key; the response's top-level keys must be properties of its schema, every `required` key must be present, and
+    for a list the same holds for each item."""
+
+    @staticmethod
+    def _headers(db):
+        import hashlib
+
+        from tests.test_api_key_authorization import _insert_admin_user, _insert_api_key
+
+        admin_id = _insert_admin_user(db, "q174_spec_admin")
+        key_id = _insert_api_key(db, "_q174_spec_key", created_by=admin_id)
+        raw = "jen_q174_spec_key_value"
+        with db.cursor() as cur:
+            cur.execute(
+                "UPDATE api_keys SET key_hash=%s WHERE id=%s", (hashlib.sha256(raw.encode()).hexdigest(), key_id)
+            )
+        db.commit()
+        return {"Authorization": f"Bearer {raw}"}
+
+    @staticmethod
+    def _schema(spec, node):
+        while "$ref" in node:
+            node = spec["components"]["schemas"][node["$ref"].rsplit("/", 1)[1]]
+        return node
+
+    def _check(self, spec, schema, body, where):
+        schema = self._schema(spec, schema)
+        props = schema.get("properties") or {}
+        if not props:
+            return
+        extra = set(body) - set(props)
+        assert not extra, f"{where}: keys the document does not describe: {sorted(extra)}"
+        missing = set(schema.get("required") or []) - set(body)
+        assert not missing, f"{where}: required keys absent: {sorted(missing)}"
+        for name, sub in props.items():
+            sub = self._schema(spec, sub)
+            if name in body and sub.get("type") == "array" and isinstance(body[name], list):
+                item_schema = self._schema(spec, sub.get("items") or {})
+                for i, item in enumerate(body[name][:3]):
+                    if isinstance(item, dict):
+                        self._check(spec, item_schema, item, f"{where}.{name}[{i}]")
+
+    def test_the_get_responses_match(self, client, db, mock_kea, monkeypatch):
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {1: {"name": "Office", "cidr": "10.99.0.0/24"}})
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4 WHERE HEX(hwaddr)='AABBCCDDEE71'")
+            cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier)='AABBCCDDEE72'")
+            cur.execute(
+                "INSERT INTO lease4 (address, hwaddr, subnet_id, valid_lifetime, expire, state, hostname) VALUES "
+                "(INET_ATON('10.99.0.171'), UNHEX('AABBCCDDEE71'), 1, 3600, DATE_ADD(NOW(), INTERVAL 1 HOUR), 0, 'q174-lease')"
+            )
+            cur.execute(
+                "INSERT INTO hosts (dhcp_identifier, dhcp_identifier_type, dhcp4_subnet_id, ipv4_address, hostname) "
+                "VALUES (UNHEX('AABBCCDDEE72'), 0, 1, INET_ATON('10.99.0.172'), 'q174-host')"
+            )
+            cur.execute("DELETE FROM devices WHERE mac='aa:bb:cc:dd:ee:71'")
+            cur.execute(
+                "INSERT INTO devices (mac, device_name, last_ip, last_hostname, last_subnet_id, first_seen, last_seen) "
+                "VALUES ('aa:bb:cc:dd:ee:71', 'q174 device', '10.99.0.171', 'q174-lease', 1, NOW(), NOW())"
+            )
+        db.commit()
+        headers = self._headers(db)
+        spec = build_spec("x")
+        checked = []
+        try:
+            for path, item in spec["paths"].items():
+                if "{" in path or "get" not in item or path == "/api/v1/openapi.json":
+                    continue
+                ok = item["get"]["responses"].get("200") or {}
+                schema = ((ok.get("content") or {}).get("application/json") or {}).get("schema")
+                if not schema:
+                    continue
+                r = client.get(path, headers=headers)
+                assert r.status_code == 200, (path, r.status_code, r.get_data(as_text=True)[:200])
+                self._check(spec, schema, r.get_json(), path)
+                checked.append(path)
+            for path in ("/api/v1/leases/aa:bb:cc:dd:ee:71", "/api/v1/devices/aa:bb:cc:dd:ee:71"):
+                r = client.get(path, headers=headers)
+                assert r.status_code == 200, (path, r.status_code)
+                spec_path = path.rsplit("/", 1)[0] + "/{mac}"
+                schema = spec["paths"][spec_path]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+                self._check(spec, schema, r.get_json(), path)
+                checked.append(path)
+        finally:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM lease4 WHERE HEX(hwaddr)='AABBCCDDEE71'")
+                cur.execute("DELETE FROM hosts WHERE HEX(dhcp_identifier)='AABBCCDDEE72'")
+                cur.execute("DELETE FROM devices WHERE mac='aa:bb:cc:dd:ee:71'")
+            db.commit()
+        assert "/api/v1/subnets" in checked and "/api/v1/leases" in checked and "/api/v1/reservations" in checked

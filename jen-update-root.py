@@ -475,6 +475,7 @@ def fetch_text(url, timeout=15):
 # _install_kea_helper_signature() (below) uses this — a "+1" read that comes back oversize
 # is treated as a fetch failure, never truncated and used anyway.
 _HELPER_SIG_MAX = 8 * 1024
+_PLUGIN_ZIP_MAX_BYTES = 50 * 1024 * 1024  # a plugin package is code and templates (v5.69.0-beta.5, Q174)
 
 
 def fetch_bytes_bounded(url, max_bytes, timeout=15):
@@ -490,17 +491,29 @@ def fetch_bytes_bounded(url, max_bytes, timeout=15):
     return data
 
 
-def fetch_bytes_with_sha256(url, timeout=120):
+def fetch_bytes_with_sha256(url, timeout=120, max_bytes=None):
+    """The body of `url` and its sha256. `max_bytes` (a plugin package: 50 MB - v5.69.0-beta.5, Q174) refuses a response that declares or turns out to be bigger, before it is all
+    in memory: this runs as root on a URL the registry names."""
     req = urllib.request.Request(url)
     sha256 = hashlib.sha256()
     chunks = []
+    total = 0
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         if resp.status != 200:
             raise RuntimeError(f"Download failed: HTTP {resp.status}")
+        try:
+            declared = int(resp.headers.get("Content-Length"))
+        except (TypeError, ValueError, AttributeError):
+            declared = None
+        if max_bytes is not None and declared is not None and declared > max_bytes:
+            raise RuntimeError(f"Download refused: {declared} bytes is over the {max_bytes} byte cap")
         while True:
             chunk = resp.read(8192)
             if not chunk:
                 break
+            total += len(chunk)
+            if max_bytes is not None and total > max_bytes:
+                raise RuntimeError(f"Download refused: over the {max_bytes} byte cap")
             chunks.append(chunk)
             sha256.update(chunk)
     return b"".join(chunks), sha256.hexdigest()
@@ -1891,7 +1904,9 @@ def _install_one_plugin(
         return "error: registry entry has no valid checksum"
 
     try:
-        zip_bytes, actual_sha256 = fetch_bytes_with_sha256(f"{download_url}/plugin.zip")
+        zip_bytes, actual_sha256 = fetch_bytes_with_sha256(
+            f"{download_url}/plugin.zip", max_bytes=_PLUGIN_ZIP_MAX_BYTES
+        )
     except Exception as e:
         return f"error: download failed: {e}"
 

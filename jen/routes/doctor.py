@@ -35,7 +35,7 @@ def doctor_page():
         return redirect(url_for("servers.servers"))
 
     result = __kea.kea_command("config-get", server=__kea.get_active_kea_server())
-    cfg = result.get("arguments", {}).get("Dhcp4") if result.get("result") == 0 else None
+    cfg = (result.get("arguments") or {}).get("Dhcp4") if result.get("result") == 0 else None
     error = None if cfg is not None else (result.get("text") or "config-get failed")
 
     findings = []

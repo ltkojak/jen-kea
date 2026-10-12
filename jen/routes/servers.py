@@ -136,11 +136,6 @@ def _JEN_VERSION():
     return JEN_VERSION
 
 
-def __ip_to_int(ip):
-    parts = ip.split(".")
-    return sum(int(p) << (8 * (3 - i)) for i, p in enumerate(parts))
-
-
 @bp.route("/servers")
 @login_required
 @diagnostic_surface(subject="client")
@@ -150,12 +145,12 @@ def servers():
     for s in statuses:
         if s["up"]:
             ver = __kea.kea_command("version-get", server=s["server"])
-            s["version"] = ver.get("arguments", {}).get("extended", ver.get("text", ""))
+            s["version"] = (ver.get("arguments") or {}).get("extended", ver.get("text", ""))
             s["version"] = s["version"].splitlines()[0] if s["version"] else ""
             # Get lease stats per server
             stats_result = __kea.kea_command("stat-lease4-get", server=s["server"])
             s["lease_stats"] = (
-                stats_result.get("arguments", {}).get("result-set", {}) if stats_result.get("result") == 0 else {}
+                (stats_result.get("arguments") or {}).get("result-set", {}) if stats_result.get("result") == 0 else {}
             )
             s["packet_health"] = _packet_health_for_server(s["server"]["id"])
         else:
@@ -236,7 +231,9 @@ def servers():
             if s["up"]:
                 s["ha_status"] = __ha.ha_status(s["server"])
                 cfg_result = __kea.kea_command("config-get", server=s["server"])
-                dhcp4_cfg = cfg_result.get("arguments", {}).get("Dhcp4", {}) if cfg_result.get("result") == 0 else {}
+                dhcp4_cfg = (
+                    (cfg_result.get("arguments") or {}).get("Dhcp4", {}) if cfg_result.get("result") == 0 else {}
+                )
                 s["ha_config"] = __ha.ha_config(dhcp4_cfg)
             else:
                 s["ha_status"] = None
@@ -452,7 +449,7 @@ def ha_action(server_id, action):
     args = {}
     if action == "sync":
         cfg_result = __kea.kea_command("config-get", server=server)
-        dhcp4_cfg = cfg_result.get("arguments", {}).get("Dhcp4", {}) if cfg_result.get("result") == 0 else {}
+        dhcp4_cfg = (cfg_result.get("arguments") or {}).get("Dhcp4", {}) if cfg_result.get("result") == 0 else {}
         ha_cfg = __ha.ha_config(dhcp4_cfg)
         partner = __ha.partner_name(ha_cfg) if ha_cfg else None
         if not partner:
@@ -514,7 +511,7 @@ def _ha_configs_for_all():
     out = {}
     for s in extensions.KEA_SERVERS:
         r = __kea.kea_command("config-get", server=s)
-        dhcp4 = r.get("arguments", {}).get("Dhcp4", {}) if r.get("result") == 0 else None
+        dhcp4 = (r.get("arguments") or {}).get("Dhcp4", {}) if r.get("result") == 0 else None
         out[s["id"]] = __ha.ha_config(dhcp4) if dhcp4 is not None else None
     return out
 
@@ -722,6 +719,7 @@ def ha_maintenance_back():
 @bp.route("/servers/ha/maintenance/finish", methods=["POST"])
 @login_required
 @_superadmin_required
+@_recent_auth_required(10)
 def ha_maintenance_finish():
     state = _maint_state()
     if state:

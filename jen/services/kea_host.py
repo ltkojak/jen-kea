@@ -71,6 +71,14 @@ _HELPER_STATUS_KEY = "kea_helper_status"
 _MISSING_RE = re.compile(r"password is required|command not found|no such file", re.IGNORECASE)
 
 
+def _looks_missing(err: str) -> bool:
+    """Does `err` say the helper is not callable here? Only the FIRST line of stderr is asked: it is where sudo ("a password is required") and the shell ("... No such file
+    or directory", "command not found") put their refusal. The whole text used to be searched, so a helper that RAN and failed with a traceback naming a missing file on a
+    later line flipped the host to "legacy" status until the next contact (v5.69.0-beta.5, Q174)."""
+    first = (err or "").strip().splitlines()[:1]
+    return bool(first and _MISSING_RE.search(first[0]))
+
+
 class HelperMissing(Exception):
     """The helper isn't installed, or the sudoers line is absent, on this host."""
 
@@ -158,7 +166,7 @@ def helper_call(server: dict, op: str, payload: dict | None = None, timeout: int
                 return parsed
         except ValueError:
             pass
-    if _MISSING_RE.search(err):
+    if _looks_missing(err):
         raise HelperMissing(err)
     raise HelperError(err or "no JSON from helper")
 
@@ -183,6 +191,9 @@ def helper_status() -> dict:
         return {}
 
 
+_helper_status_lock = threading.Lock()
+
+
 def record_helper_status(server_id, version, build=None, legacy_grant: bool | None = None) -> None:
     """Called after every helper attempt: `version` is the integer
     reported by a `version` op, an int carried forward for any other
@@ -198,18 +209,20 @@ def record_helper_status(server_id, version, build=None, legacy_grant: bool | No
     callers have no reason to SSH just to check."""
     if server_id is None:
         return
-    data = helper_status()
-    prev = data.get(str(server_id), {})
-    data[str(server_id)] = {
-        "version": version,
-        "build": build if build is not None else prev.get("build"),
-        "checked": datetime.now(timezone.utc).isoformat(),
-        "legacy_grant": legacy_grant if legacy_grant is not None else prev.get("legacy_grant"),
-    }
-    try:
-        _user().set_global_setting(_HELPER_STATUS_KEY, json.dumps(data))
-    except Exception as e:
-        logger.warning(f"could not persist kea_helper_status: {e}")
+    # one JSON object holds every server: two threads recording two servers read the same object and the later write erased the earlier one's row (v5.69.0-beta.5, Q174)
+    with _helper_status_lock:
+        data = helper_status()
+        prev = data.get(str(server_id), {})
+        data[str(server_id)] = {
+            "version": version,
+            "build": build if build is not None else prev.get("build"),
+            "checked": datetime.now(timezone.utc).isoformat(),
+            "legacy_grant": legacy_grant if legacy_grant is not None else prev.get("legacy_grant"),
+        }
+        try:
+            _user().set_global_setting(_HELPER_STATUS_KEY, json.dumps(data))
+        except Exception as e:
+            logger.warning(f"could not persist kea_helper_status: {e}")
 
 
 def _known_version(server_id):
@@ -1345,7 +1358,7 @@ def _sudo_l_summary(listing: str) -> str:
     return summary
 
 
-def legacy_grant_status(server: dict) -> dict:
+def legacy_grant_status(server: dict, explain: bool = True) -> dict:
     """Is the old `NOPASSWD: /usr/bin/python3` grant usable right now, and if not, WHY — sudo's
     own first stderr line, not just a boolean. v5.65.13 (Q102, a maintainer report): a bare `rc !=
     0` used to mean only "no", with no way to tell a genuinely missing grant from sudo refusing a
@@ -1376,8 +1389,9 @@ def legacy_grant_status(server: dict) -> dict:
     reason = reason_source.splitlines()[0] if reason_source else f"sudo exited {rc}"
     summary = ""
     try:
-        list_out, list_err, _list_rc = _legacy_ssh(server, "sudo -n -l", timeout=15)
-        summary = _sudo_l_summary(list_out or list_err or "")
+        if explain:  # a caller that only wants the yes/no (check_helper) does not open a second session for a listing nobody reads (Q174)
+            list_out, list_err, _list_rc = _legacy_ssh(server, "sudo -n -l", timeout=15)
+            summary = _sudo_l_summary(list_out or list_err or "")
     except Exception:
         pass  # the reason above already carries the useful part; the listing is a bonus
     logger.warning(f"legacy_grant_status: {user_at_host}: sudo refused ({reason!r}); rc={rc}")
@@ -1390,7 +1404,7 @@ def legacy_grant_present(server: dict) -> bool:
 
     v5.65.13 (Q102) — thin boolean wrapper over legacy_grant_status(), kept for callers (helper
     status recording, the Health row) that only ever needed the yes/no."""
-    return legacy_grant_status(server)["ok"]
+    return legacy_grant_status(server, explain=False)["ok"]
 
 
 def remove_legacy_grant(server: dict) -> dict:

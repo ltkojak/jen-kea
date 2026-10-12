@@ -183,7 +183,7 @@ def test_connection(
     )
     if result is None:
         return "", err
-    return (result.get("arguments", {}).get("extended", "") or result.get("text", "")).strip(), ""
+    return ((result.get("arguments") or {}).get("extended", "") or result.get("text", "")).strip(), ""
 
 
 def probe_command(
@@ -223,7 +223,11 @@ def probe_command(
         )
         resp.raise_for_status()
         data = resp.json()
+        if isinstance(data, list) and not data:
+            return None, "Kea answered with an empty list"
         d = data[0] if isinstance(data, list) else data
+        if not isinstance(d, dict):
+            return None, "Kea answered with something that is not a reply"
         if d.get("result") != 0:
             return None, d.get("text", "Kea returned an error")
         return d, ""
@@ -520,7 +524,7 @@ def get_all_server_status() -> list:
         if up and len(extensions.KEA_SERVERS) > 1:
             ha_result = kea_command("ha-heartbeat", server=server)
             if ha_result.get("result") == 0:
-                args = ha_result.get("arguments", {})
+                args = ha_result.get("arguments") or {}
                 ha_state = args.get("state", "unknown")
                 ha_partner = args.get("partner-state", "")
         statuses.append(
@@ -560,7 +564,7 @@ def get_active_kea_server() -> dict | None:
             continue
         ha = kea_command("ha-heartbeat", server=server)
         if ha.get("result") == 0:
-            state = ha.get("arguments", {}).get("state", "")
+            state = (ha.get("arguments") or {}).get("state", "")
             role = server.get("role", "primary")
             if state in active_states and role == "primary":
                 cache["server"] = server

@@ -51,16 +51,36 @@ def _upsert_option(opts, name, code, space, data):
     (v5.18.0 / Q12) also matching an entry that carries only `code` (no
     `name`) — e.g. one Jen's own option editor wrote as a custom code
     that happens to coincide with routers/dns-servers — so it gets
-    updated instead of duplicated."""
+    updated instead of duplicated. Returns True when the config now differs (v5.69.0-beta.5, Q174:
+    the caller used to say "changed" for every non-empty field, so an unchanged submit rewrote the file and restarted the daemon)."""
     for o in opts:
         if isinstance(o, dict) and o.get("code") == code:
+            changed = o.get("data") != data
             o["data"] = data
-            return
+            return changed
     for o in opts:
         if isinstance(o, dict) and o.get("code") is None and o.get("name") == name:
+            changed = o.get("data") != data
             o["data"] = data
-            return
+            return changed
     opts.append({"name": name, "code": code, "space": space, "csv-format": True, "data": data})
+    return True
+
+
+def _set_if_different(s, key, value) -> bool:
+    """`s[key] = value`, reporting whether that changed anything."""
+    if s.get(key) == value:
+        return False
+    s[key] = value
+    return True
+
+
+def _set_pools(s, new_pool, extra_pools) -> bool:
+    pools = [{"pool": new_pool}] + [{"pool": p} for p in (extra_pools or [])]
+    if s.get("pools") == pools:
+        return False
+    s["pools"] = pools
+    return True
 
 
 def patch_subnet4(cfg, subnet_id, new_pool, extra_pools, new_lifetime, new_renew, new_rebind, new_routers, new_dns):
@@ -74,25 +94,19 @@ def patch_subnet4(cfg, subnet_id, new_pool, extra_pools, new_lifetime, new_renew
         if s.get("id") != subnet_id:
             continue
         if new_pool:
-            s["pools"] = [{"pool": new_pool}] + [{"pool": p} for p in (extra_pools or [])]
-            changed = True
+            changed |= _set_pools(s, new_pool, extra_pools)
         if new_lifetime:
-            s["valid-lifetime"] = int(new_lifetime)
-            changed = True
+            changed |= _set_if_different(s, "valid-lifetime", int(new_lifetime))
         if new_renew:
-            s["renew-timer"] = int(new_renew)
-            changed = True
+            changed |= _set_if_different(s, "renew-timer", int(new_renew))
         if new_rebind:
-            s["rebind-timer"] = int(new_rebind)
-            changed = True
+            changed |= _set_if_different(s, "rebind-timer", int(new_rebind))
         if new_routers or new_dns:
             opts = s.get("option-data", [])
             if new_routers:
-                _upsert_option(opts, "routers", 3, "dhcp4", new_routers)
-                changed = True
+                changed |= _upsert_option(opts, "routers", 3, "dhcp4", new_routers)
             if new_dns:
-                _upsert_option(opts, "domain-name-servers", 6, "dhcp4", new_dns)
-                changed = True
+                changed |= _upsert_option(opts, "domain-name-servers", 6, "dhcp4", new_dns)
             s["option-data"] = opts
         break
     return cfg, changed
@@ -106,25 +120,19 @@ def patch_subnet6(cfg, subnet_id, new_pool, extra_pools, new_preferred, new_vali
         if s.get("id") != subnet_id:
             continue
         if new_pool:
-            s["pools"] = [{"pool": new_pool}] + [{"pool": p} for p in (extra_pools or [])]
-            changed = True
+            changed |= _set_pools(s, new_pool, extra_pools)
         if new_preferred:
-            s["preferred-lifetime"] = int(new_preferred)
-            changed = True
+            changed |= _set_if_different(s, "preferred-lifetime", int(new_preferred))
         if new_valid:
-            s["valid-lifetime"] = int(new_valid)
-            changed = True
+            changed |= _set_if_different(s, "valid-lifetime", int(new_valid))
         if new_renew:
-            s["renew-timer"] = int(new_renew)
-            changed = True
+            changed |= _set_if_different(s, "renew-timer", int(new_renew))
         if new_rebind:
-            s["rebind-timer"] = int(new_rebind)
-            changed = True
+            changed |= _set_if_different(s, "rebind-timer", int(new_rebind))
         if new_dns:
             opts = s.get("option-data", [])
-            _upsert_option(opts, "dns-servers", 23, "dhcp6", new_dns)
+            changed |= _upsert_option(opts, "dns-servers", 23, "dhcp6", new_dns)
             s["option-data"] = opts
-            changed = True
         break
     return cfg, changed
 
@@ -135,6 +143,9 @@ def add_subnet4(cfg, block, shared_network=None):
     (new_cfg, "ok"|"idexists"|"nonetwork"). The new id must be unique
     across every subnet, top-level or nested."""
     cfg = copy.deepcopy(cfg)
+    block = copy.deepcopy(
+        block
+    )  # the caller keeps its own object (Q174): editing it afterwards must not edit the returned config
     new_id = block.get("id")
     d4 = cfg.setdefault("Dhcp4", {})
     if any(s.get("id") == new_id for s in _iter_subnets(cfg, "Dhcp4", "subnet4")):
@@ -370,6 +381,7 @@ def upsert_class4(cfg, class_dict, position=None):
     matching the mutate_fn(cfg) -> (cfg, code) shape _apply_dhcp4_change
     expects of every caller."""
     cfg = copy.deepcopy(cfg)
+    class_dict = copy.deepcopy(class_dict)  # not aliased into the returned config (Q174)
     classes = _classes_of(cfg)
     name = class_dict.get("name")
     idx = _find_class(classes, name)
@@ -506,6 +518,7 @@ def set_ddns4(cfg, values: dict):
     returns the (cfg, "ok") shape those use, for a consistent call site
     in the route."""
     cfg = copy.deepcopy(cfg)
+    values = copy.deepcopy(values)  # not aliased into the returned config (Q174)
     dhcp4 = cfg.setdefault("Dhcp4", {})
     block_values = {k: v for k, v in values.items() if k in _DDNS_BLOCK_KEYS}
     if block_values:
@@ -565,6 +578,7 @@ def set_control_socket(cfg: dict, service: str, socket: dict):
     `Dhcp6`/`DhcpDdns` block for `service`, or a `control-sockets` that
     isn't the daemon list form)."""
     cfg = copy.deepcopy(cfg)
+    socket = copy.deepcopy(socket)  # not aliased into the returned config (Q174)
     key = _DAEMON_KEY.get(service)
     section = cfg.get(key) if key else None
     if not isinstance(section, dict):

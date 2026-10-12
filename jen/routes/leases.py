@@ -32,11 +32,6 @@ def _JEN_VERSION():
     return JEN_VERSION
 
 
-def __ip_to_int(ip):
-    parts = ip.split(".")
-    return sum(int(p) << (8 * (3 - i)) for i, p in enumerate(parts))
-
-
 @bp.route("/leases")
 @login_required
 def leases():
@@ -142,7 +137,6 @@ def leases():
                             "mac": mac,
                             "subnet_id": row["subnet_id"],
                             "subnet_name": extensions.SUBNET_MAP.get(row["subnet_id"], {}).get("name", ""),
-                            "expired": row.get("state", 0) != 0,
                         }
                     )
             # Build set of MACs that have reservations — single query, O(1) lookup per lease

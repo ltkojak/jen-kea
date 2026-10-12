@@ -158,12 +158,12 @@ def _status_tab_context():
     if any(s["enabled"] for s in server_updates):
         r = __kea.kea_command("version-get", service="d2", server=active_server)
         if r.get("result") == 0:
-            ver = __kea.parse_kea_version(r.get("arguments", {}).get("extended", "") or r.get("text", ""))
+            ver = __kea.parse_kea_version((r.get("arguments") or {}).get("extended", "") or r.get("text", ""))
             d2_status = "ok"
             d2_detail = f"answered{' v' + '.'.join(map(str, ver)) if ver else ''}"
             stats_r = __kea.kea_command("statistic-get-all", service="d2", server=active_server)
             if stats_r.get("result") == 0:
-                args = stats_r.get("arguments", {})
+                args = stats_r.get("arguments") or {}
                 d2_stats = {
                     k: _stat_value(args, k)
                     for k in (

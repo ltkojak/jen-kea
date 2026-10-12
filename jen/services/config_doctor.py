@@ -27,6 +27,7 @@ from jen.services import kea_classes as _classes
 from jen.services import kea_config_view as _view
 from jen.services import kea_readiness as _readiness
 from jen.services import pools as _pools_mod
+from jen.services.netutil import ip_to_int
 
 Finding = dict  # {id, severity, title, detail, where, fix_url, why}
 
@@ -50,13 +51,6 @@ def _subnet_range(cidr: str) -> tuple[int, int] | None:
         net = ipaddress.IPv4Network((cidr or "").strip(), strict=False)
         return int(net.network_address), int(net.broadcast_address)
     except (ValueError, TypeError):
-        return None
-
-
-def _ip_to_int(ip: str) -> int | None:
-    try:
-        return int(ipaddress.IPv4Address((ip or "").strip()))
-    except ValueError:
         return None
 
 
@@ -229,7 +223,7 @@ def _check_reservation_outside_subnet(dhcp4_cfg, hosts) -> list[Finding]:
             continue
         subnet, _sn = found
         subnet_range = _subnet_range(subnet.get("subnet"))
-        ip_int = _ip_to_int(ip)
+        ip_int = ip_to_int(ip)
         if subnet_range is None or ip_int is None:
             continue
         if not (subnet_range[0] <= ip_int <= subnet_range[1]):
@@ -258,7 +252,7 @@ def _check_reservation_inside_pool(dhcp4_cfg, hosts) -> list[Finding]:
         if found is None:
             continue
         subnet, _sn = found
-        ip_int = _ip_to_int(ip)
+        ip_int = ip_to_int(ip)
         if ip_int is None:
             continue
         inside_pool = any(

@@ -211,6 +211,8 @@ def _kea6_targets_same_db() -> bool:
         and extensions.KEA6_DB_USER == extensions.KEA_DB_USER
         and extensions.KEA6_DB_PASS == extensions.KEA_DB_PASS
         and extensions.KEA6_DB_NAME == extensions.KEA_DB_NAME
+        # the CA is part of the target: a v6 database reached over TLS must not share the plaintext v4 pool (v5.69.0-beta.5, Q174)
+        and extensions.KEA6_DB_SSL_CA == extensions.KEA_DB_SSL_CA
     )
 
 

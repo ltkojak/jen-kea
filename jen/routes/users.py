@@ -32,11 +32,6 @@ def _JEN_VERSION():
     return JEN_VERSION
 
 
-def __ip_to_int(ip):
-    parts = ip.split(".")
-    return sum(int(p) << (8 * (3 - i)) for i, p in enumerate(parts))
-
-
 @bp.route("/audit")
 @login_required
 def audit_legacy():
@@ -127,7 +122,7 @@ def about():
         ver_result = __kea.kea_command("version-get")
         if ver_result.get("result") == 0:
             kea_up = True
-            kea_version = ver_result.get("arguments", {}).get("extended", ver_result.get("text", ""))
+            kea_version = (ver_result.get("arguments") or {}).get("extended", ver_result.get("text", ""))
             kea_version = kea_version.splitlines()[0] if kea_version else ""
     except Exception:
         pass
@@ -369,6 +364,9 @@ def upload_avatar():
         except Exception as e:
             logger.error(f"Error saving avatar for {current_user.username}: {e}")
             flash("Error saving avatar. Check server logs for details.", "error")
+    elif data_url:
+        # anything that is not an image data URL used to fall through with no answer at all (v5.69.0-beta.5, Q174)
+        flash("That is not an image. Choose a JPEG, PNG, GIF or WebP file.", "error")
     elif data_url == "":
         # Remove avatar
         try:
@@ -439,7 +437,11 @@ def set_user_timeout(user_id):
                     "UPDATE users SET session_timeout=%s, token_version=token_version+1 WHERE id=%s",
                     (timeout_val, user_id),
                 )
+                found = cur.rowcount > 0
             db.commit()
+        if not found:  # token_version moves on every real row, so no row changed means no such account
+            flash("User not found.", "error")
+            return redirect(url_for("users.users"))
         session.pop("_user_cache", None)
         flash("Session timeout updated.", "success")
     except Exception as e:

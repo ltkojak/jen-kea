@@ -4,6 +4,7 @@ jen/routes/settings/infrastructure.py
 Kea / database / SSH / DDNS / HA / ports / metrics settings.
 """
 
+import contextlib
 import functools
 import ipaddress
 import logging
@@ -389,15 +390,15 @@ def save_infra_kea():
         else:
             flash("API URL must be a valid http:// or https:// URL.", "error")
         return redirect(url_for("settings.settings_kea"))
-    if api_ca and not os.path.isfile(api_ca):
-        flash(f"CA bundle path not found on the Jen host: {api_ca}", "error")
+    if api_ca and not __auth.usable_file(api_ca):
+        flash(__auth.unusable_file_message("CA bundle", api_ca), "error")
         return redirect(url_for("settings.settings_kea"))
     if bool(api_client_cert) != bool(api_client_key):
         flash("Set both the client certificate and key, or neither.", "error")
         return redirect(url_for("settings.settings_kea"))
     for label, path in (("client certificate", api_client_cert), ("client key", api_client_key)):
-        if path and not os.path.isfile(path):
-            flash(f"Client {label} not found on the Jen host: {path}", "error")
+        if path and not __auth.usable_file(path):
+            flash(__auth.unusable_file_message(f"client {label}", path), "error")
             return redirect(url_for("settings.settings_kea"))
     # v5.10.3 — isfile() is a stat(); it says nothing about whether the pair
     # actually loads, matches, or is readable by www-data. Check for real
@@ -683,6 +684,19 @@ def _identify_daemon(url, user, pwd, service, verify=None, cert=None):
     return __kea.identify_daemon(url, user, pwd, verify=verify, cert=cert)
 
 
+def _is_kea_url_shape(url: str) -> bool:
+    """`scheme://host:port` and at most a trailing slash: no user-info, path, query or fragment. A candidate URL is probed with Jen's own Kea credentials (v5.69.0-beta.5, Q174),
+    so a URL that is anything but where a Kea daemon listens - `http://internal:8080/admin?x=` - is not one to send them to."""
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(url)
+        parts.port  # noqa: B018 - raises ValueError for a port that is not a number (`kea:8004;x`)
+        return not (parts.username or parts.password or parts.query or parts.fragment or parts.path not in ("", "/"))
+    except ValueError:
+        return False
+
+
 @bp.route("/settings/infrastructure/probe-kea", methods=["POST"])
 @login_required
 @_admin_required
@@ -728,7 +742,7 @@ def probe_kea():
 
     candidate = request.form.get("candidate_url", "").strip()
     if candidate:
-        if not __auth.valid_api_url(candidate, require_port=True):
+        if not __auth.valid_api_url(candidate, require_port=True) or not _is_kea_url_shape(candidate):
             return jsonify(
                 {
                     "ok": False,
@@ -1260,7 +1274,10 @@ def setup_direct_socket(server_id, service):
     # Kea anyway.
     vr = __kea.kea_command("version-get", service, server=server)
     if vr.get("result") == 0:
-        ver_text = (vr.get("arguments", {}).get("extended", "") or vr.get("text", "")).splitlines()[0].strip()
+        # an empty reply has no first line (v5.69.0-beta.5, Q174: `.splitlines()[0]` raised IndexError out of the route on one)
+        ver_text = (((vr.get("arguments") or {}).get("extended", "") or vr.get("text", "")).splitlines() or [""])[
+            0
+        ].strip()
         v = __kea.parse_kea_version(ver_text)
         if v and not __caps.may_attempt_direct_socket(v):
             flash(
@@ -2175,8 +2192,11 @@ def save_ha_settings():
         items.append(("kea", "ha_mode", ha_mode))
     if server_name:
         items.append(("kea", "name", server_name))
-    if items:
-        __config.app_config.write_values(items)
+    if not items:
+        # "saved" was flashed whatever was written (v5.69.0-beta.5, Q174): an HA mode that is none of the four wrote nothing and still said so
+        flash("Refused: HA mode must be hot-standby, load-balancing, passive-backup or blank.", "error")
+        return redirect(url_for("settings.settings_kea"))
+    __config.app_config.write_values(items)
     flash("HA settings saved.", "success")
     __user.audit("SAVE_INFRA", "ha_settings", f"mode={ha_mode}")
     return redirect(url_for("settings.settings_kea"))
@@ -2314,7 +2334,16 @@ def generate_ssh_key():
     else:
         redirect_target = url_for("settings.settings_kea")
     os.makedirs(os.path.dirname(extensions.SSH_KEY_PATH), exist_ok=True)
+    # v5.69.0-beta.5 (Q174): the pair is made beside the live one and moved into place. ssh-keygen on a path that already holds a key asks "Overwrite (y/n)?", there is no terminal
+    # to answer, and it failed every time a key existed ("regenerate" never worked); and it chowned the result to a hard-coded `www-data` (the service user is whoever Jen runs as,
+    # and it already owns what it creates). The comment names this host, not a placeholder.
+    import socket
+
+    staging = extensions.SSH_KEY_PATH + ".new"
     try:
+        for stale in (staging, staging + ".pub"):
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(stale)
         subprocess.run(
             [
                 "ssh-keygen",
@@ -2323,23 +2352,21 @@ def generate_ssh_key():
                 "-b",
                 "4096",
                 "-f",
-                extensions.SSH_KEY_PATH,
+                staging,
                 "-N",
                 "",
                 "-C",
-                "jen@your-jen-server",
+                f"jen@{socket.gethostname()}",
             ],
             capture_output=True,
             check=True,
         )
-        os.chmod(extensions.SSH_KEY_PATH, 0o600)
-        subprocess.run(
-            ["chown", "www-data:www-data", extensions.SSH_KEY_PATH, extensions.SSH_KEY_PATH + ".pub"],
-            capture_output=True,
-        )
+        os.chmod(staging, 0o600)
+        os.replace(staging, extensions.SSH_KEY_PATH)
+        os.replace(staging + ".pub", extensions.SSH_KEY_PATH + ".pub")
         with open(extensions.SSH_KEY_PATH + ".pub") as f:
             pub_key = f.read().strip()
-        flash(f"SSH key generated. Add this public key to your-kea-server:\n{pub_key}", "success")
+        flash(f"SSH key generated. Add this public key to the Kea server's authorized_keys:\n{pub_key}", "success")
         __user.audit("GENERATE_SSH_KEY", "settings", "SSH key pair generated")
     except subprocess.CalledProcessError as e:
         logger.error(f"Failed to generate SSH key: {e.stderr.decode() if e.stderr else e}")

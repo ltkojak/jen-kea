@@ -101,6 +101,9 @@ def settings_alerts():
     )
 
 
+CHANNEL_TYPES = ("telegram", "email", "slack", "webhook", "ntfy", "pushover", "discord")
+
+
 @bp.route("/settings/alerts/save-channel", methods=["POST"])
 @login_required
 @_admin_required
@@ -111,6 +114,10 @@ def save_alert_channel():
     channel_name = request.form.get("channel_name", "").strip()[:100]
     enabled = 1 if request.form.get("enabled") else 0
     alert_types = request.form.getlist("alert_types[]")
+    if channel_type not in CHANNEL_TYPES:
+        # the type is written now (it used to be stored only on INSERT, so an edit that changed it saved a config for one type under another) - and it is one of ours
+        flash("Choose a channel type from the list.", "error")
+        return redirect(url_for("settings.settings_alerts"))
 
     # v5.1.16 — per-channel subnet scope, same NULL-means-unrestricted
     # convention and same creator-can't-exceed-their-own-access clamp as
@@ -209,10 +216,18 @@ def save_alert_channel():
                 if channel_id:
                     cur.execute(
                         """
-                        UPDATE alert_channels SET channel_name=%s, enabled=%s, config=%s, alert_types=%s, subnet_scope=%s
+                        UPDATE alert_channels SET channel_type=%s, channel_name=%s, enabled=%s, config=%s, alert_types=%s, subnet_scope=%s
                         WHERE id=%s
                     """,
-                        (channel_name, enabled, config_blob, json.dumps(alert_types), subnet_scope, channel_id),
+                        (
+                            channel_type,
+                            channel_name,
+                            enabled,
+                            config_blob,
+                            json.dumps(alert_types),
+                            subnet_scope,
+                            channel_id,
+                        ),
                     )
                 else:
                     cur.execute(
@@ -287,6 +302,8 @@ def test_alert_channel(channel_id):
             ok = __alerts._send_ntfy_channel(test_msg, config)
         elif ctype == "discord":
             ok = __alerts._send_discord_channel(test_msg, config)
+        elif ctype == "pushover":
+            ok = __alerts._send_pushover_channel(test_msg, config)
         else:
             ok = False
         if ok:

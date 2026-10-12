@@ -29,11 +29,6 @@ def _JEN_VERSION():
     return JEN_VERSION
 
 
-def __ip_to_int(ip):
-    parts = ip.split(".")
-    return sum(int(p) << (8 * (3 - i)) for i, p in enumerate(parts))
-
-
 @bp.route("/devices")
 @login_required
 @diagnostic_surface(subject="client")
@@ -75,7 +70,7 @@ def devices():
         "status": "d.last_seen",
     }
     sort_col = sort_map.get(sort, "d.last_seen")
-    stale_days = int(__user.get_global_setting("stale_device_days", "30"))
+    stale_days = __user.get_stale_device_days()
 
     devices_list = []
     total = 0

@@ -373,7 +373,8 @@ _DROPPED_KEY = "client_problems_dropped"
 def _cap_new_keys(cur, server_id, groups: dict, limit: int = MAX_NEW_KEYS_PER_SWEEP) -> tuple[dict, int]:
     """(groups to record, number of NEW groups dropped). A group whose (kind, mac, ip, subnet) already has a row for this server is never dropped; of
     the new ones the `limit` with the newest `last_ts` are kept."""
-    macs = sorted({key[1] for key in groups if key[1]})
+    # the empty MAC is a key like any other (a NAK with no client address): it was left out of the lookup, so every such group read as NEW each sweep (v5.69.0-beta.5, Q174)
+    macs = sorted({key[1] or "" for key in groups})
     existing = set()
     for i in range(0, len(macs), 500):
         chunk = macs[i : i + 500]
@@ -382,8 +383,8 @@ def _cap_new_keys(cur, server_id, groups: dict, limit: int = MAX_NEW_KEYS_PER_SW
             f"SELECT kind, mac, ip, scope_key FROM client_problems WHERE server_id=%s AND mac IN ({marks})",  # nosec B608 - %s placeholders only
             (server_id, *chunk),
         )
-        existing |= {(r["kind"], r["mac"], r["ip"], r["scope_key"]) for r in cur.fetchall()}
-    new = [k for k in groups if (k[0], k[1], k[2], -1 if k[3] is None else k[3]) not in existing]
+        existing |= {(r["kind"], r["mac"] or "", r["ip"], r["scope_key"]) for r in cur.fetchall()}
+    new = [k for k in groups if (k[0], k[1] or "", k[2], -1 if k[3] is None else k[3]) not in existing]
     if len(new) <= limit:
         return groups, 0
     new.sort(key=lambda k: groups[k]["last_ts"], reverse=True)

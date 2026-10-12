@@ -836,10 +836,13 @@ def get_subnet6_kea_data(subnet_id: int, server: dict = None) -> dict:
         "rebind_timer": "",
         "dns_servers": "",
     }
+    # Kea not answering used to return this form empty with no word about why (an `except: pass`): the answer now carries `error` for the page to show (v5.69.0-beta.5, Q174)
+    unreadable = "Kea's DHCPv6 configuration could not be read, so the form shows no current values."
     try:
         result = kea6_command("config-get", server=server)
         if result.get("result") != 0:
-            return empty
+            logger.warning(f"get_subnet6_kea_data: config-get answered {result.get('text')!r}")
+            return {**empty, "error": unreadable}
         from jen.services.kea_config_view import iter_subnet6
 
         cfg = result["arguments"].get("Dhcp6", {})
@@ -868,6 +871,7 @@ def get_subnet6_kea_data(subnet_id: int, server: dict = None) -> dict:
                 "rebind_timer": s.get("rebind-timer", global_rebind) or "",
                 "dns_servers": dns_servers,
             }
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"get_subnet6_kea_data: {type(e).__name__}")
+        return {**empty, "error": unreadable}
     return empty

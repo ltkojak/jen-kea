@@ -369,3 +369,59 @@ class TestHealthApi:
         assert r.status_code == 200
         util = next(c for c in r.get_json()["checks"] if c["id"] == "pool_utilization")
         assert util["status"] in ("ok", "skip")
+
+
+class TestTheApiRefusesASubnetFilterItCannotHonour:
+    """v5.69.0-beta.5 (Q174): `?subnet=` that matched nothing was dropped, so a typo returned everything in scope; and /health/kea told a scoped key how many subnets the install has."""
+
+    @staticmethod
+    def _key(db, username, subnet_access=None):
+        import hashlib
+
+        from tests.test_api_key_authorization import _insert_admin_user, _insert_api_key
+
+        admin_id = _insert_admin_user(db, username)
+        key_id = _insert_api_key(db, f"_q174_{username}", created_by=admin_id, subnet_access=subnet_access)
+        raw = f"jen_q174_{username}_key"
+        with db.cursor() as cur:
+            cur.execute(
+                "UPDATE api_keys SET key_hash=%s WHERE id=%s", (hashlib.sha256(raw.encode()).hexdigest(), key_id)
+            )
+        db.commit()
+        return {"Authorization": f"Bearer {raw}"}
+
+    def test_an_unknown_subnet_is_a_400_that_names_the_filter(self, client, db, mock_kea):
+        h = self._key(db, "q174_unrestricted")
+        for path in ("leases", "devices", "reservations"):
+            for bad in ("999", "abc"):
+                r = client.get(f"/api/v1/{path}?subnet={bad}", headers=h)
+                assert r.status_code == 400, (path, bad)
+                assert "subnet" in r.get_json()["error"].lower()
+
+    def test_a_known_subnet_still_filters(self, client, db, mock_kea):
+        h = self._key(db, "q174_known")
+        r = client.get("/api/v1/leases?subnet=1", headers=h)
+        assert r.status_code == 200
+
+    def test_a_subnet_outside_a_scoped_keys_list_answers_like_an_unknown_one(self, client, db, mock_kea):
+        h = self._key(db, "q174_scoped", subnet_access=[1])
+        assert client.get("/api/v1/leases?subnet=2", headers=h).status_code == 400
+        assert client.get("/api/v1/leases?subnet=999", headers=h).status_code == 400
+        assert client.get("/api/v1/leases?subnet=1", headers=h).status_code == 200
+
+    def test_health_kea_counts_only_the_subnets_the_key_may_see(self, client, db, mock_kea, monkeypatch):
+        from jen import extensions
+
+        monkeypatch.setattr(
+            extensions,
+            "SUBNET_MAP",
+            {
+                1: {"name": "A", "cidr": "10.0.0.0/24"},
+                2: {"name": "B", "cidr": "10.0.1.0/24"},
+                3: {"name": "C", "cidr": "10.0.2.0/24"},
+            },
+        )
+        everyone = self._key(db, "q174_health_all")
+        scoped = self._key(db, "q174_health_one", subnet_access=[2])
+        assert client.get("/api/v1/health/kea", headers=everyone).get_json()["subnets"] == 3
+        assert client.get("/api/v1/health/kea", headers=scoped).get_json()["subnets"] == 1

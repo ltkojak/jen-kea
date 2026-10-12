@@ -495,6 +495,9 @@ S10_MODULES = (
 
 # (module, function, exception, effect): why the empty value is fail-closed there
 S10_ALLOWED = {
+    ("jen/services/auth.py", "usable_file", "(OSError, ValueError, TypeError)", "return False"): (
+        "a path that cannot be examined is NOT a usable file: the caller refuses the CA bundle / client certificate it was asked to trust (Q174)"
+    ),
     ("jen/services/access.py", "auth_is_recent", "(TypeError, ValueError)", "return False"): (
         "an unreadable step-up timestamp reads as NOT recently authenticated, so the step-up is demanded"
     ),

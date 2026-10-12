@@ -1103,3 +1103,29 @@ class TestMigration35RemovesTheLegacyTelegramKeys:
             _m035_remove_legacy_telegram_settings(db)  # and a run on a database that has none of them changes nothing
             db.commit()
             assert self._present(cur) == []
+
+
+class TestRunMigrationsTakesTheAdvisoryLock:
+    """v5.69.0-beta.5 (Q174): one Jen at a time runs the migrations."""
+
+    def test_run_migrations_waits_for_the_lock(self, db, monkeypatch):
+        import pymysql
+        import pymysql.cursors
+        import pytest
+
+        from jen.models import migrations
+        from tests.conftest import TEST_DB
+
+        other = pymysql.connect(**TEST_DB, cursorclass=pymysql.cursors.DictCursor)
+        try:
+            with other.cursor() as cur:
+                cur.execute("SELECT GET_LOCK('jen.migrations', 0) AS got")
+                assert cur.fetchone()["got"] == 1
+            monkeypatch.setattr(migrations, "MIGRATION_LOCK_WAIT_S", 1)
+            with pytest.raises(RuntimeError, match="another Jen is running the migrations"):
+                migrations.run_migrations()
+            with other.cursor() as cur:
+                cur.execute("SELECT RELEASE_LOCK('jen.migrations')")
+            assert migrations.run_migrations() >= 0
+        finally:
+            other.close()

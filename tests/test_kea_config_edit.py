@@ -789,3 +789,55 @@ class TestControlSocket:
     def test_remove_unsupported_shapes(self):
         assert edit.remove_control_socket({"Dhcp6": {}}, "dhcp4")[1] == "unsupported"
         assert edit.remove_control_socket({"Dhcp4": {"control-sockets": {"dhcp4": {}}}}, "dhcp4")[1] == "unsupported"
+
+
+class TestTheMutatorsCopyWhatTheyAreGivenAndSayWhenNothingChanged:
+    """v5.69.0-beta.5 (Q174): the new object was aliased into the returned config (editing it afterwards edited the result), and every non-empty field of a subnet edit reported "changed", so an unchanged submit
+    rewrote the file and restarted the daemon."""
+
+    def test_extra_pools_and_the_callers_config_are_not_aliased(self):
+        cfg = copy.deepcopy(_V4)
+        extra = ["10.0.10.30 - 10.0.10.40"]
+        out, changed = edit.patch_subnet4(cfg, 10, "10.0.10.10 - 10.0.10.20", extra, "", "", "", "", "")
+        assert changed is True
+        before = copy.deepcopy(out)
+        extra.append("x")
+        del cfg["Dhcp4"]["subnet4"][0]["pools"]
+        assert out == before
+
+    def test_the_values_the_config_already_holds_are_no_change(self):
+        pool = "10.0.10.50 - 10.0.10.200"
+        out, changed = edit.patch_subnet4(_V4, 10, pool, [], "", "", "", "10.0.10.1", "")
+        assert changed is False and out == _V4
+        out6, changed6 = edit.patch_subnet6(_V6, 100, "2001:db8:a::100-2001:db8:a::1ff", [], "", "", "", "", "")
+        assert changed6 is False and out6 == _V6
+
+    def test_one_different_value_is_a_change(self):
+        _, changed = edit.patch_subnet4(_V4, 10, "10.0.10.50 - 10.0.10.200", [], "", "", "", "10.0.10.254", "")
+        assert changed is True
+
+    def test_the_block_a_new_subnet_is_made_of_is_copied(self):
+        block = {"id": 30, "subnet": "10.0.30.0/24", "pools": [{"pool": "10.0.30.10 - 10.0.30.20"}]}
+        out, code = edit.add_subnet4(_V4, block)
+        assert code == "ok"
+        block["pools"].append({"pool": "x"})
+        added = [s for s in out["Dhcp4"]["subnet4"] if s["id"] == 30][0]
+        assert added["pools"] == [{"pool": "10.0.30.10 - 10.0.30.20"}]
+
+    def test_a_class_a_socket_and_the_ddns_values_are_copied(self):
+        klass = {"name": "voip", "test": "option[60].hex == 'x'", "option-data": []}
+        out, _ = edit.upsert_class4(_V4, klass)
+        klass["option-data"].append("x")
+        assert out["Dhcp4"]["client-classes"][0]["option-data"] == []
+        sock = {"socket-type": "http", "socket-address": "127.0.0.1", "socket-port": 8000}
+        cfg = {"Dhcp4": {"control-sockets": [{"socket-type": "unix", "socket-name": "/run/kea/s"}]}}
+        out, code = edit.set_control_socket(cfg, "dhcp4", sock)
+        sock["socket-port"] = 1
+        assert (
+            code == "ok"
+            and [s for s in out["Dhcp4"]["control-sockets"] if s["socket-type"] == "http"][0]["socket-port"] == 8000
+        )
+        values = {"enable-updates": True, "server-ip": "127.0.0.1"}
+        out, _ = edit.set_ddns4(_V4, values)
+        values["server-ip"] = "x"
+        assert out["Dhcp4"]["dhcp-ddns"]["server-ip"] == "127.0.0.1"

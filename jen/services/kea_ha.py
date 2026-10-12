@@ -87,7 +87,7 @@ def ha_status(server: dict) -> dict | None:
     resp = __kea.kea_command("status-get", server=server)
     if resp.get("result") != 0:
         return None
-    ha_list = resp.get("arguments", {}).get("high-availability")
+    ha_list = (resp.get("arguments") or {}).get("high-availability")
     if not ha_list:
         return None
     servers = ha_list[0].get("ha-servers", {})
@@ -170,7 +170,7 @@ def compare_assigned(servers: list[dict]) -> list[dict]:
     for server in servers:
         name = server.get("name") or f"Server {server.get('id')}"
         resp = __kea.kea_command("statistic-get-all", server=server)
-        args = resp.get("arguments", {}) if resp.get("result") == 0 else {}
+        args = (resp.get("arguments") or {}) if resp.get("result") == 0 else {}
         counts: dict[int, int] = {}
         for key, samples in args.items():
             m = _SUBNET_ASSIGNED_RE.match(key)

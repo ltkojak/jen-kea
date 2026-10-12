@@ -1549,3 +1549,24 @@ class TestThePluginsPageShowsALoadFailure:
         r = logged_in_client.get("/settings/plugins")
         assert r.status_code == 200
         assert b"Demo Plugin" in r.data and b"Failed to load" not in r.data
+
+
+class TestADirectoryIsThePluginItIsNamedFor:
+    """v5.69.0-beta.5 (Q174): `discover_plugins` took the id from the manifest, so a hand-copied directory whose manifest claimed a bundled plugin's id shadowed that plugin."""
+
+    def test_a_manifest_id_that_is_not_the_directory_name_is_ignored(self, tmp_path, monkeypatch):
+        import json
+
+        from jen import extensions
+
+        base = tmp_path / "bundled"
+        for dirname, manifest_id in (("honest", "honest"), ("zzz-shadow", "honest"), ("liar", "someone-else")):
+            d = base / dirname
+            d.mkdir(parents=True)
+            (d / "manifest.json").write_text(json.dumps({"id": manifest_id, "name": dirname, "version": "1.0.0"}))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_BUNDLED", str(base))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR_ROOT", str(tmp_path / "none-root"))
+        monkeypatch.setattr(extensions, "PLUGIN_DIR", str(tmp_path / "none-writable"))
+        found = {p["id"]: p for p in plugins_svc.discover_plugins()}
+        assert sorted(found) == ["honest"]
+        assert found["honest"]["path"].endswith("honest") and not found["honest"]["path"].endswith("zzz-shadow")

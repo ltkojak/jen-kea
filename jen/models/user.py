@@ -188,6 +188,20 @@ def settings_ever_loaded() -> bool:
     return _settings_ever_loaded
 
 
+STALE_DEVICE_DAYS_DEFAULT = 30
+
+
+def get_stale_device_days() -> int:
+    """`stale_device_days` as a positive integer, or the default of 30 when the stored value is not one (v5.69.0-beta.5, Q174). Three readers did `int(get_global_setting(...))`
+    on their own - the Devices page and the Reservations page outside any `try`, so one corrupt row in the settings table was a 500 for both lists; the alert loop inside one
+    whose handler skipped the stale, drift, snapshot and summary work of every cycle. A table edit is the only way to store a bad value; this makes it harmless."""
+    try:
+        days = int(get_global_setting("stale_device_days", str(STALE_DEVICE_DAYS_DEFAULT)))
+    except (TypeError, ValueError):
+        return STALE_DEVICE_DAYS_DEFAULT
+    return days if days > 0 else STALE_DEVICE_DAYS_DEFAULT
+
+
 def get_global_setting(key: str, default=None):
     """
     Read a value from the settings table.

@@ -4,6 +4,7 @@ jen/routes/settings/branding.py
 Custom icons, favicon, nav logo, nav color.
 """
 
+import contextlib
 import logging
 import os
 import re
@@ -62,6 +63,12 @@ def upload_favicon():
         return redirect(url_for("settings.settings_appearance"))
     if not favicon_file.filename.lower().endswith((".ico", ".png")):
         flash("Favicon must be a .ico or .png file.", "error")
+        return redirect(url_for("settings.settings_appearance"))
+    favicon_file.seek(0, 2)
+    size = favicon_file.tell()
+    favicon_file.seek(0)
+    if size > 200 * 1024:  # the same cap the nav logo has; a favicon is a few KB
+        flash("Favicon file must be under 200KB.", "error")
         return redirect(url_for("settings.settings_appearance"))
     os.makedirs(os.path.dirname(extensions.FAVICON_PATH), exist_ok=True)
     try:
@@ -123,7 +130,7 @@ def upload_custom_icon():
     if not icon_name.replace("-", "").replace("_", "").isalnum():
         flash("Icon name must be alphanumeric (hyphens/underscores allowed).", "error")
         return redirect(url_for("settings.settings_appearance"))
-    if not svg_file.filename.endswith(".svg"):
+    if not svg_file.filename.lower().endswith(".svg"):
         flash("Only SVG files are accepted.", "error")
         return redirect(url_for("settings.settings_appearance"))
     svg_file.seek(0, 2)
@@ -192,18 +199,23 @@ def upload_nav_logo():
         if reason:
             flash(f"SVG rejected — {reason}. Use a plain vector logo, or a PNG/JPG/WebP.", "error")
             return redirect(url_for("settings.settings_appearance"))
-    # Remove any existing logo files
-    for old_ext in ("png", "svg", "jpg", "jpeg", "webp"):
-        old = f"{extensions.NAV_LOGO_PATH}.{old_ext}"
-        if os.path.exists(old):
-            os.remove(old)
     os.makedirs(os.path.dirname(extensions.NAV_LOGO_PATH), exist_ok=True)
+    final = f"{extensions.NAV_LOGO_PATH}.{ext}"
+    staging = final + ".new"
     try:
-        logo_file.save(f"{extensions.NAV_LOGO_PATH}.{ext}")
+        # the new logo is written first and the old ones go only after it is in place: they used to be deleted BEFORE the save, so a failed save left no logo at all (Q174)
+        logo_file.save(staging)
+        os.replace(staging, final)
+        for old_ext in ("png", "svg", "jpg", "jpeg", "webp"):
+            old = f"{extensions.NAV_LOGO_PATH}.{old_ext}"
+            if old != final and os.path.exists(old):
+                os.remove(old)
         __user.audit("BRANDING", "settings", f"Nav logo uploaded by {current_user.username}")
         flash("Nav logo updated.", "success")
     except Exception as e:
         logger.error(f"Error saving nav logo: {e}")
+        with contextlib.suppress(OSError):
+            os.remove(staging)
         flash("Error saving logo. Check server logs for details.", "error")
     return redirect(url_for("settings.settings_appearance"))
 

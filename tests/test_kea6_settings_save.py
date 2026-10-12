@@ -156,7 +156,7 @@ class TestSaveKeaClientCert:
             },
             follow_redirects=True,
         )
-        assert b"not found on the Jen host" in r.data
+        assert b"the file does not exist or Jen cannot read it" in r.data
 
     def test_a_real_matching_pair_is_saved(self, logged_in_client, db, mock_kea, isolated_config, tmp_path):
         """v5.10.3 — a real pair now, not two text files: the route

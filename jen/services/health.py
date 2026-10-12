@@ -83,7 +83,7 @@ def _fetch_dhcp4_config(server) -> dict | None:
     try:
         r = __kea.kea_command("config-get", server=server)
         if r.get("result") == 0:
-            return r.get("arguments", {}).get("Dhcp4", {})
+            return (r.get("arguments") or {}).get("Dhcp4", {})
     except Exception as e:
         logger.warning(f"health: config-get failed: {e}")
     return None
@@ -570,7 +570,7 @@ def _doctor_ha_configs() -> dict | None:
     for s in extensions.KEA_SERVERS:
         try:
             r = __kea.kea_command("config-get", server=s)
-            dhcp4 = r.get("arguments", {}).get("Dhcp4", {}) if r.get("result") == 0 else None
+            dhcp4 = (r.get("arguments") or {}).get("Dhcp4", {}) if r.get("result") == 0 else None
             out[s["id"]] = kea_ha.ha_config(dhcp4) if dhcp4 is not None else None
         except Exception as e:
             _log_err("config_doctor", e)
@@ -858,7 +858,7 @@ def _d2_reachable(ctx) -> Check:
         return c
     r = __kea.kea_command("version-get", service="d2", server=ctx["active_server"])
     if r.get("result") == 0:
-        ver = __kea.parse_kea_version(r.get("arguments", {}).get("extended", "") or r.get("text", ""))
+        ver = __kea.parse_kea_version((r.get("arguments") or {}).get("extended", "") or r.get("text", ""))
         c.status, c.detail = "ok", f"D2 answered{' v' + _vstr(ver) if ver else ''}"
     else:
         logger.warning(f"health check d2_reachable: {r.get('text', '')}")
@@ -879,7 +879,7 @@ def _d2_errors(ctx) -> Check:
         logger.warning(f"health check d2_errors: {r.get('text', '')}")
         c.status, c.detail = "skip", "D2 statistics unavailable"
         return c
-    args = r.get("arguments", {})
+    args = r.get("arguments") or {}
     ncr = _stat_value(args, "ncr-error")
     upd = _stat_value(args, "update-error")
     if ncr + upd > 0:

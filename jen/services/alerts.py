@@ -20,12 +20,6 @@ logger = logging.getLogger(__name__)
 
 
 # ── Lazy service imports (avoids circular imports) ───────────────────────────
-def __get_jen_db():
-    from jen.models.db import get_jen_db
-
-    return get_jen_db()
-
-
 def __jen_db_ctx():
     from jen.models.db import jen_db
 
@@ -36,12 +30,6 @@ def __kea_db_ctx():
     from jen.models.db import kea_db
 
     return kea_db()
-
-
-def __get_kea_db():
-    from jen.models.db import get_kea_db
-
-    return get_kea_db()
 
 
 def __kea_command(*a, **kw):
@@ -80,10 +68,19 @@ def __classify_device(*a, **kw):
     return classify_device(*a, **kw)
 
 
-def __get_device_info_map(*a, **kw):
-    from jen.services.fingerprint import get_device_info_map
+def _int_setting(key, default):
+    """A setting read as an integer; a value that is not one (a table edit is the only way to store it) is `default`, never an exception that stops the rest of the cycle
+    (v5.69.0-beta.5, Q174: the threshold reads raised out of `check_utilization_alerts` and the outer handler skipped every later check of every pass)."""
+    try:
+        return int(__get_global_setting(key, str(default)))
+    except (TypeError, ValueError):
+        return default
 
-    return get_device_info_map(*a, **kw)
+
+def __get_stale_device_days():
+    from jen.models.user import get_stale_device_days
+
+    return get_stale_device_days()
 
 
 def __get_global_setting(key, default=None):
@@ -102,12 +99,6 @@ def __emit_event(*a, **kw):
     from jen.services.events import emit
 
     return emit(*a, **kw)
-
-
-def __get_jen_db_direct():
-    from jen.models.db import get_jen_db
-
-    return get_jen_db()
 
 
 def __check_config_drift():
@@ -911,7 +902,7 @@ def take_server_stats_snapshot():
                         continue
                     if result.get("result") != 0:
                         continue
-                    args = result.get("arguments", {})
+                    args = result.get("arguments") or {}
                     stats = {}
                     for key, samples in args.items():
                         if not _packet_stat_key(key):
@@ -1371,8 +1362,8 @@ def check_utilization_alerts(cur, dhcp4_cfg) -> None:
     State is persisted (`alert_state`): a repeated pass sends nothing, a restart re-sends nothing, and a condition that cleared while Jen was
     down sends its `_ok` once. `pool_exhaustion` has hysteresis - it fires at `free <= N` (`pool_exhaustion_free`, default 5) and recovers,
     with `pool_exhaustion_ok`, only at `free >= N + max(2, N // 5)` - so a subnet hovering at the line does not flap."""
-    threshold = int(__get_global_setting("alert_threshold_pct", "80"))
-    exhaustion = int(__get_global_setting("pool_exhaustion_free", "5"))
+    threshold = _int_setting("alert_threshold_pct", 80)
+    exhaustion = _int_setting("pool_exhaustion_free", 5)
     recover_at = exhaustion + max(2, exhaustion // 5)
     present = set()  # subnets Jen knows AND Kea's config has with a pool: the ones a state may stay active for
     for s, _sn in __iter_subnet4(dhcp4_cfg):
@@ -1552,11 +1543,6 @@ def send_daily_summary() -> str:
         _pending_summary = None
         return "delivered"
     return "undelivered"
-
-
-def ip_to_int(ip):
-    parts = ip.strip().split(".")
-    return sum(int(x) << (8 * (3 - i)) for i, x in enumerate(parts))
 
 
 def _cached(name, compute, now):
@@ -1936,7 +1922,7 @@ def check_stale_reservation_alerts(cur) -> None:
     """`stale_reservation` for every device not seen for `stale_device_days` that has a reservation, once - recorded as told only when a channel TOOK it. The set of
     macs already told was `alerted_stale_macs`, local to `check_alerts`: a restart told every one of them again, and an alert nobody received was recorded as sent.
     `cur` is an open Kea-database cursor (the reservation lookup)."""
-    stale_days = int(__get_global_setting("stale_device_days", "30"))
+    stale_days = __get_stale_device_days()
     with __jen_db_ctx() as jdb, jdb.cursor() as jcur:
         jcur.execute(
             "SELECT mac, last_seen, DATEDIFF(NOW(), last_seen) as days FROM devices WHERE last_seen < DATE_SUB(NOW(), INTERVAL %s DAY)",
@@ -2069,7 +2055,7 @@ def check_alerts():
                     if srv_up and len(extensions.KEA_SERVERS) > 1:
                         ha = __kea_command("ha-heartbeat", server=srv)
                         if ha.get("result") == 0:
-                            new_state = ha.get("arguments", {}).get("state", "")
+                            new_state = (ha.get("arguments") or {}).get("state", "")
                             old_state = last_ha_states.get(srv_id)
                             if old_state is not None and new_state != old_state:
                                 send_alert(
@@ -2272,7 +2258,7 @@ def check_alerts():
                         logger.error(f"Config drift check error: {e}")
 
             # ── Lease history snapshot ──
-            snapshot_interval = int(__get_global_setting("snapshot_interval_minutes", "30")) * 60
+            snapshot_interval = _int_setting("snapshot_interval_minutes", 30) * 60
             now_ts = time.time()
             if now_ts - last_snapshot_time >= snapshot_interval:
                 run_snapshot_pass()

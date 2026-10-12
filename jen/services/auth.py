@@ -6,6 +6,7 @@ Input validation helpers and login rate-limiting functions.
 
 import ipaddress
 import logging
+import os
 import re
 import time
 
@@ -212,6 +213,20 @@ def valid_oidc_issuer(value: str) -> bool:
     if p.scheme == "https":
         return True
     return p.scheme == "http" and p.hostname in ("127.0.0.1", "localhost")
+
+
+def usable_file(path) -> bool:
+    """A regular file Jen can read. `os.path.isfile` alone says only that the path exists, so a form that answered "not found" for one and went on to a different complaint for the
+    other let an admin ask which files exist on the Jen host (v5.69.0-beta.5, Q174); existence and readability are one question now, and `unusable_file_message` is its one answer."""
+    try:
+        return os.path.isfile(path) and os.access(path, os.R_OK)
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def unusable_file_message(label, path) -> str:
+    """The one sentence for a path that is absent OR unreadable (the two are not told apart)."""
+    return f"The {label} cannot be used: the file does not exist or Jen cannot read it ({path})."
 
 
 def valid_api_url(url: str, require_port: bool = False) -> bool:

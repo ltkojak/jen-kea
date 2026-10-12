@@ -410,6 +410,20 @@ def main():
         return _serve_werkzeug_fallback(use_ssl, http_port, https_port)
 
 
+def _http_redirect_response(host_header, path, query_string, https_port):
+    """The fallback server's HTTP->HTTPS redirect (v5.69.0-beta.5, Q174): the host goes through the same `safe_host` the real redirect listener uses (a Host header it would
+    never serve is a 400, not a Location), and the query string is kept - it used to be dropped, so a bookmarked `/leases?search=x` landed on `/leases`."""
+    from flask import redirect
+
+    from jen.httpredirect import safe_host
+
+    host = safe_host(host_header)
+    if host is None:
+        return "Bad Request", 400
+    query = (query_string.decode("latin-1") if isinstance(query_string, bytes) else query_string or "").strip()
+    return redirect(f"https://{host}:{https_port}/{path}" + (f"?{query}" if query else ""), code=301)
+
+
 def _serve_werkzeug_fallback(use_ssl: bool, http_port: int, https_port: int):
     """The pre-v5.5.0 server, kept only as a safety net (see module
     docstring). Starts the background workers in-process since there's
@@ -417,7 +431,7 @@ def _serve_werkzeug_fallback(use_ssl: bool, http_port: int, https_port: int):
     import ssl
     import threading
 
-    from flask import Flask, redirect, request
+    from flask import Flask, request
     from werkzeug.serving import make_server
 
     from jen.services.background import start_background_workers
@@ -440,8 +454,7 @@ def _serve_werkzeug_fallback(use_ssl: bool, http_port: int, https_port: int):
         @http_redirect.route("/", defaults={"path": ""})
         @http_redirect.route("/<path:path>")
         def _redirect(path):
-            host = request.host.split(":")[0]
-            return redirect(f"https://{host}:{https_port}/{path}", code=301)
+            return _http_redirect_response(request.host, path, request.query_string, https_port)
 
         http_server = make_server("0.0.0.0", http_port, http_redirect, threaded=True)
         t1 = threading.Thread(target=https_server.serve_forever, daemon=True)

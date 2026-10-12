@@ -57,9 +57,16 @@ def api_ok(data):
     return jsonify(data)
 
 
-def _ip_to_int(ip):
-    parts = ip.split(".")
-    return sum(int(p) << (8 * (3 - i)) for i, p in enumerate(parts))
+def _resolve_subnet_filter(raw, scope):
+    """`(subnet_id, None)` for a `?subnet=` the key may filter by, `(None, None)` when there is no filter, `(None, 400 response)` when it names no subnet the key can see.
+    It used to be dropped silently - a typo returned EVERYTHING in scope - and a subnet outside a scoped key's list now answers exactly like one that does not exist
+    (v5.69.0-beta.5, Q174)."""
+    if not raw:
+        return None, None
+    sid = next((k for k, v in extensions.SUBNET_MAP.items() if v["name"].lower() == raw.lower() or str(k) == raw), None)
+    if sid is None or (scope is not None and sid not in scope):
+        return None, api_error("Unknown subnet: the subnet filter matches no subnet this key can see.", 400)
+    return sid, None
 
 
 # ── REST API v1 ───────────────────────────────────────────────────────────────
@@ -92,7 +99,9 @@ def api_v1_health_kea():
     key = _api_auth()
     if not key:
         return api_error("Invalid or missing API key.", 401)
-    subnets = len(extensions.SUBNET_MAP)
+    # the count of what THIS key may see (a scoped key was told how many subnets the install has)
+    scope = _api_key_subnet_ids(key)
+    subnets = len(extensions.SUBNET_MAP) if scope is None else len([i for i in scope if i in extensions.SUBNET_MAP])
     # the ACTIVE server (the one Jen serves from), not `[kea] api_url`'s primary: in an HA pair with
     # server 1 down this said kea_up false while Jen was serving from server 2. It is chosen WITHOUT a
     # probe (cached_active_server) and probed ONCE (probe_kea_health): this route used to run the
@@ -291,6 +300,9 @@ def api_v1_leases():
         limit = 200
     if scope is not None and not scope:
         return api_ok({"leases": [], "count": 0})
+    sid, bad = _resolve_subnet_filter(subnet, scope)
+    if bad:
+        return bad
     result = []
     try:
         with kea_db() as db, db.cursor() as cur:
@@ -300,18 +312,9 @@ def api_v1_leases():
                 placeholders = ",".join(["%s"] * len(scope))
                 where.append(f"l.subnet_id IN ({placeholders})")
                 params.extend(scope)
-            if subnet:
-                sid = next(
-                    (
-                        k
-                        for k, v in extensions.SUBNET_MAP.items()
-                        if v["name"].lower() == subnet.lower() or str(k) == subnet
-                    ),
-                    None,
-                )
-                if sid:
-                    where.append("l.subnet_id=%s")
-                    params.append(sid)
+            if sid is not None:
+                where.append("l.subnet_id=%s")
+                params.append(sid)
             if mac:
                 where.append("HEX(l.hwaddr) LIKE %s")
                 params.append("%" + mac + "%")
@@ -413,6 +416,9 @@ def api_v1_devices_endpoint():
         limit = 200
     if scope is not None and not scope:
         return api_ok({"devices": [], "count": 0})
+    sid, bad = _resolve_subnet_filter(subnet, scope)
+    if bad:
+        return bad
     result = []
     try:
         with jen_db() as db, db.cursor() as cur:
@@ -428,18 +434,9 @@ def api_v1_devices_endpoint():
             if name:
                 where.append("(d.device_name LIKE %s OR d.last_hostname LIKE %s)")
                 params += ["%" + name + "%", "%" + name + "%"]
-            if subnet:
-                sid = next(
-                    (
-                        k
-                        for k, v in extensions.SUBNET_MAP.items()
-                        if v["name"].lower() == subnet.lower() or str(k) == subnet
-                    ),
-                    None,
-                )
-                if sid:
-                    where.append("d.last_subnet_id=%s")
-                    params.append(sid)
+            if sid is not None:
+                where.append("d.last_subnet_id=%s")
+                params.append(sid)
             cur.execute(
                 "SELECT d.mac, d.device_name, d.owner, d.last_ip, d.last_hostname, "
                 "d.last_subnet_id, d.first_seen, d.last_seen, "
@@ -540,6 +537,9 @@ def api_v1_reservations():
         limit = 200
     if scope is not None and not scope:
         return api_ok({"reservations": [], "count": 0})
+    sid, bad = _resolve_subnet_filter(subnet, scope)
+    if bad:
+        return bad
     result = []
     try:
         with kea_db() as db, db.cursor() as cur:
@@ -549,18 +549,9 @@ def api_v1_reservations():
                 placeholders = ",".join(["%s"] * len(scope))
                 where.append(f"dhcp4_subnet_id IN ({placeholders})")
                 params.extend(scope)
-            if subnet:
-                sid = next(
-                    (
-                        k
-                        for k, v in extensions.SUBNET_MAP.items()
-                        if v["name"].lower() == subnet.lower() or str(k) == subnet
-                    ),
-                    None,
-                )
-                if sid:
-                    where.append("dhcp4_subnet_id=%s")
-                    params.append(sid)
+            if sid is not None:
+                where.append("dhcp4_subnet_id=%s")
+                params.append(sid)
             cur.execute(
                 "SELECT inet_ntoa(ipv4_address) AS ip, hostname, "
                 "HEX(dhcp_identifier) AS mac_hex, dhcp4_subnet_id AS subnet_id "

@@ -35,6 +35,7 @@ from flask_login import login_required
 
 from jen import extensions
 from jen.models import user as __user
+from jen.services import auth as __auth
 from jen.services import dbexport
 from jen.services.access import admin_required as _admin_required
 from jen.services.access import recent_auth_required as _recent_auth_required
@@ -248,7 +249,7 @@ def _recovery_manifest(db_meta: dict, without_audit_history: bool) -> dict:
         try:
             r = __kea.kea_command("version-get", server=srv)
             if r.get("result") == 0:
-                v = r.get("arguments", {}).get("extended", r.get("text", ""))
+                v = (r.get("arguments") or {}).get("extended", r.get("text", ""))
                 kea_versions[srv["name"]] = v.splitlines()[0] if v else ""
         except Exception as e:
             logger.warning(f"recovery bundle: version-get failed for {srv.get('name')}: {e}")
@@ -606,6 +607,32 @@ def backup_now():
 # ── Import ────────────────────────────────────────────────────────────────────
 _IMPORT_READ_CHUNK = 1024 * 1024
 
+#: an inspected import that is never confirmed leaves its spooled upload behind: anything this old is somebody's abandoned one (v5.69.0-beta.5, Q174)
+IMPORT_SPOOL_MAX_AGE_S = 3600
+
+
+def _sweep_import_spool(now=None, max_age_s=IMPORT_SPOOL_MAX_AGE_S) -> int:
+    """Delete `jen_import_*.json.gz` spool files older than `max_age_s` from the content tmp dir. Returns how many. Never raises."""
+    import time
+
+    removed = 0
+    cutoff = (now if now is not None else time.time()) - max_age_s
+    try:
+        names = os.listdir(extensions.CONTENT_TMP_DIR)
+    except OSError:
+        return 0
+    for name in names:
+        if not (name.startswith("jen_import_") and name.endswith(".json.gz")):
+            continue
+        path = os.path.join(extensions.CONTENT_TMP_DIR, name)
+        try:
+            if os.path.isfile(path) and not os.path.islink(path) and os.path.getmtime(path) < cutoff:
+                os.unlink(path)
+                removed += 1
+        except OSError:
+            continue
+    return removed
+
 
 @bp.route("/database/import/inspect", methods=["POST"])
 @login_required
@@ -629,6 +656,7 @@ def import_inspect():
     max_bytes = max_mb * 1024 * 1024
 
     os.makedirs(extensions.CONTENT_TMP_DIR, exist_ok=True)
+    _sweep_import_spool()
     fd, tmp_path = tempfile.mkstemp(dir=extensions.CONTENT_TMP_DIR, prefix="jen_import_", suffix=".json.gz")
 
     def _abort(message):
@@ -877,8 +905,8 @@ def _migrate_target_ca():
     check as the Kea API CA: a file that exists on the Jen host. Without it a target that requires TLS refused the
     connection, and one that merely allows TLS got the credentials in clear."""
     ca = request.form.get("ssl_ca", "").strip()
-    if ca and not os.path.isfile(ca):
-        return "", f"CA bundle path not found on the Jen host: {ca}"
+    if ca and not __auth.usable_file(ca):
+        return "", __auth.unusable_file_message("CA bundle", ca)
     return ca, None
 
 

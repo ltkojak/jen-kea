@@ -81,7 +81,10 @@ class TestMigrationRoutes:
             "/database/migrate/test",
             data={"host": "h", "user": "u", "database": "d", "ssl_ca": "/no/such/ca.pem"},
         )
-        assert r.get_json() == {"ok": False, "error": "CA bundle path not found on the Jen host: /no/such/ca.pem"}
+        assert r.get_json() == {
+            "ok": False,
+            "error": "The CA bundle cannot be used: the file does not exist or Jen cannot read it (/no/such/ca.pem).",
+        }
 
     def test_the_test_button_passes_a_real_ca_through(self, logged_in_client, monkeypatch, ca_file):
         seen = []

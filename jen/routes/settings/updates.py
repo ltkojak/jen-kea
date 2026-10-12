@@ -206,6 +206,7 @@ def update_status():
 @bp.route("/settings/infrastructure/self-update", methods=["POST"])
 @login_required
 @_superadmin_required
+@_recent_auth_required()
 def self_update():
     """
     Trigger the hardened, root-privileged updater.
