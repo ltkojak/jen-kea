@@ -109,6 +109,31 @@ def macro_env():
     return env
 
 
+# Bundled-plugin templates that print a MAC and are not a row naming a client to investigate - each with its reason (v5.69.0-beta.5, Q174: the scan above covered core templates only).
+_PLUGIN_NOT_A_ROW: dict = {}
+
+
+class TestEveryBundledPluginRowThatNamesAClientCarriesTheLinkToo:
+    def test_every_plugin_template_that_prints_a_mac_imports_the_macro_or_says_why_not(self):
+        missing = []
+        for path in sorted((_ROOT / "plugins").glob("*/templates/**/*.html")):
+            rel = path.relative_to(_ROOT).as_posix()
+            text = path.read_text(encoding="utf-8")
+            if not _PRINTS_A_MAC.search(text) or rel in _PLUGIN_NOT_A_ROW:
+                continue
+            if "import investigate_link" not in text:
+                missing.append(rel)
+        assert not missing, (
+            f"{missing} print a MAC but do not import templates/_investigate.html's investigate_link: add the link, "
+            "or add the template to _PLUGIN_NOT_A_ROW with its reason"
+        )
+
+    def test_the_plugin_list_of_exceptions_has_no_stale_entries(self):
+        for rel in _PLUGIN_NOT_A_ROW:
+            path = _ROOT / rel
+            assert path.is_file() and _PRINTS_A_MAC.search(path.read_text(encoding="utf-8")), rel
+
+
 class TestTheMacro:
     def _render(self, env, call):
         return env.from_string("{% from '_investigate.html' import investigate_link %}" + call).render().strip()

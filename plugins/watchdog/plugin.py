@@ -57,6 +57,8 @@ from datetime import datetime, timedelta, timezone
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 
+from jen.plugin_api import is_admin_or_above, require_write
+
 logger = logging.getLogger(__name__)
 
 PLUGIN_ID = "watchdog"
@@ -73,6 +75,12 @@ _PROBE_CHOICES = ("ping", "tcp")
 _SOURCES = ("reservation", "ipam", "manual")
 _INTERVAL_CHOICES = (1, 5, 15, 30, 60)
 _FAILS_CHOICES = (1, 2, 3, 5, 10)
+
+# wd_targets.probe is VARCHAR(40) (migration 1): a longer probe string would fail the INSERT, so
+# parse_probe() refuses it first with a sentence that says why.
+_PROBE_MAX_LEN = 40
+
+_VIEWER_MESSAGE = "Viewers can look at Watchdog but not change it."
 
 # Probing.
 _PING_TIMEOUT_S = 3
@@ -107,6 +115,11 @@ def parse_probe(probe):
     bad = [p for p in ports if not (1 <= p <= 65535)]
     if bad:
         return None, f"Invalid port(s): {bad}"
+    if len(probe) > _PROBE_MAX_LEN:
+        return (
+            None,
+            f"That probe is {len(probe)} characters long and a probe holds at most {_PROBE_MAX_LEN} - list fewer ports.",
+        )
     return "tcp", ports
 
 
@@ -213,25 +226,6 @@ def _subnet_map():
     from jen.plugin_api import subnet_map
 
     return subnet_map()
-
-
-def _is_admin():
-    try:
-        from jen.plugin_api import is_admin_or_above
-
-        return is_admin_or_above()
-    except Exception:
-        role = getattr(current_user, "role", None)
-        if role is not None:
-            return role in ("superadmin", "admin")
-        return bool(getattr(current_user, "is_admin", False))
-
-
-def _require_write():
-    if _is_admin():
-        return True
-    flash("Viewers can look at Watchdog but not change it.", "error")
-    return False
 
 
 def _can(subnet_id):
@@ -755,23 +749,22 @@ def index():
     subnet_map = _subnet_map()
     for r in rows:
         r["subnet_name"] = subnet_map.get(r["subnet_id"], {}).get("name", "") if r["subnet_id"] else "—"
-    candidates = _candidate_hosts() if _is_admin() else []
+    admin = is_admin_or_above()
+    candidates = _candidate_hosts() if admin else []
     return render_template(
         "watchdog/index.html",
         rows=rows,
         candidates=candidates,
         interval_choices=_INTERVAL_CHOICES,
         fails_choices=_FAILS_CHOICES,
-        is_admin=_is_admin(),
+        is_admin=admin,
     )
 
 
 @bp.route("/targets/add", methods=["POST"])
 @login_required
+@require_write(_VIEWER_MESSAGE, "watchdog.index")
 def add_target():
-    if not _require_write():
-        return redirect(url_for("watchdog.index"))
-
     ip = request.form.get("ip", "").strip()
     try:
         ipaddress.IPv4Address(ip)
@@ -834,9 +827,8 @@ def add_target():
 
 @bp.route("/targets/<int:target_id>/toggle", methods=["POST"])
 @login_required
+@require_write(_VIEWER_MESSAGE, "watchdog.index")
 def toggle_target(target_id):
-    if not _require_write():
-        return redirect(url_for("watchdog.index"))
     row, refusal = _load_target(target_id)
     if row is None:
         flash(refusal, "error")
@@ -860,9 +852,8 @@ def toggle_target(target_id):
 
 @bp.route("/targets/<int:target_id>/delete", methods=["POST"])
 @login_required
+@require_write(_VIEWER_MESSAGE, "watchdog.index")
 def delete_target(target_id):
-    if not _require_write():
-        return redirect(url_for("watchdog.index"))
     row, refusal = _load_target(target_id)
     if row is None:
         flash(refusal, "error")
@@ -924,9 +915,8 @@ def target_history(target_id):
 
 @bp.route("/watch", methods=["POST"])
 @login_required
+@require_write(_VIEWER_MESSAGE, "watchdog.index")
 def watch_from_row():
-    if not _require_write():
-        return redirect(url_for("watchdog.index"))
     ip = request.args.get("ip", "").strip()
     mac = _normalize_mac(request.args.get("mac", ""))
     hostname = request.args.get("hostname", "").strip()[:100]
@@ -935,9 +925,10 @@ def watch_from_row():
     except ValueError:
         flash("Invalid IP address.", "error")
         return redirect(url_for("watchdog.index"))
-    # The subnet is where the ADDRESS is, worked out here. The `subnet_id` in the query string is
-    # only what the page that linked us happened to know; trusting it let a caller authorise
-    # against one subnet and watch a host in another.
+    # The subnet is where the ADDRESS is, worked out here. The row action no longer sends a
+    # `subnet_id` at all (v1.1.3: it was never read): what the page that linked us happened to know
+    # is not what decides, because trusting it let a caller authorise against one subnet and watch a
+    # host in another.
     subnet_id = derive_subnet_id(ip, _subnet_map())
     if not _can(subnet_id):
         flash(ADDRESS_REFUSAL, "error")
@@ -969,9 +960,8 @@ def watch_from_row():
 
 
 # ── JSON API (v1.0.0, plugin API v3) ───────────────────────────────────────────
-# Undecorated on purpose: api_key_required() is applied in register(app), not
-# here, so plugin.py's top level never imports jen.plugin_api — the standalone
-# harness (tools/test_plugin.py) stubs only flask/flask_login.
+# Undecorated on purpose: api_key_required() is applied in register(app), where each
+# route is added to the blueprint.
 
 api_bp = Blueprint("watchdog_api", __name__, url_prefix="/api/v1/plugins/watchdog")
 
@@ -1101,7 +1091,7 @@ def register(app):
         "reservation",
         label="Watch this host",
         icon="activity",
-        href="/network/watchdog/watch?mac={mac}&ip={ip}&subnet_id={subnet_id}&hostname={hostname}",
+        href="/network/watchdog/watch?mac={mac}&ip={ip}&hostname={hostname}",
         method="POST",
     )
     register_search_provider(PLUGIN_ID, title="Host Watchdog", fn=_watchdog_search)

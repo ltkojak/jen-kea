@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from '_investigate.html' import investigate_link %}
 {% block title %}Host Watchdog{% endblock %}
 {% block content %}
 
@@ -69,6 +70,7 @@
         <td data-m="trailing">
             <div class="flex gap-1 items-center">
                 <button class="btn btn-sm btn-secondary wd-history-btn" title="History" aria-label="History" data-id="{{ r.id }}" data-label="{{ r.label or r.ip }}">{{ icon("clock") }}</button>
+                {{ investigate_link(r.mac or r.ip, "icon") }}
                 {% if is_admin %}
                 <form method="POST" action="{{ url_for('watchdog.toggle_target', target_id=r.id) }}" class="contents">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

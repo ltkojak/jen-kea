@@ -114,6 +114,8 @@ import subprocess
 from flask import Blueprint, flash, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 
+from jen.plugin_api import in_placeholders, is_admin_or_above, require_write
+
 logger = logging.getLogger(__name__)
 
 PLUGIN_ID = "switchport"
@@ -367,10 +369,6 @@ def derive_subnet_id(ip, subnet_map):
     return None
 
 
-def _in_placeholders(values):
-    return ",".join(["%s"] * len(values))
-
-
 def _normalize_mac(raw):
     """'' for no MAC given or garbled input, the lowercase MAC for a valid one. Delegates to
     plugin_api's normalize_mac() (which returns None for both cases); this wrapper keeps this
@@ -405,23 +403,7 @@ def _can(subnet_id):
     return can_access_subnet(subnet_id)
 
 
-def _is_admin():
-    try:
-        from jen.plugin_api import is_admin_or_above
-
-        return is_admin_or_above()
-    except Exception:
-        role = getattr(current_user, "role", None)
-        if role is not None:
-            return role in ("superadmin", "admin")
-        return bool(getattr(current_user, "is_admin", False))
-
-
-def _require_write():
-    if _is_admin():
-        return True
-    flash("Viewers can look at Switch Ports but not change it.", "error")
-    return False
+_VIEWER_MESSAGE = "Viewers can look at Switch Ports but not change it."
 
 
 def _audit(action, target, detail):
@@ -460,6 +442,12 @@ def _load_switch(switch_id):
         with db.cursor() as cur:
             cur.execute("SELECT id, host, enabled FROM sp_switches WHERE id=%s", (switch_id,))
             row = cur.fetchone()
+    except Exception as e:
+        # v1.1.5 - a database failure here used to propagate uncaught: toggle, delete and set_uplink answered with a
+        # 500 instead of the refusal every other write route gives a database error. The class name is logged, never
+        # the message, and nothing from the exception reaches the page.
+        logger.error(f"Switch Port Locator: could not load switch {switch_id}: {type(e).__name__}")
+        return None, "Could not load the switch; the details are in Jen's log."
     finally:
         if db:
             db.close()
@@ -552,7 +540,7 @@ def _poll_switch(switch):
             if new_positions:
                 cur.execute(
                     f"SELECT mac, switch_id, ifindex, last_seen FROM sp_mac_ports "  # nosec B608 - only `%s` placeholders are interpolated; every value is bound
-                    f"WHERE mac IN ({_in_placeholders(new_positions)}) ORDER BY last_seen DESC",
+                    f"WHERE mac IN ({in_placeholders(new_positions)}) ORDER BY last_seen DESC",
                     tuple(new_positions),
                 )
                 for row in cur.fetchall():
@@ -961,15 +949,14 @@ def index():
         query_mac=query_mac,
         vlan_indexing_choices=_VLAN_INDEXING_CHOICES,
         uplink_threshold=_UPLINK_THRESHOLD,
-        is_admin=_is_admin(),
+        is_admin=is_admin_or_above(),
     )
 
 
 @bp.route("/switches/add", methods=["POST"])
 @login_required
+@require_write(_VIEWER_MESSAGE, "switchport.index")
 def add_switch():
-    if not _require_write():
-        return redirect(url_for("switchport.index"))
 
     name = request.form.get("name", "").strip()[:100]
     host = request.form.get("host", "").strip()[:255]
@@ -1016,9 +1003,8 @@ def add_switch():
 
 @bp.route("/switches/<int:switch_id>/toggle", methods=["POST"])
 @login_required
+@require_write(_VIEWER_MESSAGE, "switchport.index")
 def toggle_switch(switch_id):
-    if not _require_write():
-        return redirect(url_for("switchport.index"))
     row, refusal = _load_switch(switch_id)
     if row is None:
         flash(refusal, "error")
@@ -1042,9 +1028,8 @@ def toggle_switch(switch_id):
 
 @bp.route("/switches/<int:switch_id>/delete", methods=["POST"])
 @login_required
+@require_write(_VIEWER_MESSAGE, "switchport.index")
 def delete_switch(switch_id):
-    if not _require_write():
-        return redirect(url_for("switchport.index"))
     row, refusal = _load_switch(switch_id)
     if row is None:
         flash(refusal, "error")
@@ -1070,9 +1055,8 @@ def delete_switch(switch_id):
 
 @bp.route("/ports/<int:switch_id>/<int:ifindex>/uplink", methods=["POST"])
 @login_required
+@require_write(_VIEWER_MESSAGE, "switchport.index")
 def set_uplink(switch_id, ifindex):
-    if not _require_write():
-        return redirect(url_for("switchport.index"))
     row, refusal = _load_switch(switch_id)
     if row is None:
         flash(refusal, "error")
@@ -1113,8 +1097,7 @@ def set_uplink(switch_id, ifindex):
 
 # ── JSON API (v1.0.0) ────────────────────────────────────────────────────────
 # Undecorated on purpose: api_key_required() is applied in register(app), not
-# here, so plugin.py's top level never imports jen.plugin_api — the standalone
-# harness (tools/test_plugin.py) stubs only flask/flask_login.
+# here, as an add_url_rule on the blueprint.
 
 api_bp = Blueprint("switchport_api", __name__, url_prefix="/api/v1/plugins/switchport")
 

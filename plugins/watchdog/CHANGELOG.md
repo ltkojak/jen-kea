@@ -1,5 +1,29 @@
 # Host Watchdog Plugin — Changelog
 
+## [1.1.3] - 2026-10-12
+
+Cleanup and one clearer refusal; no change to what a probe does or to any stored data. `requires_jen` (5.68.0) and `plugin_api` (3) are unchanged: the helpers this release imports (`require_write`, `is_admin_or_above`) have been in `jen.plugin_api` since 5.65.10.
+
+### Fixed: a TCP probe that cannot be stored is refused in one sentence
+
+`wd_targets.probe` is `VARCHAR(40)`, and the form accepted any run of ports, each checked only for the range 1-65535. A list of eight four-digit ports passed every check, the INSERT then failed on the column length, and the person saw the generic *Could not add target; the details are in Jen's log* with nothing to say what to change. `parse_probe` (which both the Add Target form and the JSON API call before anything is written) now also refuses a probe longer than the column: *That probe is 43 characters long and a probe holds at most 40 - list fewer ports.* The port range keeps its own sentence. There is no edit route (a target is added, paused, resumed or deleted), so this is the only place the value enters.
+
+### Changed: the admin check and the viewer gate are Jen's, not a copy
+
+Each plugin carried its own `_is_admin` and `_require_write`, with a fallback to reading `current_user.role` for a Jen that did not export the helper; copies of that shape had drifted between plugins. The four write routes (add, pause/resume, delete, and the Reservations row action) now use `jen.plugin_api.require_write` with this plugin's sentence and the Watchdog page as the place to land, and the page asks `is_admin_or_above()` directly. For a form post nothing a person sees changes: the same sentence, the same redirect, decided before the route reads the request. A request that is JSON or under `/api/` would now get a 403 body instead of a flash that surfaces on the next page; none of this plugin's session routes is one (its JSON routes are key-authenticated and never flash), so this is a guard, not a change.
+
+### Fixed: the Watch row action stops sending a `subnet_id` nothing read
+
+The "Watch this host" link on a reservation row carried `&subnet_id={subnet_id}`, and `watch_from_row` ignores it on purpose: the subnet is worked out from the address, because trusting what the linking page happened to know let a caller authorise against one subnet and watch a host in another. The parameter was dead weight that read like an input. It is gone from the link; the route's behaviour is unchanged. (The subnet is known where the link is built, but honouring it would undo the rule above, so the right fix was to remove it.)
+
+### Added: Investigate on every target row
+
+A target row names a host, so it carries Jen's Investigate action (the shared `investigate_link` macro), given the target's MAC or its address when it has none.
+
+### Documented, not changed
+
+`wd_targets.created_by`, `created_at` and `source` are written when a target is added and read by nothing here; the README now says they are recorded for the audit trail and not displayed. `derive_subnet_id` and `_when` stay: the first takes the subnet map as an argument so the harness can run it on a fixed map (`plugin_api.subnet_for_ip` reads Jen's live map), and Jen offers no equivalent of the second. `_normalize_mac` stays as a thin wrapper because this plugin treats a bad MAC as "none given" (`""`), where `plugin_api.normalize_mac` answers `None`.
+
 ## [1.1.2] - 2026-10-11
 
 Fix. `requires_jen` (5.68.0) and `plugin_api` (3) are unchanged.

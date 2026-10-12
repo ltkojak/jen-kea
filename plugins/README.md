@@ -9,8 +9,9 @@ live-fetches anything from the plugin's own repository to correct it.
 
 ## Releasing a new plugin version
 
-Each plugin (`jen-plugin-ipam`, `jen-plugin-network-discovery`) lives in
-its own repository and ships a `plugin.zip` at its root. A release is
+Each plugin (`jen-plugin-<id>`: ipam, network-discovery, watchdog, dns-sync,
+switchport, wol, presence) lives in its own repository and ships a
+`plugin.zip` at its root. A release is
 **one commit here** that does all of the following together — an entry
 with any one of these stale is worse than not updating at all:
 
@@ -162,10 +163,9 @@ Jen's event stream (`jen.services.events`, the record behind the
 Timeline page and `GET /api/v1/events`) calls every subscriber after
 each `emit()` — a plugin can react to `lease.new`, `reservation.added`,
 `config.applied`, and the rest of the pinned kind vocabulary (`from
-jen.plugin_api import event_kinds`) without polling. There is no
-`emit()` in the plugin surface — plugins observe the stream, they don't
-write to it; `discovery.unknown` is reserved for network-discovery's own
-future use.
+jen.plugin_api import event_kinds`) without polling. A plugin also
+WRITES to the stream with `emit()` (below) - but only kinds named for
+itself (`plugin.<plugin_id>.<name>`), never a core kind.
 
 ```python
 from jen.plugin_api import subscribe, unsubscribe

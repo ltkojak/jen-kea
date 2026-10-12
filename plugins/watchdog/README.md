@@ -16,11 +16,12 @@ Jen runs as an unprivileged service user. Sending a raw ICMP echo request normal
 ## Features
 
 - **Targets** from a Kea reservation, an IPAM Lite entry (when that plugin is installed), or any bare IP — the Add Target picker offers the first two, and always accepts a manual address
-- **Two probe types**: `ping` (ICMP) or `tcp:<port>[,<port>]` (any one port answering counts as up)
+- **Two probe types**: `ping` (ICMP) or `tcp:<port>[,<port>]` (any one port answering counts as up). Ports are whole numbers from 1 to 65535, and the whole probe string is stored in a 40-character column, so a TCP probe takes about seven four-digit ports at most; a longer one is refused with a sentence that says so
 - **Configurable per target**: check interval (1–60 min) and how many consecutive failures before it counts as down (1–10)
 - **State machine**: `unknown` until the first result, `up` on any success, `down` only after the configured run of consecutive failures — a single blip doesn't flip a healthy target down early. Every *transition* — not every check — sends an alert and writes an event
 - **7-day uptime %** and per-target history (last 50 checks, with RTT) on every row
-- **"Watch this host"** row action on Jen's Reservations page
+- **"Watch this host"** row action on Jen's Reservations page; the link carries the MAC, address and hostname, never a subnet (the subnet is worked out from the address on the server)
+- **Investigate** on every target row, Jen's own action for a row that names a client (given the target's MAC, or its address when it has none)
 - Discovered in Jen's global search by label or IP
 - **On the Investigation page** (Jen 5.68.0): a card under "What else Jen knows" for a client a target watches — does it answer, since when, how many checks in a row have failed; a down target also appears in the page's one-line answer
 - **JSON API**: `GET /api/v1/plugins/watchdog/targets` (read key), `POST …/targets` (write key), both scoped to the calling key's accessible subnets
@@ -29,6 +30,10 @@ Jen runs as an unprivileged service user. Sending a raw ICMP echo request normal
 ## Probing budget
 
 Every due target is probed through one shared 8-thread pool, one run at a time, budgeted at 30 seconds total per periodic tick — which runs every 5 minutes, Jen's own floor for any plugin's periodic job; a target's own 1-minute interval choice means "checked on every tick", not literally once a minute. A run that takes longer than its budget just leaves the slowest targets for the next tick rather than blocking it — a watchdog that hangs waiting on itself would be a poor watchdog.
+
+## Recorded for the audit trail, not displayed
+
+Three columns of `wd_targets` are written when a target is added and read by nothing in this plugin: `created_by` (who added it, a username or `api:<key name>`), `created_at`, and `source` (`reservation`, `ipam` or `manual`, where the Add Target picker found the address; the list query selects it, and no page or API response shows it). They stay in the table as the record of how each target came to be watched, and a support question about one can be answered from the database. They are not dropped, and a later release may show them.
 
 ## Installation
 

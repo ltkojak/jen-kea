@@ -1,5 +1,29 @@
 # Switch Port Locator Plugin — Changelog
 
+## [1.1.5] - 2026-10-12
+
+Fix and tidy-up from a whole-tree review of Jen's bundled plugins. `requires_jen` stays 5.68.0 (the Investigate macro and every `jen.plugin_api` name this release imports are in 5.68.0 and earlier).
+
+### Fixed: a database error while loading a switch was a 500
+
+`_load_switch`, behind pausing, removing and pinning the uplink of a switch, had no `except`, so a database failure surfaced as an error page instead of the refusal every other write route already gives a database error. It now logs the failure (the exception's class name only; nothing from the exception reaches a page) and answers "Could not load the switch; the details are in Jen's log." in the page's usual flash, with nothing written.
+
+### Fixed: a string that is not a MAC no longer says "valid or accessible"
+
+Typing something that is not a MAC address into the locate box answered "Not a valid or accessible MAC address.", which blended two different refusals: a parse failure, and a MAC the caller may not see. They are now two sentences. A string that is not a MAC says "That is not a MAC address." A valid MAC with no visible position, whether no switch has reported it or its only positions are on switches the caller may not see, keeps the one sentence it always had ("No switch has reported ... yet."), so the page still cannot be used to ask which MACs exist on switches that are hidden.
+
+### Added: the locate result carries Jen's Investigate link
+
+The result of a locate, found or not found, prints a client's MAC, and every place that does is meant to offer Jen's Investigate action. The page imports Jen's `_investigate.html` macro and uses its icon form beside the result, so the link is the one every other page has. The harness renders the template through Jinja and checks the link's address for both results.
+
+### Changed: the copied write gate and placeholder helper are Jen's
+
+The private `_is_admin`, `_require_write` and `_in_placeholders` are gone. The four write routes (add switch, pause or enable, remove, pin an uplink) are decorated with `jen.plugin_api.require_write`, with this plugin's own sentence and a redirect to its own page, so a viewer sees exactly what they saw before. `_in_placeholders` returned an empty string for an empty list, which is a syntax error inside `IN (...)`, where `plugin_api.in_placeholders` returns `NULL`, valid SQL that matches nothing; its one caller never passed an empty list, so nothing changes. The old `_is_admin` also swallowed an import failure and fell back to reading the account's role itself; that fallback is gone. Left as they are, because Jen's API has no equivalent: `derive_subnet_id` (the pure subnet-map walk the harness covers) and the plugin's own MAC helper wrapper, which keeps this plugin's empty-string convention over `plugin_api.normalize_mac`. The plugin has no JSON route that flashed on a role refusal: the one API route is behind an API key.
+
+### Documented: a column that is written and never read
+
+`sp_switches.created_by` (the account that added a switch) is recorded for the audit trail and is not displayed anywhere. It is not dropped: removing a column from a released table would be a destructive migration for no benefit. The README says so.
+
 ## [1.1.4] - 2026-10-07
 
 Fix. No change to what Jen needs: `requires_jen` stays 5.68.0.
