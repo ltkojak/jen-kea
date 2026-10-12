@@ -1011,7 +1011,7 @@ The Problems inbox is filled by a sweep every five minutes that tails each SSH-c
 
 1. **`HelperUnreachable` or a timeout**: Jen cannot SSH to the host. Check Settings → Kea → SSH (key, user, host, trust) and the host's firewall; the sweep retries on its own every five minutes and the row turns green on the first successful read.
 2. **`no-helper`**: the Kea host helper is missing, or too old to have `tail-log`; press **Update helper** on the Servers page. The sweep reads the log through the helper only.
-3. **`missing`** ("log file not found"): the DHCP4 log path in Jen is not where Kea writes; Settings → Kea → the DHCP4 log path must be the file Kea logs to (the file output of the `kea-dhcp4` logger), readable by the helper.
+3. **`missing`** ("log file not found"): the row names the file it looked for and says the host answered - this is not an SSH problem (v5.69.0-beta.6). Jen reads the file the `kea-dhcp4` logger's own `output-options` name, and `[kea] dhcp4_log_path` (Settings → Kea → SSH → **Kea log path**, a `*.log` under `/var/log`) only when the logger names none. The usual cause is a logger that writes to `stdout` - Kea's journal output, which no file reader can see; **Tools → Doctor** then shows "Kea's log is not written to a file" with the `output-options` block to paste into the logger's entry in `kea-dhcp4.conf` (a file under `/var/log/kea`, flushed, rotated at 10 MB with four old files kept), after which Kea needs a reload. A file output whose `pattern` has no `%D` is the second Doctor note: its lines carry no date and time, which Jen's parser needs.
 4. **"the sweep itself last ran at …"** means the scheduler is not running the job: check the Background workers row and the service log.
 
 ## Log Locations

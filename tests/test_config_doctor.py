@@ -27,6 +27,8 @@ ALL_CHECK_IDS = {
     "shared_network_asymmetry",
     "ha_peer_semantic_diff",
     "removed_keys",
+    "logger-no-file",
+    "logger-pattern-no-timestamp",
 }
 
 
@@ -358,6 +360,8 @@ class TestFindingShape:
             hosts=[],
             ha_configs={1: TestHaPeerSemanticDiff()._ha(), 2: TestHaPeerSemanticDiff()._ha(max_ack_delay=1)},
         )
+        out += doctor.diagnose(TestTheDhcp4Logger.STDOUT, hosts=[])
+        out += doctor.diagnose(TestTheDhcp4Logger.FILE_NO_TIME, hosts=[])
         return out
 
     def test_every_finding_has_a_non_empty_why(self, kitchen_sink_cfg, kitchen_sink_hosts):
@@ -386,3 +390,98 @@ class TestFindingShape:
         order = {"fail": 0, "warn": 1, "info": 2}
         severities = [order[f["severity"]] for f in findings]
         assert severities == sorted(severities)
+
+
+class TestTheDhcp4Logger:
+    """v5.69.0-beta.6 (Q175): the Problems inbox, Trace, Explain and the host-side restore read a FILE; a logger that writes to stdout leaves them blind (the maintainer's
+    host was, for 1447 sweeps), and a pattern with no %D leaves the lines Jen's parser cannot read. Doctor says so, with the JSON to paste."""
+
+    STDOUT = {
+        "loggers": [
+            {"name": "kea-dhcp4", "output-options": [{"output": "stdout", "pattern": "%-5p %m\n"}], "severity": "INFO"}
+        ]
+    }
+    FILE_NO_TIME = {
+        "loggers": [
+            {
+                "name": "kea-dhcp4",
+                "output-options": [{"output": "/var/log/kea/kea-dhcp4.log", "pattern": "%-5p %m\n"}],
+                "severity": "INFO",
+            }
+        ]
+    }
+    FILE_NO_PATTERN = {
+        "loggers": [
+            {"name": "kea-dhcp4", "output-options": [{"output": "/var/log/kea/kea-dhcp4.log"}], "severity": "INFO"}
+        ]
+    }
+
+    def test_the_maintainers_stdout_logger_has_no_file_and_its_pattern_is_not_judged(self):
+        ids = _ids(doctor.diagnose(self.STDOUT, hosts=[]))
+        assert "logger-no-file" in ids
+        assert "logger-pattern-no-timestamp" not in ids
+
+    def test_a_file_output_with_a_pattern_without_a_timestamp_is_the_second_note_only(self):
+        ids = _ids(doctor.diagnose(self.FILE_NO_TIME, hosts=[]))
+        assert "logger-pattern-no-timestamp" in ids
+        assert "logger-no-file" not in ids
+
+    def test_a_file_output_with_no_pattern_is_neither(self):
+        ids = _ids(doctor.diagnose(self.FILE_NO_PATTERN, hosts=[]))
+        assert not ({"logger-no-file", "logger-pattern-no-timestamp"} & ids)
+
+    def test_a_file_output_with_kea_s_default_pattern_is_neither(self):
+        cfg = {
+            "loggers": [
+                {
+                    "name": "kea-dhcp4",
+                    "output-options": [{"output": "/var/log/kea/kea-dhcp4.log", "pattern": doctor.LOGGER_PATTERN}],
+                }
+            ]
+        }
+        assert not ({"logger-no-file", "logger-pattern-no-timestamp"} & _ids(doctor.diagnose(cfg, hosts=[])))
+
+    def test_the_note_carries_the_json_to_paste(self):
+        note = next(f for f in doctor.diagnose(self.STDOUT, hosts=[]) if f["id"] == "logger-no-file")
+        assert '"maxver": 4' in note["detail"]
+        assert '"maxsize": 10485760' in note["detail"]
+        assert '"output": "/var/log/kea/kea-dhcp4.log"' in note["detail"]
+        assert '"flush": true' in note["detail"]
+        assert note["severity"] == "warn"
+
+    def test_the_pasted_block_is_valid_json_and_a_file_the_definition_accepts(self):
+        import json
+
+        from jen.services import kea_log_trace as klt
+
+        block = json.loads("{" + doctor.LOGGER_OUTPUT_JSON + "}")
+        cfg = {"Dhcp4": {"loggers": [{"name": "kea-dhcp4", **block}]}}
+        assert klt.logger_file_outputs(cfg) == ["/var/log/kea/kea-dhcp4.log"]
+        assert klt.host_log_path("/var/log/kea/kea-dhcp4.log")
+        assert not (
+            {"logger-no-file", "logger-pattern-no-timestamp"}
+            & _ids(doctor.diagnose({"loggers": [{"name": "kea-dhcp4", **block}]}, hosts=[]))
+        )
+
+    def test_a_pattern_in_the_pasted_default_has_a_timestamp(self):
+        assert "%D" in doctor.LOGGER_PATTERN and doctor.LOGGER_PATTERN.endswith(
+            "%m\\n"
+        )  # the JSON text to paste: backslash and n, not a newline
+
+    def test_a_config_with_no_dhcp4_logger_is_not_second_guessed(self):
+        assert not (
+            {"logger-no-file", "logger-pattern-no-timestamp"}
+            & _ids(doctor.diagnose({"valid-lifetime": 3600}, hosts=[]))
+        )
+        other = {"loggers": [{"name": "kea-dhcp4.dhcpsrv", "output-options": [{"output": "stdout"}]}]}
+        assert not ({"logger-no-file"} & _ids(doctor.diagnose(other, hosts=[])))
+
+    def test_a_logger_with_no_output_options_has_no_file(self):
+        assert "logger-no-file" in _ids(doctor.diagnose({"loggers": [{"name": "kea-dhcp4"}]}, hosts=[]))
+
+    def test_malformed_logger_shapes_do_not_raise(self):
+        for cfg in (
+            {"loggers": "x"},
+            {"loggers": [None, 3, {"name": "kea-dhcp4", "output-options": [None, "x", {"output": 5}]}]},
+        ):
+            doctor.diagnose(cfg, hosts=[])

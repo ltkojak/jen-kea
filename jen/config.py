@@ -515,7 +515,9 @@ class AppConfig:
         )
 
         extensions.DDNS_LOG = cfg.get("ddns", "log_path", fallback="/var/log/kea/kea-ddns.log")
-        extensions.DHCP4_LOG = cfg.get("kea", "dhcp4_log_path", fallback="/var/log/kea/kea-dhcp4.log").strip()
+        extensions.DHCP4_LOG = (
+            cfg.get("kea", "dhcp4_log_path", fallback="").strip() or "/var/log/kea/kea-dhcp4.log"
+        )  # v5.69.0-beta.6 (Q175): an empty value is the default, as it reads on the form
         extensions.CLIENT_PROBLEM_THRESHOLD = _parse_problem_threshold(
             cfg.get("alerts", "client_problem_threshold", fallback="")
         )

@@ -855,3 +855,74 @@ class TestThePrimarysNameFollowsTheSameRules:
         _seed((2, {"name": "Kea-B", "api_url": "http://s2:8000"}))
         self._save(logged_in_client, "kea-a")
         assert _on_disk(isolated_config).get("kea", "name") == "kea-a"
+
+
+class TestTheKeaLogPathField:
+    """v5.69.0-beta.6 (Q175): `[kea] dhcp4_log_path` is a field on Settings → Kea → SSH, validated by the rule the Kea host's helper applies to a log it reads (`valid_log_path`),
+    and blank is the default again - the key is removed, never saved empty."""
+
+    URL = "/settings/infrastructure/save-ssh"
+
+    def _post(self, client, **data):
+        return client.post(
+            self.URL, data={"host": "10.0.0.5", "user": "jen", "kea_conf": "", **data}, follow_redirects=True
+        )
+
+    def test_the_field_renders_with_the_configured_value_and_the_default_as_the_placeholder(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        app_config.write_value("kea", "dhcp4_log_path", "/var/log/kea/dhcp4.log")
+        r = logged_in_client.get("/settings/kea")
+        body = r.data.decode()
+        assert 'name="dhcp4_log_path"' in body and 'value="/var/log/kea/dhcp4.log"' in body
+        assert 'placeholder="/var/log/kea/kea-dhcp4.log"' in body
+        assert 'for="f-dhcp4_log_path"' in body
+
+    def test_a_path_outside_var_log_is_refused_and_the_key_is_unchanged(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        app_config.write_value("kea", "dhcp4_log_path", "/var/log/kea/mine.log")
+        r = self._post(logged_in_client, dhcp4_log_path="/etc/shadow")
+        assert b"Invalid Kea log path" in r.data
+        assert _on_disk(isolated_config).get("kea", "dhcp4_log_path") == "/var/log/kea/mine.log"
+        assert extensions.DHCP4_LOG == "/var/log/kea/mine.log"
+
+    @pytest.mark.parametrize(
+        "bad", ["/var/log/../etc/x.log", "/var/log/kea/x.txt", "var/log/x.log", "/var/log/a b.log", "/var/log/x;y.log"]
+    )
+    def test_other_shapes_the_host_would_refuse_are_refused_here(
+        self, logged_in_client, db, mock_kea, isolated_config, bad
+    ):
+        r = self._post(logged_in_client, dhcp4_log_path=bad)
+        assert b"Invalid Kea log path" in r.data
+        assert not _on_disk(isolated_config).has_option("kea", "dhcp4_log_path")
+
+    def test_a_good_path_is_written_and_is_live(self, logged_in_client, db, mock_kea, isolated_config):
+        self._post(logged_in_client, dhcp4_log_path="/var/log/kea/dhcp4.log")
+        assert _on_disk(isolated_config).get("kea", "dhcp4_log_path") == "/var/log/kea/dhcp4.log"
+        assert extensions.DHCP4_LOG == "/var/log/kea/dhcp4.log"
+
+    def test_blank_removes_the_key_and_is_the_default_again(self, logged_in_client, db, mock_kea, isolated_config):
+        app_config.write_value("kea", "dhcp4_log_path", "/var/log/kea/dhcp4.log")
+        self._post(logged_in_client, dhcp4_log_path="")
+        assert not _on_disk(isolated_config).has_option("kea", "dhcp4_log_path")
+        assert extensions.DHCP4_LOG == "/var/log/kea/kea-dhcp4.log"
+
+    def test_an_empty_value_already_in_the_file_reads_as_the_default(self, isolated_config):
+        app_config.write_value("kea", "dhcp4_log_path", "")
+        assert extensions.DHCP4_LOG == "/var/log/kea/kea-dhcp4.log"
+
+    def test_a_refused_log_path_writes_nothing_of_the_ssh_form_either(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        self._post(logged_in_client, host="10.9.9.9", dhcp4_log_path="/etc/passwd")
+        assert not _on_disk(isolated_config).has_option("kea_ssh", "host")
+
+    def test_saving_the_path_forgets_where_each_servers_log_was_found(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        from jen.services import log_tail
+
+        log_tail._paths[99] = (1e12, "/var/log/kea/stale.log")
+        self._post(logged_in_client, dhcp4_log_path="/var/log/kea/dhcp4.log")
+        assert 99 not in log_tail._paths

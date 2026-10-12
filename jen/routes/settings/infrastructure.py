@@ -258,6 +258,8 @@ def settings_kea():
         "ssh_host": extensions.cfg.get("kea_ssh", "host", fallback=""),
         "ssh_user": extensions.cfg.get("kea_ssh", "user", fallback=""),
         "kea_conf": extensions.cfg.get("kea_ssh", "kea_conf", fallback="/etc/kea/kea-dhcp4.conf"),
+        # v5.69.0-beta.6 (Q175): what is STORED (blank = the default), not the derived value, so the field shows what an admin set
+        "dhcp4_log_path": extensions.cfg.get("kea", "dhcp4_log_path", fallback=""),
         "ddns_log": extensions.cfg.get("ddns", "log_path", fallback=""),
         "ddns_url": extensions.cfg.get("ddns", "api_url", fallback=""),
         "ddns_user": extensions.cfg.get("ddns", "api_user", fallback=""),
@@ -1871,6 +1873,7 @@ def save_infra_ssh():
     host = request.form.get("host", "").strip()
     user = request.form.get("user", "").strip()
     kea_conf = request.form.get("kea_conf", "").strip()
+    dhcp4_log_path = request.form.get("dhcp4_log_path", "").strip()
     if host and not __auth.valid_ssh_target(host):
         flash("Invalid SSH host — must be a valid hostname or IP address.", "error")
         return redirect(url_for("settings.settings_kea"))
@@ -1883,6 +1886,13 @@ def save_infra_ssh():
     if kea_conf and not kea_conf.endswith(".conf"):
         flash(f"Invalid Kea config path — the file name must end in .conf: {kea_conf}", "error")
         return redirect(url_for("settings.settings_kea"))
+    if dhcp4_log_path and not __auth.valid_log_path(dhcp4_log_path):
+        # v5.69.0-beta.6 (Q175): the rule the Kea host's helper applies to a log it reads - a path outside /var/log would only be refused there
+        flash(
+            "Invalid Kea log path — it must be an absolute path to a .log file under /var/log (for example /var/log/kea/kea-dhcp4.log), with no special characters.",
+            "error",
+        )
+        return redirect(url_for("settings.settings_kea"))
     if not host:
         # v5.68.0-beta.9 (Q144): without an SSH host Jen cannot put a log level back on the primary
         refusal = __inv.removal_refusal([1], actor=current_user.username)
@@ -1892,13 +1902,29 @@ def save_infra_ssh():
     items = [("kea_ssh", "host", host), ("kea_ssh", "user", user)]
     if kea_conf:
         items.append(("kea_ssh", "kea_conf", kea_conf))
-    __config.app_config.write_values(items)
+    if dhcp4_log_path:
+        items.append(("kea", "dhcp4_log_path", dhcp4_log_path))
+
+    def _apply(parser):
+        for section, key, value in items:
+            if not parser.has_section(section):
+                parser.add_section(section)
+            parser.set(section, key, value)
+        if not dhcp4_log_path and parser.has_section("kea"):
+            parser.remove_option(
+                "kea", "dhcp4_log_path"
+            )  # blank is the default again: the key is removed, not saved empty
+
+    __config.app_config.mutate(_apply)  # one write: the SSH settings and the log path land together or not at all
+    from jen.services import log_tail as __log_tail
+
+    __log_tail.clear()  # where each server's log is was read under the old path; the next reader asks again
     __user.set_global_setting("restart_pending", "true")
     flash("SSH settings saved. Restart Jen to apply.", "success")
     mismatch = __host_match.api_ssh_mismatch(extensions.cfg.get("kea", "api_url", fallback=""), host)
     if mismatch:
         flash(mismatch, "warning")
-    __user.audit("SAVE_INFRA", "ssh", f"host={host} user={user}")
+    __user.audit("SAVE_INFRA", "ssh", f"host={host} user={user} log_path={dhcp4_log_path or 'default'}")
     return redirect(url_for("settings.settings_kea"))
 
 

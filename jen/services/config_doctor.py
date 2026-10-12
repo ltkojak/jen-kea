@@ -640,6 +640,74 @@ def _check_removed_keys(dhcp4_cfg) -> list[Finding]:
     return out
 
 
+# ── the kea-dhcp4 logger ─────────────────────────────────────────────────────────────────────────────────────────
+
+
+LOGGER_NAME = "kea-dhcp4"
+LOGGER_FILE = "/var/log/kea/kea-dhcp4.log"
+# The block Jen asks for (v5.69.0-beta.6, Q175): a file under /var/log/kea, flushed as it is written, rotated at 10 MB with four old files kept.
+LOGGER_OUTPUT_JSON = (
+    '"output-options": [{"output": "' + LOGGER_FILE + '", "flush": true, "maxsize": 10485760, "maxver": 4}]'
+)
+# Kea's own default line pattern: the date-time Jen's line parser needs first, then the level and the logger name and process id
+LOGGER_PATTERN = "%D{%Y-%m-%d %H:%M:%S.%q} %-5p [%c/%i.%t] %m\\n"
+
+
+def _dhcp4_logger(dhcp4_cfg) -> dict | None:
+    loggers = dhcp4_cfg.get("loggers") if isinstance(dhcp4_cfg, dict) else None
+    for entry in loggers if isinstance(loggers, list) else []:
+        if isinstance(entry, dict) and entry.get("name") == LOGGER_NAME:
+            return entry
+    return None
+
+
+def _check_logger_output(dhcp4_cfg) -> list[Finding]:
+    """The `kea-dhcp4` logger (v5.69.0-beta.6, Q175). Jen reads Kea's own log for the Problems inbox, for Trace and Explain, and the Kea host reads it to prove that an
+    investigation's logging was put back: all of them need a FILE the helper may read, and a logger that writes to stdout (the journal) gives them nothing - the
+    Problems inbox sat blind for 1447 sweeps on a host configured that way. And what is written has to start with the date and time Kea's default pattern prints, or
+    Jen's line parser reads nothing from it. Only a config that HAS a `kea-dhcp4` logger is judged (one without any logger is Kea's own default, which this page does not
+    second-guess), and every note is a warning - Kea itself is working."""
+    entry = _dhcp4_logger(dhcp4_cfg)
+    if entry is None:
+        return []
+    options = [o for o in entry.get("output-options") or [] if isinstance(o, dict)]
+    files = [o for o in options if isinstance(o.get("output"), str) and o["output"].startswith("/")]
+    if not files:
+        return [
+            _finding(
+                "logger-no-file",
+                "warn",
+                "Kea's log is not written to a file",
+                "The kea-dhcp4 logger writes to "
+                + (", ".join(str(o.get("output")) for o in options if o.get("output")) or "no output at all")
+                + ', not to a file. Paste this into that logger\'s entry under "loggers" in kea-dhcp4.conf, then reload Kea: '
+                + LOGGER_OUTPUT_JSON,
+                "loggers[" + LOGGER_NAME + "]",
+                "/settings/kea",
+                "The Problems inbox, Trace and the host-side restore evidence read a file; give the logger a file output under /var/log/kea. A logger that writes to stdout "
+                "keeps its lines in the system journal, which none of them can read, so the inbox stays empty - and a quiet inbox looks exactly like a quiet network.",
+            )
+        ]
+    out = []
+    for o in files:
+        pattern = o.get("pattern")
+        if isinstance(pattern, str) and "%D" not in pattern:
+            out.append(
+                _finding(
+                    "logger-pattern-no-timestamp",
+                    "warn",
+                    "Kea's log lines carry no date and time",
+                    f'The pattern {pattern!r} for {o["output"]} has no %D, so its lines start with the level and no time. Remove the "pattern" key, or use Kea\'s default: '
+                    f'"pattern": "{LOGGER_PATTERN}"',
+                    f"loggers[{LOGGER_NAME}] → {o['output']}",
+                    "/settings/kea",
+                    "Jen's line parser needs the timestamp Kea's default pattern prints at the start of every line - without it the Problems inbox, Trace and Explain find no "
+                    "events in the file and the Kea host cannot tell when its restore happened.",
+                )
+            )
+    return out
+
+
 def group_findings(findings: list[Finding]) -> list[dict]:
     """Collapse findings that are the same KIND — same check id and severity — into
     one group, in order of first appearance (diagnose() already sorts most severe
@@ -704,5 +772,6 @@ def diagnose(
     out += _check_global_option_shadowed(dhcp4_cfg)
     out += _check_shared_network_asymmetry(dhcp4_cfg)
     out += _check_removed_keys(dhcp4_cfg)
+    out += _check_logger_output(dhcp4_cfg)
     out.sort(key=lambda f: _SEVERITY_ORDER.get(f["severity"], 3))
     return out
