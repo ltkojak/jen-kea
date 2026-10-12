@@ -46,3 +46,17 @@ One step (5.69.0-beta.2), and nothing to do for it: this release closes the plac
 **One sign-out after a password change.** When a password is changed, the account's older sessions, in any browser, end at their next request and sign in again; the session that made the change stays. Sessions that are open when you upgrade are not signed out.
 
 **IPv6 pages follow the IPv6 switch.** With IPv6 switched off, `?view=v6` shows the IPv4 page and the IPv6 add and edit routes answer 404, even when the config has a `[subnets6]` section.
+
+## Data, the clock and alerts: database sessions run in UTC, one migration, and a few alerts can repeat once
+
+One step (5.69.0-beta.3), and nothing to do for it. What you will notice:
+
+**Every database connection runs in UTC.** Jen now sets `time_zone = '+00:00'` on each connection it opens, to its own database and to Kea's, so `NOW()` in a query and the time Jen's Python code reads are one clock whatever zone the database host is in. Your server's own zone is not touched, and rows written earlier keep the clock they were written with. On a database host that was east or west of UTC you may see Health's "Lease snapshots current" row, the once-a-day backup and the capacity forecast's day settle onto the right hour; the daily summary time is UTC (HH:MM, and the form refuses anything else, such as `7am`).
+
+**Migration 35 runs by itself.** It removes the old `telegram_token`, `telegram_chat_id` and `telegram_enabled` rows from the settings table, a plaintext bot token the removed save-telegram page used to write. Your alert channels (where the token is stored encrypted) are not touched; a database that never had the rows changes nothing, and an interrupted run finishes on the next start.
+
+**A few alerts can repeat once.** Stale-reservation, configuration-drift and Kea-down messages kept what they had said in memory, so a restart said it again; from this release the fact is stored, and the first sweep after the upgrade can send, one time, a message that the earlier version had already sent. After that a restart sends nothing, a message no channel took is retried with a back-off, and a recovery is sent only for a warning that was delivered.
+
+**A subnet that left Kea's config ends its alert.** A subnet still listed in Jen but gone from Kea's config (or left with no pool) used to keep its utilization or exhaustion warning for ever; Jen now sends one recovery that names it, and clears it.
+
+**Reservations and plugins.** A CSV import stores a hardware address as a hardware address. Reservations an earlier import created were stored as a DUID, which may never have matched a client: check any you imported by CSV and re-create the ones that do not take effect. The import also names a bad row by its line and refuses an address outside the subnet. The Plugins page shows "Failed to load" for a plugin whose start-up raised, with the exception class only.
