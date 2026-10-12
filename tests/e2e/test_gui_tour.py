@@ -12,7 +12,8 @@ variants and detail pages the url_map does not name are visited as well.
 The report (`artifacts/tour/report.md` + `report.json`) and the screenshots are the deliverable: the
 `e2e` job uploads them on every run. The test itself FAILS only on what is unambiguously a bug for any
 account: a 5xx, an uncaught page error, or a failure marker in the page. A 403 or a 404 for a route an
-account may not use is the correct answer and is only recorded.
+account may not use is the correct answer and is only recorded - and so is NOT repeated as a console error
+(the browser logs "Failed to load resource" for the page's own 4xx), and a file download is a pass.
 
 Runs only with JEN_E2E_TOUR=1 (its own step in .github/workflows/tests.yml, on the demo dataset so the
 pages have rows to show). It is a tour, not a journey: nothing is submitted, nothing is changed - GET only.
@@ -21,6 +22,7 @@ pages have rows to show). It is a tour, not a journey: nothing is submitted, not
 from __future__ import annotations
 
 import contextlib
+import itertools
 import json
 import os
 import re
@@ -52,8 +54,17 @@ ACCOUNTS = {
 #: what the page says when the server failed behind a 200 or a partial - never acceptable for any account
 FAILURE_MARKERS = ("Internal Server Error", "Traceback (most recent call last)", "UndefinedError", "jinja2.exceptions")
 
-#: sample URL arguments per converter name; a converter not listed here is recorded as "skipped (no sample)"
+#: the browser's own console line for a response with an error status - the status is already in the report, so the line is not a second finding
+CONSOLE_NOISE = re.compile(r"^Failed to load resource: the server responded with a status of \d{3}")
+
+#: what Playwright raises for a navigation that turns into a file download: the route answered with a file, which is a pass
+DOWNLOAD_STARTS = "Download is starting"
+
+#: sample URL arguments per converter name; a converter not listed here is recorded as "skipped (no sample)". A tuple is every value to try (a rule is built once for each).
 SAMPLE_ARGS = {
+    "mac": "aa:bb:cc:dd:ee:01",
+    "filename": "nav_logo.png",
+    "source": ("isc", "windows"),
     "subnet_id": 10,
     "server_id": 1,
     "user_id": 1,
@@ -99,22 +110,25 @@ def _routes(app) -> list[tuple[str, str]]:
             continue
         if rule.endpoint == "static" or rule.rule.startswith("/static/") or "<path:" in rule.rule:
             continue
-        args = {}
         missing = [a for a in rule.arguments if a not in SAMPLE_ARGS]
         if missing:
             skipped.append((rule.endpoint, rule.rule, missing))
             continue
-        for a in rule.arguments:
-            args[a] = SAMPLE_ARGS[a]
-        try:
-            with app.test_request_context():
-                from flask import url_for
+        names = sorted(rule.arguments)
+        choices = [SAMPLE_ARGS[a] if isinstance(SAMPLE_ARGS[a], tuple) else (SAMPLE_ARGS[a],) for a in names]
+        built = False
+        for combo in itertools.product(*choices):
+            try:
+                with app.test_request_context():
+                    from flask import url_for
 
-                path = url_for(rule.endpoint, **args)
-        except Exception as e:  # recorded, never fatal
-            skipped.append((rule.endpoint, rule.rule, [f"url_for: {e}"]))
-            continue
-        out.append((rule.endpoint, path))
+                    path = url_for(rule.endpoint, **dict(zip(names, combo, strict=True)))
+            except Exception:  # a value this rule has no variant for (the other `source`)
+                continue
+            built = True
+            out.append((rule.endpoint, path))
+        if not built:
+            skipped.append((rule.endpoint, rule.rule, ["url_for failed for every sample"]))
     _routes.skipped = skipped
     return sorted(set(out), key=lambda t: t[1])
 
@@ -156,7 +170,10 @@ def _visit(page, base_url, path, console, errors):
         resp = page.goto(f"{base_url}{path}", wait_until="load", timeout=30000)
         status = resp.status if resp is not None else None
     except Exception as e:  # a navigation failure is a finding, not a crash of the tour
-        return {"status": None, "error": f"navigation: {e}"[:300], "ms": int((time.monotonic() - started) * 1000)}
+        ms = int((time.monotonic() - started) * 1000)
+        if DOWNLOAD_STARTS in str(e):
+            return {"status": None, "download": True, "ms": ms, "title": "(a file download)"}
+        return {"status": None, "error": f"navigation: {e}"[:300], "ms": ms}
     with contextlib.suppress(Exception):  # a long poll is not "still loading"
         page.wait_for_load_state("networkidle", timeout=8000)
     ms = int((time.monotonic() - started) * 1000)
@@ -181,7 +198,10 @@ def _tour(browser, base_url, username, password, routes):
     ctx = browser.new_context(viewport=DESKTOP, device_scale_factor=1)
     page = ctx.new_page()
     console, errors = [], []
-    page.on("console", lambda m: console.append(m.text[:200]) if m.type == "error" else None)
+    page.on(
+        "console",
+        lambda m: console.append(m.text[:200]) if m.type == "error" and not CONSOLE_NOISE.match(m.text) else None,
+    )
     page.on("pageerror", lambda e: errors.append(str(e)[:200]))
     login(page, base_url, username, password, re.compile(r".*"))
     rows = []
@@ -246,7 +266,8 @@ def _write_report(report: dict):
                 + r.get("console_errors", [])
                 + ([r["error"]] if r.get("error") else [])
             )
-            lines.append(f"| {r.get('status')} | {r.get('ms')} | `{r['path']}` | {r.get('title', '')} | {errs[:160]} |")
+            shown = "download" if r.get("download") else r.get("status")
+            lines.append(f"| {shown} | {r.get('ms')} | `{r['path']}` | {r.get('title', '')} | {errs[:160]} |")
         lines.append("")
     lines += ["## skipped routes (no sample argument)", ""] + [
         f"- `{rule}` ({ep}): {miss}" for ep, rule, miss in report["skipped"]
@@ -279,6 +300,8 @@ def test_every_get_route_renders_for_every_account(browser, base_url):
     _write_report(report)
 
     failures = []
+    # every GET route must have a sample for its converters: a route the tour cannot build is a page nobody opened
+    assert not _routes.skipped, f"routes with no sample argument - add them to SAMPLE_ARGS: {_routes.skipped}"
     for account, rows in report["accounts"].items():
         for r in rows:
             if (r.get("status") or 0) >= 500 or r.get("markers") or r.get("page_errors") or r.get("error"):
