@@ -14,7 +14,7 @@ function saveNote(id) {
     const notes = document.getElementById('note-text-' + id).value.trim();
     jenFetch('/subnets/save-note', {
         method: 'POST',
-        headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRFToken': '{{ csrf_token() }}'},
+        headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRFToken': {{ csrf_token()|tojson }}},
         body: 'subnet_id=' + id + '&notes=' + encodeURIComponent(notes)
     })
     .then(r => r.json())
@@ -56,12 +56,12 @@ document.addEventListener('click', function(e) {
         <a href="{{ url_for('subnets.import_windows') }}" class="btn btn-secondary">{{ icon("app-window") }} Import from Windows DHCP</a>
         <a href="{{ url_for('subnets.import_isc') }}" class="btn btn-secondary">{{ icon("file-text") }} Import from ISC DHCP</a>
         {% endif %}
-        <a href="/subnets/add" class="btn btn-primary">{{ icon("plus") }} Add Subnet</a>
+        {% if current_user.all_subnets %}<a href="/subnets/add" class="btn btn-primary">{{ icon("plus") }} Add Subnet</a>{% endif %}
     </div>
     {% endif %}
 </div>
 
-{% if not ssh_ready %}
+{% if not ssh_ready and current_user.role in ('superadmin','admin') %}
 <div class="alert alert-warning">{{ icon("lightbulb") }} Subnet editing requires SSH to be configured. Go to <a href="/settings/kea#kea-ssh">Settings → Kea → SSH Key Management</a> to set it up.</div>
 {% endif %}
 
@@ -239,7 +239,7 @@ document.addEventListener('click', function(e) {
 {% else %}
 {% from '_empty.html' import empty_state %}
 {% set sb = namespace(buttons=[]) %}
-{% if current_user.role in ('superadmin','admin') %}
+{% if current_user.role in ('superadmin','admin') and current_user.all_subnets %}
     {% set sb.buttons = sb.buttons + [((icon('plus') ~ ' Add Subnet'), '/subnets/add')] %}
 {% endif %}
 {% if current_user.role == 'superadmin' %}

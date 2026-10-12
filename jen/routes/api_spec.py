@@ -35,12 +35,12 @@ def build_spec(version: str, base_url: str = "") -> dict:
             "version": version,
             "description": (
                 "Jen's integration API. Reads for Home Assistant, Zabbix and scripts; "
-                "writes (v5.34.0) for reservations, device names and subnet notes with a key that has write access. "
-                "Nothing that edits a Kea configuration file is exposed here. Plugin endpoints "
-                "(v5.57.0), mounted under /api/v1/plugins/<plugin_id>/…, use the same Bearer key "
+                "writes for reservations, device names and subnet notes with a key that has write access. "
+                "Nothing that edits a Kea configuration file is exposed here. Plugin endpoints, "
+                "mounted under /api/v1/plugins/<plugin_id>/…, use the same Bearer key "
                 "and the same write flag but are not listed here — each plugin documents its own "
                 "endpoints in its README. This document itself is served at GET /api/v1/openapi.json "
-                "with no auth, by design (v5.66.0-beta.4): it describes the surface, generated from "
+                "with no auth, by design: it describes the surface, generated from "
                 "one static description with no database access, so it never exposes anything beyond "
                 "the version string above and this server's own URL."
             ),
@@ -59,7 +59,7 @@ def build_spec(version: str, base_url: str = "") -> dict:
                 "Error": {"type": "object", "properties": {"error": {"type": "string"}}, "required": ["error"]},
                 "Health": {
                     "type": "object",
-                    "description": "Unauthenticated. jen_version only (v5.65.12, Q101) - Kea's state and the "
+                    "description": "Unauthenticated. jen_version only - Kea's state and the "
                     "subnet count moved to the key-gated HealthKea, reconnaissance for no benefit to a caller "
                     "with no key.",
                     "properties": {"jen_version": {"type": "string"}},
@@ -101,7 +101,7 @@ def build_spec(version: str, base_url: str = "") -> dict:
                         "peak_30d": {
                             "type": "integer",
                             "nullable": True,
-                            "description": "Highest active-lease count in the last 30 days of snapshots (v5.36.0).",
+                            "description": "Highest active-lease count in the last 30 days of snapshots.",
                         },
                         "trend_per_day": {
                             "type": "number",
@@ -126,7 +126,7 @@ def build_spec(version: str, base_url: str = "") -> dict:
                 "PacketHealth": {
                     "type": "object",
                     "nullable": True,
-                    "description": "null until the server has two statistic-get-all snapshots (Q42).",
+                    "description": "null until the server has two statistic-get-all snapshots.",
                     "properties": {
                         "status": {"type": "string", "enum": ["ok", "warn", "fail", "no_traffic"]},
                         "window_minutes": {"type": "integer", "description": "Actual minutes of data covered."},
@@ -356,21 +356,21 @@ def build_spec(version: str, base_url: str = "") -> dict:
             },
             "/api/v1/health/kea": {
                 "get": {
-                    "summary": "A live probe of the ACTIVE Kea server: may take as long as the Kea API timeout when it is unreachable (v5.65.6)",
+                    "summary": "A live probe of the ACTIVE Kea server: may take as long as the Kea API timeout when it is unreachable",
                     "security": [_KEY],
                     "responses": {"200": _resp("OK", "HealthKea"), "401": _ERR},
                 }
             },
             "/api/v1/health/checks": {
                 "get": {
-                    "summary": "The Health Center run as JSON (Q44)",
+                    "summary": "The Health Center run as JSON",
                     "security": [_KEY],
                     "responses": {"200": _resp("OK", "HealthChecksResult"), "401": _ERR},
                 }
             },
             "/api/v1/health/readiness": {
                 "get": {
-                    "summary": "Just the Kea 3.2 readiness group (Q44)",
+                    "summary": "Just the Kea 3.2 readiness group",
                     "security": [_KEY],
                     "responses": {"200": _resp("OK", "HealthReadinessResult"), "401": _ERR},
                 }
@@ -384,14 +384,14 @@ def build_spec(version: str, base_url: str = "") -> dict:
             },
             "/api/v1/servers": {
                 "get": {
-                    "summary": "Kea servers, HA state and packet health (Q42)",
+                    "summary": "Kea servers, HA state and packet health",
                     "security": [_KEY],
                     "responses": {"200": _resp("OK", "ServerList"), "401": _ERR},
                 }
             },
             "/api/v1/events": {
                 "get": {
-                    "summary": "Raw event stream rows (Q43)",
+                    "summary": "Raw event stream rows",
                     "security": [_KEY],
                     "parameters": [
                         _q("mac", "Filter by MAC"),
@@ -405,7 +405,7 @@ def build_spec(version: str, base_url: str = "") -> dict:
             },
             "/api/v1/timeline/{mac}": {
                 "get": {
-                    "summary": "One client's merged timeline (Q43)",
+                    "summary": "One client's merged timeline",
                     "security": [_KEY],
                     "parameters": [{"name": "mac", "in": "path", "required": True, "schema": {"type": "string"}}],
                     "responses": {"200": _resp("OK", "Timeline"), "400": _ERR, "401": _ERR, "403": _ERR},

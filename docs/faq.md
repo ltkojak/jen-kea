@@ -245,7 +245,7 @@ This was a bug in versions before 2.5.7 caused by iOS's 300ms tap delay. Upgrade
 ## High Availability
 
 ### Does Jen support Kea HA?
-Yes, as of v2.5.0. Add your standby server and set HA mode in **Settings → Kea → Servers & High Availability**. Jen automatically routes config and subnet editing commands to the active node.
+Yes, as of v2.5.0. Add your standby server and set HA mode in **Settings → Kea → Kea servers & high availability**. Jen automatically routes config and subnet editing commands to the active node.
 
 ### What HA modes does Jen support?
 Hot-standby, load-balancing, and passive-backup — matching Kea's supported HA modes.
@@ -257,7 +257,7 @@ Jen queries `ha-heartbeat` on all configured servers every 10 seconds (cached) a
 Yes — enable the **HA failover / state change** alert type on any alert channel. Jen fires this alert any time a server's HA state changes.
 
 ### I added a second server but forgot to set HA mode — what happens?
-Jen will show a warning on the Servers page and will always use Server 1 for config and subnet editing. Set HA mode in **Settings → Kea → Servers & High Availability** to enable automatic active node routing.
+Jen will show a warning on the Servers page and will always use the first Kea server for config and subnet editing. Set HA mode in **Settings → Kea → Kea servers & high availability** to enable automatic active node routing.
 
 ---
 

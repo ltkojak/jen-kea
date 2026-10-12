@@ -12,7 +12,7 @@
 {% if endpoint_error %}
 <div class="alert alert-danger">{{ icon("octagon-alert") }} Direct mode: no kea-dhcp6 control-socket URL is configured for
 <strong>{{ target_server.name or target_server.ssh_host }}</strong> — set <code>[kea6] api_url</code>
-(Settings → Kea → IPv6) or this server's IPv6 API URL (Servers &amp; HA) first. Authoring will refuse.
+(Settings → Kea → IPv6) or this server's IPv6 API URL (Kea servers &amp; HA) first. Authoring will refuse.
 <br><span class="form-hint">{{ endpoint_error }}</span></div>
 {% else %}
 <div class="alert alert-info">{{ icon("plug") }} Jen is in <strong>direct</strong> connection mode, so each generated config gets a

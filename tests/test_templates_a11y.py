@@ -105,7 +105,7 @@ class TestTheStyleExtractorsBadRuleIsGone:
 
     def test_the_options_grid_collapses_on_a_phone(self):
         base = pathlib.Path("templates/base.html").read_text(encoding="utf-8")
-        assert ".dhcp-opt-grid { grid-template-columns: 1fr; }" in base
+        assert ".dhcp-opt-grid { grid-template-columns: minmax(0, 1fr); }" in base
         assert 'class="dhcp-opt-grid"' in pathlib.Path("templates/dhcp_options.html").read_text(encoding="utf-8")
 
 
@@ -146,3 +146,23 @@ class TestTheColspansMatchTheirHeaders:
     def test_the_devices_empty_row_spans_the_columns_the_role_sees(self):
         text = pathlib.Path("templates/_device_rows.html").read_text(encoding="utf-8")
         assert "(12 if current_user.role in ('superadmin','admin') else 11)" in text
+
+
+class TestNoReleaseMarkerInTheApiDescription:
+    """The OpenAPI document is end-user text too (the API docs page and every client generator read it): its strings carry no release number and no Q reference."""
+
+    def test_no_string_in_the_spec_names_a_release_or_a_q(self):
+        import ast
+
+        tree = ast.parse(pathlib.Path("jen/routes/api_spec.py").read_text(encoding="utf-8"))
+        module_doc = ast.get_docstring(tree, clean=False)
+        marker = re.compile(r"\(v?5\.\d+|\(Q\d+|, Q\d+\)|\bbeta\.\d+")
+        found = [
+            (node.lineno, node.value[:80])
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and node.value != module_doc
+            and marker.search(node.value)
+        ]
+        assert found == [], found

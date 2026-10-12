@@ -225,18 +225,35 @@ TOJSON_REVIEWED: dict = {
 class TestJsContextsUseTojson:
     """Q173: a Jinja value inside a <script> body is JS, and HTML autoescaping is not JS escaping (CLAUDE.md, Frontend)."""
 
+    @staticmethod
+    def _js_spans(text):
+        """(start, end) of every JS body: a <script> without src, and a child template's `{% block scripts %}` (base.html puts that block INSIDE its own <script>, so the
+        child writes bare JS with no tag around it - the script regex alone never saw it)."""
+        spans = [(m.start(2), m.end(2)) for m in SCRIPT_RE.finditer(text) if "src=" not in m.group(1)]
+        spans += [
+            (m.start(1), m.end(1)) for m in re.finditer(r"\{% block scripts %\}(.*?)\{% endblock %\}", text, re.S)
+        ]
+        merged = []
+        for start, end in sorted(spans):
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        return merged
+
     def _sites(self):
         out = []
         for path in TEMPLATE_HTML_FILES:
             text = path.read_text(encoding="utf-8")
-            for m in SCRIPT_RE.finditer(text):
-                if "src=" in m.group(1):
-                    continue
-                for e in EXPR_RE.finditer(m.group(2)):
+            for start, end in self._js_spans(text):
+                for e in EXPR_RE.finditer(text[start:end]):
                     expr = e.group(1).strip()
+                    line = text[text.rfind("\n", 0, start + e.start()) + 1 : text.find("\n", start + e.start())]
+                    if "<script" in line:  # the nonce attribute of a script tag a block re-opens: markup, not JS
+                        continue
                     if "tojson" in expr or expr in TOJSON_REVIEWED.get(path.as_posix(), {}):
                         continue
-                    out.append((path.as_posix(), text[: m.start(2) + e.start()].count("\n") + 1, expr))
+                    out.append((path.as_posix(), text[: start + e.start()].count("\n") + 1, expr))
         return out
 
     def test_every_value_in_a_script_is_tojson_or_reviewed(self):
@@ -246,7 +263,8 @@ class TestJsContextsUseTojson:
 
     def test_the_reviewed_list_is_live(self):
         for rel, exprs in TOJSON_REVIEWED.items():
-            scripts = " ".join(m.group(2) for m in SCRIPT_RE.finditer(pathlib.Path(rel).read_text(encoding="utf-8")))
+            text = pathlib.Path(rel).read_text(encoding="utf-8")
+            scripts = " ".join(text[s:e] for s, e in self._js_spans(text))
             for expr in exprs:
                 assert expr in scripts, f"{rel} no longer has {expr!r}: drop it from TOJSON_REVIEWED"
 

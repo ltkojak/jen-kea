@@ -285,7 +285,7 @@ function saveDevice() {
     const iconOverride = document.getElementById('editIconOverride') ? document.getElementById('editIconOverride').value : '';
     jenFetch(`/devices/edit/${editingId}`, {
         method: 'POST',
-        headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRFToken': '{{ csrf_token() }}'},
+        headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRFToken': {{ csrf_token()|tojson }}},
         body: `device_name=${encodeURIComponent(name)}&owner=${encodeURIComponent(owner)}&notes=${encodeURIComponent(notes)}&type_override=${encodeURIComponent(typeOverride)}&icon_override=${encodeURIComponent(iconOverride)}`
     })
     .then(r => r.json())

@@ -43,11 +43,11 @@
 <div class="card">
     <div class="card-header"><span class="card-title">Results — {{ total }} checked</span></div>
     <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;">
-        <a href="?limit={{ limit }}" class="badge {{ 'badge-production' if not verdict_filter else '' }}" style="{% if not verdict_filter %}background:var(--primary);{% endif %}">All ({{ total }})</a>
+        <a href="?limit={{ limit }}" class="badge" style="{% if not verdict_filter %}background:var(--primary);color:#fff;{% endif %}">All ({{ total }})</a>
         {% for v in verdicts %}
         <a href="?limit={{ limit }}&verdict={{ v }}"
            class="badge"
-           style="{% if verdict_filter == v %}background:var(--primary);{% elif v == 'ok' %}background:color-mix(in srgb, var(--success) 18%, transparent);color:var(--success);{% elif v == 'multiple-a' %}background:var(--surface2);color:var(--text-muted);{% else %}background:color-mix(in srgb, var(--warning) 18%, transparent);color:var(--warning);{% endif %}">
+           style="{% if verdict_filter == v %}background:var(--primary);color:#fff;{% elif v == 'ok' %}background:color-mix(in srgb, var(--success) 18%, transparent);color:var(--success);{% elif v == 'multiple-a' %}background:var(--surface2);color:var(--text-muted);{% else %}background:color-mix(in srgb, var(--warning) 18%, transparent);color:var(--warning);{% endif %}">
             {{ v }} ({{ counts.get(v, 0) }})
         </a>
         {% endfor %}
@@ -89,8 +89,10 @@
             <td data-m="secondary">
                 {% if r.verdict != 'ok' %}
                 <a href="/reservations?search={{ r.ip }}" class="u-6cb285">Fix in Kea</a>
+                {% if current_user.all_subnets %}
                 &nbsp;·&nbsp;
                 <a href="/ddns?tab=verify&hostname={{ r.name|urlencode }}&ip={{ r.ip|urlencode }}" class="u-6cb285">re-verify</a>
+                {% endif %}
                 {% endif %}
             </td>
         </tr>

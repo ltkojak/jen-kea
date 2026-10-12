@@ -91,6 +91,12 @@ NO_SCREENSHOT = re.compile(r"/(logout|export|download|\.csv|\.json|bundle|sw\.js
 
 MAX_CRAWL_PER_ACCOUNT = 250
 
+#: pages a lower account must NOT be served: it is sent somewhere else (a redirect with a sentence) or answers 401/403/404 (account -> paths)
+REFUSED = {
+    "tour_viewer": ["/settings/kea", "/settings/alerts", "/getting-started", "/users", "/subnets/add"],
+    "tour_admin_scoped": ["/subnets/add"],
+}
+
 
 def _app():
     app = getattr(e2e, "LIVE_APP", None)
@@ -148,6 +154,19 @@ def _accounts(live_server):
                 (f"tour_{name}", hash_password(TOUR_PASSWORD), role, access),
             )
     yield
+    with jen_db() as db, db.cursor() as cur:
+        cur.execute("DELETE FROM users WHERE username LIKE 'tour\\_%'")
+
+
+def _failing(r: dict) -> bool:
+    """What fails the tour for any account: a 5xx on the page or on any request it made, an uncaught page error, a failure marker, a navigation that broke."""
+    return bool(
+        (r.get("status") or 0) >= 500
+        or r.get("markers")
+        or r.get("page_errors")
+        or r.get("error")
+        or r.get("server_errors")
+    )
 
 
 def _client_mac() -> str | None:
@@ -162,9 +181,10 @@ def _client_mac() -> str | None:
     return ":".join(h[i : i + 2].lower() for i in range(0, 12, 2)) if h and len(h) == 12 else None
 
 
-def _visit(page, base_url, path, console, errors):
+def _visit(page, base_url, path, console, errors, server_errors):
     console.clear()
     errors.clear()
+    server_errors.clear()
     started = time.monotonic()
     try:
         resp = page.goto(f"{base_url}{path}", wait_until="load", timeout=30000)
@@ -189,6 +209,7 @@ def _visit(page, base_url, path, console, errors):
         "markers": markers,
         "console_errors": list(console)[:5],
         "page_errors": list(errors)[:5],
+        "server_errors": list(server_errors)[:5],
         "title": page.title()[:80],
         "links": sorted(set(links)),
     }
@@ -203,7 +224,14 @@ def _tour(browser, base_url, username, password, routes):
         lambda m: console.append(m.text[:200]) if m.type == "error" and not CONSOLE_NOISE.match(m.text) else None,
     )
     page.on("pageerror", lambda e: errors.append(str(e)[:200]))
-    login(page, base_url, username, password, re.compile(r".*"))
+    # a 5xx answered to ANY request the page makes (an XHR, an htmx swap, a script) is a failure; the console line the browser writes for it is filtered as noise above
+    server_errors = []
+    page.on(
+        "response",
+        lambda r: server_errors.append(f"{r.status} {r.url.replace(base_url, '')}"[:200]) if r.status >= 500 else None,
+    )
+    # the account must really be signed in: the dashboard, never /login (which answers 200 too)
+    login(page, base_url, username, password, re.compile(r"^https?://[^/]+/$"))
     rows = []
     seen = set()
     queue = [(ep, p) for ep, p in routes]
@@ -213,7 +241,7 @@ def _tour(browser, base_url, username, password, routes):
         if path in seen:
             continue
         seen.add(path)
-        r = _visit(page, base_url, path, console, errors)
+        r = _visit(page, base_url, path, console, errors, server_errors)
         r.update(endpoint=endpoint, path=path)
         shot = None
         if not NO_SCREENSHOT.search(path) and r.get("status") not in (None, 302, 303):
@@ -248,11 +276,7 @@ def _write_report(report: dict):
         "",
     ]
     for account, rows in report["accounts"].items():
-        bad = [
-            r
-            for r in rows
-            if (r.get("status") or 0) >= 500 or r.get("markers") or r.get("page_errors") or r.get("error")
-        ]
+        bad = [r for r in rows if _failing(r)]
         lines += [
             f"## {account}: {len(rows)} pages, {len(bad)} failing",
             "",
@@ -262,6 +286,7 @@ def _write_report(report: dict):
         for r in rows:
             errs = "; ".join(
                 r.get("markers", [])
+                + r.get("server_errors", [])
                 + r.get("page_errors", [])
                 + r.get("console_errors", [])
                 + ([r["error"]] if r.get("error") else [])
@@ -290,6 +315,10 @@ def test_every_get_route_renders_for_every_account(browser, base_url):
         ("not-found", "/this-page-does-not-exist"),
         ("leases-filtered", "/leases?subnet=10"),
         ("problems-filtered", "/problems?server=1&kind=nak"),
+        # the DDNS tabs and the other tabbed pages are links the crawl does not always reach
+        ("ddns-naming", "/ddns?tab=naming"),
+        ("ddns-d2config", "/ddns?tab=d2config"),
+        ("ddns-verify", "/ddns?tab=verify"),
     ]
     report = {"route_count": len(routes), "skipped": _routes.skipped, "accounts": {}}
     report["accounts"][ADMIN_USERNAME] = _tour(browser, base_url, ADMIN_USERNAME, ADMIN_PASSWORD, routes)
@@ -299,14 +328,25 @@ def test_every_get_route_renders_for_every_account(browser, base_url):
         report["accounts"][f"tour_{name}"] = _tour(browser, base_url, f"tour_{name}", TOUR_PASSWORD, routes)
     _write_report(report)
 
+    # a refusal is asserted, not only recorded: a lower account that is handed an admin page with a 200 is a finding, and the tour would otherwise call it a pass
+    for account, paths in REFUSED.items():
+        by_path = {r["path"]: r for r in report["accounts"][account]}
+        for path in paths:
+            assert path in by_path, f"{account} was never sent to {path}: the refusal check needs the route in the tour"
+            r = by_path[path]
+            assert r.get("final_url") != path or (r.get("status") in (401, 403, 404)), (
+                f"{account} was served {path} (status {r.get('status')}, ended at {r.get('final_url')})"
+            )
+
     failures = []
     # every GET route must have a sample for its converters: a route the tour cannot build is a page nobody opened
     assert not _routes.skipped, f"routes with no sample argument - add them to SAMPLE_ARGS: {_routes.skipped}"
     for account, rows in report["accounts"].items():
         for r in rows:
-            if (r.get("status") or 0) >= 500 or r.get("markers") or r.get("page_errors") or r.get("error"):
+            if _failing(r):
                 failures.append(
-                    f"{account} {r['path']}: status {r.get('status')} {r.get('markers')} {r.get('page_errors')} {r.get('error', '')}"
+                    f"{account} {r['path']}: status {r.get('status')} {r.get('markers')} {r.get('server_errors')} "
+                    f"{r.get('page_errors')} {r.get('error', '')}"
                 )
     assert not failures, (
         "pages that failed for some account (the full tour is in artifacts/tour/report.md):\n"

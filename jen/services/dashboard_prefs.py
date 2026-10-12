@@ -107,7 +107,7 @@ def upgrade(raw) -> dict:
     }
 
 
-def validate(raw, accessible_subnet_ids, admin: bool = True) -> dict:
+def validate(raw, accessible_subnet_ids, admin: bool = False) -> dict:
     """`upgrade()` plus the trust boundary: unknown widget ids and duplicate
     entries are dropped, an invalid width falls back to that widget's
     default, and every subnet id is checked against `accessible_subnet_ids`

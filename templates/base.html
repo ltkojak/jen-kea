@@ -691,7 +691,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         .dhcp-opt-grid { display: grid; grid-template-columns: 260px 1fr; gap: 16px; align-items: start; }
 
         @media (max-width: 768px) {
-            .dhcp-opt-grid { grid-template-columns: 1fr; }
+            .dhcp-opt-grid { grid-template-columns: minmax(0, 1fr); }
             /* rowlist — one markup, two lines: primary/badge cells, then secondary cells joined with · */
             table.rowlist, table.rowlist tbody { display: block; width: 100%; }
             table.rowlist thead { display: none; }

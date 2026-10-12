@@ -1186,7 +1186,7 @@ def setup_direct_socket(server_id, service):
     if not server.get("ssh_host"):
         flash(
             f"{name} has no SSH host configured — Jen edits {conf} over SSH. Set it under "
-            f"{'SSH to the Kea host' if server_id == 1 else 'Servers & HA'} first.",
+            f"{'SSH to the Kea server' if server_id == 1 else 'Kea servers & HA'} first.",
             "error",
         )
         return back

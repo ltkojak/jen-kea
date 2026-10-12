@@ -86,9 +86,47 @@ class TestTheDashboardCatalogFollowsTheRole:
         raw = {"v": 2, "panels": [{"id": "totals", "w": "full"}, {"id": "getting_started", "w": "third"}]}
         assert [p["id"] for p in dp.validate(raw, [], admin=False)["panels"]] == ["totals"]
         assert [p["id"] for p in dp.validate(raw, [], admin=True)["panels"]] == ["totals", "getting_started"]
-        assert [p["id"] for p in dp.validate(raw, [])["panels"]] == ["totals", "getting_started"]
+        # no argument is the safe answer: a caller that forgets to say who is asking gets the viewer's catalog
+        assert [p["id"] for p in dp.validate(raw, [])["panels"]] == ["totals"]
 
     def test_the_catalog_data_route_gives_a_viewer_nothing_for_it(self, client, db, mock_kea):
         v, _ = restricted_client(client, db, None, role="viewer", username="q173_catalog_viewer")
         r = v.get("/api/dashboard/catalog-data?widgets=getting_started")
         assert r.status_code == 200 and "getting_started" not in r.get_json()
+
+
+class TestSubnetsOffersOnlyWhatTheCallerMayDo:
+    def test_a_scoped_admin_is_not_offered_add_subnet(self, client, db, mock_kea, two_subnets):
+        c, _ = restricted_client(client, db, [1], role="admin", username="q173_scoped_subnets")
+        body = c.get("/subnets", follow_redirects=True).get_data(as_text=True)
+        assert 'href="/subnets/add"' not in body
+
+    def test_an_admin_with_every_subnet_is_offered_it(self, client, db, mock_kea, two_subnets):
+        c, _ = restricted_client(client, db, None, role="admin", username="q173_all_subnets")
+        body = c.get("/subnets", follow_redirects=True).get_data(as_text=True)
+        assert 'href="/subnets/add"' in body
+
+    def test_a_viewer_is_not_told_to_set_up_ssh(self, client, db, mock_kea, two_subnets):
+        # the test install has no SSH configured, so an admin would be shown the banner here
+        v, _ = restricted_client(client, db, None, role="viewer", username="q173_viewer_ssh")
+        body = v.get("/subnets", follow_redirects=True).get_data(as_text=True)
+        assert "Subnet editing requires SSH" not in body
+
+    def test_the_template_gates_the_banner_and_both_add_buttons(self):
+        text = pathlib.Path("templates/subnets.html").read_text(encoding="utf-8")
+        assert "{% if not ssh_ready and current_user.role in ('superadmin','admin') %}" in text
+        assert text.count("current_user.all_subnets") >= 2
+
+
+class TestTheReconcileChipsAreReadable:
+    def test_the_selected_chip_sets_a_text_colour_with_its_background(self):
+        text = pathlib.Path("templates/ddns_reconcile.html").read_text(encoding="utf-8")
+        assert text.count("background:var(--primary);color:#fff;") == 2
+        assert "badge-production" not in text
+
+    def test_the_reverify_link_is_for_a_caller_who_can_use_it(self):
+        text = pathlib.Path("templates/ddns_reconcile.html").read_text(encoding="utf-8")
+        i = text.index("/ddns?tab=verify&hostname=")
+        assert "{% if current_user.all_subnets %}" in text[:i] and text.rfind(
+            "{% if current_user.all_subnets %}", 0, i
+        ) > text.rfind("{% endif %}", 0, i)
