@@ -121,7 +121,7 @@ class TestSubnetsOffersOnlyWhatTheCallerMayDo:
 class TestTheReconcileChipsAreReadable:
     def test_the_selected_chip_sets_a_text_colour_with_its_background(self):
         text = pathlib.Path("templates/ddns_reconcile.html").read_text(encoding="utf-8")
-        assert text.count("background:var(--primary);color:#fff;") == 2
+        assert text.count("background:var(--primary);color:white;") == 2
         assert "badge-production" not in text
 
     def test_the_reverify_link_is_for_a_caller_who_can_use_it(self):
