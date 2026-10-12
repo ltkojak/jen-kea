@@ -72,3 +72,15 @@ One step (5.69.0-beta.4), and nothing to do for it. What you will notice:
 **The Saved-filters dropdown on Leases and Reservations works again**, and its Save Filter button with it.
 
 **Keyboard and screen readers.** The shortcuts window and the confirmation window take focus when they open, keep it inside until they close and give it back.
+
+## The loose ends: seven plugin updates and a safer SSH key button, nothing to do
+
+One step (5.69.0-beta.5), and nothing to do for it. What you will notice:
+
+**Seven plugin updates are offered** under Settings → Plugins (the copies that ship with Jen are already the new versions; a box that installed a plugin from the registry is offered the update). They fix small things: a database error on a plugin page is a sentence, a viewer is no longer shown buttons the page then refuses, and every row that names a client has the Investigate action.
+
+**Regenerate SSH key** (Settings → Kea) now works over an existing key, asks you to confirm your password again first, and keeps the old pair beside the new one as `<key>.prev`. Add the new public key to each Kea server's `authorized_keys`, then delete the `.prev` files.
+
+**A password in a DNS-sync URL is refused**: put the credential in the password field. A target saved earlier with `user:pass@` in its URL keeps working, and shows without the password; remove and re-add it to drop the stored copy.
+
+**An unknown `?subnet=` on the API is a 400** where it used to return everything the key may see. If a script passes a subnet name or id that does not exist, it now learns that.
