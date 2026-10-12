@@ -205,6 +205,92 @@ class TestGroupPagesRender:
         assert 'action="/settings/generate-ssh-key"' not in system
 
 
+class TestDdnsSettingsLiveTogetherUnderKea:
+    """Q176: the D2 socket and the DNS provider are one section on Settings -> Kea; Alerts & Integrations holds no DDNS card."""
+
+    def test_a_superadmin_sees_both_cards_in_one_section(self, logged_in_client, mock_kea):
+        body = logged_in_client.get("/settings/kea").get_data(as_text=True)
+        assert 'id="kea-ddns"' in body
+        assert 'action="/settings/infrastructure/save-d2"' in body
+        assert 'action="/settings/infrastructure/save-ddns"' in body
+        assert (
+            body.index('id="kea-ddns"')
+            < body.index('action="/settings/infrastructure/save-d2"')
+            < body.index('action="/settings/infrastructure/save-ddns"')
+        )
+
+    def test_an_admin_sees_the_provider_card_and_not_the_d2_card(self, client, db, mock_kea):
+        from tests.conftest import restricted_client
+
+        a, _ = restricted_client(client, db, None, role="admin", username="q176_admin")
+        body = a.get("/settings/kea").get_data(as_text=True)
+        assert 'action="/settings/infrastructure/save-ddns"' in body
+        assert 'action="/settings/infrastructure/save-d2"' not in body
+        assert "kea-ddns" in body  # the TOC entry is the admin's too
+
+    def test_alerts_and_integrations_holds_no_ddns_card_and_forwards_the_old_anchor(self, logged_in_client, mock_kea):
+        body = logged_in_client.get("/settings/alerts").get_data(as_text=True)
+        assert 'action="/settings/infrastructure/save-ddns"' not in body
+        assert 'id="al-ddns"' not in body
+        assert "location.hash === '#al-ddns'" in body and "/settings/kea#kea-ddns" in body
+
+    def test_the_save_lands_back_on_the_section(self, logged_in_client, monkeypatch):
+        monkeypatch.setattr("jen.config.app_config.mutate", lambda fn: None)
+        r = logged_in_client.post("/settings/infrastructure/save-ddns", data={"dns_provider": "none", "log_path": ""})
+        assert r.status_code == 302 and r.headers["Location"].endswith("/settings/kea#kea-ddns")
+        r = logged_in_client.post("/settings/infrastructure/save-ddns", data={"dns_provider": "bogus"})
+        assert r.status_code == 302 and r.headers["Location"].endswith("/settings/kea#kea-ddns")
+        r = logged_in_client.post(
+            "/settings/infrastructure/save-ddns", data={"dns_provider": "none", "log_path": "/etc/shadow"}
+        )
+        assert r.status_code == 302 and r.headers["Location"].endswith("/settings/kea#kea-ddns")
+        r = logged_in_client.post(
+            "/settings/infrastructure/save-ddns", data={"dns_provider": "pihole", "api_url_pihole": "ftp://x"}
+        )
+        assert r.status_code == 302 and r.headers["Location"].endswith("/settings/kea#kea-ddns")
+
+    def test_the_page_says_who_writes(self, logged_in_client, mock_kea):
+        body = logged_in_client.get("/settings/kea").get_data(as_text=True)
+        assert "Jen never writes DNS records" in body and "DNS provider (lookups)" in body
+        assert "None (no lookups)" in body
+        assert "log viewer only" not in body and "DDNS &amp; DNS Provider" not in body
+
+    def test_a_fresh_install_has_no_provider_selected_by_default(self, logged_in_client, mock_kea):
+        body = logged_in_client.get("/settings/kea").get_data(as_text=True)
+        assert 'value="none" selected' in body
+        assert 'value="technitium" selected' not in body
+
+    def test_no_page_or_doc_still_sends_the_operator_to_alerts_for_ddns(self):
+        import pathlib
+        import re
+
+        for path in [
+            *pathlib.Path("templates").glob("ddns*.html"),
+            pathlib.Path("docs/admin-guide.md"),
+            pathlib.Path("docs/troubleshooting.md"),
+        ]:
+            text = path.read_text(encoding="utf-8")
+            for m in re.finditer(r"Alerts\s*&(?:amp;)?\s*Integrations", text):
+                window = text[max(0, m.start() - 160) : m.end() + 160].lower()
+                assert "ddns" not in window and "dns provider" not in window, (path.as_posix(), m.start())
+
+    def test_the_only_mention_of_the_old_anchor_is_the_forward(self):
+        import pathlib
+
+        hits = []
+        for root in ("templates", "jen", "docs"):
+            for p in pathlib.Path(root).rglob("*"):
+                if p.suffix in (".html", ".py", ".md") and "al-ddns" in p.read_text(encoding="utf-8", errors="ignore"):
+                    hits.append(p.as_posix())
+        assert hits == ["templates/settings_alerts.html"], hits
+
+    def test_a_phone_toc_chip_names_the_section_and_it_is_a_card_with_a_header(self, logged_in_client, mock_kea):
+        body = logged_in_client.get("/settings/kea").get_data(as_text=True)
+        assert 'href="#kea-ddns"' in body and 'href="#kea-d2"' not in body
+        start = body.index('id="kea-ddns"')
+        assert body[start - 20 : start].count("card") == 1 and 'class="card-header"' in body[start : start + 200]
+
+
 class TestEveryFormActionStillResolves:
     """Moving cards between templates must not orphan a form. Every literal
     action="/…" in the settings-area templates has to resolve to a route

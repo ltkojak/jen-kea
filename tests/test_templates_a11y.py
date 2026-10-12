@@ -69,6 +69,7 @@ class TestNoReleaseMarkerInEndUserProse:
         "_icon_sprite.html": "SVG path coordinates",
         "explain.html": "a placeholder naming a DHCP vendor-class string (MSFT 5.0)",
         "settings_alerts.html": "Pi-hole v5 and v6 are that product's versions",
+        "settings_kea.html": "the DNS provider card (moved here from settings_alerts.html in Q176) names Pi-hole's versions",
     }
 
     def _prose(self, path):

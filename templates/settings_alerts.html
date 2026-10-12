@@ -4,10 +4,10 @@
 {% from '_icons.html' import icon_edit, icon_trash, icon_dots, icon_test %}
 <div class="page-header">
     <h1>{{ icon("bell", "ico-lg") }} Alerts &amp; Integrations</h1>
-    <p>Notification channels, thresholds and templates — plus the DNS provider and Prometheus hooks. Delivery history is under <a href="/settings/logs?tab=alerts">Logs → Alert log</a>.</p>
+    <p>Notification channels, thresholds and templates — plus the Prometheus hook. Delivery history is under <a href="/settings/logs?tab=alerts">Logs → Alert log</a>.</p>
 </div>
 
-{% set toc = [('al-global', 'Thresholds'), ('al-channels', 'Channels'), ('al-templates', 'Templates'), ('al-ddns', 'DDNS / DNS'), ('al-metrics', 'Prometheus')] %}
+{% set toc = [('al-global', 'Thresholds'), ('al-channels', 'Channels'), ('al-templates', 'Templates'), ('al-metrics', 'Prometheus')] %}
 {% include '_card_toc.html' %}
 
 <div class="settings-cols">
@@ -418,97 +418,6 @@ var JEN_CHANNELS = {
 </div>
 
 
-<!-- DDNS / DNS provider (moved from Infrastructure in v5.9.0) -->
-<div class="card" id="al-ddns">
-    <div class="card-header"><span class="card-title">{{ icon("link") }} DDNS &amp; DNS Provider</span>
-        <span class="u-865c33">Powers the <a href="/ddns">Network → DDNS</a> page</span>
-    </div>
-    <form method="POST" action="/settings/infrastructure/save-ddns"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <div class="form-row">
-            <div class="form-group">
-                <label for="f-log_path">Log File Path</label>
-                <input id="f-log_path" type="text" name="log_path" value="{{ infra.ddns_log }}">
-                <div class="form-hint">Path on the Kea server — read via SSH</div>
-            </div>
-            <div class="form-group">
-                <label for="dnsProvider">DNS Provider</label>
-                <select name="dns_provider" id="dnsProvider">
-                    <option value="technitium" {% if infra.dns_provider == 'technitium' %}selected{% endif %}>Technitium DNS</option>
-                    <option value="pihole" {% if infra.dns_provider == 'pihole' %}selected{% endif %}>Pi-hole</option>
-                    <option value="adguard" {% if infra.dns_provider == 'adguard' %}selected{% endif %}>AdGuard Home</option>
-                    <option value="ssh" {% if infra.dns_provider == 'ssh' %}selected{% endif %}>DNS via SSH (Bind9, Unbound, etc.)</option>
-                    <option value="none" {% if infra.dns_provider == 'none' %}selected{% endif %}>None (log viewer only)</option>
-                </select>
-                <div class="form-hint">Used for hostname lookup on the DDNS page</div>
-            </div>
-        </div>
-
-        <div id="dns-fields-technitium" style="display:none;">
-            <div class="form-row">
-                <div class="form-group">
-                    <label for="f-api_url_technitium">API URL</label>
-                    <input id="f-api_url_technitium" type="text" name="api_url_technitium" value="{{ infra.ddns_url }}" placeholder="https://dns.example.com">
-                </div>
-                <div class="form-group">
-                    <label for="f-api_token_technitium">API Token</label>
-                    <input id="f-api_token_technitium" type="password" name="api_token_technitium" placeholder="(unchanged)">
-                    <div class="form-hint">Leave blank to keep existing token</div>
-                </div>
-                <div class="form-group">
-                    <label for="f-forward_zone">Forward Zone</label>
-                    <input id="f-forward_zone" type="text" name="forward_zone" value="{{ infra.ddns_zone }}" placeholder="example.com">
-                </div>
-            </div>
-        </div>
-
-        <div id="dns-fields-pihole" style="display:none;">
-            <div class="form-row">
-                <div class="form-group">
-                    <label for="f-api_url_pihole">Pi-hole URL</label>
-                    <input id="f-api_url_pihole" type="text" name="api_url_pihole" value="{{ infra.ddns_url }}" placeholder="http://pi.hole">
-                    <div class="form-hint">Supports Pi-hole v5 and v6</div>
-                </div>
-                <div class="form-group">
-                    <label for="f-api_token_pihole">Password / API Token</label>
-                    <input id="f-api_token_pihole" type="password" name="api_token_pihole" placeholder="(unchanged)">
-                    <div class="form-hint">Pi-hole web password (v5) or API token (v6)</div>
-                </div>
-            </div>
-        </div>
-
-        <div id="dns-fields-adguard" style="display:none;">
-            <div class="form-row">
-                <div class="form-group">
-                    <label for="f-api_url_adguard">AdGuard Home URL</label>
-                    <input id="f-api_url_adguard" type="text" name="api_url_adguard" value="{{ infra.ddns_url }}" placeholder="http://adguard.local:3000">
-                </div>
-                <div class="form-group">
-                    <label for="f-api_user_adguard">Username</label>
-                    <input id="f-api_user_adguard" type="text" name="api_user_adguard" value="{{ infra.ddns_user }}" placeholder="admin">
-                </div>
-                <div class="form-group">
-                    <label for="f-api_token_adguard">Password</label>
-                    <input id="f-api_token_adguard" type="password" name="api_token_adguard" placeholder="(unchanged)">
-                </div>
-            </div>
-        </div>
-
-        <div id="dns-fields-ssh" style="display:none;">
-            <div style="padding:10px 12px;background:var(--surface2);border-radius:var(--radius);font-size:13px;color:var(--text-muted);">
-                {{ icon("info") }} Uses the SSH connection configured under <a href="/settings/kea#kea-ssh">Kea → SSH</a> to run <code>dig</code> on your Kea server.
-                No additional configuration required.
-            </div>
-        </div>
-
-        <div class="form-group">
-            <label class="u-3a9859">
-                <input type="checkbox" name="clear_api_token" value="1"> Remove the saved API token / password
-            </label>
-        </div>
-        <button type="submit" class="btn btn-primary u-1b0f49">Save DDNS</button>
-    </form>
-</div>
-
 <!-- Prometheus Metrics (moved from Infrastructure in v5.9.0) -->
 <div class="card" id="al-metrics">
     <div class="card-header">
@@ -563,13 +472,8 @@ function generateMetricsToken() {
     crypto.getRandomValues(bytes);
     document.getElementById('metrics-token-input').value = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
 }
-function showDnsFields(provider) {
-    ['technitium','pihole','adguard','ssh'].forEach(p => {
-        const el = document.getElementById('dns-fields-' + p);
-        if (el) el.style.display = (p === provider) ? 'block' : 'none';
-    });
-}
-showDnsFields(document.getElementById('dnsProvider') ? document.getElementById('dnsProvider').value : 'technitium');
+// v5.69.0-beta.7 (Q176): the DDNS card moved to Settings -> Kea; a fragment never reaches the server, so the page forwards the old bookmark
+if (location.hash === '#al-ddns') location.replace('/settings/kea#kea-ddns');
 
 function showChannelFields(type) {
     ['telegram','email','slack','webhook','ntfy','pushover','discord'].forEach(t => {
@@ -684,8 +588,6 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal()
 document.getElementById('add-channel-btn').addEventListener('click', showAddChannel);
 document.getElementById('channel-cancel-btn').addEventListener('click', closeModal);
 document.getElementById('channelType').addEventListener('change', function() { showChannelFields(this.value); });
-var dnsProviderEl = document.getElementById('dnsProvider');
-if (dnsProviderEl) dnsProviderEl.addEventListener('change', function() { showDnsFields(this.value); });
 var generateMetricsTokenBtn = document.getElementById('generate-metrics-token-btn');
 if (generateMetricsTokenBtn) generateMetricsTokenBtn.addEventListener('click', generateMetricsToken);
 // Delegated — edit-channel-btn is rendered once per channel in a loop.

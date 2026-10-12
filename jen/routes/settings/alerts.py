@@ -56,17 +56,9 @@ def settings_alerts():
         logger.error(f"Error loading alert settings: {e}")
         flash("Error loading alert settings. Check server logs for details.", "error")
 
-    # v5.9.0 — the delivery log moved to Settings → Logs → Alert log; the
-    # DDNS/DNS-provider and Prometheus cards moved here from Infrastructure
-    # (they're integrations, not Kea plumbing).
+    # v5.9.0 — the delivery log moved to Settings → Logs → Alert log; the Prometheus card moved here from Infrastructure. (The DDNS / DNS-provider card moved to
+    # Settings → Kea → DDNS in v5.69.0-beta.7, Q176: it is how Jen reaches the DDNS pipeline on the Kea side, not an alert or an integration.)
     cfg = extensions.cfg
-    infra = {
-        "ddns_log": cfg.get("ddns", "log_path", fallback=""),
-        "ddns_url": cfg.get("ddns", "api_url", fallback=""),
-        "ddns_user": cfg.get("ddns", "api_user", fallback=""),
-        "ddns_zone": cfg.get("ddns", "forward_zone", fallback=""),
-        "dns_provider": cfg.get("ddns", "dns_provider", fallback="technitium"),
-    }
 
     # v5.57.0 (Q73) — {type_id: plugin display name}, for the Message
     # Templates card's "From plugins" group; empty on every install with
@@ -95,7 +87,6 @@ def settings_alerts():
         reserved_lease_mode=reserved_lease_mode,
         subnet_map=accessible_subnet_map,
         can_grant_all_subnets=current_user.all_subnets,
-        infra=infra,
         metrics_token=cfg.get("server", "metrics_token", fallback="") if cfg else "",
         metrics_open=cfg.getboolean("server", "metrics_open", fallback=False) if cfg else False,
     )

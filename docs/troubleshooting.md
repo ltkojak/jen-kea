@@ -1022,7 +1022,7 @@ The Problems inbox is filled by a sweep every five minutes that tails each SSH-c
 | The installer (apt, pip, venv, systemctl, mysql output) | File | `sudo less /var/log/jen-install.log` (v5.67.0-beta.18) |
 | Kea DHCP | systemd journal | `sudo journalctl -u isc-kea-dhcp4-server -f` |
 | Kea Control Agent | systemd journal | `sudo journalctl -u isc-kea-ctrl-agent -f` |
-| DDNS updates | File | `tail -f /var/log/kea/kea-ddns-technitium.log` |
+| DDNS updates (a `run_script` hook of your own, or D2) | File | the path in `[ddns] log_path` (Settings → Kea → DDNS) |
 
 ---
 
@@ -1056,7 +1056,7 @@ Go to **Settings → Infrastructure → High Availability** and set the HA mode 
 ### D2 status shows "D2 did not answer version-get"
 
 1. `dhcp-ddns.enable-updates` must be `true` on the Naming tab first — D2 status is skipped entirely while it's off.
-2. In `direct` connection mode, confirm **Settings → Kea → D2 Control Socket** (`[d2] api_url`) is set and points at D2's real control socket (conventionally port 53001) — without it, D2 has no endpoint to answer on.
+2. In `direct` connection mode, confirm **Settings → Kea → DDNS → D2 Control Socket** (`[d2] api_url`) is set and points at D2's real control socket (conventionally port 53001) — without it, D2 has no endpoint to answer on.
 3. Confirm `kea-dhcp-ddns` is actually running: `sudo systemctl status kea-dhcp-ddns-server` (or `isc-kea-dhcp-ddns-server` on older Debian/Ubuntu packages).
 
 ### D2 Configuration tab says "Could not read kea-dhcp-ddns.conf"

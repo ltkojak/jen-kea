@@ -264,7 +264,7 @@ Jen will show a warning on the Servers page and will always use the first Kea se
 ## DDNS Providers
 
 ### Which DNS providers does Jen support?
-Technitium DNS, Pi-hole (v5 and v6), AdGuard Home, and any DNS server reachable via SSH (Bind9, Unbound, etc.). Configure in **Settings → Alerts & Integrations → DDNS & DNS Provider**.
+Technitium DNS, Pi-hole (v5 and v6), AdGuard Home, and any DNS server reachable via SSH (Bind9, Unbound, etc.). Jen only looks names up there - D2 or a hook script on the Kea host writes them. Configure in **Settings → Kea → DDNS → DNS provider (lookups)**.
 
 ### I don't use Technitium — can I still use the DDNS log viewer?
 Yes. Set the DNS provider to **DNS via SSH** or **None** — the log viewer works regardless of DNS provider since it just reads the Kea DDNS log file over SSH.

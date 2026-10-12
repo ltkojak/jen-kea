@@ -174,3 +174,37 @@ class TestStorkIsDescribedOnceAndWithItsSources:
                 "practical alternative to ISC Stork",
             ):
                 assert claim not in text, f"{rel} still says {claim!r}, which no ISC page does"
+
+
+class TestTheGuideSaysWhoWritesDns:
+    """v5.69.0-beta.7 (Q176): the guide said "Jen itself pushes hostname records to an external DNS server's REST API" - false (Jen only ever looked names up). Names are written on the Kea
+    host by D2 or by a run_script hook of the operator's own; the guide says so, and walks the move from the hook to D2."""
+
+    def _ddns_section(self):
+        text = _read("docs/admin-guide.md")
+        start = text.index("\n## DDNS\n")
+        return text[start : text.index("\n## ", start + 5)]
+
+    def test_the_ddns_section_says_jen_writes_nothing_and_never_that_it_pushes(self):
+        section = self._ddns_section()
+        assert "Jen writes nothing" in section
+        assert "Jen itself pushes" not in _read("docs/admin-guide.md")
+        assert "libdhcp_run_script.so" in section and "Local DNS Sync" in section
+
+    def test_the_move_from_a_hook_script_is_a_subsection_with_the_conflict_mode(self):
+        section = self._ddns_section()
+        assert "### Moving from a hook script to D2" in section
+        move = section[section.index("### Moving from a hook script to D2") :]
+        move = move[: move.index("\n### ", 10)]
+        assert "no-check-with-dhcid" in move and "ddns-update-on-renew" in move
+        assert "hooks-libraries" in move and "kea-dhcp4 -t" in move and "log_path" in move
+
+    def test_the_log_table_row_is_not_a_technitium_script(self):
+        text = _read("docs/troubleshooting.md")
+        assert "kea-ddns-technitium.log" not in text
+        assert "run_script" in text
+
+    def test_the_provider_section_is_titled_for_lookups_and_the_default_is_none(self):
+        section = self._ddns_section()
+        assert "### DNS provider (lookups)" in section and "(the default)" in section
+        assert "Settings → Alerts & Integrations → DDNS" not in _read("docs/admin-guide.md")

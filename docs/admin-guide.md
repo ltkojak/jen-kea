@@ -508,9 +508,10 @@ The ID must match the `id` field in your `kea-dhcp4.conf` subnet definition.
 
 | Key | Description | Example |
 |---|---|---|
-| `log_path` | Path to DDNS update log on Kea server | `/var/log/kea/kea-ddns.log` |
-| `api_url` | Technitium API base URL | `https://dns.example.com/api` |
-| `api_token` | Technitium API token | `your-token` |
+| `log_path` | The DDNS log on the Kea server that Jen tails - D2's, or your own hook script's (Settings → Kea → DDNS) | `/var/log/kea/kea-ddns.log` |
+| `dns_provider` | The server Jen looks names up on - lookups only, Jen writes no DNS: `technitium`, `pihole`, `adguard`, `ssh` or `none`. Default `none` (v5.69.0-beta.7; it used to read `technitium` when absent) | `technitium` |
+| `api_url` | The DNS provider's API base URL | `https://dns.example.com/api` |
+| `api_token` | The DNS provider's API token | `your-token` |
 | `forward_zone` | DNS forward zone | `example.com` |
 
 ---
@@ -2135,41 +2136,46 @@ Add an alert channel and enable the **HA failover / state change** alert type. Y
 
 ## DDNS
 
-The **DDNS** page (Network → DDNS) has five tabs: **Status**, **Naming**, **D2 Configuration**, **Verify**, and **Reconcile**. It covers two independent mechanisms for keeping DNS in sync with DHCP leases, and Jen treats neither as more "correct" than the other:
+The **DDNS** page (Network → DDNS) has five tabs: **Status**, **Naming**, **D2 Configuration**, **Verify**, and **Reconcile**. It is where the pipeline is *operated*; its *settings* - the D2 control socket and the DNS provider Jen looks names up on - are under **Settings → Kea → DDNS**, beside every setting that says how Jen reaches Kea (v5.69.0-beta.7).
 
-- **Provider mode** — Jen itself pushes hostname records to an external DNS server's REST API (Technitium, Pi-hole, AdGuard Home) or over SSH (`dig`/`host` against BIND/Unbound). This existed before v5.23.0 and is unchanged.
-- **D2 mode** — Kea's own DNS-update daemon, `kea-dhcp-ddns` ("D2"), sends dynamic DNS updates (RFC 2136) directly from `kea-dhcp4` as leases are issued/renewed/released. Jen v5.23.0 added the ability to read D2's status, configure its forward/reverse zones and TSIG keys, and verify what actually landed in DNS.
+**Who writes DNS.** Jen writes nothing. Names are written on the Kea host by one of two things:
 
-`[ddns] mode` picks which one the Status tab and Health Center report on: `provider` (default when a real provider is configured), `d2` (default when no provider is set but dhcp4's own DDNS is enabled), or `both`. This is display-only — running both mechanisms against the same records at once is an operator choice Jen doesn't second-guess, but it isn't a use case D2's own conflict-resolution options were designed to reconcile.
+- **D2** - Kea's own DNS-update daemon, `kea-dhcp-ddns`, when dhcp4's `dhcp-ddns.enable-updates` is on. It sends dynamic DNS updates (RFC 2136) to whatever server D2's own config names, as leases are issued, renewed and released. Jen can read D2's status, configure its forward/reverse zones and TSIG keys, and verify what landed in DNS.
+- **A hook script of your own**, loaded through Kea's `libdhcp_run_script.so` (events such as `leases4_committed` and `lease4_renew`) and calling your DNS server's API. Jen does not ship, author or know that script; it reads the hook's log when `[ddns] log_path` points at it.
 
-### Provider mode
+The **DNS provider** setting (Technitium, Pi-hole, AdGuard Home, or `dig`/`host` over SSH) is only where Jen *reads*: the Status tab's Lookup card, Verify and Reconcile. The same server can be D2's update target and Jen's lookup provider at once. The one thing besides D2 and your hook that writes DNS is the Local DNS Sync plugin, which pushes rewrites to Pi-hole or AdGuard Home from its own target list.
 
-Go to **Settings → Alerts & Integrations → DDNS & DNS Provider** and choose:
+`[ddns] mode` picks what the Status tab and Health Center report on: `d2` (the default when dhcp4 sends updates to D2), `provider` (the default when a DNS provider is set), `none` (nothing is configured - a fresh install; the Status tab says "Not configured" and points at Settings → Kea → DDNS), or `both`. This is display-only. Running a hook and D2 against the same records is an operator choice Jen does not block - it warns instead (Doctor's `ddns-two-writers`, a row and a sentence on the Status tab, a confirmation on the Naming tab), because with both on every lease is written twice by two writers that do not know each other, and D2's DHCID conflict check refuses a name the script wrote.
+
+### DNS provider (lookups)
+
+Go to **Settings → Kea → DDNS → DNS provider (lookups)** and choose:
 
 | Provider | Description |
 |---|---|
-| Technitium DNS | Uses Technitium REST API for hostname lookup |
-| Generic | Uses `dig`/`host` over SSH to the Kea server |
-| None | Log viewer only — no hostname lookup |
+| Technitium DNS | Looks names up through Technitium's REST API |
+| Pi-hole / AdGuard Home | Looks names up through their APIs |
+| DNS via SSH | Uses `dig`/`host` over SSH to the Kea server |
+| None (no lookups) | The default - the Lookup card has nothing to ask |
 
 Or set it in `jen.config`:
 
 ```ini
 [ddns]
 log_path     = /var/log/kea/kea-ddns.log
-dns_provider = technitium   # technitium, pihole, adguard, ssh, or none
+dns_provider = technitium   # technitium, pihole, adguard, ssh, or none (the default)
 api_url      = https://your-technitium-server/api
 api_token    = your-token
 forward_zone = your.domain.com
 ```
 
-The **Status** tab's Hostname Lookup card queries whichever provider is configured, unchanged from earlier releases.
+The **Status** tab's Hostname Lookup card queries whichever provider is configured and writes nothing. `log_path` is the log Jen tails on the Kea host: D2's, or your own hook script's.
 
 ### D2 mode
 
 D2 needs three things before Jen can manage it: a reachable control socket, at least one forward or reverse zone, and (usually) a TSIG key so BIND/Unbound/Technitium accept the updates as authenticated rather than rejecting them outright.
 
-**1. Point Jen at D2's control socket.** In `ca` connection mode (the default) the Control Agent already proxies D2 alongside dhcp4/dhcp6 — nothing to configure. In `direct` mode, set **Settings → Kea → D2 Control Socket** (or `[d2] api_url` in `jen.config`) to D2's own HTTP control socket, conventionally port 53001:
+**1. Point Jen at D2's control socket.** In `ca` connection mode (the default) the Control Agent already proxies D2 alongside dhcp4/dhcp6 — nothing to configure. In `direct` mode, set **Settings → Kea → DDNS → D2 Control Socket** (or `[d2] api_url` in `jen.config`) to D2's own HTTP control socket, conventionally port 53001:
 
 ```ini
 [d2]
@@ -2220,6 +2226,18 @@ In Jen's D2 Configuration tab:
 Each Add/Remove pushes to every SSH-configured server, guarded by that server's own current config hash (a stale read elsewhere can't silently overwrite a change made in between), tests the result with `kea-dhcp-ddns -t` before writing, and restarts D2 — exactly the same lifecycle as every other Kea config edit in Jen.
 
 **4. Verify it actually worked.** The **Verify** tab runs `socket.getaddrinfo()`/`socket.gethostbyaddr()` from the Jen host's own system resolver — not from Kea, not from D2 directly — so a green check here means an ordinary client would see the same thing. Type a hostname and/or IP (or use one from an active lease) and Jen shows the forward and reverse results side by side with a ✓/✗ for whether they match what you typed.
+
+### Moving from a hook script to D2
+
+The order the maintainer followed on 2026-10-12, for a box whose names are written by a `run_script` hook script of your own. Nothing here is automatic: Jen does not read the script and cannot turn it off.
+
+1. **The DNS server first.** Dynamic updates allowed on the forward zone and on every reverse zone, with one TSIG key (see "D2 mode" below for BIND and Technitium examples).
+2. **Install and reach D2.** `kea-dhcp-ddns-server` installed on the Kea host; its control socket set up from Settings → Kea → DDNS (the direct-socket button); D2's logger given a file output under `/var/log/kea`.
+3. **D2 Configuration tab.** The forward domain and one reverse domain per /24 (a /23 is two), the key on each.
+4. **Naming tab, for one lease lifetime.** `ddns-update-on-renew` on and `ddns-conflict-resolution-mode` set to `no-check-with-dhcid`: the script's records carry no DHCID, and D2's default conflict check refuses to touch a name it does not own. Put the mode back to the default after one lease lifetime.
+5. **The cut-over, in one dhcp4 edit.** Take the `run_script` entry out of `hooks-libraries` by hand (and check it with `kea-dhcp4 -t`), then turn updates on from the Naming tab (it restarts dhcp4). Never turn updates on with the hook still loaded - that is the two-writers warning, for exactly this step.
+6. **Point `[ddns] log_path` at D2's log** (Settings → Kea → DDNS); keep the DNS provider for lookups.
+7. **The proof.** The Status tab's D2 counters moving, Health's D2 checks green, Reconcile clean after one lease lifetime. Keep the script and its log until then: they are the way back.
 
 ### Reconcile (v5.47.0)
 

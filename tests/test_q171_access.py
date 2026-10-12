@@ -408,8 +408,11 @@ class TestSaveDdnsClearsWhatIsBlank:
     def test_the_page_has_no_plain_named_provider_input_and_each_suffixed_name_once(self):
         import re
 
-        text = pathlib.Path("templates/settings_alerts.html").read_text(encoding="utf-8")
-        assert re.findall(r'name="(api_url|api_user|api_token)"', text) == []
+        text = pathlib.Path("templates/settings_kea.html").read_text(encoding="utf-8")  # the card moved here in Q176
+        # (the page also holds the Kea API and D2 forms, whose plain `api_url` is theirs: the rule is about the provider card, from its id to the end of its form)
+        start = text.index('id="kea-dns-provider"')
+        card = text[start : text.index("</form>", start)]
+        assert re.findall(r'name="(api_url|api_user|api_token)"', card) == []
         for name in (
             "api_url_technitium",
             "api_token_technitium",

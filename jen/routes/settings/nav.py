@@ -87,7 +87,7 @@ SETTINGS_GROUPS = [
         "label": "Kea",
         "icon": "plug",
         "url": "/settings/kea",
-        "blurb": "Control Agent, servers & HA, SSH, packages, config drift",
+        "blurb": "Control Agent, servers & HA, SSH, DDNS (D2 and DNS provider), packages, config drift",
         "match": ("settings.settings_kea", "settings.author_kea_config", "settings.settings_infrastructure"),
     },
     {
@@ -111,7 +111,7 @@ SETTINGS_GROUPS = [
         "label": "Alerts & Integrations",
         "icon": "bell",
         "url": "/settings/alerts",
-        "blurb": "Channels, templates, thresholds, DDNS/DNS provider, Prometheus",
+        "blurb": "Channels, templates, thresholds, Prometheus",
         "match": ("settings.settings_alerts",),
     },
     {

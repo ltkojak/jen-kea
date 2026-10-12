@@ -264,7 +264,7 @@ def settings_kea():
         "ddns_url": extensions.cfg.get("ddns", "api_url", fallback=""),
         "ddns_user": extensions.cfg.get("ddns", "api_user", fallback=""),
         "ddns_zone": extensions.cfg.get("ddns", "forward_zone", fallback=""),
-        "dns_provider": extensions.cfg.get("ddns", "dns_provider", fallback="technitium"),
+        "dns_provider": extensions.cfg.get("ddns", "dns_provider", fallback="none"),
         "ha_mode": extensions.cfg.get("kea", "ha_mode", fallback=""),
         "server_name": extensions.cfg.get("kea", "name", fallback="Kea Server 1"),
         "subnets": extensions.SUBNET_MAP,
@@ -2150,20 +2150,22 @@ def _provider_field(name, provider):
 @_admin_required
 def save_infra_ddns():
     log_path = request.form.get("log_path", "").strip()
-    dns_provider = request.form.get("dns_provider", "technitium").strip()
+    dns_provider = request.form.get("dns_provider", "none").strip()
     api_url = _provider_field("api_url", dns_provider)
     api_user = _provider_field("api_user", dns_provider)
     api_token = _provider_field("api_token", dns_provider)
     forward_zone = request.form.get("forward_zone", "").strip()
+    # (v5.69.0-beta.7, Q176: the card lives on Settings -> Kea -> DDNS, so every way out of this route lands back on that section)
+    home = url_for("settings.settings_kea", _anchor="kea-ddns")
     if log_path and not __auth.valid_log_path(log_path):
         flash("Invalid log path — must be an absolute path to a .log file under /var/log.", "error")
-        return redirect(url_for("settings.settings_alerts"))
+        return redirect(home)
     if dns_provider not in DDNS_PROVIDERS:
         flash("Unknown DNS provider.", "error")
-        return redirect(url_for("settings.settings_alerts"))
+        return redirect(home)
     if api_url and not __auth.valid_api_url(api_url):
         flash("The DNS provider's API URL must start with http:// or https://.", "error")
-        return redirect(url_for("settings.settings_alerts"))
+        return redirect(home)
     # v5.69.0-beta.2 (Q171): a blank field clears its key - the page used to say "saved" and keep the old value, so a provider's URL, user, zone or log path could never
     # be unset. The token is the one secret here and the page promises "leave blank to keep": it is replaced when typed and removed only by its own checkbox.
     clear_token = request.form.get("clear_api_token", "") == "1"
@@ -2190,7 +2192,7 @@ def save_infra_ddns():
     __config.app_config.mutate(_apply)
     flash("DDNS settings saved.", "success")
     __user.audit("SAVE_INFRA", "ddns", f"log={log_path} provider={dns_provider}")
-    return redirect(url_for("settings.settings_alerts"))
+    return redirect(home)
 
 
 @bp.route("/settings/infrastructure/save-ha", methods=["POST"])

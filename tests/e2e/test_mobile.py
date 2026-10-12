@@ -238,14 +238,16 @@ class TestSettingsCardsCollapsibleOnPhone:
     def test_only_the_first_card_is_open_on_load(self, phone, base_url):
         _visit(phone, base_url, "/settings/kea")
         assert "collapsed" not in (phone.get_attribute("#kea-api", "class") or "")
-        for anchor in ("kea-ssh", "kea-servers", "kea6", "kea-d2", "kea-packages", "kea-drift"):
+        for anchor in ("kea-ssh", "kea-servers", "kea-ddns", "kea6", "kea-packages", "kea-drift"):
             assert "collapsed" in (phone.get_attribute(f"#{anchor}", "class") or ""), anchor
 
     def test_tapping_a_toc_chip_opens_its_card(self, phone, base_url):
         _visit(phone, base_url, "/settings/kea")
-        phone.click('.card-toc a[href="#kea-d2"]')
-        assert "collapsed" not in (phone.get_attribute("#kea-d2", "class") or "")
-        expect(phone.locator("#kea-d2 form")).to_be_visible()
+        phone.click(
+            '.card-toc a[href="#kea-ddns"]'
+        )  # Q176: the D2 socket and the DNS provider are one section; its chip opens both
+        assert "collapsed" not in (phone.get_attribute("#kea-ddns", "class") or "")
+        expect(phone.locator("#kea-ddns form").first).to_be_visible()
 
     def test_the_screenshot_is_well_under_3000px(self, phone, base_url):
         _visit(phone, base_url, "/settings/kea")
@@ -256,7 +258,7 @@ class TestSettingsCardsCollapsibleOnPhone:
 
     def test_desktop_shows_every_card_open(self, desktop, base_url):
         _visit(desktop, base_url, "/settings/kea")
-        for anchor in ("kea-api", "kea-ssh", "kea-servers", "kea6", "kea-d2", "kea-packages", "kea-drift"):
+        for anchor in ("kea-api", "kea-ssh", "kea-servers", "kea-ddns", "kea6", "kea-packages", "kea-drift"):
             expect(desktop.locator(f"#{anchor} > :not(.card-header)").first).to_be_visible()
 
     # v5.56.4 (Q72c) — the two-column Settings layout at >=1280px. The

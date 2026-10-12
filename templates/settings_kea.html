@@ -67,8 +67,8 @@
 <div class="alert alert-warning">{{ icon("triangle-alert") }} Kea connection changes require a Jen restart to take effect. {% if current_user.role == 'superadmin' %}<form method="POST" action="/settings/infrastructure/restart" class="u-cccfa4"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-sm btn-warning u-5dd2a6">Restart Now</button></form>{% else %}A superadmin restarts Jen.{% endif %}</div>
 {% endif %}
 
-{% set toc = [('kea-api', 'Control Plane'), ('kea-ssh', 'SSH'), ('kea-servers', 'Kea servers & HA')] %}
-{% if current_user.role == 'superadmin' %}{% set toc = toc + [('kea6', 'IPv6'), ('kea-d2', 'D2'), ('kea-packages', 'Packages'), ('kea-drift', 'Drift')] %}{% endif %}
+{% set toc = [('kea-api', 'Control Plane'), ('kea-ssh', 'SSH'), ('kea-servers', 'Kea servers & HA'), ('kea-ddns', 'DDNS')] %}
+{% if current_user.role == 'superadmin' %}{% set toc = toc + [('kea6', 'IPv6'), ('kea-packages', 'Packages'), ('kea-drift', 'Drift')] %}{% endif %}
 {% include '_card_toc.html' %}
 
 {% if ca_removed %}
@@ -407,6 +407,146 @@
     </div>
 </div>
 
+<!-- DDNS settings (v5.69.0-beta.7, Q176): how Jen reaches the DDNS pipeline on the Kea side lives here, beside every other "how Jen reaches Kea" setting. The pipeline is
+     OPERATED under Network → DDNS. The D2 card is the superadmin's; the provider card is the admin's. -->
+<div class="card" id="kea-ddns">
+    <div class="card-header"><span class="card-title">{{ icon("link") }} DDNS - Kea's D2 daemon and the DNS provider</span></div>
+    <p class="form-hint u-da12f2">D2 is kea-dhcp-ddns, the daemon that sends Kea's updates; the DNS provider is the server Jen reads names from, looks them up on and reconciles against. Jen never writes DNS records itself: D2 or a hook script on the Kea host does. The provider below is where Jen looks names up. The pipeline itself is operated under <a href="/ddns">Network → DDNS</a>.</p>
+    {% if current_user.role == 'superadmin' %}
+    <!-- D2 (kea-dhcp-ddns) control socket (v5.23.0, Q19) -->
+    <div class="card" id="kea-d2">
+        <div class="card-header"><span class="card-title">{{ icon("link") }} D2 Control Socket</span></div>
+        <div class="form-hint u-761d3a">
+            {% if infra.kea_connection_mode == 'direct' %}
+            <strong>Direct mode:</strong> the API URL below is <strong>kea-dhcp-ddns's own</strong> HTTP control
+            socket. D2 is only reachable once this is set — Kea's example port is <strong>53001</strong>.
+            {% else %}
+            The common Kea setup is one Control Agent proxying to <code>kea-dhcp4</code>, <code>kea-dhcp6</code>,
+            and D2 alike. Only fill these in if D2 genuinely uses a separate CA/port.
+            {% endif %}
+            <br>Applies to the first Kea server only; additional servers set their own D2 endpoint under Kea servers &amp; HA.
+            <br>Blank text fields inherit the Kea settings above and clear any override saved here.
+            Passwords are kept unless you tick Inherit.
+        </div>
+        {% if infra.kea_connection_mode == 'direct' and not infra.d2_api_url %}
+        <div class="alert alert-warning">{{ icon("triangle-alert") }} Jen is in <code>direct</code> mode, but no D2 control socket URL is set — D2 status/config on the DDNS page will show errors until you set the API URL below.</div>
+        {% endif %}
+        <form method="POST" action="/settings/infrastructure/save-d2"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="form-row">
+                <div class="form-group">
+                    <label>{% if infra.kea_connection_mode == 'direct' %}kea-dhcp-ddns control socket URL{% else %}API URL{% endif %}</label>
+                    <input type="text" name="api_url" value="{{ infra.d2_api_url }}" placeholder="{% if infra.kea_connection_mode == 'direct' %}http://YOUR-KEA-SERVER:53001{% else %}{{ infra.kea_api_url }} (inherited){% endif %}">
+                </div>
+                <div class="form-group">
+                    <label>API Username</label>
+                    <input type="text" name="api_user" value="{{ infra.d2_api_user }}" placeholder="{{ infra.kea_api_user }} (inherited)">
+                </div>
+                <div class="form-group">
+                    <label>API Password</label>
+                    <input type="password" name="api_pass" placeholder="(kept unless changed)">
+                    <label class="u-6125e5">
+                        <input type="checkbox" name="inherit_api_pass" value="1" class="u-30e741">
+                        Inherit the Kea API password
+                    </label>
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary">Save D2 API</button>
+        </form>
+        {{ direct_socket_setup(1, 'd2', 'kea-dhcp-ddns', 'kea-dhcp-ddns.conf', infra.ssh_host, infra.bind_default, infra.d2_api_user or infra.kea_api_user, 53001, infra.d2_api_url, 'SSH to the Kea host (above)', infra.tls_supported) }}
+    </div>
+    {% endif %}
+    <!-- DNS provider: where Jen READS names (moved from Alerts & Integrations in v5.69.0-beta.7, Q176) -->
+    <div class="card" id="kea-dns-provider">
+        <div class="card-header"><span class="card-title">{{ icon("search") }} DNS provider (lookups)</span>
+            <span class="u-865c33">Powers the <a href="/ddns">Network → DDNS</a> page</span>
+        </div>
+        <form method="POST" action="/settings/infrastructure/save-ddns"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="f-log_path">Log File Path</label>
+                    <input id="f-log_path" type="text" name="log_path" value="{{ infra.ddns_log }}">
+                    <div class="form-hint">The DDNS log on the Kea server (D2's, or your own hook script's) — read through the Kea host helper</div>
+                </div>
+                <div class="form-group">
+                    <label for="dnsProvider">DNS provider</label>
+                    <select name="dns_provider" id="dnsProvider">
+                        <option value="technitium" {% if infra.dns_provider == 'technitium' %}selected{% endif %}>Technitium DNS</option>
+                        <option value="pihole" {% if infra.dns_provider == 'pihole' %}selected{% endif %}>Pi-hole</option>
+                        <option value="adguard" {% if infra.dns_provider == 'adguard' %}selected{% endif %}>AdGuard Home</option>
+                        <option value="ssh" {% if infra.dns_provider == 'ssh' %}selected{% endif %}>DNS via SSH (Bind9, Unbound, etc.)</option>
+                        <option value="none" {% if infra.dns_provider == 'none' %}selected{% endif %}>None (no lookups)</option>
+                    </select>
+                    <div class="form-hint">Read-only: the server Jen asks on the DDNS page's Lookup card. D2's update target is in D2's own config (Network → DDNS → D2 Configuration).</div>
+                </div>
+            </div>
+
+            <div id="dns-fields-technitium" style="display:none;">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="f-api_url_technitium">API URL</label>
+                        <input id="f-api_url_technitium" type="text" name="api_url_technitium" value="{{ infra.ddns_url }}" placeholder="https://dns.example.com">
+                    </div>
+                    <div class="form-group">
+                        <label for="f-api_token_technitium">API Token</label>
+                        <input id="f-api_token_technitium" type="password" name="api_token_technitium" placeholder="(unchanged)">
+                        <div class="form-hint">Leave blank to keep existing token</div>
+                    </div>
+                    <div class="form-group">
+                        <label for="f-forward_zone">Forward Zone</label>
+                        <input id="f-forward_zone" type="text" name="forward_zone" value="{{ infra.ddns_zone }}" placeholder="example.com">
+                    </div>
+                </div>
+            </div>
+
+            <div id="dns-fields-pihole" style="display:none;">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="f-api_url_pihole">Pi-hole URL</label>
+                        <input id="f-api_url_pihole" type="text" name="api_url_pihole" value="{{ infra.ddns_url }}" placeholder="http://pi.hole">
+                        <div class="form-hint">Supports Pi-hole v5 and v6</div>
+                    </div>
+                    <div class="form-group">
+                        <label for="f-api_token_pihole">Password / API Token</label>
+                        <input id="f-api_token_pihole" type="password" name="api_token_pihole" placeholder="(unchanged)">
+                        <div class="form-hint">Pi-hole web password (v5) or API token (v6)</div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="dns-fields-adguard" style="display:none;">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="f-api_url_adguard">AdGuard Home URL</label>
+                        <input id="f-api_url_adguard" type="text" name="api_url_adguard" value="{{ infra.ddns_url }}" placeholder="http://adguard.local:3000">
+                    </div>
+                    <div class="form-group">
+                        <label for="f-api_user_adguard">Username</label>
+                        <input id="f-api_user_adguard" type="text" name="api_user_adguard" value="{{ infra.ddns_user }}" placeholder="admin">
+                    </div>
+                    <div class="form-group">
+                        <label for="f-api_token_adguard">Password</label>
+                        <input id="f-api_token_adguard" type="password" name="api_token_adguard" placeholder="(unchanged)">
+                    </div>
+                </div>
+            </div>
+
+            <div id="dns-fields-ssh" style="display:none;">
+                <div style="padding:10px 12px;background:var(--surface2);border-radius:var(--radius);font-size:13px;color:var(--text-muted);">
+                    {{ icon("info") }} Uses the SSH connection configured under <a href="/settings/kea#kea-ssh">Kea → SSH</a> to run <code>dig</code> on your Kea server.
+                    No additional configuration required.
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="u-3a9859">
+                    <input type="checkbox" name="clear_api_token" value="1"> Remove the saved API token / password
+                </label>
+            </div>
+            <button type="submit" class="btn btn-primary u-1b0f49">Save DDNS</button>
+        </form>
+    </div>
+</div>
+
 {% if current_user.role == 'superadmin' %}
 <!-- Kea6 API / IPv6 toggle (v5.0 Phase 1) -->
 <div class="card" id="kea6">
@@ -510,48 +650,6 @@
     </div>
 </div>
 
-<!-- D2 (kea-dhcp-ddns) control socket (v5.23.0, Q19) -->
-<div class="card" id="kea-d2">
-    <div class="card-header"><span class="card-title">{{ icon("link") }} D2 Control Socket</span></div>
-    <div class="form-hint u-761d3a">
-        {% if infra.kea_connection_mode == 'direct' %}
-        <strong>Direct mode:</strong> the API URL below is <strong>kea-dhcp-ddns's own</strong> HTTP control
-        socket. D2 is only reachable once this is set — Kea's example port is <strong>53001</strong>.
-        {% else %}
-        The common Kea setup is one Control Agent proxying to <code>kea-dhcp4</code>, <code>kea-dhcp6</code>,
-        and D2 alike. Only fill these in if D2 genuinely uses a separate CA/port.
-        {% endif %}
-        <br>Applies to the first Kea server only; additional servers set their own D2 endpoint under Kea servers &amp; HA.
-        <br>Blank text fields inherit the Kea settings above and clear any override saved here.
-        Passwords are kept unless you tick Inherit.
-    </div>
-    {% if infra.kea_connection_mode == 'direct' and not infra.d2_api_url %}
-    <div class="alert alert-warning">{{ icon("triangle-alert") }} Jen is in <code>direct</code> mode, but no D2 control socket URL is set — D2 status/config on the DDNS page will show errors until you set the API URL below.</div>
-    {% endif %}
-    <form method="POST" action="/settings/infrastructure/save-d2"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <div class="form-row">
-            <div class="form-group">
-                <label>{% if infra.kea_connection_mode == 'direct' %}kea-dhcp-ddns control socket URL{% else %}API URL{% endif %}</label>
-                <input type="text" name="api_url" value="{{ infra.d2_api_url }}" placeholder="{% if infra.kea_connection_mode == 'direct' %}http://YOUR-KEA-SERVER:53001{% else %}{{ infra.kea_api_url }} (inherited){% endif %}">
-            </div>
-            <div class="form-group">
-                <label>API Username</label>
-                <input type="text" name="api_user" value="{{ infra.d2_api_user }}" placeholder="{{ infra.kea_api_user }} (inherited)">
-            </div>
-            <div class="form-group">
-                <label>API Password</label>
-                <input type="password" name="api_pass" placeholder="(kept unless changed)">
-                <label class="u-6125e5">
-                    <input type="checkbox" name="inherit_api_pass" value="1" class="u-30e741">
-                    Inherit the Kea API password
-                </label>
-            </div>
-        </div>
-        <button type="submit" class="btn btn-primary">Save D2 API</button>
-    </form>
-    {{ direct_socket_setup(1, 'd2', 'kea-dhcp-ddns', 'kea-dhcp-ddns.conf', infra.ssh_host, infra.bind_default, infra.d2_api_user or infra.kea_api_user, 53001, infra.d2_api_url, 'SSH to the Kea host (above)', infra.tls_supported) }}
-</div>
-
 <!-- Investigation logging on demand: early access, off by default (v5.68.0-beta.30, Q167) -->
 <div class="card" id="kea-investigation-logging">
     <div class="card-header"><span class="card-title">{{ icon("eye") }} Investigation logging <span class="form-hint">(early access)</span></span></div>
@@ -592,6 +690,16 @@
 
 {% endblock %}
 {% block scripts %}
+// v5.69.0-beta.7 (Q176): the DNS provider card moved here from Alerts & Integrations - one block of fields per provider, the chosen one shown
+function showDnsFields(provider) {
+    ['technitium','pihole','adguard','ssh'].forEach(p => {
+        const el = document.getElementById('dns-fields-' + p);
+        if (el) el.style.display = (p === provider) ? 'block' : 'none';
+    });
+}
+var dnsProviderEl = document.getElementById('dnsProvider');
+showDnsFields(dnsProviderEl ? dnsProviderEl.value : 'none');
+if (dnsProviderEl) dnsProviderEl.addEventListener('change', function() { showDnsFields(this.value); });
 function addServerRow() {
     const list = document.getElementById('extra-servers-list');
     const count = list.querySelectorAll('.extra-server-row').length + 2;
