@@ -479,12 +479,17 @@ def _reset_capabilities_cache():
 
 
 @pytest.fixture(autouse=True)
-def _reset_log_tail():
+def _reset_log_tail(monkeypatch):
     """v5.68.0-beta.17 (Q152) - jen.services.log_tail keeps one read of a Kea server's log for 3 s per (server, path), shared by every
-    reader. Every test starts (and ends) with none, so one test's stubbed log can never answer for the next."""
+    reader. Every test starts (and ends) with none, so one test's stubbed log can never answer for the next.
+
+    v5.69.0-beta.6 (Q175): it also keeps where each server's log IS (`path_for`, one config read per server per two minutes) - cleared the same way - and the one seam
+    that read goes through, `_read_server_config`, answers "could not read" here, so no test that stubs `tail_log` opens an SSH session to a fake host for a log path
+    (the configured path is what such a test has always been given). A test of the path itself replaces the seam with its own."""
     from jen.services import log_tail
 
     log_tail.clear()
+    monkeypatch.setattr(log_tail, "_read_server_config", lambda server: None)
     yield
     log_tail.clear()
 

@@ -87,6 +87,9 @@ def trace_page():
     # emitting hx-trigger), not by page JS.
     watching = watch and watched_s < WATCH_MAX_S
 
+    # v5.69.0-beta.6 (Q175): where THIS server's kea-dhcp4 writes its log - its own logger's file, else [kea] dhcp4_log_path (services/log_tail.path_for, the one definition)
+    log_path = __log_tail.path_for(server) if server else __trace.log_path_for(None)
+
     ctx = {
         "mac": mac_raw,
         "servers": extensions.KEA_SERVERS or [],
@@ -96,7 +99,7 @@ def trace_page():
         "next_t": watched_s + WATCH_STEP_S,
         "watch_step": WATCH_STEP_S,
         "watch_max": WATCH_MAX_S,
-        "log_path": extensions.DHCP4_LOG,
+        "log_path": log_path,
         "error": "",
         "groups": None,
         "note": "",
@@ -135,14 +138,23 @@ def trace_page():
             else:
                 # v5.68.0-beta.17 (Q152): one cached read per server and path for WATCH_STEP_S, shared by every watcher and by Explain's
                 # log read - two admins watching the same server cost the Kea host one tail per step, not two
-                res = __log_tail.tail(server, extensions.DHCP4_LOG, lines, timeout=TAIL_TIMEOUT_S)
+                res = (
+                    __log_tail.tail(server, log_path, lines, timeout=TAIL_TIMEOUT_S)
+                    if log_path
+                    else {"ok": False, "code": "missing"}  # no file the host would read: nothing to ask it
+                )
                 trace_refusal = NEEDS_HELPER
             if res["code"] == "no-helper":
                 ctx["error"] = trace_refusal
             elif res["code"] == "missing":
                 ctx["error"] = (
-                    f"Log file not found on the Kea server: {extensions.DHCP4_LOG}. "
-                    "Set [kea] dhcp4_log_path in jen.config if kea-dhcp4 logs elsewhere."
+                    (
+                        f"Log file not found on the Kea server: {log_path}. "
+                        if log_path
+                        else "Jen has no log file it may read for this server. "
+                    )
+                    + "If kea-dhcp4 logs to stdout or the system journal, give its logger a file output under /var/log/kea (Doctor shows the lines to paste); "
+                    "if it logs elsewhere under /var/log, set the log path under Settings → Kea → SSH (dhcp4_log_path)."
                 )
             elif not res["ok"]:
                 logger.error(f"trace: tail_log failed: {res.get('detail')}")

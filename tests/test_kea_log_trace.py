@@ -337,3 +337,111 @@ class TestAllocationsAndTheNewestLine:
             _alloc("10:07:00.000", MAC, "10.0.1.56", "2"),
         ]
         assert klt.newest_ts(lines).strftime("%H:%M:%S") == "10:07:00" and klt.newest_ts(["nothing"]) is None
+
+
+class TestLogPathForIsTheLoggersOwnFile:
+    """v5.69.0-beta.6 (Q175): where kea-dhcp4 writes its log is ONE definition, and every reader of that log asks it - the Problems sweep read the configured path for 1447
+    sweeps of a host whose logger wrote to stdout, while the investigation arm already asked the daemon's own logger config."""
+
+    def test_the_loggers_first_file_output_wins(self):
+        cfg = {
+            "Dhcp4": {
+                "loggers": [
+                    {
+                        "name": "kea-dhcp4",
+                        "output-options": [{"output": "stdout"}, {"output": "/var/log/kea/dhcp4.log"}],
+                    }
+                ]
+            }
+        }
+        assert klt.log_path_for(cfg) == "/var/log/kea/dhcp4.log"
+
+    def test_stdout_alone_falls_back_to_the_configured_path(self, monkeypatch):
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "DHCP4_LOG", "/var/log/kea/kea-dhcp4.log")
+        cfg = {
+            "Dhcp4": {
+                "loggers": [{"name": "kea-dhcp4", "output-options": [{"output": "stdout", "pattern": "%-5p %m\n"}]}]
+            }
+        }
+        assert klt.log_path_for(cfg) == "/var/log/kea/kea-dhcp4.log"
+
+    def test_a_file_outside_var_log_is_not_offered(self):
+        from jen import extensions
+
+        cfg = {"Dhcp4": {"loggers": [{"name": "kea-dhcp4", "output-options": [{"output": "/tmp/kea.log"}]}]}}
+        assert klt.log_path_for(cfg) in ("", extensions.DHCP4_LOG)
+
+    def test_no_config_is_the_configured_path(self):
+        from jen import extensions
+
+        assert klt.log_path_for(None) == extensions.DHCP4_LOG
+
+    def test_a_file_the_host_would_refuse_is_skipped_for_the_next_one_that_it_would_read(self, monkeypatch):
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "DHCP4_LOG", "")
+        cfg = {
+            "Dhcp4": {
+                "loggers": [
+                    {
+                        "name": "kea-dhcp4",
+                        "output-options": [{"output": "/tmp/kea.log"}, {"output": "/var/log/kea/kea-dhcp4.log"}],
+                    }
+                ]
+            }
+        }
+        assert klt.log_path_for(cfg) == "/var/log/kea/kea-dhcp4.log"
+
+    def test_another_loggers_file_is_not_the_dhcp4_log(self, monkeypatch):
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "DHCP4_LOG", "")
+        cfg = {
+            "Dhcp4": {"loggers": [{"name": "kea-dhcp4.dhcpsrv", "output-options": [{"output": "/var/log/kea/x.log"}]}]}
+        }
+        assert klt.log_path_for(cfg) == ""
+
+    def test_a_configured_path_the_host_would_refuse_is_nothing(self, monkeypatch):
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "DHCP4_LOG", "/srv/kea/kea.log")
+        assert klt.log_path_for(None) == ""
+
+
+class TestNothingElseReadsTheConfiguredLogPath:
+    """The whole-tree guard of the definition (Q175): a second reader of `DHCP4_LOG` is the next sweep that reads the wrong file."""
+
+    ALLOWED = {"jen/config.py", "jen/extensions.py", "jen/services/kea_log_trace.py"}
+
+    def test_every_read_of_dhcp4_log_is_in_the_three_files(self):
+        import ast
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        found = []
+        for path in sorted((root / "jen").rglob("*.py")):
+            rel = path.relative_to(root).as_posix()
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                hit = (
+                    (isinstance(node, ast.Attribute) and node.attr == "DHCP4_LOG")
+                    or (isinstance(node, ast.Name) and node.id == "DHCP4_LOG")
+                    or (isinstance(node, ast.Constant) and node.value == "DHCP4_LOG")
+                    or (isinstance(node, ast.alias) and node.name == "DHCP4_LOG")
+                )
+                if hit and rel not in self.ALLOWED:
+                    found.append(f"{rel}:{getattr(node, 'lineno', '?')}")
+        assert not found, f"the configured log path is read outside log_path_for: {found}"
+
+    def test_the_trace_sentence_names_the_field_not_the_file(self):
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        offenders = [
+            p.relative_to(root).as_posix()
+            for p in (root / "jen").rglob("*.py")
+            if "dhcp4_log_path in jen.config" in p.read_text(encoding="utf-8")
+        ]
+        assert not offenders, offenders

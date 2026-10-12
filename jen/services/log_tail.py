@@ -14,12 +14,19 @@ reader that arrives while one is in flight WAITS for it instead of starting anot
   * A failed read (host unreachable, no helper, log missing) is kept for the window too: a hanging host must not be asked again by every
     watcher every three seconds.
   * Everything goes through `kea_host.tail_log(..., helper_only=True)` exactly as the callers did, looked up at call time.
-  * The Problems inbox sweep does NOT use this: it needs a read that is current when it runs (its watermark logic is built on that) and
-    runs every five minutes, so there is nothing to coalesce.
+  * The Problems inbox sweep does NOT use this for the READ: it needs a read that is current when it runs (its watermark logic is built on that) and
+    runs every five minutes, so there is nothing to coalesce. It does use `path_for`.
+
+v5.69.0-beta.6 (Q175) - `path_for(server)` is where that server's kea-dhcp4 writes its log: `kea_log_trace.log_path_for` of the server's own config file,
+read once per server and kept for `PATH_TTL_S` (so a live watch costs the Kea host one config read per two minutes, not one per step, and a sweep every
+five minutes reads fresh). The sweep, Trace and Explain all ask here; none of them reads the configured path itself.
 """
 
+import logging
 import threading
 import time
+
+logger = logging.getLogger(__name__)
 
 TTL_S = 3.0  # == routes/trace.WATCH_STEP_S: a watcher's next poll is just past the window, so it reads once per step
 
@@ -27,6 +34,10 @@ _lock = threading.Lock()
 _per_key: dict[tuple, threading.Lock] = {}
 _cache: dict[tuple, tuple[float, int, dict]] = {}
 _reads = 0  # tail_log calls actually made (the tests, and anyone who wants the count)
+
+PATH_TTL_S = 120.0
+_path_gates: dict = {}
+_paths: dict = {}  # server id -> (monotonic time, path)
 
 
 def reads() -> int:
@@ -36,6 +47,49 @@ def reads() -> int:
 def clear() -> None:
     with _lock:
         _cache.clear()
+        _paths.clear()
+
+
+def _read_server_config(server: dict):
+    """The parsed config FILE of `server`'s kea-dhcp4 (`{"Dhcp4": ...}`), or None when it cannot be read - or when the host is recorded as having no helper, which is not
+    asked (`tail_log` refuses such a host without SSH too, and `read_config`'s legacy fallback would open the very session the helper-only reads exist to avoid). The seam the
+    tests replace: no unit test opens an SSH session for a log path."""
+    from jen.services import capabilities as _caps
+    from jen.services import kea_host as _host
+
+    c = _caps.for_server(server.get("id"), probe_kea=False)
+    if c.helper_known and not c.helper:
+        return None
+    return _host.read_config(server, "dhcp4")
+
+
+def path_for(server: dict) -> str:
+    """Where `server`'s kea-dhcp4 writes the log Jen reads (`kea_log_trace.log_path_for` of the config file on that host), "" when neither the logger's file nor `[kea]
+    dhcp4_log_path` is one the helper would read. One config read per server per `PATH_TTL_S`; a config that cannot be read is the configured path - what every reader
+    used before - and is kept for the window too, so an unreachable host is not asked again by every watcher."""
+    from jen.services import kea_log_trace as _klt
+
+    sid = server.get("id")
+    with _lock:
+        gate = _path_gates.setdefault(sid, threading.Lock())
+    with gate:
+        with _lock:
+            hit = _paths.get(sid)
+        if hit and time.monotonic() - hit[0] < PATH_TTL_S:
+            return hit[1]
+        try:
+            cfg = _read_server_config(server)
+        except Exception as e:
+            logger.warning(
+                f"log_tail: could not read {server.get('name')}'s config to find its log: {type(e).__name__}: {e}"
+            )
+            cfg = None
+        path = _klt.log_path_for(cfg)
+        with _lock:
+            if len(_paths) > 64:
+                _paths.clear()
+            _paths[sid] = (time.monotonic(), path)
+        return path
 
 
 def _slice(res: dict, lines: int) -> dict:

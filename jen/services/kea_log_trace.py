@@ -22,8 +22,12 @@ tid=0x1a2b: lease 10.0.0.5 has been allocated for 3600 seconds
 
 from __future__ import annotations
 
+import posixpath
 import re
 from datetime import datetime
+
+from jen import extensions
+from jen.services import kea_config_edit as _edit
 
 # Gap between consecutive events above which a new exchange starts.
 EXCHANGE_GAP_SECONDS = 2.0
@@ -430,3 +434,47 @@ def problem_events(lines: list[str]) -> list[dict]:
         events.append(event)
     events.sort(key=lambda e: e["ts"])
     return events
+
+
+# ── where the log is: ONE definition (v5.69.0-beta.6, Q175) ─────────────────────────────────────────────────────────
+
+
+def host_log_path(path) -> str:
+    """`path` when the Kea host's helper would accept it as a log to read - an absolute, normalised `*.log` under /var/log (the helper's `_allowed_log_path`, without the symlink
+    resolution only the host can do) - else "" (v5.69.0-beta.1, Q170). Anything else made the arm refuse with `bad-log-path` even where the control socket could answer on its own."""
+    if (
+        isinstance(path, str)
+        and path.startswith("/var/log/")
+        and path.endswith(".log")
+        and posixpath.normpath(path) == path
+        and ".." not in path.split("/")
+    ):
+        return path
+    return ""
+
+
+def logger_file_outputs(cfg) -> list[str]:
+    """Every `output` of the `kea-dhcp4` logger in `cfg` (a whole `{"Dhcp4": ...}` config) that starts with "/" - the files the daemon says it writes, in order. Empty for
+    stdout, stderr, syslog and a config with no such logger. Not judged: `host_log_path` decides whether the host would read one."""
+    section = cfg.get("Dhcp4") if isinstance(cfg, dict) else None
+    loggers = section.get("loggers") if isinstance(section, dict) else None
+    out = []
+    for logger_entry in loggers if isinstance(loggers, list) else []:
+        if isinstance(logger_entry, dict) and logger_entry.get("name") == _edit.INVESTIGATION_LOGGER:
+            for option in logger_entry.get("output-options") or []:
+                path = option.get("output") if isinstance(option, dict) else None
+                if isinstance(path, str) and path.startswith("/"):
+                    out.append(path)
+    return out
+
+
+def log_path_for(cfg) -> str:
+    """Where kea-dhcp4 writes the log Jen reads: the `kea-dhcp4` logger's first file output in `cfg` that the host's helper would read (`host_log_path`), else the
+    configured `[kea] dhcp4_log_path` when it would, else "". EVERY reader of the daemon's log goes through here - the Problems inbox sweep, Trace, Explain's log
+    evidence and the investigation arm (v5.68.0-beta.30 Q167 / beta.1 Q170 had the rule for the arm alone; the sweep read the configured path for 1447 sweeps of a host
+    whose logger wrote to stdout). `cfg` None (the config could not be read) is the configured path."""
+    for path in logger_file_outputs(cfg):
+        accepted = host_log_path(path)
+        if accepted:
+            return accepted
+    return host_log_path(extensions.DHCP4_LOG)

@@ -47,7 +47,6 @@ from __future__ import annotations
 
 import json
 import logging
-import posixpath
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -58,6 +57,7 @@ from jen.services import kea as _kea
 from jen.services import kea_changeset as _changeset
 from jen.services import kea_config_edit as _edit
 from jen.services import kea_host as _host
+from jen.services import kea_log_trace as _klt
 
 logger = logging.getLogger(__name__)
 
@@ -725,31 +725,14 @@ def helper_gate(server: dict, held: dict | None = None) -> str:
 
 
 def host_log_path(path) -> str:
-    """`path` when the Kea host's helper would accept it as a log to read - an absolute, normalised `*.log` under /var/log (the helper's `_allowed_log_path`, without the symlink
-    resolution only the host can do) - else "" (v5.69.0-beta.1, Q170). Anything else made the arm refuse with `bad-log-path` even where the control socket could answer on its own."""
-    if (
-        isinstance(path, str)
-        and path.startswith("/var/log/")
-        and path.endswith(".log")
-        and posixpath.normpath(path) == path
-        and ".." not in path.split("/")
-    ):
-        return path
-    return ""
+    """`path` when the Kea host's helper would read it as a log (v5.69.0-beta.1, Q170) - the rule lives in `kea_log_trace.host_log_path` since Q175, beside the one definition of where the log is."""
+    return _klt.host_log_path(path)
 
 
 def kea_log_path(cfg) -> str:
-    """Where the `kea-dhcp4` logger of `cfg` writes (its first file output), else the configured DHCP4 log - when the host's helper would accept it (`host_log_path`), else "": the file the
-    host reads Kea's own reload lines from (v5.68.0-beta.30, Q167; the rule is v5.69.0-beta.1, Q170)."""
-    section = (cfg or {}).get("Dhcp4") if isinstance(cfg, dict) else None
-    loggers = section.get("loggers") if isinstance(section, dict) else None
-    for logger_entry in loggers if isinstance(loggers, list) else []:
-        if isinstance(logger_entry, dict) and logger_entry.get("name") == _edit.INVESTIGATION_LOGGER:
-            for option in logger_entry.get("output-options") or []:
-                out = option.get("output") if isinstance(option, dict) else None
-                if isinstance(out, str) and out.startswith("/"):
-                    return host_log_path(out)
-    return host_log_path(extensions.DHCP4_LOG)
+    """Where the `kea-dhcp4` logger of `cfg` writes - `kea_log_trace.log_path_for`, the one definition every reader of the daemon's log shares (v5.69.0-beta.6, Q175; the arm's
+    own rule since v5.68.0-beta.30, Q167): the file the host reads Kea's own reload lines from."""
+    return _klt.log_path_for(cfg)
 
 
 def _arm_host(server: dict, entry: dict, until: str) -> tuple[bool, list[str], bool, dict | None]:

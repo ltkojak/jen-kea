@@ -1643,6 +1643,9 @@ class ExplainWalk:
         monkeypatch.setattr(ctx, "_clock_offset_s", lambda server: None)
         monkeypatch.setattr("jen.services.config_revisions.latest", lambda server_id, service: None)
         monkeypatch.setattr("jen.services.kea_host.tail_log", self._tail)
+        # Q175: Explain asks `log_tail.path_for` where each server's log is, which reads the server's config file. The walk models the LOG's reads (its answers, silences and
+        # reloads); a config read that fails is the configured path - the same file the walk's tail answers for - so the read is stubbed, never a real SSH attempt
+        monkeypatch.setattr(log_tail, "_read_server_config", lambda server: None)
         monkeypatch.setattr("jen.services.kea_ha.ha_status", self._ha)
         self.hosts = [f"10.0.0.{n}" for n in range(1, 7)]
         count = self.rng.randint(1, 4)

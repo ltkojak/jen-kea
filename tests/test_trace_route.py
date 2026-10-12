@@ -108,6 +108,39 @@ class TestTraceRoute:
         r = logged_in_client.get("/tools/trace", query_string={"mac": MAC})
         assert b"dhcp4_log_path" in r.data
 
+    def test_missing_log_names_the_file_and_what_to_do_about_it(self, logged_in_client, db, monkeypatch):
+        """Q175: the sentence names the FIELD (not 'jen.config'), the file that was tried, and the logger's file output - the maintainer's host logged to stdout."""
+        _servers(monkeypatch)
+        _stub_tail(monkeypatch, {"ok": False, "code": "missing", "detail": "log file not found"})
+        _clean(db)
+        r = logged_in_client.get("/tools/trace", query_string={"mac": MAC})
+        body = r.data.decode()
+        assert "/var/log/kea/kea-dhcp4.log" in body and "file output" in body and "dhcp4_log_path" in body
+        assert "in jen.config" not in body
+
+    def test_the_server_s_own_logger_file_is_the_one_tailed(self, logged_in_client, db, monkeypatch):
+        """Q175: Trace asks `log_tail.path_for` - the same definition as the sweep - so a server whose logger writes /var/log/kea/dhcp4.log is read there."""
+        from jen.services import log_tail
+
+        _servers(monkeypatch)
+        cfg = {"Dhcp4": {"loggers": [{"name": "kea-dhcp4", "output-options": [{"output": "/var/log/kea/dhcp4.log"}]}]}}
+        monkeypatch.setattr(log_tail, "_read_server_config", lambda server: cfg)
+        calls = _stub_tail(monkeypatch, _ok(EXCHANGE))
+        _clean(db)
+        r = logged_in_client.get("/tools/trace", query_string={"mac": MAC})
+        assert calls[-1][0] == "/var/log/kea/dhcp4.log"
+        assert b"/var/log/kea/dhcp4.log" in r.data
+
+    def test_a_configured_path_the_host_would_refuse_is_not_asked(self, logged_in_client, db, monkeypatch):
+        from jen import extensions
+
+        _servers(monkeypatch)
+        monkeypatch.setattr(extensions, "DHCP4_LOG", "/srv/kea/kea.log")
+        calls = _stub_tail(monkeypatch, _ok(EXCHANGE))
+        _clean(db)
+        r = logged_in_client.get("/tools/trace", query_string={"mac": MAC})
+        assert calls == [] and b"has no log file it may read" in r.data
+
     def test_read_failure_shows_generic_message_not_the_detail(self, logged_in_client, db, monkeypatch):
         _servers(monkeypatch)
         _stub_tail(monkeypatch, {"ok": False, "code": "error", "detail": "permission denied /var/log/secret"})

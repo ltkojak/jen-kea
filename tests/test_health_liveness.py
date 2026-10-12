@@ -622,3 +622,108 @@ class TestTheDispatcherIsJudgedByWhatIsWaitingNow:
             "actor",
             "detail",
         }
+
+
+class TestTheSweepRowSaysWhatTheErrorMeans:
+    """v5.69.0-beta.6 (Q175): `missing` is the host ANSWERING that the file is not there - the row used to send the admin to check SSH, which had just worked. The sentence and the hint
+    follow the last error the sweep stored, and the path it tried."""
+
+    @pytest.fixture(autouse=True)
+    def _world(self, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5"}])
+        monkeypatch.setattr(cp, "_now", lambda: NOW)
+        monkeypatch.setattr(background, "STARTED_AT", (NOW - timedelta(hours=5)).replace(tzinfo=timezone.utc))
+
+    def _blind(self, monkeypatch, error, path="/var/log/kea/kea-dhcp4.log", misses=1447):
+        monkeypatch.setattr(
+            cp,
+            "read_status",
+            lambda servers=None: {
+                "swept_at": NOW - timedelta(minutes=2),
+                "servers": [
+                    {
+                        "id": 1,
+                        "name": "kea-a",
+                        "last_read": None,
+                        "last_error": error,
+                        "last_path": path,
+                        "misses": misses,
+                    }
+                ],
+            },
+        )
+        return health._problems_sweep({})
+
+    def test_missing_names_the_path_and_the_file_output_and_never_says_ssh(self, monkeypatch):
+        c = self._blind(monkeypatch, "missing")
+        assert c.status == "fail"
+        assert "/var/log/kea/kea-dhcp4.log" in c.detail and "file output" in c.detail
+        assert "1447 sweeps" in c.detail
+        assert "SSH" not in c.detail and "SSH" not in c.fix_hint
+        assert "file output" in c.fix_hint and "dhcp4_log_path" not in c.fix_hint.replace(
+            "log path", ""
+        )  # the field is named by what it is on the page
+
+    def test_missing_with_no_path_says_there_is_no_file_jen_may_read(self, monkeypatch):
+        c = self._blind(monkeypatch, "missing", path="")
+        assert "no log file it may read" in c.detail and "SSH" not in c.detail and "SSH" not in c.fix_hint
+
+    def test_no_helper_keeps_the_ssh_sentence(self, monkeypatch):
+        c = self._blind(monkeypatch, "no-helper", misses=6)
+        assert "last error: no-helper" in c.detail
+        assert "SSH" in c.fix_hint
+
+    def test_a_transport_failure_keeps_the_ssh_sentence(self, monkeypatch):
+        c = self._blind(monkeypatch, "transport", misses=6)
+        assert "SSH" in c.fix_hint and "last error: transport" in c.detail
+
+    def test_anything_else_shows_its_own_text_and_no_guess_about_the_connection(self, monkeypatch):
+        c = self._blind(monkeypatch, "unreachable", misses=6)
+        assert "last error: unreachable" in c.detail
+        assert "SSH" not in c.fix_hint
+
+    def test_two_servers_with_two_meanings_get_both_hints_once(self, monkeypatch):
+        monkeypatch.setattr(
+            extensions,
+            "KEA_SERVERS",
+            [{"id": 1, "name": "kea-a", "ssh_host": "a"}, {"id": 2, "name": "kea-b", "ssh_host": "b"}],
+        )
+        monkeypatch.setattr(
+            cp,
+            "read_status",
+            lambda servers=None: {
+                "swept_at": NOW,
+                "servers": [
+                    {
+                        "id": 1,
+                        "name": "kea-a",
+                        "last_read": None,
+                        "last_error": "missing",
+                        "last_path": "/var/log/kea/kea-dhcp4.log",
+                        "misses": 6,
+                    },
+                    {
+                        "id": 2,
+                        "name": "kea-b",
+                        "last_read": None,
+                        "last_error": "transport",
+                        "last_path": "",
+                        "misses": 6,
+                    },
+                ],
+            },
+        )
+        c = health._problems_sweep({})
+        assert "file output" in c.fix_hint and "SSH" in c.fix_hint
+        assert "kea-a" in c.detail and "kea-b" in c.detail
+
+    def test_a_status_with_no_last_path_key_still_renders(self, monkeypatch):
+        monkeypatch.setattr(
+            cp,
+            "read_status",
+            lambda servers=None: {
+                "swept_at": NOW,
+                "servers": [{"id": 1, "name": "kea-a", "last_read": None, "last_error": "missing", "misses": 6}],
+            },
+        )
+        assert health._problems_sweep({}).status == "fail"

@@ -58,6 +58,7 @@ import pymysql
 from jen import extensions
 from jen.services import kea_host as _host
 from jen.services import kea_log_trace as _klt
+from jen.services import log_tail as _log_tail
 from jen.services.leases_sql import active_lease4
 
 logger = logging.getLogger(__name__)
@@ -398,6 +399,7 @@ _SERVER_KEY_PREFIXES = (
     "client_problems_err:",
     "client_problems_miss:",
     "client_problems_clock:",
+    "client_problems_path:",
 )
 
 
@@ -449,8 +451,9 @@ def _note_dropped(now: datetime, dropped: int) -> None:
         logger.error(f"client_problems: could not record the dropped-key count: {type(e).__name__}: {e}")
 
 
-def _note_server(server_id, ok: bool, error: str, now: datetime) -> None:
-    """Record one read attempt. Never raises: bookkeeping must not break the sweep it describes."""
+def _note_server(server_id, ok: bool, error: str, now: datetime, path: str | None = None) -> None:
+    """Record one read attempt. `path` (v5.69.0-beta.6, Q175) is the log file it tried ("" when there was none to try; None leaves the last one), kept beside the error so the
+    Health row can say WHICH file was missing. Never raises: bookkeeping must not break the sweep it describes."""
     from jen.models import db as __db
 
     try:
@@ -459,6 +462,8 @@ def _note_server(server_id, ok: bool, error: str, now: datetime) -> None:
                 "INSERT INTO settings (setting_key, setting_value) VALUES (%s, %s) "
                 "ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)"
             )
+            if path is not None:
+                cur.execute(upsert, (f"client_problems_path:{server_id}", path[:255]))
             if ok:
                 cur.execute(upsert, (f"client_problems_read:{server_id}", now.isoformat()))
                 cur.execute(upsert, (f"client_problems_err:{server_id}", ""))
@@ -490,7 +495,7 @@ def _note_swept(now: datetime) -> None:
 
 def read_status(servers: list[dict] | None = None) -> dict:
     """What the sweep has recorded: {"swept_at": datetime | None, "servers": [{"id", "name", "last_read": datetime | None,
-    "last_error": str, "misses": int}]} for every SSH-configured server (or the given list). Reads the settings table directly (the
+    "last_error": str, "last_path": str, "misses": int}]} for every SSH-configured server (or the given list). Reads the settings table directly (the
     cached reader could be 30 s behind). The Health Center's row is built from this."""
     from jen.models import db as __db
 
@@ -519,6 +524,7 @@ def read_status(servers: list[dict] | None = None) -> dict:
                 "name": s.get("name") or s.get("ssh_host") or f"Server {sid}",
                 "last_read": when(values.get(f"client_problems_read:{sid}")),
                 "last_error": values.get(f"client_problems_err:{sid}") or "",
+                "last_path": values.get(f"client_problems_path:{sid}") or "",
                 "misses": misses,
             }
         )
@@ -746,10 +752,17 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                 False  # the miss counter is about the LOG: a database failure after a good read is not a missed read
             )
             try:
-                res = _host.tail_log(server, extensions.DHCP4_LOG, TAIL_LINES, timeout=TAIL_TIMEOUT_S, helper_only=True)
+                # v5.69.0-beta.6 (Q175): the file the server's own logger writes, else the configured one - the one definition every reader of this log shares. "" (no
+                # file the host would read) is a missing log without asking the host, and the path tried is recorded either way, for the Health row to name
+                log_path = _log_tail.path_for(server)
+                res = (
+                    _host.tail_log(server, log_path, TAIL_LINES, timeout=TAIL_TIMEOUT_S, helper_only=True)
+                    if log_path
+                    else {"ok": False, "code": "missing"}
+                )
                 if not res.get("ok"):
                     summary["errors"].append(f"{server.get('name')}: {res.get('code') or 'error'}")
-                    _note_server(sid, False, str(res.get("code") or "error"), now)
+                    _note_server(sid, False, str(res.get("code") or "error"), now, log_path)
                     continue
                 log_read = True
                 wm = _wm_get(sid)
@@ -900,7 +913,7 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                         )
                         summary["errors"].append(f"{server.get('name')}: alert delivered, not recorded")
                 summary["servers"] += 1
-                _note_server(sid, True, "", now)
+                _note_server(sid, True, "", now, log_path)
             except Exception as e:
                 logger.error(f"client_problems: server {server.get('name')!r}: {type(e).__name__}: {e}")
                 summary["errors"].append(f"{server.get('name')}: {type(e).__name__}")

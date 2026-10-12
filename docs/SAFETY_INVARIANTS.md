@@ -325,6 +325,19 @@ host names and paths. The reviewed list is empty.
 - `tests/test_identity_guard.py::TestTheIdentityInvariantHasOneChokePointInTheSource`
 - `tests/test_identity_guard.py::TestTheKeaFileHasOneChokePointInTheSource`
 
+### LOG-001 - Where kea-dhcp4 writes its log is one definition, and every reader of that log asks it
+**Rule.** The file Jen reads for the daemon's log is `kea_log_trace.log_path_for(config)`: the `kea-dhcp4` logger's own first file output that the host's helper would read, else `[kea] dhcp4_log_path`
+when it would, else nothing - asked per server (`log_tail.path_for`) by the Problems inbox sweep, Trace, Explain and the investigation arm. No reader reads the configured path itself, and a
+Health row that cannot read the log says WHICH file was missing (the one it tried), not "check SSH".
+**Established.** Q175 (the sweep read the configured path for 1447 sweeps of a host whose logger wrote to stdout, while the arm already asked the daemon's own logger).
+**Enforced at.** `kea_log_trace.log_path_for`, through `log_tail.path_for`.
+**Tests.**
+- `tests/test_kea_log_trace.py::TestNothingElseReadsTheConfiguredLogPath`
+- `tests/test_kea_log_trace.py::TestLogPathForIsTheLoggersOwnFile`
+- `tests/test_log_tail.py::TestPathForIsWhereTheServersOwnLoggerWrites`
+- `tests/test_client_problems_db.py::TestTheSweepReadsTheFileTheServersLoggerWrites`
+- `tests/test_health_liveness.py::TestTheSweepRowSaysWhatTheErrorMeans`
+
 ## Retired ids
 
 An id that is retired stays here, with the reason, so it is never given to a different rule. (None yet.)

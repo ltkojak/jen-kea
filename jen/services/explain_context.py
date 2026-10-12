@@ -96,9 +96,14 @@ READ_FAILURE_PHRASES = {
 
 
 def _tail_one(server: dict) -> dict:
+    path = _log_tail.path_for(
+        server
+    )  # v5.69.0-beta.6 (Q175): the server's own logger file, else [kea] dhcp4_log_path - the one definition Trace and the sweep share
+    if not path:
+        return {"ok": False, "code": "missing"}
     # v5.68.0-beta.17 (Q152): the layer below this function's own 30 s per-MAC cache - one read per server and path is shared
     # with Trace's live watch (jen.services.log_tail), so a watcher and an Investigation page do not each tail the log
-    return _log_tail.tail(server, extensions.DHCP4_LOG, TAIL_LINES, timeout=TAIL_TIMEOUT_S)
+    return _log_tail.tail(server, path, TAIL_LINES, timeout=TAIL_TIMEOUT_S)
 
 
 def pool_used(subnet_id, pool_text) -> int | None:
@@ -393,7 +398,11 @@ def read_log(mac: str, *, allowed: bool, fetch: bool = True) -> dict:
             problem = problem or {
                 **empty,
                 "state": "missing",
-                "message": f"Kea's log was not found at {extensions.DHCP4_LOG}.",
+                "message": (
+                    f"Kea's log was not found at {_log_tail.path_for(server)}."
+                    if _log_tail.path_for(server)
+                    else "Jen has no log file it may read for this server (give kea-dhcp4's logger a file output under /var/log/kea, or set the log path under Settings → Kea → SSH)."
+                ),
             }
             read_failures.append({"server": _name(server), "reason": READ_FAILURE_PHRASES["missing"]})
             continue

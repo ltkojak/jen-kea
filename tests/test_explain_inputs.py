@@ -133,6 +133,60 @@ class TestHint:
         assert ctx.hint_for({"missing_inputs": []}, {"state": "ok"}) == "" and ctx.hint_for(None, None) == ""
 
 
+@pytest.fixture(autouse=True)
+def _no_ssh_for_a_log_path(monkeypatch):
+    """Q175: Explain asks `log_tail.path_for` where the log is, which reads the server's config over SSH - no test here opens a session (tests/conftest.py does the same for the DB-backed suite)."""
+    from jen.services import log_tail
+
+    log_tail.clear()
+    monkeypatch.setattr(log_tail, "_read_server_config", lambda server: None)
+    yield
+    log_tail.clear()
+
+
+class TestExplainReadsTheFileTheServersLoggerWrites:
+    CFG_FILE = {"Dhcp4": {"loggers": [{"name": "kea-dhcp4", "output-options": [{"output": "/var/log/kea/dhcp4.log"}]}]}}
+
+    def test_the_tail_is_of_the_servers_own_logger_file(self, monkeypatch):
+        from jen import extensions
+        from jen.services import log_tail
+
+        ctx.clear_log_cache()
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "k", "ssh_host": "10.0.0.9"}])
+        monkeypatch.setattr(log_tail, "_read_server_config", lambda server: self.CFG_FILE)
+        paths = []
+        monkeypatch.setattr(
+            "jen.services.kea_host.tail_log",
+            lambda server, path, *a, **k: paths.append(path) or {"ok": True, "lines": []},
+        )
+        ctx.read_log(MAC, allowed=True)
+        assert paths == ["/var/log/kea/dhcp4.log"]
+        ctx.clear_log_cache()
+
+    def test_a_missing_log_names_the_path_it_looked_for(self, monkeypatch):
+        from jen import extensions
+
+        ctx.clear_log_cache()
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "k", "ssh_host": "10.0.0.9"}])
+        monkeypatch.setattr(extensions, "DHCP4_LOG", "/var/log/kea/kea-dhcp4.log")
+        monkeypatch.setattr("jen.services.kea_host.tail_log", lambda *a, **k: {"ok": False, "code": "missing"})
+        view = ctx.read_log(MAC, allowed=True)
+        assert view["state"] == "missing" and "/var/log/kea/kea-dhcp4.log" in view["message"]
+        ctx.clear_log_cache()
+
+    def test_a_configured_path_the_host_would_refuse_is_not_asked(self, monkeypatch):
+        from jen import extensions
+
+        ctx.clear_log_cache()
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "k", "ssh_host": "10.0.0.9"}])
+        monkeypatch.setattr(extensions, "DHCP4_LOG", "/srv/kea/kea.log")
+        called = []
+        monkeypatch.setattr("jen.services.kea_host.tail_log", lambda *a, **k: called.append(a) or {})
+        view = ctx.read_log(MAC, allowed=True)
+        assert view["state"] == "missing" and called == [] and "may read" in view["message"]
+        ctx.clear_log_cache()
+
+
 class TestReadLogGates:
     def test_a_caller_who_may_not_read_the_log_gets_no_log_and_no_server_call(self, monkeypatch):
         called = []

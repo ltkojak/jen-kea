@@ -1104,7 +1104,16 @@ class TestTheSweepRecordsWhetherItCanReadEachServer:
         cp.sweep(NOW, servers=[SERVER_A])
         st = cp.read_status([SERVER_A])
         assert st["swept_at"] == NOW
-        assert st["servers"] == [{"id": 1, "name": "kea-a", "last_read": NOW, "last_error": "", "misses": 0}]
+        assert st["servers"] == [
+            {
+                "id": 1,
+                "name": "kea-a",
+                "last_read": NOW,
+                "last_error": "",
+                "last_path": "/var/log/kea/kea-dhcp4.log",
+                "misses": 0,
+            }
+        ]
 
     def test_six_misses_turn_the_row_red_and_the_next_good_read_turns_it_green(self, db, stack, monkeypatch):
         logs, _ = stack
@@ -1258,6 +1267,7 @@ class TestARemovedServersKeysAreCleared:
         "client_problems_err:",
         "client_problems_miss:",
         "client_problems_clock:",
+        "client_problems_path:",
     )
 
     @staticmethod
@@ -1275,7 +1285,7 @@ class TestARemovedServersKeysAreCleared:
         db.commit()  # a fresh snapshot: the sweep writes through another connection
         with db.cursor() as cur:
             cur.execute(
-                "SELECT setting_key FROM settings WHERE setting_key IN (%s,%s,%s,%s,%s)",
+                "SELECT setting_key FROM settings WHERE setting_key IN (%s,%s,%s,%s,%s,%s)",
                 tuple(f"{p}{server_id}" for p in TestARemovedServersKeysAreCleared.KEYS),
             )
             return len(cur.fetchall())
@@ -1284,7 +1294,7 @@ class TestARemovedServersKeysAreCleared:
         logs, _calls = stack
         prime(logs)
         self._put(db, 77)  # not in KEA_SERVERS (the stack has servers 1 and 2)
-        assert self._present(db, 77) == 5
+        assert self._present(db, 77) == 6
         cp.sweep(NOW, servers=[SERVER_A])
         assert self._present(db, 77) == 0
         assert self._present(db, 1) >= 3, "the live server's own keys are kept"
@@ -1313,3 +1323,87 @@ class TestARemovedServersKeysAreCleared:
                 "SELECT setting_key FROM settings WHERE setting_key IN ('client_problems_swept', 'client_problems_dropped')"
             )
             assert len(cur.fetchall()) == 2
+
+
+class TestTheSweepReadsTheFileTheServersLoggerWrites:
+    """v5.69.0-beta.6 (Q175): one definition of where kea-dhcp4 logs (`kea_log_trace.log_path_for`, asked per server through `log_tail.path_for`). The sweep read the configured path
+    for 1447 sweeps of a host whose logger wrote to stdout, and recorded nothing about which file it had tried."""
+
+    CFG_FILE = {"Dhcp4": {"loggers": [{"name": "kea-dhcp4", "output-options": [{"output": "/var/log/kea/dhcp4.log"}]}]}}
+
+    @pytest.fixture(autouse=True)
+    def _clock_and_cleanup(self, db, monkeypatch):
+        monkeypatch.setattr(cp, "_now", lambda: NOW)
+        monkeypatch.setattr(extensions, "DHCP4_LOG", "/var/log/kea/kea-dhcp4.log")
+        TestTheSweepRecordsWhetherItCanReadEachServer._wipe(db)
+        yield
+        TestTheSweepRecordsWhetherItCanReadEachServer._wipe(db)
+
+    def test_a_server_whose_config_names_a_logger_file_is_tailed_at_that_file(self, db, stack, monkeypatch):
+        from jen.services import log_tail
+
+        logs, calls = stack
+        logs[1] = [nak(1)]
+        monkeypatch.setattr(log_tail, "_read_server_config", lambda server: self.CFG_FILE)
+        cp.sweep(NOW, servers=[SERVER_A])
+        assert [c[1] for c in calls["tail"]] == ["/var/log/kea/dhcp4.log"]
+        assert cp.read_status([SERVER_A])["servers"][0]["last_path"] == "/var/log/kea/dhcp4.log"
+
+    def test_a_server_whose_config_cannot_be_read_is_tailed_at_the_configured_path(self, db, stack):
+        logs, calls = stack
+        logs[1] = [nak(1)]
+        cp.sweep(NOW, servers=[SERVER_A])  # the seam answers "could not read" in every test (tests/conftest.py)
+        assert [c[1] for c in calls["tail"]] == ["/var/log/kea/kea-dhcp4.log"]
+
+    def test_each_server_is_asked_its_own_path(self, db, stack, monkeypatch):
+        from jen.services import log_tail
+
+        logs, calls = stack
+        logs[1], logs[2] = [nak(1)], [nak(2)]
+        monkeypatch.setattr(
+            log_tail, "_read_server_config", lambda server: self.CFG_FILE if server["id"] == 1 else None
+        )
+        cp.sweep(NOW, servers=[SERVER_A, SERVER_B])
+        assert sorted((c[0], c[1]) for c in calls["tail"]) == [
+            (1, "/var/log/kea/dhcp4.log"),
+            (2, "/var/log/kea/kea-dhcp4.log"),
+        ]
+
+    def test_a_missing_log_stores_the_path_it_tried_beside_the_error(self, db, stack):
+        logs, _ = stack
+        logs[1] = {"ok": False, "code": "missing", "lines": []}
+        cp.sweep(NOW, servers=[SERVER_A])
+        s = cp.read_status([SERVER_A])["servers"][0]
+        assert s["last_error"] == "missing" and s["last_path"] == "/var/log/kea/kea-dhcp4.log" and s["misses"] == 1
+
+    def test_a_configured_path_the_host_would_refuse_is_missing_without_asking_the_host(self, db, stack, monkeypatch):
+        logs, calls = stack
+        monkeypatch.setattr(extensions, "DHCP4_LOG", "/srv/kea/kea.log")
+        cp.sweep(NOW, servers=[SERVER_A])
+        s = cp.read_status([SERVER_A])["servers"][0]
+        assert calls["tail"] == [] and s["last_error"] == "missing" and s["last_path"] == ""
+
+    def test_the_health_row_names_the_file_for_a_missing_log_after_six_sweeps(self, db, stack):
+        from jen.services import health
+
+        logs, _ = stack
+        logs[1] = {"ok": False, "code": "missing", "lines": []}
+        for _ in range(cp.MISS_LIMIT):
+            cp.sweep(NOW, servers=[SERVER_A])
+        row = health._problems_sweep({})
+        assert row.status == "fail"
+        assert "/var/log/kea/kea-dhcp4.log" in row.detail and "file output" in row.detail
+        assert "SSH" not in row.detail and "SSH" not in row.fix_hint
+
+    def test_a_good_read_records_the_path_that_worked(self, db, stack, monkeypatch):
+        from jen.services import log_tail
+
+        logs, _ = stack
+        logs[1] = [nak(1)]
+        monkeypatch.setattr(log_tail, "_read_server_config", lambda server: self.CFG_FILE)
+        cp.sweep(NOW, servers=[SERVER_A])
+        logs[1] = {"ok": False, "code": "missing", "lines": []}
+        log_tail.clear()
+        monkeypatch.setattr(log_tail, "_read_server_config", lambda server: None)
+        cp.sweep(NOW, servers=[SERVER_A])
+        assert cp.read_status([SERVER_A])["servers"][0]["last_path"] == "/var/log/kea/kea-dhcp4.log"

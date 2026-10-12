@@ -419,6 +419,14 @@ def _debug_logging_left_on(ctx) -> Check:
     return c
 
 
+_SWEEP_SSH_HINT = "Check that Jen can still reach the server over SSH (Settings → Kea → SSH) and that the Kea log path is set; the sweep retries every five minutes."
+_SWEEP_ERROR_HINT = "The error above is what the sweep last got back from the Kea server; the connection and the log path are under Settings → Kea, and the sweep retries every five minutes."
+_SWEEP_MISSING_HINT = (
+    "Give kea-dhcp4's logger a file output under /var/log/kea (Tools → Doctor shows the lines to paste), or set the log path under Settings → Kea if it logs to a different "
+    "file; the sweep retries every five minutes."
+)
+
+
 def _problems_sweep(ctx) -> Check:
     """v5.68.0-beta.17 (Q152) - the Problems inbox is only as good as the sweep that fills it, and that sweep's failures were a log
     line: a server whose log could not be read left the inbox quiet because it was blind, which looks exactly like a quiet network.
@@ -430,7 +438,7 @@ def _problems_sweep(ctx) -> Check:
         "Problems inbox sweep",
         "kea",
         fix_url="/settings/kea",
-        fix_hint="Check that Jen can still reach the server over SSH (Settings → Kea → SSH) and that the Kea log path is set; the sweep retries every five minutes.",
+        fix_hint=_SWEEP_SSH_HINT,
     )
     from jen.services import client_problems as __cp
 
@@ -449,15 +457,38 @@ def _problems_sweep(ctx) -> Check:
     blind = [s for s in st["servers"] if s["misses"] >= __cp.MISS_LIMIT]
     if blind or stale:
         c.status = "fail"
-        parts = [
-            f"{s['name']}: its log has not been read for {s['misses']} sweeps (last read {fmt(s['last_read'])}"
-            + (f"; last error: {s['last_error']}" if s["last_error"] else "")
-            + ")"
-            for s in blind
-        ]
+        parts = []
+        hints = []
+        for s in blind:
+            # v5.69.0-beta.6 (Q175): what the last error MEANS decides the sentence and the hint. "missing" is the host answering that the file is not there - the SSH sentence
+            # sent an admin to check a connection that had just worked (a host whose logger writes to stdout was blind for 1447 sweeps under it)
+            if s["last_error"] == "missing":
+                tried = s.get("last_path") or ""
+                parts.append(
+                    (
+                        f"{s['name']}: {tried} is not on {s['name']} - kea-dhcp4 logs to stdout, the system journal or a file Jen may not read"
+                        if tried
+                        else f"{s['name']}: Jen has no log file it may read (the configured path is not a *.log under /var/log)"
+                    )
+                    + f"; give its logger a file output under /var/log/kea, or set the log path under Settings → Kea ({s['misses']} sweeps without a read, last read {fmt(s['last_read'])})"
+                )
+                hints.append(_SWEEP_MISSING_HINT)
+            else:
+                parts.append(
+                    f"{s['name']}: its log has not been read for {s['misses']} sweeps (last read {fmt(s['last_read'])}"
+                    + (f"; last error: {s['last_error']}" if s["last_error"] else "")
+                    + ")"
+                )
+                # an SSH failure or a host with no helper keeps today's sentence; any other error shows its own text and no guess about the connection
+                hints.append(
+                    _SWEEP_SSH_HINT
+                    if s["last_error"] in ("", "no-helper", "transport", "no-ssh")
+                    else _SWEEP_ERROR_HINT
+                )
         if stale:
             parts.append(f"the sweep itself last ran at {fmt(swept)} and should run every five minutes")
         c.detail = "; ".join(parts)
+        c.fix_hint = " ".join(dict.fromkeys(h for h in hints if h)) or c.fix_hint
         return c
     if swept is None:
         # v5.68.0-beta.19 (Q154): "has not run yet" was a skip with no age limit - a scheduler that never started left it skipped forever.

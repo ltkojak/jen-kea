@@ -14,6 +14,9 @@ import pytest
 from jen.services import kea_host, log_tail
 
 SERVER = {"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5"}
+_REAL_READ = (
+    log_tail._read_server_config
+)  # tests/conftest.py replaces the seam for every test; the ones that test it use the function as imported
 LINES = [f"line {i}" for i in range(1000)]
 
 
@@ -108,4 +111,116 @@ class TestWhatIsShared:
         import pathlib
 
         src = pathlib.Path("jen/services/client_problems.py").read_text(encoding="utf-8")
-        assert "log_tail" not in src and "_host.tail_log(" in src
+        # Q175 adjustment: the sweep now asks `log_tail.path_for` WHERE the log is (the one definition), but still never reads it through the coalescing cache
+        assert "_log_tail.tail(" not in src and "log_tail.tail(" not in src
+        assert "_host.tail_log(" in src and "_log_tail.path_for(" in src
+
+
+class TestPathForIsWhereTheServersOwnLoggerWrites:
+    """v5.69.0-beta.6 (Q175): `path_for` is the server-level form of `kea_log_trace.log_path_for` - the file the server's own kea-dhcp4 logger writes, else `[kea] dhcp4_log_path` -
+    read once per server per `PATH_TTL_S`. The sweep, Trace and Explain all ask it; the config read is a seam (`_read_server_config`) so no test opens SSH."""
+
+    CFG_FILE = {"Dhcp4": {"loggers": [{"name": "kea-dhcp4", "output-options": [{"output": "/var/log/kea/dhcp4.log"}]}]}}
+    CFG_STDOUT = {"Dhcp4": {"loggers": [{"name": "kea-dhcp4", "output-options": [{"output": "stdout"}]}]}}
+
+    @pytest.fixture(autouse=True)
+    def _configured(self, monkeypatch):
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "DHCP4_LOG", "/var/log/kea/kea-dhcp4.log")
+
+    def test_the_servers_own_logger_file_wins(self, monkeypatch):
+        monkeypatch.setattr(log_tail, "_read_server_config", lambda server: self.CFG_FILE)
+        assert log_tail.path_for(SERVER) == "/var/log/kea/dhcp4.log"
+
+    def test_stdout_is_the_configured_path(self, monkeypatch):
+        monkeypatch.setattr(log_tail, "_read_server_config", lambda server: self.CFG_STDOUT)
+        assert log_tail.path_for(SERVER) == "/var/log/kea/kea-dhcp4.log"
+
+    def test_a_config_that_cannot_be_read_is_the_configured_path(self, monkeypatch):
+        monkeypatch.setattr(log_tail, "_read_server_config", lambda server: None)
+        assert log_tail.path_for(SERVER) == "/var/log/kea/kea-dhcp4.log"
+
+    def test_a_config_read_that_raises_is_the_configured_path_and_never_raises(self, monkeypatch):
+        def boom(server):
+            raise OSError("ssh timed out")
+
+        monkeypatch.setattr(log_tail, "_read_server_config", boom)
+        assert log_tail.path_for(SERVER) == "/var/log/kea/kea-dhcp4.log"
+
+    def test_one_read_serves_every_caller_inside_the_window(self, monkeypatch):
+        reads = []
+        monkeypatch.setattr(log_tail, "_read_server_config", lambda server: reads.append(server["id"]) or self.CFG_FILE)
+        for _ in range(5):
+            log_tail.path_for(SERVER)
+        assert reads == [1]
+
+    def test_a_failed_read_is_kept_for_the_window_too(self, monkeypatch):
+        reads = []
+        monkeypatch.setattr(log_tail, "_read_server_config", lambda server: reads.append(1))  # returns None
+        log_tail.path_for(SERVER)
+        log_tail.path_for(SERVER)
+        assert reads == [1]
+
+    def test_the_read_is_per_server(self, monkeypatch):
+        reads = []
+        monkeypatch.setattr(log_tail, "_read_server_config", lambda server: reads.append(server["id"]) or None)
+        log_tail.path_for(SERVER)
+        log_tail.path_for({"id": 2, "name": "kea-b", "ssh_host": "10.0.0.6"})
+        assert sorted(reads) == [1, 2]
+
+    def test_a_read_after_the_window_asks_again_and_sees_a_changed_logger(self, monkeypatch):
+        answers = [self.CFG_STDOUT, self.CFG_FILE]
+        monkeypatch.setattr(log_tail, "_read_server_config", lambda server: answers.pop(0))
+        monkeypatch.setattr(log_tail, "PATH_TTL_S", 0.05)
+        assert log_tail.path_for(SERVER) == "/var/log/kea/kea-dhcp4.log"
+        time.sleep(0.08)
+        assert log_tail.path_for(SERVER) == "/var/log/kea/dhcp4.log"
+
+    def test_clear_forgets_the_paths(self, monkeypatch):
+        answers = [self.CFG_STDOUT, self.CFG_FILE]
+        monkeypatch.setattr(log_tail, "_read_server_config", lambda server: answers.pop(0))
+        log_tail.path_for(SERVER)
+        log_tail.clear()
+        assert log_tail.path_for(SERVER) == "/var/log/kea/dhcp4.log"
+
+    def test_a_host_recorded_as_having_no_helper_is_not_asked_for_its_config(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from jen.services import capabilities
+
+        monkeypatch.setattr(
+            capabilities, "for_server", lambda sid, **k: SimpleNamespace(helper_known=True, helper=False)
+        )
+        asked = []
+        monkeypatch.setattr(
+            kea_host, "read_config", lambda server, service, **k: asked.append(service) or self.CFG_FILE
+        )
+        assert _REAL_READ(SERVER) is None
+        assert asked == []
+
+    def test_a_host_with_a_helper_is_asked_for_its_dhcp4_config(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from jen.services import capabilities
+
+        monkeypatch.setattr(
+            capabilities, "for_server", lambda sid, **k: SimpleNamespace(helper_known=True, helper=True)
+        )
+        asked = []
+        monkeypatch.setattr(
+            kea_host, "read_config", lambda server, service, **k: asked.append(service) or self.CFG_FILE
+        )
+        assert _REAL_READ(SERVER) == self.CFG_FILE
+        assert asked == ["dhcp4"]
+
+    def test_a_host_never_seen_is_asked_once_to_learn_what_it_has(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from jen.services import capabilities
+
+        monkeypatch.setattr(
+            capabilities, "for_server", lambda sid, **k: SimpleNamespace(helper_known=False, helper=False)
+        )
+        monkeypatch.setattr(kea_host, "read_config", lambda server, service, **k: self.CFG_FILE)
+        assert _REAL_READ(SERVER) == self.CFG_FILE
