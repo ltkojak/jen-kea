@@ -60,3 +60,15 @@ One step (5.69.0-beta.3), and nothing to do for it. What you will notice:
 **A subnet that left Kea's config ends its alert.** A subnet still listed in Jen but gone from Kea's config (or left with no pool) used to keep its utilization or exhaustion warning for ever; Jen now sends one recovery that names it, and clears it.
 
 **Reservations and plugins.** A CSV import stores a hardware address as a hardware address. Reservations an earlier import created were stored as a DUID, which may never have matched a client: check any you imported by CSV and re-create the ones that do not take effect. The import also names a bad row by its line and refuses an address outside the subnet. The Plugins page shows "Failed to load" for a plugin whose start-up raised, with the exception class only.
+
+## The interface: pages you may see differently, nothing to do
+
+One step (5.69.0-beta.4), and nothing to do for it. What you will notice:
+
+**A viewer sees fewer buttons.** Controls that led a viewer to an "Admin access required" page are no longer shown: the stale-after-days setting on Devices, the options and classes links on a subnet card, the Settings links on Servers and the dashboard's Alert Summary, and the Getting Started widget. A scoped admin is no longer offered Add Subnet. Nothing a viewer could do before is removed; only the dead ends are.
+
+**Names.** The navigation entry is "Kea servers", and the database pages say "Kea reservations". The pages no longer name the release that introduced a feature.
+
+**The Saved-filters dropdown on Leases and Reservations works again**, and its Save Filter button with it.
+
+**Keyboard and screen readers.** The shortcuts window and the confirmation window take focus when they open, keep it inside until they close and give it back.
