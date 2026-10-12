@@ -1294,7 +1294,7 @@ class TestARemovedServersKeysAreCleared:
         logs, _calls = stack
         prime(logs)
         self._put(db, 77)  # not in KEA_SERVERS (the stack has servers 1 and 2)
-        assert self._present(db, 77) == 6
+        assert self._present(db, 77) == len(self.KEYS)
         cp.sweep(NOW, servers=[SERVER_A])
         assert self._present(db, 77) == 0
         assert self._present(db, 1) >= 3, "the live server's own keys are kept"
@@ -1309,7 +1309,7 @@ class TestARemovedServersKeysAreCleared:
     def test_a_process_whose_config_was_never_applied_touches_nothing(self, db, stack, monkeypatch):
         self._put(db, 79)
         monkeypatch.setattr(extensions, "cfg", None)
-        assert cp._clear_orphan_server_keys() == 0 and self._present(db, 79) == 5
+        assert cp._clear_orphan_server_keys() == 0 and self._present(db, 79) == len(self.KEYS)
         with db.cursor() as cur:
             cur.execute("DELETE FROM settings WHERE setting_key LIKE 'client_problems_%:79'")
         db.commit()
