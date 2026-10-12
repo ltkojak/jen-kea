@@ -25,6 +25,7 @@ from jen.services import dhcp_explain as _explain
 from jen.services import dhcp_options as _opts
 from jen.services import kea_classes as _classes
 from jen.services import kea_config_view as _view
+from jen.services import kea_log_trace as _klt
 from jen.services import kea_readiness as _readiness
 from jen.services import pools as _pools_mod
 from jen.services.netutil import ip_to_int
@@ -671,16 +672,17 @@ def _check_logger_output(dhcp4_cfg) -> list[Finding]:
     if entry is None:
         return []
     options = [o for o in entry.get("output-options") or [] if isinstance(o, dict)]
-    files = [o for o in options if isinstance(o.get("output"), str) and o["output"].startswith("/")]
+    # a file Jen's reader would be given: absolute, a *.log under /var/log (kea_log_trace.host_log_path - the rule the host's helper applies). A file elsewhere is as good as none
+    files = [o for o in options if isinstance(o.get("output"), str) and _klt.host_log_path(o["output"])]
     if not files:
         return [
             _finding(
                 "logger-no-file",
                 "warn",
-                "Kea's log is not written to a file",
+                "Kea's log is not written to a file Jen can read",
                 "The kea-dhcp4 logger writes to "
                 + (", ".join(str(o.get("output")) for o in options if o.get("output")) or "no output at all")
-                + ', not to a file. Paste this into that logger\'s entry under "loggers" in kea-dhcp4.conf, then reload Kea: '
+                + ', not to a *.log file under /var/log. Paste this into that logger\'s entry under "loggers" in kea-dhcp4.conf, then reload Kea: '
                 + LOGGER_OUTPUT_JSON,
                 "loggers[" + LOGGER_NAME + "]",
                 "/settings/kea",
@@ -691,7 +693,9 @@ def _check_logger_output(dhcp4_cfg) -> list[Finding]:
     out = []
     for o in files:
         pattern = o.get("pattern")
-        if isinstance(pattern, str) and "%D" not in pattern:
+        if (
+            isinstance(pattern, str) and "%D" not in pattern and "%d" not in pattern
+        ):  # %D is local time, %d is UTC: either prints the date and time
             out.append(
                 _finding(
                     "logger-pattern-no-timestamp",

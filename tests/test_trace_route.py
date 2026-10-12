@@ -131,6 +131,17 @@ class TestTraceRoute:
         assert calls[-1][0] == "/var/log/kea/dhcp4.log"
         assert b"/var/log/kea/dhcp4.log" in r.data
 
+    def test_opening_the_page_with_no_client_reads_no_config(self, logged_in_client, db, monkeypatch):
+        """The second pass (Q175, finding 3): the page that only shows the path opens no SSH session for it."""
+        from jen.services import log_tail
+
+        _servers(monkeypatch)
+        monkeypatch.setattr(
+            log_tail, "_read_server_config", lambda server: (_ for _ in ()).throw(AssertionError("read the config"))
+        )
+        r = logged_in_client.get("/tools/trace")
+        assert r.status_code == 200 and b"/var/log/kea/kea-dhcp4.log" in r.data
+
     def test_a_configured_path_the_host_would_refuse_is_not_asked(self, logged_in_client, db, monkeypatch):
         from jen import extensions
 

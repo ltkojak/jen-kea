@@ -562,8 +562,20 @@ def _read_refusal(resp: dict, path: str) -> str:
     return f"{code}: {detail}" if detail else f"{code} - {path}"
 
 
-def read_config_versioned(server: dict, service: str, *, errors: list | None = None) -> tuple[dict | None, str | None]:
+def read_config_versioned(
+    server: dict,
+    service: str,
+    *,
+    errors: list | None = None,
+    timeout: int | None = None,
+    helper_only: bool = False,
+    capture: bool = True,
+) -> tuple[dict | None, str | None]:
     """(parsed config, sha256-of-raw-bytes or a canonical sentinel).
+
+    v5.69.0-beta.6 (Q175): `timeout` bounds the SSH round trip (default 60 s); `helper_only` never uses the legacy root-python read (a host with no helper is
+    flagged and the answer is (None, None)); `capture=False` records no config revision - for a caller that only wants a value out of the file (where Kea's log is)
+    and must not write history, or race a write of Jen's own, every five minutes.
 
     `errors` (v5.67.0-beta.8, Q120, item a) — pass a list and the reason a read came back
     (None, None) is appended to it as a sentence ("SSH to kea@host failed — ...", "the helper
@@ -596,7 +608,7 @@ def read_config_versioned(server: dict, service: str, *, errors: list | None = N
     cfg: dict | None = None
     sha: str | None = None
     try:
-        resp = helper_call(server, "read-config", {"service": service, "path": path})
+        resp = helper_call(server, "read-config", {"service": service, "path": path}, timeout=timeout or 60)
         _record_from_resp(server.get("id"), resp)
         if resp.get("ok"):
             cfg = resp.get("config")
@@ -607,6 +619,8 @@ def read_config_versioned(server: dict, service: str, *, errors: list | None = N
             errors.append(_read_refusal(resp, path))
     except HelperMissing:
         _flag_legacy(server)
+        if helper_only:
+            return None, None
         try:
             ssh = _open_ssh(server)
         except HelperUnreachable as e:
@@ -635,16 +649,17 @@ def read_config_versioned(server: dict, service: str, *, errors: list | None = N
 
     # _capture_baseline_or_external_change must see the RAW sha (None
     # on v1/legacy) — it branches on that, not on the sentinel below.
-    _capture_baseline_or_external_change(server.get("id"), service, cfg, sha)
+    if capture:
+        _capture_baseline_or_external_change(server.get("id"), service, cfg, sha)
     if not sha:
         sha = _canonical_sentinel(cfg)
     return cfg, sha
 
 
-def read_config(server: dict, service: str, *, errors: list | None = None) -> dict | None:
+def read_config(server: dict, service: str, *, errors: list | None = None, **kw) -> dict | None:
     """The parsed Kea config for `service` on `server`, or None if it's
-    missing or unreadable. Thin wrapper over read_config_versioned()."""
-    return read_config_versioned(server, service, errors=errors)[0]
+    missing or unreadable. Thin wrapper over read_config_versioned() (`**kw`: its `timeout`, `helper_only` and `capture`)."""
+    return read_config_versioned(server, service, errors=errors, **kw)[0]
 
 
 def _capture_baseline_or_external_change(server_id, service: str, cfg: dict, sha: str | None) -> None:

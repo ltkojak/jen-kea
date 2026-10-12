@@ -2286,3 +2286,47 @@ class TestMissingBinaryTellsTheRealReason:
 
         src = (pathlib.Path(__file__).resolve().parent.parent / "jen-kea-helper").read_text(encoding="utf-8")
         assert int(re.search(r"^HELPER_BUILD = (\d+)$", src, re.M).group(1)) == kea_host.JEN_HELPER_SHIPPED_BUILD == 18
+
+
+class TestReadConfigForAValueNotForHistory:
+    """v5.69.0-beta.6 (Q175, the second pass): the Problems sweep, Trace and Explain read a server's config every few minutes only to learn where its log is. That read is bounded, helper-only
+    and records no config revision - it must neither write history, race a write of Jen's own, nor open the legacy root-python session."""
+
+    def test_the_timeout_reaches_the_ssh_round_trip(self, monkeypatch):
+        seen = []
+
+        def fake(server, op, payload=None, timeout=60):
+            seen.append((op, timeout))
+            return {"ok": True, "config": {"Dhcp4": {}}, "sha256": "abc"}
+
+        monkeypatch.setattr(kea_host, "helper_call", fake)
+        monkeypatch.setattr(kea_host, "_record_from_resp", lambda *a: None)
+        kea_host.read_config(SERVER, "dhcp4", timeout=10, capture=False)
+        kea_host.read_config(SERVER, "dhcp4", capture=False)
+        assert seen == [("read-config", 10), ("read-config", 60)]
+
+    def test_capture_false_records_no_revision_and_the_default_still_does(self, monkeypatch):
+        captured = []
+        monkeypatch.setattr(
+            kea_host, "helper_call", lambda *a, **k: {"ok": True, "config": {"Dhcp4": {}}, "sha256": "abc"}
+        )
+        monkeypatch.setattr(kea_host, "_record_from_resp", lambda *a: None)
+        monkeypatch.setattr(kea_host, "_capture_baseline_or_external_change", lambda *a: captured.append(a))
+        kea_host.read_config(SERVER, "dhcp4", capture=False)
+        assert captured == []
+        kea_host.read_config(SERVER, "dhcp4")
+        assert len(captured) == 1
+
+    def test_helper_only_never_opens_the_legacy_session(self, monkeypatch):
+        flagged = []
+
+        def missing(*a, **k):
+            raise kea_host.HelperMissing("no helper")
+
+        monkeypatch.setattr(kea_host, "helper_call", missing)
+        monkeypatch.setattr(kea_host, "_flag_legacy", lambda srv: flagged.append(srv))
+        monkeypatch.setattr(
+            kea_host, "_open_ssh", lambda srv: (_ for _ in ()).throw(AssertionError("opened a legacy session"))
+        )
+        assert kea_host.read_config_versioned(SERVER, "dhcp4", helper_only=True, capture=False) == (None, None)
+        assert flagged == [SERVER], "the host is still recorded as having no helper"

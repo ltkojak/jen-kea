@@ -463,13 +463,16 @@ def _problems_sweep(ctx) -> Check:
             # v5.69.0-beta.6 (Q175): what the last error MEANS decides the sentence and the hint. "missing" is the host answering that the file is not there - the SSH sentence
             # sent an admin to check a connection that had just worked (a host whose logger writes to stdout was blind for 1447 sweeps under it)
             if s["last_error"] == "missing":
+                # "-" is a sweep that had no file to try; "" is a row written before the path was recorded (the next sweep records it)
                 tried = s.get("last_path") or ""
+                if tried == "-":
+                    lead = f"{s['name']}: Jen has no log file it may read (the configured path is not a *.log under /var/log)"
+                elif tried:
+                    lead = f"{s['name']}: {tried} is not on {s['name']} - kea-dhcp4 logs to stdout, the system journal or a file Jen may not read"
+                else:
+                    lead = f"{s['name']}: its log file is not on {s['name']} - kea-dhcp4 logs to stdout, the system journal or a file Jen may not read"
                 parts.append(
-                    (
-                        f"{s['name']}: {tried} is not on {s['name']} - kea-dhcp4 logs to stdout, the system journal or a file Jen may not read"
-                        if tried
-                        else f"{s['name']}: Jen has no log file it may read (the configured path is not a *.log under /var/log)"
-                    )
+                    lead
                     + f"; give its logger a file output under /var/log/kea, or set the log path under Settings → Kea ({s['misses']} sweeps without a read, last read {fmt(s['last_read'])})"
                 )
                 hints.append(_SWEEP_MISSING_HINT)

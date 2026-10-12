@@ -97,6 +97,11 @@ console.log(JSON.stringify(out));
         out = _run(self._harness("out.band = sparklineBand([20, 60]);"))
         assert out["band"] == {"lo": 10, "hi": 70}
 
+    def test_values_above_one_hundred_still_have_a_band(self):
+        """The second pass (Q175): a pool that shrank after leases were counted gives pct over 100; the band is clamped at 100 and its floor must stay below it."""
+        out = _run(self._harness("out.band = sparklineBand([104, 108]);"))
+        assert out["band"]["lo"] < out["band"]["hi"] <= 100
+
     def test_one_value_has_a_nonzero_height(self):
         out = _run(self._harness("out.band = sparklineBand([50, 50]);"))
         assert out["band"]["hi"] > out["band"]["lo"]

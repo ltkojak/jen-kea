@@ -36,8 +36,10 @@ _cache: dict[tuple, tuple[float, int, dict]] = {}
 _reads = 0  # tail_log calls actually made (the tests, and anyone who wants the count)
 
 PATH_TTL_S = 120.0
+FAIL_TTL_S = 15.0
 _path_gates: dict = {}
-_paths: dict = {}  # server id -> (monotonic time, path)
+_paths: dict = {}  # server id -> (monotonic time, path, identity, how long it is kept)
+_generation = 0  # bumped by clear(): a read that began before it does not store its answer
 
 
 def reads() -> int:
@@ -45,37 +47,55 @@ def reads() -> int:
 
 
 def clear() -> None:
+    global _generation
     with _lock:
         _cache.clear()
         _paths.clear()
+        _generation += 1
+
+
+READ_TIMEOUT_S = 10  # the config read is bounded well below the log read's own: a host whose helper hangs costs one short wait, not a minute
 
 
 def _read_server_config(server: dict):
     """The parsed config FILE of `server`'s kea-dhcp4 (`{"Dhcp4": ...}`), or None when it cannot be read - or when the host is recorded as having no helper, which is not
-    asked (`tail_log` refuses such a host without SSH too, and `read_config`'s legacy fallback would open the very session the helper-only reads exist to avoid). The seam the
-    tests replace: no unit test opens an SSH session for a log path."""
+    asked (`tail_log` refuses such a host without SSH too). Helper only, bounded, and recording no config revision: the answer is one value out of the file, asked every
+    few minutes, and must neither write history nor race a write of Jen's own. The seam the tests replace: no unit test opens an SSH session for a log path."""
     from jen.services import capabilities as _caps
     from jen.services import kea_host as _host
 
     c = _caps.for_server(server.get("id"), probe_kea=False)
     if c.helper_known and not c.helper:
         return None
-    return _host.read_config(server, "dhcp4")
+    return _host.read_config(server, "dhcp4", timeout=READ_TIMEOUT_S, helper_only=True, capture=False)
 
 
-def path_for(server: dict) -> str:
+def _identity(server: dict) -> tuple:
+    """What makes it a different host or file: a server edited to point elsewhere is not answered from the old one's cache."""
+    return (server.get("ssh_host"), server.get("ssh_user"), server.get("kea_conf"))
+
+
+def path_for(server: dict, read: bool = True) -> str:
     """Where `server`'s kea-dhcp4 writes the log Jen reads (`kea_log_trace.log_path_for` of the config file on that host), "" when neither the logger's file nor `[kea]
-    dhcp4_log_path` is one the helper would read. One config read per server per `PATH_TTL_S`; a config that cannot be read is the configured path - what every reader
-    used before - and is kept for the window too, so an unreachable host is not asked again by every watcher."""
+    dhcp4_log_path` is one the helper would read. One config read per server per `PATH_TTL_S`, kept only while the server's host, user and config path are the ones it was
+    read for. A config that cannot be read is the configured path - what every reader used before - kept for `FAIL_TTL_S` only, so one SSH blip does not choose the file for
+    two minutes. `read=False` never opens a session: the cached answer, else the configured path (a page that only SHOWS the path)."""
     from jen.services import kea_log_trace as _klt
 
     sid = server.get("id")
+    who = _identity(server)
     with _lock:
         gate = _path_gates.setdefault(sid, threading.Lock())
+        hit = _paths.get(sid)
+    if hit and hit[2] == who and time.monotonic() - hit[0] < hit[3]:
+        return hit[1]
+    if not read:
+        return _klt.log_path_for(None)
     with gate:
         with _lock:
             hit = _paths.get(sid)
-        if hit and time.monotonic() - hit[0] < PATH_TTL_S:
+            generation = _generation
+        if hit and hit[2] == who and time.monotonic() - hit[0] < hit[3]:
             return hit[1]
         try:
             cfg = _read_server_config(server)
@@ -86,9 +106,12 @@ def path_for(server: dict) -> str:
             cfg = None
         path = _klt.log_path_for(cfg)
         with _lock:
-            if len(_paths) > 64:
-                _paths.clear()
-            _paths[sid] = (time.monotonic(), path)
+            if (
+                generation == _generation
+            ):  # a clear() while the read was in flight means it was read under a configuration that has since changed
+                if len(_paths) > 64:
+                    _paths.clear()
+                _paths[sid] = (time.monotonic(), path, who, PATH_TTL_S if cfg is not None else FAIL_TTL_S)
         return path
 
 

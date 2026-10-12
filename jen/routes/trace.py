@@ -88,7 +88,8 @@ def trace_page():
     watching = watch and watched_s < WATCH_MAX_S
 
     # v5.69.0-beta.6 (Q175): where THIS server's kea-dhcp4 writes its log - its own logger's file, else [kea] dhcp4_log_path (services/log_tail.path_for, the one definition)
-    log_path = __log_tail.path_for(server) if server else __trace.log_path_for(None)
+    # (a page that only shows the path never opens a session for it: the cached answer, else the configured one - the read happens when a client is asked about)
+    log_path = __log_tail.path_for(server, read=bool(mac_raw)) if server else __trace.log_path_for(None)
 
     ctx = {
         "mac": mac_raw,

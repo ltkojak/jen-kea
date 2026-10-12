@@ -201,12 +201,9 @@
                 <label for="f-kea_conf">Kea Config Path</label>
                 <input id="f-kea_conf" type="text" name="kea_conf" value="{{ infra.kea_conf }}">
             </div>
-        </div>
-        <div class="form-row">
             <div class="form-group">
-                <label for="f-dhcp4_log_path">Kea log path</label>
-                <input id="f-dhcp4_log_path" type="text" name="dhcp4_log_path" value="{{ infra.dhcp4_log_path }}" placeholder="/var/log/kea/kea-dhcp4.log" class="mono">
-                <span class="form-hint">Optional. Where kea-dhcp4 writes its log when its logger has no file output of its own: a <code>.log</code> file under <code>/var/log</code>. Blank is <code>/var/log/kea/kea-dhcp4.log</code>. Jen reads the logger's own file first; Tools → Doctor says when there is none.</span>
+                <label for="f-dhcp4_log_path" title="Where kea-dhcp4 writes its log when its logger has no file output of its own: a .log file under /var/log. Blank is the default shown. Jen reads the logger's own file first; Tools → Doctor says when there is none.">Kea log path</label>
+                <input id="f-dhcp4_log_path" type="text" name="dhcp4_log_path" value="{{ infra.dhcp4_log_path }}" placeholder="/var/log/kea/kea-dhcp4.log" class="mono" title="A .log file under /var/log; blank is the default. Jen reads the logger's own file output first.">
             </div>
         </div>
         <button type="submit" class="btn btn-primary">Save SSH Config</button>

@@ -224,3 +224,77 @@ class TestPathForIsWhereTheServersOwnLoggerWrites:
         )
         monkeypatch.setattr(kea_host, "read_config", lambda server, service, **k: self.CFG_FILE)
         assert _REAL_READ(SERVER) == self.CFG_FILE
+
+
+class TestPathForSecondPassFixes:
+    """The adversarial pass of Q175: a page that only shows the path never opens a session, a changed host is not answered from the old one's cache, a failed read is not kept
+    for two minutes, a clear() during a read keeps the stale answer out, and the config read is helper-only, bounded and records no revision."""
+
+    CFG_FILE = TestPathForIsWhereTheServersOwnLoggerWrites.CFG_FILE
+
+    @pytest.fixture(autouse=True)
+    def _configured(self, monkeypatch):
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "DHCP4_LOG", "/var/log/kea/kea-dhcp4.log")
+
+    def test_read_false_never_reads_and_gives_the_configured_path(self, monkeypatch):
+        monkeypatch.setattr(
+            log_tail, "_read_server_config", lambda server: (_ for _ in ()).throw(AssertionError("read"))
+        )
+        assert log_tail.path_for(SERVER, read=False) == "/var/log/kea/kea-dhcp4.log"
+
+    def test_read_false_returns_a_cached_answer_when_there_is_one(self, monkeypatch):
+        monkeypatch.setattr(log_tail, "_read_server_config", lambda server: self.CFG_FILE)
+        log_tail.path_for(SERVER)
+        monkeypatch.setattr(
+            log_tail, "_read_server_config", lambda server: (_ for _ in ()).throw(AssertionError("read"))
+        )
+        assert log_tail.path_for(SERVER, read=False) == "/var/log/kea/dhcp4.log"
+
+    def test_a_server_edited_to_point_elsewhere_is_not_answered_from_the_old_hosts_cache(self, monkeypatch):
+        answers = {"10.0.0.5": self.CFG_FILE, "10.0.0.9": None}
+        reads = []
+        monkeypatch.setattr(
+            log_tail, "_read_server_config", lambda server: reads.append(server) or answers[server["ssh_host"]]
+        )
+        assert log_tail.path_for(SERVER) == "/var/log/kea/dhcp4.log"
+        moved = {**SERVER, "ssh_host": "10.0.0.9"}
+        assert log_tail.path_for(moved) == "/var/log/kea/kea-dhcp4.log"
+        log_tail.path_for({**SERVER, "kea_conf": "/etc/kea/other.conf"})
+        assert len(reads) == 3, "a changed host and a changed config path each read again"
+
+    def test_a_failed_read_is_kept_for_the_short_window_only(self, monkeypatch):
+        answers = [None, self.CFG_FILE]
+        monkeypatch.setattr(log_tail, "_read_server_config", lambda server: answers.pop(0))
+        monkeypatch.setattr(log_tail, "FAIL_TTL_S", 0.05)
+        assert log_tail.path_for(SERVER) == "/var/log/kea/kea-dhcp4.log"
+        time.sleep(0.08)
+        assert log_tail.path_for(SERVER) == "/var/log/kea/dhcp4.log", (
+            "an SSH blip did not choose the file for two minutes"
+        )
+
+    def test_a_clear_while_a_read_is_in_flight_keeps_its_answer_out_of_the_cache(self, monkeypatch):
+        def read_then_clear(server):
+            log_tail.clear()  # the configuration changed while the read was on the wire
+            return self.CFG_FILE
+
+        monkeypatch.setattr(log_tail, "_read_server_config", read_then_clear)
+        assert log_tail.path_for(SERVER) == "/var/log/kea/dhcp4.log", "the caller still gets what it read"
+        calls = []
+        monkeypatch.setattr(log_tail, "_read_server_config", lambda server: calls.append(1) or None)
+        assert log_tail.path_for(SERVER) == "/var/log/kea/kea-dhcp4.log" and calls == [1], "but it was not kept"
+
+    def test_the_real_read_is_helper_only_bounded_and_records_nothing(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from jen.services import capabilities
+
+        monkeypatch.setattr(
+            capabilities, "for_server", lambda sid, **k: SimpleNamespace(helper_known=True, helper=True)
+        )
+        seen = []
+        monkeypatch.setattr(kea_host, "read_config", lambda server, service, **k: seen.append((service, k)) or {})
+        _REAL_READ(SERVER)
+        assert seen == [("dhcp4", {"timeout": log_tail.READ_TIMEOUT_S, "helper_only": True, "capture": False})]
+        assert log_tail.READ_TIMEOUT_S <= 15

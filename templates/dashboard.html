@@ -463,7 +463,8 @@ function utilColor(pct) {
 function sparklineBand(vals) {
     var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
     var pad = Math.max(2, (hi - lo) * 0.25);
-    return { lo: Math.max(0, Math.floor(lo - pad)), hi: Math.min(100, Math.ceil(hi + pad)) };
+    var top = Math.min(100, Math.ceil(hi + pad));
+    return { lo: Math.min(Math.max(0, Math.floor(lo - pad)), Math.max(0, top - 1)), hi: top };
 }
 
 // The window the line covers, in words: "24h: 24.1–26.4%", and - when the first snapshot is younger than the window - how many days of data there are. `days` is the

@@ -761,8 +761,10 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                     else {"ok": False, "code": "missing"}
                 )
                 if not res.get("ok"):
-                    summary["errors"].append(f"{server.get('name')}: {res.get('code') or 'error'}")
-                    _note_server(sid, False, str(res.get("code") or "error"), now, log_path)
+                    # a failure to open SSH at all is `transport`, whatever code the tail wrapper gave it: Health keeps its SSH advice for exactly that
+                    code = "transport" if res.get("transport") else str(res.get("code") or "error")
+                    summary["errors"].append(f"{server.get('name')}: {code}")
+                    _note_server(sid, False, code, now, log_path or "-")
                     continue
                 log_read = True
                 wm = _wm_get(sid)
@@ -913,7 +915,7 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                         )
                         summary["errors"].append(f"{server.get('name')}: alert delivered, not recorded")
                 summary["servers"] += 1
-                _note_server(sid, True, "", now, log_path)
+                _note_server(sid, True, "", now, log_path or "-")
             except Exception as e:
                 logger.error(f"client_problems: server {server.get('name')!r}: {type(e).__name__}: {e}")
                 summary["errors"].append(f"{server.get('name')}: {type(e).__name__}")

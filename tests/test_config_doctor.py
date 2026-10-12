@@ -426,6 +426,32 @@ class TestTheDhcp4Logger:
         assert "logger-pattern-no-timestamp" in ids
         assert "logger-no-file" not in ids
 
+    @pytest.mark.parametrize(
+        "output", ["/tmp/kea.log", "/var/log/kea/dhcp4.txt", "/opt/kea/log/x.log", "/var/log/../etc/x.log"]
+    )
+    def test_a_file_Jen_cannot_read_is_no_file(self, output):
+        """The second pass (Q175, finding 2): a file output outside /var/log, or not a *.log, is one the host's helper refuses - the sweep would fall back and go blind."""
+        cfg = {"loggers": [{"name": "kea-dhcp4", "output-options": [{"output": output}]}]}
+        assert "logger-no-file" in _ids(doctor.diagnose(cfg, hosts=[]))
+
+    def test_a_readable_file_after_an_unreadable_one_is_a_file(self):
+        cfg = {
+            "loggers": [
+                {
+                    "name": "kea-dhcp4",
+                    "output-options": [{"output": "/tmp/kea.log"}, {"output": "/var/log/kea/kea-dhcp4.log"}],
+                }
+            ]
+        }
+        assert "logger-no-file" not in _ids(doctor.diagnose(cfg, hosts=[]))
+
+    @pytest.mark.parametrize("pattern", ["%d{%Y-%m-%d %H:%M:%S} %-5p %m", "%D %m", "%D{%H:%M:%S.%q} %m"])
+    def test_a_pattern_with_either_date_conversion_is_fine(self, pattern):
+        cfg = {
+            "loggers": [{"name": "kea-dhcp4", "output-options": [{"output": "/var/log/kea/k.log", "pattern": pattern}]}]
+        }
+        assert "logger-pattern-no-timestamp" not in _ids(doctor.diagnose(cfg, hosts=[]))
+
     def test_a_file_output_with_no_pattern_is_neither(self):
         ids = _ids(doctor.diagnose(self.FILE_NO_PATTERN, hosts=[]))
         assert not ({"logger-no-file", "logger-pattern-no-timestamp"} & ids)

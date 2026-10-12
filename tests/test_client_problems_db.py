@@ -1381,7 +1381,29 @@ class TestTheSweepReadsTheFileTheServersLoggerWrites:
         monkeypatch.setattr(extensions, "DHCP4_LOG", "/srv/kea/kea.log")
         cp.sweep(NOW, servers=[SERVER_A])
         s = cp.read_status([SERVER_A])["servers"][0]
-        assert calls["tail"] == [] and s["last_error"] == "missing" and s["last_path"] == ""
+        assert calls["tail"] == [] and s["last_error"] == "missing" and s["last_path"] == "-"
+
+    def test_an_ssh_failure_is_stored_as_transport_and_keeps_the_ssh_advice(self, db, stack):
+        """The second pass (Q175, finding 1): `kea_host.tail_log` answers code "error" with transport=True for every SSH failure; the row's SSH advice used to key on a code nothing stored."""
+        from jen.services import health
+
+        logs, _ = stack
+        logs[1] = {"ok": False, "code": "error", "detail": "TimeoutError: timed out", "transport": True}
+        for _ in range(cp.MISS_LIMIT):
+            cp.sweep(NOW, servers=[SERVER_A])
+        assert cp.read_status([SERVER_A])["servers"][0]["last_error"] == "transport"
+        row = health._problems_sweep({})
+        assert row.status == "fail" and "SSH" in row.fix_hint and "last error: transport" in row.detail
+
+    def test_a_helper_that_answered_an_error_is_not_blamed_on_the_connection(self, db, stack):
+        from jen.services import health
+
+        logs, _ = stack
+        logs[1] = {"ok": False, "code": "error", "detail": "permission denied"}
+        for _ in range(cp.MISS_LIMIT):
+            cp.sweep(NOW, servers=[SERVER_A])
+        row = health._problems_sweep({})
+        assert "last error: error" in row.detail and "SSH" not in row.fix_hint
 
     def test_the_health_row_names_the_file_for_a_missing_log_after_six_sweeps(self, db, stack):
         from jen.services import health
