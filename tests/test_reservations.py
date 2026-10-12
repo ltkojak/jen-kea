@@ -519,7 +519,7 @@ class TestARefusedEditLeavesTheReservationAlone:
         assert len(adds) == 2 and adds[0]["hostname"] == "renamed"
         assert adds[1] == {
             "subnet-id": 1,
-            "hw-address": "aa:bb:cc:dd:ee:77",
+            "hw-address": "AA:BB:CC:DD:EE:77",  # as the route formats it (Kea reads the identifier case-insensitively)
             "ip-address": self.IP,
             "hostname": "original-host",
             "option-data": [{"name": "domain-name-servers", "data": "10.99.0.1"}],
@@ -540,7 +540,7 @@ class TestARefusedEditLeavesTheReservationAlone:
             f"/reservations/edit/{reservation}", data={"hostname": "renamed", "dns_override": ""}, follow_redirects=True
         )
         assert b"could NOT be put back" in r.data and self.IP.encode() in r.data
-        assert self._hosts(db) == []
+        assert list(self._hosts(db)) == []
 
     def test_a_delete_kea_refuses_adds_nothing(self, logged_in_client, db, reservation, kea):
         kea["delete_result"] = 1
