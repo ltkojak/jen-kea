@@ -184,7 +184,7 @@ class TestRowsFromBeforeTheColumnAreNotReadings:
 
     def test_reports_says_when_pool_use_starts(self, legacy, logged_in_client):
         page = logged_in_client.get("/reports?days=30").get_data(as_text=True)
-        assert "Pool use is recorded from the first snapshot taken after the upgrade" in page
+        assert "Pool use is shown from the first snapshot Jen takes of this subnet" in page
 
     def test_one_new_snapshot_makes_health_report_it(self, legacy):
         alerts.take_lease_snapshot()
