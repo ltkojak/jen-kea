@@ -159,18 +159,18 @@ function showStep(n) {
         document.getElementById('step'+i).style.display = i===n ? '' : 'none';
     });
     if (n===2) {
-        var db = _which==='jen' ? '{{ jen_db_name }}' : '{{ kea_db_name }}';
+        var db = _which==='jen' ? {{ jen_db_name|tojson }} : {{ kea_db_name|tojson }};
         document.getElementById('target-db-label').innerHTML =
             'Migrating <strong style="color:var(--'+((_which==='jen')?'primary':'warning')+');">'
             + (_which==='jen'?'<svg class="ico ico-dot ico-success" aria-hidden="true"><use href="#i-circle"></use></svg> Jen':'<svg class="ico ico-dot ico-warning" aria-hidden="true"><use href="#i-circle"></use></svg> Kea') + ' Database</strong> to a new server. '
-            + 'The source database on <code>' + (_which==='jen'?'{{ jen_db_host }}':'{{ kea_db_host }}') + '</code> is never modified.';
+            + 'The source database on <code>' + (_which==='jen'?{{ jen_db_host|tojson }}:{{ kea_db_host|tojson }}) + '</code> is never modified.';
         if (!document.getElementById('t-db').value) document.getElementById('t-db').value = db;
     }
     if (n===3) {
         var host = document.getElementById('t-host').value;
         var db   = document.getElementById('t-db').value;
         var which = _which==='jen' ? '<svg class="ico ico-dot ico-success" aria-hidden="true"><use href="#i-circle"></use></svg> Jen Database' : '<svg class="ico ico-dot ico-warning" aria-hidden="true"><use href="#i-circle"></use></svg> Kea Database';
-        var src  = _which==='jen' ? '{{ jen_db_host }}/{{ jen_db_name }}' : '{{ kea_db_host }}/{{ kea_db_name }}';
+        var src  = _which==='jen' ? {{ (jen_db_host ~ '/' ~ jen_db_name)|tojson }} : {{ (kea_db_host ~ '/' ~ kea_db_name)|tojson }};
         document.getElementById('migration-summary').innerHTML =
             '<div class="card u-851d78">'
             + '<strong>Migrating:</strong> ' + which + '<br>'
@@ -193,7 +193,7 @@ function testConn() {
     fd.append('host',host); fd.append('port',port); fd.append('user',user);
     fd.append('password',pw); fd.append('database',db);
     fd.append('ssl_ca', document.getElementById('t-ca').value.trim());
-    jenFetch('/database/migrate/test', {method:'POST', headers: {'X-CSRFToken': '{{ csrf_token() }}'}, body:fd})
+    jenFetch('/database/migrate/test', {method:'POST', headers: {'X-CSRFToken': {{ csrf_token()|tojson }}}, body:fd})
         .then(function(r){return r.json();})
         .then(function(d){
             if (d.ok) {
@@ -234,7 +234,7 @@ function runMigration() {
     }
 
     // POST to SSE endpoint using fetch + ReadableStream
-    jenFetch('/database/migrate/run', {method:'POST', headers: {'X-CSRFToken': '{{ csrf_token() }}'}, body:fd})
+    jenFetch('/database/migrate/run', {method:'POST', headers: {'X-CSRFToken': {{ csrf_token()|tojson }}}, body:fd})
         .then(function(resp) {
             var reader = resp.body.getReader();
             var dec = new TextDecoder();

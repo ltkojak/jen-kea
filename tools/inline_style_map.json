@@ -18,7 +18,6 @@
  "border-color:var(--warning)": "u-fd6601",
  "border-top:1px solid var(--border)": "u-2eea7e",
  "border:1px solid var(--danger);color:var(--danger);background:transparent": "u-be83f6",
- "color:' + color + '": "u-999e54",
  "color:var(--danger)": "u-497726",
  "color:var(--primary)": "u-dc2e42",
  "color:var(--primary);font-weight:600": "u-01f649",

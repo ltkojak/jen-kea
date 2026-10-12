@@ -19,7 +19,7 @@
         <td class="hide-mobile u-bca09b"  data-m="hide">{{ l.duid_hex or '—' }}</td>
         <td class="hide-mobile" data-m="hide">{{ l.iaid }}</td>
         <td data-m="secondary">{{ l.subnet_name or l.subnet_id }}</td>
-        <td class="hide-tablet" data-m="secondary">{{ l.expire }}</td>
+        <td class="hide-tablet" data-m="secondary">{{ l.expire|utcfmt }}</td>
     </tr>
     {% else %}
     <tr><td colspan="7" data-m="full" class="u-f23e59">No IPv6 leases found.</td></tr>

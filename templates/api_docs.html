@@ -3,7 +3,7 @@
 {% block content %}
 <div class="page-header">
     <h1>{{ icon("book-open", "ico-lg") }} REST API Documentation</h1>
-    <p>Jen v{{ jen_version }} — integration API for Home Assistant, Zabbix, and custom scripts. Reads with any key; writes (v5.34.0) with a key that has <em>Allow writes</em>. Machine-readable: <a href="/api/v1/openapi.json">OpenAPI 3.0 document</a>.</p>
+    <p>Jen v{{ jen_version }} — integration API for Home Assistant, Zabbix, and custom scripts. Reads with any key; writes with a key that has <em>Allow writes</em>. Machine-readable: <a href="/api/v1/openapi.json">OpenAPI 3.0 document</a>.</p>
 </div>
 
 {% if keys %}
@@ -35,7 +35,7 @@
         <p class="u-8a77e5"><strong class="u-f045bb">Authentication:</strong> All endpoints (except <code class="mono-box">/api/v1/health</code>) require an API key in the request header:</p>
         <pre class="code-block">Authorization: Bearer YOUR_API_KEY</pre>
         <p class="u-8a77e5"><strong class="u-f045bb">Response format:</strong> All responses are JSON. Errors return <code class="mono-box">{"error": "message"}</code> with an appropriate HTTP status code.</p>
-        <p class="u-8a77e5"><strong class="u-f045bb">All keys are read-only.</strong> The API cannot modify your DHCP configuration or reservations.</p>
+        <p class="u-8a77e5"><strong class="u-f045bb">Read keys and write keys.</strong> A key without <em>Allow writes</em> can only read. A key with it may also create and delete reservations, edit device names and owners, and set subnet notes, always within the key's subnet scope. The API never edits Kea's configuration files.</p>
         <p class="u-8a77e5"><strong class="u-f045bb">Subnet scope:</strong> each key has its own subnet access, set independently when the key is created (<a href="/settings/api-keys">manage keys</a>) — it is not tied to whoever created it. A key restricted to specific subnets returns empty results / 404s for anything outside its scope, the same as if that data didn't exist.</p>
     </div>
 </div>
@@ -50,7 +50,7 @@
         "desc": "Returns Jen version, Kea status, and subnet count. No authentication required — useful for monitoring checks.",
         "params": [],
         "example_path": "/api/v1/health",
-        "example_response": '{\n  "jen_version": "2.3.0",\n  "kea_up": true,\n  "kea_version": "Kea 3.0.0",\n  "subnets": 3\n}'
+        "example_response": '{\n  "jen_version": "' ~ jen_version ~ '",\n  "kea_up": true,\n  "kea_version": "Kea 3.0.0",\n  "subnets": 3\n}'
     },
     {
         "method": "GET",
@@ -67,7 +67,7 @@
         "path": "/api/v1/servers",
         "title": "Servers & Packet Health",
         "auth": true,
-        "desc": "Returns every configured Kea server with its HA state and packet health (Q42) — drop/NAK/allocation-failure rates over the trailing hour. packet_health is null until the server has two statistic snapshots.",
+        "desc": "Returns every configured Kea server with its HA state and packet health — drop/NAK/allocation-failure rates over the trailing hour. packet_health is null until the server has two statistic snapshots.",
         "params": [],
         "example_path": "/api/v1/servers",
         "example_response": '{\n  "count": 1,\n  "servers": [\n    {\n      "id": 1,\n      "name": "kea-primary",\n      "role": "primary",\n      "up": true,\n      "ha_state": "hot-standby",\n      "version": "Kea 3.0.0",\n      "packet_health": {\n        "status": "ok",\n        "window_minutes": 60,\n        "rates": {\n          "pkt4-received": 12.3,\n          "pkt4-ack-sent": 11.9\n        }\n      }\n    }\n  ]\n}'
@@ -373,17 +373,20 @@ rest:
 </style>
 {% endblock %}
 {% block scripts %}
-var currentKey = '';
+// The example requests are rewritten from their ORIGINAL text each time (kept on first use), as text and never as markup: what is typed into the key box is
+// shown in the examples, and clearing the box puts YOUR_KEY back (v5.69.0-beta.4, Q173).
 function updateExamples(key) {
-    currentKey = key;
     document.querySelectorAll('[id^="req-"]').forEach(function(el) {
-        if (key) {
-            el.innerHTML = el.innerHTML.replace(/YOUR_KEY/g, key);
-        }
+        if (el.dataset.template === undefined) el.dataset.template = el.textContent;
+        el.textContent = key ? el.dataset.template.split('YOUR_KEY').join(key) : el.dataset.template;
     });
 }
 function setKey(prefix) {
-    document.getElementById('apiKeyInput').focus();
+    var input = document.getElementById('apiKeyInput');
+    if (!input) return;
+    // the button knows only the key's prefix (the full key is shown once, when it is created): say which key to paste
+    if (prefix) input.placeholder = 'Paste the full key that starts with ' + prefix;
+    input.focus();
 }
 document.querySelectorAll('.set-key-btn').forEach(function(btn) {
     btn.addEventListener('click', function() { setKey(btn.getAttribute('data-key-prefix')); });

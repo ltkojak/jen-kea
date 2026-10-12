@@ -41,18 +41,18 @@
         </div>
         <div class="form-row">
             <div class="form-group">
-                <label>D2 server IP</label>
-                <input type="text" name="server-ip" value="{{ ddns_block.get('server-ip', '127.0.0.1') }}">
+                <label for="f-server-ip">D2 server IP</label>
+                <input id="f-server-ip" type="text" name="server-ip" value="{{ ddns_block.get('server-ip', '127.0.0.1') }}">
                 <div class="form-hint">Where dhcp4 sends update requests — almost always D2 on the same host.</div>
             </div>
             <div class="form-group">
-                <label>D2 server port</label>
-                <input type="text" name="server-port" value="{{ ddns_block.get('server-port', 53001) }}">
+                <label for="f-server-port">D2 server port</label>
+                <input id="f-server-port" type="text" name="server-port" value="{{ ddns_block.get('server-port', 53001) }}">
                 <div class="form-hint">D2's listening port — Kea's default is 53001.</div>
             </div>
             <div class="form-group">
-                <label>NCR protocol</label>
-                <select name="ncr-protocol">
+                <label for="f-ncr-protocol">NCR protocol</label>
+                <select id="f-ncr-protocol" name="ncr-protocol">
                     <option value="UDP" {% if ddns_block.get('ncr-protocol', 'UDP') == 'UDP' %}selected{% endif %}>UDP</option>
                     <option value="TCP" {% if ddns_block.get('ncr-protocol') == 'TCP' %}selected{% endif %}>TCP</option>
                 </select>
@@ -87,8 +87,8 @@
         </div>
         <div class="form-row">
             <div class="form-group">
-                <label>Replace client-supplied name</label>
-                <select name="ddns-replace-client-name">
+                <label for="f-ddns-replace-client-name">Replace client-supplied name</label>
+                <select id="f-ddns-replace-client-name" name="ddns-replace-client-name">
                     <option value="never" {% if naming.get('ddns-replace-client-name', 'never') == 'never' %}selected{% endif %}>Never</option>
                     <option value="always" {% if naming.get('ddns-replace-client-name') == 'always' %}selected{% endif %}>Always</option>
                     <option value="when-present" {% if naming.get('ddns-replace-client-name') == 'when-present' %}selected{% endif %}>When present</option>
@@ -97,13 +97,13 @@
                 <div class="form-hint">Whether Kea's own generated name replaces a hostname the client offered.</div>
             </div>
             <div class="form-group">
-                <label>Generated name prefix</label>
-                <input type="text" name="ddns-generated-prefix" value="{{ naming.get('ddns-generated-prefix', 'myhost') }}">
+                <label for="f-ddns-generated-prefix">Generated name prefix</label>
+                <input id="f-ddns-generated-prefix" type="text" name="ddns-generated-prefix" value="{{ naming.get('ddns-generated-prefix', 'myhost') }}">
                 <div class="form-hint">Used when no usable client hostname exists — becomes <span class="mono">prefix-10-0-0-5</span>.</div>
             </div>
             <div class="form-group">
-                <label>Qualifying suffix</label>
-                <input type="text" name="ddns-qualifying-suffix" value="{{ naming.get('ddns-qualifying-suffix', '') }}" placeholder="example.com">
+                <label for="f-ddns-qualifying-suffix">Qualifying suffix</label>
+                <input id="f-ddns-qualifying-suffix" type="text" name="ddns-qualifying-suffix" value="{{ naming.get('ddns-qualifying-suffix', '') }}" placeholder="example.com">
                 <div class="form-hint">Domain appended to build the FQDN — blank means the client must supply a fully-qualified name itself.</div>
             </div>
         </div>
@@ -116,8 +116,8 @@
                 <div class="form-hint">Re-send the DNS update on every lease renewal, not just new leases.</div>
             </div>
             <div class="form-group">
-                <label>Conflict resolution</label>
-                <select name="ddns-conflict-resolution-mode">
+                <label for="f-ddns-conflict-resolution-mode">Conflict resolution</label>
+                <select id="f-ddns-conflict-resolution-mode" name="ddns-conflict-resolution-mode">
                     <option value="check-with-dhcid" {% if naming.get('ddns-conflict-resolution-mode', 'check-with-dhcid') == 'check-with-dhcid' %}selected{% endif %}>Check with DHCID</option>
                     <option value="no-check-with-dhcid" {% if naming.get('ddns-conflict-resolution-mode') == 'no-check-with-dhcid' %}selected{% endif %}>No check with DHCID</option>
                     <option value="check-exists-with-dhcid" {% if naming.get('ddns-conflict-resolution-mode') == 'check-exists-with-dhcid' %}selected{% endif %}>Check exists with DHCID</option>
@@ -128,13 +128,13 @@
         </div>
         <div class="form-row">
             <div class="form-group">
-                <label>Hostname character set</label>
-                <input type="text" name="hostname-char-set" value="{{ naming.get('hostname-char-set', '[^A-Za-z0-9.-]') }}">
+                <label for="f-hostname-char-set">Hostname character set</label>
+                <input id="f-hostname-char-set" type="text" name="hostname-char-set" value="{{ naming.get('hostname-char-set', '[^A-Za-z0-9.-]') }}">
                 <div class="form-hint">Regex of characters to replace in a client-supplied hostname — Kea's own syntax, free text.</div>
             </div>
             <div class="form-group">
-                <label>Replacement character</label>
-                <input type="text" name="hostname-char-replacement" value="{{ naming.get('hostname-char-replacement', 'x') }}">
+                <label for="f-hostname-char-replacement">Replacement character</label>
+                <input id="f-hostname-char-replacement" type="text" name="hostname-char-replacement" value="{{ naming.get('hostname-char-replacement', 'x') }}">
                 <div class="form-hint">What a disallowed character becomes — blank deletes it instead.</div>
             </div>
         </div>
@@ -284,14 +284,14 @@
                 <input type="text" name="name" placeholder="tsig1" required>
             </div>
             <div class="form-group">
-                <label>Algorithm</label>
-                <select name="algorithm">
+                <label for="f-algorithm">Algorithm</label>
+                <select id="f-algorithm" name="algorithm">
                     {% for a in tsig_algorithms %}<option value="{{ a }}">{{ a }}</option>{% endfor %}
                 </select>
             </div>
             <div class="form-group">
-                <label>Secret</label>
-                <input type="password" name="secret" placeholder="base64 key material" required>
+                <label for="f-secret">Secret</label>
+                <input id="f-secret" type="password" name="secret" placeholder="base64 key material" required>
                 <div class="form-hint">Write-only — never shown again after saving.</div>
             </div>
         </div>
@@ -314,12 +314,12 @@
         <input type="hidden" name="tab" value="verify">
         <div class="form-row">
             <div class="form-group">
-                <label>Hostname</label>
-                <input type="text" name="hostname" value="{{ verify_hostname }}" placeholder="host.example.com">
+                <label for="f-hostname">Hostname</label>
+                <input id="f-hostname" type="text" name="hostname" value="{{ verify_hostname }}" placeholder="host.example.com">
             </div>
             <div class="form-group">
-                <label>IP address</label>
-                <input type="text" name="ip" value="{{ verify_ip }}" placeholder="10.0.0.50">
+                <label for="f-ip">IP address</label>
+                <input id="f-ip" type="text" name="ip" value="{{ verify_ip }}" placeholder="10.0.0.50">
             </div>
             <div class="form-group u-ffd20f">
                 <button type="submit" class="btn btn-primary">Verify</button>

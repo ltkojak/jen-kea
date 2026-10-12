@@ -256,7 +256,7 @@ def dashboard():
         "ipv6_summary": _get_ipv6_dashboard_summary(accessible_subnet6_map()),
         "subnets6": _get_subnets6_data(set(accessible_subnet_map.keys())),
         "kea_config_error": kea_config_error,
-        "widget_catalog": __dprefs.WIDGET_CATALOG,
+        "widget_catalog": __dprefs.catalog_for(current_user.role in ("admin", "superadmin")),
     }
     # HTMX time window change — return just the recent leases rows
     if request.headers.get("HX-Request") == "true":
@@ -306,7 +306,7 @@ def save_dashboard_prefs():
         return jsonify({"ok": False, "error": "expected a JSON object"}), 400
     raw = body if "panels" in body or body.get("v") == 2 else body.get("widgets", [])
     accessible_ids = set(current_user.filter_subnet_map(extensions.SUBNET_MAP).keys())
-    prefs = __dprefs.validate(raw, accessible_ids)
+    prefs = __dprefs.validate(raw, accessible_ids, admin=current_user.role in ("admin", "superadmin"))
     try:
         with __db.jen_db() as db:
             with db.cursor() as cur:
@@ -334,7 +334,7 @@ def get_dashboard_prefs():
         raw = json.loads(row["widgets"]) if row else None
     except Exception:
         raw = None
-    prefs = __dprefs.validate(raw, accessible_ids)
+    prefs = __dprefs.validate(raw, accessible_ids, admin=current_user.role in ("admin", "superadmin"))
     # v1 shape too, for any cached client script that hasn't reloaded yet.
     prefs["widgets"] = [p["id"] for p in prefs["panels"]]
     return jsonify(prefs)
@@ -386,7 +386,7 @@ def dashboard_catalog_data():
             out["ddns_errors"] = __dcatalog.ddns_errors_widget(checks)
         if "problems" in requested:
             out["problems"] = __dcatalog.problems_widget(accessible.keys(), current_user.all_subnets)
-        if "getting_started" in requested:
+        if "getting_started" in requested and current_user.role in ("admin", "superadmin"):
             out["getting_started"] = __dcatalog.getting_started_widget(current_user, current_user.role == "superadmin")
     except Exception as e:
         logger.error(f"dashboard catalog-data error: {e}")

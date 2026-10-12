@@ -195,6 +195,62 @@ class TestNoMermaidOrEval:
         assert "htmx.config.allowEval = false" in content
 
 
+class TestJenFetchIsDefinedBeforeTheContentBlock:
+    """Q173: leases.html and reservations.html call jenFetch from a script inside {% block content %}, which renders before the
+    scripts at the end of base.html - so the definition lives in the head script."""
+
+    def test_base_defines_it_in_the_head(self):
+        text = pathlib.Path("templates/base.html").read_text(encoding="utf-8")
+        assert text.index("window.jenFetch = function") < text.index("{% block content %}")
+
+    def test_no_other_template_defines_its_own(self):
+        for path in TEMPLATE_HTML_FILES:
+            if path.name != "base.html":
+                # a CALL (the dns-sync plugin's `window.jenFetch(...)`) is fine; a second DEFINITION is not
+                assert not re.search(r"window\.jenFetch\s*=[^=]", path.read_text(encoding="utf-8")), path
+
+
+SCRIPT_RE = re.compile(r"<script\b([^>]*)>(.*?)</script>", re.S | re.I)
+EXPR_RE = re.compile(r"\{\{(.*?)\}\}", re.S)
+# "templates/<file>.html": {"<expression as written>": "why it is safe without |tojson"}
+TOJSON_REVIEWED: dict = {
+    # a boolean literal the template itself picks between 'true' and 'false' - no data in it. The file is the bundled copy of the IPAM plugin's release,
+    # byte-identical to its tag (the registry pins its sha256), so it is changed at its source in the plugin sweep (Q174), not here.
+    "plugins/ipam/templates/ipam/subnet.html": {
+        "'true' if unmanaged else 'false'": "a literal true/false chosen by the template, no value is interpolated",
+    },
+}
+
+
+class TestJsContextsUseTojson:
+    """Q173: a Jinja value inside a <script> body is JS, and HTML autoescaping is not JS escaping (CLAUDE.md, Frontend)."""
+
+    def _sites(self):
+        out = []
+        for path in TEMPLATE_HTML_FILES:
+            text = path.read_text(encoding="utf-8")
+            for m in SCRIPT_RE.finditer(text):
+                if "src=" in m.group(1):
+                    continue
+                for e in EXPR_RE.finditer(m.group(2)):
+                    expr = e.group(1).strip()
+                    if "tojson" in expr or expr in TOJSON_REVIEWED.get(path.as_posix(), {}):
+                        continue
+                    out.append((path.as_posix(), text[: m.start(2) + e.start()].count("\n") + 1, expr))
+        return out
+
+    def test_every_value_in_a_script_is_tojson_or_reviewed(self):
+        assert self._sites() == [], (
+            "a value in a JS context without |tojson: add the filter, or argue it onto TOJSON_REVIEWED"
+        )
+
+    def test_the_reviewed_list_is_live(self):
+        for rel, exprs in TOJSON_REVIEWED.items():
+            scripts = " ".join(m.group(2) for m in SCRIPT_RE.finditer(pathlib.Path(rel).read_text(encoding="utf-8")))
+            for expr in exprs:
+                assert expr in scripts, f"{rel} no longer has {expr!r}: drop it from TOJSON_REVIEWED"
+
+
 class TestSecurityHeaders:
     def test_enforcing_header_has_nonce_and_no_unsafe_inline_script(self, logged_in_client):
         """Step 2/2 — the nonce-based script-src is now enforcing, not

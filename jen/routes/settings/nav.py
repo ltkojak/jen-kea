@@ -60,7 +60,7 @@ SECTION_STRIPS = {
     ],
     "network": [
         {"icon": "network", "label": "Subnets", "url": "/subnets", "match": ("subnets.",)},
-        {"icon": "server", "label": "Servers", "url": "/servers", "match": ("servers.",)},
+        {"icon": "server", "label": "Kea servers", "url": "/servers", "match": ("servers.",)},
         {"icon": "link", "label": "DDNS", "url": "/ddns", "match": ("ddns.",)},
         {"icon": "stethoscope", "label": "Health", "url": "/health-center", "match": ("health.",)},
         {"icon": "search", "label": "Investigate", "url": "/client", "match": ("client.",)},

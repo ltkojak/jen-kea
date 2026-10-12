@@ -12,10 +12,10 @@
 <table class="sortable rowlist">
     <thead><tr>
         <th class="col-check"><input type="checkbox" id="selectAll"></th>
-        <th><a href="?sort=ip&dir={{ 'desc' if sort=='ip' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter }}&search={{ search }}&per_page={{ per_page }}&status={{ status_filter }}" class="th-link">IP Address{% if sort=='ip' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
-        <th><a href="?sort=hostname&dir={{ 'desc' if sort=='hostname' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter }}&search={{ search }}&per_page={{ per_page }}&status={{ status_filter }}" class="th-link">Hostname{% if sort=='hostname' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
-        <th class="hide-mobile"><a href="?sort=mac&dir={{ 'desc' if sort=='mac' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter }}&search={{ search }}&per_page={{ per_page }}&status={{ status_filter }}" class="th-link">MAC Address{% if sort=='mac' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
-        <th><a href="?sort=subnet&dir={{ 'desc' if sort=='subnet' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter }}&search={{ search }}&per_page={{ per_page }}&status={{ status_filter }}" class="th-link">Subnet{% if sort=='subnet' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th><a href="?sort=ip&dir={{ 'desc' if sort=='ip' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter|urlencode }}&search={{ search|urlencode }}&per_page={{ per_page }}&status={{ status_filter|urlencode }}" class="th-link">IP Address{% if sort=='ip' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th><a href="?sort=hostname&dir={{ 'desc' if sort=='hostname' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter|urlencode }}&search={{ search|urlencode }}&per_page={{ per_page }}&status={{ status_filter|urlencode }}" class="th-link">Hostname{% if sort=='hostname' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th class="hide-mobile"><a href="?sort=mac&dir={{ 'desc' if sort=='mac' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter|urlencode }}&search={{ search|urlencode }}&per_page={{ per_page }}&status={{ status_filter|urlencode }}" class="th-link">MAC Address{% if sort=='mac' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
+        <th><a href="?sort=subnet&dir={{ 'desc' if sort=='subnet' and direction=='asc' else 'asc' }}&subnet={{ subnet_filter|urlencode }}&search={{ search|urlencode }}&per_page={{ per_page }}&status={{ status_filter|urlencode }}" class="th-link">Subnet{% if sort=='subnet' %} {{ '↑' if direction=='asc' else '↓' }}{% endif %}</a></th>
         <th>Status</th>
         <th class="hide-tablet">DNS Override</th>
         <th class="hide-tablet">Notes</th>
@@ -26,7 +26,7 @@
     {% include '_reservation_row.html' %}
     {% else %}
     {% from '_empty.html' import empty_state %}
-    <tr id="no-reservations"><td colspan="9" data-m="full">
+    <tr id="no-reservations"><td colspan="{{ 9 if current_user.role in ('superadmin','admin') else 8 }}" data-m="full">
         {% set res_buttons = [((icon('plus') ~ ' Add reservation'), '/reservations/add')] if current_user.role in ('superadmin','admin') else [] %}
         {{ empty_state(icon('pin'), 'No reservations. Convert a lease or add one.', res_buttons) }}
     </td></tr>
@@ -39,7 +39,7 @@
 
 {% if pages > 1 %}
 <div class="pagination">
-    {% set base = '&subnet=' ~ subnet_filter ~ '&search=' ~ search ~ '&sort=' ~ sort ~ '&dir=' ~ direction ~ '&per_page=' ~ per_page ~ '&status=' ~ status_filter %}
+    {% set base = '&subnet=' ~ (subnet_filter|urlencode) ~ '&search=' ~ (search|urlencode) ~ '&sort=' ~ sort ~ '&dir=' ~ direction ~ '&per_page=' ~ per_page ~ '&status=' ~ (status_filter|urlencode) %}
     {% if page > 1 %}<a href="?page={{ page-1 }}{{ base }}">‹ Prev</a>{% endif %}
     {% for p in range(1, pages+1) %}
     {% if p == page %}<span class="current">{{ p }}</span>

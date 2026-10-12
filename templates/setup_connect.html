@@ -28,7 +28,7 @@
                 <input type="password" name="api_pass" placeholder="{{ '(saved — leave blank to keep it)' if api_pass_saved else '(leave blank for none)' }}">
             </div>
         </div>
-        <details class="u-56f435"{% if api_ca or api_client_cert %} open{% endif %}>
+        <details class="u-56f435 mb-4"{% if api_ca or api_client_cert %} open{% endif %}>
             <summary class="u-3928fa">Advanced TLS</summary>
             <div class="form-row">
                 <div class="form-group">

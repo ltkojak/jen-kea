@@ -38,11 +38,18 @@ WIDGET_CATALOG = {
     "events_feed": {"label": "Recent Events", "default_w": "half"},
     "ha_state": {"label": "HA State", "default_w": "third"},
     "ddns_errors": {"label": "DDNS Errors", "default_w": "third"},
-    "getting_started": {"label": "Getting Started", "default_w": "third"},
+    # an admin page (GET /getting-started is @admin_required): not offered to, and never stored for, a viewer (v5.69.0-beta.4, Q173)
+    "getting_started": {"label": "Getting Started", "default_w": "third", "admin_only": True},
     # v5.68.0-beta.5 (Q140)
     "problems": {"label": "Clients with problems", "default_w": "half"},
 }
 VALID_WIDGETS = frozenset(WIDGET_CATALOG)
+
+
+def catalog_for(admin: bool) -> dict:
+    """The catalog a caller may use: a viewer's does not hold the widgets whose page the routes refuse them."""
+    return {k: v for k, v in WIDGET_CATALOG.items() if admin or not v.get("admin_only")}
+
 
 DEFAULT_PANELS = [
     {"id": "subnet_stats", "w": "full"},
@@ -100,19 +107,20 @@ def upgrade(raw) -> dict:
     }
 
 
-def validate(raw, accessible_subnet_ids) -> dict:
+def validate(raw, accessible_subnet_ids, admin: bool = True) -> dict:
     """`upgrade()` plus the trust boundary: unknown widget ids and duplicate
     entries are dropped, an invalid width falls back to that widget's
     default, and every subnet id is checked against `accessible_subnet_ids`
     (a hidden/pinned/ordered id the caller cannot access is dropped, not
     just hidden from view — it is never written back either, so it can't
-    accumulate in a stored value across a subnet-scope change)."""
+    accumulate in a stored value across a subnet-scope change). `admin=False` (a viewer) also drops the admin-only widgets."""
     prefs = upgrade(raw)
     seen: set[str] = set()
     panels = []
+    usable = VALID_WIDGETS if admin else frozenset(catalog_for(False))
     for p in prefs["panels"]:
         wid = p.get("id")
-        if wid not in VALID_WIDGETS or wid in seen:
+        if wid not in usable or wid in seen:
             continue
         seen.add(wid)
         w = p.get("w")

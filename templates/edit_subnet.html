@@ -327,9 +327,11 @@ async function showConfirm() {
 
         valDiv.innerHTML = data.servers.map(function(s) {
             var icon = s.ok ? '<svg class="ico" aria-hidden="true"><use href="#i-circle-check"></use></svg>' : '<svg class="ico" aria-hidden="true"><use href="#i-circle-x"></use></svg>';
-            var color = s.ok ? 'var(--success)' : 'var(--danger)';
-            return '<div class="u-999e54">' + icon + ' <strong>' + s.name + ':</strong> ' + s.message + '</div>';
+            return '<div data-ok="' + (s.ok ? '1' : '0') + '">' + icon + ' <strong>' + escapeHtml(s.name) + ':</strong> ' + escapeHtml(s.message || '') + '</div>';
         }).join('');
+        valDiv.querySelectorAll('[data-ok]').forEach(function(el) {
+            el.style.color = el.getAttribute('data-ok') === '1' ? 'var(--success)' : 'var(--danger)';
+        });
 
         applyBtn.disabled = !data.all_passed;
         if (!data.all_passed) {

@@ -5,7 +5,7 @@
 {% from '_settings_subtabs.html' import subtabs %}
 <div class="page-header">
     <h1>{{ icon("key-round", "ico-lg") }} API Keys</h1>
-    <p>Manage read-only API keys for integrations with Home Assistant, Zabbix, and similar tools.</p>
+    <p>Manage API keys for integrations with Home Assistant, Zabbix, and similar tools. A key reads unless you tick <em>Allow writes</em>.</p>
 </div>
 
 {{ subtabs(nav.subtabs['security'], 'api-keys') }}
@@ -41,7 +41,7 @@
             <label style="display:flex;align-items:center;gap:8px;font-size:13px;text-transform:none;letter-spacing:0;cursor:pointer;">
                 <input type="checkbox" name="can_write" value="1"> Allow writes
             </label>
-            <div class="form-hint">Off = read-only (every key before v5.34.0). On = may create/delete reservations, edit device names and owners, and set subnet notes — within its subnet scope.</div>
+            <div class="form-hint">Off = read-only. On = may create/delete reservations, edit device names and owners, and set subnet notes — within its subnet scope.</div>
         </div>
         <div class="form-group u-9e0402">
             <label>Subnet Access</label>
@@ -140,7 +140,7 @@
 <div class="card" style="border-style:dashed;opacity:0.8;">
     <div class="card-header"><span class="card-title">{{ icon("info") }} About API Keys</span></div>
     <p style="font-size:13px;color:var(--text-muted);line-height:1.6;">
-        All API keys are <strong>read-only</strong> — they can query leases, devices, reservations, and subnet stats but cannot make any changes to your network.<br><br>
+        A key can query leases, devices, reservations, and subnet stats. A key with <strong>Allow writes</strong> may also create and delete reservations, edit device names and owners, and set subnet notes, within its subnet scope; a key without it is <strong>read-only</strong>. No key can change Kea's configuration files.<br><br>
         Keys are passed in the <code class="u-5f0ff9">Authorization: Bearer &lt;key&gt;</code> HTTP header.<br><br>
         A key is shown only once at creation time. If you lose it, revoke it and generate a new one.
         {% if current_user.role != 'superadmin' %}<br><br>

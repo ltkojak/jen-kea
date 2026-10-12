@@ -33,7 +33,7 @@
             {% endfor %}
         </td>
         <td data-m="secondary">{{ d.subnet_name or d.subnet_id }}</td>
-        <td class="hide-tablet" data-m="secondary">{{ d.last_expire }}</td>
+        <td class="hide-tablet" data-m="secondary">{{ d.last_expire|utcfmt }}</td>
     </tr>
     {% else %}
     <tr><td colspan="6" data-m="full" class="u-f23e59">No IPv6 devices found.</td></tr>

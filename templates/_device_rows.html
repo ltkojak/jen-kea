@@ -1,7 +1,7 @@
 {% from '_icons.html' import icon_edit, icon_trash, icon_pin, icon_dots %}
 {% from '_investigate.html' import investigate_link %}
 {% from '_empty.html' import empty_state %}
-{% set colspan = (11 if current_user.role in ('superadmin','admin') else 10) + (1 if ipv6_enabled and subnet6_map else 0) %}
+{% set colspan = (12 if current_user.role in ('superadmin','admin') else 11) + (1 if ipv6_enabled and subnet6_map else 0) %}
 {% for d in devices %}
 <tr id="dev-row-{{ d.id }}">
     {% if current_user.role in ('superadmin','admin') %}

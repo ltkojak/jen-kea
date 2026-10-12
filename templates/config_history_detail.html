@@ -3,7 +3,7 @@
 {% block content %}
 <div class="page-header">
     <h1>{{ icon("file-clock", "ico-lg") }} Revision #{{ rev.id }}</h1>
-    <p>{{ server.name }} · <code>{{ rev.service }}</code> · {{ rev.created_at }}
+    <p>{{ server.name }} · <code>{{ rev.service }}</code> · {{ rev.created_at|utcfmt }}
        {% if rev.username %}· by {{ rev.username }}{% endif %}
        · <span class="mono">{{ rev.sha256[:16] if rev.sha256 else '—' }}</span></p>
 </div>

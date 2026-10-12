@@ -36,7 +36,7 @@
         <tbody>
             {% for r in revisions %}
             <tr class="u-2eea7e">
-                <td data-m="secondary" class="u-18b307">{{ r.created_at }}</td>
+                <td data-m="secondary" class="u-18b307">{{ r.created_at|utcfmt }}</td>
                 <td data-m="secondary" class="u-e2c960">{{ r.username or '—' }}</td>
                 <td data-m="badge" class="u-e2c960">
                     {% if r.source == 'external' %}

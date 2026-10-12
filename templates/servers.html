@@ -126,8 +126,8 @@
 {% elif not single_server and not ha_mode %}
 <div class="alert alert-warning">
     {{ icon("triangle-alert") }} <strong>HA mode not configured.</strong>
-    Multiple servers are defined but HA mode is not set — Jen will always use Server 1 for config and subnet editing.
-    <a href="/settings/kea#kea-servers" style="color:var(--warning);text-decoration:underline;margin-left:8px;">Configure HA →</a>
+    Multiple servers are defined but HA mode is not set — Jen will always use the first Kea server for config and subnet editing.
+    {% if current_user.role in ('admin', 'superadmin') %}<a href="/settings/kea#kea-servers" style="color:var(--warning);text-decoration:underline;margin-left:8px;">Configure HA →</a>{% endif %}
 </div>
 {% endif %}
 
@@ -168,6 +168,7 @@
     {% include "_packet_health_block.html" %}
 </div>
 
+{% if current_user.role in ('admin', 'superadmin') %}
 <div class="card u-32e230">
     <div style="text-align:center;padding:16px;color:var(--text-muted);">
         <div style="font-size:24px;margin-bottom:8px;">{{ icon("refresh-cw") }}</div>
@@ -176,6 +177,7 @@
         <a href="/settings/kea#kea-servers">Settings → Kea</a>.</div>
     </div>
 </div>
+{% endif %}
 
 {% else %}
 <!-- Multi-server / HA view -->
@@ -371,7 +373,16 @@
 {% endblock %}
 {% block scripts %}
 // Auto-refresh server status every 30 seconds
-setInterval(function() { location.reload(); }, 30000);
+// (v5.69.0-beta.4, Q173: not while a menu, a <details>, the confirm dialog, a sheet or a field is open - the reload dismissed them mid-use - nor in a hidden tab)
+setInterval(function() {
+    var overlay = document.getElementById('jen-confirm-overlay');
+    var busy = document.hidden ||
+        document.querySelector('.action-menu-toggle:checked, details[open]') ||
+        (overlay && overlay.style.display !== 'none') ||
+        document.body.classList.contains('sheet-open') ||
+        /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+    if (!busy) location.reload();
+}, 30000);
 {% if packet_health_sparklines %}
 </script>
 <script src="/static/js/chart.umd.min.js"></script>
@@ -385,7 +396,7 @@ function buildPacketCharts() {
     const primary = jenColor('var(--primary)');
     Object.entries(PACKET_HEALTH).forEach(([serverId, points]) => {
         const canvas = document.getElementById('ph-chart-' + serverId);
-        if (!canvas || !points.length) return;
+        if (!canvas || points.length < 2) return;
         new Chart(canvas, {
             type: 'line',
             data: {

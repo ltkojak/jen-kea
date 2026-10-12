@@ -177,6 +177,8 @@ document.addEventListener('click', function(e) {
         </table>
     </div>
     {% endif %}
+    {# both pages are admin-only: a viewer would be bounced (v5.69.0-beta.4, Q173) #}
+    {% if current_user.role in ('admin', 'superadmin') %}
     <div style="margin-bottom:12px;font-size:12px;">
         <a href="{{ url_for('subnets.dhcp_options_page', level='subnet', key=s.id) }}" class="u-5872de">
             {{ icon("wrench") }} Options: {{ s.options_here }} here{% if s.options_inherited %} · {{ s.options_inherited }} inherited{% endif %}
@@ -188,6 +190,7 @@ document.addEventListener('click', function(e) {
         </a>
         {% endif %}
     </div>
+    {% endif %}
     <div class="u-10a65a">
         <div class="stat-label u-4e420a">Notes</div>
         <div id="note-display-{{ s.id }}"

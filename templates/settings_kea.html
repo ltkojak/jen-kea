@@ -18,21 +18,21 @@
             <div class="form-hint u-761d3a">Jen adds the socket entry to <code>control-sockets</code> in <code>{{ conf }}</code> on <code>{{ ssh_host }}</code> (the unix socket stays), validates the file with <code>-t</code>, restarts {{ daemon }}, probes the new socket, and only if it answers <em>as {{ daemon }}</em> points Jen at it{% if service == 'dhcp4' %} and switches to direct mode{% endif %}. If the probe fails, nothing in Jen changes.</div>
             <div class="form-row">
                 <div class="form-group">
-                    <label>Scheme</label>
-                    <select name="scheme">
+                    <label for="f-scheme">Scheme</label>
+                    <select id="f-scheme" name="scheme">
                         <option value="https" {% if not tls_ok %}disabled{% endif %}>https — mutual TLS with Jen's CA (recommended){% if not tls_ok %} — needs jen-kea-helper v4{% endif %}</option>
                         <option value="http" {% if not tls_ok %}selected{% endif %}>http — plain, basic-auth only</option>
                     </select>
                     <div class="form-hint">{% if tls_ok %}https: Jen's own CA issues a server certificate, pushes it to <code>/etc/kea/tls/{{ service }}/</code> on the host, and presents its client certificate — the daemon accepts nothing else.{% else %}https needs the v4 host helper — bring this server's helper up to date from the SSH card, then come back.{% endif %}</div>
                 </div>
                 <div class="form-group">
-                    <label>Bind address</label>
-                    <input type="text" name="address" value="{{ bind_default }}" placeholder="management IP of this host">
+                    <label for="f-address">Bind address</label>
+                    <input id="f-address" type="text" name="address" value="{{ bind_default }}" placeholder="management IP of this host">
                     <div class="form-hint">The IP {{ daemon }} listens on — its management address, never 0.0.0.0. Firewall this port to the Jen host.</div>
                 </div>
                 <div class="form-group">
-                    <label>Port</label>
-                    <input type="text" name="port" value="{{ default_port }}">
+                    <label for="f-port">Port</label>
+                    <input id="f-port" type="text" name="port" value="{{ default_port }}">
                     <div class="form-hint">Never the Control Agent's :8000.</div>
                 </div>
                 <div class="form-group">
@@ -40,8 +40,8 @@
                     <input type="text" name="user" value="{{ api_user }}">
                 </div>
                 <div class="form-group">
-                    <label>API password</label>
-                    <input type="password" name="password" placeholder="(the password Jen already uses here)">
+                    <label for="f-password">API password</label>
+                    <input id="f-password" type="password" name="password" placeholder="(the password Jen already uses here)">
                 </div>
             </div>
             <div class="form-hint u-761d3a">Plain <code>http</code>: the basic-auth credentials cross the network unencrypted, so keep such a socket on a management network reachable only from the Jen host. Your own CA instead of Jen's: add the socket by hand per the admin guide's "Direct control sockets" section and fill in the TLS fields above.</div>
@@ -67,7 +67,7 @@
 <div class="alert alert-warning">{{ icon("triangle-alert") }} Kea connection changes require a Jen restart to take effect. {% if current_user.role == 'superadmin' %}<form method="POST" action="/settings/infrastructure/restart" class="u-cccfa4"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="btn btn-sm btn-warning u-5dd2a6">Restart Now</button></form>{% else %}A superadmin restarts Jen.{% endif %}</div>
 {% endif %}
 
-{% set toc = [('kea-api', 'Control Plane'), ('kea-ssh', 'SSH'), ('kea-servers', 'Servers & HA')] %}
+{% set toc = [('kea-api', 'Control Plane'), ('kea-ssh', 'SSH'), ('kea-servers', 'Kea servers & HA')] %}
 {% if current_user.role == 'superadmin' %}{% set toc = toc + [('kea6', 'IPv6'), ('kea-d2', 'D2'), ('kea-packages', 'Packages'), ('kea-drift', 'Drift')] %}{% endif %}
 {% include '_card_toc.html' %}
 
@@ -90,7 +90,7 @@
     <form method="POST" action="/settings/infrastructure/save-kea" id="kea-api-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
-                <label>Connection Mode</label>
+                <label for="kea-connection-mode">Connection Mode</label>
                 <select name="connection_mode" id="kea-connection-mode">
                     <option value="ca" {% if infra.kea_connection_mode != 'direct' %}selected{% endif %}>Control Agent — deprecated in Kea 3.0, removed in 3.2</option>
                     <option value="direct" {% if infra.kea_connection_mode == 'direct' %}selected{% endif %}>Direct to daemons — Kea 2.7.2+</option>
@@ -100,7 +100,7 @@
         </div>
         <div class="form-row">
             <div class="form-group">
-                <label id="kea-url-label">Control Agent URL</label>
+                <label id="kea-url-label" for="kea-url-input">Control Agent URL</label>
                 <input type="text" name="api_url" value="{{ infra.kea_api_url }}" placeholder="http://YOUR-KEA-SERVER:8000" id="kea-url-input">
             </div>
             <div class="form-group">
@@ -115,8 +115,8 @@
         </div>
         <div class="form-row" id="kea-tls-row">
             <div class="form-group">
-                <label>CA bundle path (optional)</label>
-                <input type="text" name="api_ca" value="{{ infra.kea_api_ca }}" placeholder="{{ jen_layout.config_dir }}/ssl/kea-ca.pem">
+                <label for="f-api_ca">CA bundle path (optional)</label>
+                <input id="f-api_ca" type="text" name="api_ca" value="{{ infra.kea_api_ca }}" placeholder="{{ jen_layout.config_dir }}/ssl/kea-ca.pem">
                 <div class="form-hint">Only for an <code>https://</code> URL — pins TLS verification to this CA bundle on the Jen host.</div>
             </div>
             <div class="form-group">
@@ -130,12 +130,12 @@
         </div>
         <div class="form-row">
             <div class="form-group">
-                <label>Client certificate (optional)</label>
-                <input type="text" name="api_client_cert" value="{{ infra.kea_api_client_cert }}" placeholder="{{ jen_layout.config_dir }}/ssl/jen-kea-client.pem">
+                <label for="f-api_client_cert">Client certificate (optional)</label>
+                <input id="f-api_client_cert" type="text" name="api_client_cert" value="{{ infra.kea_api_client_cert }}" placeholder="{{ jen_layout.config_dir }}/ssl/jen-kea-client.pem">
             </div>
             <div class="form-group">
-                <label>Client key</label>
-                <input type="text" name="api_client_key" value="{{ infra.kea_api_client_key }}" placeholder="{{ jen_layout.config_dir }}/ssl/jen-kea-client.key">
+                <label for="f-api_client_key">Client key</label>
+                <input id="f-api_client_key" type="text" name="api_client_key" value="{{ infra.kea_api_client_key }}" placeholder="{{ jen_layout.config_dir }}/ssl/jen-kea-client.key">
                 <div class="form-hint">For Kea sockets with <code>cert-required</code> (Kea's default for <code>https</code>). Key must be readable by www-data — <code>root:www-data</code> 640 under <code>{{ jen_layout.config_dir }}/ssl/</code>.</div>
             </div>
         </div>
@@ -182,7 +182,7 @@
 <!-- SSH — host/user/path AND the key, one card (was split across two tabs before v5.9.0) -->
 <div class="card" id="kea-ssh">
     <div class="card-header">
-        <span class="card-title">{{ icon("key-round") }} SSH to the Kea host</span>
+        <span class="card-title">{{ icon("key-round") }} SSH to the Kea server</span>
         {% if ssh_configured %}<span class="u-d5881b">● Key present</span>
         {% else %}<span class="u-0051c0">● No key generated</span>{% endif %}
     </div>
@@ -190,16 +190,16 @@
     <form method="POST" action="/settings/infrastructure/save-ssh"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
-                <label>Kea Server Host</label>
-                <input type="text" name="host" value="{{ infra.ssh_host }}">
+                <label for="f-host">Kea server</label>
+                <input id="f-host" type="text" name="host" value="{{ infra.ssh_host }}">
             </div>
             <div class="form-group">
                 <label>SSH Username</label>
                 <input type="text" name="user" value="{{ infra.ssh_user }}">
             </div>
             <div class="form-group">
-                <label>Kea Config Path</label>
-                <input type="text" name="kea_conf" value="{{ infra.kea_conf }}">
+                <label for="f-kea_conf">Kea Config Path</label>
+                <input id="f-kea_conf" type="text" name="kea_conf" value="{{ infra.kea_conf }}">
             </div>
         </div>
         <button type="submit" class="btn btn-primary">Save SSH Config</button>
@@ -288,8 +288,8 @@
 <!-- Servers & HA -->
 <div class="card" id="kea-servers">
     <div class="card-header">
-        <span class="card-title">{{ icon("server") }} Servers &amp; High Availability</span>
-        <span class="u-865c33">Server 1 is the Control Agent above</span>
+        <span class="card-title">{{ icon("server") }} Kea servers &amp; high availability</span>
+        <span class="u-865c33">The first Kea server is the Control Agent above</span>
     </div>
     {% if readiness %}
     <div class="form-hint u-da12f2">
@@ -300,13 +300,13 @@
     <form method="POST" action="/settings/infrastructure/save-ha"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
-                <label>Primary Server Name</label>
-                <input type="text" name="server_name" value="{{ infra.server_name }}" placeholder="Kea Server 1">
+                <label for="f-server_name">Primary Server Name</label>
+                <input id="f-server_name" type="text" name="server_name" value="{{ infra.server_name }}" placeholder="Kea server 1">
                 <div class="form-hint">Friendly name shown in the UI and alerts</div>
             </div>
             <div class="form-group">
-                <label>HA Mode</label>
-                <select name="ha_mode">
+                <label for="f-ha_mode">HA Mode</label>
+                <select id="f-ha_mode" name="ha_mode">
                     <option value="" {% if not infra.ha_mode %}selected{% endif %}>Standalone (no HA)</option>
                     <option value="hot-standby" {% if infra.ha_mode == 'hot-standby' %}selected{% endif %}>Hot Standby — primary active, standby takes over on failure</option>
                     <option value="load-balancing" {% if infra.ha_mode == 'load-balancing' %}selected{% endif %}>Load Balancing — both nodes share the load</option>
@@ -444,8 +444,8 @@
         <code>kea-dhcp6</code>. Only fill these in if your v6 deployment genuinely uses a separate
         CA/port or a separate database.
         {% endif %}
-        <br>These settings apply to Kea Server 1 only; additional servers set their own IPv6 endpoint
-        under Servers &amp; HA.
+        <br>These settings apply to the first Kea server only; additional servers set their own IPv6 endpoint
+        under Kea servers &amp; HA.
         <br>Blank text fields inherit the Kea settings above and clear any override saved here.
         Passwords are kept unless you tick Inherit.
     </div>
@@ -476,24 +476,24 @@
         </div>
         <div class="form-row">
             <div class="form-group">
-                <label>DB Host</label>
-                <input type="text" name="db_host" value="{{ infra.kea6_db_host }}" placeholder="{{ infra.kea_db_host }} (inherited)">
+                <label for="f-db_host">DB Host</label>
+                <input id="f-db_host" type="text" name="db_host" value="{{ infra.kea6_db_host }}" placeholder="{{ infra.kea_db_host }} (inherited)">
             </div>
             <div class="form-group">
-                <label>DB Username</label>
-                <input type="text" name="db_user" value="{{ infra.kea6_db_user }}" placeholder="{{ infra.kea_db_user }} (inherited)">
+                <label for="f-db_user">DB Username</label>
+                <input id="f-db_user" type="text" name="db_user" value="{{ infra.kea6_db_user }}" placeholder="{{ infra.kea_db_user }} (inherited)">
             </div>
             <div class="form-group">
-                <label>DB Password</label>
-                <input type="password" name="db_pass" placeholder="(kept unless changed)">
+                <label for="f-db_pass">DB Password</label>
+                <input id="f-db_pass" type="password" name="db_pass" placeholder="(kept unless changed)">
                 <label class="u-6125e5">
                     <input type="checkbox" name="inherit_db_pass" value="1" class="u-30e741">
                     Inherit the Kea DB password
                 </label>
             </div>
             <div class="form-group">
-                <label>DB Name</label>
-                <input type="text" name="db_name" value="{{ infra.kea6_db_name }}" placeholder="{{ infra.kea_db_name }} (inherited)">
+                <label for="f-db_name">DB Name</label>
+                <input id="f-db_name" type="text" name="db_name" value="{{ infra.kea6_db_name }}" placeholder="{{ infra.kea_db_name }} (inherited)">
             </div>
         </div>
         <button type="submit" class="btn btn-primary">Save Kea6 API</button>
@@ -517,7 +517,7 @@
         The common Kea setup is one Control Agent proxying to <code>kea-dhcp4</code>, <code>kea-dhcp6</code>,
         and D2 alike. Only fill these in if D2 genuinely uses a separate CA/port.
         {% endif %}
-        <br>Applies to Kea Server 1 only; additional servers set their own D2 endpoint under Servers &amp; HA.
+        <br>Applies to the first Kea server only; additional servers set their own D2 endpoint under Kea servers &amp; HA.
         <br>Blank text fields inherit the Kea settings above and clear any override saved here.
         Passwords are kept unless you tick Inherit.
     </div>
@@ -551,7 +551,7 @@
 <!-- Investigation logging on demand: early access, off by default (v5.68.0-beta.30, Q167) -->
 <div class="card" id="kea-investigation-logging">
     <div class="card-header"><span class="card-title">{{ icon("eye") }} Investigation logging <span class="form-hint">(early access)</span></span></div>
-    <div class="form-hint u-da12f2">Early access in 5.68: temporary DEBUG 55 logging on one Kea server, restored by the Kea host itself at the deadline. Off by default. It needs the Kea host helper at build 16 or later on that server. Switching it off removes the Turn on buttons; a session that is already on is still restored and shown.</div>
+    <div class="form-hint u-da12f2">Early access: temporary DEBUG 55 logging on one Kea server, restored by the Kea host itself at the deadline. Off by default. It needs the Kea host helper at build 16 or later on that server. Switching it off removes the Turn on buttons; a session that is already on is still restored and shown.</div>
     {% if current_user.role == 'superadmin' %}
     <form method="POST" action="/settings/infrastructure/investigation-logging-enabled">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

@@ -15,7 +15,7 @@
     {% if ph.notes %}
     <div style="color:var(--text-muted);margin-bottom:8px;">{{ ph.notes|join('; ') }}</div>
     {% endif %}
-    <canvas id="ph-chart-{{ s.server.id }}" height="50"></canvas>
+    {% if ph.sparkline and ph.sparkline|length > 1 %}<canvas id="ph-chart-{{ s.server.id }}" height="50"></canvas>{% endif %}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:6px 8px;font-size:11px;margin-top:8px;">
         {% for n in ph.named %}
         <div><div class="stat-label">{{ n.label }}</div><div class="mono">{% if n.key in ('pkt4-nak-sent', 'pkt4-receive-drop') and n.total %}<a href="/problems?server={{ s.server.id }}" title="Which clients? Open the Problems list for this server">{{ n.total }}</a>{% else %}{{ n.total }}{% endif %}</div></div>

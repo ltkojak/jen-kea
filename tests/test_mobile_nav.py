@@ -67,7 +67,9 @@ class TestSheetContents:
     def test_admin_sheet_lists_every_destination_grouped_like_the_desktop_nav(self):
         got = self._labels(navmod.nav_context("dashboard.dashboard", "admin", PLUGIN_ITEMS))
         assert got["management"] == ["Leases", "Reservations", "Devices", "Reports"]
-        assert {"Subnets", "Servers", "DDNS", "Health", "Explain", "Doctor", "Timeline", "IPAM"} <= set(got["network"])
+        assert {"Subnets", "Kea servers", "DDNS", "Health", "Explain", "Doctor", "Timeline", "IPAM"} <= set(
+            got["network"]
+        )
         assert "Kea" in got["settings"] and "Logs" in got["settings"]
         assert got["plugins"] == ["Extras"]
         assert got["about"] == ["About"]
@@ -88,7 +90,7 @@ class TestSheetContents:
     def test_active_item_is_marked(self):
         ctx = navmod.nav_context("servers.servers", "admin")
         net = next(g for g in ctx["sheet"] if g["id"] == "network")
-        assert [i["label"] for i in net["items"] if i["active"]] == ["Servers"]
+        assert [i["label"] for i in net["items"] if i["active"]] == ["Kea servers"]
 
 
 def _render(role="admin", endpoint="servers.servers", pill=None):

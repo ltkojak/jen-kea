@@ -44,7 +44,7 @@
         <label class="u-fbdb05"><input type="checkbox" id="w-ha_state"> HA State</label>
         <label class="u-fbdb05"><input type="checkbox" id="w-ddns_errors"> DDNS Errors</label>
         <label class="u-fbdb05"><input type="checkbox" id="w-problems"> Clients with problems</label>
-        <label class="u-fbdb05"><input type="checkbox" id="w-getting_started"> Getting Started</label>
+        {% if 'getting_started' in widget_catalog %}<label class="u-fbdb05"><input type="checkbox" id="w-getting_started"> Getting Started</label>{% endif %}
     </div>
     <label class="u-fbdb05"><input type="checkbox" id="dash-compact-toggle"> Compact subnet cards</label>
     <div class="flex gap-2 mt-3">
@@ -186,6 +186,7 @@
             <div>
                 <div class="u-760160">{{ s.name }}</div>
                 <canvas id="chart-{{ subnet_id }}" height="60" class="u-046678"></canvas>
+                <div id="chart-label-{{ subnet_id }}" class="muted small"></div>
             </div>
             {% endfor %}
         </div>
@@ -354,7 +355,7 @@ body.dash-compact #dash-subnet_stats .util-bar { margin-top: 6px; }
     <div class="card">
         <div class="card-header">
             <span class="card-title">{{ icon("bell") }} Alert Summary</span>
-            <a href="/settings/alerts" class="btn btn-sm btn-secondary">Configure</a>
+            {% if current_user.role in ('admin', 'superadmin') %}<a href="/settings/alerts" class="btn btn-sm btn-secondary">Configure</a>{% endif %}
         </div>
         <div id="alert-summary-body">
             <p class="u-6f1339">Loading...</p>
@@ -425,6 +426,7 @@ body.dash-compact #dash-subnet_stats .util-bar { margin-top: 6px; }
     </div>
 </div>
 
+{% if 'getting_started' in widget_catalog %}
 <div id="dash-getting_started" class="hidden">
     <div class="card">
         <div class="card-header">
@@ -434,6 +436,7 @@ body.dash-compact #dash-subnet_stats .util-bar { margin-top: 6px; }
         <div class="dash-cat-body"><p class="u-6f1339">Loading...</p></div>
     </div>
 </div>
+{% endif %}
 
 </div><!-- #dash-widgets -->
 
@@ -720,7 +723,7 @@ function loadAlertSummary() {
             if (allFailed) {
                 html += '<div class="as-fail-banner">' +
                         '<svg class="ico" aria-hidden="true"><use href="#i-triangle-alert"></use></svg> All recent alerts failed to send — check your notification channel configuration. ' +
-                        '<a href="/settings/alerts" class="u-dc2e42">Configure →</a></div>';
+                        (CAN_CONFIGURE_ALERTS ? '<a href="/settings/alerts" class="u-dc2e42">Configure →</a>' : '') + '</div>';
             }
             html += '<table class="u-046678">';
             data.alerts.forEach(function(a) {
@@ -957,9 +960,9 @@ function updateStats() {
             }
 
             // Kea dot
-            var keaDot = document.getElementById('kea-status-dot');
+            var keaDot = document.getElementById('kea-indicator');
             if (keaDot) {
-                keaDot.style.background = data.kea_up ? 'var(--success)' : 'var(--danger)';
+                keaDot.className = 'kea-status ' + (data.kea_up ? 'kea-up' : 'kea-down');
                 keaDot.title = data.kea_up ? 'Kea: Online' : 'Kea: Unreachable';
             }
 
@@ -987,6 +990,8 @@ function updateStats() {
 // server (jen/services/dashboard_prefs.py) is the only place that validates a
 // stored or posted value; this page just reflects whatever it returns.
 var WIDGET_CATALOG = {{ widget_catalog | tojson }};
+// the alerts page is admin-only: a viewer is not offered a link that would bounce them (v5.69.0-beta.4, Q173)
+var CAN_CONFIGURE_ALERTS = {{ (current_user.role in ('admin', 'superadmin')) | tojson }};
 var CATALOG_LOADERS = {
     lease_history_chart: loadHistory,
     lease_sparklines: loadSparklines,
@@ -1234,7 +1239,7 @@ document.addEventListener('change', function(e) {
 // ── Auto-refresh ──────────────────────────────────────────────────────────────
 function setRefreshInterval(ms) {
     if (refreshTimer) clearInterval(refreshTimer);
-    localStorage.setItem('jen-refresh-interval', ms);
+    try { localStorage.setItem('jen-refresh-interval', ms); } catch (e) { /* private mode / blocked storage: the interval just is not remembered */ }
     var dot = document.getElementById('refreshDot');
     if (ms == 0) {
         if (dot) dot.style.background = 'var(--text-muted)';
@@ -1255,7 +1260,8 @@ function setRefreshInterval(ms) {
         });
 
     // Restore refresh interval
-    var saved = localStorage.getItem('jen-refresh-interval') || '30000';
+    var saved = '30000';
+    try { saved = localStorage.getItem('jen-refresh-interval') || saved; } catch (e) { /* blocked storage */ }
     var sel = document.getElementById('refreshInterval');
     if (sel) { sel.value = saved; if (!sel.value) sel.value = '30000'; }
     setRefreshInterval(saved);

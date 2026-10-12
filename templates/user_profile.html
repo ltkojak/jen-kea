@@ -14,7 +14,7 @@
     <div style="display:flex;align-items:center;gap:24px;padding:8px 0;">
         <div id="avatar-preview" style="width:72px;height:72px;border-radius:50%;background:linear-gradient(135deg, color-mix(in srgb, var(--primary) 65%, black), var(--primary));display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:700;color:white;overflow:hidden;flex-shrink:0;">
             {% if current_user_avatar %}
-            <img src="{{ current_user_avatar }}" style="width:100%;height:100%;object-fit:cover;">
+            <img src="{{ current_user_avatar }}" alt="Your avatar" style="width:100%;height:100%;object-fit:cover;">
             {% else %}
             {{ current_user.username[0].upper() }}
             {% endif %}

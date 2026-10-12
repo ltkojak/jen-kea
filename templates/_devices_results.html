@@ -10,7 +10,7 @@
 <div class="table-wrap">
 <table class="sortable rowlist">
     <thead><tr>
-        {% set base = '&search=' ~ search ~ ('&stale=1' if show_stale else '') ~ '&subnet=' ~ subnet_filter ~ '&per_page=' ~ per_page ~ ('&type=' ~ type_filter if type_filter else '') %}
+        {% set base = '&search=' ~ (search|urlencode) ~ ('&stale=1' if show_stale else '') ~ '&subnet=' ~ (subnet_filter|urlencode) ~ '&per_page=' ~ per_page ~ ('&type=' ~ (type_filter|urlencode) if type_filter else '') %}
         {% if current_user.role in ('superadmin','admin') %}
         <th class="col-check"><input type="checkbox" id="selectAll"></th>
         {% endif %}
@@ -41,7 +41,7 @@
 
 {% if pages > 1 %}
 <div class="pagination">
-    {% set base = '&search=' ~ search ~ ('&stale=1' if show_stale else '') ~ '&subnet=' ~ subnet_filter ~ '&per_page=' ~ per_page ~ ('&type=' ~ type_filter if type_filter else '') ~ '&sort=' ~ sort ~ '&dir=' ~ direction %}
+    {% set base = '&search=' ~ (search|urlencode) ~ ('&stale=1' if show_stale else '') ~ '&subnet=' ~ (subnet_filter|urlencode) ~ '&per_page=' ~ per_page ~ ('&type=' ~ (type_filter|urlencode) if type_filter else '') ~ '&sort=' ~ sort ~ '&dir=' ~ direction %}
     {% if page > 1 %}<a href="?page={{ page-1 }}{{ base }}">‹ Prev</a>{% endif %}
     {% for p in range(1, pages+1) %}
     {% if p == page %}<span class="current">{{ p }}</span>

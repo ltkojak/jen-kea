@@ -152,7 +152,7 @@ function saveCurrentFilter() {
     var params = window.location.search.replace('?','');
     jenFetch('/saved-searches/save', {
         method:'POST',
-        headers:{'Content-Type':'application/x-www-form-urlencoded', 'X-CSRFToken': '{{ csrf_token() }}'},
+        headers:{'Content-Type':'application/x-www-form-urlencoded', 'X-CSRFToken': {{ csrf_token()|tojson }}},
         body:'name='+encodeURIComponent(name)+'&page=leases&params='+encodeURIComponent(params)
     }).then(r => r.json()).then(function(d) {
         if (d.ok) { alert('Filter saved!'); location.reload(); }

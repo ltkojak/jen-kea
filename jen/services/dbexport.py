@@ -97,7 +97,7 @@ JEN_TABLES = {
 # restores in this order whatever order a file lists them in. A table that does not exist on this Kea is
 # left out of the export (never an empty stand-in).
 KEA_BACKUP_GROUP = "reservations_all"
-KEA_BACKUP_LABEL = "Kea host reservations (IPv4 and IPv6)"
+KEA_BACKUP_LABEL = "Kea reservations (IPv4 and IPv6)"
 KEA_EXPORT_GROUPS = {
     "reservations_all": {
         "label": KEA_BACKUP_LABEL,
@@ -105,7 +105,7 @@ KEA_EXPORT_GROUPS = {
         "tables": ["hosts", "dhcp4_options", "dhcp6_options", "ipv6_reservations"],
     },
     "reservations": {
-        "label": "Kea host reservations — IPv4 only",
+        "label": "Kea reservations — IPv4 only",
         "description": "The IPv4 half of the group above (hosts + per-host DHCP options), kept for exports that predate it.",
         "tables": ["hosts", "dhcp4_options"],
     },

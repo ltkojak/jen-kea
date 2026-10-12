@@ -8,11 +8,12 @@
        returns for them — nothing here is ever written to Kea.</p>
 </div>
 
+{# the same tab list as ddns.html: Verify is for callers who see every subnet (v5.69.0-beta.4, Q173) #}
 {% set ddns_tabs = [
     {'id': 'status', 'label': 'Status', 'url': '/ddns?tab=status'},
     {'id': 'naming', 'label': 'Naming (dhcp4)', 'url': '/ddns?tab=naming'},
     {'id': 'd2config', 'label': 'D2 Configuration', 'url': '/ddns?tab=d2config'},
-    {'id': 'verify', 'label': 'Verify', 'url': '/ddns?tab=verify'},
+] + ([{'id': 'verify', 'label': 'Verify', 'url': '/ddns?tab=verify'}] if current_user.all_subnets else []) + [
     {'id': 'reconcile', 'label': 'Reconcile', 'url': '/ddns/reconcile'},
 ] %}
 {{ subtabs(ddns_tabs, tab) }}
@@ -89,7 +90,7 @@
                 {% if r.verdict != 'ok' %}
                 <a href="/reservations?search={{ r.ip }}" class="u-6cb285">Fix in Kea</a>
                 &nbsp;·&nbsp;
-                <a href="/ddns?tab=verify&hostname={{ r.name }}&ip={{ r.ip }}" class="u-6cb285">re-verify</a>
+                <a href="/ddns?tab=verify&hostname={{ r.name|urlencode }}&ip={{ r.ip|urlencode }}" class="u-6cb285">re-verify</a>
                 {% endif %}
             </td>
         </tr>

@@ -1577,8 +1577,8 @@ sudo systemctl restart jen
 
 | Group | Tables | What it is for |
 |---|---|---|
-| **Kea host reservations (IPv4 and IPv6)** | `hosts`, `dhcp4_options`, `dhcp6_options`, `ipv6_reservations` | Every permanent host reservation with its per-host options. This is what the **scheduled backup**, **Back Up Now**, and the Recovery step of the setup wizard save, and the default for a Kea migration. |
-| **Kea host reservations — IPv4 only** | `hosts`, `dhcp4_options` | The IPv4 half, kept for exports made before the group above existed. |
+| **Kea reservations (IPv4 and IPv6)** | `hosts`, `dhcp4_options`, `dhcp6_options`, `ipv6_reservations` | Every permanent host reservation with its per-host options. This is what the **scheduled backup**, **Back Up Now**, and the Recovery step of the setup wizard save, and the default for a Kea migration. |
+| **Kea reservations — IPv4 only** | `hosts`, `dhcp4_options` | The IPv4 half, kept for exports made before the group above existed. |
 | **Active leases** | `lease4` | A point-in-time snapshot, on request only. Leases are transient — they expire and renew on their own — so they are never part of a backup. |
 
 A backup is *reservations*, not "Kea's database": it carries no leases and none of Kea's configuration (that lives in `kea-dhcp4.conf`, which Jen keeps a revision history of under Servers → Config history). A table that does not exist on your Kea is left out of the file rather than written empty.

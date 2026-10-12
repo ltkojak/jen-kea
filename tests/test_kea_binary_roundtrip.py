@@ -268,7 +268,7 @@ class TestTheBackupGroupIsEveryReservationV4AndV6:
         grp = dbexport.KEA_EXPORT_GROUPS[dbexport.KEA_BACKUP_GROUP]
         assert dbexport.KEA_BACKUP_GROUP == "reservations_all"
         assert grp["tables"] == ["hosts", "dhcp4_options", "dhcp6_options", "ipv6_reservations"]
-        assert grp["label"] == "Kea host reservations (IPv4 and IPv6)"
+        assert grp["label"] == "Kea reservations (IPv4 and IPv6)"
         assert "lease4" not in grp["tables"], "leases are transient and never part of a backup"
         assert "Kea's database" not in grp["label"] + grp["description"]
 
@@ -419,7 +419,7 @@ class TestBackupsWriteTheReservationsGroup:
         assert r.status_code == 200
         backup = next(tmp_path.glob("kea-manual-*.json.gz"))
         assert json.loads(_read_gz(backup))["_meta"]["group"] == "reservations_all"
-        assert b"Kea host reservations (IPv4 and IPv6)" in r.data
+        assert b"Kea reservations (IPv4 and IPv6)" in r.data
         assert next(tmp_path.glob("kea-manual-*.meta.json")).is_file()
 
     def test_no_backup_label_says_kea_database(self):
@@ -435,7 +435,7 @@ class TestBackupsWriteTheReservationsGroup:
             return db_page[start : nxt if nxt != -1 else len(db_page)]
 
         for t in (tab("schedule"), tab("backups")):
-            assert "Kea Database" not in t and "Kea host reservations (IPv4 and IPv6)" in t
+            assert "Kea Database" not in t and "Kea reservations (IPv4 and IPv6)" in t
 
 
 class TestAFileWrittenBeforeThisFix:

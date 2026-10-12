@@ -44,7 +44,7 @@
         {{ (s.pool_used / s.pool_size * 100)|round|int }}% of the pool used ({{ s.pool_used }} of {{ s.pool_size }})
     </div>
     {% elif s.pool_size > 0 %}
-    <div class="u-5d9b49">Pool use is recorded from the first snapshot taken after the upgrade to 5.68.0-beta.19.</div>
+    <div class="u-5d9b49">Pool use is shown from the first snapshot Jen takes of this subnet.</div>
     {% endif %}
     {% set f = forecast.get(subnet_id) %}
     {% if f %}

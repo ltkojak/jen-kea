@@ -67,42 +67,42 @@
         </div>
         <div class="form-row">
             <div class="form-group">
-                <label>Issuer URL</label>
-                <input type="text" name="issuer" value="{{ oidc.issuer }}" placeholder="https://idp.example.com/application/o/jen/" class="u-046678">
+                <label for="f-issuer">Issuer URL</label>
+                <input id="f-issuer" type="text" name="issuer" value="{{ oidc.issuer }}" placeholder="https://idp.example.com/application/o/jen/" class="u-046678">
                 <div class="form-hint">Discovery is read from &lt;issuer&gt;/.well-known/openid-configuration. Must be https:// (http:// only for a local 127.0.0.1/localhost test IdP).</div>
             </div>
             <div class="form-group">
-                <label>Client ID</label>
-                <input type="text" name="client_id" value="{{ oidc.client_id }}" class="u-046678">
+                <label for="f-client_id">Client ID</label>
+                <input id="f-client_id" type="text" name="client_id" value="{{ oidc.client_id }}" class="u-046678">
             </div>
             <div class="form-group">
-                <label>Client Secret</label>
-                <input type="password" name="client_secret" placeholder="{% if oidc.has_client_secret %}(kept unless changed){% else %}(none set){% endif %}" class="u-046678">
+                <label for="f-client_secret">Client Secret</label>
+                <input id="f-client_secret" type="password" name="client_secret" placeholder="{% if oidc.has_client_secret %}(kept unless changed){% else %}(none set){% endif %}" class="u-046678">
             </div>
         </div>
         <div class="form-row">
             <div class="form-group">
-                <label>Scopes</label>
-                <input type="text" name="scopes" value="{{ oidc.scopes }}" class="u-046678">
+                <label for="f-scopes">Scopes</label>
+                <input id="f-scopes" type="text" name="scopes" value="{{ oidc.scopes }}" class="u-046678">
             </div>
             <div class="form-group">
-                <label>Username Claim</label>
-                <input type="text" name="username_claim" value="{{ oidc.username_claim }}" class="u-046678">
+                <label for="f-username_claim">Username Claim</label>
+                <input id="f-username_claim" type="text" name="username_claim" value="{{ oidc.username_claim }}" class="u-046678">
             </div>
             <div class="form-group">
-                <label>Role Claim</label>
-                <input type="text" name="role_claim" value="{{ oidc.role_claim }}" class="u-046678">
+                <label for="f-role_claim">Role Claim</label>
+                <input id="f-role_claim" type="text" name="role_claim" value="{{ oidc.role_claim }}" class="u-046678">
             </div>
         </div>
         <div class="form-group">
-            <label>Role Mapping</label>
-            <input type="text" name="role_map" value="{{ oidc.role_map }}" placeholder="superadmin=jen-superadmin;admin=jen-admin;viewer=jen-viewer" class="u-046678">
+            <label for="f-role_map">Role Mapping</label>
+            <input id="f-role_map" type="text" name="role_map" value="{{ oidc.role_map }}" placeholder="superadmin=jen-superadmin;admin=jen-admin;viewer=jen-viewer" class="u-046678">
             <div class="form-hint">Kea role → claim value(s), <code>;</code>-separated pairs; each right side may be a <code>,</code>-separated list.</div>
         </div>
         <div class="form-row">
             <div class="form-group">
-                <label>Default Role</label>
-                <select name="default_role" class="u-046678">
+                <label for="f-default_role">Default Role</label>
+                <select id="f-default_role" name="default_role" class="u-046678">
                     <option value="viewer" {% if oidc.default_role == 'viewer' %}selected{% endif %}>Viewer</option>
                     <option value="admin" {% if oidc.default_role == 'admin' %}selected{% endif %}>Admin</option>
                     <option value="superadmin" {% if oidc.default_role == 'superadmin' %}selected{% endif %}>SuperAdmin</option>
@@ -111,24 +111,24 @@
                 <div class="form-hint">Used when a user's groups match nothing in the mapping above.</div>
             </div>
             <div class="form-group">
-                <label>Button Label</label>
-                <input type="text" name="button_label" value="{{ oidc.button_label }}" class="u-046678">
+                <label for="f-button_label">Button Label</label>
+                <input id="f-button_label" type="text" name="button_label" value="{{ oidc.button_label }}" class="u-046678">
             </div>
             <div class="form-group">
-                <label>Redirect URI</label>
-                <input type="text" name="redirect_uri" value="{{ oidc.redirect_uri }}" placeholder="(auto-detected)" class="u-046678">
+                <label for="f-redirect_uri">Redirect URI</label>
+                <input id="f-redirect_uri" type="text" name="redirect_uri" value="{{ oidc.redirect_uri }}" placeholder="(auto-detected)" class="u-046678">
                 <div class="form-hint">Leave blank unless Jen is behind a proxy that changes the external URL.</div>
             </div>
         </div>
         <div class="form-group">
-            <label>Subnet Mapping <span class="u-dd1085">(v5.46.0 — optional)</span></label>
+            <label for="oidc-subnet-map">Subnet Mapping <span class="u-dd1085">(optional)</span></label>
             <input type="text" id="oidc-subnet-map" name="subnet_map" value="{{ oidc.subnet_map }}" placeholder="network-iot-admins:30,31;network-all:*" class="u-046678">
             <div class="form-hint">Same claim as Role Claim above → <code>;</code>-separated <code>group:id,id</code> pairs, or <code>group:*</code> for every subnet. Blank (default) leaves every SSO user unrestricted, same as before this setting existed.</div>
             <div id="subnet-map-preview" class="mono" style="font-size:12px;margin-top:6px;color:var(--text-muted);"></div>
         </div>
         <div class="form-group">
-            <label>When no group matches the Subnet Mapping</label>
-            <select name="subnet_map_default" class="u-046678">
+            <label for="f-subnet_map_default">When no group matches the Subnet Mapping</label>
+            <select id="f-subnet_map_default" name="subnet_map_default" class="u-046678">
                 <option value="none" {% if oidc.subnet_map_default == 'none' %}selected{% endif %}>Restrict to nothing (recommended — deliberately fail closed)</option>
                 <option value="all" {% if oidc.subnet_map_default == 'all' %}selected{% endif %}>Leave unrestricted</option>
             </select>
@@ -156,16 +156,16 @@
     <form method="POST" action="/settings/save-session"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
-                <label>Enable Session Timeout</label>
-                <select name="timeout_enabled" style="max-width:180px;">
+                <label for="f-timeout_enabled">Enable Session Timeout</label>
+                <select id="f-timeout_enabled" name="timeout_enabled" style="max-width:180px;">
                     <option value="true" {% if session.enabled == 'true' %}selected{% endif %}>Enabled</option>
                     <option value="false" {% if session.enabled == 'false' %}selected{% endif %}>Disabled</option>
                 </select>
                 <div class="form-hint">Disabled = sessions never expire</div>
             </div>
             <div class="form-group">
-                <label>Timeout Duration (minutes)</label>
-                <input type="number" name="timeout_minutes" value="{{ session.timeout }}" min="0" max="1440" class="u-7a96d9">
+                <label for="f-timeout_minutes">Timeout Duration (minutes)</label>
+                <input id="f-timeout_minutes" type="number" name="timeout_minutes" value="{{ session.timeout }}" min="0" max="1440" class="u-7a96d9">
                 <div class="form-hint">0 = never expire. Per-user overrides are set on the Users tab.</div>
             </div>
         </div>
@@ -186,18 +186,18 @@
     <form method="POST" action="/settings/save-rate-limit"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
-                <label>Max Failed Attempts</label>
-                <input type="number" name="max_attempts" value="{{ rl.max_attempts }}" min="0" max="100">
+                <label for="f-max_attempts">Max Failed Attempts</label>
+                <input id="f-max_attempts" type="number" name="max_attempts" value="{{ rl.max_attempts }}" min="0" max="100">
                 <div class="form-hint">0 = disabled</div>
             </div>
             <div class="form-group">
-                <label>Lockout Duration (minutes)</label>
-                <input type="number" name="lockout_minutes" value="{{ rl.lockout_minutes }}" min="0" max="1440">
+                <label for="f-lockout_minutes">Lockout Duration (minutes)</label>
+                <input id="f-lockout_minutes" type="number" name="lockout_minutes" value="{{ rl.lockout_minutes }}" min="0" max="1440">
                 <div class="form-hint">0 = permanent until admin clears</div>
             </div>
             <div class="form-group">
-                <label>Lockout Mode</label>
-                <select name="mode">
+                <label for="f-mode">Lockout Mode</label>
+                <select id="f-mode" name="mode">
                     <option value="both" {% if rl.mode == 'both' %}selected{% endif %}>Both IP and Username</option>
                     <option value="ip" {% if rl.mode == 'ip' %}selected{% endif %}>IP Address only</option>
                     <option value="username" {% if rl.mode == 'username' %}selected{% endif %}>Username only</option>
@@ -238,9 +238,9 @@
     <form method="POST" action="/settings/upload-cert" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="u-f0aa70">{% if ssl_configured %}Replace current certificate:{% else %}Upload certificate to enable HTTPS:{% endif %}</div>
         <div class="form-row">
-            <div class="form-group"><label>Certificate *</label><input type="file" name="certificate" accept=".crt,.pem" required><div class="form-hint">certificate.crt</div></div>
-            <div class="form-group"><label>Private Key *</label><input type="file" name="private_key" accept=".key,.pem" required><div class="form-hint">private.key</div></div>
-            <div class="form-group"><label>CA Bundle</label><input type="file" name="ca_bundle" accept=".crt,.pem"><div class="form-hint">ca_bundle.crt — required for ZeroSSL</div></div>
+            <div class="form-group"><label for="f-certificate">Certificate *</label><input id="f-certificate" type="file" name="certificate" accept=".crt,.pem" required><div class="form-hint">certificate.crt</div></div>
+            <div class="form-group"><label for="f-private_key">Private Key *</label><input id="f-private_key" type="file" name="private_key" accept=".key,.pem" required><div class="form-hint">private.key</div></div>
+            <div class="form-group"><label for="f-ca_bundle">CA Bundle</label><input id="f-ca_bundle" type="file" name="ca_bundle" accept=".crt,.pem"><div class="form-hint">ca_bundle.crt — required for ZeroSSL</div></div>
         </div>
         <button type="submit" class="btn btn-primary">{% if ssl_configured %}{{ icon("refresh-cw") }} Replace Certificate{% else %}{{ icon("lock") }} Enable HTTPS{% endif %}</button>
     </form>

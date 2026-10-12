@@ -70,12 +70,15 @@
         <a href="/devices" class="btn btn-sm btn-secondary">Clear</a>
         {% endif %}
     </form>
+    {# the route refuses everyone below admin, so the form is not offered to them (v5.69.0-beta.4, Q173) #}
+    {% if current_user.role in ('admin', 'superadmin') %}
     <form method="POST" action="/devices/settings" class="flex items-center gap-2"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <span class="muted small">Stale after</span>
         <input type="number" name="stale_days" value="{{ stale_days }}" min="1" max="365" class="w-70" aria-label="Stale after (days)">
         <span class="muted small">days</span>
         <button type="submit" class="btn btn-sm btn-secondary">Set</button>
     </form>
+    {% endif %}
 </div>
 
 <!-- Device type filter badges — preserve all current filters -->

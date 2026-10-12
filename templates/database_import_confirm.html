@@ -42,7 +42,7 @@
                 {% if meta.database == 'jen' %}
                 {{ jen_tables.get(tbl, '') }}
                 {% else %}
-                {% if tbl == 'hosts' %}Kea host reservations (permanent)
+                {% if tbl == 'hosts' %}Kea reservations (permanent)
                 {% elif tbl == 'dhcp4_options' %}Per-host DHCP option overrides
                 {% elif tbl == 'dhcp6_options' %}Per-host DHCPv6 option overrides
                 {% elif tbl == 'ipv6_reservations' %}IPv6 reservations (addresses and prefixes per host)

@@ -32,7 +32,7 @@
         .user-badge { background:rgba(0,180,216,0.08); border:1px solid rgba(0,180,216,0.12); border-radius:20px; padding:4px 14px; font-size:12px; color:#4a8fa0; text-align:center; margin-bottom:20px; }
             .ico { width: 1em; height: 1em; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vertical-align: -0.125em; flex: none; }
     </style>
-    <script nonce="{{ csp_nonce }}">(function(){document.documentElement.setAttribute('data-theme',localStorage.getItem('jen-theme')||'dark');})();</script>
+    <script nonce="{{ csp_nonce }}">(function(){var s='dark';try{s=localStorage.getItem('jen-theme-pick')==='light'?'light':'dark';}catch(e){}document.documentElement.setAttribute('data-theme',s);})();</script>
 </head>
 <body>
 {% include "_icon_sprite.html" %}
@@ -89,7 +89,6 @@
     <!-- TOTP tab -->
     <div id="tab-totp" {% if not has_totp or has_passkey %}style="display:none"{% endif %}>
         <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="method" value="totp">
             <div class="form-group">
                 <label>6-digit code from your authenticator app</label>
                 <input type="text" name="code" maxlength="6" autocomplete="one-time-code"
@@ -122,7 +121,6 @@
     <!-- Backup code tab -->
     <div id="tab-backup" {% if has_totp or has_passkey %}style="display:none"{% endif %}>
         <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="method" value="backup">
             <div class="form-group">
                 <label>Enter a backup recovery code</label>
                 <input type="text" name="code" placeholder="XXXXXXXX-XXXXXXXX" autocomplete="off"

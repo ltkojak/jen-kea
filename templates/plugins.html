@@ -41,7 +41,7 @@
                 </div>
                 {% if p.changelog_url %}
                 <div class="u-c00d39">
-                    <a href="{{ p.changelog_url }}" target="_blank"
+                    <a href="{{ p.changelog_url }}" target="_blank" rel="noopener noreferrer"
                        style="font-size:11px;color:var(--primary);">{{ icon("file-text") }} Changelog</a>
                 </div>
                 {% endif %}
@@ -200,7 +200,7 @@
             {% endif %}
             {% if entry.changelog_url %}
             <span>·</span>
-            <a href="{{ entry.changelog_url }}" target="_blank"
+            <a href="{{ entry.changelog_url }}" target="_blank" rel="noopener noreferrer"
                class="u-dc2e42">{{ icon("file-text") }} Changelog</a>
             {% endif %}
         </div>
@@ -239,7 +239,7 @@
     Installed plugins live in <code>{{ jen_layout.plugin_dir }}/</code>.
     {% endif %}
     Enable/disable changes take effect after restarting Jen.</p>
-    <p>Want to build a plugin? See the <a href="https://github.com/ltkojak/jen-kea/tree/main/plugins" target="_blank" class="u-dc2e42">plugin developer guide on GitHub</a>.</p>
+    <p>Want to build a plugin? See the <a href="https://github.com/ltkojak/jen-kea/tree/main/plugins" target="_blank" rel="noopener noreferrer" class="u-dc2e42">plugin developer guide on GitHub</a>.</p>
 </div>
 
 {% if is_systemd_host %}
