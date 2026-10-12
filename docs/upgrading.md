@@ -84,3 +84,19 @@ One step (5.69.0-beta.5), and nothing to do for it. What you will notice:
 **A password in a DNS-sync URL is refused**: put the credential in the password field. A target saved earlier with `user:pass@` in its URL keeps working, and shows without the password; remove and re-add it to drop the stored copy.
 
 **An unknown `?subnet=` on the API is a 400** where it used to return everything the key may see. If a script passes a subnet name or id that does not exist, it now learns that.
+
+## Where Kea's log is: a logger that writes to the journal, and a new field
+
+One step (5.69.0-beta.6), and nothing has to be done for it. What you may notice:
+
+**Tools → Doctor can say that Kea's log is not written to a file.** Jen reads Kea's own log for the Problems inbox, for Trace and Explain, and the Kea host reads it to prove that investigation logging was put back. They all need a file the helper may read, a `*.log` under `/var/log`. If the `kea-dhcp4` logger writes to `stdout` it writes to the system journal and none of them can see it: the Problems inbox stays empty, which looks exactly like a quiet network. Doctor now shows a warning for it, and the Health Center row "Problems inbox sweep" names the file it looked for instead of sending you to check SSH. To fix it, give the logger a file output in `kea-dhcp4.conf` and reload Kea:
+
+```
+"output-options": [{"output": "/var/log/kea/kea-dhcp4.log", "flush": true, "maxsize": 10485760, "maxver": 4}]
+```
+
+That is a file under `/var/log/kea`, flushed as it is written, rotated at 10 MB with four old files kept. Leave out any `pattern` (or use Kea's default, which starts with the date and time): Jen's line parser needs the timestamp, and Doctor warns about a pattern that has none.
+
+**Settings → Kea → SSH has a Kea log path field.** It is the `[kea] dhcp4_log_path` key, which used to be edited by hand. Jen reads the file the logger's own `output-options` name first and uses this path only when the logger names none. Blank is `/var/log/kea/kea-dhcp4.log`. It must be a `*.log` file under `/var/log`, the same rule the Kea host applies.
+
+**The Utilization History chart shows its window.** The 24-hour, 7-day and 30-day views are scaled to the data's own range and the label under each subnet says which window it is, the range it covered and, on a box that has been collecting snapshots for less than the window, how many days of data there are.
