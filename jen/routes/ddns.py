@@ -27,6 +27,7 @@ from flask_login import current_user, login_required
 import jen.models.db as __db
 import jen.models.user as __user
 import jen.services.auth as __auth
+import jen.services.ddns_writers as __writers
 import jen.services.dns_reconcile as __reconcile
 import jen.services.kea as __kea
 import jen.services.kea_changeset as __changeset
@@ -60,20 +61,18 @@ def _stat_value(args: dict, key: str) -> int:
 
 
 def _ddns_mode(dhcp4_enable_updates: bool) -> str:
-    """[ddns] mode ∈ provider | d2 | both. Explicit config wins; absent,
-    it's derived at read time (never written back) — provider when a
-    real provider is configured, else d2 when dhcp4 already has DDNS
-    updates enabled, else provider (the historical default — a page
-    with nothing configured shows the provider tab, same as always)."""
+    """[ddns] mode ∈ provider | d2 | both | none. Explicit config wins; absent, it's derived at read time (never written back) - d2 when dhcp4 sends updates to
+    D2, else provider when a DNS provider (a lookup server) is set, else `none`: nothing is configured, and the Status tab says so instead of showing a provider nobody
+    chose (v5.69.0-beta.7, Q176: a fresh install used to read "Provider (technitium)" and tail a log that did not exist)."""
     configured = extensions.cfg.get("ddns", "mode", fallback="").strip()
     if configured in ("provider", "d2", "both"):
         return configured
-    provider = extensions.cfg.get("ddns", "dns_provider", fallback="technitium")
-    if provider and provider != "none":
-        return "provider"
     if dhcp4_enable_updates:
         return "d2"
-    return "provider"
+    provider = extensions.cfg.get("ddns", "dns_provider", fallback="none").strip()
+    if provider and provider != "none":
+        return "provider"
+    return "none"
 
 
 def _status_tab_context():
@@ -141,14 +140,17 @@ def _status_tab_context():
     active_server = __kea.get_active_kea_server() if extensions.KEA_SERVERS else None
     server_updates = []
     active_enabled = False
+    active_hook = None  # whether the active server loads libdhcp_run_script.so: None when its config could not be read
     for server in extensions.KEA_SERVERS:
         name = server.get("name") or server.get("ssh_host") or f"Server {server.get('id')}"
         r = __kea.kea_command("config-get", server=server)
         cfg = r.get("arguments") if r.get("result") == 0 else None
         enabled = bool((cfg or {}).get("Dhcp4", {}).get("dhcp-ddns", {}).get("enable-updates")) if cfg else None
+        hook = __writers.hook_loaded((cfg or {}).get("Dhcp4", {})) if cfg else None
         if server is active_server:
             active_enabled = bool(enabled)
-        server_updates.append({"name": name, "enabled": enabled})
+            active_hook = hook
+        server_updates.append({"name": name, "enabled": enabled, "hook": hook})
 
     mode = _ddns_mode(active_enabled)
 
@@ -189,8 +191,12 @@ def _status_tab_context():
         "log_status": log_status,
         "log_message": log_message,
         "ddns_log": extensions.DDNS_LOG if show_log else "",
-        "dns_provider": extensions.cfg.get("ddns", "dns_provider", fallback="technitium"),
+        "dns_provider": extensions.cfg.get("ddns", "dns_provider", fallback="none"),
         "mode": mode,
+        # v5.69.0-beta.7 (Q176): the lease hook is read from the SAME config-get as the update switch; both on is the two-writers warning
+        "hook_loaded": active_hook,
+        "two_writers": bool(active_hook and active_enabled),
+        "two_writers_sentence": __writers.TWO_WRITERS_SENTENCE,
         "server_updates": server_updates,
         "d2_status": d2_status,
         "d2_detail": d2_detail,
@@ -204,7 +210,7 @@ def _provider_lookup(lookup_host: str):
     TestDdnsSshLookupProvider, which still calls this with no ?tab= and
     expects it to run)."""
     try:
-        dns_provider = extensions.cfg.get("ddns", "dns_provider", fallback="technitium")
+        dns_provider = extensions.cfg.get("ddns", "dns_provider", fallback="none")
         if dns_provider == "technitium":
             dns_url = extensions.cfg.get("ddns", "api_url", fallback="")
             dns_token = extensions.cfg.get("ddns", "api_token", fallback="")
@@ -326,6 +332,9 @@ def _naming_tab_context():
     return {
         "config_unavailable": cfg is None,
         "ddns_block": dhcp4.get("dhcp-ddns", {}),
+        # v5.69.0-beta.7 (Q176): a run_script hook that is loaded while the form turns updates on is two writers - the form asks first, and the saved result says it again
+        "hook_loaded": __writers.hook_loaded(dhcp4),
+        "two_writers_sentence": __writers.TWO_WRITERS_SENTENCE,
         # dhcp4.get(k, default) rather than a .setdefault-shaped dict
         # comprehension — a key genuinely present but explicitly `null`
         # in Kea's own JSON is not the same as "absent," but Kea never
@@ -354,9 +363,10 @@ def _save_ddns4(values: dict):
     )
     if result.status == "noservers":
         flash("No Kea server has SSH configured.", "error")
-        return
+        return False
     for style, text in result.lines:
         flash(text, style)
+    return result.status == "ok"
 
 
 @bp.route("/ddns")
@@ -570,7 +580,15 @@ def ddns_naming_save():
     }
     if values["ddns-replace-client-name"] not in ("never", "always", "when-present", "when-not-present"):
         values["ddns-replace-client-name"] = "never"
-    _save_ddns4(values)
+    # v5.69.0-beta.7 (Q176): is a run_script hook loaded? Asked of the active server's own file before the save; a config that cannot be read is "not known", which warns nothing
+    hook = False
+    if values["enable-updates"]:
+        active = __kea.get_active_kea_server()
+        current = __host.read_config(active, "dhcp4") if active and active.get("ssh_host") else None
+        hook = __writers.hook_loaded((current or {}).get("Dhcp4", {}))
+    saved = _save_ddns4(values)
+    if saved and values["enable-updates"] and hook:
+        flash(__writers.TWO_WRITERS_SENTENCE, "warning")
     return redirect(url_for("ddns.ddns", tab="naming"))
 
 

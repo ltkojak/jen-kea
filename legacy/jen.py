@@ -3569,7 +3569,7 @@ def ddns():
     lookup_result = ""
     if lookup_host:
         try:
-            dns_provider = cfg.get("ddns", "dns_provider", fallback="technitium")
+            dns_provider = cfg.get("ddns", "dns_provider", fallback="none")
             if dns_provider == "technitium":
                 dns_url = cfg.get("ddns", "api_url", fallback="")
                 dns_token = cfg.get("ddns", "api_token", fallback="")
@@ -3657,7 +3657,7 @@ def ddns():
     return render_template("ddns.html", lines=lines, lookup_host=lookup_host,
                            lookup_result=lookup_result, log_status=log_status,
                            log_message=log_message, ddns_log=DDNS_LOG,
-                           dns_provider=cfg.get("ddns", "dns_provider", fallback="technitium"))
+                           dns_provider=cfg.get("ddns", "dns_provider", fallback="none"))
 
 # ─────────────────────────────────────────
 # Audit Log
@@ -4130,7 +4130,7 @@ def settings_infrastructure():
         "ddns_url": cfg.get("ddns", "api_url", fallback=""),
         "ddns_user": cfg.get("ddns", "api_user", fallback=""),
         "ddns_zone": cfg.get("ddns", "forward_zone", fallback=""),
-        "dns_provider": cfg.get("ddns", "dns_provider", fallback="technitium"),
+        "dns_provider": cfg.get("ddns", "dns_provider", fallback="none"),
         "ha_mode": cfg.get("kea", "ha_mode", fallback=""),
         "server_name": cfg.get("kea", "name", fallback="Kea Server 1"),
         "subnets": SUBNET_MAP,
@@ -4320,7 +4320,7 @@ def save_extra_servers():
 @admin_required
 def save_infra_ddns():
     log_path = request.form.get("log_path", "").strip()
-    dns_provider = request.form.get("dns_provider", "technitium").strip()
+    dns_provider = request.form.get("dns_provider", "none").strip()
     api_url = request.form.get("api_url", "").strip()
     api_user = request.form.get("api_user", "").strip()
     api_token = request.form.get("api_token", "").strip()

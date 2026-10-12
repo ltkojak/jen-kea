@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import ipaddress
 
+from jen.services import ddns_writers as _writers
 from jen.services import dhcp_explain as _explain
 from jen.services import dhcp_options as _opts
 from jen.services import kea_classes as _classes
@@ -654,6 +655,41 @@ LOGGER_OUTPUT_JSON = (
 LOGGER_PATTERN = "%D{%Y-%m-%d %H:%M:%S.%q} %-5p [%c/%i.%t] %m\\n"
 
 
+def _check_ddns_writers(dhcp4_cfg) -> list[Finding]:
+    """Two writers of one DNS name (v5.69.0-beta.7, Q176). Jen never writes DNS; D2 does when dhcp4 sends updates, and a `run_script` hook of the operator's own may. Jen cannot
+    know what a hook script does, but it can see one is loaded: both on is a warning (every lease may be written twice by two writers that do not know each other), the hook
+    alone is information (Jen reads its log at `[ddns] log_path`). Never a block - an operator who runs both on purpose is not stopped."""
+    hook = _writers.hook_loaded(dhcp4_cfg)
+    updates = _writers.updates_enabled(dhcp4_cfg)
+    if hook and updates:
+        return [
+            _finding(
+                "ddns-two-writers",
+                "warn",
+                "Two things may be writing DNS names",
+                _writers.TWO_WRITERS_SENTENCE,
+                "hooks-libraries / dhcp-ddns",
+                "/ddns?tab=naming",
+                "D2 (kea-dhcp-ddns) writes a lease's names when dhcp4's enable-updates is on, and a libdhcp_run_script.so hook runs the operator's own script on the same lease "
+                "events. Neither knows about the other: with both on, a lease is written twice, and a conflict between them (D2's DHCID check refuses a name the script wrote) "
+                "looks like D2 failing. Turn one off - the admin guide's 'Moving from a hook script to D2' walks the order.",
+            )
+        ]
+    if hook:
+        return [
+            _finding(
+                "ddns-hook-present",
+                "info",
+                "Names are written by a run_script hook",
+                "Names are written by the run_script hook loaded on this server; D2 is off. Jen writes nothing: it reads the hook's log when [ddns] log_path points at it, and looks names up on the DNS provider.",
+                "hooks-libraries",
+                "/settings/kea#kea-ddns",
+                "Jen cannot see what the hook does, only that it is loaded. If the script logs, point [ddns] log_path (Settings → Kea → DDNS) at that log to see it on the DDNS page.",
+            )
+        ]
+    return []
+
+
 def _dhcp4_logger(dhcp4_cfg) -> dict | None:
     loggers = dhcp4_cfg.get("loggers") if isinstance(dhcp4_cfg, dict) else None
     for entry in loggers if isinstance(loggers, list) else []:
@@ -777,5 +813,6 @@ def diagnose(
     out += _check_shared_network_asymmetry(dhcp4_cfg)
     out += _check_removed_keys(dhcp4_cfg)
     out += _check_logger_output(dhcp4_cfg)
+    out += _check_ddns_writers(dhcp4_cfg)
     out.sort(key=lambda f: _SEVERITY_ORDER.get(f["severity"], 3))
     return out

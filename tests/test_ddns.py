@@ -128,9 +128,14 @@ class TestDdnsStatusTab:
         assert b"Recent Log Activity" in r.data
 
     def test_mode_shows_provider_when_a_provider_is_configured(self, logged_in_client, mock_kea, monkeypatch):
+        """Q176 adjustment: this used to rely on `technitium` being the default when [ddns] is absent. There is no default provider now, so the test configures one."""
         from jen import extensions
 
         monkeypatch.setattr(extensions, "KEA_SSH_HOST", "")
+        test_cfg = __import__("configparser").ConfigParser()
+        test_cfg.read_dict({s: dict(extensions.cfg.items(s)) for s in extensions.cfg.sections()})
+        test_cfg["ddns"] = {"dns_provider": "technitium"}
+        monkeypatch.setattr(extensions, "cfg", test_cfg)
         r = logged_in_client.get("/ddns?tab=status")
         assert r.status_code == 200
         assert b"Provider (technitium)" in r.data
@@ -944,3 +949,129 @@ class TestReconcileHealthCacheIsFleetWide:
             with db.cursor() as cur:
                 cur.execute("DELETE FROM lease4 WHERE hostname IN ('expired-a-host','expired-b-host')")
             db.commit()
+
+
+class TestNoDefaultProviderAndTwoWriters:
+    """v5.69.0-beta.7 (Q176): a fresh install is "Not configured", not "Provider (technitium)" tailing a log that does not exist; and a run_script hook loaded beside D2's
+    updates is two writers - said on the Status tab, never silent, never a block."""
+
+    HOOK = {"library": "/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_run_script.so"}
+
+    def _status(self, logged_in_client, monkeypatch, dhcp4, provider=None):
+        from jen import extensions
+        from jen.services import kea as kea_svc
+
+        monkeypatch.setattr(extensions, "KEA_SSH_HOST", "")
+        test_cfg = __import__("configparser").ConfigParser()
+        test_cfg.read_dict({s: dict(extensions.cfg.items(s)) for s in extensions.cfg.sections() if s != "ddns"})
+        if provider is not None:
+            test_cfg["ddns"] = {"dns_provider": provider}
+        monkeypatch.setattr(extensions, "cfg", test_cfg)
+
+        def fake_command(cmd, service="dhcp4", arguments=None, server=None, timeout=10):
+            if cmd == "config-get":
+                return {"result": 0, "arguments": {"Dhcp4": dhcp4}}
+            return {"result": 0, "arguments": {}, "text": "2.6.1"}
+
+        monkeypatch.setattr(kea_svc, "kea_command", fake_command)
+        monkeypatch.setattr(kea_svc, "get_active_kea_server", lambda: extensions.KEA_SERVERS[0])
+        r = logged_in_client.get("/ddns?tab=status")
+        assert r.status_code == 200
+        return r.data.decode()
+
+    def test_the_mode_is_none_with_no_ddns_section_and_no_updates(self, monkeypatch):
+        from jen import extensions
+        from jen.routes import ddns as ddns_route
+
+        test_cfg = __import__("configparser").ConfigParser()
+        monkeypatch.setattr(extensions, "cfg", test_cfg)
+        assert ddns_route._ddns_mode(False) == "none"
+
+    def test_the_mode_follows_what_is_configured(self, monkeypatch):
+        from jen import extensions
+        from jen.routes import ddns as ddns_route
+
+        for ddns_section, updates, expect in (
+            ({}, True, "d2"),
+            ({"dns_provider": "pihole"}, False, "provider"),
+            ({"dns_provider": "pihole"}, True, "d2"),
+            ({"dns_provider": "none"}, False, "none"),
+            ({"mode": "both"}, False, "both"),
+            ({"mode": "nonsense"}, False, "none"),
+        ):
+            test_cfg = __import__("configparser").ConfigParser()
+            if ddns_section:
+                test_cfg["ddns"] = ddns_section
+            monkeypatch.setattr(extensions, "cfg", test_cfg)
+            assert ddns_route._ddns_mode(updates) == expect, (ddns_section, updates)
+
+    def test_the_status_tab_says_not_configured_and_points_at_the_section(self, logged_in_client, monkeypatch):
+        body = self._status(logged_in_client, monkeypatch, {})
+        assert "Not configured" in body and "/settings/kea#kea-ddns" in body
+        assert "Provider (technitium)" not in body
+
+    def test_the_hook_with_updates_on_is_two_writers(self, logged_in_client, monkeypatch):
+        body = self._status(
+            logged_in_client, monkeypatch, {"dhcp-ddns": {"enable-updates": True}, "hooks-libraries": [self.HOOK]}
+        )
+        assert "libdhcp_run_script.so loaded" in body and "two writers" in body
+
+    def test_the_hook_with_updates_off_is_loaded_and_not_two_writers(self, logged_in_client, monkeypatch):
+        body = self._status(
+            logged_in_client, monkeypatch, {"dhcp-ddns": {"enable-updates": False}, "hooks-libraries": [self.HOOK]}
+        )
+        assert "libdhcp_run_script.so loaded" in body and "two writers" not in body
+
+    def test_no_hook_says_not_loaded_and_no_warning(self, logged_in_client, monkeypatch):
+        body = self._status(logged_in_client, monkeypatch, {"dhcp-ddns": {"enable-updates": True}})
+        assert "libdhcp_run_script.so not loaded" in body and "two writers" not in body
+
+    def test_no_technitium_default_anywhere_under_jen_or_legacy(self):
+        import pathlib
+
+        offenders = []
+        for root in ("jen", "legacy"):
+            for p in pathlib.Path(root).rglob("*.py"):
+                text = p.read_text(encoding="utf-8", errors="ignore")
+                if 'fallback="technitium"' in text or '"dns_provider", "technitium"' in text:
+                    offenders.append(p.as_posix())
+        assert offenders == [], offenders
+
+
+class TestTheNamingTabWarnsOfTwoWriters:
+    """The Naming tab (Q176): a loaded run_script hook makes turning updates on a two-writers change. The form asks first (data-confirm); the saved result says it again."""
+
+    HOOK = {"library": "/usr/lib/kea/hooks/libdhcp_run_script.so"}
+
+    def _wire(self, monkeypatch, dhcp4):
+        return TestDdnsNamingTab()._wire(monkeypatch, dhcp4)
+
+    def test_the_form_asks_first_when_a_hook_is_loaded_and_updates_are_off(self, logged_in_client, monkeypatch):
+        self._wire(monkeypatch, {"dhcp-ddns": {"enable-updates": False}, "hooks-libraries": [self.HOOK]})
+        body = logged_in_client.get("/ddns?tab=naming").data.decode()
+        assert 'data-confirm="' in body and "two writers" in body and "libdhcp_run_script.so" in body
+
+    def test_the_form_does_not_ask_with_no_hook(self, logged_in_client, monkeypatch):
+        self._wire(monkeypatch, {"dhcp-ddns": {"enable-updates": False}})
+        body = logged_in_client.get("/ddns?tab=naming").data.decode()
+        form = body.split("DDNS Naming", 1)[1].split("Save DDNS Naming")[0]
+        assert "two writers" not in body and "data-confirm" not in form
+
+    def test_the_saved_result_flashes_the_warning_when_updates_went_on_beside_a_hook(
+        self, logged_in_client, monkeypatch
+    ):
+        fake = self._wire(monkeypatch, {"dhcp-ddns": {"enable-updates": False}, "hooks-libraries": [self.HOOK]})
+        r = logged_in_client.post("/ddns/naming/save", data={"enable-updates": "1"}, follow_redirects=True)
+        assert "apply-config" in fake.ops(), "the save is not blocked"
+        assert b"two writers" in r.data and b"turn one off" in r.data
+
+    def test_no_warning_when_the_save_leaves_updates_off(self, logged_in_client, monkeypatch):
+        fake = self._wire(monkeypatch, {"dhcp-ddns": {"enable-updates": False}, "hooks-libraries": [self.HOOK]})
+        r = logged_in_client.post("/ddns/naming/save", data={"ddns-generated-prefix": "x"}, follow_redirects=True)
+        assert "apply-config" in fake.ops()
+        assert b"two writers" not in r.data
+
+    def test_no_warning_without_a_hook(self, logged_in_client, monkeypatch):
+        fake = self._wire(monkeypatch, {"dhcp-ddns": {"enable-updates": False}})
+        r = logged_in_client.post("/ddns/naming/save", data={"enable-updates": "1"}, follow_redirects=True)
+        assert "apply-config" in fake.ops() and b"two writers" not in r.data

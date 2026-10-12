@@ -17,10 +17,13 @@
         Whether dhcp4 tells D2 about a lease, and how the hostname it sends is built.
         Saved here and pushed to every SSH-configured Kea server, then each one restarts.
     </div>
+    {% if hook_loaded %}
+    <div class="alert alert-warning">{{ icon("triangle-alert") }} A <span class="mono">libdhcp_run_script.so</span> hook is loaded on this server. If it writes DNS names, turning updates on here makes two writers: {{ two_writers_sentence }}</div>
+    {% endif %}
     {% if config_unavailable %}
     <div class="alert alert-error">Could not read kea-dhcp4.conf from the active server — check SSH configuration in Settings → Kea.</div>
     {% else %}
-    <form method="POST" action="/ddns/naming/save"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <form method="POST" action="/ddns/naming/save"{% if hook_loaded and not ddns_block.get('enable-updates') %} data-confirm="{{ two_writers_sentence }} Save anyway?"{% endif %}><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
                 <label>
@@ -387,7 +390,14 @@
         <tr><td class="stat-label" style="width:120px;">Mode</td><td>
             {% if mode == 'both' %}<span class="badge badge-dynamic">Provider + D2</span>
             {% elif mode == 'd2' %}<span class="badge badge-dynamic">D2</span>
+            {% elif mode == 'none' %}<span class="u-5872de">Not configured - see <a href="/settings/kea#kea-ddns">Settings → Kea → DDNS</a></span>
             {% else %}<span class="badge badge-dynamic">Provider ({{ dns_provider }})</span>{% endif %}
+        </td></tr>
+        <tr><td class="stat-label">Lease hook</td><td>
+            {% if hook_loaded is none %}<span class="u-5872de">— (config not read)</span>
+            {% elif hook_loaded %}<span class="mono">libdhcp_run_script.so loaded</span>
+            {% else %}<span class="mono">libdhcp_run_script.so not loaded</span>{% endif %}
+            {% if two_writers %}<div class="u-52df2b" style="margin-top:4px;">{{ icon("triangle-alert") }} two writers: {{ two_writers_sentence }}</div>{% endif %}
         </td></tr>
         <tr><td class="stat-label">Log File</td><td class="mono u-6cb285">{{ ddns_log }}</td></tr>
         <tr><td class="stat-label">Status</td><td>

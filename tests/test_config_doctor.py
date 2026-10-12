@@ -29,6 +29,8 @@ ALL_CHECK_IDS = {
     "removed_keys",
     "logger-no-file",
     "logger-pattern-no-timestamp",
+    "ddns-two-writers",
+    "ddns-hook-present",
 }
 
 
@@ -360,6 +362,8 @@ class TestFindingShape:
             hosts=[],
             ha_configs={1: TestHaPeerSemanticDiff()._ha(), 2: TestHaPeerSemanticDiff()._ha(max_ack_delay=1)},
         )
+        out += doctor.diagnose(TestTwoWritersOfDnsNames()._cfg(True, [TestTwoWritersOfDnsNames.HOOK]), hosts=[])
+        out += doctor.diagnose(TestTwoWritersOfDnsNames()._cfg(False, [TestTwoWritersOfDnsNames.HOOK]), hosts=[])
         out += doctor.diagnose(TestTheDhcp4Logger.STDOUT, hosts=[])
         out += doctor.diagnose(TestTheDhcp4Logger.FILE_NO_TIME, hosts=[])
         return out
@@ -511,3 +515,66 @@ class TestTheDhcp4Logger:
             {"loggers": [None, 3, {"name": "kea-dhcp4", "output-options": [None, "x", {"output": 5}]}]},
         ):
             doctor.diagnose(cfg, hosts=[])
+
+
+class TestTwoWritersOfDnsNames:
+    """v5.69.0-beta.7 (Q176): Jen never writes DNS. D2 does when dhcp4 sends updates; a `run_script` hook of the operator's own may. Jen cannot know what a hook does, but it can see one
+    is loaded - both on is a warning (never a block), the hook alone is information."""
+
+    HOOK = {"library": "/usr/lib/x86_64-linux-gnu/kea/hooks/libdhcp_run_script.so", "parameters": {"name": "/opt/x.sh"}}
+
+    def _cfg(self, updates=None, hooks=None):
+        cfg = {}
+        if updates is not None:
+            cfg["dhcp-ddns"] = {"enable-updates": updates}
+        if hooks is not None:
+            cfg["hooks-libraries"] = hooks
+        return cfg
+
+    def test_updates_on_and_the_hook_loaded_is_the_two_writers_warning(self):
+        findings = doctor.diagnose(self._cfg(True, [self.HOOK]), hosts=[])
+        two = [f for f in findings if f["id"] == "ddns-two-writers"]
+        assert len(two) == 1 and two[0]["severity"] == "warn"
+        assert "two writers" in two[0]["detail"] and "turn one off" in two[0]["detail"]
+        assert "ddns-hook-present" not in _ids(findings)
+
+    def test_the_hook_alone_is_information_not_a_warning(self):
+        findings = doctor.diagnose(self._cfg(False, [self.HOOK]), hosts=[])
+        ids = _ids(findings)
+        assert "ddns-hook-present" in ids and "ddns-two-writers" not in ids
+        note = next(f for f in findings if f["id"] == "ddns-hook-present")
+        assert note["severity"] == "info" and "log_path" in note["detail"]
+
+    def test_the_hook_with_no_ddns_block_at_all_is_the_hook_alone(self):
+        assert "ddns-hook-present" in _ids(doctor.diagnose(self._cfg(None, [self.HOOK]), hosts=[]))
+
+    def test_d2_alone_is_neither(self):
+        ids = _ids(
+            doctor.diagnose(self._cfg(True, [{"library": "/usr/lib/kea/hooks/libdhcp_lease_cmds.so"}]), hosts=[])
+        )
+        assert not ({"ddns-two-writers", "ddns-hook-present"} & ids)
+
+    def test_neither_is_neither(self):
+        assert not ({"ddns-two-writers", "ddns-hook-present"} & _ids(doctor.diagnose(self._cfg(False, []), hosts=[])))
+
+    @pytest.mark.parametrize(
+        "library", ["libdhcp_run_script.so", "/x/libdhcp_run_script.so", "  /x/libdhcp_run_script.so  "]
+    )
+    def test_any_path_to_the_library_counts(self, library):
+        assert "ddns-two-writers" in _ids(doctor.diagnose(self._cfg(True, [{"library": library}]), hosts=[]))
+
+    @pytest.mark.parametrize("library", ["/x/libdhcp_run_script.so.bak", "/x/notlibdhcp_run_script.sox", "", None, 5])
+    def test_a_look_alike_does_not(self, library):
+        assert not (
+            {"ddns-two-writers", "ddns-hook-present"}
+            & _ids(doctor.diagnose(self._cfg(True, [{"library": library}]), hosts=[]))
+        )
+
+    def test_malformed_hook_lists_never_raise(self):
+        for hooks in ("x", [None, 3, "y", {"library": ["a"]}], {"library": "a"}):
+            doctor.diagnose({"dhcp-ddns": {"enable-updates": True}, "hooks-libraries": hooks}, hosts=[])
+        doctor.diagnose({"dhcp-ddns": "x", "hooks-libraries": [{"library": "/x/libdhcp_run_script.so"}]}, hosts=[])
+
+    def test_a_warning_never_blocks_anything_it_is_only_a_finding(self):
+        two = next(f for f in doctor.diagnose(self._cfg(True, [self.HOOK]), hosts=[]) if f["id"] == "ddns-two-writers")
+        assert two["why"] and two["fix_url"]
