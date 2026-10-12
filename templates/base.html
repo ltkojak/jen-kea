@@ -177,7 +177,7 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
         /* ── Fix iOS 300ms double-tap delay on ALL interactive elements ── */
         a, button, .btn, input, select, textarea, label,
         th, td, .section-tab, .nav a.nav-link, .pagination a,
-        .nav-avatar, .theme-toggle, [onclick], [role="button"] {
+        .nav-avatar, .theme-toggle, [role="button"] {
             touch-action: manipulation;
         }
 
@@ -687,6 +687,8 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
              .row-checkbox                hidden until body.select-mode (Select button) */
         .fs-toggle, .fs-head, .fs-label, .select-toggle, .fs-holder { display: none; }
         .chip-row { display: flex; gap: 6px; flex-wrap: wrap; }
+        /* the shortcuts window's keys (v5.69.0-beta.5, Q174: a stray <style> after the body's content, now with the rest) */
+        kbd { background: var(--surface2); border: 1px solid var(--border); border-radius: 3px; padding: 2px 6px; font-size: 11px; font-family: monospace; }
         /* the DHCP options page's level picker beside its table (v5.69.0-beta.4, Q173: it had no phone rule, so the table kept ~100px) */
         .dhcp-opt-grid { display: grid; grid-template-columns: 260px 1fr; gap: 16px; align-items: start; }
 
@@ -1153,7 +1155,6 @@ function sortTable(table, col, th) {
         </table>
     </div>
 </div>
-<style>kbd { background:var(--surface2); border:1px solid var(--border); border-radius:3px; padding:2px 6px; font-size:11px; font-family:monospace; }</style>
 
 <script nonce="{{ csp_nonce }}">
 (function() {

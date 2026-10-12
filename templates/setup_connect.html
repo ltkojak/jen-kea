@@ -13,27 +13,27 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
-                <label>Kea API URL</label>
-                <input type="text" name="api_url" value="{{ api_url }}" placeholder="http://your-kea-server:8000" required>
+                <label for="f-api_url">Kea API URL</label>
+                <input id="f-api_url" type="text" name="api_url" value="{{ api_url }}" placeholder="http://your-kea-server:8000" required>
                 <div class="form-hint">The Control Agent, or a daemon's own control socket — Jen tries both.</div>
             </div>
         </div>
         <div class="form-row">
             <div class="form-group">
-                <label>API Username</label>
-                <input type="text" name="api_user" value="{{ api_user }}">
+                <label for="f-api_user">API Username</label>
+                <input id="f-api_user" type="text" name="api_user" value="{{ api_user }}">
             </div>
             <div class="form-group">
-                <label>API Password</label>
-                <input type="password" name="api_pass" placeholder="{{ '(saved — leave blank to keep it)' if api_pass_saved else '(leave blank for none)' }}">
+                <label for="f-api_pass">API Password</label>
+                <input id="f-api_pass" type="password" name="api_pass" placeholder="{{ '(saved — leave blank to keep it)' if api_pass_saved else '(leave blank for none)' }}">
             </div>
         </div>
         <details class="u-56f435 mb-4"{% if api_ca or api_client_cert %} open{% endif %}>
             <summary class="u-3928fa">Advanced TLS</summary>
             <div class="form-row">
                 <div class="form-group">
-                    <label>CA bundle path (optional)</label>
-                    <input type="text" name="api_ca" value="{{ api_ca }}" placeholder="{{ jen_layout.config_dir }}/ssl/kea-ca.pem">
+                    <label for="f-api_ca">CA bundle path (optional)</label>
+                    <input id="f-api_ca" type="text" name="api_ca" value="{{ api_ca }}" placeholder="{{ jen_layout.config_dir }}/ssl/kea-ca.pem">
                     <div class="form-hint">Only for an <code>https://</code> URL — pins TLS verification to this CA bundle on the Jen host.</div>
                 </div>
                 <div class="form-group">
@@ -47,12 +47,12 @@
             </div>
             <div class="form-row">
                 <div class="form-group">
-                    <label>Client certificate (optional)</label>
-                    <input type="text" name="api_client_cert" value="{{ api_client_cert }}" placeholder="{{ jen_layout.config_dir }}/ssl/jen-kea-client.pem">
+                    <label for="f-api_client_cert">Client certificate (optional)</label>
+                    <input id="f-api_client_cert" type="text" name="api_client_cert" value="{{ api_client_cert }}" placeholder="{{ jen_layout.config_dir }}/ssl/jen-kea-client.pem">
                 </div>
                 <div class="form-group">
-                    <label>Client key</label>
-                    <input type="text" name="api_client_key" value="{{ api_client_key }}" placeholder="{{ jen_layout.config_dir }}/ssl/jen-kea-client.key">
+                    <label for="f-api_client_key">Client key</label>
+                    <input id="f-api_client_key" type="text" name="api_client_key" value="{{ api_client_key }}" placeholder="{{ jen_layout.config_dir }}/ssl/jen-kea-client.key">
                     <div class="form-hint">For Kea sockets with <code>cert-required</code> (Kea's default for <code>https</code>). Key must be readable by www-data — <code>root:www-data</code> 640 under <code>{{ jen_layout.config_dir }}/ssl/</code>.</div>
                 </div>
             </div>
@@ -60,32 +60,32 @@
         <h3 class="mb-3">Kea's database</h3>
         <div class="form-row">
             <div class="form-group">
-                <label>Database host</label>
-                <input type="text" name="kea_db_host" value="{{ kea_db_host }}" required>
+                <label for="f-kea_db_host">Database host</label>
+                <input id="f-kea_db_host" type="text" name="kea_db_host" value="{{ kea_db_host }}" required>
             </div>
             <div class="form-group">
-                <label>Database username</label>
-                <input type="text" name="kea_db_user" value="{{ kea_db_user }}" required>
-            </div>
-        </div>
-        <div class="form-row">
-            <div class="form-group">
-                <label>Database password</label>
-                <input type="password" name="kea_db_pass" placeholder="{{ '(saved — leave blank to keep it)' if kea_db_pass_saved else '(leave blank for none)' }}">
-            </div>
-            <div class="form-group">
-                <label>Database name</label>
-                <input type="text" name="kea_db_name" value="{{ kea_db_name or 'kea' }}">
-            </div>
-            <div class="form-group">
-                <label>Database port</label>
-                <input type="number" name="kea_db_port" min="1" max="65535" value="{{ kea_db_port or 3306 }}">
+                <label for="f-kea_db_user">Database username</label>
+                <input id="f-kea_db_user" type="text" name="kea_db_user" value="{{ kea_db_user }}" required>
             </div>
         </div>
         <div class="form-row">
             <div class="form-group">
-                <label>Database CA bundle (optional)</label>
-                <input type="text" name="kea_db_ssl_ca" value="{{ kea_db_ssl_ca or '' }}" placeholder="{{ jen_layout.config_dir }}/ssl/kea-db-ca.pem">
+                <label for="f-kea_db_pass">Database password</label>
+                <input id="f-kea_db_pass" type="password" name="kea_db_pass" placeholder="{{ '(saved — leave blank to keep it)' if kea_db_pass_saved else '(leave blank for none)' }}">
+            </div>
+            <div class="form-group">
+                <label for="f-kea_db_name">Database name</label>
+                <input id="f-kea_db_name" type="text" name="kea_db_name" value="{{ kea_db_name or 'kea' }}">
+            </div>
+            <div class="form-group">
+                <label for="f-kea_db_port">Database port</label>
+                <input id="f-kea_db_port" type="number" name="kea_db_port" min="1" max="65535" value="{{ kea_db_port or 3306 }}">
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="f-kea_db_ssl_ca">Database CA bundle (optional)</label>
+                <input id="f-kea_db_ssl_ca" type="text" name="kea_db_ssl_ca" value="{{ kea_db_ssl_ca or '' }}" placeholder="{{ jen_layout.config_dir }}/ssl/kea-db-ca.pem">
                 <div class="form-hint">A file on the Jen host. Set it to connect to Kea's database over TLS, verified against this CA; empty means a plain connection. It is saved as <code>[kea_db] ssl_ca</code> and used for the test below, so a database that requires TLS can be reached from here.</div>
             </div>
         </div>

@@ -13,42 +13,42 @@
 
         <div class="form-row">
             <div class="form-group">
-                <label>Subnet ID</label>
+                <label for="f-id">Subnet ID</label>
                 <input type="number" name="subnet_id" id="f-id" value="{{ suggested_id }}" min="1" class="u-72126d">
                 <div class="form-hint">Next available: <code class="u-f045bb">{{ suggested_id }}</code> &nbsp;·&nbsp; Must be unique across all subnets in Kea</div>
             </div>
             <div class="form-group">
-                <label>Friendly Name</label>
+                <label for="f-name">Friendly Name</label>
                 <input type="text" name="name" id="f-name" placeholder="e.g. Guest WiFi" maxlength="50">
                 <div class="form-hint">Shown throughout Jen instead of the raw subnet ID</div>
             </div>
         </div>
 
         <div class="form-group">
-            <label>CIDR</label>
+            <label for="f-cidr">CIDR</label>
             <input type="text" name="cidr" id="f-cidr" placeholder="e.g. 10.10.80.0/24" class="u-72126d">
             <div class="form-hint">The full network range for this subnet</div>
         </div>
 
         <div class="form-group">
-            <label>Address Pool</label>
+            <label for="f-pool">Address Pool</label>
             <input type="text" name="pool" id="f-pool" placeholder="e.g. 10.10.80.50-10.10.80.250" class="u-72126d">
             <div class="form-hint">Must fall within the CIDR above &nbsp;·&nbsp; Format: start–end</div>
         </div>
 
         <div class="form-row">
             <div class="form-group">
-                <label>Valid Lifetime (seconds)</label>
+                <label for="f-lifetime">Valid Lifetime (seconds)</label>
                 <input type="number" name="valid_lifetime" id="f-lifetime" placeholder="e.g. 86400" min="60">
                 <div class="form-hint">Optional — leave blank to use Kea's global default</div>
             </div>
             <div class="form-group">
-                <label>Renew Timer / T1 (seconds)</label>
+                <label for="f-renew">Renew Timer / T1 (seconds)</label>
                 <input type="number" name="renew_timer" id="f-renew" placeholder="e.g. 43200" min="0">
                 <div class="form-hint">Optional &nbsp;·&nbsp; Typically ½ of valid lifetime</div>
             </div>
             <div class="form-group">
-                <label>Rebind Timer / T2 (seconds)</label>
+                <label for="f-rebind">Rebind Timer / T2 (seconds)</label>
                 <input type="number" name="rebind_timer" id="f-rebind" placeholder="e.g. 75600" min="0">
                 <div class="form-hint">Optional &nbsp;·&nbsp; Typically ⅞ of valid lifetime</div>
             </div>
@@ -56,19 +56,19 @@
 
         <div class="form-row">
             <div class="form-group">
-                <label>Router / Gateway</label>
+                <label for="f-routers">Router / Gateway</label>
                 <input type="text" name="routers" id="f-routers" placeholder="e.g. 10.10.80.1" class="u-72126d">
                 <div class="form-hint">Optional</div>
             </div>
             <div class="form-group">
-                <label>DNS Servers</label>
+                <label for="f-dns">DNS Servers</label>
                 <input type="text" name="dns_servers" id="f-dns" placeholder="e.g. 9.9.9.9,1.1.1.1" class="u-72126d">
                 <div class="form-hint">Optional &nbsp;·&nbsp; Comma-separated</div>
             </div>
         </div>
 
         <div class="form-group">
-            <label>Shared Network</label>
+            <label for="f-network">Shared Network</label>
             <select name="shared_network" id="f-network">
                 <option value="">— none (top-level subnet) —</option>
                 {% for n in shared_networks %}<option value="{{ n }}">{{ n }}</option>{% endfor %}
@@ -137,11 +137,11 @@ function showConfirm() {
     } else {
         var net = document.getElementById('f-network').value;
         summary.innerHTML =
-            '<div><span class="u-5872de">Subnet ID:</span> <span class="u-dc2e42">' + id + '</span></div>' +
-            '<div><span class="u-5872de">Name:</span> <span class="u-dc2e42">' + name + '</span></div>' +
-            '<div><span class="u-5872de">CIDR:</span> <span class="u-dc2e42">' + cidr + '</span></div>' +
-            '<div><span class="u-5872de">Pool:</span> <span class="u-dc2e42">' + pool + '</span></div>' +
-            (net ? '<div><span class="u-5872de">Shared network:</span> <span class="u-dc2e42">' + net + '</span></div>' : '');
+            '<div><span class="u-5872de">Subnet ID:</span> <span class="u-dc2e42">' + escapeHtml(id) + '</span></div>' +
+            '<div><span class="u-5872de">Name:</span> <span class="u-dc2e42">' + escapeHtml(name) + '</span></div>' +
+            '<div><span class="u-5872de">CIDR:</span> <span class="u-dc2e42">' + escapeHtml(cidr) + '</span></div>' +
+            '<div><span class="u-5872de">Pool:</span> <span class="u-dc2e42">' + escapeHtml(pool) + '</span></div>' +
+            (net ? '<div><span class="u-5872de">Shared network:</span> <span class="u-dc2e42">' + escapeHtml(net) + '</span></div>' : '');
         var okBtn2 = document.querySelector('#confirm-panel .btn-primary');
         if (okBtn2) okBtn2.disabled = false;
     }

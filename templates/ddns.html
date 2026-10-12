@@ -1,22 +1,13 @@
 {% extends "base.html" %}
 {% block title %}DDNS{% endblock %}
 {% block content %}
-{% from '_settings_subtabs.html' import subtabs %}
+{% from '_ddns_tabs.html' import ddns_tabs with context %}
 <div class="page-header">
     <h1>{{ icon("link", "ico-lg") }} DDNS</h1>
     <p>Kea's DNS-update pipeline — provider integrations and D2 (kea-dhcp-ddns), side by side.</p>
 </div>
 
-{% set ddns_tabs = [{'id': 'status', 'label': 'Status', 'url': '/ddns?tab=status'}] %}
-{% if current_user.role != 'viewer' %}
-{% set ddns_tabs = ddns_tabs + [
-    {'id': 'naming', 'label': 'Naming (dhcp4)', 'url': '/ddns?tab=naming'},
-    {'id': 'd2config', 'label': 'D2 Configuration', 'url': '/ddns?tab=d2config'},
-] + ([{'id': 'verify', 'label': 'Verify', 'url': '/ddns?tab=verify'}] if current_user.all_subnets else []) + [
-    {'id': 'reconcile', 'label': 'Reconcile', 'url': '/ddns/reconcile'},
-] %}
-{% endif %}
-{% if ddns_tabs|length > 1 %}{{ subtabs(ddns_tabs, tab) }}{% endif %}
+{{ ddns_tabs(tab) }}
 
 {% if tab == 'naming' %}
 

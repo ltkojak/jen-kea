@@ -8,7 +8,7 @@
     <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
-                <label>Subnet *</label>
+                <label for="reservation-subnet">Subnet *</label>
                 <select name="subnet_id" id="reservation-subnet" required>
                     <option value="" {% if not prefill.subnet_id %}selected{% endif %} disabled>Choose a subnet…</option>
                     {% for sid, info in subnet_map.items() %}
@@ -18,27 +18,27 @@
                 <div class="form-hint" id="reservation-subnet-hint" hidden></div>
             </div>
             <div class="form-group">
-                <label>IP Address *</label>
+                <label for="reservation-ip">IP Address *</label>
                 <input type="text" name="ip" id="reservation-ip" placeholder="x.x.x.x" value="{{ prefill.ip if prefill else '' }}" required>
             </div>
         </div>
         <div class="form-row">
             <div class="form-group">
-                <label>MAC Address *</label>
-                <input type="text" name="mac" placeholder="aa:bb:cc:dd:ee:ff" value="{{ prefill.mac if prefill else '' }}" required>
+                <label for="f-mac">MAC Address *</label>
+                <input id="f-mac" type="text" name="mac" placeholder="aa:bb:cc:dd:ee:ff" value="{{ prefill.mac if prefill else '' }}" required>
             </div>
             <div class="form-group">
-                <label>Hostname</label>
-                <input type="text" name="hostname" placeholder="device-name" value="{{ prefill.hostname if prefill else '' }}">
+                <label for="f-hostname">Hostname</label>
+                <input id="f-hostname" type="text" name="hostname" placeholder="device-name" value="{{ prefill.hostname if prefill else '' }}">
             </div>
         </div>
         <div class="form-group">
-            <label>DNS Override <span class="u-5d8d64">(optional)</span></label>
-            <input type="text" name="dns_override" placeholder="Leave blank for subnet default, e.g. 1.1.1.1, 8.8.8.8" value="{{ prefill.dns_override if prefill else '' }}">
+            <label for="f-dns_override">DNS Override <span class="u-5d8d64">(optional)</span></label>
+            <input id="f-dns_override" type="text" name="dns_override" placeholder="Leave blank for subnet default, e.g. 1.1.1.1, 8.8.8.8" value="{{ prefill.dns_override if prefill else '' }}">
         </div>
         <div class="form-group">
-            <label>Notes <span class="u-5d8d64">(optional)</span></label>
-            <textarea name="notes" rows="2" placeholder="Optional notes about this device...">{{ prefill.notes if prefill else '' }}</textarea>
+            <label for="f-notes">Notes <span class="u-5d8d64">(optional)</span></label>
+            <textarea id="f-notes" name="notes" rows="2" placeholder="Optional notes about this device...">{{ prefill.notes if prefill else '' }}</textarea>
         </div>
         <div class="u-a76d59">
             <button type="submit" class="btn btn-primary">Add Reservation</button>

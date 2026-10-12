@@ -10,13 +10,13 @@
     <form method="POST" action="{{ url_for('auth.reauth') }}" autocomplete="off">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
-            <label>Password</label>
-            <input type="password" name="password" required autofocus>
+            <label for="f-password">Password</label>
+            <input id="f-password" type="password" name="password" required autofocus>
         </div>
         {% if has_mfa %}
         <div class="form-group">
-            <label>Authenticator or backup code{% if has_passkey %} — or use your passkey below{% endif %}</label>
-            <input type="text" name="code" inputmode="text" autocomplete="one-time-code"
+            <label for="f-code">Authenticator or backup code{% if has_passkey %} — or use your passkey below{% endif %}</label>
+            <input id="f-code" type="text" name="code" inputmode="text" autocomplete="one-time-code"
                    placeholder="000000 or XXXXXXXX-XXXXXXXX">
         </div>
         {% if has_passkey %}
@@ -33,24 +33,14 @@
     </form>
 </div>
 {% if has_passkey %}
+{% from '_passkey_b64.html' import passkey_b64 %}
 <script nonce="{{ csp_nonce }}">
 (function () {
     var CSRF = {{ csrf_token()|tojson }};
     var btn = document.getElementById('reauth-passkey-btn');
     var status = document.getElementById('reauth-passkey-status');
     var form = btn.closest('form');
-    function b64urlToBytes(s) {
-        s = s.replace(/-/g, '+').replace(/_/g, '/');
-        while (s.length % 4) s += '=';
-        var bin = atob(s), out = new Uint8Array(bin.length);
-        for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-        return out.buffer;
-    }
-    function bytesToB64url(buf) {
-        var bytes = new Uint8Array(buf), bin = '';
-        for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-        return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    }
+    {{ passkey_b64() }}
     async function postJson(url, body) {
         var r = await jenFetch(url, {method: 'POST', credentials: 'same-origin',
             headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF}, body: JSON.stringify(body || {})});

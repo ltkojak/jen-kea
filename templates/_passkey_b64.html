@@ -1,0 +1,17 @@
+{# The two base64url helpers every WebAuthn page needs (v5.69.0-beta.5, Q174): the same twelve lines were pasted into mfa_enroll.html, mfa_challenge.html and reauth.html.
+   Call it inside a nonced script element:  {% from '_passkey_b64.html' import passkey_b64 %}  ...  {{ passkey_b64() }}
+   tests/test_templates_macros.py pins the output byte for byte against the text it replaced. #}
+{% macro passkey_b64() -%}
+function b64urlToBytes(s) {
+        s = s.replace(/-/g, '+').replace(/_/g, '/');
+        while (s.length % 4) s += '=';
+        var bin = atob(s), out = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+        return out.buffer;
+    }
+    function bytesToB64url(buf) {
+        var bytes = new Uint8Array(buf), bin = '';
+        for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+        return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+{%- endmacro %}

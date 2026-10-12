@@ -153,6 +153,7 @@
     <div class="divider"></div>
     <a href="/login" style="display:block;text-align:center;color:#444;font-size:12px;text-decoration:none;">← Back to login</a>
 </div>
+{% from '_passkey_b64.html' import passkey_b64 %}
 <script nonce="{{ csp_nonce }}">
 function showTab(name, btn) {
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -189,18 +190,7 @@ document.querySelectorAll('input[inputmode=numeric]').forEach(inp => {
     var status = document.getElementById('passkey-status');
     var rememberCbPasskey = document.getElementById('rememberCbPasskey');
     rememberCbPasskey.addEventListener('change', function() { toggleRemember(this, 'rememberDaysPasskey'); });
-    function b64urlToBytes(s) {
-        s = s.replace(/-/g, '+').replace(/_/g, '/');
-        while (s.length % 4) s += '=';
-        var bin = atob(s), out = new Uint8Array(bin.length);
-        for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-        return out.buffer;
-    }
-    function bytesToB64url(buf) {
-        var bytes = new Uint8Array(buf), bin = '';
-        for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-        return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    }
+    {{ passkey_b64() }}
     async function postJson(url, body) {
         var r = await fetch(url, {method: 'POST', credentials: 'same-origin',
             headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF}, body: JSON.stringify(body || {})});

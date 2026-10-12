@@ -6,6 +6,7 @@
    ones), form (set only in the Investigation page's tab: where the 'Explain again' form goes back to), form_fields,
    input_labels, link_q (the identifier a why-not's links investigate) and can_changes (an admin who may see every
    subnet: the only viewer who may follow a why-not to the Changes tab). #}
+{% for note in notes|default([]) %}<div class="alert alert-error">{{ note }}</div>{% endfor %}
 {% if result %}
 <!-- Answer -->
 <div class="card u-e25041">

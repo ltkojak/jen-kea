@@ -16,12 +16,12 @@
         <input type="hidden" name="next" value="setup">
         <div class="form-row">
             <div class="form-group">
-                <label>Passphrase</label>
-                <input type="password" name="passphrase" minlength="12" required placeholder="At least 12 characters">
+                <label for="f-passphrase">Passphrase</label>
+                <input id="f-passphrase" type="password" name="passphrase" minlength="12" required placeholder="At least 12 characters">
             </div>
             <div class="form-group">
-                <label>Confirm passphrase</label>
-                <input type="password" name="passphrase_confirm" minlength="12" required>
+                <label for="f-passphrase_confirm">Confirm passphrase</label>
+                <input id="f-passphrase_confirm" type="password" name="passphrase_confirm" minlength="12" required>
             </div>
         </div>
         <div class="form-hint u-da12f2">
@@ -37,19 +37,19 @@
         <label><input type="checkbox" name="enabled" value="1" {{ "checked" if schedule.enabled }}> Enabled</label>
         <div class="form-row">
             <div class="form-group">
-                <label>Frequency</label>
-                <select name="frequency">
+                <label for="f-frequency">Frequency</label>
+                <select id="f-frequency" name="frequency">
                     <option value="daily" {{ "selected" if schedule.frequency == "daily" }}>Daily</option>
                     <option value="weekly" {{ "selected" if schedule.frequency == "weekly" }}>Weekly</option>
                 </select>
             </div>
             <div class="form-group">
-                <label>Hour (UTC)</label>
-                <input type="number" name="hour" min="0" max="23" value="{{ schedule.hour if schedule.hour is defined else 2 }}">
+                <label for="f-hour">Hour (UTC)</label>
+                <input id="f-hour" type="number" name="hour" min="0" max="23" value="{{ schedule.hour if schedule.hour is defined else 2 }}">
             </div>
             <div class="form-group">
-                <label>Keep</label>
-                <input type="number" name="keep_count" min="1" max="30" value="{{ schedule.keep_count if schedule.keep_count is defined else 7 }}">
+                <label for="f-keep_count">Keep</label>
+                <input id="f-keep_count" type="number" name="keep_count" min="1" max="30" value="{{ schedule.keep_count if schedule.keep_count is defined else 7 }}">
             </div>
         </div>
         <label><input type="checkbox" name="include_jen" value="1" {{ "checked" if schedule.include_jen is not defined or schedule.include_jen }}> Jen's own database</label>

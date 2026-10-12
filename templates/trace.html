@@ -11,18 +11,18 @@
     <form method="GET" action="/tools/trace" autocomplete="off">
         <div class="form-row" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;">
             <div class="form-group u-116966">
-                <label>MAC address</label>
-                <input type="text" name="mac" class="mono" value="{{ mac }}" placeholder="aa:bb:cc:dd:ee:ff">
+                <label for="f-mac">MAC address</label>
+                <input id="f-mac" type="text" name="mac" class="mono" value="{{ mac }}" placeholder="aa:bb:cc:dd:ee:ff">
             </div>
             <div class="form-group u-116966">
-                <label>Kea server</label>
-                <select name="server">
+                <label for="f-server">Kea server</label>
+                <select id="f-server" name="server">
                     {% for s in servers %}<option value="{{ s.id }}" {% if server_id == s.id|string %}selected{% endif %}>{{ s.name or s.id }}</option>{% endfor %}
                 </select>
             </div>
             <div class="form-group u-116966">
-                <label>Log lines to scan</label>
-                <input type="number" name="lines" value="{{ lines }}" min="50" max="1000">
+                <label for="f-lines">Log lines to scan</label>
+                <input id="f-lines" type="number" name="lines" value="{{ lines }}" min="50" max="1000">
                 <div class="form-hint">Max 1000 — the helper's tail limit.</div>
             </div>
         </div>

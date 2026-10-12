@@ -729,7 +729,7 @@ function loadAlertSummary() {
             data.alerts.forEach(function(a) {
                 var icon = alertIcon(a.icon);
                 var ok = a.status === 'ok';
-                var errorTip = a.error ? ' title="' + a.error.replace(/"/g, '&quot;') + '"' : '';
+                var errorTip = a.error ? ' title="' + escapeHtml(a.error) + '"' : '';
                 var status = a.status || '';
                 var statusLabel = status.charAt(0).toUpperCase() + status.slice(1);
                 // v5.55.1 (Q64) — an "ok" row said the same thing on every

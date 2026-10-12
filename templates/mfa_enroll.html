@@ -67,12 +67,12 @@
                 <input type="hidden" name="action" value="enroll">
                 <input type="hidden" name="secret" value="{{ secret }}">
                 <div class="form-group">
-                    <label>Device Name (optional)</label>
-                    <input type="text" name="device_name" placeholder="Work Phone, Home Authenticator..." class="u-fdf33f">
+                    <label for="f-device_name">Device Name (optional)</label>
+                    <input id="f-device_name" type="text" name="device_name" placeholder="Work Phone, Home Authenticator..." class="u-fdf33f">
                 </div>
                 <div class="form-group">
-                    <label>Verification Code</label>
-                    <input type="text" name="code" maxlength="6" inputmode="numeric" placeholder="Enter 6-digit code" autofocus style="letter-spacing:4px;font-size:18px;text-align:center;">
+                    <label for="f-code">Verification Code</label>
+                    <input id="f-code" type="text" name="code" maxlength="6" inputmode="numeric" placeholder="Enter 6-digit code" autofocus style="letter-spacing:4px;font-size:18px;text-align:center;">
                     <div class="form-hint">Enter the code shown in your authenticator app to confirm enrollment</div>
                 </div>
                 <button type="submit" class="btn btn-primary">Enroll Authenticator</button>
@@ -90,7 +90,7 @@
     </div>
     <div id="passkey-form" class="u-82d601">
         <div class="form-group u-116966">
-            <label>Passkey name (optional)</label>
+            <label for="passkey-name">Passkey name (optional)</label>
             <input type="text" id="passkey-name" maxlength="100" placeholder="Work laptop, YubiKey 5C…" style="min-width:220px;">
         </div>
         <button type="button" id="passkey-add-btn" class="btn btn-primary">{{ icon("fingerprint-pattern") }} Add passkey</button>
@@ -98,6 +98,7 @@
     <div id="passkey-status" style="font-size:13px;margin-top:10px;display:none;"></div>
 </div>
 
+{% from '_passkey_b64.html' import passkey_b64 %}
 <script nonce="{{ csp_nonce }}">
 (function () {
     var CSRF = {{ csrf_token()|tojson }};
@@ -107,18 +108,7 @@
     var status = document.getElementById('passkey-status');
     var btn = document.getElementById('passkey-add-btn');
 
-    function b64urlToBytes(s) {
-        s = s.replace(/-/g, '+').replace(/_/g, '/');
-        while (s.length % 4) s += '=';
-        var bin = atob(s), out = new Uint8Array(bin.length);
-        for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-        return out.buffer;
-    }
-    function bytesToB64url(buf) {
-        var bytes = new Uint8Array(buf), bin = '';
-        for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-        return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    }
+    {{ passkey_b64() }}
     function say(msg, isError) {
         status.style.display = 'block';
         status.style.color = isError ? 'var(--danger)' : 'var(--text-muted)';

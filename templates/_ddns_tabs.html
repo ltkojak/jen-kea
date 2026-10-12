@@ -1,0 +1,17 @@
+{# The DDNS page's sub-tab row, in one place (v5.69.0-beta.5, Q174: ddns.html and ddns_reconcile.html each built the same list). Import WITH CONTEXT - it reads current_user:
+       {% from '_ddns_tabs.html' import ddns_tabs with context %}
+       {{ ddns_tabs(tab) }}
+   A viewer sees Status only (and so no row at all); Verify is for a caller who may see every subnet. tests/test_templates_macros.py pins the output against the markup it replaced. #}
+{% from '_settings_subtabs.html' import subtabs %}
+{% macro ddns_tabs(tab) -%}
+{% set tabs = [{'id': 'status', 'label': 'Status', 'url': '/ddns?tab=status'}] %}
+{% if current_user.role != 'viewer' %}
+{% set tabs = tabs + [
+    {'id': 'naming', 'label': 'Naming (dhcp4)', 'url': '/ddns?tab=naming'},
+    {'id': 'd2config', 'label': 'D2 Configuration', 'url': '/ddns?tab=d2config'},
+] + ([{'id': 'verify', 'label': 'Verify', 'url': '/ddns?tab=verify'}] if current_user.all_subnets else []) + [
+    {'id': 'reconcile', 'label': 'Reconcile', 'url': '/ddns/reconcile'},
+] %}
+{% endif %}
+{% if tabs|length > 1 %}{{ subtabs(tabs, tab) }}{% endif %}
+{%- endmacro %}

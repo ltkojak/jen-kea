@@ -77,31 +77,31 @@
     <div id="target-db-label" class="u-c0a2eb"></div>
     <div class="form-row">
         <div class="form-group">
-            <label>Host</label>
+            <label for="t-host">Host</label>
             <input type="text" id="t-host" placeholder="192.168.1.100" class="u-72126d">
         </div>
         <div class="form-group">
-            <label>Port</label>
+            <label for="t-port">Port</label>
             <input type="number" id="t-port" value="3306" style="font-family:monospace;max-width:90px;">
         </div>
     </div>
     <div class="form-row">
         <div class="form-group">
-            <label>Username</label>
+            <label for="t-user">Username</label>
             <input type="text" id="t-user" placeholder="jen" class="u-72126d">
         </div>
         <div class="form-group">
-            <label>Password</label>
+            <label for="t-pass">Password</label>
             <input type="password" id="t-pass" placeholder="••••••••">
         </div>
         <div class="form-group">
-            <label>Database Name</label>
+            <label for="t-db">Database Name</label>
             <input type="text" id="t-db" placeholder="jen" class="u-72126d">
         </div>
     </div>
     <div class="form-row">
         <div class="form-group">
-            <label>CA bundle (optional)</label>
+            <label for="t-ca">CA bundle (optional)</label>
             <input type="text" id="t-ca" placeholder="{{ jen_layout.config_dir }}/ssl/db-ca.pem" class="u-72126d">
             <div class="form-hint">A file on the Jen host. Set it to connect to the target over TLS, verified against this CA — needed when the target requires TLS, and the only way to keep the password off the wire when it merely allows it. Left empty, the connection is plain.</div>
         </div>
@@ -163,7 +163,7 @@ function showStep(n) {
         document.getElementById('target-db-label').innerHTML =
             'Migrating <strong style="color:var(--'+((_which==='jen')?'primary':'warning')+');">'
             + (_which==='jen'?'<svg class="ico ico-dot ico-success" aria-hidden="true"><use href="#i-circle"></use></svg> Jen':'<svg class="ico ico-dot ico-warning" aria-hidden="true"><use href="#i-circle"></use></svg> Kea') + ' Database</strong> to a new server. '
-            + 'The source database on <code>' + (_which==='jen'?{{ jen_db_host|tojson }}:{{ kea_db_host|tojson }}) + '</code> is never modified.';
+            + 'The source database on <code>' + escapeHtml(_which==='jen'?{{ jen_db_host|tojson }}:{{ kea_db_host|tojson }}) + '</code> is never modified.';
         if (!document.getElementById('t-db').value) document.getElementById('t-db').value = db;
     }
     if (n===3) {
@@ -174,8 +174,8 @@ function showStep(n) {
         document.getElementById('migration-summary').innerHTML =
             '<div class="card u-851d78">'
             + '<strong>Migrating:</strong> ' + which + '<br>'
-            + '<strong>From:</strong> <code>' + src + '</code><br>'
-            + '<strong>To:</strong> <code>' + host + '/' + db + '</code>'
+            + '<strong>From:</strong> <code>' + escapeHtml(src) + '</code><br>'
+            + '<strong>To:</strong> <code>' + escapeHtml(host + '/' + db) + '</code>'
             + '</div>';
     }
 }

@@ -11,12 +11,12 @@
     <form method="GET" action="/tools/explain" autocomplete="off">
         <div class="form-row u-f0e9d3">
             <div class="form-group u-116966">
-                <label>MAC address <span class="u-497726">*</span></label>
-                <input type="text" name="mac" class="mono" value="{{ client.mac }}" placeholder="aa:bb:cc:dd:ee:ff" required>
+                <label for="f-mac">MAC address <span class="u-497726">*</span></label>
+                <input id="f-mac" type="text" name="mac" class="mono" value="{{ client.mac }}" placeholder="aa:bb:cc:dd:ee:ff" required>
             </div>
             <div class="form-group u-116966">
-                <label>Subnet</label>
-                <select name="subnet">
+                <label for="f-subnet">Subnet</label>
+                <select id="f-subnet" name="subnet">
                     <option value="">auto (lease, then reservation, then first)</option>
                     {% for sid, info in subnet_map.items() %}
                     <option value="{{ sid }}" {% if subnet_id == sid %}selected{% endif %}>{{ info.name }} ({{ info.cidr }})</option>
@@ -24,22 +24,22 @@
                 </select>
             </div>
             <div class="form-group u-116966">
-                <label>Vendor class (option 60)</label>
-                <input type="text" name="vendor_class" value="{{ client.vendor_class }}" placeholder="MSFT 5.0, android-dhcp-14, PXEClient…">
+                <label for="f-vendor_class">Vendor class (option 60)</label>
+                <input id="f-vendor_class" type="text" name="vendor_class" value="{{ client.vendor_class }}" placeholder="MSFT 5.0, android-dhcp-14, PXEClient…">
             </div>
             <div class="form-group u-116966">
-                <label>User class (option 77)</label>
-                <input type="text" name="user_class" value="{{ client.user_class }}" placeholder="iPXE">
+                <label for="f-user_class">User class (option 77)</label>
+                <input id="f-user_class" type="text" name="user_class" value="{{ client.user_class }}" placeholder="iPXE">
                 <input type="text" name="user_class_bytes" class="mono" value="{{ client.user_class_bytes }}" placeholder="as sent, hex (08:69:50:58:45) - optional">
                 <div class="form-hint">Kea compares the bytes the client sent. A client sends the bare string or, like Windows, one length byte then the string; give the bytes when you know them.</div>
             </div>
             <div class="form-group u-116966">
-                <label>Hostname (option 12)</label>
-                <input type="text" name="hostname" value="{{ client.hostname }}">
+                <label for="f-hostname">Hostname (option 12)</label>
+                <input id="f-hostname" type="text" name="hostname" value="{{ client.hostname }}">
             </div>
             <div class="form-group u-116966">
-                <label>Client id (option 61)</label>
-                <input type="text" name="client_id" class="mono" value="{{ client.client_id }}" placeholder="01:aa:bb:cc:dd:ee:ff">
+                <label for="f-client_id">Client id (option 61)</label>
+                <input id="f-client_id" type="text" name="client_id" class="mono" value="{{ client.client_id }}" placeholder="01:aa:bb:cc:dd:ee:ff">
             </div>
             <div class="form-group u-116966">
                 <label>Relay circuit id / remote id</label>
@@ -50,8 +50,8 @@
                 </div>
             </div>
             <div class="form-group u-116966">
-                <label>giaddr (relay agent address)</label>
-                <input type="text" name="giaddr" class="mono" value="{{ client.giaddr }}" placeholder="10.0.1.1">
+                <label for="f-giaddr">giaddr (relay agent address)</label>
+                <input id="f-giaddr" type="text" name="giaddr" class="mono" value="{{ client.giaddr }}" placeholder="10.0.1.1">
             </div>
         </div>
         <div class="u-012c80">

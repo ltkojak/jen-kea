@@ -9,8 +9,8 @@
     <form method="POST" action="/reservations/add6"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
-                <label>Subnet *</label>
-                <select name="subnet_id" required>
+                <label for="f-subnet_id">Subnet *</label>
+                <select id="f-subnet_id" name="subnet_id" required>
                     <option value="" {% if not prefill.subnet_id %}selected{% endif %} disabled>Choose a subnet…</option>
                     {% for sid, info in subnet6_map.items() %}
                     <option value="{{ sid }}" {% if prefill.subnet_id and prefill.subnet_id|string == sid|string %}selected{% endif %}>{{ info.name }} — {{ info.cidr }}</option>
@@ -18,29 +18,29 @@
                 </select>
             </div>
             <div class="form-group">
-                <label>DUID *</label>
-                <input type="text" name="duid" placeholder="00:03:00:01:aa:bb:cc:dd:ee:ff" value="{{ prefill.duid if prefill else '' }}" required>
+                <label for="f-duid">DUID *</label>
+                <input id="f-duid" type="text" name="duid" placeholder="00:03:00:01:aa:bb:cc:dd:ee:ff" value="{{ prefill.duid if prefill else '' }}" required>
                 <div class="form-hint">Hex, with or without colons — Jen normalizes it.</div>
             </div>
         </div>
         <div class="form-group">
-            <label>Hostname</label>
-            <input type="text" name="hostname" placeholder="device-name" value="{{ prefill.hostname if prefill else '' }}">
+            <label for="f-hostname">Hostname</label>
+            <input id="f-hostname" type="text" name="hostname" placeholder="device-name" value="{{ prefill.hostname if prefill else '' }}">
         </div>
         <div class="form-row">
             <div class="form-group">
-                <label>Address (IA_NA) <span class="u-5d8d64">(optional)</span></label>
-                <input type="text" name="address" placeholder="2001:db8::10" value="{{ prefill.address if prefill else '' }}">
+                <label for="f-address">Address (IA_NA) <span class="u-5d8d64">(optional)</span></label>
+                <input id="f-address" type="text" name="address" placeholder="2001:db8::10" value="{{ prefill.address if prefill else '' }}">
             </div>
         </div>
         <div class="form-row">
             <div class="form-group">
-                <label>Delegated Prefix (IA_PD) <span class="u-5d8d64">(optional)</span></label>
-                <input type="text" name="prefix" placeholder="2001:db8:1:1000::" value="{{ prefill.prefix if prefill else '' }}">
+                <label for="f-prefix">Delegated Prefix (IA_PD) <span class="u-5d8d64">(optional)</span></label>
+                <input id="f-prefix" type="text" name="prefix" placeholder="2001:db8:1:1000::" value="{{ prefill.prefix if prefill else '' }}">
             </div>
             <div class="form-group">
-                <label>Prefix Length</label>
-                <input type="number" name="prefix_len" min="1" max="128" placeholder="56" value="{{ prefill.prefix_len if prefill else '' }}">
+                <label for="f-prefix_len">Prefix Length</label>
+                <input id="f-prefix_len" type="number" name="prefix_len" min="1" max="128" placeholder="56" value="{{ prefill.prefix_len if prefill else '' }}">
             </div>
         </div>
         <div class="form-hint u-2b583d">At least one of address or prefix is required — both can be set for a device that needs both.</div>

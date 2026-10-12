@@ -41,14 +41,14 @@ Each server is authored from its <em>own</em> API settings and binds its <em>own
 <div class="card u-48a0d2">
     <form method="POST" id="author-kea-form" action="/settings/infrastructure/author-kea/{{ service }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
-            <label>Interfaces</label>
+            <label for="f-interfaces">Interfaces</label>
             <input type="text" name="interfaces" id="f-interfaces"
                    value="{{ (detected.interfaces or autodetected_interfaces)|join(', ') }}"
                    placeholder="eth0" class="u-72126d">
             <div class="form-hint">Comma-separated interface names Kea should listen on.</div>
         </div>
         <div class="form-group">
-            <label>{{ 'Unix control socket path' if direct_mode else 'Control Socket Path' }}</label>
+            <label for="f-socket">{{ 'Unix control socket path' if direct_mode else 'Control Socket Path' }}</label>
             <input type="text" name="control_socket" id="f-socket" value="{{ default_socket }}" class="u-72126d">
             <div class="form-hint">{% if direct_mode %}The local unix socket (kept alongside the control socket for kea-shell and some hooks). Any writable path Kea can create works.{% else %}Must match what the Control Agent (kea-ctrl-agent.conf) expects for this service, or Jen's own commands won't reach it.{% endif %}</div>
         </div>
@@ -79,15 +79,15 @@ Each server is authored from its <em>own</em> API settings and binds its <em>own
         {% if endpoint_scheme == 'https' %}
         <div class="form-row">
             <div class="form-group">
-                <label>TLS certificate file</label>
+                <label for="f-tls-cert">TLS certificate file</label>
                 <input type="text" name="tls_cert_file" id="f-tls-cert" value="/etc/kea/tls/server.crt" class="u-72126d">
             </div>
             <div class="form-group">
-                <label>TLS key file</label>
+                <label for="f-tls-key">TLS key file</label>
                 <input type="text" name="tls_key_file" id="f-tls-key" value="/etc/kea/tls/server.key" class="u-72126d">
             </div>
             <div class="form-group">
-                <label>Trust anchor (CA file or directory)</label>
+                <label for="f-tls-ca">Trust anchor (CA file or directory)</label>
                 <input type="text" name="tls_trust_anchor" id="f-tls-ca" value="/etc/kea/tls/ca.crt" class="u-72126d">
             </div>
         </div>
@@ -96,22 +96,22 @@ Each server is authored from its <em>own</em> API settings and binds its <em>own
         {% endif %}
         <div class="form-row">
             <div class="form-group">
-                <label>DB Host</label>
+                <label for="f-db-host">DB Host</label>
                 <input type="text" name="db_host" id="f-db-host" value="{{ detected.lease_db_host or default_db.host }}">
             </div>
             <div class="form-group">
-                <label>DB Username</label>
+                <label for="f-db-user">DB Username</label>
                 <input type="text" name="db_user" id="f-db-user" value="{{ default_db.user }}">
             </div>
             <div class="form-group">
-                <label>DB Name</label>
+                <label for="f-db-name">DB Name</label>
                 <input type="text" name="db_name" id="f-db-name" value="{{ detected.lease_db_name or default_db.name }}">
             </div>
         </div>
         <div class="form-hint u-2b583d">Database password is taken from Jen's own {{ 'Kea' if service == 'dhcp4' else 'Kea6' }} API settings — not re-entered here.</div>
 
         <div class="form-group">
-            <label>Subnets to include</label>
+            <label for="f-subnets">Subnets to include</label>
             <textarea name="subnets" id="f-subnets" rows="5" class="u-bca09b" placeholder="1 = LAN, 192.168.1.0/24">{{ subnet_lines }}</textarea>
             <div class="form-hint">
                 One per line: <code>id = name, cidr{{ ', paired_v4_subnet_id' if service == 'dhcp6' else '' }}</code>{% if service == 'dhcp6' %} — the paired id is optional{% endif %}.

@@ -15,8 +15,8 @@
     <form method="POST" action="{{ url_for('servers.ha_maintenance_begin') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
-            <label>Server to take down</label>
-            <select name="down" class="u-4a724c">
+            <label for="f-down">Server to take down</label>
+            <select id="f-down" name="down" class="u-4a724c">
                 {% for s in servers %}
                 <option value="{{ s.id }}" {% if s.id == preselect %}selected{% endif %}>{{ s.name }}{% if s.role %} ({{ s.role }}){% endif %}</option>
                 {% endfor %}

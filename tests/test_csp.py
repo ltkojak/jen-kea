@@ -214,6 +214,10 @@ SCRIPT_RE = re.compile(r"<script\b([^>]*)>(.*?)</script>", re.S | re.I)
 EXPR_RE = re.compile(r"\{\{(.*?)\}\}", re.S)
 # "templates/<file>.html": {"<expression as written>": "why it is safe without |tojson"}
 TOJSON_REVIEWED: dict = {
+    # a macro that prints two constant JS functions (templates/_passkey_b64.html): no value of the request, no data
+    "templates/mfa_challenge.html": {"passkey_b64()": "a macro printing constant JavaScript"},
+    "templates/mfa_enroll.html": {"passkey_b64()": "a macro printing constant JavaScript"},
+    "templates/reauth.html": {"passkey_b64()": "a macro printing constant JavaScript"},
     # a boolean literal the template itself picks between 'true' and 'false' - no data in it. The file is the bundled copy of the IPAM plugin's release,
     # byte-identical to its tag (the registry pins its sha256), so it is changed at its source in the plugin sweep (Q174), not here.
     "plugins/ipam/templates/ipam/subnet.html": {

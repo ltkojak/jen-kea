@@ -32,8 +32,8 @@
     </div>
     <form method="POST" action="/settings/api-keys/create" class="u-82d601"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group u-9e0402">
-            <label>Key Name</label>
-            <input type="text" name="name" placeholder="e.g. Home Assistant, Zabbix, My Script" maxlength="100" required>
+            <label for="f-name">Key Name</label>
+            <input id="f-name" type="text" name="name" placeholder="e.g. Home Assistant, Zabbix, My Script" maxlength="100" required>
             <div class="form-hint">A descriptive name so you know what this key is used for.</div>
         </div>
         <div class="form-group" style="margin:0;min-width:160px;">
@@ -44,8 +44,8 @@
             <div class="form-hint">Off = read-only. On = may create/delete reservations, edit device names and owners, and set subnet notes — within its subnet scope.</div>
         </div>
         <div class="form-group u-9e0402">
-            <label>Subnet Access</label>
-            <select name="subnet_ids" multiple class="u-ff2ba4">
+            <label for="f-subnet_ids">Subnet Access</label>
+            <select id="f-subnet_ids" name="subnet_ids" multiple class="u-ff2ba4">
                 {% if can_grant_all_subnets %}
                 <option value="all" selected>All Subnets</option>
                 {% endif %}

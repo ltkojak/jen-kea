@@ -21,16 +21,16 @@
             </div>
         </div>
         <div class="form-group">
-            <label>Hostname</label>
-            <input type="text" name="hostname" value="{{ host.hostname or '' }}">
+            <label for="f-hostname">Hostname</label>
+            <input id="f-hostname" type="text" name="hostname" value="{{ host.hostname or '' }}">
         </div>
         <div class="form-group">
-            <label>DNS Override</label>
-            <input type="text" name="dns_override" value="{{ host.dns_override }}" placeholder="Leave blank for subnet default">
+            <label for="f-dns_override">DNS Override</label>
+            <input id="f-dns_override" type="text" name="dns_override" value="{{ host.dns_override }}" placeholder="Leave blank for subnet default">
         </div>
         <div class="form-group">
-            <label>Notes</label>
-            <textarea name="notes" rows="2">{{ host.notes or '' }}</textarea>
+            <label for="f-notes">Notes</label>
+            <textarea id="f-notes" name="notes" rows="2">{{ host.notes or '' }}</textarea>
         </div>
         <div class="u-a76d59">
             <button type="submit" class="btn btn-primary">Save Changes</button>

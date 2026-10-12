@@ -1,22 +1,14 @@
 {% extends "base.html" %}
 {% block title %}DNS Reconcile{% endblock %}
 {% block content %}
-{% from '_settings_subtabs.html' import subtabs %}
+{% from '_ddns_tabs.html' import ddns_tabs with context %}
 <div class="page-header">
     <h1>{{ icon("link", "ico-lg") }} DDNS</h1>
     <p>Read-only: reservations and active leases with a hostname, checked against what your resolver actually
        returns for them — nothing here is ever written to Kea.</p>
 </div>
 
-{# the same tab list as ddns.html: Verify is for callers who see every subnet (v5.69.0-beta.4, Q173) #}
-{% set ddns_tabs = [
-    {'id': 'status', 'label': 'Status', 'url': '/ddns?tab=status'},
-    {'id': 'naming', 'label': 'Naming (dhcp4)', 'url': '/ddns?tab=naming'},
-    {'id': 'd2config', 'label': 'D2 Configuration', 'url': '/ddns?tab=d2config'},
-] + ([{'id': 'verify', 'label': 'Verify', 'url': '/ddns?tab=verify'}] if current_user.all_subnets else []) + [
-    {'id': 'reconcile', 'label': 'Reconcile', 'url': '/ddns/reconcile'},
-] %}
-{{ subtabs(ddns_tabs, tab) }}
+{{ ddns_tabs(tab) }}
 
 <div class="card">
     <div class="card-header"><span class="card-title">{{ icon("search") }} Reconcile</span></div>
@@ -29,8 +21,8 @@
         <input type="hidden" name="verdict" value="{{ verdict_filter }}">
         <div class="form-row">
             <div class="form-group">
-                <label>Limit</label>
-                <input type="number" name="limit" value="{{ limit }}" min="1" max="1000" class="u-bbc1fe">
+                <label for="f-limit">Limit</label>
+                <input id="f-limit" type="number" name="limit" value="{{ limit }}" min="1" max="1000" class="u-bbc1fe">
                 <div class="form-hint">Max 1000 — each name is a live DNS lookup.</div>
             </div>
             <div class="form-group u-ffd20f">

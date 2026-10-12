@@ -8,8 +8,8 @@
         <input type="hidden" name="q" value="{{ q }}">
         <input type="hidden" name="tab" value="{{ tab }}">
         <div class="form-group">
-            <label>Which subnet should this be evaluated against?</label>
-            <select name="subnet">
+            <label for="f-subnet">Which subnet should this be evaluated against?</label>
+            <select id="f-subnet" name="subnet">
                 {% for sid, info in choices.items() %}<option value="{{ sid }}">{{ info.name }} — {{ info.cidr }}</option>{% endfor %}
             </select>
         </div>

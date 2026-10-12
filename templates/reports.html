@@ -111,13 +111,13 @@
     <form method="POST" action="/reports/settings"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
-                <label>Snapshot Interval (minutes)</label>
-                <input type="number" name="snapshot_interval" value="{{ snapshot_interval }}" min="5" max="1440" class="u-bbc1fe">
+                <label for="f-snapshot_interval">Snapshot Interval (minutes)</label>
+                <input id="f-snapshot_interval" type="number" name="snapshot_interval" value="{{ snapshot_interval }}" min="5" max="1440" class="u-bbc1fe">
                 <div class="form-hint">How often to record a data point (5–1440 min)</div>
             </div>
             <div class="form-group">
-                <label>Retention Period (days)</label>
-                <input type="number" name="retention_days" value="{{ retention_days }}" min="1" max="365" class="u-bbc1fe">
+                <label for="f-retention_days">Retention Period (days)</label>
+                <input id="f-retention_days" type="number" name="retention_days" value="{{ retention_days }}" min="1" max="365" class="u-bbc1fe">
                 <div class="form-hint">How long to keep history (1–365 days)</div>
             </div>
             <div class="form-group u-ffd20f">

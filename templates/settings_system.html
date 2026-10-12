@@ -141,8 +141,8 @@
     <form method="POST" action="{{ url_for('settings.save_ports') }}" data-confirm="Changing ports or threads will restart Jen. You may need to update bookmarks or firewall rules. Continue?"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
-                <label>HTTP Port{% if ssl_configured %} <span class="u-5d8d64">(redirect only)</span>{% endif %}</label>
-                <input type="number" name="http_port" value="{{ http_port }}" min="1024" max="65535" class="u-21e8bb">
+                <label for="f-http_port">HTTP Port{% if ssl_configured %} <span class="u-5d8d64">(redirect only)</span>{% endif %}</label>
+                <input id="f-http_port" type="number" name="http_port" value="{{ http_port }}" min="1024" max="65535" class="u-21e8bb">
                 <div class="form-hint">Default: 5050</div>
             </div>
             {% if ssl_configured %}
@@ -159,8 +159,8 @@
             </div>
             {% endif %}
             <div class="form-group">
-                <label>Worker Threads</label>
-                <input type="number" name="threads" value="{{ worker_threads }}" min="1" max="64" class="u-21e8bb">
+                <label for="f-threads">Worker Threads</label>
+                <input id="f-threads" type="number" name="threads" value="{{ worker_threads }}" min="1" max="64" class="u-21e8bb">
                 <div class="form-hint">Concurrent requests (gunicorn <code>--threads</code>). Default: 8.</div>
             </div>
         </div>
@@ -223,8 +223,8 @@
     <form method="POST" action="/settings/save-audit-retention"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row u-3521b3">
             <div class="form-group">
-                <label>Keep audit log entries for (days)</label>
-                <input type="number" name="audit_retention_days"
+                <label for="f-audit_retention_days">Keep audit log entries for (days)</label>
+                <input id="f-audit_retention_days" type="number" name="audit_retention_days"
                        value="{{ audit_retention_days }}" min="0" max="3650">
                 <div class="form-hint">Entries older than this are deleted automatically at midnight. 0 = keep forever. Current log: <strong>{{ audit_log_count }}</strong> entries — <a href="/settings/logs">view</a>.</div>
             </div>
@@ -241,8 +241,8 @@
     <form method="POST" action="/settings/save-config-revision-keep"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row u-3521b3">
             <div class="form-group">
-                <label>Revisions to keep per server / service</label>
-                <input type="number" name="config_revision_keep"
+                <label for="f-config_revision_keep">Revisions to keep per server / service</label>
+                <input id="f-config_revision_keep" type="number" name="config_revision_keep"
                        value="{{ config_revision_keep }}" min="1" max="1000">
                 <div class="form-hint">Every Kea config Jen writes is saved so you can diff and restore it (Servers → Config history). Older revisions beyond this count are pruned.</div>
             </div>

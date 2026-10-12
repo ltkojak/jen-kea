@@ -99,16 +99,16 @@
     </div>
     <form method="POST" action="/users/add"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-group">
-            <label>Username</label>
-            <input type="text" name="username" required autocomplete="off" class="u-046678">
+            <label for="f-username">Username</label>
+            <input id="f-username" type="text" name="username" required autocomplete="off" class="u-046678">
         </div>
         <div class="form-group">
-            <label>Password</label>
-            <input type="password" name="password" required autocomplete="new-password" class="u-046678">
+            <label for="f-password">Password</label>
+            <input id="f-password" type="password" name="password" required autocomplete="new-password" class="u-046678">
             <div class="form-hint">Minimum 8 characters</div>
         </div>
         <div class="form-group">
-            <label>Role</label>
+            <label for="add-role">Role</label>
             <select name="role" id="add-role" class="u-046678">
                 <option value="viewer">Viewer — read-only on assigned subnets</option>
                 <option value="admin">Admin — manage assigned subnets</option>
@@ -150,7 +150,7 @@
 
         <!-- Role -->
         <div class="form-group">
-            <label>Role</label>
+            <label for="edit-role">Role</label>
             <select name="role" id="edit-role" class="u-046678">
                 <option value="viewer">Viewer — read-only on assigned subnets</option>
                 <option value="admin">Admin — manage assigned subnets</option>
@@ -161,7 +161,7 @@
 
         <!-- Subnet Access -->
         <div class="form-group" id="edit-subnet-group">
-            <label>Subnet Access</label>
+            <label for="edit-subnets">Subnet Access</label>
             <select name="subnet_ids" id="edit-subnets" multiple class="u-ff2ba4">
                 <option value="all">All Subnets</option>
                 {% for sid, info in subnet_map.items() %}
@@ -173,7 +173,7 @@
 
         <!-- Timeout -->
         <div class="form-group">
-            <label>Session Timeout (minutes)</label>
+            <label for="edit-timeout">Session Timeout (minutes)</label>
             <input type="number" name="timeout" id="edit-timeout" placeholder="{{ global_timeout }} (global default)" min="1" max="1440" class="u-046678">
             <div class="form-hint">Leave blank to use the global default ({{ global_timeout }}m)</div>
         </div>
@@ -187,11 +187,11 @@
                 <div class="u-054de4">Leave blank to keep current password.</div>
             </div>
             <div class="form-group">
-                <label>New Password</label>
+                <label for="edit-new-pw">New Password</label>
                 <input type="password" name="new_password" id="edit-new-pw" autocomplete="new-password" placeholder="Enter new password…" class="u-046678">
             </div>
             <div class="form-group">
-                <label>Confirm New Password</label>
+                <label for="edit-confirm-pw">Confirm New Password</label>
                 <input type="password" name="confirm_password" id="edit-confirm-pw" autocomplete="new-password" placeholder="Confirm new password…" class="u-046678">
             </div>
         </div>
