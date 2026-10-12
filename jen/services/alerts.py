@@ -2258,7 +2258,7 @@ def check_alerts():
                         logger.error(f"Config drift check error: {e}")
 
             # ── Lease history snapshot ──
-            snapshot_interval = _int_setting("snapshot_interval_minutes", 30) * 60
+            snapshot_interval = max(1, _int_setting("snapshot_interval_minutes", 30)) * 60
             now_ts = time.time()
             if now_ts - last_snapshot_time >= snapshot_interval:
                 run_snapshot_pass()

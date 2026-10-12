@@ -15,6 +15,8 @@
     <td class="nw-d" data-m="primary">
         {{ l.hostname | hostname or '—' }}
         {{ device_badge(device_info, l.mac, get_manufacturer_icon_url, device_type_display) }}
+        {# the action menu (which carries Investigate) is an admin's, and only on a live list: everyone else gets the link beside the name (Q134's rule: every row that names a client) #}
+        {% if show_expired or current_user.role not in ('superadmin','admin') %}{{ investigate_link(l.mac, "icon") }}{% endif %}
     </td>
     <td class="mono hide-mobile" data-m="hide">{{ l.mac }}</td>
     <td data-m="secondary"><span class="badge badge-{{ l.subnet_name|lower|replace(' ','') }}">{{ l.subnet_name }}</span></td>

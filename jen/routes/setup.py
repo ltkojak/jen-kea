@@ -40,10 +40,13 @@ def _progress():
     every /setup page renders this."""
     __setup.mark_started()
     state = __setup.get_state()
+    # the pill that is lit is the page being shown (v5.69.0-beta.5, Q174: it was the first step not yet done, so the Recovery page lit "1. Connect"); a page that is not one
+    # of the six steps falls back to the wizard's first unresolved step
+    page = (request.endpoint or "").rsplit("setup_", 1)[-1]
     return {
         "state": state,
         "steps": __setup.STEPS,
-        "current": __setup.current_step(),
+        "current": page if page in __setup.STEPS else __setup.current_step(),
     }
 
 

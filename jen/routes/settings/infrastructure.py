@@ -4,7 +4,6 @@ jen/routes/settings/infrastructure.py
 Kea / database / SSH / DDNS / HA / ports / metrics settings.
 """
 
-import contextlib
 import functools
 import ipaddress
 import logging
@@ -2188,14 +2187,13 @@ def save_ha_settings():
             )
             return redirect(url_for("settings.settings_kea"))
     items = []
-    if ha_mode in ("hot-standby", "load-balancing", "passive-backup", ""):
-        items.append(("kea", "ha_mode", ha_mode))
-    if server_name:
-        items.append(("kea", "name", server_name))
-    if not items:
-        # "saved" was flashed whatever was written (v5.69.0-beta.5, Q174): an HA mode that is none of the four wrote nothing and still said so
+    if ha_mode not in ("hot-standby", "load-balancing", "passive-backup", ""):
+        # "saved" was flashed whatever was written (v5.69.0-beta.5, Q174): a mode that is none of the four refuses the whole form, with or without a valid name beside it
         flash("Refused: HA mode must be hot-standby, load-balancing, passive-backup or blank.", "error")
         return redirect(url_for("settings.settings_kea"))
+    items.append(("kea", "ha_mode", ha_mode))
+    if server_name:
+        items.append(("kea", "name", server_name))
     __config.app_config.write_values(items)
     flash("HA settings saved.", "success")
     __user.audit("SAVE_INFRA", "ha_settings", f"mode={ha_mode}")
@@ -2324,6 +2322,7 @@ def save_metrics_settings():
 @bp.route("/settings/generate-ssh-key", methods=["POST"])
 @login_required
 @_admin_required
+@_recent_auth_required()  # replacing Jen's only SSH key cuts off every Kea host that trusts the old one: a recent password confirmation, like the other key-changing routes (Q174)
 def generate_ssh_key():
     # v5.67.0 (Q115) — the setup wizard's helper step offers key generation
     # too, and needs to land back on /setup/helper instead of Settings. A
@@ -2334,39 +2333,57 @@ def generate_ssh_key():
     else:
         redirect_target = url_for("settings.settings_kea")
     os.makedirs(os.path.dirname(extensions.SSH_KEY_PATH), exist_ok=True)
-    # v5.69.0-beta.5 (Q174): the pair is made beside the live one and moved into place. ssh-keygen on a path that already holds a key asks "Overwrite (y/n)?", there is no terminal
-    # to answer, and it failed every time a key existed ("regenerate" never worked); and it chowned the result to a hard-coded `www-data` (the service user is whoever Jen runs as,
-    # and it already owns what it creates). The comment names this host, not a placeholder.
+    # v5.69.0-beta.5 (Q174): the pair is generated in a private scratch directory and installed as a SET (certs.commit_file_set: all-or-nothing, the old pair kept as a copy
+    # at <key>.prev). ssh-keygen on a path that already holds a key asks "Overwrite (y/n)?", there is no terminal to answer, and it failed every time a key existed
+    # ("regenerate" never worked); and it chowned the result to a hard-coded `www-data` (the service user is whoever Jen runs as, and it already owns what it creates).
+    # The comment names this host, not a placeholder.
+    import shutil
     import socket
+    import tempfile
 
-    staging = extensions.SSH_KEY_PATH + ".new"
+    from jen.services import certs as __certs
+
+    live, live_pub = extensions.SSH_KEY_PATH, extensions.SSH_KEY_PATH + ".pub"
     try:
-        for stale in (staging, staging + ".pub"):
-            with contextlib.suppress(FileNotFoundError):
-                os.remove(stale)
-        subprocess.run(
-            [
-                "ssh-keygen",
-                "-t",
-                "rsa",
-                "-b",
-                "4096",
-                "-f",
-                staging,
-                "-N",
-                "",
-                "-C",
-                f"jen@{socket.gethostname()}",
-            ],
-            capture_output=True,
-            check=True,
+        scratch = tempfile.mkdtemp(
+            prefix=".keygen-", dir=os.path.dirname(live)
+        )  # 0700: the private half exists only here until it is installed
+        try:
+            made = os.path.join(scratch, "id")
+            subprocess.run(
+                [
+                    "ssh-keygen",
+                    "-t",
+                    "rsa",
+                    "-b",
+                    "4096",
+                    "-f",
+                    made,
+                    "-N",
+                    "",
+                    "-C",
+                    f"jen@{socket.gethostname()}",
+                ],
+                capture_output=True,
+                check=True,
+            )
+            with open(made, "rb") as f:
+                private_bytes = f.read()
+            with open(made + ".pub", "rb") as f:
+                public_bytes = f.read()
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+        had_old = os.path.exists(live)
+        __certs.commit_file_set([(live, private_bytes, 0o600), (live_pub, public_bytes, 0o644)])
+        pub_key = public_bytes.decode("utf-8", "replace").strip()
+        kept = (
+            f" The previous key is kept as {live}.prev - delete it once every Kea server has the new one."
+            if had_old
+            else ""
         )
-        os.chmod(staging, 0o600)
-        os.replace(staging, extensions.SSH_KEY_PATH)
-        os.replace(staging + ".pub", extensions.SSH_KEY_PATH + ".pub")
-        with open(extensions.SSH_KEY_PATH + ".pub") as f:
-            pub_key = f.read().strip()
-        flash(f"SSH key generated. Add this public key to the Kea server's authorized_keys:\n{pub_key}", "success")
+        flash(
+            f"SSH key generated. Add this public key to the Kea server's authorized_keys:\n{pub_key}{kept}", "success"
+        )
         __user.audit("GENERATE_SSH_KEY", "settings", "SSH key pair generated")
     except subprocess.CalledProcessError as e:
         logger.error(f"Failed to generate SSH key: {e.stderr.decode() if e.stderr else e}")

@@ -209,7 +209,10 @@ def upload_nav_logo():
         for old_ext in ("png", "svg", "jpg", "jpeg", "webp"):
             old = f"{extensions.NAV_LOGO_PATH}.{old_ext}"
             if old != final and os.path.exists(old):
-                os.remove(old)
+                with contextlib.suppress(
+                    OSError
+                ):  # the new logo is in place; an old one that will not go is not "error saving"
+                    os.remove(old)
         __user.audit("BRANDING", "settings", f"Nav logo uploaded by {current_user.username}")
         flash("Nav logo updated.", "success")
     except Exception as e:

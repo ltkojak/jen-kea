@@ -11,6 +11,8 @@
     <td class="nw-d" data-m="primary">
         {{ h.hostname | hostname or '—' }}
         {{ device_badge(device_info, h.mac, get_manufacturer_icon_url, device_type_display) }}
+        {# the action menu (which carries Investigate) is an admin's; everyone else gets the link beside the name #}
+        {% if current_user.role not in ('superadmin','admin') %}{{ investigate_link(h.mac, "icon") }}{% endif %}
     </td>
     <td class="mono hide-mobile" data-m="hide">{{ h.mac }}</td>
     <td data-m="secondary"><span class="badge badge-{{ h.subnet_name|lower|replace(' ','') }}">{{ h.subnet_name }}</span></td>

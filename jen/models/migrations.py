@@ -1443,7 +1443,10 @@ def run_migrations() -> int:
         with lock_db.cursor() as cur:
             cur.execute("SELECT GET_LOCK(%s, %s) AS got", (MIGRATION_LOCK_NAME, MIGRATION_LOCK_WAIT_S))
             row = cur.fetchone()
-        if not row or row.get("got") != 1:
+        got = row.get("got") if row else None
+        if got is None:  # GET_LOCK answers NULL on an error: that is not "someone else has it"
+            raise RuntimeError("the migration lock could not be taken (the database reported an error)")
+        if got != 1:
             raise RuntimeError("another Jen is running the migrations")
         try:
             return _run_migrations_locked()

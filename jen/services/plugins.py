@@ -1054,20 +1054,20 @@ def install_plugin(plugin_id: str, registry_entry: dict) -> tuple[bool, str]:
     dest = os.path.join(extensions.PLUGIN_DIR, plugin_id)
 
     try:
-        resp = requests.get(zip_url, timeout=30, stream=True)
-        if resp.status_code != 200:
-            return False, f"Download failed: HTTP {resp.status_code}"
+        with contextlib.closing(requests.get(zip_url, timeout=30, stream=True)) as resp:
+            if resp.status_code != 200:
+                return False, f"Download failed: HTTP {resp.status_code}"
 
-        expected_sha256 = registry_entry.get("sha256", "").strip().lower()
-        if not expected_sha256:
-            return False, "Registry entry has no checksum — refusing to install."
-        try:
-            zip_body = _read_capped(resp, MAX_PLUGIN_ZIP_BYTES)
-        except _ZipTooBig:
-            return (
-                False,
-                f"The plugin package is larger than {MAX_PLUGIN_ZIP_BYTES // (1024 * 1024)} MB: refusing to install.",
-            )
+            expected_sha256 = registry_entry.get("sha256", "").strip().lower()
+            if not expected_sha256:
+                return False, "Registry entry has no checksum — refusing to install."
+            try:
+                zip_body = _read_capped(resp, MAX_PLUGIN_ZIP_BYTES)
+            except _ZipTooBig:
+                return (
+                    False,
+                    f"The plugin package is larger than {MAX_PLUGIN_ZIP_BYTES // (1024 * 1024)} MB: refusing to install.",
+                )
         actual_sha256 = hashlib.sha256(zip_body).hexdigest()
         if actual_sha256 != expected_sha256:
             logger.error(

@@ -137,9 +137,6 @@ def save_alert_channel():
         ids = [int(s) for s in subnet_ids_raw if s.isdigit() and int(s) in allowed]
         subnet_scope = json.dumps(ids) if ids else None
 
-    if channel_type not in ("telegram", "email", "slack", "webhook", "ntfy", "discord"):
-        flash("Invalid channel type.", "error")
-        return redirect(url_for("settings.settings_alerts"))
     if not channel_name:
         flash("Channel name is required.", "error")
         return redirect(url_for("settings.settings_alerts"))

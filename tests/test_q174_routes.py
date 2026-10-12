@@ -286,10 +286,107 @@ class TestRegeneratingTheSshKey:
 
         monkeypatch.setattr(subprocess, "run", fake_keygen)
         r = logged_in_client.post("/settings/generate-ssh-key", data={}, follow_redirects=True)
-        assert seen["cmd"][seen["cmd"].index("-f") + 1].endswith(".new"), (
+        staged = seen["cmd"][seen["cmd"].index("-f") + 1]
+        assert ".keygen-" in staged and staged != str(key), (
             "never ssh-keygen on the live path (it prompts for an overwrite)"
         )
         assert key.read_text() == "new-private" and (tmp_path / "id_rsa.pub").read_text().startswith("ssh-rsa NEW")
-        assert not (tmp_path / "id_rsa.new").exists()
+        assert (tmp_path / "id_rsa.prev").read_text() == "old-private", (
+            "the old key is kept until the person deletes it"
+        )
+        assert (tmp_path / "id_rsa.pub.prev").read_text().startswith("ssh-rsa OLD")
+        assert not [p for p in tmp_path.iterdir() if ".keygen-" in p.name], "the scratch directory is gone"
         assert "authorized_keys" in r.get_data(as_text=True) and "your-kea-server" not in r.get_data(as_text=True)
         assert "chown" not in " ".join(map(str, seen["cmd"]))
+
+
+class TestSecondPassFixes:
+    @pytest.mark.parametrize("bad", ["/%09/evil.example", "/%0a/x", "/%0d%0aSet-Cookie:x=y", "/ok%00"])
+    def test_a_control_character_in_next_is_ignored_not_a_500(self, client, bad):
+        r = client.post("/login?next=" + bad, data={"username": "admin", "password": "admin"})
+        assert (
+            r.status_code in (301, 302)
+            and "evil" not in r.headers["Location"]
+            and "Set-Cookie" not in r.headers["Location"]
+        )
+
+    def test_regenerating_the_ssh_key_needs_a_recent_confirmation(self, logged_in_client):
+        _stale(logged_in_client)
+        r = logged_in_client.post("/settings/generate-ssh-key", data={})
+        assert r.status_code in (301, 302) and "reauth" in r.headers["Location"]
+
+    def test_a_pushover_channel_can_be_created_from_the_form(self, logged_in_client, db):
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM alert_channels WHERE channel_name='q174-push-new'")
+        db.commit()
+        try:
+            r = logged_in_client.post(
+                "/settings/alerts/save-channel",
+                data={
+                    "channel_type": "pushover",
+                    "channel_name": "q174-push-new",
+                    "enabled": "1",
+                    "pushover_user_key": "u" * 30,
+                    "pushover_api_token": "t" * 30,
+                },
+                follow_redirects=True,
+            )
+            assert "Invalid channel type" not in r.get_data(as_text=True)
+            with db.cursor() as cur:
+                cur.execute("SELECT channel_type FROM alert_channels WHERE channel_name='q174-push-new'")
+                assert cur.fetchone()["channel_type"] == "pushover"
+            db.commit()
+        finally:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM alert_channels WHERE channel_name='q174-push-new'")
+            db.commit()
+
+    def test_a_garbage_ha_mode_is_refused_even_with_a_good_name(self, logged_in_client, monkeypatch):
+        from jen import config as config_mod
+
+        wrote = []
+        monkeypatch.setattr(config_mod.app_config, "write_values", lambda items: wrote.append(items))
+        r = logged_in_client.post(
+            "/settings/infrastructure/save-ha",
+            data={"ha_mode": "nonsense", "server_name": "kea-ok"},
+            follow_redirects=True,
+        )
+        assert "HA mode must be" in r.get_data(as_text=True) and wrote == []
+
+    def test_a_viewer_gets_the_investigate_link_on_lease_and_reservation_rows(self, client, db, mock_kea, monkeypatch):
+        monkeypatch.setattr(extensions, "SUBNET_MAP", {1: dict(A)})
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM lease4 WHERE HEX(hwaddr)='AABBCCDDEE91'")
+            cur.execute(
+                "INSERT INTO lease4 (address, hwaddr, subnet_id, valid_lifetime, expire, state, hostname) VALUES "
+                "(INET_ATON('10.99.0.191'), UNHEX('AABBCCDDEE91'), 1, 3600, DATE_ADD(NOW(), INTERVAL 1 HOUR), 0, 'q174v')"
+            )
+        db.commit()
+        try:
+            v, _ = restricted_client(client, db, None, role="viewer", username="q174_viewer_inv")
+            body = v.get("/leases").get_data(as_text=True)
+            assert "/client?q=aa%3Abb%3Acc%3Add%3Aee%3A91" in body or "/client?q=aa:bb:cc:dd:ee:91" in body
+        finally:
+            with db.cursor() as cur:
+                cur.execute("DELETE FROM lease4 WHERE HEX(hwaddr)='AABBCCDDEE91'")
+            db.commit()
+
+    def test_the_passkey_banner_is_not_shown_to_a_plain_get(self, logged_in_client):
+        r = logged_in_client.get("/mfa/passkey/enrolled", follow_redirects=True)
+        assert "Passkey enrolled successfully" not in r.get_data(as_text=True)
+
+
+class TestTheLitSetupPillIsThePageBeingShown:
+    @pytest.mark.parametrize("step", ["connect", "found", "helper", "baseline", "recovery", "investigate"])
+    def test_each_step_page_lights_its_own_pill(self, app, step):
+        from jen.routes import setup as setup_routes
+
+        with app.test_request_context(f"/setup/{step}"):
+            assert setup_routes._progress()["current"] == step
+
+    def test_a_page_that_is_not_a_step_falls_back_to_the_first_unresolved_step(self, app):
+        from jen.routes import setup as setup_routes
+        from jen.services import setup_wizard
+
+        with app.test_request_context("/setup/"):
+            assert setup_routes._progress()["current"] in setup_wizard.STEPS

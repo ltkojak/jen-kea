@@ -71,12 +71,17 @@ _HELPER_STATUS_KEY = "kea_helper_status"
 _MISSING_RE = re.compile(r"password is required|command not found|no such file", re.IGNORECASE)
 
 
+_SHELL_REFUSAL_RE = re.compile(r"^\s*-?(sudo|bash|sh|dash|zsh|ksh)\b[^:\n]*:")
+
+
 def _looks_missing(err: str) -> bool:
-    """Does `err` say the helper is not callable here? Only the FIRST line of stderr is asked: it is where sudo ("a password is required") and the shell ("... No such file
-    or directory", "command not found") put their refusal. The whole text used to be searched, so a helper that RAN and failed with a traceback naming a missing file on a
-    later line flipped the host to "legacy" status until the next contact (v5.69.0-beta.5, Q174)."""
-    first = (err or "").strip().splitlines()[:1]
-    return bool(first and _MISSING_RE.search(first[0]))
+    """Does `err` say the helper is not callable here? Only a line sudo or the shell WROTE counts ("sudo: a password is required", "bash: line 1: ...: No such file or directory",
+    "sudo: ...: command not found"), among the first few lines (sudo prints "unable to resolve host" first on a box that cannot resolve its own name). The whole text used to be
+    searched, so a helper that RAN and failed with a traceback naming a missing file flipped the host to "legacy" status until the next contact (v5.69.0-beta.5, Q174)."""
+    for line in (err or "").strip().splitlines()[:5]:
+        if _SHELL_REFUSAL_RE.match(line) and _MISSING_RE.search(line):
+            return True
+    return False
 
 
 class HelperMissing(Exception):

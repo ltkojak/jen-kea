@@ -72,6 +72,7 @@ SECTION_STRIPS = {
             "url": "/tools/doctor",
             "match": ("doctor.",),
             "requires_all_subnets": True,
+            "roles": ADMIN_ROLES,  # the route is admin-only: a viewer was shown a link that bounced them
         },
         {"icon": "clock", "label": "Timeline", "url": "/timeline", "match": ("timeline.",)},
         # plugin nav items with section == "network" are appended at render time
@@ -287,7 +288,8 @@ def nav_context(endpoint, role, plugin_nav_items=None, all_subnets=True):
     # Items flagged requires_all_subnets render the whole Kea config; a
     # subnet-restricted user is not shown them (the route refuses anyway).
     section_strips = {
-        k: [t for t in v if all_subnets or not t.get("requires_all_subnets")] for k, v in SECTION_STRIPS.items()
+        k: [t for t in v if (all_subnets or not t.get("requires_all_subnets")) and _allowed(t, role)]
+        for k, v in SECTION_STRIPS.items()
     }
     group = settings_group_for(endpoint)
     in_settings = endpoint == "settings.settings" or group is not None

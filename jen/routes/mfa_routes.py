@@ -468,6 +468,7 @@ def passkey_register_finish():
         _complete_pending_login(enrolling)
     if codes:
         session["passkey_backup_codes"] = codes
+    session["passkey_just_enrolled"] = True
     return jsonify({"ok": True, "name": out["name"], "next": url_for("mfa_routes.passkey_enrolled")})
 
 
@@ -477,7 +478,8 @@ def passkey_enrolled():
     """Where the page lands after a successful /finish: shows freshly
     issued backup codes once, else back to the MFA page."""
     codes = session.pop("passkey_backup_codes", None)
-    flash("Passkey enrolled successfully!", "success")
+    if session.pop("passkey_just_enrolled", None):  # set by /finish: a plain GET of this URL is not an enrolment
+        flash("Passkey enrolled successfully!", "success")
     if codes:
         return render_template("mfa_backup_codes.html", codes=codes)
     return redirect(url_for("mfa_routes.mfa_enroll"))

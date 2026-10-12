@@ -78,7 +78,9 @@ def timeline_page():
         if result is None:
             # the sentences are this module's own constants, never request text
             return "".join(f"<p>{n}</p>" for n in (notes or [NO_MATCH]))
-        return render_template("_timeline_rows.html", result=result, kinds=kinds)
+        return "".join(f"<p>{n}</p>" for n in notes) + render_template(
+            "_timeline_rows.html", result=result, kinds=kinds
+        )
     return render_template(
         "timeline.html",
         mac=raw_mac,

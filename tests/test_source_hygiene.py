@@ -474,3 +474,53 @@ class TestAnEmptyMacIsAKeyLikeAnyOther:
         groups = {("nak", "", "10.0.0.5", None): {"last_ts": 5}, ("nak", "", "10.0.0.6", None): {"last_ts": 9}}
         kept, dropped = cp._cap_new_keys(Cur(), 1, groups, limit=0)
         assert ("nak", "", "10.0.0.5", None) in kept and dropped == 1  # the known one stays; only the new one is capped
+
+
+class TestSecondPassFixesThatNeedNoDatabase:
+    @pytest.mark.parametrize(
+        "raw", ["/\t/evil.example", "/\n/x", "/a\rb", "/ok\x00", "//evil", "https://evil/", "/\\evil", "leases", ""]
+    )
+    def test_safe_next_refuses_anything_that_is_not_a_plain_path(self, raw):
+        from jen.routes.auth import _safe_next
+
+        assert _safe_next(raw) == ""
+
+    @pytest.mark.parametrize("raw", ["/leases", "/leases?search=a%20b&page=2", "/"])
+    def test_safe_next_keeps_a_plain_path(self, raw):
+        from jen.routes.auth import _safe_next
+
+        assert _safe_next(raw) == raw
+
+    @pytest.mark.parametrize(
+        "err",
+        [
+            "sudo: unable to resolve host kea1: Name or service not known\nsudo: a password is required",
+            "sudo: a password is required",
+            "bash: line 1: /usr/local/sbin/jen-kea-helper: No such file or directory",
+        ],
+    )
+    def test_a_missing_helper_is_still_missing_behind_sudos_noise(self, err):
+        from jen.services import kea_host
+
+        assert kea_host._looks_missing(err) is True
+
+    @pytest.mark.parametrize(
+        "err",
+        [
+            "Traceback (most recent call last):\n  File x\nFileNotFoundError: [Errno 2] No such file or directory: 'x'",
+            "FileNotFoundError: [Errno 2] No such file or directory: '/etc/kea/kea-dhcp4.conf'",
+            "sudo: unable to resolve host kea1: Name or service not known",
+        ],
+    )
+    def test_a_helper_that_ran_and_failed_is_not_missing(self, err):
+        from jen.services import kea_host
+
+        assert kea_host._looks_missing(err) is False
+
+    def test_doctor_is_not_offered_to_a_viewer(self):
+        from jen.routes.settings import nav
+
+        for role, expected in (("viewer", False), ("admin", True), ("superadmin", True)):
+            ctx = nav.nav_context("dashboard.dashboard", role)
+            labels = [i["label"] for g in ctx["sheet"] for i in g["items"]]
+            assert ("Doctor" in labels) is expected, role

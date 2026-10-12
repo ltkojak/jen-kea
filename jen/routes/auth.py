@@ -30,7 +30,14 @@ def _JEN_VERSION():
 def _safe_next(raw) -> str:
     """`raw` (a ?next= value) when it is a path on this host - one slash, no scheme, no backslash (a browser reads a slash-backslash start as `//host`) - else ''."""
     raw = raw or ""
-    if raw and (raw.startswith("//") or "://" in raw or "\\" in raw or not raw.startswith("/")):
+    if raw and (
+        raw.startswith("//")
+        or "://" in raw
+        or "\\" in raw
+        or not raw.startswith("/")
+        # a tab, a newline, any control character: a browser's URL parser DROPS tabs and newlines (so "/<TAB>/host" is "//host"), and werkzeug refuses a newline in a header
+        or any(ord(c) < 32 or ord(c) == 127 for c in raw)
+    ):
         return ""
     return raw
 
