@@ -365,7 +365,8 @@ class TestSecondPassFixes:
         try:
             v, _ = restricted_client(client, db, None, role="viewer", username="q174_viewer_inv")
             body = v.get("/leases").get_data(as_text=True)
-            assert "/client?q=aa%3Abb%3Acc%3Add%3Aee%3A91" in body or "/client?q=aa:bb:cc:dd:ee:91" in body
+            low = body.lower()  # the lease's MAC is printed as the database gives it (upper case), and percent-encoded
+            assert "/client?q=aa%3abb%3acc%3add%3aee%3a91" in low or "/client?q=aa:bb:cc:dd:ee:91" in low
         finally:
             with db.cursor() as cur:
                 cur.execute("DELETE FROM lease4 WHERE HEX(hwaddr)='AABBCCDDEE91'")
