@@ -139,3 +139,62 @@ class TestArrangeOnPhone:
         page.reload()
         page.wait_for_timeout(200)
         expect(page.locator("body")).to_have_class(re.compile(r"\bdash-compact\b"))
+
+
+class TestTheUtilizationHistoryShowsItsWindow:
+    """v5.69.0-beta.6 (Q175): 24 hours and 30 days drew the same flat line, and nothing on the card said which window it was. The label now carries the window and the range it covered
+    ("24h: 24.1-26.4%"), and the line is scaled to its own band. A daily sine is seeded for subnet 1 (the default dataset has no history of its own) and removed again."""
+
+    LABEL = r"\d+(\.\d)?% of the pool · \d+ in the pools · (24h|30d): \d+(\.\d)?–\d+(\.\d)?%"
+
+    @pytest.fixture
+    def history(self):
+        import math
+
+        import pymysql
+        import pymysql.cursors
+
+        from tests.conftest import TEST_DB
+
+        conn = pymysql.connect(**TEST_DB, cursorclass=pymysql.cursors.DictCursor)
+        try:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM lease_history WHERE subnet_id=1")
+                rows = [
+                    (
+                        1,
+                        24 * 30 - i,
+                        90 + int(10 * math.sin(i / 24 * 2 * math.pi)),
+                        90 + int(10 * math.sin(i / 24 * 2 * math.pi)),
+                        250,
+                    )
+                    for i in range(24 * 30)
+                ]
+                cur.executemany(
+                    "INSERT INTO lease_history (subnet_id, snapshot_time, active_leases, pool_used, pool_size) "
+                    "VALUES (%s, DATE_SUB(NOW(), INTERVAL %s HOUR), %s, %s, %s)",
+                    rows,
+                )
+            conn.commit()
+            yield
+        finally:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM lease_history WHERE subnet_id=1")
+            conn.commit()
+            conn.close()
+
+    def test_the_label_names_the_window_and_changes_with_it(self, history, dash_page, base_url):
+        page = dash_page
+        page.click("#customize-btn")
+        page.check("#w-lease_history_chart")
+        page.click("#save-dash-prefs-btn")
+        page.wait_for_timeout(300)
+        label = page.locator("#chart-label-1")
+        page.select_option("#history-days", "1")
+        expect(label).to_have_text(re.compile(self.LABEL + r".*"), timeout=10000)
+        expect(label).to_contain_text("24h:")
+        day = label.inner_text()
+        page.select_option("#history-days", "30")
+        expect(label).to_contain_text("30d:", timeout=10000)
+        expect(label).to_have_text(re.compile(self.LABEL + r".*"))
+        assert label.inner_text() != day

@@ -459,6 +459,29 @@ function utilColor(pct) {
     return          jenColor('var(--primary)');
 }
 
+// v5.69.0-beta.6 (Q175): the y-range is the data's own band, padded, never a fixed 0-100 - a flat line means a flat series, not a short canvas
+function sparklineBand(vals) {
+    var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+    var pad = Math.max(2, (hi - lo) * 0.25);
+    return { lo: Math.max(0, Math.floor(lo - pad)), hi: Math.min(100, Math.ceil(hi + pad)) };
+}
+
+// The window the line covers, in words: "24h: 24.1–26.4%", and - when the first snapshot is younger than the window - how many days of data there are. `days` is the
+// API's own (clamped) answer, not the select's value. The first bucket is an hour's start, so a first point within two hours of the window's edge is the whole window.
+function spanText(points, days) {
+    var vals = points.map(function(p) { return p.pct; });
+    var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+    function one(v) { return String(Math.round(v * 10) / 10); }
+    var text = (days === 1 ? '24h' : days + 'd') + ': ' + one(lo) + '–' + one(hi) + '%';
+    var first = Date.parse(String(points[0].t).replace(' ', 'T') + 'Z');
+    var now = Date.now();
+    if (!isNaN(first) && first > now - days * 86400000 + 2 * 3600000) {
+        var n = Math.floor((now - first) / 86400000);
+        text += ' (' + (n < 1 ? 'under a day' : n + (n === 1 ? ' day' : ' days')) + ' of snapshots so far)';
+    }
+    return text;
+}
+
 function drawSparkline(canvasId, points, _unused, _attempt) {
     var canvas = document.getElementById(canvasId);
     if (!canvas) return;
@@ -486,12 +509,11 @@ function drawSparkline(canvasId, points, _unused, _attempt) {
     }
 
     var vals  = points.map(function(p) { return p.pct; });
-    var max   = Math.max(100, Math.max.apply(null, vals));
-    var range = max || 1;
+    var band  = sparklineBand(vals);
     var step  = w / Math.max(points.length - 1, 1);
     var pad   = 4;
 
-    function yPos(v) { return h - pad - (v / range) * (h - pad * 2); }
+    function yPos(v) { return h - pad - ((v - band.lo) / Math.max(band.hi - band.lo, 1)) * (h - pad * 2); }
 
     // Determine color from latest utilization
     var latestPct = vals[vals.length - 1];
@@ -526,6 +548,13 @@ function drawSparkline(canvasId, points, _unused, _attempt) {
     ctx.arc(lx, ly, 3, 0, Math.PI * 2);
     ctx.fillStyle = lineColor;
     ctx.fill();
+
+    // The band's own edges, so the scale is never a guess
+    ctx.fillStyle = jenColor('var(--text-muted)');
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(band.hi + '%', w - 2, 10);
+    ctx.fillText(band.lo + '%', w - 2, h - 2);
 }
 
 // ── Lease Sparklines — 30-day per subnet ─────────────────────────────────────
@@ -664,7 +693,7 @@ function loadHistory() {
                         var last = known[known.length-1];
                         drawSparkline('chart-' + sid, known, null);
                         var label = document.getElementById('chart-label-' + sid);
-                        if (label) label.textContent = last.pct + '% of the pool · ' + last.u + ' in the pools';
+                        if (label) label.textContent = last.pct + '% of the pool · ' + last.u + ' in the pools · ' + spanText(known, data.days || parseInt(d, 10) || 7);
                     }
                 });
             }, 200);
