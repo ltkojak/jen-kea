@@ -287,8 +287,11 @@ class TestDdnsSettingsLiveTogetherUnderKea:
     def test_a_phone_toc_chip_names_the_section_and_it_is_a_card_with_a_header(self, logged_in_client, mock_kea):
         body = logged_in_client.get("/settings/kea").get_data(as_text=True)
         assert 'href="#kea-ddns"' in body and 'href="#kea-d2"' not in body
-        start = body.index('id="kea-ddns"')
-        assert body[start - 20 : start].count("card") == 1 and 'class="card-header"' in body[start : start + 200]
+        import re
+
+        # the chip's target is a .card with its own .card-header as a direct child: that is what the phone accordion collapses and opens
+        m = re.search(r'<div class="card[^"]*" id="kea-ddns">\s*<div class="card-header">', body)
+        assert m, "the kea-ddns anchor is not a card with a header"
 
 
 class TestEveryFormActionStillResolves:
