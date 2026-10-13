@@ -100,3 +100,15 @@ That is a file under `/var/log/kea`, flushed as it is written, rotated at 10 MB 
 **Settings → Kea → SSH has a Kea log path field.** It is the `[kea] dhcp4_log_path` key, which used to be edited by hand. Jen reads the file the logger's own `output-options` name first and uses this path only when the logger names none. Blank is `/var/log/kea/kea-dhcp4.log`. It must be a `*.log` file under `/var/log`, the same rule the Kea host applies.
 
 **The Utilization History chart shows its window.** The 24-hour, 7-day and 30-day views are scaled to the data's own range and the label under each subnet says which window it is, the range it covered and, on a box that has been collecting snapshots for less than the window, how many days of data there are.
+
+## The DDNS card moved to Settings → Kea
+
+One step (5.69.0-beta.7), and nothing has to be done for it. What you will notice:
+
+**The DDNS settings are one section under Settings → Kea.** The D2 control-socket card and the DNS provider card (it was "DDNS & DNS Provider" under Alerts & Integrations) sit together under a DDNS heading, with a DDNS chip in the page's contents list. A bookmark to the old place forwards to the new one. Neither card was ever an alert; both are how Jen reaches the DDNS pipeline on the Kea side. The pipeline itself is still operated under Network → DDNS.
+
+**The wording says who writes DNS.** Jen writes no DNS records. D2 does when dhcp4 sends updates, or a hook script of your own does if you load one through `libdhcp_run_script.so`. The DNS provider is where Jen looks names up, so the card is now "DNS provider (lookups)" and the no-provider choice is "None (no lookups)".
+
+**A box with no DNS provider set reads "Not configured".** A missing `[ddns] dns_provider` used to read as Technitium, so a fresh install showed "Provider (technitium)" on the DDNS Status tab and tailed a log that did not exist. The default is now none. A box that has the key set is not affected, and neither is a hand-written section that has an `api_url` or `api_token` and no `dns_provider` key: it still reads as Technitium. If you relied on the old default with nothing else set, choose Technitium under Settings → Kea → DDNS.
+
+**A hook script beside D2 is warned about.** If a `libdhcp_run_script.so` hook is loaded and dhcp4 also sends updates to D2, Doctor, the DDNS Status tab and the Naming tab say that every lease may be written twice. Nothing is blocked. The admin guide has a walk-through, "Moving from a hook script to D2".
