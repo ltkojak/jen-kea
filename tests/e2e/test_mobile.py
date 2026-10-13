@@ -266,10 +266,10 @@ class TestSettingsCardsCollapsibleOnPhone:
     # v5.56.3-beta.1 CI artifact (1440x2546, device_scale_factor 1 so PNG
     # pixels == CSS/scrollHeight pixels) — a real measurement, not a guess.
     SETTINGS_KEA_HEIGHT_BEFORE_Q72 = 2546
-    # v5.69.0-beta.7 (Q176): the DNS provider card and the DDNS section's heading and intro joined this page (the D2 card was already on it). Stacked in one column they add
-    # about 450 px to the baseline above; in the two-column layout the section is one wide card with its two cards side by side. The first layout (the section as one
-    # unbreakable card in a column) measured 2196 px in CI against a page that had been at the old ceiling, which is where the 450 comes from.
-    DDNS_SECTION_ADDED_Q176 = 450
+    # v5.69.0-beta.7 (Q176): the DNS provider card and the DDNS section's heading and intro joined this page (the D2 card was already on it). The page had been at the old
+    # ceiling (about 1770 px); with the section as one wide card, its two cards side by side, CI measured 2169 px - about 400 px more in two columns, which is 575 px in one
+    # (400 / 0.7), and that is what the baseline above gains. The ceiling is still 30% under a page that holds everything it holds now.
+    DDNS_SECTION_ADDED_Q176 = 575
 
     def test_settings_kea_is_at_least_30_percent_shorter_than_5_56_3(self, desktop, base_url):
         _visit(desktop, base_url, "/settings/kea")

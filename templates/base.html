@@ -225,6 +225,10 @@ var THEME_IDS = {{ theme_presets | map(attribute=0) | list | tojson }};
            to bottom, then the second column), so the chip TOC's anchors and
            the phone accordion (≤768px, no overlap with this ≥1280px rule)
            both still work unmodified. */
+        /* v5.69.0-beta.7 (Q176) - the DDNS section's two cards side by side. A class, never an inline style: the phone accordion hides a collapsed card's body with a
+           stylesheet `display: none`, which an inline `display: grid` would beat (the section stayed open and the page grew 400 px). */
+        .ddns-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 16px; align-items: start; }
+        .ddns-pair > .card { margin-bottom: 0; }
         @media (min-width: 1280px) {
             .settings-cols { columns: 2; column-gap: var(--sp-5); }
             .settings-cols .card { break-inside: avoid; }
