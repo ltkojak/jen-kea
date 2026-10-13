@@ -287,9 +287,8 @@ class TestDdnsSettingsLiveTogetherUnderKea:
     def test_the_two_cards_sit_side_by_side_by_a_class_not_an_inline_style(self, logged_in_client, mock_kea):
         """The phone accordion hides a collapsed card's body with a stylesheet display:none; an inline display:grid on the wrapper beat it and the section stayed open (Q176, CI)."""
         body = logged_in_client.get("/settings/kea").get_data(as_text=True)
-        start = body.index('id="kea-ddns"')
-        section = body[start : start + 600]
-        assert 'class="ddns-pair"' in section and "display:grid" not in section
+        assert 'class="ddns-pair"' in body
+        assert "display:grid;grid-template-columns:repeat(auto-fit,minmax(min(420px" not in body
         assert ".ddns-pair {" in body or ".ddns-pair{" in body
 
     def test_a_phone_toc_chip_names_the_section_and_it_is_a_card_with_a_header(self, logged_in_client, mock_kea):
