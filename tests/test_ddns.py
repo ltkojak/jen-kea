@@ -1046,6 +1046,12 @@ class TestTheNamingTabWarnsOfTwoWriters:
     def _wire(self, monkeypatch, dhcp4):
         return TestDdnsNamingTab()._wire(monkeypatch, dhcp4)
 
+    @staticmethod
+    def _flashes(client):
+        """What the save queued for the next page (the page itself carries the banner, so a rendered body cannot tell the two apart)."""
+        with client.session_transaction() as sess:
+            return [(cat, msg) for cat, msg in sess.get("_flashes", [])]
+
     def test_the_form_asks_first_when_a_hook_is_loaded_and_updates_are_off(self, logged_in_client, monkeypatch):
         self._wire(monkeypatch, {"dhcp-ddns": {"enable-updates": False}, "hooks-libraries": [self.HOOK]})
         body = logged_in_client.get("/ddns?tab=naming").data.decode()
@@ -1061,17 +1067,78 @@ class TestTheNamingTabWarnsOfTwoWriters:
         self, logged_in_client, monkeypatch
     ):
         fake = self._wire(monkeypatch, {"dhcp-ddns": {"enable-updates": False}, "hooks-libraries": [self.HOOK]})
-        r = logged_in_client.post("/ddns/naming/save", data={"enable-updates": "1"}, follow_redirects=True)
+        logged_in_client.post("/ddns/naming/save", data={"enable-updates": "1"})
         assert "apply-config" in fake.ops(), "the save is not blocked"
-        assert b"two writers" in r.data and b"turn one off" in r.data
+        flashed = self._flashes(logged_in_client)
+        assert any(cat == "warning" and "two writers" in msg and "turn one off" in msg for cat, msg in flashed), flashed
 
     def test_no_warning_when_the_save_leaves_updates_off(self, logged_in_client, monkeypatch):
         fake = self._wire(monkeypatch, {"dhcp-ddns": {"enable-updates": False}, "hooks-libraries": [self.HOOK]})
-        r = logged_in_client.post("/ddns/naming/save", data={"ddns-generated-prefix": "x"}, follow_redirects=True)
+        logged_in_client.post("/ddns/naming/save", data={"ddns-generated-prefix": "x"})
         assert "apply-config" in fake.ops()
-        assert b"two writers" not in r.data
+        assert not any("two writers" in msg for _cat, msg in self._flashes(logged_in_client))
 
     def test_no_warning_without_a_hook(self, logged_in_client, monkeypatch):
         fake = self._wire(monkeypatch, {"dhcp-ddns": {"enable-updates": False}})
-        r = logged_in_client.post("/ddns/naming/save", data={"enable-updates": "1"}, follow_redirects=True)
-        assert "apply-config" in fake.ops() and b"two writers" not in r.data
+        logged_in_client.post("/ddns/naming/save", data={"enable-updates": "1"})
+        assert "apply-config" in fake.ops()
+        assert not any("two writers" in msg for _cat, msg in self._flashes(logged_in_client))
+
+
+class TestSecondPassFixes:
+    """Q176's adversarial pass: a failed config-get is not "Not configured"; an upgrade keeps the lookups it had; the muted log row; the Naming pre-save read records no history."""
+
+    def test_a_config_get_that_failed_is_unknown_not_not_configured(self, monkeypatch):
+        from jen import extensions
+        from jen.routes import ddns as ddns_route
+
+        monkeypatch.setattr(extensions, "cfg", __import__("configparser").ConfigParser())
+        assert ddns_route._ddns_mode(None) == "unknown"
+        assert ddns_route._ddns_mode(False) == "none"
+        assert ddns_route._ddns_mode(True) == "d2"
+        test_cfg = __import__("configparser").ConfigParser()
+        test_cfg["ddns"] = {"dns_provider": "pihole"}
+        monkeypatch.setattr(extensions, "cfg", test_cfg)
+        assert ddns_route._ddns_mode(None) == "provider", "a configured provider is still known"
+
+    def test_the_status_tab_says_unknown_when_kea_does_not_answer(self, logged_in_client, monkeypatch):
+        from jen import extensions
+        from jen.services import kea as kea_svc
+
+        monkeypatch.setattr(extensions, "KEA_SSH_HOST", "")
+        test_cfg = __import__("configparser").ConfigParser()
+        monkeypatch.setattr(extensions, "cfg", test_cfg)
+        monkeypatch.setattr(kea_svc, "kea_command", lambda *a, **k: {"result": 1, "text": "down"})
+        monkeypatch.setattr(kea_svc, "get_active_kea_server", lambda: extensions.KEA_SERVERS[0])
+        body = logged_in_client.get("/ddns?tab=status").data.decode()
+        assert "could not be read" in body and "Not configured" not in body
+
+    def test_an_upgraded_config_with_a_url_and_no_provider_key_still_looks_names_up(self, monkeypatch):
+        from jen import extensions
+        from jen.routes import ddns as ddns_route
+
+        test_cfg = __import__("configparser").ConfigParser()
+        test_cfg["ddns"] = {"api_url": "http://dns:5380", "api_token": "t"}
+        monkeypatch.setattr(extensions, "cfg", test_cfg)
+        assert ddns_route._ddns_mode(False) == "provider"
+
+    def test_the_status_tab_mutes_a_missing_log_when_nothing_is_configured(self, logged_in_client, monkeypatch):
+        from jen import extensions
+        from jen.services import kea as kea_svc
+        from jen.services import kea_host
+
+        monkeypatch.setattr(extensions, "KEA_SSH_HOST", "10.0.0.5")
+        monkeypatch.setattr(extensions, "cfg", __import__("configparser").ConfigParser())
+        monkeypatch.setattr(kea_host, "tail_log", lambda *a, **k: {"ok": False, "code": "missing"})
+        monkeypatch.setattr(kea_svc, "kea_command", lambda *a, **k: {"result": 0, "arguments": {"Dhcp4": {}}})
+        monkeypatch.setattr(kea_svc, "get_active_kea_server", lambda: extensions.KEA_SERVERS[0])
+        body = logged_in_client.get("/ddns?tab=status").data.decode()
+        assert "Not configured" in body and "no DDNS log is configured" in body and "File not found" not in body
+
+    def test_the_naming_save_reads_the_hook_for_a_value_and_records_no_history(self):
+        import inspect
+
+        from jen.routes import ddns as ddns_route
+
+        src = inspect.getsource(ddns_route.ddns_naming_save)
+        assert "capture=False" in src and "timeout=" in src

@@ -21,6 +21,7 @@ import jen.config as __config
 import jen.models.user as __user
 import jen.services.auth as __auth
 import jen.services.capabilities as __caps
+import jen.services.ddns_writers as __ddns_writers
 import jen.services.host_match as __host_match
 import jen.services.investigation_logging as __inv
 import jen.services.kea as __kea
@@ -264,7 +265,7 @@ def settings_kea():
         "ddns_url": extensions.cfg.get("ddns", "api_url", fallback=""),
         "ddns_user": extensions.cfg.get("ddns", "api_user", fallback=""),
         "ddns_zone": extensions.cfg.get("ddns", "forward_zone", fallback=""),
-        "dns_provider": extensions.cfg.get("ddns", "dns_provider", fallback="none"),
+        "dns_provider": __ddns_writers.effective_provider(extensions.cfg),
         "ha_mode": extensions.cfg.get("kea", "ha_mode", fallback=""),
         "server_name": extensions.cfg.get("kea", "name", fallback="Kea Server 1"),
         "subnets": extensions.SUBNET_MAP,

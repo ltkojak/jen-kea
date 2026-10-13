@@ -681,7 +681,7 @@ def _check_ddns_writers(dhcp4_cfg) -> list[Finding]:
                 "ddns-hook-present",
                 "info",
                 "Names are written by a run_script hook",
-                "Names are written by the run_script hook loaded on this server; D2 is off. Jen writes nothing: it reads the hook's log when [ddns] log_path points at it, and looks names up on the DNS provider.",
+                "Names are written by the run_script hook loaded on this server; D2 is off. Jen's DDNS page writes nothing: it reads the hook's log when [ddns] log_path points at it, and looks names up on the DNS provider.",
                 "hooks-libraries",
                 "/settings/kea#kea-ddns",
                 "Jen cannot see what the hook does, only that it is loaded. If the script logs, point [ddns] log_path (Settings → Kea → DDNS) at that log to see it on the DDNS page.",

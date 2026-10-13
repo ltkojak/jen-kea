@@ -457,7 +457,7 @@ as for IPv4 (set at the bottom of the page).
 
 A superadmin can download one encrypted **recovery bundle** from Settings → Databases: config, keys, content and the Jen database in a single file protected by a passphrase you choose. It is for rebuilding a lost Jen host — see "Recovery Bundle" in the admin guide for the restore steps.
 
-The DDNS Status page shows activity from whatever writes names on the Kea host - D2 (kea-dhcp-ddns) or a hook script of your own - when `[ddns] log_path` (Settings → Kea → DDNS) points at its log. Jen itself writes no DNS records.
+The DDNS Status page shows activity from whatever writes names on the Kea host - D2 (kea-dhcp-ddns) or a hook script of your own - when `[ddns] log_path` (Settings → Kea → DDNS) points at its log. Jen itself writes no DNS records on this page (the optional Local DNS Sync plugin, which pushes rewrites to Pi-hole or AdGuard Home, is the one exception).
 
 ### Log Activity
 

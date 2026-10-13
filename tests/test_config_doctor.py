@@ -563,7 +563,10 @@ class TestTwoWritersOfDnsNames:
     def test_any_path_to_the_library_counts(self, library):
         assert "ddns-two-writers" in _ids(doctor.diagnose(self._cfg(True, [{"library": library}]), hosts=[]))
 
-    @pytest.mark.parametrize("library", ["/x/libdhcp_run_script.so.bak", "/x/notlibdhcp_run_script.sox", "", None, 5])
+    @pytest.mark.parametrize(
+        "library",
+        ["/x/libdhcp_run_script.so.bak", "/x/notlibdhcp_run_script.sox", "/x/notlibdhcp_run_script.so", "", None, 5],
+    )
     def test_a_look_alike_does_not(self, library):
         assert not (
             {"ddns-two-writers", "ddns-hook-present"}

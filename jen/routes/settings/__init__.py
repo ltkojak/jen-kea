@@ -5,7 +5,7 @@ The Settings blueprint. Split into focused modules (v5.6.1) — all
 register on the one `bp` below so every endpoint stays `settings.<fn>`
 and every existing `url_for("settings.…")` keeps resolving:
 
-  alerts          — channels, templates, thresholds (+ DDNS/metrics cards)
+  alerts          — channels, templates, thresholds (+ the metrics card; the DDNS cards live on the Kea page since v5.69.0-beta.7)
   infrastructure  — the Kea page (Control Agent / SSH / servers / HA)
                     and the save handlers for Kea, DB, SSH, DDNS, HA,
                     ports, metrics

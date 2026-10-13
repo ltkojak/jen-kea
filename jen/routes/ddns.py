@@ -60,19 +60,20 @@ def _stat_value(args: dict, key: str) -> int:
         return 0
 
 
-def _ddns_mode(dhcp4_enable_updates: bool) -> str:
-    """[ddns] mode ∈ provider | d2 | both | none. Explicit config wins; absent, it's derived at read time (never written back) - d2 when dhcp4 sends updates to
+def _ddns_mode(dhcp4_enable_updates: bool | None) -> str:
+    """[ddns] mode ∈ provider | d2 | both | none | unknown. Explicit config wins; absent, it's derived at read time (never written back) - d2 when dhcp4 sends updates to
     D2, else provider when a DNS provider (a lookup server) is set, else `none`: nothing is configured, and the Status tab says so instead of showing a provider nobody
-    chose (v5.69.0-beta.7, Q176: a fresh install used to read "Provider (technitium)" and tail a log that did not exist)."""
+    chose (v5.69.0-beta.7, Q176: a fresh install used to read "Provider (technitium)" and tail a log that did not exist). `dhcp4_enable_updates` None is a config-get that
+    could not be read: with nothing else configured that is `unknown`, never "Not configured" - a failed read is not a statement about configuration."""
     configured = extensions.cfg.get("ddns", "mode", fallback="").strip()
     if configured in ("provider", "d2", "both"):
         return configured
     if dhcp4_enable_updates:
         return "d2"
-    provider = extensions.cfg.get("ddns", "dns_provider", fallback="none").strip()
+    provider = __writers.effective_provider(extensions.cfg)
     if provider and provider != "none":
         return "provider"
-    return "none"
+    return "unknown" if dhcp4_enable_updates is None else "none"
 
 
 def _status_tab_context():
@@ -140,6 +141,7 @@ def _status_tab_context():
     active_server = __kea.get_active_kea_server() if extensions.KEA_SERVERS else None
     server_updates = []
     active_enabled = False
+    active_read = active_server is None  # no server at all is a known nothing; a server whose config-get failed is not
     active_hook = None  # whether the active server loads libdhcp_run_script.so: None when its config could not be read
     for server in extensions.KEA_SERVERS:
         name = server.get("name") or server.get("ssh_host") or f"Server {server.get('id')}"
@@ -149,10 +151,11 @@ def _status_tab_context():
         hook = __writers.hook_loaded((cfg or {}).get("Dhcp4", {})) if cfg else None
         if server is active_server:
             active_enabled = bool(enabled)
+            active_read = cfg is not None
             active_hook = hook
         server_updates.append({"name": name, "enabled": enabled, "hook": hook})
 
-    mode = _ddns_mode(active_enabled)
+    mode = _ddns_mode(active_enabled if active_read else None)
 
     d2_status = "skip"
     d2_detail = "DDNS updates disabled in dhcp4"
@@ -191,7 +194,7 @@ def _status_tab_context():
         "log_status": log_status,
         "log_message": log_message,
         "ddns_log": extensions.DDNS_LOG if show_log else "",
-        "dns_provider": extensions.cfg.get("ddns", "dns_provider", fallback="none"),
+        "dns_provider": __writers.effective_provider(extensions.cfg),
         "mode": mode,
         # v5.69.0-beta.7 (Q176): the lease hook is read from the SAME config-get as the update switch; both on is the two-writers warning
         "hook_loaded": active_hook,
@@ -210,7 +213,7 @@ def _provider_lookup(lookup_host: str):
     TestDdnsSshLookupProvider, which still calls this with no ?tab= and
     expects it to run)."""
     try:
-        dns_provider = extensions.cfg.get("ddns", "dns_provider", fallback="none")
+        dns_provider = __writers.effective_provider(extensions.cfg)
         if dns_provider == "technitium":
             dns_url = extensions.cfg.get("ddns", "api_url", fallback="")
             dns_token = extensions.cfg.get("ddns", "api_token", fallback="")
@@ -584,7 +587,12 @@ def ddns_naming_save():
     hook = False
     if values["enable-updates"]:
         active = __kea.get_active_kea_server()
-        current = __host.read_config(active, "dhcp4") if active and active.get("ssh_host") else None
+        # a read for one value: no config revision recorded (it must not race the save that follows), and bounded
+        current = (
+            __host.read_config(active, "dhcp4", capture=False, timeout=15)
+            if active and active.get("ssh_host")
+            else None
+        )
         hook = __writers.hook_loaded((current or {}).get("Dhcp4", {}))
     saved = _save_ddns4(values)
     if saved and values["enable-updates"] and hook:

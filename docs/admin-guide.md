@@ -509,7 +509,7 @@ The ID must match the `id` field in your `kea-dhcp4.conf` subnet definition.
 | Key | Description | Example |
 |---|---|---|
 | `log_path` | The DDNS log on the Kea server that Jen tails - D2's, or your own hook script's (Settings → Kea → DDNS) | `/var/log/kea/kea-ddns.log` |
-| `dns_provider` | The server Jen looks names up on - lookups only, Jen writes no DNS: `technitium`, `pihole`, `adguard`, `ssh` or `none`. Default `none` (v5.69.0-beta.7; it used to read `technitium` when absent) | `technitium` |
+| `dns_provider` | The server Jen looks names up on - lookups only, the DDNS page writes no DNS: `technitium`, `pihole`, `adguard`, `ssh` or `none`. Default `none` (v5.69.0-beta.7; it used to read `technitium` when absent - a file with an `api_url` or `api_token` and no `dns_provider` still reads as `technitium`) | `technitium` |
 | `api_url` | The DNS provider's API base URL | `https://dns.example.com/api` |
 | `api_token` | The DNS provider's API token | `your-token` |
 | `forward_zone` | DNS forward zone | `example.com` |
@@ -2229,9 +2229,9 @@ Each Add/Remove pushes to every SSH-configured server, guarded by that server's 
 
 ### Moving from a hook script to D2
 
-The order the maintainer followed on 2026-10-12, for a box whose names are written by a `run_script` hook script of your own. Nothing here is automatic: Jen does not read the script and cannot turn it off.
+The order that worked on a real box, for a box whose names are written by a `run_script` hook script of your own. Nothing here is automatic: Jen does not read the script and cannot turn it off.
 
-1. **The DNS server first.** Dynamic updates allowed on the forward zone and on every reverse zone, with one TSIG key (see "D2 mode" below for BIND and Technitium examples).
+1. **The DNS server first.** Dynamic updates allowed on the forward zone and on every reverse zone, with one TSIG key (see "D2 mode" above for BIND and Technitium examples).
 2. **Install and reach D2.** `kea-dhcp-ddns-server` installed on the Kea host; its control socket set up from Settings → Kea → DDNS (the direct-socket button); D2's logger given a file output under `/var/log/kea`.
 3. **D2 Configuration tab.** The forward domain and one reverse domain per /24 (a /23 is two), the key on each.
 4. **Naming tab, for one lease lifetime.** `ddns-update-on-renew` on and `ddns-conflict-resolution-mode` set to `no-check-with-dhcid`: the script's records carry no DHCID, and D2's default conflict check refuses to touch a name it does not own. Put the mode back to the default after one lease lifetime.
