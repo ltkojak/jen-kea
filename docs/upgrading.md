@@ -122,3 +122,13 @@ One step (5.69.0-beta.8), and nothing has to be done for it. What you may notice
 **A Kea host that is replaced under the same server entry starts its Problems progress afresh.** The Problems inbox remembers how far it has read each server's log. When a server's SSH host, SSH user or config path changes, that memory is cleared before the next read, so the new host's problems are counted from its own log instead of being skipped behind the old host's position. The rows already in the inbox stay, and renaming a server changes nothing.
 
 **The DDNS Status tab has a hook mode.** If a `libdhcp_run_script.so` hook is loaded and D2 is off, the Mode row says what it writes is outside Jen's view instead of "Not configured", and an explicit `[ddns] mode = none` is honoured.
+
+## A changed endpoint asks for its password; a replaced Kea host's earlier problems read "earlier host"
+
+One step (5.69.0-beta.9). It adds one database migration (36) that runs by itself on the first start; nothing else has to be done. What you may notice:
+
+**A form that keeps a blank password asks for it when the address changes.** On the Kea API, Kea6, D2, additional-server, Kea database and Jen database forms, a saved password is kept only while the address (or database host) names the same place: the same scheme, host and port. Change the address and leave the password box empty and the form refuses, with a sentence saying so, and saves nothing; type the password and it saves. Saving with the same address, or with the address spelled differently (a different case, a trailing slash, an explicit default port), still keeps the password. On a Kea6 or D2 form, ticking Inherit still removes the saved password. Adding a new additional server still inherits the primary's password. For the DNS provider under Settings → Kea → DDNS the saved token is removed, with a warning, when the provider or its address changes.
+
+**Migration 36 adds a generation to the Problems inbox.** The column `client_problems.generation` (every existing row is generation 0) becomes part of the table's unique key. No row is removed or changed.
+
+**A Kea host that is replaced under the same server entry is a new generation.** When a server's SSH host, SSH user or config path changes, the Problems inbox closes that server's open rows and starts the new host's from its own log; the earlier rows stay, marked "(earlier host)" beside the server name on the Problems page, and the dashboard no longer counts them. The earlier host's alert state no longer silences or repeats for the new host. Renaming a server changes nothing.
