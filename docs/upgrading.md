@@ -112,3 +112,13 @@ One step (5.69.0-beta.7), and nothing has to be done for it. What you will notic
 **A box with no DNS provider set reads "Not configured".** A missing `[ddns] dns_provider` used to read as Technitium, so a fresh install showed "Provider (technitium)" on the DDNS Status tab and tailed a log that did not exist. The default is now none. A box that has the key set is not affected, and neither is a hand-written section that has an `api_url` or `api_token` and no `dns_provider` key: it still reads as Technitium. If you relied on the old default with nothing else set, choose Technitium under Settings → Kea → DDNS.
 
 **A hook script beside D2 is warned about.** If a `libdhcp_run_script.so` hook is loaded and dhcp4 also sends updates to D2, Doctor, the DDNS Status tab and the Naming tab say that every lease may be written twice. Nothing is blocked. The admin guide has a walk-through, "Moving from a hook script to D2".
+
+## A provider switch asks for its credential; a replaced Kea host starts afresh
+
+One step (5.69.0-beta.8), and nothing has to be done for it. What you may notice:
+
+**Changing the DNS provider asks for the new provider's token or password.** Under Settings → Kea → DDNS, a saved token is kept only for the provider it was typed for. If you switch from Technitium to Pi-hole (or any change of provider) and leave the token box empty, the saved token is removed rather than reused, and the page says to enter the new provider's own. Saving the same provider again with the box empty still keeps its token, and so does a file that has an address or a token and no provider key. The provider blocks no longer show one provider's address inside another's block.
+
+**A Kea host that is replaced under the same server entry starts its Problems progress afresh.** The Problems inbox remembers how far it has read each server's log. When a server's SSH host, SSH user or config path changes, that memory is cleared before the next read, so the new host's problems are counted from its own log instead of being skipped behind the old host's position. The rows already in the inbox stay, and renaming a server changes nothing.
+
+**The DDNS Status tab has a hook mode.** If a `libdhcp_run_script.so` hook is loaded and D2 is off, the Mode row says what it writes is outside Jen's view instead of "Not configured", and an explicit `[ddns] mode = none` is honoured.
