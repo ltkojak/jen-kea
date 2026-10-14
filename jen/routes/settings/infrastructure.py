@@ -413,6 +413,16 @@ def save_infra_kea():
         flash(f"TLS settings not saved: {tls_err}.", "error")
         return redirect(url_for("settings.settings_kea"))
 
+    refusal = _secret_for_new_endpoint(
+        extensions.cfg.get("kea", "api_url", fallback=""),
+        api_url,
+        api_pass,
+        extensions.cfg.get("kea", "api_pass", fallback=""),
+        "Kea API address",
+    )
+    if refusal:
+        flash(refusal, "error")
+        return redirect(url_for("settings.settings_kea"))
     # (v5.68.0-beta.28, Q164: no identity check here - `write_values` below asks the config writer's guard, which covers this route and every other)
     items = [
         ("kea", "api_url", api_url),
@@ -452,6 +462,16 @@ def save_infra_kea_db():
     database = request.form.get("database", "").strip()
     if not host or not user or not database:
         flash("Host, username, and database name are required.", "error")
+        return redirect(url_for("database.database", tab="connections"))
+    refusal = _secret_for_new_endpoint(
+        extensions.cfg.get("kea_db", "host", fallback=""),
+        host,
+        password,
+        extensions.cfg.get("kea_db", "password", fallback=""),
+        "Kea database host",
+    )
+    if refusal:
+        flash(refusal, "error")
         return redirect(url_for("database.database", tab="connections"))
     items = [("kea_db", "host", host), ("kea_db", "user", user), ("kea_db", "database", database)]
     if password:
@@ -511,6 +531,30 @@ def save_infra_kea6():
         else:
             flash("The Kea6 API URL must be a valid http:// or https:// URL.", "error")
         return redirect(url_for("settings.settings_kea"))
+
+    # CRED-002 (Q178): a saved password stays with the endpoint it was typed for - unless "Inherit" is ticked, which removes it
+    for stored_url, new_url, new_secret, stored_secret, inherit, what in (
+        (
+            extensions.cfg.get("kea6", "api_url", fallback=""),
+            api_url,
+            api_pass,
+            extensions.cfg.get("kea6", "api_pass", fallback=""),
+            inherit_api_pass,
+            "Kea6 API address",
+        ),
+        (
+            extensions.cfg.get("kea6_db", "host", fallback=""),
+            db_host,
+            db_pass,
+            extensions.cfg.get("kea6_db", "password", fallback=""),
+            inherit_db_pass,
+            "Kea6 database host",
+        ),
+    ):
+        refusal = None if inherit else _secret_for_new_endpoint(stored_url, new_url, new_secret, stored_secret, what)
+        if refusal:
+            flash(refusal, "error")
+            return redirect(url_for("settings.settings_kea"))
 
     # (section, option, submitted value)
     text_fields = [
@@ -591,6 +635,18 @@ def save_infra_d2():
         else:
             flash("The D2 API URL must be a valid http:// or https:// URL.", "error")
         return redirect(url_for("settings.settings_kea"))
+
+    if not inherit_api_pass:  # CRED-002 (Q178); "Inherit" removes the saved password, so it is the way out
+        refusal = _secret_for_new_endpoint(
+            extensions.cfg.get("d2", "api_url", fallback=""),
+            api_url,
+            api_pass,
+            extensions.cfg.get("d2", "api_pass", fallback=""),
+            "D2 API address",
+        )
+        if refusal:
+            flash(refusal, "error")
+            return redirect(url_for("settings.settings_kea"))
 
     text_fields = [("d2", "api_url", api_url), ("d2", "api_user", api_user)]
     changed: list[str] = []
@@ -1859,6 +1915,16 @@ def save_infra_jen_db():
     if not host or not user or not database:
         flash("Host, username, and database name are required.", "error")
         return redirect(url_for("database.database", tab="connections"))
+    refusal = _secret_for_new_endpoint(
+        extensions.cfg.get("jen_db", "host", fallback=""),
+        host,
+        password,
+        extensions.cfg.get("jen_db", "password", fallback=""),
+        "Jen database host",
+    )
+    if refusal:
+        flash(refusal, "error")
+        return redirect(url_for("database.database", tab="connections"))
     items = [("jen_db", "host", host), ("jen_db", "user", user), ("jen_db", "database", database)]
     if password:
         items.append(("jen_db", "password", password))
@@ -2085,6 +2151,18 @@ def save_extra_servers():
             seen_ids.add(out)
             prev = existing.get(orig_id, {}) if orig_id is not None else {}
 
+            # CRED-002 (Q178): a row that keeps its saved password must keep its endpoint. Nothing is written until this callback returns, so raising is the refusal.
+            # (A genuinely NEW row has nothing stored and inherits the primary's password as it always has; that fallback is the documented way to add a peer.)
+            for stored_url, new_url, new_secret, stored_secret, what in (
+                (prev.get("api_url"), api_url, api_pass, prev.get("api_pass"), "API address"),
+                (prev.get("api6_url"), api6_url, api6_pass, prev.get("api6_pass"), "IPv6 API address"),
+            ):
+                refusal = _secret_for_new_endpoint(
+                    stored_url, new_url, new_secret, stored_secret, f"{what} of {name.strip() or f'Kea Server {out}'}"
+                )
+                if refusal:
+                    raise _EndpointNeedsItsPassword(refusal)
+
             sec = f"kea_server_{out}"
             cfg.add_section(sec)
             cfg.set(sec, "name", name.strip() or f"Kea Server {out}")
@@ -2116,6 +2194,9 @@ def save_extra_servers():
 
     try:
         __config.app_config.mutate(_rewrite_extra_servers)
+    except _EndpointNeedsItsPassword as e:
+        flash(str(e), "error")
+        return redirect(url_for("settings.settings_kea"))
     except ValueError as e:
         # strict=True on the zip() inside _rewrite_extra_servers means a
         # form submission whose extra_*[] fields don't all have the same
@@ -2136,6 +2217,28 @@ def save_extra_servers():
     __user.set_global_setting("restart_pending", "true")
     __user.audit("SAVE_INFRA", "extra_servers", f"{count} additional servers configured")
     return redirect(url_for("settings.settings_kea"))
+
+
+class _EndpointNeedsItsPassword(Exception):
+    """Raised inside a config `mutate` callback: the form would keep a saved password for a new endpoint. The callback has written nothing yet - `mutate` writes only after
+    it returns - so raising is the refusal (CRED-002, Q178)."""
+
+
+def _secret_for_new_endpoint(stored_url, new_url, new_secret, stored_secret, what) -> str | None:
+    """CRED-002 (v5.69.0-beta.9, Q178): a saved password is never sent to an endpoint it was not typed for. The refusal sentence when a form would KEEP a stored secret (the
+    new secret is blank, a stored one exists) while the endpoint it names has changed (`auth.same_endpoint` - scheme, host and port); None when nothing is wrong: a secret was
+    typed, none is stored, neither side names an endpoint (nothing changed), or the endpoint is the same place. Every connection form calls this BEFORE its write, so a refusal
+    writes nothing. (A LOOKUP credential - the DDNS token - is not refused: it is removed, with a warning, by `save_infra_ddns`.)"""
+    if (new_secret or "").strip() or not (stored_secret or "").strip():
+        return None
+    if not (stored_url or "").strip() and not (new_url or "").strip():
+        return None
+    if __auth.same_endpoint(stored_url, new_url):
+        return None
+    return (
+        f"The {what} changed: enter the password for the new endpoint - "
+        "a saved password is never sent to one it was not typed for."
+    )
 
 
 DDNS_PROVIDERS = ("technitium", "pihole", "adguard", "ssh", "generic", "none")
@@ -2182,7 +2285,10 @@ def save_infra_ddns():
             cfg.add_section("ddns")
         # what the stored provider IS (an upgraded hand-written file with a URL or token and no key reads as technitium - the provider its token was typed for)
         previous = __ddns_writers.effective_provider(cfg)
-        switched = seen["switched"] = previous != dns_provider
+        # a different PROVIDER, or the same provider at a different ENDPOINT (CRED-002, Q178): a Technitium token typed for server A is not Technitium server B's
+        stored_url = cfg.get("ddns", "api_url", fallback="")
+        url_changed = bool(stored_url.strip() or api_url) and not __auth.same_endpoint(stored_url, api_url)
+        switched = seen["switched"] = previous != dns_provider or url_changed
         had_token = seen["had_token"] = bool(cfg.get("ddns", "api_token", fallback="").strip())
         cfg.set("ddns", "dns_provider", dns_provider)
         for key, value in (

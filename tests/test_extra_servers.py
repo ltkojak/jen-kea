@@ -648,7 +648,12 @@ class TestChangingWhereAServerIsReachedWhileInvestigationLoggingIsOn:
         try:
             r = logged_in_client.post(
                 "/settings/infrastructure/save-kea",
-                data={"api_url": "http://other:8000", "api_user": "u4", "connection_mode": "ca"},
+                data={
+                    "api_url": "http://other:8000",
+                    "api_user": "u4",
+                    "api_pass": "typed",
+                    "connection_mode": "ca",
+                },  # (Q178 adjustment: a new endpoint needs its password typed - CRED-002 - so these saves type one)
                 follow_redirects=True,
             )
             assert b"Changing its api_url now would point Jen at a different Kea" in r.data

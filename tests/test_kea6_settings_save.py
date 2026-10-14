@@ -113,7 +113,13 @@ class TestSaveKeaPortValidation:
     def test_ca_mode_accepts_a_portless_api_url(self, logged_in_client, db, mock_kea, isolated_config):
         logged_in_client.post(
             "/settings/infrastructure/save-kea",
-            data={"api_url": "http://kea-ca", "api_user": "u", "connection_mode": "ca", "api_tls_verify": "1"},
+            data={
+                "api_url": "http://kea-ca",
+                "api_user": "u",
+                "api_pass": "pw",
+                "connection_mode": "ca",
+                "api_tls_verify": "1",
+            },  # (Q178 adjustment: a new endpoint needs its password typed - CRED-002 - so these saves type one)
             follow_redirects=True,
         )
         assert _on_disk(isolated_config).get("kea", "api_url") == "http://kea-ca"
@@ -121,7 +127,13 @@ class TestSaveKeaPortValidation:
     def test_direct_mode_accepts_an_explicit_port(self, logged_in_client, db, mock_kea, isolated_config):
         logged_in_client.post(
             "/settings/infrastructure/save-kea",
-            data={"api_url": "http://kea:8004", "api_user": "u", "connection_mode": "direct", "api_tls_verify": "1"},
+            data={
+                "api_url": "http://kea:8004",
+                "api_user": "u",
+                "api_pass": "pw",
+                "connection_mode": "direct",
+                "api_tls_verify": "1",
+            },
             follow_redirects=True,
         )
         assert _on_disk(isolated_config).get("kea", "api_url") == "http://kea:8004"
@@ -170,6 +182,7 @@ class TestSaveKeaClientCert:
             data={
                 "api_url": "https://kea:8004",
                 "api_user": "u",
+                "api_pass": "pw",
                 "connection_mode": "direct",
                 "api_tls_verify": "1",
                 "api_client_cert": str(cert),

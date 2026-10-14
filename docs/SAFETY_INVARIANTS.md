@@ -370,6 +370,29 @@ id in one transaction before the next read and starts the server afresh; histori
 **Tests.**
 - `tests/test_ddns.py::TestTheModeSaysWhatItKnows`
 
+### CRED-002 - A kept secret is kept only for the endpoint it was typed for
+**Rule.** A form that keeps a blank secret keeps it only while the endpoint it names is the same place (`auth.same_endpoint`: scheme, host and port - never the path or the query; a bare host has no default port).
+Two behaviours, by consequence. A LOOKUP credential (the DDNS token) is REMOVED when the provider or its address changes, with a warning, and never sent to the new place. A CONNECTION credential (the Kea API,
+Kea6, D2, an additional server's, Kea's database, Jen's database) is REQUIRED for a new endpoint: the form refuses a blank password with one sentence and writes nothing; "Inherit", where a form has one, is the way out.
+(DNS-CRED-001 is the provider-level half of the same rule.)
+**Established.** Q178 (the beta.8 review: Technitium at A to Technitium at B kept A's token, and six more forms kept a blank password across a new URL or host).
+**Enforced at.** `auth.same_endpoint`, through `infrastructure._secret_for_new_endpoint` (every connection route, before its write) and `save_infra_ddns`'s `_apply`.
+**Tests.**
+- `tests/test_same_endpoint.py::TestSameEndpoint`
+- `tests/test_kea_connection_forms.py::TestTheKeaApiForm`
+- `tests/test_kea_connection_forms.py::TestTheKea6Form`
+- `tests/test_kea_connection_forms.py::TestTheD2Form`
+- `tests/test_kea_connection_forms.py::TestAnAdditionalServer`
+- `tests/test_kea_connection_forms.py::TestTheDatabaseForms`
+- `tests/test_ddns.py::TestADifferentEndpointIsNotTheSameProvider`
+
+### LOG-CACHE-002 - The gates of a cache are a fixed set, and a read begun before a clear is not kept
+**Rule.** The locks that make a second reader wait for the first one's read are a fixed striped set (64), never one per key; a `clear()` while a read is on the wire keeps that read's answer out of the cache.
+**Established.** Q178 (`_per_key` grew one Lock per distinct (host, user, config path, id, path) for the life of the process).
+**Enforced at.** `log_tail._GATES` / `_PATH_GATES` and the generation counter in `log_tail.tail` and `log_tail.path_for`.
+**Tests.**
+- `tests/test_log_tail.py::TestTheGatesAreBounded`
+
 ## Retired ids
 
 An id that is retired stays here, with the reason, so it is never given to a different rule. (None yet.)

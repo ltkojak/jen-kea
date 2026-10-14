@@ -1191,9 +1191,12 @@ class TestACredentialBelongsToItsProvider:
     )
     def test_a_switch_never_carries_the_old_token(self, logged_in_client, cfg, before, after, token, expect):
         cfg.write({"dns_provider": before, "api_url": "http://old.local", "api_token": "OLD"})
+        # (Q178 adjustment: the same-provider row used to post a different URL as well and expect the token kept; a changed endpoint is a changed place - CRED-002 -
+        # so that row now posts the URL it was saved with, and TestADifferentEndpointIsNotTheSameProvider holds the changed-URL cases)
+        url = "http://old.local" if before == after else "http://next.local"
         logged_in_client.post(
             "/settings/infrastructure/save-ddns",
-            data={"dns_provider": after, f"api_url_{after}": "http://next.local", f"api_token_{after}": token},
+            data={"dns_provider": after, f"api_url_{after}": url, f"api_token_{after}": token},
         )
         assert cfg.get("api_token") == expect
 
@@ -1394,3 +1397,45 @@ class TestACredentialSecondPass:
         cfg.write({"dns_provider": "pihole", "api_url": "http://pi.hole"})
         msg = ddns_route._provider_lookup("h.example")
         assert "password or API token" in msg and "empty credential is never sent" in msg
+
+
+class TestADifferentEndpointIsNotTheSameProvider:
+    """v5.69.0-beta.9 (Q178, CRED-002): beta.8 compared providers only, so Technitium at A -> Technitium at B with a blank token kept A's token and the lookup sent it to B."""
+
+    @pytest.fixture
+    def cfg(self, monkeypatch):
+        return TestACredentialSecondPass._build(monkeypatch)
+
+    @pytest.mark.parametrize("provider", ["technitium", "pihole", "adguard"])
+    def test_a_new_address_with_a_blank_token_removes_it_and_warns(self, logged_in_client, cfg, provider):
+        cfg.write({"dns_provider": provider, "api_url": "http://a.example:5380", "api_token": "OLD"})
+        r = logged_in_client.post(
+            "/settings/infrastructure/save-ddns",
+            data={"dns_provider": provider, f"api_url_{provider}": "http://b.example:5380"},
+            follow_redirects=True,
+        )
+        assert cfg.get("api_token") is None
+        assert b"enter its token or password" in r.data and b"was not carried over" in r.data
+
+    @pytest.mark.parametrize(
+        "url", ["https://A.example:443/api", "https://a.example", "https://a.example/other/path?x=1"]
+    )
+    def test_the_same_address_spelled_differently_keeps_the_token(self, logged_in_client, cfg, url):
+        cfg.write({"dns_provider": "technitium", "api_url": "https://a.example/api", "api_token": "OLD"})
+        logged_in_client.post(
+            "/settings/infrastructure/save-ddns", data={"dns_provider": "technitium", "api_url_technitium": url}
+        )
+        assert cfg.get("api_token") == "OLD"
+
+    def test_a_new_address_with_a_typed_token_stores_only_the_new_one(self, logged_in_client, cfg):
+        cfg.write({"dns_provider": "pihole", "api_url": "http://a.example", "api_token": "OLD"})
+        logged_in_client.post(
+            "/settings/infrastructure/save-ddns",
+            data={"dns_provider": "pihole", "api_url_pihole": "http://b.example", "api_token_pihole": "NEW"},
+        )
+        assert cfg.get("api_token") == "NEW"
+
+    def test_a_blank_address_beside_a_blank_stored_one_is_not_a_change(self, logged_in_client, cfg):
+        cfg.write({"dns_provider": "technitium", "api_token": "OLD"})
+        logged_in_client.post("/settings/infrastructure/save-ddns", data={"dns_provider": "technitium"})
+        assert cfg.get("api_token") == "OLD", "no address names no place a token could go"

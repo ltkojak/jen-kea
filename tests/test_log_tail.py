@@ -366,3 +366,87 @@ class TestAReadBelongsToItsEndpoint:
         assert "identity(server)" in inspect.getsource(log_tail.path_for) or "_identity(server)" in inspect.getsource(
             log_tail.path_for
         )
+
+
+class TestTheGatesAreBounded:
+    """v5.69.0-beta.9 (Q178, LOG-CACHE-002): the gates that make a second reader wait for the first one's read are a fixed set, striped by key - not one Lock per distinct key
+    for the life of the process."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh(self, monkeypatch):
+        log_tail.clear()
+        self.calls = []
+
+        def tail_log(server, path, lines=200, timeout=None, helper_only=False):
+            self.calls.append((server["ssh_host"], path))
+            return {"ok": True, "code": "ok", "lines": [f"from:{server['ssh_host']}"]}
+
+        monkeypatch.setattr(kea_host, "tail_log", tail_log)
+        yield
+        log_tail.clear()
+
+    def test_a_thousand_distinct_keys_leave_the_same_sixty_four_gates(self):
+        before = log_tail._GATES
+        for n in range(1000):
+            log_tail.tail(
+                {"id": n, "ssh_host": f"h{n}", "ssh_user": "u", "kea_conf": "/etc/kea/kea-dhcp4.conf"},
+                f"/var/log/kea/{n}.log",
+                10,
+            )
+        assert len(log_tail._GATES) == 64 and log_tail._GATES is before
+        assert not hasattr(log_tail, "_per_key") and not hasattr(log_tail, "_path_gates")
+        assert len(log_tail._PATH_GATES) == 64
+
+    def test_path_for_does_not_grow_either(self, monkeypatch):
+        monkeypatch.setattr(log_tail, "_read_server_config", lambda server: None)
+        for n in range(300):
+            log_tail.path_for({"id": n, "ssh_host": f"h{n}"})
+        assert len(log_tail._PATH_GATES) == 64
+
+    def test_one_key_from_two_threads_is_one_read_of_the_host(self, monkeypatch):
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow(server, path, lines=200, timeout=None, helper_only=False):
+            self.calls.append(server["ssh_host"])
+            started.set()
+            release.wait(5)
+            return {"ok": True, "code": "ok", "lines": ["x"]}
+
+        monkeypatch.setattr(kea_host, "tail_log", slow)
+        server = {"id": 1, "ssh_host": "h", "ssh_user": "u", "kea_conf": "/c.conf"}
+        out = []
+        t1 = threading.Thread(target=lambda: out.append(log_tail.tail(server, "/var/log/kea/k.log", 10)))
+        t2 = threading.Thread(target=lambda: out.append(log_tail.tail(server, "/var/log/kea/k.log", 10)))
+        t1.start()
+        started.wait(5)
+        t2.start()
+        time.sleep(0.1)
+        release.set()
+        t1.join(5)
+        t2.join(5)
+        assert len(out) == 2 and self.calls == ["h"]
+
+    def test_a_clear_while_a_read_is_in_flight_keeps_its_answer_out_of_the_cache(self, monkeypatch):
+        server = {"id": 1, "ssh_host": "h", "ssh_user": "u", "kea_conf": "/c.conf"}
+
+        def read_then_clear(srv, path, lines=200, timeout=None, helper_only=False):
+            self.calls.append(srv["ssh_host"])
+            log_tail.clear()  # the configuration changed while the read was on the wire
+            return {"ok": True, "code": "ok", "lines": ["stale"]}
+
+        monkeypatch.setattr(kea_host, "tail_log", read_then_clear)
+        first = log_tail.tail(server, "/var/log/kea/k.log", 10)
+        assert first["lines"] == ["stale"], "the caller that asked still gets what it read"
+        monkeypatch.setattr(
+            kea_host,
+            "tail_log",
+            lambda srv, path, lines=200, timeout=None, helper_only=False: {
+                "ok": True,
+                "code": "ok",
+                "lines": ["fresh"],
+            },
+        )
+        assert log_tail.tail(server, "/var/log/kea/k.log", 10)["lines"] == ["fresh"], (
+            "but it was not served to the next one"
+        )

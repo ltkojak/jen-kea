@@ -229,6 +229,32 @@ def unusable_file_message(label, path) -> str:
     return f"The {label} cannot be used: the file does not exist or Jen cannot read it ({path})."
 
 
+def same_endpoint(a: str, b: str) -> bool:
+    """Do two URLs (or bare host[:port] strings) name the same place a secret would be sent to: scheme, host and port - never the path or the query (CRED-002, Q178).
+    A blank on either side is a different place, and so is an unparsable one. A URL's port defaults from its scheme (https 443, http 80); a BARE host has no scheme and
+    so no default port: `db.local` and `db.local:3306` are different places, because the default of a bare host is whatever the driver chooses, not something this
+    function may assume."""
+    from urllib.parse import urlsplit
+
+    def parts(u):
+        u = (u or "").strip()
+        if not u:
+            return None
+        if "://" not in u:
+            u = "//" + u
+        try:
+            p = urlsplit(u)
+            scheme = (p.scheme or "").lower()
+            host = (p.hostname or "").lower().rstrip(".")
+            port = p.port or {"https": 443, "http": 80}.get(scheme)
+        except ValueError:
+            return None
+        return (scheme, host, port) if host else None
+
+    pa, pb = parts(a), parts(b)
+    return pa is not None and pa == pb
+
+
 def valid_api_url(url: str, require_port: bool = False) -> bool:
     """A Kea command-API URL: http(s):// scheme, a hostname or IP, and —
     in direct mode (require_port=True) — an explicit port. A daemon
