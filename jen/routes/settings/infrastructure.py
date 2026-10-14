@@ -2107,6 +2107,8 @@ def save_extra_servers():
             return redirect(url_for("settings.settings_kea"))
         seen_names.add(shown.casefold())
 
+    refused: list[str] = []
+
     def _rewrite_extra_servers(cfg):
         # v5.10.3 — snapshot every current [kea_server_N] so keys the form
         # doesn't manage (ssh_key, any hand-added value) and a blank
@@ -2183,7 +2185,8 @@ def save_extra_servers():
                     stored_url, new_url, new_secret, stored_secret, f"{what} of {name.strip() or f'Kea Server {out}'}"
                 )
                 if refusal:
-                    raise _EndpointNeedsItsPassword(refusal)
+                    refused.append(refusal)
+                    raise _EndpointNeedsItsPassword()
 
             sec = f"kea_server_{out}"
             cfg.add_section(sec)
@@ -2216,8 +2219,8 @@ def save_extra_servers():
 
     try:
         __config.app_config.mutate(_rewrite_extra_servers)
-    except _EndpointNeedsItsPassword as e:
-        flash(str(e), "error")
+    except _EndpointNeedsItsPassword:
+        flash(refused[0], "error")  # our own sentence, appended before the raise - never the exception's text
         return redirect(url_for("settings.settings_kea"))
     except ValueError as e:
         # strict=True on the zip() inside _rewrite_extra_servers means a

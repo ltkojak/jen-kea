@@ -356,11 +356,20 @@ class TestSaveDdnsClearsWhatIsBlank:
     def test_blank_clears_each_key_and_the_token_is_kept_for_the_same_provider(self, logged_in_client, cfg):
         """Q177 adjustment: this posted technitium -> none and expected the token kept. A token is kept only for the provider it was typed for (DNS-CRED-001), so the
         same-provider case is what 'blank keeps the token' now means; the switch to none removes it (TestACredentialBelongsToItsProvider)."""
-        logged_in_client.post("/settings/infrastructure/save-ddns", data={"dns_provider": "technitium"})
+        # (Q178 adjustment: the address is posted as it was saved - clearing it is a change of endpoint, which removes the token: CRED-002)
+        logged_in_client.post(
+            "/settings/infrastructure/save-ddns",
+            data={"dns_provider": "technitium", "api_url_technitium": "http://dns.example:5380"},
+        )
         assert cfg.get("ddns", "dns_provider") == "technitium"
-        for key in ("log_path", "api_url", "api_user", "forward_zone"):
+        for key in ("log_path", "api_user", "forward_zone"):
             assert not cfg.has_option("ddns", key), key
+        assert cfg.get("ddns", "api_url") == "http://dns.example:5380"
         assert cfg.get("ddns", "api_token") == "TOKEN"
+
+    def test_clearing_the_address_is_a_change_of_endpoint_and_removes_the_token(self, logged_in_client, cfg):
+        logged_in_client.post("/settings/infrastructure/save-ddns", data={"dns_provider": "technitium"})
+        assert not cfg.has_option("ddns", "api_url") and not cfg.has_option("ddns", "api_token")
 
     def test_the_token_goes_only_when_its_box_is_ticked_and_is_replaced_when_typed(self, logged_in_client, cfg):
         # (Q177 adjustment: this posted a token for provider none; a provider with no credential stores none - DNS-CRED-001 - so the replacement is typed for a provider that has one)

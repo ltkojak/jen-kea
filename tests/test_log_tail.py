@@ -385,23 +385,52 @@ class TestTheGatesAreBounded:
         yield
         log_tail.clear()
 
-    def test_a_thousand_distinct_keys_leave_the_same_sixty_four_gates(self):
-        before = log_tail._GATES
+    def test_a_thousand_distinct_keys_leave_nothing_behind(self):
+        # (Q178: the entry asked for 64 striped locks; striping let a hung host's read hold an UNRELATED server's inside Explain's one budget - the model walk's E1 failed in CI -
+        # so the table of in-flight reads is bounded by what is in flight instead, and an unrelated key never waits)
         for n in range(1000):
             log_tail.tail(
                 {"id": n, "ssh_host": f"h{n}", "ssh_user": "u", "kea_conf": "/etc/kea/kea-dhcp4.conf"},
                 f"/var/log/kea/{n}.log",
                 10,
             )
-        assert len(log_tail._GATES) == 64 and log_tail._GATES is before
-        assert not hasattr(log_tail, "_per_key") and not hasattr(log_tail, "_path_gates")
-        assert len(log_tail._PATH_GATES) == 64
+        assert log_tail._flying == {} and log_tail._flying_paths == {}
+        assert len(log_tail._cache) <= 65
+        assert (
+            not hasattr(log_tail, "_per_key")
+            and not hasattr(log_tail, "_path_gates")
+            and not hasattr(log_tail, "_GATES")
+        )
 
     def test_path_for_does_not_grow_either(self, monkeypatch):
         monkeypatch.setattr(log_tail, "_read_server_config", lambda server: None)
         for n in range(300):
             log_tail.path_for({"id": n, "ssh_host": f"h{n}"})
-        assert len(log_tail._PATH_GATES) == 64
+        assert log_tail._flying_paths == {} and len(log_tail._paths) <= 65
+
+    def test_an_unrelated_key_never_waits_for_a_slow_read(self, monkeypatch):
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_or_fast(server, path, lines=200, timeout=None, helper_only=False):
+            if server["ssh_host"] == "hung":
+                started.set()
+                release.wait(5)
+            return {"ok": True, "code": "ok", "lines": [server["ssh_host"]]}
+
+        monkeypatch.setattr(kea_host, "tail_log", slow_or_fast)
+        hung = {"id": 1, "ssh_host": "hung", "ssh_user": "u", "kea_conf": "/c.conf"}
+        t = threading.Thread(target=lambda: log_tail.tail(hung, "/var/log/kea/k.log", 10))
+        t.start()
+        started.wait(5)
+        began = time.monotonic()
+        for n in range(200):  # any number of unrelated keys: none of them may share anything with the hung read
+            assert log_tail.tail(
+                {"id": 100 + n, "ssh_host": f"ok{n}", "ssh_user": "u", "kea_conf": "/c.conf"}, "/var/log/kea/k.log", 10
+            )["ok"]
+        assert time.monotonic() - began < 2.0
+        release.set()
+        t.join(5)
 
     def test_one_key_from_two_threads_is_one_read_of_the_host(self, monkeypatch):
         started = threading.Event()

@@ -390,10 +390,11 @@ different host with the same credential), and the setup wizard and the probe are
 - `tests/test_kea_connection_forms.py::TestAPasswordTheFormInheritsStaysWithTheKeaHost`
 - `tests/test_ddns.py::TestADifferentEndpointIsNotTheSameProvider`
 
-### LOG-CACHE-002 - The gates of a cache are a fixed set, and a read begun before a clear is not kept
-**Rule.** The locks that make a second reader wait for the first one's read are a fixed striped set (64), never one per key; a `clear()` while a read is on the wire keeps that read's answer out of the cache.
-**Established.** Q178 (`_per_key` grew one Lock per distinct (host, user, config path, id, path) for the life of the process).
-**Enforced at.** `log_tail._GATES` / `_PATH_GATES` and the generation counter in `log_tail.tail` and `log_tail.path_for`.
+### LOG-CACHE-002 - What a cache remembers about its readers is bounded by what is in flight, an unrelated key never waits, and a read begun before a clear is not kept
+**Rule.** A second reader of the SAME key waits for the first one's read through a table of in-flight reads whose entries live only as long as their read - never one lock per key kept for the life of the process,
+and never a striped set that lets an unrelated key's hung read hold another server's inside one budget; a `clear()` while a read is on the wire keeps that read's answer out of the cache.
+**Established.** Q178 (`_per_key` grew one Lock per distinct (host, user, config path, id, path); the entry's 64 striped locks were tried and failed the model walk's E1 in CI, so the table is of in-flight reads).
+**Enforced at.** `log_tail._flying` / `_flying_paths` and the generation counter in `log_tail.tail` and `log_tail.path_for`.
 **Tests.**
 - `tests/test_log_tail.py::TestTheGatesAreBounded`
 

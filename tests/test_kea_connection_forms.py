@@ -109,7 +109,7 @@ class TestTheKea6Form:
 
     def test_inherit_is_the_way_out_and_removes_the_password(self, logged_in_client, db, mock_kea, isolated_config):
         # (Q178 second pass: Inherit is honoured for another PORT of the Kea API's host - the daemons' own sockets - and not for a different host)
-        r = _post(logged_in_client, self.URL, api_url="https://kea-a:9006", inherit_api_pass="1")
+        r = _post(logged_in_client, self.URL, api_url="https://kea-a:9006", db_host="db6-a", inherit_api_pass="1")
         assert SENTENCE.encode() not in r.data and b"different host from the Kea API" not in r.data
         disk = _disk(isolated_config)
         assert disk.get("kea6", "api_url") == "https://kea-a:9006" and not disk.has_option("kea6", "api_pass")
@@ -123,7 +123,7 @@ class TestTheKea6Form:
         assert disk.get("kea6", "api_url") == "https://k6-a:8006" and disk.get("kea6", "api_pass") == "S6"
 
     def test_a_typed_password_writes_the_new_endpoint(self, logged_in_client, db, mock_kea, isolated_config):
-        _post(logged_in_client, self.URL, api_url="https://k6-b:8006", api_pass="N6")
+        _post(logged_in_client, self.URL, api_url="https://k6-b:8006", db_host="db6-a", api_pass="N6")
         disk = _disk(isolated_config)
         assert disk.get("kea6", "api_url") == "https://k6-b:8006" and disk.get("kea6", "api_pass") == "N6"
 

@@ -31,11 +31,13 @@ logger = logging.getLogger(__name__)
 TTL_S = 3.0  # == routes/trace.WATCH_STEP_S: a watcher's next poll is just past the window, so it reads once per step
 
 _lock = threading.Lock()
-# LOG-CACHE-002 (v5.69.0-beta.9, Q178): the gates that make a second reader wait for the first one's read are a FIXED set, striped by key. They were one Lock per distinct
-# key, kept for the life of the process (the key carries the host, user and config path, so every endpoint ever read left one behind). Two unrelated keys may wait on each
-# other for one 3 s read; a key never gets two locks, and nothing here grows. The path cache's gates are their own stripes: no thread holds one of each.
-_GATES = tuple(threading.Lock() for _ in range(64))
-_PATH_GATES = tuple(threading.Lock() for _ in range(64))
+# LOG-CACHE-002 (v5.69.0-beta.9, Q178): who is reading what RIGHT NOW is a table of in-flight reads - key -> an Event the reader sets when it is done - and an entry lives only
+# as long as its read. A second reader of the SAME key waits on that Event for the first one's read (the coalescing this module exists for) and an unrelated key never waits for it.
+# This replaced one Lock per distinct key kept for the life of the process (the key carries the host, user and config path, so every endpoint ever read left one behind); a fixed
+# STRIPED set of locks was tried first and let a hung host's read hold an unrelated server's inside Explain's one budget (the model walk's E1 found it): bounded memory must not
+# buy cross-key waiting.
+_flying: dict[tuple, threading.Event] = {}
+_flying_paths: dict = {}
 _cache: dict[tuple, tuple[float, int, dict]] = {}
 _reads = 0  # tail_log calls actually made (the tests, and anyone who wants the count)
 
@@ -91,35 +93,42 @@ def path_for(server: dict, read: bool = True) -> str:
 
     sid = server.get("id")
     who = _identity(server)
-    gate = _PATH_GATES[hash(sid) % len(_PATH_GATES)]
-    with _lock:
-        hit = _paths.get(sid)
-    if hit and hit[2] == who and time.monotonic() - hit[0] < hit[3]:
-        return hit[1]
-    if not read:
-        return _klt.log_path_for(None)
-    with gate:
+    while True:
         with _lock:
             hit = _paths.get(sid)
+            if hit and hit[2] == who and time.monotonic() - hit[0] < hit[3]:
+                return hit[1]
+            if not read:
+                return _klt.log_path_for(None)
+            pending = _flying_paths.get((sid, who))
+            leader = pending is None
+            if leader:
+                pending = _flying_paths[(sid, who)] = threading.Event()
             generation = _generation
-        if hit and hit[2] == who and time.monotonic() - hit[0] < hit[3]:
-            return hit[1]
+        if not leader:
+            pending.wait()  # the first reader's config read answers this one too (it re-checks the cache above)
+            continue
         try:
-            cfg = _read_server_config(server)
-        except Exception as e:
-            logger.warning(
-                f"log_tail: could not read {server.get('name')}'s config to find its log: {type(e).__name__}: {e}"
-            )
-            cfg = None
-        path = _klt.log_path_for(cfg)
-        with _lock:
-            if (
-                generation == _generation
-            ):  # a clear() while the read was in flight means it was read under a configuration that has since changed
-                if len(_paths) > 64:
-                    _paths.clear()
-                _paths[sid] = (time.monotonic(), path, who, PATH_TTL_S if cfg is not None else FAIL_TTL_S)
-        return path
+            try:
+                cfg = _read_server_config(server)
+            except Exception as e:
+                logger.warning(
+                    f"log_tail: could not read {server.get('name')}'s config to find its log: {type(e).__name__}: {e}"
+                )
+                cfg = None
+            path = _klt.log_path_for(cfg)
+            with _lock:
+                if (
+                    generation == _generation
+                ):  # a clear() while the read was in flight: it was read under a configuration that has since changed
+                    if len(_paths) > 64:
+                        _paths.clear()
+                    _paths[sid] = (time.monotonic(), path, who, PATH_TTL_S if cfg is not None else FAIL_TTL_S)
+            return path
+        finally:
+            with _lock:
+                _flying_paths.pop((sid, who), None)
+            pending.set()
 
 
 def _slice(res: dict, lines: int) -> dict:
@@ -138,20 +147,31 @@ def tail(server: dict, path: str, lines: int, timeout: float | None = None) -> d
     # v5.69.0-beta.8 (Q177, LOG-IDENTITY-001): a read belongs to the endpoint it came from. The key is the server's identity (host, user, config path) as well as its id
     # and the path - `path_for` already keys by it - so a server edited to point at a different host under the same id is never answered with the old host's lines
     key = (*identity(server), server.get("id"), path)
-    gate = _GATES[hash(key) % len(_GATES)]
-    with gate:  # a second reader waits here for the first one's read, then finds it in the cache
-        hit = _cache.get(key)
-        if hit and time.monotonic() - hit[0] < TTL_S and hit[1] >= lines:
-            return _slice(hit[2], lines)
+    while True:
         with _lock:
+            hit = _cache.get(key)
+            if hit and time.monotonic() - hit[0] < TTL_S and hit[1] >= lines:
+                return _slice(hit[2], lines)
+            pending = _flying.get(key)
+            leader = pending is None
+            if leader:
+                pending = _flying[key] = threading.Event()
             generation = _generation
-        res = _host.tail_log(server, path, lines, timeout=timeout, helper_only=True)
-        with _lock:
-            _reads += 1
-            if (
-                generation == _generation
-            ):  # a clear() while the read was on the wire means it was read under a configuration that has since changed: not kept
-                if len(_cache) > 64:
-                    _cache.clear()
-                _cache[key] = (time.monotonic(), lines, res)
-        return res
+        if not leader:
+            pending.wait()  # a second reader waits for the first one's read, then finds it in the cache (or reads for itself if it wanted more lines)
+            continue
+        try:
+            res = _host.tail_log(server, path, lines, timeout=timeout, helper_only=True)
+            with _lock:
+                _reads += 1
+                if (
+                    generation == _generation
+                ):  # a clear() while the read was on the wire: read under a configuration that has since changed - not kept
+                    if len(_cache) > 64:
+                        _cache.clear()
+                    _cache[key] = (time.monotonic(), lines, res)
+            return res
+        finally:
+            with _lock:
+                _flying.pop(key, None)
+            pending.set()

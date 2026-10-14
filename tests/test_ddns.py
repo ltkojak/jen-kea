@@ -1210,8 +1210,9 @@ class TestACredentialBelongsToItsProvider:
         assert cfg.get("api_token") is None
         cfg.write({"api_url": "http://old.local", "api_token": "OLD"})
         logged_in_client.post(
-            "/settings/infrastructure/save-ddns", data={"dns_provider": "technitium", "api_url_technitium": "http://t"}
-        )
+            "/settings/infrastructure/save-ddns",
+            data={"dns_provider": "technitium", "api_url_technitium": "http://old.local"},
+        )  # (Q178 adjustment: the same address - a different one is a different place, TestADifferentEndpointIsNotTheSameProvider)
         assert cfg.get("api_token") == "OLD", "the provider it was typed for keeps it"
 
     def test_the_checkbox_removes_it_for_the_same_provider(self, logged_in_client, cfg):
