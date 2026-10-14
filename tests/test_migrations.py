@@ -8,6 +8,8 @@ init_jen_db call), so these verify recorded state, idempotency,
 registry integrity, and the admin-role regression fix.
 """
 
+import pytest
+
 from jen.models.db import jen_db
 from jen.models.migrations import (
     MIGRATIONS,
@@ -570,22 +572,29 @@ class TestMigration30ClientProblems:
                 "qualified_at",
                 "qualified_count",
                 "scope_key",
+                "generation",
                 "resolved_at",
             }
-        )  # fmt: skip  (alert_attempted_at: migration 31, v5.68.0-beta.9; qualified_*: migration 32, v5.68.0-beta.13; scope_key: 33)
+        )  # fmt: skip  (alert_attempted_at: migration 31, v5.68.0-beta.9; qualified_*: migration 32, v5.68.0-beta.13; scope_key: 33; generation: 36, v5.69.0-beta.9)
         # mac and ip are NOT NULL with an empty default: a NULL would make the unique key useless (MySQL treats NULLs as distinct)
         assert cols["mac"]["Null"] == "NO" and cols["ip"]["Null"] == "NO"
         assert cols["subnet_id"]["Null"] == "YES" and cols["resolved_at"]["Null"] == "YES"
         assert cols["server_id"]["Default"] == "0"
 
-    def test_the_unique_key_is_server_kind_mac_ip_and_the_scope_key(self):
-        # migration 33 (v5.68.0-beta.14, Q149) added `scope_key`: the subnet is part of a row's identity
+    def test_the_unique_key_is_server_generation_kind_mac_ip_and_the_scope_key(self):
+        # migration 33 (v5.68.0-beta.14, Q149) added `scope_key`: the subnet is part of a row's identity; migration 36 (v5.69.0-beta.9, Q178) put the generation into
+        # the key and replaced `uq_client_problem` with `uq_client_problem_gen` (Q178 adjustment: this pinned the five-column key under its old name)
         with jen_db() as db, db.cursor() as cur:
-            cur.execute("SHOW INDEX FROM client_problems WHERE Key_name='uq_client_problem'")
+            cur.execute("SHOW INDEX FROM client_problems WHERE Key_name='uq_client_problem_gen'")
             parts = sorted((r["Seq_in_index"], r["Column_name"]) for r in cur.fetchall())
-            cur.execute("SHOW INDEX FROM client_problems WHERE Key_name='uq_client_problem' AND Non_unique=0")
+            cur.execute("SHOW INDEX FROM client_problems WHERE Key_name='uq_client_problem_gen' AND Non_unique=0")
             unique = cur.fetchall()
-        assert [c for _s, c in parts] == ["server_id", "kind", "mac", "ip", "scope_key"] and unique
+            cur.execute("SHOW INDEX FROM client_problems WHERE Key_name='uq_client_problem'")
+            old = cur.fetchall()
+        assert [c for _s, c in parts] == ["server_id", "generation", "kind", "mac", "ip", "scope_key"] and unique
+        assert old == [], (
+            "the old key (no generation) is gone: it would make a replaced host's rows collide with the old host's"
+        )
 
     def test_rerun_is_idempotent(self):
         from jen.models.migrations import _m030_client_problems
@@ -690,7 +699,26 @@ class TestMigration32ClientProblemsQualified:
 class TestMigration33ClientProblemsScopeKey:
     """v5.68.0-beta.14 (Q149) - the subnet is part of a Problems row's identity. `scope_key` = COALESCE(subnet_id, -1) is in the unique key
     (a NULL cannot be: MySQL treats NULLs as distinct); the migration DELETES the existing rows (they may be cross-contaminated) and resets
-    the per-server watermarks, and runs only when the column is absent."""
+    the per-server watermarks, and runs only when the column is absent.
+
+    Q178 adjustment: these tests are about migration 33's own world - the five-column key under the name `uq_client_problem` - and the database they run on is at the
+    head, where migration 36 has replaced it. Each test therefore starts in migration 33's end state and puts the head back afterwards (36 is idempotent)."""
+
+    @pytest.fixture(autouse=True)
+    def _in_migration_33s_world(self):
+        from jen.models.migrations import _index_exists, _m036_client_problems_generation
+
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("DELETE FROM client_problems")
+            if not _index_exists(cur, "client_problems", "uq_client_problem"):
+                cur.execute(
+                    "ALTER TABLE client_problems ADD UNIQUE KEY uq_client_problem (server_id, kind, mac, ip, scope_key)"
+                )
+            db.commit()
+        yield
+        with jen_db() as db:
+            _m036_client_problems_generation(db)
+            db.commit()
 
     def _insert(self, cur, subnet, scope, server=98, ip=""):
         cur.execute(
@@ -1129,3 +1157,163 @@ class TestRunMigrationsTakesTheAdvisoryLock:
             assert migrations.run_migrations() >= 0
         finally:
             other.close()
+
+
+class TestMigration36ProblemsGeneration:
+    """v5.69.0-beta.9 (Q178, PROBLEMS-IDENTITY-002) - `client_problems.generation` (INT NOT NULL DEFAULT 0) joins the unique key: (server_id, generation, kind, mac, ip, scope_key).
+    Every statement has its own guard; the new key is added BEFORE the old one is dropped, so a crash between never leaves the table without a unique key."""
+
+    GEN_KEY = ["server_id", "generation", "kind", "mac", "ip", "scope_key"]
+
+    @pytest.fixture(autouse=True)
+    def _head_before_and_after(self):
+        from jen.models.migrations import _m036_client_problems_generation
+
+        with jen_db() as db:
+            _m036_client_problems_generation(db)
+            db.commit()
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("DELETE FROM client_problems WHERE server_id=97")
+            db.commit()
+        yield
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("DELETE FROM client_problems WHERE server_id=97")
+            db.commit()
+        with jen_db() as db:
+            _m036_client_problems_generation(db)
+            db.commit()
+
+    @staticmethod
+    def _key(cur, name):
+        cur.execute(
+            "SELECT COLUMN_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() "
+            "AND TABLE_NAME = 'client_problems' AND INDEX_NAME = %s ORDER BY SEQ_IN_INDEX",
+            (name,),
+        )
+        return [r["COLUMN_NAME"] for r in cur.fetchall()]
+
+    @staticmethod
+    def _insert(cur, generation, server=97, mac="aa:bb:cc:dd:ee:36"):
+        cur.execute(
+            "INSERT INTO client_problems (server_id, generation, kind, mac, ip, subnet_id, scope_key, first_seen, last_seen) "
+            "VALUES (%s, %s, 'nak', %s, '', 1, 1, NOW(), NOW())",
+            (server, generation, mac),
+        )
+
+    def test_it_is_recorded_and_a_new_numbered_migration(self):
+        assert 36 in applied_versions()
+        by_version = {v: fn.__name__ for v, _d, fn in MIGRATIONS}
+        assert (
+            by_version[36] == "_m036_client_problems_generation"
+            and by_version[35] == "_m035_remove_legacy_telegram_settings"
+        )
+        assert MIGRATIONS[-1][0] >= 36
+
+    def test_the_column_is_a_not_null_int_with_default_zero(self):
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("SHOW COLUMNS FROM client_problems LIKE 'generation'")
+            col = cur.fetchone()
+        assert col["Type"].lower().startswith("int") and col["Null"] == "NO" and str(col["Default"]) == "0"
+
+    def test_the_old_key_is_gone_and_the_new_one_is_the_six_columns(self):
+        with jen_db() as db, db.cursor() as cur:
+            assert self._key(cur, "uq_client_problem") == []
+            assert self._key(cur, "uq_client_problem_gen") == self.GEN_KEY
+
+    def test_the_same_client_may_be_a_row_in_each_generation_and_only_once_in_one(self):
+        import pymysql
+
+        with jen_db() as db, db.cursor() as cur:
+            self._insert(cur, 0)
+            self._insert(cur, 1)
+            db.commit()
+            cur.execute("SELECT COUNT(*) AS n FROM client_problems WHERE server_id=97")
+            assert cur.fetchone()["n"] == 2
+            with pytest.raises(pymysql.err.IntegrityError):
+                self._insert(cur, 1)
+            db.rollback()
+
+    def test_a_rerun_changes_nothing(self):
+        from jen.models.migrations import _m036_client_problems_generation
+
+        with jen_db() as db, db.cursor() as cur:
+            self._insert(cur, 0)
+            self._insert(cur, 2)
+            db.commit()
+            _m036_client_problems_generation(db)
+            db.commit()
+            cur.execute("SELECT COUNT(*) AS n FROM client_problems WHERE server_id=97")
+            assert cur.fetchone()["n"] == 2
+            assert self._key(cur, "uq_client_problem_gen") == self.GEN_KEY and self._key(cur, "uq_client_problem") == []
+
+    def test_existing_rows_become_generation_zero(self):
+        from jen.models.migrations import _m036_client_problems_generation
+
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("ALTER TABLE client_problems DROP INDEX uq_client_problem_gen")
+            cur.execute("ALTER TABLE client_problems DROP COLUMN generation")
+            cur.execute(
+                "ALTER TABLE client_problems ADD UNIQUE KEY uq_client_problem (server_id, kind, mac, ip, scope_key)"
+            )
+            cur.execute(
+                "INSERT INTO client_problems (server_id, kind, mac, ip, subnet_id, scope_key, first_seen, last_seen) "
+                "VALUES (97, 'nak', 'aa:bb:cc:dd:ee:36', '', 1, 1, NOW(), NOW())"
+            )
+            db.commit()
+            _m036_client_problems_generation(db)
+            db.commit()
+            cur.execute("SELECT generation FROM client_problems WHERE server_id=97")
+            assert [r["generation"] for r in cur.fetchall()] == [0]
+
+    @pytest.mark.parametrize(
+        "state",
+        [
+            "before-anything",  # the pre-36 schema: no column, the old key
+            "column-only",  # crashed after ADD COLUMN: the column, the old key, no new key
+            "both-keys",  # crashed after ADD UNIQUE KEY: the new key beside the old one
+            "wrong-new-key",  # the new key's name with other columns
+            "nullable-column",  # a column that is not the final definition
+        ],
+    )
+    def test_an_interruption_between_its_statements_is_finished_by_the_next_run(self, state):
+        from jen.models.migrations import _m036_client_problems_generation
+
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("ALTER TABLE client_problems DROP INDEX uq_client_problem_gen")
+            old_key = (
+                "ALTER TABLE client_problems ADD UNIQUE KEY uq_client_problem (server_id, kind, mac, ip, scope_key)"
+            )
+            if state == "before-anything":
+                cur.execute("ALTER TABLE client_problems DROP COLUMN generation")
+                cur.execute(old_key)
+            elif state == "column-only":
+                cur.execute(old_key)
+            elif state == "both-keys":
+                cur.execute(old_key)
+                cur.execute(
+                    "ALTER TABLE client_problems ADD UNIQUE KEY uq_client_problem_gen (server_id, generation, kind, mac, ip, scope_key)"
+                )
+            elif state == "wrong-new-key":
+                cur.execute(old_key)
+                cur.execute(
+                    "ALTER TABLE client_problems ADD UNIQUE KEY uq_client_problem_gen (server_id, kind, mac, ip, scope_key)"
+                )
+            elif state == "nullable-column":
+                cur.execute("ALTER TABLE client_problems MODIFY COLUMN generation INT NULL DEFAULT 5")
+                cur.execute(old_key)
+            db.commit()
+            _m036_client_problems_generation(db)
+            db.commit()
+            assert self._key(cur, "uq_client_problem_gen") == self.GEN_KEY
+            assert self._key(cur, "uq_client_problem") == []
+            cur.execute("SHOW COLUMNS FROM client_problems LIKE 'generation'")
+            col = cur.fetchone()
+            assert col["Null"] == "NO" and str(col["Default"]) == "0"
+
+    def test_the_new_key_is_added_before_the_old_one_is_dropped(self):
+        import inspect
+
+        from jen.models import migrations
+
+        src = inspect.getsource(migrations._m036_client_problems_generation)
+        assert src.index("ADD UNIQUE KEY uq_client_problem_gen") < src.index('DROP INDEX uq_client_problem"')

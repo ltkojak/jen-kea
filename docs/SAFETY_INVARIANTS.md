@@ -393,6 +393,17 @@ Kea6, D2, an additional server's, Kea's database, Jen's database) is REQUIRED fo
 **Tests.**
 - `tests/test_log_tail.py::TestTheGatesAreBounded`
 
+### PROBLEMS-IDENTITY-002 - Rows of an earlier endpoint generation never suppress, trigger or absorb a replacement endpoint's problems
+**Rule.** A Problems row belongs to the generation of the server id it was recorded under; the generation (`client_problems_gen:<id>`, part of the unique key) is incremented in the same transaction that clears the
+server's progress when its identity (host, user, config path - never the display name) changes, and that transaction closes every open row of the older generations (resolved, with the pending qualification and
+failed-attempt marker cleared). Every statement that reads or writes a server's rows filters by the current generation; the inbox says "(earlier host)" beside an earlier generation's rows and the dashboard never
+counts them. The two statements that do not filter are the time-based resolution of any idle row and the 30-day retention prune, which apply to every row.
+**Established.** Q178 (the beta.8 review: a replaced host inherited the old host's `alerted_at`, its failed-delivery retries and its open row's counts).
+**Enforced at.** `client_problems._reset_if_endpoint_changed` and `_generation`, and migration 36 (`uq_client_problem_gen`).
+**Tests.**
+- `tests/test_client_problems_db.py::TestAReplacedHostIsANewGeneration`
+- `tests/test_migrations.py::TestMigration36ProblemsGeneration`
+
 ## Retired ids
 
 An id that is retired stays here, with the reason, so it is never given to a different rule. (None yet.)

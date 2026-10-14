@@ -66,7 +66,7 @@ def problems_page():
         where.append("p.kind=%s")
         params.append(kind)
     try:
-        rows = __cp.fetch_open(where, params)
+        rows = __cp.fetch_open(where, params, include_earlier=True)
         failed = False
     except Exception as e:
         logger.error(f"problems: could not read the inbox: {type(e).__name__}: {e}")

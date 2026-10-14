@@ -1256,6 +1256,57 @@ def _m034_lease_history_pool_used(db):
             cur.execute("ALTER TABLE lease_history ADD COLUMN pool_used INT NULL DEFAULT NULL AFTER reserved_leases")
 
 
+_CLIENT_PROBLEMS_GEN_KEY = ["server_id", "generation", "kind", "mac", "ip", "scope_key"]
+
+
+def _unique_key_columns(cur, table: str, index: str) -> tuple[list[str], bool]:
+    """(columns in order, every one of them UNIQUE) of one named index, read from information_schema; ([], False) when the index is not there."""
+    cur.execute(
+        "SELECT COLUMN_NAME, NON_UNIQUE FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() "
+        "AND TABLE_NAME = %s AND INDEX_NAME = %s ORDER BY SEQ_IN_INDEX",
+        (table, index),
+    )
+    rows = cur.fetchall()
+    return [r["COLUMN_NAME"] for r in rows], bool(rows) and all(not r["NON_UNIQUE"] for r in rows)
+
+
+def _m036_client_problems_generation(db):
+    """
+    v5.69.0-beta.9 (Q178, PROBLEMS-IDENTITY-002) - a replaced Kea host is a new Problems GENERATION. The rows were keyed by server id alone, so after the host behind an id
+    changed, the old host's `alerted_at` suppressed the new host's first alert on the same client, its failed `alert_attempted_at` / `qualified_at` were retried as the new
+    host's, and its open row absorbed the new host's counts through the unique key. `generation` (INT NOT NULL DEFAULT 0) is part of that key now: (server_id, generation,
+    kind, mac, ip, scope_key). Existing rows are generation 0, which is what every server's current generation is until its endpoint changes (`client_problems_gen:<id>`).
+
+    EVERY STATEMENT HAS ITS OWN GUARD, in the order that never leaves the table without a unique key: the column (added only when absent, or re-declared when its type or default
+    is not the final one), then the NEW unique key (added when absent, or replaced when the name is there with other columns), and only then the OLD key `uq_client_problem` is
+    dropped when it is still there. A crash after any statement is finished by the next start; nothing is deleted, so no row is lost either way.
+    """
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'client_problems' AND COLUMN_NAME = 'generation'"
+        )
+        col = cur.fetchone()
+        if not col:
+            cur.execute("ALTER TABLE client_problems ADD COLUMN generation INT NOT NULL DEFAULT 0 AFTER server_id")
+        elif not (
+            str(col["DATA_TYPE"]).lower() == "int"
+            and str(col["IS_NULLABLE"]).upper() == "NO"
+            and str(col["COLUMN_DEFAULT"]).strip("'") == "0"
+        ):
+            cur.execute("ALTER TABLE client_problems MODIFY COLUMN generation INT NOT NULL DEFAULT 0")
+        columns, unique = _unique_key_columns(cur, "client_problems", "uq_client_problem_gen")
+        if not (columns == _CLIENT_PROBLEMS_GEN_KEY and unique):
+            if columns:
+                cur.execute("ALTER TABLE client_problems DROP INDEX uq_client_problem_gen")
+            cur.execute(
+                "ALTER TABLE client_problems ADD UNIQUE KEY uq_client_problem_gen (server_id, generation, kind, mac, ip, scope_key)"
+            )
+        if _index_exists(cur, "client_problems", "uq_client_problem"):
+            cur.execute("ALTER TABLE client_problems DROP INDEX uq_client_problem")
+    logger.info("Migration 36: client_problems.generation and its unique key")
+
+
 _LEGACY_TELEGRAM_KEYS = ("telegram_token", "telegram_chat_id", "telegram_enabled")
 
 
@@ -1390,6 +1441,11 @@ MIGRATIONS = [
         35,
         "settings: the legacy plaintext telegram_token / telegram_chat_id / telegram_enabled keys removed (v5.69.0-beta.3, Q172)",
         _m035_remove_legacy_telegram_settings,
+    ),
+    (
+        36,
+        "client_problems.generation: a replaced Kea host is a new generation, part of the unique key (v5.69.0-beta.9, Q178)",
+        _m036_client_problems_generation,
     ),
 ]
 

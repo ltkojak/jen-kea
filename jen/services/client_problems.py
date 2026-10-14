@@ -303,6 +303,7 @@ def group_by_client(rows: list[dict]) -> list[dict]:
                 "ip": r.get("ip") or "",
                 "detail": r.get("detail") or "",
                 "last_seen": r["last_seen"],
+                "earlier": r.get("current_generation") is not None and r.get("generation", 0) < r["current_generation"],
             }
         )
         c["total"] += r["count"]
@@ -312,6 +313,11 @@ def group_by_client(rows: list[dict]) -> list[dict]:
             c["server_ids"].append(r["server_id"])
         if not c["ip"] and r.get("ip"):
             c["ip"] = r["ip"]
+    for c in clients.values():
+        # a server counts as "earlier host" for this client only when EVERY row it has here is of an earlier generation
+        c["earlier_server_ids"] = [
+            sid for sid in c["server_ids"] if all(k["earlier"] for k in c["kinds"] if k["server_id"] == sid)
+        ]
     return sorted(clients.values(), key=lambda c: c["last_seen"], reverse=True)
 
 
@@ -372,7 +378,9 @@ _SWEPT_KEY = "client_problems_swept"
 _DROPPED_KEY = "client_problems_dropped"
 
 
-def _cap_new_keys(cur, server_id, groups: dict, limit: int = MAX_NEW_KEYS_PER_SWEEP) -> tuple[dict, int]:
+def _cap_new_keys(
+    cur, server_id, groups: dict, limit: int = MAX_NEW_KEYS_PER_SWEEP, generation: int = 0
+) -> tuple[dict, int]:
     """(groups to record, number of NEW groups dropped). A group whose (kind, mac, ip, subnet) already has a row for this server is never dropped; of
     the new ones the `limit` with the newest `last_ts` are kept."""
     # the empty MAC is a key like any other (a NAK with no client address): it was left out of the lookup, so every such group read as NEW each sweep (v5.69.0-beta.5, Q174)
@@ -382,8 +390,8 @@ def _cap_new_keys(cur, server_id, groups: dict, limit: int = MAX_NEW_KEYS_PER_SW
         chunk = macs[i : i + 500]
         marks = ",".join(["%s"] * len(chunk))
         cur.execute(
-            f"SELECT kind, mac, ip, scope_key FROM client_problems WHERE server_id=%s AND mac IN ({marks})",  # nosec B608 - %s placeholders only
-            (server_id, *chunk),
+            f"SELECT kind, mac, ip, scope_key FROM client_problems WHERE server_id=%s AND generation=%s AND mac IN ({marks})",  # nosec B608 - %s placeholders only
+            (server_id, generation, *chunk),
         )
         existing |= {(r["kind"], r["mac"] or "", r["ip"], r["scope_key"]) for r in cur.fetchall()}
     new = [k for k in groups if (k[0], k[1] or "", k[2], -1 if k[3] is None else k[3]) not in existing]
@@ -401,6 +409,7 @@ _SERVER_KEY_PREFIXES = (
     "client_problems_miss:",
     "client_problems_clock:",
     "client_problems_path:",
+    "client_problems_gen:",
     "client_problems_ident:",
 )
 
@@ -453,14 +462,40 @@ def _note_dropped(now: datetime, dropped: int) -> None:
         logger.error(f"client_problems: could not record the dropped-key count: {type(e).__name__}: {e}")
 
 
-def _reset_if_endpoint_changed(server: dict) -> bool:
+# Kept across a reset: the identity it compares against, and the generation counter it increments
+_KEPT_ACROSS_A_RESET = ("client_problems_gen:", "client_problems_ident:")
+
+
+def _generation(server_id) -> int:
+    """The current generation of one server's Problems rows (`client_problems_gen:<id>`; 0 when absent, always 0 for the lease-database kinds). A replaced Kea host is a
+    new generation (v5.69.0-beta.9, Q178, PROBLEMS-IDENTITY-002)."""
+    if server_id == DB_SERVER_ID:
+        return 0
+    from jen.models import db as __db
+
+    with __db.jen_db() as db, db.cursor() as cur:
+        cur.execute("SELECT setting_value FROM settings WHERE setting_key=%s", (f"client_problems_gen:{server_id}",))
+        row = cur.fetchone()
+    try:
+        return int(row["setting_value"]) if row and row.get("setting_value") not in (None, "") else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def _reset_if_endpoint_changed(server: dict, now: datetime | None = None) -> bool:
     """Persisted progress belongs to the endpoint that produced it (v5.69.0-beta.8, Q177, PROBLEMS-IDENTITY-001). The watermark, last read, last error, misses, clock offset and
     log path are keyed by server id; a host replaced under the same id inherited a watermark that could be LATER than its own log, and the sweep then ignored every event the new
     host wrote. The sweep records the server's identity (host, user, config path - never its display name) under `client_problems_ident:<id>`; when the stored one exists and
     differs, every progress key of that id is deleted in one transaction, the new identity is written, and the sweep starts the server afresh (first-sweep baseline, fresh clock
-    offset). Historical `client_problems` rows are kept. A first sight of a server only records its identity. Returns True when progress was reset."""
+    offset). A first sight of a server only records its identity. Returns True when progress was reset.
+
+    v5.69.0-beta.9 (Q178, PROBLEMS-IDENTITY-002): the rows are a GENERATION too. In the same transaction the server's generation counter is incremented and every open row of the
+    older generations is CLOSED - resolved, with its pending qualification and failed-attempt marker cleared - so the old host's `alerted_at` can neither suppress the new host's
+    first alert on the same client, nor its failed delivery be retried as the new host's, nor its open row absorb the new host's counts (the unique key carries the generation).
+    The closed rows stay as history, and the inbox says "(earlier host)" beside them."""
     from jen.models import db as __db
 
+    now = now or _now()
     sid = server.get("id")
     ident = json.dumps(list(_log_tail.identity(server)))
     key = f"client_problems_ident:{sid}"
@@ -473,7 +508,20 @@ def _reset_if_endpoint_changed(server: dict) -> bool:
         reset = stored is not None
         if reset:
             for prefix in _SERVER_KEY_PREFIXES:
-                cur.execute("DELETE FROM settings WHERE setting_key=%s", (f"{prefix}{sid}",))
+                if prefix not in _KEPT_ACROSS_A_RESET:
+                    cur.execute("DELETE FROM settings WHERE setting_key=%s", (f"{prefix}{sid}",))
+            cur.execute(
+                "INSERT INTO settings (setting_key, setting_value) VALUES (%s, '1') "
+                "ON DUPLICATE KEY UPDATE setting_value=CAST(setting_value AS UNSIGNED)+1",
+                (f"client_problems_gen:{sid}",),
+            )
+            cur.execute("SELECT setting_value FROM settings WHERE setting_key=%s", (f"client_problems_gen:{sid}",))
+            new_generation = int(cur.fetchone()["setting_value"])
+            cur.execute(
+                "UPDATE client_problems SET resolved_at=%s, qualified_at=NULL, qualified_count=NULL, alert_attempted_at=NULL "
+                "WHERE server_id=%s AND generation < %s AND resolved_at IS NULL",
+                (now, sid, new_generation),
+            )
             logger.info(
                 f"client_problems: server {sid} now answers at {ident} (was {stored}); its sweep progress starts afresh"
             )
@@ -717,8 +765,8 @@ def clock_notes() -> list[dict]:
 _UPSERT_LOG_BASELINE = None  # (built below, from _UPSERT_LOG)
 
 _UPSERT_LOG = (
-    "INSERT INTO client_problems (server_id, kind, mac, ip, subnet_id, scope_key, first_seen, last_seen, `count`, detail) "
-    "VALUES (%s, %s, %s, %s, %s, COALESCE(%s, -1), %s, %s, %s, %s) "
+    "INSERT INTO client_problems (server_id, generation, kind, mac, ip, subnet_id, scope_key, first_seen, last_seen, `count`, detail) "
+    "VALUES (%s, %s, %s, %s, %s, %s, COALESCE(%s, -1), %s, %s, %s, %s) "
     "ON DUPLICATE KEY UPDATE "
     "`count` = IF(resolved_at IS NULL, `count` + VALUES(`count`), VALUES(`count`)), "
     "first_seen = IF(resolved_at IS NULL, first_seen, VALUES(first_seen)), "
@@ -738,8 +786,8 @@ assert _UPSERT_LOG_BASELINE != _UPSERT_LOG
 # (Q144 had the newest event reassign it, which carried one subnet's history and qualification onto another subnet's row.)
 
 _UPSERT_STATE = (
-    "INSERT INTO client_problems (server_id, kind, mac, ip, subnet_id, scope_key, first_seen, last_seen, `count`, detail) "
-    "VALUES (%s, %s, %s, %s, %s, COALESCE(%s, -1), %s, %s, 1, %s) "
+    "INSERT INTO client_problems (server_id, generation, kind, mac, ip, subnet_id, scope_key, first_seen, last_seen, `count`, detail) "
+    "VALUES (%s, 0, %s, %s, %s, %s, COALESCE(%s, -1), %s, %s, 1, %s) "  # the lease-database kinds (server 0) are always generation 0
     "ON DUPLICATE KEY UPDATE "
     "first_seen = IF(resolved_at IS NULL, first_seen, VALUES(first_seen)), "
     "alerted_at = IF(resolved_at IS NULL, alerted_at, NULL), "
@@ -799,8 +847,9 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
             )
             try:
                 _reset_if_endpoint_changed(
-                    server
-                )  # before anything of this server's progress is read: a replaced host starts afresh (Q177)
+                    server, now
+                )  # before anything of this server's progress is read: a replaced host starts afresh (Q177) and is a new generation (Q178)
+                gen = _generation(sid)
                 # v5.69.0-beta.6 (Q175): the file the server's own logger writes, else the configured one - the one definition every reader of this log shares. "" (no
                 # file the host would read) is a missing log without asking the host, and the path tried is recorded either way, for the Health row to name
                 log_path = _log_tail.path_for(server)
@@ -843,13 +892,14 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                 first_sweep = wm is None  # a server's first read sets the watermark and records; a backlog is not news
                 alerts_due = []
                 with __db.jen_db() as db, db.cursor() as cur:
-                    groups, dropped = _cap_new_keys(cur, sid, groups)
+                    groups, dropped = _cap_new_keys(cur, sid, groups, generation=gen)
                     summary["dropped_keys"] += dropped
                     for (kind, mac, ip, subnet_id), g in groups.items():
                         cur.execute(
                             _UPSERT_LOG_BASELINE if first_sweep else _UPSERT_LOG,
                             (
                                 sid,
+                                gen,
                                 kind,
                                 mac,
                                 ip,
@@ -869,17 +919,17 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                     # client to have more trouble and without needing the qualifying lines to still be in the 1000-line tail.
                     keys = {(k, m, s) for (k, m, _ip, s) in groups}
                     cur.execute(
-                        "SELECT kind, mac, subnet_id FROM client_problems WHERE server_id=%s AND resolved_at IS NULL "
+                        "SELECT kind, mac, subnet_id FROM client_problems WHERE server_id=%s AND generation=%s AND resolved_at IS NULL "
                         "AND alerted_at IS NULL AND (alert_attempted_at IS NOT NULL OR qualified_at IS NOT NULL)",
-                        (sid,),
+                        (sid, gen),
                     )
                     keys |= {(r["kind"], r["mac"], r["subnet_id"]) for r in cur.fetchall()}
                     for kind, mac, subnet in keys:
                         cur.execute(
                             "SELECT ip, alerted_at, alert_attempted_at, qualified_at, qualified_count FROM client_problems "
-                            "WHERE server_id=%s AND kind=%s AND mac=%s AND subnet_id <=> %s AND resolved_at IS NULL "
+                            "WHERE server_id=%s AND generation=%s AND kind=%s AND mac=%s AND subnet_id <=> %s AND resolved_at IS NULL "
                             "ORDER BY last_seen DESC",
-                            (sid, kind, mac, subnet),
+                            (sid, gen, kind, mac, subnet),
                         )
                         rows = cur.fetchall()
                         if not rows or any(
@@ -894,9 +944,9 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                         if qualified is not None and now - qualified["qualified_at"] >= QUALIFICATION_KEEP:
                             # 24 hours undelivered: the qualification is dropped, and the key must earn it again from the tail
                             cur.execute(
-                                "UPDATE client_problems SET qualified_at=NULL, qualified_count=NULL WHERE server_id=%s AND kind=%s "
+                                "UPDATE client_problems SET qualified_at=NULL, qualified_count=NULL WHERE server_id=%s AND generation=%s AND kind=%s "
                                 "AND mac=%s AND subnet_id <=> %s AND resolved_at IS NULL",
-                                (sid, kind, mac, subnet),
+                                (sid, gen, kind, mac, subnet),
                             )
                             qualified = None
                         if qualified is not None:
@@ -907,9 +957,9 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                                 continue
                             q_at, q_count = now, current
                             cur.execute(
-                                "UPDATE client_problems SET qualified_at=%s, qualified_count=%s WHERE server_id=%s AND kind=%s "
+                                "UPDATE client_problems SET qualified_at=%s, qualified_count=%s WHERE server_id=%s AND generation=%s AND kind=%s "
                                 "AND mac=%s AND subnet_id <=> %s AND resolved_at IS NULL",
-                                (q_at, q_count, sid, kind, mac, subnet),
+                                (q_at, q_count, sid, gen, kind, mac, subnet),
                             )
                         # a delivery that keeps failing is retried, but not every sweep (a row that DID deliver is the 24-hour rule's)
                         if any(
@@ -925,8 +975,8 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                     for kind, mac, _ip, subnet_id, _count, _q_at in alerts_due:
                         cur.execute(
                             "UPDATE client_problems SET alert_attempted_at=%s "
-                            "WHERE server_id=%s AND kind=%s AND mac=%s AND subnet_id <=> %s AND resolved_at IS NULL",
-                            (now, sid, kind, mac, subnet_id),
+                            "WHERE server_id=%s AND generation=%s AND kind=%s AND mac=%s AND subnet_id <=> %s AND resolved_at IS NULL",
+                            (now, sid, gen, kind, mac, subnet_id),
                         )
                     if new_wm is not None:
                         _wm_set_on(cur, sid, new_wm)
@@ -954,8 +1004,8 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                             # 24 hours. A delivered alert leaves NO pending qualification behind (Q149): `qualified_at` / `qualified_count` are what a retry reads.
                             cur.execute(
                                 "UPDATE client_problems SET alerted_at=%s, qualified_at=NULL, qualified_count=NULL "
-                                "WHERE server_id=%s AND kind=%s AND mac=%s AND subnet_id <=> %s AND resolved_at IS NULL",
-                                (now, sid, kind, mac, subnet_id),
+                                "WHERE server_id=%s AND generation=%s AND kind=%s AND mac=%s AND subnet_id <=> %s AND resolved_at IS NULL",
+                                (now, sid, gen, kind, mac, subnet_id),
                             )
                     except Exception as e:
                         # delivered, but not recorded: "attempted, outcome unknown" - the 30-minute retry rule is what stands between this and a second alert
@@ -984,7 +1034,7 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                 # a state that is no longer there is resolved at once - it is a fact about now, not an event that may recur
                 marks = ",".join(["%s"] * len(DB_KINDS))
                 cur.execute(
-                    f"UPDATE client_problems SET resolved_at=%s WHERE server_id=%s AND kind IN ({marks}) "  # nosec B608 - %s placeholders only
+                    f"UPDATE client_problems SET resolved_at=%s WHERE server_id=%s AND generation=0 AND kind IN ({marks}) "  # nosec B608 - %s placeholders only
                     "AND resolved_at IS NULL AND last_seen < %s",
                     (now, DB_SERVER_ID, *DB_KINDS, now),
                 )
@@ -1029,16 +1079,25 @@ def run_sweep_job() -> dict:
 # ── Reads for the page and the dashboard widget ─────────────────────────────────────────────────────────────────────────────
 
 
-def fetch_open(where: list[str], params: list, limit: int = 500) -> list[dict]:
-    """Open (unresolved) rows, newest `last_seen` first, restricted by the caller's own clauses on alias `p`
-    (`add_subnet_restriction(where, params, "p", "subnet_id")` - an unattributed row never matches a restricted caller)."""
+_CURRENT_GENERATION = "COALESCE(CAST(g.setting_value AS UNSIGNED), 0)"  # a server's current generation, joined from its settings key (0 when absent)
+
+
+def fetch_open(where: list[str], params: list, limit: int = 500, include_earlier: bool = False) -> list[dict]:
+    """Open (unresolved) rows of each server's CURRENT generation, newest `last_seen` first, restricted by the caller's own clauses on alias `p`
+    (`add_subnet_restriction(where, params, "p", "subnet_id")` - an unattributed row never matches a restricted caller). `include_earlier` (the Problems page; v5.69.0-beta.9,
+    Q178) adds the rows of an EARLIER generation - closed when their Kea host was replaced - each flagged by `generation` < `current_generation`; the dashboard's count never does."""
     from jen.models import db as __db
 
-    clauses = ["p.resolved_at IS NULL", *where]
+    current = f"(p.resolved_at IS NULL AND p.generation = {_CURRENT_GENERATION})"
+    if include_earlier:
+        current = f"({current} OR p.generation < {_CURRENT_GENERATION})"
+    clauses = [current, *where]
     with __db.jen_db() as db, db.cursor() as cur:
         cur.execute(
-            "SELECT p.id, p.server_id, p.kind, p.mac, p.ip, p.subnet_id, p.first_seen, p.last_seen, p.`count`, p.detail "  # nosec B608 - fixed clauses; values bound
-            f"FROM client_problems p WHERE {' AND '.join(clauses)} ORDER BY p.last_seen DESC LIMIT %s",
+            "SELECT p.id, p.server_id, p.generation, p.kind, p.mac, p.ip, p.subnet_id, p.first_seen, p.last_seen, p.`count`, p.detail, "  # nosec B608 - fixed clauses; values bound
+            f"{_CURRENT_GENERATION} AS current_generation "
+            "FROM client_problems p LEFT JOIN settings g ON g.setting_key = CONCAT('client_problems_gen:', p.server_id) "
+            f"WHERE {' AND '.join(clauses)} ORDER BY p.last_seen DESC LIMIT %s",
             (*params, limit),
         )
         return list(cur.fetchall())

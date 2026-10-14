@@ -1041,7 +1041,9 @@ class TestASweepIsOneTransaction:
         prime(logs)
         logs[1] = [nak(1), nak(2), nak(3)]
 
-        def boom(cur, server_id, groups, limit=cp.MAX_NEW_KEYS_PER_SWEEP):
+        def boom(
+            cur, server_id, groups, limit=cp.MAX_NEW_KEYS_PER_SWEEP, generation=0
+        ):  # (Q178 adjustment: the sweep passes the generation)
             raise pymysql.err.OperationalError(2013, "lost connection")
 
         monkeypatch.setattr(cp, "_cap_new_keys", boom)
@@ -1059,7 +1061,9 @@ class TestASweepIsOneTransaction:
         prime(logs)
         logs[1] = [nak(1), nak(2), nak(3)]
 
-        def boom(cur, server_id, groups, limit=cp.MAX_NEW_KEYS_PER_SWEEP):
+        def boom(
+            cur, server_id, groups, limit=cp.MAX_NEW_KEYS_PER_SWEEP, generation=0
+        ):  # (Q178 adjustment: the sweep passes the generation)
             raise ValueError("a bug in the sweep")
 
         monkeypatch.setattr(cp, "_cap_new_keys", boom)
@@ -1268,6 +1272,7 @@ class TestARemovedServersKeysAreCleared:
         "client_problems_miss:",
         "client_problems_clock:",
         "client_problems_path:",
+        "client_problems_gen:",
         "client_problems_ident:",
     )
 
@@ -1286,7 +1291,7 @@ class TestARemovedServersKeysAreCleared:
         db.commit()  # a fresh snapshot: the sweep writes through another connection
         with db.cursor() as cur:
             cur.execute(
-                "SELECT setting_key FROM settings WHERE setting_key IN (%s,%s,%s,%s,%s,%s,%s)",
+                "SELECT setting_key FROM settings WHERE setting_key IN (%s,%s,%s,%s,%s,%s,%s,%s)",
                 tuple(f"{p}{server_id}" for p in TestARemovedServersKeysAreCleared.KEYS),
             )
             return len(cur.fetchall())
@@ -1516,15 +1521,18 @@ class TestProgressBelongsToItsEndpoint:
             self._put(db, f"{prefix}2", "y")
         self._put(db, "client_problems_ident:1", self._ident("old-host"))
         self._put(db, "client_problems_ident:2", self._ident(SERVER_B["ssh_host"]))
+        self._put(db, "client_problems_gen:1", "3")
         new_server = {**SERVER_A, "ssh_host": "new-host"}
         monkeypatch.setattr(extensions, "KEA_SERVERS", [dict(new_server), dict(SERVER_B)])
         logs[1] = []
         assert cp._reset_if_endpoint_changed(new_server) is True
         for prefix in TestARemovedServersKeysAreCleared.KEYS:
-            if prefix != "client_problems_ident:":
+            if prefix not in cp._KEPT_ACROSS_A_RESET:
                 assert self._value(db, f"{prefix}1") is None, prefix
             assert self._value(db, f"{prefix}2") is not None, prefix
         assert self._value(db, "client_problems_ident:1") == self._ident("new-host")
+        # (Q178 adjustment: the generation counter is not deleted by a reset - it is incremented by it)
+        assert self._value(db, "client_problems_gen:1") == "4", "seeded as 3 below: a reset increments it"
 
     def test_historical_rows_are_kept(self, db, stack, monkeypatch):
         logs, _ = stack
@@ -1610,3 +1618,173 @@ class TestAHarmlessEditDoesNotRecountWhatTheInboxHolds:
             cp._UPSERT_LOG_BASELINE.replace("GREATEST(`count`, VALUES(`count`))", "`count` + VALUES(`count`)")
             == cp._UPSERT_LOG
         )
+
+
+class TestAReplacedHostIsANewGeneration:
+    """v5.69.0-beta.9 (Q178, PROBLEMS-IDENTITY-002): the rows of a server id that now answers somewhere else are an EARLIER generation. They are closed when the identity changes, they never
+    suppress, trigger or absorb the replacement's problems, and the inbox says "(earlier host)" beside them."""
+
+    @pytest.fixture(autouse=True)
+    def _clock_and_cleanup(self, db, monkeypatch):
+        monkeypatch.setattr(cp, "_now", lambda: NOW)
+        TestTheSweepRecordsWhetherItCanReadEachServer._wipe(db)
+        yield
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM settings WHERE setting_key LIKE 'client_problems_%'")
+            cur.execute("DELETE FROM client_problems")
+        db.commit()
+
+    NEW = {**SERVER_A, "ssh_host": "new-host"}
+
+    @staticmethod
+    def _put(db, key, value):
+        TestProgressBelongsToItsEndpoint._put(db, key, value)
+
+    @staticmethod
+    def _value(db, key):
+        return TestProgressBelongsToItsEndpoint._value(db, key)
+
+    def _as_replaced(self, db, monkeypatch, generation=None):
+        """The server's stored identity is its OLD host; the sweep is handed the new one."""
+        self._put(db, "client_problems_ident:1", TestProgressBelongsToItsEndpoint._ident("old-host"))
+        if generation is not None:
+            self._put(db, "client_problems_gen:1", str(generation))
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [dict(self.NEW), dict(SERVER_B)])
+
+    @staticmethod
+    def _row(
+        db,
+        *,
+        generation=0,
+        mac=MAC,
+        count=3,
+        alerted=None,
+        attempted=None,
+        qualified=None,
+        qcount=None,
+        resolved=None,
+        server=1,
+    ):
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO client_problems (server_id, generation, kind, mac, ip, subnet_id, scope_key, first_seen, last_seen, `count`, detail, "
+                "alerted_at, alert_attempted_at, qualified_at, qualified_count, resolved_at) "
+                "VALUES (%s, %s, 'nak', %s, '', NULL, -1, %s, %s, %s, 'x', %s, %s, %s, %s, %s)",
+                (
+                    server,
+                    generation,
+                    mac,
+                    NOW - timedelta(hours=2),
+                    NOW - timedelta(minutes=30),
+                    count,
+                    alerted,
+                    attempted,
+                    qualified,
+                    qcount,
+                    resolved,
+                ),
+            )
+        db.commit()
+
+    @staticmethod
+    def _rows(db, mac=MAC):
+        db.commit()
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT generation, `count`, alerted_at, alert_attempted_at, qualified_at, qualified_count, resolved_at FROM client_problems "
+                "WHERE server_id=1 AND mac=%s ORDER BY generation",
+                (mac,),
+            )
+            return cur.fetchall()
+
+    def test_a_an_earlier_hosts_alert_does_not_silence_the_replacement(self, db, stack, monkeypatch):
+        logs, calls = stack
+        self._row(db, alerted=NOW - timedelta(hours=1))
+        self._as_replaced(db, monkeypatch)
+        logs[1] = [nak(1)]
+        cp.sweep(NOW, servers=[self.NEW])  # the reset sweep: a baseline, never an alert
+        assert calls["alerts"] == []
+        logs[1] = [nak(1), nak(10, minute=5), nak(11, minute=6), nak(12, minute=7)]
+        cp.sweep(NOW + timedelta(minutes=10), servers=[self.NEW])
+        rows = self._rows(db)
+        assert [r["generation"] for r in rows] == [0, 1]
+        assert rows[0]["resolved_at"] is not None, "the earlier host's row was closed at the reset"
+        assert rows[1]["resolved_at"] is None and rows[1]["alerted_at"] is not None, (
+            "the replacement has its own row and its own alert"
+        )
+        assert len(calls["alerts"]) == 1
+
+    def test_b_an_earlier_hosts_failed_delivery_is_not_retried_as_the_replacements(self, db, stack, monkeypatch):
+        logs, calls = stack
+        self._row(db, attempted=NOW - timedelta(minutes=40), qualified=NOW - timedelta(minutes=40), qcount=5)
+        self._as_replaced(db, monkeypatch)
+        logs[1] = []
+        cp.sweep(NOW, servers=[self.NEW])
+        cp.sweep(NOW + timedelta(minutes=10), servers=[self.NEW])
+        assert calls["alerts"] == []
+        (row,) = self._rows(db)
+        assert (
+            row["resolved_at"] is not None
+            and row["qualified_at"] is None
+            and row["alert_attempted_at"] is None
+            and row["qualified_count"] is None
+        )
+
+    def test_c_an_earlier_hosts_open_row_does_not_absorb_the_replacements_counts(self, db, stack, monkeypatch):
+        logs, _ = stack
+        self._row(db, count=20)
+        self._as_replaced(db, monkeypatch)
+        logs[1] = [nak(1), nak(2)]
+        cp.sweep(NOW, servers=[self.NEW])
+        rows = self._rows(db)
+        assert [(r["generation"], r["count"]) for r in rows] == [(0, 20), (1, 2)]
+        assert rows[0]["resolved_at"] is not None and rows[1]["resolved_at"] is None
+
+    def test_d_a_changed_ssh_user_alone_is_a_new_generation_too(self, db, stack, monkeypatch):
+        import json
+
+        logs, _ = stack
+        self._row(db)
+        self._put(db, "client_problems_ident:1", json.dumps([SERVER_A["ssh_host"], "old-user", None]))
+        edited = {**SERVER_A, "ssh_user": "kea-helper"}
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [dict(edited), dict(SERVER_B)])
+        logs[1] = []
+        cp.sweep(NOW, servers=[edited])
+        assert self._value(db, "client_problems_gen:1") == "1"
+        assert self._rows(db)[0]["resolved_at"] is not None
+
+    def test_e_a_display_name_change_keeps_the_generation_and_every_row(self, db, stack, monkeypatch):
+        logs, _ = stack
+        self._row(db)
+        self._put(db, "client_problems_ident:1", TestProgressBelongsToItsEndpoint._ident(SERVER_A["ssh_host"]))
+        renamed = {**SERVER_A, "name": "renamed"}
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [dict(renamed), dict(SERVER_B)])
+        logs[1] = []
+        cp.sweep(NOW, servers=[renamed])
+        assert self._value(db, "client_problems_gen:1") is None
+        assert self._rows(db)[0]["resolved_at"] is None
+
+    def test_f_a_server_removed_from_jen_has_its_gen_and_ident_keys_cleared(self, db, stack):
+        self._put(db, "client_problems_gen:77", "2")
+        self._put(db, "client_problems_ident:77", TestProgressBelongsToItsEndpoint._ident("gone"))
+        cp._clear_orphan_server_keys()
+        assert self._value(db, "client_problems_gen:77") is None and self._value(db, "client_problems_ident:77") is None
+
+    def test_g_the_inbox_says_earlier_host_beside_the_old_row_only(self, db, stack, logged_in_client, monkeypatch):
+        self._put(db, "client_problems_gen:1", "1")
+        self._row(db, generation=0, mac="aa:bb:cc:dd:ee:a1", resolved=NOW - timedelta(minutes=5))
+        self._row(db, generation=1, mac="aa:bb:cc:dd:ee:b1")
+        body = logged_in_client.get("/problems").get_data(as_text=True)
+        assert "aa:bb:cc:dd:ee:a1" in body and "aa:bb:cc:dd:ee:b1" in body
+        assert body.count("(earlier host)") == 1
+        row_a = body.split("aa:bb:cc:dd:ee:a1")[1].split("</tr>")[0]
+        row_b = body.split("aa:bb:cc:dd:ee:b1")[1].split("</tr>")[0]
+        assert "(earlier host)" in row_a and "(earlier host)" not in row_b
+
+    def test_the_dashboard_never_counts_an_earlier_generation(self, db, stack):
+        self._put(db, "client_problems_gen:1", "1")
+        self._row(db, generation=0, mac="aa:bb:cc:dd:ee:a2", resolved=NOW - timedelta(minutes=5))
+        rows = cp.fetch_open(["p.last_seen >= %s"], [NOW - timedelta(hours=1)])
+        assert [r for r in rows if r["mac"] == "aa:bb:cc:dd:ee:a2"] == []
+        earlier = cp.fetch_open(["p.last_seen >= %s"], [NOW - timedelta(hours=1)], include_earlier=True)
+        assert [r["generation"] for r in earlier if r["mac"] == "aa:bb:cc:dd:ee:a2"] == [0]
