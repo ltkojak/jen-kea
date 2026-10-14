@@ -267,7 +267,7 @@ def _provider_lookup(lookup_host: str):
                     data = r.json()
                     matches = [e for e in data.get("data", []) if lookup_host in str(e)]
                     return matches if matches else f"No records found for {lookup_host} (Pi-hole v5 API)"
-            return "Pi-hole API not configured."
+            return "Pi-hole not configured: it needs its address and a password or API token (Settings → Kea → DDNS) - an empty credential is never sent."
 
         if dns_provider == "adguard":
             dns_url = extensions.cfg.get("ddns", "api_url", fallback="")
@@ -280,7 +280,7 @@ def _provider_lookup(lookup_host: str):
                 data = r.json()
                 matches = [e for e in data if lookup_host in str(e.get("domain", ""))]
                 return matches if matches else f"No rewrite rules found for {lookup_host}"
-            return "AdGuard Home API not configured."
+            return "AdGuard Home not configured: it needs its address and a password (Settings → Kea → DDNS) - an empty credential is never sent."
 
         if dns_provider in ("ssh", "generic"):
             active = __kea.get_active_kea_server()

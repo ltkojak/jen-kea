@@ -189,9 +189,13 @@ log_path     = /var/log/kea/kea-ddns.log
 #              DDNS page's Naming / D2 Configuration tabs)
 #   both     — report on both; Jen doesn't reconcile them if you
 #              actually run both against the same records
-# Optional — derived at read time when absent: provider if dns_provider
-# is set to anything but none, else d2 if dhcp4's dhcp-ddns.enable-updates
-# is already on, else provider.
+#   none     — nothing configured (an explicit none is honoured)
+#   hook     — a libdhcp_run_script.so hook writes the names; what it
+#              writes is outside Jen's view
+# Optional — display only, derived at read time when absent: d2 if dhcp4's
+# dhcp-ddns.enable-updates is on, else hook if a run_script hook is
+# loaded, else provider if dns_provider is set to anything but none,
+# else none (or unknown when Kea's config could not be read).
 # mode = provider
 
 # DNS provider for hostname lookup on the DDNS page:

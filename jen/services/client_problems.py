@@ -712,6 +712,10 @@ def clock_notes() -> list[dict]:
     return out
 
 
+# The first read of a server that has no watermark - a first sight, or a server started afresh after its endpoint changed (PROBLEMS-IDENTITY-001) - sees the same recent lines
+# the rows already count; the baseline upsert never adds to an unresolved row, so a harmless edit to a server's SSH settings does not double every count
+_UPSERT_LOG_BASELINE = None  # (built below, from _UPSERT_LOG)
+
 _UPSERT_LOG = (
     "INSERT INTO client_problems (server_id, kind, mac, ip, subnet_id, scope_key, first_seen, last_seen, `count`, detail) "
     "VALUES (%s, %s, %s, %s, %s, COALESCE(%s, -1), %s, %s, %s, %s) "
@@ -724,6 +728,11 @@ _UPSERT_LOG = (
     "qualified_count = IF(resolved_at IS NULL, qualified_count, NULL), "
     "detail = VALUES(detail), last_seen = GREATEST(last_seen, VALUES(last_seen)), resolved_at = NULL"
 )  # resolved_at LAST: the assignments above read its old value, and MySQL applies them left to right
+_UPSERT_LOG_BASELINE = _UPSERT_LOG.replace(
+    "`count` = IF(resolved_at IS NULL, `count` + VALUES(`count`), VALUES(`count`))",
+    "`count` = IF(resolved_at IS NULL, GREATEST(`count`, VALUES(`count`)), VALUES(`count`))",
+)
+assert _UPSERT_LOG_BASELINE != _UPSERT_LOG
 # The subnet is NOT assigned on duplicate (v5.68.0-beta.14, Q149): it is part of the unique key (`scope_key` = COALESCE(subnet_id, -1)), so a
 # row's subnet never changes and an event in another subnet - or none - is another row, with its own count, times and alert state.
 # (Q144 had the newest event reassign it, which carried one subnet's history and qualification onto another subnet's row.)
@@ -838,7 +847,7 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                     summary["dropped_keys"] += dropped
                     for (kind, mac, ip, subnet_id), g in groups.items():
                         cur.execute(
-                            _UPSERT_LOG,
+                            _UPSERT_LOG_BASELINE if first_sweep else _UPSERT_LOG,
                             (
                                 sid,
                                 kind,

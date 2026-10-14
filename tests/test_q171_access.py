@@ -363,10 +363,20 @@ class TestSaveDdnsClearsWhatIsBlank:
         assert cfg.get("ddns", "api_token") == "TOKEN"
 
     def test_the_token_goes_only_when_its_box_is_ticked_and_is_replaced_when_typed(self, logged_in_client, cfg):
-        logged_in_client.post("/settings/infrastructure/save-ddns", data={"dns_provider": "none", "api_token": "NEW"})
+        # (Q177 adjustment: this posted a token for provider none; a provider with no credential stores none - DNS-CRED-001 - so the replacement is typed for a provider that has one)
+        logged_in_client.post(
+            "/settings/infrastructure/save-ddns", data={"dns_provider": "technitium", "api_token": "NEW"}
+        )
         assert cfg.get("ddns", "api_token") == "NEW"
         logged_in_client.post(
-            "/settings/infrastructure/save-ddns", data={"dns_provider": "none", "clear_api_token": "1"}
+            "/settings/infrastructure/save-ddns", data={"dns_provider": "none", "api_token": "CRAFTED"}
+        )
+        assert not cfg.has_option("ddns", "api_token")
+        logged_in_client.post(
+            "/settings/infrastructure/save-ddns", data={"dns_provider": "technitium", "api_token": "NEW"}
+        )
+        logged_in_client.post(
+            "/settings/infrastructure/save-ddns", data={"dns_provider": "technitium", "clear_api_token": "1"}
         )
         assert not cfg.has_option("ddns", "api_token")
 

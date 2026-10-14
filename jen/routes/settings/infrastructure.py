@@ -2183,6 +2183,7 @@ def save_infra_ddns():
         # what the stored provider IS (an upgraded hand-written file with a URL or token and no key reads as technitium - the provider its token was typed for)
         previous = __ddns_writers.effective_provider(cfg)
         switched = seen["switched"] = previous != dns_provider
+        had_token = seen["had_token"] = bool(cfg.get("ddns", "api_token", fallback="").strip())
         cfg.set("ddns", "dns_provider", dns_provider)
         for key, value in (
             ("log_path", log_path),
@@ -2195,19 +2196,25 @@ def save_infra_ddns():
             else:
                 cfg.remove_option("ddns", key)
         # DNS-CRED-001: a stored token is kept only for the provider it was typed for; a switch, the checkbox, or a provider with no credential removes it
-        if api_token:
+        # (a token posted for a provider that has no credential is not stored either: the page has no such field, so only a crafted request carries one)
+        if api_token and dns_provider in _CREDENTIAL_PROVIDERS:
             cfg.set("ddns", "api_token", api_token)
+            seen["token"] = "set"
         elif clear_token or switched or dns_provider not in _CREDENTIAL_PROVIDERS:
             cfg.remove_option("ddns", "api_token")
+            seen["token"] = "removed" if had_token else "none"
+        else:
+            seen["token"] = "kept" if had_token else "none"
 
     __config.app_config.mutate(_apply)
     flash("DDNS settings saved.", "success")
     if seen.get("switched") and dns_provider in _CREDENTIAL_PROVIDERS and not api_token:
         flash(
-            f"Provider changed to {dns_provider}: enter its token or password - the previous provider's was not carried over.",
+            f"Provider changed to {dns_provider}: enter its token or password"
+            + (" - the previous provider's was not carried over." if seen.get("had_token") else "."),
             "warning",
         )
-    __user.audit("SAVE_INFRA", "ddns", f"log={log_path} provider={dns_provider}")
+    __user.audit("SAVE_INFRA", "ddns", f"log={log_path} provider={dns_provider} token={seen.get('token', 'none')}")
     return redirect(home)
 
 

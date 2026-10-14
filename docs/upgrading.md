@@ -37,7 +37,7 @@ One step (5.69.0-beta.2), and nothing to do for it: this release closes the plac
 
 **DDNS: scoped users get the Status tab alone.** A user whose account is limited to some subnets sees the dhcp4 to D2 table on the DDNS page and nothing more: no log tail, no Mode and Log card, no hostname lookup, and no Verify tab (it resolves any name or address through the Jen host). Viewers see Status only, as before. Everyone else keeps every tab.
 
-**`[ddns] log_path` must be a `.log` file under `/var/log`.** The Settings form refuses anything else, and so does the legacy read over SSH (the Kea host helper already did). If you hand-edited the path in `jen.config` to a file that does not end in `.log`, move the log or rename the setting's target. A blank field in the DDNS form now clears its setting, and the API token is kept unless you tick **Remove the saved API token**.
+**`[ddns] log_path` must be a `.log` file under `/var/log`.** The Settings form refuses anything else, and so does the legacy read over SSH (the Kea host helper already did). If you hand-edited the path in `jen.config` to a file that does not end in `.log`, move the log or rename the setting's target. A blank field in the DDNS form now clears its setting, and the API token is kept for the provider it was typed for unless you tick **Remove the saved API token** (a change of provider removes it).
 
 **The MFA policy only gets stricter for an admin.** An admin may raise it (Optional, Required for Admins, Required for All Users) and keep it, never lower it; stepping down, including to Off, is the superadmin's, and the page greys out the options an admin may not pick.
 

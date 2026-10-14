@@ -1556,3 +1556,57 @@ class TestProgressBelongsToItsEndpoint:
             "u",
             "c",
         )
+
+
+class TestAHarmlessEditDoesNotRecountWhatTheInboxHolds:
+    """Q177's adversarial pass: the identity covers the user and the config path as well as the host, so an edit to a server's SSH settings for the SAME machine also starts its progress
+    afresh - and that first read sees the same recent lines the rows already count. The baseline read never adds to an unresolved row."""
+
+    @pytest.fixture(autouse=True)
+    def _clock_and_cleanup(self, db, monkeypatch):
+        monkeypatch.setattr(cp, "_now", lambda: NOW)
+        TestTheSweepRecordsWhetherItCanReadEachServer._wipe(db)
+        yield
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM settings WHERE setting_key LIKE 'client_problems_%'")
+        db.commit()
+
+    @staticmethod
+    def _counts(db):
+        db.commit()
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT kind, mac, `count` FROM client_problems WHERE server_id=1 AND resolved_at IS NULL ORDER BY kind, mac"
+            )
+            return [(r["kind"], r["mac"], r["count"]) for r in cur.fetchall()]
+
+    def test_editing_the_ssh_user_of_the_same_box_keeps_every_count(self, db, stack, monkeypatch):
+        logs, _ = stack
+        logs[1] = [nak(1), nak(2), nak(3)]
+        cp.sweep(NOW, servers=[SERVER_A])
+        before = self._counts(db)
+        assert before and all(c >= 1 for _k, _m, c in before)
+        edited = {**SERVER_A, "ssh_user": "kea-helper"}
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [dict(edited), dict(SERVER_B)])
+        cp.sweep(NOW, servers=[edited])
+        assert self._counts(db) == before, "the same recent lines are not counted a second time"
+
+    def test_a_normal_sweep_still_adds_what_it_reads(self, db, stack):
+        logs, _ = stack
+        logs[1] = [nak(1)]
+        cp.sweep(NOW - timedelta(minutes=10), servers=[SERVER_A])
+        first = self._counts(db)
+        logs[1] = [nak(1), nak(30, minute=5)]
+        cp.sweep(NOW, servers=[SERVER_A])
+        assert sum(c for _k, _m, c in self._counts(db)) > sum(c for _k, _m, c in first)
+
+    def test_the_baseline_upsert_differs_from_the_normal_one_only_in_that_expression(self):
+        assert cp._UPSERT_LOG_BASELINE != cp._UPSERT_LOG
+        assert (
+            "GREATEST(`count`, VALUES(`count`))" in cp._UPSERT_LOG_BASELINE
+            and "`count` + VALUES(`count`)" in cp._UPSERT_LOG
+        )
+        assert (
+            cp._UPSERT_LOG_BASELINE.replace("GREATEST(`count`, VALUES(`count`))", "`count` + VALUES(`count`)")
+            == cp._UPSERT_LOG
+        )

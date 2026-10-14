@@ -1323,3 +1323,74 @@ class TestTheModeSaysWhatItKnows:
         for value in ("`provider`", "`d2`", "`both`", "`none`", "`hook`"):
             assert value in para
         assert "display-only" in para and "unknown" in para
+
+
+class TestACredentialSecondPass:
+    """Q177's adversarial pass: a token is never stored for a provider that has no credential field; the switch warning says what is true; the audit line says what happened to the token."""
+
+    @pytest.fixture
+    def cfg(self, monkeypatch):
+        return self._build(monkeypatch)
+
+    @staticmethod
+    def _build(monkeypatch):
+        import configparser
+
+        import jen.config as config
+        from jen import extensions
+
+        parser = configparser.ConfigParser()
+        parser.read_dict({s: dict(extensions.cfg.items(s)) for s in extensions.cfg.sections() if s != "ddns"})
+        monkeypatch.setattr(extensions, "cfg", parser)
+        monkeypatch.setattr(config.app_config, "mutate", lambda fn, reload=True: fn(parser))
+
+        class Handle:
+            def write(self, values):
+                if parser.has_section("ddns"):
+                    parser.remove_section("ddns")
+                parser["ddns"] = dict(values)
+
+            def get(self, key):
+                return parser.get("ddns", key, fallback=None)
+
+        return Handle()
+
+    @pytest.mark.parametrize("provider", ["none", "ssh", "generic"])
+    def test_a_token_for_a_provider_with_no_credential_is_not_stored(self, logged_in_client, cfg, provider):
+        cfg.write({"dns_provider": provider})
+        logged_in_client.post(
+            "/settings/infrastructure/save-ddns", data={"dns_provider": provider, "api_token": "CRAFTED"}
+        )
+        assert cfg.get("api_token") is None
+
+    def test_a_switch_with_no_stored_token_still_asks_but_does_not_claim_one_was_dropped(self, logged_in_client, cfg):
+        cfg.write({"dns_provider": "none"})
+        r = logged_in_client.post(
+            "/settings/infrastructure/save-ddns",
+            data={"dns_provider": "pihole", "api_url_pihole": "http://p"},
+            follow_redirects=True,
+        )
+        assert b"enter its token or password" in r.data and b"was not carried over" not in r.data
+
+    def test_the_audit_line_says_what_became_of_the_token(self, logged_in_client, cfg, db):
+        cfg.write({"dns_provider": "technitium", "api_token": "OLD"})
+        logged_in_client.post(
+            "/settings/infrastructure/save-ddns", data={"dns_provider": "pihole", "api_url_pihole": "http://p"}
+        )
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT details FROM audit_log WHERE action='SAVE_INFRA' AND entity='ddns' ORDER BY id DESC LIMIT 1"
+            )
+            row = cur.fetchone()
+        assert row and "token=removed" in row["details"] and "OLD" not in row["details"]
+
+    def test_the_lookup_message_says_what_is_missing_and_never_sends(self, monkeypatch, cfg):
+        import requests
+
+        from jen.routes import ddns as ddns_route
+
+        monkeypatch.setattr(requests, "post", lambda *a, **k: pytest.fail("sent"))
+        monkeypatch.setattr(requests, "get", lambda *a, **k: pytest.fail("sent"))
+        cfg.write({"dns_provider": "pihole", "api_url": "http://pi.hole"})
+        msg = ddns_route._provider_lookup("h.example")
+        assert "password or API token" in msg and "empty credential is never sent" in msg
