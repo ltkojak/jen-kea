@@ -1704,7 +1704,7 @@ class TestAReplacedHostIsANewGeneration:
         logs[1] = [nak(1)]
         cp.sweep(NOW, servers=[self.NEW])  # the reset sweep: a baseline, never an alert
         assert calls["alerts"] == []
-        logs[1] = [nak(1), nak(10, minute=5), nak(11, minute=6), nak(12, minute=7)]
+        logs[1] = [nak(1), nak(10, minute=5, hour=12), nak(11, minute=6, hour=12), nak(12, minute=7, hour=12)]
         cp.sweep(NOW + timedelta(minutes=10), servers=[self.NEW])
         rows = self._rows(db)
         assert [r["generation"] for r in rows] == [0, 1]

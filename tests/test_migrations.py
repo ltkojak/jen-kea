@@ -710,6 +710,9 @@ class TestMigration33ClientProblemsScopeKey:
 
         with jen_db() as db, db.cursor() as cur:
             cur.execute("DELETE FROM client_problems")
+            if _index_exists(cur, "client_problems", "uq_client_problem_gen"):
+                # (a key that carries scope_key also blocks a test that drops the column - MariaDB 1072 - and a database that has it is, to migration 33, already finished)
+                cur.execute("ALTER TABLE client_problems DROP INDEX uq_client_problem_gen")
             if not _index_exists(cur, "client_problems", "uq_client_problem"):
                 cur.execute(
                     "ALTER TABLE client_problems ADD UNIQUE KEY uq_client_problem (server_id, kind, mac, ip, scope_key)"

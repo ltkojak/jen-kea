@@ -1236,6 +1236,11 @@ def _client_problems_scope_state(cur) -> tuple[bool, bool]:
     )
     rows = cur.fetchall()
     key_ok = [r["COLUMN_NAME"] for r in rows] == _CLIENT_PROBLEMS_KEY and all(not r["NON_UNIQUE"] for r in rows)
+    if not key_ok:
+        # Migration 36 replaces this key with one that carries the generation; a database at (or past) 36 is in the FINAL state of 33 - re-running 33 over it
+        # (run_migrations at head) must not delete the rows and put the old key back
+        gen_cols, gen_unique = _unique_key_columns(cur, "client_problems", "uq_client_problem_gen")
+        key_ok = gen_cols == _CLIENT_PROBLEMS_GEN_KEY and gen_unique
     return column_ok, key_ok
 
 
