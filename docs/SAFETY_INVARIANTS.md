@@ -338,6 +338,38 @@ Health row that cannot read the log says WHICH file was missing (the one it trie
 - `tests/test_client_problems_db.py::TestTheSweepReadsTheFileTheServersLoggerWrites`
 - `tests/test_health_liveness.py::TestTheSweepRowSaysWhatTheErrorMeans`
 
+### DNS-CRED-001 - A credential stored for one DNS provider is never reused for a different provider
+**Rule.** `[ddns] api_token` is kept only for the provider it was typed for: a provider switch, the remove-token checkbox, or a provider with no credential (`ssh`, `generic`, `none`) removes it, and a switch with
+nothing typed says so. A provider's block shows only its own saved endpoint and says "(unchanged)" only for the token it holds, and a lookup never sends an empty credential.
+**Established.** Q177 (the beta.7 review: a Technitium token was stored as the Pi-hole password and POSTed to the Pi-hole URL).
+**Enforced at.** `save_infra_ddns`'s `_apply` (the one place the token is written or kept) and `_provider_lookup`.
+**Tests.**
+- `tests/test_ddns.py::TestACredentialBelongsToItsProvider`
+
+### LOG-IDENTITY-001 - A cached log result is reused only for the same effective Kea endpoint
+**Rule.** The 3 s log-read cache and the path cache are keyed by the server's identity (host, user, config path) as well as its id; a server edited to point at a different host under the same id is never answered
+with the old host's lines. A display name is not part of the identity.
+**Established.** Q177.
+**Enforced at.** `log_tail.identity`, used by `log_tail.tail` and `log_tail.path_for`.
+**Tests.**
+- `tests/test_log_tail.py::TestAReadBelongsToItsEndpoint`
+
+### PROBLEMS-IDENTITY-001 - Persisted Problems progress is never reused after the identity of its source server changes
+**Rule.** The sweep's watermark, last read, last error, misses, clock offset and log path are the progress of one endpoint. The sweep records the server's identity and, when it changes, deletes every progress key of that
+id in one transaction before the next read and starts the server afresh; historical rows are kept; a first sight only records the identity.
+**Established.** Q177.
+**Enforced at.** `client_problems._reset_if_endpoint_changed`, called by the sweep before any of a server's progress is read; `_SERVER_KEY_PREFIXES` is the one list of what progress is.
+**Tests.**
+- `tests/test_client_problems_db.py::TestProgressBelongsToItsEndpoint`
+
+### DDNS-STATUS-001 - DDNS status distinguishes an absent configuration, an unavailable observation and a loaded hook whose behaviour is unknown
+**Rule.** The Status tab's mode is `none` only when the config was read and nothing is configured, `unknown` when it could not be read, and `hook` when a run_script hook is loaded and D2 is off; an explicit
+`[ddns] mode` (including `none`) wins; D2, hook and provider stay separate facts.
+**Established.** Q176 (unknown), Q177 (explicit none, hook).
+**Enforced at.** `jen/routes/ddns.py::_ddns_mode`.
+**Tests.**
+- `tests/test_ddns.py::TestTheModeSaysWhatItKnows`
+
 ## Retired ids
 
 An id that is retired stays here, with the reason, so it is never given to a different rule. (None yet.)

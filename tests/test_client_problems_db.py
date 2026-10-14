@@ -1268,6 +1268,7 @@ class TestARemovedServersKeysAreCleared:
         "client_problems_miss:",
         "client_problems_clock:",
         "client_problems_path:",
+        "client_problems_ident:",
     )
 
     @staticmethod
@@ -1285,7 +1286,7 @@ class TestARemovedServersKeysAreCleared:
         db.commit()  # a fresh snapshot: the sweep writes through another connection
         with db.cursor() as cur:
             cur.execute(
-                "SELECT setting_key FROM settings WHERE setting_key IN (%s,%s,%s,%s,%s,%s)",
+                "SELECT setting_key FROM settings WHERE setting_key IN (%s,%s,%s,%s,%s,%s,%s)",
                 tuple(f"{p}{server_id}" for p in TestARemovedServersKeysAreCleared.KEYS),
             )
             return len(cur.fetchall())
@@ -1429,3 +1430,129 @@ class TestTheSweepReadsTheFileTheServersLoggerWrites:
         monkeypatch.setattr(log_tail, "_read_server_config", lambda server: None)
         cp.sweep(NOW, servers=[SERVER_A])
         assert cp.read_status([SERVER_A])["servers"][0]["last_path"] == "/var/log/kea/kea-dhcp4.log"
+
+
+class TestProgressBelongsToItsEndpoint:
+    """v5.69.0-beta.8 (Q177, PROBLEMS-IDENTITY-001): the watermark, clock offset and read record are keyed by server id; a host replaced under the same id inherited a watermark that
+    could be later than its own log, and the sweep ignored every event the new host wrote. The sweep records the server's identity and starts a changed one afresh."""
+
+    @pytest.fixture(autouse=True)
+    def _clock_and_cleanup(self, db, monkeypatch):
+        monkeypatch.setattr(cp, "_now", lambda: NOW)
+        TestTheSweepRecordsWhetherItCanReadEachServer._wipe(db)
+        yield
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM settings WHERE setting_key LIKE 'client_problems_%'")
+        db.commit()
+
+    @staticmethod
+    def _put(db, key, value):
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO settings (setting_key, setting_value) VALUES (%s, %s) ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)",
+                (key, value),
+            )
+        db.commit()
+
+    @staticmethod
+    def _value(db, key):
+        db.commit()
+        with db.cursor() as cur:
+            cur.execute("SELECT setting_value FROM settings WHERE setting_key=%s", (key,))
+            row = cur.fetchone()
+        return row["setting_value"] if row else None
+
+    @staticmethod
+    def _ident(host):
+        import json
+
+        return json.dumps([host, SERVER_A.get("ssh_user"), SERVER_A.get("kea_conf")])
+
+    def test_a_replaced_host_starts_afresh_and_its_events_are_collected(self, db, stack, monkeypatch):
+        logs, _ = stack
+        later = (NOW + timedelta(hours=1)).isoformat()
+        self._put(db, "client_problems_wm:1", later)
+        self._put(db, "client_problems_ident:1", self._ident("old-host"))
+        self._put(db, "client_problems_clock:1", "90")
+        new_server = {**SERVER_A, "ssh_host": "new-host"}
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [dict(new_server), dict(SERVER_B)])
+        logs[1] = [nak(1)]
+        summary = cp.sweep(NOW, servers=[new_server])
+        assert summary["events"] == 1, (
+            "the new host's problem line is counted, not skipped behind the old host's watermark"
+        )
+        wm = datetime.fromisoformat(self._value(db, "client_problems_wm:1"))
+        assert wm < NOW, "the watermark is the new host's own"
+        assert self._value(db, "client_problems_clock:1") != "90", "the old host's clock offset is not the new host's"
+        assert self._value(db, "client_problems_ident:1") == self._ident("new-host")
+
+    def test_only_the_display_name_changed_keeps_the_progress(self, db, stack, monkeypatch):
+        logs, _ = stack
+        later = (NOW + timedelta(hours=1)).isoformat()
+        self._put(db, "client_problems_wm:1", later)
+        self._put(db, "client_problems_ident:1", self._ident(SERVER_A["ssh_host"]))
+        renamed = {**SERVER_A, "name": "renamed"}
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [dict(renamed), dict(SERVER_B)])
+        logs[1] = [nak(1)]
+        summary = cp.sweep(NOW, servers=[renamed])
+        assert summary["events"] == 0
+        assert self._value(db, "client_problems_wm:1") == later
+
+    def test_the_first_sight_of_a_server_only_records_its_identity(self, db, stack):
+        logs, _ = stack
+        later = (NOW + timedelta(hours=1)).isoformat()
+        self._put(
+            db, "client_problems_wm:1", later
+        )  # progress from before the identity was recorded: an upgrade is not an endpoint change
+        logs[1] = [nak(1)]
+        cp.sweep(NOW, servers=[SERVER_A])
+        assert self._value(db, "client_problems_wm:1") == later
+        assert self._value(db, "client_problems_ident:1") == self._ident(SERVER_A["ssh_host"])
+
+    def test_a_reset_deletes_every_progress_key_of_that_id_and_no_other_servers(self, db, stack, monkeypatch):
+        logs, _ = stack
+        for prefix in TestARemovedServersKeysAreCleared.KEYS:
+            self._put(db, f"{prefix}1", "x")
+            self._put(db, f"{prefix}2", "y")
+        self._put(db, "client_problems_ident:1", self._ident("old-host"))
+        self._put(db, "client_problems_ident:2", self._ident(SERVER_B["ssh_host"]))
+        new_server = {**SERVER_A, "ssh_host": "new-host"}
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [dict(new_server), dict(SERVER_B)])
+        logs[1] = []
+        assert cp._reset_if_endpoint_changed(new_server) is True
+        for prefix in TestARemovedServersKeysAreCleared.KEYS:
+            if prefix != "client_problems_ident:":
+                assert self._value(db, f"{prefix}1") is None, prefix
+            assert self._value(db, f"{prefix}2") is not None, prefix
+        assert self._value(db, "client_problems_ident:1") == self._ident("new-host")
+
+    def test_historical_rows_are_kept(self, db, stack, monkeypatch):
+        logs, _ = stack
+        logs[1] = [nak(1), nak(2), nak(3)]
+        cp.sweep(NOW, servers=[SERVER_A])
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS n FROM client_problems")
+            before = cur.fetchone()["n"]
+        new_server = {**SERVER_A, "ssh_host": "new-host"}
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [dict(new_server), dict(SERVER_B)])
+        cp.sweep(NOW, servers=[new_server])
+        db.commit()
+        with db.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS n FROM client_problems")
+            assert cur.fetchone()["n"] >= before
+
+    def test_a_server_removed_from_jen_has_its_ident_cleared_with_the_rest(self, db, stack):
+        self._put(db, "client_problems_ident:77", self._ident("gone"))
+        self._put(db, "client_problems_wm:77", "x")
+        assert cp._clear_orphan_server_keys() >= 2
+        assert self._value(db, "client_problems_ident:77") is None and self._value(db, "client_problems_wm:77") is None
+
+    def test_the_identity_is_the_log_caches_identity(self):
+        from jen.services import log_tail
+
+        assert cp._SERVER_KEY_PREFIXES[-1] == "client_problems_ident:"
+        assert log_tail.identity({"ssh_host": "h", "ssh_user": "u", "kea_conf": "c", "name": "n", "id": 9}) == (
+            "h",
+            "u",
+            "c",
+        )

@@ -298,3 +298,71 @@ class TestPathForSecondPassFixes:
         _REAL_READ(SERVER)
         assert seen == [("dhcp4", {"timeout": log_tail.READ_TIMEOUT_S, "helper_only": True, "capture": False})]
         assert log_tail.READ_TIMEOUT_S <= 15
+
+
+class TestAReadBelongsToItsEndpoint:
+    """v5.69.0-beta.8 (Q177, LOG-IDENTITY-001): the 3 s read cache was keyed by (server id, path) while `path_for` keyed by the server's identity; an endpoint changed under the same id
+    (save_extra_servers) was answered with the old host's lines."""
+
+    P = "/var/log/kea/kea-dhcp4.log"
+
+    @pytest.fixture(autouse=True)
+    def _count(self, monkeypatch):
+        self.calls = []
+
+        def tail_log(server, path, lines=200, timeout=None, helper_only=False):
+            self.calls.append((server["ssh_host"], path))
+            return {"ok": True, "code": "ok", "lines": [f"from:{server['ssh_host']}"]}
+
+        monkeypatch.setattr(kea_host, "tail_log", tail_log)
+        log_tail.clear()
+        yield
+        log_tail.clear()
+
+    def _server(self, **over):
+        return {
+            "id": 1,
+            "name": "kea",
+            "ssh_host": "old",
+            "ssh_user": "u",
+            "kea_conf": "/etc/kea/kea-dhcp4.conf",
+            **over,
+        }
+
+    def test_a_changed_host_under_the_same_id_is_a_new_read_and_says_so(self):
+        first = log_tail.tail(self._server(), self.P, 10)
+        second = log_tail.tail(self._server(ssh_host="new"), self.P, 10)
+        assert len(self.calls) == 2
+        assert first["lines"] == ["from:old"] and second["lines"] == ["from:new"]
+
+    def test_the_same_server_twice_is_one_read(self):
+        log_tail.tail(self._server(), self.P, 10)
+        log_tail.tail(self._server(), self.P, 10)
+        assert len(self.calls) == 1
+
+    @pytest.mark.parametrize("over", [{"ssh_user": "other-user"}, {"kea_conf": "/etc/kea/kea-dhcp4-prod.conf"}])
+    def test_a_different_user_or_config_path_is_a_new_read(self, over):
+        log_tail.tail(self._server(), self.P, 10)
+        log_tail.tail(self._server(**over), self.P, 10)
+        assert len(self.calls) == 2
+
+    def test_a_different_path_is_a_new_read(self):
+        log_tail.tail(self._server(), self.P, 10)
+        log_tail.tail(self._server(), "/var/log/kea/other.log", 10)
+        assert len(self.calls) == 2
+
+    def test_only_the_display_name_changed_is_no_new_read(self):
+        log_tail.tail(self._server(), self.P, 10)
+        log_tail.tail(self._server(name="renamed"), self.P, 10)
+        assert len(self.calls) == 1
+
+    def test_the_identity_is_one_helper_for_both_caches(self):
+        import inspect
+
+        assert log_tail._identity is log_tail.identity
+        assert "identity(server)" in inspect.getsource(log_tail.tail) and "_identity(server)" not in inspect.getsource(
+            log_tail.tail
+        )
+        assert "identity(server)" in inspect.getsource(log_tail.path_for) or "_identity(server)" in inspect.getsource(
+            log_tail.path_for
+        )

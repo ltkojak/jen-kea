@@ -70,9 +70,13 @@ def _read_server_config(server: dict):
     return _host.read_config(server, "dhcp4", timeout=READ_TIMEOUT_S, helper_only=True, capture=False)
 
 
-def _identity(server: dict) -> tuple:
-    """What makes it a different host or file: a server edited to point elsewhere is not answered from the old one's cache."""
+def identity(server: dict) -> tuple:
+    """What makes it a different host or file: a server edited to point elsewhere is not answered from the old one's cache - and its persisted progress (the Problems
+    sweep's watermark, clock and read record) is not carried over to it. A display name is not part of it."""
     return (server.get("ssh_host"), server.get("ssh_user"), server.get("kea_conf"))
+
+
+_identity = identity
 
 
 def path_for(server: dict, read: bool = True) -> str:
@@ -128,7 +132,9 @@ def tail(server: dict, path: str, lines: int, timeout: float | None = None) -> d
     # at call time: callers and tests patch `kea_host.tail_log`, and this module is imported early
     from jen.services import kea_host as _host
 
-    key = (server.get("id"), path)
+    # v5.69.0-beta.8 (Q177, LOG-IDENTITY-001): a read belongs to the endpoint it came from. The key is the server's identity (host, user, config path) as well as its id
+    # and the path - `path_for` already keys by it - so a server edited to point at a different host under the same id is never answered with the old host's lines
+    key = (*identity(server), server.get("id"), path)
     with _lock:
         gate = _per_key.setdefault(key, threading.Lock())
     with gate:  # a second reader waits here for the first one's read, then finds it in the cache

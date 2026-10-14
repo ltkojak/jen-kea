@@ -49,6 +49,7 @@ seconds (the columns are DATETIME(0)).
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from datetime import datetime, timedelta, timezone
@@ -400,6 +401,7 @@ _SERVER_KEY_PREFIXES = (
     "client_problems_miss:",
     "client_problems_clock:",
     "client_problems_path:",
+    "client_problems_ident:",
 )
 
 
@@ -449,6 +451,41 @@ def _note_dropped(now: datetime, dropped: int) -> None:
             )
     except Exception as e:
         logger.error(f"client_problems: could not record the dropped-key count: {type(e).__name__}: {e}")
+
+
+def _reset_if_endpoint_changed(server: dict) -> bool:
+    """Persisted progress belongs to the endpoint that produced it (v5.69.0-beta.8, Q177, PROBLEMS-IDENTITY-001). The watermark, last read, last error, misses, clock offset and
+    log path are keyed by server id; a host replaced under the same id inherited a watermark that could be LATER than its own log, and the sweep then ignored every event the new
+    host wrote. The sweep records the server's identity (host, user, config path - never its display name) under `client_problems_ident:<id>`; when the stored one exists and
+    differs, every progress key of that id is deleted in one transaction, the new identity is written, and the sweep starts the server afresh (first-sweep baseline, fresh clock
+    offset). Historical `client_problems` rows are kept. A first sight of a server only records its identity. Returns True when progress was reset."""
+    from jen.models import db as __db
+
+    sid = server.get("id")
+    ident = json.dumps(list(_log_tail.identity(server)))
+    key = f"client_problems_ident:{sid}"
+    with __db.jen_db() as db, db.cursor() as cur:
+        cur.execute("SELECT setting_value FROM settings WHERE setting_key=%s", (key,))
+        row = cur.fetchone()
+        stored = row.get("setting_value") if row else None
+        if stored == ident:
+            return False
+        reset = stored is not None
+        if reset:
+            for prefix in _SERVER_KEY_PREFIXES:
+                cur.execute("DELETE FROM settings WHERE setting_key=%s", (f"{prefix}{sid}",))
+            logger.info(
+                f"client_problems: server {sid} now answers at {ident} (was {stored}); its sweep progress starts afresh"
+            )
+        cur.execute(
+            "INSERT INTO settings (setting_key, setting_value) VALUES (%s, %s) ON DUPLICATE KEY UPDATE setting_value=VALUES(setting_value)",
+            (key, ident),
+        )
+    if reset:
+        from jen.models.user import _invalidate_settings_cache
+
+        _invalidate_settings_cache()
+    return reset
 
 
 def _note_server(server_id, ok: bool, error: str, now: datetime, path: str | None = None) -> None:
@@ -752,6 +789,9 @@ def sweep(now: datetime | None = None, servers: list[dict] | None = None) -> dic
                 False  # the miss counter is about the LOG: a database failure after a good read is not a missed read
             )
             try:
+                _reset_if_endpoint_changed(
+                    server
+                )  # before anything of this server's progress is read: a replaced host starts afresh (Q177)
                 # v5.69.0-beta.6 (Q175): the file the server's own logger writes, else the configured one - the one definition every reader of this log shares. "" (no
                 # file the host would read) is a missing log without asking the host, and the path tried is recorded either way, for the Health row to name
                 log_path = _log_tail.path_for(server)
