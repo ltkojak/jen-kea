@@ -235,7 +235,9 @@ class TestDdnsSettingsLiveTogetherUnderKea:
         assert "location.hash === '#al-ddns'" in body and "/settings/kea#kea-ddns" in body
 
     def test_the_save_lands_back_on_the_section(self, logged_in_client, monkeypatch):
-        monkeypatch.setattr("jen.config.app_config.mutate", lambda fn: None)
+        import jen.config as config
+
+        monkeypatch.setattr(type(config.app_config), "mutate", lambda self, fn, reload=True: None)
         r = logged_in_client.post("/settings/infrastructure/save-ddns", data={"dns_provider": "none", "log_path": ""})
         assert r.status_code == 302 and r.headers["Location"].endswith("/settings/kea#kea-ddns")
         r = logged_in_client.post("/settings/infrastructure/save-ddns", data={"dns_provider": "bogus"})
