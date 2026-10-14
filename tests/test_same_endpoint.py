@@ -51,3 +51,35 @@ class TestSameEndpoint:
         pairs = [("https://a.example/x", "https://a.example"), ("db.local", "db.local:3306"), ("", "x.example")]
         for a, b in pairs:
             assert same_endpoint(a, b) is same_endpoint(b, a)
+
+
+class TestABareIpv6HostIsAPlace:
+    """Q178's adversarial pass: `urlsplit("//fe80::1")` reads the last group as a port and raises, so a bare IPv6 database host could never equal itself."""
+
+    @pytest.mark.parametrize("host", ["::1", "fe80::1", "[::1]", "[::1]:3306", "2001:db8::5"])
+    def test_it_equals_itself(self, host):
+        assert same_endpoint(host, host)
+
+    def test_two_different_addresses_are_different(self):
+        assert not same_endpoint("::1", "::2")
+        assert not same_endpoint("[::1]:3306", "[::1]:3307")
+
+
+class TestSameHost:
+    @pytest.mark.parametrize(
+        "a,b,expect",
+        [
+            ("https://kea-a:8000", "http://kea-a:53001", True),
+            ("https://KEA-A.:8000/x", "https://kea-a", True),
+            ("https://kea-a:8000", "https://kea-b:8000", False),
+            ("db-a", "DB-A", True),
+            ("db-a", "db-b", False),
+            ("", "", False),
+            ("https://kea-a:8000", "", False),
+            ("::1", "[::1]:53", True),
+        ],
+    )
+    def test_the_rule(self, a, b, expect):
+        from jen.services.auth import same_host
+
+        assert same_host(a, b) is expect

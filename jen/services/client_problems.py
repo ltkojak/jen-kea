@@ -425,6 +425,7 @@ def _clear_orphan_server_keys() -> int:
         return 0
     live = {str(srv.get("id")) for srv in extensions.KEA_SERVERS or []}
     removed = 0
+    gone_ids: set[int] = set()
     try:
         with __db.jen_db() as db, db.cursor() as cur:
             for prefix in _SERVER_KEY_PREFIXES:
@@ -436,7 +437,19 @@ def _clear_orphan_server_keys() -> int:
                 ]
                 for key in stale:
                     cur.execute("DELETE FROM settings WHERE setting_key=%s", (key,))
+                    tail = key[len(prefix) :]
+                    if tail.isdigit() and int(tail) != DB_SERVER_ID:
+                        gone_ids.add(int(tail))
                 removed += len(stale)
+            # (Q178, PROBLEMS-IDENTITY-002) The generation counter went with the rest, and a server number can be given to a NEW server later (a save assigns the next free one):
+            # that server would start at generation 0 beside the removed one's still-open rows and inherit their alert state and counts. So the removed servers' open rows are
+            # closed here - a resolved row is revived by an upsert with a fresh count and no alert history, which is what a new server needs.
+            for gone in sorted(gone_ids):
+                cur.execute(
+                    "UPDATE client_problems SET resolved_at=%s, qualified_at=NULL, qualified_count=NULL, alert_attempted_at=NULL "
+                    "WHERE server_id=%s AND resolved_at IS NULL",
+                    (_now(), gone),
+                )
         if removed:
             from jen.models.user import _invalidate_settings_cache
 
@@ -1082,15 +1095,21 @@ def run_sweep_job() -> dict:
 _CURRENT_GENERATION = "COALESCE(CAST(g.setting_value AS UNSIGNED), 0)"  # a server's current generation, joined from its settings key (0 when absent)
 
 
-def fetch_open(where: list[str], params: list, limit: int = 500, include_earlier: bool = False) -> list[dict]:
+def fetch_open(
+    where: list[str], params: list, limit: int = 500, include_earlier: bool = False, now: datetime | None = None
+) -> list[dict]:
     """Open (unresolved) rows of each server's CURRENT generation, newest `last_seen` first, restricted by the caller's own clauses on alias `p`
     (`add_subnet_restriction(where, params, "p", "subnet_id")` - an unattributed row never matches a restricted caller). `include_earlier` (the Problems page; v5.69.0-beta.9,
     Q178) adds the rows of an EARLIER generation - closed when their Kea host was replaced - each flagged by `generation` < `current_generation`; the dashboard's count never does."""
     from jen.models import db as __db
 
     current = f"(p.resolved_at IS NULL AND p.generation = {_CURRENT_GENERATION})"
+    lead: list = []
     if include_earlier:
-        current = f"({current} OR p.generation < {_CURRENT_GENERATION})"
+        # only the replacement's recent past: an earlier generation's row that was still active in the last RESOLVE_AFTER (it was open when its host was replaced). Rows the
+        # old host's own sweeps had resolved long before are history the page does not need and the 500-row limit must not spend on
+        current = f"({current} OR (p.generation < {_CURRENT_GENERATION} AND p.last_seen >= %s))"
+        lead = [(now or _now()) - RESOLVE_AFTER]
     clauses = [current, *where]
     with __db.jen_db() as db, db.cursor() as cur:
         cur.execute(
@@ -1098,7 +1117,7 @@ def fetch_open(where: list[str], params: list, limit: int = 500, include_earlier
             f"{_CURRENT_GENERATION} AS current_generation "
             "FROM client_problems p LEFT JOIN settings g ON g.setting_key = CONCAT('client_problems_gen:', p.server_id) "
             f"WHERE {' AND '.join(clauses)} ORDER BY p.last_seen DESC LIMIT %s",
-            (*params, limit),
+            (*lead, *params, limit),
         )
         return list(cur.fetchall())
 

@@ -74,7 +74,8 @@ def problems_page():
     clients = __cp.group_by_client(rows)
     counts: dict[str, int] = {}
     for c in clients:
-        for k in {x["kind"] for x in c["kinds"]}:
+        # the kind chips count what is open NOW: an earlier host's rows are listed, with their label, and are not counted
+        for k in {x["kind"] for x in c["kinds"] if not x.get("earlier")}:
             counts[k] = counts.get(k, 0) + 1
     return render_template(
         "problems.html",

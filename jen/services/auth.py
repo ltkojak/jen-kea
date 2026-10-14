@@ -229,30 +229,42 @@ def unusable_file_message(label, path) -> str:
     return f"The {label} cannot be used: the file does not exist or Jen cannot read it ({path})."
 
 
+def _endpoint_parts(u):
+    """(scheme, host, port) of a URL or a bare host[:port], or None when it names no place (blank, no host, an unparsable port). A URL's port defaults from its scheme
+    (https 443, http 80); a BARE host has no scheme and so no default port. A bare IPv6 address (`::1`, `fe80::1`) is bracketed first - `urlsplit` would read its last group as a port."""
+    from urllib.parse import urlsplit
+
+    u = (u or "").strip()
+    if not u:
+        return None
+    if "://" not in u:
+        if u.count(":") > 1 and not u.startswith("["):
+            u = f"[{u}]"
+        u = "//" + u
+    try:
+        p = urlsplit(u)
+        scheme = (p.scheme or "").lower()
+        host = (p.hostname or "").lower().rstrip(".")
+        port = p.port or {"https": 443, "http": 80}.get(scheme)
+    except ValueError:
+        return None
+    return (scheme, host, port) if host else None
+
+
 def same_endpoint(a: str, b: str) -> bool:
     """Do two URLs (or bare host[:port] strings) name the same place a secret would be sent to: scheme, host and port - never the path or the query (CRED-002, Q178).
     A blank on either side is a different place, and so is an unparsable one. A URL's port defaults from its scheme (https 443, http 80); a BARE host has no scheme and
     so no default port: `db.local` and `db.local:3306` are different places, because the default of a bare host is whatever the driver chooses, not something this
     function may assume."""
-    from urllib.parse import urlsplit
-
-    def parts(u):
-        u = (u or "").strip()
-        if not u:
-            return None
-        if "://" not in u:
-            u = "//" + u
-        try:
-            p = urlsplit(u)
-            scheme = (p.scheme or "").lower()
-            host = (p.hostname or "").lower().rstrip(".")
-            port = p.port or {"https": 443, "http": 80}.get(scheme)
-        except ValueError:
-            return None
-        return (scheme, host, port) if host else None
-
-    pa, pb = parts(a), parts(b)
+    pa, pb = _endpoint_parts(a), _endpoint_parts(b)
     return pa is not None and pa == pb
+
+
+def same_host(a: str, b: str) -> bool:
+    """Do two addresses name the same HOST - scheme and port ignored. Used for a password a daemon's form INHERITS from the Kea API's: Kea6 and D2 are other daemons of the
+    same Kea host on their own ports, so inheriting across a port is the design; inheriting onto a different host is a secret sent somewhere it was not typed for (CRED-002)."""
+    pa, pb = _endpoint_parts(a), _endpoint_parts(b)
+    return pa is not None and pb is not None and pa[1] == pb[1]
 
 
 def valid_api_url(url: str, require_port: bool = False) -> bool:

@@ -54,8 +54,8 @@ def _post(client, **fields):
 
 class TestKea6ClearingAndInheritance:
     def test_blank_api_url_removes_the_key_and_inherits_v4(self, logged_in_client, db, mock_kea, isolated_config):
-        _post(logged_in_client, api_url="http://kea6:8006")
-        assert _on_disk(isolated_config).get("kea6", "api_url") == "http://kea6:8006"
+        _post(logged_in_client, api_url="http://1.2.3.4:8006")
+        assert _on_disk(isolated_config).get("kea6", "api_url") == "http://1.2.3.4:8006"
 
         r = _post(logged_in_client, api_url="")
         assert b"cleared" in r.data
@@ -75,20 +75,20 @@ class TestKea6ClearingAndInheritance:
     def test_blank_password_is_kept_but_inherit_checkbox_removes_it(
         self, logged_in_client, db, mock_kea, isolated_config
     ):
-        _post(logged_in_client, api_url="http://kea6:8006", api_pass="secret6")
+        _post(logged_in_client, api_url="http://1.2.3.4:8006", api_pass="secret6")
         assert _on_disk(isolated_config).get("kea6", "api_pass") == "secret6"
 
         # blank password, other field still set → password survives
-        _post(logged_in_client, api_url="http://kea6:8006", api_user="u6")
+        _post(logged_in_client, api_url="http://1.2.3.4:8006", api_user="u6")
         assert _on_disk(isolated_config).get("kea6", "api_pass") == "secret6"
 
         # tick Inherit → password key removed
-        _post(logged_in_client, api_url="http://kea6:8006", inherit_api_pass="1")
+        _post(logged_in_client, api_url="http://1.2.3.4:8006", inherit_api_pass="1")
         disk = _on_disk(isolated_config)
         assert not disk.has_option("kea6", "api_pass")
 
     def test_section_is_removed_when_every_override_is_cleared(self, logged_in_client, db, mock_kea, isolated_config):
-        _post(logged_in_client, api_url="http://kea6:8006", api_user="u6", api_pass="s6")
+        _post(logged_in_client, api_url="http://1.2.3.4:8006", api_user="u6", api_pass="s6")
         assert _on_disk(isolated_config).has_section("kea6")
         _post(logged_in_client, api_url="", api_user="", inherit_api_pass="1")
         assert not _on_disk(isolated_config).has_section("kea6")

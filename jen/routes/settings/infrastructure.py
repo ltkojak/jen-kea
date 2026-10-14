@@ -532,14 +532,25 @@ def save_infra_kea6():
             flash("The Kea6 API URL must be a valid http:// or https:// URL.", "error")
         return redirect(url_for("settings.settings_kea"))
 
-    # CRED-002 (Q178): a saved password stays with the endpoint it was typed for - unless "Inherit" is ticked, which removes it
-    for stored_url, new_url, new_secret, stored_secret, inherit, what in (
+    # CRED-002 (Q178): a saved password stays with the endpoint it was typed for; a password INHERITED from the Kea API (no own one, or "Inherit" ticked) stays with the
+    # Kea API's host - a different host needs its password typed, "Inherit" included
+    v4_api_url, v4_api_pass = (
+        extensions.cfg.get("kea", "api_url", fallback=""),
+        extensions.cfg.get("kea", "api_pass", fallback=""),
+    )
+    v4_db_host, v4_db_pass = (
+        extensions.cfg.get("kea_db", "host", fallback=""),
+        extensions.cfg.get("kea_db", "password", fallback=""),
+    )
+    for stored_url, new_url, new_secret, stored_secret, inherit, v4_url, v4_secret, what in (
         (
             extensions.cfg.get("kea6", "api_url", fallback=""),
             api_url,
             api_pass,
             extensions.cfg.get("kea6", "api_pass", fallback=""),
             inherit_api_pass,
+            v4_api_url,
+            v4_api_pass,
             "Kea6 API address",
         ),
         (
@@ -548,10 +559,15 @@ def save_infra_kea6():
             db_pass,
             extensions.cfg.get("kea6_db", "password", fallback=""),
             inherit_db_pass,
+            v4_db_host,
+            v4_db_pass,
             "Kea6 database host",
         ),
     ):
-        refusal = None if inherit else _secret_for_new_endpoint(stored_url, new_url, new_secret, stored_secret, what)
+        if (stored_secret or "").strip() and not inherit:
+            refusal = _secret_for_new_endpoint(stored_url, new_url, new_secret, stored_secret, what)
+        else:
+            refusal = _inherited_secret_refusal(v4_url, new_url, new_secret, v4_secret, what)
         if refusal:
             flash(refusal, "error")
             return redirect(url_for("settings.settings_kea"))
@@ -636,17 +652,23 @@ def save_infra_d2():
             flash("The D2 API URL must be a valid http:// or https:// URL.", "error")
         return redirect(url_for("settings.settings_kea"))
 
-    if not inherit_api_pass:  # CRED-002 (Q178); "Inherit" removes the saved password, so it is the way out
+    # CRED-002 (Q178): D2's own saved password stays with D2's endpoint; the password it INHERITS from the Kea API (no own one, or "Inherit" ticked) stays with the Kea API's host
+    own_pass = extensions.cfg.get("d2", "api_pass", fallback="")
+    if own_pass.strip() and not inherit_api_pass:
         refusal = _secret_for_new_endpoint(
-            extensions.cfg.get("d2", "api_url", fallback=""),
+            extensions.cfg.get("d2", "api_url", fallback=""), api_url, api_pass, own_pass, "D2 API address"
+        )
+    else:
+        refusal = _inherited_secret_refusal(
+            extensions.cfg.get("kea", "api_url", fallback=""),
             api_url,
             api_pass,
-            extensions.cfg.get("d2", "api_pass", fallback=""),
+            extensions.cfg.get("kea", "api_pass", fallback=""),
             "D2 API address",
         )
-        if refusal:
-            flash(refusal, "error")
-            return redirect(url_for("settings.settings_kea"))
+    if refusal:
+        flash(refusal, "error")
+        return redirect(url_for("settings.settings_kea"))
 
     text_fields = [("d2", "api_url", api_url), ("d2", "api_user", api_user)]
     changed: list[str] = []
@@ -2241,6 +2263,21 @@ def _secret_for_new_endpoint(stored_url, new_url, new_secret, stored_secret, wha
     )
 
 
+def _inherited_secret_refusal(v4_url, new_url, new_secret, v4_secret, what) -> str | None:
+    """CRED-002 for a password a form INHERITS (Kea6 and D2 use the Kea API's when they have none of their own, and "Inherit" removes theirs): the sentence when no password
+    was typed, the Kea API has one, and the address this form now names - or, when it is blank, falls back to - is on a DIFFERENT HOST from the Kea API's. Another port of the
+    same host is the same Kea (the daemons' own sockets); another host is a secret sent somewhere it was not typed for, whoever asked, and "Inherit" does not make it one."""
+    if (new_secret or "").strip() or not (v4_secret or "").strip():
+        return None
+    effective = (new_url or "").strip() or (v4_url or "").strip()
+    if not effective or __auth.same_host(v4_url, effective):
+        return None
+    return (
+        f"The {what} is on a different host from the Kea API: type its password - "
+        "the Kea API's password is never sent to a different host."
+    )
+
+
 DDNS_PROVIDERS = ("technitium", "pihole", "adguard", "ssh", "generic", "none")
 # the providers whose lookups use `[ddns] api_token` (every other provider - ssh, generic, none - has no credential to keep)
 _CREDENTIAL_PROVIDERS = ("technitium", "pihole", "adguard")
@@ -2289,6 +2326,7 @@ def save_infra_ddns():
         stored_url = cfg.get("ddns", "api_url", fallback="")
         url_changed = bool(stored_url.strip() or api_url) and not __auth.same_endpoint(stored_url, api_url)
         switched = seen["switched"] = previous != dns_provider or url_changed
+        seen["provider_changed"] = previous != dns_provider
         had_token = seen["had_token"] = bool(cfg.get("ddns", "api_token", fallback="").strip())
         cfg.set("ddns", "dns_provider", dns_provider)
         for key, value in (
@@ -2315,9 +2353,10 @@ def save_infra_ddns():
     __config.app_config.mutate(_apply)
     flash("DDNS settings saved.", "success")
     if seen.get("switched") and dns_provider in _CREDENTIAL_PROVIDERS and not api_token:
+        what = "Provider changed to" if seen.get("provider_changed") else "The address of"
         flash(
-            f"Provider changed to {dns_provider}: enter its token or password"
-            + (" - the previous provider's was not carried over." if seen.get("had_token") else "."),
+            f"{what} {dns_provider}: enter its token or password"
+            + (" - the saved one was not carried over." if seen.get("had_token") else "."),
             "warning",
         )
     __user.audit("SAVE_INFRA", "ddns", f"log={log_path} provider={dns_provider} token={seen.get('token', 'none')}")

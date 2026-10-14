@@ -1788,3 +1788,61 @@ class TestAReplacedHostIsANewGeneration:
         assert [r for r in rows if r["mac"] == "aa:bb:cc:dd:ee:a2"] == []
         earlier = cp.fetch_open(["p.last_seen >= %s"], [NOW - timedelta(hours=1)], include_earlier=True)
         assert [r["generation"] for r in earlier if r["mac"] == "aa:bb:cc:dd:ee:a2"] == [0]
+
+
+class TestTheInboxShowsOnlyTheReplacementsRecentPast:
+    """Q178's adversarial pass: "(earlier host)" rows are the ones that were still active when their host was replaced - not every row the old host ever resolved - and the kind
+    chips count what is open now."""
+
+    @pytest.fixture(autouse=True)
+    def _clock_and_cleanup(self, db, monkeypatch):
+        monkeypatch.setattr(cp, "_now", lambda: NOW)
+        TestTheSweepRecordsWhetherItCanReadEachServer._wipe(db)
+        yield
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM settings WHERE setting_key LIKE 'client_problems_%'")
+            cur.execute("DELETE FROM client_problems")
+        db.commit()
+
+    def _row(self, db, mac, generation, last_seen, resolved):
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO client_problems (server_id, generation, kind, mac, ip, subnet_id, scope_key, first_seen, last_seen, `count`, detail, resolved_at) "
+                "VALUES (1, %s, 'nak', %s, '', NULL, -1, %s, %s, 2, 'x', %s)",
+                (generation, mac, last_seen - timedelta(hours=1), last_seen, resolved),
+            )
+        db.commit()
+
+    def test_a_long_resolved_earlier_row_is_not_listed_and_a_recent_one_is(self, db, stack, logged_in_client):
+        TestProgressBelongsToItsEndpoint._put(db, "client_problems_gen:1", "1")
+        self._row(db, "aa:bb:cc:dd:ee:c1", 0, NOW - timedelta(days=5), NOW - timedelta(days=4))
+        self._row(db, "aa:bb:cc:dd:ee:c2", 0, NOW - timedelta(hours=2), NOW - timedelta(minutes=10))
+        body = logged_in_client.get("/problems").get_data(as_text=True)
+        assert "aa:bb:cc:dd:ee:c2" in body and "aa:bb:cc:dd:ee:c1" not in body
+
+    def test_the_kind_chips_do_not_count_an_earlier_hosts_rows(self, db, stack, logged_in_client):
+        TestProgressBelongsToItsEndpoint._put(db, "client_problems_gen:1", "1")
+        self._row(db, "aa:bb:cc:dd:ee:c3", 0, NOW - timedelta(hours=2), NOW - timedelta(minutes=10))
+        rows = cp.fetch_open([], [], include_earlier=True)
+        clients = cp.group_by_client(rows)
+        assert clients and all(k["earlier"] for c in clients for k in c["kinds"])
+        body = logged_in_client.get("/problems").get_data(as_text=True)
+        assert "(earlier host)" in body
+
+    def test_removing_a_server_closes_its_open_rows_so_a_reused_number_inherits_nothing(self, db, stack):
+        self._row(db, "aa:bb:cc:dd:ee:c4", 0, NOW - timedelta(minutes=20), None)
+        TestProgressBelongsToItsEndpoint._put(db, "client_problems_ident:77", "[]")
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO client_problems (server_id, generation, kind, mac, ip, subnet_id, scope_key, first_seen, last_seen, `count`, detail, alerted_at) "
+                "VALUES (77, 0, 'nak', 'aa:bb:cc:dd:ee:c5', '', NULL, -1, %s, %s, 9, 'x', %s)",
+                (NOW - timedelta(hours=1), NOW - timedelta(minutes=5), NOW - timedelta(minutes=5)),
+            )
+        db.commit()
+        cp._clear_orphan_server_keys()
+        db.commit()
+        with db.cursor() as cur:
+            cur.execute("SELECT resolved_at FROM client_problems WHERE server_id=77")
+            assert cur.fetchone()["resolved_at"] is not None, "the removed server's open row is closed"
+            cur.execute("SELECT resolved_at FROM client_problems WHERE server_id=1")
+            assert cur.fetchone()["resolved_at"] is None, "a live server's rows are untouched"

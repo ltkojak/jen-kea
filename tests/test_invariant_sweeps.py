@@ -495,7 +495,7 @@ S10_MODULES = (
 
 # (module, function, exception, effect): why the empty value is fail-closed there
 S10_ALLOWED = {
-    ("jen/services/auth.py", "same_endpoint.parts", "ValueError", "return None"): (
+    ("jen/services/auth.py", "_endpoint_parts", "ValueError", "return None"): (
         "an address that cannot be parsed (a bad port) names no place, so it is NEVER the same endpoint as anything: a kept secret is then removed or the form refuses - fail closed (CRED-002, Q178)"
     ),
     ("jen/services/auth.py", "usable_file", "(OSError, ValueError, TypeError)", "return False"): (

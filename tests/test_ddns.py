@@ -1439,3 +1439,39 @@ class TestADifferentEndpointIsNotTheSameProvider:
         cfg.write({"dns_provider": "technitium", "api_token": "OLD"})
         logged_in_client.post("/settings/infrastructure/save-ddns", data={"dns_provider": "technitium"})
         assert cfg.get("api_token") == "OLD", "no address names no place a token could go"
+
+
+class TestTheDdnsSentenceSaysWhatChanged:
+    @pytest.fixture
+    def cfg(self, monkeypatch):
+        return TestACredentialSecondPass._build(monkeypatch)
+
+    def test_a_new_address_for_the_same_provider_does_not_say_the_provider_changed(self, logged_in_client, cfg):
+        cfg.write({"dns_provider": "technitium", "api_url": "http://a.example", "api_token": "OLD"})
+        r = logged_in_client.post(
+            "/settings/infrastructure/save-ddns",
+            data={"dns_provider": "technitium", "api_url_technitium": "http://b.example"},
+            follow_redirects=True,
+        )
+        assert b"The address of technitium" in r.data and b"Provider changed" not in r.data
+
+    def test_a_new_provider_says_the_provider_changed(self, logged_in_client, cfg):
+        cfg.write({"dns_provider": "technitium", "api_url": "http://a.example", "api_token": "OLD"})
+        r = logged_in_client.post(
+            "/settings/infrastructure/save-ddns",
+            data={"dns_provider": "pihole", "api_url_pihole": "http://a.example"},
+            follow_redirects=True,
+        )
+        assert b"Provider changed to pihole" in r.data
+
+    def test_an_upgraded_file_with_a_token_and_no_address_loses_it_on_the_first_save_that_names_one(
+        self, logged_in_client, cfg
+    ):
+        cfg.write(
+            {"dns_provider": "technitium", "api_token": "OLD"}
+        )  # a token, no address: nothing it could have been typed for
+        logged_in_client.post(
+            "/settings/infrastructure/save-ddns",
+            data={"dns_provider": "technitium", "api_url_technitium": "http://x.example"},
+        )
+        assert cfg.get("api_token") is None

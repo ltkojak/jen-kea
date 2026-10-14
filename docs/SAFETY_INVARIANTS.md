@@ -374,6 +374,9 @@ id in one transaction before the next read and starts the server afresh; histori
 **Rule.** A form that keeps a blank secret keeps it only while the endpoint it names is the same place (`auth.same_endpoint`: scheme, host and port - never the path or the query; a bare host has no default port).
 Two behaviours, by consequence. A LOOKUP credential (the DDNS token) is REMOVED when the provider or its address changes, with a warning, and never sent to the new place. A CONNECTION credential (the Kea API,
 Kea6, D2, an additional server's, Kea's database, Jen's database) is REQUIRED for a new endpoint: the form refuses a blank password with one sentence and writes nothing; "Inherit", where a form has one, is the way out.
+A password a form INHERITS (Kea6 and D2 use the Kea API's when they have none of their own, and "Inherit" removes theirs) stays with the Kea API's HOST: another port of the same host is the same Kea,
+a different host needs its password typed, "Inherit" included (`auth.same_host`, `infrastructure._inherited_secret_refusal`). A genuinely new additional-server row inherits the primary's password by design (an HA peer is a
+different host with the same credential), and the setup wizard and the probe are the superadmin's and the admin's deliberate tests of a typed address.
 (DNS-CRED-001 is the provider-level half of the same rule.)
 **Established.** Q178 (the beta.8 review: Technitium at A to Technitium at B kept A's token, and six more forms kept a blank password across a new URL or host).
 **Enforced at.** `auth.same_endpoint`, through `infrastructure._secret_for_new_endpoint` (every connection route, before its write) and `save_infra_ddns`'s `_apply`.
@@ -384,6 +387,7 @@ Kea6, D2, an additional server's, Kea's database, Jen's database) is REQUIRED fo
 - `tests/test_kea_connection_forms.py::TestTheD2Form`
 - `tests/test_kea_connection_forms.py::TestAnAdditionalServer`
 - `tests/test_kea_connection_forms.py::TestTheDatabaseForms`
+- `tests/test_kea_connection_forms.py::TestAPasswordTheFormInheritsStaysWithTheKeaHost`
 - `tests/test_ddns.py::TestADifferentEndpointIsNotTheSameProvider`
 
 ### LOG-CACHE-002 - The gates of a cache are a fixed set, and a read begun before a clear is not kept
@@ -397,12 +401,16 @@ Kea6, D2, an additional server's, Kea's database, Jen's database) is REQUIRED fo
 **Rule.** A Problems row belongs to the generation of the server id it was recorded under; the generation (`client_problems_gen:<id>`, part of the unique key) is incremented in the same transaction that clears the
 server's progress when its identity (host, user, config path - never the display name) changes, and that transaction closes every open row of the older generations (resolved, with the pending qualification and
 failed-attempt marker cleared). Every statement that reads or writes a server's rows filters by the current generation; the inbox says "(earlier host)" beside an earlier generation's rows and the dashboard never
-counts them. The two statements that do not filter are the time-based resolution of any idle row and the 30-day retention prune, which apply to every row.
+counts them. The three statements that do not filter apply to every row of a server by design: the time-based resolution of any idle row, the 30-day retention prune, and the closing of a REMOVED server's open rows
+(its number may be given to a new server, which must inherit nothing). The Problems page lists an earlier generation's rows only while they are the replacement's recent past (still active within the last 24 h
+before the replacement), and the kind chips count only what is open now.
 **Established.** Q178 (the beta.8 review: a replaced host inherited the old host's `alerted_at`, its failed-delivery retries and its open row's counts).
 **Enforced at.** `client_problems._reset_if_endpoint_changed` and `_generation`, and migration 36 (`uq_client_problem_gen`).
 **Tests.**
 - `tests/test_client_problems_db.py::TestAReplacedHostIsANewGeneration`
 - `tests/test_migrations.py::TestMigration36ProblemsGeneration`
+- `tests/test_client_problems_db.py::TestTheInboxShowsOnlyTheReplacementsRecentPast`
+- `tests/test_problems_generation_source.py::TestEveryStatementCarriesTheGeneration`
 
 ## Retired ids
 

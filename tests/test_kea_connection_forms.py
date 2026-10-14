@@ -108,10 +108,19 @@ class TestTheKea6Form:
         assert disk.get("kea6_db", "host") == "db6-a" and disk.get("kea6_db", "password") == "D6"
 
     def test_inherit_is_the_way_out_and_removes_the_password(self, logged_in_client, db, mock_kea, isolated_config):
-        r = _post(logged_in_client, self.URL, api_url="https://k6-b:8006", inherit_api_pass="1")
-        assert SENTENCE.encode() not in r.data
+        # (Q178 second pass: Inherit is honoured for another PORT of the Kea API's host - the daemons' own sockets - and not for a different host)
+        r = _post(logged_in_client, self.URL, api_url="https://kea-a:9006", inherit_api_pass="1")
+        assert SENTENCE.encode() not in r.data and b"different host from the Kea API" not in r.data
         disk = _disk(isolated_config)
-        assert disk.get("kea6", "api_url") == "https://k6-b:8006" and not disk.has_option("kea6", "api_pass")
+        assert disk.get("kea6", "api_url") == "https://kea-a:9006" and not disk.has_option("kea6", "api_pass")
+
+    def test_inherit_does_not_send_the_kea_password_to_a_different_host(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        r = _post(logged_in_client, self.URL, api_url="https://k6-b:8006", inherit_api_pass="1")
+        assert b"different host from the Kea API" in r.data
+        disk = _disk(isolated_config)
+        assert disk.get("kea6", "api_url") == "https://k6-a:8006" and disk.get("kea6", "api_pass") == "S6"
 
     def test_a_typed_password_writes_the_new_endpoint(self, logged_in_client, db, mock_kea, isolated_config):
         _post(logged_in_client, self.URL, api_url="https://k6-b:8006", api_pass="N6")
@@ -143,10 +152,15 @@ class TestTheD2Form:
         assert disk.get("d2", "api_url") == "https://d2-a:8000" and disk.get("d2", "api_pass") == "SD"
 
     def test_inherit_with_a_new_endpoint_is_written(self, logged_in_client, db, mock_kea, isolated_config):
-        r = _post(logged_in_client, self.URL, api_url="https://d2-b:8000", inherit_api_pass="1")
-        assert SENTENCE.encode() not in r.data
+        r = _post(logged_in_client, self.URL, api_url="https://kea-a:9000", inherit_api_pass="1")
+        assert SENTENCE.encode() not in r.data and b"different host from the Kea API" not in r.data
         disk = _disk(isolated_config)
-        assert disk.get("d2", "api_url") == "https://d2-b:8000" and not disk.has_option("d2", "api_pass")
+        assert disk.get("d2", "api_url") == "https://kea-a:9000" and not disk.has_option("d2", "api_pass")
+
+    def test_inherit_onto_a_different_host_is_refused(self, logged_in_client, db, mock_kea, isolated_config):
+        r = _post(logged_in_client, self.URL, api_url="https://d2-b:8000", inherit_api_pass="1")
+        assert b"different host from the Kea API" in r.data
+        assert _disk(isolated_config).get("d2", "api_url") == "https://d2-a:8000"
 
     def test_the_same_endpoint_keeps_the_password(self, logged_in_client, db, mock_kea, isolated_config):
         _post(logged_in_client, self.URL, api_url="https://d2-a:8000", api_user="x")
@@ -303,3 +317,49 @@ class TestTheOneHelper:
         ):
             body = src.split(f"def {route}(", 1)[1].split("\n@bp.route", 1)[0]
             assert "_secret_for_new_endpoint(" in body or "_EndpointNeedsItsPassword" in body, route
+
+
+class TestAPasswordTheFormInheritsStaysWithTheKeaHost:
+    """Q178's adversarial pass: Kea6 and D2 use the Kea API's password when they have none of their own, and an admin may point D2 anywhere - the inherited secret must not go to a
+    different host. Another port of the same host is the design (the daemons' own sockets)."""
+
+    def test_an_admin_pointing_d2_at_another_host_with_no_password_is_refused(
+        self, client, db, mock_kea, isolated_config
+    ):
+        from tests.conftest import restricted_client
+
+        c, _ = restricted_client(client, db, None, role="admin", username="q178_d2_admin")
+        r = c.post(
+            "/settings/infrastructure/save-d2", data={"api_url": "https://attacker.example:8000"}, follow_redirects=True
+        )
+        assert b"different host from the Kea API" in r.data
+        assert not _disk(isolated_config).has_section("d2")
+
+    def test_the_same_host_on_its_own_port_inherits_as_designed(self, logged_in_client, db, mock_kea, isolated_config):
+        r = _post(logged_in_client, "/settings/infrastructure/save-d2", api_url="https://kea-a:53001")
+        assert b"different host" not in r.data
+        assert _disk(isolated_config).get("d2", "api_url") == "https://kea-a:53001"
+
+    def test_a_typed_password_makes_a_different_host_fine(self, logged_in_client, db, mock_kea, isolated_config):
+        _post(logged_in_client, "/settings/infrastructure/save-d2", api_url="https://d2-host:53001", api_pass="D2PW")
+        disk = _disk(isolated_config)
+        assert disk.get("d2", "api_url") == "https://d2-host:53001" and disk.get("d2", "api_pass") == "D2PW"
+
+    def test_kea6_with_no_password_of_its_own_on_a_different_host_is_refused(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        r = _post(logged_in_client, "/settings/infrastructure/save-kea6", api_url="https://k6-new:8006")
+        assert b"different host from the Kea API" in r.data
+        assert not _disk(isolated_config).has_section("kea6")
+
+    def test_the_kea6_database_host_follows_the_same_rule(self, logged_in_client, db, mock_kea, isolated_config):
+        r = _post(logged_in_client, "/settings/infrastructure/save-kea6", db_host="db6-new")
+        assert b"different host from the Kea API" in r.data
+        r = _post(logged_in_client, "/settings/infrastructure/save-kea6", db_host="db-a")
+        assert b"different host" not in r.data
+
+    def test_clearing_the_d2_address_falls_back_to_the_kea_host_and_is_fine(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        r = _post(logged_in_client, "/settings/infrastructure/save-d2", api_url="")
+        assert b"different host" not in r.data
