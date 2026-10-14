@@ -390,6 +390,7 @@
         <tr><td class="stat-label" style="width:120px;">Mode</td><td>
             {% if mode == 'both' %}<span class="badge badge-dynamic">Provider + D2</span>
             {% elif mode == 'd2' %}<span class="badge badge-dynamic">D2</span>
+            {% elif mode == 'hook' %}<span class="badge badge-dynamic">Lease hook (libdhcp_run_script.so)</span> <span class="u-5872de">- what it writes is outside Jen's view</span>
             {% elif mode == 'none' %}<span class="u-5872de">Not configured - see <a href="/settings/kea#kea-ddns">Settings → Kea → DDNS</a></span>
             {% elif mode == 'unknown' %}<span class="u-5872de">— (Kea's config could not be read, so the mode is not known)</span>
             {% else %}<span class="badge badge-dynamic">Provider ({{ dns_provider }})</span>{% endif %}

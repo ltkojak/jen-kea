@@ -266,6 +266,8 @@ def settings_kea():
         "ddns_user": extensions.cfg.get("ddns", "api_user", fallback=""),
         "ddns_zone": extensions.cfg.get("ddns", "forward_zone", fallback=""),
         "dns_provider": __ddns_writers.effective_provider(extensions.cfg),
+        # whether a token is stored (never the token): the provider blocks say "(unchanged)" only for the provider it belongs to (v5.69.0-beta.8, Q177)
+        "ddns_token_set": bool(extensions.cfg.get("ddns", "api_token", fallback="").strip()),
         "ha_mode": extensions.cfg.get("kea", "ha_mode", fallback=""),
         "server_name": extensions.cfg.get("kea", "name", fallback="Kea Server 1"),
         "subnets": extensions.SUBNET_MAP,
@@ -2137,6 +2139,8 @@ def save_extra_servers():
 
 
 DDNS_PROVIDERS = ("technitium", "pihole", "adguard", "ssh", "generic", "none")
+# the providers whose lookups use `[ddns] api_token` (every other provider - ssh, generic, none - has no credential to keep)
+_CREDENTIAL_PROVIDERS = ("technitium", "pihole", "adguard")
 
 
 def _provider_field(name, provider):
@@ -2168,12 +2172,17 @@ def save_infra_ddns():
         flash("The DNS provider's API URL must start with http:// or https://.", "error")
         return redirect(home)
     # v5.69.0-beta.2 (Q171): a blank field clears its key - the page used to say "saved" and keep the old value, so a provider's URL, user, zone or log path could never
-    # be unset. The token is the one secret here and the page promises "leave blank to keep": it is replaced when typed and removed only by its own checkbox.
+    # be unset. The token is the one secret here and the page promises "leave blank to keep": it is replaced when typed and removed by its own checkbox - and, since
+    # v5.69.0-beta.8 (Q177, DNS-CRED-001), kept ONLY for the provider it was typed for.
     clear_token = request.form.get("clear_api_token", "") == "1"
+    seen = {}  # `mutate` returns None: the callback reports through this
 
     def _apply(cfg):
         if not cfg.has_section("ddns"):
             cfg.add_section("ddns")
+        # what the stored provider IS (an upgraded hand-written file with a URL or token and no key reads as technitium - the provider its token was typed for)
+        previous = __ddns_writers.effective_provider(cfg)
+        switched = seen["switched"] = previous != dns_provider
         cfg.set("ddns", "dns_provider", dns_provider)
         for key, value in (
             ("log_path", log_path),
@@ -2185,13 +2194,19 @@ def save_infra_ddns():
                 cfg.set("ddns", key, value)
             else:
                 cfg.remove_option("ddns", key)
+        # DNS-CRED-001: a stored token is kept only for the provider it was typed for; a switch, the checkbox, or a provider with no credential removes it
         if api_token:
             cfg.set("ddns", "api_token", api_token)
-        elif clear_token:
+        elif clear_token or switched or dns_provider not in _CREDENTIAL_PROVIDERS:
             cfg.remove_option("ddns", "api_token")
 
     __config.app_config.mutate(_apply)
     flash("DDNS settings saved.", "success")
+    if seen.get("switched") and dns_provider in _CREDENTIAL_PROVIDERS and not api_token:
+        flash(
+            f"Provider changed to {dns_provider}: enter its token or password - the previous provider's was not carried over.",
+            "warning",
+        )
     __user.audit("SAVE_INFRA", "ddns", f"log={log_path} provider={dns_provider}")
     return redirect(home)
 

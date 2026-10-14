@@ -485,12 +485,12 @@
                 <div class="form-row">
                     <div class="form-group">
                         <label for="f-api_url_technitium">API URL</label>
-                        <input id="f-api_url_technitium" type="text" name="api_url_technitium" value="{{ infra.ddns_url }}" placeholder="https://dns.example.com">
+                        <input id="f-api_url_technitium" type="text" name="api_url_technitium" value="{{ infra.ddns_url if infra.dns_provider == 'technitium' else '' }}" placeholder="https://dns.example.com">
                     </div>
                     <div class="form-group">
                         <label for="f-api_token_technitium">API Token</label>
-                        <input id="f-api_token_technitium" type="password" name="api_token_technitium" placeholder="(unchanged)">
-                        <div class="form-hint">Leave blank to keep existing token</div>
+                        <input id="f-api_token_technitium" type="password" name="api_token_technitium" placeholder="{{ '(unchanged)' if infra.dns_provider == 'technitium' and infra.ddns_token_set else '(not set)' }}" autocomplete="new-password">
+                        <div class="form-hint">{% if infra.dns_provider == 'technitium' and infra.ddns_token_set %}Leave blank to keep the saved token{% else %}Enter this provider's token - a different provider's is never reused{% endif %}</div>
                     </div>
                     <div class="form-group">
                         <label for="f-forward_zone">Forward Zone</label>
@@ -503,12 +503,12 @@
                 <div class="form-row">
                     <div class="form-group">
                         <label for="f-api_url_pihole">Pi-hole URL</label>
-                        <input id="f-api_url_pihole" type="text" name="api_url_pihole" value="{{ infra.ddns_url }}" placeholder="http://pi.hole">
+                        <input id="f-api_url_pihole" type="text" name="api_url_pihole" value="{{ infra.ddns_url if infra.dns_provider == 'pihole' else '' }}" placeholder="http://pi.hole">
                         <div class="form-hint">Supports Pi-hole v5 and v6</div>
                     </div>
                     <div class="form-group">
                         <label for="f-api_token_pihole">Password / API Token</label>
-                        <input id="f-api_token_pihole" type="password" name="api_token_pihole" placeholder="(unchanged)">
+                        <input id="f-api_token_pihole" type="password" name="api_token_pihole" placeholder="{{ '(unchanged)' if infra.dns_provider == 'pihole' and infra.ddns_token_set else '(not set)' }}" autocomplete="new-password">
                         <div class="form-hint">Pi-hole web password (v5) or API token (v6)</div>
                     </div>
                 </div>
@@ -518,15 +518,15 @@
                 <div class="form-row">
                     <div class="form-group">
                         <label for="f-api_url_adguard">AdGuard Home URL</label>
-                        <input id="f-api_url_adguard" type="text" name="api_url_adguard" value="{{ infra.ddns_url }}" placeholder="http://adguard.local:3000">
+                        <input id="f-api_url_adguard" type="text" name="api_url_adguard" value="{{ infra.ddns_url if infra.dns_provider == 'adguard' else '' }}" placeholder="http://adguard.local:3000">
                     </div>
                     <div class="form-group">
                         <label for="f-api_user_adguard">Username</label>
-                        <input id="f-api_user_adguard" type="text" name="api_user_adguard" value="{{ infra.ddns_user }}" placeholder="admin">
+                        <input id="f-api_user_adguard" type="text" name="api_user_adguard" value="{{ infra.ddns_user if infra.dns_provider == 'adguard' else '' }}" placeholder="admin">
                     </div>
                     <div class="form-group">
                         <label for="f-api_token_adguard">Password</label>
-                        <input id="f-api_token_adguard" type="password" name="api_token_adguard" placeholder="(unchanged)">
+                        <input id="f-api_token_adguard" type="password" name="api_token_adguard" placeholder="{{ '(unchanged)' if infra.dns_provider == 'adguard' and infra.ddns_token_set else '(not set)' }}" autocomplete="new-password">
                     </div>
                 </div>
             </div>

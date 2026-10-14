@@ -353,9 +353,11 @@ class TestSaveDdnsClearsWhatIsBlank:
         monkeypatch.setattr(config.app_config, "mutate", lambda fn, reload=True: fn(parser))
         return parser
 
-    def test_blank_clears_each_key_but_the_token_is_kept(self, logged_in_client, cfg):
-        logged_in_client.post("/settings/infrastructure/save-ddns", data={"dns_provider": "none"})
-        assert cfg.get("ddns", "dns_provider") == "none"
+    def test_blank_clears_each_key_and_the_token_is_kept_for_the_same_provider(self, logged_in_client, cfg):
+        """Q177 adjustment: this posted technitium -> none and expected the token kept. A token is kept only for the provider it was typed for (DNS-CRED-001), so the
+        same-provider case is what 'blank keeps the token' now means; the switch to none removes it (TestACredentialBelongsToItsProvider)."""
+        logged_in_client.post("/settings/infrastructure/save-ddns", data={"dns_provider": "technitium"})
+        assert cfg.get("ddns", "dns_provider") == "technitium"
         for key in ("log_path", "api_url", "api_user", "forward_zone"):
             assert not cfg.has_option("ddns", key), key
         assert cfg.get("ddns", "api_token") == "TOKEN"

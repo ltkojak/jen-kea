@@ -15,6 +15,8 @@ than the old inline StrictHostKeyChecking=no flags fixed in v4.4.8.
 import json
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 
 class TestDdnsPageAuth:
     def test_requires_login(self, client):
@@ -1142,3 +1144,182 @@ class TestSecondPassFixes:
 
         src = inspect.getsource(ddns_route.ddns_naming_save)
         assert "capture=False" in src and "timeout=" in src
+
+
+class TestACredentialBelongsToItsProvider:
+    """v5.69.0-beta.8 (Q177, DNS-CRED-001): a token typed for Technitium was kept when the provider became Pi-hole with a blank password, stored as the Pi-hole password, and POSTed to
+    the Pi-hole URL. A stored credential is kept only for the provider it was typed for; the form shows only the saved provider's endpoint; a lookup never sends an empty one."""
+
+    @pytest.fixture
+    def cfg(self, monkeypatch):
+        import configparser
+
+        import jen.config as config
+        from jen import extensions
+
+        parser = configparser.ConfigParser()
+        parser.read_dict({s: dict(extensions.cfg.items(s)) for s in extensions.cfg.sections() if s != "ddns"})
+        monkeypatch.setattr(extensions, "cfg", parser)
+        monkeypatch.setattr(config.app_config, "mutate", lambda fn, reload=True: fn(parser))
+
+        class Handle:
+            def write(self, values):
+                if parser.has_section("ddns"):
+                    parser.remove_section("ddns")
+                parser["ddns"] = dict(values)
+
+            def get(self, key):
+                return parser.get("ddns", key, fallback=None)
+
+        handle = Handle()
+        handle.write({})
+        return handle
+
+    @pytest.mark.parametrize(
+        "before,after,token,expect",
+        [
+            ("technitium", "pihole", "", None),
+            ("technitium", "adguard", "", None),
+            ("pihole", "technitium", "", None),
+            ("adguard", "pihole", "", None),
+            ("technitium", "none", "", None),
+            ("technitium", "ssh", "", None),
+            ("none", "pihole", "", None),
+            ("pihole", "pihole", "", "OLD"),
+            ("technitium", "pihole", "NEW", "NEW"),
+        ],
+    )
+    def test_a_switch_never_carries_the_old_token(self, logged_in_client, cfg, before, after, token, expect):
+        cfg.write({"dns_provider": before, "api_url": "http://old.local", "api_token": "OLD"})
+        logged_in_client.post(
+            "/settings/infrastructure/save-ddns",
+            data={"dns_provider": after, f"api_url_{after}": "http://next.local", f"api_token_{after}": token},
+        )
+        assert cfg.get("api_token") == expect
+
+    def test_an_upgraded_file_with_a_token_and_no_provider_key_is_technitiums(self, logged_in_client, cfg):
+        cfg.write(
+            {"api_url": "http://old.local", "api_token": "OLD"}
+        )  # no dns_provider: the years when absent meant technitium
+        logged_in_client.post(
+            "/settings/infrastructure/save-ddns", data={"dns_provider": "pihole", "api_url_pihole": "http://p"}
+        )
+        assert cfg.get("api_token") is None
+        cfg.write({"api_url": "http://old.local", "api_token": "OLD"})
+        logged_in_client.post(
+            "/settings/infrastructure/save-ddns", data={"dns_provider": "technitium", "api_url_technitium": "http://t"}
+        )
+        assert cfg.get("api_token") == "OLD", "the provider it was typed for keeps it"
+
+    def test_the_checkbox_removes_it_for_the_same_provider(self, logged_in_client, cfg):
+        cfg.write({"dns_provider": "pihole", "api_url": "http://old.local", "api_token": "OLD"})
+        logged_in_client.post(
+            "/settings/infrastructure/save-ddns",
+            data={"dns_provider": "pihole", "api_url_pihole": "http://old.local", "clear_api_token": "1"},
+        )
+        assert cfg.get("api_token") is None
+
+    def test_a_switch_without_a_token_warns(self, logged_in_client, cfg):
+        cfg.write({"dns_provider": "technitium", "api_url": "http://old.local", "api_token": "OLD"})
+        r = logged_in_client.post(
+            "/settings/infrastructure/save-ddns",
+            data={"dns_provider": "pihole", "api_url_pihole": "http://p"},
+            follow_redirects=True,
+        )
+        assert b"enter its token or password" in r.data and b"was not carried over" in r.data
+
+    @pytest.mark.parametrize(
+        "data", [{"dns_provider": "pihole", "api_token_pihole": "T"}, {"dns_provider": "none"}, {"dns_provider": "ssh"}]
+    )
+    def test_no_warning_when_a_token_was_typed_or_the_provider_has_none(self, logged_in_client, cfg, data):
+        cfg.write({"dns_provider": "technitium", "api_token": "OLD"})
+        r = logged_in_client.post("/settings/infrastructure/save-ddns", data=data, follow_redirects=True)
+        assert b"was not carried over" not in r.data
+
+    def test_the_lookup_never_sends_an_empty_or_foreign_credential(self, monkeypatch, cfg):
+        import requests
+
+        from jen.routes import ddns as ddns_route
+
+        calls = []
+        monkeypatch.setattr(requests, "post", lambda *a, **k: calls.append(("post", a, k)) or pytest.fail("sent"))
+        monkeypatch.setattr(requests, "get", lambda *a, **k: calls.append(("get", a, k)) or pytest.fail("sent"))
+        cfg.write({"dns_provider": "pihole", "api_url": "http://pi.hole"})  # no token
+        assert "not configured" in ddns_route._provider_lookup("host.example").lower()
+        cfg.write({"dns_provider": "adguard", "api_url": "http://ag.local", "api_user": "admin"})
+        assert "not configured" in ddns_route._provider_lookup("host.example").lower()
+        cfg.write({"dns_provider": "technitium", "api_url": "http://t.local"})
+        assert "not configured" in ddns_route._provider_lookup("host.example").lower()
+        assert calls == []
+
+    def test_the_form_prefills_only_the_saved_providers_block(self, logged_in_client, mock_kea, cfg):
+        cfg.write({"dns_provider": "technitium", "api_url": "http://tech.local", "api_token": "T"})
+        body = logged_in_client.get("/settings/kea").get_data(as_text=True)
+        assert 'name="api_url_technitium" value="http://tech.local"' in body
+        assert 'name="api_url_pihole" value=""' in body and 'name="api_url_adguard" value=""' in body
+        assert 'name="api_user_adguard" value=""' in body
+        card = body[body.index('id="kea-dns-provider"') :]
+        card = card[: card.index("Save DDNS")]
+        assert card.count("(unchanged)") == 1 and card.count("(not set)") == 2
+        assert 'value="T"' not in card, "the token itself is never printed"
+
+    def test_a_fresh_install_shows_not_set_everywhere(self, logged_in_client, mock_kea, cfg):
+        body = logged_in_client.get("/settings/kea").get_data(as_text=True)
+        card = body[body.index('id="kea-dns-provider"') :]
+        card = card[: card.index("Save DDNS")]
+        assert "(unchanged)" not in card and card.count("(not set)") == 3
+
+
+class TestTheModeSaysWhatItKnows:
+    """v5.69.0-beta.8 (Q177, DDNS-STATUS-001): an explicit `mode = none` is honoured (it was documented and ignored), and a loaded run_script hook is a mode of its own -
+    `hook` - beside D2 and the provider, which stay separate facts. A failed read is `unknown`, never "Not configured"."""
+
+    @pytest.mark.parametrize(
+        "explicit,updates,hook,provider,expect",
+        [
+            ("", False, False, "none", "none"),
+            ("", True, False, "none", "d2"),
+            ("", False, True, "none", "hook"),
+            ("", True, True, "none", "d2"),
+            ("", False, False, "pihole", "provider"),
+            ("", False, True, "pihole", "hook"),
+            ("none", False, False, "pihole", "none"),
+            ("d2", False, False, "none", "d2"),
+            ("provider", True, False, "none", "provider"),
+            ("both", False, False, "none", "both"),
+            ("hook", False, False, "pihole", "hook"),
+            ("", None, None, "none", "unknown"),
+            ("", None, None, "pihole", "provider"),
+            ("nonsense", False, False, "none", "none"),
+        ],
+    )
+    def test_the_derivation(self, monkeypatch, explicit, updates, hook, provider, expect):
+        import configparser
+
+        from jen import extensions
+        from jen.routes import ddns as ddns_route
+
+        parser = configparser.ConfigParser()
+        parser["ddns"] = {k: v for k, v in (("mode", explicit), ("dns_provider", provider)) if v}
+        monkeypatch.setattr(extensions, "cfg", parser)
+        assert ddns_route._ddns_mode(updates, hook) == expect
+
+    def test_the_status_body_for_a_hook_says_outside_jens_view_and_not_not_configured(
+        self, logged_in_client, monkeypatch
+    ):
+        body = TestNoDefaultProviderAndTwoWriters()._status(
+            logged_in_client,
+            monkeypatch,
+            {"dhcp-ddns": {"enable-updates": False}, "hooks-libraries": [{"library": "/x/libdhcp_run_script.so"}]},
+        )
+        assert "outside Jen's view" in body and "Not configured" not in body
+        assert "libdhcp_run_script.so loaded" in body, "the lease-hook row is its own fact"
+
+    def test_the_guide_lists_the_five_explicit_values(self):
+        import pathlib
+
+        text = pathlib.Path("docs/admin-guide.md").read_text(encoding="utf-8")
+        para = text[text.index("`[ddns] mode` picks") :].split("\n", 1)[0]
+        for value in ("`provider`", "`d2`", "`both`", "`none`", "`hook`"):
+            assert value in para
+        assert "display-only" in para and "unknown" in para

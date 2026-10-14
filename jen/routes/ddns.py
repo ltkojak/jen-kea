@@ -60,16 +60,23 @@ def _stat_value(args: dict, key: str) -> int:
         return 0
 
 
-def _ddns_mode(dhcp4_enable_updates: bool | None) -> str:
-    """[ddns] mode ∈ provider | d2 | both | none | unknown. Explicit config wins; absent, it's derived at read time (never written back) - d2 when dhcp4 sends updates to
-    D2, else provider when a DNS provider (a lookup server) is set, else `none`: nothing is configured, and the Status tab says so instead of showing a provider nobody
-    chose (v5.69.0-beta.7, Q176: a fresh install used to read "Provider (technitium)" and tail a log that did not exist). `dhcp4_enable_updates` None is a config-get that
-    could not be read: with nothing else configured that is `unknown`, never "Not configured" - a failed read is not a statement about configuration."""
+MODES = ("provider", "d2", "both", "none", "hook")
+
+
+def _ddns_mode(dhcp4_enable_updates: bool | None, hook_loaded: bool | None = False) -> str:
+    """The DDNS mode the Status tab reports: provider | d2 | both | none | hook | unknown. An explicit `[ddns] mode` (any of the five) wins; absent, it is derived at read
+    time and never written back - `d2` when dhcp4 sends updates to D2; else `hook` when a run_script hook is loaded (what it writes is outside Jen's view, and it is not a
+    DNS provider); else `provider` when a lookup server is set; else `unknown` when the config could not be read (`dhcp4_enable_updates` None - a failed read is not a
+    statement about configuration), else `none`: nothing is configured, and the Status tab says so instead of showing a provider nobody chose (v5.69.0-beta.7, Q176: a
+    fresh install used to read "Provider (technitium)" and tail a log that did not exist). v5.69.0-beta.8 (Q177): an explicit `none` is honoured (it was documented and
+    ignored), and a loaded hook is a mode of its own. Both-on (D2 and the hook) stays `d2`: the two-writers warning is the separate fact."""
     configured = extensions.cfg.get("ddns", "mode", fallback="").strip()
-    if configured in ("provider", "d2", "both"):
+    if configured in MODES:
         return configured
     if dhcp4_enable_updates:
         return "d2"
+    if hook_loaded:
+        return "hook"
     provider = __writers.effective_provider(extensions.cfg)
     if provider and provider != "none":
         return "provider"
@@ -155,7 +162,7 @@ def _status_tab_context():
             active_hook = hook
         server_updates.append({"name": name, "enabled": enabled, "hook": hook})
 
-    mode = _ddns_mode(active_enabled if active_read else None)
+    mode = _ddns_mode(active_enabled if active_read else None, active_hook)
 
     d2_status = "skip"
     d2_detail = "DDNS updates disabled in dhcp4"
@@ -234,7 +241,7 @@ def _provider_lookup(lookup_host: str):
         if dns_provider == "pihole":
             dns_url = extensions.cfg.get("ddns", "api_url", fallback="")
             dns_pass = extensions.cfg.get("ddns", "api_token", fallback="")
-            if dns_url:
+            if dns_url and dns_pass:  # an empty credential is never sent (v5.69.0-beta.8, Q177)
                 import requests as req
 
                 try:
@@ -260,20 +267,20 @@ def _provider_lookup(lookup_host: str):
                     data = r.json()
                     matches = [e for e in data.get("data", []) if lookup_host in str(e)]
                     return matches if matches else f"No records found for {lookup_host} (Pi-hole v5 API)"
-            return "Pi-hole API URL not configured."
+            return "Pi-hole API not configured."
 
         if dns_provider == "adguard":
             dns_url = extensions.cfg.get("ddns", "api_url", fallback="")
             dns_user = extensions.cfg.get("ddns", "api_user", fallback="")
             dns_pass = extensions.cfg.get("ddns", "api_token", fallback="")
-            if dns_url:
+            if dns_url and dns_pass:
                 import requests as req
 
                 r = req.get(f"{dns_url}/control/rewrite/list", auth=(dns_user, dns_pass), timeout=5)
                 data = r.json()
                 matches = [e for e in data if lookup_host in str(e.get("domain", ""))]
                 return matches if matches else f"No rewrite rules found for {lookup_host}"
-            return "AdGuard Home URL not configured."
+            return "AdGuard Home API not configured."
 
         if dns_provider in ("ssh", "generic"):
             active = __kea.get_active_kea_server()
