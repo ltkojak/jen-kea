@@ -592,7 +592,7 @@ class TestMigration30ClientProblems:
             cur.execute("SHOW INDEX FROM client_problems WHERE Key_name='uq_client_problem'")
             old = cur.fetchall()
         assert [c for _s, c in parts] == ["server_id", "generation", "kind", "mac", "ip", "scope_key"] and unique
-        assert old == [], (
+        assert not old, (
             "the old key (no generation) is gone: it would make a replaced host's rows collide with the old host's"
         )
 
