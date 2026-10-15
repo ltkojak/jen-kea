@@ -1455,7 +1455,7 @@ class TestFoundRoute:
         monkeypatch.setattr(setup_wizard, "probe_v6", lambda *a, **kw: probe)
         calls = []
         monkeypatch.setattr(
-            setup_wizard, "enable_v6", lambda url, proposed, remove, api_pass="": calls.append((url, remove))
+            setup_wizard, "enable_v6", lambda url, proposed, remove, **kw: calls.append((url, remove))
         )
         r = logged_in_client.post("/setup/found", data={"action": "enable_v6", "remove6_9": "1"})
         assert r.status_code == 302
