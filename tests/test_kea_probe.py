@@ -243,9 +243,10 @@ class TestProbeServerAndService:
         "api_url": "http://localhost:18000",
         "api_user": "u1",
         "api_pass": "p1",
-        "api6_url": "",
-        "api6_user": "",
-        "api6_pass": "",
+        # (Q181: what `derive_kea_servers` writes in CA mode for an endpoint with no IPv6 keys - the server's own address and credential)
+        "api6_url": "http://localhost:18000",
+        "api6_user": "u1",
+        "api6_pass": "p1",
     }
     STANDBY = {
         "id": 2,
@@ -253,9 +254,9 @@ class TestProbeServerAndService:
         "api_url": "http://kea02:9000",
         "api_user": "u2",
         "api_pass": "p2",
-        "api6_url": "",
-        "api6_user": "",
-        "api6_pass": "",
+        "api6_url": "http://kea02:9000",
+        "api6_user": "u2",
+        "api6_pass": "p2",
     }
 
     @pytest.fixture(autouse=True)
@@ -283,6 +284,12 @@ class TestProbeServerAndService:
 
     def test_direct_dhcp6_without_a_v6_url_is_400(self, logged_in_client, db, probe_http, monkeypatch):
         monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
+        # (Q181: in direct mode an endpoint with no IPv6 keys resolves to NO address - the dict says so)
+        monkeypatch.setattr(
+            extensions,
+            "KEA_SERVERS",
+            [dict(self.PRIMARY), {**self.STANDBY, "api6_url": "", "api6_user": "", "api6_pass": ""}],
+        )
         probe_http({})
         r = logged_in_client.post("/settings/infrastructure/probe-kea", data={"server_id": "2", "service": "dhcp6"})
         assert r.status_code == 400

@@ -2406,8 +2406,12 @@ def save_extra_servers():
                     cfg.set(sec, k, v)
             if nod2_ticked and cfg.has_option(sec, "api_d2_url"):
                 cfg.set(sec, "api_d2_pass", "")  # explicit: the D2 socket has no authentication
-            elif row_idx < len(nod2_passes) and cfg.has_option(sec, "api_d2_pass") and cfg.get(sec, "api_d2_pass") == "":
-                cfg.remove_option(sec, "api_d2_pass")  # the box was UNTICKED on a page that carries it: back to "inherit, if the host is the same"
+            elif (
+                row_idx < len(nod2_passes) and cfg.has_option(sec, "api_d2_pass") and cfg.get(sec, "api_d2_pass") == ""
+            ):
+                cfg.remove_option(
+                    sec, "api_d2_pass"
+                )  # the box was UNTICKED on a page that carries it: back to "inherit, if the host is the same"
 
         # U3 (Q180): the resolver is the proof. The IPv6 and D2 endpoint of every saved row is judged against the credential `resolve` gives IT: a typed API password authorises
         # them on the same host only, and one on a different host with no password of its own would be refused its neighbour's - so the form says so instead of saving a

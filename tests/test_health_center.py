@@ -1118,7 +1118,9 @@ class TestEndpointForD2:
             "api_user": "ub",
             "api_pass": "pb",
             "api_d2_pass": "pb",
-        }  # (Q180: resolved, as derive_kea_servers makes it)
+            "api_d2_url": "http://kea-b:8000",
+            "api_d2_user": "ub",
+        }  # (Q180/Q181: resolved, as derive_kea_servers makes it in CA mode)
         assert kea_svc._endpoint_for(srv, "d2") == ("http://kea-b:8000", "ub", "pb")
 
     def test_direct_mode_returns_error_dict(self, monkeypatch):
