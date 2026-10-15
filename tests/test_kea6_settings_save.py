@@ -220,12 +220,14 @@ class TestSaveKeaClientCert:
 class TestDirectPortWarnings:
     def test_warning_lists_a_portless_url_in_direct_mode(self, logged_in_client, db, mock_kea, isolated_config):
         # a portless URL that was valid in ca mode, now in direct mode
-        app_config.write_values([("kea", "api_url", "http://kea-noport"), ("kea", "connection_mode", "direct")])
+        app_config.write_values(
+            [("kea", "api_url", "http://kea-noport"), ("kea", "connection_mode", "direct")], typed={"kea"}
+        )
         body = logged_in_client.get("/settings/kea").data
         assert b"explicit port on every API URL" in body
         assert b"http://kea-noport" in body
 
     def test_no_warning_in_ca_mode(self, logged_in_client, db, mock_kea, isolated_config):
-        app_config.write_value("kea", "api_url", "http://kea-noport")  # ca mode (default)
+        app_config.write_value("kea", "api_url", "http://kea-noport", typed={"kea"})  # ca mode (default)
         body = logged_in_client.get("/settings/kea").data
         assert b"explicit port on every API URL" not in body

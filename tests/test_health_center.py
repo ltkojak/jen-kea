@@ -1113,7 +1113,12 @@ class TestEndpointForD2:
 
     def test_ca_mode_per_server(self, monkeypatch):
         monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "ca")
-        srv = {"api_url": "http://kea-b:8000", "api_user": "ub", "api_pass": "pb"}
+        srv = {
+            "api_url": "http://kea-b:8000",
+            "api_user": "ub",
+            "api_pass": "pb",
+            "api_d2_pass": "pb",
+        }  # (Q180: resolved, as derive_kea_servers makes it)
         assert kea_svc._endpoint_for(srv, "d2") == ("http://kea-b:8000", "ub", "pb")
 
     def test_direct_mode_returns_error_dict(self, monkeypatch):

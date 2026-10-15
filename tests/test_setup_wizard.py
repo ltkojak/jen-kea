@@ -1241,6 +1241,9 @@ class TestConnectRoute:
         """Item n — saved passwords are never rendered, so a revisit shows blank fields."""
         from jen import extensions
 
+        # (Q180 adjustment: the saved passwords belong to the saved HOSTS - the form names those same hosts here; a different host is the next test)
+        monkeypatch.setattr(extensions, "KEA_API_URL", "http://kea.test:9000")
+        monkeypatch.setattr(extensions, "KEA_DB_HOST", "dbhost")
         monkeypatch.setattr(extensions, "KEA_API_PASS", "stored-api")
         monkeypatch.setattr(extensions, "KEA_DB_PASS", "stored-db")
         seen = self._capture(monkeypatch)
@@ -1250,6 +1253,20 @@ class TestConnectRoute:
         assert seen["db"][0]["password"] == "stored-db"
         # and the SAVE keeps the stored value: it is handed the blank one, which it never writes
         assert seen["save"][0]["api_pass"] == "" and seen["save"][0]["kea_db_pass"] == ""
+
+    def test_a_blank_password_is_not_tested_with_the_stored_credential_on_a_different_host(
+        self, logged_in_client, monkeypatch
+    ):
+        """Q180 second pass (P2-4): a saved password goes only to the host it was saved for."""
+        from jen import extensions
+
+        monkeypatch.setattr(extensions, "KEA_API_URL", "http://old-kea:8000")
+        monkeypatch.setattr(extensions, "KEA_DB_HOST", "old-db")
+        monkeypatch.setattr(extensions, "KEA_API_PASS", "stored-api")
+        monkeypatch.setattr(extensions, "KEA_DB_PASS", "stored-db")
+        seen = self._capture(monkeypatch)
+        logged_in_client.post("/setup/connect", data=self.FORM)
+        assert seen["conn"][0]["password"] == "" and seen["db"][0]["password"] == ""
 
     def test_a_typed_password_is_what_gets_tested(self, logged_in_client, monkeypatch):
         from jen import extensions
@@ -1403,7 +1420,9 @@ class TestFoundRoute:
         }
         monkeypatch.setattr(setup_wizard, "probe_v6", lambda *a, **kw: probe)
         calls = []
-        monkeypatch.setattr(setup_wizard, "enable_v6", lambda url, proposed, remove: calls.append((url, remove)))
+        monkeypatch.setattr(
+            setup_wizard, "enable_v6", lambda url, proposed, remove, api_pass="": calls.append((url, remove))
+        )
         r = logged_in_client.post("/setup/found", data={"action": "enable_v6", "remove6_9": "1"})
         assert r.status_code == 302
         assert calls and calls[0][1] == {9}, "only the ticked orphan, never 8"
@@ -1423,7 +1442,7 @@ class TestFoundRoute:
             "orphaned_subnets6": {},
         }
         monkeypatch.setattr(setup_wizard, "probe_v6", lambda *a, **kw: probe)
-        monkeypatch.setattr(setup_wizard, "enable_v6", lambda *a: "name contains a forbidden character")
+        monkeypatch.setattr(setup_wizard, "enable_v6", lambda *a, **k: "name contains a forbidden character")
         r = logged_in_client.post("/setup/found", data={"action": "enable_v6"})
         assert r.status_code == 200 and b"IPv6 was not enabled" in r.data
 

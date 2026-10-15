@@ -50,6 +50,7 @@ EXPECTED_ENDPOINTS = {
     "settings.save_infra_jen_db",
     "settings.save_infra_ssh",
     "settings.save_extra_servers",
+    "settings.copy_primary_password",
     "settings.save_infra_ddns",
     "settings.save_ha_settings",
     "settings.restart_jen",

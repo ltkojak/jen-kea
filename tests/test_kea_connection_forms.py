@@ -663,10 +663,11 @@ class TestAnAdditionalServerUsesTheCredentialItIsGiven:
         self._post(logged_in_client, {"extra_id[]": "", "extra_name[]": "Peer", "extra_api_url[]": "https://peer:8000"})
         assert not _disk(isolated_config).has_option("kea_server_2", "api_pass")
 
-    def test_a_new_row_with_a_typed_password_keeps_it_whatever_the_box_says(
+    def test_a_new_row_with_a_typed_password_and_the_box_is_two_answers_and_is_refused(
         self, logged_in_client, db, mock_kea, isolated_config
     ):
-        self._post(
+        before = isolated_config.read_bytes()
+        r = self._post(
             logged_in_client,
             {
                 "extra_id[]": "",
@@ -676,7 +677,8 @@ class TestAnAdditionalServerUsesTheCredentialItIsGiven:
                 "share": "1",
             },
         )
-        assert _disk(isolated_config).get("kea_server_2", "api_pass") == "OWN"
+        # (Q180 adjustment: Q179 let a typed password win over the box; U3 says ticked AND typed is two answers - "Choose one" - and nothing is written)
+        assert b"Choose one for the API password" in r.data and isolated_config.read_bytes() == before
 
     def test_an_old_page_that_sends_no_share_list_shares_nothing(self, logged_in_client, db, mock_kea, isolated_config):
         logged_in_client.post(

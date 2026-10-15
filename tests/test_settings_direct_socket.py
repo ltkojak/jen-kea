@@ -431,7 +431,12 @@ class TestSwitchBack:
                 ("kea", "connection_mode", "direct"),
                 ("kea", "api_url", SOCK),
                 ("kea", "direct_prev_api_url", CA_URL),
-            ]
+            ],
+            typed={
+                "kea",
+                "kea6",
+                "d2",
+            },  # (Q180: this fixture seeds the state the route would have written - the superadmin's explicit act)
         )
         fake.configs[(1, "dhcp4")]["Dhcp4"]["control-sockets"] = [
             fake.configs[(1, "dhcp4")]["Dhcp4"].pop("control-socket"),
@@ -464,7 +469,9 @@ class TestSwitchBack:
         assert b"standby" in r.data
 
     def test_dhcp6_switch_back_clears_the_override_only(self, logged_in_client, db, isolated_config, fake, http):
-        app_config.write_values([("kea", "connection_mode", "direct"), ("kea6", "api_url", "http://10.0.0.5:8006")])
+        app_config.write_values(
+            [("kea", "connection_mode", "direct"), ("kea6", "api_url", "http://10.0.0.5:8006")], typed={"kea", "kea6"}
+        )
         fake.responses["service"] = {"ok": True, "unit": "kea-dhcp6-server", "state": "active"}
         http({})
         r = logged_in_client.post("/settings/infrastructure/direct-socket/1/dhcp6/remove", follow_redirects=True)
@@ -816,7 +823,8 @@ class TestRotateKeaCa:
                 ("kea", "api_client_cert", pem),
                 ("kea", "api_client_key", key),
                 ("kea", "api_tls_verify", "true"),
-            ]
+            ],
+            typed={"kea", "server_2"},
         )
         tls_env.issue_server_cert(extensions.KEA_SERVERS[0], "dhcp4", "10.0.0.5")
         tls_env.issue_server_cert(extensions.KEA_SERVERS[1], "dhcp4", "10.0.0.6")

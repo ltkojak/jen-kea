@@ -187,7 +187,7 @@ class TestSetupSavesAndTestsIt:
 class TestSaveConnectionWritesIt:
     def _save(self, monkeypatch, **over):
         calls = []
-        monkeypatch.setattr("jen.config.app_config.write_values", lambda items: calls.append(list(items)))
+        monkeypatch.setattr("jen.config.app_config.write_values", lambda items, typed=None: calls.append(list(items)))
         monkeypatch.setattr("jen.models.db.reset_kea_pools", lambda: None)
         kw = {
             "api_url": "http://kea:8000",
