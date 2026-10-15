@@ -20,6 +20,7 @@ import pytest
 from jen import config as jconfig
 from jen import extensions
 from jen.config import AppConfig, ConfigChangeRefused, app_config
+from jen.services import access as access_service  # noqa: F401  (registers RBAC-004's guard, as create_app() does)
 from jen.services import investigation_logging as inv
 
 pytest_plugins = ("tests._investigation_world",)
@@ -262,6 +263,168 @@ class TestPreflight:
     def test_it_returns_none_when_the_change_is_allowed(self, cfgfile):
         assert app_config.preflight_identity_change([("kea_ssh", "host", "10.9.9.9")]) is None
         assert _disk(cfgfile.path).get("kea_ssh", "host") == "10.0.0.1", "a preflight never writes"
+
+
+def _login_app(role):
+    """A bare Flask app with Flask-Login and a stub user of `role` - the guard only reads the request context, `current_user` and the session, so no database is needed."""
+    from flask import Flask
+    from flask_login import LoginManager, UserMixin
+
+    class _User(UserMixin):
+        def __init__(self, role):
+            self.id = "1"
+            self.role = role
+
+    app = Flask(__name__)
+    app.secret_key = "t"
+    manager = LoginManager()
+    manager.init_app(app)
+    manager.user_loader(lambda _id: _User(role))
+    return app, _User(role)
+
+
+def _sign_in(role, *, minutes_ago=0):
+    """(app, context) with `role` signed in and `session["auth_at"]` that many minutes old; a request context is open when `with` is entered."""
+    from datetime import datetime, timedelta, timezone
+
+    from flask import session
+    from flask_login import login_user
+
+    app, user = _login_app(role)
+    ctx = app.test_request_context("/")
+    ctx.push()
+    login_user(user)
+    session["auth_at"] = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()
+    return ctx
+
+
+class TestIdentityIsASuperadminsSetting:
+    """RBAC-004 (v5.69.0-beta.10, Q179): where Jen reaches a Kea server is a superadmin's setting with a recent password, asked at the config writer - not on a list of routes."""
+
+    def test_an_admin_cannot_change_the_kea_api_url(self, cfgfile, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_API_URL", "http://10.0.0.1:8000", raising=False)
+        before = cfgfile.path.read_bytes()
+        ctx = _sign_in("admin")
+        try:
+            with pytest.raises(ConfigChangeRefused, match="superadmin's setting"):
+                app_config.write_values([("kea", "api_url", "https://kea-x:8000")])
+        finally:
+            ctx.pop()
+        assert cfgfile.path.read_bytes() == before
+        assert extensions.KEA_API_URL == "http://10.0.0.1:8000"
+
+    def test_an_admin_cannot_add_a_server(self, cfgfile):
+        def add(p):
+            p.add_section("kea_server_9")
+            for k, v in (
+                ("name", "kea-x"),
+                ("api_url", "http://10.0.0.9:8000"),
+                ("ssh_host", "10.0.0.9"),
+                ("ssh_user", "jen"),
+                ("kea_conf", "/etc/kea/kea-dhcp4.conf"),
+            ):
+                p.set("kea_server_9", k, v)
+
+        ctx = _sign_in("admin")
+        try:
+            with pytest.raises(ConfigChangeRefused, match="superadmin's setting"):
+                app_config.mutate(add)
+        finally:
+            ctx.pop()
+        assert not _disk(cfgfile.path).has_section("kea_server_9")
+
+    def test_an_admin_cannot_remove_a_server_or_change_the_mode(self, cfgfile):
+        ctx = _sign_in("admin")
+        try:
+            with pytest.raises(ConfigChangeRefused, match="superadmin's setting"):
+                app_config.mutate(lambda p: p.remove_section("kea_server_2"))
+            with pytest.raises(ConfigChangeRefused, match="superadmin's setting"):
+                app_config.write_values([("kea", "connection_mode", "direct")])
+        finally:
+            ctx.pop()
+        assert _disk(cfgfile.path).has_section("kea_server_2")
+
+    def test_a_superadmin_with_an_old_password_confirmation_is_asked_to_confirm(self, cfgfile):
+        before = cfgfile.path.read_bytes()
+        ctx = _sign_in("superadmin", minutes_ago=20)
+        try:
+            with pytest.raises(ConfigChangeRefused, match="Confirm your password"):
+                app_config.write_values([("kea", "api_url", "https://kea-x:8000")])
+        finally:
+            ctx.pop()
+        assert cfgfile.path.read_bytes() == before
+
+    def test_a_superadmin_who_just_confirmed_may_change_it(self, cfgfile):
+        ctx = _sign_in("superadmin", minutes_ago=1)
+        try:
+            app_config.write_values([("kea", "api_url", "https://kea-x:8000")])
+        finally:
+            ctx.pop()
+        assert _disk(cfgfile.path).get("kea", "api_url") == "https://kea-x:8000"
+
+    def test_a_session_with_no_confirmation_time_is_not_recent(self, cfgfile):
+        from flask import session
+
+        ctx = _sign_in("superadmin")
+        try:
+            session.pop("auth_at", None)
+            with pytest.raises(ConfigChangeRefused, match="Confirm your password"):
+                app_config.write_values([("kea", "api_url", "https://kea-x:8000")])
+        finally:
+            ctx.pop()
+
+    def test_outside_a_request_there_is_no_caller_to_judge(self, cfgfile):
+        app_config.write_values([("kea", "api_url", "https://kea-x:8000")])
+        assert _disk(cfgfile.path).get("kea", "api_url") == "https://kea-x:8000"
+
+    def test_a_request_that_is_not_a_signed_in_session_is_not_asked(self, cfgfile):
+        from flask import Flask
+
+        app = Flask(__name__)
+        with app.test_request_context("/"):
+            app_config.write_values(
+                [("kea", "api_url", "https://kea-x:8000")]
+            )  # an API-key request: its scope is judged where the key is
+        assert _disk(cfgfile.path).get("kea", "api_url") == "https://kea-x:8000"
+
+    def test_both_guards_are_registered(self):
+        from jen.services import access
+
+        assert inv.identity_guard in jconfig._identity_guards
+        assert access.identity_change_needs_superadmin in jconfig._identity_guards
+
+    def test_a_password_only_change_by_an_admin_is_not_an_identity_change_and_no_guard_is_asked(
+        self, cfgfile, monkeypatch
+    ):
+        asked = []
+        monkeypatch.setattr(jconfig, "_identity_guards", [lambda before, after: asked.append(1) or ""])
+        ctx = _sign_in("admin")
+        try:
+            app_config.write_values(
+                [("kea", "api_pass", "new")]
+            )  # (CRED-002 judges it where the form is - not this guard)
+        finally:
+            ctx.pop()
+        assert asked == [] and _disk(cfgfile.path).get("kea", "api_pass") == "new"
+
+    def test_a_display_name_change_by_an_admin_is_not_an_identity_change(self, cfgfile):
+        ctx = _sign_in("admin")
+        try:
+            app_config.write_values([("kea", "name", "renamed")])
+        finally:
+            ctx.pop()
+        assert _disk(cfgfile.path).get("kea", "name") == "renamed"
+
+    def test_the_sentence_is_asked_before_the_investigation_state_is(self, cfgfile):
+        """An admin learns nothing about which servers have investigation logging outstanding from the refusal."""
+        assert inv.turn_on(_server(cfgfile, 1), 5)["ok"]
+        ctx = _sign_in("admin")
+        try:
+            with pytest.raises(ConfigChangeRefused) as raised:
+                app_config.write_values([("kea_ssh", "host", "10.9.9.9")])
+        finally:
+            ctx.pop()
+        assert "kea-a" not in str(raised.value) and "superadmin's setting" in str(raised.value)
 
 
 class TestTheSetupWizardIsGuardedWithNoChangeToIt:
@@ -596,6 +759,12 @@ class TestTheIdentityInvariantHasOneChokePointInTheSource:
         assert imported, (
             "create_app() must import investigation_logging explicitly (a config write before any route module loaded is guarded too)"
         )
+        from jen.services import access
+
+        assert access.identity_change_needs_superadmin in jconfig._identity_guards
+        assert any(
+            isinstance(n, ast.ImportFrom) and any(a.name == "access" for a in n.names) for n in ast.walk(create_app)
+        ), "create_app() must import access explicitly too (RBAC-004, Q179)"
         assert "ConfigChangeRefused" in (ROOT / "jen" / "__init__.py").read_text(encoding="utf-8")
 
     def test_03_the_identity_keys_are_exactly_the_four_settings_that_say_which_kea(self):
@@ -751,7 +920,10 @@ class TestTheErrorHandlerAndTheWholeAppAreWiredCI:
     """CI-only (the Flask app and the database): the refusal reaches a person on whichever route asked."""
 
     def test_after_create_app_the_guard_is_registered(self, app):
+        from jen.services import access
+
         assert inv.identity_guard in jconfig._identity_guards
+        assert access.identity_change_needs_superadmin in jconfig._identity_guards
 
     def test_a_refused_save_flashes_and_redirects_and_a_json_caller_gets_409(
         self, logged_in_client, db, mock_kea, ci_config

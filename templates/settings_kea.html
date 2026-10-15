@@ -87,6 +87,33 @@
         {% if kea_up %}<span class="u-d5881b">● Connected{% if kea_version %} · Kea {{ kea_version }}{% endif %}</span>
         {% else %}<span style="color:var(--danger);font-size:12px;">● Unreachable</span>{% endif %}
     </div>
+    {#- RBAC-004 (v5.69.0-beta.10, Q179): where Jen reaches a Kea server is a superadmin's setting - an admin sees the facts, and the probe of a daemon on the host Jen already reaches -#}
+    {% if current_user.role != 'superadmin' %}
+    <div class="form-row">
+        <div class="form-group"><label>Connection Mode</label><div>{% if infra.kea_connection_mode == 'direct' %}Direct to daemons{% else %}Control Agent{% endif %}</div></div>
+        <div class="form-group"><label>{% if infra.kea_connection_mode == 'direct' %}kea-dhcp4 control socket URL{% else %}Control Agent URL{% endif %}</label><div class="mono">{{ infra.kea_api_url or '(not set)' }}</div></div>
+        <div class="form-group"><label>API Username</label><div class="mono">{{ infra.kea_api_user or '(not set)' }}</div></div>
+        <div class="form-group"><label>API Password</label><div>{% if infra.kea_api_pass_set %}saved{% else %}not set{% endif %}</div></div>
+    </div>
+    <div class="form-hint">Only a superadmin changes where Jen reaches Kea.</div>
+    <div class="u-10a65a">
+        <button type="button" class="btn btn-secondary" id="probe-kea-btn">{{ icon("search") }} Probe</button>
+        {% if kea_servers|length > 1 %}
+        <select id="probe-server" class="u-c70577">
+            {% for s in kea_servers %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
+        </select>
+        {% endif %}
+        {% if ipv6_enabled %}
+        <select id="probe-service" class="u-c70577">
+            <option value="dhcp4">dhcp4</option>
+            <option value="dhcp6">dhcp6</option>
+        </select>
+        {% endif %}
+        <input type="text" id="probe-candidate-url" placeholder="optional - another daemon of the same host, e.g. https://kea:8004"
+               style="display:inline-block;width:auto;min-width:320px;margin-left:8px;font-family:monospace;font-size:12px;">
+        <div id="probe-kea-results" class="u-b20d1a"></div>
+    </div>
+    {% else %}
     <form method="POST" action="/settings/infrastructure/save-kea" id="kea-api-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
@@ -156,6 +183,7 @@
                style="display:inline-block;width:auto;min-width:320px;margin-left:8px;font-family:monospace;font-size:12px;">
         <div id="probe-kea-results" class="u-b20d1a"></div>
     </form>
+    {% endif %}
     {{ direct_socket_setup(1, 'dhcp4', 'kea-dhcp4', 'kea-dhcp4.conf', infra.ssh_host, infra.bind_default, infra.kea_api_user, 8004, infra.kea_api_url, 'SSH to the Kea server (below)', infra.tls_supported) }}
     {% if current_user.role == 'superadmin' %}
     <!-- v5.29.0 (Q29) — the Jen-managed Kea CA behind the https option above -->
@@ -187,6 +215,15 @@
         {% else %}<span class="u-0051c0">● No key generated</span>{% endif %}
     </div>
     <p class="form-hint u-da12f2">Used for config pushes, restarts, the DDNS log and package checks. With the Kea host helper installed the SSH user needs one sudoers line; without it Jen falls back to the legacy root <code>python3</code> path (see <code>docs/admin-guide.md</code> → Kea host helper).</p>
+    {% if current_user.role != 'superadmin' %}
+    <div class="form-row">
+        <div class="form-group"><label>Kea server</label><div class="mono">{{ infra.ssh_host or '(not set)' }}</div></div>
+        <div class="form-group"><label>SSH Username</label><div class="mono">{{ infra.ssh_user or '(not set)' }}</div></div>
+        <div class="form-group"><label>Kea Config Path</label><div class="mono">{{ infra.kea_conf or '(default)' }}</div></div>
+        <div class="form-group"><label>Kea log path</label><div class="mono">{{ infra.dhcp4_log_path or '(default)' }}</div></div>
+    </div>
+    <div class="form-hint">Only a superadmin changes where Jen reaches Kea.</div>
+    {% else %}
     <form method="POST" action="/settings/infrastructure/save-ssh"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="form-row">
             <div class="form-group">
@@ -208,6 +245,7 @@
         </div>
         <button type="submit" class="btn btn-primary">Save SSH Config</button>
     </form>
+    {% endif %}
     {% if ssh_pub_key %}
     <div class="u-9e4d95">
         <div class="stat-label u-4e420a">Public Key — add to <code>~/.ssh/authorized_keys</code> for {{ infra.ssh_user or 'the SSH user' }}@{{ infra.ssh_host or 'the Kea host' }}</div>
@@ -325,6 +363,21 @@
     <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border);">
         <div class="u-85c718">Additional servers</div>
         <p class="u-6d6af6">For HA peers and multi-server setups. Each needs its own API credentials and SSH config.</p>
+        {% if current_user.role != 'superadmin' %}
+        {% if infra.extra_servers %}
+        <table class="rowlist u-95cc13">
+            <thead><tr><th class="u-b7efde">Server</th><th class="u-b7efde">Role</th><th class="u-b7efde">API URL</th><th class="u-b7efde">SSH host</th></tr></thead>
+            <tbody>
+            {% for srv in infra.extra_servers %}
+            <tr><td data-m="primary" class="u-f26165">{{ srv.name }}</td><td data-m="secondary" class="u-f26165">{{ srv.role }}</td><td data-m="secondary" class="mono" style="padding:4px 8px;font-size:12px;">{{ srv.api_url }}</td><td data-m="secondary" class="mono" style="padding:4px 8px;font-size:12px;">{{ srv.ssh_host or '(not set)' }}</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="form-hint">No additional servers.</div>
+        {% endif %}
+        <div class="form-hint">Only a superadmin changes where Jen reaches Kea.</div>
+        {% else %}
         <p class="u-6d6af6">Listed in their own numeric order — each server's <code>[kea_server_N]</code> number is its permanent identity (config history, helper status, and URLs are keyed by it) and doesn't change when you add, remove, or re-save rows.</p>
         <div id="extra-servers-list">
         {% for srv in infra.extra_servers %}
@@ -404,6 +457,7 @@
             <div id="extra-servers-hidden"></div>
             <button type="submit" class="btn btn-primary" id="save-extra-servers-btn">Save Additional Servers</button>
         </form>
+        {% endif %}
     </div>
 </div>
 
@@ -413,7 +467,17 @@
     <div class="card-header"><span class="card-title">{{ icon("link") }} DDNS - Kea's D2 daemon and the DNS provider</span></div>
     <p class="form-hint u-da12f2">D2 is kea-dhcp-ddns, the daemon that sends Kea's updates; the DNS provider is the server Jen reads names from, looks them up on and reconciles against. Jen never writes DNS records itself: D2 or a hook script on the Kea host does (the optional Local DNS Sync plugin is the one exception, for Pi-hole and AdGuard Home). The provider below is where Jen looks names up. The pipeline itself is operated under <a href="/ddns">Network → DDNS</a>.</p>
     <div class="ddns-pair">
-    {% if current_user.role == 'superadmin' %}
+    {% if current_user.role != 'superadmin' %}
+    <!-- D2 control socket, read-only for an admin (RBAC-004, Q179) -->
+    <div class="card" id="kea-d2">
+        <div class="card-header"><span class="card-title">{{ icon("link") }} D2 Control Socket</span></div>
+        <div class="form-row">
+            <div class="form-group"><label>API URL</label><div class="mono">{{ infra.d2_api_url or ('(inherited from the Kea API: ' ~ infra.kea_api_url ~ ')') }}</div></div>
+            <div class="form-group"><label>API Username</label><div class="mono">{{ infra.d2_api_user or ('(inherited: ' ~ infra.kea_api_user ~ ')') }}</div></div>
+        </div>
+        <div class="form-hint">Only a superadmin changes where Jen reaches Kea.</div>
+    </div>
+    {% else %}
     <!-- D2 (kea-dhcp-ddns) control socket (v5.23.0, Q19) -->
     <div class="card" id="kea-d2">
         <div class="card-header"><span class="card-title">{{ icon("link") }} D2 Control Socket</span></div>
@@ -723,6 +787,8 @@ function addServerRow() {
             <div class="form-group"><label>API Username</label><input type="text" name="extra_api_user[]" placeholder="kea-api"></div>
             <div class="form-group"><label>API Password</label><input type="password" name="extra_api_pass[]" placeholder="password"></div>
         </div>
+        <label class="u-6125e5"><input type="checkbox" name="extra_share_pass[]" value="1" class="u-30e741"> Share the primary's API password (an HA peer of the same Kea)</label>
+        <div class="form-hint">Leave it unticked and type a password for a server that has its own. A server with no password of its own is reached with the primary's - the Configuration Doctor names it when it is on a different host.</div>
         <div class="form-row">
             <div class="form-group"><label>IPv6 API URL</label><input type="text" name="extra_api6_url[]" placeholder="http://YOUR-KEA-SERVER-2:8006"></div>
             <div class="form-group"><label>IPv6 API Username</label><input type="text" name="extra_api6_user[]" placeholder="(same as API username)"></div>
@@ -755,6 +821,13 @@ function serializeServers() {
                 hidden.appendChild(inp);
             }
         });
+        // one "1"/"0" per row, in row order (Q179, T3): a row loaded from the page has no checkbox and is "0"
+        const share = row.querySelector('[name="extra_share_pass[]"]');
+        const shareInp = document.createElement('input');
+        shareInp.type = 'hidden';
+        shareInp.name = 'extra_share_pass[]';
+        shareInp.value = (share && share.checked) ? '1' : '0';
+        hidden.appendChild(shareInp);
     });
 }
 
@@ -791,12 +864,16 @@ if (probeCandidateUrl) {
         if (e.key === 'Enter') { e.preventDefault(); probeKea(); }
     });
 }
-document.getElementById('add-server-row-btn').addEventListener('click', addServerRow);
-document.getElementById('save-extra-servers-btn').addEventListener('click', serializeServers);
+// (an admin has no additional-servers form - RBAC-004, Q179 - so each of these three is bound only where it exists)
+var addServerRowBtn = document.getElementById('add-server-row-btn');
+if (addServerRowBtn) addServerRowBtn.addEventListener('click', addServerRow);
+var saveExtraServersBtn = document.getElementById('save-extra-servers-btn');
+if (saveExtraServersBtn) saveExtraServersBtn.addEventListener('click', serializeServers);
 // Delegated — extra-server rows come from the initial Jinja render AND
 // from addServerRow()'s own DOM insertion, so a direct binding at load
 // time wouldn't reach rows added later.
-document.getElementById('extra-servers-list').addEventListener('click', function(e) {
+var extraServersList = document.getElementById('extra-servers-list');
+if (extraServersList) extraServersList.addEventListener('click', function(e) {
     if (e.target.closest('.remove-server-row-btn')) {
         e.target.closest('.extra-server-row').remove();
     }
@@ -809,7 +886,7 @@ document.getElementById('extra-servers-list').addEventListener('click', function
 (function () {
     var params = new URLSearchParams(window.location.search);
     var peerUrl = params.get('add_server_url');
-    if (!peerUrl) return;
+    if (!peerUrl || !document.getElementById('extra-servers-list')) return;
     addServerRow();
     var rows = document.querySelectorAll('.extra-server-row');
     var row = rows[rows.length - 1];

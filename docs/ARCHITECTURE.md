@@ -78,6 +78,15 @@ matrix is enforced primarily through two decorators —
 for anything subnet-scoped, `current_user.can_access_subnet()` /
 `add_subnet_restriction()` checked per-query.
 
+**Where Jen reaches a Kea server is a superadmin's setting (v5.69.0-beta.10, Q179, RBAC-004).** Three tiers by what each owns: `admin` is the day-to-day DHCP estate
+(subnets, shared networks, options, classes, reservations, leases, DDNS naming and D2 configuration, alert channels); `superadmin` is where Jen connects, its secrets and its users. The Kea API
+address, the connection mode, the SSH host, user and config path and the additional servers decide where Jen's stored credentials are sent, so a change to any of them is a superadmin's with a
+recent password confirmation. The rule is not a list of routes: it is the second identity guard (`access.identity_change_needs_superadmin`), registered beside the investigation guard and asked
+by `AppConfig._write_parser` for every write that changes a server's `api_url`, `ssh_host`, `ssh_user`, `kea_conf`, the connection mode or the set of servers - a route, a plugin, a restore
+or a hand-made POST meets the same refusal. Outside a request (`install.sh --configure`, tools) and for an API-key request there is no signed-in session to judge, and the guard answers nothing;
+the routes carry `@_superadmin_required` + `@_recent_auth_required(minutes=10)` so a person is sent to confirm rather than meeting the sentence, and the Settings → Kea page shows an admin the
+same cards as facts. A password a form keeps, or a server inherits from another, is a separate rule (CRED-002, CRED-003): the credential follows its endpoint.
+
 That subnet-restriction layer has been the single most common source of
 real bugs found across this project's audit history — not because the
 underlying mechanism is flawed, but because it has to be applied

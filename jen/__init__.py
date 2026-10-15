@@ -104,6 +104,8 @@ def create_app() -> Flask:
     # ── Config & globals ──────────────────────────────────────────────────────
     # v5.68.0-beta.28 (Q164): the identity guard registers itself when its module is imported; import it here, explicitly, so a config write made before any
     # route module was loaded (the setup wizard's, a plugin's) is guarded too - tests/test_identity_guard.py asserts it is registered after create_app().
+    # RBAC-004 (v5.69.0-beta.10, Q179): the second identity guard - where Jen reaches a Kea server is a superadmin's setting - registers itself the same way.
+    from jen.services import access as _access  # noqa: F401
     from jen.services import investigation_logging as _investigation_logging  # noqa: F401
 
     app_config.reload()

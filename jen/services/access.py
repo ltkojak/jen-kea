@@ -103,6 +103,23 @@ def auth_is_recent(minutes: int) -> bool:
     return (datetime.now(timezone.utc) - when).total_seconds() <= minutes * 60
 
 
+def identity_change_needs_superadmin(before: dict, after: dict) -> str:
+    """RBAC-004 (v5.69.0-beta.10, Q179): a config write that changes which Kea a server is reached on (api_url, ssh_host, ssh_user, kea_conf, the connection mode, a
+    server added or removed) is a superadmin's with a recent password, WHICHEVER route asked - the question is put where every write already passes
+    (`AppConfig._write_parser`, `jen.config._run_identity_guards`), not on the list of routes that happen to write it. Where Jen connects decides where its credentials
+    go, so it belongs to the role that owns Jen's secrets. Outside a request (install.sh --configure, tools, the test harness) there is no caller to judge, and a
+    request that is not a signed-in session (an API key) is not asked either - the key's own scope is judged where the key is."""
+    from flask import has_request_context
+
+    if not has_request_context() or not getattr(current_user, "is_authenticated", False):
+        return ""
+    if getattr(current_user, "role", "") != "superadmin":
+        return "Where Jen reaches a Kea server is a superadmin's setting."
+    if not auth_is_recent(10):
+        return "Confirm your password to change where Jen reaches a Kea server."
+    return ""
+
+
 def _same_origin_path(url) -> str | None:
     """The path (+query) of `url` if it is same-origin (or relative), else
     None. Used to sanitise `request.referrer` before storing it as a
@@ -384,3 +401,10 @@ def add_subnet_restriction(where_clauses, params, table_alias="l", column="subne
             where_clauses.append(f"{table_alias}.{column} IN ({placeholders})")
             params.extend(ids)
     return where_clauses, params
+
+
+# RBAC-004: registered when this module is imported, and `create_app` imports it explicitly (beside the investigation guard) so a write made before any route module
+# loaded is judged too.
+from jen import config as _config  # noqa: E402
+
+_config.register_identity_guard(identity_change_needs_superadmin)
