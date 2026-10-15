@@ -191,7 +191,7 @@ def live_server(fake_kea):
     # (CLAUDE.md "Configuration is a single choke point") — a raw
     # extensions.* assignment here would just get overwritten the moment
     # create_app() -> app_config.reload() re-reads the file from disk.
-    app_config.write_value("kea", "api_url", f"http://127.0.0.1:{fake_kea.port}", reload=False)
+    app_config.write_value("kea", "api_url", f"http://127.0.0.1:{fake_kea.port}", reload=False, typed={"kea"})
     app_config.write_subnets(_current_subnets(), reload=False)
 
     import jen as jen_pkg
