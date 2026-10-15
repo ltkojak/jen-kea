@@ -103,7 +103,8 @@ def _seed(*servers):
             for k, v in opts.items():
                 p.set(sec, k, v)
 
-    app_config.mutate(_apply)
+    # (Q180: a seed is the operator having typed these servers' passwords - the writer's "a saved password does not appear on a second host" is about what a request does)
+    app_config.mutate(_apply, typed={f"server_{n}{s}" for n in range(2, 40) for s in ("", "_v6", "_d2")} | {"kea"})
 
 
 class TestExtraServerV6EndToEnd:

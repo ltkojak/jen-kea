@@ -586,9 +586,8 @@ class TestAnAdditionalServerUsesTheCredentialItIsGiven:
     def test_a_section_with_no_password_of_its_own_moved_to_a_new_address_is_refused(
         self, logged_in_client, db, mock_kea, isolated_config
     ):
-        _seed(
-            (2, {"api_url": "https://s2-a:8000", "name": "Standby", "ssh_host": "10.0.0.2"})
-        )  # inherits the primary's "S"
+        # (Q180 adjustment: the section is on the primary's host - kea-a - so it INHERITS the primary's "S"; on another host it would have none and nothing to leak)
+        _seed((2, {"api_url": "https://kea-a:8001", "name": "Standby", "ssh_host": "10.0.0.2"}))
         before = dict(_disk(isolated_config).items("kea_server_2"))
         r = self._post(
             logged_in_client,
@@ -627,6 +626,7 @@ class TestAnAdditionalServerUsesTheCredentialItIsGiven:
                 2,
                 {
                     "api_url": "https://s2-a:8000",
+                    "api_pass": "P2",
                     "api6_url": "https://s2-a:8006",
                     "name": "Standby",
                     "ssh_host": "10.0.0.2",
