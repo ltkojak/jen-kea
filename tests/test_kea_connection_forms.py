@@ -688,3 +688,52 @@ class TestAnAdditionalServerUsesTheCredentialItIsGiven:
         body = logged_in_client.get("/settings/kea").get_data(as_text=True)
         assert "Share the primary's API password (an HA peer of the same Kea)" in body
         assert 'name="extra_share_pass[]"' in body
+
+
+class TestAnAdditionalServersIpv6AddressIsJudgedAgainstThePasswordItUses:
+    """Q179's second pass: a row with no IPv6 password of its own uses its API password; a typed API password was typed for the row."""
+
+    URL = "/settings/infrastructure/save-extra-servers"
+
+    def _row(self, **over):
+        return {
+            "extra_id[]": "2",
+            "extra_name[]": "Standby",
+            "extra_api_url[]": "https://s2-a:8000",
+            "extra_ssh_host[]": "10.0.0.2",
+            **over,
+        }
+
+    def test_a_new_api_address_with_the_new_password_typed_is_written_on_a_v4_only_install(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        _seed((2, {"api_url": "https://s2-a:8000", "api_pass": "P2", "name": "Standby", "ssh_host": "10.0.0.2"}))
+        r = logged_in_client.post(
+            self.URL,
+            data=_rows(self._row(**{"extra_api_url[]": "https://s2-b:8000", "extra_api_pass[]": "N2"})),
+            follow_redirects=True,
+        )
+        assert b"IPv6 API address" not in r.data
+        disk = _disk(isolated_config)
+        assert (
+            disk.get("kea_server_2", "api_url") == "https://s2-b:8000" and disk.get("kea_server_2", "api_pass") == "N2"
+        )
+
+    def test_a_dhcp6_socket_on_another_port_of_the_same_host_needs_no_password(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        _seed((2, {"api_url": "https://s2-a:8000", "api_pass": "P2", "name": "Standby", "ssh_host": "10.0.0.2"}))
+        r = logged_in_client.post(
+            self.URL, data=_rows(self._row(**{"extra_api6_url[]": "https://s2-a:8006"})), follow_redirects=True
+        )
+        assert SENTENCE.encode() not in r.data
+        assert _disk(isolated_config).get("kea_server_2", "api6_url") == "https://s2-a:8006"
+
+    def test_a_dhcp6_address_on_a_different_host_with_the_api_password_kept_is_refused(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        _seed((2, {"api_url": "https://s2-a:8000", "api_pass": "P2", "name": "Standby", "ssh_host": "10.0.0.2"}))
+        r = logged_in_client.post(
+            self.URL, data=_rows(self._row(**{"extra_api6_url[]": "https://elsewhere:8006"})), follow_redirects=True
+        )
+        assert SENTENCE.encode() in r.data and not _disk(isolated_config).has_option("kea_server_2", "api6_url")

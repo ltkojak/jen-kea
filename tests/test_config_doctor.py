@@ -650,3 +650,44 @@ class TestACredentialInheritedAcrossHosts:
 
         src = inspect.getsource(health._config_doctor)
         assert "jen_config=extensions.cfg" in src and "inherited" in src
+
+
+class TestTheCredentialNoteNamesTheRightSecretAndHost:
+    """Q179's second pass: an additional server's IPv6 / D2 endpoint uses its own password, else its API password, else the primary's - the note names THAT one and that host."""
+
+    _cfg = staticmethod(TestACredentialInheritedAcrossHosts._cfg)
+
+    def _notes(self, cfg):
+        return [f for f in doctor.diagnose(None, jen_config=cfg) if f["id"] == "credential-inherited-across-hosts"]
+
+    def test_an_ipv6_endpoint_on_the_primarys_own_host_is_not_a_cross_host_use(self):
+        cfg = self._cfg(
+            kea={"api_url": "https://kea-a:8000", "api_pass": "S"},
+            kea_server_2={"api_url": "https://peer:8000", "api_pass": "own", "api6_url": "https://peer:8006"},
+            kea_server_3={"api_url": "https://kea-a:8000", "api6_url": "https://kea-a:8006"},
+        )
+        assert self._notes(cfg) == []
+
+    def test_an_ipv6_endpoint_that_uses_the_primarys_password_names_the_primarys_host(self):
+        cfg = self._cfg(
+            kea={"api_url": "https://kea-a:8000", "api_pass": "S"},
+            kea_server_3={"api_url": "https://kea-a:8000", "api6_url": "https://peer6:8006"},
+        )
+        (note,) = self._notes(cfg)
+        assert note["where"] == "[kea_server_3] (IPv6)" and "the Kea API's password (kea-a)" in note["detail"]
+
+    def test_an_empty_password_key_is_a_password_of_its_own_and_inherits_nothing(self):
+        cfg = self._cfg(
+            kea={"api_url": "https://kea-a:8000", "api_pass": "S"},
+            d2={"api_url": "https://d2-host:53001", "api_pass": ""},
+            kea_server_2={"api_url": "https://peer:8000", "api_pass": ""},
+        )
+        assert self._notes(cfg) == []
+
+    def test_a_server_d2_endpoint_on_a_different_host_is_named(self):
+        cfg = self._cfg(
+            kea={"api_url": "https://kea-a:8000", "api_pass": "S"},
+            kea_server_2={"api_url": "https://kea-a:8000", "api_d2_url": "https://d2-host:53001"},
+        )
+        (note,) = self._notes(cfg)
+        assert note["where"] == "[kea_server_2] (D2)" and "d2-host" in note["detail"]

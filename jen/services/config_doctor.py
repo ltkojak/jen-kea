@@ -787,32 +787,44 @@ def _check_credential_inherited_across_hosts(jen_cfg) -> list[Finding]:
             )
         )
 
+    def inherits(section, key):
+        # the derivation falls back only when the OPTION IS ABSENT: `api_pass =` with nothing after it is an empty password of its own, not an inherited one
+        return jen_cfg.has_section(section) and not jen_cfg.has_option(section, key)
+
     kea_url, kea_pass = get("kea", "api_url"), get("kea", "api_pass")
     if kea_pass:
         for section in ("kea6", "d2"):
             url = get(section, "api_url")
-            if url and not get(section, "api_pass") and not _auth.same_host(kea_url, url):
+            if url and inherits(section, "api_pass") and not _auth.same_host(kea_url, url):
                 note(f"[{section}]", url, "the Kea API's password", kea_url)
     db_host, db_pass = get("kea_db", "host"), get("kea_db", "password")
     if db_pass:
         host6 = get("kea6_db", "host")
-        if host6 and not get("kea6_db", "password") and not _auth.same_host(db_host, host6):
+        if host6 and inherits("kea6_db", "password") and not _auth.same_host(db_host, host6):
             note("[kea6_db]", host6, "Kea's database password", db_host)
-    if kea_pass:
-        for section in jen_cfg.sections():
-            if not section.startswith("kea_server_"):
-                continue
-            url = get(section, "api_url")
-            if url and not get(section, "api_pass") and not _auth.same_host(kea_url, url):
-                note(f"[{section}]", url, "the Kea API's password", kea_url)
     for section in jen_cfg.sections():
         if not section.startswith("kea_server_"):
             continue
-        url6, url4 = get(section, "api6_url"), get(section, "api_url")
-        own = get(section, "api6_pass")
-        has4 = get(section, "api_pass") or kea_pass
-        if url6 and url4 and not own and has4 and not _auth.same_host(url4, url6):
-            note(f"[{section}] (IPv6)", url6, "the server's own API password", url4)
+        url4 = get(section, "api_url")
+        # the password a server's API endpoint resolves: its own, else the primary's
+        if url4 and inherits(section, "api_pass") and kea_pass and not _auth.same_host(kea_url, url4):
+            note(f"[{section}]", url4, "the Kea API's password", kea_url)
+        if get(section, "api_pass") or not inherits(section, "api_pass"):
+            api_secret_name, api_secret_url = "the server's own API password", url4
+        else:
+            api_secret_name, api_secret_url = "the Kea API's password", kea_url
+        has_api_secret = bool(get(section, "api_pass")) or (inherits(section, "api_pass") and bool(kea_pass))
+        # the IPv6 and D2 endpoints of a server use its own IPv6 / D2 password, else its API password (`kea._endpoint_for`)
+        for label, url_key, pass_key in (("IPv6", "api6_url", "api6_pass"), ("D2", "api_d2_url", "api_d2_pass")):
+            url = get(section, url_key)
+            if (
+                url
+                and inherits(section, pass_key)
+                and has_api_secret
+                and api_secret_url
+                and not _auth.same_host(api_secret_url, url)
+            ):
+                note(f"[{section}] ({label})", url, api_secret_name, api_secret_url)
     return out
 
 

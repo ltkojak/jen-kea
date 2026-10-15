@@ -191,8 +191,14 @@ investigation one. Outside a request (`install.sh --configure`, tools) and for a
 probe is limited to the host Jen already reaches. A password-only change is not an identity change here; CRED-002 judges it where the form is.
 **Established.** Q179 (the beta.9 review: an admin could point the Kea API, SSH, D2 or an additional server at a host of their own and receive the stored credential).
 **Enforced at.** `access.identity_change_needs_superadmin`, registered at import and imported by `create_app`; asked by `jen.config._run_identity_guards` from `AppConfig._write_parser`.
+The guard sees what `IDENTITY_KEYS` and the connection mode and the set of servers say (the Kea API URL, the SSH target, a server added or removed); the Kea6 and D2 sockets, an additional server's IPv6 and D2
+addresses and the database hosts are held by the routes' own decorators (`@_superadmin_required` + `@_recent_auth_required`) and, for the credentials they would carry, by CRED-002. A route that must ask
+for the confirmation inside its body (the setup wizard's POST steps) calls `access.step_up_redirect`, and a confirmation made at the start of a request is remembered for its last write (`g.reauth_ok_minutes`),
+so the direct-socket routes are not asked a second time after they have changed the Kea host.
 **Tests.**
 - `tests/test_identity_guard.py::TestIdentityIsASuperadminsSetting`
+- `tests/test_identity_guard.py::TestAConfirmationMadeAtTheStartOfARequestIsNotAskedAgain`
+- `tests/test_setup_wizard_stepup.py::TestTheWizardAsksForTheConfirmationItNeeds`
 - `tests/test_kea_connection_forms.py::TestEveryIdentityRouteIsASuperadminsForm`
 
 ### AUTH-001 - A password change ends every other session of the account
@@ -406,8 +412,10 @@ answer: ticking both is refused (`infrastructure._one_answer_for_a_secret`), and
 ### CRED-003 - An inherited secret used on a different host is named
 **Rule.** A secret a server inherits (`[kea6]`, `[d2]`, `[kea6_db]` and an additional server fall back to the Kea API's, or Kea's database's, password) is the password of the endpoint it was typed for. The
 derivation keeps the fall back - an upgrade must not break a working HA config - so the rule is that Jen NAMES it: the Configuration Doctor's `credential-inherited-across-hosts` (info) says, for each
-inherited secret used on a different host from the secret's own endpoint (`auth.same_host`), both hosts, and the Health check carries the same sentence. A NEW additional-server row takes the primary's
-password only through its own checkbox, and a row that keeps a password keeps the one its connection resolves (its own, else the primary's), so moving it to a new address needs the password typed.
+inherited secret used on a different host from the secret's own endpoint (`auth.same_host`; an additional server's API, IPv6 and D2 endpoints), both hosts, and the Health check carries the same sentence.
+The form COPIES the primary's password into a NEW additional-server row only through its own checkbox; a new row given neither a password nor the box has no password key and is still reached with the
+primary's by the derivation - the one place this rule is a note and not a refusal, by design (a Kea server with no password of its own is reached with the primary's, and the Doctor says so). A row that keeps a
+password keeps the one its connection resolves (its own, else the primary's), so moving it to a new address needs the password typed (an IPv6 address on the host it was on, or on the API address's host, is not moved).
 **Established.** Q179 (the beta.9 review: a section with no `api_pass` of its own was compared against nothing, and a new row inherited the primary's silently).
 **Enforced at.** `config_doctor._check_credential_inherited_across_hosts` (called by `diagnose`, Health's `_config_doctor` and the Doctor page) and `infrastructure.save_extra_servers`' `_rewrite_extra_servers`.
 **Tests.**

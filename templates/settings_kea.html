@@ -110,7 +110,7 @@
         </select>
         {% endif %}
         <input type="text" id="probe-candidate-url" placeholder="optional - another daemon of the same host, e.g. https://kea:8004"
-               style="display:inline-block;width:auto;min-width:320px;margin-left:8px;font-family:monospace;font-size:12px;">
+               class="u-784acb">
         <div id="probe-kea-results" class="u-b20d1a"></div>
     </div>
     {% else %}
@@ -180,7 +180,7 @@
         </select>
         {% endif %}
         <input type="text" id="probe-candidate-url" placeholder="optional — probe a specific direct socket URL, e.g. https://kea:8004"
-               style="display:inline-block;width:auto;min-width:320px;margin-left:8px;font-family:monospace;font-size:12px;">
+               class="u-784acb">
         <div id="probe-kea-results" class="u-b20d1a"></div>
     </form>
     {% endif %}
@@ -271,7 +271,7 @@
             {% for s in ssh_servers %}
             <tr>
                 <td data-m="primary" class="u-f26165">{{ s.name }}</td>
-                <td data-m="secondary" class="mono" style="padding:4px 8px;font-size:12px;">{{ s.ssh_host }}</td>
+                <td data-m="secondary" class="mono u-5f26fb">{{ s.ssh_host }}</td>
                 <td data-m="secondary" class="u-f26165">
                     {% if s.helper_version and s.helper_version >= s.helper_want %}<span class="u-5a4529">{{ s.helper_label }}</span>
                     {% elif s.helper_version %}<span class="u-52df2b">v{{ s.helper_version }}{% if s.helper_build %} (build {{ s.helper_build }}){% endif %} — upgrade available (v{{ s.helper_want }})</span>
@@ -369,7 +369,7 @@
             <thead><tr><th class="u-b7efde">Server</th><th class="u-b7efde">Role</th><th class="u-b7efde">API URL</th><th class="u-b7efde">SSH host</th></tr></thead>
             <tbody>
             {% for srv in infra.extra_servers %}
-            <tr><td data-m="primary" class="u-f26165">{{ srv.name }}</td><td data-m="secondary" class="u-f26165">{{ srv.role }}</td><td data-m="secondary" class="mono" style="padding:4px 8px;font-size:12px;">{{ srv.api_url }}</td><td data-m="secondary" class="mono" style="padding:4px 8px;font-size:12px;">{{ srv.ssh_host or '(not set)' }}</td></tr>
+            <tr><td data-m="primary" class="u-f26165">{{ srv.name }}</td><td data-m="secondary" class="u-f26165">{{ srv.role }}</td><td data-m="secondary" class="mono u-5f26fb">{{ srv.api_url }}</td><td data-m="secondary" class="mono u-5f26fb">{{ srv.ssh_host or '(not set)' }}</td></tr>
             {% endfor %}
             </tbody>
         </table>
@@ -472,7 +472,7 @@
     <div class="card" id="kea-d2">
         <div class="card-header"><span class="card-title">{{ icon("link") }} D2 Control Socket</span></div>
         <div class="form-row">
-            <div class="form-group"><label>API URL</label><div class="mono">{{ infra.d2_api_url or ('(inherited from the Kea API: ' ~ infra.kea_api_url ~ ')') }}</div></div>
+            <div class="form-group"><label>API URL</label><div class="mono">{% if infra.d2_api_url %}{{ infra.d2_api_url }}{% elif infra.kea_connection_mode == 'direct' %}(not set){% else %}(inherited from the Kea API: {{ infra.kea_api_url }}){% endif %}</div></div>
             <div class="form-group"><label>API Username</label><div class="mono">{{ infra.d2_api_user or ('(inherited: ' ~ infra.kea_api_user ~ ')') }}</div></div>
         </div>
         <div class="form-hint">Only a superadmin changes where Jen reaches Kea.</div>
@@ -788,7 +788,7 @@ function addServerRow() {
             <div class="form-group"><label>API Password</label><input type="password" name="extra_api_pass[]" placeholder="password"></div>
         </div>
         <label class="u-6125e5"><input type="checkbox" name="extra_share_pass[]" value="1" class="u-30e741"> Share the primary's API password (an HA peer of the same Kea)</label>
-        <div class="form-hint">Leave it unticked and type a password for a server that has its own. A server with no password of its own is reached with the primary's - the Configuration Doctor names it when it is on a different host.</div>
+        <div class="form-hint">Leave it unticked and type a password for a server that has its own. A server with no password of its own is reached with the primary's - the Configuration Doctor names it when its host is not the primary's.</div>
         <div class="form-row">
             <div class="form-group"><label>IPv6 API URL</label><input type="text" name="extra_api6_url[]" placeholder="http://YOUR-KEA-SERVER-2:8006"></div>
             <div class="form-group"><label>IPv6 API Username</label><input type="text" name="extra_api6_user[]" placeholder="(same as API username)"></div>

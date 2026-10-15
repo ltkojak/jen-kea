@@ -18,6 +18,7 @@ from flask_login import login_required
 
 import jen.models.user as __user
 import jen.services.setup_wizard as __setup
+from jen.services.access import step_up_redirect as _step_up_redirect
 from jen.services.access import superadmin_required as _superadmin_required
 
 logger = logging.getLogger(__name__)
@@ -84,6 +85,12 @@ def setup_connect():
             api_pass_saved=bool(extensions.KEA_API_PASS),
             kea_db_pass_saved=bool(extensions.KEA_DB_PASS),
         )
+
+    # RBAC-004 (Q179): saving where Jen reaches Kea needs a password confirmed in the last ten minutes - asked HERE, before the probe sends the typed or saved credentials anywhere,
+    # and with a way forward (the confirmation page) instead of a sentence the next submit would meet again. The GET steps need none.
+    stepped = _step_up_redirect(10)
+    if stepped is not None:
+        return stepped
 
     api_url = request.form.get("api_url", "").strip()
     api_user = request.form.get("api_user", "").strip()
@@ -409,6 +416,9 @@ def setup_helper():
         return redirect(url_for("setup.setup_baseline"))
 
     if action == "save_target":
+        stepped = _step_up_redirect(10)  # RBAC-004 (Q179): the SSH target is where Jen reaches the Kea host
+        if stepped is not None:
+            return stepped
         ok, err = __setup.save_ssh_target(request.form.get("ssh_host", ""), request.form.get("ssh_user", ""))
         flash(err if not ok else "SSH target saved.", "error" if not ok else "success")
         return redirect(url_for("setup.setup_helper"))

@@ -109,12 +109,16 @@ def identity_change_needs_superadmin(before: dict, after: dict) -> str:
     (`AppConfig._write_parser`, `jen.config._run_identity_guards`), not on the list of routes that happen to write it. Where Jen connects decides where its credentials
     go, so it belongs to the role that owns Jen's secrets. Outside a request (install.sh --configure, tools, the test harness) there is no caller to judge, and a
     request that is not a signed-in session (an API key) is not asked either - the key's own scope is judged where the key is."""
-    from flask import has_request_context
+    from flask import g, has_request_context
 
     if not has_request_context() or not getattr(current_user, "is_authenticated", False):
         return ""
     if getattr(current_user, "role", "") != "superadmin":
         return "Where Jen reaches a Kea server is a superadmin's setting."
+    # a route that already stepped up within ten minutes at its start (`step_up_redirect`) is not asked again at its last write: the direct-socket routes act on the Kea host
+    # first and write Jen's own settings last, and a confirmation that aged out in between would leave the daemon changed and Jen's record not
+    if getattr(g, "reauth_ok_minutes", None) is not None and g.reauth_ok_minutes <= 10:
+        return ""
     if not auth_is_recent(10):
         return "Confirm your password to change where Jen reaches a Kea server."
     return ""
@@ -147,6 +151,28 @@ def _reauth_return_target() -> str:
     return _same_origin_path(request.referrer) or url_for("mfa_routes.mfa_enroll")
 
 
+def step_up_redirect(minutes: int = 10):
+    """None when this request may go on - the session confirmed its password within `minutes` (or is not a signed-in session at all: the route's own login logic handles that) -
+    else the redirect that sends the person to confirm. A route that must check INSIDE its body (the setup wizard's POST branches: its GET steps need no confirmation) calls this;
+    `recent_auth_required` is the same check as a decorator. A pass is remembered on the request (`g.reauth_ok_minutes`), so a guard asked later in the SAME request (the config
+    writer's, RBAC-004) does not ask again after the route has already acted on a Kea host - a second ask after a remote change would leave it half done (Q179, second pass)."""
+    from flask import g
+
+    if not current_user.is_authenticated:
+        return None
+    if auth_is_recent(minutes):
+        g.reauth_ok_minutes = min(getattr(g, "reauth_ok_minutes", minutes), minutes)
+        return None
+    session["reauth_next"] = _reauth_return_target()
+    from jen.services import oidc as _oidc
+
+    if _oidc.is_oidc_user(current_user.id):
+        flash("Confirm your identity with your sign-on provider to continue.", "warning")
+        return redirect(url_for("auth.reauth_oidc"))
+    flash("Confirm your password to continue.", "warning")
+    return redirect(url_for("auth.reauth"))
+
+
 def recent_auth_required(minutes: int = 10):
     def deco(f):
         @wraps(f)
@@ -154,18 +180,10 @@ def recent_auth_required(minutes: int = 10):
             # Not a Flask-Login session yet (forced MFA enrollment) or not
             # logged in at all — the route's own @login_required / pending
             # logic handles that; nothing to step up.
-            if not current_user.is_authenticated:
-                return f(*args, **kwargs)
-            if auth_is_recent(minutes):
-                return f(*args, **kwargs)
-            session["reauth_next"] = _reauth_return_target()
-            from jen.services import oidc as _oidc
-
-            if _oidc.is_oidc_user(current_user.id):
-                flash("Confirm your identity with your sign-on provider to continue.", "warning")
-                return redirect(url_for("auth.reauth_oidc"))
-            flash("Confirm your password to continue.", "warning")
-            return redirect(url_for("auth.reauth"))
+            stepped = step_up_redirect(minutes)
+            if stepped is not None:
+                return stepped
+            return f(*args, **kwargs)
 
         return decorated
 

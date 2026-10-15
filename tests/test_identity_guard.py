@@ -1401,3 +1401,57 @@ class TestARefusedDirectSocketRouteTouchesNothingCI:
             assert wire == [], f"nothing reached the host: {wire}"
         finally:
             _clear_record()
+
+
+class TestAConfirmationMadeAtTheStartOfARequestIsNotAskedAgain:
+    """Q179's second pass: the direct-socket routes change the Kea host first and write Jen's settings last; a confirmation that aged out between the two must not leave the daemon
+    changed and Jen's record not."""
+
+    def test_a_step_up_at_the_start_is_remembered_for_the_last_write(self, cfgfile):
+        from flask import g
+
+        from jen.services import access
+
+        ctx = _sign_in("superadmin", minutes_ago=1)
+        try:
+            assert access.step_up_redirect(10) is None
+            assert g.reauth_ok_minutes == 10
+            from datetime import datetime, timedelta, timezone
+
+            from flask import session
+
+            session["auth_at"] = (
+                datetime.now(timezone.utc) - timedelta(minutes=11)
+            ).isoformat()  # it aged out while the daemon was being restarted
+            app_config.write_values([("kea", "api_url", "https://kea-x:8000")])
+        finally:
+            ctx.pop()
+        assert _disk(cfgfile.path).get("kea", "api_url") == "https://kea-x:8000"
+
+    def test_a_longer_window_is_not_a_ten_minute_confirmation(self, cfgfile):
+        from datetime import datetime, timedelta, timezone
+
+        from flask import g, session
+
+        from jen.services import access
+
+        ctx = _sign_in("superadmin", minutes_ago=20)
+        try:
+            assert access.step_up_redirect(30) is None  # a route that asks for thirty minutes
+            assert g.reauth_ok_minutes == 30
+            session["auth_at"] = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat()
+            with pytest.raises(ConfigChangeRefused, match="Confirm your password"):
+                app_config.write_values([("kea", "api_url", "https://kea-x:8000")])
+        finally:
+            ctx.pop()
+
+    def test_an_admin_is_refused_whatever_was_remembered(self, cfgfile):
+        from flask import g
+
+        ctx = _sign_in("admin")
+        try:
+            g.reauth_ok_minutes = 1
+            with pytest.raises(ConfigChangeRefused, match="superadmin's setting"):
+                app_config.write_values([("kea", "api_url", "https://kea-x:8000")])
+        finally:
+            ctx.pop()

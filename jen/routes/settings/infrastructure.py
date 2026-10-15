@@ -2214,34 +2214,41 @@ def save_extra_servers():
             # address with a blank box would send the primary's password there. Nothing is written until this callback returns, so raising is the refusal. A NEW row has no
             # stored address to compare: it takes the primary's password only through its own checkbox (below), else what was typed, else none.
             if orig_id is not None:
-                stored_api6_url = prev.get("api6_url") or ("" if direct else prev.get("api_url"))
-                new_api6_url = api6_url.strip() or ("" if direct else api_url.strip())
-                for stored_url, new_url, new_secret, stored_secret, what in (
-                    (
-                        prev.get("api_url"),
-                        api_url,
-                        api_pass,
-                        prev.get("api_pass") or extensions.KEA_API_PASS,
-                        "API address",
-                    ),
-                    (
-                        stored_api6_url,
-                        new_api6_url,
-                        api6_pass,
-                        prev.get("api6_pass") or prev.get("api_pass") or extensions.KEA_API_PASS,
-                        "IPv6 API address",
-                    ),
-                ):
-                    refusal = _secret_for_new_endpoint(
-                        stored_url,
-                        new_url,
-                        new_secret,
-                        stored_secret,
-                        f"{what} of {name.strip() or f'Kea Server {out}'}",
-                    )
-                    if refusal:
-                        refused.append(refusal)
-                        raise _EndpointNeedsItsPassword()
+                who = name.strip() or f"Kea Server {out}"
+                refusal = _secret_for_new_endpoint(
+                    prev.get("api_url"),
+                    api_url,
+                    api_pass,
+                    prev.get("api_pass") or extensions.KEA_API_PASS,
+                    f"API address of {who}",
+                )
+                if not refusal and not api6_pass.strip():
+                    # the IPv6 endpoint of a row that types no IPv6 password: judged against the password the connection will USE for it (`kea._endpoint_for`)
+                    stored6 = prev.get("api6_url") or ("" if direct else prev.get("api_url"))
+                    new6 = api6_url.strip() or ("" if direct else api_url.strip())
+                    if prev.get("api6_pass"):
+                        # its own IPv6 password is kept, and follows its own endpoint
+                        refusal = _secret_for_new_endpoint(
+                            stored6, new6, "", prev["api6_pass"], f"IPv6 API address of {who}"
+                        )
+                    elif not api_pass.strip():
+                        # no IPv6 password of its own: the connection uses the API password, which is KEPT here. That is fine while the IPv6 address stays on the host it was on or
+                        # is on the (new) API address's host - another port of the same host is the same Kea - and a password sent to a new host otherwise
+                        used = prev.get("api_pass") or extensions.KEA_API_PASS
+                        if (
+                            used
+                            and new6
+                            and not __auth.same_host(new6, stored6)
+                            and not __auth.same_host(new6, api_url)
+                        ):
+                            refusal = (
+                                f"The IPv6 API address of {who} changed: enter the password for the new endpoint - "
+                                "a saved password is never sent to one it was not typed for."
+                            )
+                    # (a typed API password is the one the IPv6 connection uses, and it was typed for this row)
+                if refusal:
+                    refused.append(refusal)
+                    raise _EndpointNeedsItsPassword()
 
             sec = f"kea_server_{out}"
             cfg.add_section(sec)

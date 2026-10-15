@@ -677,7 +677,10 @@ class TestChangingWhereAServerIsReachedWhileInvestigationLoggingIsOn:
         _seed((2, dict(self.SERVER)))
         _user.set_global_setting("investigation_logging", "{broken")
         try:
-            r = self._post_extra(logged_in_client, **{"extra_api_url[]": "http://elsewhere:8000"})
+            # (Q179 adjustment: the password is typed - a section that inherits the primary's would otherwise be refused first, CRED-002, and this test is about the record)
+            r = self._post_extra(
+                logged_in_client, **{"extra_api_url[]": "http://elsewhere:8000", "extra_api_pass[]": "typed"}
+            )
             assert b"cannot be read, so it cannot tell whether this server is at investigation DEBUG" in r.data
             assert _on_disk(isolated_config).get("kea_server_2", "api_url") == "http://s2:8000"
             assert self._refused_rows(db) == 1
