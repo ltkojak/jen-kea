@@ -58,6 +58,10 @@ _REAL_APPLY_CHANGE = (
 )  # the `world` fixture swaps in the fake daemon's; the walk wants the REAL change set
 HOSTS = ("10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.9")
 IDENTITY_KEYS = ("api_url", "ssh_host", "ssh_user", "kea_conf")
+_EVERY_ENDPOINT = frozenset(
+    ["kea", "kea6", "d2", "kea_db", "kea6_db", "jen_db"]
+    + [f"server_{n}{s}" for n in range(2, 40) for s in ("", "_v6", "_d2")]
+)
 DEFAULT_CONF = "/etc/kea/kea-dhcp4.conf"
 
 
@@ -208,7 +212,7 @@ class Walk:
                 "ssh_user": "jen",
                 "kea_conf": DEFAULT_CONF,
             }
-        ini["jen_db"] = {"host": "h", "user": "u", "password": "p"}
+        ini["jen_db"] = {"host": "h", "user": "u", "password": "jp"}
         self.path = self.tmp_path / "jen.config"
         with open(self.path, "w", encoding="utf-8") as f:
             ini.write(f)
@@ -1053,7 +1057,9 @@ class Walk:
         file_before = self.path.read_bytes()
         refused = False
         try:
-            app_config.mutate(change)
+            # (Q180: the walk models an operator who TYPED each password, so CRED-004's "a saved password does not follow an endpoint" is not in its way - it is tested in
+            # tests/test_credential_destinations.py)
+            app_config.mutate(change, typed=_EVERY_ENDPOINT)
         except ConfigChangeRefused:
             refused = True
         rows = (
@@ -1981,7 +1987,7 @@ class TestTheWalkWouldHaveCaught:
         ini = configparser.ConfigParser(interpolation=None)
         ini["kea"] = {"api_url": "http://10.0.0.1:8000", "api_user": "u", "api_pass": "p"}
         ini["kea_ssh"] = {"host": "10.0.0.1", "user": "jen"}
-        ini["jen_db"] = {"host": "h", "user": "u", "password": "p"}
+        ini["jen_db"] = {"host": "h", "user": "u", "password": "jp"}
         path = tmp_path / "jen.config"
         with open(path, "w", encoding="utf-8") as f:
             ini.write(f)

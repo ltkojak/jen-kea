@@ -617,14 +617,11 @@ def _config_doctor(ctx) -> Check:
 
     c = Check("config_doctor", "Configuration Doctor", "kea", fix_url="/tools/doctor")
     cfg = ctx["dhcp4_config"]
-    # CRED-003 (v5.69.0-beta.10, Q179): a saved password inherited by a server on a different host is named here too, in the sentence the Doctor page gives
-    inherited = [f["detail"] for f in config_doctor.diagnose(None, jen_config=extensions.cfg)]
-    line = (" - " + "; ".join(inherited)) if inherited else ""
     if cfg is None:
-        c.status, c.detail = "skip", "config-get unavailable" + line
+        c.status, c.detail = "skip", "config-get unavailable"
         return c
 
-    findings = config_doctor.diagnose(cfg, _doctor_hosts(), ha_configs=_doctor_ha_configs(), jen_config=extensions.cfg)
+    findings = config_doctor.diagnose(cfg, _doctor_hosts(), ha_configs=_doctor_ha_configs())
     if not findings:
         c.status, c.detail = "ok", "no findings"
         return c
@@ -643,10 +640,33 @@ def _config_doctor(ctx) -> Check:
 
     if c.status == "ok":
         kinds = len(group_findings(infos))
-        c.detail = f"{len(infos)} note(s) of {kinds} kind{'' if kinds == 1 else 's'} — see /tools/doctor{line}"
+        c.detail = f"{len(infos)} note(s) of {kinds} kind{'' if kinds == 1 else 's'} — see /tools/doctor"
     else:
         first = fails[0] if fails else warns[0]
         c.detail = f"{first['title']}: {first['detail']} — {len(findings)} finding(s), see /tools/doctor"
+    return c
+
+
+def _endpoint_credentials(ctx) -> Check:
+    """CRED-004 (v5.69.0-beta.11, Q180): does every endpoint Jen talks to have a credential it may use? The same `credentials.resolve` every consumer uses, read from Jen's own
+    file (so it answers while Kea is down): an endpoint on a different host from the one whose password it would have inherited is sent nothing with that password, and
+    the row says which and where to set its own."""
+    from jen.services import config_doctor
+
+    c = Check("endpoint_credentials", "Every endpoint has a credential", "kea", fix_url="/settings/kea")
+    missing = [
+        f for f in config_doctor.diagnose(None, jen_config=extensions.cfg) if f["id"] == "endpoint-has-no-credential"
+    ]
+    if not missing:
+        c.status, c.detail = (
+            "ok",
+            "every endpoint has a password of its own or shares one with a daemon of its own host",
+        )
+        return c
+    c.status = "warn"
+    c.detail = "; ".join(f["detail"] for f in missing[:3]) + (
+        f" - and {len(missing) - 3} more" if len(missing) > 3 else ""
+    )
     return c
 
 
@@ -1645,6 +1665,7 @@ _CHECKS = [
     _kea_config_drift,
     _kea_subnets_declared,
     _config_doctor,
+    _endpoint_credentials,
     _packet_health,
     _capabilities,
     _pool_utilization,
@@ -1682,6 +1703,7 @@ _CHECK_META = {
     "kea_config_drift": ("Subnet map matches Kea", "kea"),
     "kea_subnets_declared": ("Every Kea subnet is named", "kea"),
     "config_doctor": ("Configuration Doctor", "kea"),
+    "endpoint_credentials": ("Every endpoint has a credential", "kea"),
     "packet_health": ("Packet health", "kea"),
     "capabilities": ("Server capabilities", "kea"),
     "pool_utilization": ("Pool utilization", "capacity"),

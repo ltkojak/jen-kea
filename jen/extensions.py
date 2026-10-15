@@ -122,6 +122,9 @@ KEA_CONF: str = "/etc/kea/kea-dhcp4.conf"
 KEA6_API_URL: str = ""
 KEA6_API_USER: str = ""
 KEA6_API_PASS: str = ""
+KEA6_API_WITHHELD: str = (
+    ""  # the endpoint whose password [kea6] was refused (Q180): "" or a name from credentials.resolve
+)
 
 KEA6_DB_HOST: str = ""
 KEA6_DB_USER: str = ""
@@ -141,6 +144,7 @@ KEA6_DB_SSL_CA: str = ""
 D2_API_URL: str = ""
 D2_API_USER: str = ""
 D2_API_PASS: str = ""
+D2_API_WITHHELD: str = ""
 
 # ── OIDC single sign-on (v5.25.0, Q21) ────────────────────────────────────────
 # Optional [oidc] section, entirely backward-compatible — every field below

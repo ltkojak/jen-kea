@@ -931,6 +931,16 @@ def create_app() -> Flask:
     except Exception as e:
         logger.warning(f"Could not clear restart_pending flag at startup: {e}")
 
+    # v5.69.0-beta.11 (Q180, CRED-004 U2): an extra server with no `api_pass` of its own used to inherit the primary's password whatever host it was on; the resolver does not.
+    # Convert such a section ONCE, audibly (a copy written into it, a marker, one audit row each) so an HA peer that worked yesterday works today. Not in a request, never fatal.
+    try:
+        from jen.models.user import audit as _audit
+        from jen.services import credentials as _credentials
+
+        _credentials.materialise(app_config, audit=_audit)
+    except Exception as e:
+        logger.warning(f"Could not run the credential conversion at startup: {type(e).__name__}: {e}")
+
     # ── Background workers ────────────────────────────────────────────────────
     # v5.5.0 — the scheduler and alert loop are NOT started here anymore.
     # The factory only builds the app; the entrypoint that owns this

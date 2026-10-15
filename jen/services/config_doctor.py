@@ -748,83 +748,65 @@ def _check_logger_output(dhcp4_cfg) -> list[Finding]:
     return out
 
 
-def _host_of(url: str) -> str:
-    """The host a stored address names, for a sentence (a URL's host, or a bare `host[:port]`'s); the address itself when it cannot be parsed."""
-    from jen.services import auth as _auth
+def _where(name: str) -> str:
+    """The configuration section an endpoint name lives in, as the Doctor shows it."""
+    import re
 
-    parts = _auth._endpoint_parts(url)
-    return parts[1] if parts else (url or "").strip()
+    m = re.fullmatch(r"server_(\d+)(?:_(v6|d2))?", name)
+    if m:
+        return f"[kea_server_{m.group(1)}]" + {"v6": " (IPv6)", "d2": " (D2)", None: ""}[m.group(2)]
+    return f"[{name}]"
 
 
-def _check_credential_inherited_across_hosts(jen_cfg) -> list[Finding]:
-    """CRED-003 (v5.69.0-beta.10, Q179): `[kea6]`, `[d2]`, `[kea6_db]` and an additional server fall back to a saved secret when they have none of their own, and the fall back
-    does not look at where they point. Derivation keeps it - an upgrade must not break a working HA config - so the Doctor NAMES it: an inherited secret used on a different host from
-    the secret's own endpoint is a password sent to a place it was not typed for, whoever configured it (a hand edit, an import, a form before Q178). Info, never a failure: it may be
-    exactly what the operator wants, and then they know it. `jen_cfg` is the loaded `jen.config` parser (anything with `has_section`/`has_option`/`get`/`sections`); None or empty gives nothing."""
+def _check_credential_endpoints(jen_cfg) -> list[Finding]:
+    """CRED-004 (v5.69.0-beta.11, Q180): the Doctor reads the same `credentials.resolve` every consumer uses, so what it says is what Jen does. `endpoint-has-no-credential` (warn)
+    is an endpoint on a different host from the one whose password it would have inherited: it is sent NOTHING with that password, and the sentence says where to set its own.
+    `credential-shared-same-host` (info) is each inheritance in force on an endpoint that is configured explicitly (a `[kea6]`, `[d2]`, `[kea6_db]` or `[kea_server_N]` section): the
+    one password is used by two daemons of ONE box, which is the design. `jen_cfg` is the loaded `jen.config` parser; None or an empty file gives nothing."""
     if jen_cfg is None:
         return []
-    from jen.services import auth as _auth
+    from jen.services import credentials as _cred
 
-    def get(section, key):
-        return (jen_cfg.get(section, key, fallback="") or "").strip() if jen_cfg.has_section(section) else ""
-
-    why = (
-        "A daemon or server with no password of its own uses the one saved for the Kea API (or Kea's database), and Jen sends it wherever that daemon or server is. On the SAME host that is the design - "
-        "Kea6 and D2 are other daemons of one Kea. On a DIFFERENT host it is a credential given to a machine it was never typed for: check that the two share it on purpose, or give the second its own password."
-    )
+    resolved = _cred.resolve(jen_cfg)
     out: list[Finding] = []
-
-    def note(where, own_url, secret_name, secret_url):
-        out.append(
-            _finding(
-                "credential-inherited-across-hosts",
-                "info",
-                "A saved password is inherited by a different host",
-                f"{where} ({_host_of(own_url)}) has no password of its own and uses {secret_name} ({_host_of(secret_url)}), a different host.",
-                where,
-                fix_url="/settings/kea",
-                why=why,
+    for name, ep in resolved.items():
+        if ep.withheld:
+            parent = resolved[ep.withheld]
+            out.append(
+                _finding(
+                    "endpoint-has-no-credential",
+                    "warn",
+                    "An endpoint has no credential",
+                    f"The {_cred.label(name)} ({_cred.host_of(ep.url)}) has no password of its own and is on a different host from the {_cred.label(ep.withheld)} "
+                    f"({_cred.host_of(parent.url)}) whose password it would have inherited: nothing is sent to it with that password. Set its own under Settings → Kea.",
+                    _where(name),
+                    fix_url="/settings/kea",
+                    why=(
+                        "A saved password is used at its own endpoint, or by another daemon of the same host - Kea6 and D2 are other daemons of one Kea. A daemon on a DIFFERENT host never receives "
+                        "its neighbour's password: until it has its own, Jen cannot authenticate to it."
+                    ),
+                )
             )
-        )
-
-    def inherits(section, key):
-        # the derivation falls back only when the OPTION IS ABSENT: `api_pass =` with nothing after it is an empty password of its own, not an inherited one
-        return jen_cfg.has_section(section) and not jen_cfg.has_option(section, key)
-
-    kea_url, kea_pass = get("kea", "api_url"), get("kea", "api_pass")
-    if kea_pass:
-        for section in ("kea6", "d2"):
-            url = get(section, "api_url")
-            if url and inherits(section, "api_pass") and not _auth.same_host(kea_url, url):
-                note(f"[{section}]", url, "the Kea API's password", kea_url)
-    db_host, db_pass = get("kea_db", "host"), get("kea_db", "password")
-    if db_pass:
-        host6 = get("kea6_db", "host")
-        if host6 and inherits("kea6_db", "password") and not _auth.same_host(db_host, host6):
-            note("[kea6_db]", host6, "Kea's database password", db_host)
-    for section in jen_cfg.sections():
-        if not section.startswith("kea_server_"):
-            continue
-        url4 = get(section, "api_url")
-        # the password a server's API endpoint resolves: its own, else the primary's
-        if url4 and inherits(section, "api_pass") and kea_pass and not _auth.same_host(kea_url, url4):
-            note(f"[{section}]", url4, "the Kea API's password", kea_url)
-        if get(section, "api_pass") or not inherits(section, "api_pass"):
-            api_secret_name, api_secret_url = "the server's own API password", url4
-        else:
-            api_secret_name, api_secret_url = "the Kea API's password", kea_url
-        has_api_secret = bool(get(section, "api_pass")) or (inherits(section, "api_pass") and bool(kea_pass))
-        # the IPv6 and D2 endpoints of a server use its own IPv6 / D2 password, else its API password (`kea._endpoint_for`)
-        for label, url_key, pass_key in (("IPv6", "api6_url", "api6_pass"), ("D2", "api_d2_url", "api_d2_pass")):
-            url = get(section, url_key)
-            if (
-                url
-                and inherits(section, pass_key)
-                and has_api_secret
-                and api_secret_url
-                and not _auth.same_host(api_secret_url, url)
-            ):
-                note(f"[{section}] ({label})", url, api_secret_name, api_secret_url)
+        elif ep.source.startswith("inherited:"):
+            section = {"kea6": "kea6", "d2": "d2", "kea6_db": "kea6_db"}.get(name)
+            explicit = (
+                section
+                and jen_cfg.has_section(section)
+                and (jen_cfg.has_option(section, "api_url") or jen_cfg.has_option(section, "host"))
+            ) or name.startswith("server_")
+            if explicit:
+                parent_name = ep.source.split(":", 1)[1]
+                out.append(
+                    _finding(
+                        "credential-shared-same-host",
+                        "info",
+                        "A saved password is shared by two daemons of one host",
+                        f"The {_cred.label(name)} uses the {_cred.label(parent_name)}'s password: both are on {_cred.host_of(ep.url)}.",
+                        _where(name),
+                        fix_url="/settings/kea",
+                        why="Kea6 and D2 are other daemons of the same Kea host, so they use the Kea API's password unless given their own. A rotation of that password changes both.",
+                    )
+                )
     return out
 
 
@@ -873,10 +855,10 @@ def diagnose(
     the HA-comparison finding only fires with exactly two non-null
     entries. `lease_history_summary` is accepted for forward
     compatibility but not used by any check yet. `jen_config` is Jen's own loaded configuration (the parser), for the one check that reads it
-    (`credential-inherited-across-hosts`, CRED-003); it does not depend on the Kea config being readable."""
+    (`endpoint-has-no-credential` and `credential-shared-same-host`, CRED-004); it does not depend on the Kea config being readable."""
     out: list[Finding] = []
     out += _check_ha_peer_semantic_diff(ha_configs)
-    out += _check_credential_inherited_across_hosts(jen_config)
+    out += _check_credential_endpoints(jen_config)
     if not dhcp4_cfg:
         out.sort(key=lambda f: _SEVERITY_ORDER.get(f["severity"], 3))
         return out

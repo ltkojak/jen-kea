@@ -37,6 +37,7 @@ import threading
 import time
 
 from jen import extensions
+from jen.services import credentials as _credentials
 
 logger = logging.getLogger(__name__)
 
@@ -290,6 +291,17 @@ def _file_lock(path):
         os.close(fd)  # closing the descriptor releases the flock
 
 
+@contextlib.contextmanager
+def _typed_scope(typed):
+    """The endpoint names whose password was typed in THIS write, visible to `_write_parser` on this thread only and always put back."""
+    previous = getattr(_writer_state, "typed", frozenset())
+    _writer_state.typed = frozenset(typed or ())
+    try:
+        yield
+    finally:
+        _writer_state.typed = previous
+
+
 class ConfigChangeRefused(RuntimeError):
     """A config write a registered identity guard refused (v5.68.0-beta.28, Q164). The message is the sentence a person reads; nothing was written."""
 
@@ -311,6 +323,17 @@ _identity_guards: list = []
 IDENTITY_KEYS = ("api_url", "ssh_host", "ssh_user", "kea_conf")
 MODE_KEY = "__mode__"
 DEFAULT_KEA_CONF = "/etc/kea/kea-dhcp4.conf"
+
+
+#: v5.69.0-beta.11 (Q180, U5): the guards asked about WHERE Jen sends a credential - every endpoint `credentials.resolve` names, both database host:ports and the four
+#: identity keys - as opposed to `_identity_guards`, which keep their concern (WHICH Kea a server is). RBAC-004 is registered here.
+_destination_guards: list = []
+
+
+def register_destination_guard(fn) -> None:
+    """`fn(before, after) -> str` is asked, for every config write that changes `destination_view`, whether it may go ahead: "" yes, else the sentence that refuses it."""
+    if fn not in _destination_guards:
+        _destination_guards.append(fn)
 
 
 def register_identity_guard(fn) -> None:
@@ -352,6 +375,34 @@ def identity_view(parser) -> dict:
     mode = parser.get("kea", "connection_mode", fallback="ca").strip().lower() if parser.has_section("kea") else "ca"
     view[MODE_KEY] = mode if mode in ("ca", "direct") else "ca"
     return view
+
+
+def destination_view(parser) -> dict:
+    """{what: where} for every place a write could send a credential (v5.69.0-beta.11, Q180, U5): `identity_view`'s four identity keys per server and the mode, PLUS the url of every
+    endpoint `credentials.resolve` names ("dest:kea6", "dest:server_2_v6", "dest:kea_db" as host:port ...) - so a write of `[kea6] api_url`, `[d2] api_url`, a database host or an
+    additional server's IPv6 or D2 address is seen by the guard that decides WHO may repoint Jen, not only a write of the four keys."""
+    view = dict(identity_view(parser))
+    for name, endpoint in _credentials.resolve(parser).items():
+        view[f"dest:{name}"] = endpoint.url
+    return view
+
+
+def _run_destination_guards(before: dict, after: dict) -> None:
+    """Ask every registered destination guard, FAILING CLOSED like the identity ones."""
+    if before == after:
+        return
+    for guard in list(_destination_guards):
+        try:
+            message = guard(before, after)
+        except ConfigChangeRefused:
+            raise
+        except Exception as e:
+            logger.error(f"destination guard {getattr(guard, '__name__', guard)} raised {type(e).__name__}: {e}")
+            raise ConfigChangeRefused(
+                "Jen could not check who may change where it sends its credentials, so the change was refused - try again, and see the server log if it persists."
+            ) from e
+        if message:
+            raise ConfigChangeRefused(message)
 
 
 def _run_identity_guards(before: dict, after: dict) -> None:
@@ -533,14 +584,18 @@ class AppConfig:
         # direct mode there is NO fallback: kea-dhcp4 cannot answer dhcp6
         # commands, so an unset [kea6] api_url means v6 API calls return an
         # error dict rather than being misrouted to the v4 daemon.
+        # v5.69.0-beta.11 (Q180, CRED-004): the SECRETS of [kea6], [d2] and [kea6_db] come from `credentials.resolve` - used at their own endpoint, or inherited by a daemon
+        # on the SAME host as the secret's owner, never by a different one. (The urls, users and names below keep their fallbacks: they are not secrets.)
+        _resolved = _credentials.resolve(cfg)
         _kea6_url_fallback = extensions.KEA_API_URL if extensions.KEA_CONNECTION_MODE == "ca" else ""
         extensions.KEA6_API_URL = cfg.get("kea6", "api_url", fallback=_kea6_url_fallback)
         extensions.KEA6_API_USER = cfg.get("kea6", "api_user", fallback=extensions.KEA_API_USER)
-        extensions.KEA6_API_PASS = cfg.get("kea6", "api_pass", fallback=extensions.KEA_API_PASS)
+        extensions.KEA6_API_PASS = _resolved["kea6"].password
+        extensions.KEA6_API_WITHHELD = _resolved["kea6"].withheld
 
         extensions.KEA6_DB_HOST = cfg.get("kea6_db", "host", fallback=extensions.KEA_DB_HOST)
         extensions.KEA6_DB_USER = cfg.get("kea6_db", "user", fallback=extensions.KEA_DB_USER)
-        extensions.KEA6_DB_PASS = cfg.get("kea6_db", "password", fallback=extensions.KEA_DB_PASS)
+        extensions.KEA6_DB_PASS = _resolved["kea6_db"].password
         extensions.KEA6_DB_NAME = cfg.get("kea6_db", "database", fallback=extensions.KEA_DB_NAME)
         extensions.KEA6_DB_PORT = _db_port(cfg, "kea6_db", extensions.KEA_DB_PORT)
         extensions.KEA6_DB_SSL_CA = cfg.get("kea6_db", "ssl_ca", fallback=extensions.KEA_DB_SSL_CA)
@@ -553,7 +608,8 @@ class AppConfig:
         _d2_url_fallback = extensions.KEA_API_URL if extensions.KEA_CONNECTION_MODE == "ca" else ""
         extensions.D2_API_URL = cfg.get("d2", "api_url", fallback=_d2_url_fallback)
         extensions.D2_API_USER = cfg.get("d2", "api_user", fallback=extensions.KEA_API_USER)
-        extensions.D2_API_PASS = cfg.get("d2", "api_pass", fallback=extensions.KEA_API_PASS)
+        extensions.D2_API_PASS = _resolved["d2"].password
+        extensions.D2_API_WITHHELD = _resolved["d2"].withheld
 
         # v5.25.0 (Q21) — [oidc] is entirely optional; apply() only reads
         # values, it never validates (a bad issuer/role_map here must not
@@ -620,13 +676,23 @@ class AppConfig:
 
         # v5.68.0-beta.28 (Q164): the identity invariant lives HERE, where every config write already passes - not on a list of the routes that write. A write
         # that changes which Kea Jen reaches for a server is put to every registered guard BEFORE the first byte; a refusal raises and writes nothing.
-        self._check_identity(self._read_parser(), parser)
+        before = self._read_parser()
+        # v5.69.0-beta.11 (Q180, U5): WHO may repoint Jen is asked of the DESTINATION view first (an admin learns nothing of the investigation state from the refusal), then the
+        # identity guards (WHICH Kea), then CRED-004's one question: did a saved password follow an endpoint to a new host, or appear on a second one, without being typed here
+        self._check_identity(before, parser)
+        refusal = _credentials.move_refusal(
+            _credentials.resolve(before), _credentials.resolve(parser), getattr(_writer_state, "typed", frozenset())
+        )
+        if refusal:
+            raise ConfigChangeRefused(refusal)
         buf = io.StringIO()
         parser.write(buf)
         write_private_file(self.path, buf.getvalue(), 0o600)
 
     @staticmethod
     def _check_identity(before_parser, after_parser) -> None:
+        # WHO may repoint Jen first (the destination guards: RBAC-004), then WHICH Kea (the identity guards: investigation logging) - and `preflight_identity_change` asks both
+        _run_destination_guards(destination_view(before_parser), destination_view(after_parser))
         _run_identity_guards(identity_view(before_parser), identity_view(after_parser))
 
     def preflight_identity_change(self, change) -> None:
@@ -648,25 +714,27 @@ class AppConfig:
             self._check_identity(before, after)
 
     @_serialized
-    def write_value(self, section: str, key: str, value: str, reload: bool = True) -> None:
-        """Update a single value on disk, then reload."""
+    def write_value(self, section: str, key: str, value: str, reload: bool = True, typed=None) -> None:
+        """Update a single value on disk, then reload. `typed`: see `mutate`."""
         parser = self._read_parser()
         if not parser.has_section(section):
             parser.add_section(section)
         parser.set(section, key, value)
-        self._write_parser(parser)
+        with _typed_scope(typed):
+            self._write_parser(parser)
         if reload:
             self.reload()
 
     @_serialized
-    def write_values(self, items, reload: bool = True) -> None:
-        """Update multiple (section, key, value) tuples in one write+reload."""
+    def write_values(self, items, reload: bool = True, typed=None) -> None:
+        """Update multiple (section, key, value) tuples in one write+reload. `typed`: see `mutate`."""
         parser = self._read_parser()
         for section, key, value in items:
             if not parser.has_section(section):
                 parser.add_section(section)
             parser.set(section, key, value)
-        self._write_parser(parser)
+        with _typed_scope(typed):
+            self._write_parser(parser)
         if reload:
             self.reload()
 
@@ -717,11 +785,15 @@ class AppConfig:
             self.reload()
 
     @_serialized
-    def mutate(self, fn, reload: bool = True) -> None:
+    def mutate(self, fn, reload: bool = True, typed=None) -> None:
         """
         Arbitrary structured edit: load the parser from disk, pass it to
         fn(parser) for mutation, write it back, reload. Used for edits
         that add/remove whole sections (e.g. extra Kea servers).
+
+        `typed` (v5.69.0-beta.11, Q180): the endpoint names (`credentials.resolve`'s keys: "kea", "kea6", "d2", "kea_db", "kea6_db", "jen_db", "server_<N>", "server_<N>_v6",
+        "server_<N>_d2") whose password was TYPED in this request. `_write_parser` refuses a saved password that follows an endpoint to a new host, or now appears on a second
+        host, unless it is named here - the rule is the writer's, not a form's.
         """
         parser = self._read_parser()
         _writer_state.in_mutate = True
@@ -729,7 +801,8 @@ class AppConfig:
             fn(parser)
         finally:
             _writer_state.in_mutate = False
-        self._write_parser(parser)
+        with _typed_scope(typed):
+            self._write_parser(parser)
         if reload:
             self.reload()
 
@@ -740,7 +813,9 @@ class AppConfig:
         """Return list of server dicts from config. `quiet` (Q164) is for a parser that is only being compared - the identity view reads every write twice - so a
         stray `[kea_server_1]` is not warned about on each."""
         primary_user = cfg.get("kea", "api_user", fallback="")
-        primary_pass = cfg.get("kea", "api_pass", fallback="")
+        # v5.69.0-beta.11 (Q180, CRED-004): every password on a server dict is what `credentials.resolve` says that endpoint WILL send - its own, or its host's neighbour's -
+        # and `*_withheld` names the endpoint whose password was refused it (kea._endpoint_for answers with a sentence and sends nothing)
+        resolved = _credentials.resolve(cfg)
         servers = [
             {
                 "id": 1,
@@ -756,15 +831,18 @@ class AppConfig:
                 # encodes precedence, so these carry the RAW [kea6] value,
                 # NOT a fallback — pre-filling would mask that chain.
                 "api6_user": cfg.get("kea6", "api_user", fallback=""),
-                "api6_pass": cfg.get("kea6", "api_pass", fallback=""),
+                "api6_pass": resolved["kea6"].password,
+                "api6_withheld": resolved["kea6"].withheld,
                 # v5.23.0 (Q19) — same shape as api6_* above: the raw
                 # [d2] value, not a fallback (jen.services.kea._endpoint_for's
                 # `or` chain does the ca-mode/primary-only fallback).
                 "api_d2_url": cfg.get("d2", "api_url", fallback=""),
                 "api_d2_user": cfg.get("d2", "api_user", fallback=""),
-                "api_d2_pass": cfg.get("d2", "api_pass", fallback=""),
+                "api_d2_pass": resolved["d2"].password,
+                "api_d2_withheld": resolved["d2"].withheld,
                 "api_user": primary_user,
-                "api_pass": primary_pass,
+                "api_pass": resolved["kea"].password,
+                "api_withheld": "",
                 "ssh_host": cfg.get("kea_ssh", "host", fallback=""),
                 "ssh_user": cfg.get("kea_ssh", "user", fallback=""),
                 "ssh_key": cfg.get(
@@ -803,12 +881,16 @@ class AppConfig:
                     # primary above); _endpoint_for()'s `or` chain does the
                     # rest.
                     "api6_user": cfg.get(sec, "api6_user", fallback=""),
-                    "api6_pass": cfg.get(sec, "api6_pass", fallback=""),
+                    "api6_pass": resolved[f"server_{n}_v6"].password,
+                    "api6_withheld": resolved[f"server_{n}_v6"].withheld,
                     "api_d2_url": cfg.get(sec, "api_d2_url", fallback=""),
                     "api_d2_user": cfg.get(sec, "api_d2_user", fallback=""),
-                    "api_d2_pass": cfg.get(sec, "api_d2_pass", fallback=""),
+                    "api_d2_pass": resolved[f"server_{n}_d2"].password,
+                    "api_d2_withheld": resolved[f"server_{n}_d2"].withheld,
                     "api_user": cfg.get(sec, "api_user", fallback=primary_user),
-                    "api_pass": cfg.get(sec, "api_pass", fallback=primary_pass),
+                    "api_pass": resolved[f"server_{n}"].password,
+                    "api_withheld": resolved[f"server_{n}"].withheld,
+                    "api_pass_shared": cfg.get(sec, "api_pass_shared", fallback="") == "1",
                     "ssh_host": cfg.get(sec, "ssh_host", fallback=""),
                     "ssh_user": cfg.get(sec, "ssh_user", fallback=""),
                     "ssh_key": cfg.get(sec, "ssh_key", fallback=os.path.join(extensions.CONFIG_DIR, "ssh", "jen_rsa")),

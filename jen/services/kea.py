@@ -282,8 +282,23 @@ def _endpoint_for(server: dict, service: str):
     the primary dict's api6_* so the primary still gets them here. Before
     this, a standby with no api6_url sent its dhcp6 commands to the
     PRIMARY's endpoint with the primary's credentials.
+
+    v5.69.0-beta.11 (Q180, CRED-004) - the password is what `credentials.resolve` gave THIS endpoint (the server dict's `api_pass`, `api6_pass`, `api_d2_pass`; the KEA6_* and
+    D2_* globals for the primary's own sockets), never "its own, else its neighbour's" decided here. An endpoint on a different host from the one whose password it would have
+    inherited has none, and `*_withheld` names that host's endpoint: the answer is a sentence and NOTHING is sent.
     """
     direct = extensions.KEA_CONNECTION_MODE == "direct"
+
+    def _no_credential(who: str, url: str, withheld: str):
+        from jen.services import credentials as _cred
+
+        return {
+            "result": 1,
+            "text": (
+                f"{who} has no credential: {url} is on a different host from the one whose password it would inherit ({_cred.label(withheld)}) - "
+                "set its own under Settings → Kea"
+            ),
+        }
 
     if service == "d2":
         # kea-dhcp-ddns (D2), v5.23.0 (Q19). In ca mode the Control Agent
@@ -297,11 +312,15 @@ def _endpoint_for(server: dict, service: str):
             url = extensions.D2_API_URL
             user = extensions.D2_API_USER
             pwd = extensions.D2_API_PASS
+            withheld, who = extensions.D2_API_WITHHELD, "D2"
         else:
             v4_url_fallback = "" if direct else server.get("api_url", "")
             url = server.get("api_d2_url") or v4_url_fallback
             user = server.get("api_d2_user") or server.get("api_user", "")
-            pwd = server.get("api_d2_pass") or server.get("api_pass", "")
+            pwd = server.get("api_d2_pass", "")
+            withheld, who = server.get("api_d2_withheld", ""), f"{server.get('name', 'This server')}'s D2 endpoint"
+        if withheld and url:
+            return _no_credential(who, url, withheld)
         if direct and not url:
             return {
                 "result": 1,
@@ -314,11 +333,15 @@ def _endpoint_for(server: dict, service: str):
             url = extensions.KEA6_API_URL
             user = extensions.KEA6_API_USER
             pwd = extensions.KEA6_API_PASS
+            withheld, who = extensions.KEA6_API_WITHHELD, "Kea6"
         else:
             v4_url_fallback = "" if direct else server.get("api_url", "")
             url = server.get("api6_url") or v4_url_fallback
             user = server.get("api6_user") or server.get("api_user", "")
-            pwd = server.get("api6_pass") or server.get("api_pass", "")
+            pwd = server.get("api6_pass", "")
+            withheld, who = server.get("api6_withheld", ""), f"{server.get('name', 'This server')}'s IPv6 endpoint"
+        if withheld and url:
+            return _no_credential(who, url, withheld)
         if direct and not url:
             return {
                 "result": 1,
@@ -331,6 +354,8 @@ def _endpoint_for(server: dict, service: str):
 
     if server is None:
         return extensions.KEA_API_URL, extensions.KEA_API_USER, extensions.KEA_API_PASS
+    if server.get("api_withheld") and server.get("api_url"):
+        return _no_credential(server.get("name", "This server"), server["api_url"], server["api_withheld"])
     return server.get("api_url", ""), server.get("api_user", ""), server.get("api_pass", "")
 
 

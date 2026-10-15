@@ -48,7 +48,7 @@ class TestAppConfig:
         assert len(extensions.KEA_SERVERS) == 1
 
     def test_write_value_keeps_disk_and_memory_consistent(self, isolated_config):
-        app_config.write_value("kea", "api_url", "http://5.6.7.8:8000")
+        app_config.write_value("kea", "api_url", "http://5.6.7.8:8000", typed={"kea"})
         assert extensions.KEA_API_URL == "http://5.6.7.8:8000"
         assert extensions.KEA_SERVERS[0]["api_url"] == "http://5.6.7.8:8000"
         on_disk = configparser.ConfigParser()
@@ -58,7 +58,7 @@ class TestAppConfig:
     def test_a_config_write_resets_the_active_server_cache(self, isolated_config):
         """v5.69.0-beta.3 (Q172): the 10-second cache of the server Jen last chose survived a config write, so a removed or re-pointed server was still the one asked."""
         extensions._active_server_cache.update(server={"id": 1, "api_url": "http://old"}, ts=10**12)
-        app_config.write_value("kea", "api_url", "http://5.6.7.8:8000")
+        app_config.write_value("kea", "api_url", "http://5.6.7.8:8000", typed={"kea"})
         assert extensions._active_server_cache["server"] is None and extensions._active_server_cache["ts"] == 0
 
     def test_a_reload_resets_the_active_server_cache(self, isolated_config):
@@ -170,12 +170,14 @@ class TestAppConfig:
         assert not extensions.cfg.has_section("kea_server_2")
 
     def test_write_values_batch(self, isolated_config):
-        app_config.write_values([("kea_db", "host", "newhost"), ("jen_db", "host", "newhost")])
+        app_config.write_values(
+            [("kea_db", "host", "newhost"), ("jen_db", "host", "newhost")], typed={"kea_db", "jen_db"}
+        )
         assert extensions.KEA_DB_HOST == "newhost"
         assert extensions.JEN_DB_HOST == "newhost"
 
     def test_legacy_load_config_wrapper(self, isolated_config):
-        app_config.write_value("kea_db", "host", "newhost")
+        app_config.write_value("kea_db", "host", "newhost", typed={"kea_db"})
         c = load_config()
         assert c.get("kea_db", "host") == "newhost"
 
@@ -336,7 +338,7 @@ class TestAtomicWrite:
             return real_replace(src, dst)
 
         monkeypatch.setattr(os, "replace", spy_replace)
-        app_config.write_value("kea", "api_url", "http://tmp.test:8000")
+        app_config.write_value("kea", "api_url", "http://tmp.test:8000", typed={"kea"})
 
         assert calls, "write_value() did not go through os.replace()"
         src, dst = calls[-1]

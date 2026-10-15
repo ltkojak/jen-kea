@@ -210,6 +210,7 @@ dhcp4_log_path = {KEA_LOG}
 name = kea-b
 role = standby
 api_url = {server2_url}
+api_pass = jen_api_pw
 ssh_host = kea-b
 ssh_user = keaadmin
 kea_conf = {KEA_CONF}
