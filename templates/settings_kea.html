@@ -517,14 +517,10 @@
                 <div class="form-group">
                     <label>API Password</label>
                     <input type="password" name="api_pass" placeholder="(kept unless changed)">
-                    <label class="u-6125e5">
-                        <input type="checkbox" name="inherit_api_pass" value="1" class="u-30e741">
-                        Inherit the Kea API password
-                    </label>
-                    <label class="u-6125e5">
-                        <input type="checkbox" name="no_api_pass" value="1" class="u-30e741">
-                        No password (this daemon has no authentication)
-                    </label>
+                    <div class="u-6125e5">
+                        <label><input type="checkbox" name="inherit_api_pass" value="1" class="u-30e741"> Inherit the Kea API password</label>
+                        <label title="This daemon has no authentication"><input type="checkbox" name="no_api_pass" value="1" class="u-30e741"> No password</label>
+                    </div>
                 </div>
             </div>
             <button type="submit" class="btn btn-primary">Save D2 API</button>
@@ -690,14 +686,10 @@
             <div class="form-group">
                 <label>API Password</label>
                 <input type="password" name="api_pass" placeholder="(kept unless changed)">
-                <label class="u-6125e5">
-                    <input type="checkbox" name="inherit_api_pass" value="1" class="u-30e741">
-                    Inherit the Kea API password
-                </label>
-                <label class="u-6125e5">
-                    <input type="checkbox" name="no_api_pass" value="1" class="u-30e741">
-                    No password (this daemon has no authentication)
-                </label>
+                <div class="u-6125e5">
+                    <label><input type="checkbox" name="inherit_api_pass" value="1" class="u-30e741"> Inherit the Kea API password</label>
+                    <label title="This daemon has no authentication"><input type="checkbox" name="no_api_pass" value="1" class="u-30e741"> No password</label>
+                </div>
             </div>
         </div>
         <div class="form-row">
@@ -712,14 +704,10 @@
             <div class="form-group">
                 <label for="f-db_pass">DB Password</label>
                 <input id="f-db_pass" type="password" name="db_pass" placeholder="(kept unless changed)">
-                <label class="u-6125e5">
-                    <input type="checkbox" name="inherit_db_pass" value="1" class="u-30e741">
-                    Inherit the Kea DB password
-                </label>
-                <label class="u-6125e5">
-                    <input type="checkbox" name="no_db_pass" value="1" class="u-30e741">
-                    No password
-                </label>
+                <div class="u-6125e5">
+                    <label><input type="checkbox" name="inherit_db_pass" value="1" class="u-30e741"> Inherit the Kea DB password</label>
+                    <label><input type="checkbox" name="no_db_pass" value="1" class="u-30e741"> No password</label>
+                </div>
             </div>
             <div class="form-group">
                 <label for="f-db_name">DB Name</label>
