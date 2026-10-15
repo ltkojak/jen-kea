@@ -390,6 +390,13 @@ def save_connection(
         items.append(("kea", "api_pass", api_pass))
     if kea_db_pass:
         items.append(("kea_db", "password", kea_db_pass))
+    # Q181 (V3): a config the wizard is filling in is one with nothing legacy to convert, so it is born with the credential-model marker - unless it still holds a borrowed password
+    # the start-up conversion has not seen yet (the marker would then say "converted" for a file that is not)
+    from jen.services import credentials as __credentials
+
+    _live = app_config._read_parser()
+    if not __credentials.has_model_marker(_live) and not __credentials.pending_conversions(_live):
+        items.append((__credentials.MODEL_SECTION, __credentials.MODEL_KEY, __credentials.MODEL_VALUE))
     # Q180: the passwords the superadmin TYPED here are the ones `_write_parser` lets follow the endpoint to its new host; a blank keeps the saved one, which may not
     app_config.write_values(items, typed={n for n, v in (("kea", api_pass), ("kea_db", kea_db_pass)) if v})
     __db.reset_kea_pools()
@@ -588,7 +595,14 @@ def probe_v6(url: str, user: str, password: str, *, omit_service: bool) -> dict:
     }
 
 
-def enable_v6(url: str, subnets6: dict, remove_ids: set = frozenset(), api_pass: str = "") -> str | None:
+def enable_v6(
+    url: str,
+    subnets6: dict,
+    remove_ids: set = frozenset(),
+    api_pass: str = "",
+    no_auth: bool = False,
+    api_user: str = "",
+) -> str | None:
     """ "Manage IPv6 in Jen" — called only after probe_v6() has already
     confirmed dhcp6 answered. Flips Jen's own display flag, saves the
     confirmed dhcp6 endpoint (so later reads use it instead of inheriting
@@ -621,8 +635,14 @@ def enable_v6(url: str, subnets6: dict, remove_ids: set = frozenset(), api_pass:
         if not parser.has_section("kea6"):
             parser.add_section("kea6")
         parser.set("kea6", "api_url", url)
+        if api_user:
+            parser.set("kea6", "api_user", api_user)
         if api_pass:
             parser.set("kea6", "api_pass", api_pass)
+        elif no_auth:
+            parser.set(
+                "kea6", "api_pass", ""
+            )  # Q181 (V4): explicit - this daemon has no authentication; `resolve` reads it as none and nothing is withheld
 
     try:
         app_config.mutate(_apply, typed={"kea6"} if api_pass else None)

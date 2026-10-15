@@ -50,6 +50,10 @@ def _the_investigation_guard_is_not_this_files_question(monkeypatch):
     monkeypatch.setattr(config, "_identity_guards", [])
 
 
+NL = chr(10)
+DIRECT = BASE.replace("[kea]" + NL, "[kea]" + NL + "connection_mode = direct" + NL, 1)
+
+
 def _parse(text):
     p = configparser.ConfigParser(interpolation=None)
     p.read_string(text)
@@ -249,6 +253,39 @@ ROWS = {
         BASE.replace("host = db1", "host = ::1"),
         _set("kea_db", "port", "3307"),
         expect={"kea_db": ("KDB", "own", "")},
+    ),
+    "a_saved_password_given_its_first_address_untyped": Row(
+        "beta.11 review (Q181) P1: a saved password with no previous address gains its first one without the move check",
+        DIRECT + "[kea6]" + NL + "api_pass = K6" + NL,
+        _set("kea6", "api_url", "https://k6:8006"),
+        refused=True,
+    ),
+    "the_same_with_the_password_typed": Row(
+        "beta.11 review (Q181): the first address with the password typed in this request",
+        DIRECT + "[kea6]" + NL + "api_pass = K6" + NL,
+        _all(_set("kea6", "api_url", "https://k6:8006"), _set("kea6", "api_pass", "K6B")),
+        typed={"kea6"},
+        expect={"kea6": ("K6B", "own", "")},
+    ),
+    "a_new_server_with_a_typed_password_and_its_first_address": Row(
+        "beta.11 review (Q181): first-time configuration passes because the password is typed by construction",
+        BASE,
+        _add_server(2, api_url="https://b:8000", api_pass="P2"),
+        typed={"server_2"},
+        expect={"server_2": ("P2", "own", "")},
+    ),
+    "no_password_before_then_an_address_is_free": Row(
+        "beta.11 review (Q181): a section that had no password gains an address freely",
+        DIRECT + "[kea6]" + NL + "api_user = x" + NL,
+        _set("kea6", "api_url", "https://k6:8006"),
+        expect={"kea6": ("", "none", "kea")},
+    ),
+    "an_extra_servers_blank_ipv6_url_with_its_own_password": Row(
+        "beta.11 review (Q181) P1: a present-blank api6_url is no endpoint - the transport may not fall back to the v4 url",
+        BASE + "[kea_server_2]" + NL + "api_url = https://b:8000" + NL + "api_pass = P2" + NL,
+        _all(_set("kea_server_2", "api6_url", ""), _set("kea_server_2", "api6_pass", "P6")),
+        typed={"server_2_v6"},
+        expect={"server_2_v6": ("P6", "own", "")},
     ),
     "the_jen_database_moved_with_the_password_typed": Row(
         "beta.9: ... typed",
@@ -676,3 +713,69 @@ class TestTheWizardsFirstStepDoesNotSendASavedPasswordToANewHost:
             },
         )
         assert seen["kea"] == ("http://kea-a:9000", "SAVED")
+
+
+class TestTheServerRowsCanSayNoPasswordForTheirIpv6AndD2Endpoints:
+    """CI, Q181 V4: `extra_api6_no_pass[]` and `extra_d2_no_pass[]` write an explicit blank beside the password inputs."""
+
+    URL = "/settings/infrastructure/save-extra-servers"
+
+    def _body(self, **over):
+        body = _extra_server_body(url="https://elsewhere:8000", password="P2")
+        body["extra_ssh_host[]"] = ["10.0.0.9"]
+        body.update(over)
+        return body
+
+    def test_an_ipv6_endpoint_elsewhere_with_the_box_is_saved_blank_and_nothing_is_withheld(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        body = self._body(**{"extra_api6_url[]": ["https://v6host:8006"], "extra_api6_no_pass[]": ["1"]})
+        logged_in_client.post(self.URL, data=body, follow_redirects=True)
+        disk = _forms._disk(isolated_config)
+        assert disk.get("kea_server_2", "api6_pass") == ""
+        ep = cred.resolve(disk)["server_2_v6"]
+        assert (ep.url, ep.password, ep.withheld) == ("https://v6host:8006", "", "")
+
+    def test_an_ipv6_endpoint_elsewhere_without_a_password_or_the_box_is_refused(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        before = isolated_config.read_bytes()
+        body = self._body(**{"extra_api6_url[]": ["https://v6host:8006"]})
+        r = logged_in_client.post(self.URL, data=body, follow_redirects=True)
+        assert b"IPv6 address" in r.data and isolated_config.read_bytes() == before
+
+    def test_the_box_and_a_typed_ipv6_password_are_two_answers(self, logged_in_client, db, mock_kea, isolated_config):
+        before = isolated_config.read_bytes()
+        body = self._body(
+            **{"extra_api6_url[]": ["https://v6host:8006"], "extra_api6_pass[]": ["x"], "extra_api6_no_pass[]": ["1"]}
+        )
+        r = logged_in_client.post(self.URL, data=body, follow_redirects=True)
+        assert b"Choose one for the IPv6 API password" in r.data and isolated_config.read_bytes() == before
+
+    def test_a_d2_socket_with_the_box_is_saved_blank(self, logged_in_client, db, mock_kea, isolated_config):
+        from tests.test_extra_servers import _seed
+
+        _seed(
+            (
+                2,
+                {
+                    "api_url": "https://s2:8000",
+                    "api_pass": "P2",
+                    "name": "peer",
+                    "ssh_host": "10.0.0.9",
+                    "api_d2_url": "https://d2host:53001",
+                    "api_d2_pass": "D",
+                },
+            )
+        )
+        body = self._body(
+            **{
+                "extra_id[]": ["2"],
+                "extra_api_url[]": ["https://s2:8000"],
+                "extra_api_pass[]": [""],
+                "extra_d2_no_pass[]": ["1"],
+            }
+        )
+        body["extra_name[]"] = ["peer"]
+        logged_in_client.post(self.URL, data=body, follow_redirects=True)
+        assert _forms._disk(isolated_config).get("kea_server_2", "api_d2_pass") == ""

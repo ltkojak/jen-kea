@@ -235,6 +235,11 @@ def settings_kea():
                 "api_pass_shared": extensions.cfg.get(sec, "api_pass_shared", fallback="") == "1",
                 "api_pass_state": _api_pass_state(_resolved_endpoints.get(f"server_{n}")),
                 # an explicit blank: a Kea with no authentication
+                "api6_pass_none": extensions.cfg.has_option(sec, "api6_pass")
+                and extensions.cfg.get(sec, "api6_pass", fallback="") == "",
+                "api_d2_url": extensions.cfg.get(sec, "api_d2_url", fallback=""),
+                "api_d2_pass_none": extensions.cfg.has_option(sec, "api_d2_pass")
+                and extensions.cfg.get(sec, "api_d2_pass", fallback="") == "",
                 "api_pass_none": extensions.cfg.has_option(sec, "api_pass")
                 and extensions.cfg.get(sec, "api_pass", fallback="") == "",
                 # v5.29.0 (Q29) — the "Set up direct socket" form's bind
@@ -2152,9 +2157,11 @@ def save_extra_servers():
     kea_confs = request.form.getlist("extra_kea_conf[]")
     # CRED-003 (Q179, T3): one "1"/"0" per row, in row order - a NEW row takes the primary's API password only through its own checkbox
     shares = request.form.getlist("extra_share_pass[]")
-    no_passes = request.form.getlist(
-        "extra_no_pass[]"
-    )  # one "1"/"0" per row: "this server has no authentication" - an explicit blank
+    no6_passes = request.form.getlist(
+        "extra_api6_no_pass[]"
+    )  # Q181 (V4): one "1"/"0" per row, like extra_no_pass[] - the IPv6 and D2 endpoints can say "no authentication" too
+    nod2_passes = request.form.getlist("extra_d2_no_pass[]")
+    no_passes = request.form.getlist("extra_no_pass[]")
 
     for h in ssh_hosts:
         if h.strip() and not __auth.valid_ssh_target(h.strip()):
@@ -2302,13 +2309,15 @@ def save_extra_servers():
             # own, else - on the same host only - the primary's). Nothing is written until this callback returns, so raising is the refusal. A NEW row has no stored address to compare:
             # it takes the primary's password only through its own box (below), else what was typed, else none.
             who = name.strip() or f"Kea Server {out}"
+            no6_ticked = row_idx < len(no6_passes) and no6_passes[row_idx] == "1"
+            nod2_ticked = row_idx < len(nod2_passes) and nod2_passes[row_idx] == "1"
             if orig_id is not None and not (row_idx < len(no_passes) and no_passes[row_idx] == "1"):
                 stored_api = before_resolved.get(f"server_{orig_id}")
                 stored_secret = stored_api.password if stored_api else ""
                 refusal = _secret_for_new_endpoint(
                     prev.get("api_url"), api_url, api_pass, stored_secret, f"API address of {who}"
                 )
-                if not refusal and not api6_pass.strip():
+                if not refusal and not api6_pass.strip() and not no6_ticked:
                     # the IPv6 endpoint of a row that types no IPv6 password: judged against the password the connection will USE for it
                     stored6 = prev.get("api6_url") or ("" if direct else prev.get("api_url"))
                     new6 = api6_url.strip() or ("" if direct else api_url.strip())
@@ -2340,6 +2349,9 @@ def save_extra_servers():
                 refused.append(
                     f"Choose one for the API password of {who}: no password, share the primary's, or type one."
                 )
+                raise _EndpointNeedsItsPassword()
+            if no6_ticked and api6_pass.strip():
+                refused.append(f"Choose one for the IPv6 API password of {who}: no password, or type one.")
                 raise _EndpointNeedsItsPassword()
             if share_ticked and api_pass.strip():
                 # U3 (Q180): the box and a typed password are two answers for one secret
@@ -2379,7 +2391,9 @@ def save_extra_servers():
                 cfg.set(sec, "api6_url", api6_url.strip())
             if api6_user.strip():
                 cfg.set(sec, "api6_user", api6_user.strip())
-            if api6_pass.strip():
+            if no6_ticked:
+                cfg.set(sec, "api6_pass", "")  # explicit: the IPv6 socket has no authentication
+            elif api6_pass.strip():
                 cfg.set(sec, "api6_pass", api6_pass.strip())
                 typed_names.add(f"server_{out}_v6")
             elif prev.get("api6_pass"):
@@ -2390,6 +2404,8 @@ def save_extra_servers():
             for k, v in prev.items():
                 if k not in _EXTRA_SERVER_FORM_KEYS:
                     cfg.set(sec, k, v)
+            if nod2_ticked and cfg.has_option(sec, "api_d2_url"):
+                cfg.set(sec, "api_d2_pass", "")  # explicit: the D2 socket has no authentication
 
         # U3 (Q180): the resolver is the proof. The IPv6 and D2 endpoint of every saved row is judged against the credential `resolve` gives IT: a typed API password authorises
         # them on the same host only, and one on a different host with no password of its own would be refused its neighbour's - so the form says so instead of saving a

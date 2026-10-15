@@ -432,8 +432,12 @@
                 <div class="form-group">
                     <label>IPv6 API Password</label>
                     <input type="password" name="extra_api6_pass[]" placeholder="(unchanged)">
+                    <label class="u-6125e5"><input type="checkbox" name="extra_api6_no_pass[]" value="1" class="u-30e741"{% if srv.api6_pass_none %} checked{% endif %}> No password</label>
                 </div>
             </div>
+            {% if srv.api_d2_url %}
+            <label class="u-6125e5"><input type="checkbox" name="extra_d2_no_pass[]" value="1" class="u-30e741"{% if srv.api_d2_pass_none %} checked{% endif %}> The D2 socket ({{ srv.api_d2_url }}) has no password</label>
+            {% endif %}
             <div class="form-hint u-27d304">Only needed when this server's kea-dhcp6 has its own endpoint — required in direct mode if IPv6 is on (a kea-dhcp4 daemon can't answer v6 commands). Blank = this server's own API URL and credentials (ca mode); required in direct mode when IPv6 is on.</div>
             <div class="form-row">
                 <div class="form-group">
@@ -797,11 +801,11 @@ function addServerRow() {
         </div>
         <label class="u-6125e5"><input type="checkbox" name="extra_share_pass[]" value="1" class="u-30e741"> Share the primary's API password (an HA peer of the same Kea)</label>
         <label class="u-6125e5"><input type="checkbox" name="extra_no_pass[]" value="1" class="u-30e741"> No password (this server has no authentication)</label>
-        <div class="form-hint">Leave it unticked and type a password for a server that has its own. A server with no password of its own is reached with the primary's - the Configuration Doctor names it when its host is not the primary's.</div>
+        <div class="form-hint">A blank password keeps the saved one; an endpoint on another host needs its own, or No password.</div>
         <div class="form-row">
             <div class="form-group"><label>IPv6 API URL</label><input type="text" name="extra_api6_url[]" placeholder="http://YOUR-KEA-SERVER-2:8006"></div>
             <div class="form-group"><label>IPv6 API Username</label><input type="text" name="extra_api6_user[]" placeholder="(same as API username)"></div>
-            <div class="form-group"><label>IPv6 API Password</label><input type="password" name="extra_api6_pass[]" placeholder="(unchanged)"></div>
+            <div class="form-group"><label>IPv6 API Password</label><input type="password" name="extra_api6_pass[]" placeholder="(unchanged)"><label class="u-6125e5"><input type="checkbox" name="extra_api6_no_pass[]" value="1" class="u-30e741"> No password</label></div>
         </div>
         <div class="form-hint u-27d304">IPv6 API fields are only needed when this server's kea-dhcp6 has its own endpoint — required in direct mode if IPv6 is on.</div>
         <div class="form-row">
@@ -843,6 +847,14 @@ function serializeServers() {
         noPassInp.name = 'extra_no_pass[]';
         noPassInp.value = (noPass && noPass.checked) ? '1' : '0';
         hidden.appendChild(noPassInp);
+        ['extra_api6_no_pass', 'extra_d2_no_pass'].forEach(name => {
+            const box = row.querySelector(`[name="${name}[]"]`);
+            const mirror = document.createElement('input');
+            mirror.type = 'hidden';
+            mirror.name = name + '[]';
+            mirror.value = (box && box.checked) ? '1' : '0';
+            hidden.appendChild(mirror);
+        });
     });
 }
 

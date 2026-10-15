@@ -1653,6 +1653,10 @@ write_config() {
     # which IS relocation-aware. A literal "/etc/jen/ssh/jen_rsa" here
     # would silently override that correct default with a wrong one on
     # any relocated install.
+    # v5.69.0-beta.12 (Q181, V3): a config the installer CREATES is born with the credential-model marker (`[jen] credential_model = explicit`: no borrowed passwords to convert); one
+    # that already exists is NOT given it here - a legacy file is converted by Jen at its first start, and --configure merges answers into the live file without marking it
+    local credential_model_block=""
+    [[ -f "$CONFIG_FILE" ]] || credential_model_block="$(printf '\n[jen]\ncredential_model = explicit\n')"
     local wizard_text
     wizard_text="$(cat << CONFEOF
 # Jen - The Kea DHCP Management Console
@@ -1693,6 +1697,7 @@ dns_provider = ${DDNS_PROVIDER}
 api_url     = ${DDNS_URL}
 api_token   = ${DDNS_TOKEN}
 forward_zone = ${DDNS_ZONE}
+${credential_model_block}
 CONFEOF
 )"
 

@@ -290,6 +290,10 @@ def setup_found():
             return stepped
 
         v6_pass_typed = request.form.get("v6_pass", "")
+        v6_no_auth = (
+            request.form.get("v6_no_auth", "") == "1"
+        )  # Q181 (V4): "this DHCPv6 control socket has no authentication" - an explicit blank, never the primary's password
+        v6_user_typed = request.form.get("v6_user", "").strip()
         if __caps.is_direct():
             v6_url = request.form.get("v6_url", "").strip()
             from jen.services import auth as __auth
@@ -304,10 +308,25 @@ def setup_found():
                     hook_labels=__setup.HOOK_LABELS,
                 )
             # the credential the probe sends is the one `credentials.resolve` would give this endpoint: the primary's only when the candidate is on the primary's host, else
-            # one TYPED here - and with neither, nothing is sent
-            if v6_pass_typed:
+            # one TYPED here, or the explicit "no authentication" - and with none of them, nothing is sent
+            same_box = __auth.same_host(extensions.KEA_API_URL, v6_url)
+            v6_user = v6_user_typed or (extensions.KEA_API_USER if same_box else "")
+            if v6_no_auth and v6_pass_typed:
+                flash("Choose one for the DHCPv6 API password: no authentication, or type one.", "error")
+                return render_template(
+                    "setup_found.html",
+                    progress=_progress(),
+                    found=found,
+                    hook_loss=__setup.HOOK_LOSS,
+                    hook_labels=__setup.HOOK_LABELS,
+                    v6_url=v6_url,
+                    v6_needs_password=True,
+                )
+            if v6_no_auth:
+                v6_password = ""
+            elif v6_pass_typed:
                 v6_password = v6_pass_typed
-            elif __auth.same_host(extensions.KEA_API_URL, v6_url):
+            elif same_box:
                 v6_password = extensions.KEA_API_PASS
             else:
                 flash(
@@ -323,7 +342,7 @@ def setup_found():
                     v6_url=v6_url,
                     v6_needs_password=True,
                 )
-            v6_probe = __setup.probe_v6(v6_url, extensions.KEA_API_USER, v6_password, omit_service=True)
+            v6_probe = __setup.probe_v6(v6_url, v6_user, v6_password, omit_service=True)
         else:
             v6_url = extensions.KEA_API_URL
             v6_password = extensions.KEA_API_PASS
@@ -358,7 +377,12 @@ def setup_found():
         # [subnets6] that this daemon did not report stays unless the superadmin ticked its "remove" box.
         remove6 = {sid for sid in v6_probe["orphaned_subnets6"] if request.form.get(f"remove6_{sid}", "") == "1"}
         error = __setup.enable_v6(
-            v6_url, v6_probe["proposed_subnets6"], remove6, api_pass=v6_pass_typed if __caps.is_direct() else ""
+            v6_url,
+            v6_probe["proposed_subnets6"],
+            remove6,
+            api_pass=v6_pass_typed if __caps.is_direct() else "",
+            no_auth=v6_no_auth and __caps.is_direct(),
+            api_user=v6_user_typed if __caps.is_direct() else "",
         )
         if error:
             flash(f"IPv6 was not enabled: {error}.", "error")

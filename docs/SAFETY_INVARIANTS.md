@@ -428,19 +428,26 @@ secret is used at its OWN endpoint, or inherited by another daemon ON THE SAME H
 has NONE - never its neighbour's, and `_endpoint_for` answers with a sentence and sends nothing. A blank `api_pass =` is an explicit no-credential; an ABSENT key is "inherit, if the host is the same".
 The writer asks one more question for every write (`AppConfig._write_parser` through `credentials.move_refusal`, never per form): a saved password does not FOLLOW an endpoint to a new host, and does not
 appear on a SECOND host, unless it was typed in this request (`mutate(fn, typed=...)`). A legacy endpoint that inherited its parent's password across hosts (an extra server since 5.10; Kea6, D2, the Kea6 database and a server's IPv6 and D2 endpoints) is converted ONCE PER INSTALL, audibly,
-at `create_app` (`credentials.materialise`, gated on the settings key `credentials_materialised`: the copy, a `<key>_shared` marker, one `CONFIG_MIGRATION` audit row each); a later change of the parent's
+at `create_app` (`credentials.materialise`, gated on `[jen] credential_model = explicit` IN jen.config, written in the same atomic write as the copies - the marker is in the file it describes, so a restored older database
+changes nothing and a restored pre-beta.11 config converts again, correctly; a fresh install (installer, wizard, container) is born with it; the settings key beta.11 wrote is read once more, by `already_converted`: the copy, a `<key>_shared` marker, one `CONFIG_MIGRATION` audit row each); a later change of the parent's
 password does not follow it, and a section left WITHOUT a key afterwards is never filled in at a restart. An explicit blank (`api_pass =`, the forms' "No password" boxes) is how a Kea with no
 authentication is said, and nothing is withheld from it. `Set up direct socket` keeps a daemon's password as its own copy when the address it moves to is the same box spelled differently.
 **Established.** Q180 (the beta.10 review - and the four before it: beta.7 provider switch, beta.8 same-provider URL change, beta.9 inherit plus typed and an extra server without a key, beta.10 the
 unchecked share box and the extra server's IPv6 and D2 endpoints: one defect, a fallback written in a different place each time).
-**Enforced at.** `jen/services/credentials.py` (`resolve`, `move_refusal`, `materialise`); `jen/config.py` (`apply`, `derive_kea_servers`, `_write_parser`); `jen/services/kea.py` (`_endpoint_for`). The two
+**Enforced at.** `jen/services/credentials.py` (`resolve`, `move_refusal`, `materialise`); `jen/config.py` (`apply`, `derive_kea_servers`, `_write_parser`); `jen/services/kea.py` (`_endpoint_for` reads only resolved fields; `tests/test_credential_transport.py` compares the two). A saved password's FIRST address is a move too (`move_refusal`: a password that had no address and is given one needs to be typed). The two
 greps `fallback=primary_pass` and `or server.get("api_pass"` over `jen/` find nothing, and `tests/test_credentials.py` says so.
 **Tests.**
 - `tests/test_credentials.py::TestResolve`
 - `tests/test_credentials.py::TestTheConsumersAreOnTheResolver`
 - `tests/test_credentials.py::TestEndpointForSendsNothingWithoutACredential`
 - `tests/test_credentials.py::TestMaterialise`
-- `tests/test_credentials.py::TestItRunsOncePerInstallNotOncePerStart`
+- `tests/test_credentials.py::TestTheMarkerLivesInTheFileItDescribes`
+- `tests/test_credentials.py::TestTheThreeReadingsForEveryField`
+- `tests/test_credentials.py::TestAFirstAddressIsAMove`
+- `tests/test_credentials.py::TestNothingDownstreamDecides`
+- `tests/test_credential_transport.py::test_the_transport_posts_exactly_what_resolve_says`
+- `tests/test_credential_transport.py::TestTheRowsTheReviewNamed`
+- `tests/test_setup_wizard_stepup.py::TestTheIpv6StepCanSayNoAuthentication`
 - `tests/test_credentials.py::TestAnIpv6LiteralDatabaseHost`
 - `tests/test_credential_destinations.py::TestADirectSocketKeepsWhatWorkedWhenTheHostChangesSpelling`
 - `tests/test_credential_destinations.py::TestTheFormsCanSayNoPassword`

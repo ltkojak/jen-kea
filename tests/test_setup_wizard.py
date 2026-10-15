@@ -127,6 +127,9 @@ class TestSaveConnection:
         actively clear whatever a previous save left behind."""
         calls = []
         monkeypatch.setattr("jen.config.app_config.write_values", lambda items, typed=None: calls.append(items))
+        # (Q181 V3: a config the wizard fills in is born with the credential-model marker - made deterministic here)
+        monkeypatch.setattr("jen.services.credentials.has_model_marker", lambda parser: False)
+        monkeypatch.setattr("jen.services.credentials.pending_conversions", lambda parser: [])
         setup_wizard.save_connection(
             api_url="http://kea:8000",
             api_user="u",
@@ -149,6 +152,7 @@ class TestSaveConnection:
                 ("kea_db", "host", "kea-db"),
                 ("kea_db", "user", "kea"),
                 ("kea_db", "database", "kea"),
+                ("jen", "credential_model", "explicit"),
             ]
         ]
 
@@ -412,6 +416,21 @@ class TestEnableV6:
         assert parser.get("subnets6", "1") == "Subnet1, 2001:db8::/64"
         assert calls["flag"] == [("ipv6_enabled", "true")]
         assert not parser.has_option("kea6", "api_pass") and calls["typed"] == [None]
+
+    def test_no_authentication_is_an_explicit_blank_and_a_typed_user_is_written(self, monkeypatch):
+        proposed = {1: {"name": "Subnet1", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
+        from jen import extensions
+
+        parser = self._parser({})
+        monkeypatch.setattr(extensions, "SUBNET6_MAP", {})
+        monkeypatch.setattr("jen.config.app_config.mutate", lambda fn, reload=True, typed=None: fn(parser))
+        monkeypatch.setattr("jen.models.user.set_global_setting", lambda *a: None)
+        assert setup_wizard.enable_v6("http://elsewhere:8006", proposed, no_auth=True, api_user="v6u") is None
+        assert (
+            parser.has_option("kea6", "api_pass")
+            and parser.get("kea6", "api_pass") == ""
+            and parser.get("kea6", "api_user") == "v6u"
+        )
 
     def test_a_typed_password_is_written_with_the_endpoint_and_named_as_typed(self, monkeypatch):
         proposed = {1: {"name": "Subnet1", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}

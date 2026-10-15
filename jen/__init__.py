@@ -931,21 +931,19 @@ def create_app() -> Flask:
     except Exception as e:
         logger.warning(f"Could not clear restart_pending flag at startup: {e}")
 
-    # v5.69.0-beta.11 (Q180, CRED-004 U2): an endpoint with no password of its own used to inherit its parent's whatever host it was on (extra servers since 5.10, Kea6 and D2 since 5.0); the
-    # resolver does not. Convert them ONCE, audibly (a copy written into the section, a marker, one audit row each) so an HA peer that worked yesterday works today. ONCE means once per
-    # install: the settings key `credentials_materialised` is set when the conversion has run (or had nothing to do), so a section a superadmin leaves without a key LATER is never filled
-    # in at a restart. Not in a request, never fatal; with the settings unreadable it does not run (it cannot prove it is the first time).
+    # v5.69.0-beta.11 (Q180, CRED-004 U2; Q181 V3): an endpoint with no password of its own used to inherit its parent's whatever host it was on (extra servers since 5.10, Kea6 and D2
+    # since 5.0); the resolver does not. Convert them ONCE, audibly (a copy written into the section, a marker, one audit row each) so an HA peer that worked yesterday works today.
+    # ONCE is a fact about the FILE: `[jen] credential_model = explicit` is written in the same atomic write as the copies, so a file that has it is never converted again, a restored
+    # older database changes nothing, and a fresh install (installer, wizard, container) is born with it. The settings-table row beta.11 wrote is read once more for a release - an
+    # install that already converted gets the key without a second round of copies. Not in a request, never fatal.
     try:
         from jen.models.user import audit as _audit
         from jen.models.user import get_global_setting as _get_setting
-        from jen.models.user import set_global_setting as _set_setting
         from jen.services import credentials as _credentials
 
-        if (
-            _get_setting("credentials_materialised", "") != "1"
-            and _credentials.materialise(app_config, audit=_audit) is not None
-        ):
-            _set_setting("credentials_materialised", "1")
+        _credentials.materialise(
+            app_config, audit=_audit, already_converted=_get_setting("credentials_materialised", "") == "1"
+        )
     except Exception as e:
         logger.warning(f"Could not run the credential conversion at startup: {type(e).__name__}: {e}")
 

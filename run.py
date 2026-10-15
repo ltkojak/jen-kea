@@ -219,6 +219,9 @@ user     = {os.environ.get("JEN_KEA_SSH_USER", "")}
 key_path = {os.path.join(config_dir, "ssh", "jen_rsa")}
 kea_conf = {os.environ.get("JEN_KEA_CONF", "/etc/kea/kea-dhcp4.conf")}
 
+[jen]
+credential_model = explicit
+
 [subnets]
 {subnet_lines}
 [ddns]

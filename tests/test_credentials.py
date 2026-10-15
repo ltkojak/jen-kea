@@ -240,9 +240,7 @@ class TestEndpointForSendsNothingWithoutACredential:
             "[kea]\napi_url = https://a:8000\napi_user = u\n[kea_server_2]\napi_url = https://b:8000\n"
         )
         assert kea.kea_command("version-get", server=servers[1])["result"] == 0
-        assert sent == [("https://b:8000", ("u", ""))], (
-            "a Kea with no authentication: a blank password is not a refusal"
-        )
+        assert sent == [("https://b:8000", None)], "a Kea with no authentication: a blank password is not a refusal"
 
 
 class _FakeConfig:
@@ -338,7 +336,10 @@ class TestMaterialise:
 
     def test_a_primary_with_no_password_has_nothing_to_copy(self):
         fake = _FakeConfig(_p("[kea]\napi_url = https://a:8000\n[kea_server_2]\napi_url = https://b:8000\n"))
-        assert cred.materialise(fake) == [] and fake.writes == 0
+        assert cred.materialise(fake) == [] and fake.writes == 1, (
+            "nothing to copy - the marker alone is written, so a server left keyless LATER is never converted"
+        )
+        assert not fake.parser.has_option("kea_server_2", "api_pass") and cred.has_model_marker(fake.parser)
 
     def test_it_never_runs_in_a_request_and_says_it_did_not_run(self):
         from flask import Flask
@@ -366,10 +367,57 @@ class TestMaterialise:
         )
 
 
-class TestItRunsOncePerInstallNotOncePerStart:
-    """The second pass's P1: a section a superadmin leaves WITHOUT a key on purpose (the share box unticked) must not be filled in at the next restart."""
+class TestTheMarkerLivesInTheFileItDescribes:
+    """Q181, V3: `[jen] credential_model = explicit` is written in the SAME mutate as the copies (one atomic replace); a file that has it is never converted again."""
 
-    def test_create_app_converts_only_while_the_install_marker_is_unset_and_sets_it(self):
+    LEGACY = BASE + "[kea_server_2]\napi_url = https://b:8000\n"
+
+    def test_a_fresh_config_with_the_key_copies_nothing_and_writes_nothing(self):
+        fake = _FakeConfig(_p(self.LEGACY + "[jen]\ncredential_model = explicit\n"))
+        assert cred.materialise(fake) == [] and fake.writes == 0
+        assert not fake.parser.has_option("kea_server_2", "api_pass"), (
+            "a passwordless peer in a file born explicit is the operator's answer"
+        )
+
+    def test_a_pre_beta11_config_gets_the_copies_and_the_key_in_one_write(self):
+        fake, rows = _FakeConfig(_p(self.LEGACY)), []
+        assert cred.materialise(fake, audit=lambda *a: rows.append(a)) == ["server_2"]
+        assert fake.writes == 1, "one atomic mutate: marker and copies together or neither"
+        assert (
+            fake.parser.get("jen", "credential_model") == "explicit"
+            and fake.parser.get("kea_server_2", "api_pass") == "S"
+        )
+        assert len(rows) == 1
+        assert cred.materialise(fake, audit=lambda *a: rows.append(a)) == [] and fake.writes == 1 and len(rows) == 1, (
+            "a second start: nothing"
+        )
+
+    def test_a_config_without_the_key_whose_database_says_it_converted_gets_the_key_and_no_copies(self):
+        fake = _FakeConfig(_p(self.LEGACY))
+        assert cred.materialise(fake, already_converted=True) == []
+        assert cred.has_model_marker(fake.parser) and not fake.parser.has_option("kea_server_2", "api_pass")
+        assert fake.writes == 1
+
+    def test_a_restored_older_database_changes_nothing_because_the_marker_is_not_in_it(self):
+        """The decision reads the FILE: with the key present the answer is the same whatever the settings table says."""
+        fake = _FakeConfig(_p(self.LEGACY + "[jen]\ncredential_model = explicit\n"))
+        assert cred.materialise(fake, already_converted=False) == [] and fake.writes == 0
+
+    def test_a_read_only_file_logs_one_error_naming_it_and_raises_nothing(self, caplog):
+        class ReadOnly(_FakeConfig):
+            path = "/etc/jen/jen.config"
+
+            def mutate(self, *a, **k):
+                raise PermissionError(13, "Read-only file system")
+
+        import logging
+
+        with caplog.at_level(logging.ERROR, logger="jen.services.credentials"):
+            assert cred.materialise(ReadOnly(_p(self.LEGACY))) is None
+        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert len(errors) == 1 and "/etc/jen/jen.config" in errors[0].getMessage()
+
+    def test_create_app_calls_it_every_start_and_the_database_key_is_only_read(self):
         import ast
         import pathlib
 
@@ -377,20 +425,29 @@ class TestItRunsOncePerInstallNotOncePerStart:
         tree = ast.parse(src)
         create_app = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "create_app")
         text = ast.get_source_segment(src, create_app)
-        assert 'credentials_materialised", "") != "1"' in text and "materialise(app_config" in text
-        assert text.index('credentials_materialised", "") != "1"') < text.index("materialise(app_config")
-        assert '_set_setting("credentials_materialised", "1")' in text
-        assert "is not None" in text.split("materialise(app_config")[1].split("\n")[0], (
-            "the marker is set only when the conversion RAN (None = it did not)"
+        assert "materialise(" in text and "already_converted=" in text and "credentials_materialised" in text
+        assert "set_global_setting" not in text.split("materialise(")[1].split("Background workers")[0], (
+            "the settings-table row is no longer written"
+        )
+
+    def test_the_fresh_install_paths_write_the_key(self):
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        assert "credential_model = explicit" in (root / "run.py").read_text(encoding="utf-8")
+        installer = (root / "install.sh").read_text(encoding="utf-8")
+        assert (
+            "credential_model = explicit" in installer
+            and '[[ -f "$CONFIG_FILE" ]] || credential_model_block=' in installer
         )
 
     def test_after_the_conversion_a_keyless_server_stays_keyless(self):
-        """What the marker guarantees, in terms of the function: the conversion is a function of the file; nothing in it remembers - so the caller must not call it again."""
         fake = _FakeConfig(_p(BASE + "[kea_server_2]\napi_url = https://b:8000\n"))
         assert cred.materialise(fake) == ["server_2"]
         fake.parser.add_section("kea_server_3")
         fake.parser.set("kea_server_3", "api_url", "https://c:8000")  # added later, on purpose, with no key
         assert cred.resolve(fake.parser)["server_3"].withheld == "kea"
+        assert cred.materialise(fake) == [] and not fake.parser.has_option("kea_server_3", "api_pass")
 
 
 class TestAnIpv6LiteralDatabaseHost:
@@ -406,3 +463,119 @@ class TestAnIpv6LiteralDatabaseHost:
         )
         assert after["kea_db"].url == "[::1]:3307"
         assert cred.move_refusal(before, after) == ""
+
+
+class TestTheThreeReadingsForEveryField:
+    """Q181, V1: url, user and password under ONE reading - a value is its own, a present-blank key is explicit, an absent key inherits (the url in CA mode only; the user and the
+    password on the same host only)."""
+
+    def test_kea6_url_absent_in_ca_mode_is_the_primarys_present_blank_is_none_and_direct_is_none(self):
+        assert cred.resolve(_p(BASE))["kea6"].url == "https://a:8000"
+        assert cred.resolve(_p(BASE + "[kea6]\napi_url =\n"))["kea6"].url == ""
+        direct = BASE.replace("[kea]\n", "[kea]\nconnection_mode = direct\n")
+        assert (
+            cred.resolve(_p(direct))["kea6"].url == ""
+            and cred.resolve(_p(direct + "[kea6]\napi_url =\n"))["kea6"].url == ""
+        )
+        assert cred.resolve(_p(direct + "[kea6]\napi_url = https://a:8006\n"))["kea6"].url == "https://a:8006"
+
+    def test_the_user_absent_on_the_same_host_is_the_primarys_present_blank_is_none_and_another_host_is_none(self):
+        same = cred.resolve(_p(BASE + "[kea6]\napi_url = https://a:8006\n"))["kea6"]
+        blank = cred.resolve(_p(BASE + "[kea6]\napi_url = https://a:8006\napi_user =\n"))["kea6"]
+        other = cred.resolve(_p(BASE + "[kea6]\napi_url = https://b:8006\n"))["kea6"]
+        own = cred.resolve(_p(BASE + "[kea6]\napi_url = https://b:8006\napi_user = mine\n"))["kea6"]
+        assert (same.user, blank.user, other.user, own.user) == ("u", "", "", "mine")
+
+    def test_an_extra_servers_ipv6_url_blank_with_a_password_is_no_endpoint_never_the_v4_url(self):
+        r = cred.resolve(
+            _p(
+                BASE
+                + "[kea_server_2]\napi_url = https://b:8000\napi_pass = S\napi6_url =\napi6_pass = S\n".replace(
+                    "\napi6_pass", "\napi6_pass"
+                )
+            )
+        )
+        assert r["server_2_v6"].url == "" and r["server_2_v6"].password == "S"
+
+    def test_a_servers_d2_user_follows_the_servers_on_the_same_host_only(self):
+        cfg = BASE + "[kea_server_2]\napi_url = https://b:8000\napi_pass = P\napi_user = su\napi_d2_url = {}\n"
+        assert cred.resolve(_p(cfg.format("https://b:53001")))["server_2_d2"].user == "su"
+        assert cred.resolve(_p(cfg.format("https://c:53001")))["server_2_d2"].user == ""
+
+    def test_the_database_user_follows_the_same_rule(self):
+        assert cred.resolve(_p(BASE + "[kea6_db]\nhost = db1\n"))["kea6_db"].user == "k"
+        assert cred.resolve(_p(BASE + "[kea6_db]\nhost = db2\n"))["kea6_db"].user == ""
+
+
+class TestAFirstAddressIsAMove:
+    """Q181, V2: a saved password that had NO address and is given one is a move, unless the password was typed in this write."""
+
+    @staticmethod
+    def _pair(before_text, after_text):
+        return cred.resolve(_p(before_text)), cred.resolve(_p(after_text))
+
+    DIRECT = "[kea]\nconnection_mode = direct\napi_url = https://a:8004\napi_user = u\napi_pass = S\n"
+
+    def test_a_saved_password_given_its_first_address_untyped_is_refused_with_the_sentence(self):
+        before, after = self._pair(
+            self.DIRECT + "[kea6]\napi_pass = K6\n", self.DIRECT + "[kea6]\napi_pass = K6\napi_url = https://k6:8006\n"
+        )
+        assert "is being given its first address" in cred.move_refusal(before, after)
+
+    def test_typed_it_passes(self):
+        before, after = self._pair(
+            self.DIRECT + "[kea6]\napi_pass = K6\n", self.DIRECT + "[kea6]\napi_pass = K6\napi_url = https://k6:8006\n"
+        )
+        assert cred.move_refusal(before, after, typed={"kea6"}) == ""
+
+    def test_a_new_section_with_its_password_typed_passes(self):
+        before, after = self._pair(
+            self.DIRECT, self.DIRECT + "[kea_server_2]\napi_url = https://b:8004\napi_pass = P\n"
+        )
+        assert cred.move_refusal(before, after, typed={"server_2"}) == ""
+
+    def test_no_password_before_then_an_address_is_free(self):
+        before, after = self._pair(
+            self.DIRECT + "[kea6]\napi_user = x\n", self.DIRECT + "[kea6]\napi_user = x\napi_url = https://k6:8006\n"
+        )
+        assert cred.move_refusal(before, after) == ""
+
+    def test_the_writer_refuses_it_byte_identical(self, tmp_path, monkeypatch):
+        from jen import extensions
+        from jen.config import ConfigChangeRefused, app_config
+
+        path = tmp_path / "jen.config"
+        path.write_text(self.DIRECT + "[kea6]\napi_pass = K6\n", encoding="utf-8")
+        monkeypatch.setattr(extensions, "CONFIG_FILE", str(path))
+        monkeypatch.setattr(app_config, "reload", lambda: None)
+        monkeypatch.setattr("jen.config._identity_guards", [])
+        before = path.read_bytes()
+        with pytest.raises(ConfigChangeRefused, match="first address"):
+            app_config.write_values([("kea6", "api_url", "https://k6:8006")])
+        assert path.read_bytes() == before
+        app_config.write_values([("kea6", "api_url", "https://k6:8006")], typed={"kea6"})
+        assert "k6:8006" in path.read_text(encoding="utf-8")
+
+
+class TestNothingDownstreamDecides:
+    """Q181, V1: a whole-tree source test - no `or` fallback on a url, user or password key of a server dict anywhere under jen/."""
+
+    PATTERNS = ("or v4_url_fallback", "v4_url_fallback", "fallback=primary_user", "fallback=primary_pass")
+
+    def test_there_is_no_fallback_left_in_the_tree(self):
+        import pathlib
+        import re
+
+        root = pathlib.Path(__file__).resolve().parent.parent / "jen"
+        hits = []
+        key = re.compile(
+            r"""or\s+server\.get\(\s*["'](?:api6?_?(?:d2_)?(?:url|user|pass)|api_d2_(?:url|user|pass)|api6_(?:url|user|pass))["']"""
+        )
+        for path in root.rglob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            for needle in self.PATTERNS:
+                if needle in text and path.name != "credentials.py":
+                    hits.append((path.name, needle))
+            if key.search(text):
+                hits.append((path.name, "an `or server.get(<url/user/pass>)`"))
+        assert hits == [], hits
