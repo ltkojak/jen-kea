@@ -184,6 +184,17 @@ the DDNS status context and `ddns()` (the Verify tab); the rank table in `save_m
 - `tests/test_q171_access.py::TestDdnsStatusIsScoped`
 - `tests/test_settings.py::TestMfaPolicyIsNeverWeakenedByAnAdmin`
 
+### RBAC-004 - Where Jen reaches a Kea server, and so where its credentials go, is a superadmin's setting with a recent password
+**Rule.** A config write that changes which Kea a server is reached on - the API URL, the SSH host, user or config path, the connection mode, a server added or removed - is a superadmin's, with a password
+confirmed in the last ten minutes, whichever route (or plugin, restore or hand-made request) asked. The rule is asked where every write passes, not on a list of routes: a second identity guard beside the
+investigation one. Outside a request (`install.sh --configure`, tools) and for a request that is not a signed-in session (an API key) there is no caller to judge. An admin sees the cards as facts and the
+probe is limited to the host Jen already reaches. A password-only change is not an identity change here; CRED-002 judges it where the form is.
+**Established.** Q179 (the beta.9 review: an admin could point the Kea API, SSH, D2 or an additional server at a host of their own and receive the stored credential).
+**Enforced at.** `access.identity_change_needs_superadmin`, registered at import and imported by `create_app`; asked by `jen.config._run_identity_guards` from `AppConfig._write_parser`.
+**Tests.**
+- `tests/test_identity_guard.py::TestIdentityIsASuperadminsSetting`
+- `tests/test_kea_connection_forms.py::TestEveryIdentityRouteIsASuperadminsForm`
+
 ### AUTH-001 - A password change ends every other session of the account
 **Rule.** A session carries a fingerprint of the password hash it was opened under; `load_user` ends the session on its next request when the row's fingerprint is no longer the same, and the session
 that made the change is rebuilt and stays. `token_version` moves in the same statement (it refreshes a cached role or subnet list; it never ends a session by itself).
@@ -375,8 +386,9 @@ id in one transaction before the next read and starts the server afresh; histori
 Two behaviours, by consequence. A LOOKUP credential (the DDNS token) is REMOVED when the provider or its address changes, with a warning, and never sent to the new place. A CONNECTION credential (the Kea API,
 Kea6, D2, an additional server's, Kea's database, Jen's database) is REQUIRED for a new endpoint: the form refuses a blank password with one sentence and writes nothing; "Inherit", where a form has one, is the way out.
 A password a form INHERITS (Kea6 and D2 use the Kea API's when they have none of their own, and "Inherit" removes theirs) stays with the Kea API's HOST: another port of the same host is the same Kea,
-a different host needs its password typed, "Inherit" included (`auth.same_host`, `infrastructure._inherited_secret_refusal`). A genuinely new additional-server row inherits the primary's password by design (an HA peer is a
-different host with the same credential), and the setup wizard and the probe are the superadmin's and the admin's deliberate tests of a typed address.
+a different host needs its password typed, "Inherit" included (`auth.same_host`, `infrastructure._inherited_secret_refusal`). A genuinely new additional-server row takes the primary's password only through its own "Share the primary's API password" box (CRED-003; Q178 let it inherit silently), and the setup wizard
+and the probe are the superadmin's deliberate tests of a typed address (an admin's probe is limited to the host Jen already reaches, RBAC-004). A form that offers "Inherit" AND a password box gets one
+answer: ticking both is refused (`infrastructure._one_answer_for_a_secret`), and the checks judge the EFFECTIVE secret.
 (DNS-CRED-001 is the provider-level half of the same rule.)
 **Established.** Q178 (the beta.8 review: Technitium at A to Technitium at B kept A's token, and six more forms kept a blank password across a new URL or host).
 **Enforced at.** `auth.same_endpoint`, through `infrastructure._secret_for_new_endpoint` (every connection route, before its write) and `save_infra_ddns`'s `_apply`.
@@ -388,7 +400,19 @@ different host with the same credential), and the setup wizard and the probe are
 - `tests/test_kea_connection_forms.py::TestAnAdditionalServer`
 - `tests/test_kea_connection_forms.py::TestTheDatabaseForms`
 - `tests/test_kea_connection_forms.py::TestAPasswordTheFormInheritsStaysWithTheKeaHost`
+- `tests/test_kea_connection_forms.py::TestOneAnswerForASecret`
 - `tests/test_ddns.py::TestADifferentEndpointIsNotTheSameProvider`
+
+### CRED-003 - An inherited secret used on a different host is named
+**Rule.** A secret a server inherits (`[kea6]`, `[d2]`, `[kea6_db]` and an additional server fall back to the Kea API's, or Kea's database's, password) is the password of the endpoint it was typed for. The
+derivation keeps the fall back - an upgrade must not break a working HA config - so the rule is that Jen NAMES it: the Configuration Doctor's `credential-inherited-across-hosts` (info) says, for each
+inherited secret used on a different host from the secret's own endpoint (`auth.same_host`), both hosts, and the Health check carries the same sentence. A NEW additional-server row takes the primary's
+password only through its own checkbox, and a row that keeps a password keeps the one its connection resolves (its own, else the primary's), so moving it to a new address needs the password typed.
+**Established.** Q179 (the beta.9 review: a section with no `api_pass` of its own was compared against nothing, and a new row inherited the primary's silently).
+**Enforced at.** `config_doctor._check_credential_inherited_across_hosts` (called by `diagnose`, Health's `_config_doctor` and the Doctor page) and `infrastructure.save_extra_servers`' `_rewrite_extra_servers`.
+**Tests.**
+- `tests/test_config_doctor.py::TestACredentialInheritedAcrossHosts`
+- `tests/test_kea_connection_forms.py::TestAnAdditionalServerUsesTheCredentialItIsGiven`
 
 ### LOG-CACHE-002 - What a cache remembers about its readers is bounded by what is in flight, an unrelated key never waits, and a read begun before a clear is not kept
 **Rule.** A second reader of the SAME key waits for the first one's read through a table of in-flight reads whose entries live only as long as their read - never one lock per key kept for the life of the process,

@@ -748,6 +748,74 @@ def _check_logger_output(dhcp4_cfg) -> list[Finding]:
     return out
 
 
+def _host_of(url: str) -> str:
+    """The host a stored address names, for a sentence (a URL's host, or a bare `host[:port]`'s); the address itself when it cannot be parsed."""
+    from jen.services import auth as _auth
+
+    parts = _auth._endpoint_parts(url)
+    return parts[1] if parts else (url or "").strip()
+
+
+def _check_credential_inherited_across_hosts(jen_cfg) -> list[Finding]:
+    """CRED-003 (v5.69.0-beta.10, Q179): `[kea6]`, `[d2]`, `[kea6_db]` and an additional server fall back to a saved secret when they have none of their own, and the fall back
+    does not look at where they point. Derivation keeps it - an upgrade must not break a working HA config - so the Doctor NAMES it: an inherited secret used on a different host from
+    the secret's own endpoint is a password sent to a place it was not typed for, whoever configured it (a hand edit, an import, a form before Q178). Info, never a failure: it may be
+    exactly what the operator wants, and then they know it. `jen_cfg` is the loaded `jen.config` parser (anything with `has_section`/`has_option`/`get`/`sections`); None or empty gives nothing."""
+    if jen_cfg is None:
+        return []
+    from jen.services import auth as _auth
+
+    def get(section, key):
+        return (jen_cfg.get(section, key, fallback="") or "").strip() if jen_cfg.has_section(section) else ""
+
+    why = (
+        "A daemon or server with no password of its own uses the one saved for the Kea API (or Kea's database), and Jen sends it wherever that daemon or server is. On the SAME host that is the design - "
+        "Kea6 and D2 are other daemons of one Kea. On a DIFFERENT host it is a credential given to a machine it was never typed for: check that the two share it on purpose, or give the second its own password."
+    )
+    out: list[Finding] = []
+
+    def note(where, own_url, secret_name, secret_url):
+        out.append(
+            _finding(
+                "credential-inherited-across-hosts",
+                "info",
+                "A saved password is inherited by a different host",
+                f"{where} ({_host_of(own_url)}) has no password of its own and uses {secret_name} ({_host_of(secret_url)}), a different host.",
+                where,
+                fix_url="/settings/kea",
+                why=why,
+            )
+        )
+
+    kea_url, kea_pass = get("kea", "api_url"), get("kea", "api_pass")
+    if kea_pass:
+        for section in ("kea6", "d2"):
+            url = get(section, "api_url")
+            if url and not get(section, "api_pass") and not _auth.same_host(kea_url, url):
+                note(f"[{section}]", url, "the Kea API's password", kea_url)
+    db_host, db_pass = get("kea_db", "host"), get("kea_db", "password")
+    if db_pass:
+        host6 = get("kea6_db", "host")
+        if host6 and not get("kea6_db", "password") and not _auth.same_host(db_host, host6):
+            note("[kea6_db]", host6, "Kea's database password", db_host)
+    if kea_pass:
+        for section in jen_cfg.sections():
+            if not section.startswith("kea_server_"):
+                continue
+            url = get(section, "api_url")
+            if url and not get(section, "api_pass") and not _auth.same_host(kea_url, url):
+                note(f"[{section}]", url, "the Kea API's password", kea_url)
+    for section in jen_cfg.sections():
+        if not section.startswith("kea_server_"):
+            continue
+        url6, url4 = get(section, "api6_url"), get(section, "api_url")
+        own = get(section, "api6_pass")
+        has4 = get(section, "api_pass") or kea_pass
+        if url6 and url4 and not own and has4 and not _auth.same_host(url4, url6):
+            note(f"[{section}] (IPv6)", url6, "the server's own API password", url4)
+    return out
+
+
 def group_findings(findings: list[Finding]) -> list[dict]:
     """Collapse findings that are the same KIND — same check id and severity — into
     one group, in order of first appearance (diagnose() already sorts most severe
@@ -783,6 +851,7 @@ def diagnose(
     hosts: list[dict] | None = None,
     lease_history_summary=None,
     ha_configs: dict | None = None,
+    jen_config=None,
 ) -> list[Finding]:
     """Every finding for the given config, most severe first. `hosts` is
     reservation rows from Kea's host database — {subnet_id,
@@ -791,9 +860,11 @@ def diagnose(
     {server_id: kea_ha.ha_config() result} for every configured server;
     the HA-comparison finding only fires with exactly two non-null
     entries. `lease_history_summary` is accepted for forward
-    compatibility but not used by any check yet."""
+    compatibility but not used by any check yet. `jen_config` is Jen's own loaded configuration (the parser), for the one check that reads it
+    (`credential-inherited-across-hosts`, CRED-003); it does not depend on the Kea config being readable."""
     out: list[Finding] = []
     out += _check_ha_peer_semantic_diff(ha_configs)
+    out += _check_credential_inherited_across_hosts(jen_config)
     if not dhcp4_cfg:
         out.sort(key=lambda f: _SEVERITY_ORDER.get(f["severity"], 3))
         return out

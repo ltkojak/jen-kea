@@ -54,7 +54,7 @@
                 {% endfor %}
                 <div class="u-865c33">{{ c.kinds[0].detail }}</div>
             </td>
-            <td data-m="hide" class="hide-mobile">{% for sid in c.server_ids %}<a href="/problems?server={{ sid }}">{{ server_name(sid) }}</a>{% if sid in c.earlier_server_ids %} <span class="muted">(earlier host)</span>{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}</td>
+            <td data-m="hide" class="hide-mobile">{% for sid in c.server_ids %}<a href="/problems?server={{ sid }}">{{ server_name(sid) }}</a>{% if sid in c.earlier_server_ids %} <span class="muted">(earlier host{% if c.earlier_resolved[sid] %} · resolved {{ c.earlier_resolved[sid]|utcfmt }}{% endif %})</span>{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}</td>
             <td data-m="secondary" class="mono muted">{{ c.last_seen|utcfmt }}</td>
             <td data-m="trailing">
                 <button type="button" class="btn btn-sm btn-secondary" hx-get="/problems/answer?q={{ c.who|urlencode }}" hx-trigger="click" hx-target="#why-{{ loop.index }}" hx-swap="innerHTML">Why?</button>

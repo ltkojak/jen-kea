@@ -1776,10 +1776,11 @@ class TestAReplacedHostIsANewGeneration:
         self._row(db, generation=1, mac="aa:bb:cc:dd:ee:b1")
         body = logged_in_client.get("/problems").get_data(as_text=True)
         assert "aa:bb:cc:dd:ee:a1" in body and "aa:bb:cc:dd:ee:b1" in body
-        assert body.count("(earlier host)") == 1
+        assert body.count("(earlier host") == 1
         row_a = body.split("aa:bb:cc:dd:ee:a1")[1].split("</tr>")[0]
         row_b = body.split("aa:bb:cc:dd:ee:b1")[1].split("</tr>")[0]
-        assert "(earlier host)" in row_a and "(earlier host)" not in row_b
+        # (Q179 adjustment, T4: the label says when the earlier host's rows were closed)
+        assert "(earlier host · resolved 2026-10-04 11:55 UTC)" in row_a and "(earlier host" not in row_b
 
     def test_the_dashboard_never_counts_an_earlier_generation(self, db, stack):
         self._put(db, "client_problems_gen:1", "1")
@@ -1827,7 +1828,7 @@ class TestTheInboxShowsOnlyTheReplacementsRecentPast:
         clients = cp.group_by_client(rows)
         assert clients and all(k["earlier"] for c in clients for k in c["kinds"])
         body = logged_in_client.get("/problems").get_data(as_text=True)
-        assert "(earlier host)" in body
+        assert "(earlier host · resolved" in body
 
     def test_removing_a_server_closes_its_open_rows_so_a_reused_number_inherits_nothing(self, db, stack):
         self._row(db, "aa:bb:cc:dd:ee:c4", 0, NOW - timedelta(minutes=20), None)
@@ -1846,3 +1847,56 @@ class TestTheInboxShowsOnlyTheReplacementsRecentPast:
             assert cur.fetchone()["resolved_at"] is not None, "the removed server's open row is closed"
             cur.execute("SELECT resolved_at FROM client_problems WHERE server_id=1")
             assert cur.fetchone()["resolved_at"] is None, "a live server's rows are untouched"
+
+
+class TestTheEarlierHostLabelSaysWhenItWasClosed:
+    """Q179, T4: "earlier host · resolved <time>" beside the server name; the kind chips, the dashboard and Health count only the current generation's open rows."""
+
+    @pytest.fixture(autouse=True)
+    def _clock_and_cleanup(self, db, monkeypatch):
+        monkeypatch.setattr(cp, "_now", lambda: NOW)
+        TestTheSweepRecordsWhetherItCanReadEachServer._wipe(db)
+        yield
+        with db.cursor() as cur:
+            cur.execute("DELETE FROM settings WHERE setting_key LIKE 'client_problems_%'")
+            cur.execute("DELETE FROM client_problems")
+        db.commit()
+
+    def test_the_label_names_the_close_time_and_the_chip_does_not_count_the_row(self, db, stack, logged_in_client):
+        helper = TestTheInboxShowsOnlyTheReplacementsRecentPast
+        TestProgressBelongsToItsEndpoint._put(db, "client_problems_gen:1", "1")
+        helper._row(None, db, "aa:bb:cc:dd:ee:d1", 0, NOW - timedelta(hours=2), NOW - timedelta(minutes=30))
+        body = logged_in_client.get("/problems").get_data(as_text=True)
+        assert "aa:bb:cc:dd:ee:d1" in body
+        assert "earlier host" in body and "resolved 2026-10-04 11:30 UTC" in body
+        import re
+
+        option = re.search(r'<option value="nak"[^>]*>([^<]*)</option>', body).group(1)
+        assert "(" not in option, "an earlier host's row is listed and not counted"
+
+    def test_the_dashboards_widget_counts_only_the_current_generation(self, db, stack):
+        helper = TestTheInboxShowsOnlyTheReplacementsRecentPast
+        TestProgressBelongsToItsEndpoint._put(db, "client_problems_gen:1", "1")
+        helper._row(None, db, "aa:bb:cc:dd:ee:d2", 0, NOW - timedelta(minutes=20), NOW - timedelta(minutes=10))
+        helper._row(None, db, "aa:bb:cc:dd:ee:d3", 1, NOW - timedelta(minutes=5), None)
+        w = cp.widget(None, True, now=NOW)
+        assert w["total"] == 1 and w["counts"] == {"nak": 1}
+
+    def test_a_row_with_no_close_time_is_labelled_without_one(self):
+        rows = [
+            {
+                "server_id": 1,
+                "generation": 0,
+                "current_generation": 1,
+                "kind": "nak",
+                "mac": "aa:bb:cc:dd:ee:d4",
+                "ip": "",
+                "count": 1,
+                "detail": "",
+                "last_seen": NOW,
+                "first_seen": NOW,
+                "resolved_at": None,
+            }
+        ]
+        (c,) = cp.group_by_client(rows)
+        assert c["earlier_server_ids"] == [1] and c["earlier_resolved"] == {1: None}

@@ -581,3 +581,72 @@ class TestTwoWritersOfDnsNames:
     def test_a_warning_never_blocks_anything_it_is_only_a_finding(self):
         two = next(f for f in doctor.diagnose(self._cfg(True, [self.HOOK]), hosts=[]) if f["id"] == "ddns-two-writers")
         assert two["why"] and two["fix_url"]
+
+
+class TestACredentialInheritedAcrossHosts:
+    """CRED-003 (v5.69.0-beta.10, Q179): a saved password used on a different host from the secret's own endpoint is named, with both hosts (info, never a failure)."""
+
+    @staticmethod
+    def _cfg(**sections):
+        import configparser
+
+        p = configparser.ConfigParser(interpolation=None)
+        for name, values in sections.items():
+            p[name.replace("__", "_")] = values
+        return p
+
+    def _notes(self, cfg):
+        return [f for f in doctor.diagnose(None, jen_config=cfg) if f["id"] == "credential-inherited-across-hosts"]
+
+    def test_d2_on_another_host_with_no_password_of_its_own_names_both_hosts(self):
+        cfg = self._cfg(kea={"api_url": "https://kea-b:8000", "api_pass": "S"}, d2={"api_url": "https://kea-a:53001"})
+        (note,) = self._notes(cfg)
+        assert note["severity"] == "info" and "kea-a" in note["detail"] and "kea-b" in note["detail"]
+        assert note["where"] == "[d2]" and note["fix_url"] == "/settings/kea"
+
+    def test_the_same_host_on_its_own_port_is_the_design_and_gives_no_note(self):
+        cfg = self._cfg(kea={"api_url": "https://kea-a:8000", "api_pass": "S"}, d2={"api_url": "https://kea-a:53001"})
+        assert self._notes(cfg) == []
+
+    def test_a_daemon_with_its_own_password_gives_no_note(self):
+        cfg = self._cfg(
+            kea={"api_url": "https://kea-b:8000", "api_pass": "S"},
+            d2={"api_url": "https://kea-a:53001", "api_pass": "own"},
+        )
+        assert self._notes(cfg) == []
+
+    def test_no_primary_password_means_nothing_is_inherited(self):
+        cfg = self._cfg(kea={"api_url": "https://kea-b:8000"}, d2={"api_url": "https://kea-a:53001"})
+        assert self._notes(cfg) == []
+
+    def test_kea6_and_an_additional_server_and_the_kea6_database_are_named_too(self):
+        cfg = self._cfg(
+            kea={"api_url": "https://kea-b:8000", "api_pass": "S"},
+            kea6={"api_url": "https://kea-a:8006"},
+            kea_db={"host": "db-b", "password": "P"},
+            kea6_db={"host": "db-a"},
+            kea_server_2={"api_url": "https://peer:8000"},
+        )
+        assert sorted(f["where"] for f in self._notes(cfg)) == ["[kea6]", "[kea6_db]", "[kea_server_2]"]
+
+    def test_an_additional_servers_ipv6_endpoint_on_another_host_uses_its_api_password(self):
+        cfg = self._cfg(
+            kea={"api_url": "https://kea-b:8000", "api_pass": "S"},
+            kea_server_2={"api_url": "https://peer:8000", "api_pass": "own", "api6_url": "https://peer6:8006"},
+        )
+        (note,) = self._notes(cfg)
+        assert note["where"] == "[kea_server_2] (IPv6)" and "peer6" in note["detail"] and "peer" in note["detail"]
+
+    def test_none_and_an_empty_file_give_nothing_and_the_check_needs_no_kea_config(self):
+        assert doctor.diagnose(None, jen_config=None) == []
+        assert self._notes(self._cfg()) == []
+        cfg = self._cfg(kea={"api_url": "https://kea-b:8000", "api_pass": "S"}, d2={"api_url": "https://kea-a:53001"})
+        assert [f["id"] for f in doctor.diagnose(None, jen_config=cfg)] == ["credential-inherited-across-hosts"]
+
+    def test_health_and_the_page_carry_the_same_sentence(self):
+        import inspect
+
+        from jen.services import health
+
+        src = inspect.getsource(health._config_doctor)
+        assert "jen_config=extensions.cfg" in src and "inherited" in src

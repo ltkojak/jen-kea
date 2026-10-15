@@ -362,8 +362,11 @@ def _helper_by_hand_command() -> str:
 
 @bp.route("/settings/infrastructure/save-kea", methods=["POST"])
 @login_required
-@_admin_required
+@_superadmin_required
+@_recent_auth_required(minutes=10)
 def save_infra_kea():
+    """RBAC-004 (v5.69.0-beta.10, Q179): where Jen reaches Kea, and so where its credentials go, is a superadmin's setting with a recent password (the config writer asks the
+    same question for every route, `access.identity_change_needs_superadmin`; the decorators send a person to confirm rather than let them meet the sentence)."""
     api_url = request.form.get("api_url", "").strip()
     api_user = request.form.get("api_user", "").strip()
     api_pass = request.form.get("api_pass", "").strip()
@@ -542,7 +545,7 @@ def save_infra_kea6():
         extensions.cfg.get("kea_db", "host", fallback=""),
         extensions.cfg.get("kea_db", "password", fallback=""),
     )
-    for stored_url, new_url, new_secret, stored_secret, inherit, v4_url, v4_secret, what in (
+    for stored_url, new_url, new_secret, stored_secret, inherit, v4_url, v4_secret, what, parent in (
         (
             extensions.cfg.get("kea6", "api_url", fallback=""),
             api_url,
@@ -552,6 +555,7 @@ def save_infra_kea6():
             v4_api_url,
             v4_api_pass,
             "Kea6 API address",
+            "Kea6 API password|the Kea API's",
         ),
         (
             extensions.cfg.get("kea6_db", "host", fallback=""),
@@ -562,12 +566,19 @@ def save_infra_kea6():
             v4_db_host,
             v4_db_pass,
             "Kea6 database host",
+            "Kea6 database password|the Kea database's",
         ),
     ):
-        if (stored_secret or "").strip() and not inherit:
-            refusal = _secret_for_new_endpoint(stored_url, new_url, new_secret, stored_secret, what)
+        # RBAC/CRED (Q179, T2): ONE answer for a secret - "Inherit" and a typed password at once is a contradiction, and the form does not guess which was meant. The
+        # EFFECTIVE secret is what the checks below judge: nothing when Inherit is ticked, else what was typed.
+        refusal = _one_answer_for_a_secret(inherit, new_secret, parent)
+        effective_secret = "" if inherit else new_secret
+        if refusal:
+            pass
+        elif (stored_secret or "").strip() and not inherit:
+            refusal = _secret_for_new_endpoint(stored_url, new_url, effective_secret, stored_secret, what)
         else:
-            refusal = _inherited_secret_refusal(v4_url, new_url, new_secret, v4_secret, what)
+            refusal = _inherited_secret_refusal(v4_url, new_url, effective_secret, v4_secret, what)
         if refusal:
             flash(refusal, "error")
             return redirect(url_for("settings.settings_kea"))
@@ -629,7 +640,8 @@ def save_infra_kea6():
 
 @bp.route("/settings/infrastructure/save-d2", methods=["POST"])
 @login_required
-@_admin_required
+@_superadmin_required
+@_recent_auth_required(minutes=10)
 def save_infra_d2():
     """v5.23.0 (Q19) — [d2] api_url/api_user/api_pass, same inheritance
     shape as save_infra_kea6 above (minus a _db companion — D2 has no
@@ -654,15 +666,19 @@ def save_infra_d2():
 
     # CRED-002 (Q178): D2's own saved password stays with D2's endpoint; the password it INHERITS from the Kea API (no own one, or "Inherit" ticked) stays with the Kea API's host
     own_pass = extensions.cfg.get("d2", "api_pass", fallback="")
-    if own_pass.strip() and not inherit_api_pass:
+    effective_pass = "" if inherit_api_pass else api_pass  # Q179 (T2): the secret the checks judge is the EFFECTIVE one
+    refusal = _one_answer_for_a_secret(inherit_api_pass, api_pass, "D2 API password|the Kea API's")
+    if refusal:
+        pass
+    elif own_pass.strip() and not inherit_api_pass:
         refusal = _secret_for_new_endpoint(
-            extensions.cfg.get("d2", "api_url", fallback=""), api_url, api_pass, own_pass, "D2 API address"
+            extensions.cfg.get("d2", "api_url", fallback=""), api_url, effective_pass, own_pass, "D2 API address"
         )
     else:
         refusal = _inherited_secret_refusal(
             extensions.cfg.get("kea", "api_url", fallback=""),
             api_url,
-            api_pass,
+            effective_pass,
             extensions.cfg.get("kea", "api_pass", fallback=""),
             "D2 API address",
         )
@@ -832,6 +848,15 @@ def probe_kea():
                     "(e.g. https://kea:8004).",
                 }
             ), 400
+        # RBAC-004 / CRED-002 (Q179): the probe sends the saved Kea credentials to the address it is given. An admin may test another daemon of the host Jen already
+        # reaches; sending them to a different host is a superadmin's deliberate test of an address they typed.
+        if current_user.role != "superadmin" and not __auth.same_host(configured_url, candidate):
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": "Only a superadmin probes an address on a different host from the one Jen reaches - the probe sends the saved Kea credentials to it.",
+                }
+            ), 403
         version_text, err = _probe_once(candidate, user, pwd, omit_service=True, service=service)
         attempts.append({"url": candidate, "mode": "direct", "error": err or ""})
         answered_mode = "direct" if version_text else None
@@ -1238,6 +1263,7 @@ def _undo_remote_change(server: dict, service: str, undo, summary: str, sentence
 @bp.route("/settings/infrastructure/direct-socket/<int:server_id>/<service>", methods=["POST"])
 @login_required
 @_superadmin_required
+@_recent_auth_required(minutes=10)
 @_holding_identity_lock
 def setup_direct_socket(server_id, service):
     """v5.29.0 (Q29, B1) — give one daemon on one server its own http
@@ -1662,6 +1688,7 @@ def rotate_kea_ca():
 @bp.route("/settings/infrastructure/direct-socket/<int:server_id>/<service>/remove", methods=["POST"])
 @login_required
 @_superadmin_required
+@_recent_auth_required(minutes=10)
 @_holding_identity_lock
 def remove_direct_socket(server_id, service):
     """v5.29.0 (Q29, B2) — the reverse of setup_direct_socket for ONE
@@ -1959,7 +1986,8 @@ def save_infra_jen_db():
 
 @bp.route("/settings/infrastructure/save-ssh", methods=["POST"])
 @login_required
-@_admin_required
+@_superadmin_required
+@_recent_auth_required(minutes=10)
 def save_infra_ssh():
     host = request.form.get("host", "").strip()
     user = request.form.get("user", "").strip()
@@ -2021,7 +2049,8 @@ def save_infra_ssh():
 
 @bp.route("/settings/infrastructure/save-extra-servers", methods=["POST"])
 @login_required
-@_admin_required
+@_superadmin_required
+@_recent_auth_required(minutes=10)
 def save_extra_servers():
     # v5.10.3 — extra_id[] carries each row's ORIGINAL kea_server_N number
     # (blank for a row added in the UI). It is the identity used to carry a
@@ -2039,6 +2068,8 @@ def save_extra_servers():
     ssh_hosts = request.form.getlist("extra_ssh_host[]")
     ssh_users = request.form.getlist("extra_ssh_user[]")
     kea_confs = request.form.getlist("extra_kea_conf[]")
+    # CRED-003 (Q179, T3): one "1"/"0" per row, in row order - a NEW row takes the primary's API password only through its own checkbox
+    shares = request.form.getlist("extra_share_pass[]")
 
     for h in ssh_hosts:
         if h.strip() and not __auth.valid_ssh_target(h.strip()):
@@ -2136,7 +2167,8 @@ def save_extra_servers():
         # A tampered/duplicated id must not pull another server's secrets in.
         seen_ids = set()
 
-        for (
+        direct = __caps.is_direct()
+        for row_idx, (
             extra_id,
             name,
             role,
@@ -2149,20 +2181,22 @@ def save_extra_servers():
             ssh_host,
             ssh_user,
             kea_conf,
-        ) in zip(
-            ids,
-            names,
-            roles,
-            api_urls,
-            api_users,
-            api_passes,
-            api6_urls,
-            api6_users,
-            api6_passes,
-            ssh_hosts,
-            ssh_users,
-            kea_confs,
-            strict=True,
+        ) in enumerate(
+            zip(
+                ids,
+                names,
+                roles,
+                api_urls,
+                api_users,
+                api_passes,
+                api6_urls,
+                api6_users,
+                api6_passes,
+                ssh_hosts,
+                ssh_users,
+                kea_confs,
+                strict=True,
+            )
         ):
             if not api_url.strip():
                 continue
@@ -2175,18 +2209,39 @@ def save_extra_servers():
             seen_ids.add(out)
             prev = existing.get(orig_id, {}) if orig_id is not None else {}
 
-            # CRED-002 (Q178): a row that keeps its saved password must keep its endpoint. Nothing is written until this callback returns, so raising is the refusal.
-            # (A genuinely NEW row has nothing stored and inherits the primary's password as it always has; that fallback is the documented way to add a peer.)
-            for stored_url, new_url, new_secret, stored_secret, what in (
-                (prev.get("api_url"), api_url, api_pass, prev.get("api_pass"), "API address"),
-                (prev.get("api6_url"), api6_url, api6_pass, prev.get("api6_pass"), "IPv6 API address"),
-            ):
-                refusal = _secret_for_new_endpoint(
-                    stored_url, new_url, new_secret, stored_secret, f"{what} of {name.strip() or f'Kea Server {out}'}"
-                )
-                if refusal:
-                    refused.append(refusal)
-                    raise _EndpointNeedsItsPassword()
+            # CRED-002 (Q178, Q179 T3): a row that keeps its saved password must keep its endpoint, and the password it keeps is the one it USES - what the connection resolves
+            # (`kea._endpoint_for`): its own, else (IPv6) the API password, else the primary's. A section with no `api_pass` of its own uses the primary's, so moving it to a new
+            # address with a blank box would send the primary's password there. Nothing is written until this callback returns, so raising is the refusal. A NEW row has no
+            # stored address to compare: it takes the primary's password only through its own checkbox (below), else what was typed, else none.
+            if orig_id is not None:
+                stored_api6_url = prev.get("api6_url") or ("" if direct else prev.get("api_url"))
+                new_api6_url = api6_url.strip() or ("" if direct else api_url.strip())
+                for stored_url, new_url, new_secret, stored_secret, what in (
+                    (
+                        prev.get("api_url"),
+                        api_url,
+                        api_pass,
+                        prev.get("api_pass") or extensions.KEA_API_PASS,
+                        "API address",
+                    ),
+                    (
+                        stored_api6_url,
+                        new_api6_url,
+                        api6_pass,
+                        prev.get("api6_pass") or prev.get("api_pass") or extensions.KEA_API_PASS,
+                        "IPv6 API address",
+                    ),
+                ):
+                    refusal = _secret_for_new_endpoint(
+                        stored_url,
+                        new_url,
+                        new_secret,
+                        stored_secret,
+                        f"{what} of {name.strip() or f'Kea Server {out}'}",
+                    )
+                    if refusal:
+                        refused.append(refusal)
+                        raise _EndpointNeedsItsPassword()
 
             sec = f"kea_server_{out}"
             cfg.add_section(sec)
@@ -2196,10 +2251,14 @@ def save_extra_servers():
             cfg.set(sec, "api_user", api_user.strip())
             if api_pass.strip():
                 cfg.set(sec, "api_pass", api_pass.strip())
-            else:
-                # Blank ⇒ keep THIS server's existing password (by id), or
-                # fall back to the primary's for a genuinely new row.
-                cfg.set(sec, "api_pass", prev.get("api_pass") or extensions.KEA_API_PASS)
+            elif orig_id is not None:
+                # Blank ⇒ keep THIS server's own saved password (by id). A section that had none keeps having none: the connection falls back to the primary's (the derivation keeps
+                # that, an upgrade must not break a working HA config) and the Configuration Doctor names it when the host differs - nothing is COPIED into it here (CRED-003).
+                if prev.get("api_pass"):
+                    cfg.set(sec, "api_pass", prev["api_pass"])
+            elif row_idx < len(shares) and shares[row_idx] == "1" and extensions.KEA_API_PASS:
+                # a NEW row: the primary's password only because the box "Share the primary's API password (an HA peer of the same Kea)" was ticked
+                cfg.set(sec, "api_pass", extensions.KEA_API_PASS)
             # v5.10.2 — per-server v6 endpoint. Blank managed field ⇒ key
             # absent (that IS the clear). api6_pass blank ⇒ preserve by id.
             if api6_url.strip():
@@ -2264,6 +2323,15 @@ def _secret_for_new_endpoint(stored_url, new_url, new_secret, stored_secret, wha
         f"The {what} changed: enter the password for the new endpoint - "
         "a saved password is never sent to one it was not typed for."
     )
+
+
+def _one_answer_for_a_secret(inherit: bool, typed: str, what_and_parent: str) -> str | None:
+    """CRED-002 (v5.69.0-beta.10, Q179, T2): a form that offers "Inherit" and a password box gets ONE answer for the secret. Ticking Inherit AND typing a password is a contradiction
+    - the old code wrote nothing for the typed one and said "saved" - so the form refuses it, with nothing written. `what_and_parent` is "<the secret>|<whose it inherits>"."""
+    if not (inherit and (typed or "").strip()):
+        return None
+    what, parent = what_and_parent.split("|", 1)
+    return f"Choose one for the {what}: inherit {parent} password, or type one."
 
 
 def _inherited_secret_refusal(v4_url, new_url, new_secret, v4_secret, what) -> str | None:

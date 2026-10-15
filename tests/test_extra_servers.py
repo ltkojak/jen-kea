@@ -310,7 +310,9 @@ class TestExtraServerIdentity:
         # but only coincidentally — the id space and the row count are
         # different things now that ids don't renumber contiguously).
         assert disk.get("kea_server_5", "api_url") == "http://s9:8000"
-        assert disk.get("kea_server_5", "api_pass") == "p4"  # the primary's, per isolated_config
+        # (Q179 adjustment: a new row has NO password key now - it takes the primary's only through its own "share" box, CRED-003; the connection still falls back to the
+        # primary's at runtime, and the Configuration Doctor names it when the host differs)
+        assert not disk.has_option("kea_server_5", "api_pass")
         assert not disk.has_option("kea_server_5", "ssh_key")
         assert disk.get("kea_server_2", "api_pass") == "P2"  # untouched
         assert disk.get("kea_server_4", "api_pass") == "P4"  # untouched
@@ -325,7 +327,9 @@ class TestExtraServerIdentity:
         # and lands one past the highest id that existed THIS save (2),
         # not at 2 itself.
         assert not disk.has_section("kea_server_2")
-        assert disk.get("kea_server_3", "api_pass") == "p4"  # the primary's fallback
+        assert not disk.has_option(
+            "kea_server_3", "api_pass"
+        )  # (Q179 adjustment: not copied in, see test_a_new_row_carries_nothing_over)
         assert not disk.has_option("kea_server_3", "ssh_key")
 
     def test_history_stays_attached_after_deleting_another_server(

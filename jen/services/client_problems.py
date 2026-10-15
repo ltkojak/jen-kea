@@ -304,6 +304,7 @@ def group_by_client(rows: list[dict]) -> list[dict]:
                 "detail": r.get("detail") or "",
                 "last_seen": r["last_seen"],
                 "earlier": r.get("current_generation") is not None and r.get("generation", 0) < r["current_generation"],
+                "resolved_at": r.get("resolved_at"),
             }
         )
         c["total"] += r["count"]
@@ -318,6 +319,11 @@ def group_by_client(rows: list[dict]) -> list[dict]:
         c["earlier_server_ids"] = [
             sid for sid in c["server_ids"] if all(k["earlier"] for k in c["kinds"] if k["server_id"] == sid)
         ]
+        # when the earlier host's rows were closed (the replacement), for the label "earlier host · resolved <time>" (Q179, T4): the latest close among that server's rows here
+        c["earlier_resolved"] = {
+            sid: max((k["resolved_at"] for k in c["kinds"] if k["server_id"] == sid and k["resolved_at"]), default=None)
+            for sid in c["earlier_server_ids"]
+        }
     return sorted(clients.values(), key=lambda c: c["last_seen"], reverse=True)
 
 
@@ -1113,7 +1119,7 @@ def fetch_open(
     clauses = [current, *where]
     with __db.jen_db() as db, db.cursor() as cur:
         cur.execute(
-            "SELECT p.id, p.server_id, p.generation, p.kind, p.mac, p.ip, p.subnet_id, p.first_seen, p.last_seen, p.`count`, p.detail, "  # nosec B608 - fixed clauses; values bound
+            "SELECT p.id, p.server_id, p.generation, p.kind, p.mac, p.ip, p.subnet_id, p.first_seen, p.last_seen, p.`count`, p.detail, p.resolved_at, "  # nosec B608 - fixed clauses; values bound
             f"{_CURRENT_GENERATION} AS current_generation "
             "FROM client_problems p LEFT JOIN settings g ON g.setting_key = CONCAT('client_problems_gen:', p.server_id) "
             f"WHERE {' AND '.join(clauses)} ORDER BY p.last_seen DESC LIMIT %s",

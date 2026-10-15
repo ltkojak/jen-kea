@@ -15,6 +15,7 @@ from flask_login import current_user, login_required
 import jen.services.config_doctor as __doctor
 import jen.services.health as __health
 import jen.services.kea as __kea
+from jen import extensions
 from jen.services.access import admin_required as _admin_required
 from jen.services.access import diagnostic_surface
 
@@ -40,7 +41,11 @@ def doctor_page():
 
     findings = []
     if cfg is not None:
-        findings = __doctor.diagnose(cfg, __health._doctor_hosts(), ha_configs=__health._doctor_ha_configs())
+        findings = __doctor.diagnose(
+            cfg, __health._doctor_hosts(), ha_configs=__health._doctor_ha_configs(), jen_config=extensions.cfg
+        )
+    else:
+        findings = __doctor.diagnose(None, jen_config=extensions.cfg)  # (CRED-003 reads Jen's own file, not Kea's)
 
     counts = {"fail": 0, "warn": 0, "info": 0}
     for f in findings:

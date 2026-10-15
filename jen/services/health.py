@@ -617,11 +617,14 @@ def _config_doctor(ctx) -> Check:
 
     c = Check("config_doctor", "Configuration Doctor", "kea", fix_url="/tools/doctor")
     cfg = ctx["dhcp4_config"]
+    # CRED-003 (v5.69.0-beta.10, Q179): a saved password inherited by a server on a different host is named here too, in the sentence the Doctor page gives
+    inherited = [f["detail"] for f in config_doctor.diagnose(None, jen_config=extensions.cfg)]
+    line = (" - " + "; ".join(inherited)) if inherited else ""
     if cfg is None:
-        c.status, c.detail = "skip", "config-get unavailable"
+        c.status, c.detail = "skip", "config-get unavailable" + line
         return c
 
-    findings = config_doctor.diagnose(cfg, _doctor_hosts(), ha_configs=_doctor_ha_configs())
+    findings = config_doctor.diagnose(cfg, _doctor_hosts(), ha_configs=_doctor_ha_configs(), jen_config=extensions.cfg)
     if not findings:
         c.status, c.detail = "ok", "no findings"
         return c
@@ -640,7 +643,7 @@ def _config_doctor(ctx) -> Check:
 
     if c.status == "ok":
         kinds = len(group_findings(infos))
-        c.detail = f"{len(infos)} note(s) of {kinds} kind{'' if kinds == 1 else 's'} — see /tools/doctor"
+        c.detail = f"{len(infos)} note(s) of {kinds} kind{'' if kinds == 1 else 's'} — see /tools/doctor{line}"
     else:
         first = fails[0] if fails else warns[0]
         c.detail = f"{first['title']}: {first['detail']} — {len(findings)} finding(s), see /tools/doctor"

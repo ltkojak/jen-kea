@@ -259,8 +259,8 @@ class TestAnAdditionalServer:
         )
         disk = _disk(isolated_config)
         assert disk.get("kea_server_2", "api_pass") == "P2"
-        assert disk.get("kea_server_3", "api_pass") == "S", (
-            "a genuinely new row has no saved password of its own and inherits the primary's, as documented"
+        assert not disk.has_option("kea_server_3", "api_pass"), (
+            "Q179 adjustment: a new row is given the primary's password only by its own 'share' box (CRED-003); without it nothing is copied into the section"
         )
 
 
@@ -323,13 +323,11 @@ class TestAPasswordTheFormInheritsStaysWithTheKeaHost:
     """Q178's adversarial pass: Kea6 and D2 use the Kea API's password when they have none of their own, and an admin may point D2 anywhere - the inherited secret must not go to a
     different host. Another port of the same host is the design (the daemons' own sockets)."""
 
-    def test_an_admin_pointing_d2_at_another_host_with_no_password_is_refused(
-        self, client, db, mock_kea, isolated_config
+    def test_pointing_d2_at_another_host_with_no_password_is_refused(
+        self, logged_in_client, db, mock_kea, isolated_config
     ):
-        from tests.conftest import restricted_client
-
-        c, _ = restricted_client(client, db, None, role="admin", username="q178_d2_admin")
-        r = c.post(
+        # (Q179 adjustment: this posted as an admin in Q178; the D2 form is a superadmin's now - the admin's refusal is TestEveryIdentityRouteIsASuperadminsForm)
+        r = logged_in_client.post(
             "/settings/infrastructure/save-d2", data={"api_url": "https://attacker.example:8000"}, follow_redirects=True
         )
         assert b"different host from the Kea API" in r.data
@@ -363,3 +361,330 @@ class TestAPasswordTheFormInheritsStaysWithTheKeaHost:
     ):
         r = _post(logged_in_client, "/settings/infrastructure/save-d2", api_url="")
         assert b"different host" not in r.data
+
+
+IDENTITY_ROUTES = [
+    ("/settings/infrastructure/save-kea", {"api_url": "https://elsewhere:8000", "api_user": "u4", "api_pass": "x"}),
+    ("/settings/infrastructure/save-ssh", {"host": "10.9.9.9", "user": "jen"}),
+    ("/settings/infrastructure/save-d2", {"api_url": "https://kea-a:53001", "api_pass": "x"}),
+    (
+        "/settings/infrastructure/save-extra-servers",
+        {
+            "extra_id[]": [""],
+            "extra_name[]": ["N"],
+            "extra_role[]": ["standby"],
+            "extra_api_url[]": ["https://s9:8000"],
+            "extra_api_user[]": [""],
+            "extra_api_pass[]": ["x"],
+            "extra_api6_url[]": [""],
+            "extra_api6_user[]": [""],
+            "extra_api6_pass[]": [""],
+            "extra_ssh_host[]": ["10.0.0.9"],
+            "extra_ssh_user[]": ["jen"],
+            "extra_kea_conf[]": ["/etc/kea/kea-dhcp4.conf"],
+        },
+    ),
+    ("/settings/infrastructure/direct-socket/1/dhcp4", {"address": "10.0.0.1", "port": "8004", "tls": "http"}),
+    ("/settings/infrastructure/direct-socket/1/dhcp4/remove", {}),
+]
+
+
+class TestEveryIdentityRouteIsASuperadminsForm:
+    """RBAC-004 (v5.69.0-beta.10, Q179): the six routes that write where Jen reaches a Kea server refuse an admin, write nothing, and the Settings -> Kea page shows an admin the
+    same cards as facts (a superadmin sees the forms)."""
+
+    @pytest.mark.parametrize(("url", "data"), IDENTITY_ROUTES)
+    def test_an_admin_is_refused_and_nothing_is_written(self, client, db, mock_kea, isolated_config, url, data):
+        from tests.conftest import restricted_client
+
+        c, _ = restricted_client(client, db, None, role="admin", username="q179_admin")
+        before = isolated_config.read_bytes()
+        r = c.post(url, data=data, follow_redirects=True)
+        assert b"SuperAdmin access required" in r.data
+        assert isolated_config.read_bytes() == before
+
+    @pytest.mark.parametrize(("url", "data"), IDENTITY_ROUTES)
+    def test_a_superadmin_with_an_old_confirmation_is_sent_to_confirm_and_nothing_is_written(
+        self, logged_in_client, db, mock_kea, isolated_config, url, data
+    ):
+        from datetime import datetime, timedelta, timezone
+
+        with logged_in_client.session_transaction() as sess:
+            sess["auth_at"] = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+        before = isolated_config.read_bytes()
+        r = logged_in_client.post(url, data=data)
+        assert r.status_code == 302 and "/auth/reauth" in r.headers["Location"]
+        assert isolated_config.read_bytes() == before
+
+    def test_an_admin_sees_the_four_cards_as_facts_and_no_form_that_writes_them(
+        self, client, db, mock_kea, isolated_config
+    ):
+        from tests.conftest import restricted_client
+
+        c, _ = restricted_client(client, db, None, role="admin", username="q179_admin_page")
+        body = c.get("/settings/kea").get_data(as_text=True)
+        for url, _data in IDENTITY_ROUTES:
+            assert f'action="{url}"' not in body, url
+        assert 'action="/settings/infrastructure/direct-socket' not in body
+        assert body.count("Only a superadmin changes where Jen reaches Kea.") >= 4
+        assert "https://kea-a:8000" in body  # the facts are there
+        assert 'id="kea-d2"' in body  # the D2 card is a read-only one, not absent
+        assert (
+            'action="/settings/infrastructure/save-ha"' in body
+        )  # the HA mode and the primary's name are not where Jen connects
+
+    def test_a_superadmin_sees_the_forms(self, logged_in_client, db, mock_kea, isolated_config):
+        body = logged_in_client.get("/settings/kea").get_data(as_text=True)
+        for url in (
+            "/settings/infrastructure/save-kea",
+            "/settings/infrastructure/save-ssh",
+            "/settings/infrastructure/save-d2",
+            "/settings/infrastructure/save-extra-servers",
+        ):
+            assert f'action="{url}"' in body, url
+        assert "Only a superadmin changes where Jen reaches Kea." not in body
+
+    def test_the_admin_page_still_has_every_control_its_script_binds(self, client, db, mock_kea, isolated_config):
+        """The script binds the probe button by id; an admin has no additional-servers form, so those three bindings are guarded (a missing element would stop the whole block)."""
+        from tests.conftest import restricted_client
+
+        c, _ = restricted_client(client, db, None, role="admin", username="q179_admin_js")
+        body = c.get("/settings/kea").get_data(as_text=True)
+        assert 'id="probe-kea-btn"' in body and 'id="add-server-row-btn"' not in body
+        assert "if (addServerRowBtn)" in body
+
+    def test_an_admin_probes_a_daemon_of_the_same_host_and_not_a_different_one(
+        self, client, db, mock_kea, isolated_config, monkeypatch
+    ):
+        from jen.routes.settings import infrastructure as infra
+        from tests.conftest import restricted_client
+
+        seen = []
+        monkeypatch.setattr(
+            infra,
+            "_probe_once",
+            lambda url, user, pwd, omit_service, service="dhcp4", **k: (seen.append(url) or "3.0.0", None),
+        )
+        c, _ = restricted_client(client, db, None, role="admin", username="q179_probe_admin")
+        r = c.post("/settings/infrastructure/probe-kea", data={"candidate_url": "https://attacker.example:8004"})
+        assert r.status_code == 403 and seen == []
+        c.post("/settings/infrastructure/probe-kea", data={"candidate_url": "https://kea-a:8004"})
+        assert seen == ["https://kea-a:8004"]
+
+    def test_a_superadmin_may_probe_an_address_they_typed(
+        self, logged_in_client, db, mock_kea, isolated_config, monkeypatch
+    ):
+        from jen.routes.settings import infrastructure as infra
+
+        seen = []
+        monkeypatch.setattr(
+            infra,
+            "_probe_once",
+            lambda url, user, pwd, omit_service, service="dhcp4", **k: (seen.append(url) or "3.0.0", None),
+        )
+        logged_in_client.post("/settings/infrastructure/probe-kea", data={"candidate_url": "https://new-host:8004"})
+        assert seen == ["https://new-host:8004"]
+
+
+class TestOneAnswerForASecret:
+    """Q179, T2: the Inherit box and the password box of Kea6 and D2 are one question."""
+
+    @pytest.fixture(autouse=True)
+    def _stored(self, isolated_config):
+        app_config.write_values(
+            [
+                ("kea6", "api_url", "https://kea-a:8006"),
+                ("kea6", "api_pass", "S6"),
+                ("d2", "api_url", "https://kea-a:53001"),
+                ("d2", "api_pass", "SD"),
+            ]
+        )
+
+    SENTENCE6 = b"Choose one for the Kea6 API password: inherit the Kea API"
+    SENTENCED2 = b"Choose one for the D2 API password: inherit the Kea API"
+
+    def test_kea6_inherit_and_a_typed_password_is_refused_and_nothing_is_written(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        before = isolated_config.read_bytes()
+        r = _post(
+            logged_in_client,
+            "/settings/infrastructure/save-kea6",
+            api_url="https://kea-a:8006",
+            api_pass="N",
+            inherit_api_pass="1",
+        )
+        assert self.SENTENCE6 in r.data and isolated_config.read_bytes() == before
+
+    def test_d2_inherit_and_a_typed_password_is_refused_and_nothing_is_written(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        before = isolated_config.read_bytes()
+        r = _post(
+            logged_in_client,
+            "/settings/infrastructure/save-d2",
+            api_url="https://kea-a:53001",
+            api_pass="N",
+            inherit_api_pass="1",
+        )
+        assert self.SENTENCED2 in r.data and isolated_config.read_bytes() == before
+
+    def test_the_database_pair_of_kea6_is_the_same_question(self, logged_in_client, db, mock_kea, isolated_config):
+        app_config.write_values([("kea6_db", "host", "db-a"), ("kea6_db", "password", "D6")])
+        before = isolated_config.read_bytes()
+        r = _post(
+            logged_in_client,
+            "/settings/infrastructure/save-kea6",
+            api_url="https://kea-a:8006",
+            db_host="db-a",
+            db_pass="N",
+            inherit_db_pass="1",
+        )
+        assert b"Choose one for the Kea6 database password" in r.data and isolated_config.read_bytes() == before
+
+    def test_inherit_with_a_blank_box_on_the_same_host_is_written_and_inherits(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        _post(logged_in_client, "/settings/infrastructure/save-d2", api_url="https://kea-a:53001", inherit_api_pass="1")
+        assert not _disk(isolated_config).has_option("d2", "api_pass")
+
+    def test_inherit_with_a_blank_box_on_a_different_host_is_beta_nines_refusal(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        r = _post(
+            logged_in_client, "/settings/infrastructure/save-d2", api_url="https://d2-other:53001", inherit_api_pass="1"
+        )
+        assert b"different host from the Kea API" in r.data and _disk(isolated_config).get("d2", "api_pass") == "SD"
+
+    def test_no_inherit_and_a_typed_password_on_a_different_host_is_written(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        _post(logged_in_client, "/settings/infrastructure/save-d2", api_url="https://d2-other:53001", api_pass="TYPED")
+        disk = _disk(isolated_config)
+        assert disk.get("d2", "api_url") == "https://d2-other:53001" and disk.get("d2", "api_pass") == "TYPED"
+
+    def test_the_helper_is_given_the_effective_secret(self):
+        import inspect
+
+        from jen.routes.settings import infrastructure as infra
+
+        for fn in (infra.save_infra_kea6, infra.save_infra_d2):
+            src = inspect.getsource(fn)
+            assert "_one_answer_for_a_secret(" in src and "effective" in src, fn.__name__
+
+
+class TestAnAdditionalServerUsesTheCredentialItIsGiven:
+    """Q179, T3: the password an additional server keeps is the one its connection RESOLVES (its own, else the primary's), and sharing the primary's with a NEW row is its own box."""
+
+    URL = "/settings/infrastructure/save-extra-servers"
+
+    def _post(self, client, *rows):
+        data = _rows(*rows)
+        data["extra_share_pass[]"] = [r.get("share", "0") for r in rows]
+        return client.post(self.URL, data=data, follow_redirects=True)
+
+    def test_a_section_with_no_password_of_its_own_moved_to_a_new_address_is_refused(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        _seed(
+            (2, {"api_url": "https://s2-a:8000", "name": "Standby", "ssh_host": "10.0.0.2"})
+        )  # inherits the primary's "S"
+        before = dict(_disk(isolated_config).items("kea_server_2"))
+        r = self._post(
+            logged_in_client,
+            {
+                "extra_id[]": "2",
+                "extra_name[]": "Standby",
+                "extra_api_url[]": "https://s2-b:8000",
+                "extra_ssh_host[]": "10.0.0.2",
+            },
+        )
+        assert SENTENCE.encode() in r.data
+        assert dict(_disk(isolated_config).items("kea_server_2")) == before
+
+    def test_the_same_address_is_written_and_nothing_is_copied_into_the_section(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        _seed((2, {"api_url": "https://s2-a:8000", "name": "Standby", "ssh_host": "10.0.0.2"}))
+        r = self._post(
+            logged_in_client,
+            {
+                "extra_id[]": "2",
+                "extra_name[]": "Standby2",
+                "extra_api_url[]": "https://s2-a:8000/",
+                "extra_ssh_host[]": "10.0.0.2",
+            },
+        )
+        assert SENTENCE.encode() not in r.data
+        disk = _disk(isolated_config)
+        assert disk.get("kea_server_2", "name") == "Standby2" and not disk.has_option("kea_server_2", "api_pass")
+
+    def test_the_ipv6_address_is_judged_against_the_password_it_would_use(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        _seed(
+            (
+                2,
+                {
+                    "api_url": "https://s2-a:8000",
+                    "api6_url": "https://s2-a:8006",
+                    "name": "Standby",
+                    "ssh_host": "10.0.0.2",
+                },
+            )
+        )
+        r = self._post(
+            logged_in_client,
+            {
+                "extra_id[]": "2",
+                "extra_name[]": "Standby",
+                "extra_api_url[]": "https://s2-a:8000",
+                "extra_api6_url[]": "https://s2-v6:8006",
+                "extra_ssh_host[]": "10.0.0.2",
+            },
+        )
+        assert (
+            SENTENCE.encode() in r.data
+            and _disk(isolated_config).get("kea_server_2", "api6_url") == "https://s2-a:8006"
+        )
+
+    def test_a_new_row_with_the_share_box_gets_the_primarys_password_in_its_section(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        self._post(
+            logged_in_client,
+            {"extra_id[]": "", "extra_name[]": "Peer", "extra_api_url[]": "https://peer:8000", "share": "1"},
+        )
+        assert _disk(isolated_config).get("kea_server_2", "api_pass") == "S"
+
+    def test_a_new_row_without_the_box_and_without_a_password_has_no_password_key(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        self._post(logged_in_client, {"extra_id[]": "", "extra_name[]": "Peer", "extra_api_url[]": "https://peer:8000"})
+        assert not _disk(isolated_config).has_option("kea_server_2", "api_pass")
+
+    def test_a_new_row_with_a_typed_password_keeps_it_whatever_the_box_says(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        self._post(
+            logged_in_client,
+            {
+                "extra_id[]": "",
+                "extra_name[]": "Peer",
+                "extra_api_url[]": "https://peer:8000",
+                "extra_api_pass[]": "OWN",
+                "share": "1",
+            },
+        )
+        assert _disk(isolated_config).get("kea_server_2", "api_pass") == "OWN"
+
+    def test_an_old_page_that_sends_no_share_list_shares_nothing(self, logged_in_client, db, mock_kea, isolated_config):
+        logged_in_client.post(
+            self.URL, data=_rows({"extra_id[]": "", "extra_name[]": "Peer", "extra_api_url[]": "https://peer:8000"})
+        )
+        assert not _disk(isolated_config).has_option("kea_server_2", "api_pass")
+
+    def test_the_page_offers_the_box_on_a_new_row(self, logged_in_client, db, mock_kea, isolated_config):
+        body = logged_in_client.get("/settings/kea").get_data(as_text=True)
+        assert "Share the primary's API password (an HA peer of the same Kea)" in body
+        assert 'name="extra_share_pass[]"' in body
