@@ -263,6 +263,17 @@ def password_key(name: str) -> tuple[str, str]:
     return f"kea_server_{m.group(1)}", {None: "api_pass", "v6": "api6_pass", "d2": "api_d2_pass"}[m.group(2)]
 
 
+def user_key(name: str) -> tuple[str, str]:
+    """(section, option) that holds an endpoint's own USER - the sibling of `password_key`."""
+    section, option = password_key(name)
+    return section, {
+        "api_pass": "api_user",
+        "api6_pass": "api6_user",
+        "api_d2_pass": "api_d2_user",
+        "password": "user",
+    }[option]
+
+
 def pending_conversions(parser) -> list[str]:
     """The endpoints the 5.10-to-5.69.0-beta.10 inheritance would have given a password that CRED-004 no longer does: each has a url, no password key and a parent with a password
     on a different host (`withheld`). Servers' own endpoints come before their IPv6 and D2 ones, which inherit from them."""
@@ -320,6 +331,11 @@ def materialise(app_config, audit=None, today: str = "", already_converted: bool
                     if p.has_section(section) and not p.has_option(section, option):
                         p.set(section, option, res[parent].password)
                         p.set(section, f"{option}_shared", "1")
+                        # the USER it sent too (Q181): the old inheritance carried the parent's user with the password, and the resolver now inherits a user on the same host only -
+                        # a copied password without its user would fail the endpoint's Basic authentication
+                        u_section, u_option = user_key(name)
+                        if res[parent].user and not p.has_option(u_section, u_option):
+                            p.set(u_section, u_option, res[parent].user)
                         done.append(name)
 
         try:

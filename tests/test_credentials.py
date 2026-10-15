@@ -392,6 +392,20 @@ class TestTheMarkerLivesInTheFileItDescribes:
             "a second start: nothing"
         )
 
+    def test_the_conversion_copies_the_parents_user_with_the_password(self):
+        """The old inheritance carried the parent's USER with its password; the resolver inherits a user on the same host only, so a copied password without its user would fail Basic auth."""
+        fake = _FakeConfig(_p(self.LEGACY + "[kea6]\napi_url = https://k6:8006\n"))
+        assert sorted(cred.materialise(fake)) == ["kea6", "server_2"]
+        r = cred.resolve(fake.parser)
+        assert (r["server_2"].user, r["server_2"].password) == ("u", "S")
+        assert (r["kea6"].user, r["kea6"].password) == ("u", "S")
+        assert fake.parser.get("kea_server_2", "api_user") == "u"
+
+    def test_a_user_the_section_already_has_is_kept(self):
+        fake = _FakeConfig(_p(self.LEGACY + "api_user = mine\n"))
+        cred.materialise(fake)
+        assert cred.resolve(fake.parser)["server_2"].user == "mine"
+
     def test_a_config_without_the_key_whose_database_says_it_converted_gets_the_key_and_no_copies(self):
         fake = _FakeConfig(_p(self.LEGACY))
         assert cred.materialise(fake, already_converted=True) == []
