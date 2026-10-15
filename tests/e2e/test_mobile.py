@@ -270,11 +270,14 @@ class TestSettingsCardsCollapsibleOnPhone:
     # ceiling (about 1770 px); with the section as one wide card, its two cards side by side, CI measured 2169 px - about 400 px more in two columns, which is 575 px in one
     # (400 / 0.7), and that is what the baseline above gains. The ceiling is still 30% under a page that holds everything it holds now.
     DDNS_SECTION_ADDED_Q176 = 575
+    # v5.69.0-beta.11 (Q180): the Kea6, Kea6-database and D2 password fields gained a "No password" box beside "Inherit" (an explicit blank, for a Kea with no authentication). CI measured
+    # 2201 px with the boxes on the Inherit line, against a ceiling of 2185: 16 px over, so the baseline gains 60 px (ceiling +42, 2227) - a real measurement, not a guess.
+    NO_PASSWORD_BOXES_Q180 = 60
 
     def test_settings_kea_is_at_least_30_percent_shorter_than_5_56_3(self, desktop, base_url):
         _visit(desktop, base_url, "/settings/kea")
         height = desktop.evaluate("document.documentElement.scrollHeight")
-        baseline = self.SETTINGS_KEA_HEIGHT_BEFORE_Q72 + self.DDNS_SECTION_ADDED_Q176
+        baseline = self.SETTINGS_KEA_HEIGHT_BEFORE_Q72 + self.DDNS_SECTION_ADDED_Q176 + self.NO_PASSWORD_BOXES_Q180
         ceiling = baseline * 0.7
         assert height <= ceiling, f"settings-kea is {height}px tall now, needed <= {ceiling:.0f}px (was {baseline}px)"
 
