@@ -215,6 +215,9 @@ ssh_host = kea-b
 ssh_user = keaadmin
 kea_conf = {KEA_CONF}
 
+[jen]
+credential_model = explicit
+
 [kea_ssh]
 host = kea-a
 user = keaadmin
