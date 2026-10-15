@@ -427,8 +427,10 @@ password keeps the one its connection resolves, so moving it to a new address ne
 secret is used at its OWN endpoint, or inherited by another daemon ON THE SAME HOST (`auth.same_host`: another port of that host is the same box); an endpoint on a different host with no secret of its own
 has NONE - never its neighbour's, and `_endpoint_for` answers with a sentence and sends nothing. A blank `api_pass =` is an explicit no-credential; an ABSENT key is "inherit, if the host is the same".
 The writer asks one more question for every write (`AppConfig._write_parser` through `credentials.move_refusal`, never per form): a saved password does not FOLLOW an endpoint to a new host, and does not
-appear on a SECOND host, unless it was typed in this request (`mutate(fn, typed=...)`). A legacy section that inherited the primary's password across hosts since 5.10 is converted ONCE, audibly, at
-`create_app` (`credentials.materialise`: the copy, the `api_pass_shared` marker, one `CONFIG_MIGRATION` audit row each); a later change of the primary's password does not follow it.
+appear on a SECOND host, unless it was typed in this request (`mutate(fn, typed=...)`). A legacy endpoint that inherited its parent's password across hosts (an extra server since 5.10; Kea6, D2, the Kea6 database and a server's IPv6 and D2 endpoints) is converted ONCE PER INSTALL, audibly,
+at `create_app` (`credentials.materialise`, gated on the settings key `credentials_materialised`: the copy, a `<key>_shared` marker, one `CONFIG_MIGRATION` audit row each); a later change of the parent's
+password does not follow it, and a section left WITHOUT a key afterwards is never filled in at a restart. An explicit blank (`api_pass =`, the forms' "No password" boxes) is how a Kea with no
+authentication is said, and nothing is withheld from it. `Set up direct socket` keeps a daemon's password as its own copy when the address it moves to is the same box spelled differently.
 **Established.** Q180 (the beta.10 review - and the four before it: beta.7 provider switch, beta.8 same-provider URL change, beta.9 inherit plus typed and an extra server without a key, beta.10 the
 unchecked share box and the extra server's IPv6 and D2 endpoints: one defect, a fallback written in a different place each time).
 **Enforced at.** `jen/services/credentials.py` (`resolve`, `move_refusal`, `materialise`); `jen/config.py` (`apply`, `derive_kea_servers`, `_write_parser`); `jen/services/kea.py` (`_endpoint_for`). The two
@@ -438,6 +440,11 @@ greps `fallback=primary_pass` and `or server.get("api_pass"` over `jen/` find no
 - `tests/test_credentials.py::TestTheConsumersAreOnTheResolver`
 - `tests/test_credentials.py::TestEndpointForSendsNothingWithoutACredential`
 - `tests/test_credentials.py::TestMaterialise`
+- `tests/test_credentials.py::TestItRunsOncePerInstallNotOncePerStart`
+- `tests/test_credentials.py::TestAnIpv6LiteralDatabaseHost`
+- `tests/test_credential_destinations.py::TestADirectSocketKeepsWhatWorkedWhenTheHostChangesSpelling`
+- `tests/test_credential_destinations.py::TestTheFormsCanSayNoPassword`
+- `tests/test_credential_destinations.py::TestTheWizardsFirstStepDoesNotSendASavedPasswordToANewHost`
 - `tests/test_credential_destinations.py::test_the_row`
 - `tests/test_credential_destinations.py::TestTheSevenFormsAreHeldByTheWriterWhoeverPosts`
 - `tests/test_setup_wizard.py::TestEnableV6`

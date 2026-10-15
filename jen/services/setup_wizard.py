@@ -608,7 +608,7 @@ def enable_v6(url: str, subnets6: dict, remove_ids: set = frozenset(), api_pass:
     API has no other credential) and `[subnets6]` together or not at all. A name the writer refuses comes back as the error text (None on success) before anything is written, and
     a refusal of the write itself (the identity guards, CRED-004) leaves both sections as they were - never an endpoint saved with its subnets not, or the reverse."""
     from jen import extensions
-    from jen.config import _reconcile_subnet_names, app_config
+    from jen.config import app_config, subnets6_into
     from jen.models.user import set_global_setting
 
     merged = dict(extensions.SUBNET6_MAP)
@@ -617,18 +617,7 @@ def enable_v6(url: str, subnets6: dict, remove_ids: set = frozenset(), api_pass:
         merged.pop(sid, None)
 
     def _apply(parser):
-        stored = app_config.derive_subnet_map(parser, "subnets6")
-        raw_section = dict(parser.items("subnets6")) if parser.has_section("subnets6") else {}
-        reconciled = _reconcile_subnet_names(merged, stored, raw_section)
-        if parser.has_section("subnets6"):
-            parser.remove_section("subnets6")
-        parser.add_section("subnets6")
-        for sid, info in reconciled.items():
-            paired = info.get("paired_subnet4_id")
-            line = f"{info['name']}, {info['cidr']}"
-            if paired is not None:
-                line += f", {paired}"
-            parser.set("subnets6", str(sid), line)
+        subnets6_into(parser, merged)
         if not parser.has_section("kea6"):
             parser.add_section("kea6")
         parser.set("kea6", "api_url", url)

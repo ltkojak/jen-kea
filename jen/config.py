@@ -139,6 +139,23 @@ def invalid_subnet_name_reason(name: str) -> str | None:
     return None
 
 
+def subnets6_into(parser, subnet_dict: dict) -> None:
+    """Rewrite `[subnets6]` in `parser` from `subnet_dict` (v5.69.0-beta.11, Q180: the ONE definition - `write_subnets6` and the setup wizard's `enable_v6`, which writes it in the same
+    `mutate` as `[kea6]`, both call it). A new or changed name is validated first and a bad one raises ValueError before anything is changed in `parser`."""
+    stored = AppConfig.derive_subnet_map(parser, "subnets6")
+    raw_section = dict(parser.items("subnets6")) if parser.has_section("subnets6") else {}
+    reconciled = _reconcile_subnet_names(subnet_dict, stored, raw_section)
+    if parser.has_section("subnets6"):
+        parser.remove_section("subnets6")
+    parser.add_section("subnets6")
+    for sid, info in reconciled.items():
+        paired = info.get("paired_subnet4_id")
+        line = f"{info['name']}, {info['cidr']}"
+        if paired is not None:
+            line += f", {paired}"
+        parser.set("subnets6", str(sid), line)
+
+
 def _reconcile_subnet_names(subnet_dict: dict, stored: dict, raw_section: dict) -> dict:
     """v5.67.0-beta.7 (Q119, item g) — since Q117, write_subnets()/
     write_subnets6() validated EVERY name in the whole map on every
@@ -768,18 +785,7 @@ class AppConfig:
         new-or-changed-only validation); includes the optional
         paired_subnet4_id third field when an entry has one set."""
         parser = self._read_parser()
-        stored = self.derive_subnet_map(parser, "subnets6")
-        raw_section = dict(parser.items("subnets6")) if parser.has_section("subnets6") else {}
-        reconciled = _reconcile_subnet_names(subnet_dict, stored, raw_section)
-        if parser.has_section("subnets6"):
-            parser.remove_section("subnets6")
-        parser.add_section("subnets6")
-        for sid, info in reconciled.items():
-            paired = info.get("paired_subnet4_id")
-            line = f"{info['name']}, {info['cidr']}"
-            if paired is not None:
-                line += f", {paired}"
-            parser.set("subnets6", str(sid), line)
+        subnets6_into(parser, subnet_dict)
         self._write_parser(parser)
         if reload:
             self.reload()

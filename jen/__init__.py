@@ -931,13 +931,21 @@ def create_app() -> Flask:
     except Exception as e:
         logger.warning(f"Could not clear restart_pending flag at startup: {e}")
 
-    # v5.69.0-beta.11 (Q180, CRED-004 U2): an extra server with no `api_pass` of its own used to inherit the primary's password whatever host it was on; the resolver does not.
-    # Convert such a section ONCE, audibly (a copy written into it, a marker, one audit row each) so an HA peer that worked yesterday works today. Not in a request, never fatal.
+    # v5.69.0-beta.11 (Q180, CRED-004 U2): an endpoint with no password of its own used to inherit its parent's whatever host it was on (extra servers since 5.10, Kea6 and D2 since 5.0); the
+    # resolver does not. Convert them ONCE, audibly (a copy written into the section, a marker, one audit row each) so an HA peer that worked yesterday works today. ONCE means once per
+    # install: the settings key `credentials_materialised` is set when the conversion has run (or had nothing to do), so a section a superadmin leaves without a key LATER is never filled
+    # in at a restart. Not in a request, never fatal; with the settings unreadable it does not run (it cannot prove it is the first time).
     try:
         from jen.models.user import audit as _audit
+        from jen.models.user import get_global_setting as _get_setting
+        from jen.models.user import set_global_setting as _set_setting
         from jen.services import credentials as _credentials
 
-        _credentials.materialise(app_config, audit=_audit)
+        if (
+            _get_setting("credentials_materialised", "") != "1"
+            and _credentials.materialise(app_config, audit=_audit) is not None
+        ):
+            _set_setting("credentials_materialised", "1")
     except Exception as e:
         logger.warning(f"Could not run the credential conversion at startup: {type(e).__name__}: {e}")
 

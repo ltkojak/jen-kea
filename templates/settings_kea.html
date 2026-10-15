@@ -369,7 +369,7 @@
             <thead><tr><th class="u-b7efde">Server</th><th class="u-b7efde">Role</th><th class="u-b7efde">API URL</th><th class="u-b7efde">API password</th><th class="u-b7efde">SSH host</th></tr></thead>
             <tbody>
             {% for srv in infra.extra_servers %}
-            <tr><td data-m="primary" class="u-f26165">{{ srv.name }}</td><td data-m="secondary" class="u-f26165">{{ srv.role }}</td><td data-m="secondary" class="mono u-5f26fb">{{ srv.api_url }}</td><td data-m="secondary" class="u-f26165">{% if srv.api_pass_shared %}shared copy{% else %}its own{% endif %}</td><td data-m="secondary" class="mono u-5f26fb">{{ srv.ssh_host or '(not set)' }}</td></tr>
+            <tr><td data-m="primary" class="u-f26165">{{ srv.name }}</td><td data-m="secondary" class="u-f26165">{{ srv.role }}</td><td data-m="secondary" class="mono u-5f26fb">{{ srv.api_url }}</td><td data-m="secondary" class="u-f26165">{% if srv.api_pass_shared %}shared copy{% else %}{{ srv.api_pass_state }}{% endif %}</td><td data-m="secondary" class="mono u-5f26fb">{{ srv.ssh_host or '(not set)' }}</td></tr>
             {% endfor %}
             </tbody>
         </table>
@@ -415,6 +415,7 @@
                     <input type="password" name="extra_api_pass[]" placeholder="(unchanged)">
                 </div>
             </div>
+            <label class="u-6125e5"><input type="checkbox" name="extra_no_pass[]" value="1" class="u-30e741"{% if srv.api_pass_none %} checked{% endif %}> No password (this server has no authentication)</label>
             {% if srv.api_pass_shared %}
             <div class="form-hint">API password: <strong>shared copy</strong> - a copy of the primary's, made once; it does not follow a later change of the primary's.
                 <button type="submit" form="copy-primary-{{ srv.id }}" class="btn btn-sm btn-secondary">Copy the primary's again</button></div>
@@ -519,6 +520,10 @@
                     <label class="u-6125e5">
                         <input type="checkbox" name="inherit_api_pass" value="1" class="u-30e741">
                         Inherit the Kea API password
+                    </label>
+                    <label class="u-6125e5">
+                        <input type="checkbox" name="no_api_pass" value="1" class="u-30e741">
+                        No password (this daemon has no authentication)
                     </label>
                 </div>
             </div>
@@ -689,6 +694,10 @@
                     <input type="checkbox" name="inherit_api_pass" value="1" class="u-30e741">
                     Inherit the Kea API password
                 </label>
+                <label class="u-6125e5">
+                    <input type="checkbox" name="no_api_pass" value="1" class="u-30e741">
+                    No password (this daemon has no authentication)
+                </label>
             </div>
         </div>
         <div class="form-row">
@@ -706,6 +715,10 @@
                 <label class="u-6125e5">
                     <input type="checkbox" name="inherit_db_pass" value="1" class="u-30e741">
                     Inherit the Kea DB password
+                </label>
+                <label class="u-6125e5">
+                    <input type="checkbox" name="no_db_pass" value="1" class="u-30e741">
+                    No password
                 </label>
             </div>
             <div class="form-group">
@@ -795,6 +808,7 @@ function addServerRow() {
             <div class="form-group"><label>API Password</label><input type="password" name="extra_api_pass[]" placeholder="password"></div>
         </div>
         <label class="u-6125e5"><input type="checkbox" name="extra_share_pass[]" value="1" class="u-30e741"> Share the primary's API password (an HA peer of the same Kea)</label>
+        <label class="u-6125e5"><input type="checkbox" name="extra_no_pass[]" value="1" class="u-30e741"> No password (this server has no authentication)</label>
         <div class="form-hint">Leave it unticked and type a password for a server that has its own. A server with no password of its own is reached with the primary's - the Configuration Doctor names it when its host is not the primary's.</div>
         <div class="form-row">
             <div class="form-group"><label>IPv6 API URL</label><input type="text" name="extra_api6_url[]" placeholder="http://YOUR-KEA-SERVER-2:8006"></div>
@@ -835,6 +849,12 @@ function serializeServers() {
         shareInp.name = 'extra_share_pass[]';
         shareInp.value = (share && share.checked) ? '1' : '0';
         hidden.appendChild(shareInp);
+        const noPass = row.querySelector('[name="extra_no_pass[]"]');
+        const noPassInp = document.createElement('input');
+        noPassInp.type = 'hidden';
+        noPassInp.name = 'extra_no_pass[]';
+        noPassInp.value = (noPass && noPass.checked) ? '1' : '0';
+        hidden.appendChild(noPassInp);
     });
 }
 

@@ -54,6 +54,8 @@ def _db_url(parser, section: str, host: str, fallback_port: str = "3306") -> str
     host = (host or "").strip()
     if not host:
         return ""
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"  # a bare IPv6 literal: the port must not fuse into it
     port = (_get(parser, section, "port", fallback_port) or fallback_port).strip()
     return f"{host}:{port}"
 
@@ -218,51 +220,81 @@ def move_refusal(before: dict, after: dict, typed=frozenset()) -> str:
     return ""
 
 
-def materialise(app_config, audit=None, today: str = "") -> list[str]:
-    """Convert a legacy configuration ONCE, audibly (CRED-004, Q180 U2). Extra servers inherited the primary's password across hosts since 5.10 (HA peers), and the
-    resolver no longer does: for each `[kea_server_N]` with an `api_url` and NO `api_pass` key, the primary's CURRENT password is written into the section as `api_pass`, with
-    `api_pass_shared = 1` (a marker: this is a copy of the primary's, which no longer follows it), one audit row per server and one INFO line. Idempotent (a section that has
-    the key is left alone); a primary with no password has nothing to copy; never in a request context (a request is judged by the identity guards - this is Jen converting
-    its own file at start); failures are logged and never fatal. Returns the names of the servers converted."""
+def password_key(name: str) -> tuple[str, str]:
+    """(section, option) that holds an endpoint's own password - the inverse of `resolve`'s reading."""
+    fixed = {
+        "kea": ("kea", "api_pass"),
+        "kea6": ("kea6", "api_pass"),
+        "d2": ("d2", "api_pass"),
+        "kea_db": ("kea_db", "password"),
+        "kea6_db": ("kea6_db", "password"),
+        "jen_db": ("jen_db", "password"),
+    }
+    if name in fixed:
+        return fixed[name]
+    m = re.fullmatch(r"server_(\d+)(?:_(v6|d2))?", name)
+    if not m:
+        raise KeyError(name)
+    return f"kea_server_{m.group(1)}", {None: "api_pass", "v6": "api6_pass", "d2": "api_d2_pass"}[m.group(2)]
+
+
+def pending_conversions(parser) -> list[str]:
+    """The endpoints the 5.10-to-5.69.0-beta.10 inheritance would have given a password that CRED-004 no longer does: each has a url, no password key and a parent with a password
+    on a different host (`withheld`). Servers' own endpoints come before their IPv6 and D2 ones, which inherit from them."""
+    return [n for n, e in resolve(parser).items() if e.withheld and e.url and n != "kea"]
+
+
+def materialise(app_config, audit=None, today: str = "") -> list[str] | None:
+    """Convert a legacy configuration ONCE, audibly (CRED-004, Q180 U2). Until beta.11 an extra server - and Kea6, D2, the Kea6 database and a server's IPv6 and D2 endpoints - with
+    no password of its own inherited its parent's whatever host it was on (HA peers since 5.10), and the resolver no longer does. For each endpoint that has a url, no password key
+    and a parent with a password on a DIFFERENT host (`pending_conversions`), the parent's CURRENT password is written into its section with a `<key>_shared = 1` marker, one audit
+    row (`CONFIG_MIGRATION`) and one INFO line each. A server's own API password is converted before its IPv6 and D2 ones, which inherit from it.
+
+    ONCE: `create_app` calls this only while the install-level marker `credentials_materialised` is unset, and sets it when this returns a list (`None` = it did not run: a request
+    context, or a failure - never fatal, retried at the next start). A section a superadmin leaves without a key afterwards is left alone: that is their answer, not a legacy
+    state. Idempotent in itself (a section that has the key is untouched)."""
     try:
         from flask import has_request_context
 
         if has_request_context():
-            return []
-        before = app_config._read_parser()
-        primary = _get(before, "kea", "api_pass")
-        pending = [
-            n
-            for n in server_numbers(before)
-            if _get(before, f"kea_server_{n}", "api_url").strip() and not _has(before, f"kea_server_{n}", "api_pass")
-        ]
-        if not primary or not pending:
-            return []
-        done: list[int] = []
+            return None
+        done: list[str] = []
 
         def _apply(p):
-            for n in pending:
-                sec = f"kea_server_{n}"
-                if p.has_section(sec) and not p.has_option(sec, "api_pass"):
-                    p.set(sec, "api_pass", _get(p, "kea", "api_pass"))
-                    p.set(sec, SHARED_MARKER, "1")
-                    done.append(n)
+            for _ in range(3):  # parent before child: a server's API password, then its IPv6 and D2
+                batch = [n for n in pending_conversions(p) if n not in done]
+                if not batch:
+                    return
+                res = resolve(p)
+                for name in batch[:]:
+                    parent = res[name].withheld
+                    if not res[parent].password:
+                        continue
+                    section, option = password_key(name)
+                    if p.has_section(section) and not p.has_option(section, option):
+                        p.set(section, option, res[parent].password)
+                        p.set(section, f"{option}_shared", "1")
+                        done.append(name)
 
-        app_config.mutate(_apply, typed={f"server_{n}" for n in pending})
-        for n in done:
+        probe = app_config._read_parser()
+        if not pending_conversions(probe):
+            return []
+        app_config.mutate(_apply, typed=set(resolve(probe)))
+        for name in done:
+            section, option = password_key(name)
             logger.info(
-                f"credentials: kea_server_{n}: the primary's API password was copied into its section (it no longer follows the primary's) {today}".rstrip()
+                f"credentials: [{section}] {option}: the parent's password was copied into it (it no longer follows the parent's) {today}".rstrip()
             )
             if audit is not None:
                 try:
                     audit(
                         "CONFIG_MIGRATION",
-                        f"kea_server_{n}",
-                        f"kea_server_{n}: the primary's API password materialised; it no longer follows the primary's",
+                        section,
+                        f"{section}: the parent's {option} materialised; it no longer follows the parent's",
                     )
                 except Exception as e:  # the audit row is a record, not a gate
-                    logger.warning(f"credentials: could not audit the conversion of kea_server_{n}: {type(e).__name__}")
-        return [f"kea_server_{n}" for n in done]
+                    logger.warning(f"credentials: could not audit the conversion of [{section}]: {type(e).__name__}")
+        return done
     except Exception as e:
         logger.warning(f"credentials: the legacy conversion did not run: {type(e).__name__}: {e}")
-        return []
+        return None

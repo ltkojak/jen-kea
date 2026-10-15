@@ -342,11 +342,11 @@ class TestD2Transport:
             "api_user": "u2",
             "api_pass": "p2",
             "api_d2_pass": "p2",
-            "api_d2_url": "http://kea02-d2:8000",
+            "api_d2_url": "http://kea02:8001",  # (Q180: another port of the SAME host - `resolve` gives a daemon on a different host no inherited password)
         }
         kea_svc.kea_command("version-get", service="d2", server=srv)
         c = fake_http.calls[0]
-        assert c["url"] == "http://kea02-d2:8000"
+        assert c["url"] == "http://kea02:8001"
         assert c["auth"] == ("u2", "p2")  # not the global D2 user/pass
 
     def test_direct_mode_with_nothing_configured_returns_an_error_dict_without_posting(self, fake_http, monkeypatch):

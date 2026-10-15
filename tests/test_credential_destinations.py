@@ -232,6 +232,24 @@ ROWS = {
         _set("jen_db", "host", "jh9"),
         refused=True,
     ),
+    "an_explicit_no_password_for_a_daemon_on_another_host": Row(
+        "beta.10 second pass (Q180): a Kea with no authentication on another host - `api_pass =` is an answer, nothing is withheld",
+        BASE,
+        _all(_set("kea6", "api_url", "https://k6:8006"), _set("kea6", "api_pass", "")),
+        expect={"kea6": ("", "none", "")},
+    ),
+    "a_legacy_extra_server_converted_by_the_upgrade_then_an_unrelated_write": Row(
+        "upgrade: the conversion left the primary's password in a peer on another host (marked); an unrelated write is not refused for it",
+        BASE + "[kea_server_2]\napi_url = https://b:8000\napi_pass = S\napi_pass_shared = 1\n",
+        _set("kea", "api_user", "renamed"),
+        expect={"server_2": ("S", "own", "")},
+    ),
+    "a_port_change_on_an_ipv6_database_host": Row(
+        "beta.11 second pass (Q180): an IPv6 literal database host, its port changed - not a move",
+        BASE.replace("host = db1", "host = ::1"),
+        _set("kea_db", "port", "3307"),
+        expect={"kea_db": ("KDB", "own", "")},
+    ),
     "the_jen_database_moved_with_the_password_typed": Row(
         "beta.9: ... typed",
         BASE,
@@ -520,3 +538,141 @@ class TestTheSevenFormsAreHeldByTheWriterWhoeverPosts:
             follow_redirects=True,
         )
         assert b"Choose one for the API password" in r.data and _sha(isolated_config) == before
+
+
+class TestADirectSocketKeepsWhatWorkedWhenTheHostChangesSpelling:
+    """Q180 second pass (P2-2): `Set up direct socket` points a server at the address its SSH host gave (an IP literal); the resolver compares hosts as written, so a daemon that
+    inherited the Kea API's password by NAME would lose it by number. The edit writes the password as the daemon's own (a marked copy) instead of removing the keys."""
+
+    def _edit(self, ini, server, service, url):
+        from jen.routes.settings import infrastructure as infra
+
+        parser = _parse(ini)
+        fn, changed = infra._direct_socket_edit(server, service, url, server["api_user"], server["api_pass"])
+        fn(parser)
+        return parser, changed
+
+    def test_dhcp6_set_up_by_ip_on_a_primary_named_by_hostname_keeps_its_password(self):
+        ini = BASE.replace("https://a:8000", "http://kea-a.lan:8000")
+        server = {"id": 1, "api_user": "u", "api_pass": "S", "api_url": "http://kea-a.lan:8000"}
+        parser, changed = self._edit(ini, server, "dhcp6", "http://10.0.0.5:8006")
+        r = cred.resolve(parser)
+        assert (r["kea6"].password, r["kea6"].withheld) == ("S", "") and parser.get("kea6", "api_pass_shared") == "1"
+        assert any("kept: the address changed spelling" in c for c in changed)
+
+    def test_the_same_host_spelled_the_same_way_still_just_inherits(self):
+        server = {"id": 1, "api_user": "u", "api_pass": "S", "api_url": "https://a:8000"}
+        parser, _changed = self._edit(BASE, server, "dhcp6", "https://a:8006")
+        assert not parser.has_option("kea6", "api_pass") and cred.resolve(parser)["kea6"].password == "S"
+
+    def test_a_dhcp4_switch_to_an_ip_keeps_a_pinned_kea6_that_used_the_hostname(self):
+        ini = BASE.replace("https://a:8000", "http://kea-a.lan:8000") + "[kea6]\napi_url = http://kea-a.lan:8006\n"
+        server = {"id": 1, "api_user": "u", "api_pass": "S", "api_url": "http://kea-a.lan:8000"}
+        parser, _changed = self._edit(ini, server, "dhcp4", "http://10.0.0.5:8004")
+        assert cred.resolve(parser)["kea6"].password == "S" and cred.resolve(parser)["kea6"].withheld == ""
+
+
+class TestTheFormsCanSayNoPassword:
+    """CI: the Kea6, D2 and extra-server forms write an EXPLICIT blank for a Kea with no authentication - `resolve` reads it as none and nothing is withheld."""
+
+    def test_kea6_with_no_password_on_another_host_is_written_and_resolves_to_none(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        r = logged_in_client.post(
+            "/settings/infrastructure/save-kea6",
+            data={"api_url": "https://k6:8006", "no_api_pass": "1"},
+            follow_redirects=True,
+        )
+        assert b"different host from the Kea API" not in r.data
+        disk = _forms._disk(isolated_config)
+        assert disk.get("kea6", "api_url") == "https://k6:8006" and disk.get("kea6", "api_pass") == ""
+        ep = cred.resolve(disk)["kea6"]
+        assert (ep.password, ep.withheld) == ("", "")
+
+    def test_d2_and_a_typed_password_together_are_two_answers(self, logged_in_client, db, mock_kea, isolated_config):
+        before = isolated_config.read_bytes()
+        r = logged_in_client.post(
+            "/settings/infrastructure/save-d2",
+            data={"api_url": "https://d2:53001", "no_api_pass": "1", "api_pass": "x"},
+            follow_redirects=True,
+        )
+        assert b"Choose one for the D2 API password" in r.data and isolated_config.read_bytes() == before
+
+    def test_an_extra_server_row_with_no_password_is_written_blank_and_not_refused(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        body = _extra_server_body(url="https://elsewhere:8000")
+        body["extra_no_pass[]"] = ["1"]
+        logged_in_client.post("/settings/infrastructure/save-extra-servers", data=body, follow_redirects=True)
+        disk = _forms._disk(isolated_config)
+        assert disk.get("kea_server_2", "api_pass") == ""
+        assert cred.resolve(disk)["server_2"].withheld == ""
+
+    def test_the_box_and_a_typed_password_on_a_row_are_two_answers(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        before = isolated_config.read_bytes()
+        body = _extra_server_body(url="https://elsewhere:8000", password="typed")
+        body["extra_no_pass[]"] = ["1"]
+        r = logged_in_client.post("/settings/infrastructure/save-extra-servers", data=body, follow_redirects=True)
+        assert b"Choose one for the API password" in r.data and isolated_config.read_bytes() == before
+
+
+class TestTheWizardsFirstStepDoesNotSendASavedPasswordToANewHost:
+    """CI (P2-4): the connection step tests the address it is given; the saved Kea API and database passwords go only to the host they were saved for."""
+
+    def test_a_new_host_with_blank_passwords_is_tested_with_none(self, logged_in_client, db, mock_kea, monkeypatch):
+        from jen.services import setup_wizard
+
+        seen = {}
+
+        def kea_conn(url, user, password, **k):
+            seen["kea"] = (url, password)
+            return {"ok": False, "attempts": [], "error": "stub", "url": url, "mode": "ca"}
+
+        def kea_db(host, user, password, name, **k):
+            seen["db"] = (host, password)
+            return False, "stub"
+
+        monkeypatch.setattr(extensions, "KEA_API_URL", "http://old-kea:8000")
+        monkeypatch.setattr(extensions, "KEA_API_PASS", "SAVED")
+        monkeypatch.setattr(extensions, "KEA_DB_HOST", "old-db")
+        monkeypatch.setattr(extensions, "KEA_DB_PASS", "SAVEDDB")
+        monkeypatch.setattr(setup_wizard, "test_kea_connection", kea_conn)
+        monkeypatch.setattr(setup_wizard, "test_kea_db", kea_db)
+        logged_in_client.post(
+            "/setup/connect",
+            data={
+                "api_url": "http://new-kea:8000",
+                "api_user": "u",
+                "kea_db_host": "new-db",
+                "kea_db_user": "k",
+                "kea_db_name": "kea",
+            },
+        )
+        assert seen["kea"] == ("http://new-kea:8000", "") and seen["db"] == ("new-db", "")
+
+    def test_the_saved_host_is_still_tested_with_the_saved_passwords(self, logged_in_client, db, mock_kea, monkeypatch):
+        from jen.services import setup_wizard
+
+        seen = {}
+
+        def kea_conn(url, user, password, **k):
+            seen["kea"] = (url, password)
+            return {"ok": False, "attempts": [], "error": "stub", "url": url, "mode": "ca"}
+
+        monkeypatch.setattr(extensions, "KEA_API_URL", "http://kea-a:8000")
+        monkeypatch.setattr(extensions, "KEA_API_PASS", "SAVED")
+        monkeypatch.setattr(setup_wizard, "test_kea_connection", kea_conn)
+        monkeypatch.setattr(setup_wizard, "test_kea_db", lambda *a, **k: (False, "stub"))
+        logged_in_client.post(
+            "/setup/connect",
+            data={
+                "api_url": "http://kea-a:9000",
+                "api_user": "u",
+                "kea_db_host": "d",
+                "kea_db_user": "k",
+                "kea_db_name": "kea",
+            },
+        )
+        assert seen["kea"] == ("http://kea-a:9000", "SAVED")

@@ -296,7 +296,7 @@ def _endpoint_for(server: dict, service: str):
             "result": 1,
             "text": (
                 f"{who} has no credential: {url} is on a different host from the one whose password it would inherit ({_cred.label(withheld)}) - "
-                "set its own under Settings → Kea"
+                'set its own under Settings → Kea (or tick "No password" there if it has no authentication)'
             ),
         }
 

@@ -86,7 +86,7 @@ The prompt is below, verbatim; replace `<repo root>` and `<previous tag>` and ch
 
 ```
 You are an independent adversarial release reviewer for Jen at <repo root>. Read-only: change no file; report findings only. Scope: `git diff <previous tag>..HEAD`
-(run it). Read docs/RELEASE_AUDIT.md first and apply its steps (h)-(m). Read the WHOLE diff, then the CURRENT text of every changed function in full - never the hunk alone.
+(run it). Read docs/RELEASE_AUDIT.md first and apply its steps (h)-(n). Read the WHOLE diff, then the CURRENT text of every changed function in full - never the hunk alone.
 For every piece of evidence, guard or check the diff adds, ask what else could produce the same observation without the thing it is taken to prove; for every
 check-then-act, name what could change between the two; for every except, say whether a failure reads as success; for every new state or field, find every reader and
 writer; for every multi-step operation, inject a failure at each step and say what state is left and whether it is visible. Compare what the tests pin with what the

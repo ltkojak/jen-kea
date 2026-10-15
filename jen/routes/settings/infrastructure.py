@@ -58,6 +58,19 @@ _EXTRA_SERVER_FORM_KEYS = frozenset(
 )
 
 
+def _api_pass_state(endpoint) -> str:
+    """The words the Servers & HA table uses for what an additional server's API password is (from `credentials.resolve`)."""
+    if endpoint is None:
+        return "none"
+    if endpoint.source == "own":
+        return "its own"
+    if endpoint.source.startswith("inherited:"):
+        return "the primary's (same host)"
+    if endpoint.withheld:
+        return "none (the primary's is not sent to a different host)"
+    return "none"
+
+
 def _kea_server_section_ids(cfg) -> list[int]:
     """Every `[kea_server_N]` (N >= 2 — 1 is the primary, `[kea]`) present
     in `cfg`, sorted. v5.19.1 (Q14) — gap-tolerant: a
@@ -201,6 +214,7 @@ def settings_kea():
     helper_rows = _kea_servers_with_helper_status()
     tls_ok_by_id = {r["id"]: r["tls_supported"] for r in helper_rows}
     extra_servers = []
+    _resolved_endpoints = __credentials.resolve(extensions.cfg)
     for n in _kea_server_section_ids(extensions.cfg):
         sec = f"kea_server_{n}"
         extra_servers.append(
@@ -219,6 +233,10 @@ def settings_kea():
                 "role": extensions.cfg.get(sec, "role", fallback="standby"),
                 # v5.69.0-beta.11 (Q180, U2): this password is a COPY of the primary's, made once and no longer following it
                 "api_pass_shared": extensions.cfg.get(sec, "api_pass_shared", fallback="") == "1",
+                "api_pass_state": _api_pass_state(_resolved_endpoints.get(f"server_{n}")),
+                # an explicit blank: a Kea with no authentication
+                "api_pass_none": extensions.cfg.has_option(sec, "api_pass")
+                and extensions.cfg.get(sec, "api_pass", fallback="") == "",
                 # v5.29.0 (Q29) — the "Set up direct socket" form's bind
                 # address default: the SSH host when it's an IP literal.
                 "bind_default": _bind_default(extensions.cfg.get(sec, "ssh_host", fallback="")),
@@ -522,6 +540,10 @@ def save_infra_kea6():
     api_user = request.form.get("api_user", "").strip()
     api_pass = request.form.get("api_pass", "").strip()
     inherit_api_pass = request.form.get("inherit_api_pass", "") == "1"
+    no_api_pass = (
+        request.form.get("no_api_pass", "") == "1"
+    )  # Q180 second pass: "this daemon has no authentication" - an explicit blank, which `resolve` reads as none
+    no_db_pass = request.form.get("no_db_pass", "") == "1"
     db_host = request.form.get("db_host", "").strip()
     db_user = request.form.get("db_user", "").strip()
     db_pass = request.form.get("db_pass", "").strip()
@@ -549,7 +571,7 @@ def save_infra_kea6():
         extensions.cfg.get("kea_db", "host", fallback=""),
         extensions.cfg.get("kea_db", "password", fallback=""),
     )
-    for stored_url, new_url, new_secret, stored_secret, inherit, v4_url, v4_secret, what, parent in (
+    for stored_url, new_url, new_secret, stored_secret, inherit, v4_url, v4_secret, what, parent, no_pass in (
         (
             extensions.cfg.get("kea6", "api_url", fallback=""),
             api_url,
@@ -560,6 +582,7 @@ def save_infra_kea6():
             v4_api_pass,
             "Kea6 API address",
             "Kea6 API password|the Kea API's",
+            no_api_pass,
         ),
         (
             extensions.cfg.get("kea6_db", "host", fallback=""),
@@ -571,8 +594,15 @@ def save_infra_kea6():
             v4_db_pass,
             "Kea6 database host",
             "Kea6 database password|the Kea database's",
+            no_db_pass,
         ),
     ):
+        if no_pass:
+            # an explicit "no password" cannot send anything anywhere; combined with Inherit or a typed password it is two answers
+            if inherit or new_secret.strip():
+                flash(f"Choose one for the {parent.split('|')[0]}: no password, inherit it, or type one.", "error")
+                return redirect(url_for("settings.settings_kea"))
+            continue
         # RBAC/CRED (Q179, T2): ONE answer for a secret - "Inherit" and a typed password at once is a contradiction, and the form does not guess which was meant. The
         # EFFECTIVE secret is what the checks below judge: nothing when Inherit is ticked, else what was typed.
         refusal = _one_answer_for_a_secret(inherit, new_secret, parent)
@@ -597,8 +627,8 @@ def save_infra_kea6():
     ]
     # (section, option, submitted value, inherit-checkbox)
     pw_fields = [
-        ("kea6", "api_pass", api_pass, inherit_api_pass),
-        ("kea6_db", "password", db_pass, inherit_db_pass),
+        ("kea6", "api_pass", api_pass, inherit_api_pass, no_api_pass),
+        ("kea6_db", "password", db_pass, inherit_db_pass, no_db_pass),
     ]
     changed: list[str] = []
 
@@ -614,9 +644,15 @@ def save_infra_kea6():
             elif has:
                 cfg.remove_option(section, opt)
                 changed.append(f"{section}.{opt} cleared — inherits v4")
-        for section, opt, val, inherit in pw_fields:
+        for section, opt, val, inherit, none_ in pw_fields:
             has = cfg.has_section(section) and cfg.has_option(section, opt)
-            if inherit:
+            if none_:
+                if not cfg.has_section(section):
+                    cfg.add_section(section)
+                if not has or cfg.get(section, opt) != "":
+                    cfg.set(section, opt, "")
+                    changed.append(f"{section}.{opt} set to no password")
+            elif inherit:
                 if has:
                     cfg.remove_option(section, opt)
                     changed.append(f"{section}.{opt} inherits v4")
@@ -663,6 +699,7 @@ def save_infra_d2():
     api_user = request.form.get("api_user", "").strip()
     api_pass = request.form.get("api_pass", "").strip()
     inherit_api_pass = request.form.get("inherit_api_pass", "") == "1"
+    no_api_pass = request.form.get("no_api_pass", "") == "1"  # Q180 second pass: an explicit "no authentication"
 
     if api_url and not __auth.valid_api_url(api_url, require_port=(__caps.is_direct())):
         if __caps.is_direct():
@@ -679,8 +716,12 @@ def save_infra_d2():
     own_pass = extensions.cfg.get("d2", "api_pass", fallback="")
     effective_pass = "" if inherit_api_pass else api_pass  # Q179 (T2): the secret the checks judge is the EFFECTIVE one
     refusal = _one_answer_for_a_secret(inherit_api_pass, api_pass, "D2 API password|the Kea API's")
+    if no_api_pass and (inherit_api_pass or api_pass):
+        refusal = "Choose one for the D2 API password: no password, inherit it, or type one."
     if refusal:
         pass
+    elif no_api_pass:
+        refusal = None  # an explicit "no password" sends nothing anywhere
     elif own_pass.strip() and not inherit_api_pass:
         refusal = _secret_for_new_endpoint(
             extensions.cfg.get("d2", "api_url", fallback=""), api_url, effective_pass, own_pass, "D2 API address"
@@ -713,7 +754,13 @@ def save_infra_d2():
                 cfg.remove_option(section, opt)
                 changed.append(f"{section}.{opt} cleared — inherits v4")
         has_pass = cfg.has_section("d2") and cfg.has_option("d2", "api_pass")
-        if inherit_api_pass:
+        if no_api_pass:
+            if not cfg.has_section("d2"):
+                cfg.add_section("d2")
+            if not has_pass or cfg.get("d2", "api_pass") != "":
+                cfg.set("d2", "api_pass", "")
+                changed.append("d2.api_pass set to no password")
+        elif inherit_api_pass:
             if has_pass:
                 cfg.remove_option("d2", "api_pass")
                 changed.append("d2.api_pass inherits v4")
@@ -1136,6 +1183,7 @@ def _direct_socket_edit(server: dict, service: str, url: str, user: str, passwor
     changed: list[str] = []
 
     def _apply(cfg):
+        before_resolved = __credentials.resolve(cfg)  # what each endpoint of the server sent BEFORE this edit
         if tls:
             from jen.services import kea_tls as __tls
 
@@ -1190,6 +1238,19 @@ def _direct_socket_edit(server: dict, service: str, url: str, user: str, passwor
                 cfg.add_section("kea")
             cfg.set("kea", "connection_mode", "direct")
             changed.append("Jen switched to direct mode")
+        # CRED-004 (Q180, second pass): the socket that just answered is on the SAME Kea, but its address is spelled differently (`10.0.0.5` for `kea-a.lan`), and the resolver compares
+        # hosts as written. An endpoint of this server that sent a password before and would now be refused it keeps that password as its OWN (a copy, marked) instead of silently
+        # losing it - the superadmin's act, named in the flash.
+        after_resolved = __credentials.resolve(cfg)
+        for name in sorted(_endpoints_of_server(server)):
+            was, now = before_resolved.get(name), after_resolved.get(name)
+            if was and now and was.password and not now.password and now.withheld:
+                section, option = __credentials.password_key(name)
+                if not cfg.has_section(section):
+                    cfg.add_section(section)
+                cfg.set(section, option, was.password)
+                cfg.set(section, f"{option}_shared", "1")
+                changed.append(f"[{section}] {option} (kept: the address changed spelling)")
 
     return _apply, changed
 
@@ -2091,6 +2152,9 @@ def save_extra_servers():
     kea_confs = request.form.getlist("extra_kea_conf[]")
     # CRED-003 (Q179, T3): one "1"/"0" per row, in row order - a NEW row takes the primary's API password only through its own checkbox
     shares = request.form.getlist("extra_share_pass[]")
+    no_passes = request.form.getlist(
+        "extra_no_pass[]"
+    )  # one "1"/"0" per row: "this server has no authentication" - an explicit blank
 
     for h in ssh_hosts:
         if h.strip() and not __auth.valid_ssh_target(h.strip()):
@@ -2238,7 +2302,7 @@ def save_extra_servers():
             # own, else - on the same host only - the primary's). Nothing is written until this callback returns, so raising is the refusal. A NEW row has no stored address to compare:
             # it takes the primary's password only through its own box (below), else what was typed, else none.
             who = name.strip() or f"Kea Server {out}"
-            if orig_id is not None:
+            if orig_id is not None and not (row_idx < len(no_passes) and no_passes[row_idx] == "1"):
                 stored_api = before_resolved.get(f"server_{orig_id}")
                 stored_secret = stored_api.password if stored_api else ""
                 refusal = _secret_for_new_endpoint(
@@ -2271,6 +2335,12 @@ def save_extra_servers():
                     refused.append(refusal)
                     raise _EndpointNeedsItsPassword()
             share_ticked = orig_id is None and row_idx < len(shares) and shares[row_idx] == "1"
+            no_ticked = row_idx < len(no_passes) and no_passes[row_idx] == "1"
+            if no_ticked and (api_pass.strip() or share_ticked):
+                refused.append(
+                    f"Choose one for the API password of {who}: no password, share the primary's, or type one."
+                )
+                raise _EndpointNeedsItsPassword()
             if share_ticked and api_pass.strip():
                 # U3 (Q180): the box and a typed password are two answers for one secret
                 refused.append(f"Choose one for the API password of {who}: share the primary's, or type one.")
@@ -2282,7 +2352,11 @@ def save_extra_servers():
             cfg.set(sec, "role", role.strip() or "standby")
             cfg.set(sec, "api_url", api_url.strip())
             cfg.set(sec, "api_user", api_user.strip())
-            if api_pass.strip():
+            if no_ticked:
+                cfg.set(
+                    sec, "api_pass", ""
+                )  # explicit: a Kea with no authentication - `resolve` reads it as none and nothing is withheld
+            elif api_pass.strip():
                 cfg.set(
                     sec, "api_pass", api_pass.strip()
                 )  # typed: its own from now on, and no longer "a copy of the primary's"
@@ -2378,11 +2452,20 @@ def copy_primary_password(server_id):
         flash("The primary has no API password to copy.", "error")
         return redirect(url_for("settings.settings_kea"))
 
+    class _Gone(Exception):
+        pass
+
     def _apply(cfg):
+        if not cfg.has_section(section):
+            raise _Gone()  # removed by another save since the check above: nothing is written
         cfg.set(section, "api_pass", cfg.get("kea", "api_pass", fallback=""))
         cfg.set(section, __credentials.SHARED_MARKER, "1")
 
-    __config.app_config.mutate(_apply, typed={f"server_{server_id}"})
+    try:
+        __config.app_config.mutate(_apply, typed={f"server_{server_id}"})
+    except _Gone:
+        flash("That server is not configured.", "error")
+        return redirect(url_for("settings.settings_kea"))
     __user.set_global_setting("restart_pending", "true")
     flash("The primary's API password was copied into that server again. It does not follow later changes.", "success")
     __user.audit("SAVE_INFRA", f"kea_server_{server_id}", "api_pass copied again from the primary")

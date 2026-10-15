@@ -660,7 +660,7 @@ def _endpoint_credentials(ctx) -> Check:
     if not missing:
         c.status, c.detail = (
             "ok",
-            "every endpoint has a password of its own or shares one with a daemon of its own host",
+            "no endpoint has been refused a password: each uses its own, one shared with a daemon of its own host, or none on purpose",
         )
         return c
     c.status = "warn"

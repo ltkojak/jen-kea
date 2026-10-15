@@ -269,13 +269,13 @@ class _FakeConfig:
 class TestMaterialise:
     CFG = (
         BASE
-        + "[kea_server_2]\napi_url = https://b:8000\n[kea_server_3]\napi_url = https://c:8000\napi_pass = OWN\n[kea_server_4]\nname = no url\n"
+        + "[kea_server_2]\napi_url = https://b:8000\n[kea_server_3]\napi_url = https://c:8000\napi_pass = OWN\n[kea_server_4]\nname = no url\n[kea_server_5]\napi_url = https://a:8001\n"
     )
 
-    def test_a_server_with_no_key_gets_a_marked_copy_and_the_others_are_untouched(self):
+    def test_a_server_on_another_host_with_no_key_gets_a_marked_copy_and_the_others_are_untouched(self):
         fake, rows = _FakeConfig(_p(self.CFG)), []
         done = cred.materialise(fake, audit=lambda *a: rows.append(a))
-        assert done == ["kea_server_2"]
+        assert done == ["server_2"]
         assert (
             fake.parser.get("kea_server_2", "api_pass") == "S"
             and fake.parser.get("kea_server_2", "api_pass_shared") == "1"
@@ -284,14 +284,42 @@ class TestMaterialise:
             "kea_server_3", "api_pass_shared"
         )
         assert not fake.parser.has_option("kea_server_4", "api_pass")
+        assert not fake.parser.has_option("kea_server_5", "api_pass"), (
+            "a server on the PRIMARY's host still inherits: nothing to convert, nothing copied"
+        )
         assert rows == [
             (
                 "CONFIG_MIGRATION",
                 "kea_server_2",
-                "kea_server_2: the primary's API password materialised; it no longer follows the primary's",
+                "kea_server_2: the parent's api_pass materialised; it no longer follows the parent's",
             )
         ]
-        assert fake.typed == [{"server_2"}]
+        assert "server_2" in fake.typed[0]
+
+    def test_kea6_d2_the_kea6_database_and_a_servers_ipv6_and_d2_are_converted_in_order(self):
+        """The second pass (P2-3): U2's reasoning - what worked yesterday works today - applies to every endpoint the old inheritance reached."""
+        cfg = (
+            BASE
+            + "[kea6]\napi_url = https://k6:8006\n[d2]\napi_url = https://dd:53001\n[kea6_db]\nhost = db2\n"
+            + "[kea_server_2]\napi_url = https://b:8000\napi6_url = https://b6:8006\napi_d2_url = https://bd:53001\n"
+        )
+        fake = _FakeConfig(_p(cfg))
+        done = cred.materialise(fake)
+        assert sorted(done) == ["d2", "kea6", "kea6_db", "server_2", "server_2_d2", "server_2_v6"]
+        r = cred.resolve(fake.parser)
+        assert (r["kea6"].password, r["d2"].password, r["kea6_db"].password) == ("S", "S", "KDB")
+        assert (r["server_2"].password, r["server_2_v6"].password, r["server_2_d2"].password) == ("S", "S", "S")
+        assert (
+            fake.parser.get("kea6_db", "password_shared") == "1"
+            and fake.parser.get("kea_server_2", "api6_pass_shared") == "1"
+        )
+        assert all(e.withheld == "" for e in r.values())
+
+    def test_another_spelling_of_the_same_box_is_converted_too(self):
+        fake = _FakeConfig(
+            _p(BASE.replace("https://a:8000", "https://kea-a.lan:8000") + "[kea6]\napi_url = https://10.0.0.5:8006\n")
+        )
+        assert cred.materialise(fake) == ["kea6"] and fake.parser.get("kea6", "api_pass") == "S"
 
     def test_a_second_call_changes_nothing(self):
         fake, rows = _FakeConfig(_p(self.CFG)), []
@@ -312,20 +340,20 @@ class TestMaterialise:
         fake = _FakeConfig(_p("[kea]\napi_url = https://a:8000\n[kea_server_2]\napi_url = https://b:8000\n"))
         assert cred.materialise(fake) == [] and fake.writes == 0
 
-    def test_it_never_runs_in_a_request(self):
+    def test_it_never_runs_in_a_request_and_says_it_did_not_run(self):
         from flask import Flask
 
         fake = _FakeConfig(_p(self.CFG))
         with Flask(__name__).test_request_context("/"):
-            assert cred.materialise(fake) == []
+            assert cred.materialise(fake) is None
         assert fake.writes == 0
 
-    def test_a_failure_is_logged_and_never_raised(self):
+    def test_a_failure_is_logged_never_raised_and_says_it_did_not_run(self):
         class Broken(_FakeConfig):
             def mutate(self, *a, **k):
                 raise OSError("disk full")
 
-        assert cred.materialise(Broken(_p(self.CFG))) == []
+        assert cred.materialise(Broken(_p(self.CFG))) is None
 
     def test_a_failing_audit_does_not_undo_the_conversion(self):
         fake = _FakeConfig(_p(self.CFG))
@@ -333,6 +361,48 @@ class TestMaterialise:
         def audit(*a):
             raise RuntimeError("database down")
 
-        assert cred.materialise(fake, audit=audit) == ["kea_server_2"] and fake.parser.has_option(
+        assert cred.materialise(fake, audit=audit) == ["server_2"] and fake.parser.has_option(
             "kea_server_2", "api_pass"
         )
+
+
+class TestItRunsOncePerInstallNotOncePerStart:
+    """The second pass's P1: a section a superadmin leaves WITHOUT a key on purpose (the share box unticked) must not be filled in at the next restart."""
+
+    def test_create_app_converts_only_while_the_install_marker_is_unset_and_sets_it(self):
+        import ast
+        import pathlib
+
+        src = (pathlib.Path(__file__).resolve().parent.parent / "jen" / "__init__.py").read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        create_app = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "create_app")
+        text = ast.get_source_segment(src, create_app)
+        assert 'credentials_materialised", "") != "1"' in text and "materialise(app_config" in text
+        assert text.index('credentials_materialised", "") != "1"') < text.index("materialise(app_config")
+        assert '_set_setting("credentials_materialised", "1")' in text
+        assert "is not None" in text.split("materialise(app_config")[1].split("\n")[0], (
+            "the marker is set only when the conversion RAN (None = it did not)"
+        )
+
+    def test_after_the_conversion_a_keyless_server_stays_keyless(self):
+        """What the marker guarantees, in terms of the function: the conversion is a function of the file; nothing in it remembers - so the caller must not call it again."""
+        fake = _FakeConfig(_p(BASE + "[kea_server_2]\napi_url = https://b:8000\n"))
+        assert cred.materialise(fake) == ["server_2"]
+        fake.parser.add_section("kea_server_3")
+        fake.parser.set("kea_server_3", "api_url", "https://c:8000")  # added later, on purpose, with no key
+        assert cred.resolve(fake.parser)["server_3"].withheld == "kea"
+
+
+class TestAnIpv6LiteralDatabaseHost:
+    def test_the_port_does_not_fuse_into_the_host(self):
+        r = cred.resolve(_p(BASE.replace("host = db1", "host = ::1") + "[kea6_db]\nport = 3307\n"))
+        assert r["kea_db"].url == "[::1]:3306" and r["kea6_db"].url == "[::1]:3307"
+        assert r["kea6_db"].password == "KDB" and r["kea6_db"].withheld == ""
+
+    def test_a_port_change_on_an_ipv6_database_host_is_not_a_move(self):
+        before = cred.resolve(_p(BASE.replace("host = db1", "host = ::1")))
+        after = cred.resolve(
+            _p(BASE.replace("host = db1", "host = ::1").replace("password = KDB", "password = KDB\nport = 3307"))
+        )
+        assert after["kea_db"].url == "[::1]:3307"
+        assert cred.move_refusal(before, after) == ""

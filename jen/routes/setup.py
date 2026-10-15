@@ -176,8 +176,12 @@ def setup_connect():
     # v5.67.0-beta.8 (Q120, item n) — saved passwords are never rendered, so a revisit shows blank
     # fields; save_connection() keeps the stored value for a blank one, and the TEST now does the same
     # instead of failing with an empty password the save would never have written.
-    test_api_pass = api_pass or extensions.KEA_API_PASS
-    test_db_pass = kea_db_pass or extensions.KEA_DB_PASS
+    # CRED-004 (Q180, second pass): the SAVED password is used for the test only when the address is the saved one's host - a password is never sent to a host it was not typed for,
+    # and the write below would refuse it anyway
+    test_api_pass = api_pass or (extensions.KEA_API_PASS if __auth.same_host(extensions.KEA_API_URL, api_url) else "")
+    test_db_pass = kea_db_pass or (
+        extensions.KEA_DB_PASS if __auth.same_host(extensions.KEA_DB_HOST, kea_db_host) else ""
+    )
     # An answer that cannot be identified keeps the mode already saved for THIS url (Q120, item b).
     saved_url = (extensions.KEA_API_URL or "").rstrip("/")
     saved_mode = "direct" if __caps.is_direct() else "ca"
