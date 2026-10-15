@@ -185,21 +185,23 @@ the DDNS status context and `ddns()` (the Verify tab); the rank table in `save_m
 - `tests/test_settings.py::TestMfaPolicyIsNeverWeakenedByAnAdmin`
 
 ### RBAC-004 - Where Jen reaches a Kea server, and so where its credentials go, is a superadmin's setting with a recent password
-**Rule.** A config write that changes which Kea a server is reached on - the API URL, the SSH host, user or config path, the connection mode, a server added or removed - is a superadmin's, with a password
-confirmed in the last ten minutes, whichever route (or plugin, restore or hand-made request) asked. The rule is asked where every write passes, not on a list of routes: a second identity guard beside the
-investigation one. Outside a request (`install.sh --configure`, tools) and for a request that is not a signed-in session (an API key) there is no caller to judge. An admin sees the cards as facts and the
-probe is limited to the host Jen already reaches. A password-only change is not an identity change here; CRED-002 judges it where the form is.
-**Established.** Q179 (the beta.9 review: an admin could point the Kea API, SSH, D2 or an additional server at a host of their own and receive the stored credential).
-**Enforced at.** `access.identity_change_needs_superadmin`, registered at import and imported by `create_app`; asked by `jen.config._run_identity_guards` from `AppConfig._write_parser`.
-The guard sees what `IDENTITY_KEYS` and the connection mode and the set of servers say (the Kea API URL, the SSH target, a server added or removed); the Kea6 and D2 sockets, an additional server's IPv6 and D2
-addresses and the database hosts are held by the routes' own decorators (`@_superadmin_required` + `@_recent_auth_required`) and, for the credentials they would carry, by CRED-002. A route that must ask
-for the confirmation inside its body (the setup wizard's POST steps) calls `access.step_up_redirect`, and a confirmation made at the start of a request is remembered for its last write (`g.reauth_ok_minutes`),
-so the direct-socket routes are not asked a second time after they have changed the Kea host.
+**Rule.** A config write that changes where Jen reaches a Kea server or sends a credential - the API URL, the SSH host, user or config path, the connection mode, a server added or removed, AND
+every other endpoint a credential goes to (`[kea6]`, `[d2]`, both database hosts and ports, an additional server's IPv6 and D2 addresses) - is a superadmin's, with a password confirmed in the last ten
+minutes, whichever route (or plugin or hand-made request) asked. The rule is asked where every write passes, not on a list of routes: a destination guard, beside (and asked before) the investigation
+guard. Outside a request (`install.sh --configure`, tools) and for a request that is not a signed-in session (an API key) there is no caller to judge. An admin sees the cards as facts and the probe is
+limited to the host Jen already reaches. A password-only change is not a destination change here; CRED-002 and CRED-004 judge it.
+**Established.** Q179 (the beta.9 review: an admin could point the Kea API, SSH, D2 or an additional server at a host of their own and receive the stored credential); Q180 (the beta.10 review: the guard saw
+only the four identity keys, so a write of `[kea6] api_url`, `[d2] api_url`, a database host or an extra server's IPv6 or D2 address was not its question - it is asked of `destination_view` now).
+**Enforced at.** `access.identity_change_needs_superadmin`, registered with `config.register_destination_guard` at import and imported by `create_app`; asked by `AppConfig._check_identity` (and so by
+`preflight_identity_change`) from `AppConfig._write_parser` on `config.destination_view` - `identity_view`'s four keys and the mode PLUS the url of every endpoint `credentials.resolve` names. The investigation
+guard keeps `identity_view` (its concern is WHICH Kea). A route that must ask for the confirmation inside its body (the setup wizard's POST steps, the IPv6 step) calls `access.step_up_redirect`, and a
+confirmation made at the start of a request is remembered for its last write (`g.reauth_ok_minutes`), so the direct-socket routes are not asked a second time after they have changed the Kea host.
 **Tests.**
 - `tests/test_identity_guard.py::TestIdentityIsASuperadminsSetting`
 - `tests/test_identity_guard.py::TestAConfirmationMadeAtTheStartOfARequestIsNotAskedAgain`
 - `tests/test_setup_wizard_stepup.py::TestTheWizardAsksForTheConfirmationItNeeds`
 - `tests/test_kea_connection_forms.py::TestEveryIdentityRouteIsASuperadminsForm`
+- `tests/test_credential_destinations.py::TestTheDestinationGuardSeesEveryEndpoint`
 
 ### AUTH-001 - A password change ends every other session of the account
 **Rule.** A session carries a fingerprint of the password hash it was opened under; `load_user` ends the session on its next request when the row's fingerprint is no longer the same, and the session
@@ -395,7 +397,7 @@ A password a form INHERITS (Kea6 and D2 use the Kea API's when they have none of
 a different host needs its password typed, "Inherit" included (`auth.same_host`, `infrastructure._inherited_secret_refusal`). A genuinely new additional-server row takes the primary's password only through its own "Share the primary's API password" box (CRED-003; Q178 let it inherit silently), and the setup wizard
 and the probe are the superadmin's deliberate tests of a typed address (an admin's probe is limited to the host Jen already reaches, RBAC-004). A form that offers "Inherit" AND a password box gets one
 answer: ticking both is refused (`infrastructure._one_answer_for_a_secret`), and the checks judge the EFFECTIVE secret.
-(DNS-CRED-001 is the provider-level half of the same rule.)
+(DNS-CRED-001 is the provider-level half of the same rule; CRED-004 is the definition every form's check now agrees with.)
 **Established.** Q178 (the beta.8 review: Technitium at A to Technitium at B kept A's token, and six more forms kept a blank password across a new URL or host).
 **Enforced at.** `auth.same_endpoint`, through `infrastructure._secret_for_new_endpoint` (every connection route, before its write) and `save_infra_ddns`'s `_apply`.
 **Tests.**
@@ -409,18 +411,37 @@ answer: ticking both is refused (`infrastructure._one_answer_for_a_secret`), and
 - `tests/test_kea_connection_forms.py::TestOneAnswerForASecret`
 - `tests/test_ddns.py::TestADifferentEndpointIsNotTheSameProvider`
 
-### CRED-003 - An inherited secret used on a different host is named
-**Rule.** A secret a server inherits (`[kea6]`, `[d2]`, `[kea6_db]` and an additional server fall back to the Kea API's, or Kea's database's, password) is the password of the endpoint it was typed for. The
-derivation keeps the fall back - an upgrade must not break a working HA config - so the rule is that Jen NAMES it: the Configuration Doctor's `credential-inherited-across-hosts` (info) says, for each
-inherited secret used on a different host from the secret's own endpoint (`auth.same_host`; an additional server's API, IPv6 and D2 endpoints), both hosts, and the Health check carries the same sentence.
-The form COPIES the primary's password into a NEW additional-server row only through its own checkbox; a new row given neither a password nor the box has no password key and is still reached with the
-primary's by the derivation - the one place this rule is a note and not a refusal, by design (a Kea server with no password of its own is reached with the primary's, and the Doctor says so). A row that keeps a
-password keeps the one its connection resolves (its own, else the primary's), so moving it to a new address needs the password typed (an IPv6 address on the host it was on, or on the API address's host, is not moved).
-**Established.** Q179 (the beta.9 review: a section with no `api_pass` of its own was compared against nothing, and a new row inherited the primary's silently).
-**Enforced at.** `config_doctor._check_credential_inherited_across_hosts` (called by `diagnose`, Health's `_config_doctor` and the Doctor page) and `infrastructure.save_extra_servers`' `_rewrite_extra_servers`.
+### CRED-003 - An additional server takes the primary's password only on purpose, and an inherited secret is named
+**Rule.** (Q179; the note-only wording is SUPERSEDED by CRED-004 - an inherited secret on a different host is no longer used, it is refused and named.) The form COPIES the primary's password into a NEW
+additional-server row only through its own checkbox ("Share the primary's API password"), marked `api_pass_shared = 1`; ticking it AND typing a password is refused ("Choose one"). A row that keeps a
+password keeps the one its connection resolves, so moving it to a new address needs the password typed (an IPv6 address on the host it was on, or on the API address's host, is not moved).
+**Established.** Q179 (the beta.9 review), Q180 (the beta.10 review: the derivation kept the fallback, so an unticked box still sent the primary's password; CRED-004 removes it).
+**Enforced at.** `infrastructure.save_extra_servers`' `_rewrite_extra_servers`; the Doctor's `endpoint-has-no-credential` and `credential-shared-same-host` (`config_doctor._check_credential_endpoints`).
 **Tests.**
-- `tests/test_config_doctor.py::TestACredentialInheritedAcrossHosts`
+- `tests/test_config_doctor.py::TestEndpointCredentials`
 - `tests/test_kea_connection_forms.py::TestAnAdditionalServerUsesTheCredentialItIsGiven`
+
+### CRED-004 - A secret is used at its own endpoint or inherited by a daemon on the same host; `credentials.resolve` is the one definition
+**Rule.** Which password Jen sends to which endpoint is decided in ONE pure function, `credentials.resolve(parser)`, and every consumer asks it: `AppConfig.apply` (the KEA6, D2 and KEA6_DB globals),
+`derive_kea_servers` (each server's `api_pass`, `api6_pass`, `api_d2_pass` and their `*_withheld`), `kea._endpoint_for`, the Configuration Doctor and the Health row "Every endpoint has a credential". A
+secret is used at its OWN endpoint, or inherited by another daemon ON THE SAME HOST (`auth.same_host`: another port of that host is the same box); an endpoint on a different host with no secret of its own
+has NONE - never its neighbour's, and `_endpoint_for` answers with a sentence and sends nothing. A blank `api_pass =` is an explicit no-credential; an ABSENT key is "inherit, if the host is the same".
+The writer asks one more question for every write (`AppConfig._write_parser` through `credentials.move_refusal`, never per form): a saved password does not FOLLOW an endpoint to a new host, and does not
+appear on a SECOND host, unless it was typed in this request (`mutate(fn, typed=...)`). A legacy section that inherited the primary's password across hosts since 5.10 is converted ONCE, audibly, at
+`create_app` (`credentials.materialise`: the copy, the `api_pass_shared` marker, one `CONFIG_MIGRATION` audit row each); a later change of the primary's password does not follow it.
+**Established.** Q180 (the beta.10 review - and the four before it: beta.7 provider switch, beta.8 same-provider URL change, beta.9 inherit plus typed and an extra server without a key, beta.10 the
+unchecked share box and the extra server's IPv6 and D2 endpoints: one defect, a fallback written in a different place each time).
+**Enforced at.** `jen/services/credentials.py` (`resolve`, `move_refusal`, `materialise`); `jen/config.py` (`apply`, `derive_kea_servers`, `_write_parser`); `jen/services/kea.py` (`_endpoint_for`). The two
+greps `fallback=primary_pass` and `or server.get("api_pass"` over `jen/` find nothing, and `tests/test_credentials.py` says so.
+**Tests.**
+- `tests/test_credentials.py::TestResolve`
+- `tests/test_credentials.py::TestTheConsumersAreOnTheResolver`
+- `tests/test_credentials.py::TestEndpointForSendsNothingWithoutACredential`
+- `tests/test_credentials.py::TestMaterialise`
+- `tests/test_credential_destinations.py::test_the_row`
+- `tests/test_credential_destinations.py::TestTheSevenFormsAreHeldByTheWriterWhoeverPosts`
+- `tests/test_setup_wizard.py::TestEnableV6`
+- `tests/test_setup_wizard_stepup.py::TestTheWizardAsksForTheConfirmationItNeeds`
 
 ### LOG-CACHE-002 - What a cache remembers about its readers is bounded by what is in flight, an unrelated key never waits, and a read begun before a clear is not kept
 **Rule.** A second reader of the SAME key waits for the first one's read through a table of in-flight reads whose entries live only as long as their read - never one lock per key kept for the life of the process,

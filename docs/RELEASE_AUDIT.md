@@ -49,6 +49,12 @@ an entry in the commit that adds its test.
 grep -n "^### " docs/SAFETY_INVARIANTS.md
 ```
 
+**(n) The credential matrix (v5.69.0-beta.11, Q180).** For any change under `jen/config.py`, `jen/services/credentials.py`, `kea._endpoint_for`, the settings forms or the setup wizard: the new
+shape is a ROW of `tests/test_credential_destinations.py` BEFORE the fix (the parser as it was, the mutation as the route makes it through `mutate(..., typed=...)`, the expected `resolve(after)` per
+endpoint, and whether the write is refused). A P1 or P2 the second pass finds in this class is handled in this order, and never by guarding a form: the row that fails; the fix in
+`credentials.resolve` or `AppConfig._write_parser`; the registry line (CRED-004 / RBAC-004); the row green. Ask of every endpoint a change touches: which secret does `resolve` give it, from where, and
+what does `destination_view` say about who may move it.
+
 ## The second pass (adversarial)
 
 Run as a separate subagent on the same diff, with the reviewer's method as its prompt, so that it does not inherit the first pass's assumptions. Its findings are reconciled against the first pass's
