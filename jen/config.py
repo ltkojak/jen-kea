@@ -604,14 +604,14 @@ class AppConfig:
         # v5.69.0-beta.11 (Q180, CRED-004): the SECRETS of [kea6], [d2] and [kea6_db] come from `credentials.resolve` - used at their own endpoint, or inherited by a daemon
         # on the SAME host as the secret's owner, never by a different one. (The urls, users and names below keep their fallbacks: they are not secrets.)
         _resolved = _credentials.resolve(cfg)
-        _kea6_url_fallback = extensions.KEA_API_URL if extensions.KEA_CONNECTION_MODE == "ca" else ""
-        extensions.KEA6_API_URL = cfg.get("kea6", "api_url", fallback=_kea6_url_fallback)
-        extensions.KEA6_API_USER = cfg.get("kea6", "api_user", fallback=extensions.KEA_API_USER)
+        # (v5.69.0-beta.12, Q181: the url and the user too - one reading for all three fields, `credentials.resolve`'s)
+        extensions.KEA6_API_URL = _resolved["kea6"].url
+        extensions.KEA6_API_USER = _resolved["kea6"].user
         extensions.KEA6_API_PASS = _resolved["kea6"].password
         extensions.KEA6_API_WITHHELD = _resolved["kea6"].withheld
 
         extensions.KEA6_DB_HOST = cfg.get("kea6_db", "host", fallback=extensions.KEA_DB_HOST)
-        extensions.KEA6_DB_USER = cfg.get("kea6_db", "user", fallback=extensions.KEA_DB_USER)
+        extensions.KEA6_DB_USER = _resolved["kea6_db"].user
         extensions.KEA6_DB_PASS = _resolved["kea6_db"].password
         extensions.KEA6_DB_NAME = cfg.get("kea6_db", "database", fallback=extensions.KEA_DB_NAME)
         extensions.KEA6_DB_PORT = _db_port(cfg, "kea6_db", extensions.KEA_DB_PORT)
@@ -622,9 +622,8 @@ class AppConfig:
         # URL (one CA proxies D2 too); in direct mode there's no fallback,
         # since a bare CA connection_mode of "direct" means every daemon
         # (D2 included) has its own http control socket.
-        _d2_url_fallback = extensions.KEA_API_URL if extensions.KEA_CONNECTION_MODE == "ca" else ""
-        extensions.D2_API_URL = cfg.get("d2", "api_url", fallback=_d2_url_fallback)
-        extensions.D2_API_USER = cfg.get("d2", "api_user", fallback=extensions.KEA_API_USER)
+        extensions.D2_API_URL = _resolved["d2"].url
+        extensions.D2_API_USER = _resolved["d2"].user
         extensions.D2_API_PASS = _resolved["d2"].password
         extensions.D2_API_WITHHELD = _resolved["d2"].withheld
 
@@ -818,7 +817,6 @@ class AppConfig:
     def derive_kea_servers(cfg: configparser.ConfigParser, quiet: bool = False) -> list:
         """Return list of server dicts from config. `quiet` (Q164) is for a parser that is only being compared - the identity view reads every write twice - so a
         stray `[kea_server_1]` is not warned about on each."""
-        primary_user = cfg.get("kea", "api_user", fallback="")
         # v5.69.0-beta.11 (Q180, CRED-004): every password on a server dict is what `credentials.resolve` says that endpoint WILL send - its own, or its host's neighbour's -
         # and `*_withheld` names the endpoint whose password was refused it (kea._endpoint_for answers with a sentence and sends nothing)
         resolved = _credentials.resolve(cfg)
@@ -831,22 +829,22 @@ class AppConfig:
                 # mode. Blank on the primary means "use [kea6] api_url"
                 # (jen/services/kea.py::_endpoint_for); v6 API is
                 # primary-only, so extra servers rarely set this.
-                "api6_url": cfg.get("kea6", "api_url", fallback=""),
+                "api6_url": resolved["kea6"].url,
                 # v5.10.2 — per-daemon v6 credentials. The `or` chain in
                 # _endpoint_for() (server.api6_* → KEA6_* → server.api_*)
                 # encodes precedence, so these carry the RAW [kea6] value,
                 # NOT a fallback — pre-filling would mask that chain.
-                "api6_user": cfg.get("kea6", "api_user", fallback=""),
+                "api6_user": resolved["kea6"].user,
                 "api6_pass": resolved["kea6"].password,
                 "api6_withheld": resolved["kea6"].withheld,
                 # v5.23.0 (Q19) — same shape as api6_* above: the raw
                 # [d2] value, not a fallback (jen.services.kea._endpoint_for's
                 # `or` chain does the ca-mode/primary-only fallback).
-                "api_d2_url": cfg.get("d2", "api_url", fallback=""),
-                "api_d2_user": cfg.get("d2", "api_user", fallback=""),
+                "api_d2_url": resolved["d2"].url,
+                "api_d2_user": resolved["d2"].user,
                 "api_d2_pass": resolved["d2"].password,
                 "api_d2_withheld": resolved["d2"].withheld,
-                "api_user": primary_user,
+                "api_user": resolved["kea"].user,
                 "api_pass": resolved["kea"].password,
                 "api_withheld": "",
                 "ssh_host": cfg.get("kea_ssh", "host", fallback=""),
@@ -881,19 +879,19 @@ class AppConfig:
                 {
                     "id": n,
                     "name": cfg.get(sec, "name", fallback=f"Kea Server {n}"),
-                    "api_url": cfg.get(sec, "api_url", fallback=""),
-                    "api6_url": cfg.get(sec, "api6_url", fallback=""),
+                    "api_url": resolved[f"server_{n}"].url,
+                    "api6_url": resolved[f"server_{n}_v6"].url,
                     # v5.10.2 — raw per-server value, fallback "" (see the
                     # primary above); _endpoint_for()'s `or` chain does the
                     # rest.
-                    "api6_user": cfg.get(sec, "api6_user", fallback=""),
+                    "api6_user": resolved[f"server_{n}_v6"].user,
                     "api6_pass": resolved[f"server_{n}_v6"].password,
                     "api6_withheld": resolved[f"server_{n}_v6"].withheld,
-                    "api_d2_url": cfg.get(sec, "api_d2_url", fallback=""),
-                    "api_d2_user": cfg.get(sec, "api_d2_user", fallback=""),
+                    "api_d2_url": resolved[f"server_{n}_d2"].url,
+                    "api_d2_user": resolved[f"server_{n}_d2"].user,
                     "api_d2_pass": resolved[f"server_{n}_d2"].password,
                     "api_d2_withheld": resolved[f"server_{n}_d2"].withheld,
-                    "api_user": cfg.get(sec, "api_user", fallback=primary_user),
+                    "api_user": resolved[f"server_{n}"].user,
                     "api_pass": resolved[f"server_{n}"].password,
                     "api_withheld": resolved[f"server_{n}"].withheld,
                     "api_pass_shared": cfg.get(sec, "api_pass_shared", fallback="") == "1",

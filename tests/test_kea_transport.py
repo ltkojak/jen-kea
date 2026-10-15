@@ -244,7 +244,15 @@ class TestPerServerV6Precedence:
 
     # (Q180: a server dict is what `derive_kea_servers` makes - every password already resolved by `credentials.resolve`; `_endpoint_for` no longer falls back from the IPv6 or D2 password
     # to the API's, so the same-host inheritance the resolver would have made is spelled out here)
-    STANDBY = {"api_url": "http://kea02:8000", "api_user": "u2", "api_pass": "p2", "api6_pass": "p2"}
+    STANDBY = {
+        "api_url": "http://kea02:8000",
+        "api_user": "u2",
+        "api_pass": "p2",
+        # (Q181: what `derive_kea_servers` writes in CA mode for an endpoint with no IPv6 keys of its own: the server's own address, user and password)
+        "api6_url": "http://kea02:8000",
+        "api6_user": "u2",
+        "api6_pass": "p2",
+    }
 
     def test_ca_standby_without_api6_uses_its_own_v4_endpoint(self, fake_http):
         kea_svc.kea_command("config-get", service="dhcp6", server=dict(self.STANDBY))
@@ -315,7 +323,14 @@ class TestD2Transport:
         assert c["auth"] == ("ud2", "pd2")
 
     def test_ca_mode_standby_without_api_d2_url_uses_its_own_v4_endpoint(self, fake_http):
-        srv = {"api_url": "http://kea02:8000", "api_user": "u2", "api_pass": "p2", "api_d2_pass": "p2"}
+        srv = {
+            "api_url": "http://kea02:8000",
+            "api_user": "u2",
+            "api_pass": "p2",
+            "api_d2_url": "http://kea02:8000",  # (Q181: resolved - CA mode, no D2 keys of its own)
+            "api_d2_user": "u2",
+            "api_d2_pass": "p2",
+        }
         kea_svc.kea_command("version-get", service="d2", server=srv)
         c = fake_http.calls[0]
         assert c["url"] == "http://kea02:8000"
@@ -342,6 +357,7 @@ class TestD2Transport:
             "api_user": "u2",
             "api_pass": "p2",
             "api_d2_pass": "p2",
+            "api_d2_user": "u2",
             "api_d2_url": "http://kea02:8001",  # (Q180: another port of the SAME host - `resolve` gives a daemon on a different host no inherited password)
         }
         kea_svc.kea_command("version-get", service="d2", server=srv)

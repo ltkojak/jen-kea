@@ -157,7 +157,9 @@ class TestAppConfig:
         assert len(extensions.KEA_SERVERS) == 2
         assert extensions.KEA_SERVERS[1]["name"] == "Standby"
         # credentials fall back to primary values from the parser, not globals
-        assert extensions.KEA_SERVERS[1]["api_user"] == "u1"
+        assert (
+            extensions.KEA_SERVERS[1]["api_user"] == ""
+        )  # (Q181: a server on another host inherits no user - the user follows the same rule as the password)
 
     def test_extensions_cfg_tracks_disk_after_mutation(self, isolated_config):
         def add_then_check(p):
@@ -251,7 +253,9 @@ class TestKea3ConnectionMode:
         assert extensions.KEA_API_TLS_VERIFY is True
         assert extensions.KEA_API_CLIENT_CERT == ""
         assert extensions.KEA_API_CLIENT_KEY == ""
-        assert extensions.KEA_SERVERS[0]["api6_url"] == ""
+        assert (
+            extensions.KEA_SERVERS[0]["api6_url"] == extensions.KEA_API_URL
+        )  # (Q181: resolved - in CA mode one Control Agent proxies every daemon)
 
     def test_direct_mode_and_tls_options_round_trip(self, isolated_config):
         app_config.write_values(
@@ -291,7 +295,7 @@ class TestD2Config:
         assert extensions.D2_API_URL == extensions.KEA_API_URL  # ca-mode fallback
         assert extensions.D2_API_USER == extensions.KEA_API_USER
         assert extensions.D2_API_PASS == extensions.KEA_API_PASS
-        assert extensions.KEA_SERVERS[0]["api_d2_url"] == ""
+        assert extensions.KEA_SERVERS[0]["api_d2_url"] == extensions.KEA_API_URL  # (Q181: resolved)
 
     def test_d2_section_overrides_the_global(self, isolated_config):
         app_config.write_values(

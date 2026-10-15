@@ -216,7 +216,7 @@ def probe_command(
         resp = http.post(
             url,
             json=payload,
-            auth=(user, password),
+            auth=_auth(user, password),
             timeout=timeout,
             verify=verify if verify is not None else _tls_verify(),
             cert=_resolve_cert(cert),
@@ -266,28 +266,25 @@ def identify_daemon(url: str, user: str, password: str, *, verify=None, cert=Non
     return next((k for k in args if k != "hash"), None)
 
 
+def _auth(user, password):
+    """The Basic credential a request carries (v5.69.0-beta.12, Q181): exactly the endpoint's resolved user and password - and NO Authorization header when both are blank (an endpoint
+    that says it has no authentication is sent none, not an empty Basic one)."""
+    return (user, password) if (user or password) else None
+
+
 def _endpoint_for(server: dict, service: str):
     """
-    Resolve (url, user, pwd) for one command — or return an error dict
-    when a dhcp6 or d2 command has nowhere to go in direct mode.
+    (url, user, pwd) for one command - or an error dict when the endpoint has no address or no credential it may use.
 
-    dhcp4 (and anything that isn't "dhcp6"/"d2") behaves exactly as it has
-    since v4.0.0: the given server dict, or the [kea] globals when server
-    is None. dhcp6 and d2 routing are mode-aware.
+    v5.69.0-beta.12 (Q181, V1; CRED-004) - THIS FUNCTION DECIDES NOTHING. Every field it returns is what `credentials.resolve` gave the endpoint, carried on the server dict by
+    `derive_kea_servers` (`api_url`/`api_user`/`api_pass`, `api6_*`, `api_d2_*`, and `*_withheld`) and on the KEA6_* / D2_* globals by `AppConfig.apply`: url, user and password under
+    ONE reading (a value is its own, a present-blank key is explicit, an absent key inherits - the url in CA mode, the user and password on the same host only). There is no `or`
+    here and no fallback to the Control Agent's url, because a second place that decides is how a password reached a host its owner never named four times. An endpoint with no
+    address answers with a sentence; one whose password was refused (`*_withheld`) answers with a sentence and NOTHING is sent. `tests/test_credential_transport.py` proves the
+    transport posts exactly what `resolve` says; a whole-tree test refuses a new fallback.
 
-    v5.10.3 — a server's v6 endpoint is THAT SERVER's: its api6_* fields,
-    else (ca mode) its own api_url/api_user/api_pass. The KEA6_* globals
-    are the primary's [kea6] override and are used only for the
-    server-is-None (primary) path; derive_kea_servers() bakes [kea6] into
-    the primary dict's api6_* so the primary still gets them here. Before
-    this, a standby with no api6_url sent its dhcp6 commands to the
-    PRIMARY's endpoint with the primary's credentials.
-
-    v5.69.0-beta.11 (Q180, CRED-004) - the password is what `credentials.resolve` gave THIS endpoint (the server dict's `api_pass`, `api6_pass`, `api_d2_pass`; the KEA6_* and
-    D2_* globals for the primary's own sockets), never "its own, else its neighbour's" decided here. An endpoint on a different host from the one whose password it would have
-    inherited has none, and `*_withheld` names that host's endpoint: the answer is a sentence and NOTHING is sent.
+    dhcp4 (and anything that isn't "dhcp6"/"d2"): the given server dict, or the [kea] globals when server is None. The primary-only KEA6_*/D2_* globals serve server=None.
     """
-    direct = extensions.KEA_CONNECTION_MODE == "direct"
 
     def _no_credential(who: str, url: str, withheld: str):
         from jen.services import credentials as _cred
@@ -300,56 +297,42 @@ def _endpoint_for(server: dict, service: str):
             ),
         }
 
-    if service == "d2":
-        # kea-dhcp-ddns (D2), v5.23.0 (Q19). In ca mode the Control Agent
-        # forwards a `service: ["d2"]` command to it, so D2 rides the same
-        # endpoint as dhcp4 by default. Direct mode needs D2's own control
-        # socket — same precedence shape as the dhcp6 branch below: a
-        # server's own api_d2_url wins, else (server is None — the primary
-        # only) the [d2] globals, which jen/config.py already folds the
-        # ca-mode fallback to KEA_API_URL into at config-apply time.
+    if service in ("d2", "dhcp6"):
         if server is None:
-            url = extensions.D2_API_URL
-            user = extensions.D2_API_USER
-            pwd = extensions.D2_API_PASS
-            withheld, who = extensions.D2_API_WITHHELD, "D2"
+            if service == "d2":
+                url, user, pwd = extensions.D2_API_URL, extensions.D2_API_USER, extensions.D2_API_PASS
+                withheld, who = extensions.D2_API_WITHHELD, "D2"
+            else:
+                url, user, pwd = extensions.KEA6_API_URL, extensions.KEA6_API_USER, extensions.KEA6_API_PASS
+                withheld, who = extensions.KEA6_API_WITHHELD, "Kea6"
         else:
-            v4_url_fallback = "" if direct else server.get("api_url", "")
-            url = server.get("api_d2_url") or v4_url_fallback
-            user = server.get("api_d2_user") or server.get("api_user", "")
-            pwd = server.get("api_d2_pass", "")
-            withheld, who = server.get("api_d2_withheld", ""), f"{server.get('name', 'This server')}'s D2 endpoint"
-        if withheld and url:
+            prefix, label_ = ("api_d2", "D2") if service == "d2" else ("api6", "IPv6")
+            url, user, pwd = (
+                server.get(f"{prefix}_url", ""),
+                server.get(f"{prefix}_user", ""),
+                server.get(f"{prefix}_pass", ""),
+            )
+            withheld, who = (
+                server.get(f"{prefix}_withheld", ""),
+                f"{server.get('name', 'This server')}'s {label_} endpoint",
+            )
+        if not url:
+            direct = extensions.KEA_CONNECTION_MODE == "direct"
+            if service == "d2":
+                text = (
+                    "D2 needs a kea-dhcp-ddns control-socket URL — set [d2] api_url (Settings → Kea)."
+                    if direct
+                    else f"{who} has no address of its own (its address is blank on purpose)."
+                )
+            else:
+                text = (
+                    "IPv6 direct mode needs a kea-dhcp6 control-socket URL — set [kea6] api_url (Settings → Kea → Kea6 Control Socket)."
+                    if direct
+                    else f"{who} has no address of its own (its address is blank on purpose)."
+                )
+            return {"result": 1, "text": text}
+        if withheld:
             return _no_credential(who, url, withheld)
-        if direct and not url:
-            return {
-                "result": 1,
-                "text": "D2 needs a kea-dhcp-ddns control-socket URL — set [d2] api_url (Settings → Kea).",
-            }
-        return url, user, pwd
-
-    if service == "dhcp6":
-        if server is None:
-            url = extensions.KEA6_API_URL
-            user = extensions.KEA6_API_USER
-            pwd = extensions.KEA6_API_PASS
-            withheld, who = extensions.KEA6_API_WITHHELD, "Kea6"
-        else:
-            v4_url_fallback = "" if direct else server.get("api_url", "")
-            url = server.get("api6_url") or v4_url_fallback
-            user = server.get("api6_user") or server.get("api_user", "")
-            pwd = server.get("api6_pass", "")
-            withheld, who = server.get("api6_withheld", ""), f"{server.get('name', 'This server')}'s IPv6 endpoint"
-        if withheld and url:
-            return _no_credential(who, url, withheld)
-        if direct and not url:
-            return {
-                "result": 1,
-                "text": (
-                    "IPv6 direct mode needs a kea-dhcp6 control-socket URL — "
-                    "set [kea6] api_url (Settings → Kea → Kea6 Control Socket)."
-                ),
-            }
         return url, user, pwd
 
     if server is None:
@@ -381,7 +364,7 @@ def kea_command(
         payload["arguments"] = arguments
     try:
         resp = http.post(
-            url, json=payload, auth=(user, pwd), timeout=timeout, verify=_tls_verify(), cert=_tls_client_cert()
+            url, json=payload, auth=_auth(user, pwd), timeout=timeout, verify=_tls_verify(), cert=_tls_client_cert()
         )
         resp.raise_for_status()
         data = resp.json()
@@ -449,7 +432,9 @@ def server_clock_offset(server: dict = None) -> float | None:
         payload = {"command": "version-get", "service": ["dhcp4"]}
     try:
         t0 = datetime.now(timezone.utc)
-        resp = http.post(url, json=payload, auth=(user, pwd), timeout=10, verify=_tls_verify(), cert=_tls_client_cert())
+        resp = http.post(
+            url, json=payload, auth=_auth(user, pwd), timeout=10, verify=_tls_verify(), cert=_tls_client_cert()
+        )
         t1 = datetime.now(timezone.utc)
     except Exception:
         return None

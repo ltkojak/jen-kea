@@ -172,8 +172,8 @@ class TestKea6ConfigFallback:
     def test_direct_mode_kea6_url_still_takes_an_explicit_value(self):
         AppConfig().apply(self._base_cfg("[kea6]\napi_url = http://kea6:8006\n", kea_extra="connection_mode = direct"))
         assert extensions.KEA6_API_URL == "http://kea6:8006"
-        # user/pass still fall back to [kea] in either mode
-        assert extensions.KEA6_API_USER == "u4"
+        # (Q181: the user follows the password's rule - the primary's only on the same host; this socket is on another one)
+        assert extensions.KEA6_API_USER == ""
 
     def test_api_ca_and_tls_verify_are_parsed(self):
         AppConfig().apply(self._base_cfg(kea_extra="api_ca = /etc/jen/ssl/kea-ca.pem\napi_tls_verify = false"))
