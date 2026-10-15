@@ -104,8 +104,10 @@ class TestDatabaseCardsAndRestartAreSuperadminWithStepUp:
         from jen.services import runtime
 
         calls = {"write": [], "restart": []}
-        monkeypatch.setattr(config.app_config, "write_values", lambda items: calls["write"].append(items))
-        monkeypatch.setattr(type(config.app_config), "mutate", lambda self, fn, reload=True: calls["write"].append(fn))
+        monkeypatch.setattr(config.app_config, "write_values", lambda items, typed=None: calls["write"].append(items))
+        monkeypatch.setattr(
+            type(config.app_config), "mutate", lambda self, fn, reload=True, typed=None: calls["write"].append(fn)
+        )
         monkeypatch.setattr(runtime, "restart_service", lambda *a, **k: calls["restart"].append(1) or "systemd")
         return calls
 
@@ -302,7 +304,9 @@ class TestDdnsLogPathStaysInsideVarLog:
         import jen.config as config
 
         wrote = []
-        monkeypatch.setattr(type(config.app_config), "mutate", lambda self, fn, reload=True: wrote.append(fn))
+        monkeypatch.setattr(
+            type(config.app_config), "mutate", lambda self, fn, reload=True, typed=None: wrote.append(fn)
+        )
         r = logged_in_client.post(
             "/settings/infrastructure/save-ddns",
             data={"log_path": "/etc/shadow", "dns_provider": "none"},
@@ -350,7 +354,7 @@ class TestSaveDdnsClearsWhatIsBlank:
                 }
             }
         )
-        monkeypatch.setattr(type(config.app_config), "mutate", lambda self, fn, reload=True: fn(parser))
+        monkeypatch.setattr(type(config.app_config), "mutate", lambda self, fn, reload=True, typed=None: fn(parser))
         return parser
 
     def test_blank_clears_each_key_and_the_token_is_kept_for_the_same_provider(self, logged_in_client, cfg):

@@ -1160,7 +1160,7 @@ class TestACredentialBelongsToItsProvider:
         parser = configparser.ConfigParser()
         parser.read_dict({s: dict(extensions.cfg.items(s)) for s in extensions.cfg.sections() if s != "ddns"})
         monkeypatch.setattr(extensions, "cfg", parser)
-        monkeypatch.setattr(type(config.app_config), "mutate", lambda self, fn, reload=True: fn(parser))
+        monkeypatch.setattr(type(config.app_config), "mutate", lambda self, fn, reload=True, typed=None: fn(parser))
 
         class Handle:
             def write(self, values):
@@ -1346,7 +1346,7 @@ class TestACredentialSecondPass:
         parser = configparser.ConfigParser()
         parser.read_dict({s: dict(extensions.cfg.items(s)) for s in extensions.cfg.sections() if s != "ddns"})
         monkeypatch.setattr(extensions, "cfg", parser)
-        monkeypatch.setattr(type(config.app_config), "mutate", lambda self, fn, reload=True: fn(parser))
+        monkeypatch.setattr(type(config.app_config), "mutate", lambda self, fn, reload=True, typed=None: fn(parser))
 
         class Handle:
             def write(self, values):

@@ -21,6 +21,7 @@ import jen.config as __config
 import jen.models.user as __user
 import jen.services.auth as __auth
 import jen.services.capabilities as __caps
+import jen.services.credentials as __credentials
 import jen.services.ddns_writers as __ddns_writers
 import jen.services.host_match as __host_match
 import jen.services.investigation_logging as __inv
@@ -49,6 +50,7 @@ _EXTRA_SERVER_FORM_KEYS = frozenset(
         "api6_url",
         "api6_user",
         "api6_pass",
+        "api_pass_shared",
         "ssh_host",
         "ssh_user",
         "kea_conf",
@@ -215,6 +217,8 @@ def settings_kea():
                 "ssh_user": extensions.cfg.get(sec, "ssh_user", fallback=""),
                 "kea_conf": extensions.cfg.get(sec, "kea_conf", fallback="/etc/kea/kea-dhcp4.conf"),
                 "role": extensions.cfg.get(sec, "role", fallback="standby"),
+                # v5.69.0-beta.11 (Q180, U2): this password is a COPY of the primary's, made once and no longer following it
+                "api_pass_shared": extensions.cfg.get(sec, "api_pass_shared", fallback="") == "1",
                 # v5.29.0 (Q29) — the "Set up direct socket" form's bind
                 # address default: the SSH host when it's an IP literal.
                 "bind_default": _bind_default(extensions.cfg.get(sec, "ssh_host", fallback="")),
@@ -438,7 +442,7 @@ def save_infra_kea():
     ]
     if api_pass:
         items.append(("kea", "api_pass", api_pass))
-    __config.app_config.write_values(items)
+    __config.app_config.write_values(items, typed={"kea"} if api_pass else None)
     __user.set_global_setting("restart_pending", "true")
     flash("Kea API settings saved. Restart Jen to apply.", "success")
     mismatch = __host_match.api_ssh_mismatch(api_url, extensions.cfg.get("kea_ssh", "host", fallback=""))
@@ -479,7 +483,7 @@ def save_infra_kea_db():
     items = [("kea_db", "host", host), ("kea_db", "user", user), ("kea_db", "database", database)]
     if password:
         items.append(("kea_db", "password", password))
-    __config.app_config.write_values(items)
+    __config.app_config.write_values(items, typed={"kea_db"} if password else None)
     __user.set_global_setting("restart_pending", "true")
     flash("Kea database settings saved. Restart Jen to apply.", "success")
     __user.audit("SAVE_INFRA", "kea_db", f"host={host}")
@@ -625,7 +629,14 @@ def save_infra_kea6():
             if cfg.has_section(section) and not cfg.options(section):
                 cfg.remove_section(section)
 
-    __config.app_config.mutate(_apply)
+    __config.app_config.mutate(
+        _apply,
+        typed={
+            n
+            for n, v in (("kea6", api_pass), ("kea6_db", db_pass))
+            if v and not (inherit_api_pass if n == "kea6" else inherit_db_pass)
+        },
+    )
 
     if not changed:
         flash("No Kea6 changes.", "info")
@@ -714,7 +725,7 @@ def save_infra_d2():
         if cfg.has_section("d2") and not cfg.options("d2"):
             cfg.remove_section("d2")
 
-    __config.app_config.mutate(_apply)
+    __config.app_config.mutate(_apply, typed={"d2"} if api_pass and not inherit_api_pass else None)
 
     if not changed:
         flash("No D2 changes.", "info")
@@ -1183,12 +1194,22 @@ def _direct_socket_edit(server: dict, service: str, url: str, user: str, passwor
     return _apply, changed
 
 
+def _endpoints_of_server(server: dict) -> set[str]:
+    """Every `credentials.resolve` endpoint name of one Kea server. The direct-socket routes point a server at the socket that has JUST ANSWERED with its saved credentials (it
+    is the same Kea, reached by the address its own SSH host gave): that is the superadmin's explicit act, so the password the writer would otherwise refuse to follow an
+    endpoint to a new spelling of the host (`10.0.0.1` for `kea-a`) is theirs to move (CRED-004)."""
+    sid = (server or {}).get("id")
+    if sid in (None, 1):
+        return {"kea", "kea6", "d2"}
+    return {f"server_{sid}", f"server_{sid}_v6", f"server_{sid}_d2"}
+
+
 def _write_direct_socket_config(
     server: dict, service: str, url: str, user: str, password: str, tls: bool = False
 ) -> str:
     """Point Jen at the daemon socket that just answered (see `_direct_socket_edit`). Returns the phrase the caller flashes."""
     apply_fn, changed = _direct_socket_edit(server, service, url, user, password, tls)
-    __config.app_config.mutate(apply_fn)
+    __config.app_config.mutate(apply_fn, typed=_endpoints_of_server(server))
     return ", ".join(changed)
 
 
@@ -1799,7 +1820,7 @@ def remove_direct_socket(server_id, service):
         return back
 
     try:
-        __config.app_config.mutate(_apply)
+        __config.app_config.mutate(_apply, typed=_endpoints_of_server(server))
     except __config.ConfigChangeRefused as refused:
         # v5.68.0-beta.29 (Q165, edge 3): refused AFTER the socket was taken out of the daemon's config - put it back as it was, the daemon restarted
         if result.status == "ok" and removed_sockets:
@@ -1977,7 +1998,7 @@ def save_infra_jen_db():
     items = [("jen_db", "host", host), ("jen_db", "user", user), ("jen_db", "database", database)]
     if password:
         items.append(("jen_db", "password", password))
-    __config.app_config.write_values(items)
+    __config.app_config.write_values(items, typed={"jen_db"} if password else None)
     __user.set_global_setting("restart_pending", "true")
     flash("Jen database settings saved. Restart Jen to apply.", "success")
     __user.audit("SAVE_INFRA", "jen_db", f"host={host}")
@@ -2139,8 +2160,12 @@ def save_extra_servers():
         seen_names.add(shown.casefold())
 
     refused: list[str] = []
+    typed_names: set[str] = (
+        set()
+    )  # the endpoint names whose password this request TYPED (or copied by the box): `mutate`'s `typed`, read after the callback has run
 
     def _rewrite_extra_servers(cfg):
+        before_resolved = __credentials.resolve(cfg)  # what each endpoint resolved to BEFORE this save touched it
         # v5.10.3 — snapshot every current [kea_server_N] so keys the form
         # doesn't manage (ssh_key, any hand-added value) and a blank
         # password survive the remove-and-rebuild. Preservation is by the
@@ -2209,21 +2234,18 @@ def save_extra_servers():
             seen_ids.add(out)
             prev = existing.get(orig_id, {}) if orig_id is not None else {}
 
-            # CRED-002 (Q178, Q179 T3): a row that keeps its saved password must keep its endpoint, and the password it keeps is the one it USES - what the connection resolves
-            # (`kea._endpoint_for`): its own, else (IPv6) the API password, else the primary's. A section with no `api_pass` of its own uses the primary's, so moving it to a new
-            # address with a blank box would send the primary's password there. Nothing is written until this callback returns, so raising is the refusal. A NEW row has no
-            # stored address to compare: it takes the primary's password only through its own checkbox (below), else what was typed, else none.
+            # CRED-002 (Q178, Q179 T3, Q180): a row that keeps its saved password must keep its endpoint, and the password it keeps is the one `credentials.resolve` says it USES (its
+            # own, else - on the same host only - the primary's). Nothing is written until this callback returns, so raising is the refusal. A NEW row has no stored address to compare:
+            # it takes the primary's password only through its own box (below), else what was typed, else none.
+            who = name.strip() or f"Kea Server {out}"
             if orig_id is not None:
-                who = name.strip() or f"Kea Server {out}"
+                stored_api = before_resolved.get(f"server_{orig_id}")
+                stored_secret = stored_api.password if stored_api else ""
                 refusal = _secret_for_new_endpoint(
-                    prev.get("api_url"),
-                    api_url,
-                    api_pass,
-                    prev.get("api_pass") or extensions.KEA_API_PASS,
-                    f"API address of {who}",
+                    prev.get("api_url"), api_url, api_pass, stored_secret, f"API address of {who}"
                 )
                 if not refusal and not api6_pass.strip():
-                    # the IPv6 endpoint of a row that types no IPv6 password: judged against the password the connection will USE for it (`kea._endpoint_for`)
+                    # the IPv6 endpoint of a row that types no IPv6 password: judged against the password the connection will USE for it
                     stored6 = prev.get("api6_url") or ("" if direct else prev.get("api_url"))
                     new6 = api6_url.strip() or ("" if direct else api_url.strip())
                     if prev.get("api6_pass"):
@@ -2231,24 +2253,28 @@ def save_extra_servers():
                         refusal = _secret_for_new_endpoint(
                             stored6, new6, "", prev["api6_pass"], f"IPv6 API address of {who}"
                         )
-                    elif not api_pass.strip():
+                    elif (
+                        not api_pass.strip()
+                        and stored_secret
+                        and new6
+                        and not __auth.same_host(new6, stored6)
+                        and not __auth.same_host(new6, api_url)
+                    ):
                         # no IPv6 password of its own: the connection uses the API password, which is KEPT here. That is fine while the IPv6 address stays on the host it was on or
                         # is on the (new) API address's host - another port of the same host is the same Kea - and a password sent to a new host otherwise
-                        used = prev.get("api_pass") or extensions.KEA_API_PASS
-                        if (
-                            used
-                            and new6
-                            and not __auth.same_host(new6, stored6)
-                            and not __auth.same_host(new6, api_url)
-                        ):
-                            refusal = (
-                                f"The IPv6 API address of {who} changed: enter the password for the new endpoint - "
-                                "a saved password is never sent to one it was not typed for."
-                            )
+                        refusal = (
+                            f"The IPv6 API address of {who} changed: enter the password for the new endpoint - "
+                            "a saved password is never sent to one it was not typed for."
+                        )
                     # (a typed API password is the one the IPv6 connection uses, and it was typed for this row)
                 if refusal:
                     refused.append(refusal)
                     raise _EndpointNeedsItsPassword()
+            share_ticked = orig_id is None and row_idx < len(shares) and shares[row_idx] == "1"
+            if share_ticked and api_pass.strip():
+                # U3 (Q180): the box and a typed password are two answers for one secret
+                refused.append(f"Choose one for the API password of {who}: share the primary's, or type one.")
+                raise _EndpointNeedsItsPassword()
 
             sec = f"kea_server_{out}"
             cfg.add_section(sec)
@@ -2257,15 +2283,22 @@ def save_extra_servers():
             cfg.set(sec, "api_url", api_url.strip())
             cfg.set(sec, "api_user", api_user.strip())
             if api_pass.strip():
-                cfg.set(sec, "api_pass", api_pass.strip())
+                cfg.set(
+                    sec, "api_pass", api_pass.strip()
+                )  # typed: its own from now on, and no longer "a copy of the primary's"
+                typed_names.add(f"server_{out}")
             elif orig_id is not None:
-                # Blank ⇒ keep THIS server's own saved password (by id). A section that had none keeps having none: the connection falls back to the primary's (the derivation keeps
-                # that, an upgrade must not break a working HA config) and the Configuration Doctor names it when the host differs - nothing is COPIED into it here (CRED-003).
+                # Blank => keep THIS server's own saved password (by id), and the marker that says it is a copy of the primary's. A section that has none keeps having none:
+                # `credentials.resolve` gives it the primary's only while it is on the primary's host (CRED-004) - nothing is COPIED into it here.
                 if prev.get("api_pass"):
                     cfg.set(sec, "api_pass", prev["api_pass"])
-            elif row_idx < len(shares) and shares[row_idx] == "1" and extensions.KEA_API_PASS:
-                # a NEW row: the primary's password only because the box "Share the primary's API password (an HA peer of the same Kea)" was ticked
+                    if prev.get(__credentials.SHARED_MARKER):
+                        cfg.set(sec, __credentials.SHARED_MARKER, prev[__credentials.SHARED_MARKER])
+            elif share_ticked and extensions.KEA_API_PASS:
+                # a NEW row: the primary's password only because the box "Share the primary's API password (an HA peer of the same Kea)" was ticked - a copy, marked as one
                 cfg.set(sec, "api_pass", extensions.KEA_API_PASS)
+                cfg.set(sec, __credentials.SHARED_MARKER, "1")
+                typed_names.add(f"server_{out}")
             # v5.10.2 — per-server v6 endpoint. Blank managed field ⇒ key
             # absent (that IS the clear). api6_pass blank ⇒ preserve by id.
             if api6_url.strip():
@@ -2274,6 +2307,7 @@ def save_extra_servers():
                 cfg.set(sec, "api6_user", api6_user.strip())
             if api6_pass.strip():
                 cfg.set(sec, "api6_pass", api6_pass.strip())
+                typed_names.add(f"server_{out}_v6")
             elif prev.get("api6_pass"):
                 cfg.set(sec, "api6_pass", prev["api6_pass"])
             cfg.set(sec, "ssh_host", ssh_host.strip())
@@ -2283,8 +2317,26 @@ def save_extra_servers():
                 if k not in _EXTRA_SERVER_FORM_KEYS:
                     cfg.set(sec, k, v)
 
+        # U3 (Q180): the resolver is the proof. The IPv6 and D2 endpoint of every saved row is judged against the credential `resolve` gives IT: a typed API password authorises
+        # them on the same host only, and one on a different host with no password of its own would be refused its neighbour's - so the form says so instead of saving a
+        # credential-less endpoint. (One that was ALREADY in that state and did not change is not this save's doing.)
+        after_resolved = __credentials.resolve(cfg)
+        for name_, endpoint in after_resolved.items():
+            if not name_.endswith(("_v6", "_d2")) or not endpoint.withheld:
+                continue
+            was = before_resolved.get(name_)
+            if was is not None and was.withheld and was.url == endpoint.url:
+                continue
+            number = int(name_.split("_")[1])
+            who_ = cfg.get(f"kea_server_{number}", "name", fallback=f"Kea Server {number}")
+            refused.append(
+                f"The {'IPv6' if name_.endswith('_v6') else 'D2'} address of {who_} ({__credentials.host_of(endpoint.url)}) is on a different host from its API address: "
+                "enter its own password - the API password is never sent to a different host."
+            )
+            raise _EndpointNeedsItsPassword()
+
     try:
-        __config.app_config.mutate(_rewrite_extra_servers)
+        __config.app_config.mutate(_rewrite_extra_servers, typed=typed_names)
     except _EndpointNeedsItsPassword:
         flash(refused[0], "error")  # our own sentence, appended before the raise - never the exception's text
         return redirect(url_for("settings.settings_kea"))
@@ -2307,6 +2359,33 @@ def save_extra_servers():
             flash(mismatch, "warning")
     __user.set_global_setting("restart_pending", "true")
     __user.audit("SAVE_INFRA", "extra_servers", f"{count} additional servers configured")
+    return redirect(url_for("settings.settings_kea"))
+
+
+@bp.route("/settings/infrastructure/extra-server/<int:server_id>/copy-primary-password", methods=["POST"])
+@login_required
+@_superadmin_required
+@_recent_auth_required(minutes=10)
+def copy_primary_password(server_id):
+    """U2 (v5.69.0-beta.11, Q180): "Copy the primary's again" - an additional server whose password is a COPY of the primary's (`api_pass_shared`; written by the upgrade's one-time
+    conversion or by the "share" box) does not follow a later change of the primary's password. This writes the primary's CURRENT password into the section again, as the
+    superadmin's explicit act, with the marker, and an audit row."""
+    section = f"kea_server_{server_id}"
+    if server_id < 2 or not extensions.cfg.has_section(section):
+        flash("That server is not configured.", "error")
+        return redirect(url_for("settings.settings_kea"))
+    if not extensions.cfg.get("kea", "api_pass", fallback=""):
+        flash("The primary has no API password to copy.", "error")
+        return redirect(url_for("settings.settings_kea"))
+
+    def _apply(cfg):
+        cfg.set(section, "api_pass", cfg.get("kea", "api_pass", fallback=""))
+        cfg.set(section, __credentials.SHARED_MARKER, "1")
+
+    __config.app_config.mutate(_apply, typed={f"server_{server_id}"})
+    __user.set_global_setting("restart_pending", "true")
+    flash("The primary's API password was copied into that server again. It does not follow later changes.", "success")
+    __user.audit("SAVE_INFRA", f"kea_server_{server_id}", "api_pass copied again from the primary")
     return redirect(url_for("settings.settings_kea"))
 
 

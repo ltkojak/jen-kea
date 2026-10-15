@@ -42,7 +42,11 @@ def cfgfile(tmp_path, monkeypatch, world):
         "ssh_user": "jen",
         "kea_conf": "/etc/kea/kea-dhcp4.conf",
     }
-    ini["jen_db"] = {"host": "h", "user": "u", "password": "p"}
+    ini["jen_db"] = {
+        "host": "h",
+        "user": "u",
+        "password": "jp",
+    }  # (Q180: a password of its own - the same value on two hosts is what CRED-004 refuses to write untyped)
     path = tmp_path / "jen.config"
     with open(path, "w", encoding="utf-8") as f:
         ini.write(f)
@@ -205,7 +209,7 @@ class TestTheConfigWriterRefusesAnIdentityChange:
 
     def test_a_config_with_no_kea_credentials_yet_is_read_leniently(self, cfgfile):
         """A fresh install's file has no `[kea]` credentials: the view reads blanks, the write is not an error of its own."""
-        cfgfile.path.write_text("[jen_db]\nhost = h\nuser = u\npassword = p\n", encoding="utf-8")
+        cfgfile.path.write_text("[jen_db]\nhost = h\nuser = u\npassword = jp\n", encoding="utf-8")
         app_config.write_values(
             [("kea", "api_url", "http://10.0.0.1:8000"), ("kea", "api_user", "u"), ("kea", "api_pass", "p")],
             reload=False,
@@ -307,7 +311,7 @@ class TestIdentityIsASuperadminsSetting:
         ctx = _sign_in("admin")
         try:
             with pytest.raises(ConfigChangeRefused, match="superadmin's setting"):
-                app_config.write_values([("kea", "api_url", "https://kea-x:8000")])
+                app_config.write_values([("kea", "api_url", "https://kea-x:8000")], typed={"kea"})
         finally:
             ctx.pop()
         assert cfgfile.path.read_bytes() == before
@@ -349,7 +353,7 @@ class TestIdentityIsASuperadminsSetting:
         ctx = _sign_in("superadmin", minutes_ago=20)
         try:
             with pytest.raises(ConfigChangeRefused, match="Confirm your password"):
-                app_config.write_values([("kea", "api_url", "https://kea-x:8000")])
+                app_config.write_values([("kea", "api_url", "https://kea-x:8000")], typed={"kea"})
         finally:
             ctx.pop()
         assert cfgfile.path.read_bytes() == before
@@ -357,7 +361,7 @@ class TestIdentityIsASuperadminsSetting:
     def test_a_superadmin_who_just_confirmed_may_change_it(self, cfgfile):
         ctx = _sign_in("superadmin", minutes_ago=1)
         try:
-            app_config.write_values([("kea", "api_url", "https://kea-x:8000")])
+            app_config.write_values([("kea", "api_url", "https://kea-x:8000")], typed={"kea"})
         finally:
             ctx.pop()
         assert _disk(cfgfile.path).get("kea", "api_url") == "https://kea-x:8000"
@@ -369,12 +373,12 @@ class TestIdentityIsASuperadminsSetting:
         try:
             session.pop("auth_at", None)
             with pytest.raises(ConfigChangeRefused, match="Confirm your password"):
-                app_config.write_values([("kea", "api_url", "https://kea-x:8000")])
+                app_config.write_values([("kea", "api_url", "https://kea-x:8000")], typed={"kea"})
         finally:
             ctx.pop()
 
     def test_outside_a_request_there_is_no_caller_to_judge(self, cfgfile):
-        app_config.write_values([("kea", "api_url", "https://kea-x:8000")])
+        app_config.write_values([("kea", "api_url", "https://kea-x:8000")], typed={"kea"})
         assert _disk(cfgfile.path).get("kea", "api_url") == "https://kea-x:8000"
 
     def test_a_request_that_is_not_a_signed_in_session_is_not_asked(self, cfgfile):
@@ -383,7 +387,7 @@ class TestIdentityIsASuperadminsSetting:
         app = Flask(__name__)
         with app.test_request_context("/"):
             app_config.write_values(
-                [("kea", "api_url", "https://kea-x:8000")]
+                [("kea", "api_url", "https://kea-x:8000")], typed={"kea"}
             )  # an API-key request: its scope is judged where the key is
         assert _disk(cfgfile.path).get("kea", "api_url") == "https://kea-x:8000"
 
@@ -391,7 +395,9 @@ class TestIdentityIsASuperadminsSetting:
         from jen.services import access
 
         assert inv.identity_guard in jconfig._identity_guards
-        assert access.identity_change_needs_superadmin in jconfig._identity_guards
+        assert (
+            access.identity_change_needs_superadmin in jconfig._destination_guards
+        )  # (Q180: RBAC-004 is asked of the destination view)
 
     def test_a_password_only_change_by_an_admin_is_not_an_identity_change_and_no_guard_is_asked(
         self, cfgfile, monkeypatch
@@ -761,7 +767,9 @@ class TestTheIdentityInvariantHasOneChokePointInTheSource:
         )
         from jen.services import access
 
-        assert access.identity_change_needs_superadmin in jconfig._identity_guards
+        assert (
+            access.identity_change_needs_superadmin in jconfig._destination_guards
+        )  # (Q180: RBAC-004 is asked of the destination view)
         assert any(
             isinstance(n, ast.ImportFrom) and any(a.name == "access" for a in n.names) for n in ast.walk(create_app)
         ), "create_app() must import access explicitly too (RBAC-004, Q179)"
@@ -923,7 +931,9 @@ class TestTheErrorHandlerAndTheWholeAppAreWiredCI:
         from jen.services import access
 
         assert inv.identity_guard in jconfig._identity_guards
-        assert access.identity_change_needs_superadmin in jconfig._identity_guards
+        assert (
+            access.identity_change_needs_superadmin in jconfig._destination_guards
+        )  # (Q180: RBAC-004 is asked of the destination view)
 
     def test_a_refused_save_flashes_and_redirects_and_a_json_caller_gets_409(
         self, logged_in_client, db, mock_kea, ci_config
@@ -1423,7 +1433,7 @@ class TestAConfirmationMadeAtTheStartOfARequestIsNotAskedAgain:
             session["auth_at"] = (
                 datetime.now(timezone.utc) - timedelta(minutes=11)
             ).isoformat()  # it aged out while the daemon was being restarted
-            app_config.write_values([("kea", "api_url", "https://kea-x:8000")])
+            app_config.write_values([("kea", "api_url", "https://kea-x:8000")], typed={"kea"})
         finally:
             ctx.pop()
         assert _disk(cfgfile.path).get("kea", "api_url") == "https://kea-x:8000"
@@ -1441,7 +1451,7 @@ class TestAConfirmationMadeAtTheStartOfARequestIsNotAskedAgain:
             assert g.reauth_ok_minutes == 30
             session["auth_at"] = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat()
             with pytest.raises(ConfigChangeRefused, match="Confirm your password"):
-                app_config.write_values([("kea", "api_url", "https://kea-x:8000")])
+                app_config.write_values([("kea", "api_url", "https://kea-x:8000")], typed={"kea"})
         finally:
             ctx.pop()
 
@@ -1452,6 +1462,6 @@ class TestAConfirmationMadeAtTheStartOfARequestIsNotAskedAgain:
         try:
             g.reauth_ok_minutes = 1
             with pytest.raises(ConfigChangeRefused, match="superadmin's setting"):
-                app_config.write_values([("kea", "api_url", "https://kea-x:8000")])
+                app_config.write_values([("kea", "api_url", "https://kea-x:8000")], typed={"kea"})
         finally:
             ctx.pop()

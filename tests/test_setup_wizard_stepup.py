@@ -67,3 +67,61 @@ class TestTheWizardAsksForTheConfirmationItNeeds:
         _stale(logged_in_client)
         r = logged_in_client.get(path)
         assert r.status_code == 200
+
+
+class TestTheIpv6StepSendsOnlyTheCredentialResolveWouldGive:
+    """Q180, U4: the Found step's IPv6 check probes the address it is given - with the primary's password only on the primary's host, else a typed one, else NOTHING is sent."""
+
+    @pytest.fixture
+    def probe(self, monkeypatch):
+        from jen import extensions
+        from jen.services import capabilities, setup_wizard
+
+        monkeypatch.setattr(extensions, "KEA_API_URL", "http://kea-a:8004")
+        monkeypatch.setattr(extensions, "KEA_API_USER", "jen")
+        monkeypatch.setattr(extensions, "KEA_API_PASS", "PRIMARY")
+        monkeypatch.setattr(capabilities, "is_direct", lambda: True)
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
+        calls = []
+
+        def fake(url, user, password, *, omit_service):
+            calls.append((url, user, password, omit_service))
+            return {
+                "ok": False,
+                "error": "stub",
+                "version": "",
+                "subnet6_count": 0,
+                "orphaned_subnets6": {},
+                "proposed_subnets6": {},
+            }
+
+        monkeypatch.setattr(setup_wizard, "probe_v6", fake)
+        return calls
+
+    def _post(self, client, **data):
+        return client.post("/setup/found", data={"action": "check_v6", **data})
+
+    def test_a_stale_session_is_sent_to_confirm_and_no_request_is_made(self, logged_in_client, db, mock_kea, probe):
+        _stale(logged_in_client)
+        r = self._post(logged_in_client, v6_url="http://kea-a:8006")
+        assert r.status_code == 302 and "/auth/reauth" in r.headers["Location"]
+        assert probe == []
+
+    def test_a_candidate_on_the_primarys_host_is_probed_with_the_primarys_password(
+        self, logged_in_client, db, mock_kea, probe
+    ):
+        self._post(logged_in_client, v6_url="http://kea-a:8006")
+        assert probe == [("http://kea-a:8006", "jen", "PRIMARY", True)]
+
+    def test_a_candidate_elsewhere_without_a_password_is_refused_before_any_request(
+        self, logged_in_client, db, mock_kea, probe
+    ):
+        r = self._post(logged_in_client, v6_url="http://elsewhere:8006")
+        assert probe == []
+        assert b"different host from the Kea API" in r.data and b'name="v6_pass"' in r.data
+
+    def test_a_candidate_elsewhere_with_its_own_password_is_probed_with_that_password_only(
+        self, logged_in_client, db, mock_kea, probe
+    ):
+        self._post(logged_in_client, v6_url="http://elsewhere:8006", v6_pass="OWN")
+        assert probe == [("http://elsewhere:8006", "jen", "OWN", True)]

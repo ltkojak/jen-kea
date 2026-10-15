@@ -366,10 +366,10 @@
         {% if current_user.role != 'superadmin' %}
         {% if infra.extra_servers %}
         <table class="rowlist u-95cc13">
-            <thead><tr><th class="u-b7efde">Server</th><th class="u-b7efde">Role</th><th class="u-b7efde">API URL</th><th class="u-b7efde">SSH host</th></tr></thead>
+            <thead><tr><th class="u-b7efde">Server</th><th class="u-b7efde">Role</th><th class="u-b7efde">API URL</th><th class="u-b7efde">API password</th><th class="u-b7efde">SSH host</th></tr></thead>
             <tbody>
             {% for srv in infra.extra_servers %}
-            <tr><td data-m="primary" class="u-f26165">{{ srv.name }}</td><td data-m="secondary" class="u-f26165">{{ srv.role }}</td><td data-m="secondary" class="mono u-5f26fb">{{ srv.api_url }}</td><td data-m="secondary" class="mono u-5f26fb">{{ srv.ssh_host or '(not set)' }}</td></tr>
+            <tr><td data-m="primary" class="u-f26165">{{ srv.name }}</td><td data-m="secondary" class="u-f26165">{{ srv.role }}</td><td data-m="secondary" class="mono u-5f26fb">{{ srv.api_url }}</td><td data-m="secondary" class="u-f26165">{% if srv.api_pass_shared %}shared copy{% else %}its own{% endif %}</td><td data-m="secondary" class="mono u-5f26fb">{{ srv.ssh_host or '(not set)' }}</td></tr>
             {% endfor %}
             </tbody>
         </table>
@@ -415,6 +415,10 @@
                     <input type="password" name="extra_api_pass[]" placeholder="(unchanged)">
                 </div>
             </div>
+            {% if srv.api_pass_shared %}
+            <div class="form-hint">API password: <strong>shared copy</strong> - a copy of the primary's, made once; it does not follow a later change of the primary's.
+                <button type="submit" form="copy-primary-{{ srv.id }}" class="btn btn-sm btn-secondary">Copy the primary's again</button></div>
+            {% endif %}
             <div class="form-row">
                 <div class="form-group">
                     <label>IPv6 API URL</label>
@@ -451,6 +455,9 @@
         </div>
         {% endfor %}
         </div>
+        {% for srv in infra.extra_servers if srv.api_pass_shared %}
+        <form method="POST" id="copy-primary-{{ srv.id }}" action="/settings/infrastructure/extra-server/{{ srv.id }}/copy-primary-password" data-confirm="Copy the primary's CURRENT API password into {{ srv.name }} again? It does not follow later changes."><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"></form>
+        {% endfor %}
         <button type="button" class="btn btn-sm btn-secondary u-da12f2" id="add-server-row-btn">+ Add Server</button>
         <br>
         <form method="POST" action="/settings/infrastructure/save-extra-servers" id="extraServersForm"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

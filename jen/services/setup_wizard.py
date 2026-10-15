@@ -390,7 +390,8 @@ def save_connection(
         items.append(("kea", "api_pass", api_pass))
     if kea_db_pass:
         items.append(("kea_db", "password", kea_db_pass))
-    app_config.write_values(items)
+    # Q180: the passwords the superadmin TYPED here are the ones `_write_parser` lets follow the endpoint to its new host; a blank keeps the saved one, which may not
+    app_config.write_values(items, typed={n for n, v in (("kea", api_pass), ("kea_db", kea_db_pass)) if v})
     __db.reset_kea_pools()
 
 
@@ -587,7 +588,7 @@ def probe_v6(url: str, user: str, password: str, *, omit_service: bool) -> dict:
     }
 
 
-def enable_v6(url: str, subnets6: dict, remove_ids: set = frozenset()) -> str | None:
+def enable_v6(url: str, subnets6: dict, remove_ids: set = frozenset(), api_pass: str = "") -> str | None:
     """ "Manage IPv6 in Jen" — called only after probe_v6() has already
     confirmed dhcp6 answered. Flips Jen's own display flag, saves the
     confirmed dhcp6 endpoint (so later reads use it instead of inheriting
@@ -601,22 +602,43 @@ def enable_v6(url: str, subnets6: dict, remove_ids: set = frozenset()) -> str | 
     v5.67.0-beta.8 (Q120, item c) — a MERGE, never `write_subnets6(proposed)`: `subnets6` is
     probe_v6()'s proposal (which already keeps the name and pairing of every subnet whose id and network
     match), laid over Jen's current map; whatever Jen has that the daemon did not report stays unless its
-    id is in `remove_ids` (the superadmin's explicit, unchecked-by-default choice). The subnets are
-    written FIRST: a name the writer refuses comes back as the error text (None on success) before
-    anything else has changed, so a failure leaves Jen exactly as it was — no half-enabled IPv6."""
+    id is in `remove_ids` (the superadmin's explicit, unchecked-by-default choice).
+
+    v5.69.0-beta.11 (Q180, U4): the endpoint and the subnets are ONE write - `[kea6] api_url` (and the password TYPED for it, when given: a kea-dhcp6 on a different host from the Kea
+    API has no other credential) and `[subnets6]` together or not at all. A name the writer refuses comes back as the error text (None on success) before anything is written, and
+    a refusal of the write itself (the identity guards, CRED-004) leaves both sections as they were - never an endpoint saved with its subnets not, or the reverse."""
     from jen import extensions
-    from jen.config import app_config
+    from jen.config import _reconcile_subnet_names, app_config
     from jen.models.user import set_global_setting
 
     merged = dict(extensions.SUBNET6_MAP)
     merged.update(subnets6)
     for sid in remove_ids:
         merged.pop(sid, None)
+
+    def _apply(parser):
+        stored = app_config.derive_subnet_map(parser, "subnets6")
+        raw_section = dict(parser.items("subnets6")) if parser.has_section("subnets6") else {}
+        reconciled = _reconcile_subnet_names(merged, stored, raw_section)
+        if parser.has_section("subnets6"):
+            parser.remove_section("subnets6")
+        parser.add_section("subnets6")
+        for sid, info in reconciled.items():
+            paired = info.get("paired_subnet4_id")
+            line = f"{info['name']}, {info['cidr']}"
+            if paired is not None:
+                line += f", {paired}"
+            parser.set("subnets6", str(sid), line)
+        if not parser.has_section("kea6"):
+            parser.add_section("kea6")
+        parser.set("kea6", "api_url", url)
+        if api_pass:
+            parser.set("kea6", "api_pass", api_pass)
+
     try:
-        app_config.write_subnets6(merged)
+        app_config.mutate(_apply, typed={"kea6"} if api_pass else None)
     except ValueError as e:
         return str(e)
-    app_config.write_values([("kea6", "api_url", url)])
     set_global_setting("ipv6_enabled", "true")
     return None
 

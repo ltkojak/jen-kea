@@ -279,6 +279,13 @@ def setup_found():
     if action in ("check_v6", "enable_v6"):
         from jen.services import capabilities as __caps
 
+        # RBAC-004 / CRED-004 (Q180, U4): the probe sends a credential to the address it is given, and enabling saves where Jen reaches the v6 daemon - the same step-up as the
+        # connection step, asked BEFORE any request is made
+        stepped = _step_up_redirect(10)
+        if stepped is not None:
+            return stepped
+
+        v6_pass_typed = request.form.get("v6_pass", "")
         if __caps.is_direct():
             v6_url = request.form.get("v6_url", "").strip()
             from jen.services import auth as __auth
@@ -292,10 +299,31 @@ def setup_found():
                     hook_loss=__setup.HOOK_LOSS,
                     hook_labels=__setup.HOOK_LABELS,
                 )
-            v6_probe = __setup.probe_v6(v6_url, extensions.KEA_API_USER, extensions.KEA_API_PASS, omit_service=True)
+            # the credential the probe sends is the one `credentials.resolve` would give this endpoint: the primary's only when the candidate is on the primary's host, else
+            # one TYPED here - and with neither, nothing is sent
+            if v6_pass_typed:
+                v6_password = v6_pass_typed
+            elif __auth.same_host(extensions.KEA_API_URL, v6_url):
+                v6_password = extensions.KEA_API_PASS
+            else:
+                flash(
+                    "That DHCPv6 socket is on a different host from the Kea API: type its own password - the Kea API's password is never sent to a different host.",
+                    "error",
+                )
+                return render_template(
+                    "setup_found.html",
+                    progress=_progress(),
+                    found=found,
+                    hook_loss=__setup.HOOK_LOSS,
+                    hook_labels=__setup.HOOK_LABELS,
+                    v6_url=v6_url,
+                    v6_needs_password=True,
+                )
+            v6_probe = __setup.probe_v6(v6_url, extensions.KEA_API_USER, v6_password, omit_service=True)
         else:
             v6_url = extensions.KEA_API_URL
-            v6_probe = __setup.probe_v6(v6_url, extensions.KEA_API_USER, extensions.KEA_API_PASS, omit_service=False)
+            v6_password = extensions.KEA_API_PASS
+            v6_probe = __setup.probe_v6(v6_url, extensions.KEA_API_USER, v6_password, omit_service=False)
 
         if not v6_probe["ok"]:
             flash(f"DHCPv6 did not answer: {v6_probe['error'] or 'no response'}.", "error")
@@ -325,7 +353,9 @@ def setup_found():
         # action == "enable_v6" — v5.67.0-beta.8 (Q120, item c): a merge; whatever Jen already has under
         # [subnets6] that this daemon did not report stays unless the superadmin ticked its "remove" box.
         remove6 = {sid for sid in v6_probe["orphaned_subnets6"] if request.form.get(f"remove6_{sid}", "") == "1"}
-        error = __setup.enable_v6(v6_url, v6_probe["proposed_subnets6"], remove6)
+        error = __setup.enable_v6(
+            v6_url, v6_probe["proposed_subnets6"], remove6, api_pass=v6_pass_typed if __caps.is_direct() else ""
+        )
         if error:
             flash(f"IPv6 was not enabled: {error}.", "error")
             return render_template(

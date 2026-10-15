@@ -104,8 +104,8 @@ def auth_is_recent(minutes: int) -> bool:
 
 
 def identity_change_needs_superadmin(before: dict, after: dict) -> str:
-    """RBAC-004 (v5.69.0-beta.10, Q179): a config write that changes which Kea a server is reached on (api_url, ssh_host, ssh_user, kea_conf, the connection mode, a
-    server added or removed) is a superadmin's with a recent password, WHICHEVER route asked - the question is put where every write already passes
+    """RBAC-004 (v5.69.0-beta.10, Q179; on `config.destination_view` since v5.69.0-beta.11, Q180): a config write that changes where Jen reaches a Kea server or sends a credential
+    (every endpoint `credentials.resolve` names, both database host:ports, ssh_host, ssh_user, kea_conf, the connection mode, a server added or removed) is a superadmin's with a recent password, WHICHEVER route asked - the question is put where every write already passes
     (`AppConfig._write_parser`, `jen.config._run_identity_guards`), not on the list of routes that happen to write it. Where Jen connects decides where its credentials
     go, so it belongs to the role that owns Jen's secrets. Outside a request (install.sh --configure, tools, the test harness) there is no caller to judge, and a
     request that is not a signed-in session (an API key) is not asked either - the key's own scope is judged where the key is."""
@@ -425,4 +425,5 @@ def add_subnet_restriction(where_clauses, params, table_alias="l", column="subne
 # loaded is judged too.
 from jen import config as _config  # noqa: E402
 
-_config.register_identity_guard(identity_change_needs_superadmin)
+# (v5.69.0-beta.11, Q180 U5: registered on the DESTINATION view - every endpoint a credential is sent to - not on `identity_view`, which is the investigation guard's)
+_config.register_destination_guard(identity_change_needs_superadmin)

@@ -126,7 +126,7 @@ class TestSaveConnection:
         Advanced TLS expander means "no TLS material", which must
         actively clear whatever a previous save left behind."""
         calls = []
-        monkeypatch.setattr("jen.config.app_config.write_values", lambda items: calls.append(items))
+        monkeypatch.setattr("jen.config.app_config.write_values", lambda items, typed=None: calls.append(items))
         setup_wizard.save_connection(
             api_url="http://kea:8000",
             api_user="u",
@@ -154,7 +154,7 @@ class TestSaveConnection:
 
     def test_writes_the_submitted_tls_material(self, monkeypatch):
         calls = []
-        monkeypatch.setattr("jen.config.app_config.write_values", lambda items: calls.append(items))
+        monkeypatch.setattr("jen.config.app_config.write_values", lambda items, typed=None: calls.append(items))
         setup_wizard.save_connection(
             api_url="https://kea:8004",
             api_user="u",
@@ -181,7 +181,7 @@ class TestSaveConnectionPortAndPools:
 
     def _save(self, monkeypatch, **over):
         calls, resets = [], []
-        monkeypatch.setattr("jen.config.app_config.write_values", lambda items: calls.append(items))
+        monkeypatch.setattr("jen.config.app_config.write_values", lambda items, typed=None: calls.append(items))
         monkeypatch.setattr("jen.models.db.reset_kea_pools", lambda: resets.append(True))
         kwargs = {
             "api_url": "http://kea:8000",
@@ -199,7 +199,7 @@ class TestSaveConnectionPortAndPools:
 
     def test_the_kea_pools_are_reset_after_the_write(self, monkeypatch):
         order = []
-        monkeypatch.setattr("jen.config.app_config.write_values", lambda items: order.append("write"))
+        monkeypatch.setattr("jen.config.app_config.write_values", lambda items, typed=None: order.append("write"))
         monkeypatch.setattr("jen.models.db.reset_kea_pools", lambda: order.append("reset"))
         setup_wizard.save_connection(
             api_url="http://kea:8000",
@@ -365,32 +365,58 @@ class TestMergeSubnets6:
 
 
 class TestEnableV6:
-    """v5.67.0-beta.8 (Q120, item c) — a merge into what Jen already has, not a replace."""
+    """v5.67.0-beta.8 (Q120, item c) — a merge into what Jen already has, not a replace.
 
-    def _run(self, monkeypatch, known, proposed, remove=frozenset(), write_error=None):
+    v5.69.0-beta.11 (Q180, U4) - the endpoint and the subnets are ONE `mutate`: the callback is run here on a parser that holds what Jen already has, so what is asserted is
+    the file the write would produce."""
+
+    @staticmethod
+    def _parser(known):
+        import configparser
+
+        parser = configparser.ConfigParser(interpolation=None)
+        parser.add_section("kea")
+        if known:
+            parser.add_section("subnets6")
+            for sid, info in known.items():
+                line = f"{info['name']}, {info['cidr']}"
+                if info.get("paired_subnet4_id") is not None:
+                    line += f", {info['paired_subnet4_id']}"
+                parser.set("subnets6", str(sid), line)
+        return parser
+
+    def _run(self, monkeypatch, known, proposed, remove=frozenset(), api_pass=""):
         from jen import extensions
 
-        calls = {"subnets6": [], "values": [], "flag": []}
+        calls = {"mutations": [], "flag": [], "typed": []}
         monkeypatch.setattr(extensions, "SUBNET6_MAP", known)
+        parser = self._parser(known)
 
-        def write_subnets6(subnets):
-            if write_error:
-                raise ValueError(write_error)
-            calls["subnets6"].append(subnets)
+        def fake_mutate(fn, reload=True, typed=None):
+            calls["typed"].append(typed)
+            fn(
+                parser
+            )  # a ValueError here is "a refused name": nothing below it ran, and a real mutate writes only after the callback returns
+            calls["mutations"].append(parser)
 
-        monkeypatch.setattr("jen.config.app_config.write_values", lambda items: calls["values"].append(items))
-        monkeypatch.setattr("jen.config.app_config.write_subnets6", write_subnets6)
+        monkeypatch.setattr("jen.config.app_config.mutate", fake_mutate)
         monkeypatch.setattr("jen.models.user.set_global_setting", lambda key, value: calls["flag"].append((key, value)))
-        error = setup_wizard.enable_v6("http://kea:8006", proposed, remove)
-        return error, calls
+        error = setup_wizard.enable_v6("http://kea:8006", proposed, remove, api_pass=api_pass)
+        return error, calls, parser
 
-    def test_writes_endpoint_subnets_and_the_flag(self, monkeypatch):
+    def test_writes_endpoint_subnets_and_the_flag_in_one_mutation(self, monkeypatch):
         proposed = {1: {"name": "Subnet1", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
-        error, calls = self._run(monkeypatch, {}, proposed)
-        assert error is None
-        assert calls["values"] == [[("kea6", "api_url", "http://kea:8006")]]
-        assert calls["subnets6"] == [proposed]
+        error, calls, parser = self._run(monkeypatch, {}, proposed)
+        assert error is None and len(calls["mutations"]) == 1
+        assert parser.get("kea6", "api_url") == "http://kea:8006"
+        assert parser.get("subnets6", "1") == "Subnet1, 2001:db8::/64"
         assert calls["flag"] == [("ipv6_enabled", "true")]
+        assert not parser.has_option("kea6", "api_pass") and calls["typed"] == [None]
+
+    def test_a_typed_password_is_written_with_the_endpoint_and_named_as_typed(self, monkeypatch):
+        proposed = {1: {"name": "Subnet1", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
+        error, calls, parser = self._run(monkeypatch, {}, proposed, api_pass="V6PW")
+        assert error is None and parser.get("kea6", "api_pass") == "V6PW" and calls["typed"] == [{"kea6"}]
 
     def test_what_jen_already_has_survives_unless_it_was_ticked_for_removal(self, monkeypatch):
         known = {
@@ -399,17 +425,59 @@ class TestEnableV6:
             8: {"name": "Other", "cidr": "2001:db8:8::/64", "paired_subnet4_id": 3},
         }
         proposed = {1: dict(known[1]), 2: {"name": "Subnet2", "cidr": "2001:db8:2::/64", "paired_subnet4_id": None}}
-        _error, calls = self._run(monkeypatch, known, proposed, remove={9})
-        written = calls["subnets6"][0]
-        assert set(written) == {1, 2, 8}, "9 was removed on purpose; 8 was not reported but nobody asked to drop it"
-        assert written[1]["paired_subnet4_id"] == 10 and written[1]["name"] == "Office v6"
+        _error, _calls, parser = self._run(monkeypatch, known, proposed, remove={9})
+        assert set(parser.options("subnets6")) == {"1", "2", "8"}, (
+            "9 was removed on purpose; 8 was not reported but nobody asked to drop it"
+        )
+        assert parser.get("subnets6", "1") == "Office v6, 2001:db8::/64, 10"
 
     def test_a_refused_name_changes_nothing_else(self, monkeypatch):
-        """The subnets are written first: a ValueError leaves no URL, no flag — no half-enabled IPv6."""
+        """ONE write: a name the writer refuses leaves no URL, no subnets, no flag - and no half-enabled IPv6."""
         proposed = {1: {"name": "Bad=Name", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
-        error, calls = self._run(monkeypatch, {}, proposed, write_error="name contains a forbidden character")
-        assert error == "name contains a forbidden character"
-        assert calls["values"] == [] and calls["flag"] == []
+        error, calls, parser = self._run(monkeypatch, {}, proposed)
+        assert error
+        assert calls["mutations"] == [] and calls["flag"] == []
+        assert not parser.has_section("kea6"), "the endpoint was not written either"
+
+    def test_a_refused_write_leaves_both_sections_as_they_were(self, tmp_path, monkeypatch):
+        """A real writer on a real file: the destination guards refuse (an admin), and `[kea6]` and `[subnets6]` are both byte-identical."""
+        import configparser
+
+        from jen import extensions
+        from jen.config import ConfigChangeRefused, app_config
+        from jen.services import access  # noqa: F401  (registers RBAC-004's guard)
+
+        ini = configparser.ConfigParser(interpolation=None)
+        ini["kea"] = {"api_url": "http://kea:8000", "api_user": "u", "api_pass": "S"}
+        ini["jen_db"] = {"host": "h", "user": "u", "password": "jp"}
+        ini["subnets6"] = {"1": "Office v6, 2001:db8::/64"}
+        path = tmp_path / "jen.config"
+        with open(path, "w", encoding="utf-8") as f:
+            ini.write(f)
+        monkeypatch.setattr(extensions, "CONFIG_FILE", str(path))
+        monkeypatch.setattr(app_config, "reload", lambda: None)
+        monkeypatch.setattr(
+            extensions, "SUBNET6_MAP", {1: {"name": "Office v6", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
+        )
+        monkeypatch.setattr("jen.models.user.set_global_setting", lambda *a, **k: None)
+        from flask import Flask
+        from flask_login import LoginManager, UserMixin, login_user
+
+        class _Admin(UserMixin):
+            id = "1"
+            role = "admin"
+
+        flask_app = Flask(__name__)
+        flask_app.secret_key = "t"
+        LoginManager(flask_app).user_loader(lambda _i: _Admin())
+        before = path.read_bytes()
+        with flask_app.test_request_context("/"):
+            login_user(_Admin())
+            with pytest.raises(ConfigChangeRefused):
+                setup_wizard.enable_v6(
+                    "http://kea:8006", {2: {"name": "Subnet2", "cidr": "2001:db8:2::/64", "paired_subnet4_id": None}}
+                )
+        assert path.read_bytes() == before
 
 
 class TestHaPeerView:
@@ -653,7 +721,7 @@ class TestSshTarget:
 
     def test_save_writes_kea_ssh_section_on_success(self, monkeypatch):
         calls = []
-        monkeypatch.setattr("jen.config.app_config.write_values", lambda items: calls.append(items))
+        monkeypatch.setattr("jen.config.app_config.write_values", lambda items, typed=None: calls.append(items))
         ok, err = setup_wizard.save_ssh_target("kea.lan", "jen")
         assert ok is True and err == ""
         assert calls == [[("kea_ssh", "host", "kea.lan"), ("kea_ssh", "user", "jen")]]

@@ -196,7 +196,7 @@ class TestHaSettings:
         from jen import config as config_mod
 
         wrote = []
-        monkeypatch.setattr(config_mod.app_config, "write_values", lambda items: wrote.append(items))
+        monkeypatch.setattr(config_mod.app_config, "write_values", lambda items, typed=None: wrote.append(items))
         r = logged_in_client.post(
             "/settings/infrastructure/save-ha", data={"ha_mode": "round-robin"}, follow_redirects=True
         )
@@ -345,7 +345,7 @@ class TestSecondPassFixes:
         from jen import config as config_mod
 
         wrote = []
-        monkeypatch.setattr(config_mod.app_config, "write_values", lambda items: wrote.append(items))
+        monkeypatch.setattr(config_mod.app_config, "write_values", lambda items, typed=None: wrote.append(items))
         r = logged_in_client.post(
             "/settings/infrastructure/save-ha",
             data={"ha_mode": "nonsense", "server_name": "kea-ok"},
