@@ -236,6 +236,12 @@ ROWS = {
         _set("jen_db", "host", "jh9"),
         refused=True,
     ),
+    "a_direct_to_ca_mode_switch": Row(
+        "beta.12 second pass (Q181): direct -> CA gives a daemon with its own password the Control Agent's address - not a move the Kea API form can type",
+        DIRECT + "[kea6]" + NL + "api_pass = K6" + NL,
+        _set("kea", "connection_mode", "ca"),
+        expect={"kea6": ("K6", "own", "")},
+    ),
     "an_explicit_no_password_for_a_daemon_on_another_host": Row(
         "beta.10 second pass (Q180): a Kea with no authentication on another host - `api_pass =` is an answer, nothing is withheld",
         BASE,
@@ -595,6 +601,9 @@ class TestADirectSocketKeepsWhatWorkedWhenTheHostChangesSpelling:
         parser, changed = self._edit(ini, server, "dhcp6", "http://10.0.0.5:8006")
         r = cred.resolve(parser)
         assert (r["kea6"].password, r["kea6"].withheld) == ("S", "") and parser.get("kea6", "api_pass_shared") == "1"
+        assert r["kea6"].user == "u", (
+            "the second pass (P2-2): the user comes with the password - a copy without it would fail Basic authentication"
+        )
         assert any("kept: the address changed spelling" in c for c in changed)
 
     def test_the_same_host_spelled_the_same_way_still_just_inherits(self):
@@ -607,6 +616,7 @@ class TestADirectSocketKeepsWhatWorkedWhenTheHostChangesSpelling:
         server = {"id": 1, "api_user": "u", "api_pass": "S", "api_url": "http://kea-a.lan:8000"}
         parser, _changed = self._edit(ini, server, "dhcp4", "http://10.0.0.5:8004")
         assert cred.resolve(parser)["kea6"].password == "S" and cred.resolve(parser)["kea6"].withheld == ""
+        assert cred.resolve(parser)["kea6"].user == "u"
 
 
 class TestTheFormsCanSayNoPassword:
@@ -779,3 +789,34 @@ class TestTheServerRowsCanSayNoPasswordForTheirIpv6AndD2Endpoints:
         body["extra_name[]"] = ["peer"]
         logged_in_client.post(self.URL, data=body, follow_redirects=True)
         assert _forms._disk(isolated_config).get("kea_server_2", "api_d2_pass") == ""
+
+
+class TestTheD2BoxCanBeUnticked:
+    """CI (second pass P3-7): the D2 "no password" box on a server row can be ticked AND unticked."""
+
+    URL = "/settings/infrastructure/save-extra-servers"
+
+    def test_untick_returns_the_endpoint_to_inherit(self, logged_in_client, db, mock_kea, isolated_config):
+        from tests.test_extra_servers import _seed
+
+        _seed(
+            (
+                2,
+                {
+                    "api_url": "https://s2:8000",
+                    "api_pass": "P2",
+                    "name": "peer",
+                    "ssh_host": "10.0.0.9",
+                    "api_d2_url": "https://s2:53001",
+                    "api_d2_pass": "",
+                },
+            )
+        )
+        body = _extra_server_body(url="https://s2:8000", password="")
+        body["extra_id[]"] = ["2"]
+        body["extra_name[]"] = ["peer"]
+        body["extra_ssh_host[]"] = ["10.0.0.9"]
+        body["extra_d2_no_pass[]"] = ["0"]
+        logged_in_client.post(self.URL, data=body, follow_redirects=True)
+        disk = _forms._disk(isolated_config)
+        assert not disk.has_option("kea_server_2", "api_d2_pass")

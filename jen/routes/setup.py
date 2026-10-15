@@ -310,7 +310,11 @@ def setup_found():
             # the credential the probe sends is the one `credentials.resolve` would give this endpoint: the primary's only when the candidate is on the primary's host, else
             # one TYPED here, or the explicit "no authentication" - and with none of them, nothing is sent
             same_box = __auth.same_host(extensions.KEA_API_URL, v6_url)
-            v6_user = v6_user_typed or (extensions.KEA_API_USER if same_box else "")
+            # the user follows `credentials.resolve`: the primary's on the same host, or alongside a password typed for this socket; a typed user always wins
+            v6_user = v6_user_typed or (extensions.KEA_API_USER if (same_box or v6_pass_typed) else "")
+            inherit_creds = (
+                same_box and not v6_no_auth and not v6_pass_typed
+            )  # the probe used the primary's credential, so that is what must be SAVED (no leftover own keys)
             if v6_no_auth and v6_pass_typed:
                 flash("Choose one for the DHCPv6 API password: no authentication, or type one.", "error")
                 return render_template(
@@ -346,6 +350,7 @@ def setup_found():
         else:
             v6_url = extensions.KEA_API_URL
             v6_password = extensions.KEA_API_PASS
+            inherit_creds = True
             v6_probe = __setup.probe_v6(v6_url, extensions.KEA_API_USER, v6_password, omit_service=False)
 
         if not v6_probe["ok"]:
@@ -371,6 +376,7 @@ def setup_found():
                 hook_labels=__setup.HOOK_LABELS,
                 v6_probe=v6_probe,
                 v6_url=v6_url,
+                v6_user=v6_user_typed,
             )
 
         # action == "enable_v6" — v5.67.0-beta.8 (Q120, item c): a merge; whatever Jen already has under
@@ -383,6 +389,7 @@ def setup_found():
             api_pass=v6_pass_typed if __caps.is_direct() else "",
             no_auth=v6_no_auth and __caps.is_direct(),
             api_user=v6_user_typed if __caps.is_direct() else "",
+            inherit_credentials=inherit_creds,
         )
         if error:
             flash(f"IPv6 was not enabled: {error}.", "error")

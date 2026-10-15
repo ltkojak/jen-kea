@@ -240,7 +240,9 @@ class TestEndpointForSendsNothingWithoutACredential:
             "[kea]\napi_url = https://a:8000\napi_user = u\n[kea_server_2]\napi_url = https://b:8000\n"
         )
         assert kea.kea_command("version-get", server=servers[1])["result"] == 0
-        assert sent == [("https://b:8000", None)], "a Kea with no authentication: a blank password is not a refusal"
+        assert sent == [("https://b:8000", kea._NO_AUTH)], (
+            "a Kea with no authentication: a blank password is not a refusal"
+        )
 
 
 class _FakeConfig:
@@ -439,9 +441,12 @@ class TestTheMarkerLivesInTheFileItDescribes:
         tree = ast.parse(src)
         create_app = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "create_app")
         text = ast.get_source_segment(src, create_app)
-        assert "materialise(" in text and "already_converted=" in text and "credentials_materialised" in text
+        assert "materialise(" in text and "already_converted=" in text and "beta11_flag()" in text
+        assert "credentials_materialised" not in text.replace("beta11_flag", ""), (
+            "create_app no longer reads or writes the settings row itself"
+        )
         assert "set_global_setting" not in text.split("materialise(")[1].split("Background workers")[0], (
-            "the settings-table row is no longer written"
+            "the settings-table row is never written again"
         )
 
     def test_the_fresh_install_paths_write_the_key(self):
@@ -593,3 +598,134 @@ class TestNothingDownstreamDecides:
             if key.search(text):
                 hits.append((path.name, "an `or server.get(<url/user/pass>)`"))
         assert hits == [], hits
+
+
+class TestTheUserFollowsAnOwnPassword:
+    """Q181 second pass (P2-1): an absent user on another host is the parent's when the endpoint has a password of its own - the shape Jen's own forms write - and none otherwise."""
+
+    def test_an_own_password_on_another_host_carries_the_parents_user(self):
+        r = cred.resolve(
+            _p(BASE + "[kea6]\napi_url = https://z:8006\napi_pass = K6\n[kea6_db]\nhost = db2\npassword = D6\n")
+        )
+        assert (r["kea6"].user, r["kea6"].password) == ("u", "K6")
+        assert (r["kea6_db"].user, r["kea6_db"].password) == ("k", "D6")
+
+    def test_no_password_on_another_host_has_no_user(self):
+        r = cred.resolve(_p(BASE + "[kea6]\napi_url = https://z:8006\n"))
+        assert (r["kea6"].user, r["kea6"].password, r["kea6"].withheld) == ("", "", "kea")
+
+    def test_a_present_blank_user_is_still_no_user_beside_an_own_password(self):
+        r = cred.resolve(_p(BASE + "[kea6]\napi_url = https://z:8006\napi_pass = K6\napi_user =\n"))
+        assert r["kea6"].user == ""
+
+    def test_a_server_endpoint_beside_its_own_password(self):
+        cfg = (
+            BASE
+            + "[kea_server_2]\napi_url = https://b:8000\napi_pass = P\napi_user = su\napi6_url = https://c:8006\napi6_pass = P6\n"
+        )
+        assert cred.resolve(_p(cfg))["server_2_v6"].user == "su"
+
+
+class TestAModeSwitchRepointsTheDaemonsWholesale:
+    """Q181 second pass (P2-5): direct -> CA gives every daemon the Control Agent's address; the form that flips the mode cannot type their passwords, so it is not refused for them."""
+
+    DIRECT = (
+        "[kea]\nconnection_mode = direct\napi_url = https://a:8004\napi_user = u\napi_pass = S\n[kea6]\napi_pass = K6\n"
+    )
+
+    def test_the_move_rule_skips_a_daemon_that_rides_the_control_agent_when_the_mode_changed(self):
+        before = cred.resolve(_p(self.DIRECT))
+        after = cred.resolve(_p(self.DIRECT.replace("direct", "ca")))
+        assert "first address" in cred.move_refusal(before, after)
+        assert cred.move_refusal(before, after, mode_changed=True) == ""
+
+    def test_the_writer_passes_a_mode_switch_and_still_refuses_the_same_change_without_it(self, tmp_path, monkeypatch):
+        from jen import extensions
+        from jen.config import ConfigChangeRefused, app_config
+
+        path = tmp_path / "jen.config"
+        path.write_text(self.DIRECT, encoding="utf-8")
+        monkeypatch.setattr(extensions, "CONFIG_FILE", str(path))
+        monkeypatch.setattr(app_config, "reload", lambda: None)
+        monkeypatch.setattr("jen.config._identity_guards", [])
+        with pytest.raises(ConfigChangeRefused, match="first address"):
+            app_config.write_values([("kea6", "api_url", "https://a:8006")])
+        app_config.write_values([("kea", "connection_mode", "ca")])
+        assert "connection_mode = ca" in path.read_text(encoding="utf-8")
+
+
+class TestAnUnreadableSettingsTableIsNotAnAbsentRow:
+    """Q181 second pass (P2-4): beta.11 refused to convert with the settings unreadable; beta.12 must not read "unreadable" as "not converted"."""
+
+    def test_the_flag_is_none_when_the_table_cannot_be_read(self, monkeypatch):
+        import contextlib
+
+        @contextlib.contextmanager
+        def broken():
+            raise OSError("database down")
+            yield  # pragma: no cover
+
+        monkeypatch.setattr("jen.models.db.jen_db", broken)
+        assert cred.beta11_flag() is None
+
+    def test_the_flag_reads_the_row(self, monkeypatch):
+        import contextlib
+
+        class _Cur:
+            def __init__(self, row):
+                self.row = row
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def execute(self, *a):
+                pass
+
+            def fetchone(self):
+                return self.row
+
+        class _Db:
+            def __init__(self, row):
+                self.row = row
+
+            def cursor(self):
+                return _Cur(self.row)
+
+        for row, expected in (
+            ({"setting_value": "1"}, True),
+            ({"setting_value": '"1"'}, True),
+            (None, False),
+            ({"setting_value": "0"}, False),
+        ):
+
+            @contextlib.contextmanager
+            def db(row=row):
+                yield _Db(row)
+
+            monkeypatch.setattr("jen.models.db.jen_db", db)
+            assert cred.beta11_flag() is expected, row
+
+    def test_create_app_does_nothing_when_the_flag_is_unreadable_and_drops_the_row_after_the_bridge(self):
+        import ast
+        import pathlib
+
+        src = (pathlib.Path(__file__).resolve().parent.parent / "jen" / "__init__.py").read_text(encoding="utf-8")
+        create_app = next(
+            n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.FunctionDef) and n.name == "create_app"
+        )
+        text = ast.get_source_segment(src, create_app)
+        assert "beta11_flag()" in text and "_bridge is not None" in text and "forget_beta11_flag()" in text
+        assert text.index("_bridge is not None") < text.index("materialise(")
+
+    def test_a_marker_that_appears_between_the_probe_and_the_write_stops_the_conversion(self):
+        class Racing(_FakeConfig):
+            def mutate(self, fn, reload=True, typed=None):
+                self.parser.add_section("jen")
+                self.parser.set("jen", "credential_model", "explicit")  # a second process won the race
+                super().mutate(fn, reload, typed)
+
+        fake = Racing(_p(BASE + "[kea_server_2]\napi_url = https://b:8000\n"))
+        assert cred.materialise(fake) == [] and not fake.parser.has_option("kea_server_2", "api_pass")

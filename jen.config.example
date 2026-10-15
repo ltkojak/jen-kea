@@ -123,7 +123,7 @@ kea_conf = /etc/kea/kea-dhcp4.conf
 # ssh_user = your-ssh-user
 # kea_conf = /etc/kea/kea-dhcp4.conf
 # Optional per-server DHCPv6 endpoint (direct mode) — api6_user/api6_pass
-# fall back to api_user/api_pass:
+# are read like api_user/api_pass: a value is its own, a blank is "none", and an absent key is the server's own - on the same host only:
 # api6_url  = http://YOUR-STANDBY-SERVER:8006
 # api6_user = kea-api
 # api6_pass = your-kea-api-password
@@ -150,11 +150,12 @@ kea_conf = /etc/kea/kea-dhcp4.conf
 #                 is NO fallback (a v4 daemon can't answer v6 commands).
 #                 REQUIRED here if you run IPv6 in direct mode. ISC's
 #                 example uses port 8004 for dhcp4; use 8006 for dhcp6.
-# api_user / api_pass still fall back to [kea] in both modes.
+# api_pass is [kea]'s ONLY for a daemon on the same host as the Kea API (another port of it is the same box); on a different host an absent api_pass means NONE - give it its own, or
+# an empty `api_pass =` for a Kea with no authentication. api_user is [kea]'s on the same host or alongside a password of its own.
 # [kea6] applies to the PRIMARY server only — each [kea_server_N] sets its
 # own api6_url / api6_user / api6_pass, and falls back to that server's own
 # api_url / api_user / api_pass (ca mode), never to the primary's.
-# [kea6_db] always falls back to [kea_db].
+# [kea6_db]'s password falls back to [kea_db]'s only when its host is the same.
 
 # [kea6]
 # api_url  = http://YOUR-KEA-SERVER:8006
@@ -232,7 +233,7 @@ forward_zone = your.domain.com
 #   direct mode — api_url is kea-dhcp-ddns's OWN http control socket
 #                 and there is NO fallback. ISC's example uses port
 #                 53001.
-# api_user / api_pass fall back to [kea] in both modes.
+# api_pass is [kea]'s ONLY on the same host (see [kea6] above); api_user is [kea]'s on the same host or alongside a password of its own.
 # [d2] applies to the PRIMARY server only — each [kea_server_N] sets
 # its own api_d2_url / api_d2_user / api_d2_pass, and falls back to
 # that server's own api_url / api_user / api_pass (ca mode), never to

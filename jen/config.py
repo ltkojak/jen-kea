@@ -394,6 +394,16 @@ def identity_view(parser) -> dict:
     return view
 
 
+def _connection_mode(parser) -> str:
+    """The mode as `apply()` reads it: anything but "direct" is "ca"."""
+    mode = (
+        parser.get("kea", "connection_mode", fallback="ca", raw=True).strip().lower()
+        if parser.has_section("kea")
+        else "ca"
+    )
+    return mode if mode in ("ca", "direct") else "ca"
+
+
 def destination_view(parser) -> dict:
     """{what: where} for every place a write could send a credential (v5.69.0-beta.11, Q180, U5): `identity_view`'s four identity keys per server and the mode, PLUS the url of every
     endpoint `credentials.resolve` names ("dest:kea6", "dest:server_2_v6", "dest:kea_db" as host:port ...) - so a write of `[kea6] api_url`, `[d2] api_url`, a database host or an
@@ -697,7 +707,10 @@ class AppConfig:
         # identity guards (WHICH Kea), then CRED-004's one question: did a saved password follow an endpoint to a new host, or appear on a second one, without being typed here
         self._check_identity(before, parser)
         refusal = _credentials.move_refusal(
-            _credentials.resolve(before), _credentials.resolve(parser), getattr(_writer_state, "typed", frozenset())
+            _credentials.resolve(before),
+            _credentials.resolve(parser),
+            getattr(_writer_state, "typed", frozenset()),
+            mode_changed=_connection_mode(before) != _connection_mode(parser),
         )
         if refusal:
             raise ConfigChangeRefused(refusal)
@@ -830,10 +843,10 @@ class AppConfig:
                 # (jen/services/kea.py::_endpoint_for); v6 API is
                 # primary-only, so extra servers rarely set this.
                 "api6_url": resolved["kea6"].url,
-                # v5.10.2 — per-daemon v6 credentials. The `or` chain in
-                # _endpoint_for() (server.api6_* → KEA6_* → server.api_*)
-                # encodes precedence, so these carry the RAW [kea6] value,
-                # NOT a fallback — pre-filling would mask that chain.
+                # v5.69.0-beta.12 (Q181): the per-daemon v6 url, user and password are what
+                # `credentials.resolve` says this endpoint sends (a value, a present-blank
+                # key, or the parent's - see its docstring); `_endpoint_for` reads these
+                # fields and decides nothing.
                 "api6_user": resolved["kea6"].user,
                 "api6_pass": resolved["kea6"].password,
                 "api6_withheld": resolved["kea6"].withheld,

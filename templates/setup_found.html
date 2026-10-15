@@ -64,6 +64,7 @@
             <label>DHCPv6 API password</label>
             <input type="password" name="v6_pass" autocomplete="new-password" placeholder="(only if kea-dhcp6 is on a different host from the Kea API)">
             <label class="form-hint"><input type="checkbox" name="v6_no_auth" value="1"> This DHCPv6 control socket has no authentication</label>
+            <input type="text" name="v6_user" value="{{ v6_user or '' }}" autocomplete="off" placeholder="API username (blank: the Kea API's, when a password is typed)">
         </div>
         {% endif %}
         {% if v6_probe.orphaned_subnets6 %}

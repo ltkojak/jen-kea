@@ -432,6 +432,21 @@ class TestEnableV6:
             and parser.get("kea6", "api_user") == "v6u"
         )
 
+    def test_what_was_probed_with_the_primarys_credential_is_what_is_saved(self, monkeypatch):
+        """Second pass (P2-6): a leftover `[kea6] api_pass =` / `api_user` from an earlier run must not outlive a probe that used the primary's credential."""
+        from jen import extensions
+
+        parser = self._parser({})
+        parser.add_section("kea6")
+        parser.set("kea6", "api_pass", "")
+        parser.set("kea6", "api_user", "old")
+        monkeypatch.setattr(extensions, "SUBNET6_MAP", {})
+        monkeypatch.setattr("jen.config.app_config.mutate", lambda fn, reload=True, typed=None: fn(parser))
+        monkeypatch.setattr("jen.models.user.set_global_setting", lambda *a: None)
+        assert setup_wizard.enable_v6("http://kea:8006", {}, inherit_credentials=True) is None
+        assert not parser.has_option("kea6", "api_pass") and not parser.has_option("kea6", "api_user")
+        assert parser.get("kea6", "api_url") == "http://kea:8006"
+
     def test_a_typed_password_is_written_with_the_endpoint_and_named_as_typed(self, monkeypatch):
         proposed = {1: {"name": "Subnet1", "cidr": "2001:db8::/64", "paired_subnet4_id": None}}
         error, calls, parser = self._run(monkeypatch, {}, proposed, api_pass="V6PW")

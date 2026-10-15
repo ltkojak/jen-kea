@@ -125,7 +125,9 @@ class TestTheIpv6StepSendsOnlyTheCredentialResolveWouldGive:
     ):
         self._post(logged_in_client, v6_url="http://elsewhere:8006", v6_pass="OWN")
         # (Q181: the USER follows the password's rule - the primary's only on the same host; this socket is on another one, so none unless one is typed)
-        assert probe == [("http://elsewhere:8006", "", "OWN", True)]
+        assert probe == [
+            ("http://elsewhere:8006", "jen", "OWN", True)
+        ]  # (the user rides alongside a password typed for this socket - `resolve`'s rule)
 
 
 class TestTheIpv6StepCanSayNoAuthentication:

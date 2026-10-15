@@ -2193,7 +2193,7 @@ api_user = kea-api
 api_pass = your-kea-api-password
 ```
 
-`api_user`/`api_pass` fall back to `[kea]`'s if unset. Additional servers set their own `api_d2_url`/`api_d2_user`/`api_d2_pass` under their own `[kea_server_N]` section.
+`api_pass` falls back to `[kea]`'s only when the D2 socket is on the same host as the Kea API (a different host needs its own, or an empty `api_pass =` for a D2 with no authentication); `api_user` is `[kea]`'s on the same host or alongside a password of its own. Additional servers set their own `api_d2_url`/`api_d2_user`/`api_d2_pass` under their own `[kea_server_N]` section.
 
 **2. Enable it on the dhcp4 side.** The **Naming** tab writes `Dhcp4.dhcp-ddns` (the master "send updates to D2" switch, D2's IP/port, and the NCR wire protocol) plus the naming knobs that control what hostname gets sent and how — qualifying suffix, generated-name prefix, conflict-resolution mode, and so on. Saving pushes to every SSH-configured Kea server and restarts dhcp4 on each.
 

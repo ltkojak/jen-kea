@@ -938,12 +938,13 @@ def create_app() -> Flask:
     # install that already converted gets the key without a second round of copies. Not in a request, never fatal.
     try:
         from jen.models.user import audit as _audit
-        from jen.models.user import get_global_setting as _get_setting
         from jen.services import credentials as _credentials
 
-        _credentials.materialise(
-            app_config, audit=_audit, already_converted=_get_setting("credentials_materialised", "") == "1"
-        )
+        _bridge = _credentials.beta11_flag()  # None = the settings table could not be read: do nothing this start (it cannot tell "absent" from "unreadable")
+        if _bridge is not None:
+            _converted = _credentials.materialise(app_config, audit=_audit, already_converted=_bridge)
+            if _converted is not None and _bridge:
+                _credentials.forget_beta11_flag()
     except Exception as e:
         logger.warning(f"Could not run the credential conversion at startup: {type(e).__name__}: {e}")
 

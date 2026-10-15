@@ -121,7 +121,7 @@ def _expect(endpoint, service, direct):
         return False, "", None
     if endpoint.withheld:
         return False, "", None
-    auth = (endpoint.user, endpoint.password) if (endpoint.user or endpoint.password) else None
+    auth = (endpoint.user, endpoint.password) if (endpoint.user or endpoint.password) else kea._NO_AUTH
     return True, endpoint.url, auth
 
 
@@ -197,10 +197,32 @@ class TestTheRowsTheReviewNamed:
             "present-blank user is explicit: no user (the password is still the same host's)"
         )
 
-    def test_an_absent_username_on_another_host_is_none_not_the_primarys(self, monkeypatch):
+    def test_an_absent_username_beside_an_own_password_on_another_host_is_the_primarys(self, monkeypatch):
+        """The second pass (P2-1): Jen's own forms leave the user blank when a password is typed for a daemon on another host; the account name is the primary's unless said otherwise."""
         calls, _reply = self._send(
             f"[kea]\napi_url = {PRIMARY}\napi_user = pu\napi_pass = PS\n[kea6]\napi_url = https://z:8006\napi_pass = OWN\n",
             "kea6",
             monkeypatch,
         )
-        assert calls == [("https://z:8006", ("", "OWN"))]
+        assert calls == [("https://z:8006", ("pu", "OWN"))]
+
+    def test_an_absent_username_and_no_password_on_another_host_sends_nothing(self, monkeypatch):
+        calls, reply = self._send(
+            f"[kea]\napi_url = {PRIMARY}\napi_user = pu\napi_pass = PS\n[kea6]\napi_url = https://z:8006\n",
+            "kea6",
+            monkeypatch,
+        )
+        assert calls == [] and reply["result"] == 1
+
+    def test_an_endpoint_with_no_authentication_sends_no_authorization_header_and_never_looks_in_netrc(
+        self, monkeypatch
+    ):
+        """An explicit blank user and password: a no-op auth callable, not `None` (which would let `requests` read ~/.netrc and send what it finds)."""
+        calls, _reply = self._send(
+            f"[kea]\napi_url = {PRIMARY}\napi_user = pu\napi_pass = PS\n[kea6]\napi_url = https://z:8006\napi_user =\napi_pass =\n",
+            "kea6",
+            monkeypatch,
+        )
+        assert calls == [("https://z:8006", kea._NO_AUTH)]
+        request = type("R", (), {"headers": {}})()
+        assert kea._NO_AUTH(request) is request and request.headers == {}

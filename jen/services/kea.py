@@ -266,10 +266,21 @@ def identify_daemon(url: str, user: str, password: str, *, verify=None, cert=Non
     return next((k for k in args if k != "hash"), None)
 
 
+class _NoAuth:
+    """An explicit "send no Authorization header". `auth=None` would let `requests` look in the service user's ~/.netrc and send what it finds there to an endpoint that said it has no
+    authentication; a callable that leaves the request alone does not."""
+
+    def __call__(self, request):
+        return request
+
+
+_NO_AUTH = _NoAuth()
+
+
 def _auth(user, password):
     """The Basic credential a request carries (v5.69.0-beta.12, Q181): exactly the endpoint's resolved user and password - and NO Authorization header when both are blank (an endpoint
     that says it has no authentication is sent none, not an empty Basic one)."""
-    return (user, password) if (user or password) else None
+    return (user, password) if (user or password) else _NO_AUTH
 
 
 def _endpoint_for(server: dict, service: str):
@@ -322,13 +333,13 @@ def _endpoint_for(server: dict, service: str):
                 text = (
                     "D2 needs a kea-dhcp-ddns control-socket URL — set [d2] api_url (Settings → Kea)."
                     if direct
-                    else f"{who} has no address of its own (its address is blank on purpose)."
+                    else f"{who} has no address to send to (set one under Settings → Kea)."
                 )
             else:
                 text = (
                     "IPv6 direct mode needs a kea-dhcp6 control-socket URL — set [kea6] api_url (Settings → Kea → Kea6 Control Socket)."
                     if direct
-                    else f"{who} has no address of its own (its address is blank on purpose)."
+                    else f"{who} has no address to send to (set one under Settings → Kea)."
                 )
             return {"result": 1, "text": text}
         if withheld:

@@ -602,6 +602,7 @@ def enable_v6(
     api_pass: str = "",
     no_auth: bool = False,
     api_user: str = "",
+    inherit_credentials: bool = False,
 ) -> str | None:
     """ "Manage IPv6 in Jen" — called only after probe_v6() has already
     confirmed dhcp6 answered. Flips Jen's own display flag, saves the
@@ -635,6 +636,11 @@ def enable_v6(
         if not parser.has_section("kea6"):
             parser.add_section("kea6")
         parser.set("kea6", "api_url", url)
+        if inherit_credentials:
+            # the probe used the primary's credential (the same box): what is SAVED must be what was probed, so an own user or password left from an earlier run is removed
+            for stale in ("api_user", "api_pass"):
+                if parser.has_option("kea6", stale):
+                    parser.remove_option("kea6", stale)
         if api_user:
             parser.set("kea6", "api_user", api_user)
         if api_pass:

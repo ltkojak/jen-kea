@@ -60,12 +60,14 @@ def _db_url(parser, section: str, host: str, fallback_port: str = "3306") -> str
     return f"{host}:{port}"
 
 
-def _user(own_present: bool, own_value: str, parent: Endpoint, url: str) -> str:
+def _user(own_present: bool, own_value: str, parent: Endpoint, url: str, own_password: str = "") -> str:
     """An endpoint's username under the one reading (v5.69.0-beta.12, Q181): a value is its own, a PRESENT-BLANK key is "no user", and an ABSENT key is the parent's - on the same
-    host only, else none. (A user is not a secret, but it is half of the credential the transport sends, so it follows the same rule as the password.)"""
+    host, or alongside a password the endpoint OWNS (the operator typed a password for it, and the account name it was typed with is the parent's unless said otherwise: the forms
+    still offer "inherited" for a blank user). An endpoint with no password of its own on a different host has no user - a name is not a secret, but it is half of the credential, and
+    there is no credential to carry it."""
     if own_present:
         return own_value
-    if parent.user and url and _same_host(parent.url, url):
+    if parent.user and url and (own_password or _same_host(parent.url, url)):
         return parent.user
     return ""
 
@@ -101,7 +103,7 @@ def resolve(parser) -> dict[str, Endpoint]:
       * a VALUE is the endpoint's own;
       * a PRESENT-BLANK key is explicit: "no endpoint of its own" (url), "no user", "no password" - never a request to fall back;
       * an ABSENT key inherits: the url from the parent endpoint in CA mode (one Control Agent proxies every daemon) and nothing in direct mode (every daemon has its own
-        socket); the user and the password from the parent's, on the same host only, else none.
+        socket); the password from the parent's on the same host only, else none; the user from the parent's on the same host or alongside a password the endpoint owns, else none.
 
     Lenient on purpose (a fresh install, a hand-made file, a parser built for a comparison): a missing section or option is a blank, never an error, and values are read raw
     (a `%` in a password is a `%`)."""
@@ -119,7 +121,9 @@ def resolve(parser) -> dict[str, Endpoint]:
     # [kea6] and [d2]: in ca mode an absent api_url is the Control Agent's (one CA proxies every daemon); in direct mode there is no fallback
     for name in ("kea6", "d2"):
         url = _get(parser, name, "api_url") if _has(parser, name, "api_url") else ("" if direct else kea_url)
-        user = _user(_has(parser, name, "api_user"), _get(parser, name, "api_user"), kea, url)
+        user = _user(
+            _has(parser, name, "api_user"), _get(parser, name, "api_user"), kea, url, _get(parser, name, "api_pass")
+        )
         out[name] = _inherit(name, url, user, _has(parser, name, "api_pass"), _get(parser, name, "api_pass"), kea)
 
     kea_db_host, kea_db_user, kea_db_pass = (
@@ -135,7 +139,13 @@ def resolve(parser) -> dict[str, Endpoint]:
     out["kea6_db"] = _inherit(
         "kea6_db",
         url6,
-        _user(_has(parser, "kea6_db", "user"), _get(parser, "kea6_db", "user"), kea_db, url6),
+        _user(
+            _has(parser, "kea6_db", "user"),
+            _get(parser, "kea6_db", "user"),
+            kea_db,
+            url6,
+            _get(parser, "kea6_db", "password"),
+        ),
         _has(parser, "kea6_db", "password"),
         _get(parser, "kea6_db", "password"),
         kea_db,
@@ -152,7 +162,9 @@ def resolve(parser) -> dict[str, Endpoint]:
     for n in server_numbers(parser):
         sec = f"kea_server_{n}"
         url = _get(parser, sec, "api_url")
-        user = _user(_has(parser, sec, "api_user"), _get(parser, sec, "api_user"), kea, url)
+        user = _user(
+            _has(parser, sec, "api_user"), _get(parser, sec, "api_user"), kea, url, _get(parser, sec, "api_pass")
+        )
         srv = out[f"server_{n}"] = _inherit(
             f"server_{n}", url, user, _has(parser, sec, "api_pass"), _get(parser, sec, "api_pass"), kea
         )
@@ -161,7 +173,9 @@ def resolve(parser) -> dict[str, Endpoint]:
             ("d2", "api_d2_url", "api_d2_user", "api_d2_pass"),
         ):
             eurl = _get(parser, sec, url_key) if _has(parser, sec, url_key) else ("" if direct else url)
-            euser = _user(_has(parser, sec, user_key), _get(parser, sec, user_key), srv, eurl)
+            euser = _user(
+                _has(parser, sec, user_key), _get(parser, sec, user_key), srv, eurl, _get(parser, sec, pass_key)
+            )
             out[f"server_{n}_{suffix}"] = _inherit(
                 f"server_{n}_{suffix}", eurl, euser, _has(parser, sec, pass_key), _get(parser, sec, pass_key), srv
             )
@@ -193,7 +207,11 @@ def host_of(url: str) -> str:
     return parts[1] if parts else (url or "").strip()
 
 
-def move_refusal(before: dict, after: dict, typed=frozenset()) -> str:
+#: the endpoints that ride the Control Agent in CA mode (one proxy for every daemon): a switch of the connection mode re-points them wholesale, by the superadmin's own act
+RIDES_THE_CONTROL_AGENT = re.compile(r"kea6|d2|server_\d+_(?:v6|d2)")
+
+
+def move_refusal(before: dict, after: dict, typed=frozenset(), mode_changed: bool = False) -> str:
     """The sentence when a write would send a saved password somewhere its owner never named, else "" (CRED-004; asked ONCE, by `AppConfig._write_parser`, for every write of
     Jen's configuration - never per form). `before` and `after` are `resolve()` of the file as it is and as it would be; `typed` is the set of endpoint names whose password was
     TYPED in this request (a route says so; the setup wizard, an installer and a test say so for theirs).
@@ -208,6 +226,8 @@ def move_refusal(before: dict, after: dict, typed=frozenset()) -> str:
         # only a secret an endpoint OWNS can move with it: an inherited one is its parent's, and the parent is judged as itself
         if a.source != "own" or name in typed or not a.url:
             continue
+        if mode_changed and RIDES_THE_CONTROL_AGENT.fullmatch(name):
+            continue  # direct -> CA: a daemon's address becomes the Control Agent's. The mode is one switch for every daemon, and the Kea API form that flips it cannot type their passwords
         b = before.get(name)
         if b is not None and b.password == a.password:
             if not b.url:
@@ -285,6 +305,38 @@ def pending_conversions(parser) -> list[str]:
 MODEL_SECTION, MODEL_KEY, MODEL_VALUE = "jen", "credential_model", "explicit"
 
 
+def beta11_flag():
+    """The settings-table row beta.11 wrote when it converted (`credentials_materialised`): True / False, or None when the settings table cannot be READ - which is not "absent". An
+    unreadable table must not read as "not converted" (a section a superadmin left keyless on purpose after beta.11's conversion would be filled in), so the caller does nothing this
+    start and tries again at the next."""
+    try:
+        from jen.models.db import jen_db
+
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("SELECT setting_value FROM settings WHERE setting_key = %s", ("credentials_materialised",))
+            row = cur.fetchone()
+    except Exception as e:
+        logger.warning(
+            f"credentials: the settings table could not be read ({type(e).__name__}); the conversion waits for the next start"
+        )
+        return None
+    return bool(row) and str(row["setting_value"]).strip().strip('"') == "1"
+
+
+def forget_beta11_flag() -> None:
+    """The bridge has done its work once the marker is in the file: drop the row, so a pre-beta.11 config copied back by hand later converts instead of being marked unconverted."""
+    try:
+        from jen.models.db import jen_db
+
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("DELETE FROM settings WHERE setting_key = %s", ("credentials_materialised",))
+            db.commit()
+    except Exception as e:
+        logger.warning(
+            f"credentials: could not drop the beta.11 conversion row ({type(e).__name__}); it is harmless and is retried at the next start"
+        )
+
+
 def has_model_marker(parser) -> bool:
     return _has(parser, MODEL_SECTION, MODEL_KEY)
 
@@ -313,6 +365,8 @@ def materialise(app_config, audit=None, today: str = "", already_converted: bool
         done: list[str] = []
 
         def _apply(p):
+            if has_model_marker(p):
+                return  # a second process (or an installer) wrote it between the probe and now: nothing to convert, nothing to write
             if not p.has_section(MODEL_SECTION):
                 p.add_section(MODEL_SECTION)
             p.set(MODEL_SECTION, MODEL_KEY, MODEL_VALUE)
