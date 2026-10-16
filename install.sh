@@ -1705,9 +1705,19 @@ CONFEOF
     # wizard was open survives, and a section the wizard never asks about ([oidc], extra Kea servers, [kea6] ...) is no longer dropped.
     local final_text="$wizard_text"
     if [[ "$MODE_CONFIGURE" == "true" && -f "$CONFIG_FILE" ]]; then
+        # v5.69.0-beta.13 (Q182, X6): the merge also asks Jen's own writer's question (CRED-004) - exit status 4 is "this would send a saved password to a host it was not typed
+        # for", with the sentence on stderr (above); anything else non-zero is a merge that could not be made
+        local _merge_rc=0
         final_text="$("$PYBIN_FOR_LAYOUT" "$SCRIPT_DIR/tools/config_merge.py" \
-            --snapshot <(printf '%s\n' "$CONFIG_SNAPSHOT_TEXT") --live "$CONFIG_FILE" <<< "$wizard_text")" \
-            || fatal "Could not merge the wizard's answers into the live $CONFIG_FILE"
+            --snapshot <(printf '%s\n' "$CONFIG_SNAPSHOT_TEXT") --live "$CONFIG_FILE" <<< "$wizard_text")" || _merge_rc=$?
+        if [[ $_merge_rc -eq 4 ]]; then
+            err "Nothing was written."
+            echo -e "  A password Jen has saved would be sent to a host it was not typed for (the sentence above). Type that endpoint's password in the wizard (or its answers file),"
+            echo -e "  or move the endpoint under Settings → Kea in Jen, where the password is asked for."
+            fatal "Refused: --configure would send a saved password to a different host."
+        elif [[ $_merge_rc -ne 0 ]]; then
+            fatal "Could not merge the wizard's answers into the live $CONFIG_FILE"
+        fi
         _guard_endpoint_changes "$CONFIG_FILE" "$final_text"
     fi
     printf '%s\n' "$final_text" | _private_write "$CONFIG_FILE" --owner "$jen_owner" --mode 0600 --trusted-root "$CONFIG_DIR" ${_cfg_lock_args[@]+"${_cfg_lock_args[@]}"} \

@@ -1156,18 +1156,53 @@ def _socket_url(scheme: str, address: str, port: int) -> str:
     return f"{scheme}://{host}:{port}"
 
 
-def _daemon_creds(server: dict, service: str) -> tuple[str, str]:
-    """The basic-auth pair Jen already presents to this daemon on this
-    server — the form's defaults, so an operator who keeps one API user
-    per host types nothing. Falls back to the server's v4 pair when the
-    per-daemon endpoint is unresolvable (direct mode, no v6/D2 URL yet —
-    exactly the state this flow exists to fix)."""
-    endpoint = __kea._endpoint_for(server, service)
-    if isinstance(endpoint, tuple):
-        _url, user, pwd = endpoint
-        if user or pwd:
-            return user, pwd
-    return server.get("api_user", ""), server.get("api_pass", "")
+def _endpoint_name(server: dict, service: str) -> str:
+    """The `credentials.resolve` name of the endpoint one daemon of one server is reached on."""
+    sid = (server or {}).get("id")
+    if sid in (None, 1):
+        return {"dhcp4": "kea", "dhcp6": "kea6", "d2": "d2"}[service]
+    return f"server_{sid}" + {"dhcp4": "", "dhcp6": "_v6", "d2": "_d2"}[service]
+
+
+def _socket_keys(server: dict, service: str) -> tuple[str, str, str, str]:
+    """(section, url key, user key, password key) of the endpoint one daemon of one server is reached on."""
+    sid = (server or {}).get("id")
+    if sid in (None, 1):
+        return {
+            "dhcp4": ("kea", "api_url", "api_user", "api_pass"),
+            "dhcp6": ("kea6", "api_url", "api_user", "api_pass"),
+            "d2": ("d2", "api_url", "api_user", "api_pass"),
+        }[service]
+    return (
+        f"kea_server_{sid}",
+        *{
+            "dhcp4": ("api_url", "api_user", "api_pass"),
+            "dhcp6": ("api6_url", "api6_user", "api6_pass"),
+            "d2": ("api_d2_url", "api_d2_user", "api_d2_pass"),
+        }[service],
+    )
+
+
+def _daemon_creds(server: dict, service: str, url: str = "") -> tuple[str, str]:
+    """The basic-auth pair `credentials.resolve` gives this daemon's endpoint - the form's defaults, so an operator who keeps one API user per host types nothing. v5.69.0-beta.13
+    (Q182, X4): there is NO second decider here (the old fallback to the server's v4 pair was one: it handed a different host's password to the form). `url` is the address the
+    endpoint is ABOUT to be given (the socket this flow creates): resolved as if it were already saved, so the pair that comes back is the one the writer will let that address
+    have - the server's own on the same host, nothing on a different one."""
+    parser = __config.app_config._read_parser()
+    if url:
+        section, url_key, _user_key, _pass_key = _socket_keys(server, service)
+        if not parser.has_section(section):
+            parser.add_section(section)
+        parser.set(section, url_key, url)
+    endpoint = __credentials.resolve(parser).get(_endpoint_name(server, service))
+    return (endpoint.user, endpoint.password) if endpoint is not None else ("", "")
+
+
+def _sentence_of(refusal: BaseException) -> str:
+    """The words for a failed write of Jen's own settings: the writer's own sentence for a refusal, one that names the failure for anything else (a read-only file, a full disk)."""
+    return getattr(refusal, "sentence", "") or (
+        f"Jen could not write its own settings ({type(refusal).__name__}: {refusal}) - the file may be read-only or the disk full."
+    )
 
 
 def _direct_socket_edit(server: dict, service: str, url: str, user: str, password: str, tls: bool = False):
@@ -1183,8 +1218,6 @@ def _direct_socket_edit(server: dict, service: str, url: str, user: str, passwor
     one Jen identity, for every server — and pins `api_tls_verify` on
     (this flow never sets it off). Returns a short phrase for the flash
     saying what was written."""
-    sid = server.get("id")
-    primary = sid == 1
     changed: list[str] = []
 
     def _apply(cfg):
@@ -1202,19 +1235,7 @@ def _direct_socket_edit(server: dict, service: str, url: str, user: str, passwor
                 cfg.set("kea", "api_client_key", client_key)
                 changed.append("[kea] api_ca/api_client_cert/api_client_key (Jen's CA and client certificate)")
             cfg.set("kea", "api_tls_verify", "true")
-        if primary:
-            sec, url_key, user_key, pass_key = {
-                "dhcp4": ("kea", "api_url", "api_user", "api_pass"),
-                "dhcp6": ("kea6", "api_url", "api_user", "api_pass"),
-                "d2": ("d2", "api_url", "api_user", "api_pass"),
-            }[service]
-        else:
-            sec = f"kea_server_{sid}"
-            url_key, user_key, pass_key = {
-                "dhcp4": ("api_url", "api_user", "api_pass"),
-                "dhcp6": ("api6_url", "api6_user", "api6_pass"),
-                "d2": ("api_d2_url", "api_d2_user", "api_d2_pass"),
-            }[service]
+        sec, url_key, user_key, pass_key = _socket_keys(server, service)
         if not cfg.has_section(sec):
             cfg.add_section(sec)
         old_url = cfg.get(sec, url_key, fallback="")
@@ -1256,6 +1277,16 @@ def _direct_socket_edit(server: dict, service: str, url: str, user: str, passwor
                 cfg.set(section, option, was.password)
                 cfg.set(section, f"{option}_shared", "1")
                 changed.append(f"[{section}] {option} (kept: the address changed spelling)")
+        # Q182 (X4), after the keep above: the pair that was pushed into the daemon's config and ANSWERED the probe is what Jen must keep sending to it. When the resolver would withhold it at the new
+        # address (the socket set up by IP on a server Jen reaches by name: `resolve` compares hosts as written, and the removal of an own key above made the endpoint inherit)
+        # the probed pair is written as the endpoint's OWN - a copy of the server's, marked - never dropped. The superadmin's act, named in the flash.
+        if service != "dhcp4":
+            here = __credentials.resolve(cfg).get(_endpoint_name(server, service))
+            if here is not None and here.withheld:
+                cfg.set(sec, user_key, user)
+                cfg.set(sec, pass_key, password)
+                cfg.set(sec, f"{pass_key}_shared", "1")
+                changed.append(f"[{sec}] {user_key}/{pass_key} (kept: the probed pair is the endpoint's own)")
 
     return _apply, changed
 
@@ -1275,7 +1306,8 @@ def _write_direct_socket_config(
 ) -> str:
     """Point Jen at the daemon socket that just answered (see `_direct_socket_edit`). Returns the phrase the caller flashes."""
     apply_fn, changed = _direct_socket_edit(server, service, url, user, password, tls)
-    __config.app_config.mutate(apply_fn, typed=_endpoints_of_server(server))
+    # Q182 (X4): the password typed (or confirmed by the probe) is the ONE endpoint's - not every endpoint of the server
+    __config.app_config.mutate(apply_fn, typed={_endpoint_name(server, service)})
     return ", ".join(changed)
 
 
@@ -1425,17 +1457,18 @@ def setup_direct_socket(server_id, service):
         flash("The port must be a number between 1 and 65535.", "error")
         return back
     port = int(raw_port)
-    default_user, default_pass = _daemon_creds(server, service)
+    new_url = _socket_url(scheme, address, port)
+    # the defaults are what `credentials.resolve` would send to the address this socket is about to be given (Q182, X4)
+    default_user, default_pass = _daemon_creds(server, service, new_url)
     user = request.form.get("user", "").strip() or default_user
     password = request.form.get("password", "").strip() or default_pass
     if not user or not password:
         flash(
-            f"The socket needs a basic-auth username and password — Jen has none on record for {daemon} on "
-            f"{name}, so fill both in.",
+            f"The socket needs a basic-auth username and password — Jen has none to send to {new_url} for {daemon} on "
+            f"{name} (a saved password is never sent to a different host from the one it belongs to), so fill both in.",
             "error",
         )
         return back
-    new_url = _socket_url(scheme, address, port)
 
     # The daemon socket must not be the Control Agent's own address —
     # that's the exact 2026-09-13 confusion, and Kea would fail to bind
@@ -1588,21 +1621,22 @@ def setup_direct_socket(server_id, service):
     was_ca = __caps.is_ca()
     try:
         written = _write_direct_socket_config(server, service, new_url, user, password, tls=(scheme == "https"))
-    except __config.ConfigChangeRefused as refused:
+    except (__config.ConfigChangeRefused, OSError) as refused:
         # v5.68.0-beta.29 (Q165, edge 3): refused AFTER the remote change (the record became unreadable between the check and the write, or a hand edit): a socket THIS
-        # request added is taken out again; one that was already there (`nochange`) is not Jen's to remove
+        # request added is taken out again; one that was already there (`nochange`) is not Jen's to remove. Q182 (X4): a write that FAILS (a read-only jen.config, a full disk) is
+        # the same case - the daemon was changed and Jen's settings were not - so it is handled the same way, not left to be a 500
         if result.status == "ok":
             _undo_remote_change(
                 server,
                 service,
                 lambda cfg: __edit.remove_control_socket(cfg, service),
                 f"removed the control socket added on {address}:{port} (Jen's settings were refused)",
-                refused.sentence,
+                _sentence_of(refused),
                 what=f"the {scheme} control socket on {address}:{port}",
                 by_hand=f"Remove it with 'Remove socket' for {daemon} on this page, or delete the http/https entry under control-sockets in {conf} and restart {daemon}.",
             )
         else:
-            flash(refused.sentence, "error")
+            flash(_sentence_of(refused), "error")
             flash(f"Nothing was changed on {name}: the socket was already in {conf}.", "info")
         return back
     __user.set_global_setting("restart_pending", "true")
@@ -1886,21 +1920,21 @@ def remove_direct_socket(server_id, service):
         return back
 
     try:
-        __config.app_config.mutate(_apply, typed=_endpoints_of_server(server))
-    except __config.ConfigChangeRefused as refused:
-        # v5.68.0-beta.29 (Q165, edge 3): refused AFTER the socket was taken out of the daemon's config - put it back as it was, the daemon restarted
+        __config.app_config.mutate(_apply, typed={_endpoint_name(server, service)})
+    except (__config.ConfigChangeRefused, OSError) as refused:
+        # v5.68.0-beta.29 (Q165, edge 3): refused AFTER the socket was taken out of the daemon's config - put it back as it was, the daemon restarted (Q182: a failed write too)
         if result.status == "ok" and removed_sockets:
             _undo_remote_change(
                 server,
                 service,
                 lambda cfg: __edit.set_control_socket(cfg, service, removed_sockets[0]),
                 f"put the {daemon} control socket back (Jen's settings were refused)",
-                refused.sentence,
+                _sentence_of(refused),
                 what="the removal of the control socket",
                 by_hand=f"Add the control socket back to {conf} by hand (the entry that was removed: {removed_sockets[0]}) and restart {daemon}, or press Remove socket again once Jen's settings can be changed.",
             )
         else:
-            flash(refused.sentence, "error")
+            flash(_sentence_of(refused), "error")
             flash(f"Nothing was changed on {name}: there was no socket to remove.", "info")
         return back
     __user.set_global_setting("restart_pending", "true")
@@ -2477,9 +2511,14 @@ def copy_primary_password(server_id):
     class _Gone(Exception):
         pass
 
+    class _Own(Exception):
+        pass
+
     def _apply(cfg):
         if not cfg.has_section(section):
             raise _Gone()  # removed by another save since the check above: nothing is written
+        if cfg.get(section, __credentials.SHARED_MARKER, fallback="") != "1":
+            raise _Own()  # Q182 (X5b): only a COPY of the primary's is copied again - a password the server owns is not the primary's to overwrite
         cfg.set(section, "api_pass", cfg.get("kea", "api_pass", fallback=""))
         cfg.set(section, __credentials.SHARED_MARKER, "1")
 
@@ -2487,6 +2526,13 @@ def copy_primary_password(server_id):
         __config.app_config.mutate(_apply, typed={f"server_{server_id}"})
     except _Gone:
         flash("That server is not configured.", "error")
+        return redirect(url_for("settings.settings_kea"))
+    except _Own:
+        flash(
+            f"{extensions.cfg.get(section, 'name', fallback=f'Kea Server {server_id}')}'s password is its own - it is not a copy of the primary's, so there is nothing to copy again. "
+            "Type a new one on the server's row to change it.",
+            "error",
+        )
         return redirect(url_for("settings.settings_kea"))
     __user.set_global_setting("restart_pending", "true")
     flash("The primary's API password was copied into that server again. It does not follow later changes.", "success")

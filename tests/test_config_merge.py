@@ -445,3 +445,84 @@ password = secret
         ]
         for variant in variants:
             assert bool(cm.identity_diff(self.LIVE, variant)) == (view(self.LIVE) != view(variant)), variant
+
+
+class TestTheMergeAsksTheWritersQuestion:
+    """Q182 (X6): `tools/config_merge.py` runs `credentials.move_refusal(resolve(live), resolve(merged), typed)` - the question Jen's own writer asks (CRED-004). A wizard answer set that
+    moves `[kea] api_url` to another host without the password is refused (exit 4, the sentence on stderr, nothing on stdout); with the password typed it is merged."""
+
+    LIVE = """[kea]
+api_url = http://old:8000
+api_user = u
+api_pass = SAVED
+
+[kea_db]
+host = db1
+user = k
+password = KDB
+
+[jen_db]
+host = jh
+user = j
+password = JP
+"""
+
+    def _run(self, tmp_path, monkeypatch, capsys, wizard):
+        import io
+
+        live = tmp_path / "jen.config"
+        live.write_text(self.LIVE, encoding="utf-8")
+        snapshot = tmp_path / "snapshot.config"
+        snapshot.write_text(self.LIVE, encoding="utf-8")
+        monkeypatch.setattr("sys.stdin", io.StringIO(wizard))
+        code = cm.main(["--snapshot", str(snapshot), "--live", str(live)])
+        out = capsys.readouterr()
+        return code, out.out, out.err
+
+    def test_a_moved_api_url_with_the_saved_password_is_refused(self, tmp_path, monkeypatch, capsys):
+        wizard = self.LIVE.replace("http://old:8000", "http://new:8000")
+        code, out, err = self._run(tmp_path, monkeypatch, capsys, wizard)
+        assert code == 4 and out == ""
+        assert "moved to a different host" in err and "new" in err
+
+    def test_the_same_move_with_the_password_typed_is_merged(self, tmp_path, monkeypatch, capsys):
+        wizard = self.LIVE.replace("http://old:8000", "http://new:8000").replace("api_pass = SAVED", "api_pass = TYPED")
+        code, out, err = self._run(tmp_path, monkeypatch, capsys, wizard)
+        assert code == 0 and err == ""
+        assert "api_url = http://new:8000" in out and "api_pass = TYPED" in out
+
+    def test_an_answer_that_changes_nothing_about_where_a_password_goes_is_merged(self, tmp_path, monkeypatch, capsys):
+        code, out, _err = self._run(tmp_path, monkeypatch, capsys, self.LIVE.replace("api_user = u", "api_user = v"))
+        assert code == 0 and "api_user = v" in out
+
+    def test_the_kea_database_moved_with_its_saved_password_is_refused(self, tmp_path, monkeypatch, capsys):
+        code, out, err = self._run(tmp_path, monkeypatch, capsys, self.LIVE.replace("host = db1", "host = db9"))
+        assert code == 4 and out == "" and "Kea database" in err
+
+    def test_it_runs_with_no_flask_and_no_import_of_the_app(self, tmp_path):
+        """The installer runs this with whatever Python it has: the credential rules are loaded from the tree through stand-in packages, so nothing of Jen's application is imported."""
+        import subprocess
+        import sys
+
+        live = tmp_path / "jen.config"
+        live.write_text(self.LIVE, encoding="utf-8")
+        driver = (
+            "import sys, runpy\n"
+            "sys.modules['flask'] = None\n"
+            "sys.modules['flask_login'] = None\n"
+            "sys.argv = ['config_merge.py', '--snapshot', sys.argv[1], '--live', sys.argv[1]]\n"
+            f"runpy.run_path({str(ROOT / 'tools' / 'config_merge.py')!r}, run_name='__main__')\n"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", driver, str(live)],
+            input=self.LIVE.replace("http://old:8000", "http://new:8000"),
+            capture_output=True,
+            text=True,
+            cwd=tmp_path,
+        )
+        assert proc.returncode == 4, proc.stdout + proc.stderr
+        assert "moved to a different host" in proc.stderr and proc.stdout == ""
+
+    def test_the_installer_reads_the_exit_status_and_says_why(self):
+        text = (ROOT / "install.sh").read_text(encoding="utf-8")
+        assert "_merge_rc" in text and "-eq 4" in text and "Refused: --configure would send a saved password" in text

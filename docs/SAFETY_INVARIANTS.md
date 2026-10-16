@@ -427,7 +427,7 @@ password keeps the one its connection resolves, so moving it to a new address ne
 secret is used at its OWN endpoint, or inherited by another daemon ON THE SAME HOST (`auth.same_host`: another port of that host is the same box); an endpoint on a different host with no secret of its own
 has NONE - never its neighbour's, and `_endpoint_for` answers with a sentence and sends nothing. A blank `api_pass =` is an explicit no-credential; an ABSENT key is "inherit, if the host is the same". The URL and the USER are decided by the same function under the same three readings (a value is its
 own; a present-blank key is explicit - no endpoint, no user, no password; an absent key inherits: the url from the parent in CA mode and nothing in direct mode, the password on the same host only, the user on
-the same host or alongside a password the endpoint owns), and the transport reads only those resolved fields: what `resolve` returns is what `requests.post` receives, and nothing downstream may change it.
+the same host or alongside a password the endpoint owns - and NOT beside a PRESENT-BLANK password, which says "no authentication" and so sends no user and no Authorization header; a database keeps its user), and the transport reads only those resolved fields: what `resolve` returns is what `requests.post` receives, and nothing downstream may change it. The Kea6 database is an endpoint like the rest: a present-blank `[kea6_db] host =` is "no Kea6 database" and a withheld password is none - `models/db.py` opens no pool and no connection for either, and Health says so.
 The writer asks one more question for every write (`AppConfig._write_parser` through `credentials.move_refusal`, never per form): a saved password does not FOLLOW an endpoint to a new host, and does not
 appear on a SECOND host, unless it was typed in this request (`mutate(fn, typed=...)`). A legacy endpoint that inherited its parent's password across hosts (an extra server since 5.10; Kea6, D2, the Kea6 database and a server's IPv6 and D2 endpoints) is converted ONCE PER INSTALL, audibly,
 at `create_app` (`credentials.materialise`, gated on `[jen] credential_model = explicit` IN jen.config, written in the same atomic write as the copies - the marker is in the file it describes, so a restored older database
@@ -435,8 +435,9 @@ changes nothing and a restored pre-beta.11 config converts again, correctly; a f
 password does not follow it, and a section left WITHOUT a key afterwards is never filled in at a restart. An explicit blank (`api_pass =`, the forms' "No password" boxes) is how a Kea with no
 authentication is said, and nothing is withheld from it. `Set up direct socket` keeps a daemon's password as its own copy when the address it moves to is the same box spelled differently.
 **Established.** Q180 (the beta.10 review - and the four before it: beta.7 provider switch, beta.8 same-provider URL change, beta.9 inherit plus typed and an extra server without a key, beta.10 the
-unchecked share box and the extra server's IPv6 and D2 endpoints: one defect, a fallback written in a different place each time).
-**Enforced at.** `jen/services/credentials.py` (`resolve`, `move_refusal`, `materialise`); `jen/config.py` (`apply`, `derive_kea_servers`, `_write_parser`); `jen/services/kea.py` (`_endpoint_for` reads only resolved fields; `tests/test_credential_transport.py` compares the two). A saved password's FIRST address is a move too (`move_refusal`: a password that had no address and is given one needs to be typed). Exception: a switch of the connection mode, which re-points every daemon at the Control Agent wholesale. The conversion copies the parent's USER with the password. A request for an endpoint
+unchecked share box and the extra server's IPv6 and D2 endpoints: one defect, a fallback written in a different place each time); Q181 (the transport reads only resolved fields); Q182 (every
+exemption in the rule is itself a row first: the mode-switch skip, no authentication is no header, the marker is a value, the probed pair is kept, the installer's merge asks the same question).
+**Enforced at.** `jen/services/credentials.py` (`resolve`, `move_refusal`, `materialise`); `jen/config.py` (`apply`, `derive_kea_servers`, `_write_parser`); `jen/services/kea.py` (`_endpoint_for` reads only resolved fields; `tests/test_credential_transport.py` compares the two). A saved password's FIRST address is a move too (`move_refusal`: a password that had no address and is given one needs to be typed). Exception (Q182): a switch of the connection mode exempts ONLY an endpoint whose address is DERIVED (its url key absent: `Endpoint.url_own` False) from a parent whose host did not change - an address of the daemon's own, or a Control Agent on a new host, is judged as any move; and every exemption in the rule is a matrix row that uses it for a different purpose (RELEASE_AUDIT step (n)). The conversion copies the parent's USER with the password and marks the file only when nothing is pending (a restored legacy file is converted, not merely marked); a legacy present-blank `api6_pass` / `api_d2_pass` is "inherit" in a file without the marker. The marker is a VALUE: `credentials.model_marker` is absent / explicit / invalid, and an invalid one converts nothing and shows in Doctor and Health as `credential-model-invalid`. The direct-socket routes write the pair that answered the probe as the endpoint's own when the resolver would withhold it at the new address, take their defaults from `resolve` (`_daemon_creds`), type only the endpoint they repoint, and handle a failed write of Jen's settings like a refusal. The installer's merge (`tools/config_merge.py`) runs the same `move_refusal`. A request for an endpoint
 with no authentication carries no Authorization header and no netrc lookup (`kea._NO_AUTH`). An unreadable settings table is not an absent row: the conversion waits for the next start (`credentials.beta11_flag`). The two
 greps `fallback=primary_pass` and `or server.get("api_pass"` over `jen/` find nothing, and `tests/test_credentials.py` says so.
 **Tests.**
@@ -451,6 +452,20 @@ greps `fallback=primary_pass` and `or server.get("api_pass"` over `jen/` find no
 - `tests/test_credentials.py::TestTheUserFollowsAnOwnPassword`
 - `tests/test_credentials.py::TestAModeSwitchRepointsTheDaemonsWholesale`
 - `tests/test_credentials.py::TestAnUnreadableSettingsTableIsNotAnAbsentRow`
+- `tests/test_credentials.py::TestUrlOwn`
+- `tests/test_credentials.py::TestNoAuthenticationIsNoUser`
+- `tests/test_credentials.py::TestTheMarkerIsAValue`
+- `tests/test_credentials.py::TestALegacyBlankIsInherit`
+- `tests/test_credentials.py::TestTheKea6DatabaseIsAnEndpoint`
+- `tests/test_credential_transport.py::TestNoAuthenticationOnTheSameHostSendsNoHeader`
+- `tests/test_credential_destinations.py::test_every_continue_in_move_refusal_names_the_row_that_uses_it`
+- `tests/test_credential_destinations.py::TestTheCopyButtonActsOnlyOnACopy`
+- `tests/test_direct_socket_credentials.py::TestTheProbedPairIsTheEndpointsOwn`
+- `tests/test_direct_socket_credentials.py::TestDaemonCredsIsTheResolversAnswer`
+- `tests/test_direct_socket_credentials.py::TestARemovedSocketLeavesTheCredentialsAndTheNextAddressIsAMove`
+- `tests/test_direct_socket_lock.py::TestAFailedWriteOfJensSettingsIsHandledLikeARefusal`
+- `tests/test_config_merge.py::TestTheMergeAsksTheWritersQuestion`
+- `tests/test_config_doctor.py::TestTheCredentialModelMarkerAndTheBlankKea6Database`
 - `tests/test_credential_transport.py::test_the_transport_posts_exactly_what_resolve_says`
 - `tests/test_credential_transport.py::TestTheRowsTheReviewNamed`
 - `tests/test_setup_wizard_stepup.py::TestTheIpv6StepCanSayNoAuthentication`

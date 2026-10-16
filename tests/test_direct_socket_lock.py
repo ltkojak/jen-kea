@@ -89,7 +89,7 @@ def wire(monkeypatch):
     monkeypatch.setattr(infra, "url_for", lambda *a, **k: "/settings/kea")
     monkeypatch.setattr(infra, "flash", lambda text, style="message": log["flashes"].append((style, str(text))))
     monkeypatch.setattr(infra, "_server_by_id", lambda sid: server)
-    monkeypatch.setattr(infra, "_daemon_creds", lambda s, svc: ("u", "p"))
+    monkeypatch.setattr(infra, "_daemon_creds", lambda s, svc, url="": ("u", "p"))
     monkeypatch.setattr(infra, "_probe_after_restart", lambda *a, **k: ("Kea 3.0.3", None))
     monkeypatch.setattr(infra, "_identify_daemon", lambda *a, **k: "Dhcp4")
     monkeypatch.setattr("jen.services.capabilities.is_ca", lambda: False)
@@ -220,3 +220,51 @@ class TestALateRefusalOnRemovalPutsTheSocketBack:
         _post(_inner(infra.remove_direct_socket))
         assert len(wire["applies"]) == 1
         assert ed.remove_control_socket({"Dhcp4": {"control-sockets": [UNIX]}}, "dhcp4")[1] == "nochange"
+
+
+class TestAFailedWriteOfJensSettingsIsHandledLikeARefusal:
+    """Q182 (X4, step i): the config writer can FAIL after the change set applied (a read-only jen.config, a full disk) - an OSError, not a refusal. The daemon was changed and Jen's
+    settings were not: the same compensation, a flash that says what happened, a redirect - never a 500 with the Kea host left half done."""
+
+    def test_setup_puts_the_host_back_and_redirects(self, wire, monkeypatch):
+        def fail(*a, **k):
+            raise OSError(30, "Read-only file system")
+
+        monkeypatch.setattr(infra, "_write_direct_socket_config", fail)
+        wire["results"] = [_ok("socket added"), _ok("socket removed")]
+        response = _post(_inner(infra.setup_direct_socket), **TestALateRefusalOnSetupPutsTheHostBack.FORM)
+        assert response.status_code == 302
+        assert len(wire["applies"]) == 2 and "removed the control socket" in wire["applies"][1][0]
+        texts = " ".join(t for _s, t in wire["flashes"])
+        assert "could not write its own settings" in texts and "Read-only file system" in texts
+        assert "was undone" in texts and "PARTIAL" not in texts
+
+    def test_setup_with_a_socket_that_was_already_there_removes_nothing(self, wire, monkeypatch):
+        def fail(*a, **k):
+            raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr(infra, "_write_direct_socket_config", fail)
+        wire["results"] = [ChangeSetResult("nothing", "nochange", [("success", "already has exactly this socket")])]
+        response = _post(_inner(infra.setup_direct_socket), **TestALateRefusalOnSetupPutsTheHostBack.FORM)
+        assert response.status_code == 302 and len(wire["applies"]) == 1
+        assert "could not write its own settings" in " ".join(t for _s, t in wire["flashes"])
+
+    def test_removal_puts_the_socket_back_and_redirects(self, wire, monkeypatch):
+        def fail(self_, fn, *a, **k):
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr(type(jconfig.app_config), "mutate", fail)
+        before = {"Dhcp4": {"control-sockets": [copy.deepcopy(UNIX), copy.deepcopy(SOCKET)]}}
+
+        def run_removal(service, mutate_fn, summary, **kw):
+            wire["applies"].append((summary, mutate_fn))
+            if len(wire["applies"]) == 1:
+                mutate_fn(copy.deepcopy(before))
+            return _ok()
+
+        monkeypatch.setattr("jen.services.kea_changeset.apply_change", run_removal)
+        response = _post(_inner(infra.remove_direct_socket))
+        assert response.status_code == 302 and len(wire["applies"]) == 2
+        assert "put the kea-dhcp4 control socket back" in wire["applies"][1][0]
+        texts = " ".join(t for _s, t in wire["flashes"])
+        assert "No space left on device" in texts and "was undone" in texts

@@ -29,13 +29,20 @@ SSH host, SSH user and config path, and a server added or removed - between two 
 file with the merged result before it writes: a changed endpoint while investigation logging may be on (on the OLD Kea, which the new settings would stop Jen reaching)
 needs `--change-endpoints`. It reads the INI only - no database, no running Jen - so the guard holds exactly when Jen's own is not running to refuse.
 
+v5.69.0-beta.13 (Q182, X6): the merge asks the same question Jen's own writer asks (`AppConfig._write_parser`, CRED-004): did a saved password follow an endpoint to a
+new host, or appear on a second one, without being typed? `credentials.move_refusal(resolve(live), resolve(merged), typed)` - the module is Jen's own, loaded from the tree this
+tool ships in (it needs nothing but the standard library), and `typed` is the endpoints whose password the wizard received non-empty and different from the snapshot's. A merge that
+would move a saved password is refused with the sentence, exit status 4, and nothing is written.
+
 Comments are not kept (Jen's own writer, `configparser`, does not keep them either). Exit status: 0 merged text on stdout; 2 usage; 3 a file
-could not be read as an INI.
+could not be read as an INI; 4 the merge would send a saved password to a host it was not typed for; 5 the credential rules could not be loaded (refused: fail closed).
 """
 
 import argparse
 import configparser
+import contextlib
 import io
+import os
 import sys
 
 
@@ -104,6 +111,61 @@ def identity_diff(before_text, after_text):
                 f"{key}: {old if old not in (None, '') else '(not set)'} -> {new if new not in (None, '') else '(not set)'}"
             )
     return lines
+
+
+@contextlib.contextmanager
+def _credential_rules():
+    """Jen's `credentials` module, imported from the tree this file ships in (v5.69.0-beta.13, Q182, X6). The module and the two it uses (`jen.services.auth`, `jen.extensions`) are
+    standard-library only, but their package `jen` imports Flask: when `jen` is not already loaded, two empty stand-in packages pointing at the directories let the three be imported
+    by name without running it - and are taken out again afterwards, so nothing else in the process sees them."""
+    import importlib
+    import types
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    stubs = []
+    for name, rel in (("jen", "jen"), ("jen.services", os.path.join("jen", "services"))):
+        if name not in sys.modules:
+            stub = types.ModuleType(name)
+            stub.__path__ = [os.path.join(root, rel)]
+            sys.modules[name] = stub
+            stubs.append(name)
+    try:
+        try:
+            yield importlib.import_module("jen.services.credentials")
+        except ImportError as e:
+            raise SystemExit(f"config_merge: could not load Jen's credential rules from {root} ({e})") from e
+    finally:
+        if (
+            "jen" in stubs
+        ):  # nothing of Jen was loaded before: take out the stand-ins and everything imported through them
+            for name in [n for n in sys.modules if n == "jen" or n.startswith("jen.")]:
+                sys.modules.pop(name, None)
+
+
+def credential_refusal(snapshot_text, live_text, wizard_text, merged_text):
+    """The sentence when applying `merged_text` over `live_text` would send a saved password to a host it was not typed for, else "" (v5.69.0-beta.13, Q182, X6). An endpoint is
+    TYPED when the wizard's file carries a non-empty value for its password that is not the snapshot's (the operator entered it); a value the wizard merely echoed from the snapshot
+    is the saved password and is judged."""
+    snap = _parse(snapshot_text, "the snapshot")
+    live = _parse(live_text, "the live file")
+    wizard = _parse(wizard_text, "the wizard's file")
+    merged = _parse(merged_text, "the merged file")
+    with _credential_rules() as cred:
+        before, after = cred.resolve(live), cred.resolve(merged)
+        typed = set()
+        for name in set(before) | set(after):
+            section, option = cred.password_key(name)
+            if not wizard.has_option(section, option):
+                continue
+            value = wizard.get(section, option, raw=True)
+            if value != "" and not (snap.has_option(section, option) and snap.get(section, option, raw=True) == value):
+                typed.add(name)
+
+        def mode(parser):
+            value = parser.get("kea", "connection_mode", fallback="ca", raw=True).strip().lower()
+            return value if value in ("ca", "direct") else "ca"
+
+        return cred.move_refusal(before, after, typed, mode_changed=mode(live) != mode(merged))
 
 
 def merge(snapshot_text, live_text, wizard_text):
@@ -214,6 +276,10 @@ def main(argv=None):
     wizard_text = sys.stdin.read()
     header = "".join(line + "\n" for line in wizard_text.splitlines()[:3] if line.startswith("#"))
     merged = merge(_read(args.snapshot), _read(args.live), wizard_text)
+    refusal = credential_refusal(_read(args.snapshot), _read(args.live), wizard_text, merged)
+    if refusal:
+        sys.stderr.write(f"config_merge: refused - {refusal}\n")
+        return 4
     sys.stdout.write(header + ("\n" if header else "") + merged)
     return 0
 

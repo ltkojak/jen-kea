@@ -257,11 +257,57 @@ class TestHttpFlowSuccess:
         r = _setup(logged_in_client, service="dhcp6", port="8006", user="u4", password="p4")
         on_disk = _on_disk(isolated_config)
         assert on_disk.get("kea6", "api_url") == "http://10.0.0.5:8006"
-        # Same pair as [kea] → no redundant [kea6] override.
-        assert not on_disk.has_option("kea6", "api_user")
+        # Q182 (X4): the fixture reaches the Control Agent at 1.2.3.4 and the new socket by 10.0.0.5 - two spellings of the host, which the resolver compares as written - so the
+        # pair that answered the probe is the endpoint's OWN (it used to be dropped as "the same pair as [kea]", leaving [kea6] without a credential)
+        assert (on_disk.get("kea6", "api_user"), on_disk.get("kea6", "api_pass")) == ("u4", "p4")
         assert on_disk.get("kea", "connection_mode", fallback="ca") == "ca"
         assert b"still in Control Agent mode" in r.data
         assert fake.payload_for("apply-config")["service"] == "dhcp6"
+
+    def test_dhcp6_on_the_same_host_spelled_the_same_way_writes_no_override(
+        self, logged_in_client, db, isolated_config, fake, http
+    ):
+        """The other half of X4: a socket on the Control Agent's own host (spelled the same) inherits the pair - no redundant [kea6] override."""
+        cfg = _on_disk(isolated_config)
+        cfg.set("kea", "api_url", "http://10.0.0.5:8000")
+        with open(isolated_config, "w") as f:
+            cfg.write(f)
+        app_config.reload()
+        http(
+            {"10.0.0.5:8000": _ok("3.0.4"), "10.0.0.5:8006": _ok("3.0.4")},
+            config_replies={"10.0.0.5:8006": [{"result": 0, "arguments": {"Dhcp6": {}}}]},
+        )
+        _setup(logged_in_client, service="dhcp6", port="8006", user="u4", password="p4")
+        on_disk = _on_disk(isolated_config)
+        assert on_disk.get("kea6", "api_url") == "http://10.0.0.5:8006"
+        assert not on_disk.has_option("kea6", "api_user") and not on_disk.has_option("kea6", "api_pass")
+
+    def test_dhcp6_set_up_by_ip_on_a_primary_named_by_hostname_is_read_with_the_probed_pair(
+        self, logged_in_client, db, isolated_config, fake, http
+    ):
+        """S2 (subagent): the route end to end. The primary is reached by name, the dhcp6 socket by IP: [kea6] holds the pair that answered, and the transport sends exactly it."""
+        cfg = _on_disk(isolated_config)
+        cfg.set("kea", "api_url", "http://kea-a.lan:8000")
+        with open(isolated_config, "w") as f:
+            cfg.write(f)
+        app_config.reload()
+        fk = http(
+            {"kea-a.lan:8000": _ok("3.0.4"), "10.0.0.5:8006": _ok("3.0.4")},
+            config_replies={"10.0.0.5:8006": [{"result": 0, "arguments": {"Dhcp6": {}}}]},
+        )
+        r = _setup(logged_in_client, service="dhcp6", port="8006", user="", password="")
+        # the form was left blank: the default for an address on a different spelling of the host is nothing (`_daemon_creds` is `resolve`'s answer), so the person is asked
+        # and nothing is sent to the Kea host or written
+        assert b"fill both in" in r.data and "apply-config" not in fake.ops()
+        assert not _on_disk(isolated_config).has_section("kea6")
+        fk.calls.clear()
+        _setup(logged_in_client, service="dhcp6", port="8006", user="u4", password="p4")
+        on_disk = _on_disk(isolated_config)
+        assert (on_disk.get("kea6", "api_user"), on_disk.get("kea6", "api_pass")) == ("u4", "p4")
+        fk.calls.clear()
+        reply = kea_svc.kea_command("version-get", "dhcp6", server=extensions.KEA_SERVERS[0])
+        assert reply.get("result") == 0
+        assert [(c["url"], c["auth"]) for c in fk.calls] == [("http://10.0.0.5:8006", ("u4", "p4"))]
 
     def test_dhcp6_with_its_own_credentials_writes_the_override(
         self, logged_in_client, db, isolated_config, fake, http
