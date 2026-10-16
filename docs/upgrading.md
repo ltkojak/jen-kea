@@ -184,3 +184,17 @@ One step (5.69.0-beta.13). It adds no migration and needs no action. What you ma
 **"Copy the primary's again" works on a copy only.** A server whose password is its own is told so; type a new one on its row to change it. A Kea6 database host written blank means no Kea6 database: Jen opens no connection to the machine it runs on, and Health names it.
 
 **`install.sh --configure` asks the question Settings asks.** An answer that would send a saved password to a new host is refused, with the sentence, before anything is written. Give that endpoint a new password in the wizard or its answers file, or move it under Settings → Kea.
+
+## Remove socket asks only what it can; a URL with a backslash is refused; shared copies are shown
+
+One step (5.69.0-beta.14). It adds no migration and there is nothing for you to do. What you may notice:
+
+**"Remove socket" no longer carries a password to a host it was not typed for.** The button has no password field, so it now types an endpoint only when that endpoint's saved password has already gone to the Kea box the button acts on. A Kea6 or D2 address that points at a different host, a primary that was moved to a different host after its socket was set up, or a daemon whose password has no address are refused before anything is sent to the Kea host, and the page says where to type the password (Settings → Kea) instead.
+
+**Switching the connection mode asks about a password that had no address.** A daemon with a saved password and no address, given the Control Agent's address by the switch, is being given its first one and asks for the password like any first address. A daemon that had an address on the Control Agent's host is not asked again.
+
+**A password value changes only when it is typed.** A write that copies a saved password into a different endpoint is refused. Every Settings form and the setup wizard already type what they save, so nothing you do changes.
+
+**Shared copies are shown on every card.** The IPv6 and D2 passwords of an additional server, and the Kea6, D2 and Kea6-database passwords, say "shared copy" when they are a marked copy of the Kea API's or the server's password, and typing a password again makes it its own.
+
+**A URL with a backslash or a control character is not an API address.** The Kea API, Kea6, D2 and additional-server address fields refuse it, because the two programs that read an address disagree about which host it names.
