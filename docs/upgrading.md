@@ -198,3 +198,15 @@ One step (5.69.0-beta.14). It adds no migration and there is nothing for you to 
 **Shared copies are shown on every card.** The IPv6 and D2 passwords of an additional server, and the Kea6, D2 and Kea6-database passwords, say "shared copy" when they are a marked copy of the Kea API's or the server's password, and typing a password again makes it its own.
 
 **A URL with a backslash or a control character is not an API address.** The Kea API, Kea6, D2 and additional-server address fields refuse it, because the two programs that read an address disagree about which host it names.
+
+## Switching back asks for the Control Agent's password; a dot is a different name
+
+One step (5.69.0-beta.15). It adds no migration and there is nothing for you to do. What you may notice:
+
+**"Switch back to the Control Agent" has a password field.** It shows the address the Control Agent will be reached at, a user field, a password field, a "No password" box and, when Jen saved the Control Agent's own user and password while setting the socket up, a box to restore them. Jen does not guess which password belongs at which address: type the Control Agent's, tick No password, or tick the restore box. Pressing the button with none of them is refused, before anything is sent to the Kea host, when the Control Agent is at a different address from the socket.
+
+**The Control Agent's own user and password are remembered at setup.** Setting up a kea-dhcp4 socket saves the primary's previous user and password beside its previous address; the switch-back can put them back. A socket set up by an earlier release has the address but no saved pair, so type the password the first time.
+
+**A daemon that loses a credential is named.** If switching back changes the spelling of the primary's address, a Kea6 or D2 socket that inherited the primary's user and password on the same host has none afterwards; the message names it and says to type its password under Settings → Kea.
+
+**A dot at the end of a host name is part of the name.** `kea-a.` and `kea-a` are two names for the purposes of deciding which saved password may go where. An address containing a no-break space, a zero-width character or any control character is refused, and so is a host name that is not plain ASCII letters, digits, dots, hyphens and underscores (internationalised names that survive unchanged are still accepted).
