@@ -50,6 +50,29 @@ def _the_investigation_guard_is_not_this_files_question(monkeypatch):
     monkeypatch.setattr(config, "_identity_guards", [])
 
 
+@pytest.fixture(autouse=True)
+def _a_scanner_may_hold_the_file_for_a_moment_on_windows(monkeypatch):
+    """On a Windows dev box an indexer can hold a freshly written file for a moment and `os.replace` then raises PermissionError (the rule is not in question). Retried; no effect elsewhere."""
+    import os
+    import sys
+    import time
+
+    if sys.platform != "win32":
+        return
+    real = os.replace
+
+    def replace(src, dst, *a, **k):
+        for attempt in range(6):
+            try:
+                return real(src, dst, *a, **k)
+            except PermissionError:
+                if attempt == 5:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+
+    monkeypatch.setattr(os, "replace", replace)
+
+
 NL = chr(10)
 DIRECT = BASE.replace("[kea]" + NL, "[kea]" + NL + "connection_mode = direct" + NL, 1)
 
@@ -341,17 +364,35 @@ ROWS = {
         refused=True,
     ),
     "a_dhcp4_switch_back_by_name_with_the_derived_daemons_typed_by_the_route": Row(
-        "beta.13 second pass (Q182) P2-1: ... the route names the daemons the switch-back re-points (its own act), so it is written and nothing was changed on the Kea host first",
+        "beta.13 second pass (Q182) P2-1, narrowed by beta.14 (Q183): ... the route types a daemon whose password ALREADY went to this box (kea6 had an own address on it), so it is written and nothing was changed on the Kea host first",
         DIRECT.replace("https://a:8000", "http://10.0.0.5:8001")
         + "direct_prev_api_url = http://kea-a.lan:8000"
         + NL
         + "[kea6]"
         + NL
+        + "api_url = http://10.0.0.5:8006"
+        + NL
         + "api_pass = K6"
         + NL,
-        _all(_set("kea", "connection_mode", "ca"), _set("kea", "api_url", "http://kea-a.lan:8000")),
+        _all(
+            _set("kea", "connection_mode", "ca"),
+            _set("kea", "api_url", "http://kea-a.lan:8000"),
+            _drop("kea6", "api_url"),
+        ),
         typed={"kea", "kea6"},
         expect={"kea6": ("K6", "own", "")},
+    ),
+    "a_switch_back_to_a_stale_previous_address_after_the_primary_was_retargeted": Row(
+        "beta.13 second pass (Q183) finding 1 (F2): the primary was retargeted to host z with its password typed there, direct_prev_api_url still names a - the route must not type a password for a",
+        DIRECT.replace("https://a:8000", "http://z:8004") + "direct_prev_api_url = https://a:8000" + NL,
+        _all(_set("kea", "connection_mode", "ca"), _set("kea", "api_url", "https://a:8000")),
+        refused=True,
+    ),
+    "a_removed_socket_that_pointed_at_another_host_in_ca_mode": Row(
+        "beta.13 second pass (Q183) finding 2 (F3): Remove socket clears a Kea6 address that was on host b; the derived address is the Control Agent's, and the password was never typed for it",
+        BASE + "[kea6]" + NL + "api_url = https://b:8006" + NL + "api_user = x" + NL + "api_pass = K6" + NL,
+        _drop("kea6", "api_url"),
+        refused=True,
     ),
     # ── a direct-socket removal and the next write (S4b), and two refusals nothing pinned (S7, S7b) ────────────────────────────────────────────────────────────────────
     "a_removed_direct_socket_leaves_user_and_password_and_the_next_address_is_a_move": Row(

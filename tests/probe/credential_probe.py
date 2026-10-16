@@ -89,10 +89,23 @@ class Lab:
             return f.read()
 
     def mutate(self, fn, typed=()):
-        return outcome(lambda: app_config.mutate(fn, reload=False, typed=set(typed)))
+        return outcome(lambda: _retry(lambda: app_config.mutate(fn, reload=False, typed=set(typed))))
 
     def values(self, items, typed=()):
-        return outcome(lambda: app_config.write_values(items, reload=False, typed=set(typed)))
+        return outcome(lambda: _retry(lambda: app_config.write_values(items, reload=False, typed=set(typed))))
+
+
+def _retry(call):
+    """A scanner or indexer on a Windows dev box can hold a freshly written file for a moment: `os.replace` then raises PermissionError. Retried a few times (the rule is not in question)."""
+    import time
+
+    for attempt in range(6):
+        try:
+            return call()
+        except PermissionError:
+            if attempt == 5:
+                raise
+            time.sleep(0.05 * (attempt + 1))
 
 
 def outcome(call) -> str:
@@ -527,6 +540,65 @@ def q183_y6_enable_v6_answers_a_failed_write_with_text():
     return text.startswith("Jen could not write its own settings (OSError")
 
 
+def _removal(text, ssh_host, current_url, service, apply_fn):
+    """The route's typing and the writer's preflight, through the real functions: (typed endpoints, the preflight's outcome)."""
+    from jen.routes.settings import infrastructure as infra
+
+    server = {"id": 1, "name": "kea-a", "ssh_host": ssh_host, "api_url": current_url}
+    with Lab(text) as lab, mock.patch("socket.getaddrinfo", side_effect=OSError("no resolver")):
+        typed = infra._typed_for_removal(server, service, app_config._read_parser(), apply_fn)
+        result = outcome(lambda: app_config.preflight_identity_change(apply_fn, typed=typed))
+        untouched = lab.bytes() == text.encode()
+    return (sorted(typed), result, untouched)
+
+
+def _switch_back(prev):
+    def fn(p):
+        p.set("kea", "api_url", prev)
+        p.set("kea", "connection_mode", "ca")
+        if p.has_option("kea", "direct_prev_api_url"):
+            p.remove_option("kea", "direct_prev_api_url")
+
+    return fn
+
+
+def q183_p2_f1_a_password_typed_for_another_host_does_not_ride_the_switch_back():
+    text = (
+        DIRECT.replace("https://a:8000", "http://10.0.0.5:8004")
+        + "direct_prev_api_url = https://a:8000\n[kea6]\napi_pass = K6\n"
+    )
+    return _removal(text, "10.0.0.5", "http://10.0.0.5:8004", "dhcp4", _switch_back("https://a:8000"))
+
+
+def q183_p2_f1_a_daemon_that_had_an_address_on_this_box_does_ride_it():
+    text = (
+        DIRECT.replace("https://a:8000", "http://10.0.0.5:8004")
+        + "direct_prev_api_url = http://kea-a.lan:8000\n[kea6]\napi_url = http://10.0.0.5:8006\napi_pass = K6\n"
+    )
+
+    def fn(p):
+        _switch_back("http://kea-a.lan:8000")(p)
+        p.remove_option("kea6", "api_url")
+
+    return _removal(text, "10.0.0.5", "http://10.0.0.5:8004", "dhcp4", fn)
+
+
+def q183_p2_f2_a_stale_previous_address_after_a_retarget_is_not_typed():
+    text = DIRECT.replace("https://a:8000", "http://z:8004") + "direct_prev_api_url = https://a:8000\n"
+    return _removal(text, "10.0.0.5", "http://z:8004", "dhcp4", _switch_back("https://a:8000"))
+
+
+def q183_p2_f3_removing_a_dhcp6_socket_that_pointed_at_another_host_is_not_typed():
+    text = BASE + "[kea6]\napi_url = https://b:8006\napi_user = x\napi_pass = K6\n"
+    return _removal(text, "10.0.0.5", "https://a:8000", "dhcp6", lambda p: p.remove_option("kea6", "api_url"))
+
+
+def q183_p2_f6_a_backslash_url_is_not_the_primarys_host():
+    text = BASE + "[kea6]\napi_url = http://127.0.0.1:9\\@a:8000/\n"
+    e = cred.resolve(parse(text))["kea6"]
+    return (e.password, e.withheld, "withheld" if e.withheld else "inherited")
+
+
 SCENARIOS = {
     name: fn for name, fn in sorted(globals().items()) if name.startswith(("b12_", "b13_", "q183_")) and callable(fn)
 }
@@ -590,6 +662,15 @@ EXPECTED = {
     ),
     "q183_y3_a_marker_is_read_and_cleared": (["server_2_v6"], []),
     "q183_y6_enable_v6_answers_a_failed_write_with_text": True,
+    "q183_p2_f1_a_password_typed_for_another_host_does_not_ride_the_switch_back": (
+        ["kea"],
+        "refused: first address",
+        True,
+    ),
+    "q183_p2_f1_a_daemon_that_had_an_address_on_this_box_does_ride_it": (["kea", "kea6"], "written", True),
+    "q183_p2_f2_a_stale_previous_address_after_a_retarget_is_not_typed": ([], "refused: moved", True),
+    "q183_p2_f3_removing_a_dhcp6_socket_that_pointed_at_another_host_is_not_typed": ([], "refused: moved", True),
+    "q183_p2_f6_a_backslash_url_is_not_the_primarys_host": ("", "kea", "withheld"),
 }
 
 #: the executed scenarios that need a Flask request or a database, and where each is pinned instead

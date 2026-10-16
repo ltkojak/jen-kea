@@ -38,6 +38,30 @@ password = JP
 [server]
 """
 
+
+@pytest.fixture(autouse=True)
+def _a_scanner_may_hold_the_file_for_a_moment_on_windows(monkeypatch):
+    """On a Windows dev box an indexer can hold a freshly written file for a moment and `os.replace` then raises PermissionError (the rule is not in question). Retried; no effect elsewhere."""
+    import os
+    import sys
+    import time
+
+    if sys.platform != "win32":
+        return
+    real = os.replace
+
+    def replace(src, dst, *a, **k):
+        for attempt in range(6):
+            try:
+                return real(src, dst, *a, **k)
+            except PermissionError:
+                if attempt == 5:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+
+    monkeypatch.setattr(os, "replace", replace)
+
+
 PRIMARY = {"id": 1, "name": "kea-a", "api_url": "http://kea-a.lan:8004", "api_user": "u", "api_pass": "S"}
 
 
@@ -195,3 +219,98 @@ class TestSwitchingBackByNameIsAskedBeforeTheKeaHostIsTouched:
             if n in derived and not derived[n].url_own and cred.RIDES_THE_CONTROL_AGENT.fullmatch(n)
         }
         assert names == {"kea6"}
+
+
+class TestARemoveSocketRouteTypesOnlyWhatAlreadyWentToThisBox:
+    """Second pass (Q183) findings 1 and 2: beta.13's "Remove socket" routes typed the endpoints they repoint or re-derive, so a password typed for a DIFFERENT host (a Kea6 url on `b`, a
+    primary retargeted to `z`) went to the Control Agent's host. `_typed_for_removal` types an endpoint only when the address it is leaving was on THIS box (the server's SSH host)."""
+
+    SERVER = {"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5", "api_url": "http://10.0.0.5:8004"}
+
+    @pytest.fixture(autouse=True)
+    def _no_dns(self, monkeypatch):
+        def fail(*a, **k):
+            raise OSError("no resolver in a pure test")
+
+        monkeypatch.setattr("socket.getaddrinfo", fail)
+
+    @staticmethod
+    def _switch_back(prev="http://kea-a.lan:8000"):
+        def fn(cfg):
+            cfg.set("kea", "api_url", prev)
+            cfg.set("kea", "connection_mode", "ca")
+            if cfg.has_option("kea", "direct_prev_api_url"):
+                cfg.remove_option("kea", "direct_prev_api_url")
+
+        return fn
+
+    def _typed(self, text, server, service, apply_fn, _a_real_file):
+        _a_real_file.write_text(text, encoding="utf-8")
+        return infra._typed_for_removal(server, service, app_config._read_parser(), apply_fn)
+
+    def test_the_primary_on_the_box_and_a_daemon_that_had_an_address_there_are_typed(self, _a_real_file):
+        text = (
+            SWITCHED.replace("[kea6]\napi_pass = K6\n", "") + "[kea6]\napi_url = http://10.0.0.5:8006\napi_pass = K6\n"
+        )
+
+        def apply(cfg):
+            self._switch_back()(cfg)
+            cfg.remove_option("kea6", "api_url")
+
+        assert self._typed(text, self.SERVER, "dhcp4", apply, _a_real_file) == {"kea", "kea6"}
+
+    def test_f1_a_daemon_whose_password_has_no_address_is_not_typed(self, _a_real_file):
+        """K6 typed for host b, its address removed, then the switch-back: nothing says where K6 belongs, so the route does not claim it was typed."""
+        text = SWITCHED  # [kea6] api_pass = K6, no address
+        typed = self._typed(text, self.SERVER, "dhcp4", self._switch_back(), _a_real_file)
+        assert typed == {"kea"}
+        with pytest.raises(ConfigChangeRefused, match="first address"):
+            app_config.preflight_identity_change(self._switch_back(), typed=typed)
+
+    def test_f1_a_daemon_whose_address_was_on_another_host_is_not_typed(self, _a_real_file):
+        text = SWITCHED.replace("[kea6]\napi_pass = K6\n", "[kea6]\napi_url = https://b:8006\napi_pass = K6\n")
+
+        def apply(cfg):
+            self._switch_back()(cfg)
+            cfg.remove_option("kea6", "api_url")
+
+        assert self._typed(text, self.SERVER, "dhcp4", apply, _a_real_file) == {"kea"}
+
+    def test_f2_a_stale_previous_address_after_the_primary_was_retargeted_is_not_typed(self, _a_real_file):
+        server = dict(self.SERVER, api_url="http://z:8004")
+        text = SWITCHED.replace("http://10.0.0.5:8001", "http://z:8004").replace("[kea6]\napi_pass = K6\n", "")
+        typed = self._typed(text, server, "dhcp4", self._switch_back("https://a:8000"), _a_real_file)
+        assert typed == set()
+        with pytest.raises(ConfigChangeRefused, match="moved to a different host"):
+            app_config.preflight_identity_change(self._switch_back("https://a:8000"), typed=typed)
+
+    def test_f3_removing_a_dhcp6_socket_whose_address_was_on_another_host_is_not_typed(self, _a_real_file):
+        text = HOSTNAME.replace("connection_mode = direct\n", "") + "[kea6]\napi_url = https://b:8006\napi_pass = K6\n"
+
+        def apply(cfg):
+            cfg.remove_option("kea6", "api_url")
+
+        typed = self._typed(text, self.SERVER, "dhcp6", apply, _a_real_file)
+        assert typed == set()
+        with pytest.raises(ConfigChangeRefused, match="moved to a different host"):
+            app_config.preflight_identity_change(apply, typed=typed)
+
+    def test_removing_a_dhcp6_socket_that_was_on_the_box_is_typed(self, _a_real_file):
+        text = HOSTNAME + "[kea6]\napi_url = http://10.0.0.5:8006\napi_pass = K6\n"
+
+        def apply(cfg):
+            cfg.remove_option("kea6", "api_url")
+
+        assert self._typed(text, self.SERVER, "dhcp6", apply, _a_real_file) == {"kea6"}
+
+    def test_a_name_that_resolves_to_the_ssh_hosts_address_is_the_same_box(self, monkeypatch):
+        monkeypatch.setattr(
+            "socket.getaddrinfo",
+            lambda host, port, *a, **k: [(2, 1, 6, "", ("10.0.0.5", 0))] if host in ("kea-a.lan", "10.0.0.5") else [],
+        )
+        assert infra._same_box("http://kea-a.lan:8000", "10.0.0.5") is True
+        assert infra._same_box("http://other.lan:8000", "10.0.0.5") is False
+
+    def test_a_name_that_does_not_resolve_is_not_evidence(self):
+        assert infra._same_box("http://nowhere.invalid:8000", "10.0.0.5") is False
+        assert infra._same_box("", "10.0.0.5") is False and infra._same_box("http://a:1", "") is False

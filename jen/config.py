@@ -848,6 +848,7 @@ class AppConfig:
         # v5.69.0-beta.11 (Q180, CRED-004): every password on a server dict is what `credentials.resolve` says that endpoint WILL send - its own, or its host's neighbour's -
         # and `*_withheld` names the endpoint whose password was refused it (kea._endpoint_for answers with a sentence and sends nothing)
         resolved = _credentials.resolve(cfg)
+        shared = _credentials.shared_copies(cfg)  # the same fact the Settings page reads (Q183, Y3)
         servers = [
             {
                 "id": 1,
@@ -922,7 +923,7 @@ class AppConfig:
                     "api_user": resolved[f"server_{n}"].user,
                     "api_pass": resolved[f"server_{n}"].password,
                     "api_withheld": resolved[f"server_{n}"].withheld,
-                    "api_pass_shared": cfg.get(sec, "api_pass_shared", fallback="") == "1",
+                    "api_pass_shared": f"server_{n}" in shared,
                     "ssh_host": cfg.get(sec, "ssh_host", fallback=""),
                     "ssh_user": cfg.get(sec, "ssh_user", fallback=""),
                     "ssh_key": cfg.get(sec, "ssh_key", fallback=os.path.join(extensions.CONFIG_DIR, "ssh", "jen_rsa")),

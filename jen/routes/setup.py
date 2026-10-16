@@ -395,7 +395,7 @@ def setup_found():
             inherit_credentials=inherit_creds,
         )
         if error:
-            flash(f"IPv6 was not enabled: {error}.", "error")
+            flash(f"IPv6 was not enabled: {error.rstrip('.')}.", "error")
             return render_template(
                 "setup_found.html",
                 progress=_progress(),

@@ -7,6 +7,7 @@ the path or the query. A blank on either side is a different place. Pure: `pytes
 
 import pytest
 
+from jen.services import auth
 from jen.services.auth import same_endpoint
 
 
@@ -83,3 +84,42 @@ class TestSameHost:
         from jen.services.auth import same_host
 
         assert same_host(a, b) is expect
+
+
+class TestAUrlTheTwoParsersReadDifferentlyNamesNoPlace:
+    """Second pass (Q183) finding 6: `urlsplit` reads `http://127.0.0.1:9\\@a:8000/` as host `a`, `requests` (urllib3) as `127.0.0.1`, so the primary's credential was inherited by (and sent to) a
+    host that `same_host` called the primary's. A place the two disagree about is no place."""
+
+    BAD = [
+        "http://127.0.0.1:9\\@a:8000/",
+        "http://a:8000\\.evil.example/",
+        "http://a:8000/ x",
+        "http://a:8000/\nx",
+        "http://a:8000/\tx",
+        "http://a\x00:8000/",
+    ]
+
+    @pytest.mark.parametrize("url", BAD)
+    def test_it_is_not_a_place_and_not_the_same_host_as_anything(self, url):
+        assert auth._endpoint_parts(url) is None
+        assert auth.same_host("https://a:8000", url) is False and auth.same_host(url, url) is False
+
+    @pytest.mark.parametrize("url", BAD)
+    def test_it_is_not_a_valid_api_url(self, url):
+        assert auth.valid_api_url(url) is False and auth.valid_api_url(url, require_port=True) is False
+
+    def test_an_ordinary_url_is_unchanged(self):
+        assert auth.same_host("https://a:8000", "http://a:8006/x?y=1") is True
+        assert auth.valid_api_url("http://kea-a.lan:8000") is True
+
+    def test_the_resolver_withholds_the_primarys_password_from_it(self):
+        import configparser
+
+        from jen.services import credentials as cred
+
+        p = configparser.ConfigParser(interpolation=None)
+        p.read_string(
+            "[kea]\napi_url = https://a:8000\napi_pass = PS\n[kea6]\napi_url = http://127.0.0.1:9\\@a:8000/\n"
+        )
+        e = cred.resolve(p)["kea6"]
+        assert (e.password, e.withheld) == ("", "kea")

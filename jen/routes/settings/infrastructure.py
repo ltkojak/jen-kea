@@ -9,6 +9,7 @@ import ipaddress
 import logging
 import os
 import re
+import socket
 import subprocess
 import time
 from copy import deepcopy as _deepcopy
@@ -1309,6 +1310,60 @@ def _direct_socket_edit(server: dict, service: str, url: str, user: str, passwor
     return _apply, changed
 
 
+def _same_box(url: str, ssh_host: str) -> bool:
+    """Is the address `url` on the box Jen reaches over SSH at `ssh_host` (second pass, Q183, P2-1/P2-2)? The same host as written, or the two names resolve to a common address
+    (`kea-a.lan` and `10.0.0.5`). A name that does not resolve is not evidence."""
+    if not url or not (ssh_host or "").strip():
+        return False
+    if __auth.same_host(url, ssh_host):
+        return True
+    try:
+        theirs = {info[4][0] for info in socket.getaddrinfo(__credentials.host_of(url), None)}
+        ours = {info[4][0] for info in socket.getaddrinfo(ssh_host.strip(), None)}
+    except (OSError, UnicodeError):
+        return False
+    return bool(theirs & ours)
+
+
+def _typed_for_removal(server: dict, service: str, before_parser, apply_fn) -> set[str]:
+    """The endpoints a "Remove socket" route may type, which is the endpoints whose saved password has ALREADY been sent to THIS Kea box (second pass, Q183, findings 1 and 2).
+    Typing is the route's claim that the superadmin supplied the password for the address the endpoint ends up with; the button has no password field, so the claim holds only
+    where the password demonstrably belongs to the box the route is acting on:
+
+      * the endpoint the route repoints - when the address it is leaving was on the box (dhcp6 / D2: the url key being cleared; dhcp4: the current API url, the socket the route set up);
+      * for dhcp4, the daemons whose address the switch-back RE-DERIVES - when they had an address of their own on the box.
+
+    A password typed for a DIFFERENT host (a Kea6 url on `b`, a primary retargeted to `z`) and a password with no address at all are not typed: the writer judges the move, and the
+    flip, or the removal of the address, is refused before the Kea host is touched. (Beta.13 typed all of them, so the button carried a secret to a host it was never typed for.)"""
+    ssh = server.get("ssh_host", "")
+    before = __credentials.resolve(before_parser)
+    name = _endpoint_name(server, service)
+    typed: set[str] = set()
+    if service == "dhcp4":
+        if _same_box(server.get("api_url", ""), ssh):
+            typed.add(name)
+        preview = __config.app_config._read_parser()
+        apply_fn(preview)
+        after = __credentials.resolve(preview)
+        for n in _endpoints_of_server(server):
+            was = before.get(n)
+            if (
+                n != name
+                and n in after
+                and not after[n].url_own
+                and __credentials.RIDES_THE_CONTROL_AGENT.fullmatch(n)
+                and was is not None
+                and was.url
+                and _same_box(was.url, ssh)
+            ):
+                typed.add(n)
+    else:
+        was = before.get(name)
+        if was is not None and was.url and _same_box(was.url, ssh):
+            typed.add(name)
+    return typed
+
+
 def _endpoints_of_server(server: dict) -> set[str]:
     """Every `credentials.resolve` endpoint name of one Kea server. The direct-socket routes point a server at the socket that has JUST ANSWERED with its saved credentials (it
     is the same Kea, reached by the address its own SSH host gave): that is the superadmin's explicit act, so the password the writer would otherwise refuse to follow an
@@ -1896,22 +1951,17 @@ def remove_direct_socket(server_id, service):
 
     # v5.68.0-beta.28 (Q164): Jen's own side of this (the dhcp4 URL put back, the global mode returned to `ca`) is an identity change, and the route's first act is
     # on the Kea host - so the config writer's question is asked of a COPY before the first remote write.
-    # Second pass (Q182, P2-1): the daemons whose address the switch-back RE-DERIVES (kea6 and d2 follow the Control Agent's address once the mode is `ca`, a server's IPv6 and D2 follow
-    # the server's) are re-pointed by this route's own act, so they are typed with the endpoint - found out BEFORE the Kea host is touched, on a copy
-    typed_names = {_endpoint_name(server, service)}
-    if service == "dhcp4":
-        preview = __config.app_config._read_parser()
-        _apply(preview)
-        derived = __credentials.resolve(preview)
-        typed_names |= {
-            n
-            for n in _endpoints_of_server(server)
-            if n in derived and not derived[n].url_own and __credentials.RIDES_THE_CONTROL_AGENT.fullmatch(n)
-        }
+    # Second pass (Q182, P2-1; Q183, findings 1 and 2): what this route may type is what has ALREADY gone to this box (`_typed_for_removal`), asked BEFORE the Kea host is touched, on a copy
+    typed_names = _typed_for_removal(server, service, __config.app_config._read_parser(), _apply)
     try:
         __config.app_config.preflight_identity_change(_apply, typed=typed_names)
     except __config.ConfigChangeRefused as refused:
         flash(refused.sentence, "error")
+        if "type the password" in refused.sentence:
+            flash(
+                "The Remove button has no password field. Set that endpoint's address and type its password under Settings → Kea first (or clear its saved password), then remove the socket.",
+                "info",
+            )
         flash(f"Nothing was changed on {name}.", "info")
         return back
     changed.clear()  # the preflight ran the callback on a copy; the real run below fills the list the flash reads

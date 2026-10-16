@@ -237,6 +237,10 @@ def _endpoint_parts(u):
     u = (u or "").strip()
     if not u:
         return None
+    if "\\" in u or any(ord(c) <= 32 or ord(c) == 127 for c in u):
+        # (second pass, Q183, finding 6: `urlsplit` reads `http://127.0.0.1:9\@a:8000/` as host `a`, `requests` (urllib3) as `127.0.0.1` - a place the two disagree about is no place, so a
+        # secret is never inherited by, or compared equal with, it)
+        return None
     if "://" not in u:
         if u.count(":") > 1 and not u.startswith("["):
             u = f"[{u}]"
@@ -278,6 +282,8 @@ def valid_api_url(url: str, require_port: bool = False) -> bool:
     value = (url or "").strip()
     if not value:
         return False
+    if "\\" in value or any(ord(c) <= 32 or ord(c) == 127 for c in value):
+        return False  # a backslash or a control/space character: not a URL Jen and `requests` read the same way (finding 6)
     try:
         p = urlparse(value)
         port = p.port
