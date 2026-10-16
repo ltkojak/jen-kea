@@ -303,7 +303,8 @@ class TestD2Config:
                 ("d2", "api_url", "http://d2:53001"),
                 ("d2", "api_user", "d2user"),
                 ("d2", "api_pass", "d2pass"),
-            ]
+            ],
+            typed={"d2"},
         )
         assert extensions.D2_API_URL == "http://d2:53001"
         assert extensions.D2_API_USER == "d2user"

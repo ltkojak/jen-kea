@@ -186,7 +186,8 @@ class TestTheConfigWriterRefusesAnIdentityChange:
                 ("kea_ssh", "key_path", "/k"),
                 ("kea_server_2", "name", "Also renamed"),
                 ("server", "http_port", "5051"),
-            ]
+            ],
+            typed={"kea"},
         )
         assert _audits(cfgfile, "INVESTIGATION_LOGGING_IDENTITY_CHANGE_REFUSED") == []
 
@@ -213,6 +214,7 @@ class TestTheConfigWriterRefusesAnIdentityChange:
         app_config.write_values(
             [("kea", "api_url", "http://10.0.0.1:8000"), ("kea", "api_user", "u"), ("kea", "api_pass", "p")],
             reload=False,
+            typed={"kea"},
         )
         assert _disk(cfgfile.path).get("kea", "api_url") == "http://10.0.0.1:8000"
 

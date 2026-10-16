@@ -478,7 +478,7 @@ class TestEnableV6:
         import configparser
 
         from jen import extensions
-        from jen.config import ConfigChangeRefused, app_config
+        from jen.config import app_config
         from jen.services import access  # noqa: F401  (registers RBAC-004's guard)
 
         ini = configparser.ConfigParser(interpolation=None)
@@ -507,10 +507,11 @@ class TestEnableV6:
         before = path.read_bytes()
         with flask_app.test_request_context("/"):
             login_user(_Admin())
-            with pytest.raises(ConfigChangeRefused):
-                setup_wizard.enable_v6(
-                    "http://kea:8006", {2: {"name": "Subnet2", "cidr": "2001:db8:2::/64", "paired_subnet4_id": None}}
-                )
+            # (Q183, Y6: `enable_v6` answers a refusal of the write with TEXT - it promises "a refusal of the write itself leaves both sections as they were" - instead of raising)
+            error = setup_wizard.enable_v6(
+                "http://kea:8006", {2: {"name": "Subnet2", "cidr": "2001:db8:2::/64", "paired_subnet4_id": None}}
+            )
+            assert error and isinstance(error, str)
         assert path.read_bytes() == before
 
 

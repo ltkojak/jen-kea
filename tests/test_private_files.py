@@ -192,9 +192,14 @@ class TestEveryPrivateWriteIsPrivateAtEveryInstant:
         parser = configparser.ConfigParser(interpolation=None)
         parser.add_section("jen_db")
         w = _Watcher(str(tmp_path))
-        w.watch(
-            lambda i: (parser.set("jen_db", "password", f"s3cret-{i}"), AppConfig()._write_parser(parser)), self.ROUNDS
-        )
+        from jen import config as jconfig
+
+        def one_write(i):
+            parser.set("jen_db", "password", f"s3cret-{i}")
+            with jconfig._typed_scope({"jen_db"}):  # (Q183, Y2: a password VALUE changes only when typed)
+                AppConfig()._write_parser(parser)
+
+        w.watch(one_write, self.ROUNDS)
         self._check(request, "jen.config", w, 0o600)
         assert stat.S_IMODE((tmp_path / "jen.config").stat().st_mode) == 0o600
 

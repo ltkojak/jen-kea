@@ -91,7 +91,11 @@ class TestTheKea6Form:
                 ("kea6", "api_pass", "S6"),
                 ("kea6_db", "host", "db6-a"),
                 ("kea6_db", "password", "D6"),
-            ]
+            ],
+            typed={
+                "kea6",
+                "kea6_db",
+            },  # (Q183, Y2: a password VALUE changes only when typed - this fixture is the superadmin who typed them)
         )
 
     def test_a_new_api_endpoint_with_a_blank_password_is_refused(self, logged_in_client, db, mock_kea, isolated_config):
@@ -497,7 +501,8 @@ class TestOneAnswerForASecret:
                 ("kea6", "api_pass", "S6"),
                 ("d2", "api_url", "https://kea-a:53001"),
                 ("d2", "api_pass", "SD"),
-            ]
+            ],
+            typed={"kea6", "d2"},
         )
 
     SENTENCE6 = b"Choose one for the Kea6 API password: inherit the Kea API"

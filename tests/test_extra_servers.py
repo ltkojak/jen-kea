@@ -116,7 +116,8 @@ class TestExtraServerV6EndToEnd:
                 p.set("kea_server_2", "api6_url", "http://s2:8006"),
                 p.set("kea_server_2", "api6_user", "s2u6"),
                 p.set("kea_server_2", "api6_pass", "s2secret"),
-            )
+            ),
+            typed={"server_2_v6"},
         )
         body = logged_in_client.get("/settings/kea").data
         assert b'name="extra_api6_url[]" value="http://s2:8006"' in body
@@ -156,7 +157,8 @@ class TestExtraServerV6EndToEnd:
                 p.set("kea_server_2", "api_url", "http://s2:8000"),
                 p.set("kea_server_2", "api6_url", "http://s2:8006"),
                 p.set("kea_server_2", "api6_pass", "keepme"),
-            )
+            ),
+            typed={"server_2_v6"},
         )
         logged_in_client.post(
             "/settings/infrastructure/save-extra-servers",
