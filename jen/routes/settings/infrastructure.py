@@ -278,7 +278,9 @@ def settings_kea():
         if extensions.cfg.has_section(_sec):
             if extensions.cfg.get(_sec, "direct_prev_api_url", fallback=""):
                 _prev_urls[_sid] = extensions.cfg.get(_sec, "direct_prev_api_url")
-            if extensions.cfg.get(_sec, "direct_prev_api_pass", fallback=""):
+            if extensions.cfg.has_option(_sec, "direct_prev_api_pass") or extensions.cfg.has_option(
+                _sec, "direct_prev_api_user"
+            ):
                 _prev_pairs.add(_sid)
     infra = {
         "prev_urls": _prev_urls,
@@ -1270,10 +1272,12 @@ def _direct_socket_edit(server: dict, service: str, url: str, user: str, passwor
             # Agent: remember where it was, for "Switch back" - and the pair
             # the Control Agent was reached with (Z2, Q184).
             cfg.set(sec, _PREV_URL_KEY, old_url)
-            if cfg.get(sec, user_key, fallback=""):
+            if cfg.has_option(sec, user_key):
                 cfg.set(sec, _PREV_USER_KEY, cfg.get(sec, user_key))
-            if cfg.get(sec, pass_key, fallback=""):
-                cfg.set(sec, _PREV_PASS_KEY, cfg.get(sec, pass_key))
+            if cfg.has_option(sec, pass_key):
+                cfg.set(
+                    sec, _PREV_PASS_KEY, cfg.get(sec, pass_key)
+                )  # a blank is kept: "the Control Agent had no password" is something to restore
         cfg.set(sec, url_key, url)
         changed.append(f"[{sec}] {url_key}")
         # Per-daemon credentials: only written when they differ from the
@@ -1879,6 +1883,7 @@ def remove_direct_socket(server_id, service):
     # typed only when the person typed a password, ticked "No password", or ticked "restore the saved one" - their act, in this request. The daemons the switch-back re-derives are
     # never typed here: the writer refuses one whose saved password would reach a new place, and the page says to type it under Settings -> Kea first.
     password = request.form.get("password", "").strip()
+    user_typed = request.form.get("user", "").strip()
     no_password = request.form.get("no_password", "") == "1"
     restore_saved = request.form.get("restore_saved", "") == "1"
     if sum(bool(x) for x in (password, no_password, restore_saved)) > 1:
@@ -1886,9 +1891,16 @@ def remove_direct_socket(server_id, service):
         return back
     _sec, _url_key, _user_key, _pass_key = _socket_keys(server, service)
     _live = __config.app_config._read_parser()
-    has_saved_pair = service == "dhcp4" and bool(
-        _live.has_section(_sec) and _live.get(_sec, _PREV_PASS_KEY, fallback="")
+    # (second pass, Q184, finding 1: the saved pair is valid WITH its address - a pair left without one by an older release is not offered and not restored)
+    has_saved_pair = (
+        service == "dhcp4"
+        and _live.has_section(_sec)
+        and bool(_live.get(_sec, _PREV_URL_KEY, fallback=""))
+        and (_live.has_option(_sec, _PREV_USER_KEY) or _live.has_option(_sec, _PREV_PASS_KEY))
     )
+    if restore_saved and not has_saved_pair:
+        flash("There is no saved Control Agent user and password to restore - type the password instead.", "error")
+        return back
     sid = server.get("id")
     changed: list[str] = []
     # Computed once, outside the mutate: does any OTHER server still
@@ -1915,19 +1927,21 @@ def remove_direct_socket(server_id, service):
             else:
                 changed.append(f"[{sec}] {url_key} left as-is (no Control Agent URL on record — set it above)")
             if cfg.has_section(sec):
-                saved_user, saved_pass = (
-                    cfg.get(sec, _PREV_USER_KEY, fallback=""),
-                    cfg.get(sec, _PREV_PASS_KEY, fallback=""),
-                )
-                if restore_saved and saved_pass:
-                    # Z2: the Control Agent's own pair, put back by the person's tick - the socket's pair was the SOCKET's
-                    if saved_user:
-                        cfg.set(sec, "api_user", saved_user)
-                    cfg.set(sec, "api_pass", saved_pass)
+                if prev and restore_saved:
+                    # Z2: the Control Agent's own pair, put back by the person's tick - the socket's pair was the SOCKET's. A blank is restored too (the Control Agent had none)
+                    if cfg.has_option(sec, _PREV_USER_KEY):
+                        cfg.set(sec, "api_user", cfg.get(sec, _PREV_USER_KEY))
+                    # the password is ALWAYS set: a saved user with no saved password is a Control Agent with none - the socket's password must not stay behind and go to the Control Agent's address
+                    cfg.set(sec, "api_pass", cfg.get(sec, _PREV_PASS_KEY, fallback=""))
                     changed.append(f"[{sec}] the Control Agent's saved user and password restored")
                 for stale in (_PREV_USER_KEY, _PREV_PASS_KEY):
                     if cfg.has_option(sec, stale):
-                        cfg.remove_option(sec, stale)  # restored or superseded: the saved pair is not kept
+                        cfg.remove_option(
+                            sec, stale
+                        )  # restored, superseded, or orphaned (no address to go with it): the saved pair is not kept
+            if user_typed:
+                cfg.set(sec, "api_user", user_typed)
+                changed.append(f"[{sec}] api_user set to {user_typed}")
             if password:
                 cfg.set(sec, "api_pass", password)
                 __credentials.clear_shared(cfg, _endpoint_name(server, service))
@@ -1962,9 +1976,8 @@ def remove_direct_socket(server_id, service):
     # v5.68.0-beta.28 (Q164): Jen's own side of this (the dhcp4 URL put back, the global mode returned to `ca`) is an identity change, and the route's first act is
     # on the Kea host - so the config writer's question is asked of a COPY before the first remote write.
     # Z1: the endpoint this route repoints is typed when - and only when - the person gave it a password (or "No password", or asked for the saved one back); asked BEFORE the Kea host is touched
-    typed_names = (
-        {_endpoint_name(server, service)} if (password or no_password or (restore_saved and has_saved_pair)) else set()
-    )
+    # (a restore with nothing saved was refused above, so the tick alone is the claim: every term is something the form said)
+    typed_names = {_endpoint_name(server, service)} if (password or no_password or restore_saved) else set()
     try:
         __config.app_config.preflight_identity_change(_apply, typed=typed_names)
     except __config.ConfigChangeRefused as refused:
@@ -1977,6 +1990,22 @@ def remove_direct_socket(server_id, service):
             )
         flash(f"Nothing was changed on {name}.", "info")
         return back
+    # second pass (Q184, finding 3): a daemon socket that INHERITED the primary's pair on the same host loses it when the primary's address changes spelling (10.0.0.5 -> kea-a.lan) - nothing
+    # is sent to it any more and the daemon on the Kea host still wants that pair. Not a leak, so not a refusal; named, so the person is told rather than finding a blank card
+    _before_endpoints = __credentials.resolve(_live)
+    _preview = __config.app_config._read_parser()
+    _apply(_preview)
+    _after_endpoints = __credentials.resolve(_preview)
+    lost = [
+        __credentials.label(n)
+        for n in sorted(_endpoints_of_server(server))
+        if n != _endpoint_name(server, service)
+        and n in _before_endpoints
+        and n in _after_endpoints
+        and _before_endpoints[n].password
+        and not _after_endpoints[n].password
+        and _after_endpoints[n].withheld
+    ]
     changed.clear()  # the preflight ran the callback on a copy; the real run below fills the list the flash reads
 
     removed_sockets: list = []
@@ -2032,6 +2061,11 @@ def remove_direct_socket(server_id, service):
         return back
     __user.set_global_setting("restart_pending", "true")
     flash(f"{daemon} on {name}: {'; '.join(changed)}.", "success")
+    if lost:
+        flash(
+            f"{', '.join(lost)} used the pair of the address that just changed and now has no credential, so Jen sends it nothing: type its own password under Settings → Kea (the daemon on the Kea host still needs it).",
+            "warning",
+        )
     if keep_direct:
         flash(
             f"Jen stays in direct mode — {', '.join(others_still_direct)} still answer on their own kea-dhcp4 "
@@ -2039,7 +2073,8 @@ def remove_direct_socket(server_id, service):
             "socket up again.",
             "warning",
         )
-    __user.audit("REMOVE_DIRECT_SOCKET", "kea_api", f"server={name} service={service}")
+    answer = "typed" if password else "none" if no_password else "restored" if restore_saved else "unchanged"
+    __user.audit("REMOVE_DIRECT_SOCKET", "kea_api", f"server={name} service={service} password={answer}")
     return back
 
 

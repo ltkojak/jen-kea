@@ -276,7 +276,9 @@ class TestTheRemoveFormInfersNothing:
         assert r["touched"] and not p.has_section(section), (
             "the section had nothing left but the socket's pair and address"
         )
-        assert cred.resolve(p)[section].password == "S" or cred.resolve(p)[section].password == "PS"
+        assert cred.resolve(p)[section].password == "PS", (
+            "the daemon now inherits the Control Agent's password and has none of its own"
+        )
 
     @pytest.mark.parametrize(("service", "section"), [("dhcp6", "kea6"), ("d2", "d2")])
     def test_a_daemons_removal_in_direct_mode_keeps_its_pair_and_clears_only_the_address(self, service, section):
@@ -333,6 +335,42 @@ class TestTheRemoveFormInfersNothing:
             "CB",
             "http://kea-b.lan:8000",
         )
+
+    def test_a_restore_with_no_saved_pair_or_no_saved_address_is_refused_before_anything_is_sent(self):
+        """Second pass (Q184) finding 1: a pair left without its address (an older release's removal) is not offered and not restored."""
+        orphan = probe.PROXY.replace("direct_prev_api_url = http://proxy.lan:8000\n", "direct_prev_api_pass = APW\n")
+        r = probe.route_remove(orphan, "dhcp4", {"restore_saved": "1"})
+        assert not r["touched"] and "no saved Control Agent" in r["flashes"] and r["text"] == orphan
+        bare = probe.route_remove(probe.PROXY, "dhcp4", {"restore_saved": "1"})
+        assert not bare["touched"] and "no saved Control Agent" in bare["flashes"]
+
+    def test_a_daemon_that_inherited_the_primarys_pair_is_named_when_the_switch_back_takes_it_away(self):
+        r = probe.q184_p2_3_a_daemon_that_inherited_the_primarys_pair_is_named_after_the_switch_back()
+        assert r == (True, True, True)
+
+    def test_the_user_can_be_typed_and_a_userless_saved_pair_restores_a_blank_password(self):
+        typed, touched, restored = (
+            probe.q184_p2_5_the_form_can_name_the_control_agents_user_and_a_userless_pair_restores_a_blank_password()
+        )
+        assert typed == ("cu", "CAP") and touched and restored == ("cu", "")
+
+    def test_the_restore_box_is_not_checked_until_the_person_checks_it(self):
+        import pathlib
+
+        page = (pathlib.Path(__file__).resolve().parent.parent / "templates" / "settings_kea.html").read_text(
+            encoding="utf-8"
+        )
+        line = next(x for x in page.splitlines() if 'name="restore_saved"' in x)
+        assert "checked" not in line.replace("unchecked", ""), (
+            "a bare click on the button must not be a typed act by default"
+        )
+        assert "infra.prev_urls.get(server_id)" in line, "the label names the address the pair was saved for"
+
+    def test_the_audit_row_says_what_was_done_with_the_password(self):
+        import inspect
+
+        source = inspect.getsource(infra.remove_direct_socket)
+        assert "password={answer}" in source and '"restored"' in source and '"typed"' in source
 
     def test_the_form_has_the_field_and_the_boxes_and_says_where_the_password_goes(self):
         import pathlib

@@ -1025,73 +1025,10 @@ class TestTheKea6DatabaseIsAnEndpoint:
         assert db.get_kea6_db() == "the kea pool"
 
 
-def _untyped_claims(source: str, path: str = "<snippet>") -> list[str]:
-    """Z4 (v5.69.0-beta.15, Q184): every `typed=` handed to the config writer (or its preflight) in `source`, judged by its SHAPE. `typed` is a human's act in this request or the
-    one-time conversion, so a route writes it as a literal set of endpoint names, a conditional on what the form said, or a name built that way - never from hosts, DNS or history.
-    Returns one line per violation."""
-    import ast
-
-    tree = ast.parse(source)
-    writers = {"write_values", "write_value", "mutate", "preflight_identity_change"}
-
-    def literal(node):
-        if isinstance(node, ast.Constant):
-            return node.value is None or isinstance(node.value, str)
-        if isinstance(node, ast.JoinedStr):
-            return True
-        if isinstance(node, ast.Set):
-            return all(
-                literal(e) or (isinstance(e, ast.Call) and getattr(e.func, "id", "") == "_endpoint_name")
-                for e in node.elts
-            )
-        if isinstance(node, ast.Call):
-            return getattr(node.func, "id", "") == "set" and not node.args
-        if isinstance(node, ast.SetComp):
-            return all(isinstance(g.iter, ast.Tuple) for g in node.generators)
-        if isinstance(node, ast.IfExp):
-            return literal(node.body) and literal(node.orelse)
-        return False
-
-    bad = []
-    for fn in ast.walk(tree):
-        if not isinstance(fn, ast.FunctionDef):
-            continue
-        assigned = {}
-        for node in ast.walk(fn):
-            if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-                assigned.setdefault(node.targets[0].id, []).append(node.value)
-            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.value is not None:
-                assigned.setdefault(node.target.id, []).append(node.value)
-        adds = {}
-        for node in ast.walk(fn):
-            if (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "add"
-                and isinstance(node.func.value, ast.Name)
-            ):
-                adds.setdefault(node.func.value.id, []).extend(node.args)
-        for node in ast.walk(fn):
-            if not (isinstance(node, ast.Call) and getattr(node.func, "attr", getattr(node.func, "id", "")) in writers):
-                continue
-            for kw in node.keywords:
-                if kw.arg != "typed":
-                    continue
-                value = kw.value
-                if isinstance(value, ast.Name) and value.id in assigned:
-                    ok = all(literal(v) for v in assigned[value.id]) and all(
-                        isinstance(a, ast.Constant | ast.JoinedStr) for a in adds.get(value.id, [])
-                    )
-                else:
-                    ok = literal(value)
-                if not ok:
-                    bad.append(f"{path}:{node.lineno} in {fn.name}(): typed={ast.unparse(value)}")
-    return bad
-
-
 class TestTypedIsAHumansAct:
-    """Z4 (Q184): the design rule, enforced. `docs/SAFETY_INVARIANTS.md` CRED-004: the writer's `typed` set is a human's act in this request or the one-time conversion; a route never
-    derives it from hosts, DNS or history."""
+    """Z4 (Q184): the design rule, enforced by `tests/typed_claims.py`. CRED-004: the writer's `typed` set is a human's act in this request or the one-time conversion; a route never
+    derives it from hosts, DNS or history. The first version of this check looked only at the branches of a conditional, so `{..} if _same_box(url, ssh) else set()` - the shape beta.13 and
+    beta.14 shipped - passed; the second pass EXECUTED it against twelve shapes that slipped. They are the `SLIPS` below and every one must be caught."""
 
     #: the one place a dynamic set is the point: the conversion types every endpoint it writes, by design (CRED-004, U2)
     ALLOWED = {("jen/services/credentials.py", "materialise")}
@@ -1099,45 +1036,74 @@ class TestTypedIsAHumansAct:
     def test_no_route_or_service_derives_typed_from_anything_but_a_form(self):
         import pathlib
 
+        from tests.typed_claims import untyped_claims
+
         root = pathlib.Path(__file__).resolve().parent.parent
-        found = []
-        for path in sorted((root / "jen").rglob("*.py")):
-            rel = path.relative_to(root).as_posix()
-            if rel in ("jen/config.py",):
-                continue  # the writer itself (plumbs the set through)
-            for line in _untyped_claims(path.read_text(encoding="utf-8"), rel):
-                fn = line.split(" in ")[1].split("(")[0]
-                if (rel, fn) not in self.ALLOWED:
-                    found.append(line)
-        assert found == [], (
-            "typed= must be a literal set of names, a conditional on a form value, or None:\n" + "\n".join(found)
+        found, scanned = [], 0
+        for folder in ("jen", "tools", "plugins"):
+            for path in sorted((root / folder).rglob("*.py")):
+                rel = path.relative_to(root).as_posix()
+                if rel == "jen/config.py":
+                    continue  # the writer itself (plumbs the set through)
+                scanned += 1
+                for line in untyped_claims(path.read_text(encoding="utf-8"), rel):
+                    where = line.split(" in ")[1].split("(")[0]
+                    if (rel, where) not in self.ALLOWED:
+                        found.append(line)
+        assert scanned > 100, "the scan found no tree"
+        assert found == [], "typed= must be a literal set of names, or a conditional on the REQUEST:\n" + "\n".join(
+            found
         )
 
-    @pytest.mark.parametrize(
-        "bad",
-        [
-            "def f():\n    app_config.mutate(fn, typed=_endpoints_on_this_box(server))\n",
-            "def f():\n    app_config.write_values(items, typed={n for n in resolve(parser)})\n",
-            "def f():\n    names = _typed_for_removal(server)\n    app_config.mutate(fn, typed=names)\n",
-            "def f():\n    app_config.mutate(fn, typed=set(resolve(parser)))\n",
-            "def f():\n    typed = set()\n    typed.add(dns_name(host))\n    app_config.mutate(fn, typed=typed)\n",
-        ],
-    )
-    def test_the_checker_refuses_a_derived_set(self, bad):
-        assert _untyped_claims(bad), bad
+    SLIPS = [
+        "def f():\n    app_config.mutate(fn, typed={_endpoint_name(s, svc)} if _same_box(url, ssh) else set())\n",
+        'def f():\n    names = {"kea"} if _same_box(url, ssh) else set()\n    app_config.mutate(fn, typed=names)\n',
+        'def f():\n    app_config.mutate(fn, typed={n for n in ("kea", "kea6") if _same_box(urls[n], ssh)})\n',
+        "def f():\n    app_config.mutate(fn, typed={derive(n) for n in ('kea', 'kea6')})\n",
+        "def f():\n    names = set()\n    names.update(_endpoints_on_this_box(server))\n    app_config.mutate(fn, typed=names)\n",
+        "def f():\n    names = set()\n    names |= _endpoints_on_this_box(server)\n    app_config.mutate(fn, typed=names)\n",
+        "def f():\n    names = set()\n    names.add(f'{dns_name(host)}')\n    app_config.mutate(fn, typed=names)\n",
+        "def f():\n    app_config.preflight_identity_change(fn, derived)\n",
+        "def f():\n    app_config.mutate(fn, **{'typed': derived()})\n",
+        "async def f():\n    app_config.mutate(fn, typed={'kea'} if _same_box(a, b) else None)\n",
+        "app_config.mutate(fn, typed={'kea'} if resolves_to(host) else None)\n",
+        'def f():\n    names = set()\n    if _same_box(a, b):\n        names.add("kea")\n    app_config.mutate(fn, typed=names)\n',
+        "def f():\n    app_config.mutate(fn, typed=_endpoints_on_this_box(server))\n",
+        "def f():\n    app_config.write_values(items, typed={n for n in resolve(parser)})\n",
+        "def f():\n    app_config.mutate(fn, typed=set(resolve(parser)))\n",
+        'def f():\n    ok = _same_box(a, b)\n    app_config.mutate(fn, typed={"kea"} if ok else None)\n',
+        'def f():\n    ok = socket.getaddrinfo(h, None)\n    app_config.mutate(fn, typed={"kea"} if ok else set())\n',
+        'def f():\n    for n in ("kea",):\n        app_config.mutate(fn, typed={n} if open("/etc/hosts").read() else None)\n',
+    ]
+
+    @pytest.mark.parametrize("bad", SLIPS)
+    def test_the_checker_catches_every_shape_that_slipped_through_the_first_version(self, bad):
+        from tests.typed_claims import untyped_claims
+
+        assert untyped_claims(bad), bad
 
     @pytest.mark.parametrize(
         "good",
         [
-            'def f():\n    app_config.mutate(fn, typed={"kea"} if api_pass else None)\n',
-            'def f():\n    app_config.write_values(items, typed={n for n, v in (("kea", a), ("kea_db", b)) if v})\n',
-            "def f():\n    names = {_endpoint_name(s, svc)} if (pw or no) else set()\n    app_config.mutate(fn, typed=names)\n",
-            'def f():\n    names = set()\n    names.add(f"server_{n}")\n    app_config.mutate(fn, typed=names)\n',
+            'def f():\n    app_config.mutate(fn, typed={"kea"} if request.form.get("api_pass") else None)\n',
+            'def f(api_pass):\n    app_config.mutate(fn, typed={"kea6"} if api_pass else None)\n',
+            'def f(a, b):\n    app_config.write_values(items, typed={n for n, v in (("kea", a), ("kea_db", b)) if v})\n',
+            'def f():\n    pw = request.form.get("password", "").strip()\n    no = request.form.get("no_password", "") == "1"\n    names = {_endpoint_name(s, svc)} if (pw or no) else set()\n    app_config.mutate(fn, typed=names)\n',
+            'def f():\n    names = set()\n    if request.form.get("share") == "1":\n        names.add(f"server_{n}")\n    app_config.mutate(fn, typed=names)\n',
             "def f():\n    app_config.mutate(fn)\n",
+            "def f():\n    app_config.mutate(fn, typed=None)\n",
+            'def f():\n    app_config.mutate(fn, typed={f"server_{server_id}"})\n',
         ],
     )
-    def test_the_checker_accepts_a_form_conditional_set(self, good):
-        assert _untyped_claims(good) == [], good
+    def test_the_checker_accepts_what_a_form_decides(self, good):
+        from tests.typed_claims import untyped_claims
+
+        assert untyped_claims(good) == [], good
+
+    def test_a_parser_method_named_mutate_is_not_the_writer(self):
+        from tests.typed_claims import untyped_claims
+
+        assert untyped_claims("def f(parser):\n    parser.mutate(typed=derived())\n") == []
 
     def test_the_registry_says_it(self):
         import pathlib
@@ -1145,7 +1111,7 @@ class TestTypedIsAHumansAct:
         text = (pathlib.Path(__file__).resolve().parent.parent / "docs" / "SAFETY_INVARIANTS.md").read_text(
             encoding="utf-8"
         )
-        assert "never derives it from hosts, DNS or history" in text
+        assert "never derives it from hosts, DNS or history" in text and "tests/typed_claims.py" in text
 
 
 class TestEverySharedMarkerHasAReaderAndAClearer:

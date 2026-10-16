@@ -764,6 +764,42 @@ def q184_z2_s3_the_order_of_two_removals_ends_with_the_control_agents_pair_and_n
     )
 
 
+def q184_p2_1_a_saved_pair_without_its_address_is_neither_offered_nor_restored():
+    """Finding 1: an older release's removal deletes the saved ADDRESS and leaves the pair. Restoring it would type the endpoint and write the Control Agent's password onto the socket."""
+    orphan = DIRECT.replace("https://a:8000", "http://10.0.0.5:8004").replace(
+        "connection_mode = direct\n",
+        "connection_mode = direct\ndirect_prev_api_user = cu\ndirect_prev_api_pass = APW\n",
+        1,
+    )
+    r = route_remove(orphan, "dhcp4", {"restore_saved": "1"})
+    return (r["touched"], r["changed"], "no saved Control Agent" in r["flashes"], r["text"] == orphan)
+
+
+def q184_p2_3_a_daemon_that_inherited_the_primarys_pair_is_named_after_the_switch_back():
+    ca = (
+        BASE.replace("https://a:8000", "http://kea-a.lan:8000")
+        .replace("api_user = pu", "api_user = cu")
+        .replace("api_pass = PS", "api_pass = CAP")
+    )
+    _, t4 = _setup(ca, "dhcp4", "http://10.0.0.5:8004", "sock", "SOCKPW", {"kea"})
+    _, t46 = _setup(t4, "dhcp6", "http://10.0.0.5:8006", "sock", "SOCKPW", {"kea6"})
+    inherited = not parse(t46).has_option("kea6", "api_pass")
+    r = route_remove(t46, "dhcp4", {"restore_saved": "1"})
+    return (inherited, r["touched"], "Kea6 API" in r["flashes"] and "now has no credential" in r["flashes"])
+
+
+def q184_p2_5_the_form_can_name_the_control_agents_user_and_a_userless_pair_restores_a_blank_password():
+    typed = route_remove(PROXY, "dhcp4", {"password": "CAP", "user": "cu"})
+    only_user = PROXY.replace("connection_mode = direct\n", "connection_mode = direct\ndirect_prev_api_user = cu\n", 1)
+    restored = route_remove(only_user, "dhcp4", {"restore_saved": "1"})
+    p = parse(restored["text"])
+    return (
+        (_kv(typed["text"], "kea", "api_user"), _kv(typed["text"], "kea", "api_pass")),
+        restored["touched"],
+        (p.get("kea", "api_user"), p.get("kea", "api_pass")),
+    )
+
+
 def q184_z3_a_trailing_dot_is_a_different_name_and_odd_spaces_are_no_url():
     from jen.services import auth
 
@@ -883,6 +919,13 @@ EXPECTED = {
     "q184_z2_s3_the_order_of_two_removals_ends_with_the_control_agents_pair_and_no_daemon_pair": (
         (True, True, "CAP", False),
         (True, False, True, True, "CAP"),
+    ),
+    "q184_p2_1_a_saved_pair_without_its_address_is_neither_offered_nor_restored": (False, False, True, True),
+    "q184_p2_3_a_daemon_that_inherited_the_primarys_pair_is_named_after_the_switch_back": (True, True, True),
+    "q184_p2_5_the_form_can_name_the_control_agents_user_and_a_userless_pair_restores_a_blank_password": (
+        ("cu", "CAP"),
+        True,
+        ("cu", ""),
     ),
     "q184_z3_a_trailing_dot_is_a_different_name_and_odd_spaces_are_no_url": (False, True, False, False, False, True),
     "q184_z2_the_saved_pair_is_masked_in_a_support_bundle": (False, True),
