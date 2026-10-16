@@ -48,7 +48,7 @@
             <button type="submit" class="btn btn-sm btn-primary">Add socket, restart {{ daemon }} and probe</button>
         </form>
         {% if (infra.kea_connection_mode == 'direct' and service == 'dhcp4') or (service != 'dhcp4' and current_url) %}
-        <form method="POST" action="/settings/infrastructure/direct-socket/{{ server_id }}/{{ service }}/remove" class="u-2d191d" data-confirm="Remove the http control socket from {{ conf }} on {{ ssh_host }} and restart {{ daemon }}? {% if service == 'dhcp4' %}Jen returns to Control Agent mode unless another server still has its own socket.{% else %}Jen clears this daemon's URL override.{% endif %}">
+        <form method="POST" action="/settings/infrastructure/direct-socket/{{ server_id }}/{{ service }}/remove" class="u-2d191d" data-confirm="Remove the http control socket from {{ conf }} on {{ ssh_host }} and restart {{ daemon }}? {% if service == 'dhcp4' %}Jen returns to Control Agent mode unless another server still has its own socket.{% else %}Jen clears this daemon's URL override{% if infra.kea_connection_mode != 'direct' %} and its own user and password (they were the socket's; it then uses the Control Agent's){% endif %}.{% endif %}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="form-group">
                 {% if service == 'dhcp4' %}<input type="text" name="user" aria-label="The Control Agent's user (blank keeps the current one)" placeholder="user (blank keeps the current one)" autocomplete="off">{% endif %}

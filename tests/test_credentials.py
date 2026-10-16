@@ -1129,7 +1129,66 @@ class TestTypedIsAHumansAct:
         'def f():\n    app_config.mutate(fn, typed={"kea"} if request.form.get("x") == host() else None)\n',
         # a writer method on an object that merely resembles it
         "def f(w):\n    w.mutate(fn, typed=derived)\n",
+        # (second pass, Q185) the control flow that reaches a claim: the statement spelling of `A if COND else B` is judged like the expression
+        'def f():\n    if _same_box(a, b):\n        app_config.mutate(fn, typed={"kea"})\n',
+        'def f():\n    for h in hosts():\n        app_config.mutate(fn, typed={"kea"})\n',
+        'def f():\n    try:\n        x()\n    except OSError:\n        app_config.mutate(fn, typed={"kea"})\n',
+        'def f():\n    while dns():\n        app_config.mutate(fn, typed={"kea"})\n',
+        'def f():\n    ok = request.form.get("a")\n    if dns(ok):\n        app_config.mutate(fn, typed={"kea"})\n',
+        # `request` is the framework's: a local, a parameter or an import that rebinds it is not
+        'def f():\n    request = derived()\n    app_config.mutate(fn, typed={"kea"} if request.form.get("a") else None)\n',
+        'def f(request):\n    app_config.mutate(fn, typed={"kea"} if request.form.get("a") else None)\n',
+        # star arguments, global/nonlocal in the function that writes
+        'def f():\n    app_config.mutate(*args, typed={"kea"})\n',
+        'def f():\n    global names\n    names = {"kea"}\n    app_config.mutate(fn, typed=names)\n',
+        'def f():\n    names = {"kea"}\n    def g():\n        nonlocal names\n        names = derived()\n    g()\n    app_config.mutate(fn, typed=names)\n',
+        'def f():\n    app_config.mutate(fn, typed={"kea"} if request.form.get(*cols) else None)\n',
     ]
+
+    #: shapes that are dynamic by design in ONE named function, and slips inside that function that the capability does not cover
+    DYNAMIC_SLIPS = [
+        # remove_direct_socket: the endpoint the URL names, from the route's own parameters or `_server_by_id(<parameter>)`; and only behind an answer from the form
+        (
+            "jen/routes/settings/infrastructure.py",
+            'def remove_direct_socket(server_id, service):\n    app_config.mutate(fn, typed={_endpoint_name(x(), service)} if request.form.get("password") else None)\n',
+        ),
+        (
+            "jen/routes/settings/infrastructure.py",
+            'def remove_direct_socket(server_id, service):\n    server = _server_by_id(guess())\n    app_config.mutate(fn, typed={_endpoint_name(server, service)} if request.form.get("password") else None)\n',
+        ),
+        (
+            "jen/routes/settings/infrastructure.py",
+            'def remove_direct_socket(server_id, service):\n    service = derived()\n    app_config.mutate(fn, typed={_endpoint_name(server_id, service)} if request.form.get("password") else None)\n',
+        ),
+        (
+            "jen/routes/settings/infrastructure.py",
+            "def remove_direct_socket(server_id, service):\n    app_config.mutate(fn, typed={_endpoint_name(server_id, service)} if dns() else None)\n",
+        ),
+        (
+            "jen/routes/settings/infrastructure.py",
+            "def remove_direct_socket(server_id, service):\n    app_config.mutate(fn, typed={_endpoint_name(server_id, service)})\n",
+        ),
+        # the wizard: only the named parameters, never rebound
+        (
+            "jen/services/setup_wizard.py",
+            'def enable_v6(api_pass, other):\n    app_config.mutate(fn, typed={"kea6"} if other else None)\n',
+        ),
+        (
+            "jen/services/setup_wizard.py",
+            'def enable_v6(api_pass):\n    api_pass = derived()\n    app_config.mutate(fn, typed={"kea6"} if api_pass else None)\n',
+        ),
+        # the copy button: the server the URL names, nothing else
+        (
+            "jen/routes/settings/infrastructure.py",
+            'def copy_primary_password(server_id):\n    server_id = pick()\n    app_config.mutate(fn, typed={f"server_{server_id}"})\n',
+        ),
+    ]
+
+    @pytest.mark.parametrize(("path", "bad"), DYNAMIC_SLIPS)
+    def test_a_dynamic_function_is_not_dynamic_beyond_its_one_capability(self, path, bad):
+        from tests.typed_claims import untyped_claims
+
+        assert untyped_claims(bad, path), bad
 
     @pytest.mark.parametrize("bad", SLIPS + SLIPS_Q185)
     def test_the_checker_catches_every_shape_that_slipped_through_an_earlier_version(self, bad):
@@ -1145,6 +1204,10 @@ class TestTypedIsAHumansAct:
             'def f():\n    pw = request.form.get("password", "").strip()\n    inherit = request.form.get("inherit") == "1"\n    app_config.write_values(items, typed={"d2"} if pw and not inherit else None)\n',
             'def f():\n    a = request.form.get("a")\n    b = request.form.get("b")\n    names = {"x", "y"} if (a and b) else {"x"} if a else {"y"} if b else set()\n    app_config.mutate(fn, typed=names)\n',
             'def f():\n    mode = request.form.get("mode", "")\n    app_config.mutate(fn, typed={"kea"} if mode in ("a", "b") else set())\n',
+            'def f():\n    app_config.mutate(fn, typed={"kea"} if "password" in request.form else None)\n',
+            'def f():\n    app_config.mutate(fn, typed={"kea"} if bool(request.form.get("password")) else None)\n',
+            'def f():\n    app_config.mutate(fn, typed={"kea"} if len(request.form.getlist("rows")) == 1 else None)\n',
+            'def f():\n    if request.form.get("password"):\n        app_config.mutate(fn, typed={"kea"})\n',
             "def f():\n    app_config.mutate(fn)\n",
             "def f():\n    app_config.mutate(fn, typed=None)\n",
             'def f():\n    app_config.mutate(fn, typed={"kea", "d2"})\n',
@@ -1163,7 +1226,13 @@ class TestTypedIsAHumansAct:
         assert untyped_claims(source, "jen/services/other.py") != [], (
             "a parameter is the caller's claim only where the list says so"
         )
-        source = "def remove_direct_socket(server, service):\n    app_config.mutate(fn, typed={_endpoint_name(server, service)})\n"
+        bare = "def remove_direct_socket(server, service):\n    app_config.mutate(fn, typed={_endpoint_name(server, service)})\n"
+        # remove_direct_socket claims ONLY when the form carried an answer (cond_required): the unconditional spelling is refused even there
+        assert untyped_claims(bare, "jen/routes/settings/infrastructure.py") != []
+        source = (
+            "def remove_direct_socket(server, service):\n"
+            '    app_config.mutate(fn, typed={_endpoint_name(server, service)} if request.form.get("password") else None)\n'
+        )
         assert untyped_claims(source, "jen/routes/settings/infrastructure.py") == []
         assert untyped_claims(source, "jen/routes/settings/other.py") != []
 

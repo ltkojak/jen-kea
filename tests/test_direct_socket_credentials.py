@@ -321,6 +321,56 @@ class TestTheRemoveFormInfersNothing:
             "typed user=typed",
         )
 
+    def test_clearing_the_primarys_user_does_not_change_what_a_dependant_sends(self):
+        """Second pass (Q185, finding 1): a Kea6 with a password of its own and no user inherits the primary's user; No password on the primary keeps the user the Kea6 was sending."""
+        assert probe.q185_sp1_a_dependant_keeps_the_user_it_was_sending_when_its_parents_user_is_cleared() == (
+            True,
+            [("http://10.0.0.5:8006", ("su", "K6"))],
+            [("http://10.0.0.5:8006", ("su", "K6"))],
+            False,
+            "su",
+        )
+
+    def test_the_audit_row_names_what_was_done_to_the_user(self):
+        """Finding 2: the user is reported as it was handled (cleared, restored, typed) - a crafted user field on a daemon is ignored and the row says `unchanged`."""
+        assert probe.q185_sp2_the_audit_row_names_what_was_done_to_the_user() == (
+            "none user=cleared",
+            "restored user=restored",
+            "typed user=unchanged",
+        )
+
+    def test_a_stale_shared_marker_does_not_follow_a_restore(self):
+        assert probe.q185_sp6_a_stale_shared_marker_does_not_follow_a_restore() == (True, "PS", False, False)
+
+    def test_the_mode_is_read_as_the_resolver_reads_it(self):
+        """H1: `Direct ` in a hand-edited file is direct (the resolver strips and lower-cases); anything but direct is `ca`."""
+        assert probe.q185_h1_the_mode_is_read_as_the_resolver_reads_it() == (
+            "direct",
+            "direct",
+            "direct",
+            "ca",
+            "ca",
+            "ca",
+            "ca",
+        )
+
+    def test_the_confirm_text_says_the_ca_mode_removal_drops_the_daemons_own_pair(self):
+        import pathlib
+
+        page = (pathlib.Path(__file__).resolve().parent.parent / "templates" / "settings_kea.html").read_text(
+            encoding="utf-8"
+        )
+        assert "and its own user and password (they were the socket's; it then uses the Control Agent's)" in page
+
+    def test_an_existing_rows_address_is_judged_stripped(self):
+        """Finding 7: the extra-servers form hands the SAME stripped address to the check that it stores."""
+        import pathlib
+
+        src = (
+            pathlib.Path(__file__).resolve().parent.parent / "jen" / "routes" / "settings" / "infrastructure.py"
+        ).read_text(encoding="utf-8")
+        assert 'prev.get("api_url"), api_url.strip(), api_pass, stored_secret' in src
+
     def test_the_remove_form_is_offered_for_a_daemon_socket_still_configured_in_control_agent_mode(self):
         """AA3 (Q185): after the primary is switched back (mode `ca`) a Kea6 or D2 socket that still has its own address in Jen's settings can be removed from the page - order A of the round trip
         is a route the page has, not only one the tests reach."""

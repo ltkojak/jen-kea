@@ -786,7 +786,7 @@ def q184_p2_3_a_daemon_that_inherited_the_primarys_pair_is_named_after_the_switc
     _, t46 = _setup(t4, "dhcp6", "http://10.0.0.5:8006", "sock", "SOCKPW", {"kea6"})
     inherited = not parse(t46).has_option("kea6", "api_pass")
     r = route_remove(t46, "dhcp4", {"restore_saved": "1"})
-    return (inherited, r["touched"], "Kea6 API" in r["flashes"] and "now has no credential" in r["flashes"])
+    return (inherited, r["touched"], "Kea6 API" in r["flashes"] and "now has none" in r["flashes"])
 
 
 def q184_p2_5_the_form_can_name_the_control_agents_user_and_a_userless_pair_restores_a_blank_password():
@@ -890,6 +890,64 @@ def q185_aa3_s6_a_restored_copy_keeps_its_shared_marker():
         p.get("kea", "api_pass_shared", fallback=None),
         p.has_option("kea", "direct_prev_api_pass_shared"),
     )
+
+
+def q185_sp1_a_dependant_keeps_the_user_it_was_sending_when_its_parents_user_is_cleared():
+    """Second pass, finding 1: a Kea6 with a password of its own and NO user key inherits the primary's user; clearing the primary's user (No password) must not change what the Kea6 sends."""
+    text = (
+        _direct_on("http://10.0.0.5:8004", "http://proxy.lan:8000", "")
+        .replace("api_user = pu", "api_user = su")
+        .replace("api_pass = PS", "api_pass = SP")
+        + "[kea6]\napi_url = http://10.0.0.5:8006\napi_pass = K6\n"
+    )
+    before = sends(text, "kea6")
+    r = route_remove(text, "dhcp4", {"no_password": "1"})
+    p = parse(r["text"])
+    return (
+        r["touched"],
+        before,
+        sends(r["text"], "kea6"),
+        p.has_option("kea", "api_user"),
+        p.get("kea6", "api_user", fallback=None),
+    )
+
+
+def q185_sp2_the_audit_row_names_what_was_done_to_the_user():
+    cleared = route_remove(PROXY, "dhcp4", {"no_password": "1"})["audit"]
+    saved = _direct_on(
+        "http://10.0.0.5:8004", "http://kea-a.lan:8000", "direct_prev_api_user = cu\ndirect_prev_api_pass = CAP\n"
+    )
+    restored = route_remove(saved, "dhcp4", {"restore_saved": "1"})["audit"]
+    daemon = DIRECT + "[kea6]\napi_url = http://10.0.0.5:8006\napi_user = x\napi_pass = K6\n"
+    ignored = route_remove(daemon, "dhcp6", {"password": "NEW", "user": "crafted"})["audit"]
+    return tuple(a.split("password=")[1] for a in (cleared, restored, ignored))
+
+
+def q185_sp6_a_stale_shared_marker_does_not_follow_a_restore():
+    ca = BASE.replace("https://a:8000", "http://kea-a.lan:8000")
+    _, t4 = _setup(ca, "dhcp4", "http://10.0.0.5:8004", "sock", "SOCKPW", {"kea"})
+    stale = t4.replace("api_pass = SOCKPW\n", "api_pass = SOCKPW\napi_pass_shared = 1\n", 1)
+    back = route_remove(stale, "dhcp4", {"restore_saved": "1"})
+    p = parse(back["text"])
+    return (
+        back["touched"],
+        p.get("kea", "api_pass"),
+        p.has_option("kea", "api_pass_shared"),
+        p.has_option("kea", "direct_prev_api_pass_shared"),
+    )
+
+
+def q185_h1_the_mode_is_read_as_the_resolver_reads_it():
+    from jen.routes.settings import infrastructure as infra
+
+    def mode(raw):
+        p = configparser.ConfigParser(interpolation=None)
+        p.add_section("kea")
+        if raw is not None:
+            p.set("kea", "connection_mode", raw)
+        return infra._mode_of(p)
+
+    return tuple(mode(v) for v in ("direct", " Direct ", "DIRECT", "ca", "", "bogus", None))
 
 
 def q185_aa3_a_trailing_no_break_space_is_refused_and_ordinary_padding_is_not():
@@ -1051,6 +1109,20 @@ EXPECTED = {
     ),
     "q185_aa3_s5_a_same_host_switch_back_says_the_saved_pair_was_discarded": (True, True, "PS", False),
     "q185_aa3_s6_a_restored_copy_keeps_its_shared_marker": ("1", False, "CAP", "1", False),
+    "q185_sp1_a_dependant_keeps_the_user_it_was_sending_when_its_parents_user_is_cleared": (
+        True,
+        [("http://10.0.0.5:8006", ("su", "K6"))],
+        [("http://10.0.0.5:8006", ("su", "K6"))],
+        False,
+        "su",
+    ),
+    "q185_sp2_the_audit_row_names_what_was_done_to_the_user": (
+        "none user=cleared",
+        "restored user=restored",
+        "typed user=unchanged",
+    ),
+    "q185_sp6_a_stale_shared_marker_does_not_follow_a_restore": (True, "PS", False, False),
+    "q185_h1_the_mode_is_read_as_the_resolver_reads_it": ("direct", "direct", "direct", "ca", "ca", "ca", "ca"),
     "q185_aa3_a_trailing_no_break_space_is_refused_and_ordinary_padding_is_not": (False, True, False, True),
     "q184_z3_a_trailing_dot_is_a_different_name_and_odd_spaces_are_no_url": (False, True, False, False, False, True),
     "q184_z2_the_saved_pair_is_masked_in_a_support_bundle": (False, True),

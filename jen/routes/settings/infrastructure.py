@@ -1192,6 +1192,12 @@ def _socket_url(scheme: str, address: str, port: int) -> str:
     return f"{scheme}://{host}:{port}"
 
 
+def _mode_of(cfg) -> str:
+    """The connection mode as `credentials.resolve` and `AppConfig` read it: anything but "direct" is "ca"; stripped and lower-cased (a hand edit of `Direct` is `direct`)."""
+    value = cfg.get("kea", "connection_mode", fallback="ca").strip().lower()
+    return "direct" if value == "direct" else "ca"
+
+
 def _endpoint_name(server: dict, service: str) -> str:
     """The `credentials.resolve` name of the endpoint one daemon of one server is reached on."""
     sid = (server or {}).get("id")
@@ -1288,6 +1294,8 @@ def _direct_socket_edit(server: dict, service: str, url: str, user: str, passwor
                 )  # a blank is kept: "the Control Agent had no password" is something to restore
                 if cfg.get(sec, f"{pass_key}_shared", fallback="") == "1":
                     cfg.set(sec, _PREV_SHARED_KEY, "1")  # (read before the socket's own pair clears it below)
+                elif cfg.has_option(sec, _PREV_SHARED_KEY):
+                    cfg.remove_option(sec, _PREV_SHARED_KEY)  # a leftover from an earlier round trip is not this pair's
         cfg.set(sec, url_key, url)
         changed.append(f"[{sec}] {url_key}")
         # Per-daemon credentials: only written when they differ from the
@@ -1933,6 +1941,10 @@ def remove_direct_socket(server_id, service):
                 others_still_direct.append(s.get("name", "Kea Server"))
         keep_direct = bool(others_still_direct)
 
+    _before_users = {
+        n: e.user for n, e in __credentials.resolve(_live).items()
+    }  # what each endpoint sends now (a dependant inherits its parent's user)
+
     def _apply(cfg):
         sec, url_key, user_key, pass_key = _socket_keys(server, service)
         if service == "dhcp4":
@@ -1954,6 +1966,10 @@ def remove_direct_socket(server_id, service):
                         cfg.set(
                             sec, f"{pass_key}_shared", "1"
                         )  # the saved pair was a marked copy; so is the restored one
+                    else:
+                        __credentials.clear_shared(
+                            cfg, _endpoint_name(server, service)
+                        )  # ... and one that was not is not (a stale marker of the socket's own pair)
                     changed.append(f"[{sec}] the Control Agent's saved user and password restored")
                 elif (
                     prev
@@ -1979,17 +1995,33 @@ def remove_direct_socket(server_id, service):
                 # AA1 (Q185): "No password" is no authentication - no user either (an empty Basic header carrying the socket's username is not "none")
                 cfg.set(sec, "api_pass", "")
                 if cfg.has_option(sec, "api_user"):
+                    # second pass (Q185, finding 1): a dependant with a password of its own and NO user key inherits THIS user (the resolver's rule) - removing it would change what that
+                    # dependant sends. It keeps the user it was sending, written as its own; the message says so.
+                    removed_user = cfg.get(sec, "api_user")
+                    for dep in sorted(_endpoints_of_server(server) - {_endpoint_name(server, service)}):
+                        dep_section, dep_user_key = __credentials.user_key(dep)
+                        if (
+                            removed_user
+                            and dep in _before_users
+                            and _before_users[dep] == removed_user
+                            and cfg.has_section(dep_section)
+                            and not cfg.has_option(dep_section, dep_user_key)
+                        ):
+                            cfg.set(dep_section, dep_user_key, removed_user)
+                            changed.append(
+                                f"[{dep_section}] {dep_user_key} kept as {removed_user} (it was inherited from the user just cleared)"
+                            )
                     cfg.remove_option(sec, "api_user")
                 __credentials.clear_shared(cfg, _endpoint_name(server, service))
                 changed.append(f"[{sec}] user and password cleared (no authentication)")
-            if not keep_direct and cfg.get("kea", "connection_mode", fallback="ca") != "ca":
+            if not keep_direct and _mode_of(cfg) != "ca":
                 cfg.set("kea", "connection_mode", "ca")
                 changed.append("Jen switched back to Control Agent mode")
         else:
             if cfg.has_section(sec) and cfg.has_option(sec, url_key):
                 cfg.remove_option(sec, url_key)
                 changed.append(f"[{sec}] {url_key} cleared — inherits the v4 URL in Control Agent mode")
-            if cfg.get("kea", "connection_mode", fallback="ca") != "direct" and cfg.has_section(sec):
+            if _mode_of(cfg) != "direct" and cfg.has_section(sec):
                 # Z2: in Control Agent mode the daemon's own user and password were the SOCKET's - the Control Agent authenticates with the Control Agent's, so no pair rides to it
                 for stale in (user_key, pass_key):
                     if cfg.has_option(sec, stale):
@@ -2040,7 +2072,6 @@ def remove_direct_socket(server_id, service):
         and n in _after_endpoints
         and _before_endpoints[n].password
         and not _after_endpoints[n].password
-        and _after_endpoints[n].withheld
     ]
     changed.clear()  # the preflight ran the callback on a copy; the real run below fills the list the flash reads
 
@@ -2099,7 +2130,7 @@ def remove_direct_socket(server_id, service):
     flash(f"{daemon} on {name}: {'; '.join(changed)}.", "success")
     if lost:
         flash(
-            f"{', '.join(lost)} used the pair of the address that just changed and now has no credential, so Jen sends it nothing: type its own password under Settings → Kea (the daemon on the Kea host still needs it).",
+            f"{', '.join(lost)} used the password of the address that just changed and now has none: type its own under Settings → Kea (the daemon on the Kea host may still need one).",
             "warning",
         )
     if keep_direct:
@@ -2110,10 +2141,18 @@ def remove_direct_socket(server_id, service):
             "warning",
         )
     answer = "typed" if password else "none" if no_password else "restored" if restore_saved else "unchanged"
+    # (second pass, Q185, finding 2: the user is whatever the route did to it - the form's user field exists for the Control Agent only, so a crafted one on a daemon is ignored and said so)
+    user_answer = (
+        "typed"
+        if (user_typed and service == "dhcp4")
+        else "cleared"
+        if no_password
+        else "restored"
+        if restore_saved
+        else "unchanged"
+    )
     __user.audit(
-        "REMOVE_DIRECT_SOCKET",
-        "kea_api",
-        f"server={name} service={service} password={answer} user={'typed' if user_typed else 'unchanged'}",
+        "REMOVE_DIRECT_SOCKET", "kea_api", f"server={name} service={service} password={answer} user={user_answer}"
     )
     return back
 
@@ -2517,7 +2556,7 @@ def save_extra_servers():
                 stored_api = before_resolved.get(f"server_{orig_id}")
                 stored_secret = stored_api.password if stored_api else ""
                 refusal = _secret_for_new_endpoint(
-                    prev.get("api_url"), api_url, api_pass, stored_secret, f"API address of {who}"
+                    prev.get("api_url"), api_url.strip(), api_pass, stored_secret, f"API address of {who}"
                 )
                 if not refusal and not api6_pass.strip() and not no6_ticked:
                     # the IPv6 endpoint of a row that types no IPv6 password: judged against the password the connection will USE for it
