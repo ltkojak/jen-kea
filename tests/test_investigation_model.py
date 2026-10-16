@@ -1050,7 +1050,9 @@ class Walk:
                 (mode_after != mode_before and bool(outstanding)) or any(k in outstanding for k in touched) or readded
             )
         try:
-            app_config.preflight_identity_change(change)
+            # (Q182: the preflight now asks CRED-004's question too, with the route's typed set - the walk's operator types every password, for the preflight as for the write, so
+            # I4's "the preflight and the write agree" is still about the investigation record and nothing else)
+            app_config.preflight_identity_change(change, typed=_EVERY_ENDPOINT)
             preflight_refused = False
         except ConfigChangeRefused:
             preflight_refused = True
