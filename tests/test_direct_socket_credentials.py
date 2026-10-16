@@ -248,9 +248,91 @@ class TestTheRemoveFormInfersNothing:
         assert r["touched"] and (p.get("kea", "api_pass"), p.get("kea", "api_url")) == ("CAPW", "http://proxy.lan:8000")
         assert p.get("kea", "connection_mode") == "ca" and not p.has_option("kea", "direct_prev_api_url")
 
-    def test_no_password_is_an_answer(self):
+    def test_no_password_is_an_answer_and_it_removes_the_user_too(self):
+        """AA1 (Q185): no authentication is no user. `_auth` sends `Basic user:` when EITHER field is set, so a socket declared unauthenticated used to reach the Control Agent with a header
+        carrying the socket's username."""
         r = probe.route_remove(self.PROXY, "dhcp4", {"no_password": "1"})
-        assert r["touched"] and _parse(r["text"]).get("kea", "api_pass") == ""
+        p = _parse(r["text"])
+        assert r["touched"] and p.get("kea", "api_pass") == "" and not p.has_option("kea", "api_user")
+        assert "user and password cleared" in r["flashes"]
+        assert probe.sends(r["text"], "kea") == [("http://proxy.lan:8000", "no header")]
+
+    @pytest.mark.parametrize(
+        ("service", "section", "user_key"), [("dhcp6", "kea6", "api_user"), ("d2", "d2", "api_user")]
+    )
+    @pytest.mark.parametrize("mode", ["direct", "ca"])
+    def test_a_daemons_no_password_removes_its_user_in_either_mode(self, service, section, user_key, mode):
+        base = probe.DIRECT if mode == "direct" else probe.BASE
+        url = "http://10.0.0.5:8006" if mode == "direct" else "https://b:8006"
+        text = base + f"[{section}]\napi_url = {url}\napi_user = x\napi_pass = K6\n"
+        r = probe.route_remove(text, service, {"no_password": "1"})
+        p = _parse(r["text"])
+        assert r["touched"] and not p.has_option(section, user_key) and p.get(section, "api_pass") == ""
+
+    def test_an_extra_servers_no_password_removes_its_user_and_sends_no_header(self):
+        assert probe.q185_aa1_s13_an_extra_servers_no_password_sends_no_header_too() == (
+            True,
+            False,
+            "",
+            [("http://kea-b.lan:8000", "no header")],
+        )
+
+    def test_a_typed_user_beside_no_password_or_a_restore_is_refused_whole_before_anything_is_sent(self):
+        assert probe.q185_aa1_s3_a_typed_user_beside_no_password_or_a_restore_is_refused_whole() == (
+            False,
+            True,
+            True,
+            False,
+            True,
+            True,
+        )
+
+    def test_a_typed_user_with_a_typed_password_is_the_ordinary_answer(self):
+        r = probe.route_remove(self.PROXY, "dhcp4", {"user": "cu", "password": "CAPW"})
+        p = _parse(r["text"])
+        assert r["touched"] and (p.get("kea", "api_user"), p.get("kea", "api_pass")) == ("cu", "CAPW")
+
+    def test_a_same_host_switch_back_with_nothing_typed_says_the_saved_pair_was_discarded(self):
+        r = probe.route_remove(
+            probe._direct_on(
+                "http://10.0.0.5:8004",
+                "http://10.0.0.5:8000",
+                "direct_prev_api_user = cu\ndirect_prev_api_pass = CAP\n",
+            ),
+            "dhcp4",
+        )
+        assert r["touched"] and "DISCARDED" in r["flashes"] and "tick Restore" in r["flashes"]
+        assert not _parse(r["text"]).has_option("kea", "direct_prev_api_pass")
+
+    def test_the_placeholder_says_what_blank_does(self):
+        import pathlib
+
+        page = (pathlib.Path(__file__).resolve().parent.parent / "templates" / "settings_kea.html").read_text(
+            encoding="utf-8"
+        )
+        assert "(blank keeps the socket's pair)" in page
+
+    def test_a_restored_copy_keeps_its_shared_marker(self):
+        assert probe.q185_aa3_s6_a_restored_copy_keeps_its_shared_marker() == ("1", False, "CAP", "1", False)
+
+    def test_the_audit_row_says_when_only_the_user_was_typed(self):
+        assert probe.q185_aa3_s4_the_audit_row_says_what_was_done_with_the_password_and_the_user() == (
+            "unchanged user=typed",
+            "typed user=typed",
+        )
+
+    def test_the_remove_form_is_offered_for_a_daemon_socket_still_configured_in_control_agent_mode(self):
+        """AA3 (Q185): after the primary is switched back (mode `ca`) a Kea6 or D2 socket that still has its own address in Jen's settings can be removed from the page - order A of the round trip
+        is a route the page has, not only one the tests reach."""
+        import pathlib
+
+        page = (pathlib.Path(__file__).resolve().parent.parent / "templates" / "settings_kea.html").read_text(
+            encoding="utf-8"
+        )
+        assert (
+            "(infra.kea_connection_mode == 'direct' and service == 'dhcp4') or (service != 'dhcp4' and current_url)"
+            in page
+        )
 
     def test_two_answers_are_refused_before_anything_is_sent(self):
         for form in ({"password": "x", "no_password": "1"}, {"password": "x", "restore_saved": "1"}):

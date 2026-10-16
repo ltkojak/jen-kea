@@ -570,7 +570,7 @@ def route_remove(text, service, form=None, *, ssh_host="10.0.0.5", server_id=1):
     from jen.routes.settings import infrastructure as infra
     from jen.services import kea_changeset
 
-    flashes, applied = [], []
+    flashes, applied, audits = [], [], []
     with Lab(text) as lab, contextlib.ExitStack() as stack:
         before = lab.bytes()
         servers = AppConfig.derive_kea_servers(lab.read(), quiet=True)
@@ -583,7 +583,7 @@ def route_remove(text, service, form=None, *, ssh_host="10.0.0.5", server_id=1):
         stack.enter_context(
             mock.patch.dict(
                 infra.__dict__["__user"].__dict__,
-                {"audit": lambda *a, **k: None, "set_global_setting": lambda *a, **k: True},
+                {"audit": lambda *a, **k: audits.append(a), "set_global_setting": lambda *a, **k: True},
             )
         )
 
@@ -604,6 +604,7 @@ def route_remove(text, service, form=None, *, ssh_host="10.0.0.5", server_id=1):
             "changed": lab.bytes() != before,
             "flashes": " | ".join(flashes),
             "text": after,
+            "audit": " | ".join(str(a[2]) for a in audits if len(a) > 2),
         }
 
 
@@ -800,6 +801,108 @@ def q184_p2_5_the_form_can_name_the_control_agents_user_and_a_userless_pair_rest
     )
 
 
+def q185_aa1_s1_a_dhcp4_no_password_removes_the_user_and_sends_no_header():
+    r = route_remove(PROXY, "dhcp4", {"no_password": "1"})
+    p = parse(r["text"])
+    return (
+        r["touched"],
+        p.has_option("kea", "api_user"),
+        p.get("kea", "api_pass"),
+        "user and password cleared" in r["flashes"],
+        sends(r["text"], "kea"),
+    )
+
+
+def q185_aa1_s2_a_daemon_no_password_removes_its_user_in_either_mode():
+    direct = DIRECT + "[kea6]\napi_url = http://10.0.0.5:8006\napi_user = x\napi_pass = K6\n"
+    d = parse(route_remove(direct, "dhcp6", {"no_password": "1"})["text"])
+    ca = BASE + "[kea6]\napi_url = https://b:8006\napi_user = x\napi_pass = K6\n"
+    c = parse(route_remove(ca, "dhcp6", {"no_password": "1"})["text"])
+    return (
+        (d.has_option("kea6", "api_user"), d.get("kea6", "api_pass")),
+        (c.has_option("kea6", "api_user"), c.get("kea6", "api_pass")),
+    )
+
+
+def q185_aa1_s13_an_extra_servers_no_password_sends_no_header_too():
+    text = (
+        BASE.replace("[kea]\n", "[kea]\nconnection_mode = direct\n", 1)
+        + "[kea_server_2]\nname = b\napi_url = http://10.0.0.6:8004\napi_user = su\napi_pass = SP\ndirect_prev_api_url = http://kea-b.lan:8000\n"
+    )
+    r = route_remove(text, "dhcp4", {"no_password": "1"}, server_id=2, ssh_host="10.0.0.6")
+    p = parse(r["text"])
+    return (
+        r["touched"],
+        p.has_option("kea_server_2", "api_user"),
+        p.get("kea_server_2", "api_pass"),
+        sends(r["text"], "server_2"),
+    )
+
+
+def q185_aa1_s3_a_typed_user_beside_no_password_or_a_restore_is_refused_whole():
+    a = route_remove(PROXY, "dhcp4", {"user": "cu", "no_password": "1"})
+    saved = _direct_on(
+        "http://10.0.0.5:8004", "http://kea-a.lan:8000", "direct_prev_api_user = cu\ndirect_prev_api_pass = CAP\n"
+    )
+    b = route_remove(saved, "dhcp4", {"user": "x", "restore_saved": "1"})
+    return (
+        a["touched"],
+        a["text"] == PROXY,
+        "Choose one for the user" in a["flashes"],
+        b["touched"],
+        b["text"] == saved,
+        "Choose one for the user" in b["flashes"],
+    )
+
+
+def q185_aa3_s4_the_audit_row_says_what_was_done_with_the_password_and_the_user():
+    only_user = route_remove(PROXY.replace("proxy.lan", "10.0.0.5"), "dhcp4", {"user": "cu"})
+    pw = route_remove(PROXY, "dhcp4", {"password": "CAPW", "user": "cu"})
+    return (only_user["audit"].split("password=")[1], pw["audit"].split("password=")[1])
+
+
+def q185_aa3_s5_a_same_host_switch_back_says_the_saved_pair_was_discarded():
+    saved = _direct_on(
+        "http://10.0.0.5:8004", "http://10.0.0.5:8000", "direct_prev_api_user = cu\ndirect_prev_api_pass = CAP\n"
+    )
+    r = route_remove(saved, "dhcp4")
+    p = parse(r["text"])
+    return (
+        r["touched"],
+        "DISCARDED" in r["flashes"] and "Restore" in r["flashes"],
+        p.get("kea", "api_pass"),
+        p.has_option("kea", "direct_prev_api_pass"),
+    )
+
+
+def q185_aa3_s6_a_restored_copy_keeps_its_shared_marker():
+    ca = BASE.replace("https://a:8000", "http://kea-a.lan:8000") + ""
+    ca = ca.replace("api_pass = PS\n", "api_pass = CAP\napi_pass_shared = 1\n", 1)
+    _, t4 = _setup(ca, "dhcp4", "http://10.0.0.5:8004", "sock", "SOCKPW", {"kea"})
+    saved_marker = parse(t4).get("kea", "direct_prev_api_pass_shared", fallback=None)
+    socket_marker = parse(t4).has_option("kea", "api_pass_shared")
+    back = route_remove(t4, "dhcp4", {"restore_saved": "1"})
+    p = parse(back["text"])
+    return (
+        saved_marker,
+        socket_marker,
+        p.get("kea", "api_pass"),
+        p.get("kea", "api_pass_shared", fallback=None),
+        p.has_option("kea", "direct_prev_api_pass_shared"),
+    )
+
+
+def q185_aa3_a_trailing_no_break_space_is_refused_and_ordinary_padding_is_not():
+    from jen.services import auth
+
+    return (
+        auth.valid_api_url("http://a:8000\u00a0"),
+        auth.valid_api_url("http://a:8000 \n"),
+        auth.same_host("https://a:8000\u00a0", "https://a:8000"),
+        auth.same_host(" https://a:8000\n", "https://a:8001"),
+    )
+
+
 def q184_z3_a_trailing_dot_is_a_different_name_and_odd_spaces_are_no_url():
     from jen.services import auth
 
@@ -829,7 +932,7 @@ def q183_p2_f6_a_backslash_url_is_not_the_primarys_host():
 SCENARIOS = {
     name: fn
     for name, fn in sorted(globals().items())
-    if name.startswith(("b12_", "b13_", "q183_", "q184_")) and callable(fn)
+    if name.startswith(("b12_", "b13_", "q183_", "q184_", "q185_")) and callable(fn)
 }
 
 #: scenario -> the observation the rule requires
@@ -927,6 +1030,28 @@ EXPECTED = {
         True,
         ("cu", ""),
     ),
+    "q185_aa1_s1_a_dhcp4_no_password_removes_the_user_and_sends_no_header": (
+        True,
+        False,
+        "",
+        True,
+        [("http://proxy.lan:8000", "no header")],
+    ),
+    "q185_aa1_s2_a_daemon_no_password_removes_its_user_in_either_mode": ((False, ""), (False, "")),
+    "q185_aa1_s13_an_extra_servers_no_password_sends_no_header_too": (
+        True,
+        False,
+        "",
+        [("http://kea-b.lan:8000", "no header")],
+    ),
+    "q185_aa1_s3_a_typed_user_beside_no_password_or_a_restore_is_refused_whole": (False, True, True, False, True, True),
+    "q185_aa3_s4_the_audit_row_says_what_was_done_with_the_password_and_the_user": (
+        "unchanged user=typed",
+        "typed user=typed",
+    ),
+    "q185_aa3_s5_a_same_host_switch_back_says_the_saved_pair_was_discarded": (True, True, "PS", False),
+    "q185_aa3_s6_a_restored_copy_keeps_its_shared_marker": ("1", False, "CAP", "1", False),
+    "q185_aa3_a_trailing_no_break_space_is_refused_and_ordinary_padding_is_not": (False, True, False, True),
     "q184_z3_a_trailing_dot_is_a_different_name_and_odd_spaces_are_no_url": (False, True, False, False, False, True),
     "q184_z2_the_saved_pair_is_masked_in_a_support_bundle": (False, True),
     "q183_p2_f6_a_backslash_url_is_not_the_primarys_host": ("", "kea", "withheld"),

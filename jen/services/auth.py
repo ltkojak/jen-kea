@@ -229,6 +229,10 @@ def unusable_file_message(label, path) -> str:
     return f"The {label} cannot be used: the file does not exist or Jen cannot read it ({path})."
 
 
+#: padding a form or a file leaves around an address; anything else at an end (a no-break space, a zero-width character) is part of the value and is refused (AA3, Q185)
+_PADDING = " \t\r\n"
+
+
 def _odd_characters(value: str) -> bool:
     """A backslash, or any control, format (zero-width), or separator character (NBSP and the other Unicode spaces) anywhere in a URL or host: not something `urlsplit` and `requests` read
     the same way, and not a character anyone types on purpose (Q183 finding 6; widened by Q184, Z3)."""
@@ -261,7 +265,7 @@ def _endpoint_parts(u):
     (https 443, http 80); a BARE host has no scheme and so no default port. A bare IPv6 address (`::1`, `fe80::1`) is bracketed first - `urlsplit` would read its last group as a port."""
     from urllib.parse import urlsplit
 
-    u = (u or "").strip()
+    u = (u or "").strip(_PADDING)
     if not u:
         return None
     if _odd_characters(u):
@@ -307,7 +311,7 @@ def valid_api_url(url: str, require_port: bool = False) -> bool:
     urlparse raises ValueError on a bad port literal like `:abc`."""
     from urllib.parse import urlparse
 
-    value = (url or "").strip()
+    value = (url or "").strip(_PADDING)
     if not value:
         return False
     if _odd_characters(value):

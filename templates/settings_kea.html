@@ -47,13 +47,13 @@
             <div class="form-hint u-761d3a">Plain <code>http</code>: the basic-auth credentials cross the network unencrypted, so keep such a socket on a management network reachable only from the Jen host. Your own CA instead of Jen's: add the socket by hand per the admin guide's "Direct control sockets" section and fill in the TLS fields above.</div>
             <button type="submit" class="btn btn-sm btn-primary">Add socket, restart {{ daemon }} and probe</button>
         </form>
-        {% if infra.kea_connection_mode == 'direct' and (service == 'dhcp4' or current_url) %}
+        {% if (infra.kea_connection_mode == 'direct' and service == 'dhcp4') or (service != 'dhcp4' and current_url) %}
         <form method="POST" action="/settings/infrastructure/direct-socket/{{ server_id }}/{{ service }}/remove" class="u-2d191d" data-confirm="Remove the http control socket from {{ conf }} on {{ ssh_host }} and restart {{ daemon }}? {% if service == 'dhcp4' %}Jen returns to Control Agent mode unless another server still has its own socket.{% else %}Jen clears this daemon's URL override.{% endif %}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="form-group">
                 {% if service == 'dhcp4' %}<input type="text" name="user" aria-label="The Control Agent's user (blank keeps the current one)" placeholder="user (blank keeps the current one)" autocomplete="off">{% endif %}
                 <label>{% if service == 'dhcp4' %}The password Jen will use at {{ infra.prev_urls.get(server_id) or 'the Control Agent address (set it above)' }}{% else %}Replace this daemon's saved password{% endif %}
-                    <input type="password" name="password" placeholder="(blank keeps what is saved)" autocomplete="new-password"></label>
+                    <input type="password" name="password" placeholder="{% if service == 'dhcp4' %}(blank keeps the socket's pair){% else %}(blank keeps what is saved){% endif %}" autocomplete="new-password"></label>
                 <div class="form-hint">{% if service == 'dhcp4' %}A saved password is never moved to a different address by this button: type the Control Agent's, tick No password, or restore the one saved when this socket was set up.{% else %}Leave it blank unless this daemon's password changes. A password saved for a daemon whose address moves must be typed under Settings → Kea first.{% endif %}</div>
                 <label><input type="checkbox" name="no_password" value="1" class="u-30e741"> No password (nothing there is authenticated)</label>
                 {% if service == 'dhcp4' and server_id in infra.prev_pairs and infra.prev_urls.get(server_id) %}<label><input type="checkbox" name="restore_saved" value="1" class="u-30e741"> Restore the Control Agent's user and password saved for {{ infra.prev_urls.get(server_id) }}</label>{% endif %}

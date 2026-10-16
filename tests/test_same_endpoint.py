@@ -118,6 +118,13 @@ class TestAUrlTheTwoParsersReadDifferentlyNamesNoPlace:
     def test_it_is_not_a_valid_api_url(self, url):
         assert auth.valid_api_url(url) is False and auth.valid_api_url(url, require_port=True) is False
 
+    def test_a_trailing_no_break_space_is_refused_and_ordinary_padding_is_not(self):
+        """AA3 (Q185): the odd-character check runs BEFORE any strip, and the strip is ASCII padding only - a trailing NBSP is part of the value, as the page says."""
+        assert auth.valid_api_url("http://a:8000\u00a0") is False and auth.valid_api_url("http://a:8000\u200b") is False
+        assert auth.valid_api_url("http://a:8000 \n") is True and auth.valid_api_url("\thttp://a:8000") is True
+        assert auth._endpoint_parts("https://a:8000\u00a0") is None
+        assert auth.same_host(" https://a:8000\n", "https://a:8001") is True
+
     def test_an_ordinary_url_is_unchanged(self):
         assert auth.same_host("https://a:8000", "http://a:8006/x?y=1") is True
         assert auth.valid_api_url("http://kea-a.lan:8000") is True

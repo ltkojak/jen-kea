@@ -492,6 +492,16 @@ def model_marker(parser) -> str:
     return "explicit" if _get(parser, MODEL_SECTION, MODEL_KEY).strip() == MODEL_VALUE else "invalid"
 
 
+def _config_path() -> str:
+    """The file the writer writes, for a log line (no `getattr` on the writer: AA2, Q185)."""
+    try:
+        from jen import extensions
+
+        return extensions.CONFIG_FILE or "jen.config"
+    except Exception:
+        return "jen.config"
+
+
 def has_model_marker(parser) -> bool:
     """True when the marker says `explicit` (the file is converted or was born converted)."""
     return model_marker(parser) == "explicit"
@@ -521,7 +531,7 @@ def materialise(app_config, audit=None, today: str = "", already_converted: bool
             return []
         if state == "invalid":
             logger.error(
-                f"credentials: [{MODEL_SECTION}] {MODEL_KEY} = {_get(probe, MODEL_SECTION, MODEL_KEY)!r} in {getattr(app_config, 'path', 'jen.config')} is not a value Jen knows - nothing was converted. "
+                f"credentials: [{MODEL_SECTION}] {MODEL_KEY} = {_get(probe, MODEL_SECTION, MODEL_KEY)!r} in {_config_path()} is not a value Jen knows - nothing was converted. "
                 f"Set it to {MODEL_VALUE!r} if every password in the file is its own, or remove the line to convert a legacy file"
             )
             return None
@@ -572,7 +582,7 @@ def materialise(app_config, audit=None, today: str = "", already_converted: bool
             app_config.mutate(_apply, typed=set(resolve(probe)))
         except OSError as e:
             logger.error(
-                f"credentials: could not write the credential model into {getattr(app_config, 'path', 'jen.config')} ({type(e).__name__}: {e}) - "
+                f"credentials: could not write the credential model into {_config_path()} ({type(e).__name__}: {e}) - "
                 "a legacy additional server may lose its borrowed password until the file is writable; retried at the next start"
             )
             return None

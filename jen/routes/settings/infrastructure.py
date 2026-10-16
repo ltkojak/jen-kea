@@ -692,14 +692,19 @@ def save_infra_kea6():
             if cfg.has_section(section) and not cfg.options(section):
                 cfg.remove_section(section)
 
-    __config.app_config.mutate(
-        _apply,
-        typed={
-            n
-            for n, v in (("kea6", api_pass), ("kea6_db", db_pass))
-            if v and not (inherit_api_pass if n == "kea6" else inherit_db_pass)
-        },
+    # AA2 (Q185): a literal set chosen by what the form said - the password typed and not taken back to "inherit", for each of the two endpoints this form writes
+    typed_kea6 = api_pass and not inherit_api_pass
+    typed_kea6_db = db_pass and not inherit_db_pass
+    typed_names = (
+        {"kea6", "kea6_db"}
+        if (typed_kea6 and typed_kea6_db)
+        else {"kea6"}
+        if typed_kea6
+        else {"kea6_db"}
+        if typed_kea6_db
+        else set()
     )
+    __config.app_config.mutate(_apply, typed=typed_names)
 
     if not changed:
         flash("No Kea6 changes.", "info")
@@ -1165,6 +1170,9 @@ _PREV_URL_KEY = "direct_prev_api_url"
 # Control Agent authenticates with the Control Agent's. (jen.config is private; `support_bundle` masks any `*_pass` key.)
 _PREV_USER_KEY = "direct_prev_api_user"
 _PREV_PASS_KEY = "direct_prev_api_pass"
+_PREV_SHARED_KEY = (
+    "direct_prev_api_pass_shared"  # AA3 (Q185): the saved pair was a marked copy, and a restored copy is one again
+)
 
 
 def _server_by_id(server_id):
@@ -1278,6 +1286,8 @@ def _direct_socket_edit(server: dict, service: str, url: str, user: str, passwor
                 cfg.set(
                     sec, _PREV_PASS_KEY, cfg.get(sec, pass_key)
                 )  # a blank is kept: "the Control Agent had no password" is something to restore
+                if cfg.get(sec, f"{pass_key}_shared", fallback="") == "1":
+                    cfg.set(sec, _PREV_SHARED_KEY, "1")  # (read before the socket's own pair clears it below)
         cfg.set(sec, url_key, url)
         changed.append(f"[{sec}] {url_key}")
         # Per-daemon credentials: only written when they differ from the
@@ -1889,6 +1899,13 @@ def remove_direct_socket(server_id, service):
     if sum(bool(x) for x in (password, no_password, restore_saved)) > 1:
         flash("Choose one for the password: type it, tick No password, or restore the saved one.", "error")
         return back
+    # AA1/AA3 (Q185): "No password" means no user either, so a typed user beside it is a contradiction; the restore is the saved user AND password or neither, so a typed user beside it is too
+    if user_typed and (no_password or restore_saved):
+        flash(
+            "Choose one for the user: type one, or tick No password / restore the saved pair (each of those sets the user itself).",
+            "error",
+        )
+        return back
     _sec, _url_key, _user_key, _pass_key = _socket_keys(server, service)
     _live = __config.app_config._read_parser()
     # (second pass, Q184, finding 1: the saved pair is valid WITH its address - a pair left without one by an older release is not offered and not restored)
@@ -1933,8 +1950,20 @@ def remove_direct_socket(server_id, service):
                         cfg.set(sec, "api_user", cfg.get(sec, _PREV_USER_KEY))
                     # the password is ALWAYS set: a saved user with no saved password is a Control Agent with none - the socket's password must not stay behind and go to the Control Agent's address
                     cfg.set(sec, "api_pass", cfg.get(sec, _PREV_PASS_KEY, fallback=""))
+                    if cfg.get(sec, _PREV_SHARED_KEY, fallback="") == "1":
+                        cfg.set(
+                            sec, f"{pass_key}_shared", "1"
+                        )  # the saved pair was a marked copy; so is the restored one
                     changed.append(f"[{sec}] the Control Agent's saved user and password restored")
-                for stale in (_PREV_USER_KEY, _PREV_PASS_KEY):
+                elif (
+                    prev
+                    and (cfg.has_option(sec, _PREV_USER_KEY) or cfg.has_option(sec, _PREV_PASS_KEY))
+                    and not (password or no_password)
+                ):
+                    changed.append(
+                        f"[{sec}] the Control Agent's saved user and password were DISCARDED - the socket's pair is now the Control Agent's (tick Restore the saved user and password to put the saved pair back)"
+                    )
+                for stale in (_PREV_USER_KEY, _PREV_PASS_KEY, _PREV_SHARED_KEY):
                     if cfg.has_option(sec, stale):
                         cfg.remove_option(
                             sec, stale
@@ -1947,9 +1976,12 @@ def remove_direct_socket(server_id, service):
                 __credentials.clear_shared(cfg, _endpoint_name(server, service))
                 changed.append(f"[{sec}] api_pass set (typed for the Control Agent)")
             elif no_password:
+                # AA1 (Q185): "No password" is no authentication - no user either (an empty Basic header carrying the socket's username is not "none")
                 cfg.set(sec, "api_pass", "")
+                if cfg.has_option(sec, "api_user"):
+                    cfg.remove_option(sec, "api_user")
                 __credentials.clear_shared(cfg, _endpoint_name(server, service))
-                changed.append(f"[{sec}] api_pass set to no password")
+                changed.append(f"[{sec}] user and password cleared (no authentication)")
             if not keep_direct and cfg.get("kea", "connection_mode", fallback="ca") != "ca":
                 cfg.set("kea", "connection_mode", "ca")
                 changed.append("Jen switched back to Control Agent mode")
@@ -1968,8 +2000,12 @@ def remove_direct_socket(server_id, service):
                 if not cfg.has_section(sec):
                     cfg.add_section(sec)
                 cfg.set(sec, pass_key, password if password else "")
+                if no_password and cfg.has_option(sec, user_key):
+                    cfg.remove_option(sec, user_key)  # AA1 (Q185): no authentication is no user, in either mode
                 __credentials.clear_shared(cfg, _endpoint_name(server, service))
-                changed.append(f"[{sec}] {pass_key} {'set' if password else 'set to no password'}")
+                changed.append(
+                    f"[{sec}] {pass_key} set" if password else f"[{sec}] user and password cleared (no authentication)"
+                )
             if sid == 1 and cfg.has_section(sec) and not cfg.options(sec):
                 cfg.remove_section(sec)
 
@@ -2074,7 +2110,11 @@ def remove_direct_socket(server_id, service):
             "warning",
         )
     answer = "typed" if password else "none" if no_password else "restored" if restore_saved else "unchanged"
-    __user.audit("REMOVE_DIRECT_SOCKET", "kea_api", f"server={name} service={service} password={answer}")
+    __user.audit(
+        "REMOVE_DIRECT_SOCKET",
+        "kea_api",
+        f"server={name} service={service} password={answer} user={'typed' if user_typed else 'unchanged'}",
+    )
     return back
 
 
@@ -2542,10 +2582,13 @@ def save_extra_servers():
                     cfg.set(sec, "api_pass", prev["api_pass"])
                     if prev.get(__credentials.SHARED_MARKER):
                         cfg.set(sec, __credentials.SHARED_MARKER, prev[__credentials.SHARED_MARKER])
-            elif share_ticked and extensions.KEA_API_PASS:
-                # a NEW row: the primary's password only because the box "Share the primary's API password (an HA peer of the same Kea)" was ticked - a copy, marked as one
-                cfg.set(sec, "api_pass", extensions.KEA_API_PASS)
-                cfg.set(sec, __credentials.SHARED_MARKER, "1")
+            elif share_ticked:
+                # a NEW row: the primary's password only because the box "Share the primary's API password (an HA peer of the same Kea)" was ticked - a copy, marked as one. The typed claim is
+                # the box alone (AA2, Q185); whether the primary HAS a password is the parser's to say, inside the callback, not a read of the configuration to decide the claim
+                primary_password = cfg.get("kea", "api_pass", fallback="")
+                if primary_password:
+                    cfg.set(sec, "api_pass", primary_password)
+                    cfg.set(sec, __credentials.SHARED_MARKER, "1")
                 typed_names.add(f"server_{out}")
             # v5.10.2 — per-server v6 endpoint. Blank managed field ⇒ key
             # absent (that IS the clear). api6_pass blank ⇒ preserve by id.

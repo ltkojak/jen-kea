@@ -430,10 +430,13 @@ class TestTheMarkerLivesInTheFileItDescribes:
         fake = _FakeConfig(_p(self.LEGACY + "[jen]\ncredential_model = explicit\n"))
         assert cred.materialise(fake, already_converted=False) == [] and fake.writes == 0
 
-    def test_a_read_only_file_logs_one_error_naming_it_and_raises_nothing(self, caplog):
-        class ReadOnly(_FakeConfig):
-            path = "/etc/jen/jen.config"
+    def test_a_read_only_file_logs_one_error_naming_it_and_raises_nothing(self, caplog, monkeypatch):
+        # (Q185 AA2: the log line names the file the WRITER writes - `extensions.CONFIG_FILE` - rather than a `getattr` on the writer object, which the typed= checker refuses)
+        from jen import extensions
 
+        monkeypatch.setattr(extensions, "CONFIG_FILE", "/etc/jen/jen.config")
+
+        class ReadOnly(_FakeConfig):
             def mutate(self, *a, **k):
                 raise PermissionError(13, "Read-only file system")
 
@@ -682,6 +685,8 @@ class TestNoAuthenticationIsNoUser:
         assert (r["server_2"].user, r["server_2"].password) == ("", "")
 
     def test_an_own_user_beside_a_blank_password_stays(self):
+        """AA1 (Q185): the RESOLVER keeps a user a form wrote beside a blank password (`Basic user:` with an empty password is a real endpoint - the Kea6 and D2 forms offer the user field
+        explicitly). It is the REMOVE form that never writes one: its "No password" removes the user key (tests/test_direct_socket_credentials.py::TestTheRemoveFormInfersNothing)."""
         e = cred.resolve(_p(self.SAME + "api_user = mine\n"))["kea6"]
         assert (e.user, e.password) == ("mine", "")
 
@@ -1026,12 +1031,27 @@ class TestTheKea6DatabaseIsAnEndpoint:
 
 
 class TestTypedIsAHumansAct:
-    """Z4 (Q184): the design rule, enforced by `tests/typed_claims.py`. CRED-004: the writer's `typed` set is a human's act in this request or the one-time conversion; a route never
-    derives it from hosts, DNS or history. The first version of this check looked only at the branches of a conditional, so `{..} if _same_box(url, ssh) else set()` - the shape beta.13 and
-    beta.14 shipped - passed; the second pass EXECUTED it against twelve shapes that slipped. They are the `SLIPS` below and every one must be caught."""
+    """Z4 (Q184) / AA2 (Q185): the design rule, enforced by `tests/typed_claims.py`. CRED-004: the writer's `typed` set is a human's act in this request or the one-time conversion; a route
+    never derives it from hosts, DNS or history. Beta.15's checker accepted a wider language than that; an executing pass found seventeen shapes derived from hosts, configuration or history
+    that it let through. They are `SLIPS_Q185` (and the earlier twelve-plus in `SLIPS`), and every one must be caught. The checker is the registry's sentence, not the other way round."""
 
-    #: the one place a dynamic set is the point: the conversion types every endpoint it writes, by design (CRED-004, U2)
-    ALLOWED = {("jen/services/credentials.py", "materialise")}
+    #: what may be dynamic, and the ONE thing each may do (tests/typed_claims.py DYNAMIC) - asserted here so it cannot grow silently
+    EXPECTED_DYNAMIC = {
+        ("jen/services/credentials.py", "materialise"): "conversion",
+        ("jen/services/setup_wizard.py", "save_connection"): "params",
+        ("jen/services/setup_wizard.py", "enable_v6"): "params",
+        ("jen/routes/settings/infrastructure.py", "setup_direct_socket"): "endpoint_name",
+        ("jen/routes/settings/infrastructure.py", "_write_direct_socket_config"): "endpoint_name",
+        ("jen/routes/settings/infrastructure.py", "remove_direct_socket"): "endpoint_name",
+        ("jen/routes/settings/infrastructure.py", "copy_primary_password"): "server_fstring",
+        ("jen/routes/settings/infrastructure.py", "save_extra_servers"): "adds",
+    }
+
+    def test_the_dynamic_list_is_exactly_the_reviewed_one(self):
+        from tests.typed_claims import DYNAMIC
+
+        assert {k: v[0] for k, v in DYNAMIC.items()} == self.EXPECTED_DYNAMIC
+        assert all(len(v[1]) > 20 for v in DYNAMIC.values()), "each entry says why"
 
     def test_no_route_or_service_derives_typed_from_anything_but_a_form(self):
         import pathlib
@@ -1046,10 +1066,7 @@ class TestTypedIsAHumansAct:
                 if rel == "jen/config.py":
                     continue  # the writer itself (plumbs the set through)
                 scanned += 1
-                for line in untyped_claims(path.read_text(encoding="utf-8"), rel):
-                    where = line.split(" in ")[1].split("(")[0]
-                    if (rel, where) not in self.ALLOWED:
-                        found.append(line)
+                found += untyped_claims(path.read_text(encoding="utf-8"), rel)
         assert scanned > 100, "the scan found no tree"
         assert found == [], "typed= must be a literal set of names, or a conditional on the REQUEST:\n" + "\n".join(
             found
@@ -1076,8 +1093,46 @@ class TestTypedIsAHumansAct:
         'def f():\n    for n in ("kea",):\n        app_config.mutate(fn, typed={n} if open("/etc/hosts").read() else None)\n',
     ]
 
-    @pytest.mark.parametrize("bad", SLIPS)
-    def test_the_checker_catches_every_shape_that_slipped_through_the_first_version(self, bad):
+    #: Q185 (AA2): the seventeen shapes the executing pass on beta.15 let through, by the hole each used
+    SLIPS_Q185 = [
+        # `extensions` was whitelisted wholesale
+        'def f():\n    app_config.mutate(fn, typed={"kea"} if extensions.KEA_API_PASS else None)\n',
+        'def f():\n    app_config.mutate(fn, typed={"kea"} if extensions.cfg.get("kea", "api_pass") else None)\n',
+        'def f():\n    pw = extensions.KEA_API_PASS\n    app_config.mutate(fn, typed={"kea"} if pw else None)\n',
+        # f-string and comprehension elements were unchecked
+        'def f():\n    app_config.mutate(fn, typed={f"{dns_name(h)}"})\n',
+        'def f():\n    app_config.mutate(fn, typed={f"server_{n}"})\n',
+        'def f():\n    app_config.mutate(fn, typed={n for n in ("kea",)})\n',
+        'def f():\n    app_config.mutate(fn, typed={n for n in ("kea", "kea6") if request.form.get(n)})\n',
+        # .add() was refused only under if/while
+        'def f():\n    names = set()\n    for h in hosts_from_config():\n        names.add("kea")\n    app_config.mutate(fn, typed=names)\n',
+        'def f():\n    names = set()\n    with open("/etc/hosts") as fh:\n        names.add("kea")\n    app_config.mutate(fn, typed=names)\n',
+        'def f():\n    names = set()\n    if not _same_box(a, b):\n        return\n    names.add("kea")\n    app_config.mutate(fn, typed=names)\n',
+        'def f():\n    names = set()\n    try:\n        names.add("kea")\n    finally:\n        pass\n    app_config.mutate(fn, typed=names)\n',
+        # a walrus, a nested def's parameter, a lambda
+        'def f():\n    app_config.mutate(fn, typed={"kea"} if (ok := _same_box(a, b)) else None)\n',
+        'def f():\n    def g(x):\n        app_config.mutate(fn, typed={"kea"} if x else None)\n    g(_same_box(a, b))\n',
+        'def f(flag):\n    app_config.mutate(fn, typed={"kea"} if flag else None)\n',
+        "def f():\n    app_config.mutate(fn, typed=(lambda: derived())())\n",
+        # getattr, partial, an aliased writer, an aliased app_config
+        'def f():\n    getattr(app_config, "mutate")(fn, typed=derived)\n',
+        "def f():\n    functools.partial(app_config.mutate, typed=derived)(fn)\n",
+        "def f():\n    w = app_config.mutate\n    w(fn, typed=derived)\n",
+        "def f():\n    c = app_config\n    c.mutate(fn, typed=derived)\n",
+        "from jen.config import app_config as ac\ndef f():\n    ac.mutate(fn, typed=derived)\n",
+        # a name rebound or handed on
+        'def f():\n    names = {"kea"}\n    names = derive(names)\n    app_config.mutate(fn, typed=names)\n',
+        'def f():\n    names = {"kea"}\n    log(names)\n    app_config.mutate(fn, typed=names)\n',
+        # request values other than the form, and form reads with a derived argument
+        'def f():\n    app_config.mutate(fn, typed={"kea"} if request.args.get("x") else None)\n',
+        'def f():\n    app_config.mutate(fn, typed={"kea"} if request.form.get(derived()) else None)\n',
+        'def f():\n    app_config.mutate(fn, typed={"kea"} if request.form.get("x") == host() else None)\n',
+        # a writer method on an object that merely resembles it
+        "def f(w):\n    w.mutate(fn, typed=derived)\n",
+    ]
+
+    @pytest.mark.parametrize("bad", SLIPS + SLIPS_Q185)
+    def test_the_checker_catches_every_shape_that_slipped_through_an_earlier_version(self, bad):
         from tests.typed_claims import untyped_claims
 
         assert untyped_claims(bad), bad
@@ -1086,13 +1141,13 @@ class TestTypedIsAHumansAct:
         "good",
         [
             'def f():\n    app_config.mutate(fn, typed={"kea"} if request.form.get("api_pass") else None)\n',
-            'def f(api_pass):\n    app_config.mutate(fn, typed={"kea6"} if api_pass else None)\n',
-            'def f(a, b):\n    app_config.write_values(items, typed={n for n, v in (("kea", a), ("kea_db", b)) if v})\n',
-            'def f():\n    pw = request.form.get("password", "").strip()\n    no = request.form.get("no_password", "") == "1"\n    names = {_endpoint_name(s, svc)} if (pw or no) else set()\n    app_config.mutate(fn, typed=names)\n',
-            'def f():\n    names = set()\n    if request.form.get("share") == "1":\n        names.add(f"server_{n}")\n    app_config.mutate(fn, typed=names)\n',
+            'def f():\n    pw = request.form.get("password", "").strip()\n    app_config.mutate(fn, typed={"kea"} if pw else None)\n',
+            'def f():\n    pw = request.form.get("password", "").strip()\n    inherit = request.form.get("inherit") == "1"\n    app_config.write_values(items, typed={"d2"} if pw and not inherit else None)\n',
+            'def f():\n    a = request.form.get("a")\n    b = request.form.get("b")\n    names = {"x", "y"} if (a and b) else {"x"} if a else {"y"} if b else set()\n    app_config.mutate(fn, typed=names)\n',
+            'def f():\n    mode = request.form.get("mode", "")\n    app_config.mutate(fn, typed={"kea"} if mode in ("a", "b") else set())\n',
             "def f():\n    app_config.mutate(fn)\n",
             "def f():\n    app_config.mutate(fn, typed=None)\n",
-            'def f():\n    app_config.mutate(fn, typed={f"server_{server_id}"})\n',
+            'def f():\n    app_config.mutate(fn, typed={"kea", "d2"})\n',
         ],
     )
     def test_the_checker_accepts_what_a_form_decides(self, good):
@@ -1100,10 +1155,22 @@ class TestTypedIsAHumansAct:
 
         assert untyped_claims(good) == [], good
 
-    def test_a_parser_method_named_mutate_is_not_the_writer(self):
+    def test_the_dynamic_capabilities_are_per_function_and_do_nothing_elsewhere(self):
         from tests.typed_claims import untyped_claims
 
-        assert untyped_claims("def f(parser):\n    parser.mutate(typed=derived())\n") == []
+        source = 'def enable_v6(api_pass):\n    app_config.mutate(fn, typed={"kea6"} if api_pass else None)\n'
+        assert untyped_claims(source, "jen/services/setup_wizard.py") == []
+        assert untyped_claims(source, "jen/services/other.py") != [], (
+            "a parameter is the caller's claim only where the list says so"
+        )
+        source = "def remove_direct_socket(server, service):\n    app_config.mutate(fn, typed={_endpoint_name(server, service)})\n"
+        assert untyped_claims(source, "jen/routes/settings/infrastructure.py") == []
+        assert untyped_claims(source, "jen/routes/settings/other.py") != []
+
+    def test_a_parser_method_named_mutate_with_typed_is_not_waved_through(self):
+        from tests.typed_claims import untyped_claims
+
+        assert untyped_claims("def f(parser):\n    parser.mutate(typed=derived())\n") != []
 
     def test_the_registry_says_it(self):
         import pathlib
