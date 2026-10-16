@@ -20,6 +20,7 @@ from jen.config import AppConfig, ConfigChangeRefused, app_config
 from jen.routes.settings import infrastructure as infra
 from jen.services import credentials as cred
 from jen.services import kea
+from tests.probe import credential_probe as probe
 
 HOSTNAME = """
 [kea]
@@ -221,96 +222,129 @@ class TestSwitchingBackByNameIsAskedBeforeTheKeaHostIsTouched:
         assert names == {"kea6"}
 
 
-class TestARemoveSocketRouteTypesOnlyWhatAlreadyWentToThisBox:
-    """Second pass (Q183) findings 1 and 2: beta.13's "Remove socket" routes typed the endpoints they repoint or re-derive, so a password typed for a DIFFERENT host (a Kea6 url on `b`, a
-    primary retargeted to `z`) went to the Control Agent's host. `_typed_for_removal` types an endpoint only when the address it is leaving was on THIS box (the server's SSH host)."""
+class TestTheRemoveFormInfersNothing:
+    """Z1 (v5.69.0-beta.15, Q184): the Remove-socket routes infer nothing. Beta.13 typed what they re-derived, beta.14 typed what had "already gone to this box" by comparing the address an
+    endpoint LEAVES with the SSH host - and a proxy, a tunnel or a jump host each made that comparison wrong in a different direction (a secret to the Control Agent's host; a legitimate
+    switch-back refused). The form has the password field every credential-moving form has, and the route types the endpoint it repoints only when the person typed a password, ticked
+    No password, or ticked the saved one. These drive the REAL route body on a real jen.config (`probe.route_remove`); Flask is the only dependency."""
 
-    SERVER = {"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5", "api_url": "http://10.0.0.5:8004"}
+    PROXY = probe.PROXY
 
-    @pytest.fixture(autouse=True)
-    def _no_dns(self, monkeypatch):
-        def fail(*a, **k):
-            raise OSError("no resolver in a pure test")
+    def test_the_helpers_that_inferred_a_box_are_gone(self):
+        import inspect
 
-        monkeypatch.setattr("socket.getaddrinfo", fail)
+        assert not hasattr(infra, "_typed_for_removal") and not hasattr(infra, "_same_box")
+        source = inspect.getsource(infra)
+        assert "def _same_box" not in source and "def _typed_for_removal" not in source and "getaddrinfo(" not in source
 
-    @staticmethod
-    def _switch_back(prev="http://kea-a.lan:8000"):
-        def fn(cfg):
-            cfg.set("kea", "api_url", prev)
-            cfg.set("kea", "connection_mode", "ca")
-            if cfg.has_option("kea", "direct_prev_api_url"):
-                cfg.remove_option("kea", "direct_prev_api_url")
+    def test_a_control_agent_on_a_proxy_is_refused_untyped_and_the_kea_host_is_never_touched(self):
+        r = probe.route_remove(self.PROXY, "dhcp4")
+        assert r["touched"] is False and r["changed"] is False and r["text"] == self.PROXY
+        assert "moved to a different host" in r["flashes"] and "Nothing was changed" in r["flashes"]
 
-        return fn
+    def test_the_same_with_the_password_typed_is_written_with_that_password(self):
+        r = probe.route_remove(self.PROXY, "dhcp4", {"password": "CAPW"})
+        p = _parse(r["text"])
+        assert r["touched"] and (p.get("kea", "api_pass"), p.get("kea", "api_url")) == ("CAPW", "http://proxy.lan:8000")
+        assert p.get("kea", "connection_mode") == "ca" and not p.has_option("kea", "direct_prev_api_url")
 
-    def _typed(self, text, server, service, apply_fn, _a_real_file):
-        _a_real_file.write_text(text, encoding="utf-8")
-        return infra._typed_for_removal(server, service, app_config._read_parser(), apply_fn)
+    def test_no_password_is_an_answer(self):
+        r = probe.route_remove(self.PROXY, "dhcp4", {"no_password": "1"})
+        assert r["touched"] and _parse(r["text"]).get("kea", "api_pass") == ""
 
-    def test_the_primary_on_the_box_and_a_daemon_that_had_an_address_there_are_typed(self, _a_real_file):
+    def test_two_answers_are_refused_before_anything_is_sent(self):
+        for form in ({"password": "x", "no_password": "1"}, {"password": "x", "restore_saved": "1"}):
+            r = probe.route_remove(self.PROXY, "dhcp4", form)
+            assert not r["touched"] and "Choose one" in r["flashes"] and r["text"] == self.PROXY
+
+    def test_a_jump_host_ssh_target_does_not_matter_to_a_typed_switch_back(self):
+        text = self.PROXY.replace("proxy.lan", "kea-a.lan")
+        assert probe.route_remove(text, "dhcp4", {"password": "CAPW"}, ssh_host="10.9.9.9")["touched"]
+        assert not probe.route_remove(text, "dhcp4", ssh_host="10.9.9.9")["touched"]
+
+    def test_a_daemon_password_with_no_address_is_never_typed_by_the_button_and_is_named(self):
+        text = self.PROXY + "[kea6]\napi_pass = K6\n"
+        r = probe.route_remove(text, "dhcp4", {"password": "CAPW"})
+        assert not r["touched"] and "Kea6 API" in r["flashes"] and "Settings" in r["flashes"] and r["text"] == text
+
+    @pytest.mark.parametrize(("service", "section"), [("dhcp6", "kea6"), ("d2", "d2")])
+    def test_a_daemons_removal_in_control_agent_mode_leaves_no_pair_of_its_own(self, service, section):
+        url = "https://b:8006" if service == "dhcp6" else "https://b:53001"
+        text = probe.BASE + f"[{section}]\napi_url = {url}\napi_user = x\napi_pass = K6\napi_pass_shared = 1\n"
+        r = probe.route_remove(text, service)
+        p = _parse(r["text"])
+        assert r["touched"] and not p.has_section(section), (
+            "the section had nothing left but the socket's pair and address"
+        )
+        assert cred.resolve(p)[section].password == "S" or cred.resolve(p)[section].password == "PS"
+
+    @pytest.mark.parametrize(("service", "section"), [("dhcp6", "kea6"), ("d2", "d2")])
+    def test_a_daemons_removal_in_direct_mode_keeps_its_pair_and_clears_only_the_address(self, service, section):
+        url = "http://10.0.0.5:8006" if service == "dhcp6" else "http://10.0.0.5:53001"
+        text = probe.DIRECT + f"[{section}]\napi_url = {url}\napi_user = x\napi_pass = K6\n"
+        p = _parse(probe.route_remove(text, service)["text"])
+        assert (p.get(section, "api_pass"), p.has_option(section, "api_url")) == ("K6", False)
+
+    def test_the_round_trip_in_both_orders(self):
+        ca = probe.BASE.replace("https://a:8000", "http://kea-a.lan:8000").replace("api_user = pu", "api_user = cu")
+        ca = ca.replace("api_pass = PS", "api_pass = CAP")
+        _, t4 = probe._setup(ca, "dhcp4", "http://10.0.0.5:8004", "sock", "SOCKPW", {"kea"})
+        assert _parse(t4).get("kea", "direct_prev_api_pass") == "CAP" and _parse(t4).get("kea", "api_pass") == "SOCKPW"
+        _, t46 = probe._setup(t4, "dhcp6", "http://10.0.0.5:8006", "six", "SIXPW", {"kea6"})
+        # A: the primary first, restoring its own pair; the daemon (still with its own address) is not re-derived; then the daemon in Control Agent mode
+        a1 = probe.route_remove(t46, "dhcp4", {"restore_saved": "1"})
+        a2 = probe.route_remove(a1["text"], "dhcp6")
+        end = _parse(a2["text"])
+        assert (
+            a1["touched"]
+            and a2["touched"]
+            and end.get("kea", "api_pass") == "CAP"
+            and end.get("kea", "api_user") == "cu"
+        )
+        assert not end.has_section("kea6") and cred.resolve(end)["kea6"].password == "CAP"
+        assert not any(k.startswith("direct_prev") for k in end["kea"])
+        # B: the daemon first (direct mode keeps its pair, no address), then the primary - refused, naming the daemon, until that pair is cleared
+        b1 = probe.route_remove(t46, "dhcp6")
+        b2 = probe.route_remove(b1["text"], "dhcp4", {"restore_saved": "1"})
+        assert b1["touched"] and not b2["touched"] and "Kea6 API" in b2["flashes"] and b2["text"] == b1["text"]
+
+    def test_the_saved_pair_is_restored_only_when_asked_and_is_forgotten_when_superseded(self):
+        text = probe._direct_on(
+            "http://10.0.0.5:8004", "http://kea-a.lan:8000", "direct_prev_api_user = cu\ndirect_prev_api_pass = CAP\n"
+        )
+        untouched = probe.route_remove(
+            text, "dhcp4"
+        )  # nothing typed, nothing ticked: the socket's pair would reach the Control Agent's host
+        assert not untouched["touched"] and untouched["text"] == text
+        typed = _parse(probe.route_remove(text, "dhcp4", {"password": "NEW"})["text"])
+        assert typed.get("kea", "api_pass") == "NEW" and not typed.has_option("kea", "direct_prev_api_pass")
+
+    def test_an_extra_servers_switch_back_follows_the_same_rule(self):
         text = (
-            SWITCHED.replace("[kea6]\napi_pass = K6\n", "") + "[kea6]\napi_url = http://10.0.0.5:8006\napi_pass = K6\n"
+            probe.BASE + "[kea_server_2]\nname = b\napi_url = http://10.0.0.6:8004\napi_user = su\napi_pass = SP\n"
+            "direct_prev_api_url = http://kea-b.lan:8000\ndirect_prev_api_pass = CB\n"
+        )
+        text = text.replace("[kea]\n", "[kea]\nconnection_mode = direct\n", 1)
+        assert not probe.route_remove(text, "dhcp4", server_id=2, ssh_host="10.0.0.6")["touched"]
+        back = _parse(
+            probe.route_remove(text, "dhcp4", {"restore_saved": "1"}, server_id=2, ssh_host="10.0.0.6")["text"]
+        )
+        assert (back.get("kea_server_2", "api_pass"), back.get("kea_server_2", "api_url")) == (
+            "CB",
+            "http://kea-b.lan:8000",
         )
 
-        def apply(cfg):
-            self._switch_back()(cfg)
-            cfg.remove_option("kea6", "api_url")
+    def test_the_form_has_the_field_and_the_boxes_and_says_where_the_password_goes(self):
+        import pathlib
 
-        assert self._typed(text, self.SERVER, "dhcp4", apply, _a_real_file) == {"kea", "kea6"}
-
-    def test_f1_a_daemon_whose_password_has_no_address_is_not_typed(self, _a_real_file):
-        """K6 typed for host b, its address removed, then the switch-back: nothing says where K6 belongs, so the route does not claim it was typed."""
-        text = SWITCHED  # [kea6] api_pass = K6, no address
-        typed = self._typed(text, self.SERVER, "dhcp4", self._switch_back(), _a_real_file)
-        assert typed == {"kea"}
-        with pytest.raises(ConfigChangeRefused, match="first address"):
-            app_config.preflight_identity_change(self._switch_back(), typed=typed)
-
-    def test_f1_a_daemon_whose_address_was_on_another_host_is_not_typed(self, _a_real_file):
-        text = SWITCHED.replace("[kea6]\napi_pass = K6\n", "[kea6]\napi_url = https://b:8006\napi_pass = K6\n")
-
-        def apply(cfg):
-            self._switch_back()(cfg)
-            cfg.remove_option("kea6", "api_url")
-
-        assert self._typed(text, self.SERVER, "dhcp4", apply, _a_real_file) == {"kea"}
-
-    def test_f2_a_stale_previous_address_after_the_primary_was_retargeted_is_not_typed(self, _a_real_file):
-        server = dict(self.SERVER, api_url="http://z:8004")
-        text = SWITCHED.replace("http://10.0.0.5:8001", "http://z:8004").replace("[kea6]\napi_pass = K6\n", "")
-        typed = self._typed(text, server, "dhcp4", self._switch_back("https://a:8000"), _a_real_file)
-        assert typed == set()
-        with pytest.raises(ConfigChangeRefused, match="moved to a different host"):
-            app_config.preflight_identity_change(self._switch_back("https://a:8000"), typed=typed)
-
-    def test_f3_removing_a_dhcp6_socket_whose_address_was_on_another_host_is_not_typed(self, _a_real_file):
-        text = HOSTNAME.replace("connection_mode = direct\n", "") + "[kea6]\napi_url = https://b:8006\napi_pass = K6\n"
-
-        def apply(cfg):
-            cfg.remove_option("kea6", "api_url")
-
-        typed = self._typed(text, self.SERVER, "dhcp6", apply, _a_real_file)
-        assert typed == set()
-        with pytest.raises(ConfigChangeRefused, match="moved to a different host"):
-            app_config.preflight_identity_change(apply, typed=typed)
-
-    def test_removing_a_dhcp6_socket_that_was_on_the_box_is_typed(self, _a_real_file):
-        text = HOSTNAME + "[kea6]\napi_url = http://10.0.0.5:8006\napi_pass = K6\n"
-
-        def apply(cfg):
-            cfg.remove_option("kea6", "api_url")
-
-        assert self._typed(text, self.SERVER, "dhcp6", apply, _a_real_file) == {"kea6"}
-
-    def test_a_name_that_resolves_to_the_ssh_hosts_address_is_the_same_box(self, monkeypatch):
-        monkeypatch.setattr(
-            "socket.getaddrinfo",
-            lambda host, port, *a, **k: [(2, 1, 6, "", ("10.0.0.5", 0))] if host in ("kea-a.lan", "10.0.0.5") else [],
+        page = (pathlib.Path(__file__).resolve().parent.parent / "templates" / "settings_kea.html").read_text(
+            encoding="utf-8"
         )
-        assert infra._same_box("http://kea-a.lan:8000", "10.0.0.5") is True
-        assert infra._same_box("http://other.lan:8000", "10.0.0.5") is False
+        for needle in ('name="password"', 'name="no_password"', 'name="restore_saved"', "The password Jen will use at"):
+            assert needle in page, needle
 
-    def test_a_name_that_does_not_resolve_is_not_evidence(self):
-        assert infra._same_box("http://nowhere.invalid:8000", "10.0.0.5") is False
-        assert infra._same_box("", "10.0.0.5") is False and infra._same_box("http://a:1", "") is False
+    def test_the_saved_password_is_masked_in_a_support_bundle(self):
+        from jen.services import support_bundle
+
+        out = support_bundle.redact_ini_text("[kea]\ndirect_prev_api_user = cu\ndirect_prev_api_pass = CAP\n")
+        assert "CAP" not in out and "direct_prev_api_user = cu" in out

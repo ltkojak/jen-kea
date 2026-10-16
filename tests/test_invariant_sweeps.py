@@ -498,6 +498,9 @@ S10_ALLOWED = {
     ("jen/services/auth.py", "_endpoint_parts", "ValueError", "return None"): (
         "an address that cannot be parsed (a bad port) names no place, so it is NEVER the same endpoint as anything: a kept secret is then removed or the form refuses - fail closed (CRED-002, Q178)"
     ),
+    ("jen/services/auth.py", "_plain_host", "UnicodeError", "return False"): (
+        "a host that cannot be IDNA-encoded is NOT a plain name: `valid_api_url` then refuses the address, so a credential is never sent to a name nobody can read the same way twice (Q184, Z3)"
+    ),
     ("jen/services/auth.py", "usable_file", "(OSError, ValueError, TypeError)", "return False"): (
         "a path that cannot be examined is NOT a usable file: the caller refuses the CA bundle / client certificate it was asked to trust (Q174)"
     ),

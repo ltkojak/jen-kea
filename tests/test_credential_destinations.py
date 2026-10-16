@@ -363,8 +363,28 @@ ROWS = {
         typed={"kea"},
         refused=True,
     ),
-    "a_dhcp4_switch_back_by_name_with_the_derived_daemons_typed_by_the_route": Row(
-        "beta.13 second pass (Q182) P2-1, narrowed by beta.14 (Q183): ... the route types a daemon whose password ALREADY went to this box (kea6 had an own address on it), so it is written and nothing was changed on the Kea host first",
+    "a_dhcp4_switch_back_by_name_with_the_daemons_own_password_typed_first": Row(
+        "beta.13 second pass (Q182) P2-1, rewritten by beta.15 (Q184, Z1): the route types only the primary - a daemon whose address is re-derived is written only when ITS password was typed (here, under Settings first)",
+        DIRECT.replace("https://a:8000", "http://10.0.0.5:8001")
+        + "direct_prev_api_url = http://kea-a.lan:8000"
+        + NL
+        + "[kea6]"
+        + NL
+        + "api_url = http://10.0.0.5:8006"
+        + NL
+        + "api_pass = K6"
+        + NL,
+        _all(
+            _set("kea", "connection_mode", "ca"),
+            _set("kea", "api_url", "http://kea-a.lan:8000"),
+            _drop("kea6", "api_url"),
+            _set("kea6", "api_pass", "K6B"),
+        ),
+        typed={"kea", "kea6"},
+        expect={"kea6": ("K6B", "own", "")},
+    ),
+    "a_dhcp4_switch_back_by_name_leaves_a_daemon_that_was_on_the_boxs_ip_refused": Row(
+        "beta.15 (Q184, Z1): the same switch-back with only the primary typed (what the route does) - the daemon's address would move from the box's IP to the Control Agent's name, with its saved password",
         DIRECT.replace("https://a:8000", "http://10.0.0.5:8001")
         + "direct_prev_api_url = http://kea-a.lan:8000"
         + NL
@@ -379,8 +399,8 @@ ROWS = {
             _set("kea", "api_url", "http://kea-a.lan:8000"),
             _drop("kea6", "api_url"),
         ),
-        typed={"kea", "kea6"},
-        expect={"kea6": ("K6", "own", "")},
+        typed={"kea"},
+        refused=True,
     ),
     "a_switch_back_to_a_stale_previous_address_after_the_primary_was_retargeted": Row(
         "beta.13 second pass (Q183) finding 1 (F2): the primary was retargeted to host z with its password typed there, direct_prev_api_url still names a - the route must not type a password for a",

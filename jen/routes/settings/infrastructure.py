@@ -9,7 +9,6 @@ import ipaddress
 import logging
 import os
 import re
-import socket
 import subprocess
 import time
 from copy import deepcopy as _deepcopy
@@ -273,7 +272,17 @@ def settings_kea():
             if _needs_port(srv.get("api6_url", "")):
                 direct_port_warnings.append(f"{srv.get('name', 'Kea Server')} api6_url ({srv['api6_url']})")
 
+    # Z1/Z2 (Q184): the Remove form shows where the Control Agent will be reached and whether its own password was saved
+    _prev_urls, _prev_pairs = {}, set()
+    for _sid, _sec in [(1, "kea"), *[(n, f"kea_server_{n}") for n in _kea_server_section_ids(extensions.cfg)]]:
+        if extensions.cfg.has_section(_sec):
+            if extensions.cfg.get(_sec, "direct_prev_api_url", fallback=""):
+                _prev_urls[_sid] = extensions.cfg.get(_sec, "direct_prev_api_url")
+            if extensions.cfg.get(_sec, "direct_prev_api_pass", fallback=""):
+                _prev_pairs.add(_sid)
     infra = {
+        "prev_urls": _prev_urls,
+        "prev_pairs": _prev_pairs,
         "shared_copies": _shared_copies,
         "kea_api_url": extensions.cfg.get("kea", "api_url", fallback=""),
         "kea_api_user": extensions.cfg.get("kea", "api_user", fallback=""),
@@ -1150,6 +1159,10 @@ _DAEMON_KEY = {"dhcp4": "Dhcp4", "dhcp6": "Dhcp6", "d2": "DhcpDdns"}
 # field: _rewrite_extra_servers copies it forward with the other
 # unmanaged keys (it's not in _EXTRA_SERVER_FORM_KEYS).
 _PREV_URL_KEY = "direct_prev_api_url"
+# Z2 (v5.69.0-beta.15, Q184): the Control Agent's own pair is remembered beside its address, so a switch back can put the pair back - the socket's pair is the SOCKET's, and the
+# Control Agent authenticates with the Control Agent's. (jen.config is private; `support_bundle` masks any `*_pass` key.)
+_PREV_USER_KEY = "direct_prev_api_user"
+_PREV_PASS_KEY = "direct_prev_api_pass"
 
 
 def _server_by_id(server_id):
@@ -1254,8 +1267,13 @@ def _direct_socket_edit(server: dict, service: str, url: str, user: str, passwor
         old_url = cfg.get(sec, url_key, fallback="")
         if service == "dhcp4" and old_url and old_url != url and not cfg.has_option(sec, _PREV_URL_KEY):
             # First time this server's v4 URL moves off the Control
-            # Agent: remember where it was, for "Switch back".
+            # Agent: remember where it was, for "Switch back" - and the pair
+            # the Control Agent was reached with (Z2, Q184).
             cfg.set(sec, _PREV_URL_KEY, old_url)
+            if cfg.get(sec, user_key, fallback=""):
+                cfg.set(sec, _PREV_USER_KEY, cfg.get(sec, user_key))
+            if cfg.get(sec, pass_key, fallback=""):
+                cfg.set(sec, _PREV_PASS_KEY, cfg.get(sec, pass_key))
         cfg.set(sec, url_key, url)
         changed.append(f"[{sec}] {url_key}")
         # Per-daemon credentials: only written when they differ from the
@@ -1308,60 +1326,6 @@ def _direct_socket_edit(server: dict, service: str, url: str, user: str, passwor
                 changed.append(f"[{sec}] {user_key}/{pass_key} (kept: the probed pair is the endpoint's own)")
 
     return _apply, changed
-
-
-def _same_box(url: str, ssh_host: str) -> bool:
-    """Is the address `url` on the box Jen reaches over SSH at `ssh_host` (second pass, Q183, P2-1/P2-2)? The same host as written, or the two names resolve to a common address
-    (`kea-a.lan` and `10.0.0.5`). A name that does not resolve is not evidence."""
-    if not url or not (ssh_host or "").strip():
-        return False
-    if __auth.same_host(url, ssh_host):
-        return True
-    try:
-        theirs = {info[4][0] for info in socket.getaddrinfo(__credentials.host_of(url), None)}
-        ours = {info[4][0] for info in socket.getaddrinfo(ssh_host.strip(), None)}
-    except (OSError, UnicodeError):
-        return False
-    return bool(theirs & ours)
-
-
-def _typed_for_removal(server: dict, service: str, before_parser, apply_fn) -> set[str]:
-    """The endpoints a "Remove socket" route may type, which is the endpoints whose saved password has ALREADY been sent to THIS Kea box (second pass, Q183, findings 1 and 2).
-    Typing is the route's claim that the superadmin supplied the password for the address the endpoint ends up with; the button has no password field, so the claim holds only
-    where the password demonstrably belongs to the box the route is acting on:
-
-      * the endpoint the route repoints - when the address it is leaving was on the box (dhcp6 / D2: the url key being cleared; dhcp4: the current API url, the socket the route set up);
-      * for dhcp4, the daemons whose address the switch-back RE-DERIVES - when they had an address of their own on the box.
-
-    A password typed for a DIFFERENT host (a Kea6 url on `b`, a primary retargeted to `z`) and a password with no address at all are not typed: the writer judges the move, and the
-    flip, or the removal of the address, is refused before the Kea host is touched. (Beta.13 typed all of them, so the button carried a secret to a host it was never typed for.)"""
-    ssh = server.get("ssh_host", "")
-    before = __credentials.resolve(before_parser)
-    name = _endpoint_name(server, service)
-    typed: set[str] = set()
-    if service == "dhcp4":
-        if _same_box(server.get("api_url", ""), ssh):
-            typed.add(name)
-        preview = __config.app_config._read_parser()
-        apply_fn(preview)
-        after = __credentials.resolve(preview)
-        for n in _endpoints_of_server(server):
-            was = before.get(n)
-            if (
-                n != name
-                and n in after
-                and not after[n].url_own
-                and __credentials.RIDES_THE_CONTROL_AGENT.fullmatch(n)
-                and was is not None
-                and was.url
-                and _same_box(was.url, ssh)
-            ):
-                typed.add(n)
-    else:
-        was = before.get(name)
-        if was is not None and was.url and _same_box(was.url, ssh):
-            typed.add(name)
-    return typed
 
 
 def _endpoints_of_server(server: dict) -> set[str]:
@@ -1910,6 +1874,21 @@ def remove_direct_socket(server_id, service):
         flash(f"{name} has no SSH host configured — Jen edits {conf} over SSH.", "error")
         return back
 
+    # Z1 (v5.69.0-beta.15, Q184): THE PERSON TYPES. This route infers nothing about hosts, boxes or history (beta.13 and beta.14 each defined "this box" a different way and each
+    # definition was wrong for a proxy, a tunnel or a jump host): the form has the password field every other credential-moving form has, and the endpoint the route repoints is
+    # typed only when the person typed a password, ticked "No password", or ticked "restore the saved one" - their act, in this request. The daemons the switch-back re-derives are
+    # never typed here: the writer refuses one whose saved password would reach a new place, and the page says to type it under Settings -> Kea first.
+    password = request.form.get("password", "").strip()
+    no_password = request.form.get("no_password", "") == "1"
+    restore_saved = request.form.get("restore_saved", "") == "1"
+    if sum(bool(x) for x in (password, no_password, restore_saved)) > 1:
+        flash("Choose one for the password: type it, tick No password, or restore the saved one.", "error")
+        return back
+    _sec, _url_key, _user_key, _pass_key = _socket_keys(server, service)
+    _live = __config.app_config._read_parser()
+    has_saved_pair = service == "dhcp4" and bool(
+        _live.has_section(_sec) and _live.get(_sec, _PREV_PASS_KEY, fallback="")
+    )
     sid = server.get("id")
     changed: list[str] = []
     # Computed once, outside the mutate: does any OTHER server still
@@ -1926,11 +1905,7 @@ def remove_direct_socket(server_id, service):
         keep_direct = bool(others_still_direct)
 
     def _apply(cfg):
-        if sid == 1:
-            sec, url_key = {"dhcp4": ("kea", "api_url"), "dhcp6": ("kea6", "api_url"), "d2": ("d2", "api_url")}[service]
-        else:
-            sec = f"kea_server_{sid}"
-            url_key = {"dhcp4": "api_url", "dhcp6": "api6_url", "d2": "api_d2_url"}[service]
+        sec, url_key, user_key, pass_key = _socket_keys(server, service)
         if service == "dhcp4":
             prev = cfg.get(sec, _PREV_URL_KEY, fallback="") if cfg.has_section(sec) else ""
             if prev:
@@ -1939,6 +1914,28 @@ def remove_direct_socket(server_id, service):
                 changed.append(f"[{sec}] {url_key} restored to {prev}")
             else:
                 changed.append(f"[{sec}] {url_key} left as-is (no Control Agent URL on record — set it above)")
+            if cfg.has_section(sec):
+                saved_user, saved_pass = (
+                    cfg.get(sec, _PREV_USER_KEY, fallback=""),
+                    cfg.get(sec, _PREV_PASS_KEY, fallback=""),
+                )
+                if restore_saved and saved_pass:
+                    # Z2: the Control Agent's own pair, put back by the person's tick - the socket's pair was the SOCKET's
+                    if saved_user:
+                        cfg.set(sec, "api_user", saved_user)
+                    cfg.set(sec, "api_pass", saved_pass)
+                    changed.append(f"[{sec}] the Control Agent's saved user and password restored")
+                for stale in (_PREV_USER_KEY, _PREV_PASS_KEY):
+                    if cfg.has_option(sec, stale):
+                        cfg.remove_option(sec, stale)  # restored or superseded: the saved pair is not kept
+            if password:
+                cfg.set(sec, "api_pass", password)
+                __credentials.clear_shared(cfg, _endpoint_name(server, service))
+                changed.append(f"[{sec}] api_pass set (typed for the Control Agent)")
+            elif no_password:
+                cfg.set(sec, "api_pass", "")
+                __credentials.clear_shared(cfg, _endpoint_name(server, service))
+                changed.append(f"[{sec}] api_pass set to no password")
             if not keep_direct and cfg.get("kea", "connection_mode", fallback="ca") != "ca":
                 cfg.set("kea", "connection_mode", "ca")
                 changed.append("Jen switched back to Control Agent mode")
@@ -1946,20 +1943,36 @@ def remove_direct_socket(server_id, service):
             if cfg.has_section(sec) and cfg.has_option(sec, url_key):
                 cfg.remove_option(sec, url_key)
                 changed.append(f"[{sec}] {url_key} cleared — inherits the v4 URL in Control Agent mode")
+            if cfg.get("kea", "connection_mode", fallback="ca") != "direct" and cfg.has_section(sec):
+                # Z2: in Control Agent mode the daemon's own user and password were the SOCKET's - the Control Agent authenticates with the Control Agent's, so no pair rides to it
+                for stale in (user_key, pass_key):
+                    if cfg.has_option(sec, stale):
+                        cfg.remove_option(sec, stale)
+                __credentials.clear_shared(cfg, _endpoint_name(server, service))
+                changed.append(f"[{sec}] the daemon's own user and password cleared — it uses the Control Agent's")
+            if password or no_password:
+                if not cfg.has_section(sec):
+                    cfg.add_section(sec)
+                cfg.set(sec, pass_key, password if password else "")
+                __credentials.clear_shared(cfg, _endpoint_name(server, service))
+                changed.append(f"[{sec}] {pass_key} {'set' if password else 'set to no password'}")
             if sid == 1 and cfg.has_section(sec) and not cfg.options(sec):
                 cfg.remove_section(sec)
 
     # v5.68.0-beta.28 (Q164): Jen's own side of this (the dhcp4 URL put back, the global mode returned to `ca`) is an identity change, and the route's first act is
     # on the Kea host - so the config writer's question is asked of a COPY before the first remote write.
-    # Second pass (Q182, P2-1; Q183, findings 1 and 2): what this route may type is what has ALREADY gone to this box (`_typed_for_removal`), asked BEFORE the Kea host is touched, on a copy
-    typed_names = _typed_for_removal(server, service, __config.app_config._read_parser(), _apply)
+    # Z1: the endpoint this route repoints is typed when - and only when - the person gave it a password (or "No password", or asked for the saved one back); asked BEFORE the Kea host is touched
+    typed_names = (
+        {_endpoint_name(server, service)} if (password or no_password or (restore_saved and has_saved_pair)) else set()
+    )
     try:
         __config.app_config.preflight_identity_change(_apply, typed=typed_names)
     except __config.ConfigChangeRefused as refused:
         flash(refused.sentence, "error")
-        if "type the password" in refused.sentence:
+        if "type the password" in refused.sentence or "type each one's own password" in refused.sentence:
             flash(
-                "The Remove button has no password field. Set that endpoint's address and type its password under Settings → Kea first (or clear its saved password), then remove the socket.",
+                "This form types only the password of the endpoint it moves (the field above, or No password, or the saved one). A daemon named in the sentence keeps its own saved password: "
+                "type it under Settings → Kea first (or clear it), then remove the socket.",
                 "info",
             )
         flash(f"Nothing was changed on {name}.", "info")

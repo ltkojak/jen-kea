@@ -499,7 +499,10 @@ class TestSwitchBack:
 
     def test_removes_the_socket_restores_the_ca_url_and_mode(self, logged_in_client, db, direct_primary, fake, http):
         http({})  # the standby's v4 URL answers nothing → it isn't on a direct socket
-        r = logged_in_client.post("/settings/infrastructure/direct-socket/1/dhcp4/remove", follow_redirects=True)
+        # (Q184, Z1: the Control Agent is at a different address from the socket, so the person types its password - the route infers nothing)
+        r = logged_in_client.post(
+            "/settings/infrastructure/direct-socket/1/dhcp4/remove", data={"password": "p4"}, follow_redirects=True
+        )
         assert r.status_code == 200
         applied = fake.payload_for("apply-config")["config"]["Dhcp4"]["control-sockets"]
         assert [s["socket-type"] for s in applied] == ["unix"]
@@ -514,7 +517,9 @@ class TestSwitchBack:
         self, logged_in_client, db, direct_primary, fake, http
     ):
         http({"kea02:8000": _ok("3.0.4")}, config_replies={"kea02:8000": DHCP4_OK})
-        r = logged_in_client.post("/settings/infrastructure/direct-socket/1/dhcp4/remove", follow_redirects=True)
+        r = logged_in_client.post(
+            "/settings/infrastructure/direct-socket/1/dhcp4/remove", data={"password": "p4"}, follow_redirects=True
+        )
         on_disk = _on_disk(direct_primary)
         assert on_disk.get("kea", "api_url") == CA_URL
         assert on_disk.get("kea", "connection_mode") == "direct"
@@ -533,6 +538,42 @@ class TestSwitchBack:
         assert on_disk.get("kea", "connection_mode") == "direct"  # dhcp6 never touches the mode
         assert b"no http/https control socket to remove" in r.data  # the fixture's dhcp6 config had none
         assert b"inherits the v4 URL" in r.data
+
+    def test_without_a_typed_password_a_move_to_the_control_agents_address_is_refused_before_the_kea_host_is_touched(
+        self, logged_in_client, db, direct_primary, fake, http
+    ):
+        """Q184 (Z1): the socket is at 10.0.0.5, the Control Agent at 1.2.3.4 - a different host - and nothing was typed: the writer refuses, the Kea host is never asked, the file is byte-identical."""
+        http({})
+        before = direct_primary.read_bytes()
+        r = logged_in_client.post("/settings/infrastructure/direct-socket/1/dhcp4/remove", follow_redirects=True)
+        assert b"moved to a different host" in r.data and b"Nothing was changed" in r.data
+        assert "apply-config" not in fake.ops() and "service" not in fake.ops()
+        assert direct_primary.read_bytes() == before
+
+    def test_the_saved_control_agent_pair_is_restored_when_asked(
+        self, logged_in_client, db, direct_primary, fake, http
+    ):
+        app_config.write_values(
+            [("kea", "direct_prev_api_user", "ca-user"), ("kea", "direct_prev_api_pass", "ca-pass")], typed=set()
+        )
+        http({})
+        logged_in_client.post(
+            "/settings/infrastructure/direct-socket/1/dhcp4/remove", data={"restore_saved": "1"}, follow_redirects=True
+        )
+        on_disk = _on_disk(direct_primary)
+        assert (on_disk.get("kea", "api_user"), on_disk.get("kea", "api_pass")) == ("ca-user", "ca-pass")
+        assert on_disk.get("kea", "api_url") == CA_URL and on_disk.get("kea", "connection_mode") == "ca"
+        assert not on_disk.has_option("kea", "direct_prev_api_pass") and not on_disk.has_option(
+            "kea", "direct_prev_api_user"
+        )
+
+    def test_the_page_offers_the_password_field_and_names_the_address(
+        self, logged_in_client, db, direct_primary, mock_kea
+    ):
+        app_config.write_values([("kea", "direct_prev_api_pass", "ca-pass")], typed=set())
+        r = logged_in_client.get("/settings/kea")
+        assert b'name="no_password"' in r.data and b'name="restore_saved"' in r.data
+        assert b"The password Jen will use at" in r.data and CA_URL.encode() in r.data
 
     def test_aborted_kea_edit_leaves_jen_untouched(self, logged_in_client, db, direct_primary, fake, http):
         fake.responses["test-config"] = {"ok": False, "error": "testerror", "detail": "nope"}

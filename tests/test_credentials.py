@@ -1025,6 +1025,129 @@ class TestTheKea6DatabaseIsAnEndpoint:
         assert db.get_kea6_db() == "the kea pool"
 
 
+def _untyped_claims(source: str, path: str = "<snippet>") -> list[str]:
+    """Z4 (v5.69.0-beta.15, Q184): every `typed=` handed to the config writer (or its preflight) in `source`, judged by its SHAPE. `typed` is a human's act in this request or the
+    one-time conversion, so a route writes it as a literal set of endpoint names, a conditional on what the form said, or a name built that way - never from hosts, DNS or history.
+    Returns one line per violation."""
+    import ast
+
+    tree = ast.parse(source)
+    writers = {"write_values", "write_value", "mutate", "preflight_identity_change"}
+
+    def literal(node):
+        if isinstance(node, ast.Constant):
+            return node.value is None or isinstance(node.value, str)
+        if isinstance(node, ast.JoinedStr):
+            return True
+        if isinstance(node, ast.Set):
+            return all(
+                literal(e) or (isinstance(e, ast.Call) and getattr(e.func, "id", "") == "_endpoint_name")
+                for e in node.elts
+            )
+        if isinstance(node, ast.Call):
+            return getattr(node.func, "id", "") == "set" and not node.args
+        if isinstance(node, ast.SetComp):
+            return all(isinstance(g.iter, ast.Tuple) for g in node.generators)
+        if isinstance(node, ast.IfExp):
+            return literal(node.body) and literal(node.orelse)
+        return False
+
+    bad = []
+    for fn in ast.walk(tree):
+        if not isinstance(fn, ast.FunctionDef):
+            continue
+        assigned = {}
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+                assigned.setdefault(node.targets[0].id, []).append(node.value)
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.value is not None:
+                assigned.setdefault(node.target.id, []).append(node.value)
+        adds = {}
+        for node in ast.walk(fn):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "add"
+                and isinstance(node.func.value, ast.Name)
+            ):
+                adds.setdefault(node.func.value.id, []).extend(node.args)
+        for node in ast.walk(fn):
+            if not (isinstance(node, ast.Call) and getattr(node.func, "attr", getattr(node.func, "id", "")) in writers):
+                continue
+            for kw in node.keywords:
+                if kw.arg != "typed":
+                    continue
+                value = kw.value
+                if isinstance(value, ast.Name) and value.id in assigned:
+                    ok = all(literal(v) for v in assigned[value.id]) and all(
+                        isinstance(a, ast.Constant | ast.JoinedStr) for a in adds.get(value.id, [])
+                    )
+                else:
+                    ok = literal(value)
+                if not ok:
+                    bad.append(f"{path}:{node.lineno} in {fn.name}(): typed={ast.unparse(value)}")
+    return bad
+
+
+class TestTypedIsAHumansAct:
+    """Z4 (Q184): the design rule, enforced. `docs/SAFETY_INVARIANTS.md` CRED-004: the writer's `typed` set is a human's act in this request or the one-time conversion; a route never
+    derives it from hosts, DNS or history."""
+
+    #: the one place a dynamic set is the point: the conversion types every endpoint it writes, by design (CRED-004, U2)
+    ALLOWED = {("jen/services/credentials.py", "materialise")}
+
+    def test_no_route_or_service_derives_typed_from_anything_but_a_form(self):
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        found = []
+        for path in sorted((root / "jen").rglob("*.py")):
+            rel = path.relative_to(root).as_posix()
+            if rel in ("jen/config.py",):
+                continue  # the writer itself (plumbs the set through)
+            for line in _untyped_claims(path.read_text(encoding="utf-8"), rel):
+                fn = line.split(" in ")[1].split("(")[0]
+                if (rel, fn) not in self.ALLOWED:
+                    found.append(line)
+        assert found == [], (
+            "typed= must be a literal set of names, a conditional on a form value, or None:\n" + "\n".join(found)
+        )
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "def f():\n    app_config.mutate(fn, typed=_endpoints_on_this_box(server))\n",
+            "def f():\n    app_config.write_values(items, typed={n for n in resolve(parser)})\n",
+            "def f():\n    names = _typed_for_removal(server)\n    app_config.mutate(fn, typed=names)\n",
+            "def f():\n    app_config.mutate(fn, typed=set(resolve(parser)))\n",
+            "def f():\n    typed = set()\n    typed.add(dns_name(host))\n    app_config.mutate(fn, typed=typed)\n",
+        ],
+    )
+    def test_the_checker_refuses_a_derived_set(self, bad):
+        assert _untyped_claims(bad), bad
+
+    @pytest.mark.parametrize(
+        "good",
+        [
+            'def f():\n    app_config.mutate(fn, typed={"kea"} if api_pass else None)\n',
+            'def f():\n    app_config.write_values(items, typed={n for n, v in (("kea", a), ("kea_db", b)) if v})\n',
+            "def f():\n    names = {_endpoint_name(s, svc)} if (pw or no) else set()\n    app_config.mutate(fn, typed=names)\n",
+            'def f():\n    names = set()\n    names.add(f"server_{n}")\n    app_config.mutate(fn, typed=names)\n',
+            "def f():\n    app_config.mutate(fn)\n",
+        ],
+    )
+    def test_the_checker_accepts_a_form_conditional_set(self, good):
+        assert _untyped_claims(good) == [], good
+
+    def test_the_registry_says_it(self):
+        import pathlib
+
+        text = (pathlib.Path(__file__).resolve().parent.parent / "docs" / "SAFETY_INVARIANTS.md").read_text(
+            encoding="utf-8"
+        )
+        assert "never derives it from hosts, DNS or history" in text
+
+
 class TestEverySharedMarkerHasAReaderAndAClearer:
     """Q183 (Y3): the `<password key>_shared = 1` markers the conversion, the share box and the direct-socket routes write were READ for a server's `api_pass` only - the IPv6 and D2
     passwords and the Kea6 database's were written, shown to nobody, and never cleared when the password was typed again. Every marker has a reader (`shared_copies`, which the Servers & HA

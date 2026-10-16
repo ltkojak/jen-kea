@@ -239,7 +239,12 @@ peer port (see the notes below). **Switch back** (per daemon, shown in
 direct mode) removes the http/https entry, restarts the daemon,
 restores the remembered Control Agent URL for kea-dhcp4 and returns
 Jen to `ca` mode only once no server is still answering on its own
-socket.
+socket. The form has a password field: Jen never moves a saved password to
+a different address on its own, so type the Control Agent's password (or
+tick **No password**, or **Restore** the pair Jen saved beside the
+Control Agent's address when the socket was set up). A daemon whose saved
+password would then reach the Control Agent's address is named in the
+refusal - type it under Settings → Kea first, or clear it.
 
 **Why not Let's Encrypt?** The Kea link needs *client* certificates
 (ACME issues server certificates only), and homelab management

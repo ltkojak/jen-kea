@@ -229,6 +229,33 @@ def unusable_file_message(label, path) -> str:
     return f"The {label} cannot be used: the file does not exist or Jen cannot read it ({path})."
 
 
+def _odd_characters(value: str) -> bool:
+    """A backslash, or any control, format (zero-width), or separator character (NBSP and the other Unicode spaces) anywhere in a URL or host: not something `urlsplit` and `requests` read
+    the same way, and not a character anyone types on purpose (Q183 finding 6; widened by Q184, Z3)."""
+    import unicodedata
+
+    return "\\" in value or any(unicodedata.category(c) in ("Cc", "Cf", "Zs", "Zl", "Zp") for c in value)
+
+
+def _plain_host(host: str) -> bool:
+    """Is `host` a name `requests` will send exactly as written: ASCII letters, digits, dots, hyphens, underscores and the colons of an IPv6 literal - or an internationalised name that
+    survives IDNA unchanged (Q184, Z3). Fullwidth and compatibility forms (`ａ.example`) normalise to a DIFFERENT name under IDNA, and a zero-width or no-break space is dropped or
+    refused by it - none of them is a name that means what it looks like."""
+    import re
+    import unicodedata
+
+    host = host or ""
+    if not host:
+        return False
+    if host.isascii():
+        return re.fullmatch(r"[A-Za-z0-9._:\-]+", host) is not None
+    try:
+        encoded = host.encode("idna").decode("ascii")
+        return encoded.encode("ascii").decode("idna") == unicodedata.normalize("NFC", host).lower()
+    except UnicodeError:
+        return False
+
+
 def _endpoint_parts(u):
     """(scheme, host, port) of a URL or a bare host[:port], or None when it names no place (blank, no host, an unparsable port). A URL's port defaults from its scheme
     (https 443, http 80); a BARE host has no scheme and so no default port. A bare IPv6 address (`::1`, `fe80::1`) is bracketed first - `urlsplit` would read its last group as a port."""
@@ -237,9 +264,9 @@ def _endpoint_parts(u):
     u = (u or "").strip()
     if not u:
         return None
-    if "\\" in u or any(ord(c) <= 32 or ord(c) == 127 for c in u):
+    if _odd_characters(u):
         # (second pass, Q183, finding 6: `urlsplit` reads `http://127.0.0.1:9\@a:8000/` as host `a`, `requests` (urllib3) as `127.0.0.1` - a place the two disagree about is no place, so a
-        # secret is never inherited by, or compared equal with, it)
+        # secret is never inherited by, or compared equal with, it. Q184, Z3: any control, zero-width or no-break space character too)
         return None
     if "://" not in u:
         if u.count(":") > 1 and not u.startswith("["):
@@ -248,7 +275,8 @@ def _endpoint_parts(u):
     try:
         p = urlsplit(u)
         scheme = (p.scheme or "").lower()
-        host = (p.hostname or "").lower().rstrip(".")
+        # Q184, Z3: the trailing dot is KEPT - `a.` is the absolute name and `a` is search-relative, `requests` keeps the dot, so they are two names and `same_host` says so
+        host = (p.hostname or "").lower()
         port = p.port or {"https": 443, "http": 80}.get(scheme)
     except ValueError:
         return None
@@ -282,14 +310,14 @@ def valid_api_url(url: str, require_port: bool = False) -> bool:
     value = (url or "").strip()
     if not value:
         return False
-    if "\\" in value or any(ord(c) <= 32 or ord(c) == 127 for c in value):
-        return False  # a backslash or a control/space character: not a URL Jen and `requests` read the same way (finding 6)
+    if _odd_characters(value):
+        return False  # a backslash, control, zero-width or no-break space character: not a URL Jen and `requests` read the same way (finding 6, Z3)
     try:
         p = urlparse(value)
         port = p.port
     except ValueError:
         return False
-    if p.scheme not in ("http", "https") or not p.hostname:
+    if p.scheme not in ("http", "https") or not p.hostname or not _plain_host(p.hostname):
         return False
     return not (require_port and port is None)
 

@@ -50,6 +50,13 @@
         {% if infra.kea_connection_mode == 'direct' and (service == 'dhcp4' or current_url) %}
         <form method="POST" action="/settings/infrastructure/direct-socket/{{ server_id }}/{{ service }}/remove" class="u-2d191d" data-confirm="Remove the http control socket from {{ conf }} on {{ ssh_host }} and restart {{ daemon }}? {% if service == 'dhcp4' %}Jen returns to Control Agent mode unless another server still has its own socket.{% else %}Jen clears this daemon's URL override.{% endif %}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="form-group">
+                <label for="f-rm-pass-{{ service }}-{{ server_id }}">{% if service == 'dhcp4' %}The password Jen will use at {{ infra.prev_urls.get(server_id) or 'the Control Agent address (set it above)' }}{% else %}Replace this daemon's saved password{% endif %}</label>
+                <input id="f-rm-pass-{{ service }}-{{ server_id }}" type="password" name="password" placeholder="(blank keeps what is saved)" autocomplete="new-password">
+                <div class="form-hint">{% if service == 'dhcp4' %}A saved password is never moved to a different address by this button: type the Control Agent's, tick No password, or restore the one saved when this socket was set up.{% else %}Leave it blank unless this daemon's password changes. A password saved for a daemon whose address moves must be typed under Settings → Kea first.{% endif %}</div>
+                <label><input type="checkbox" name="no_password" value="1" class="u-30e741"> No password (nothing there is authenticated)</label>
+                {% if service == 'dhcp4' and server_id in infra.prev_pairs %}<label><input type="checkbox" name="restore_saved" value="1" class="u-30e741" checked> Restore the Control Agent's saved user and password</label>{% endif %}
+            </div>
             <button type="submit" class="btn btn-sm btn-secondary">{{ icon("undo-2") }} Switch back to the Control Agent</button>
         </form>
         {% endif %}

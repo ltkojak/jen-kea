@@ -15,7 +15,12 @@ class TestSameEndpoint:
     @pytest.mark.parametrize(
         "a,b,expect",
         [
-            ("https://a.example/api", "https://A.example./api", True),
+            (
+                "https://a.example/api",
+                "https://A.example./api",
+                False,
+            ),  # (Q184, Z3: the trailing dot is a different name - absolute against search-relative)
+            ("https://a.example./api", "https://A.example./api", True),
             ("https://a.example", "https://a.example:443/x?y=1", True),
             ("http://a.example", "http://a.example:80", True),
             ("http://a.example", "https://a.example", False),
@@ -71,7 +76,12 @@ class TestSameHost:
         "a,b,expect",
         [
             ("https://kea-a:8000", "http://kea-a:53001", True),
-            ("https://KEA-A.:8000/x", "https://kea-a", True),
+            (
+                "https://KEA-A.:8000/x",
+                "https://kea-a",
+                False,
+            ),  # (Q184, Z3: `a.` is the absolute name, `a` is search-relative - two names)
+            ("https://KEA-A.:8000/x", "https://kea-a.", True),
             ("https://kea-a:8000", "https://kea-b:8000", False),
             ("db-a", "DB-A", True),
             ("db-a", "db-b", False),
