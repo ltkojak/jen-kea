@@ -22,6 +22,7 @@ import pytest
 
 from jen import extensions
 from jen.config import app_config
+from jen.services import credentials as cred
 from jen.services import kea as kea_svc
 from jen.services import kea_host
 from tests._kea_host_fakes import FakeHelper
@@ -259,7 +260,10 @@ class TestHttpFlowSuccess:
         assert on_disk.get("kea6", "api_url") == "http://10.0.0.5:8006"
         # Q182 (X4): the fixture reaches the Control Agent at 1.2.3.4 and the new socket by 10.0.0.5 - two spellings of the host, which the resolver compares as written - so the
         # pair that answered the probe is the endpoint's OWN (it used to be dropped as "the same pair as [kea]", leaving [kea6] without a credential)
-        assert (on_disk.get("kea6", "api_user"), on_disk.get("kea6", "api_pass")) == ("u4", "p4")
+        endpoint = cred.resolve(on_disk)[
+            "kea6"
+        ]  # (the user rides with the endpoint's own password, so it need not be a key of its own)
+        assert (endpoint.user, endpoint.password, endpoint.source) == ("u4", "p4", "own")
         assert on_disk.get("kea", "connection_mode", fallback="ca") == "ca"
         assert b"still in Control Agent mode" in r.data
         assert fake.payload_for("apply-config")["service"] == "dhcp6"
@@ -303,7 +307,10 @@ class TestHttpFlowSuccess:
         fk.calls.clear()
         _setup(logged_in_client, service="dhcp6", port="8006", user="u4", password="p4")
         on_disk = _on_disk(isolated_config)
-        assert (on_disk.get("kea6", "api_user"), on_disk.get("kea6", "api_pass")) == ("u4", "p4")
+        endpoint = cred.resolve(on_disk)[
+            "kea6"
+        ]  # (the user rides with the endpoint's own password, so it need not be a key of its own)
+        assert (endpoint.user, endpoint.password, endpoint.source) == ("u4", "p4", "own")
         fk.calls.clear()
         reply = kea_svc.kea_command("version-get", "dhcp6", server=extensions.KEA_SERVERS[0])
         assert reply.get("result") == 0

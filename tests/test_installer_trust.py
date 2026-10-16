@@ -41,6 +41,11 @@ def _lib(tmp_path):
     tools.mkdir(exist_ok=True)
     (tools / "private_write.py").write_bytes((ROOT / "tools" / "private_write.py").read_bytes())
     (tools / "config_merge.py").write_bytes((ROOT / "tools" / "config_merge.py").read_bytes())
+    # (Q182, X6) the merge loads Jen's credential rules from the tree it ships in - the three standard-library modules, as the release tarball carries them
+    for rel in ("jen/services/credentials.py", "jen/services/auth.py", "jen/extensions.py"):
+        target = tmp_path / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((ROOT / rel).read_bytes())
     return lib
 
 
