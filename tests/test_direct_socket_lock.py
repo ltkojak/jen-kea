@@ -94,7 +94,7 @@ def wire(monkeypatch):
     monkeypatch.setattr(infra, "_identify_daemon", lambda *a, **k: "Dhcp4")
     monkeypatch.setattr("jen.services.capabilities.is_ca", lambda: False)
     monkeypatch.setattr("jen.services.kea.kea_command", lambda *a, **k: {"result": 1})
-    monkeypatch.setattr(jconfig.app_config, "preflight_identity_change", lambda change: None)
+    monkeypatch.setattr(jconfig.app_config, "preflight_identity_change", lambda change, typed=None: None)
     monkeypatch.setattr(infra.__dict__["__user"], "audit", lambda *a, **k: log["audits"].append(a))
     monkeypatch.setattr(infra.__dict__["__user"], "set_global_setting", lambda *a, **k: True)
 

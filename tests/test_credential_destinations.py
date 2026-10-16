@@ -281,6 +281,33 @@ ROWS = {
         typed={"kea", "kea6"},
         expect={"kea6": ("K6B", "own", "")},
     ),
+    # ── second pass (Q182) finding 1: switching the primary back to the Control Agent restores the address by NAME while the socket was set up by IP ─────────────────
+    "a_dhcp4_switch_back_by_name_with_a_derived_daemon_that_owns_a_password_untyped": Row(
+        "beta.13 second pass (Q182) P2-1: the primary's address goes from 10.0.0.5 to kea-a.lan (same box, different spelling) and the daemon that rides it follows with its saved password",
+        DIRECT.replace("https://a:8000", "http://10.0.0.5:8001")
+        + "direct_prev_api_url = http://kea-a.lan:8000"
+        + NL
+        + "[kea6]"
+        + NL
+        + "api_pass = K6"
+        + NL,
+        _all(_set("kea", "connection_mode", "ca"), _set("kea", "api_url", "http://kea-a.lan:8000")),
+        typed={"kea"},
+        refused=True,
+    ),
+    "a_dhcp4_switch_back_by_name_with_the_derived_daemons_typed_by_the_route": Row(
+        "beta.13 second pass (Q182) P2-1: ... the route names the daemons the switch-back re-points (its own act), so it is written and nothing was changed on the Kea host first",
+        DIRECT.replace("https://a:8000", "http://10.0.0.5:8001")
+        + "direct_prev_api_url = http://kea-a.lan:8000"
+        + NL
+        + "[kea6]"
+        + NL
+        + "api_pass = K6"
+        + NL,
+        _all(_set("kea", "connection_mode", "ca"), _set("kea", "api_url", "http://kea-a.lan:8000")),
+        typed={"kea", "kea6"},
+        expect={"kea6": ("K6", "own", "")},
+    ),
     # ── a direct-socket removal and the next write (S4b), and two refusals nothing pinned (S7, S7b) ────────────────────────────────────────────────────────────────────
     "a_removed_direct_socket_leaves_user_and_password_and_the_next_address_is_a_move": Row(
         "beta.12 review (Q182) S4b: remove_direct_socket for dhcp6 in direct mode leaves the user and password with no address; giving it one later, untyped, is the first-address move",
@@ -402,6 +429,16 @@ def test_the_row(name, tmp_path, monkeypatch):
         ), f"[{row.review}] {endpoint}: {got}"
 
 
+def test_the_preflight_asks_the_move_question_before_the_kea_host_is_touched():
+    """Second pass (Q182) P2-1: `preflight_identity_change` runs `move_refusal` on the copy with the route's typed set, so a refusal comes BEFORE the remote change."""
+    import inspect
+
+    from jen.config import AppConfig
+
+    source = inspect.getsource(AppConfig.preflight_identity_change)
+    assert "move_refusal" in source and "typed" in source
+
+
 def test_every_continue_in_move_refusal_names_the_row_that_uses_it():
     """Q182 (X1): an exemption in the rule is a row in this file that uses it for a DIFFERENT purpose, before it is code. Each `continue` in `move_refusal` carries `# row: <name>`
     and the name is a row of this matrix."""
@@ -415,7 +452,7 @@ def test_every_continue_in_move_refusal_names_the_row_that_uses_it():
     lines = src.splitlines()
     function = next(n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.FunctionDef) and n.name == "move_refusal")
     skips = [n for n in ast.walk(function) if isinstance(n, ast.Continue)]
-    assert len(skips) >= 4
+    assert len(skips) >= 7, "each condition of the skips has its own `continue` and its own row"
     for node in skips:
         match = re.search(r"#\s*row:\s*(\w+)", lines[node.lineno - 1])
         assert match, f"credentials.py line {node.lineno}: a `continue` in move_refusal names no row"

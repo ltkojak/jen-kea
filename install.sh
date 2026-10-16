@@ -1712,8 +1712,8 @@ CONFEOF
             --snapshot <(printf '%s\n' "$CONFIG_SNAPSHOT_TEXT") --live "$CONFIG_FILE" <<< "$wizard_text")" || _merge_rc=$?
         if [[ $_merge_rc -eq 4 ]]; then
             err "Nothing was written."
-            echo -e "  A password Jen has saved would be sent to a host it was not typed for (the sentence above). Type that endpoint's password in the wizard (or its answers file),"
-            echo -e "  or move the endpoint under Settings → Kea in Jen, where the password is asked for."
+            echo -e "  A password Jen has saved would be sent to a host it was not typed for (the sentence above). Give that endpoint a NEW password in the wizard (or its answers file) -"
+            echo -e "  a value equal to the saved one cannot be told from the saved one - or move the endpoint under Settings → Kea in Jen, where the password is asked for."
             fatal "Refused: --configure would send a saved password to a different host."
         elif [[ $_merge_rc -ne 0 ]]; then
             fatal "Could not merge the wizard's answers into the live $CONFIG_FILE"

@@ -286,8 +286,12 @@ def move_refusal(before: dict, after: dict, typed=frozenset(), mode_changed: boo
     typed = frozenset(typed or ())
     for name, a in after.items():
         # only a secret an endpoint OWNS can move with it: an inherited one is its parent's, and the parent is judged as itself
-        if a.source != "own" or name in typed or not a.url:
+        if a.source != "own":
+            continue  # row: a_new_server_with_no_key_on_another_host
+        if name in typed:
             continue  # row: the_same_move_with_the_password_typed
+        if not a.url:
+            continue  # row: an_extra_servers_blank_ipv6_url_with_its_own_password
         if mode_changed and _re_pointed_by_the_mode_alone(name, a, before, after):
             continue  # row: a_mode_switch_with_derived_urls_on_the_same_control_agent
         b = before.get(name)
@@ -306,7 +310,11 @@ def move_refusal(before: dict, after: dict, typed=frozenset(), mode_changed: boo
     shown = [(n, e) for n, e in after.items() if e.password and e.url and e.source == "own"]
     for i, (n1, e1) in enumerate(shown):
         for n2, e2 in shown[i + 1 :]:
-            if e1.password != e2.password or _same_host(e1.url, e2.url) or n1 in typed or n2 in typed:
+            if e1.password != e2.password:
+                continue  # row: a_rotation_with_kea6_and_d2_pinned
+            if _same_host(e1.url, e2.url):
+                continue  # row: a_move_to_another_spelling_of_the_same_host
+            if n1 in typed or n2 in typed:
                 continue  # row: the_same_server_with_the_share_box_ticked
             b1, b2 = before.get(n1), before.get(n2)
             if (
@@ -477,20 +485,24 @@ def materialise(app_config, audit=None, today: str = "", already_converted: bool
             p.set(MODEL_SECTION, MODEL_KEY, MODEL_VALUE)
             # X5a (Q182): the bridge marks THIS file only when it has nothing to convert - the settings row described the database's old file, and a restored pre-beta.11 file with
             # passwordless peers on other hosts converts them. The marker above is already set, so what is pending is read as a legacy file (legacy=True)
-            if already_converted and not pending_conversions(p, legacy=True):
+            # (second pass, P2-2: a file whose database says beta.11 converted is not a 5.68.0 file - beta.11's own forms wrote `api6_pass =` for "no authentication" - so its blanks are
+            # answers, and the legacy-blank reading applies only when the bridge does not)
+            legacy = not already_converted
+            if already_converted and not pending_conversions(p, legacy=False):
                 return
             for _ in range(3):  # parent before child: a server's API password, then its IPv6 and D2
-                batch = [n for n in pending_conversions(p, legacy=True) if n not in done]
+                batch = [n for n in pending_conversions(p, legacy=legacy) if n not in done]
                 if not batch:
                     return
-                res = resolve(_without_legacy_blanks(p))
+                res = resolve(_without_legacy_blanks(p) if legacy else p)
                 for name in batch[:]:
                     parent = res[name].withheld
                     if not res[parent].password:
                         continue
                     section, option = password_key(name)
                     blank_legacy = (
-                        p.has_section(section)
+                        legacy
+                        and p.has_section(section)
                         and option in LEGACY_BLANK_KEYS
                         and re.fullmatch(r"kea_server_\d+", section) is not None
                         and p.has_option(section, option)

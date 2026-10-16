@@ -729,6 +729,23 @@ class TestTheMarkerIsAValue:
         assert len(errors) == 1 and "credential_model" in errors[0].getMessage() and "explcit" in errors[0].getMessage()
 
 
+class TestTheBridgeKeepsBeta11sBlankAsAnAnswer:
+    """Second pass (Q182) P2-2: beta.11's own forms wrote `api6_pass =` for "no authentication", and its conversion was remembered in the settings table, not in the file. A file with no marker
+    whose database says it converted is NOT a 5.68.0 file: its blank is an answer, and the bridge must not fill it in."""
+
+    FILE = BASE + "[kea_server_2]\napi_url = https://b:8000\napi_pass = P\napi6_url = https://c:8006\napi6_pass =\n"
+
+    def test_the_bridge_marks_the_file_and_copies_nothing(self):
+        fake = _FakeConfig(_p(self.FILE))
+        assert cred.materialise(fake, already_converted=True) == []
+        assert fake.parser.get("kea_server_2", "api6_pass") == "" and cred.has_model_marker(fake.parser)
+
+    def test_without_the_bridge_it_is_still_a_legacy_blank(self):
+        fake = _FakeConfig(_p(self.FILE))
+        assert cred.materialise(fake, already_converted=False) == ["server_2_v6"]
+        assert fake.parser.get("kea_server_2", "api6_pass") == "P"
+
+
 class TestALegacyBlankIsInherit:
     """Q182 (X5d): 5.68.0 read a BLANK `api6_pass` / `api_d2_pass` on a server as "inherit", so in a file without the marker it is pending; with the marker a blank is a blank."""
 

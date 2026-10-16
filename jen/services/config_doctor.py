@@ -779,7 +779,7 @@ def _check_credential_endpoints(jen_cfg) -> list[Finding]:
                 "The credential-model marker is not a value Jen knows",
                 f"[{_cred.MODEL_SECTION}] {_cred.MODEL_KEY} is {shown!r}. Set it to `{_cred.MODEL_VALUE}` if every password in the file is its own; remove the line to convert a legacy file.",
                 f"[{_cred.MODEL_SECTION}] {_cred.MODEL_KEY}",
-                fix_url="/settings/kea",
+                fix_url="",  # (a hand edit of jen.config: no page has a control for it)
                 why=(
                     "Jen cannot tell whether an additional server or the Kea6 and D2 endpoints still borrow a password from the Kea API, so it converts nothing and starts no copy until the line is one "
                     "of the two values it writes itself."

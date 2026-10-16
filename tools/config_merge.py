@@ -133,7 +133,8 @@ def _credential_rules():
         try:
             yield importlib.import_module("jen.services.credentials")
         except ImportError as e:
-            raise SystemExit(f"config_merge: could not load Jen's credential rules from {root} ({e})") from e
+            sys.stderr.write(f"config_merge: could not load Jen's credential rules from {root} ({e})\n")
+            raise SystemExit(5) from e
     finally:
         if (
             "jen" in stubs

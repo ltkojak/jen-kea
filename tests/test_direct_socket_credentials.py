@@ -153,3 +153,45 @@ class TestARemovedSocketLeavesTheCredentialsAndTheNextAddressIsAMove:
             app_config.mutate(give_it_an_address, reload=False)
         assert _a_real_file.read_bytes() == before
         app_config.mutate(give_it_an_address, reload=False, typed={"kea6"})
+
+
+SWITCHED = (
+    HOSTNAME.replace("http://kea-a.lan:8004", "http://10.0.0.5:8001")
+    + "direct_prev_api_url = http://kea-a.lan:8000\n[kea6]\napi_pass = K6\n"
+)
+
+
+class TestSwitchingBackByNameIsAskedBeforeTheKeaHostIsTouched:
+    """Second pass (Q182) P2-1: the socket was set up by IP, the Control Agent is restored by NAME; the daemon that rides it (kea6, with its own saved password and no address) follows. The
+    refusal used to arrive AFTER the daemon was changed and restarted, with a remedy the Remove button cannot perform. The preflight asks the move question, and the route types what it re-derives."""
+
+    @staticmethod
+    def _switch_back(cfg):
+        cfg.set("kea", "api_url", "http://kea-a.lan:8000")
+        cfg.set("kea", "connection_mode", "ca")
+        cfg.remove_option("kea", "direct_prev_api_url")
+
+    def test_untyped_the_preflight_refuses_with_the_sentence(self, _a_real_file):
+        _a_real_file.write_text(SWITCHED, encoding="utf-8")
+        with pytest.raises(ConfigChangeRefused, match="first address"):
+            app_config.preflight_identity_change(self._switch_back, typed={"kea"})
+
+    def test_with_the_derived_daemon_typed_by_the_route_it_passes_and_the_write_follows(self, _a_real_file):
+        _a_real_file.write_text(SWITCHED, encoding="utf-8")
+        app_config.preflight_identity_change(self._switch_back, typed={"kea", "kea6"})
+        app_config.mutate(self._switch_back, reload=False, typed={"kea", "kea6"})
+        on_disk = _parse(_a_real_file.read_text(encoding="utf-8"))
+        assert on_disk.get("kea", "connection_mode") == "ca" and cred.resolve(on_disk)["kea6"].password == "K6"
+
+    def test_the_route_types_exactly_the_endpoints_that_follow_the_control_agent(self, _a_real_file):
+        """The route's own computation, on the real file: the derived endpoints of the server after the change - not the ones that have an address of their own."""
+        _a_real_file.write_text(SWITCHED + "[d2]\napi_url = http://dd:53001\napi_pass = D\n", encoding="utf-8")
+        preview = app_config._read_parser()
+        self._switch_back(preview)
+        derived = cred.resolve(preview)
+        names = {
+            n
+            for n in infra._endpoints_of_server(PRIMARY)
+            if n in derived and not derived[n].url_own and cred.RIDES_THE_CONTROL_AGENT.fullmatch(n)
+        }
+        assert names == {"kea6"}

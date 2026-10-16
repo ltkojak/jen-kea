@@ -728,11 +728,14 @@ class AppConfig:
         _run_destination_guards(destination_view(before_parser), destination_view(after_parser))
         _run_identity_guards(identity_view(before_parser), identity_view(after_parser))
 
-    def preflight_identity_change(self, change) -> None:
+    def preflight_identity_change(self, change, typed=None) -> None:
         """Would this change be refused? Raises `ConfigChangeRefused` exactly as the write would, and writes nothing (v5.68.0-beta.28, Q164). `change` is a list of
         (section, key, value) tuples, applied the way `write_values` applies them, or a callable `fn(parser)` that edits a copy the way a `mutate` callback does.
         A route whose first step is a change on a Kea host (the direct-socket setup restarts the daemon BEFORE it writes Jen's own settings) asks this first, so
-        the refusal comes before any remote write, not after it."""
+        the refusal comes before any remote write, not after it.
+
+        v5.69.0-beta.13 (Q182, second pass P2-1): it also asks CRED-004's question (`credentials.move_refusal`, with the route's `typed` set), because a route that acts on the Kea host
+        first must not find out AFTER the daemon was changed that the write of Jen's own settings would send a saved password somewhere it was not typed for."""
         with identity_lock:
             before = self._read_parser()
             after = configparser.ConfigParser(interpolation=None)
@@ -745,6 +748,14 @@ class AppConfig:
                         after.add_section(section)
                     after.set(section, key, value)
             self._check_identity(before, after)
+            refusal = _credentials.move_refusal(
+                _credentials.resolve(before),
+                _credentials.resolve(after),
+                frozenset(typed or ()),
+                mode_changed=_connection_mode(before) != _connection_mode(after),
+            )
+            if refusal:
+                raise ConfigChangeRefused(refusal)
 
     @_serialized
     def write_value(self, section: str, key: str, value: str, reload: bool = True, typed=None) -> None:

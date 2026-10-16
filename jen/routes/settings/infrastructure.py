@@ -1489,7 +1489,7 @@ def setup_direct_socket(server_id, service):
     # entry exists - so the same question is asked of a copy BEFORE anything is sent: refused here, nothing was touched. (Not "probe, then find out".)
     try:
         _edit_fn, _unused = _direct_socket_edit(server, service, new_url, user, password, tls=(scheme == "https"))
-        __config.app_config.preflight_identity_change(_edit_fn)
+        __config.app_config.preflight_identity_change(_edit_fn, typed={_endpoint_name(server, service)})
     except __config.ConfigChangeRefused as refused:
         flash(refused.sentence, "error")
         flash(f"Nothing was changed on {name}.", "info")
@@ -1878,8 +1878,20 @@ def remove_direct_socket(server_id, service):
 
     # v5.68.0-beta.28 (Q164): Jen's own side of this (the dhcp4 URL put back, the global mode returned to `ca`) is an identity change, and the route's first act is
     # on the Kea host - so the config writer's question is asked of a COPY before the first remote write.
+    # Second pass (Q182, P2-1): the daemons whose address the switch-back RE-DERIVES (kea6 and d2 follow the Control Agent's address once the mode is `ca`, a server's IPv6 and D2 follow
+    # the server's) are re-pointed by this route's own act, so they are typed with the endpoint - found out BEFORE the Kea host is touched, on a copy
+    typed_names = {_endpoint_name(server, service)}
+    if service == "dhcp4":
+        preview = __config.app_config._read_parser()
+        _apply(preview)
+        derived = __credentials.resolve(preview)
+        typed_names |= {
+            n
+            for n in _endpoints_of_server(server)
+            if n in derived and not derived[n].url_own and __credentials.RIDES_THE_CONTROL_AGENT.fullmatch(n)
+        }
     try:
-        __config.app_config.preflight_identity_change(_apply)
+        __config.app_config.preflight_identity_change(_apply, typed=typed_names)
     except __config.ConfigChangeRefused as refused:
         flash(refused.sentence, "error")
         flash(f"Nothing was changed on {name}.", "info")
@@ -1920,7 +1932,7 @@ def remove_direct_socket(server_id, service):
         return back
 
     try:
-        __config.app_config.mutate(_apply, typed={_endpoint_name(server, service)})
+        __config.app_config.mutate(_apply, typed=typed_names)
     except (__config.ConfigChangeRefused, OSError) as refused:
         # v5.68.0-beta.29 (Q165, edge 3): refused AFTER the socket was taken out of the daemon's config - put it back as it was, the daemon restarted (Q182: a failed write too)
         if result.status == "ok" and removed_sockets:
@@ -2517,6 +2529,8 @@ def copy_primary_password(server_id):
     def _apply(cfg):
         if not cfg.has_section(section):
             raise _Gone()  # removed by another save since the check above: nothing is written
+        if not cfg.get("kea", "api_pass", fallback=""):
+            raise _Gone()  # the primary's password was blanked since the check above: copying "" would silently say "no authentication"
         if cfg.get(section, __credentials.SHARED_MARKER, fallback="") != "1":
             raise _Own()  # Q182 (X5b): only a COPY of the primary's is copied again - a password the server owns is not the primary's to overwrite
         cfg.set(section, "api_pass", cfg.get("kea", "api_pass", fallback=""))
