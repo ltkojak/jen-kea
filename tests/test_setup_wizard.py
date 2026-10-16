@@ -1532,3 +1532,33 @@ class TestRecoveryStatusAndNext:
         assert r.status_code == 302
         assert "evil.example" not in r.headers["Location"]
         assert "/settings/databases" in r.headers["Location"] and "tab=recovery" in r.headers["Location"]
+
+
+class TestEnableV6AnswersWithTextForAFailedWrite:
+    """Q183 (Y6): `enable_v6` promises that a refusal of the write itself leaves both sections as they were and says so - as TEXT. It caught `ValueError` only, so a refusal by the move
+    rule (`ConfigChangeRefused`) or a failed write (`OSError`) was a 500 in the middle of the wizard."""
+
+    def _enable(self, monkeypatch, raising):
+        from jen.services import setup_wizard
+
+        class _Config:
+            def mutate(self, fn, typed=None, **_k):
+                raise raising
+
+        monkeypatch.setattr("jen.config.app_config", _Config())
+        monkeypatch.setattr(
+            "jen.models.user.set_global_setting", lambda *a, **k: pytest.fail("the display flag was set")
+        )
+        return setup_wizard.enable_v6("http://a:8006", {})
+
+    def test_a_refusal_by_the_writer_is_the_error_text(self, monkeypatch):
+        from jen.config import ConfigChangeRefused
+
+        text = self._enable(
+            monkeypatch, ConfigChangeRefused("The Kea6 API moved to a different host with its saved password: type it.")
+        )
+        assert text and "moved to a different host" in text
+
+    def test_a_failed_write_is_the_error_text(self, monkeypatch):
+        text = self._enable(monkeypatch, OSError(30, "Read-only file system"))
+        assert text and "could not write its own settings" in text and "Read-only file system" in text

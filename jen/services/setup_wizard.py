@@ -623,8 +623,9 @@ def enable_v6(
     API has no other credential) and `[subnets6]` together or not at all. A name the writer refuses comes back as the error text (None on success) before anything is written, and
     a refusal of the write itself (the identity guards, CRED-004) leaves both sections as they were - never an endpoint saved with its subnets not, or the reverse."""
     from jen import extensions
-    from jen.config import app_config, subnets6_into
+    from jen.config import ConfigChangeRefused, app_config, subnets6_into
     from jen.models.user import set_global_setting
+    from jen.services import credentials as __credentials
 
     merged = dict(extensions.SUBNET6_MAP)
     merged.update(subnets6)
@@ -636,6 +637,10 @@ def enable_v6(
         if not parser.has_section("kea6"):
             parser.add_section("kea6")
         parser.set("kea6", "api_url", url)
+        if inherit_credentials or api_pass or no_auth:
+            __credentials.clear_shared(
+                parser, "kea6"
+            )  # Y3 (Q183): a typed, blanked or inherited password is not a marked copy
         if inherit_credentials:
             # the probe used the primary's credential (the same box): what is SAVED must be what was probed, so an own user or password left from an earlier run is removed
             for stale in ("api_user", "api_pass"):
@@ -655,8 +660,12 @@ def enable_v6(
 
     try:
         app_config.mutate(_apply, typed={"kea6"} if api_pass else None)
-    except ValueError as e:
+    except (ValueError, ConfigChangeRefused) as e:
         return str(e)
+    except OSError as e:
+        # Y6 (v5.69.0-beta.14, Q183): the docstring promises "a refusal of the write itself leaves both sections as they were" - a write that FAILS (a read-only file, a full disk) is the
+        # same answer, as text, not a 500
+        return f"Jen could not write its own settings ({type(e).__name__}: {e}) - nothing was saved"
     set_global_setting("ipv6_enabled", "true")
     return None
 

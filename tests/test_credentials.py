@@ -771,18 +771,36 @@ class TestALegacyBlankIsInherit:
 
 
 class TestAModeSwitchRepointsTheDaemonsWholesale:
-    """Q181 second pass (P2-5): direct -> CA gives every daemon the Control Agent's address; the form that flips the mode cannot type their passwords, so it is not refused for them."""
+    """Q181 second pass (P2-5), narrowed by Q182 (X1) and Q183 (Y1): the mode flip carries only a password that ALREADY WENT to the parent's host. A daemon that had an address on the
+    parent's host (and loses its own key, so the flip derives it) is not asked again; one that had NO address is being given its first, and that is a move like any other."""
 
+    #: a daemon with an address of its own on the parent's host - its password has been sent there
+    DIRECT_OWN = (
+        "[kea]\nconnection_mode = direct\napi_url = https://a:8004\napi_user = u\napi_pass = S\n"
+        "[kea6]\napi_url = https://a:8006\napi_pass = K6\n"
+    )
+    #: a daemon with a saved password and NO address (the state a removed direct socket leaves)
     DIRECT = (
         "[kea]\nconnection_mode = direct\napi_url = https://a:8004\napi_user = u\napi_pass = S\n[kea6]\napi_pass = K6\n"
     )
 
-    def test_the_move_rule_skips_a_daemon_whose_address_is_derived_from_an_unmoved_control_agent(self):
+    def _flipped_own(self):
+        return self.DIRECT_OWN.replace("direct", "ca").replace("api_url = https://a:8006\n", "")
+
+    def test_a_daemon_whose_password_already_went_to_the_parents_host_follows_the_flip(self):
+        before = cred.resolve(_p(self.DIRECT_OWN))
+        after = cred.resolve(_p(self._flipped_own()))
+        assert before["kea6"].url_own is True and after["kea6"].url_own is False
+        assert cred.move_refusal(before, after, mode_changed=True) == ""
+
+    def test_a_password_with_no_address_is_given_its_first_one_by_the_flip_and_is_refused(self):
+        """Y1: the flip derives an address for a password that was never sent anywhere."""
         before = cred.resolve(_p(self.DIRECT))
         after = cred.resolve(_p(self.DIRECT.replace("direct", "ca")))
-        assert after["kea6"].url_own is False and before["kea6"].url_own is False
+        assert after["kea6"].url_own is False and before["kea6"].url == ""
         assert "first address" in cred.move_refusal(before, after)
-        assert cred.move_refusal(before, after, mode_changed=True) == ""
+        assert "first address" in cred.move_refusal(before, after, mode_changed=True)
+        assert cred.move_refusal(before, after, typed={"kea6"}, mode_changed=True) == ""
 
     def test_the_skip_does_not_cover_an_address_of_the_daemons_own(self):
         """Q182 (X1): a mode flip that also gives the daemon an address of its own on another host is judged as any move."""
@@ -795,24 +813,28 @@ class TestAModeSwitchRepointsTheDaemonsWholesale:
         assert cred.move_refusal(before, after, typed={"kea6"}, mode_changed=True) == ""
 
     def test_the_skip_does_not_cover_a_control_agent_on_a_new_host(self):
-        before = cred.resolve(_p(self.DIRECT))
-        after = cred.resolve(_p(self.DIRECT.replace("direct", "ca").replace("https://a:8004", "https://z:8000")))
+        before = cred.resolve(_p(self.DIRECT_OWN))
+        after = cred.resolve(_p(self._flipped_own().replace("https://a:8004", "https://z:8000")))
         assert after["kea6"].url_own is False and after["kea6"].url == "https://z:8000"
-        assert "first address" in cred.move_refusal(before, after, typed={"kea"}, mode_changed=True)
+        assert "moved to a different host" in cred.move_refusal(before, after, typed={"kea"}, mode_changed=True)
         assert cred.move_refusal(before, after, typed={"kea", "kea6"}, mode_changed=True) == ""
 
     def test_a_servers_derived_endpoints_follow_the_same_rule(self):
-        text = (
+        own = (
             "[kea]\nconnection_mode = direct\napi_url = https://a:8004\napi_pass = S\n"
-            "[kea_server_2]\napi_url = https://b:8004\napi_pass = P\napi6_pass = P6\n"
+            "[kea_server_2]\napi_url = https://b:8004\napi_pass = P\napi6_url = https://b:8006\napi6_pass = P6\n"
         )
-        before = cred.resolve(_p(text))
-        same = cred.resolve(_p(text.replace("direct", "ca")))
-        assert cred.move_refusal(before, same, mode_changed=True) == ""
-        moved = cred.resolve(_p(text.replace("direct", "ca").replace("https://b:8004", "https://y:8000")))
-        assert "first address" in cred.move_refusal(before, moved, typed={"server_2"}, mode_changed=True)
+        before = cred.resolve(_p(own))
+        derived = cred.resolve(_p(own.replace("direct", "ca").replace("api6_url = https://b:8006\n", "")))
+        assert cred.move_refusal(before, derived, mode_changed=True) == ""
+        bare = own.replace("api6_url = https://b:8006\n", "")  # no address before: a first one
+        before_bare = cred.resolve(_p(bare))
+        after_bare = cred.resolve(_p(bare.replace("direct", "ca")))
+        assert "first address" in cred.move_refusal(before_bare, after_bare, typed={"server_2"}, mode_changed=True)
 
-    def test_the_writer_passes_a_mode_switch_and_still_refuses_the_same_change_without_it(self, tmp_path, monkeypatch):
+    def test_the_writer_refuses_the_flip_for_a_password_with_no_address_and_passes_it_for_one_that_had_one(
+        self, tmp_path, monkeypatch
+    ):
         from jen import extensions
         from jen.config import ConfigChangeRefused, app_config
 
@@ -823,8 +845,38 @@ class TestAModeSwitchRepointsTheDaemonsWholesale:
         monkeypatch.setattr("jen.config._identity_guards", [])
         with pytest.raises(ConfigChangeRefused, match="first address"):
             app_config.write_values([("kea6", "api_url", "https://a:8006")])
-        app_config.write_values([("kea", "connection_mode", "ca")])
+        with pytest.raises(ConfigChangeRefused, match="first address"):
+            app_config.write_values([("kea", "connection_mode", "ca")])
+        path.write_text(self.DIRECT_OWN, encoding="utf-8")
+
+        def drop_the_address_and_flip(parser):
+            parser.remove_option("kea6", "api_url")
+            parser.set("kea", "connection_mode", "ca")
+
+        app_config.mutate(drop_the_address_and_flip, reload=False)
         assert "connection_mode = ca" in path.read_text(encoding="utf-8")
+
+    def test_y1_the_executed_sequence_a_password_typed_for_another_host_does_not_reach_the_control_agent(
+        self, tmp_path, monkeypatch
+    ):
+        """The pass's executed input: direct mode, `[kea6] api_pass` typed for host b, the address removed (allowed: nothing is sent to an endpoint with no address), then the mode flipped
+        untyped - K6 would be sent to the Control Agent's host a. The same after-state by an explicit address is refused by the first-address rule; so is this."""
+        from jen import extensions
+        from jen.config import ConfigChangeRefused, app_config
+
+        path = tmp_path / "jen.config"
+        path.write_text(self.DIRECT + "", encoding="utf-8")
+        monkeypatch.setattr(extensions, "CONFIG_FILE", str(path))
+        monkeypatch.setattr(app_config, "reload", lambda: None)
+        monkeypatch.setattr("jen.config._identity_guards", [])
+        app_config.write_values(
+            [("kea6", "api_url", "https://b:8006"), ("kea6", "api_pass", "K6")], typed={"kea6"}
+        )  # typed for host b
+        app_config.mutate(lambda p: p.remove_option("kea6", "api_url"), reload=False)  # the address goes: allowed
+        before = path.read_bytes()
+        with pytest.raises(ConfigChangeRefused, match="first address"):
+            app_config.write_values([("kea", "connection_mode", "ca")])
+        assert path.read_bytes() == before
 
 
 class TestAnUnreadableSettingsTableIsNotAnAbsentRow:
@@ -971,3 +1023,93 @@ class TestTheKea6DatabaseIsAnEndpoint:
         self._apply("")  # no [kea6_db] at all: the v4 database, through the v4 pool
         monkeypatch.setattr(db, "get_kea_db", lambda: "the kea pool")
         assert db.get_kea6_db() == "the kea pool"
+
+
+class TestEverySharedMarkerHasAReaderAndAClearer:
+    """Q183 (Y3): the `<password key>_shared = 1` markers the conversion, the share box and the direct-socket routes write were READ for a server's `api_pass` only - the IPv6 and D2
+    passwords and the Kea6 database's were written, shown to nobody, and never cleared when the password was typed again. Every marker has a reader (`shared_copies`, which the Servers & HA
+    rows and the Kea6 / D2 / Kea6-database cards use) and a clearer (`clear_shared`, called by every form that types, blanks or removes that password)."""
+
+    ENDPOINTS = {
+        "kea6": ("[kea6]\napi_url = https://a:8006\napi_pass = X\n", "kea6", "api_pass"),
+        "d2": ("[d2]\napi_url = https://a:53001\napi_pass = X\n", "d2", "api_pass"),
+        "kea6_db": ("[kea6_db]\nhost = db2\npassword = X\n", "kea6_db", "password"),
+        "server_2": ("[kea_server_2]\napi_url = https://b:8000\napi_pass = X\n", "kea_server_2", "api_pass"),
+        "server_2_v6": (
+            "[kea_server_2]\napi_url = https://b:8000\napi6_url = https://b:8006\napi6_pass = X\n",
+            "kea_server_2",
+            "api6_pass",
+        ),
+        "server_2_d2": (
+            "[kea_server_2]\napi_url = https://b:8000\napi_d2_url = https://b:53001\napi_d2_pass = X\n",
+            "kea_server_2",
+            "api_d2_pass",
+        ),
+    }
+
+    @pytest.mark.parametrize("name", sorted(ENDPOINTS))
+    def test_the_reader_and_the_clearer_for_each_endpoint(self, name):
+        text, section, option = self.ENDPOINTS[name]
+        p = _p(BASE + text)
+        assert name not in cred.shared_copies(p)
+        p.set(section, f"{option}_shared", "1")
+        assert name in cred.shared_copies(p), f"{name}: the `{option}_shared` marker is written and nothing reads it"
+        cred.clear_shared(p, name)
+        assert name not in cred.shared_copies(p) and not p.has_option(section, f"{option}_shared")
+
+    def test_a_marker_beside_no_password_is_not_a_shared_copy(self):
+        p = _p(BASE + "[kea6]\napi_url = https://a:8006\napi_pass_shared = 1\n")
+        assert "kea6" not in cred.shared_copies(p)
+
+    def test_the_clearer_is_called_by_every_form_that_changes_the_password(self):
+        import inspect
+
+        from jen.routes.settings import infrastructure as infra
+        from jen.services import setup_wizard
+
+        for fn in (
+            infra.save_extra_servers,
+            infra.save_infra_kea6,
+            infra.save_infra_d2,
+            infra._direct_socket_edit,
+            setup_wizard.enable_v6,
+        ):
+            assert "clear_shared" in inspect.getsource(fn), (
+                f"{fn.__name__} changes a password and never clears its `_shared` marker"
+            )
+
+    def test_the_page_reads_every_marker(self):
+        import inspect
+        import pathlib
+
+        from jen.routes.settings import infrastructure as infra
+
+        page = (pathlib.Path(__file__).resolve().parent.parent / "templates" / "settings_kea.html").read_text(
+            encoding="utf-8"
+        )
+        assert "shared_copies" in inspect.getsource(infra.settings_kea)
+        for needle in (
+            "srv.api_pass_shared",
+            "srv.api6_pass_shared",
+            "srv.api_d2_pass_shared",
+            "'kea6' in infra.shared_copies",
+            "'d2' in infra.shared_copies",
+            "'kea6_db' in infra.shared_copies",
+        ):
+            assert needle in page, needle
+
+    def test_no_file_sets_a_marker_without_going_through_a_module_that_also_clears_it(self):
+        """The whole tree: a `.set(` of a `_shared` key lives in a module that also calls `clear_shared` (or is the credentials module itself)."""
+        import pathlib
+        import re
+
+        root = pathlib.Path(__file__).resolve().parent.parent / "jen"
+        writers = []
+        for path in sorted(root.rglob("*.py")):
+            text = path.read_text(encoding="utf-8")
+            if re.search(r"\.set\([^\n]*(?:_shared|SHARED_MARKER)", text):
+                writers.append(path.relative_to(root).as_posix())
+        assert writers, "the scan found no writers: the pattern is wrong"
+        assert set(writers) <= {"routes/settings/infrastructure.py", "services/credentials.py"}, writers
+        infra_text = (root / "routes" / "settings" / "infrastructure.py").read_text(encoding="utf-8")
+        assert "clear_shared" in infra_text

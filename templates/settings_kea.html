@@ -420,6 +420,12 @@
             <div class="form-hint">API password: <strong>shared copy</strong> - a copy of the primary's, made once; it does not follow a later change of the primary's.
                 <button type="submit" form="copy-primary-{{ srv.id }}" class="btn btn-sm btn-secondary">Copy the primary's again</button></div>
             {% endif %}
+            {% if srv.api6_pass_shared %}
+            <div class="form-hint">IPv6 API password: <strong>shared copy</strong> - a copy of this server's API password, made once; it does not follow a later change of it. Type a new one to make it its own.</div>
+            {% endif %}
+            {% if srv.api_d2_pass_shared %}
+            <div class="form-hint">D2 API password: <strong>shared copy</strong> - a copy of this server's API password, made once; it does not follow a later change of it.</div>
+            {% endif %}
             <div class="form-row">
                 <div class="form-group">
                     <label>IPv6 API URL</label>
@@ -521,6 +527,7 @@
                 <div class="form-group">
                     <label>API Password</label>
                     <input type="password" name="api_pass" placeholder="(kept unless changed)">
+                    {% if 'd2' in infra.shared_copies %}<div class="form-hint">Password: <strong>shared copy</strong> - a copy of the Kea API's, made once; it does not follow a later change of it.</div>{% endif %}
                     <div class="u-6125e5">
                         <label><input type="checkbox" name="inherit_api_pass" value="1" class="u-30e741"> Inherit the Kea API password</label>
                         <label title="This daemon has no authentication"><input type="checkbox" name="no_api_pass" value="1" class="u-30e741"> No password</label>
@@ -690,6 +697,7 @@
             <div class="form-group">
                 <label>API Password</label>
                 <input type="password" name="api_pass" placeholder="(kept unless changed)">
+                {% if 'kea6' in infra.shared_copies %}<div class="form-hint">Password: <strong>shared copy</strong> - a copy of the Kea API's, made once; it does not follow a later change of it.</div>{% endif %}
                 <div class="u-6125e5">
                     <label><input type="checkbox" name="inherit_api_pass" value="1" class="u-30e741"> Inherit the Kea API password</label>
                     <label title="This daemon has no authentication"><input type="checkbox" name="no_api_pass" value="1" class="u-30e741"> No password</label>
@@ -708,6 +716,7 @@
             <div class="form-group">
                 <label for="f-db_pass">DB Password</label>
                 <input id="f-db_pass" type="password" name="db_pass" placeholder="(kept unless changed)">
+                {% if 'kea6_db' in infra.shared_copies %}<div class="form-hint">Password: <strong>shared copy</strong> - a copy of the Kea database's, made once; it does not follow a later change of it.</div>{% endif %}
                 <div class="u-6125e5">
                     <label><input type="checkbox" name="inherit_db_pass" value="1" class="u-30e741"> Inherit the Kea DB password</label>
                     <label><input type="checkbox" name="no_db_pass" value="1" class="u-30e741"> No password</label>

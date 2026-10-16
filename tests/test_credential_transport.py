@@ -54,9 +54,9 @@ class _Post:
         return _Reply()
 
 
-def _config(mode, section_lines, server_lines):
+def _config(mode, section_lines, server_lines, primary_pass="api_pass = PS\n"):
     text = (
-        f"[kea]\nconnection_mode = {mode}\napi_url = {PRIMARY}\napi_user = pu\napi_pass = PS\n"
+        f"[kea]\nconnection_mode = {mode}\napi_url = {PRIMARY}\napi_user = pu\n{primary_pass}"
         "[kea_db]\nhost = db1\nuser = k\npassword = KDB\n"
         "[jen_db]\nhost = jh\nuser = j\npassword = JP\n[server]\n"
         f"{section_lines}\n[kea_server_2]\napi_url = https://b:8000\napi_user = su\napi_pass = SS\n{server_lines}\n"
@@ -115,28 +115,35 @@ def _calls_for(name, servers):
     return server, {"": "dhcp4", "v6": "dhcp6", "d2": "d2"}[suffix]
 
 
-def _own_user(cfg, name):
-    """Does the endpoint's section carry a user of its own, with a value?"""
-    section, option = cred.user_key(name)
-    return cfg.has_option(section, option) and cfg.get(section, option, raw=True) != ""
-
-
 def _expect(endpoint, service, direct, cfg):
     """What the transport must do for this endpoint: (posts?, url, auth).
 
-    Q182 (X2): a header is sent iff the resolved password is non-blank OR the resolved user is an OWN value. A user that is only the parent's, beside a blank password, is not a
-    credential the endpoint asked to send - "no authentication" is no header."""
+    Y5 (v5.69.0-beta.14, Q183): a header is sent iff the resolved password is non-blank OR the resolved user is non-blank - what `kea._auth` does. (Q182's oracle read "the user is the
+    endpoint's OWN value", which a primary WITHOUT a password breaks: an endpoint on its host inherits its name and the primary itself sends `Basic u:`.) "No authentication" is the
+    present-blank case, and `resolve` makes it no user: the absence of the header there comes from the resolver, not from this oracle."""
     if service in ("dhcp6", "d2") and not endpoint.url:
         return False, "", None
     if endpoint.withheld:
         return False, "", None
-    header = bool(endpoint.password) or (bool(endpoint.user) and _own_user(cfg, endpoint.name))
+    header = bool(endpoint.password) or bool(endpoint.user)
     return True, endpoint.url, ((endpoint.user, endpoint.password) if header else kea._NO_AUTH)
 
 
 @pytest.mark.parametrize(("mode", "kea6", "server"), _cases())
 def test_the_transport_posts_exactly_what_resolve_says(mode, kea6, server, monkeypatch):
-    cfg = _config(mode, kea6 + "\n[d2]\napi_url = https://a:53001", server)
+    _the_transport_posts_exactly_what_resolve_says(mode, kea6, server, monkeypatch, "api_pass = PS\n")
+
+
+@pytest.mark.parametrize(("mode", "kea6", "server"), _cases())
+def test_the_same_with_a_primary_that_has_no_password(mode, kea6, server, monkeypatch):
+    """Y5: the same matrix with the primary's password ABSENT (a Kea API with a user and no password) and BLANK (explicit): an endpoint on its host inherits its name, and the transport
+    must still post exactly what `resolve` says."""
+    _the_transport_posts_exactly_what_resolve_says(mode, kea6, server, monkeypatch, "")
+    _the_transport_posts_exactly_what_resolve_says(mode, kea6, server, monkeypatch, "api_pass =\n")
+
+
+def _the_transport_posts_exactly_what_resolve_says(mode, kea6, server, monkeypatch, primary_pass):
+    cfg = _config(mode, kea6 + "\n[d2]\napi_url = https://a:53001", server, primary_pass)
     resolved = cred.resolve(cfg)
     servers = AppConfig.derive_kea_servers(cfg, quiet=True)
     fake = _Post()

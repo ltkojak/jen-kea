@@ -143,7 +143,7 @@ class TestTheD2Form:
 
     @pytest.fixture(autouse=True)
     def _stored(self, isolated_config):
-        app_config.write_values([("d2", "api_url", "https://d2-a:8000"), ("d2", "api_pass", "SD")])
+        app_config.write_values([("d2", "api_url", "https://d2-a:8000"), ("d2", "api_pass", "SD")], typed={"d2"})
 
     def test_a_new_endpoint_with_a_blank_password_is_refused(self, logged_in_client, db, mock_kea, isolated_config):
         r = _post(logged_in_client, self.URL, api_url="https://d2-b:8000")
@@ -530,7 +530,7 @@ class TestOneAnswerForASecret:
         assert self.SENTENCED2 in r.data and isolated_config.read_bytes() == before
 
     def test_the_database_pair_of_kea6_is_the_same_question(self, logged_in_client, db, mock_kea, isolated_config):
-        app_config.write_values([("kea6_db", "host", "db-a"), ("kea6_db", "password", "D6")])
+        app_config.write_values([("kea6_db", "host", "db-a"), ("kea6_db", "password", "D6")], typed={"kea6_db"})
         before = isolated_config.read_bytes()
         r = _post(
             logged_in_client,

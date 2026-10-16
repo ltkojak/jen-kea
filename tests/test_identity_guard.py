@@ -230,7 +230,7 @@ class TestTheConfigWriterRefusesAnIdentityChange:
     def test_a_write_that_changes_no_identity_never_asks_a_guard(self, cfgfile, monkeypatch):
         asked = []
         monkeypatch.setattr(jconfig, "_identity_guards", [lambda before, after: asked.append(1) or ""])
-        app_config.write_values([("server", "http_port", "5052"), ("kea", "api_pass", "x")])
+        app_config.write_values([("server", "http_port", "5052"), ("kea", "api_pass", "x")], typed={"kea"})
         assert asked == []
 
     def test_the_comparison_is_by_what_the_config_means_not_how_it_is_spelled(self, cfgfile):
@@ -407,8 +407,8 @@ class TestIdentityIsASuperadminsSetting:
         ctx = _sign_in("admin")
         try:
             app_config.write_values(
-                [("kea", "api_pass", "new")]
-            )  # (CRED-002 judges it where the form is - not this guard)
+                [("kea", "api_pass", "new")], typed={"kea"}
+            )  # (CRED-002 judges it where the form is - not this guard; Q183 Y2: typed, as the form types it)
         finally:
             ctx.pop()
         assert asked == [] and _disk(cfgfile.path).get("kea", "api_pass") == "new"

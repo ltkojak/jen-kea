@@ -238,10 +238,55 @@ ROWS = {
     ),
     # ── the mode switch exempts only what the mode itself moves (Q182, X1: a row for each purpose the exemption could be used for) ────────────────────────────────────
     "a_mode_switch_with_derived_urls_on_the_same_control_agent": Row(
-        "beta.12 second pass (Q181): direct -> CA gives a daemon with its own password the Control Agent's address - not a move the Kea API form can type",
+        "beta.12 second pass (Q181), narrowed by beta.14 (Q183, Y1): direct -> CA derives the Control Agent's address for a daemon whose password ALREADY went to the parent's host (it had an own address there)",
+        DIRECT + "[kea6]" + NL + "api_url = https://a:8006" + NL + "api_pass = K6" + NL,
+        _all(_drop("kea6", "api_url"), _set("kea", "connection_mode", "ca")),
+        expect={"kea6": ("K6", "own", "")},
+    ),
+    "a_mode_switch_that_would_give_a_saved_password_its_first_address": Row(
+        "beta.13 second pass (Q183) Y1 P2: a password typed for another host, its address removed, then the mode flipped - the flip derives a FIRST address for it",
         DIRECT + "[kea6]" + NL + "api_pass = K6" + NL,
         _set("kea", "connection_mode", "ca"),
+        refused=True,
+    ),
+    "a_mode_switch_that_gives_a_saved_password_its_first_address_with_it_typed": Row(
+        "beta.13 second pass (Q183) Y1: ... typed, it is the superadmin's act",
+        DIRECT + "[kea6]" + NL + "api_pass = K6" + NL,
+        _set("kea", "connection_mode", "ca"),
+        typed={"kea6"},
         expect={"kea6": ("K6", "own", "")},
+    ),
+    "a_saved_password_with_no_address_is_not_a_write_to_judge": Row(
+        "beta.13 second pass (Q183) Y1: a password typed for host b whose address is then removed - nothing is sent to an endpoint with no address, so removing it is allowed (the flip is what is judged)",
+        DIRECT + "[kea6]" + NL + "api_url = https://b:8006" + NL + "api_pass = K6" + NL,
+        _drop("kea6", "api_url"),
+        expect={"kea6": ("K6", "own", "")},
+    ),
+    "two_own_passwords_equal_on_the_same_host": Row(
+        "beta.13 second pass (Q183) Y4: Kea6's own password equal to the Kea API's on the SAME host is one box, not a second host",
+        BASE + "[kea6]" + NL + "api_url = https://a:8006" + NL + "api_pass = S" + NL,
+        _set("kea", "name", "renamed"),
+        expect={"kea6": ("S", "own", "")},
+    ),
+    # ── an own password VALUE changes only when typed (Q183, Y2: shape (c)) ───────────────────────────────────────────────────────────────────────────────────────
+    "a_write_that_copies_keas_new_password_into_an_untyped_server": Row(
+        "beta.13 second pass (Q183) Y2 (hypothesis H2 made rule): the Kea API's password is rotated (typed) and the same value is copied into a server in the same write - the pair rule lets it through because one side is typed",
+        BASE + "[kea_server_2]" + NL + "api_url = https://b:8000" + NL + "api_pass = P" + NL,
+        _all(_set("kea", "api_pass", "N"), _set("kea_server_2", "api_pass", "N")),
+        typed={"kea"},
+        refused=True,
+    ),
+    "a_section_renumbered_in_one_write_with_its_password": Row(
+        "beta.13 second pass (Q183) Y2 (hypothesis H3 made rule): a server section removed and re-added under another number with its password, in one write, untyped",
+        BASE + "[kea_server_2]" + NL + "api_url = https://b:8000" + NL + "api_pass = P" + NL,
+        _all(lambda p: p.remove_section("kea_server_2"), _add_server(3, api_url="https://b:8000", api_pass="P")),
+        refused=True,
+    ),
+    "a_server_saved_again_with_the_same_value_is_not_a_change": Row(
+        "beta.13 second pass (Q183) Y2: the form that keeps a blank password writes the same value back - not a typed change",
+        BASE + "[kea_server_2]" + NL + "api_url = https://b:8000" + NL + "api_pass = P" + NL,
+        _all(_set("kea_server_2", "api_pass", "P"), _set("kea_server_2", "name", "same")),
+        expect={"server_2": ("P", "own", "")},
     ),
     "a_mode_switch_with_an_explicit_kea6_url_on_another_host": Row(
         "beta.12 review (Q182) P2: the same flip used to carry a NEW explicit address along - the exemption was the whole flip, not the derived addresses",
@@ -427,6 +472,53 @@ def test_the_row(name, tmp_path, monkeypatch):
             source.split(":")[0] if ":" not in source else source,
             withheld,
         ), f"[{row.review}] {endpoint}: {got}"
+
+
+def _named_rows():
+    """{row: [line numbers]} of the `# row:` comments on the `continue`s of `move_refusal`."""
+    import ast
+    import pathlib
+    import re
+
+    src = (pathlib.Path(__file__).resolve().parent.parent / "jen" / "services" / "credentials.py").read_text(
+        encoding="utf-8"
+    )
+    lines = src.splitlines()
+    function = next(n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.FunctionDef) and n.name == "move_refusal")
+    out = {}
+    for node in ast.walk(function):
+        if isinstance(node, ast.Continue):
+            out.setdefault(re.search(r"#\s*row:\s*(\w+)", lines[node.lineno - 1]).group(1), []).append(node.lineno)
+    return out
+
+
+@pytest.mark.parametrize("named", sorted(_named_rows()))
+def test_the_row_a_continue_names_reaches_that_continue(named, tmp_path, monkeypatch):
+    """Q183 (Y4): existence of the row is not reach. The row is run through the real writer with `credentials._trace` on, and the walk must hit the `continue` that cites it - a row that
+    is refused earlier, or that takes another branch, would pass `test_every_continue...` and prove nothing about the exemption."""
+    trace = []
+    monkeypatch.setattr(cred, "_trace", trace)
+    _run(tmp_path, monkeypatch, ROWS[named])
+    assert named in trace, f"row {named!r} never reached the continue that cites it (trace: {sorted(set(trace))})"
+
+
+def test_every_hit_names_the_row_its_continue_cites():
+    """The `_hit("row")` before a `continue` and the `# row: row` on it are one fact written twice: they must agree."""
+    import ast
+    import pathlib
+    import re
+
+    src = (pathlib.Path(__file__).resolve().parent.parent / "jen" / "services" / "credentials.py").read_text(
+        encoding="utf-8"
+    )
+    lines = src.splitlines()
+    function = next(n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.FunctionDef) and n.name == "move_refusal")
+    for node in ast.walk(function):
+        if isinstance(node, ast.Continue):
+            cited = re.search(r"#\s*row:\s*(\w+)", lines[node.lineno - 1]).group(1)
+            assert f'_hit("{cited}")' in lines[node.lineno - 2], (
+                f"line {node.lineno}: no _hit({cited!r}) before the continue"
+            )
 
 
 def test_the_preflight_asks_the_move_question_before_the_kea_host_is_touched():
@@ -983,3 +1075,88 @@ class TestTheCopyButtonActsOnlyOnACopy:
 
         source = inspect.getsource(infra.copy_primary_password)
         assert "SHARED_MARKER" in source and "_Own" in source
+
+
+class TestARetypedPasswordIsNoLongerASharedCopy:
+    """Q183 (Y3): a password written as a marked copy (`<key>_shared = 1`) and then typed again in a form is the endpoint's own - the marker goes; left blank, it stays."""
+
+    def _file(self, path, extra):
+        p = _forms._disk(path)
+        for section, values in extra.items():
+            if not p.has_section(section):
+                p.add_section(section)
+            for k, v in values.items():
+                p.set(section, k, v)
+        with open(path, "w") as f:
+            p.write(f)
+        app_config.reload()
+
+    def _row(self, **over):
+        body = _extra_server_body(url="https://kea-b:8000")
+        body["extra_id[]"] = ["2"]
+        body["extra_api6_url[]"] = ["https://kea-b:8006"]
+        for key, value in over.items():
+            body[key] = [value]
+        return body
+
+    SERVER = {
+        "name": "peer",
+        "role": "standby",
+        "api_url": "https://kea-b:8000",
+        "api_pass": "P",
+        "api6_url": "https://kea-b:8006",
+        "api6_pass": "OLD6",
+        "api6_pass_shared": "1",
+        "ssh_host": "10.0.0.9",
+        "ssh_user": "jen",
+    }
+
+    def test_a_retyped_ipv6_password_drops_its_marker(self, logged_in_client, db, mock_kea, isolated_config):
+        self._file(isolated_config, {"kea_server_2": self.SERVER})
+        logged_in_client.post(
+            "/settings/infrastructure/save-extra-servers",
+            data=self._row(**{"extra_api6_pass[]": "NEW6"}),
+            follow_redirects=True,
+        )
+        disk = _forms._disk(isolated_config)
+        assert disk.get("kea_server_2", "api6_pass") == "NEW6" and not disk.has_option(
+            "kea_server_2", "api6_pass_shared"
+        )
+
+    def test_a_blank_one_keeps_the_password_and_the_marker(self, logged_in_client, db, mock_kea, isolated_config):
+        self._file(isolated_config, {"kea_server_2": self.SERVER})
+        logged_in_client.post("/settings/infrastructure/save-extra-servers", data=self._row(), follow_redirects=True)
+        disk = _forms._disk(isolated_config)
+        assert disk.get("kea_server_2", "api6_pass") == "OLD6" and disk.get("kea_server_2", "api6_pass_shared") == "1"
+
+    def test_the_servers_page_says_so_for_the_ipv6_password(self, logged_in_client, db, mock_kea, isolated_config):
+        self._file(isolated_config, {"kea_server_2": self.SERVER})
+        r = logged_in_client.get("/settings/kea")
+        assert b"IPv6 API password:" in r.data and b"shared copy" in r.data
+
+    def test_a_retyped_kea6_database_password_drops_its_marker_and_the_card_says_so_before(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        self._file(isolated_config, {"kea6_db": {"host": "db-b", "password": "COPY", "password_shared": "1"}})
+        assert b"shared copy" in logged_in_client.get("/settings/kea").data
+        logged_in_client.post(
+            "/settings/infrastructure/save-kea6",
+            data={"db_host": "db-b", "db_pass": "TYPED"},
+            follow_redirects=True,
+        )
+        disk = _forms._disk(isolated_config)
+        assert disk.get("kea6_db", "password") == "TYPED" and not disk.has_option("kea6_db", "password_shared")
+
+    def test_a_blank_password_on_the_kea6_form_when_the_box_is_ticked_drops_a_kea6_marker(
+        self, logged_in_client, db, mock_kea, isolated_config
+    ):
+        self._file(
+            isolated_config, {"kea6": {"api_url": "https://kea-a:8006", "api_pass": "S", "api_pass_shared": "1"}}
+        )
+        logged_in_client.post(
+            "/settings/infrastructure/save-kea6",
+            data={"api_url": "https://kea-a:8006", "inherit_api_pass": "1"},
+            follow_redirects=True,
+        )
+        disk = _forms._disk(isolated_config)
+        assert not disk.has_option("kea6", "api_pass") and not disk.has_option("kea6", "api_pass_shared")

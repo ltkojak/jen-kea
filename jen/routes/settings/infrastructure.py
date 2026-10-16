@@ -51,6 +51,7 @@ _EXTRA_SERVER_FORM_KEYS = frozenset(
         "api6_user",
         "api6_pass",
         "api_pass_shared",
+        "api6_pass_shared",
         "ssh_host",
         "ssh_user",
         "kea_conf",
@@ -215,6 +216,9 @@ def settings_kea():
     tls_ok_by_id = {r["id"]: r["tls_supported"] for r in helper_rows}
     extra_servers = []
     _resolved_endpoints = __credentials.resolve(extensions.cfg)
+    _shared_copies = __credentials.shared_copies(
+        extensions.cfg
+    )  # Y3 (Q183): every endpoint whose password is a marked copy, for the rows and cards that say so
     for n in _kea_server_section_ids(extensions.cfg):
         sec = f"kea_server_{n}"
         extra_servers.append(
@@ -232,7 +236,9 @@ def settings_kea():
                 "kea_conf": extensions.cfg.get(sec, "kea_conf", fallback="/etc/kea/kea-dhcp4.conf"),
                 "role": extensions.cfg.get(sec, "role", fallback="standby"),
                 # v5.69.0-beta.11 (Q180, U2): this password is a COPY of the primary's, made once and no longer following it
-                "api_pass_shared": extensions.cfg.get(sec, "api_pass_shared", fallback="") == "1",
+                "api_pass_shared": f"server_{n}" in _shared_copies,
+                "api6_pass_shared": f"server_{n}_v6" in _shared_copies,
+                "api_d2_pass_shared": f"server_{n}_d2" in _shared_copies,
                 "api_pass_state": _api_pass_state(_resolved_endpoints.get(f"server_{n}")),
                 # an explicit blank: a Kea with no authentication
                 "api6_pass_none": extensions.cfg.has_option(sec, "api6_pass")
@@ -267,6 +273,7 @@ def settings_kea():
                 direct_port_warnings.append(f"{srv.get('name', 'Kea Server')} api6_url ({srv['api6_url']})")
 
     infra = {
+        "shared_copies": _shared_copies,
         "kea_api_url": extensions.cfg.get("kea", "api_url", fallback=""),
         "kea_api_user": extensions.cfg.get("kea", "api_user", fallback=""),
         # v5.69.0-beta.2 (Q171): whether a password is saved, never the password - every other password field on these pages already works this way, and the save below keeps a blank
@@ -651,6 +658,9 @@ def save_infra_kea6():
                 changed.append(f"{section}.{opt} cleared — inherits v4")
         for section, opt, val, inherit, none_ in pw_fields:
             has = cfg.has_section(section) and cfg.has_option(section, opt)
+            if none_ or inherit or val:
+                # Y3 (Q183): a password that is typed, made blank, or taken back to "inherit" in this save is not a marked COPY any more
+                __credentials.clear_shared(cfg, "kea6" if section == "kea6" else "kea6_db")
             if none_:
                 if not cfg.has_section(section):
                     cfg.add_section(section)
@@ -759,6 +769,8 @@ def save_infra_d2():
                 cfg.remove_option(section, opt)
                 changed.append(f"{section}.{opt} cleared — inherits v4")
         has_pass = cfg.has_section("d2") and cfg.has_option("d2", "api_pass")
+        if no_api_pass or inherit_api_pass or api_pass:
+            __credentials.clear_shared(cfg, "d2")  # Y3 (Q183): no longer a marked copy
         if no_api_pass:
             if not cfg.has_section("d2"):
                 cfg.add_section("d2")
@@ -1253,12 +1265,18 @@ def _direct_socket_edit(server: dict, service: str, url: str, user: str, passwor
         if service == "dhcp4" or (user, password) != (base_user, base_pass):
             cfg.set(sec, user_key, user)
             cfg.set(sec, pass_key, password)
+            __credentials.clear_shared(
+                cfg, _endpoint_name(server, service)
+            )  # Y3 (Q183): typed here, so no longer a marked copy
             if service != "dhcp4":
                 changed.append(f"[{sec}] {user_key}/{pass_key}")
         elif service != "dhcp4":
             for k in (user_key, pass_key):
                 if cfg.has_option(sec, k):
                     cfg.remove_option(sec, k)
+            __credentials.clear_shared(
+                cfg, _endpoint_name(server, service)
+            )  # Y3 (Q183): the password is gone, so is the marker that said it was a copy
         if service == "dhcp4" and cfg.get("kea", "connection_mode", fallback="ca") != "direct":
             if not cfg.has_section("kea"):
                 cfg.add_section("kea")
@@ -2444,6 +2462,10 @@ def save_extra_servers():
                 typed_names.add(f"server_{out}_v6")
             elif prev.get("api6_pass"):
                 cfg.set(sec, "api6_pass", prev["api6_pass"])
+                if prev.get("api6_pass_shared"):
+                    cfg.set(
+                        sec, "api6_pass_shared", prev["api6_pass_shared"]
+                    )  # kept as it was: still a copy (a typed or blanked one is not - see `clear_shared` below)
             cfg.set(sec, "ssh_host", ssh_host.strip())
             cfg.set(sec, "ssh_user", ssh_user.strip())
             cfg.set(sec, "kea_conf", kea_conf.strip() or "/etc/kea/kea-dhcp4.conf")
@@ -2452,12 +2474,20 @@ def save_extra_servers():
                     cfg.set(sec, k, v)
             if nod2_ticked and cfg.has_option(sec, "api_d2_url"):
                 cfg.set(sec, "api_d2_pass", "")  # explicit: the D2 socket has no authentication
+                __credentials.clear_shared(cfg, f"server_{out}_d2")  # Y3 (Q183)
             elif (
                 row_idx < len(nod2_passes) and cfg.has_option(sec, "api_d2_pass") and cfg.get(sec, "api_d2_pass") == ""
             ):
                 cfg.remove_option(
                     sec, "api_d2_pass"
                 )  # the box was UNTICKED on a page that carries it: back to "inherit, if the host is the same"
+                __credentials.clear_shared(cfg, f"server_{out}_d2")  # Y3 (Q183)
+            if no_ticked or api_pass.strip():
+                __credentials.clear_shared(
+                    cfg, f"server_{out}"
+                )  # Y3 (Q183): typed or blanked in this save - its own now (a kept password carries its marker above)
+            if no6_ticked or api6_pass.strip():
+                __credentials.clear_shared(cfg, f"server_{out}_v6")  # Y3 (Q183)
 
         # U3 (Q180): the resolver is the proof. The IPv6 and D2 endpoint of every saved row is judged against the credential `resolve` gives IT: a typed API password authorises
         # them on the same host only, and one on a different host with no password of its own would be refused its neighbour's - so the form says so instead of saving a

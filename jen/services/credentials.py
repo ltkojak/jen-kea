@@ -255,6 +255,16 @@ def host_of(url: str) -> str:
 RIDES_THE_CONTROL_AGENT = re.compile(r"kea6|d2|server_\d+_(?:v6|d2)")
 
 
+#: Y4 (v5.69.0-beta.14, Q183): a test sets this to a list and every `continue` in `move_refusal` appends the name of the matrix row it cites, so a test can prove a row REACHES the
+#: exemption it names (existence of the row is not reach). None in production: one `is not None` per skip.
+_trace = None
+
+
+def _hit(row: str) -> None:
+    if _trace is not None:
+        _trace.append(row)
+
+
 def _parent_of(name: str) -> str:
     """The endpoint whose address a derived (absent-key) address follows: the primary for Kea6 and D2, a server for its own IPv6 and D2."""
     if name in ("kea6", "d2"):
@@ -265,12 +275,18 @@ def _parent_of(name: str) -> str:
 
 def _re_pointed_by_the_mode_alone(name: str, a, before: dict, after: dict) -> bool:
     """X1 (v5.69.0-beta.13, Q182): the connection-mode switch exempts ONLY what the mode itself moves - a daemon whose address is DERIVED (its url key absent: `url_own` False) from a
-    parent whose host did not change. An address of its own, or a Control Agent on a NEW host, is judged as any move: typed, or refused."""
+    parent whose host did not change. An address of its own, or a Control Agent on a NEW host, is judged as any move: typed, or refused.
+
+    Y1 (v5.69.0-beta.14, Q183): and only a daemon whose password ALREADY WENT to the parent's host - it had an address before, and that address was on the parent's host. A password
+    that was typed for another host and then lost its address (the key removed, which is allowed: nothing is sent to an endpoint with no address) is given the Control Agent's address
+    by the flip, and that is a first address like any other."""
     if a.url_own or not RIDES_THE_CONTROL_AGENT.fullmatch(name):
         return False
     parent = _parent_of(name)
-    b_parent, a_parent = before.get(parent), after.get(parent)
-    return bool(b_parent is not None and a_parent is not None and _same_host(b_parent.url, a_parent.url))
+    b, b_parent, a_parent = before.get(name), before.get(parent), after.get(parent)
+    if b is None or not b.url or b_parent is None or not _same_host(b.url, b_parent.url):
+        return False
+    return bool(a_parent is not None and _same_host(b_parent.url, a_parent.url))
 
 
 def move_refusal(before: dict, after: dict, typed=frozenset(), mode_changed: bool = False) -> str:
@@ -278,23 +294,31 @@ def move_refusal(before: dict, after: dict, typed=frozenset(), mode_changed: boo
     Jen's configuration - never per form). `before` and `after` are `resolve()` of the file as it is and as it would be; `typed` is the set of endpoint names whose password was
     TYPED in this request (a route says so; the setup wizard, an installer and a test say so for theirs).
 
-    Two shapes, both only for a password that was not typed:
+    Three shapes, all only for a password that was not typed:
       (a) an endpoint whose password VALUE is unchanged but whose HOST changed - or that had NO address and was given one (Q181) - the saved password followed the endpoint to a
           new place; an endpoint that had no password gains an address freely, and a section new in this write has its password in `typed` by construction;
-      (b) a password VALUE that now appears on two endpoints on different hosts, when that pair did not already exist unchanged - the same secret on a second host.
-    A write that touches neither (a rename, an HA mode, a password rotation at the same host) is never asked."""
+      (b) a password VALUE that now appears on two endpoints on different hosts, when that pair did not already exist unchanged - the same secret on a second host;
+      (c) (Y2, v5.69.0-beta.14) an endpoint whose own password VALUE differs from what it was - or that is new with one - and whose name is not in `typed`: a value changes only when
+          someone typed it for that endpoint. Every route types what it sets; what this catches is a `mutate` (a plugin's, a test's) that COPIES a value into an endpoint.
+    A write that touches none (a rename, an HA mode, a password rotation at the same host, typed) is never asked."""
     typed = frozenset(typed or ())
     for name, a in after.items():
         # only a secret an endpoint OWNS can move with it: an inherited one is its parent's, and the parent is judged as itself
         if a.source != "own":
+            _hit("a_new_server_with_no_key_on_another_host")
             continue  # row: a_new_server_with_no_key_on_another_host
         if name in typed:
+            _hit("the_same_move_with_the_password_typed")
             continue  # row: the_same_move_with_the_password_typed
-        if not a.url:
-            continue  # row: an_extra_servers_blank_ipv6_url_with_its_own_password
-        if mode_changed and _re_pointed_by_the_mode_alone(name, a, before, after):
-            continue  # row: a_mode_switch_with_derived_urls_on_the_same_control_agent
         b = before.get(name)
+        if a.password and (b is None or b.password != a.password):
+            return f"The {label(name)}'s password was written without being typed for it: a saved password changes only when it is typed for that endpoint."
+        if not a.url:
+            _hit("a_saved_password_with_no_address_is_not_a_write_to_judge")
+            continue  # row: a_saved_password_with_no_address_is_not_a_write_to_judge
+        if mode_changed and _re_pointed_by_the_mode_alone(name, a, before, after):
+            _hit("a_mode_switch_with_derived_urls_on_the_same_control_agent")
+            continue  # row: a_mode_switch_with_derived_urls_on_the_same_control_agent
         if b is not None and b.password == a.password:
             if not b.url:
                 # v5.69.0-beta.12 (Q181): a saved password's FIRST address is a move too - it was never sent anywhere, and the address it is given now is a place it was not typed for
@@ -311,10 +335,13 @@ def move_refusal(before: dict, after: dict, typed=frozenset(), mode_changed: boo
     for i, (n1, e1) in enumerate(shown):
         for n2, e2 in shown[i + 1 :]:
             if e1.password != e2.password:
+                _hit("a_rotation_with_kea6_and_d2_pinned")
                 continue  # row: a_rotation_with_kea6_and_d2_pinned
             if _same_host(e1.url, e2.url):
-                continue  # row: a_move_to_another_spelling_of_the_same_host
+                _hit("two_own_passwords_equal_on_the_same_host")
+                continue  # row: two_own_passwords_equal_on_the_same_host
             if n1 in typed or n2 in typed:
+                _hit("the_same_server_with_the_share_box_ticked")
                 continue  # row: the_same_server_with_the_share_box_ticked
             b1, b2 = before.get(n1), before.get(n2)
             if (
@@ -327,6 +354,7 @@ def move_refusal(before: dict, after: dict, typed=frozenset(), mode_changed: boo
                 and _same_host(b1.url, e1.url)
                 and _same_host(b2.url, e2.url)
             ):
+                _hit("an_existing_pair_sharing_a_password_is_not_this_writes_doing")
                 continue  # row: an_existing_pair_sharing_a_password_is_not_this_writes_doing
             return (
                 f"The {label(n1)} ({host_of(e1.url)}) and the {label(n2)} ({host_of(e2.url)}) would now use the same saved password on different hosts: "
@@ -381,6 +409,28 @@ def _without_legacy_blanks(parser):
                 continue
             q.set(section, key, value)
     return q
+
+
+def shared_copies(parser) -> set[str]:
+    """The endpoints whose password is a COPY of the parent's, made once and not following it (Y3, v5.69.0-beta.14): the `<password key>_shared = 1` marker the conversion, the "share"
+    box and the direct-socket routes write beside the copy - for `api_pass` of a server, Kea6 or D2, `api6_pass` and `api_d2_pass` of a server, and `[kea6_db] password`. The Servers & HA
+    rows and the Kea6 / D2 / Kea6-database cards read it ("shared copy"); `clear_shared` is how a password that is typed again stops being one."""
+    out = set()
+    for name in resolve(parser):
+        try:
+            section, option = password_key(name)
+        except KeyError:
+            continue
+        if _has(parser, section, option) and _get(parser, section, f"{option}_shared") == "1":
+            out.add(name)
+    return out
+
+
+def clear_shared(parser, name: str) -> None:
+    """Drop an endpoint's `_shared` marker: its password was typed (or removed, or made explicitly blank) in this save, so it is its own and no longer a copy."""
+    section, option = password_key(name)
+    if parser.has_section(section) and parser.has_option(section, f"{option}_shared"):
+        parser.remove_option(section, f"{option}_shared")
 
 
 def pending_conversions(parser, legacy: bool | None = None) -> list[str]:

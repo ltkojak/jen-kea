@@ -777,7 +777,7 @@ def _check_credential_endpoints(jen_cfg) -> list[Finding]:
                 "credential-model-invalid",
                 "warn",
                 "The credential-model marker is not a value Jen knows",
-                f"[{_cred.MODEL_SECTION}] {_cred.MODEL_KEY} is {shown!r}. Set it to `{_cred.MODEL_VALUE}` if every password in the file is its own; remove the line to convert a legacy file.",
+                f"[{_cred.MODEL_SECTION}] {_cred.MODEL_KEY} is {shown!r}. Write exactly `{_cred.MODEL_VALUE}` (lower case) if every password in the file is its own; remove the line to convert a legacy file.",
                 f"[{_cred.MODEL_SECTION}] {_cred.MODEL_KEY}",
                 fix_url="",  # (a hand edit of jen.config: no page has a control for it)
                 why=(

@@ -359,7 +359,9 @@ class TestAtomicWrite:
             pytest.skip("root bypasses the file mode bits this test relies on")
 
         os.chmod(str(isolated_config), 0o444)
-        app_config.write_value("kea", "api_pass", "rotated-secret")
+        app_config.write_value(
+            "kea", "api_pass", "rotated-secret", typed={"kea"}
+        )  # (Q183, Y2: a password VALUE changes only when typed)
 
         assert extensions.KEA_API_PASS == "rotated-secret"
         mode = os.stat(str(isolated_config)).st_mode & 0o777

@@ -59,7 +59,15 @@ what does `destination_view` say about who may move it.
 uses it for a DIFFERENT purpose, BEFORE the exemption is code: the mode-switch skip was the whole flip until a review flipped the mode and moved the address in the same save (Q181's skip was
 written for "direct -> CA re-points the daemons", and was used for "this daemon now has an address on another host"). Each `continue` in `move_refusal` carries `# row: <name>` and
 `tests/test_credential_destinations.py::test_every_continue_in_move_refusal_names_the_row_that_uses_it` fails on one that names no row of the matrix. A route types the ONE endpoint it repoints, never the
-server's three. Ask of every new exemption: what ELSE does this skip let through, and where is the row that says it is still refused?
+server's three. Ask of every new exemption: what ELSE does this skip let through, and where is the row that says it is still refused? The row must REACH the `continue` that cites it
+(`test_the_row_a_continue_names_reaches_that_continue` runs each through an instrumented `move_refusal`): a row that exists but is refused earlier proves nothing.
+
+**The second pass EXECUTES (Q183).** The passes that found beta.12's findings, beta.13's and beta.14's did not read the credential rule, they ran it: the real writer, resolver and transport on
+crafted configurations. That is now the procedure, and its instrument is `tests/probe/credential_probe.py` (a temporary jen.config, the real `AppConfig.mutate` / `write_values` /
+`preflight_identity_change`, `kea_command` with a captured `post`, `materialise`, `config_merge.credential_refusal`; one function per scenario returning what it observed;
+`tests/test_credential_probe.py` asserts them all). The second pass on any change to the credential rule EXECUTES: it extends `tests/probe/credential_probe.py` with one scenario per
+exemption used for a purpose its comment does not state, runs it, and reports each finding with the executed input and the observed output; a finding reported from reading alone is a
+hypothesis.
 
 ## The second pass (adversarial)
 
@@ -101,6 +109,9 @@ or lower-role account reads or changes data it may not, auth or CSRF bypass, roo
 that dies silently, a 500 any user can trigger with ordinary input; P2 = wrong behaviour a user sees, a failure read as success, inconsistent answers, a missing
 validation with no exploit; P3 = nit), the exact file:line in the CURRENT tree, a concrete triggering sequence, and whether a test pins the current behaviour. Then a
 short list of what you checked and found correct. Keep hypotheses in a separate list. No padding: say so when nothing is at a severity.
+On any change to the credential rule (credentials.py, AppConfig._write_parser, kea._endpoint_for, the connection forms, the wizard, the installer's merge) the pass EXECUTES: run
+`py tests/probe/credential_probe.py`, extend it with one scenario per exemption used for a purpose its comment does not state, and report each finding with the executed input and the
+observed output - a finding reported from reading alone is a hypothesis.
 ```
 
 The author's rule: a P1 or P2 from the second pass is fixed in a fixup commit before the release commit (and CI is green again); a P3 is fixed when it is a one-liner, else added
