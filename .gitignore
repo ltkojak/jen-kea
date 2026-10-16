@@ -18,6 +18,7 @@ static/icons/custom/
 # Local maintainer working notes — includes un-patched security items
 # that SECURITY.md says not to disclose publicly before a fix ships
 PENDING.md
+LESSONS.md
 
 # Screenshots written by tests/e2e/test_mobile.py (uploaded by CI, never committed)
 artifacts/
