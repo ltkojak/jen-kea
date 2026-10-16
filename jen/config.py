@@ -620,9 +620,13 @@ class AppConfig:
         extensions.KEA6_API_PASS = _resolved["kea6"].password
         extensions.KEA6_API_WITHHELD = _resolved["kea6"].withheld
 
+        # v5.69.0-beta.13 (Q182, X5c): the Kea6 database is an endpoint like the rest - its host, user and password are `resolve`'s. A PRESENT-BLANK `[kea6_db] host =` is "no Kea6
+        # database" (not a request to dial the local machine), and a host different from Kea's own without a password of its own is `withheld`: `models/db.py` opens no connection
+        # for either, and Health says so.
         extensions.KEA6_DB_HOST = cfg.get("kea6_db", "host", fallback=extensions.KEA_DB_HOST)
         extensions.KEA6_DB_USER = _resolved["kea6_db"].user
         extensions.KEA6_DB_PASS = _resolved["kea6_db"].password
+        extensions.KEA6_DB_WITHHELD = _resolved["kea6_db"].withheld
         extensions.KEA6_DB_NAME = cfg.get("kea6_db", "database", fallback=extensions.KEA_DB_NAME)
         extensions.KEA6_DB_PORT = _db_port(cfg, "kea6_db", extensions.KEA_DB_PORT)
         extensions.KEA6_DB_SSL_CA = cfg.get("kea6_db", "ssl_ca", fallback=extensions.KEA_DB_SSL_CA)

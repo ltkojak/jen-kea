@@ -252,6 +252,15 @@ def get_kea6_db() -> pymysql.connections.Connection:
     global _kea6_pool
     if _kea6_targets_same_db():
         return get_kea_db()
+    # v5.69.0-beta.13 (Q182, X5c): no pool and no connection for a Kea6 database that has no host (`[kea6_db] host =` is "none", not "the local machine") or whose password was
+    # withheld (a host different from Kea's own, with no password of its own - `credentials.resolve`): the caller gets an ordinary connection failure with the reason in it
+    if not extensions.KEA6_DB_HOST:
+        raise pymysql.err.OperationalError(2003, "no Kea6 database is configured ([kea6_db] host is blank)")
+    if extensions.KEA6_DB_WITHHELD:
+        raise pymysql.err.OperationalError(
+            2003,
+            "the Kea6 database is on a different host from the Kea database and has no password of its own - set one under Settings -> Kea",
+        )
     if _kea6_pool is None:
         direct = False
         with _pool_lock:

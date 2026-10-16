@@ -129,6 +129,8 @@ KEA6_API_WITHHELD: str = (
 KEA6_DB_HOST: str = ""
 KEA6_DB_USER: str = ""
 KEA6_DB_PASS: str = ""
+# Q182 (X5c): the endpoint whose password the Kea6 database was refused (`credentials.resolve`'s `withheld`) - blank when it has its own, or none on purpose
+KEA6_DB_WITHHELD: str = ""
 KEA6_DB_NAME: str = ""
 KEA6_DB_PORT: int = 3306
 KEA6_DB_SSL_CA: str = ""

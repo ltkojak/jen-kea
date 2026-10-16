@@ -29,8 +29,10 @@ from collections import namedtuple
 
 logger = logging.getLogger(__name__)
 
-# source: "own" | "inherited:<name>" | "none"; withheld: the endpoint whose secret was NOT inherited because the host differs ("" otherwise)
-Endpoint = namedtuple("Endpoint", "name url user password source withheld", defaults=("",))
+# source: "own" | "inherited:<name>" | "none"; withheld: the endpoint whose secret was NOT inherited because the host differs ("" otherwise);
+# url_own (v5.69.0-beta.13, Q182, X1): True when the address is the endpoint's OWN value (its key is present in its section), False when it is DERIVED from its parent's (an absent
+# key in CA mode) - the writer's mode-switch exemption reads it without the parser
+Endpoint = namedtuple("Endpoint", "name url user password source withheld url_own", defaults=("", True))
 
 #: the marker `materialise` and the "share" box write beside a copied password
 SHARED_MARKER = "api_pass_shared"
@@ -60,28 +62,40 @@ def _db_url(parser, section: str, host: str, fallback_port: str = "3306") -> str
     return f"{host}:{port}"
 
 
-def _user(own_present: bool, own_value: str, parent: Endpoint, url: str, own_password: str = "") -> str:
+def _user(
+    own_present: bool,
+    own_value: str,
+    parent: Endpoint,
+    url: str,
+    own_password: str = "",
+    no_auth: bool = False,
+) -> str:
     """An endpoint's username under the one reading (v5.69.0-beta.12, Q181): a value is its own, a PRESENT-BLANK key is "no user", and an ABSENT key is the parent's - on the same
     host, or alongside a password the endpoint OWNS (the operator typed a password for it, and the account name it was typed with is the parent's unless said otherwise: the forms
     still offer "inherited" for a blank user). An endpoint with no password of its own on a different host has no user - a name is not a secret, but it is half of the credential, and
-    there is no credential to carry it."""
+    there is no credential to carry it.
+
+    v5.69.0-beta.13 (Q182, X2): `no_auth` is True for an HTTP endpoint whose password key is PRESENT and BLANK - the endpoint said "no authentication" - and an absent user beside it is no
+    user: nothing is sent, not an empty Basic header carrying the parent's name. (A database keeps its user beside a blank password: a connection always names one.)"""
     if own_present:
         return own_value
+    if no_auth:
+        return ""
     if parent.user and url and (own_password or _same_host(parent.url, url)):
         return parent.user
     return ""
 
 
-def _inherit(name, url, user, own_present, own_value, parent: Endpoint) -> Endpoint:
+def _inherit(name, url, user, own_present, own_value, parent: Endpoint, url_own: bool = True) -> Endpoint:
     """One endpoint's credential: its own (blank = none, on purpose), else `parent`'s when this endpoint is on the parent's host, else none - with `withheld` set when the
     parent HAD a secret that was refused."""
     if own_present:
-        return Endpoint(name, url, user, own_value, "own" if own_value else "none")
+        return Endpoint(name, url, user, own_value, "own" if own_value else "none", "", url_own)
     if parent.password and url:
         if _same_host(parent.url, url):
-            return Endpoint(name, url, user, parent.password, f"inherited:{parent.name}")
-        return Endpoint(name, url, user, "", "none", parent.name)
-    return Endpoint(name, url, user, "", "none")
+            return Endpoint(name, url, user, parent.password, f"inherited:{parent.name}", "", url_own)
+        return Endpoint(name, url, user, "", "none", parent.name, url_own)
+    return Endpoint(name, url, user, "", "none", "", url_own)
 
 
 def server_numbers(parser) -> list[int]:
@@ -122,9 +136,22 @@ def resolve(parser) -> dict[str, Endpoint]:
     for name in ("kea6", "d2"):
         url = _get(parser, name, "api_url") if _has(parser, name, "api_url") else ("" if direct else kea_url)
         user = _user(
-            _has(parser, name, "api_user"), _get(parser, name, "api_user"), kea, url, _get(parser, name, "api_pass")
+            _has(parser, name, "api_user"),
+            _get(parser, name, "api_user"),
+            kea,
+            url,
+            _get(parser, name, "api_pass"),
+            no_auth=_has(parser, name, "api_pass") and not _get(parser, name, "api_pass"),
         )
-        out[name] = _inherit(name, url, user, _has(parser, name, "api_pass"), _get(parser, name, "api_pass"), kea)
+        out[name] = _inherit(
+            name,
+            url,
+            user,
+            _has(parser, name, "api_pass"),
+            _get(parser, name, "api_pass"),
+            kea,
+            _has(parser, name, "api_url"),
+        )
 
     kea_db_host, kea_db_user, kea_db_pass = (
         _get(parser, "kea_db", "host"),
@@ -149,6 +176,7 @@ def resolve(parser) -> dict[str, Endpoint]:
         _has(parser, "kea6_db", "password"),
         _get(parser, "kea6_db", "password"),
         kea_db,
+        _has(parser, "kea6_db", "host"),
     )
     jen_pass = _get(parser, "jen_db", "password")
     out["jen_db"] = Endpoint(
@@ -163,7 +191,12 @@ def resolve(parser) -> dict[str, Endpoint]:
         sec = f"kea_server_{n}"
         url = _get(parser, sec, "api_url")
         user = _user(
-            _has(parser, sec, "api_user"), _get(parser, sec, "api_user"), kea, url, _get(parser, sec, "api_pass")
+            _has(parser, sec, "api_user"),
+            _get(parser, sec, "api_user"),
+            kea,
+            url,
+            _get(parser, sec, "api_pass"),
+            no_auth=_has(parser, sec, "api_pass") and not _get(parser, sec, "api_pass"),
         )
         srv = out[f"server_{n}"] = _inherit(
             f"server_{n}", url, user, _has(parser, sec, "api_pass"), _get(parser, sec, "api_pass"), kea
@@ -174,10 +207,21 @@ def resolve(parser) -> dict[str, Endpoint]:
         ):
             eurl = _get(parser, sec, url_key) if _has(parser, sec, url_key) else ("" if direct else url)
             euser = _user(
-                _has(parser, sec, user_key), _get(parser, sec, user_key), srv, eurl, _get(parser, sec, pass_key)
+                _has(parser, sec, user_key),
+                _get(parser, sec, user_key),
+                srv,
+                eurl,
+                _get(parser, sec, pass_key),
+                no_auth=_has(parser, sec, pass_key) and not _get(parser, sec, pass_key),
             )
             out[f"server_{n}_{suffix}"] = _inherit(
-                f"server_{n}_{suffix}", eurl, euser, _has(parser, sec, pass_key), _get(parser, sec, pass_key), srv
+                f"server_{n}_{suffix}",
+                eurl,
+                euser,
+                _has(parser, sec, pass_key),
+                _get(parser, sec, pass_key),
+                srv,
+                _has(parser, sec, url_key),
             )
     return out
 
@@ -211,6 +255,24 @@ def host_of(url: str) -> str:
 RIDES_THE_CONTROL_AGENT = re.compile(r"kea6|d2|server_\d+_(?:v6|d2)")
 
 
+def _parent_of(name: str) -> str:
+    """The endpoint whose address a derived (absent-key) address follows: the primary for Kea6 and D2, a server for its own IPv6 and D2."""
+    if name in ("kea6", "d2"):
+        return "kea"
+    m = re.fullmatch(r"(server_\d+)_(?:v6|d2)", name)
+    return m.group(1) if m else ""
+
+
+def _re_pointed_by_the_mode_alone(name: str, a, before: dict, after: dict) -> bool:
+    """X1 (v5.69.0-beta.13, Q182): the connection-mode switch exempts ONLY what the mode itself moves - a daemon whose address is DERIVED (its url key absent: `url_own` False) from a
+    parent whose host did not change. An address of its own, or a Control Agent on a NEW host, is judged as any move: typed, or refused."""
+    if a.url_own or not RIDES_THE_CONTROL_AGENT.fullmatch(name):
+        return False
+    parent = _parent_of(name)
+    b_parent, a_parent = before.get(parent), after.get(parent)
+    return bool(b_parent is not None and a_parent is not None and _same_host(b_parent.url, a_parent.url))
+
+
 def move_refusal(before: dict, after: dict, typed=frozenset(), mode_changed: bool = False) -> str:
     """The sentence when a write would send a saved password somewhere its owner never named, else "" (CRED-004; asked ONCE, by `AppConfig._write_parser`, for every write of
     Jen's configuration - never per form). `before` and `after` are `resolve()` of the file as it is and as it would be; `typed` is the set of endpoint names whose password was
@@ -225,9 +287,9 @@ def move_refusal(before: dict, after: dict, typed=frozenset(), mode_changed: boo
     for name, a in after.items():
         # only a secret an endpoint OWNS can move with it: an inherited one is its parent's, and the parent is judged as itself
         if a.source != "own" or name in typed or not a.url:
-            continue
-        if mode_changed and RIDES_THE_CONTROL_AGENT.fullmatch(name):
-            continue  # direct -> CA: a daemon's address becomes the Control Agent's. The mode is one switch for every daemon, and the Kea API form that flips it cannot type their passwords
+            continue  # row: the_same_move_with_the_password_typed
+        if mode_changed and _re_pointed_by_the_mode_alone(name, a, before, after):
+            continue  # row: a_mode_switch_with_derived_urls_on_the_same_control_agent
         b = before.get(name)
         if b is not None and b.password == a.password:
             if not b.url:
@@ -245,7 +307,7 @@ def move_refusal(before: dict, after: dict, typed=frozenset(), mode_changed: boo
     for i, (n1, e1) in enumerate(shown):
         for n2, e2 in shown[i + 1 :]:
             if e1.password != e2.password or _same_host(e1.url, e2.url) or n1 in typed or n2 in typed:
-                continue
+                continue  # row: the_same_server_with_the_share_box_ticked
             b1, b2 = before.get(n1), before.get(n2)
             if (
                 b1 is not None
@@ -257,7 +319,7 @@ def move_refusal(before: dict, after: dict, typed=frozenset(), mode_changed: boo
                 and _same_host(b1.url, e1.url)
                 and _same_host(b2.url, e2.url)
             ):
-                continue  # this pair already existed, unchanged: not something this write did
+                continue  # row: an_existing_pair_sharing_a_password_is_not_this_writes_doing
             return (
                 f"The {label(n1)} ({host_of(e1.url)}) and the {label(n2)} ({host_of(e2.url)}) would now use the same saved password on different hosts: "
                 "type each one's own password - a saved password is never sent to a host it was not typed for."
@@ -294,9 +356,35 @@ def user_key(name: str) -> tuple[str, str]:
     }[option]
 
 
-def pending_conversions(parser) -> list[str]:
+#: the two server keys that 5.68.0 read a BLANK as "inherit" for (`kea._endpoint_for`'s `or` chain): in a file that has not been converted, a present-blank value is the same as an absent key
+LEGACY_BLANK_KEYS = ("api6_pass", "api_d2_pass")
+
+
+def _without_legacy_blanks(parser):
+    """A copy of `parser` with the legacy present-blank keys (`LEGACY_BLANK_KEYS` of a `[kea_server_N]`) removed: what 5.68.0 meant by them."""
+    import configparser
+
+    q = configparser.ConfigParser(interpolation=None)
+    for section in parser.sections():
+        q.add_section(section)
+        legacy = re.fullmatch(r"kea_server_\d+", section) is not None
+        for key, value in parser.items(section, raw=True):
+            if legacy and key in LEGACY_BLANK_KEYS and value == "":
+                continue
+            q.set(section, key, value)
+    return q
+
+
+def pending_conversions(parser, legacy: bool | None = None) -> list[str]:
     """The endpoints the 5.10-to-5.69.0-beta.10 inheritance would have given a password that CRED-004 no longer does: each has a url, no password key and a parent with a password
-    on a different host (`withheld`). Servers' own endpoints come before their IPv6 and D2 ones, which inherit from them."""
+    on a different host (`withheld`). Servers' own endpoints come before their IPv6 and D2 ones, which inherit from them.
+
+    v5.69.0-beta.13 (Q182, X5d): in a file WITHOUT the credential-model marker (`legacy`, the default for such a file) a present-blank `api6_pass` / `api_d2_pass` of a server is what 5.68.0
+    called "inherit", so it is pending too; with the marker a blank is a blank (an explicit "no password")."""
+    if legacy is None:
+        legacy = model_marker(parser) == "absent"
+    if legacy:
+        parser = _without_legacy_blanks(parser)
     return [n for n, e in resolve(parser).items() if e.withheld and e.url and n != "kea"]
 
 
@@ -337,8 +425,18 @@ def forget_beta11_flag() -> None:
         )
 
 
+def model_marker(parser) -> str:
+    """The marker as a VALUE (v5.69.0-beta.13, Q182, X3): "absent" (no `[jen] credential_model` key: a legacy file), "explicit" (the value Jen writes, whitespace ignored) or "invalid"
+    (the key is there with anything else - a typo, an empty value). An invalid marker is neither: Jen cannot tell whether every password in the file is its own, so it converts
+    nothing and says so (`materialise`, the Doctor's `credential-model-invalid`, Health)."""
+    if not _has(parser, MODEL_SECTION, MODEL_KEY):
+        return "absent"
+    return "explicit" if _get(parser, MODEL_SECTION, MODEL_KEY).strip() == MODEL_VALUE else "invalid"
+
+
 def has_model_marker(parser) -> bool:
-    return _has(parser, MODEL_SECTION, MODEL_KEY)
+    """True when the marker says `explicit` (the file is converted or was born converted)."""
+    return model_marker(parser) == "explicit"
 
 
 def materialise(app_config, audit=None, today: str = "", already_converted: bool = False) -> list[str] | None:
@@ -360,29 +458,45 @@ def materialise(app_config, audit=None, today: str = "", already_converted: bool
         if has_request_context():
             return None
         probe = app_config._read_parser()
-        if has_model_marker(probe):
+        state = model_marker(probe)
+        if state == "explicit":
             return []
+        if state == "invalid":
+            logger.error(
+                f"credentials: [{MODEL_SECTION}] {MODEL_KEY} = {_get(probe, MODEL_SECTION, MODEL_KEY)!r} in {getattr(app_config, 'path', 'jen.config')} is not a value Jen knows - nothing was converted. "
+                f"Set it to {MODEL_VALUE!r} if every password in the file is its own, or remove the line to convert a legacy file"
+            )
+            return None
         done: list[str] = []
 
         def _apply(p):
-            if has_model_marker(p):
+            if model_marker(p) != "absent":
                 return  # a second process (or an installer) wrote it between the probe and now: nothing to convert, nothing to write
             if not p.has_section(MODEL_SECTION):
                 p.add_section(MODEL_SECTION)
             p.set(MODEL_SECTION, MODEL_KEY, MODEL_VALUE)
-            if already_converted:
+            # X5a (Q182): the bridge marks THIS file only when it has nothing to convert - the settings row described the database's old file, and a restored pre-beta.11 file with
+            # passwordless peers on other hosts converts them. The marker above is already set, so what is pending is read as a legacy file (legacy=True)
+            if already_converted and not pending_conversions(p, legacy=True):
                 return
             for _ in range(3):  # parent before child: a server's API password, then its IPv6 and D2
-                batch = [n for n in pending_conversions(p) if n not in done]
+                batch = [n for n in pending_conversions(p, legacy=True) if n not in done]
                 if not batch:
                     return
-                res = resolve(p)
+                res = resolve(_without_legacy_blanks(p))
                 for name in batch[:]:
                     parent = res[name].withheld
                     if not res[parent].password:
                         continue
                     section, option = password_key(name)
-                    if p.has_section(section) and not p.has_option(section, option):
+                    blank_legacy = (
+                        p.has_section(section)
+                        and option in LEGACY_BLANK_KEYS
+                        and re.fullmatch(r"kea_server_\d+", section) is not None
+                        and p.has_option(section, option)
+                        and p.get(section, option, raw=True) == ""
+                    )
+                    if p.has_section(section) and (not p.has_option(section, option) or blank_legacy):
                         p.set(section, option, res[parent].password)
                         p.set(section, f"{option}_shared", "1")
                         # the USER it sent too (Q181): the old inheritance carried the parent's user with the password, and the resolver now inherits a user on the same host only -

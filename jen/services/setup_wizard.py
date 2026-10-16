@@ -395,7 +395,7 @@ def save_connection(
     from jen.services import credentials as __credentials
 
     _live = app_config._read_parser()
-    if not __credentials.has_model_marker(_live) and not __credentials.pending_conversions(_live):
+    if __credentials.model_marker(_live) == "absent" and not __credentials.pending_conversions(_live):
         items.append((__credentials.MODEL_SECTION, __credentials.MODEL_KEY, __credentials.MODEL_VALUE))
     # Q180: the passwords the superadmin TYPED here are the ones `_write_parser` lets follow the endpoint to its new host; a blank keeps the saved one, which may not
     app_config.write_values(items, typed={n for n, v in (("kea", api_pass), ("kea_db", kea_db_pass)) if v})
@@ -649,6 +649,9 @@ def enable_v6(
             parser.set(
                 "kea6", "api_pass", ""
             )  # Q181 (V4): explicit - this daemon has no authentication; `resolve` reads it as none and nothing is withheld
+            if not api_user and parser.has_option("kea6", "api_user"):
+                # Q182 (X2): no authentication is no user either - a user left from an earlier run would be sent beside the blank password
+                parser.remove_option("kea6", "api_user")
 
     try:
         app_config.mutate(_apply, typed={"kea6"} if api_pass else None)

@@ -769,6 +769,36 @@ def _check_credential_endpoints(jen_cfg) -> list[Finding]:
 
     resolved = _cred.resolve(jen_cfg)
     out: list[Finding] = []
+    # Q182 (X3): the marker is a VALUE - a typo is neither "converted" nor "legacy", so nothing is converted and the line says how to put it right
+    if _cred.model_marker(jen_cfg) == "invalid":
+        shown = jen_cfg.get(_cred.MODEL_SECTION, _cred.MODEL_KEY, fallback="", raw=True)
+        out.append(
+            _finding(
+                "credential-model-invalid",
+                "warn",
+                "The credential-model marker is not a value Jen knows",
+                f"[{_cred.MODEL_SECTION}] {_cred.MODEL_KEY} is {shown!r}. Set it to `{_cred.MODEL_VALUE}` if every password in the file is its own; remove the line to convert a legacy file.",
+                f"[{_cred.MODEL_SECTION}] {_cred.MODEL_KEY}",
+                fix_url="/settings/kea",
+                why=(
+                    "Jen cannot tell whether an additional server or the Kea6 and D2 endpoints still borrow a password from the Kea API, so it converts nothing and starts no copy until the line is one "
+                    "of the two values it writes itself."
+                ),
+            )
+        )
+    # Q182 (X5c): a Kea6 database written blank on purpose is "no Kea6 database" - Jen opens no connection to the local machine for it
+    if jen_cfg.has_option("kea6_db", "host") and not jen_cfg.get("kea6_db", "host", fallback="", raw=True).strip():
+        out.append(
+            _finding(
+                "kea6-database-blank",
+                "warn",
+                "No Kea6 database is configured",
+                "[kea6_db] host is blank on purpose, so Jen opens no connection for IPv6 lease reads. Name the Kea6 database under Settings → Kea, or remove the key to use the Kea database.",
+                "[kea6_db]",
+                fix_url="/settings/kea",
+                why='A blank host is an explicit "none", not a request to reach the machine Jen runs on.',
+            )
+        )
     for name, ep in resolved.items():
         if ep.withheld:
             parent = resolved[ep.withheld]

@@ -55,6 +55,12 @@ endpoint, and whether the write is refused). A P1 or P2 the second pass finds in
 `credentials.resolve` or `AppConfig._write_parser`; the registry line (CRED-004 / RBAC-004); the row green. Ask of every endpoint a change touches: which secret does `resolve` give it, from where, and
 what does `destination_view` say about who may move it.
 
+**An exemption is a row too (Q182).** An exemption in `credentials.move_refusal` (every `continue`), `credentials._user`, `credentials._inherit` or a route's `typed=` set is a row of the matrix that
+uses it for a DIFFERENT purpose, BEFORE the exemption is code: the mode-switch skip was the whole flip until a review flipped the mode and moved the address in the same save (Q181's skip was
+written for "direct -> CA re-points the daemons", and was used for "this daemon now has an address on another host"). Each `continue` in `move_refusal` carries `# row: <name>` and
+`tests/test_credential_destinations.py::test_every_continue_in_move_refusal_names_the_row_that_uses_it` fails on one that names no row of the matrix. A route types the ONE endpoint it repoints, never the
+server's three. Ask of every new exemption: what ELSE does this skip let through, and where is the row that says it is still refused?
+
 ## The second pass (adversarial)
 
 Run as a separate subagent on the same diff, with the reviewer's method as its prompt, so that it does not inherit the first pass's assumptions. Its findings are reconciled against the first pass's

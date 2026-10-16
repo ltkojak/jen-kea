@@ -654,8 +654,11 @@ def _endpoint_credentials(ctx) -> Check:
     from jen.services import config_doctor
 
     c = Check("endpoint_credentials", "Every endpoint has a credential", "kea", fix_url="/settings/kea")
+    # Q182: the same row also carries the two states the resolver cannot act on - a credential-model marker with a value Jen does not know, and a Kea6 database written blank
     missing = [
-        f for f in config_doctor.diagnose(None, jen_config=extensions.cfg) if f["id"] == "endpoint-has-no-credential"
+        f
+        for f in config_doctor.diagnose(None, jen_config=extensions.cfg)
+        if f["id"] in ("endpoint-has-no-credential", "credential-model-invalid", "kea6-database-blank")
     ]
     if not missing:
         c.status, c.detail = (

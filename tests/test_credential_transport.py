@@ -115,14 +115,23 @@ def _calls_for(name, servers):
     return server, {"": "dhcp4", "v6": "dhcp6", "d2": "d2"}[suffix]
 
 
-def _expect(endpoint, service, direct):
-    """What the transport must do for this endpoint: (posts?, url, auth)."""
+def _own_user(cfg, name):
+    """Does the endpoint's section carry a user of its own, with a value?"""
+    section, option = cred.user_key(name)
+    return cfg.has_option(section, option) and cfg.get(section, option, raw=True) != ""
+
+
+def _expect(endpoint, service, direct, cfg):
+    """What the transport must do for this endpoint: (posts?, url, auth).
+
+    Q182 (X2): a header is sent iff the resolved password is non-blank OR the resolved user is an OWN value. A user that is only the parent's, beside a blank password, is not a
+    credential the endpoint asked to send - "no authentication" is no header."""
     if service in ("dhcp6", "d2") and not endpoint.url:
         return False, "", None
     if endpoint.withheld:
         return False, "", None
-    auth = (endpoint.user, endpoint.password) if (endpoint.user or endpoint.password) else kea._NO_AUTH
-    return True, endpoint.url, auth
+    header = bool(endpoint.password) or (bool(endpoint.user) and _own_user(cfg, endpoint.name))
+    return True, endpoint.url, ((endpoint.user, endpoint.password) if header else kea._NO_AUTH)
 
 
 @pytest.mark.parametrize(("mode", "kea6", "server"), _cases())
@@ -137,7 +146,7 @@ def test_the_transport_posts_exactly_what_resolve_says(mode, kea6, server, monke
         if name.endswith("_db") or name == "jen_db" or name in ("kea6_db",):
             continue
         server_dict, service = _calls_for(name, servers)
-        posts, url, auth = _expect(endpoint, service, mode == "direct")
+        posts, url, auth = _expect(endpoint, service, mode == "direct", cfg)
         for via in ("dict", "globals"):
             if via == "globals" and name not in ("kea", "kea6", "d2"):
                 continue
@@ -159,6 +168,78 @@ def _with_required(cfg):
         if not cfg.has_section(section):
             cfg.add_section(section)
     return cfg
+
+
+class TestNoAuthenticationOnTheSameHostSendsNoHeader:
+    """Q182 (X2, subagent S1): Kea6, D2, a server's IPv6 endpoint and the wizard's same-box "no authentication" all said `api_pass =` and sent `(primary's user, "")` - an empty Basic
+    header carrying a name the endpoint never chose."""
+
+    PRIMARY_BLOCK = (
+        f"[kea]\napi_url = {PRIMARY}\napi_user = pu\napi_pass = PS\n"
+        "[kea_db]\nhost = db1\nuser = k\npassword = KDB\n[jen_db]\nhost = jh\nuser = j\npassword = JP\n[server]\n"
+    )
+
+    def _send(self, text, name, monkeypatch):
+        cfg = configparser.ConfigParser(interpolation=None)
+        cfg.read_string(text)
+        servers = AppConfig.derive_kea_servers(cfg, quiet=True)
+        fake = _Post()
+        monkeypatch.setattr(kea, "http", fake)
+        AppConfig().apply(_with_required(cfg))
+        server, service = _calls_for(name, servers)
+        kea.kea_command("version-get", service, server=server)
+        kea.kea_command("version-get", service, server=None) if name in ("kea6", "d2") else None
+        return fake.calls
+
+    @pytest.mark.parametrize(
+        ("name", "block"),
+        [
+            ("kea6", "[kea6]\napi_url = https://a:8006\napi_pass =\n"),
+            ("d2", "[d2]\napi_url = https://a:53001\napi_pass =\n"),
+            (
+                "server_2_v6",
+                "[kea_server_2]\napi_url = https://b:8000\napi_user = su\napi_pass = SS\napi6_url = https://b:8006\napi6_pass =\n",
+            ),
+            # the shape the wizard writes for "this DHCPv6 control socket has no authentication" on the primary's own box (no user key at all)
+            ("kea6", "[kea6]\napi_url = http://a:8006\napi_pass =\n"),
+        ],
+    )
+    def test_the_request_carries_no_authorization_header(self, name, block, monkeypatch):
+        calls = self._send(self.PRIMARY_BLOCK + block, name, monkeypatch)
+        assert calls and all(auth is kea._NO_AUTH for _url, auth in calls), calls
+
+    def test_the_same_with_a_user_of_its_own_still_sends_it(self, monkeypatch):
+        calls = self._send(
+            self.PRIMARY_BLOCK + "[kea6]\napi_url = https://a:8006\napi_user = six\napi_pass =\n", "kea6", monkeypatch
+        )
+        assert calls and all(auth == ("six", "") for _url, auth in calls)
+
+    def test_the_wizard_saves_no_user_and_a_blank_password_and_probes_with_no_header(self, monkeypatch):
+        """`enable_v6(no_auth=True)` on a file that has a stale `[kea6] api_user`: the saved section has `api_pass =` and NO user key, and what it resolves to sends no header."""
+        from jen.services import setup_wizard
+
+        written = {}
+
+        class _Config:
+            def mutate(self, fn, typed=None, **_k):
+                p = configparser.ConfigParser(interpolation=None)
+                p.read_string(
+                    TestNoAuthenticationOnTheSameHostSendsNoHeader.PRIMARY_BLOCK + "[kea6]\napi_user = stale\n"
+                )
+                fn(p)
+                written["parser"] = p
+
+        monkeypatch.setattr("jen.config.app_config", _Config())
+        monkeypatch.setattr("jen.models.user.set_global_setting", lambda *a, **k: None)
+        assert setup_wizard.enable_v6("http://a:8006", {}, no_auth=True) is None
+        p = written["parser"]
+        assert (
+            p.has_option("kea6", "api_pass")
+            and p.get("kea6", "api_pass") == ""
+            and not p.has_option("kea6", "api_user")
+        )
+        e = cred.resolve(p)["kea6"]
+        assert (e.user, e.password, e.withheld) == ("", "", "")
 
 
 class TestTheRowsTheReviewNamed:

@@ -408,11 +408,22 @@ class TestTheMarkerLivesInTheFileItDescribes:
         cred.materialise(fake)
         assert cred.resolve(fake.parser)["server_2"].user == "mine"
 
-    def test_a_config_without_the_key_whose_database_says_it_converted_gets_the_key_and_no_copies(self):
-        fake = _FakeConfig(_p(self.LEGACY))
+    def test_a_config_without_the_key_whose_database_says_it_converted_and_nothing_pending_gets_the_key_and_no_copies(
+        self,
+    ):
+        fake = _FakeConfig(
+            _p(BASE + "[kea_server_2]\napi_url = https://a:8001\n")
+        )  # a peer on the primary's own host: nothing to convert
         assert cred.materialise(fake, already_converted=True) == []
         assert cred.has_model_marker(fake.parser) and not fake.parser.has_option("kea_server_2", "api_pass")
         assert fake.writes == 1
+
+    def test_a_restored_legacy_file_whose_database_row_says_converted_is_converted_not_merely_marked(self):
+        """Q182 (X5a, subagent S9): the settings row describes the DATABASE's old file, not this one. A restored pre-beta.11 file with a passwordless peer on another host keeps it working."""
+        fake, rows = _FakeConfig(_p(self.LEGACY)), []
+        assert cred.materialise(fake, audit=lambda *a: rows.append(a), already_converted=True) == ["server_2"]
+        assert fake.writes == 1 and cred.has_model_marker(fake.parser)
+        assert fake.parser.get("kea_server_2", "api_pass") == "S" and len(rows) == 1
 
     def test_a_restored_older_database_changes_nothing_because_the_marker_is_not_in_it(self):
         """The decision reads the FILE: with the key present the answer is the same whatever the settings table says."""
@@ -626,6 +637,122 @@ class TestTheUserFollowsAnOwnPassword:
         assert cred.resolve(_p(cfg))["server_2_v6"].user == "su"
 
 
+class TestUrlOwn:
+    """Q182 (X1): `Endpoint.url_own` is True when the address is the endpoint's own value (its key is present), False when it is derived from the parent's."""
+
+    def test_present_is_own_absent_in_ca_mode_is_derived(self):
+        r = cred.resolve(
+            _p(
+                BASE
+                + "[kea6]\napi_url = https://k6:8006\n[d2]\napi_pass = D\n[kea_server_2]\napi_url = https://b:8000\napi6_url =\n"
+            )
+        )
+        assert (r["kea"].url_own, r["kea6"].url_own, r["d2"].url_own) == (True, True, False)
+        assert (r["server_2"].url_own, r["server_2_v6"].url_own, r["server_2_d2"].url_own) == (True, True, False)
+
+    def test_the_databases_are_their_own(self):
+        r = cred.resolve(_p(BASE + "[kea6_db]\nhost = db2\n"))
+        assert r["kea_db"].url_own and r["kea6_db"].url_own and r["jen_db"].url_own
+
+    def test_an_absent_kea6_database_host_is_the_keas(self):
+        assert cred.resolve(_p(BASE))["kea6_db"].url_own is False
+
+
+class TestNoAuthenticationIsNoUser:
+    """Q182 (X2): an absent user beside a PRESENT-BLANK own password is no user - the endpoint said "no authentication". A database keeps its user."""
+
+    SAME = BASE + "[kea6]\napi_url = https://a:8006\napi_pass =\n"
+
+    def test_kea6_on_the_same_host_with_a_blank_password_has_no_user(self):
+        e = cred.resolve(_p(self.SAME))["kea6"]
+        assert (e.user, e.password, e.source, e.withheld) == ("", "", "none", "")
+
+    def test_d2_and_a_servers_endpoints_likewise(self):
+        r = cred.resolve(
+            _p(
+                BASE
+                + "[d2]\napi_url = https://a:53001\napi_pass =\n"
+                + "[kea_server_2]\napi_url = https://b:8000\napi_user = su\napi_pass = P\napi6_url = https://b:8006\napi6_pass =\n"
+            )
+        )
+        assert r["d2"].user == "" and r["server_2_v6"].user == ""
+
+    def test_the_server_itself_with_a_blank_password_and_no_user(self):
+        r = cred.resolve(_p(BASE + "[kea_server_2]\napi_url = https://a:8001\napi_pass =\n"))
+        assert (r["server_2"].user, r["server_2"].password) == ("", "")
+
+    def test_an_own_user_beside_a_blank_password_stays(self):
+        e = cred.resolve(_p(self.SAME + "api_user = mine\n"))["kea6"]
+        assert (e.user, e.password) == ("mine", "")
+
+    def test_an_absent_password_on_the_same_host_still_inherits_both(self):
+        e = cred.resolve(_p(BASE + "[kea6]\napi_url = https://a:8006\n"))["kea6"]
+        assert (e.user, e.password) == ("u", "S")
+
+    def test_a_database_keeps_its_user_beside_a_blank_password(self):
+        e = cred.resolve(_p(BASE + "[kea6_db]\nhost = db1\npassword =\n"))["kea6_db"]
+        assert (e.user, e.password) == ("k", "")
+
+
+class TestTheMarkerIsAValue:
+    """Q182 (X3): `model_marker` is "absent", "explicit" or "invalid"; an invalid one converts nothing, logs once, and the Doctor says so."""
+
+    @pytest.mark.parametrize(
+        ("value", "state"),
+        [
+            (None, "absent"),
+            ("explicit", "explicit"),
+            (" explicit ", "explicit"),
+            ("", "invalid"),
+            ("garbage", "invalid"),
+        ],
+    )
+    def test_the_states(self, value, state):
+        p = _p(BASE)
+        if value is not None:
+            p.add_section("jen")
+            p.set("jen", "credential_model", value)
+        assert cred.model_marker(p) == state
+        assert cred.has_model_marker(p) is (state == "explicit")
+
+    def test_an_invalid_marker_converts_nothing_writes_nothing_and_logs_one_error(self, caplog):
+        import logging
+
+        class Named(_FakeConfig):
+            path = "/etc/jen/jen.config"
+
+        fake = Named(_p(BASE + "[kea_server_2]\napi_url = https://b:8000\n[jen]\ncredential_model = explcit\n"))
+        with caplog.at_level(logging.ERROR, logger="jen.services.credentials"):
+            assert cred.materialise(fake) is None
+        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert fake.writes == 0 and not fake.parser.has_option("kea_server_2", "api_pass")
+        assert len(errors) == 1 and "credential_model" in errors[0].getMessage() and "explcit" in errors[0].getMessage()
+
+
+class TestALegacyBlankIsInherit:
+    """Q182 (X5d): 5.68.0 read a BLANK `api6_pass` / `api_d2_pass` on a server as "inherit", so in a file without the marker it is pending; with the marker a blank is a blank."""
+
+    LEGACY = BASE + "[kea_server_2]\napi_url = https://b:8000\napi_pass = P\napi6_url = https://c:8006\napi6_pass =\n"
+
+    def test_a_marker_less_file_lists_it_and_the_conversion_fills_it(self):
+        assert cred.pending_conversions(_p(self.LEGACY)) == ["server_2_v6"]
+        fake = _FakeConfig(_p(self.LEGACY))
+        assert cred.materialise(fake) == ["server_2_v6"]
+        assert (
+            fake.parser.get("kea_server_2", "api6_pass") == "P"
+            and fake.parser.get("kea_server_2", "api6_pass_shared") == "1"
+        )
+        assert cred.resolve(fake.parser)["server_2_v6"].source == "own"
+
+    def test_a_marked_file_keeps_the_blank_as_no_password(self):
+        marked = _p(self.LEGACY + "[jen]\ncredential_model = explicit\n")
+        assert cred.pending_conversions(marked) == []
+        e = cred.resolve(marked)["server_2_v6"]
+        assert (e.password, e.source, e.withheld) == ("", "none", "")
+        fake = _FakeConfig(marked)
+        assert cred.materialise(fake) == [] and fake.writes == 0
+
+
 class TestAModeSwitchRepointsTheDaemonsWholesale:
     """Q181 second pass (P2-5): direct -> CA gives every daemon the Control Agent's address; the form that flips the mode cannot type their passwords, so it is not refused for them."""
 
@@ -633,11 +760,40 @@ class TestAModeSwitchRepointsTheDaemonsWholesale:
         "[kea]\nconnection_mode = direct\napi_url = https://a:8004\napi_user = u\napi_pass = S\n[kea6]\napi_pass = K6\n"
     )
 
-    def test_the_move_rule_skips_a_daemon_that_rides_the_control_agent_when_the_mode_changed(self):
+    def test_the_move_rule_skips_a_daemon_whose_address_is_derived_from_an_unmoved_control_agent(self):
         before = cred.resolve(_p(self.DIRECT))
         after = cred.resolve(_p(self.DIRECT.replace("direct", "ca")))
+        assert after["kea6"].url_own is False and before["kea6"].url_own is False
         assert "first address" in cred.move_refusal(before, after)
         assert cred.move_refusal(before, after, mode_changed=True) == ""
+
+    def test_the_skip_does_not_cover_an_address_of_the_daemons_own(self):
+        """Q182 (X1): a mode flip that also gives the daemon an address of its own on another host is judged as any move."""
+        before = cred.resolve(_p(self.DIRECT))
+        after = cred.resolve(
+            _p(self.DIRECT.replace("direct", "ca").replace("[kea6]", "[kea6]\napi_url = https://k6:8006"))
+        )
+        assert after["kea6"].url_own is True
+        assert "first address" in cred.move_refusal(before, after, mode_changed=True)
+        assert cred.move_refusal(before, after, typed={"kea6"}, mode_changed=True) == ""
+
+    def test_the_skip_does_not_cover_a_control_agent_on_a_new_host(self):
+        before = cred.resolve(_p(self.DIRECT))
+        after = cred.resolve(_p(self.DIRECT.replace("direct", "ca").replace("https://a:8004", "https://z:8000")))
+        assert after["kea6"].url_own is False and after["kea6"].url == "https://z:8000"
+        assert "first address" in cred.move_refusal(before, after, typed={"kea"}, mode_changed=True)
+        assert cred.move_refusal(before, after, typed={"kea", "kea6"}, mode_changed=True) == ""
+
+    def test_a_servers_derived_endpoints_follow_the_same_rule(self):
+        text = (
+            "[kea]\nconnection_mode = direct\napi_url = https://a:8004\napi_pass = S\n"
+            "[kea_server_2]\napi_url = https://b:8004\napi_pass = P\napi6_pass = P6\n"
+        )
+        before = cred.resolve(_p(text))
+        same = cred.resolve(_p(text.replace("direct", "ca")))
+        assert cred.move_refusal(before, same, mode_changed=True) == ""
+        moved = cred.resolve(_p(text.replace("direct", "ca").replace("https://b:8004", "https://y:8000")))
+        assert "first address" in cred.move_refusal(before, moved, typed={"server_2"}, mode_changed=True)
 
     def test_the_writer_passes_a_mode_switch_and_still_refuses_the_same_change_without_it(self, tmp_path, monkeypatch):
         from jen import extensions
@@ -729,3 +885,72 @@ class TestAnUnreadableSettingsTableIsNotAnAbsentRow:
 
         fake = Racing(_p(BASE + "[kea_server_2]\napi_url = https://b:8000\n"))
         assert cred.materialise(fake) == [] and not fake.parser.has_option("kea_server_2", "api_pass")
+
+
+class TestTheKea6DatabaseIsAnEndpoint:
+    """Q182 (X5c, subagent S5): `[kea6_db] host =` is "no Kea6 database", not "the machine Jen runs on"; a host different from Kea's own with no password of its own is withheld. Neither opens a
+    pool or a connection, and the Doctor / Health say so."""
+
+    @pytest.fixture(autouse=True)
+    def _globals_back(self):
+        from jen import extensions
+
+        snapshot = dict(vars(extensions))
+        yield
+        for key, value in snapshot.items():
+            setattr(extensions, key, value)
+
+    def _apply(self, kea6_db_section):
+        from jen import extensions
+        from jen.config import AppConfig
+
+        cfg = _p(BASE + "[jen_db]\nhost = jh\nuser = j\npassword = JP\n[server]\n" + kea6_db_section)
+        AppConfig().apply(cfg)
+        return extensions
+
+    def test_a_blank_host_is_no_endpoint_and_opens_nothing(self, monkeypatch):
+        import pymysql
+
+        from jen.models import db
+
+        ext = self._apply("[kea6_db]\nhost =\n")
+        assert ext.KEA6_DB_HOST == "" and cred.resolve(_p(BASE + "[kea6_db]\nhost =\n"))["kea6_db"].url == ""
+        monkeypatch.setattr(
+            db, "_make_kea6_pool", lambda: pytest.fail("a pool was made for a Kea6 database with no host")
+        )
+        monkeypatch.setattr(db.pymysql, "connect", lambda **k: pytest.fail("a connection was made"))
+        monkeypatch.setattr(db, "_kea6_pool", None)
+        with pytest.raises(pymysql.err.OperationalError, match="no Kea6 database"):
+            db.get_kea6_db()
+
+    def test_a_host_on_another_server_with_no_password_is_withheld_and_opens_nothing(self, monkeypatch):
+        import pymysql
+
+        from jen.models import db
+
+        ext = self._apply("[kea6_db]\nhost = db2\n")
+        assert ext.KEA6_DB_WITHHELD == "kea_db" and ext.KEA6_DB_PASS == ""
+        monkeypatch.setattr(db, "_make_kea6_pool", lambda: pytest.fail("a pool was made for a withheld credential"))
+        monkeypatch.setattr(db.pymysql, "connect", lambda **k: pytest.fail("a connection was made"))
+        monkeypatch.setattr(db, "_kea6_pool", None)
+        with pytest.raises(pymysql.err.OperationalError, match="no password of its own"):
+            db.get_kea6_db()
+
+    def test_an_own_password_opens_the_pool_and_the_same_database_reuses_kea_s(self, monkeypatch):
+        from jen.models import db
+
+        ext = self._apply("[kea6_db]\nhost = db2\npassword = D6\n")
+        assert ext.KEA6_DB_WITHHELD == "" and ext.KEA6_DB_PASS == "D6"
+        made = []
+
+        class _Pool:
+            def connection(self):
+                return "a connection"
+
+        monkeypatch.setattr(db, "_make_kea6_pool", lambda: made.append(1) or _Pool())
+        monkeypatch.setattr(db, "_kea6_pool", None)
+        assert db.get_kea6_db() == "a connection" and made == [1]
+        db._kea6_pool = None
+        self._apply("")  # no [kea6_db] at all: the v4 database, through the v4 pool
+        monkeypatch.setattr(db, "get_kea_db", lambda: "the kea pool")
+        assert db.get_kea6_db() == "the kea pool"

@@ -128,7 +128,7 @@ class TestSaveConnection:
         calls = []
         monkeypatch.setattr("jen.config.app_config.write_values", lambda items, typed=None: calls.append(items))
         # (Q181 V3: a config the wizard fills in is born with the credential-model marker - made deterministic here)
-        monkeypatch.setattr("jen.services.credentials.has_model_marker", lambda parser: False)
+        monkeypatch.setattr("jen.services.credentials.model_marker", lambda parser: "absent")
         monkeypatch.setattr("jen.services.credentials.pending_conversions", lambda parser: [])
         setup_wizard.save_connection(
             api_url="http://kea:8000",

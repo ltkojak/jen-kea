@@ -675,3 +675,45 @@ class TestEndpointCredentials:
         assert "endpoint_credentials" in health.CHECK_IDS
         assert "endpoint-has-no-credential" in inspect.getsource(health._endpoint_credentials)
         assert "jen_config=extensions.cfg" in inspect.getsource(doctor_route.doctor_page)
+
+
+class TestTheCredentialModelMarkerAndTheBlankKea6Database:
+    """Q182 (X3, X5c): the marker is a value - a typo is `credential-model-invalid`, not "converted" - and a Kea6 database written blank on purpose is named, because Jen opens no connection for it."""
+
+    @staticmethod
+    def _cfg(**sections):
+        import configparser
+
+        p = configparser.ConfigParser(interpolation=None)
+        for name, values in sections.items():
+            p[name] = values
+        return p
+
+    def _ids(self, cfg):
+        return [f["id"] for f in doctor.diagnose(None, jen_config=cfg)]
+
+    def test_a_marker_that_is_not_a_known_value_is_a_finding_that_says_how_to_put_it_right(self):
+        cfg = self._cfg(kea={"api_url": "https://a:8000", "api_pass": "S"}, jen={"credential_model": "explcit"})
+        (found,) = [f for f in doctor.diagnose(None, jen_config=cfg) if f["id"] == "credential-model-invalid"]
+        assert found["severity"] == "warn" and "explcit" in found["detail"]
+        assert "explicit" in found["detail"] and "remove the line" in found["detail"]
+
+    def test_an_empty_marker_is_invalid_too(self):
+        assert "credential-model-invalid" in self._ids(self._cfg(jen={"credential_model": ""}))
+
+    def test_absent_and_explicit_and_padded_are_not_findings(self):
+        assert "credential-model-invalid" not in self._ids(self._cfg(kea={"api_url": "https://a:8000"}))
+        assert "credential-model-invalid" not in self._ids(self._cfg(jen={"credential_model": "explicit"}))
+
+    def test_a_blank_kea6_database_host_is_named_and_an_absent_one_is_not(self):
+        assert "kea6-database-blank" in self._ids(self._cfg(kea6_db={"host": ""}))
+        assert "kea6-database-blank" not in self._ids(self._cfg(kea6_db={"password": "x"}))
+        assert "kea6-database-blank" not in self._ids(self._cfg(kea6_db={"host": "db2"}))
+
+    def test_health_reads_both(self):
+        import inspect
+
+        from jen.services import health
+
+        source = inspect.getsource(health._endpoint_credentials)
+        assert "credential-model-invalid" in source and "kea6-database-blank" in source

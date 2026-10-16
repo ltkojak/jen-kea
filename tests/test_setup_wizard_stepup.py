@@ -195,3 +195,26 @@ class TestTheIpv6StepCanSayNoAuthentication:
             data={"action": "enable_v6", "v6_url": "http://elsewhere:8006", "v6_pass": "OWN", "v6_user": "v6user"},
         )
         assert calls == [("http://elsewhere:8006", "v6user", "OWN")] and enabled[0]["api_user"] == "v6user"
+
+    def test_a_socket_on_the_same_box_with_the_box_is_probed_with_no_user_and_no_password(
+        self, logged_in_client, db, mock_kea, probe
+    ):
+        """Q182 (X2, subagent S1): "no authentication" on the primary's own host used to carry the primary's USER (an empty Basic header); it is no user, no password, no header."""
+        calls, enabled = probe
+        for action in ("check_v6", "enable_v6"):
+            logged_in_client.post(
+                "/setup/found", data={"action": action, "v6_url": "http://kea-a:8006", "v6_no_auth": "1"}
+            )
+        assert calls == [("http://kea-a:8006", "", ""), ("http://kea-a:8006", "", "")]
+        assert enabled and enabled[0]["no_auth"] is True and enabled[0]["api_pass"] == ""
+        assert enabled[0]["api_user"] == "" and enabled[0]["inherit_credentials"] is False
+
+    def test_a_user_typed_beside_no_authentication_is_the_one_probed_and_saved(
+        self, logged_in_client, db, mock_kea, probe
+    ):
+        calls, enabled = probe
+        logged_in_client.post(
+            "/setup/found",
+            data={"action": "enable_v6", "v6_url": "http://kea-a:8006", "v6_no_auth": "1", "v6_user": "named"},
+        )
+        assert calls == [("http://kea-a:8006", "named", "")] and enabled[0]["api_user"] == "named"

@@ -310,8 +310,11 @@ def setup_found():
             # the credential the probe sends is the one `credentials.resolve` would give this endpoint: the primary's only when the candidate is on the primary's host, else
             # one TYPED here, or the explicit "no authentication" - and with none of them, nothing is sent
             same_box = __auth.same_host(extensions.KEA_API_URL, v6_url)
-            # the user follows `credentials.resolve`: the primary's on the same host, or alongside a password typed for this socket; a typed user always wins
-            v6_user = v6_user_typed or (extensions.KEA_API_USER if (same_box or v6_pass_typed) else "")
+            # the user follows `credentials.resolve`: the primary's on the same host, or alongside a password typed for this socket; a typed user always wins. "No authentication"
+            # (Q182, X2) is no user either: the probe is sent no header, and `enable_v6` saves `api_pass =` with no user key
+            v6_user = v6_user_typed or (
+                extensions.KEA_API_USER if (not v6_no_auth and (same_box or v6_pass_typed)) else ""
+            )
             inherit_creds = (
                 same_box and not v6_no_auth and not v6_pass_typed
             )  # the probe used the primary's credential, so that is what must be SAVED (no leftover own keys)
