@@ -210,3 +210,15 @@ One step (5.69.0-beta.15). It adds no migration and there is nothing for you to 
 **A daemon that loses a credential is named.** If switching back changes the spelling of the primary's address, a Kea6 or D2 socket that inherited the primary's user and password on the same host has none afterwards; the message names it and says to type its password under Settings → Kea.
 
 **A dot at the end of a host name is part of the name.** `kea-a.` and `kea-a` are two names for the purposes of deciding which saved password may go where. An address containing a no-break space, a zero-width character or any control character is refused, and so is a host name that is not plain ASCII letters, digits, dots, hyphens and underscores (internationalised names that survive unchanged are still accepted).
+
+## "No password" means no user
+
+One step (5.69.0-beta.16). It adds no migration and there is nothing for you to do. What you may notice:
+
+**"No password" on the Remove forms now removes the user as well.** A socket you declare unauthenticated is reached with no credentials at all, instead of a header that carried the socket's username with an empty password. If a Kea6 or D2 socket was sending the Kea API's user because it had none of its own, it keeps sending that user and the message says so.
+
+**A user typed beside "No password" or beside the restore box is refused.** Those two answers set the user themselves; choose one for the user, and nothing is sent to the Kea host.
+
+**A same-host switch-back says what happened to the saved pair.** If the Control Agent is at the same address as the socket and you typed nothing, the saved user and password are discarded and the message says so and how to restore them next time.
+
+**A restored password keeps its "shared copy" mark, and the Remove button appears for a Kea6 or D2 socket that is still configured while the connection mode is Control Agent.** An address that ends in a no-break space or a control character is refused rather than trimmed.
