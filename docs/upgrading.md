@@ -234,3 +234,15 @@ One step (5.69.0-beta.17). It adds no migration. What you may notice:
 **A daemon with more than one http or https control socket is refused.** Jen manages one; remove the extras by hand first.
 
 **Switching back restores what the Control Agent had, including nothing.** A user or password the Control Agent did not have is removed again, so a server that inherited the primary's password inherits it again.
+
+## A failed probe puts the daemon's sockets and certificate back; an unproved recovery shows on Servers
+
+One step (5.69.0-beta.18). It adds no migration and there is nothing for you to do. What you may notice:
+
+**A failed probe puts the daemon's sockets and certificate back.** If "Set up direct socket" replaces a socket and the new one does not answer from the Jen host, the daemon's whole list of control sockets is put back as it was (and for https, the certificate it had), the daemon is restarted, and the message names the socket you had and the one that did not answer. A first socket is still left in place so you can fix the firewall and run it again; Servers and Health show it as waiting until a probe of it succeeds.
+
+**An unproved recovery shows on Servers until it is acknowledged.** When Jen cannot prove it put a Kea host back (for example the earlier certificate was installed by hand, or a restart did not verify), a notice on Servers and a row in Health name the server and the service. It goes away when a later operation on that server probes the endpoint and gets its answer, or when a superadmin presses Acknowledge. Checking the daemon yourself first is what the notice is for.
+
+**Jen keeps the server key it installs.** From the next https change on, the key Jen puts on a Kea host is also kept, private, beside the certificate copy on the Jen host (`kea-servers`), so a failed change can put the previous certificate back. A certificate installed before this release, or by hand, has no earlier copy: if a change to it fails the sockets come back and the notice says the certificate could not be.
+
+**The Remove form always shows the Control Agent address field.** It says whether leaving it blank uses the saved address, and which; when Jen has none saved, a switch-back needs one. The address you type, or the saved one, is asked who it is before the socket is removed, and a switch-back is refused when a second server record names the very socket being removed.
