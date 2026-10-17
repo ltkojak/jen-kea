@@ -222,3 +222,15 @@ One step (5.69.0-beta.16). It adds no migration and there is nothing for you to 
 **A same-host switch-back says what happened to the saved pair.** If the Control Agent is at the same address as the socket and you typed nothing, the saved user and password are discarded and the message says so and how to restore them next time.
 
 **A restored password keeps its "shared copy" mark, and the Remove button appears for a Kea6 or D2 socket that is still configured while the connection mode is Control Agent.** An address in jen.config that ends in a no-break space or a control character is refused when it is read; the Settings forms trim the ends of what you type before they save it.
+
+## A removal asks for the Control Agent address when none is saved
+
+One step (5.69.0-beta.17). It adds no migration. What you may notice:
+
+**"Switch back to the Control Agent" asks for the Control Agent's address when Jen has none saved.** If the address Jen remembered is missing, or is the socket's own, and no server besides this one keeps its own socket, the form shows an address field. Jen asks that address who it is before the socket is removed: it must answer as a Control Agent. Without an address the removal is refused and nothing is changed. A saved address is checked the same way before it is restored.
+
+**A failed save after a socket change puts the daemon's sockets back as they were.** If Jen changes a Kea host's control socket and then cannot save its own settings, the daemon's whole list of control sockets is restored, including a socket the change had replaced, and the daemon is restarted. The message names a socket by type, address and port only, and says where its authentication settings are kept (Settings → Kea → Config History).
+
+**A daemon with more than one http or https control socket is refused.** Jen manages one; remove the extras by hand first.
+
+**Switching back restores what the Control Agent had, including nothing.** A user or password the Control Agent did not have is removed again, so a server that inherited the primary's password inherits it again.
