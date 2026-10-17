@@ -756,7 +756,11 @@ class TestTheTlsMaterialIsPartOfTheSnapshot:
         )
         assert world["now"] == a_files, "the pair Jen last installed was re-asserted (a lost reply may have applied B)"
         texts = " ".join(t for _s, t in tls_world["flashes"])
-        assert "the socket was not changed" in texts and "PARTIAL" not in texts and tls_world["incidents"] == []
+        assert (
+            "nothing was changed in the daemon's sockets" in texts
+            and "PARTIAL" not in texts
+            and tls_world["incidents"] == []
+        )
 
     def test_a_refused_install_whose_reassertion_is_also_refused_is_a_recorded_incident(self, tls_world, monkeypatch):
         """Second pass (finding 7): `install_tls` answering not-ok does not prove nothing was installed (a lost reply). With a socket on Jen's files and no way to re-assert, it is an incident."""
@@ -874,15 +878,36 @@ class TestARotationThatStopsPutsBackEveryTargetItTouched:
         )
         assert world["restarts"] == ["restart"] and tls_world["incidents"] == []
 
-    def test_a_target_that_cannot_be_put_back_is_a_recorded_incident(self, tls_world, monkeypatch):
-        world = tls_world["tls"]
-        TestTheTlsMaterialIsPartOfTheSnapshot()._first_https(tls_world, monkeypatch)
-        monkeypatch.setattr(infra, "_service_url", lambda server, service: "https://10.0.0.5:8004")
-        monkeypatch.setattr("jen.services.kea_host.install_tls", lambda *a, **k: {"ok": False, "detail": "refused"})
+    def _rotate(self, tls_world):
         rotate = inspect.unwrap(infra.rotate_kea_ca)
         app = flask.Flask(__name__)
         app.secret_key = "x"
         with app.test_request_context(method="POST"):
             rotate()
+
+    def test_a_target_known_to_hold_the_staged_pair_that_cannot_be_put_back_is_rollback_failed_and_an_incident(
+        self, tls_world, monkeypatch
+    ):
+        world = tls_world["tls"]
+        TestTheTlsMaterialIsPartOfTheSnapshot()._first_https(tls_world, monkeypatch)
+        monkeypatch.setattr(infra, "_service_url", lambda server, service: "https://10.0.0.5:8004")
+        monkeypatch.setattr(
+            "jen.services.kea_host.service_action", lambda *a, **k: {"ok": False, "detail": "unit failed"}
+        )
+        self._rotate(
+            tls_world
+        )  # the staged pair is installed, the daemon will not restart on it, and the rollback's restart fails too
         assert "ROLLBACK FAILED" in " ".join(t for _s, t in tls_world["flashes"])
         assert [i[2] for i in tls_world["incidents"]] == ["tls-not-restored"] and world["restarts"] == []
+
+    def test_a_target_whose_refused_install_cannot_be_re_asserted_is_an_incident_but_not_rollback_failed(
+        self, tls_world, monkeypatch
+    ):
+        """The host was never KNOWN to hold the staged pair (its install was refused - maybe a lost reply): the re-assertion is refused too, so its material is unknown - something to acknowledge."""
+        TestTheTlsMaterialIsPartOfTheSnapshot()._first_https(tls_world, monkeypatch)
+        monkeypatch.setattr(infra, "_service_url", lambda server, service: "https://10.0.0.5:8004")
+        monkeypatch.setattr("jen.services.kea_host.install_tls", lambda *a, **k: {"ok": False, "detail": "refused"})
+        self._rotate(tls_world)
+        texts = " ".join(t for _s, t in tls_world["flashes"])
+        assert "Rotate stopped" in texts and "ROLLBACK FAILED" not in texts
+        assert [i[2] for i in tls_world["incidents"]] == ["tls-not-restored"]

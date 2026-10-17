@@ -1089,7 +1089,15 @@ class TestRotateKeaCa:
         )
         r = logged_in_client.post("/settings/infrastructure/kea-ca/rotate", follow_redirects=True)
         ops = [(sid, op) for (sid, op, _p) in fake.calls if op != "read-config"]
-        assert ops == [(1, "install-tls"), (1, "service"), (2, "install-tls"), (1, "install-tls"), (1, "service")]
+        # (Q187, second pass: the target whose install was refused is re-asserted too - a refusal can be a lost reply after the helper applied it)
+        assert ops == [
+            (1, "install-tls"),
+            (1, "service"),
+            (2, "install-tls"),
+            (1, "install-tls"),
+            (1, "service"),
+            (2, "install-tls"),
+        ]
         install_payloads = [p for (_sid, op, p) in fake.calls if op == "install-tls"]
         assert install_payloads[0]["files"]["ca.crt"] != old_pem  # the staged CA went out first
         assert install_payloads[2]["files"]["ca.crt"] == old_pem  # …and the rollback re-issued from the old one

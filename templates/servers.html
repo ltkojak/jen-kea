@@ -19,7 +19,7 @@
     <strong>A direct-socket recovery on {{ ca.server_name or ("server " ~ ca.server_id) }} is not proved.</strong>
     {{ ca.detail }}
     {% if current_user.role == 'superadmin' %}
-    <form method="POST" action="{{ url_for('servers.acknowledge_recovery_incident') }}" style="display:inline;margin-left:8px;">
+    <form method="POST" action="{{ url_for('servers.acknowledge_recovery_incident') }}" class="u-8a77e5">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="server_id" value="{{ ca.server_id }}">
         <input type="hidden" name="service" value="{{ ca.service }}">

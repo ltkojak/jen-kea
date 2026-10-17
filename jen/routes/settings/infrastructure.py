@@ -1862,7 +1862,7 @@ def setup_direct_socket(server_id, service):
         if not pushed.get("ok"):
             _tls_unknown_after_failed_install(server, service, pre_read.get("api"))
             flash(
-                f"{name}: {pushed.get('detail', 'the helper refused the TLS material')} — the socket was not changed.",
+                f"{name}: {pushed.get('detail', 'the helper refused the TLS material')} — nothing was changed in the daemon's sockets or in Jen's settings.",
                 "error",
             )
             return back
@@ -2087,6 +2087,7 @@ def rotate_kea_ca():
 
     staged = __tls.stage_rotation()
     done: list[tuple[dict, str, str]] = []
+    confirmed: set = set()
     attempted: list[
         tuple[dict, str, str]
     ] = []  # (Q187) every target the host may now hold STAGED-CA material for: the rollback covers all of them, not only those that finished
@@ -2107,6 +2108,7 @@ def rotate_kea_ca():
         if not pushed.get("ok"):
             failure = f"{sname} {daemon}: {pushed.get('detail', 'the helper refused the TLS material')}"
             break
+        confirmed.add((server.get("id"), service))  # the host is KNOWN to hold the staged pair
         __tls.commit_issued(server.get("id"), service, files)
         restarted = __host.service_action(server, service, "restart")
         if not restarted.get("ok"):
@@ -2138,8 +2140,12 @@ def rotate_kea_ca():
                 r1, r2 = {"ok": False}, {"ok": False}
             if r1.get("ok") and r2.get("ok"):
                 rolled.append(label)
-            else:
+            elif (server.get("id"), service) in confirmed:
                 rollback_failed.append(label)
+                stuck_targets.append((server, service))
+            elif not r1.get("ok"):
+                # the install that stopped the rotation was refused - but a refusal may be a lost reply after the helper applied it, so Jen re-asserted the old pair; when that is refused too the
+                # host's material is unknown (usually: unchanged), which is an incident to acknowledge, not a "ROLLBACK FAILED" for a host that was never known to have changed
                 stuck_targets.append((server, service))
         for server, service in stuck_targets:
             _record_incident(server, service, "the failed CA rotation", "tls-not-restored")
