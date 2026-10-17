@@ -1645,11 +1645,14 @@ def setup_direct_socket(server_id, service):
             )
             return back
 
-    # AB1 (Q186): Jen manages ONE API socket. A daemon whose config has more than one is refused here - before the TLS material is installed, before anything is written - not flattened.
-    existing_api = _api_sockets_of(server, service)
-    if existing_api is not None and len(existing_api) > 1:
-        flash(_many_sockets_sentence(daemon, conf, len(existing_api)), "error")
-        return back
+    def _refused_for_many_sockets() -> bool:
+        """AB1 (Q186): Jen manages ONE API socket. A daemon whose config has more than one is refused - before the TLS material is installed, before anything is written - not flattened.
+        Asked at the last point before the first thing is sent to the host (after every check that needs no SSH, so those refusals still touch nothing)."""
+        existing_api = _api_sockets_of(server, service)
+        if existing_api is not None and len(existing_api) > 1:
+            flash(_many_sockets_sentence(daemon, conf, len(existing_api)), "error")
+            return True
+        return False
 
     # ── https (v5.29.0, Q29 C3): Jen's private CA issues the material and
     # the helper's install-tls op lands it on the host BEFORE the config
@@ -1680,6 +1683,8 @@ def setup_direct_socket(server_id, service):
                 "error",
             )
             return back
+        if _refused_for_many_sockets():
+            return back
         try:
             __tls.ensure_ca()
             __tls.issue_client_cert()
@@ -1704,6 +1709,8 @@ def setup_direct_socket(server_id, service):
         probe_verify, probe_cert = jen_ca, (jen_client_cert, jen_client_key)
         entry = build_control_socket(scheme, address, port, user, password, tls=remote)
     else:
+        if _refused_for_many_sockets():
+            return back
         entry = build_control_socket(scheme, address, port, user, password)
 
     snapshot_taken: dict = {}  # AB1 (Q186): the daemon's control-sockets list exactly as the change was PLANNED on it - what the compensation restores
