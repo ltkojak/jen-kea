@@ -662,7 +662,10 @@ def record_outcome(result: ChangeSetResult, service: str, summary: str) -> None:
                 # v5.65.10 (Q99) preferred evicting a resolved `rolled_back` note; v5.66.0-beta.3
                 # (Q105 a) makes that literal: an unresolved `rollback_failed` is NEVER evicted to
                 # stay under this soft cap — only the hard ceiling below can drop one.
-                drop = next((i for i in incidents if i.get("status") != "rollback_failed"), None)
+                drop = next(
+                    (i for i in incidents if i.get("status") != "rollback_failed" and i.get("kind") != ATTENTION_KIND),
+                    None,
+                )  # (Q187: an unproved recovery - the daemon may be stopped - is protected exactly like a rollback_failed)
                 if drop is None:
                     break
                 incidents.remove(drop)
@@ -751,7 +754,9 @@ def record_attention(
             )
         ]
         incidents.append(incident)
-        _user.set_global_setting(ATTENTION_KEY, json.dumps({"incidents": incidents}))
+        if _user.set_global_setting(ATTENTION_KEY, json.dumps({"incidents": incidents})) is False:
+            logger.error(f"kea_changeset: the {category} incident for server {server_id} could not be stored")
+            return False  # (the real writer never raises: it logs and answers False)
         _user.audit(
             "DIRECT_SOCKET_INCIDENT",
             service,
@@ -787,8 +792,11 @@ def resolve_attention(server_id, service: str, *, categories=None) -> int:
                 and (categories is None or i.get("category") in categories)
             )
         ]
-        if len(left) != len(incidents):
-            _user.set_global_setting(ATTENTION_KEY, json.dumps({"incidents": left}) if left else "")
+        if (len(left) != len(incidents)) and (
+            _user.set_global_setting(ATTENTION_KEY, json.dumps({"incidents": left}) if left else "") is False
+        ):
+            logger.error(f"kea_changeset: the recovery incidents of server {server_id} could not be cleared")
+            return 0
         return len(incidents) - len(left)
     except Exception as e:
         logger.error(
@@ -797,14 +805,34 @@ def resolve_attention(server_id, service: str, *, categories=None) -> int:
         return 0
 
 
-def recovery_incidents() -> list[dict]:
-    """The unresolved recovery incidents (Q187) - what Health shows. Never raises."""
+def recovery_incidents(strict: bool = False) -> list[dict]:
+    """The unresolved recovery incidents (Q187) - what Health shows. Never raises, unless `strict`: then a note that cannot be READ (the settings table unreachable, stored text that is not the
+    note) raises ValueError instead of reading as "none" - Health says "unknown", not "ok"."""
+    if strict:
+        import json
+
+        from jen.models import user as _user
+
+        try:
+            raw = _user.get_global_setting(ATTENTION_KEY, "")
+        except Exception as e:
+            raise ValueError(f"the incident note could not be read ({type(e).__name__})") from e
+        if raw:
+            try:
+                data = json.loads(raw) if isinstance(raw, str) else raw
+            except ValueError as e:
+                raise ValueError("the incident note is not readable") from e
+            if not isinstance(data, dict):
+                raise ValueError("the incident note is not readable")
+        incidents = _incidents_of(raw)
+        return [i for i in incidents if i.get("kind") == ATTENTION_KIND]
     note = attention()
     return [i for i in (note or {}).get("incidents", []) if i.get("kind") == ATTENTION_KIND]
 
 
-def acknowledge_recovery(server_id=None, service: str | None = None, category: str | None = None) -> int:
-    """A superadmin's acknowledgement (Q187): clears the recovery incidents matching the filters (None = any). The old `rolled_back` / `rollback_failed` incidents are not touched."""
+def acknowledge_recovery(server_id=None, service: str | None = None, category: str | None = None) -> int | None:
+    """A superadmin's acknowledgement (Q187): clears the recovery incidents matching the filters (None = any) and returns how many. None means the note could not be written - the incidents are
+    still shown, and the caller says so. The old `rolled_back` / `rollback_failed` incidents are not touched."""
     try:
         import json
 
@@ -821,12 +849,15 @@ def acknowledge_recovery(server_id=None, service: str | None = None, category: s
             )
 
         left = [i for i in incidents if not matches(i)]
-        if len(left) != len(incidents):
-            _user.set_global_setting(ATTENTION_KEY, json.dumps({"incidents": left}) if left else "")
+        if (len(left) != len(incidents)) and (
+            _user.set_global_setting(ATTENTION_KEY, json.dumps({"incidents": left}) if left else "") is False
+        ):
+            logger.error("kea_changeset: the recovery incidents could not be cleared")
+            return None
         return len(incidents) - len(left)
     except Exception as e:
         logger.error(f"kea_changeset: could not acknowledge the recovery incidents: {type(e).__name__}")
-        return 0
+        return None
 
 
 def dismiss_rollback_notes() -> None:

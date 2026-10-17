@@ -615,6 +615,39 @@ class TestTheControlAgentAddressIsAlwaysOfferedAndTheProbeUsesTheResolver:
         assert touched and pairs == [("http://10.0.0.5:8100", "pu", "PS")]
 
 
+class TestTheSecondPassOfQ187:
+    """The executed findings of the adversarial pass on beta.18's routes, each as a probe row."""
+
+    def test_an_inherited_password_is_never_sent_to_the_saved_address_on_a_different_host(self):
+        touched, pairs, typed = (
+            probe.q187_sp1_an_inherited_password_is_not_sent_to_the_saved_address_on_a_different_host()
+        )
+        assert touched and pairs == [("http://proxy.lan:8100", "", "")], (
+            "asked with what the writer will leave at that host: nothing"
+        )
+        assert typed == [("http://proxy.lan:8100", "tu", "TYPED")], "a typed pair is what the person typed"
+
+    def test_a_typed_address_that_is_another_servers_own_is_refused(self):
+        refused, accepted = probe.q187_sp8_a_typed_address_that_is_another_servers_own_is_refused()
+        assert refused[:3] == (False, False, True) and accepted[0] is True
+
+    def test_a_removal_clears_only_the_probe_pending_note_of_the_socket_it_removed(self):
+        done, nothing_touched, nothing_resolved, daemon = (
+            probe.q187_sp4_a_removal_clears_only_the_probe_pending_note_of_the_socket_it_removed()
+        )
+        assert done == [(1, "dhcp4", ("probe-pending",))] and daemon == [(1, "dhcp6", ("probe-pending",))]
+        assert nothing_touched and nothing_resolved == [], "a removal that removed nothing proves nothing"
+
+    def test_a_singular_entry_with_nothing_to_remove_is_not_said_to_be_rewritten(self):
+        assert probe.q187_sp10_a_singular_unix_entry_with_nothing_to_remove_is_not_said_to_be_rewritten() == (
+            True,
+            False,
+        )
+
+    def test_describe_socket_prints_one_short_printable_line(self):
+        assert probe.q187_sp6_describe_socket_prints_one_short_printable_line() == (True, False)
+
+
 class TestTheSmallOnes:
     """Q187 (AC6)."""
 

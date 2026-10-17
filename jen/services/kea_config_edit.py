@@ -670,7 +670,10 @@ def describe_socket(entry) -> str:
         """Only a string or an integer is printed (Q187, AC6): a dict, a list or a boolean in a field the entry should carry as text is '?', never its repr (which could be anything)."""
         if isinstance(value, bool) or not isinstance(value, str | int):
             return "?"
-        return str(value) or "?"
+        text = "".join(ch if ch.isprintable() else "?" for ch in str(value))[
+            :64
+        ]  # one short printable line, whatever the file held
+        return text or "?"
 
     kind = (
         plain(entry["socket-type"]) if "socket-type" in entry else "unix"

@@ -24,8 +24,10 @@ Where things live (Jen host, `<config_dir>/ssl` — never touched by upgrades):
   kea-servers/<id>-<service>.key    its key (0600, v5.69.0-beta.18, Q187): what the host was
                                     given, so an https change that fails can put the
                                     certificate the daemon had back. `.crt.prev` / `.key.prev`
-                                    hold the pair BEFORE the last issue - one generation, kept
-                                    until the operation succeeds (retire_previous)
+                                    hold the pair BEFORE the last commit - one generation, kept
+                                    until the operation succeeds (retire_previous). The live
+                                    pair is ALWAYS what Jen last installed on the host
+                                    (commit_issued runs after install_tls succeeded)
 Keys are written mode 0600 by the Jen service user through
 certs.write_atomically (tmp + replace, previous file kept as `.prev`).
 The CA key living on the Jen host is a recorded tradeoff — see
@@ -307,7 +309,9 @@ def _san_for(value: str):
 # ── leaves ──────────────────────────────────────────────────────────────────
 
 
-def issue_server_cert(server: dict, service: str, bind_address: str, ca: tuple[str, str] | None = None) -> dict:
+def issue_server_cert(
+    server: dict, service: str, bind_address: str, ca: tuple[str, str] | None = None, commit: bool = True
+) -> dict:
     """Mint a server cert for `service` on `server`, SAN = the bind
     address (what Jen dials) plus the SSH host (IP or DNS name — the
     second name an operator might type as the URL), signed by the live
@@ -326,27 +330,34 @@ def issue_server_cert(server: dict, service: str, bind_address: str, ca: tuple[s
             sans.append(san)
     name = server.get("name") or f"Kea Server {server.get('id')}"
     cert = _leaf(ca_cert, ca_key, key, f"kea-{service} {name}", sans, client=False)
-    copy_path = server_copy_path(server.get("id"), service)
-    key_path = server_key_path(server.get("id"), service)
-    _ensure_dir(os.path.dirname(copy_path))
-    # Q187 (AC2): the pair is installed as ONE set (key before the certificate that names it), and the pair it replaces is kept as `.prev` - once. A `.prev` pair that is already there belongs to an
-    # earlier attempt that did not succeed: it is the material the daemon actually had, and a second issue must not overwrite it with the first attempt's.
-    kept = os.path.exists(copy_path + ".prev") and os.path.exists(key_path + ".prev")
-    commit_file_set([(key_path, _key_pem(key), 0o600), (copy_path, _cert_pem(cert), 0o644)], keep_prev=not kept)
-    return {
+    files = {
         "ca.crt": _cert_pem(ca_cert).decode(),
         "server.crt": _cert_pem(cert).decode(),
         "server.key": _key_pem(key).decode(),
     }
+    if commit:
+        commit_issued(server.get("id"), service, files)
+    return files
 
 
-def previous_material(server_id, service: str) -> dict | None:
-    """The `install-tls` payload of the pair issued BEFORE the last `issue_server_cert` for this server and service - {"ca.crt", "server.crt", "server.key"} (PEM str) - or None when there is
-    none to put back: a first https socket, a certificate installed by hand, or one issued before Jen kept the key. The CA is the live one (a rotation re-issues every pair)."""
-    crt, key = server_copy_path(server_id, service) + ".prev", server_key_path(server_id, service) + ".prev"
+def commit_issued(server_id, service: str, files: dict) -> None:
+    """Make Jen's own pair for this server and service `files` (Q187, AC2): the key and the certificate that names it, installed as ONE set, and the pair they replace kept as `.prev`. The
+    setup route calls this only AFTER the host has accepted the pair (`install_tls`), so the live pair is always what Jen last put on the host - never a pair that was issued and not
+    installed - and `.prev` is always what the host had immediately before THIS operation, which is what a failure puts back. (An earlier version kept the first `.prev` across attempts;
+    that restored material from before an earlier operation that had since stood.)"""
+    copy_path, key_path = server_copy_path(server_id, service), server_key_path(server_id, service)
+    _ensure_dir(os.path.dirname(copy_path))
+    commit_file_set([(key_path, files["server.key"], 0o600), (copy_path, files["server.crt"], 0o644)])
+
+
+def _material(crt: str, key: str) -> dict | None:
+    """The `install-tls` payload of a certificate and key on disk - {"ca.crt", "server.crt", "server.key"} (PEM str) - or None unless BOTH load and the key is the certificate's (a pair that does not
+    belong together is never put on a host). The CA is the live one (a rotation re-issues every pair)."""
     try:
-        load_cert(crt)
-        load_key(key)
+        cert, private = load_cert(crt), load_key(key)
+        spki = serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+        if cert.public_key().public_bytes(*spki) != private.public_key().public_bytes(*spki):
+            return None
         with open(crt, "rb") as f:
             crt_pem = f.read().decode()
         with open(key, "rb") as f:
@@ -356,6 +367,17 @@ def previous_material(server_id, service: str) -> dict | None:
     except (OSError, ValueError, TypeError):
         return None
     return {"ca.crt": ca_pem, "server.crt": crt_pem, "server.key": key_pem}
+
+
+def previous_material(server_id, service: str) -> dict | None:
+    """The pair the host had BEFORE the last commit for this server and service, or None when there is none to put back: a first https socket, a certificate installed by hand, or one
+    installed before Jen kept the key."""
+    return _material(server_copy_path(server_id, service) + ".prev", server_key_path(server_id, service) + ".prev")
+
+
+def current_material(server_id, service: str) -> dict | None:
+    """The pair Jen last put on the host (the live local pair), for re-asserting it after an install whose outcome is not known (a lost reply)."""
+    return _material(server_copy_path(server_id, service), server_key_path(server_id, service))
 
 
 def restore_previous(server_id, service: str) -> bool:

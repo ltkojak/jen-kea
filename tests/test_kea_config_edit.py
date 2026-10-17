@@ -962,6 +962,12 @@ class TestControlSocketSnapshotAndRestore:
         assert edit.remove_control_socket(cfg, "dhcp4")[1] == "multiple"
         assert cfg == self._daemon([self.UNIX, self._http(), self._https()]), "the input is untouched"
 
+    def test_describe_socket_prints_one_short_printable_line_whatever_the_file_held(self):
+        text = edit.describe_socket(
+            {"socket-type": "http", "socket-address": "10.0.0." + "9" * 200 + chr(10) + "x", "socket-port": 8004}
+        )
+        assert len(text) < 100 and chr(10) not in text
+
     def test_describe_socket_names_type_address_and_port_only(self):
         assert edit.describe_socket(self._http()) == "http 10.0.0.5:8004"
         assert edit.describe_socket(self._https()) == "https 10.0.0.7:8005"

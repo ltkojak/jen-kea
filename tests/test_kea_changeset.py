@@ -954,7 +954,40 @@ class TestAnUnprovedRecoveryIsAPersistentIncident:
         monkeypatch.setattr(user_mod, "set_global_setting", boom)
         monkeypatch.setattr(user_mod, "get_global_setting", boom)
         assert cs.record_attention(1, "dhcp4", "x", "aborted") is False
-        assert cs.resolve_attention(1, "dhcp4") == 0 and cs.acknowledge_recovery() == 0
+        assert cs.resolve_attention(1, "dhcp4") == 0 and cs.acknowledge_recovery() is None
+
+    def test_a_write_that_did_not_happen_is_not_reported_as_one_that_did(self, store, monkeypatch):
+        """Second pass (finding 5): the REAL `set_global_setting` never raises - it logs and answers False. The three writers believed it."""
+        from jen.models import user as user_mod
+
+        cs.record_attention(1, "dhcp4", "x", "aborted")
+        monkeypatch.setattr(user_mod, "set_global_setting", lambda k, v: False)
+        assert cs.record_attention(1, "dhcp4", "y", "probe-pending") is False
+        assert cs.resolve_attention(1, "dhcp4") == 0
+        assert cs.acknowledge_recovery(1) is None
+        assert [i["category"] for i in cs.attention()["incidents"]] == ["aborted"], "still stored, still shown"
+
+    def test_an_unresolved_recovery_incident_is_never_evicted_by_the_soft_cap(self, store):
+        """Second pass (finding 6): the cap protected only `rollback_failed`; a recovery incident means the daemon may be stopped."""
+        cs.record_attention(1, "dhcp4", "x", "restart-failed")
+        for n in range(25):
+            cs.record_outcome(cs.ChangeSetResult("rolled_back", "x", [], [f"kea-{n}"]), "dhcp4", f"s{n}")
+        assert "restart-failed" in [i.get("category") for i in cs.attention()["incidents"]]
+
+    def test_an_unreadable_note_is_not_an_empty_one(self, store, monkeypatch):
+        """Second pass (finding 9)."""
+        from jen.services import health
+
+        store[cs.ATTENTION_KEY] = "{not json"
+        with pytest.raises(ValueError):
+            cs.recovery_incidents(strict=True)
+        assert health._direct_socket_recovery({}).status == "skip"
+        store[cs.ATTENTION_KEY] = ""
+        assert cs.recovery_incidents(strict=True) == [] and health._direct_socket_recovery({}).status == "ok"
+        cs.record_attention(1, "dhcp4", "x", "aborted", server_name="kea-a")
+        assert health._direct_socket_recovery({}).status == "fail", (
+            "aborted: the daemon may still carry the failed change"
+        )
 
     def test_health_shows_it_failing_for_an_unknown_or_stopped_daemon_and_warning_for_a_pending_probe(self, store):
         from jen.services import health

@@ -34,13 +34,13 @@
     <strong>A configuration change was rolled back.</strong>
     {{ ca.failed_restart|join(", ") or "A server" }} would not restart on the new config, so every server was put back on the previous one and restarted. Nothing was changed.
     {% endif %}
-    <div class="u-bd72d7">{{ ca.summary }} &middot; {{ ca.at }}</div>
+    <div class="u-bd72d7">{% if ca.kind != 'attention' or current_user.role in ('admin', 'superadmin') %}{{ ca.summary }} &middot; {% endif %}{{ ca.at }}</div>
     {# the raw helper/SSH detail tails name hosts, ports and paths: admins only (v5.65.8, Q97 g) #}
     {% if ca.lines and current_user.role in ('admin', 'superadmin') %}<ul style="margin:6px 0 0 18px;font-size:12px;">{% for l in ca.lines %}<li>{{ l }}</li>{% endfor %}</ul>{% endif %}
     </div>
     {% endfor %}
     {# the route refuses everyone below admin, so the button is not offered to them (v5.65.10, Q99 g) #}
-    {% if current_user.role in ('admin', 'superadmin') %}
+    {% if current_user.role in ('admin', 'superadmin') and changeset_attention.incidents|rejectattr('kind', 'eq', 'attention')|list %}
     <form method="POST" action="{{ url_for('servers.dismiss_changeset_attention') }}" class="u-8a77e5">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-sm btn-secondary">Dismiss</button>

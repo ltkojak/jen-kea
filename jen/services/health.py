@@ -659,11 +659,23 @@ def _direct_socket_recovery(ctx) -> Check:
         fix_url="/servers",
         fix_hint="Check the daemon, then acknowledge on Servers",
     )
-    incidents = kea_changeset.recovery_incidents()
+    try:
+        incidents = kea_changeset.recovery_incidents(strict=True)
+    except ValueError:
+        c.status, c.detail = (
+            "skip",
+            "the note of unproved direct-socket recoveries could not be read, so Jen cannot say whether one is waiting",
+        )
+        return c
     if not incidents:
         c.status, c.detail = "ok", "no direct-socket change is waiting to be proved"
         return c
-    stopped = {"remote-unknown", "restart-failed", "tls-not-restored"}
+    stopped = {
+        "remote-unknown",
+        "restart-failed",
+        "tls-not-restored",
+        "aborted",
+    }  # the daemon may be stopped, or still carry the failed change
     c.status = "fail" if any(i.get("category") in stopped for i in incidents) else "warn"
     c.detail = "; ".join(
         f"{i.get('server_name') or 'server ' + str(i.get('server_id'))} ({i.get('service')}): {i.get('category')}"

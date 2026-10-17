@@ -612,7 +612,8 @@ def route_remove(
         stack.enter_context(mock.patch.object(infra, "_identify_daemon", _identify))
         stack.enter_context(
             mock.patch(
-                "jen.services.kea_changeset.resolve_attention", lambda sid, svc, **kw: resolved.append((sid, svc)) or 0
+                "jen.services.kea_changeset.resolve_attention",
+                lambda sid, svc, **kw: resolved.append((sid, svc, kw.get("categories"))) or 0,
             )
         )
         stack.enter_context(
@@ -1337,6 +1338,60 @@ def q187_ac6_s5_odd_entries_print_plainly_and_a_snapshot_that_is_not_a_list_of_e
     )
 
 
+def q187_sp1_an_inherited_password_is_not_sent_to_the_saved_address_on_a_different_host():
+    """Second pass, finding 1 (P1): the identify probe at the saved address was asked with the pair the endpoint sends to the SOCKET's host. An additional server on the primary's host inherits the
+    primary's pair; its saved Control Agent address is on a different host, where the writer withholds it - and the probe must be asked with what the writer will leave: nothing."""
+    text = (
+        DIRECT.replace("https://a:8000", "http://10.0.0.5:8000")
+        + "[kea_server_2]\nname = b\napi_url = http://10.0.0.5:8104\ndirect_prev_api_url = http://proxy.lan:8100\nssh_host = 10.0.0.5\n"
+    )
+    r = route_remove(text, "dhcp4", {}, server_id=2)
+    typed = route_remove(text, "dhcp4", {"password": "TYPED", "user": "tu"}, server_id=2)
+    return (r["touched"], r["pairs"], typed["pairs"])
+
+
+def q187_sp8_a_typed_address_that_is_another_servers_own_is_refused():
+    text = DIRECT.replace("https://a:8000", "http://10.0.0.5:8004")
+    r = route_remove(
+        text,
+        "dhcp4",
+        {"ca_url": "http://10.0.0.9:8000", "password": "x"},
+        others=[{"id": 2, "name": "standby", "api_url": "http://10.0.0.9:8000"}],
+    )
+    ok = route_remove(
+        text,
+        "dhcp4",
+        {"ca_url": "http://10.0.0.9:8000", "password": "x"},
+        others=[{"id": 2, "name": "standby", "api_url": "http://10.0.0.8:8000"}],
+    )
+    return ((r["touched"], r["changed"], "standby" in r["flashes"], r["asked"]), (ok["touched"], ok["asked"]))
+
+
+def q187_sp4_a_removal_clears_only_the_probe_pending_note_of_the_socket_it_removed():
+    done = route_remove(PROXY, "dhcp4", {"password": "CAPW"})
+    nothing = route_remove(
+        PROXY, "dhcp4", {"password": "CAPW"}, host={"Dhcp4": {"control-sockets": [dict(_UNIX_SOCKET)]}}
+    )
+    d6 = BASE + "[kea6]\napi_url = https://b:8006\napi_user = x\napi_pass = K6\n"
+    daemon = route_remove(d6, "dhcp6", {}, host={"Dhcp6": {"control-sockets": [dict(_UNIX_SOCKET), dict(_API_SOCKET)]}})
+    return (done["resolved"], nothing["touched"], nothing["resolved"], daemon["resolved"])
+
+
+def q187_sp10_a_singular_unix_entry_with_nothing_to_remove_is_not_said_to_be_rewritten():
+    host = {"Dhcp4": {"control-socket": dict(_UNIX_SOCKET)}}
+    r = route_remove(PROXY, "dhcp4", {"password": "CAPW"}, host=host)
+    return (r["host"] == host, "rewritten" in r["flashes"])
+
+
+def q187_sp6_describe_socket_prints_one_short_printable_line():
+    from jen.services import kea_config_edit as ed
+
+    long_one = ed.describe_socket(
+        {"socket-type": "http", "socket-address": "10.0.0." + "9" * 200 + chr(10) + "x", "socket-port": 8004}
+    )
+    return (len(long_one) < 100, chr(10) in long_one)
+
+
 def q185_aa3_a_trailing_no_break_space_is_refused_and_ordinary_padding_is_not():
     from jen.services import auth
 
@@ -1611,6 +1666,23 @@ EXPECTED = {
         "? ?:?",
         "unsupported",
         "unsupported",
+    ),
+    "q187_sp10_a_singular_unix_entry_with_nothing_to_remove_is_not_said_to_be_rewritten": (True, False),
+    "q187_sp1_an_inherited_password_is_not_sent_to_the_saved_address_on_a_different_host": (
+        True,
+        [("http://proxy.lan:8100", "", "")],
+        [("http://proxy.lan:8100", "tu", "TYPED")],
+    ),
+    "q187_sp4_a_removal_clears_only_the_probe_pending_note_of_the_socket_it_removed": (
+        [(1, "dhcp4", ("probe-pending",))],
+        True,
+        [],
+        [(1, "dhcp6", ("probe-pending",))],
+    ),
+    "q187_sp6_describe_socket_prints_one_short_printable_line": (True, False),
+    "q187_sp8_a_typed_address_that_is_another_servers_own_is_refused": (
+        (False, False, True, ["http://10.0.0.9:8000"]),
+        (True, ["http://10.0.0.8:8000", "http://10.0.0.9:8000"]),
     ),
     "q185_aa3_a_trailing_no_break_space_is_refused_and_ordinary_padding_is_not": (False, True, False, True),
     "q184_z3_a_trailing_dot_is_a_different_name_and_odd_spaces_are_no_url": (False, True, False, False, False, True),

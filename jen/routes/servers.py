@@ -306,7 +306,12 @@ def acknowledge_recovery_incident():
         flash("Unknown incident category.", "error")
         return redirect(url_for("servers.servers"))
     cleared = __changeset.acknowledge_recovery(server_id, service, category)
-    if cleared:
+    if cleared is None:
+        flash(
+            "The acknowledgement could not be saved - the incident is still shown. The reason is in the Jen log.",
+            "error",
+        )
+    elif cleared:
         __user.audit(
             "ACKNOWLEDGE_RECOVERY_INCIDENT",
             service or "all",

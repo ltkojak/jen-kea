@@ -575,6 +575,23 @@ class TestARecoveryThatWasNotProvedIsShownUntilItIsAcknowledged:
         )
         assert b"Unknown incident category" in r.data
 
+    def test_the_dismiss_button_is_not_offered_when_only_recovery_incidents_remain(
+        self, logged_in_client, mock_kea, db
+    ):
+        """Second pass (finding 13): it would do nothing, silently."""
+        self._record()
+        body = logged_in_client.get("/servers").data.decode()
+        assert "Acknowledge" in body and "/servers/changeset-attention/dismiss" not in body
+
+    def test_a_viewer_sees_that_a_recovery_is_not_proved_but_not_the_socket_it_was_about(self, client, mock_kea, db):
+        """Second pass (finding 14): the summary names an address and port; like the helper detail lines it is the admins'."""
+        from tests.conftest import restricted_client
+
+        self._record()
+        c, _uid = restricted_client(client, db, allowed_subnets=[], role="viewer")
+        body = c.get("/servers").data.decode()
+        assert "is not proved" in body and "10.0.0.5:8004" not in body and "Acknowledge" not in body
+
     def test_health_shows_it_failing(self, logged_in_client, mock_kea, db):
         self._record("remote-unknown")
         data = logged_in_client.get("/health-center/data").get_json()
