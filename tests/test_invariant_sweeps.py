@@ -793,3 +793,87 @@ class TestS11ARouteNeverShowsWhatABroadExceptCaught:
             "def g():\n try:\n  x()\n except Exception:\n  logger.exception('no')\n"
         )
         assert [(line, name) for _r, line, name in s11_sites(src)] == [(5, "e"), (10, "e"), (15, "e")]
+
+
+# ── S11b (Q186, AB2): a socket's own entry never reaches text ───────────────────────────────────────────────────────────────────────────────────
+# A control-sockets entry carries a Basic client's password and TLS file paths. beta.16's by-hand recovery sentence printed the raw removed entry into a flash and an audit row (LEAK-001's family,
+# but the object was never an exception). `describe_socket(entry)` is the only way a socket enters a sentence: type, address and port.
+_S11B_NAMES = re.compile(
+    r"^(snapshot|snapshots|removed|removed_sockets?|api_sockets?|existing_api|control_sockets?|sockets)$"
+)
+_S11B_ENTRY = (
+    "entry"  # a socket entry in the file that builds one; in the other routes an `entry` is a plugin's or a subnet's
+)
+_S11B_SINKS = {"flash", "audit", "debug", "info", "warning", "error", "exception", "critical", "print", "log"}
+_S11B_FORMATTERS = {"str", "repr", "format", "dumps", "pformat"}
+_S11B_SAFE = {"describe_socket", "len", "bool", "isinstance"}
+
+
+def s11b_sites(source: str, rel: str) -> list[tuple[str, int, str]]:
+    tree = ast.parse(source)
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            child.parent = parent  # type: ignore[attr-defined]
+
+    def callee(call):
+        f = call.func
+        return f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", "")
+
+    def risky_names(node):
+        """Names in `node` that look like a socket entry and are not under a describe_socket()/len() call."""
+        found = []
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Name) and (
+                _S11B_NAMES.search(sub.id) or (sub.id == _S11B_ENTRY and rel.endswith("settings/infrastructure.py"))
+            ):
+                cur, safe = getattr(sub, "parent", None), False
+                while cur is not None and cur is not node.parent:
+                    if isinstance(cur, ast.Call) and callee(cur) in _S11B_SAFE:
+                        safe = True
+                        break
+                    cur = getattr(cur, "parent", None)
+                if not safe:
+                    found.append(sub.id)
+        return found
+
+    sites = []
+    for node in ast.walk(tree):
+        text_exprs = []
+        if isinstance(node, ast.FormattedValue):
+            text_exprs.append(node.value)
+        elif isinstance(node, ast.Call) and callee(node) in _S11B_FORMATTERS:
+            text_exprs += list(node.args)
+        elif isinstance(node, ast.Call) and callee(node) in _S11B_SINKS:
+            text_exprs += list(node.args) + [k.value for k in node.keywords]
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+            text_exprs.append(node.right)
+        for expr in text_exprs:
+            for name in risky_names(expr):
+                sites.append((rel, getattr(expr, "lineno", getattr(node, "lineno", 0)), name))
+    return sorted(set(sites))
+
+
+class TestS11bASocketEntryNeverReachesText:
+    def test_no_route_prints_a_socket_entry(self):
+        found = []
+        for path in sorted((ROOT / "jen" / "routes").rglob("*.py")):
+            found += s11b_sites(path.read_text(encoding="utf-8"), path.relative_to(ROOT).as_posix())
+        assert found == [], (
+            "a control-socket entry (it holds a Basic client's password and TLS paths) reaches an f-string, str(), a flash, an audit row or a log call: "
+            f"name it with kea_config_edit.describe_socket(entry) instead: {found}"
+        )
+
+    def test_the_detector_finds_what_it_is_for(self):
+        src = (
+            "def a(removed_sockets):\n flash(f'by hand: {removed_sockets[0]}')\n"
+            "def b(entry):\n __user.audit('X', 'y', str(entry))\n"
+            "def c(snapshot):\n logger.warning('socket %s', snapshot)\n"
+            "def d(entry):\n flash(f'ok {describe_socket(entry)}')\n"
+            "def e(entry):\n msg = 'n=%d' % len(entry)\n"
+            "def f(socket_url):\n flash(f'{socket_url}')\n"
+        )
+        assert [(line, name) for _r, line, name in s11b_sites(src, "jen/routes/settings/infrastructure.py")] == [
+            (2, "removed_sockets"),
+            (4, "entry"),
+            (6, "snapshot"),
+        ]

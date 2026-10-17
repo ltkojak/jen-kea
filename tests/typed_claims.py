@@ -16,6 +16,11 @@ and matched the writer by attribute name), and an executing pass found seventeen
 AND the control flow that reaches a claim is judged too: a writer call that makes a claim may sit under an `if` only when the `if`'s test is itself form-only (the statement spelling of
 `A if COND else B`), never under a loop, never in an `except`/`finally` handler.
 
+What the reach layer IS (Q186, AB4): SYNTACTIC. It reads the ancestors of the writer call inside the innermost function that contains it, so a claim placed under an `if`, loop or handler the
+request does not decide is caught. It is a smell detector, not a proof: a claim reached through a call into another function is not followed, and an UNCONDITIONAL literal claim
+(`typed={"kea"}`) is accepted by design - a literal names an endpoint the function was written to claim. The guarantee is the shape rule above; the reach layer is what notices code that
+moved a claim somewhere the shape rule does not look.
+
 Anything else fails: a read of `extensions`, any call that is not `request.form.get/getlist`, an f-string, a comprehension, a walrus, a lambda, `getattr`, `partial`, a parameter (the
 caller's claim is not this function's), a name that is rebound, `.add()`ed to or handed anywhere, an aliased writer or an aliased `app_config`, a shadowed `request`, `*args`/`**kwargs`.
 

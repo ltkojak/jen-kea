@@ -9,6 +9,8 @@ script text.
 
 import copy
 
+import pytest
+
 from jen.services import kea_config_edit as edit
 
 _V4 = {
@@ -841,3 +843,115 @@ class TestTheMutatorsCopyWhatTheyAreGivenAndSayWhenNothingChanged:
         out, _ = edit.set_ddns4(_V4, values)
         values["server-ip"] = "x"
         assert out["Dhcp4"]["dhcp-ddns"]["server-ip"] == "127.0.0.1"
+
+
+class TestControlSocketSnapshotAndRestore:
+    """AB1/AB2 (Q186): `control_sockets` is the snapshot a multi-step route takes, `restore_control_sockets` is the ONLY compensation (the list becomes the snapshot exactly), `remove_control_socket`
+    removes only the entry it is told to, a config with more than one API socket is `multiple`, and `describe_socket` never prints a credential."""
+
+    UNIX = {"socket-type": "unix", "socket-name": "/run/kea/kea4-ctrl-socket"}
+    SECRET = "TOPSECRET-socket-password"
+
+    def _http(self, port=8004, address="10.0.0.5", password="pw"):
+        from jen.services.kea_authoring import build_control_socket
+
+        return build_control_socket("http", address, port, "su", password)
+
+    def _https(self, port=8005, address="10.0.0.7"):
+        from jen.services.kea_authoring import build_control_socket
+
+        return build_control_socket(
+            "https",
+            address,
+            port,
+            "su",
+            self.SECRET,
+            tls={
+                "trust_anchor": "/etc/kea/ca.crt",
+                "cert_file": "/etc/kea/s.crt",
+                "key_file": "/etc/kea/s.key",
+                "cert_required": True,
+            },
+        )
+
+    def _daemon(self, sockets):
+        return {"Dhcp4": {"a": 1, "control-sockets": copy.deepcopy(sockets), "z": 2}}
+
+    def test_a_snapshot_is_a_deep_copy_of_every_entry_in_order(self):
+        cfg = self._daemon([self.UNIX, self._http(), self._https()])
+        snap = edit.control_sockets(cfg, "dhcp4")
+        assert snap == cfg["Dhcp4"]["control-sockets"]
+        snap[1]["socket-port"] = 1
+        assert cfg["Dhcp4"]["control-sockets"][1]["socket-port"] == 8004, "not aliased"
+
+    def test_the_singular_pre_2_7_2_map_reads_as_a_one_element_list_and_nothing_else_reads_as_empty(self):
+        assert edit.control_sockets({"Dhcp4": {"control-socket": self.UNIX}}, "dhcp4") == [self.UNIX]
+        assert edit.control_sockets({"Dhcp4": {}}, "dhcp4") == []
+        assert edit.control_sockets({"Dhcp6": {}}, "dhcp4") == []
+        assert edit.control_sockets({"Dhcp4": {"control-sockets": {"dhcp4": {}}}}, "dhcp4") == []
+
+    @pytest.mark.parametrize(
+        "name",
+        ["unix+http", "unix+https-with-auth-and-tls", "two-api-sockets", "unix-only", "no-sockets-key"],
+    )
+    def test_set_then_restore_is_byte_equal(self, name):
+        import json
+
+        original = {
+            "unix+http": self._daemon([self.UNIX, self._http()]),
+            "unix+https-with-auth-and-tls": self._daemon([self.UNIX, self._https()]),
+            "two-api-sockets": self._daemon([self.UNIX, self._http(), self._https()]),
+            "unix-only": self._daemon([self.UNIX]),
+            "no-sockets-key": {"Dhcp4": {"a": 1, "z": 2}},
+        }[name]
+        snap = edit.control_sockets(original, "dhcp4")
+        changed, code = edit.set_control_socket(original, "dhcp4", self._http(port=9999, address="10.0.0.9"))
+        assert code in ("ok", "multiple")
+        restored, rcode = edit.restore_control_sockets(changed, "dhcp4", snap)
+        assert rcode in ("ok", "nochange")
+        assert json.dumps(restored) == json.dumps(original)
+
+    def test_a_removal_is_restored_whole_including_a_socket_the_removal_did_not_name(self):
+        import json
+
+        original = self._daemon([self.UNIX, self._http(), self._https()])
+        snap = edit.control_sockets(original, "dhcp4")
+        after, code = edit.remove_control_socket(original, "dhcp4", "10.0.0.7", 8005)
+        assert code == "ok" and after["Dhcp4"]["control-sockets"] == [self.UNIX, self._http()]
+        restored, _ = edit.restore_control_sockets(after, "dhcp4", snap)
+        assert json.dumps(restored) == json.dumps(original)
+
+    def test_restoring_an_unchanged_list_is_nochange_and_a_missing_block_is_unsupported(self):
+        cfg = self._daemon([self.UNIX, self._http()])
+        assert edit.restore_control_sockets(cfg, "dhcp4", edit.control_sockets(cfg, "dhcp4"))[1] == "nochange"
+        assert edit.restore_control_sockets({"Dhcp6": {}}, "dhcp4", [])[1] == "unsupported"
+        assert edit.restore_control_sockets({"Dhcp4": {"control-sockets": {}}}, "dhcp4", [])[1] == "unsupported"
+
+    def test_restore_converts_a_singular_map_in_the_list_form_in_place(self):
+        cfg = {"Dhcp4": {"a": 1, "control-socket": self.UNIX, "z": 2}}
+        snap = edit.control_sockets(cfg, "dhcp4")
+        changed, _ = edit.set_control_socket(cfg, "dhcp4", self._http())
+        restored, code = edit.restore_control_sockets(changed, "dhcp4", snap)
+        assert code == "ok" and list(restored["Dhcp4"]) == ["a", "control-sockets", "z"]
+        assert restored["Dhcp4"]["control-sockets"] == [self.UNIX]
+
+    def test_removal_removes_only_the_named_entry(self):
+        cfg = self._daemon([self.UNIX, self._http(), self._https()])
+        after, code = edit.remove_control_socket(cfg, "dhcp4", "10.0.0.5", 8004)
+        assert code == "ok" and after["Dhcp4"]["control-sockets"] == [self.UNIX, self._https()]
+        assert edit.remove_control_socket(cfg, "dhcp4", "10.9.9.9", 1)[1] == "nochange"
+
+    def test_more_than_one_api_socket_is_multiple_for_set_and_for_an_unnamed_removal(self):
+        cfg = self._daemon([self.UNIX, self._http(), self._https()])
+        assert edit.set_control_socket(cfg, "dhcp4", self._http())[1] == "multiple"
+        assert edit.remove_control_socket(cfg, "dhcp4")[1] == "multiple"
+        assert cfg == self._daemon([self.UNIX, self._http(), self._https()]), "the input is untouched"
+
+    def test_describe_socket_names_type_address_and_port_only(self):
+        assert edit.describe_socket(self._http()) == "http 10.0.0.5:8004"
+        assert edit.describe_socket(self._https()) == "https 10.0.0.7:8005"
+        assert edit.describe_socket(self.UNIX) == "unix /run/kea/kea4-ctrl-socket"
+        assert edit.describe_socket(self._http(address="fd00::5")) == "http [fd00::5]:8004"
+        assert edit.describe_socket("not a dict") == "an unreadable socket entry"
+        text = edit.describe_socket(self._https())
+        assert self.SECRET not in text and "key" not in text and "authentication" not in text

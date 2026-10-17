@@ -1033,7 +1033,10 @@ class TestTheKea6DatabaseIsAnEndpoint:
 class TestTypedIsAHumansAct:
     """Z4 (Q184) / AA2 (Q185): the design rule, enforced by `tests/typed_claims.py`. CRED-004: the writer's `typed` set is a human's act in this request or the one-time conversion; a route
     never derives it from hosts, DNS or history. Beta.15's checker accepted a wider language than that; an executing pass found seventeen shapes derived from hosts, configuration or history
-    that it let through. They are `SLIPS_Q185` (and the earlier twelve-plus in `SLIPS`), and every one must be caught. The checker is the registry's sentence, not the other way round."""
+    that it let through. They are `SLIPS_Q185` (and the earlier twelve-plus in `SLIPS`), and every one must be caught. The checker is the registry's sentence, not the other way round.
+
+    What its reach layer is (Q186, AB4): SYNTACTIC - the ancestors of the writer call inside the innermost function, a smell detector for a claim moved under a test the request does not decide.
+    The guarantee is the shape rule; an unconditional literal claim is accepted by design (`test_the_reach_layer_is_syntactic_and_says_so`)."""
 
     #: what may be dynamic, and the ONE thing each may do (tests/typed_claims.py DYNAMIC) - asserted here so it cannot grow silently
     EXPECTED_DYNAMIC = {
@@ -1248,6 +1251,18 @@ class TestTypedIsAHumansAct:
             encoding="utf-8"
         )
         assert "never derives it from hosts, DNS or history" in text and "tests/typed_claims.py" in text
+        assert "syntactic reach" in text, "CRED-004 says what the reach layer is"
+
+    def test_the_reach_layer_is_syntactic_and_says_so(self):
+        import pathlib
+
+        from tests.typed_claims import untyped_claims
+
+        doc = (pathlib.Path(__file__).resolve().parent / "typed_claims.py").read_text(encoding="utf-8")
+        assert "SYNTACTIC" in doc and "smell detector" in doc and "accepted by design" in doc
+        # by design: a literal claim is accepted wherever the function was written to make it; the shape rule is the guarantee
+        literal = "def f():" + chr(10) + '    app_config.mutate(fn, typed={"kea"})' + chr(10)
+        assert untyped_claims(literal) == []
 
 
 class TestEverySharedMarkerHasAReaderAndAClearer:

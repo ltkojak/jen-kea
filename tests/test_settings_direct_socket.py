@@ -567,6 +567,50 @@ class TestSwitchBack:
             "kea", "direct_prev_api_user"
         )
 
+    def test_with_no_saved_control_agent_address_the_removal_is_refused_before_the_kea_host_is_touched(
+        self, logged_in_client, db, direct_primary, fake, http
+    ):
+        """AB3 (Q186): the saved address is gone and no other server keeps direct mode - flipping to Control Agent mode would leave Jen pointing at the socket it just removed."""
+        app_config.write_values([("kea", "direct_prev_api_url", "")], typed=set())
+        http({})
+        before = direct_primary.read_bytes()
+        r = logged_in_client.post(
+            "/settings/infrastructure/direct-socket/1/dhcp4/remove", data={"password": "p4"}, follow_redirects=True
+        )
+        assert b"no Control Agent address to return to" in r.data
+        assert "apply-config" not in fake.ops() and "service" not in fake.ops()
+        assert direct_primary.read_bytes() == before
+
+    def test_the_forms_control_agent_address_is_identified_first_and_then_used(
+        self, logged_in_client, db, direct_primary, fake, http
+    ):
+        app_config.write_values([("kea", "direct_prev_api_url", "")], typed=set())
+        http({"ca.lan:8000": _ok("3.0.4")}, config_replies={"ca.lan:8000": AS_CA})
+        r = logged_in_client.post(
+            "/settings/infrastructure/direct-socket/1/dhcp4/remove",
+            data={"ca_url": "http://ca.lan:8000", "password": "ca-pass", "user": "ca-user"},
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        on_disk = _on_disk(direct_primary)
+        assert on_disk.get("kea", "api_url") == "http://ca.lan:8000" and on_disk.get("kea", "connection_mode") == "ca"
+        assert (on_disk.get("kea", "api_user"), on_disk.get("kea", "api_pass")) == ("ca-user", "ca-pass")
+        assert fake.payload_for("service")["action"] == "restart"
+
+    def test_an_address_that_answers_as_the_daemon_is_not_a_control_agent(
+        self, logged_in_client, db, direct_primary, fake, http
+    ):
+        app_config.write_values([("kea", "direct_prev_api_url", "")], typed=set())
+        http({"ca.lan:8000": _ok("3.0.4")}, config_replies={"ca.lan:8000": DHCP4_OK})
+        before = direct_primary.read_bytes()
+        r = logged_in_client.post(
+            "/settings/infrastructure/direct-socket/1/dhcp4/remove",
+            data={"ca_url": "http://ca.lan:8000", "password": "ca-pass"},
+            follow_redirects=True,
+        )
+        assert b"not as a Control Agent" in r.data and "apply-config" not in fake.ops()
+        assert direct_primary.read_bytes() == before
+
     def test_the_page_offers_the_password_field_and_names_the_address(
         self, logged_in_client, db, direct_primary, mock_kea
     ):

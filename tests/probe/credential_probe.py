@@ -559,10 +559,20 @@ def q183_y6_enable_v6_answers_a_failed_write_with_text():
     return text.startswith("Jen could not write its own settings (OSError")
 
 
-def route_remove(text, service, form=None, *, ssh_host="10.0.0.5", server_id=1):
+_UNIX_SOCKET = {"socket-type": "unix", "socket-name": "/run/kea/kea4-ctrl-socket"}
+_API_SOCKET = {"socket-type": "http", "socket-address": "10.0.0.5", "socket-port": 8004}
+_DAEMON_BLOCK = {"dhcp4": "Dhcp4", "dhcp6": "Dhcp6", "d2": "DhcpDdns"}
+
+
+def route_remove(
+    text, service, form=None, *, ssh_host="10.0.0.5", server_id=1, identify="Dhcp4", host=None, others=None
+):
     """The real "Remove socket" route body (`remove_direct_socket`) on a real jen.config, with the Kea host stubbed (the change set records that it was asked, and applies): what a person
     pressing the button would cause. Returns {"touched": the Kea host was changed, "changed": jen.config changed, "flashes": the words shown, "text": the file after}. Flask is the only
-    dependency (a bare request context); no database, no SSH."""
+    dependency (a bare request context); no database, no SSH. Q186: the Kea host is a SIMULATED daemon config (`host`, default: a unix socket and one http socket) that the change
+    really edits; `identify` is what a `config-get` at any address answers as (a string, or a function of the url); the result also carries "applies", "asked" (the addresses
+    identified, in order) and "host" (the daemon config after)."""
+    import copy
     import inspect
 
     from flask import Flask
@@ -570,7 +580,12 @@ def route_remove(text, service, form=None, *, ssh_host="10.0.0.5", server_id=1):
     from jen.routes.settings import infrastructure as infra
     from jen.services import kea_changeset
 
-    flashes, applied, audits = [], [], []
+    flashes, applied, audits, asked, events = [], [], [], [], []
+    host_state = {
+        "cfg": copy.deepcopy(host)
+        if host is not None
+        else {_DAEMON_BLOCK[service]: {"control-sockets": [copy.deepcopy(_UNIX_SOCKET), copy.deepcopy(_API_SOCKET)]}}
+    }
     with Lab(text) as lab, contextlib.ExitStack() as stack:
         before = lab.bytes()
         servers = AppConfig.derive_kea_servers(lab.read(), quiet=True)
@@ -578,8 +593,23 @@ def route_remove(text, service, form=None, *, ssh_host="10.0.0.5", server_id=1):
         stack.enter_context(mock.patch.object(infra, "url_for", lambda *a, **k: "/settings/kea"))
         stack.enter_context(mock.patch.object(infra, "flash", lambda t, style="message": flashes.append(str(t))))
         stack.enter_context(mock.patch.object(infra, "_server_by_id", lambda sid: server))
-        stack.enter_context(mock.patch.object(infra, "_identify_daemon", lambda *a, **k: "Dhcp4"))
-        stack.enter_context(mock.patch.object(extensions, "KEA_SERVERS", []))
+
+        def _identify(url, *a, **k):
+            asked.append(url)
+            events.append("identify")
+            return identify(url) if callable(identify) else identify
+
+        from jen.services import kea_config_edit as _edit
+
+        stack.enter_context(mock.patch.object(infra, "_identify_daemon", _identify))
+        stack.enter_context(
+            mock.patch.object(
+                infra,
+                "_api_sockets_of",
+                lambda s, svc: [x for x in _edit.control_sockets(host_state["cfg"], svc) if _edit._is_api_socket(x)],
+            )
+        )
+        stack.enter_context(mock.patch.object(extensions, "KEA_SERVERS", list(others or [])))
         stack.enter_context(
             mock.patch.dict(
                 infra.__dict__["__user"].__dict__,
@@ -589,7 +619,16 @@ def route_remove(text, service, form=None, *, ssh_host="10.0.0.5", server_id=1):
 
         def apply_change(*args, **kw):
             applied.append(args[0])
-            return kea_changeset.ChangeSetResult("ok", "ok", [])
+            events.append("apply")
+            after, code = args[1](copy.deepcopy(host_state["cfg"]))
+            if code == "ok":
+                host_state["cfg"] = after
+                return kea_changeset.ChangeSetResult("ok", "ok", [])
+            if code in ("nochange", "notfound"):
+                return kea_changeset.ChangeSetResult("nothing", code, [])
+            return kea_changeset.ChangeSetResult(
+                "aborted", code, [("error", kw.get("code_messages", {}).get(code, code))]
+            )
 
         stack.enter_context(mock.patch("jen.services.kea_changeset.apply_change", apply_change))
         view = infra._holding_identity_lock(inspect.unwrap(infra.remove_direct_socket))
@@ -605,6 +644,10 @@ def route_remove(text, service, form=None, *, ssh_host="10.0.0.5", server_id=1):
             "flashes": " | ".join(flashes),
             "text": after,
             "audit": " | ".join(str(a[2]) for a in audits if len(a) > 2),
+            "applies": len(applied),
+            "asked": asked,
+            "events": events,
+            "host": host_state["cfg"],
         }
 
 
@@ -789,7 +832,7 @@ def q184_p2_3_a_daemon_that_inherited_the_primarys_pair_is_named_after_the_switc
     return (inherited, r["touched"], "Kea6 API" in r["flashes"] and "now has none" in r["flashes"])
 
 
-def q184_p2_5_the_form_can_name_the_control_agents_user_and_a_userless_pair_restores_a_blank_password():
+def q184_p2_5_the_form_can_name_the_control_agents_user_and_a_passwordless_pair_restores_no_password_key():
     typed = route_remove(PROXY, "dhcp4", {"password": "CAP", "user": "cu"})
     only_user = PROXY.replace("connection_mode = direct\n", "connection_mode = direct\ndirect_prev_api_user = cu\n", 1)
     restored = route_remove(only_user, "dhcp4", {"restore_saved": "1"})
@@ -797,7 +840,10 @@ def q184_p2_5_the_form_can_name_the_control_agents_user_and_a_userless_pair_rest
     return (
         (_kv(typed["text"], "kea", "api_user"), _kv(typed["text"], "kea", "api_pass")),
         restored["touched"],
-        (p.get("kea", "api_user"), p.get("kea", "api_pass")),
+        (
+            p.get("kea", "api_user"),
+            p.get("kea", "api_pass", fallback=None),
+        ),  # AB4 (Q186): a password the Control Agent did not have is ABSENT again, not an explicit blank
     )
 
 
@@ -950,6 +996,205 @@ def q185_h1_the_mode_is_read_as_the_resolver_reads_it():
     return tuple(mode(v) for v in ("direct", " Direct ", "DIRECT", "ca", "", "bogus", None))
 
 
+def _setup_server(text, server_id, service, url, user, password, typed):
+    """`_setup` for any server of the file (an additional server's section is `kea_server_<id>`)."""
+    from jen.routes.settings import infrastructure as infra
+
+    with Lab(text) as lab:
+        server = next(s for s in AppConfig.derive_kea_servers(lab.read(), quiet=True) if s["id"] == server_id)
+        fn, _ = infra._direct_socket_edit(server, service, url, user, password)
+        result = lab.mutate(fn, typed=typed)
+        buf = io.StringIO()
+        lab.read().write(buf)
+    return result, buf.getvalue()
+
+
+def q186_ab3_s1_no_saved_control_agent_address_is_refused_before_the_host_is_touched():
+    """Without a Control Agent address to return to, a dhcp4 removal would flip to Control Agent mode and leave `api_url` at the socket it just removed: Jen could not reach Kea."""
+    no_prev = route_remove(DIRECT.replace("https://a:8000", "http://10.0.0.5:8004"), "dhcp4", {"password": "x"})
+    same = _direct_on("http://10.0.0.5:8004", "http://10.0.0.5:8004")
+    equal = route_remove(same, "dhcp4", {"no_password": "1"})
+    return (
+        (no_prev["touched"], no_prev["applies"], no_prev["changed"], "no Control Agent address" in no_prev["flashes"]),
+        (equal["touched"], equal["applies"], equal["changed"], "no Control Agent address" in equal["flashes"]),
+    )
+
+
+def q186_ab3_s2_the_forms_address_is_identified_first_and_then_the_removal_proceeds():
+    text = DIRECT.replace("https://a:8000", "http://10.0.0.5:8004")
+    r = route_remove(
+        text,
+        "dhcp4",
+        {"ca_url": "http://ca.lan:8000", "user": "cu", "password": "CAPW"},
+        identify=lambda url: "Control-agent" if url == "http://ca.lan:8000" else "Dhcp4",
+    )
+    p = parse(r["text"])
+    return (
+        r["touched"],
+        p.get("kea", "api_url"),
+        p.get("kea", "connection_mode"),
+        (p.get("kea", "api_user"), p.get("kea", "api_pass")),
+        r["asked"],
+        r["events"][:2],
+        sends(r["text"], "kea"),
+    )
+
+
+def q186_ab3_s3_an_address_that_is_not_a_control_agent_or_not_typed_for_is_refused_whole():
+    text = DIRECT.replace("https://a:8000", "http://10.0.0.5:8004")
+    daemon = route_remove(text, "dhcp4", {"ca_url": "http://ca.lan:8000", "password": "x"}, identify="Dhcp4")
+    silent = route_remove(text, "dhcp4", {"ca_url": "http://ca.lan:8000", "password": "x"}, identify=None)
+    no_answer = route_remove(
+        text, "dhcp4", {"ca_url": "http://10.0.0.5:8000"}, identify="Control-agent"
+    )  # same host: the writer would allow it, the form still needs an answer
+    itself = route_remove(text, "dhcp4", {"ca_url": "http://10.0.0.5:8004", "password": "x"}, identify="Control-agent")
+    junk = route_remove(
+        text, "dhcp4", {"ca_url": "http://u:p@ca.lan:8000/x?y", "password": "x"}, identify="Control-agent"
+    )
+    return tuple((r["touched"], r["changed"]) for r in (daemon, silent, no_answer, itself, junk)) + (
+        "answered as Dhcp4" in daemon["flashes"],
+        "did not answer" in silent["flashes"],
+        "needs its password" in no_answer["flashes"],
+        "is the socket being removed" in itself["flashes"],
+    )
+
+
+def q186_ab3_s4_another_server_keeping_direct_mode_needs_no_address():
+    text = DIRECT.replace("https://a:8000", "http://10.0.0.5:8004")
+    other = [{"id": 2, "name": "b", "api_url": "http://10.0.0.6:8004"}]
+    r = route_remove(text, "dhcp4", {"password": "x"}, others=other)
+    p = parse(r["text"])
+    return (
+        r["touched"],
+        p.get("kea", "api_url"),
+        p.get("kea", "connection_mode"),
+        "no Control Agent URL on record" in r["flashes"],
+    )
+
+
+def q186_ab3_s5_a_saved_address_is_restored_and_a_typed_one_wins_over_it():
+    saved = _direct_on(
+        "http://10.0.0.5:8004", "http://kea-a.lan:8000", "direct_prev_api_user = cu\ndirect_prev_api_pass = CAP\n"
+    )
+    plain = route_remove(saved, "dhcp4", {"password": "CAPW"})
+    typed = route_remove(
+        saved, "dhcp4", {"ca_url": "http://ca.lan:8000", "password": "NEWPW"}, identify="Control-agent"
+    )
+    both = route_remove(
+        saved, "dhcp4", {"ca_url": "http://ca.lan:8000", "restore_saved": "1"}, identify="Control-agent"
+    )
+    t = parse(typed["text"])
+    return (
+        _kv(plain["text"], "kea", "api_url"),
+        (
+            t.get("kea", "api_url"),
+            t.get("kea", "api_pass"),
+            t.has_option("kea", "direct_prev_api_url"),
+            t.has_option("kea", "direct_prev_api_pass"),
+        ),
+        (both["touched"], "Choose one for the Control Agent" in both["flashes"]),
+    )
+
+
+def _round_trip(user, password):
+    """The Control Agent as configured (user: value|None, password: value|""|None), a direct-socket setup, then the switch-back with the saved pair restored: what is sent before, and after."""
+    lines = ["[kea]", "api_url = http://kea-a.lan:8000"]
+    if user is not None:
+        lines.append(f"api_user = {user}")
+    if password is not None:
+        lines.append(f"api_pass = {password}")
+    ca = "\n".join(lines) + "\n" + BASE[BASE.index("[kea_db]") :]
+    before = sends(ca, "kea")
+    _, t4 = _setup(ca, "dhcp4", "http://10.0.0.5:8004", "sock", "SOCKPW", {"kea"})
+    back = route_remove(t4, "dhcp4", {"restore_saved": "1"})
+    p = parse(back["text"])
+    return (
+        before == sends(back["text"], "kea") and back["touched"],
+        p.has_option("kea", "api_user") == (user is not None),
+        p.has_option("kea", "api_pass") == (password is not None),
+        any(
+            p.has_option("kea", k)
+            for k in (
+                "direct_prev_api_user",
+                "direct_prev_api_pass",
+                "direct_prev_api_user_absent",
+                "direct_prev_api_pass_absent",
+            )
+        ),
+    )
+
+
+def q186_ab4_s1_a_restore_puts_back_each_half_as_it_was_user_present_or_absent_by_password_present_blank_or_absent():
+    return tuple(_round_trip(u, pw) for u in ("cu", None) for pw in ("CAP", "", None))
+
+
+def q186_ab4_s2_an_additional_server_that_inherited_the_primarys_pair_inherits_again():
+    text = BASE.replace("[server]\n", "") + "[kea_server_2]\nname = b\napi_url = https://a:8001\n[server]\n"
+    before = sends(text, "server_2")
+    _, t2 = _setup_server(text, 2, "dhcp4", "http://10.0.0.6:8004", "sock", "SOCKPW", {"server_2"})
+    mid = parse(t2)
+    back = route_remove(t2, "dhcp4", {"restore_saved": "1"}, server_id=2, ssh_host="10.0.0.6")
+    p = parse(back["text"])
+    return (
+        before,
+        (
+            mid.get("kea_server_2", "direct_prev_api_user_absent", fallback=None),
+            mid.get("kea_server_2", "direct_prev_api_pass_absent", fallback=None),
+        ),
+        back["touched"],
+        (p.has_option("kea_server_2", "api_user"), p.has_option("kea_server_2", "api_pass")),
+        sends(back["text"], "server_2"),
+    )
+
+
+def q186_ab4_s3_the_dependant_keep_writes_a_user_only_when_the_dependants_password_is_its_own():
+    inherited = (
+        _direct_on("http://10.0.0.5:8004", "http://proxy.lan:8000")
+        .replace("api_user = pu", "api_user = su")
+        .replace("api_pass = PS", "api_pass = SP")
+        + "[kea6]\napi_url = http://10.0.0.5:8006\n"
+    )
+    own = inherited.replace("[kea6]\n", "[kea6]\napi_pass = K6\n")
+    a = route_remove(inherited, "dhcp4", {"no_password": "1"})
+    b = route_remove(own, "dhcp4", {"no_password": "1"})
+    pa, pb = parse(a["text"]), parse(b["text"])
+    return (
+        (a["touched"], pa.has_option("kea6", "api_user"), sends(a["text"], "kea6")),
+        (b["touched"], pb.get("kea6", "api_user", fallback=None), sends(b["text"], "kea6")),
+    )
+
+
+def q186_ab5_s1_a_stale_shared_marker_is_cleared_when_a_setup_writes_the_saved_pair():
+    ca = BASE.replace("https://a:8000", "http://kea-a.lan:8000").replace(
+        "[kea]\n", "[kea]\ndirect_prev_api_pass_shared = 1\n", 1
+    )
+    _, t4 = _setup(ca, "dhcp4", "http://10.0.0.5:8004", "sock", "SOCKPW", {"kea"})
+    p = parse(t4)
+    return (
+        p.has_option("kea", "direct_prev_api_pass_shared"),
+        p.get("kea", "direct_prev_api_pass"),
+        p.get("kea", "direct_prev_api_url"),
+    )
+
+
+def q186_ab5_s2_a_typed_daemon_password_on_the_control_agent_mode_form_keeps_the_daemons_own_user():
+    text = BASE + "[kea6]\napi_url = https://b:8006\napi_user = x\napi_pass = K6\n"
+    typed = route_remove(text, "dhcp6", {"password": "NEWPW"})
+    cleared = route_remove(text, "dhcp6", {})
+    pt, pc = parse(typed["text"]), parse(cleared["text"])
+    return (
+        (
+            pt.get("kea6", "api_user", fallback=None),
+            pt.get("kea6", "api_pass", fallback=None),
+            pt.has_option("kea6", "api_url"),
+        ),
+        (
+            pc.has_section("kea6") and pc.has_option("kea6", "api_user"),
+            pc.has_section("kea6") and pc.has_option("kea6", "api_pass"),
+        ),
+    )
+
+
 def q185_aa3_a_trailing_no_break_space_is_refused_and_ordinary_padding_is_not():
     from jen.services import auth
 
@@ -990,7 +1235,7 @@ def q183_p2_f6_a_backslash_url_is_not_the_primarys_host():
 SCENARIOS = {
     name: fn
     for name, fn in sorted(globals().items())
-    if name.startswith(("b12_", "b13_", "q183_", "q184_", "q185_")) and callable(fn)
+    if name.startswith(("b12_", "b13_", "q183_", "q184_", "q185_", "q186_")) and callable(fn)
 }
 
 #: scenario -> the observation the rule requires
@@ -1083,10 +1328,10 @@ EXPECTED = {
     ),
     "q184_p2_1_a_saved_pair_without_its_address_is_neither_offered_nor_restored": (False, False, True, True),
     "q184_p2_3_a_daemon_that_inherited_the_primarys_pair_is_named_after_the_switch_back": (True, True, True),
-    "q184_p2_5_the_form_can_name_the_control_agents_user_and_a_userless_pair_restores_a_blank_password": (
+    "q184_p2_5_the_form_can_name_the_control_agents_user_and_a_passwordless_pair_restores_no_password_key": (
         ("cu", "CAP"),
         True,
-        ("cu", ""),
+        ("cu", None),
     ),
     "q185_aa1_s1_a_dhcp4_no_password_removes_the_user_and_sends_no_header": (
         True,
@@ -1123,6 +1368,64 @@ EXPECTED = {
     ),
     "q185_sp6_a_stale_shared_marker_does_not_follow_a_restore": (True, "PS", False, False),
     "q185_h1_the_mode_is_read_as_the_resolver_reads_it": ("direct", "direct", "direct", "ca", "ca", "ca", "ca"),
+    "q186_ab3_s1_no_saved_control_agent_address_is_refused_before_the_host_is_touched": (
+        (False, 0, False, True),
+        (False, 0, False, True),
+    ),
+    "q186_ab3_s2_the_forms_address_is_identified_first_and_then_the_removal_proceeds": (
+        True,
+        "http://ca.lan:8000",
+        "ca",
+        ("cu", "CAPW"),
+        ["http://ca.lan:8000"],
+        ["identify", "apply"],
+        [("http://ca.lan:8000", ("cu", "CAPW"))],
+    ),
+    "q186_ab3_s3_an_address_that_is_not_a_control_agent_or_not_typed_for_is_refused_whole": (
+        (False, False),
+        (False, False),
+        (False, False),
+        (False, False),
+        (False, False),
+        True,
+        True,
+        True,
+        True,
+    ),
+    "q186_ab3_s4_another_server_keeping_direct_mode_needs_no_address": (True, "http://10.0.0.5:8004", "direct", True),
+    "q186_ab3_s5_a_saved_address_is_restored_and_a_typed_one_wins_over_it": (
+        "http://kea-a.lan:8000",
+        ("http://ca.lan:8000", "NEWPW", False, False),
+        (False, True),
+    ),
+    "q186_ab4_s1_a_restore_puts_back_each_half_as_it_was_user_present_or_absent_by_password_present_blank_or_absent": (
+        (True, True, True, False),
+        (True, True, True, False),
+        (True, True, True, False),
+        (True, True, True, False),
+        (True, True, True, False),
+        (True, True, True, False),
+    ),
+    "q186_ab4_s2_an_additional_server_that_inherited_the_primarys_pair_inherits_again": (
+        [("https://a:8001", ("pu", "PS"))],
+        ("1", "1"),
+        True,
+        (False, False),
+        [("https://a:8001", ("pu", "PS"))],
+    ),
+    "q186_ab4_s3_the_dependant_keep_writes_a_user_only_when_the_dependants_password_is_its_own": (
+        (True, False, [("http://10.0.0.5:8006", "no header")]),
+        (True, "su", [("http://10.0.0.5:8006", ("su", "K6"))]),
+    ),
+    "q186_ab5_s1_a_stale_shared_marker_is_cleared_when_a_setup_writes_the_saved_pair": (
+        False,
+        "PS",
+        "http://kea-a.lan:8000",
+    ),
+    "q186_ab5_s2_a_typed_daemon_password_on_the_control_agent_mode_form_keeps_the_daemons_own_user": (
+        ("x", "NEWPW", False),
+        (False, False),
+    ),
     "q185_aa3_a_trailing_no_break_space_is_refused_and_ordinary_padding_is_not": (False, True, False, True),
     "q184_z3_a_trailing_dot_is_a_different_name_and_odd_spaces_are_no_url": (False, True, False, False, False, True),
     "q184_z2_the_saved_pair_is_masked_in_a_support_bundle": (False, True),

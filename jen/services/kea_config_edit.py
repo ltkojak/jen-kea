@@ -586,8 +586,13 @@ def set_control_socket(cfg: dict, service: str, socket: dict):
     sockets = _control_sockets(section)
     if sockets is None:
         return cfg, "unsupported"
+    if sum(1 for s in sockets if _is_api_socket(s)) > 1:
+        return (
+            cfg,
+            "multiple",
+        )  # AB1 (Q186): Jen manages ONE API socket; a config with more is not flattened, it is refused (the caller says so before anything is written)
     for i, existing in enumerate(sockets):
-        if isinstance(existing, dict) and existing.get("socket-type") in _API_SOCKET_TYPES:
+        if _is_api_socket(existing):
             if existing == socket:
                 return cfg, "nochange"
             sockets[i] = socket
@@ -596,24 +601,93 @@ def set_control_socket(cfg: dict, service: str, socket: dict):
     return cfg, "ok"
 
 
-def remove_control_socket(cfg: dict, service: str):
-    """Drop the daemon's http/https API socket (the "switch back to the
-    Control Agent" path), keeping the unix entry and the list form.
-    Returns (cfg, code): "ok", "nochange" (there wasn't one), or
-    "unsupported" as set_control_socket."""
-    cfg = copy.deepcopy(cfg)
+def _is_api_socket(entry) -> bool:
+    return isinstance(entry, dict) and entry.get("socket-type") in _API_SOCKET_TYPES
+
+
+def _daemon_section(cfg: dict, service: str):
     key = _DAEMON_KEY.get(service)
     section = cfg.get(key) if key else None
-    if not isinstance(section, dict):
+    return section if isinstance(section, dict) else None
+
+
+def control_sockets(cfg: dict, service: str) -> list:
+    """AB1 (Q186): a deep copy of the daemon's `control-sockets` - EVERY entry, in order - as the snapshot a multi-step route restores whole. The pre-2.7.2 singular `control-socket`
+    map reads as a one-element list; a daemon with no block, no sockets, or a shape this code does not understand (a Control Agent's map) reads as `[]`. Never changes `cfg`."""
+    section = _daemon_section(cfg, service)
+    if section is None:
+        return []
+    if "control-sockets" in section:
+        lst = section["control-sockets"]
+        return copy.deepcopy(lst) if isinstance(lst, list) else []
+    single = section.get("control-socket")
+    return [copy.deepcopy(single)] if isinstance(single, dict) else []
+
+
+def restore_control_sockets(cfg: dict, service: str, snapshot: list):
+    """AB1 (Q186): the ONLY compensation for a change to a daemon's control sockets - the list becomes `snapshot` exactly (entries, order, every field), whatever the failed step
+    left there: a socket added, replaced or removed, one entry or several. An empty snapshot is a daemon with no sockets: the key is dropped. Returns (cfg, code): "ok", "nochange" (the
+    daemon already has exactly that list) or "unsupported" (no daemon block, or a `control-sockets` that is not the list form)."""
+    cfg = copy.deepcopy(cfg)
+    section = _daemon_section(cfg, service)
+    if section is None:
+        return cfg, "unsupported"
+    if "control-sockets" in section and not isinstance(section["control-sockets"], list):
+        return cfg, "unsupported"
+    if control_sockets(cfg, service) == snapshot and "control-socket" not in section:
+        return cfg, "nochange"
+    wanted = copy.deepcopy(snapshot)
+    if "control-socket" in section:
+        if wanted:
+            _replace_key_in_place(section, "control-socket", "control-sockets", wanted)
+        else:
+            del section["control-socket"]
+    elif wanted:
+        section["control-sockets"] = wanted
+    else:
+        section.pop("control-sockets", None)
+    return cfg, "ok"
+
+
+def describe_socket(entry) -> str:
+    """AB2 (Q186): the words that name a control socket in a flash, an audit row or a log line - `<type> <address>:<port>` (a unix socket: `unix <path>`). Authentication and TLS
+    fields are NEVER printed: a Basic client's password is in the entry, and the entry must never reach text (LEAK-001)."""
+    if not isinstance(entry, dict):
+        return "an unreadable socket entry"
+    kind = str(entry.get("socket-type") or "?")
+    if kind == "unix":
+        return f"unix {entry.get('socket-name') or '?'}"
+    address = str(entry.get("socket-address") or "?")
+    host = f"[{address}]" if ":" in address else address
+    return f"{kind} {host}:{entry.get('socket-port', '?')}"
+
+
+def remove_control_socket(cfg: dict, service: str, address: str | None = None, port: int | None = None):
+    """Drop the daemon's http/https API socket (the "switch back to the
+    Control Agent" path), keeping the unix entry and the list form.
+    AB1 (Q186): ONLY the entry named is removed. With `address` and `port` (the route reads them from the entry it snapshotted) it is the http/https entry with that address and
+    port, and any other entry stays; without them it is the daemon's one API socket, and a config with more than one is "multiple" - never flattened.
+    Returns (cfg, code): "ok", "nochange" (there wasn't one), "multiple", or
+    "unsupported" as set_control_socket."""
+    cfg = copy.deepcopy(cfg)
+    section = _daemon_section(cfg, service)
+    if section is None:
         return cfg, "unsupported"
     sockets = section.get("control-sockets")
     if sockets is None:
         return cfg, "nochange"
     if not isinstance(sockets, list):
         return cfg, "unsupported"
-    kept = [s for s in sockets if not (isinstance(s, dict) and s.get("socket-type") in _API_SOCKET_TYPES)]
-    if len(kept) == len(sockets):
+    api = [s for s in sockets if _is_api_socket(s)]
+    if address is None and port is None:
+        if len(api) > 1:
+            return cfg, "multiple"
+        named = api
+    else:
+        named = [s for s in api if s.get("socket-address") == address and s.get("socket-port") == port]
+    if not named:
         return cfg, "nochange"
+    kept = [s for s in sockets if not any(s is n for n in named)]
     section["control-sockets"] = kept
     return cfg, "ok"
 

@@ -2298,3 +2298,64 @@ with app.app_context():
         st.dexec(st.KEA_A, "rm", "-f", S19_STATE, check=False)
         with contextlib.suppress(Exception):
             st.wait_jen_healthy(timeout=180)
+
+
+# ── 22. a failed write of Jen's own settings after a socket change puts the daemon's sockets back ──────────────────────────
+S22_SCRIPT = r"""
+import hashlib, inspect
+from unittest import mock
+import flask
+import jen.services.private_files as pf
+from jen.routes.settings import infrastructure as infra
+from jen.models.db import jen_db
+
+server = extensions.KEA_SERVERS[0]
+cfg_path = "/etc/jen/jen.config"
+before = hashlib.sha256(open(cfg_path, "rb").read()).hexdigest()
+flashes = []
+real_write = pf.write_private_file
+
+def read_only_config(path, *a, **k):
+    # the stand-in for a jen.config that has become read-only AFTER the Kea host was changed: the config writer's one write fails like a full or read-only disk
+    if str(path).endswith("jen.config"):
+        raise OSError(30, "Read-only file system")
+    return real_write(path, *a, **k)
+
+view = infra._holding_identity_lock(inspect.unwrap(infra.setup_direct_socket))
+form = {"scheme": "http", "address": "__ADDR__", "port": "8014", "user": "sysuser", "password": "syspass-123"}
+with app.test_request_context(method="POST", data=form):
+    with mock.patch.object(infra, "flash", lambda text, style="message": flashes.append(str(text))), \
+         mock.patch.object(pf, "write_private_file", read_only_config):
+        view(server["id"], "dhcp4")
+
+after = hashlib.sha256(open(cfg_path, "rb").read()).hexdigest()
+with app.app_context(), jen_db() as c, c.cursor() as cur:
+    cur.execute("SELECT action, details FROM audit_log WHERE action LIKE 'DIRECT_SOCKET%%' ORDER BY id DESC LIMIT 5")
+    rows = [(r["action"], r["details"]) if isinstance(r, dict) else (r[0], r[1]) for r in cur.fetchall()]
+emit({"flashes": flashes, "cfg_unchanged": before == after, "audit": rows})
+"""
+
+
+def test_22_a_failed_write_of_jens_settings_after_a_socket_change_puts_the_daemons_sockets_back(stack):
+    """REMOTE-001 (Q186): the Kea host was changed for real (kea-dhcp4 rewritten with a new http socket and restarted), then Jen's own settings could not be written (a read-only
+    jen.config). The compensation restores the daemon's control-sockets to exactly what they were, restarts it, says so - and no flash or audit row carries the socket's password.
+    The stand-in is the write failing: a container has no read-only remount to do it with."""
+    ip = st.container_ip(st.KEA_A)
+    out, proc = st.jen_py(S22_SCRIPT.replace("__ADDR__", ip), timeout=400)
+    result = emitted(out)
+    assert result is not None, f"no result from the route:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    texts = " ".join(result["flashes"])
+
+    assert "Read-only file system" in texts and "was undone" in texts and "PARTIAL" not in texts, (
+        f"INVARIANT: a socket change whose Jen-side write failed is undone, and the page says so: {texts}"
+    )
+    assert result["cfg_unchanged"], "INVARIANT: the failed write left jen.config as it was"
+    st.wait_for(lambda: st.kea_answers("kea-a"), timeout=90, what="kea-a answering on its original socket")
+    assert not st.kea_answers("kea-a", 8014), "INVARIANT: the socket the failed route added is gone"
+    assert json.loads(st.kea_conf_bytes(st.KEA_A)) == json.loads(st.BASELINE[st.KEA_A]), (
+        "INVARIANT: the daemon's config is what it was before the route ran - the original socket (with its file-based authentication) is back, not deleted"
+    )
+    assert "syspass-123" not in texts and not any("syspass-123" in str(row) for row in result["audit"]), (
+        "INVARIANT: no recovery text or audit row carries the socket's password"
+    )
+    assert [a for a, _d in result["audit"]][:1] == ["DIRECT_SOCKET_COMPENSATED"], result["audit"]

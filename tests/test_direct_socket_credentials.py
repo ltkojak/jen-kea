@@ -480,11 +480,11 @@ class TestTheRemoveFormInfersNothing:
         r = probe.q184_p2_3_a_daemon_that_inherited_the_primarys_pair_is_named_after_the_switch_back()
         assert r == (True, True, True)
 
-    def test_the_user_can_be_typed_and_a_userless_saved_pair_restores_a_blank_password(self):
+    def test_the_user_can_be_typed_and_a_passwordless_saved_pair_restores_no_password_key(self):
         typed, touched, restored = (
-            probe.q184_p2_5_the_form_can_name_the_control_agents_user_and_a_userless_pair_restores_a_blank_password()
+            probe.q184_p2_5_the_form_can_name_the_control_agents_user_and_a_passwordless_pair_restores_no_password_key()
         )
-        assert typed == ("cu", "CAP") and touched and restored == ("cu", "")
+        assert typed == ("cu", "CAP") and touched and restored == ("cu", None)
 
     def test_the_restore_box_is_not_checked_until_the_person_checks_it(self):
         import pathlib
@@ -518,3 +518,100 @@ class TestTheRemoveFormInfersNothing:
 
         out = support_bundle.redact_ini_text("[kea]\ndirect_prev_api_user = cu\ndirect_prev_api_pass = CAP\n")
         assert "CAP" not in out and "direct_prev_api_user = cu" in out
+
+
+class TestARemovalNeverLeavesJenPointingAtTheSocketItRemoved:
+    """AB3 (Q186): a dhcp4 removal that flips Jen to Control Agent mode needs a Control Agent address to flip TO."""
+
+    def test_no_saved_address_and_no_other_direct_server_is_refused_before_the_host_is_touched(self):
+        no_prev, equal = probe.q186_ab3_s1_no_saved_control_agent_address_is_refused_before_the_host_is_touched()
+        assert no_prev == (False, 0, False, True) and equal == (False, 0, False, True)
+
+    def test_the_forms_address_is_identified_as_a_control_agent_first_and_then_the_removal_proceeds(self):
+        touched, url, mode, pair, asked, events, sent = (
+            probe.q186_ab3_s2_the_forms_address_is_identified_first_and_then_the_removal_proceeds()
+        )
+        assert touched and url == "http://ca.lan:8000" and mode == "ca" and pair == ("cu", "CAPW")
+        assert asked == ["http://ca.lan:8000"] and events[:2] == ["identify", "apply"], "asked BEFORE the socket goes"
+        assert sent == [("http://ca.lan:8000", ("cu", "CAPW"))]
+
+    def test_an_address_that_is_no_control_agent_or_has_no_answer_is_refused_whole(self):
+        out = probe.q186_ab3_s3_an_address_that_is_not_a_control_agent_or_not_typed_for_is_refused_whole()
+        assert out[:5] == ((False, False),) * 5 and out[5:] == (True, True, True, True)
+
+    def test_another_server_keeping_direct_mode_needs_no_address(self):
+        touched, url, mode, said = probe.q186_ab3_s4_another_server_keeping_direct_mode_needs_no_address()
+        assert touched and mode == "direct" and url == "http://10.0.0.5:8004" and said
+
+    def test_a_saved_address_is_restored_and_a_typed_one_wins_over_it(self):
+        plain, typed, both = probe.q186_ab3_s5_a_saved_address_is_restored_and_a_typed_one_wins_over_it()
+        assert plain == "http://kea-a.lan:8000"
+        assert typed == ("http://ca.lan:8000", "NEWPW", False, False), (
+            "the pair saved for the other address goes with it"
+        )
+        assert both == (False, True)
+
+    def test_the_page_offers_the_address_field_only_where_there_is_none_to_return_to(self):
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        page = (root / "templates" / "settings_kea.html").read_text(encoding="utf-8")
+        assert "server_id in infra.needs_ca_url" in page and 'name="ca_url"' in page
+        route = (root / "jen" / "routes" / "settings" / "infrastructure.py").read_text(encoding="utf-8")
+        assert '"needs_ca_url": _needs_ca_url' in route
+
+
+class TestARestorePutsBackAbsenceAndTheKeepNeedsAnOwnPassword:
+    """AB4/AB5 (Q186): what the Control Agent had is saved as it WAS and a restore puts every half back as it was; the dependant keep writes a user only beside a password of its own."""
+
+    def test_every_saved_state_round_trips_and_the_transport_sends_what_it_sent_before(self):
+        rows = probe.q186_ab4_s1_a_restore_puts_back_each_half_as_it_was_user_present_or_absent_by_password_present_blank_or_absent()
+        assert rows == ((True, True, True, False),) * 6, "user present/absent x password present/blank/absent"
+
+    def test_the_no_authentication_state_sends_no_header_after_the_round_trip(self):
+        ca = "[kea]\napi_url = http://kea-a.lan:8000\n" + probe.BASE[probe.BASE.index("[kea_db]") :]
+        assert probe.sends(ca, "kea") == [("http://kea-a.lan:8000", "no header")]
+        _, t4 = probe._setup(ca, "dhcp4", "http://10.0.0.5:8004", "sock", "SOCKPW", {"kea"})
+        assert probe.parse(t4).get("kea", "direct_prev_api_user_absent") == "1"
+        assert probe.parse(t4).get("kea", "direct_prev_api_pass_absent") == "1"
+        back = probe.route_remove(t4, "dhcp4", {"restore_saved": "1"})
+        assert probe.sends(back["text"], "kea") == [("http://kea-a.lan:8000", "no header")]
+
+    def test_an_additional_server_that_inherited_the_primarys_pair_inherits_it_again(self):
+        before, flags, touched, own, after = (
+            probe.q186_ab4_s2_an_additional_server_that_inherited_the_primarys_pair_inherits_again()
+        )
+        assert flags == ("1", "1") and touched and own == (False, False)
+        assert before == after == [("https://a:8001", ("pu", "PS"))]
+
+    def test_the_dependant_keep_writes_a_user_only_beside_a_password_of_its_own(self):
+        inherited, own = (
+            probe.q186_ab4_s3_the_dependant_keep_writes_a_user_only_when_the_dependants_password_is_its_own()
+        )
+        assert inherited == (True, False, [("http://10.0.0.5:8006", "no header")]), (
+            "dk1: nothing of its own, nothing kept"
+        )
+        assert own == (True, "su", [("http://10.0.0.5:8006", ("su", "K6"))]), (
+            "dk2: an own password keeps the user it was sending"
+        )
+
+    def test_a_stale_shared_marker_is_cleared_when_a_setup_writes_the_saved_pair(self):
+        assert probe.q186_ab5_s1_a_stale_shared_marker_is_cleared_when_a_setup_writes_the_saved_pair() == (
+            False,
+            "PS",
+            "http://kea-a.lan:8000",
+        )
+
+    def test_a_typed_daemon_password_in_control_agent_mode_keeps_the_daemons_own_user(self):
+        typed, cleared = (
+            probe.q186_ab5_s2_a_typed_daemon_password_on_the_control_agent_mode_form_keeps_the_daemons_own_user()
+        )
+        assert typed == ("x", "NEWPW", False) and cleared == (False, False)
+
+    def test_the_page_reads_the_mode_the_way_the_resolver_does(self):
+        import pathlib
+
+        route = (
+            pathlib.Path(__file__).resolve().parent.parent / "jen" / "routes" / "settings" / "infrastructure.py"
+        ).read_text(encoding="utf-8")
+        assert '"kea_connection_mode": _mode_of(extensions.cfg)' in route

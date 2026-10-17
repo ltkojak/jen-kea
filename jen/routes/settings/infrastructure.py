@@ -11,7 +11,6 @@ import os
 import re
 import subprocess
 import time
-from copy import deepcopy as _deepcopy
 from urllib.parse import urlparse
 
 from flask import flash, jsonify, redirect, render_template, request, url_for
@@ -273,25 +272,37 @@ def settings_kea():
                 direct_port_warnings.append(f"{srv.get('name', 'Kea Server')} api6_url ({srv['api6_url']})")
 
     # Z1/Z2 (Q184): the Remove form shows where the Control Agent will be reached and whether its own password was saved
-    _prev_urls, _prev_pairs = {}, set()
+    _prev_urls, _prev_pairs, _needs_ca_url = {}, set(), set()
     for _sid, _sec in [(1, "kea"), *[(n, f"kea_server_{n}") for n in _kea_server_section_ids(extensions.cfg)]]:
         if extensions.cfg.has_section(_sec):
             if extensions.cfg.get(_sec, "direct_prev_api_url", fallback=""):
                 _prev_urls[_sid] = extensions.cfg.get(_sec, "direct_prev_api_url")
-            if extensions.cfg.has_option(_sec, "direct_prev_api_pass") or extensions.cfg.has_option(
-                _sec, "direct_prev_api_user"
+            if any(
+                extensions.cfg.has_option(_sec, k)
+                for k in (
+                    "direct_prev_api_pass",
+                    "direct_prev_api_user",
+                    "direct_prev_api_user_absent",
+                    "direct_prev_api_pass_absent",
+                )
             ):
                 _prev_pairs.add(_sid)
+            # AB3 (Q186): no Control Agent address to return to (none saved, or the saved one is the socket's own): the Remove form asks for it
+            _own_url = extensions.cfg.get(_sec, "api_url", fallback="").strip().rstrip("/")
+            if not _prev_urls.get(_sid) or _prev_urls[_sid].strip().rstrip("/") == _own_url:
+                _needs_ca_url.add(_sid)
     infra = {
         "prev_urls": _prev_urls,
         "prev_pairs": _prev_pairs,
+        "needs_ca_url": _needs_ca_url,
         "shared_copies": _shared_copies,
         "kea_api_url": extensions.cfg.get("kea", "api_url", fallback=""),
         "kea_api_user": extensions.cfg.get("kea", "api_user", fallback=""),
         # v5.69.0-beta.2 (Q171): whether a password is saved, never the password - every other password field on these pages already works this way, and the save below keeps a blank
         "kea_api_pass_set": bool(extensions.cfg.get("kea", "api_pass", fallback="")),
         # v5.10.0 — Kea 3 control plane
-        "kea_connection_mode": extensions.cfg.get("kea", "connection_mode", fallback="ca"),
+        # AB5 (Q186): the page reads the mode the way the resolver does (a hand-edited `Direct` is direct)
+        "kea_connection_mode": _mode_of(extensions.cfg),
         "kea_api_ca": extensions.cfg.get("kea", "api_ca", fallback=""),
         "kea_api_tls_verify": extensions.cfg.getboolean("kea", "api_tls_verify", fallback=True),
         "kea_api_client_cert": extensions.cfg.get("kea", "api_client_cert", fallback=""),
@@ -1173,6 +1184,11 @@ _PREV_PASS_KEY = "direct_prev_api_pass"
 _PREV_SHARED_KEY = (
     "direct_prev_api_pass_shared"  # AA3 (Q185): the saved pair was a marked copy, and a restored copy is one again
 )
+# AB4 (Q186): what the Control Agent had is saved as it WAS - a value, a blank, or NOTHING. "Nothing" is recorded too, so a restore puts back absence (and the page can offer a restore of
+# a Control Agent that had neither a user nor a password) instead of leaving the socket's user or writing an explicit blank over an inherited password.
+_PREV_USER_ABSENT_KEY = "direct_prev_api_user_absent"
+_PREV_PASS_ABSENT_KEY = "direct_prev_api_pass_absent"
+_PREV_PAIR_KEYS = (_PREV_USER_KEY, _PREV_PASS_KEY, _PREV_SHARED_KEY, _PREV_USER_ABSENT_KEY, _PREV_PASS_ABSENT_KEY)
 
 
 def _server_by_id(server_id):
@@ -1247,6 +1263,28 @@ def _sentence_of(refusal: BaseException) -> str:
     )
 
 
+def _api_sockets_of(server: dict, service: str):
+    """AB1 (Q186): the daemon's http/https control sockets as the Kea host has them RIGHT NOW (a read that records no config revision), or None when the config could not be read.
+    The route asks before it sends anything: a daemon with more than one is refused, not flattened."""
+    from jen.services import kea_config_edit as __edit
+    from jen.services import kea_host as __host
+
+    cfg = __host.read_config(server, service, capture=False)
+    if not isinstance(cfg, dict):
+        return None
+    return [s for s in __edit.control_sockets(cfg, service) if __edit._is_api_socket(s)]
+
+
+def _many_sockets_sentence(daemon: str, conf: str, count: int | None = None) -> str:
+    """AB1 (Q186): the refusal for a daemon whose config has more than one http/https control socket."""
+    what = f"{count} API sockets" if count else "more than one API socket"
+    return f"{daemon} has {what} in {conf}; Jen manages one - remove the others by hand first. Nothing was changed."
+
+
+#: AB2 (Q186): where a person finds what a socket's own entry held (its authentication and TLS settings), which no flash, audit row or log line ever prints
+_SOCKET_ENTRY_LIVES = "its authentication and TLS settings are in Jen's config history for this server (Settings → Kea → Config History) and in the daemon's last revision"
+
+
 def _direct_socket_edit(server: dict, service: str, url: str, user: str, password: str, tls: bool = False):
     """(fn, changed): the edit `_write_direct_socket_config` makes to Jen's own config, as a `mutate`-style callback, and the list of phrases it fills in when
     it runs. The setup route hands the SAME callback to `preflight_identity_change` before it touches the Kea host (v5.68.0-beta.28, Q164), so the
@@ -1286,16 +1324,25 @@ def _direct_socket_edit(server: dict, service: str, url: str, user: str, passwor
             # Agent: remember where it was, for "Switch back" - and the pair
             # the Control Agent was reached with (Z2, Q184).
             cfg.set(sec, _PREV_URL_KEY, old_url)
+            for leftover in _PREV_PAIR_KEYS:
+                if cfg.has_option(sec, leftover):
+                    cfg.remove_option(
+                        sec, leftover
+                    )  # AB5 (Q186): nothing from an earlier round trip sits beside a pair saved now
             if cfg.has_option(sec, user_key):
                 cfg.set(sec, _PREV_USER_KEY, cfg.get(sec, user_key))
+            else:
+                cfg.set(sec, _PREV_USER_ABSENT_KEY, "1")  # AB4: the Control Agent had NO user key
             if cfg.has_option(sec, pass_key):
                 cfg.set(
                     sec, _PREV_PASS_KEY, cfg.get(sec, pass_key)
                 )  # a blank is kept: "the Control Agent had no password" is something to restore
                 if cfg.get(sec, f"{pass_key}_shared", fallback="") == "1":
                     cfg.set(sec, _PREV_SHARED_KEY, "1")  # (read before the socket's own pair clears it below)
-                elif cfg.has_option(sec, _PREV_SHARED_KEY):
-                    cfg.remove_option(sec, _PREV_SHARED_KEY)  # a leftover from an earlier round trip is not this pair's
+            else:
+                cfg.set(
+                    sec, _PREV_PASS_ABSENT_KEY, "1"
+                )  # AB4: the Control Agent had NO password key (an extra server's then inherits the primary's)
         cfg.set(sec, url_key, url)
         changed.append(f"[{sec}] {url_key}")
         # Per-daemon credentials: only written when they differ from the
@@ -1403,39 +1450,63 @@ def _holding_identity_lock(view):
     return locked
 
 
-def _undo_remote_change(server: dict, service: str, undo, summary: str, sentence: str, *, what: str, by_hand: str):
+def _undo_remote_change(server: dict, service: str, snapshot, summary: str, sentence: str, *, what: str, by_hand: str):
     """The compensation for a late refusal (v5.68.0-beta.29, Q165, edge 3): the Kea host was changed and Jen's own settings write was then refused by the config writer
     (`sentence`). Put the host back - one change through the same change set, the daemon restarted - and say so. When that fails too the lines name the partial state and
-    what a person does about it; nothing is left half done without being said."""
+    what a person does about it; nothing is left half done without being said.
+
+    AB1 (Q186): the compensation is ONE thing, `restore_control_sockets(snapshot)` - the daemon's control-sockets list becomes what it was when the change was planned, every entry in
+    order, whatever the change did to it (a socket added, replaced or removed). It is never an inverse of the change. "Undone" is said only when the restored file's list EQUALS the
+    snapshot and the change set restarted the daemon (its `ok`); a file that already matched is NOT undone - the daemon still runs what the failed change started - and `snapshot` None
+    (the plan never read the config) cannot be undone at all. Both are the partial state, said."""
     from jen.services import kea_changeset as __changeset
+    from jen.services import kea_config_edit as __edit
 
     name = server.get("name") or f"Kea Server {server.get('id')}"
+    daemon = _DAEMON_NAME[service]
     flash(sentence, "error")
-    result = __changeset.apply_change(
-        service,
-        undo,
-        summary,
-        servers=[server],
-        restart=True,
-        code_messages={"nochange": f"{name} is already as it was before"},
-        daemon_label=_DAEMON_NAME[service],
-    )
-    for style, text in result.lines:
-        flash(text, style)
-    if result.status in ("ok", "nothing"):
+    if snapshot is None:
+        status = "no-snapshot"
+    else:
+
+        def _restore(cfg):
+            after, code = __edit.restore_control_sockets(cfg, service, snapshot)
+            if code == "ok" and __edit.control_sockets(after, service) != snapshot:
+                return (
+                    after,
+                    "restore-mismatch",
+                )  # the proof: what would be written IS the snapshot, or nothing is written
+            return after, code
+
+        result = __changeset.apply_change(
+            service,
+            _restore,
+            summary,
+            servers=[server],
+            restart=True,
+            code_messages={
+                "nochange": f"{name}'s control sockets are already as they were before",
+                "restore-mismatch": f"{name}: the restored control sockets did not equal the saved list",
+            },
+            daemon_label=daemon,
+        )
+        for style, text in result.lines:
+            flash(text, style)
+        status = result.status
+    if status == "ok":
         flash(
             f"{what} on {name} was undone and the daemon restarted, so the Kea host and Jen's settings agree again. Nothing else was changed.",
             "info",
         )
         __user.audit("DIRECT_SOCKET_COMPENSATED", "kea_api", f"server={name} service={service} {summary}")
         return
+    if status == "nothing":
+        by_hand = f"The file on {name} already matches what it was, but {daemon} was not restarted by this undo and may still be running the change: restart {daemon} there. {by_hand}"
     flash(
-        f"PARTIAL STATE on {name}: {what} was done on the Kea host and Jen's settings were refused, and Jen could not undo it ({result.status}). {by_hand}",
+        f"PARTIAL STATE on {name}: {what} was done on the Kea host and Jen's settings were refused, and Jen could not undo it ({status}). {by_hand}",
         "error",
     )
-    __user.audit(
-        "DIRECT_SOCKET_PARTIAL", "kea_api", f"server={name} service={service} {summary} compensation={result.status}"
-    )
+    __user.audit("DIRECT_SOCKET_PARTIAL", "kea_api", f"server={name} service={service} {summary} compensation={status}")
 
 
 @bp.route("/settings/infrastructure/direct-socket/<int:server_id>/<service>", methods=["POST"])
@@ -1574,6 +1645,12 @@ def setup_direct_socket(server_id, service):
             )
             return back
 
+    # AB1 (Q186): Jen manages ONE API socket. A daemon whose config has more than one is refused here - before the TLS material is installed, before anything is written - not flattened.
+    existing_api = _api_sockets_of(server, service)
+    if existing_api is not None and len(existing_api) > 1:
+        flash(_many_sockets_sentence(daemon, conf, len(existing_api)), "error")
+        return back
+
     # ── https (v5.29.0, Q29 C3): Jen's private CA issues the material and
     # the helper's install-tls op lands it on the host BEFORE the config
     # references it; the apply then carries the three paths as tls_paths.
@@ -1629,9 +1706,15 @@ def setup_direct_socket(server_id, service):
     else:
         entry = build_control_socket(scheme, address, port, user, password)
 
+    snapshot_taken: dict = {}  # AB1 (Q186): the daemon's control-sockets list exactly as the change was PLANNED on it - what the compensation restores
+
+    def _add_socket(cfg):
+        snapshot_taken["sockets"] = __edit.control_sockets(cfg, service)
+        return __edit.set_control_socket(cfg, service, entry)
+
     result = __changeset.apply_change(
         service,
-        lambda cfg: __edit.set_control_socket(cfg, service, entry),
+        _add_socket,
         f"added an {scheme} control socket on {address}:{port}",
         servers=[server],
         restart=True,
@@ -1639,6 +1722,7 @@ def setup_direct_socket(server_id, service):
             "unsupported": f"{conf} has no {_DAEMON_KEY[service]} block (or a control-sockets that isn't the "
             "daemon's list form) — is this the right file? Nothing was changed.",
             "nochange": f"{daemon} already has exactly this socket in {conf} — checking that it answers",
+            "multiple": _many_sockets_sentence(daemon, conf),
         },
         daemon_label=daemon,
         tls_paths=tls_paths,
@@ -1688,11 +1772,11 @@ def setup_direct_socket(server_id, service):
             _undo_remote_change(
                 server,
                 service,
-                lambda cfg: __edit.remove_control_socket(cfg, service),
-                f"removed the control socket added on {address}:{port} (Jen's settings were refused)",
+                snapshot_taken.get("sockets"),
+                f"restored the control sockets as they were before the {__edit.describe_socket(entry)} socket was added (Jen's settings were refused)",
                 _sentence_of(refused),
-                what=f"the {scheme} control socket on {address}:{port}",
-                by_hand=f"Remove it with 'Remove socket' for {daemon} on this page, or delete the http/https entry under control-sockets in {conf} and restart {daemon}.",
+                what=f"the {__edit.describe_socket(entry)} control socket",
+                by_hand=f"Put the control-sockets of {conf} back as they were before ({_SOCKET_ENTRY_LIVES}): remove the {__edit.describe_socket(entry)} entry, and put back the http/https entry it replaced if there was one; then restart {daemon}. Or use 'Remove socket' for {daemon} on this page when nothing else was there.",
             )
         else:
             flash(_sentence_of(refused), "error")
@@ -1904,6 +1988,9 @@ def remove_direct_socket(server_id, service):
     user_typed = request.form.get("user", "").strip()
     no_password = request.form.get("no_password", "") == "1"
     restore_saved = request.form.get("restore_saved", "") == "1"
+    ca_url = request.form.get(
+        "ca_url", ""
+    ).strip()  # AB3 (Q186): the Control Agent's address, typed when Jen has none to return to
     if sum(bool(x) for x in (password, no_password, restore_saved)) > 1:
         flash("Choose one for the password: type it, tick No password, or restore the saved one.", "error")
         return back
@@ -1914,6 +2001,14 @@ def remove_direct_socket(server_id, service):
             "error",
         )
         return back
+    if ca_url and (service != "dhcp4" or restore_saved):
+        flash(
+            "Choose one for the Control Agent's address: type it, or restore the saved pair (which belongs to the saved address)."
+            if service == "dhcp4"
+            else "Only kea-dhcp4's removal takes a Control Agent address.",
+            "error",
+        )
+        return back
     _sec, _url_key, _user_key, _pass_key = _socket_keys(server, service)
     _live = __config.app_config._read_parser()
     # (second pass, Q184, finding 1: the saved pair is valid WITH its address - a pair left without one by an older release is not offered and not restored)
@@ -1921,7 +2016,10 @@ def remove_direct_socket(server_id, service):
         service == "dhcp4"
         and _live.has_section(_sec)
         and bool(_live.get(_sec, _PREV_URL_KEY, fallback=""))
-        and (_live.has_option(_sec, _PREV_USER_KEY) or _live.has_option(_sec, _PREV_PASS_KEY))
+        and any(
+            _live.has_option(_sec, k)
+            for k in (_PREV_USER_KEY, _PREV_PASS_KEY, _PREV_USER_ABSENT_KEY, _PREV_PASS_ABSENT_KEY)
+        )
     )
     if restore_saved and not has_saved_pair:
         flash("There is no saved Control Agent user and password to restore - type the password instead.", "error")
@@ -1944,24 +2042,42 @@ def remove_direct_socket(server_id, service):
     _before_users = {
         n: e.user for n, e in __credentials.resolve(_live).items()
     }  # what each endpoint sends now (a dependant inherits its parent's user)
+    _before_own = {
+        n: e.source == "own" for n, e in __credentials.resolve(_live).items()
+    }  # AB4: whether each endpoint's password is its OWN (a dependant that inherited one has nothing of its own to keep)
 
     def _apply(cfg):
         sec, url_key, user_key, pass_key = _socket_keys(server, service)
         if service == "dhcp4":
-            prev = cfg.get(sec, _PREV_URL_KEY, fallback="") if cfg.has_section(sec) else ""
-            if prev:
+            saved_prev = cfg.get(sec, _PREV_URL_KEY, fallback="") if cfg.has_section(sec) else ""
+            prev = (
+                "" if ca_url else saved_prev
+            )  # an address typed on the form wins; the pair saved for the OTHER address is then discarded below
+            if ca_url:
+                cfg.set(sec, url_key, ca_url)
+                if saved_prev:
+                    cfg.remove_option(sec, _PREV_URL_KEY)
+                changed.append(f"[{sec}] {url_key} set to {ca_url} (the Control Agent's address, typed)")
+            elif prev:
                 cfg.set(sec, url_key, prev)
                 cfg.remove_option(sec, _PREV_URL_KEY)
                 changed.append(f"[{sec}] {url_key} restored to {prev}")
             else:
-                changed.append(f"[{sec}] {url_key} left as-is (no Control Agent URL on record — set it above)")
+                changed.append(
+                    f"[{sec}] {url_key} left as-is (no Control Agent URL on record; another server keeps direct mode)"
+                )
             if cfg.has_section(sec):
                 if prev and restore_saved:
-                    # Z2: the Control Agent's own pair, put back by the person's tick - the socket's pair was the SOCKET's. A blank is restored too (the Control Agent had none)
+                    # Z2: the Control Agent's own pair, put back by the person's tick - the socket's pair was the SOCKET's. AB4 (Q186): each half goes back AS IT WAS - a value (a blank
+                    # included) is set, and one the Control Agent did not have is REMOVED (the socket's user must not stay behind, and an absent password is not an explicit blank)
                     if cfg.has_option(sec, _PREV_USER_KEY):
                         cfg.set(sec, "api_user", cfg.get(sec, _PREV_USER_KEY))
-                    # the password is ALWAYS set: a saved user with no saved password is a Control Agent with none - the socket's password must not stay behind and go to the Control Agent's address
-                    cfg.set(sec, "api_pass", cfg.get(sec, _PREV_PASS_KEY, fallback=""))
+                    elif cfg.has_option(sec, "api_user"):
+                        cfg.remove_option(sec, "api_user")
+                    if cfg.has_option(sec, _PREV_PASS_KEY):
+                        cfg.set(sec, "api_pass", cfg.get(sec, _PREV_PASS_KEY))
+                    elif cfg.has_option(sec, "api_pass"):
+                        cfg.remove_option(sec, "api_pass")
                     if cfg.get(sec, _PREV_SHARED_KEY, fallback="") == "1":
                         cfg.set(
                             sec, f"{pass_key}_shared", "1"
@@ -1973,13 +2089,16 @@ def remove_direct_socket(server_id, service):
                     changed.append(f"[{sec}] the Control Agent's saved user and password restored")
                 elif (
                     prev
-                    and (cfg.has_option(sec, _PREV_USER_KEY) or cfg.has_option(sec, _PREV_PASS_KEY))
+                    and any(
+                        cfg.has_option(sec, k)
+                        for k in (_PREV_USER_KEY, _PREV_PASS_KEY, _PREV_USER_ABSENT_KEY, _PREV_PASS_ABSENT_KEY)
+                    )
                     and not (password or no_password)
                 ):
                     changed.append(
                         f"[{sec}] the Control Agent's saved user and password were DISCARDED - the socket's pair is now the Control Agent's (tick Restore the saved user and password to put the saved pair back)"
                     )
-                for stale in (_PREV_USER_KEY, _PREV_PASS_KEY, _PREV_SHARED_KEY):
+                for stale in _PREV_PAIR_KEYS:
                     if cfg.has_option(sec, stale):
                         cfg.remove_option(
                             sec, stale
@@ -2002,6 +2121,7 @@ def remove_direct_socket(server_id, service):
                         dep_section, dep_user_key = __credentials.user_key(dep)
                         if (
                             removed_user
+                            and _before_own.get(dep)
                             and dep in _before_users
                             and _before_users[dep] == removed_user
                             and cfg.has_section(dep_section)
@@ -2021,6 +2141,7 @@ def remove_direct_socket(server_id, service):
             if cfg.has_section(sec) and cfg.has_option(sec, url_key):
                 cfg.remove_option(sec, url_key)
                 changed.append(f"[{sec}] {url_key} cleared — inherits the v4 URL in Control Agent mode")
+            own_user_before = cfg.get(sec, user_key, fallback="") if cfg.has_section(sec) else ""
             if _mode_of(cfg) != "direct" and cfg.has_section(sec):
                 # Z2: in Control Agent mode the daemon's own user and password were the SOCKET's - the Control Agent authenticates with the Control Agent's, so no pair rides to it
                 for stale in (user_key, pass_key):
@@ -2034,6 +2155,10 @@ def remove_direct_socket(server_id, service):
                 cfg.set(sec, pass_key, password if password else "")
                 if no_password and cfg.has_option(sec, user_key):
                     cfg.remove_option(sec, user_key)  # AA1 (Q185): no authentication is no user, in either mode
+                if password and own_user_before and not cfg.has_option(sec, user_key):
+                    cfg.set(
+                        sec, user_key, own_user_before
+                    )  # AB5 (Q186): a password typed for the daemon is for the daemon's own user, which it had
                 __credentials.clear_shared(cfg, _endpoint_name(server, service))
                 changed.append(
                     f"[{sec}] {pass_key} set" if password else f"[{sec}] user and password cleared (no authentication)"
@@ -2058,6 +2183,57 @@ def remove_direct_socket(server_id, service):
             )
         flash(f"Nothing was changed on {name}.", "info")
         return back
+    # (Q186: these two refusals come AFTER the config writer's question above, so a refusal by the writer is still the first answer - and still before the Kea host is touched)
+    # AB1 (Q186): Jen manages ONE API socket; a daemon whose config has more than one is refused here, before anything is sent - not flattened.
+    existing_api = _api_sockets_of(server, service)
+    if existing_api is not None and len(existing_api) > 1:
+        flash(_many_sockets_sentence(daemon, conf, len(existing_api)), "error")
+        return back
+
+    # AB3 (Q186): a dhcp4 removal that would flip Jen to Control Agent mode needs a Control Agent address to flip TO. With none saved (or the saved one is the socket being removed) and no other
+    # server keeping its own socket, Jen would be left pointing at the socket it just removed. Refused BEFORE the host is touched; the form's address (with the user and password it already
+    # has) is validated, and must ANSWER as a Control Agent, before the socket goes.
+    if service == "dhcp4":
+        _has_sec = _live.has_section(_sec)
+        _current_url = _live.get(_sec, _url_key, fallback="").strip().rstrip("/") if _has_sec else ""
+        _saved_url = _live.get(_sec, _PREV_URL_KEY, fallback="").strip().rstrip("/") if _has_sec else ""
+        if ca_url:
+            if not (__auth.valid_api_url(ca_url, require_port=True) and _is_kea_url_shape(ca_url)):
+                flash(
+                    "The Control Agent's address must look like http://host:8000 (a scheme, a host and a port). Nothing was changed.",
+                    "error",
+                )
+                return back
+            if ca_url.rstrip("/") == _current_url:
+                flash(
+                    f"{ca_url} is the socket being removed, not a Control Agent. Type the Control Agent's address. Nothing was changed on {name}.",
+                    "error",
+                )
+                return back
+            if not (password or no_password):
+                flash(
+                    "An address for the Control Agent needs its password: type it, or tick No password. Nothing was changed.",
+                    "error",
+                )
+                return back
+            _probe_user = "" if no_password else (user_typed or _live.get(_sec, "api_user", fallback=""))
+            _probed = _identify_daemon(ca_url, _probe_user, "" if no_password else password, "dhcp4")
+            if _probed != "Control-agent":
+                flash(
+                    f"{ca_url} "
+                    + ("did not answer" if not _probed else f"answered as {_probed}, not as a Control Agent")
+                    + f" with that user and password. Nothing was changed on {name}.",
+                    "error",
+                )
+                return back
+        elif (not _saved_url or _saved_url == _current_url) and not keep_direct:
+            flash(
+                "Jen has no Control Agent address to return to: set it (URL, user, password) on this form. "
+                f"Nothing was changed on {name}.",
+                "error",
+            )
+            return back
+
     # second pass (Q184, finding 3): a daemon socket that INHERITED the primary's pair on the same host loses it when the primary's address changes spelling (10.0.0.5 -> kea-a.lan) - nothing
     # is sent to it any more and the daemon on the Kea host still wants that pair. Not a leak, so not a refusal; named, so the person is told rather than finding a blank card
     _before_endpoints = __credentials.resolve(_live)
@@ -2075,17 +2251,15 @@ def remove_direct_socket(server_id, service):
     ]
     changed.clear()  # the preflight ran the callback on a copy; the real run below fills the list the flash reads
 
-    removed_sockets: list = []
+    snapshot_taken: dict = {}  # AB1 (Q186): the daemon's control-sockets list exactly as the removal was PLANNED on it - what the compensation restores
 
     def _remove(cfg):
-        section = cfg.get(_DAEMON_KEY[service]) if isinstance(cfg, dict) else None
-        listed = section.get("control-sockets") if isinstance(section, dict) else None
-        removed_sockets[:] = [
-            _deepcopy(x)
-            for x in (listed if isinstance(listed, list) else [])
-            if isinstance(x, dict) and x.get("socket-type") in __edit._API_SOCKET_TYPES
-        ]
-        return __edit.remove_control_socket(cfg, service)
+        snapshot = __edit.control_sockets(cfg, service)
+        snapshot_taken["sockets"] = snapshot
+        api = [s for s in snapshot if __edit._is_api_socket(s)]
+        if len(api) == 1:  # ONE named socket is removed: the entry's own address and port
+            return __edit.remove_control_socket(cfg, service, api[0].get("socket-address"), api[0].get("socket-port"))
+        return __edit.remove_control_socket(cfg, service)  # none: "nochange"; several: "multiple"
 
     result = __changeset.apply_change(
         service,
@@ -2096,6 +2270,7 @@ def remove_direct_socket(server_id, service):
         code_messages={
             "unsupported": f"{conf} has no {_DAEMON_KEY[service]} block — is this the right file? Nothing was changed.",
             "nochange": f"{conf} has no http/https control socket to remove — only Jen's own settings change",
+            "multiple": _many_sockets_sentence(daemon, conf),
         },
         daemon_label=daemon,
     )
@@ -2112,15 +2287,18 @@ def remove_direct_socket(server_id, service):
         __config.app_config.mutate(_apply, typed=typed_names)
     except (__config.ConfigChangeRefused, OSError) as refused:
         # v5.68.0-beta.29 (Q165, edge 3): refused AFTER the socket was taken out of the daemon's config - put it back as it was, the daemon restarted (Q182: a failed write too)
-        if result.status == "ok" and removed_sockets:
+        if result.status == "ok":
+            snapshot = snapshot_taken.get("sockets")
+            removed = [s for s in (snapshot or []) if __edit._is_api_socket(s)]
+            described = __edit.describe_socket(removed[0]) if removed else "http"
             _undo_remote_change(
                 server,
                 service,
-                lambda cfg: __edit.set_control_socket(cfg, service, removed_sockets[0]),
-                f"put the {daemon} control socket back (Jen's settings were refused)",
+                snapshot,
+                f"put the {daemon} control socket back ({described}; Jen's settings were refused)",
                 _sentence_of(refused),
-                what="the removal of the control socket",
-                by_hand=f"Add the control socket back to {conf} by hand (the entry that was removed: {removed_sockets[0]}) and restart {daemon}, or press Remove socket again once Jen's settings can be changed.",
+                what=f"the removal of the {described} control socket",
+                by_hand=f"Put the control-sockets of {conf} back as they were ({_SOCKET_ENTRY_LIVES}) and restart {daemon}, or press Remove socket again once Jen's settings can be changed.",
             )
         else:
             flash(_sentence_of(refused), "error")

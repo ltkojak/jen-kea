@@ -221,4 +221,4 @@ One step (5.69.0-beta.16). It adds no migration and there is nothing for you to 
 
 **A same-host switch-back says what happened to the saved pair.** If the Control Agent is at the same address as the socket and you typed nothing, the saved user and password are discarded and the message says so and how to restore them next time.
 
-**A restored password keeps its "shared copy" mark, and the Remove button appears for a Kea6 or D2 socket that is still configured while the connection mode is Control Agent.** An address that ends in a no-break space or a control character is refused rather than trimmed.
+**A restored password keeps its "shared copy" mark, and the Remove button appears for a Kea6 or D2 socket that is still configured while the connection mode is Control Agent.** An address in jen.config that ends in a no-break space or a control character is refused when it is read; the Settings forms trim the ends of what you type before they save it.
