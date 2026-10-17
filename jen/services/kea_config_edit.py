@@ -625,7 +625,8 @@ def control_sockets(cfg: dict, service: str) -> list:
 
 
 def restore_control_sockets(cfg: dict, service: str, snapshot: list):
-    """AB1 (Q186): the ONLY compensation for a change to a daemon's control sockets - the list becomes `snapshot` exactly (entries, order, every field), whatever the failed step
+    """AB1 (Q186): the ONLY compensation (exact up to what a list cannot say: an empty list and an absent key are both "no sockets", and a singular `control-socket` map comes back in the
+    list form Kea 2.7.2+ reads; the TLS files `install_tls` put on the host are not part of a snapshot of the config) for a change to a daemon's control sockets - the list becomes `snapshot` exactly (entries, order, every field), whatever the failed step
     left there: a socket added, replaced or removed, one entry or several. An empty snapshot is a daemon with no sockets: the key is dropped. Returns (cfg, code): "ok", "nochange" (the
     daemon already has exactly that list) or "unsupported" (no daemon block, or a `control-sockets` that is not the list form)."""
     cfg = copy.deepcopy(cfg)
@@ -634,6 +635,13 @@ def restore_control_sockets(cfg: dict, service: str, snapshot: list):
         return cfg, "unsupported"
     if "control-sockets" in section and not isinstance(section["control-sockets"], list):
         return cfg, "unsupported"
+    if "control-socket" in section and (
+        "control-sockets" in section or not isinstance(section["control-socket"], dict)
+    ):
+        return (
+            cfg,
+            "unsupported",
+        )  # both spellings at once, or a singular that is not a map: not a shape this code restores (a hand edit; said, never guessed at)
     if control_sockets(cfg, service) == snapshot and "control-socket" not in section:
         return cfg, "nochange"
     wanted = copy.deepcopy(snapshot)

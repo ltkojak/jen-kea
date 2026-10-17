@@ -561,6 +561,15 @@ class TestARemovalNeverLeavesJenPointingAtTheSocketItRemoved:
         assert '"needs_ca_url": _needs_ca_url' in route
 
 
+class TestASavedAddressIsIdentifiedLikeATypedOne:
+    """Second pass (Q186, finding 1): the saved Control Agent address is restored only if it answers as a Control Agent, whatever its spelling."""
+
+    def test_an_alias_or_an_earlier_socket_is_refused_and_a_real_control_agent_is_not(self):
+        rows = probe.q186_sp1_a_saved_address_that_only_differs_as_text_is_identified_before_it_is_restored()
+        assert all(not touched and asked and mode == "direct" for touched, asked, _url, mode in rows[:5])
+        assert rows[5][0] and rows[5][3] == "ca" and rows[5][1] == ["http://kea-a.lan:8000"]
+
+
 class TestARestorePutsBackAbsenceAndTheKeepNeedsAnOwnPassword:
     """AB4/AB5 (Q186): what the Control Agent had is saved as it WAS and a restore puts every half back as it was; the dependant keep writes a user only beside a password of its own."""
 
@@ -602,11 +611,13 @@ class TestARestorePutsBackAbsenceAndTheKeepNeedsAnOwnPassword:
             "http://kea-a.lan:8000",
         )
 
-    def test_a_typed_daemon_password_in_control_agent_mode_keeps_the_daemons_own_user(self):
-        typed, cleared = (
-            probe.q186_ab5_s2_a_typed_daemon_password_on_the_control_agent_mode_form_keeps_the_daemons_own_user()
+    def test_a_typed_daemon_password_in_control_agent_mode_is_paired_with_the_control_agents_user(self):
+        """Second pass (Q186, finding 2): the daemon's own user was the SOCKET's (Z2 clears it); keeping it beside a typed password sent the Control Agent the socket's user name."""
+        typed, cleared, sent = (
+            probe.q186_ab5_s2_a_typed_daemon_password_on_the_control_agent_mode_form_is_paired_with_the_control_agents_user()
         )
-        assert typed == ("x", "NEWPW", False) and cleared == (False, False)
+        assert typed[:2] == (None, "NEWPW") and cleared == (False, False)
+        assert sent == [("https://a:8000", ("pu", "NEWPW"))], "the Control Agent's user, the typed password"
 
     def test_the_page_reads_the_mode_the_way_the_resolver_does(self):
         import pathlib

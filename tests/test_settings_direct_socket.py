@@ -498,7 +498,10 @@ class TestSwitchBack:
         return isolated_config
 
     def test_removes_the_socket_restores_the_ca_url_and_mode(self, logged_in_client, db, direct_primary, fake, http):
-        http({})  # the standby's v4 URL answers nothing → it isn't on a direct socket
+        http(
+            {"1.2.3.4:8000": _ok("3.0.4")}, config_replies={"1.2.3.4:8000": AS_CA}
+        )  # second pass (Q186): the saved Control Agent address is identified before the socket goes
+        # (the standby's v4 URL answers nothing → it isn't on a direct socket)
         # (Q184, Z1: the Control Agent is at a different address from the socket, so the person types its password - the route infers nothing)
         r = logged_in_client.post(
             "/settings/infrastructure/direct-socket/1/dhcp4/remove", data={"password": "p4"}, follow_redirects=True
@@ -556,7 +559,9 @@ class TestSwitchBack:
         app_config.write_values(
             [("kea", "direct_prev_api_user", "ca-user"), ("kea", "direct_prev_api_pass", "ca-pass")], typed=set()
         )
-        http({})
+        http(
+            {"1.2.3.4:8000": _ok("3.0.4")}, config_replies={"1.2.3.4:8000": AS_CA}
+        )  # second pass (Q186): the saved Control Agent address is identified before the socket goes
         logged_in_client.post(
             "/settings/infrastructure/direct-socket/1/dhcp4/remove", data={"restore_saved": "1"}, follow_redirects=True
         )
@@ -580,6 +585,18 @@ class TestSwitchBack:
         assert b"no Control Agent address to return to" in r.data
         assert "apply-config" not in fake.ops() and "service" not in fake.ops()
         assert direct_primary.read_bytes() == before
+
+    def test_a_saved_address_that_answers_as_the_daemon_is_not_restored(
+        self, logged_in_client, db, direct_primary, fake, http
+    ):
+        """Second pass (Q186, finding 1): the saved address merely differs as text from a direct socket - it is identified like a typed one, and refused."""
+        http({"1.2.3.4:8000": _ok("3.0.4")}, config_replies={"1.2.3.4:8000": DHCP4_OK})
+        before = direct_primary.read_bytes()
+        r = logged_in_client.post(
+            "/settings/infrastructure/direct-socket/1/dhcp4/remove", data={"password": "p4"}, follow_redirects=True
+        )
+        assert b"not as a Control Agent" in r.data and b"Type the Control Agent" in r.data
+        assert "apply-config" not in fake.ops() and direct_primary.read_bytes() == before
 
     def test_the_forms_control_agent_address_is_identified_first_and_then_used(
         self, logged_in_client, db, direct_primary, fake, http
@@ -621,8 +638,12 @@ class TestSwitchBack:
 
     def test_aborted_kea_edit_leaves_jen_untouched(self, logged_in_client, db, direct_primary, fake, http):
         fake.responses["test-config"] = {"ok": False, "error": "testerror", "detail": "nope"}
-        http({})
-        logged_in_client.post("/settings/infrastructure/direct-socket/1/dhcp4/remove", follow_redirects=True)
+        http(
+            {"1.2.3.4:8000": _ok("3.0.4")}, config_replies={"1.2.3.4:8000": AS_CA}
+        )  # second pass (Q186): the saved Control Agent address is identified before the socket goes
+        logged_in_client.post(
+            "/settings/infrastructure/direct-socket/1/dhcp4/remove", data={"password": "p4"}, follow_redirects=True
+        )
         on_disk = _on_disk(direct_primary)
         assert on_disk.get("kea", "api_url") == SOCK
         assert on_disk.get("kea", "connection_mode") == "direct"

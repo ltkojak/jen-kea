@@ -935,6 +935,21 @@ class TestControlSocketSnapshotAndRestore:
         assert code == "ok" and list(restored["Dhcp4"]) == ["a", "control-sockets", "z"]
         assert restored["Dhcp4"]["control-sockets"] == [self.UNIX]
 
+    def test_a_shape_it_cannot_restore_is_unsupported_not_guessed_at(self):
+        """Second pass (Q186): a hand edit that leaves both spellings, or a singular that is not a map, is said - the function never reports `ok` without having restored."""
+        both = {"Dhcp4": {"control-socket": self.UNIX, "control-sockets": [self._http()]}}
+        assert edit.restore_control_sockets(both, "dhcp4", [self.UNIX])[1] == "unsupported"
+        odd = {"Dhcp4": {"control-socket": "not a map"}}
+        assert edit.restore_control_sockets(odd, "dhcp4", [])[1] == "unsupported"
+        assert odd == {"Dhcp4": {"control-socket": "not a map"}}
+
+    def test_an_empty_list_and_an_absent_key_are_the_same_snapshot(self):
+        """What a list cannot say, said in the docstring: both are 'no sockets'."""
+        assert edit.control_sockets({"Dhcp4": {"control-sockets": []}}, "dhcp4") == edit.control_sockets(
+            {"Dhcp4": {}}, "dhcp4"
+        )
+        assert "an empty list and an absent key" in edit.restore_control_sockets.__doc__
+
     def test_removal_removes_only_the_named_entry(self):
         cfg = self._daemon([self.UNIX, self._http(), self._https()])
         after, code = edit.remove_control_socket(cfg, "dhcp4", "10.0.0.5", 8004)

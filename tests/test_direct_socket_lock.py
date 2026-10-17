@@ -131,7 +131,9 @@ def wire(monkeypatch, caplog):
     monkeypatch.setattr(infra, "_server_by_id", lambda sid: server)
     monkeypatch.setattr(infra, "_daemon_creds", lambda s, svc, url="": ("u", "p"))
     monkeypatch.setattr(infra, "_probe_after_restart", lambda *a, **k: ("Kea 3.0.3", None))
-    monkeypatch.setattr(infra, "_identify_daemon", lambda *a, **k: "Dhcp4")
+    monkeypatch.setattr(
+        infra, "_identify_daemon", lambda url, *a, **k: "Control-agent" if ":8000" in url else "Dhcp4"
+    )  # the saved Control Agent address (:8000) answers as one; a daemon's own socket as the daemon
     monkeypatch.setattr(
         infra,
         "_api_sockets_of",

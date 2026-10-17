@@ -564,8 +564,13 @@ _API_SOCKET = {"socket-type": "http", "socket-address": "10.0.0.5", "socket-port
 _DAEMON_BLOCK = {"dhcp4": "Dhcp4", "dhcp6": "Dhcp6", "d2": "DhcpDdns"}
 
 
+def _answers_like_a_lab(url):
+    """The default `config-get` answer of the probe's lab: a daemon's own socket (the :8004/:8005/:8006 ports the routes create) answers as the daemon, any other address as a Control Agent."""
+    return "Dhcp4" if any(f":{p}" in url for p in ("8004", "8005", "8006")) else "Control-agent"
+
+
 def route_remove(
-    text, service, form=None, *, ssh_host="10.0.0.5", server_id=1, identify="Dhcp4", host=None, others=None
+    text, service, form=None, *, ssh_host="10.0.0.5", server_id=1, identify=_answers_like_a_lab, host=None, others=None
 ):
     """The real "Remove socket" route body (`remove_direct_socket`) on a real jen.config, with the Kea host stubbed (the change set records that it was asked, and applies): what a person
     pressing the button would cause. Returns {"touched": the Kea host was changed, "changed": jen.config changed, "flashes": the words shown, "text": the file after}. Flask is the only
@@ -1177,8 +1182,19 @@ def q186_ab5_s1_a_stale_shared_marker_is_cleared_when_a_setup_writes_the_saved_p
     )
 
 
-def q186_ab5_s2_a_typed_daemon_password_on_the_control_agent_mode_form_keeps_the_daemons_own_user():
-    text = BASE + "[kea6]\napi_url = https://b:8006\napi_user = x\napi_pass = K6\n"
+def q186_ab5_s2_a_typed_daemon_password_on_the_control_agent_mode_form_is_paired_with_the_control_agents_user():
+    """Second pass, finding 2: AB5 first kept the daemon's own user beside a typed password in Control Agent mode, so the Control Agent was sent the SOCKET's user name with its own password."""
+    text = (
+        BASE
+        + "[kea6]"
+        + chr(10)
+        + "api_url = https://b:8006"
+        + chr(10)
+        + "api_user = x"
+        + chr(10)
+        + "api_pass = K6"
+        + chr(10)
+    )
     typed = route_remove(text, "dhcp6", {"password": "NEWPW"})
     cleared = route_remove(text, "dhcp6", {})
     pt, pc = parse(typed["text"]), parse(cleared["text"])
@@ -1192,7 +1208,25 @@ def q186_ab5_s2_a_typed_daemon_password_on_the_control_agent_mode_form_keeps_the
             pc.has_section("kea6") and pc.has_option("kea6", "api_user"),
             pc.has_section("kea6") and pc.has_option("kea6", "api_pass"),
         ),
+        sends(typed["text"], "kea6"),
     )
+
+
+def q186_sp1_a_saved_address_that_only_differs_as_text_is_identified_before_it_is_restored():
+    """Second pass, finding 1: a saved address that is an alias of the socket (or an earlier direct socket) is no proof of a Control Agent. Each row: (touched, the addresses identified, api_url, mode)."""
+    rows = []
+    for socket_url, prev in (
+        ("http://10.0.0.5:8004", "http://kea-a.lan:8004"),
+        ("http://10.0.0.5:8004", "HTTP://10.0.0.5:8004"),
+        ("http://10.0.0.5:8004", "http://10.0.0.5:8004."),
+        ("http://[fd00::5]:8004", "http://[FD00:0:0:0:0:0:0:5]:8004"),
+        ("http://10.0.0.5:8005", "http://10.0.0.5:8004"),
+        ("http://10.0.0.5:8004", "http://kea-a.lan:8000"),
+    ):
+        r = route_remove(_direct_on(socket_url, prev), "dhcp4", {"password": "PW"})
+        p = parse(r["text"])
+        rows.append((r["touched"], r["asked"], p.get("kea", "api_url"), p.get("kea", "connection_mode")))
+    return tuple(rows)
 
 
 def q185_aa3_a_trailing_no_break_space_is_refused_and_ordinary_padding_is_not():
@@ -1422,9 +1456,18 @@ EXPECTED = {
         "PS",
         "http://kea-a.lan:8000",
     ),
-    "q186_ab5_s2_a_typed_daemon_password_on_the_control_agent_mode_form_keeps_the_daemons_own_user": (
-        ("x", "NEWPW", False),
+    "q186_ab5_s2_a_typed_daemon_password_on_the_control_agent_mode_form_is_paired_with_the_control_agents_user": (
+        (None, "NEWPW", False),
         (False, False),
+        [("https://a:8000", ("pu", "NEWPW"))],
+    ),
+    "q186_sp1_a_saved_address_that_only_differs_as_text_is_identified_before_it_is_restored": (
+        (False, ["http://kea-a.lan:8004"], "http://10.0.0.5:8004", "direct"),
+        (False, ["HTTP://10.0.0.5:8004"], "http://10.0.0.5:8004", "direct"),
+        (False, ["http://10.0.0.5:8004."], "http://10.0.0.5:8004", "direct"),
+        (False, ["http://[FD00:0:0:0:0:0:0:5]:8004"], "http://[fd00::5]:8004", "direct"),
+        (False, ["http://10.0.0.5:8004"], "http://10.0.0.5:8005", "direct"),
+        (True, ["http://kea-a.lan:8000"], "http://kea-a.lan:8000", "ca"),
     ),
     "q185_aa3_a_trailing_no_break_space_is_refused_and_ordinary_padding_is_not": (False, True, False, True),
     "q184_z3_a_trailing_dot_is_a_different_name_and_odd_spaces_are_no_url": (False, True, False, False, False, True),

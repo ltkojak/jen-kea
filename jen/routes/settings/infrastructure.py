@@ -1495,7 +1495,7 @@ def _undo_remote_change(server: dict, service: str, snapshot, summary: str, sent
         status = result.status
     if status == "ok":
         flash(
-            f"{what} on {name} was undone and the daemon restarted, so the Kea host and Jen's settings agree again. Nothing else was changed.",
+            f"{what} on {name} was undone and the daemon restarted, so the Kea host and Jen's settings agree again. Jen changed nothing else; a socket added to that list by hand since is not kept.",
             "info",
         )
         __user.audit("DIRECT_SOCKET_COMPENSATED", "kea_api", f"server={name} service={service} {summary}")
@@ -2141,7 +2141,6 @@ def remove_direct_socket(server_id, service):
             if cfg.has_section(sec) and cfg.has_option(sec, url_key):
                 cfg.remove_option(sec, url_key)
                 changed.append(f"[{sec}] {url_key} cleared — inherits the v4 URL in Control Agent mode")
-            own_user_before = cfg.get(sec, user_key, fallback="") if cfg.has_section(sec) else ""
             if _mode_of(cfg) != "direct" and cfg.has_section(sec):
                 # Z2: in Control Agent mode the daemon's own user and password were the SOCKET's - the Control Agent authenticates with the Control Agent's, so no pair rides to it
                 for stale in (user_key, pass_key):
@@ -2155,10 +2154,8 @@ def remove_direct_socket(server_id, service):
                 cfg.set(sec, pass_key, password if password else "")
                 if no_password and cfg.has_option(sec, user_key):
                     cfg.remove_option(sec, user_key)  # AA1 (Q185): no authentication is no user, in either mode
-                if password and own_user_before and not cfg.has_option(sec, user_key):
-                    cfg.set(
-                        sec, user_key, own_user_before
-                    )  # AB5 (Q186): a password typed for the daemon is for the daemon's own user, which it had
+                # (second pass, Q186, finding 2: AB5 first kept the daemon's own user beside a typed password in Control Agent mode. That user was the SOCKET's - Z2 clears it - so the
+                # Control Agent was sent the socket's user name with the Control Agent's password. The typed password is paired with the Control Agent's user, which the daemon inherits.)
                 __credentials.clear_shared(cfg, _endpoint_name(server, service))
                 changed.append(
                     f"[{sec}] {pass_key} set" if password else f"[{sec}] user and password cleared (no authentication)"
@@ -2197,6 +2194,17 @@ def remove_direct_socket(server_id, service):
         _has_sec = _live.has_section(_sec)
         _current_url = _live.get(_sec, _url_key, fallback="").strip().rstrip("/") if _has_sec else ""
         _saved_url = _live.get(_sec, _PREV_URL_KEY, fallback="").strip().rstrip("/") if _has_sec else ""
+
+        def _pair_after_removal():
+            """(user, password) the Control Agent will be reached with once this removal is done - what the person typed, or ticked, or what stays."""
+            if no_password:
+                return "", ""
+            if restore_saved:
+                return _live.get(_sec, _PREV_USER_KEY, fallback=""), _live.get(_sec, _PREV_PASS_KEY, fallback="")
+            return user_typed or _live.get(_sec, "api_user", fallback=""), password or _live.get(
+                _sec, "api_pass", fallback=""
+            )
+
         if ca_url:
             if not (__auth.valid_api_url(ca_url, require_port=True) and _is_kea_url_shape(ca_url)):
                 flash(
@@ -2216,8 +2224,7 @@ def remove_direct_socket(server_id, service):
                     "error",
                 )
                 return back
-            _probe_user = "" if no_password else (user_typed or _live.get(_sec, "api_user", fallback=""))
-            _probed = _identify_daemon(ca_url, _probe_user, "" if no_password else password, "dhcp4")
+            _probed = _identify_daemon(ca_url, *_pair_after_removal(), "dhcp4")
             if _probed != "Control-agent":
                 flash(
                     f"{ca_url} "
@@ -2233,6 +2240,18 @@ def remove_direct_socket(server_id, service):
                 "error",
             )
             return back
+        elif not keep_direct:
+            # second pass (Q186, finding 1): a saved address that merely DIFFERS as text from the socket (an alias, an earlier direct socket the setup replaced, another case or a trailing dot)
+            # is no proof it is a Control Agent. The address Jen is about to restore is asked who it is, exactly as a typed one is, before the socket goes.
+            _probed = _identify_daemon(_saved_url, *_pair_after_removal(), "dhcp4")
+            if _probed != "Control-agent":
+                flash(
+                    f"The Control Agent address Jen saved ({_saved_url}) "
+                    + ("did not answer" if not _probed else f"answered as {_probed}, not as a Control Agent")
+                    + f". Type the Control Agent's address (URL, user, password) on this form. Nothing was changed on {name}.",
+                    "error",
+                )
+                return back
 
     # second pass (Q184, finding 3): a daemon socket that INHERITED the primary's pair on the same host loses it when the primary's address changes spelling (10.0.0.5 -> kea-a.lan) - nothing
     # is sent to it any more and the daemon on the Kea host still wants that pair. Not a leak, so not a refusal; named, so the person is told rather than finding a blank card
