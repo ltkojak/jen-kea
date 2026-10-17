@@ -647,6 +647,31 @@ def _config_doctor(ctx) -> Check:
     return c
 
 
+def _direct_socket_recovery(ctx) -> Check:
+    """v5.69.0-beta.18 (Q187, AC3): a direct-socket operation that failed and whose recovery Jen could not PROVE (REMOTE-001) stays here, as it does on the Servers page, until a later
+    operation on that server probes the endpoint or a superadmin acknowledges it. Read from Jen's own settings; the Kea host is not asked."""
+    from jen.services import kea_changeset
+
+    c = Check(
+        "direct_socket_recovery",
+        "Direct-socket changes are proved",
+        "kea",
+        fix_url="/servers",
+        fix_hint="Check the daemon, then acknowledge on Servers",
+    )
+    incidents = kea_changeset.recovery_incidents()
+    if not incidents:
+        c.status, c.detail = "ok", "no direct-socket change is waiting to be proved"
+        return c
+    stopped = {"remote-unknown", "restart-failed", "tls-not-restored"}
+    c.status = "fail" if any(i.get("category") in stopped for i in incidents) else "warn"
+    c.detail = "; ".join(
+        f"{i.get('server_name') or 'server ' + str(i.get('server_id'))} ({i.get('service')}): {i.get('category')}"
+        for i in incidents[:4]
+    ) + (f" - and {len(incidents) - 4} more" if len(incidents) > 4 else "")
+    return c
+
+
 def _endpoint_credentials(ctx) -> Check:
     """CRED-004 (v5.69.0-beta.11, Q180): does every endpoint Jen talks to have a credential it may use? The same `credentials.resolve` every consumer uses, read from Jen's own
     file (so it answers while Kea is down): an endpoint on a different host from the one whose password it would have inherited is sent nothing with that password, and
@@ -1669,6 +1694,7 @@ _CHECKS = [
     _kea_subnets_declared,
     _config_doctor,
     _endpoint_credentials,
+    _direct_socket_recovery,
     _packet_health,
     _capabilities,
     _pool_utilization,
@@ -1707,6 +1733,7 @@ _CHECK_META = {
     "kea_subnets_declared": ("Every Kea subnet is named", "kea"),
     "config_doctor": ("Configuration Doctor", "kea"),
     "endpoint_credentials": ("Every endpoint has a credential", "kea"),
+    "direct_socket_recovery": ("Direct-socket changes are proved", "kea"),
     "packet_health": ("Packet health", "kea"),
     "capabilities": ("Server capabilities", "kea"),
     "pool_utilization": ("Pool utilization", "capacity"),

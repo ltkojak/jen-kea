@@ -586,6 +586,8 @@ def route_remove(
     from jen.services import kea_changeset
 
     flashes, applied, audits, asked, events = [], [], [], [], []
+    resolved = []
+    pairs = []
     host_state = {
         "cfg": copy.deepcopy(host)
         if host is not None
@@ -601,12 +603,18 @@ def route_remove(
 
         def _identify(url, *a, **k):
             asked.append(url)
+            pairs.append((url, *a[:2]))
             events.append("identify")
             return identify(url) if callable(identify) else identify
 
         from jen.services import kea_config_edit as _edit
 
         stack.enter_context(mock.patch.object(infra, "_identify_daemon", _identify))
+        stack.enter_context(
+            mock.patch(
+                "jen.services.kea_changeset.resolve_attention", lambda sid, svc, **kw: resolved.append((sid, svc)) or 0
+            )
+        )
         stack.enter_context(
             mock.patch.object(
                 infra,
@@ -652,6 +660,8 @@ def route_remove(
             "applies": len(applied),
             "asked": asked,
             "events": events,
+            "resolved": resolved,
+            "pairs": pairs,
             "host": host_state["cfg"],
         }
 
@@ -1229,6 +1239,104 @@ def q186_sp1_a_saved_address_that_only_differs_as_text_is_identified_before_it_i
     return tuple(rows)
 
 
+def q187_ac4_s1_the_identify_pair_is_the_resolvers_for_a_half_nobody_typed():
+    """An additional server on the primary's host inherits the primary's user and password. The pair its Control Agent address is asked with is what the resolver gives it (pu/PS), not the raw
+    keys of its own section (blank)."""
+    text = (
+        DIRECT.replace("https://a:8000", "http://10.0.0.5:8000")
+        + "[kea_server_2]\nname = b\napi_url = http://10.0.0.5:8104\ndirect_prev_api_url = http://10.0.0.5:8100\nssh_host = 10.0.0.5\n"
+    )
+    r = route_remove(text, "dhcp4", {}, server_id=2)
+    return (r["touched"], r["pairs"])
+
+
+def q187_ac5_s1_a_second_record_of_the_same_socket_is_refused_and_never_keeps_direct_mode():
+    text = DIRECT.replace("https://a:8000", "http://10.0.0.5:8004")
+    twin = route_remove(
+        text, "dhcp4", {"password": "x"}, others=[{"id": 2, "name": "twin", "api_url": "http://10.0.0.5:8004/"}]
+    )
+    both = route_remove(
+        text,
+        "dhcp4",
+        {"password": "x"},
+        others=[
+            {"id": 2, "name": "twin", "api_url": "HTTP://10.0.0.5:8004"},
+            {"id": 3, "name": "real", "api_url": "http://10.0.0.6:8004"},
+        ],
+    )
+    return tuple((r["touched"], r["changed"], "uses this same socket" in r["flashes"]) for r in (twin, both)) + (
+        ("twin" in both["flashes"], "real" in both["flashes"]),
+    )
+
+
+def q187_ac5_s2_two_spellings_of_one_host_are_the_operators_to_keep_apart_and_the_sentence_says_so():
+    text = DIRECT.replace("https://a:8000", "http://10.0.0.5:8004")
+    r = route_remove(
+        text, "dhcp4", {"password": "x"}, others=[{"id": 2, "name": "kea-a-dns", "api_url": "http://kea-a.lan:8004"}]
+    )
+    p = parse(r["text"])
+    return (
+        r["touched"],
+        p.get("kea", "connection_mode"),
+        "another spelling" in r["flashes"],
+        "does no DNS lookups" in r["flashes"],
+    )
+
+
+def q187_ac6_s1_a_typed_address_beside_a_saved_pair_says_the_pair_was_discarded():
+    saved = _direct_on(
+        "http://10.0.0.5:8004", "http://kea-a.lan:8000", "direct_prev_api_user = cu\ndirect_prev_api_pass = CAP\n"
+    )
+    r = route_remove(saved, "dhcp4", {"ca_url": "http://ca.lan:8000", "password": "NEW", "user": "nu"})
+    p = parse(r["text"])
+    return (
+        r["touched"],
+        "DISCARDED" in r["flashes"] and "kea-a.lan" in r["flashes"],
+        p.get("kea", "api_url"),
+        (p.get("kea", "api_user"), p.get("kea", "api_pass")),
+        any(p.has_option("kea", k) for k in ("direct_prev_api_url", "direct_prev_api_user", "direct_prev_api_pass")),
+    )
+
+
+def q187_ac6_s2_the_keep_direct_branch_identifies_a_saved_alias_like_the_rest():
+    alias = _direct_on("http://10.0.0.5:8004", "http://kea-a.lan:8004")
+    other = [{"id": 2, "name": "b", "api_url": "http://10.0.0.6:8004"}]
+    refused = route_remove(alias, "dhcp4", {"password": "x"}, others=other)
+    genuine = route_remove(
+        _direct_on("http://10.0.0.5:8004", "http://kea-a.lan:8000"), "dhcp4", {"password": "x"}, others=other
+    )
+    return (
+        (refused["touched"], refused["changed"], refused["asked"][-1:] == ["http://kea-a.lan:8004"]),
+        (genuine["touched"], parse(genuine["text"]).get("kea", "connection_mode")),
+    )
+
+
+def q187_ac6_s3_the_singular_control_socket_is_removed_and_said():
+    host = {"Dhcp4": {"control-socket": dict(_API_SOCKET)}}
+    r = route_remove(PROXY, "dhcp4", {"password": "CAPW"}, host=host)
+    return (r["touched"], r["host"], "single control-socket entry was rewritten" in r["flashes"])
+
+
+def q187_ac6_s4_a_write_failure_sentence_prints_the_class_and_errno_never_the_path():
+    from jen.routes.settings import infrastructure as infra
+
+    sentence = infra._sentence_of(OSError(30, "Read-only file system", "/etc/jen/jen.config"))
+    return ("OSError, errno 30: Read-only file system" in sentence, "/etc/jen" in sentence, "jen.config" in sentence)
+
+
+def q187_ac6_s5_odd_entries_print_plainly_and_a_snapshot_that_is_not_a_list_of_entries_is_refused():
+    from jen.services import kea_config_edit as ed
+
+    odd = {"socket-type": "http", "socket-address": {"a": 1}, "socket-port": True}
+    return (
+        ed.describe_socket(odd),
+        ed.describe_socket({"socket-address": "10.0.0.5"}),
+        ed.describe_socket({"socket-type": ["x"], "socket-name": 5}),
+        ed.restore_control_sockets({"Dhcp4": {"control-sockets": []}}, "dhcp4", [1])[1],
+        ed.restore_control_sockets({"Dhcp4": {"control-sockets": []}}, "dhcp4", "no")[1],
+    )
+
+
 def q185_aa3_a_trailing_no_break_space_is_refused_and_ordinary_padding_is_not():
     from jen.services import auth
 
@@ -1269,7 +1377,7 @@ def q183_p2_f6_a_backslash_url_is_not_the_primarys_host():
 SCENARIOS = {
     name: fn
     for name, fn in sorted(globals().items())
-    if name.startswith(("b12_", "b13_", "q183_", "q184_", "q185_", "q186_")) and callable(fn)
+    if name.startswith(("b12_", "b13_", "q183_", "q184_", "q185_", "q186_", "q187_")) and callable(fn)
 }
 
 #: scenario -> the observation the rule requires
@@ -1468,6 +1576,41 @@ EXPECTED = {
         (False, ["http://[FD00:0:0:0:0:0:0:5]:8004"], "http://[fd00::5]:8004", "direct"),
         (False, ["http://10.0.0.5:8004"], "http://10.0.0.5:8005", "direct"),
         (True, ["http://kea-a.lan:8000"], "http://kea-a.lan:8000", "ca"),
+    ),
+    "q187_ac4_s1_the_identify_pair_is_the_resolvers_for_a_half_nobody_typed": (
+        True,
+        [("http://10.0.0.5:8100", "pu", "PS")],
+    ),
+    "q187_ac5_s1_a_second_record_of_the_same_socket_is_refused_and_never_keeps_direct_mode": (
+        (False, False, True),
+        (False, False, True),
+        (True, False),
+    ),
+    "q187_ac5_s2_two_spellings_of_one_host_are_the_operators_to_keep_apart_and_the_sentence_says_so": (
+        True,
+        "direct",
+        True,
+        True,
+    ),
+    "q187_ac6_s1_a_typed_address_beside_a_saved_pair_says_the_pair_was_discarded": (
+        True,
+        True,
+        "http://ca.lan:8000",
+        ("nu", "NEW"),
+        False,
+    ),
+    "q187_ac6_s2_the_keep_direct_branch_identifies_a_saved_alias_like_the_rest": (
+        (False, False, True),
+        (True, "direct"),
+    ),
+    "q187_ac6_s3_the_singular_control_socket_is_removed_and_said": (True, {"Dhcp4": {"control-sockets": []}}, True),
+    "q187_ac6_s4_a_write_failure_sentence_prints_the_class_and_errno_never_the_path": (True, False, False),
+    "q187_ac6_s5_odd_entries_print_plainly_and_a_snapshot_that_is_not_a_list_of_entries_is_refused": (
+        "http ?:?",
+        "unix ?",
+        "? ?:?",
+        "unsupported",
+        "unsupported",
     ),
     "q185_aa3_a_trailing_no_break_space_is_refused_and_ordinary_padding_is_not": (False, True, False, True),
     "q184_z3_a_trailing_dot_is_a_different_name_and_odd_spaces_are_no_url": (False, True, False, False, False, True),

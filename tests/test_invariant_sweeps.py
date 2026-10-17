@@ -799,7 +799,7 @@ class TestS11ARouteNeverShowsWhatABroadExceptCaught:
 # A control-sockets entry carries a Basic client's password and TLS file paths. beta.16's by-hand recovery sentence printed the raw removed entry into a flash and an audit row (LEAK-001's family,
 # but the object was never an exception). `describe_socket(entry)` is the only way a socket enters a sentence: type, address and port.
 _S11B_NAMES = re.compile(
-    r"^(snapshot|snapshots|removed|removed_sockets?|api_sockets?|existing_api|control_sockets?|sockets)$"
+    r"^(snapshot|snapshots|removed|removed_sockets?|api_sockets?|existing_api|control_sockets?|sockets|api|named|kept)$"
 )
 _S11B_ENTRY = (
     "entry"  # a socket entry in the file that builds one; in the other routes an `entry` is a plugin's or a subnet's

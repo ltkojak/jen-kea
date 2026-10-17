@@ -1940,6 +1940,8 @@ path, and never overwrites an `api_ca` that isn't its own — an
 operator who brought their own CA keeps it and configures https by
 hand, as before.
 
+**The server keys Jen keeps (v5.69.0-beta.18, Q187).** `kea-servers/<id>-<service>.key` (0600) is the key the host was given, kept beside the certificate copy so that an https change that fails can put the certificate the daemon had back (`.crt.prev` / `.key.prev`, one generation, retired when the operation stands). It adds no capability: the CA key that mints any certificate already lives on the same host (the recorded tradeoff above), and a compromised service user already holds the SSH key that pushes root-level config to every Kea host. A certificate installed before this release, or by hand, has no local key and no earlier copy: its replacement cannot be undone, and says so (the `tls-not-restored` incident).
+
 **Why not Let's Encrypt.** ACME issues server certificates for names
 it can validate; the Kea link needs *client* certificates, and homelab
 management addresses are RFC 1918 IPs with no public name. Let's

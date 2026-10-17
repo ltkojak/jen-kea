@@ -612,6 +612,8 @@ def _incident_cleared(incident: dict, result: ChangeSetResult, service: str) -> 
     clean run clears it only when it was for the same service and covered every server in its
     `needs_hands` (a clean restart of each is proof it is running); otherwise it stays until an admin
     dismisses it."""
+    if incident.get("kind") == ATTENTION_KIND:
+        return False  # Q187: an unproved recovery is cleared by a verified recovery of THAT server and service, or acknowledged - never by an unrelated change
     if incident.get("status") != "rollback_failed":
         return True
     if incident.get("service") != service:
@@ -689,6 +691,156 @@ def record_outcome(result: ChangeSetResult, service: str, summary: str) -> None:
                 _user.set_global_setting(ATTENTION_KEY, json.dumps({"incidents": left}) if left else "")
     except Exception as e:
         logger.debug(f"kea_changeset: could not record the outcome: {e}")
+
+
+# ── an unproved recovery is a persistent incident (v5.69.0-beta.18, Q187, AC3) ───────────────────────────────────────────────────────────────
+# A direct-socket operation changes the Kea host and then Jen's own settings; when it fails, the route puts the host back - and says "undone" only when that is PROVED. What could not be
+# proved (a restore that found the file already matching, a restart that did not verify, material that could not be reinstalled, a socket that never answered) is a state a flash and an audit
+# row nobody reads do not keep in front of anyone. It is the same persistent note as `rolled_back` / `rollback_failed`, with a category, a server and a service, and it is cleared by
+# a verified recovery of that server and service (a later successful operation on it that probed the endpoint) or acknowledged by a superadmin. It never carries a socket entry or a credential.
+
+ATTENTION_KIND = "attention"
+ATTENTION_CATEGORIES = {
+    "remote-unknown": "Jen could not read what the daemon's control sockets were before the change, so it could not put them back.",
+    "restored-restart-unverified": "The daemon's config file is back as it was, but Jen did not restart the daemon on it, so it may still be running the change.",
+    "restart-failed": "The previous config was put back but the daemon did not restart on it, so it may be stopped or running the change.",
+    "tls-not-restored": "The certificate Jen installed for the control socket could not be put back, so a restored socket may meet a certificate issued for another address.",
+    "probe-pending": "The new control socket was added but has not answered Jen yet. It stays in the daemon's config and Jen's settings are unchanged; run the setup again to probe it.",
+    "aborted": "The recovery could not be applied, so the daemon may still carry the failed change.",
+}
+
+
+def record_attention(
+    server_id, service: str, operation: str, category: str, when=None, *, server_name: str = "", detail: str = ""
+) -> bool:
+    """Record an unproved recovery for the Servers page and Health (Q187, AC3). `category` is one of `ATTENTION_CATEGORIES`; `operation` is a short sentence about what was being done
+    ("setup of the https control socket on 10.0.0.5:8014"), never a socket entry; `detail` is a fixed sentence. The same category for the same server and service refreshes its incident.
+    Returns whether it was stored - the caller already told the person in a flash, so a failure here is logged at ERROR, never raised."""
+    if category not in ATTENTION_CATEGORIES:
+        raise ValueError(f"unknown attention category {category!r}")
+    try:
+        import json
+        from datetime import datetime, timezone
+
+        from jen.models import user as _user
+
+        at = (when or datetime.now(timezone.utc)).isoformat(timespec="seconds")
+        incident = {
+            "kind": ATTENTION_KIND,
+            "status": category,
+            "category": category,
+            "service": service,
+            "server_id": server_id,
+            "server_name": server_name,
+            "summary": operation,
+            "detail": detail or ATTENTION_CATEGORIES[category],
+            "at": at,
+            "needs_hands": [],
+            "needs_hands_ids": [],
+            "lines": [],
+        }
+        incidents = _incidents_of(_user.get_global_setting(ATTENTION_KEY, ""))
+        incidents = [
+            i
+            for i in incidents
+            if not (
+                i.get("kind") == ATTENTION_KIND
+                and i.get("category") == category
+                and i.get("service") == service
+                and i.get("server_id") == server_id
+            )
+        ]
+        incidents.append(incident)
+        _user.set_global_setting(ATTENTION_KEY, json.dumps({"incidents": incidents}))
+        _user.audit(
+            "DIRECT_SOCKET_INCIDENT",
+            service,
+            f"server={server_name or server_id} category={category}; {operation}"[:500],
+        )
+        return True
+    except Exception as e:
+        logger.error(
+            f"kea_changeset: could not record the {category} incident for server {server_id}: {type(e).__name__}"
+        )
+        return False
+
+
+def resolve_attention(server_id, service: str, *, categories=None) -> int:
+    """A verified recovery of THAT server and service clears its recovery incidents (Q187, AC3): called by an operation that probed the endpoint and got the answer it needs. An incident of
+    another server or service, and every `rolled_back` / `rollback_failed` incident, is left alone. Returns how many were cleared; best-effort."""
+    try:
+        import json
+
+        from jen.models import user as _user
+
+        noted = _user.get_global_setting(ATTENTION_KEY, "")
+        if not noted:
+            return 0
+        incidents = _incidents_of(noted)
+        left = [
+            i
+            for i in incidents
+            if not (
+                i.get("kind") == ATTENTION_KIND
+                and i.get("service") == service
+                and i.get("server_id") == server_id
+                and (categories is None or i.get("category") in categories)
+            )
+        ]
+        if len(left) != len(incidents):
+            _user.set_global_setting(ATTENTION_KEY, json.dumps({"incidents": left}) if left else "")
+        return len(incidents) - len(left)
+    except Exception as e:
+        logger.error(
+            f"kea_changeset: could not resolve the recovery incidents of server {server_id}: {type(e).__name__}"
+        )
+        return 0
+
+
+def recovery_incidents() -> list[dict]:
+    """The unresolved recovery incidents (Q187) - what Health shows. Never raises."""
+    note = attention()
+    return [i for i in (note or {}).get("incidents", []) if i.get("kind") == ATTENTION_KIND]
+
+
+def acknowledge_recovery(server_id=None, service: str | None = None, category: str | None = None) -> int:
+    """A superadmin's acknowledgement (Q187): clears the recovery incidents matching the filters (None = any). The old `rolled_back` / `rollback_failed` incidents are not touched."""
+    try:
+        import json
+
+        from jen.models import user as _user
+
+        incidents = _incidents_of(_user.get_global_setting(ATTENTION_KEY, ""))
+
+        def matches(i):
+            return (
+                i.get("kind") == ATTENTION_KIND
+                and (server_id is None or str(i.get("server_id")) == str(server_id))
+                and (service is None or i.get("service") == service)
+                and (category is None or i.get("category") == category)
+            )
+
+        left = [i for i in incidents if not matches(i)]
+        if len(left) != len(incidents):
+            _user.set_global_setting(ATTENTION_KEY, json.dumps({"incidents": left}) if left else "")
+        return len(incidents) - len(left)
+    except Exception as e:
+        logger.error(f"kea_changeset: could not acknowledge the recovery incidents: {type(e).__name__}")
+        return 0
+
+
+def dismiss_rollback_notes() -> None:
+    """The Servers page's old Dismiss button (rolled_back / rollback_failed): leaves the recovery incidents, which a superadmin acknowledges (Q187)."""
+    try:
+        import json
+
+        from jen.models import user as _user
+
+        incidents = _incidents_of(_user.get_global_setting(ATTENTION_KEY, ""))
+        left = [i for i in incidents if i.get("kind") == ATTENTION_KIND]
+        _user.set_global_setting(ATTENTION_KEY, json.dumps({"incidents": left}) if left else "")
+    except Exception as e:
+        logger.debug(f"kea_changeset: could not dismiss the rollback notes: {e}")
 
 
 def attention() -> dict | None:

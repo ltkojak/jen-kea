@@ -570,6 +570,90 @@ class TestASavedAddressIsIdentifiedLikeATypedOne:
         assert rows[5][0] and rows[5][3] == "ca" and rows[5][1] == ["http://kea-a.lan:8000"]
 
 
+class TestOneListenerIsOneListener:
+    """Q187 (AC5): `keep_direct` counts servers by their effective dhcp4 endpoint - a second record of the very socket being removed is not another server on its own socket."""
+
+    def test_a_second_record_of_the_same_socket_is_refused_and_named(self):
+        twin, both, named = (
+            probe.q187_ac5_s1_a_second_record_of_the_same_socket_is_refused_and_never_keeps_direct_mode()
+        )
+        assert twin == (False, False, True) and both == (False, False, True), (
+            "refused before the host is touched, nothing changed"
+        )
+        assert named == (True, False), "the twin is named; the genuine other server is not what is refused"
+
+    def test_two_spellings_of_one_host_are_the_operators_to_keep_apart_and_the_sentence_says_so(self):
+        assert (
+            probe.q187_ac5_s2_two_spellings_of_one_host_are_the_operators_to_keep_apart_and_the_sentence_says_so()
+            == (
+                True,
+                "direct",
+                True,
+                True,
+            )
+        )
+
+
+class TestTheControlAgentAddressIsAlwaysOfferedAndTheProbeUsesTheResolver:
+    """Q187 (AC4)."""
+
+    def test_the_form_always_offers_the_field_and_says_which_wording_applies(self):
+        import pathlib
+
+        page = (pathlib.Path(__file__).resolve().parent.parent / "templates" / "settings_kea.html").read_text(
+            encoding="utf-8"
+        )
+        assert 'name="ca_url"' in page
+        assert "{% if service == 'dhcp4' %}<label>The Control Agent's address (" in page, (
+            "offered for every dhcp4 form, not only when none is saved"
+        )
+        assert "required: Jen has none to return to" in page and "blank uses the saved address" in page
+        assert "{% if service == 'dhcp4' and server_id in infra.needs_ca_url %}" not in page, "the old gate is gone"
+
+    def test_the_identify_pair_is_the_resolvers_for_a_half_nobody_typed(self):
+        touched, pairs = probe.q187_ac4_s1_the_identify_pair_is_the_resolvers_for_a_half_nobody_typed()
+        assert touched and pairs == [("http://10.0.0.5:8100", "pu", "PS")]
+
+
+class TestTheSmallOnes:
+    """Q187 (AC6)."""
+
+    def test_a_typed_address_beside_a_saved_pair_says_the_pair_was_discarded(self):
+        touched, said, url, pair, left = (
+            probe.q187_ac6_s1_a_typed_address_beside_a_saved_pair_says_the_pair_was_discarded()
+        )
+        assert touched and said and url == "http://ca.lan:8000" and pair == ("nu", "NEW") and left is False
+
+    def test_the_keep_direct_branch_identifies_a_saved_alias_like_the_rest(self):
+        refused, genuine = probe.q187_ac6_s2_the_keep_direct_branch_identifies_a_saved_alias_like_the_rest()
+        assert refused == (False, False, True) and genuine == (True, "direct")
+
+    def test_the_singular_control_socket_is_removed_and_said(self):
+        touched, host, said = probe.q187_ac6_s3_the_singular_control_socket_is_removed_and_said()
+        assert touched and host == {"Dhcp4": {"control-sockets": []}} and said
+
+    def test_a_write_failure_sentence_prints_the_class_and_errno_never_the_path(self):
+        assert probe.q187_ac6_s4_a_write_failure_sentence_prints_the_class_and_errno_never_the_path() == (
+            True,
+            False,
+            False,
+        )
+
+    def test_odd_entries_print_plainly_and_a_bad_snapshot_is_refused(self):
+        described, typeless, weird, bad_list, bad_str = (
+            probe.q187_ac6_s5_odd_entries_print_plainly_and_a_snapshot_that_is_not_a_list_of_entries_is_refused()
+        )
+        assert described == "http ?:?" and typeless == "unix ?" and weird == "? ?:?"
+        assert bad_list == bad_str == "unsupported"
+
+    def test_the_sweep_s11b_knows_the_three_new_names(self):
+
+        from tests import test_invariant_sweeps as sweeps
+
+        for name in ("api", "named", "kept"):
+            assert sweeps._S11B_NAMES.search(name), name
+
+
 class TestARestorePutsBackAbsenceAndTheKeepNeedsAnOwnPassword:
     """AB4/AB5 (Q186): what the Control Agent had is saved as it WAS and a restore puts every half back as it was; the dependant keep writes a user only beside a password of its own."""
 

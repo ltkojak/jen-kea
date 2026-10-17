@@ -281,14 +281,38 @@ def servers():
 def dismiss_changeset_attention():
     """v5.65.1 (Q90) - clear the "a change was rolled back / a rollback failed" banner."""
     note = __changeset.attention()
-    __changeset.clear_attention()
+    __changeset.dismiss_rollback_notes()  # Q187: an unproved recovery is acknowledged by a superadmin (below), not dismissed with the rollback notes
     if note:
-        incidents = note["incidents"]
+        incidents = [i for i in note["incidents"] if i.get("kind") != __changeset.ATTENTION_KIND]
+        if incidents:
+            __user.audit(
+                "DISMISS_CHANGESET_NOTICE",
+                ", ".join(sorted({i.get("status", "") for i in incidents})),
+                "; ".join(i.get("summary", "") for i in incidents)[:500],
+            )
+    return redirect(url_for("servers.servers"))
+
+
+@bp.route("/servers/recovery-incident/acknowledge", methods=["POST"])
+@login_required
+@_superadmin_required
+def acknowledge_recovery_incident():
+    """v5.69.0-beta.18 (Q187, AC3) - a superadmin acknowledges an unproved direct-socket recovery (a restore the route could not prove: the daemon may still carry the failed change). The
+    note also goes away by itself when a later operation on that server and service probes the endpoint and gets its answer. Nothing is sent to the Kea host."""
+    server_id = request.form.get("server_id", "").strip() or None
+    service = request.form.get("service", "").strip() or None
+    category = request.form.get("category", "").strip() or None
+    if category is not None and category not in __changeset.ATTENTION_CATEGORIES:
+        flash("Unknown incident category.", "error")
+        return redirect(url_for("servers.servers"))
+    cleared = __changeset.acknowledge_recovery(server_id, service, category)
+    if cleared:
         __user.audit(
-            "DISMISS_CHANGESET_NOTICE",
-            ", ".join(sorted({i.get("status", "") for i in incidents})),
-            "; ".join(i.get("summary", "") for i in incidents)[:500],
+            "ACKNOWLEDGE_RECOVERY_INCIDENT",
+            service or "all",
+            f"server={server_id or 'all'} category={category or 'all'} cleared={cleared}",
         )
+        flash("Acknowledged. The daemon was not touched: check it before relying on it.", "success")
     return redirect(url_for("servers.servers"))
 
 

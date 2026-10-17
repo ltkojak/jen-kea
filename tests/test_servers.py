@@ -512,3 +512,71 @@ class TestTheBannerListsEveryIncidentAndOffersDismissOnlyToAdmins:
         assert (
             row and "rollback_failed" in row["entity"] and "add a pool" in row["details"] and "edit b" in row["details"]
         )
+
+
+class TestARecoveryThatWasNotProvedIsShownUntilItIsAcknowledged:
+    """v5.69.0-beta.18 (Q187, AC3): a direct-socket recovery Jen could not prove is a persistent incident on the Servers page - with a category, the server and the service - cleared by a
+    verified recovery of that server and service or acknowledged by a superadmin. The old Dismiss (rolled back / rollback failed) leaves it."""
+
+    def _record(self, category="tls-not-restored"):
+        from jen.services import kea_changeset
+
+        kea_changeset.clear_attention()
+        kea_changeset.record_attention(
+            1, "dhcp4", "setup of the https 10.0.0.5:8004 control socket", category, server_name="Primary"
+        )
+
+    def teardown_method(self):
+        from jen.services import kea_changeset
+
+        kea_changeset.clear_attention()
+
+    def test_the_banner_names_the_server_and_says_what_was_not_proved(self, logged_in_client, mock_kea, db):
+        self._record()
+        body = logged_in_client.get("/servers").data.decode()
+        assert "A direct-socket recovery on Primary is not proved." in body
+        assert "certificate Jen installed" in body and "Acknowledge" in body
+
+    def test_the_old_dismiss_leaves_it(self, logged_in_client, mock_kea, db):
+        self._record()
+        r = logged_in_client.post("/servers/changeset-attention/dismiss", follow_redirects=True)
+        assert r.status_code == 200 and b"A direct-socket recovery on Primary is not proved." in r.data
+
+    def test_a_superadmin_acknowledges_it_and_the_audit_row_says_so(self, logged_in_client, mock_kea, db):
+        self._record()
+        r = logged_in_client.post(
+            "/servers/recovery-incident/acknowledge",
+            data={"server_id": "1", "service": "dhcp4", "category": "tls-not-restored"},
+            follow_redirects=True,
+        )
+        assert r.status_code == 200 and b"is not proved" not in r.data
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT details FROM audit_log WHERE action = 'ACKNOWLEDGE_RECOVERY_INCIDENT' ORDER BY id DESC LIMIT 1"
+            )
+            row = cur.fetchone()
+        assert row and "cleared=1" in (row["details"] if isinstance(row, dict) else row[0])
+
+    def test_an_admin_who_is_not_a_superadmin_cannot_acknowledge(self, client, mock_kea, db):
+        from tests.conftest import restricted_client
+
+        self._record()
+        c, _uid = restricted_client(client, db, allowed_subnets=[], role="admin")
+        r = c.post("/servers/recovery-incident/acknowledge", data={"server_id": "1"}, follow_redirects=False)
+        assert r.status_code in (302, 403)
+        from jen.services import kea_changeset
+
+        assert len(kea_changeset.recovery_incidents()) == 1
+
+    def test_an_unknown_category_is_refused(self, logged_in_client, mock_kea, db):
+        self._record()
+        r = logged_in_client.post(
+            "/servers/recovery-incident/acknowledge", data={"category": "made-up"}, follow_redirects=True
+        )
+        assert b"Unknown incident category" in r.data
+
+    def test_health_shows_it_failing(self, logged_in_client, mock_kea, db):
+        self._record("remote-unknown")
+        data = logged_in_client.get("/health-center/data").get_json()
+        row = next(c for c in data["checks"] if c["id"] == "direct_socket_recovery")
+        assert row["status"] == "fail" and "Primary (dhcp4)" in row["detail"]

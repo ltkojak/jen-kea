@@ -11,6 +11,7 @@ no real Kea host.
 """
 
 import copy
+import json
 
 import pytest
 
@@ -846,3 +847,121 @@ class TestIncidentsAreAListNotASlot:
         result = cs.apply_change("dhcp4", _mutate_add_pool, "edit b", servers=[SERVER_B])
         assert result.status == "rolled_back"
         assert self._statuses() == [("rollback_failed", ("kea-a",)), ("rolled_back", ())]
+
+
+class TestAnUnprovedRecoveryIsAPersistentIncident:
+    """v5.69.0-beta.18 (Q187, AC3): a direct-socket recovery Jen could not PROVE is kept in front of the operator in a category - on Servers and in Health - until a verified recovery of THAT
+    server and service clears it or a superadmin acknowledges it. An unrelated change never clears it; it is a settings row, so it survives a restart; it carries no socket entry."""
+
+    @pytest.fixture
+    def store(self, monkeypatch):
+        data = {}
+        from jen.models import user as user_mod
+
+        monkeypatch.setattr(user_mod, "get_global_setting", lambda k, d="": data.get(k, d))
+        monkeypatch.setattr(user_mod, "set_global_setting", lambda k, v: data.__setitem__(k, v))
+        monkeypatch.setattr(user_mod, "audit", lambda *a, **k: None)
+        monkeypatch.setattr(cs, "record_outcome", _REAL_RECORD_OUTCOME)
+        return data
+
+    def test_the_six_categories_are_the_ones_the_q_names(self):
+        assert set(cs.ATTENTION_CATEGORIES) == {
+            "remote-unknown",
+            "restored-restart-unverified",
+            "restart-failed",
+            "tls-not-restored",
+            "probe-pending",
+            "aborted",
+        }
+
+    @pytest.mark.parametrize("category", sorted(cs.ATTENTION_CATEGORIES))
+    def test_every_category_is_recorded_with_its_server_service_and_a_fixed_sentence(self, store, category):
+        assert cs.record_attention(
+            1, "dhcp4", "setup of the https 10.0.0.5:8014 control socket", category, server_name="kea-a"
+        )
+        (incident,) = cs.attention()["incidents"]
+        assert incident["kind"] == "attention" and incident["category"] == category and incident["status"] == category
+        assert (incident["server_id"], incident["service"], incident["server_name"]) == (1, "dhcp4", "kea-a")
+        assert incident["detail"] == cs.ATTENTION_CATEGORIES[category]
+        assert "password" not in json.dumps(incident).lower() and "authentication" not in json.dumps(incident)
+
+    def test_an_unknown_category_is_a_programming_error(self, store):
+        with pytest.raises(ValueError):
+            cs.record_attention(1, "dhcp4", "x", "made-up")
+
+    def test_the_same_trouble_again_refreshes_it_and_a_different_one_is_added(self, store):
+        cs.record_attention(1, "dhcp4", "first", "aborted")
+        cs.record_attention(1, "dhcp4", "second", "aborted")
+        cs.record_attention(1, "dhcp4", "third", "probe-pending")
+        cs.record_attention(2, "dhcp4", "other server", "aborted")
+        got = [(i["server_id"], i["category"], i["summary"]) for i in cs.attention()["incidents"]]
+        assert got == [(1, "aborted", "second"), (1, "probe-pending", "third"), (2, "aborted", "other server")]
+
+    def test_an_unrelated_successful_change_never_clears_it(self, store):
+        cs.record_attention(1, "dhcp4", "x", "remote-unknown")
+        ok = cs.ChangeSetResult("ok", "ok", covered=["kea-a"], covered_ids=[1])
+        cs.record_outcome(ok, "dhcp4", "a pool edit on the same server and service")
+        cs.record_outcome(ok, "dhcp6", "anything")
+        assert [i["category"] for i in cs.attention()["incidents"]] == ["remote-unknown"]
+
+    def test_a_verified_recovery_of_that_server_and_service_clears_only_its_own(self, store):
+        cs.record_attention(1, "dhcp4", "x", "probe-pending")
+        cs.record_attention(1, "dhcp6", "y", "probe-pending")
+        cs.record_attention(2, "dhcp4", "z", "probe-pending")
+        store[cs.ATTENTION_KEY] = json.dumps(
+            {
+                "incidents": cs.attention()["incidents"]
+                + [{"status": "rollback_failed", "service": "dhcp4", "needs_hands": ["kea-a"]}]
+            }
+        )
+        assert cs.resolve_attention(1, "dhcp4") == 1
+        left = [(i.get("server_id"), i.get("service"), i["status"]) for i in cs.attention()["incidents"]]
+        assert left == [
+            (1, "dhcp6", "probe-pending"),
+            (2, "dhcp4", "probe-pending"),
+            (None, "dhcp4", "rollback_failed"),
+        ]
+
+    def test_it_survives_a_restart_because_it_is_a_settings_row(self, store):
+        cs.record_attention(1, "dhcp4", "x", "tls-not-restored", server_name="kea-a")
+        again = json.loads(store[cs.ATTENTION_KEY])  # what a new process reads from the table
+        assert again["incidents"][0]["category"] == "tls-not-restored"
+
+    def test_a_superadmins_acknowledgement_clears_matching_incidents_only(self, store):
+        cs.record_attention(1, "dhcp4", "x", "aborted")
+        cs.record_attention(1, "dhcp4", "y", "probe-pending")
+        cs.record_attention(2, "dhcp4", "z", "aborted")
+        assert cs.acknowledge_recovery(1, "dhcp4", "aborted") == 1
+        assert cs.acknowledge_recovery(2) == 1
+        assert [(i["server_id"], i["category"]) for i in cs.attention()["incidents"]] == [(1, "probe-pending")]
+
+    def test_the_old_dismiss_leaves_the_recovery_incidents_and_clear_attention_still_clears_all(self, store):
+        cs.record_attention(1, "dhcp4", "x", "aborted")
+        store[cs.ATTENTION_KEY] = json.dumps(
+            {"incidents": cs.attention()["incidents"] + [{"status": "rolled_back", "service": "dhcp4"}]}
+        )
+        cs.dismiss_rollback_notes()
+        assert [i["status"] for i in cs.attention()["incidents"]] == ["aborted"]
+        cs.clear_attention()
+        assert cs.attention() is None
+
+    def test_recording_never_raises_and_says_whether_it_stored(self, monkeypatch):
+        from jen.models import user as user_mod
+
+        def boom(*a, **k):
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr(user_mod, "set_global_setting", boom)
+        monkeypatch.setattr(user_mod, "get_global_setting", boom)
+        assert cs.record_attention(1, "dhcp4", "x", "aborted") is False
+        assert cs.resolve_attention(1, "dhcp4") == 0 and cs.acknowledge_recovery() == 0
+
+    def test_health_shows_it_failing_for_an_unknown_or_stopped_daemon_and_warning_for_a_pending_probe(self, store):
+        from jen.services import health
+
+        assert health._direct_socket_recovery({}).status == "ok"
+        cs.record_attention(1, "dhcp4", "x", "probe-pending", server_name="kea-a")
+        assert health._direct_socket_recovery({}).status == "warn"
+        cs.record_attention(1, "dhcp4", "y", "remote-unknown", server_name="kea-a")
+        check = health._direct_socket_recovery({})
+        assert check.status == "fail" and "kea-a (dhcp4)" in check.detail and check.fix_url == "/servers"

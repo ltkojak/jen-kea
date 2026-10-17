@@ -1258,9 +1258,15 @@ def _daemon_creds(server: dict, service: str, url: str = "") -> tuple[str, str]:
 
 def _sentence_of(refusal: BaseException) -> str:
     """The words for a failed write of Jen's own settings: the writer's own sentence for a refusal, one that names the failure for anything else (a read-only file, a full disk)."""
-    return getattr(refusal, "sentence", "") or (
-        f"Jen could not write its own settings ({type(refusal).__name__}: {refusal}) - the file may be read-only or the disk full."
+    if getattr(refusal, "sentence", ""):
+        return refusal.sentence
+    # (Q187, AC6) the class and the errno's own words - never `str(error)`, which for an OSError carries the path of the file
+    detail = (
+        f"{type(refusal).__name__}, errno {refusal.errno}: {refusal.strerror}"
+        if isinstance(refusal, OSError) and refusal.errno is not None
+        else type(refusal).__name__
     )
+    return f"Jen could not write its own settings ({detail}) - the file may be read-only or the disk full."
 
 
 def _api_sockets_of(server: dict, service: str):
@@ -1450,21 +1456,86 @@ def _holding_identity_lock(view):
     return locked
 
 
-def _undo_remote_change(server: dict, service: str, snapshot, summary: str, sentence: str, *, what: str, by_hand: str):
-    """The compensation for a late refusal (v5.68.0-beta.29, Q165, edge 3): the Kea host was changed and Jen's own settings write was then refused by the config writer
-    (`sentence`). Put the host back - one change through the same change set, the daemon restarted - and say so. When that fails too the lines name the partial state and
-    what a person does about it; nothing is left half done without being said.
+def _uses_jen_tls(sockets, service: str) -> bool:
+    """Q187 (AC2): did one of these control sockets reference the TLS files Jen's `install-tls` writes (the fixed paths under /etc/kea/tls/<service>/)? Then a change that installs new
+    material there replaces what that socket's certificate was issued for."""
+    from jen.services import kea_tls as __tls
+
+    remote = __tls.remote_tls_paths(service)
+    return any(
+        isinstance(s, dict)
+        and s.get("socket-type") == "https"
+        and s.get("cert-file") == remote["cert_file"]
+        and s.get("key-file") == remote["key_file"]
+        for s in (sockets or [])
+    )
+
+
+def _put_tls_back(server: dict, service: str) -> str:
+    """Q187 (AC2): put the certificate and key the host had BEFORE this operation back on it (the same `install-tls` op, the same atomic replace), from the `.prev` pair Jen kept, and make
+    Jen's own copies agree. 'restored', 'none-saved' (a first https socket, a certificate installed by hand, one issued before Jen kept the key) or 'failed'."""
+    from jen.services import kea_host as __host
+    from jen.services import kea_tls as __tls
+
+    files = __tls.previous_material(server.get("id"), service)
+    if files is None:
+        return "none-saved"
+    pushed = __host.install_tls(server, service, files)
+    if not pushed.get("ok"):
+        logger.error(f"kea_tls: could not reinstall the previous material on server {server.get('id')}/{service}")
+        return "failed"
+    if not __tls.restore_previous(server.get("id"), service):
+        logger.error(
+            f"kea_tls: the host has the previous material back but Jen's copies for {server.get('id')}/{service} could not be made to agree"
+        )
+    return "restored"
+
+
+def _record_incident(server: dict, service: str, operation: str, category: str, detail: str = "") -> None:
+    """Q187 (AC3): an unproved recovery stays in front of the operator (Servers, Health) until a later operation on this server and service probes the endpoint, or a superadmin acknowledges it."""
+    from jen.services import kea_changeset as __changeset
+
+    __changeset.record_attention(
+        server.get("id"),
+        service,
+        operation,
+        category,
+        server_name=server.get("name") or f"Kea Server {server.get('id')}",
+        detail=detail,
+    )
+
+
+def _undo_remote_change(
+    server: dict,
+    service: str,
+    snapshot,
+    summary: str,
+    sentence: str,
+    *,
+    what: str,
+    by_hand: str,
+    tls_back: bool = False,
+    done_text: str | None = None,
+):
+    """The compensation for a failure AFTER the Kea host was changed (v5.68.0-beta.29, Q165, edge 3): the host was changed and Jen's own settings write was refused, or the new socket never
+    answered. Put the host back - one change through the same change set, the daemon restarted - and say so. When that fails too the lines name the partial state and what a person does
+    about it; nothing is left half done without being said.
 
     AB1 (Q186): the compensation is ONE thing, `restore_control_sockets(snapshot)` - the daemon's control-sockets list becomes what it was when the change was planned, every entry in
     order, whatever the change did to it (a socket added, replaced or removed). It is never an inverse of the change. "Undone" is said only when the restored file's list EQUALS the
     snapshot and the change set restarted the daemon (its `ok`); a file that already matched is NOT undone - the daemon still runs what the failed change started - and `snapshot` None
-    (the plan never read the config) cannot be undone at all. Both are the partial state, said."""
+    (the plan never read the config) cannot be undone at all. Both are the partial state, said.
+
+    AC2/AC3 (Q187): the unit of recovery is the USABLE endpoint. With `tls_back` (this change replaced the certificate an https socket was issued for) the previous certificate and key
+    are reinstalled BEFORE the restart, so the restored entry meets the certificate it was issued with; "undone" needs both. And whatever cannot be proved is a persistent incident
+    (Servers, Health) in a category - never only a flash and an audit row."""
     from jen.services import kea_changeset as __changeset
     from jen.services import kea_config_edit as __edit
 
     name = server.get("name") or f"Kea Server {server.get('id')}"
     daemon = _DAEMON_NAME[service]
     flash(sentence, "error")
+    tls_status = _put_tls_back(server, service) if tls_back else None  # BEFORE the restart the compensation makes
     if snapshot is None:
         status = "no-snapshot"
     else:
@@ -1493,20 +1564,73 @@ def _undo_remote_change(server: dict, service: str, snapshot, summary: str, sent
         for style, text in result.lines:
             flash(text, style)
         status = result.status
-    if status == "ok":
+    tls_bad = tls_status in ("none-saved", "failed")
+    if status == "ok" and not tls_bad:
         flash(
-            f"{what} on {name} was undone and the daemon restarted, so the Kea host and Jen's settings agree again. Jen changed nothing else; a socket added to that list by hand since is not kept.",
+            done_text
+            or f"{what} on {name} was undone and the daemon restarted, so the Kea host and Jen's settings agree again. Jen changed nothing else; a socket added to that list by hand since is not kept.",
             "info",
         )
         __user.audit("DIRECT_SOCKET_COMPENSATED", "kea_api", f"server={name} service={service} {summary}")
         return
-    if status == "nothing":
+    categories = []
+    if status == "no-snapshot":
+        categories.append("remote-unknown")
+    elif status == "nothing":
+        categories.append("restored-restart-unverified")
         by_hand = f"The file on {name} already matches what it was, but {daemon} was not restarted by this undo and may still be running the change: restart {daemon} there. {by_hand}"
+    elif status in ("rolled_back", "rollback_failed"):
+        categories.append("restart-failed")
+    elif status != "ok":
+        categories.append("aborted")
+    if tls_bad:
+        categories.append("tls-not-restored")
+        by_hand = (
+            f"The certificate Jen installed for the https socket could not be put back ({'there is no earlier copy' if tls_status == 'none-saved' else 'the helper refused it'}), so a restored https socket may meet a certificate issued for another address: "
+            f"run 'Set up direct socket' for {daemon} again to issue a matching one, or install the certificate you had by hand. {by_hand}"
+        )
     flash(
-        f"PARTIAL STATE on {name}: {what} was done on the Kea host and Jen's settings were refused, and Jen could not undo it ({status}). {by_hand}",
+        f"PARTIAL STATE on {name}: {what} was done on the Kea host and could not be undone ({status}{'; certificate ' + tls_status if tls_bad else ''}). {by_hand}",
         "error",
     )
     __user.audit("DIRECT_SOCKET_PARTIAL", "kea_api", f"server={name} service={service} {summary} compensation={status}")
+    for category in categories:
+        _record_incident(server, service, summary, category)
+
+
+def _tls_after_unapplied_change(server: dict, service: str, snapshot, result) -> None:
+    """Q187 (AC2): the https path installs new certificate material BEFORE the socket change. When the change then does not stand (the config check failed, the restart failed and the change
+    set rolled back), the daemon's previous socket entry would meet the new certificate on its next restart - so the previous material goes back, and a daemon the change set restarted on
+    the new files is restarted once more. Only when the socket the daemon had was an https socket on Jen's paths; with no earlier copy that is a recorded incident, not a silence."""
+    from jen.services import kea_host as __host
+
+    if snapshot is not None and not _uses_jen_tls(snapshot, service):
+        return
+    name = server.get("name") or f"Kea Server {server.get('id')}"
+    daemon = _DAEMON_NAME[service]
+    status = _put_tls_back(server, service)
+    if status == "restored":
+        flash(f"The certificate and key {name} had for {daemon} were put back.", "info")
+        if result.status in ("rolled_back", "rollback_failed"):
+            again = __host.service_action(server, service, "restart")
+            if not again.get("ok"):
+                flash(
+                    f"PARTIAL STATE on {name}: the previous certificate is back but {daemon} did not restart on it. Restart {daemon} there by hand.",
+                    "error",
+                )
+                _record_incident(server, service, f"the failed {daemon} socket change", "restart-failed")
+        return
+    if snapshot is None and status == "none-saved":
+        return  # nothing is known to have used earlier material
+    flash(
+        f"PARTIAL STATE on {name}: the certificate Jen installed for the https socket could not be put back ({'there is no earlier copy' if status == 'none-saved' else 'the helper refused it'}). "
+        f"The socket {daemon} had may meet a certificate issued for another address: run 'Set up direct socket' again to issue a matching one, or install the certificate you had by hand.",
+        "error",
+    )
+    __user.audit(
+        "DIRECT_SOCKET_PARTIAL", "kea_api", f"server={name} service={service} certificate not restored ({status})"
+    )
+    _record_incident(server, service, f"the failed {daemon} socket change", "tls-not-restored")
 
 
 @bp.route("/settings/infrastructure/direct-socket/<int:server_id>/<service>", methods=["POST"])
@@ -1535,9 +1659,12 @@ def setup_direct_socket(server_id, service):
       4. only then write Jen's own config: the per-daemon URL (+ creds),
          and for dhcp4 `connection_mode = direct`.
 
-    A failed probe leaves the socket in the Kea config (it's valid and
-    harmless — the daemon is listening on it) and Jen's settings
-    untouched, with a flash naming exactly what didn't answer.
+    A failed probe puts the daemon's sockets - and, for https, the certificate
+    it had - back as they were when the change REPLACED a working socket
+    (Q187, AC1/AC2), with Jen's settings untouched and a flash naming exactly
+    what didn't answer. A FIRST socket (nothing was replaced) stays in the
+    Kea config - it is valid, the daemon is listening on it - as a recorded
+    probe-pending incident until a later probe of it succeeds.
     """
     from jen.services import kea_changeset as __changeset
     from jen.services import kea_config_edit as __edit
@@ -1659,6 +1786,7 @@ def setup_direct_socket(server_id, service):
     # references it; the apply then carries the three paths as tls_paths.
     tls_paths = ()
     probe_verify, probe_cert = None, None
+    tls_replaced = False
     if scheme == "https":
         from jen.services import kea_host as __host
         from jen.services import kea_tls as __tls
@@ -1695,15 +1823,20 @@ def setup_direct_socket(server_id, service):
             return back
         tls_err = __kea.validate_client_tls_material(jen_client_cert, jen_client_key, jen_ca)
         if tls_err:
+            __tls.restore_previous(
+                server_id, service
+            )  # (Q187) nothing was pushed: Jen's own copies go back to what the host has
             flash(f"Jen's own client certificate is unusable ({tls_err}) — nothing was pushed to {name}.", "error")
             return back
         pushed = __host.install_tls(server, service, files)
         if not pushed.get("ok"):
+            __tls.restore_previous(server_id, service)
             flash(
                 f"{name}: {pushed.get('detail', 'the helper refused the TLS material')} — nothing was changed.",
                 "error",
             )
             return back
+        tls_replaced = True  # from here the host carries NEW material at the fixed paths
         remote = __tls.remote_tls_paths(service)
         tls_paths = [(remote["trust_anchor"], "file"), (remote["cert_file"], "file"), (remote["key_file"], "file")]
         probe_verify, probe_cert = jen_ca, (jen_client_cert, jen_client_key)
@@ -1740,9 +1873,13 @@ def setup_direct_socket(server_id, service):
     for style, text in result.lines:
         flash(text, style)
     if result.status in __changeset.NOT_APPLIED:
+        if tls_replaced:
+            _tls_after_unapplied_change(server, service, snapshot_taken.get("sockets"), result)
         flash("Jen's own settings were not changed.", "info")
         return back
     mode_now = "Control Agent" if __caps.is_ca() else "direct"
+    snapshot = snapshot_taken.get("sockets")
+    replaced_api = [s for s in (snapshot or []) if __edit._is_api_socket(s)] if result.status == "ok" else []
 
     version_text, probe_err = _probe_after_restart(
         new_url, user, password, service, verify=probe_verify, cert=probe_cert
@@ -1764,8 +1901,31 @@ def setup_direct_socket(server_id, service):
             f"is reachable from here (firewall? management VLAN?) and that {daemon}'s log shows it listening, "
             f"then run this again (the socket is already in {conf}, so it will just re-probe)."
         )
-        flash(msg, "error")
         __user.audit("SETUP_DIRECT_SOCKET", "kea_api", f"server={name} service={service} url={new_url} probe=failed")
+        if replaced_api:
+            # Q187 (AC1): the change REPLACED a working socket, so a replacement that does not answer must not leave the working one gone while Jen still dials it: the whole list - and the
+            # certificate an https socket was issued for - go back, exactly as for a refused write.
+            old_described = __edit.describe_socket(replaced_api[0])
+            _undo_remote_change(
+                server,
+                service,
+                snapshot,
+                f"restored the control sockets as they were before the {__edit.describe_socket(entry)} socket was added (it did not answer)",
+                f"{daemon} on {name} restarted with the new socket, but {__edit.describe_socket(entry)} {reason} from the Jen host - Jen stays in {mode_now} mode and none of its settings were changed.",
+                what=f"the {__edit.describe_socket(entry)} control socket",
+                by_hand=f"Put the control-sockets of {conf} back as they were before ({_SOCKET_ENTRY_LIVES}): remove the {__edit.describe_socket(entry)} entry and put back {old_described}; then restart {daemon}.",
+                tls_back=tls_replaced and _uses_jen_tls(snapshot, service),
+                done_text=f"The socket you had ({old_described}) is back on {name} and {daemon} restarted; the new one ({__edit.describe_socket(entry)}) did not answer: {reason}. Check that {address}:{port} is reachable from here (firewall? management VLAN?), then run this again.",
+            )
+            return back
+        flash(msg, "error")
+        # the socket is the first one (or was already there): it stays, unproved - a persistent incident until a later probe of it succeeds (Q187, AC3)
+        _record_incident(
+            server,
+            service,
+            f"setup of the {__edit.describe_socket(entry)} control socket (added, not yet answering)",
+            "probe-pending",
+        )
         return back
 
     was_ca = __caps.is_ca()
@@ -1784,12 +1944,21 @@ def setup_direct_socket(server_id, service):
                 _sentence_of(refused),
                 what=f"the {__edit.describe_socket(entry)} control socket",
                 by_hand=f"Put the control-sockets of {conf} back as they were before ({_SOCKET_ENTRY_LIVES}): remove the {__edit.describe_socket(entry)} entry, and put back the http/https entry it replaced if there was one; then restart {daemon}. Or use 'Remove socket' for {daemon} on this page when nothing else was there.",
+                tls_back=tls_replaced and _uses_jen_tls(snapshot_taken.get("sockets"), service),
             )
         else:
             flash(_sentence_of(refused), "error")
             flash(f"Nothing was changed on {name}: the socket was already in {conf}.", "info")
         return back
     __user.set_global_setting("restart_pending", "true")
+    from jen.services import kea_tls as __tls_done
+
+    __tls_done.retire_previous(
+        server_id, service
+    )  # (Q187) the operation stands: the material before it is no longer needed
+    __changeset.resolve_attention(
+        server_id, service
+    )  # ... and the endpoint was just probed and answered as the daemon: a verified recovery of THIS server and service
     flash(f"{daemon} on {name} answers directly at {new_url} — written: {written}.", "success")
     if service != "dhcp4" and __caps.is_ca():
         flash(
@@ -1918,6 +2087,10 @@ def rotate_kea_ca():
                 r1, r2 = {"ok": False}, {"ok": False}
             (rolled if r1.get("ok") and r2.get("ok") else rollback_failed).append(label)
         __tls.discard_rotation(staged)
+        for server, service, _bind in targets:
+            __tls.retire_previous(
+                server.get("id"), service
+            )  # (Q187) the pair before this attempt is not a recovery point for an operation that is over
         msg = f"Rotate stopped at {failure}. Jen still trusts the previous CA; nothing in Jen's settings changed."
         if rolled:
             msg += f" Rolled back to the previous CA: {', '.join(rolled)}."
@@ -1932,6 +2105,8 @@ def rotate_kea_ca():
         return back
 
     __tls.commit_rotation(staged)
+    for server, service, _bind in targets:
+        __tls.retire_previous(server.get("id"), service)  # (Q187) the rotation stands
     ca_crt, _k = __tls.ca_paths()
     client_pem, client_key = __tls.client_paths()
     if targets:
@@ -2039,11 +2214,24 @@ def remove_direct_socket(server_id, service):
     keep_direct = False
     others_still_direct: list[str] = []
     if service == "dhcp4":
+        # Q187 (AC5): ONE listener is one listener. A record that names the very endpoint being removed (scheme, host and port) is not "another server on its own socket" - it answers
+        # only because this socket still exists - so it never counts toward keeping direct mode, and removing the socket would leave it pointing at nothing: refused, naming it.
+        _socket_now = _live.get(_sec, _url_key, fallback="").strip() if _live.has_section(_sec) else ""
+        twins = []
         for s in extensions.KEA_SERVERS:
             if s.get("id") == sid or not s.get("api_url"):
                 continue
+            if __auth.same_endpoint(s["api_url"], _socket_now):
+                twins.append(s.get("name", "Kea Server"))
+                continue
             if _identify_daemon(s["api_url"], s.get("api_user", ""), s.get("api_pass", ""), "dhcp4") == "Dhcp4":
                 others_still_direct.append(s.get("name", "Kea Server"))
+        if twins:
+            flash(
+                f"{', '.join(twins)} uses this same socket ({_socket_now}); remove it there first or point it elsewhere. Nothing was changed on {name}.",
+                "error",
+            )
+            return back
         keep_direct = bool(others_still_direct)
 
     _before_users = {
@@ -2065,6 +2253,13 @@ def remove_direct_socket(server_id, service):
                 if saved_prev:
                     cfg.remove_option(sec, _PREV_URL_KEY)
                 changed.append(f"[{sec}] {url_key} set to {ca_url} (the Control Agent's address, typed)")
+                if any(
+                    cfg.has_option(sec, k)
+                    for k in (_PREV_USER_KEY, _PREV_PASS_KEY, _PREV_USER_ABSENT_KEY, _PREV_PASS_ABSENT_KEY)
+                ):
+                    changed.append(
+                        f"[{sec}] the Control Agent's saved user and password (for {saved_prev or 'the earlier address'}) were DISCARDED - the pair typed here is used"
+                    )
             elif prev:
                 cfg.set(sec, url_key, prev)
                 cfg.remove_option(sec, _PREV_URL_KEY)
@@ -2197,19 +2392,24 @@ def remove_direct_socket(server_id, service):
     # AB3 (Q186): a dhcp4 removal that would flip Jen to Control Agent mode needs a Control Agent address to flip TO. With none saved (or the saved one is the socket being removed) and no other
     # server keeping its own socket, Jen would be left pointing at the socket it just removed. Refused BEFORE the host is touched; the form's address (with the user and password it already
     # has) is validated, and must ANSWER as a Control Agent, before the socket goes.
+    verified_ca = False  # set when the Control Agent address Jen returns to has just been identified as one
     if service == "dhcp4":
         _has_sec = _live.has_section(_sec)
         _current_url = _live.get(_sec, _url_key, fallback="").strip().rstrip("/") if _has_sec else ""
         _saved_url = _live.get(_sec, _PREV_URL_KEY, fallback="").strip().rstrip("/") if _has_sec else ""
 
+        _resolved_now = __credentials.resolve(_live).get(_endpoint_name(server, service))
+
         def _pair_after_removal():
-            """(user, password) the Control Agent will be reached with once this removal is done - what the person typed, or ticked, or what stays."""
+            """(user, password) the Control Agent will be reached with once this removal is done - what the person typed or ticked, and for every half NOT typed what `credentials.resolve`
+            gives this endpoint (Q187, AC4: the raw keys miss an inherited half)."""
             if no_password:
                 return "", ""
             if restore_saved:
                 return _live.get(_sec, _PREV_USER_KEY, fallback=""), _live.get(_sec, _PREV_PASS_KEY, fallback="")
-            return user_typed or _live.get(_sec, "api_user", fallback=""), password or _live.get(
-                _sec, "api_pass", fallback=""
+            return (
+                user_typed or (_resolved_now.user if _resolved_now else ""),
+                password or (_resolved_now.password if _resolved_now else ""),
             )
 
         if ca_url:
@@ -2240,16 +2440,19 @@ def remove_direct_socket(server_id, service):
                     "error",
                 )
                 return back
-        elif (not _saved_url or _saved_url == _current_url) and not keep_direct:
-            flash(
-                "Jen has no Control Agent address to return to: set it (URL, user, password) on this form. "
-                f"Nothing was changed on {name}.",
-                "error",
-            )
-            return back
-        elif not keep_direct:
+            verified_ca = True
+        elif not _saved_url or _saved_url == _current_url:
+            if not keep_direct:
+                flash(
+                    "Jen has no Control Agent address to return to: set it (URL, user, password) on this form. "
+                    f"Nothing was changed on {name}.",
+                    "error",
+                )
+                return back
+        else:
             # second pass (Q186, finding 1): a saved address that merely DIFFERS as text from the socket (an alias, an earlier direct socket the setup replaced, another case or a trailing dot)
-            # is no proof it is a Control Agent. The address Jen is about to restore is asked who it is, exactly as a typed one is, before the socket goes.
+            # is no proof it is a Control Agent. The address Jen is about to restore is asked who it is, exactly as a typed one is, before the socket goes - whether or not another server
+            # keeps direct mode (Q187, AC6: the keep_direct branch restores it just the same).
             _probed = _identify_daemon(_saved_url, *_pair_after_removal(), "dhcp4")
             if _probed != "Control-agent":
                 flash(
@@ -2259,6 +2462,7 @@ def remove_direct_socket(server_id, service):
                     "error",
                 )
                 return back
+            verified_ca = True
 
     # second pass (Q184, finding 3): a daemon socket that INHERITED the primary's pair on the same host loses it when the primary's address changes spelling (10.0.0.5 -> kea-a.lan) - nothing
     # is sent to it any more and the daemon on the Kea host still wants that pair. Not a leak, so not a refusal; named, so the person is told rather than finding a blank card
@@ -2282,6 +2486,7 @@ def remove_direct_socket(server_id, service):
     def _remove(cfg):
         snapshot = __edit.control_sockets(cfg, service)
         snapshot_taken["sockets"] = snapshot
+        snapshot_taken["singular"] = __edit.uses_singular_socket(cfg, service)
         api = [s for s in snapshot if __edit._is_api_socket(s)]
         if len(api) == 1:  # ONE named socket is removed: the entry's own address and port
             return __edit.remove_control_socket(cfg, service, api[0].get("socket-address"), api[0].get("socket-port"))
@@ -2331,6 +2536,14 @@ def remove_direct_socket(server_id, service):
             flash(f"Nothing was changed on {name}: there was no socket to remove.", "info")
         return back
     __user.set_global_setting("restart_pending", "true")
+    if snapshot_taken.get("singular"):
+        changed.append(
+            f"{daemon}'s single control-socket entry was rewritten in the control-sockets list form (the form Kea 2.7.2 and later reads)"
+        )
+    if verified_ca:
+        __changeset.resolve_attention(
+            server_id, service
+        )  # (Q187) the Control Agent address was just identified as one: a verified recovery of THIS server and service
     flash(f"{daemon} on {name}: {'; '.join(changed)}.", "success")
     if lost:
         flash(
@@ -2341,7 +2554,8 @@ def remove_direct_socket(server_id, service):
         flash(
             f"Jen stays in direct mode — {', '.join(others_still_direct)} still answer on their own kea-dhcp4 "
             f"sockets. {name} will show the Control Agent error until you switch those back too, or set its "
-            "socket up again.",
+            "socket up again. If one of them is this same Kea under another spelling of its address, Jen cannot tell (it does no DNS lookups to decide): point that record elsewhere "
+            "or remove it, then remove this socket again.",
             "warning",
         )
     answer = "typed" if password else "none" if no_password else "restored" if restore_saved else "unchanged"
@@ -3308,13 +3522,14 @@ def generate_ssh_key():
         had_old = os.path.exists(live)
         __certs.commit_file_set([(live, private_bytes, 0o600), (live_pub, public_bytes, 0o644)])
         pub_key = public_bytes.decode("utf-8", "replace").strip()
-        kept = (
+        previous_note = (
             f" The previous key is kept as {live}.prev - delete it once every Kea server has the new one."
             if had_old
             else ""
         )
         flash(
-            f"SSH key generated. Add this public key to the Kea server's authorized_keys:\n{pub_key}{kept}", "success"
+            f"SSH key generated. Add this public key to the Kea server's authorized_keys:\n{pub_key}{previous_note}",
+            "success",
         )
         __user.audit("GENERATE_SSH_KEY", "settings", "SSH key pair generated")
     except subprocess.CalledProcessError as e:

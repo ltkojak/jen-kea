@@ -2301,8 +2301,31 @@ with app.app_context():
 
 
 # ── 22. a failed write of Jen's own settings after a socket change puts the daemon's sockets back ──────────────────────────
+def _s22_run(mode, scheme="http", port="8014"):
+    ip = st.container_ip(st.KEA_A)
+    script = (
+        S22_SCRIPT.replace("__ADDR__", ip)
+        .replace("__MODE__", mode)
+        .replace("__SCHEME__", scheme)
+        .replace("__PORT__", port)
+    )
+    return st.jen_py(script, timeout=500)
+
+
+S22_TLS_FILES = ("ca.crt", "server.crt", "server.key")
+
+
+def _s22_host_state():
+    """The whole daemon file and the three TLS files on kea-a, as bytes-in-text (None for a file that is not there)."""
+    out = {"conf": st.kea_conf_bytes(st.KEA_A)}
+    for name in S22_TLS_FILES:
+        p = st.dexec(st.KEA_A, "sh", "-c", f"cat /etc/kea/tls/dhcp4/{name} 2>/dev/null || true", check=False)
+        out[name] = p.stdout or None
+    return out
+
+
 S22_SCRIPT = r"""
-import hashlib, inspect
+import contextlib, hashlib, inspect
 from unittest import mock
 import flask
 import jen.services.private_files as pf
@@ -2322,11 +2345,21 @@ def read_only_config(path, *a, **k):
     return real_write(path, *a, **k)
 
 view = infra._holding_identity_lock(inspect.unwrap(infra.setup_direct_socket))
-form = {"scheme": "http", "address": "__ADDR__", "port": "8014", "user": "sysuser", "password": "syspass-123"}
-with app.test_request_context(method="POST", data=form):
-    with mock.patch.object(infra, "flash", lambda text, style="message": flashes.append(str(text))), \
-         mock.patch.object(pf, "write_private_file", read_only_config):
-        view(server["id"], "dhcp4")
+form = {"scheme": "__SCHEME__", "address": "__ADDR__", "port": "__PORT__", "user": "sysuser", "password": "syspass-123"}
+mode = "__MODE__"  # write-fails | write-ok | silent-probe
+patches = [mock.patch.object(infra, "flash", lambda text, style="message": flashes.append(str(text)))]
+if mode == "write-fails":
+    patches.append(mock.patch.object(pf, "write_private_file", read_only_config))
+elif mode == "write-ok":
+    # the stand-in for a Jen-side write that stands, so a later injection starts from a daemon that really holds this socket (Jen's own file is left alone)
+    patches.append(mock.patch.object(infra, "_write_direct_socket_config", lambda *a, **k: "stand-in: Jen's file is untouched"))
+elif mode == "silent-probe":
+    # the stand-in for a new socket nothing can reach from the Jen host (a firewall): the daemon really restarted with it; only the probe is made to fail
+    patches.append(mock.patch.object(infra, "_probe_after_restart", lambda *a, **k: ("", "stand-in: nothing answers")))
+with app.test_request_context(method="POST", data=form), contextlib.ExitStack() as stack:
+    for p in patches:
+        stack.enter_context(p)
+    view(server["id"], "dhcp4")
 
 after = hashlib.sha256(open(cfg_path, "rb").read()).hexdigest()
 with app.app_context(), jen_db() as c, c.cursor() as cur:
@@ -2340,8 +2373,7 @@ def test_22_a_failed_write_of_jens_settings_after_a_socket_change_puts_the_daemo
     """REMOTE-001 (Q186): the Kea host was changed for real (kea-dhcp4 rewritten with a new http socket and restarted), then Jen's own settings could not be written (a read-only
     jen.config). The compensation restores the daemon's control-sockets to exactly what they were, restarts it, says so - and no flash or audit row carries the socket's password.
     The stand-in is the write failing: a container has no read-only remount to do it with."""
-    ip = st.container_ip(st.KEA_A)
-    out, proc = st.jen_py(S22_SCRIPT.replace("__ADDR__", ip), timeout=400)
+    out, proc = _s22_run("write-fails")
     result = emitted(out)
     assert result is not None, f"no result from the route:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
     texts = " ".join(result["flashes"])
@@ -2359,3 +2391,50 @@ def test_22_a_failed_write_of_jens_settings_after_a_socket_change_puts_the_daemo
         "INVARIANT: no recovery text or audit row carries the socket's password"
     )
     assert [a for a, _d in result["audit"]][:1] == ["DIRECT_SOCKET_COMPENSATED"], result["audit"]
+
+
+def test_22_b_a_replacement_that_never_answers_puts_the_working_socket_back(stack):
+    """REMOTE-001 / Q187 (AC1): kea-a's http socket (0.0.0.0:8004) is REPLACED in place by one on another port; the new socket is made not to answer (a firewall stand-in); the daemon was really
+    restarted with it. The whole daemon file is what it was and the daemon answers on its original socket again - the beta.17 route left the working socket gone."""
+    out, proc = _s22_run("silent-probe")
+    result = emitted(out)
+    assert result is not None, f"no result from the route:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    texts = " ".join(result["flashes"])
+    assert (
+        "The socket you had (http 0.0.0.0:8004) is back" in texts
+        and "did not answer" in texts
+        and "PARTIAL" not in texts
+    ), texts
+    assert result["cfg_unchanged"], "INVARIANT: a failed probe changes none of Jen's settings"
+    st.wait_for(lambda: st.kea_answers("kea-a"), timeout=90, what="kea-a answering on its original socket")
+    assert not st.kea_answers("kea-a", 8014)
+    assert json.loads(st.kea_conf_bytes(st.KEA_A)) == json.loads(st.BASELINE[st.KEA_A]), (
+        "INVARIANT: the daemon's config is what it was before the route ran"
+    )
+    assert "syspass-123" not in texts and not any("syspass-123" in str(row) for row in result["audit"])
+
+
+def test_22_c_an_https_replacement_whose_write_fails_puts_the_sockets_and_the_certificate_back(stack):
+    """REMOTE-001 / Q187 (AC2): an https socket on Jen's CA is really set up on kea-a (certificate A installed), then a second https change (another port, certificate B installed over A) has its
+    Jen-side write fail. The daemon file AND the three TLS files on the host are byte-for-byte what they were after the first change - the restored socket meets the certificate it was issued with."""
+    out, proc = _s22_run("write-ok", scheme="https", port="8014")
+    first = emitted(out)
+    assert first is not None, f"no result from the first https change:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    after_a = _s22_host_state()
+    assert after_a["server.crt"] and after_a["server.key"] and after_a["ca.crt"], (
+        f"the first change installed no certificate: {first['flashes']}"
+    )
+    out, proc = _s22_run("write-fails", scheme="https", port="8015")
+    second = emitted(out)
+    assert second is not None, f"no result from the second https change:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    texts = " ".join(second["flashes"])
+    assert "was undone" in texts and "PARTIAL" not in texts, texts
+    after_b = _s22_host_state()
+    assert json.loads(after_b["conf"]) == json.loads(after_a["conf"]), (
+        "INVARIANT: the daemon file is what it was before the failed change"
+    )
+    for name in S22_TLS_FILES:
+        assert after_b[name] == after_a[name], (
+            f"INVARIANT: {name} on the host is the certificate material the restored socket was issued with"
+        )
+    assert "PRIVATE KEY" not in texts and "syspass-123" not in texts

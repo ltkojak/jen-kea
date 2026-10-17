@@ -14,7 +14,20 @@
     {% if not loop.first %}<hr>{% endif %}
     <div>
     {{ icon("siren") }}
-    {% if ca.status == "rollback_failed" %}
+    {% if ca.kind == "attention" %}
+    {# v5.69.0-beta.18 (Q187): a direct-socket recovery Jen could not PROVE - shown until a later operation on this server probes the endpoint, or a superadmin acknowledges it #}
+    <strong>A direct-socket recovery on {{ ca.server_name or ("server " ~ ca.server_id) }} is not proved.</strong>
+    {{ ca.detail }}
+    {% if current_user.role == 'superadmin' %}
+    <form method="POST" action="{{ url_for('servers.acknowledge_recovery_incident') }}" style="display:inline;margin-left:8px;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="server_id" value="{{ ca.server_id }}">
+        <input type="hidden" name="service" value="{{ ca.service }}">
+        <input type="hidden" name="category" value="{{ ca.category }}">
+        <button type="submit" class="btn btn-sm btn-secondary">Acknowledge</button>
+    </form>
+    {% endif %}
+    {% elif ca.status == "rollback_failed" %}
     <strong>A configuration change could not be rolled back cleanly.</strong>
     {% if ca.needs_hands %}{{ ca.needs_hands|join(", ") }} may be on the wrong config or stopped: check the config on the host, restore the last good one from Config history, and restart Kea there by hand.{% else %}Check each server's config and that Kea is running.{% endif %}
     {% else %}

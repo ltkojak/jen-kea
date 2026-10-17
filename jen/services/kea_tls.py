@@ -21,6 +21,11 @@ Where things live (Jen host, `<config_dir>/ssl` — never touched by upgrades):
   jen-kea-client.pem / .key         Jen's client cert (5 years, clientAuth)
   kea-servers/<id>-<service>.crt    a copy of each issued server cert, so
                                     Health can watch its expiry without SSH
+  kea-servers/<id>-<service>.key    its key (0600, v5.69.0-beta.18, Q187): what the host was
+                                    given, so an https change that fails can put the
+                                    certificate the daemon had back. `.crt.prev` / `.key.prev`
+                                    hold the pair BEFORE the last issue - one generation, kept
+                                    until the operation succeeds (retire_previous)
 Keys are written mode 0600 by the Jen service user through
 certs.write_atomically (tmp + replace, previous file kept as `.prev`).
 The CA key living on the Jen host is a recorded tradeoff — see
@@ -74,6 +79,10 @@ def client_paths() -> tuple[str, str]:
 
 def server_copy_path(server_id, service: str) -> str:
     return os.path.join(SSL_DIR, "kea-servers", f"{server_id}-{service}.crt")
+
+
+def server_key_path(server_id, service: str) -> str:
+    return os.path.join(SSL_DIR, "kea-servers", f"{server_id}-{service}.key")
 
 
 def remote_tls_paths(service: str) -> dict:
@@ -318,13 +327,57 @@ def issue_server_cert(server: dict, service: str, bind_address: str, ca: tuple[s
     name = server.get("name") or f"Kea Server {server.get('id')}"
     cert = _leaf(ca_cert, ca_key, key, f"kea-{service} {name}", sans, client=False)
     copy_path = server_copy_path(server.get("id"), service)
+    key_path = server_key_path(server.get("id"), service)
     _ensure_dir(os.path.dirname(copy_path))
-    write_atomically(copy_path, _cert_pem(cert), 0o644)
+    # Q187 (AC2): the pair is installed as ONE set (key before the certificate that names it), and the pair it replaces is kept as `.prev` - once. A `.prev` pair that is already there belongs to an
+    # earlier attempt that did not succeed: it is the material the daemon actually had, and a second issue must not overwrite it with the first attempt's.
+    kept = os.path.exists(copy_path + ".prev") and os.path.exists(key_path + ".prev")
+    commit_file_set([(key_path, _key_pem(key), 0o600), (copy_path, _cert_pem(cert), 0o644)], keep_prev=not kept)
     return {
         "ca.crt": _cert_pem(ca_cert).decode(),
         "server.crt": _cert_pem(cert).decode(),
         "server.key": _key_pem(key).decode(),
     }
+
+
+def previous_material(server_id, service: str) -> dict | None:
+    """The `install-tls` payload of the pair issued BEFORE the last `issue_server_cert` for this server and service - {"ca.crt", "server.crt", "server.key"} (PEM str) - or None when there is
+    none to put back: a first https socket, a certificate installed by hand, or one issued before Jen kept the key. The CA is the live one (a rotation re-issues every pair)."""
+    crt, key = server_copy_path(server_id, service) + ".prev", server_key_path(server_id, service) + ".prev"
+    try:
+        load_cert(crt)
+        load_key(key)
+        with open(crt, "rb") as f:
+            crt_pem = f.read().decode()
+        with open(key, "rb") as f:
+            key_pem = f.read().decode()
+        with open(ca_paths()[0], "rb") as f:
+            ca_pem = f.read().decode()
+    except (OSError, ValueError, TypeError):
+        return None
+    return {"ca.crt": ca_pem, "server.crt": crt_pem, "server.key": key_pem}
+
+
+def restore_previous(server_id, service: str) -> bool:
+    """The pair the host was given before is back on the host (the caller installed it): make Jen's own copies agree and retire the `.prev` pair. All-or-nothing; False when there is none."""
+    crt, key = server_copy_path(server_id, service), server_key_path(server_id, service)
+    try:
+        with open(crt + ".prev", "rb") as f:
+            old_crt = f.read()
+        with open(key + ".prev", "rb") as f:
+            old_key = f.read()
+        commit_file_set([(key, old_key, 0o600), (crt, old_crt, 0o644)], keep_prev=False)
+    except OSError:
+        return False
+    retire_previous(server_id, service)
+    return True
+
+
+def retire_previous(server_id, service: str) -> None:
+    """The operation that replaced the pair succeeded: the pair before it is no longer needed."""
+    for p in (server_copy_path(server_id, service) + ".prev", server_key_path(server_id, service) + ".prev"):
+        with contextlib.suppress(OSError):
+            os.unlink(p)
 
 
 def client_cert_ok() -> bool:

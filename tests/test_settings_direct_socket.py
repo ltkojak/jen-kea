@@ -81,6 +81,16 @@ def no_probe_sleep(monkeypatch):
     return slept
 
 
+@pytest.fixture(autouse=True)
+def no_leftover_recovery_incident():
+    """Q187 (AC3): an unproved recovery is a settings row that outlives the request - one test's probe-pending must not be the next test's banner."""
+    from jen.services import kea_changeset
+
+    kea_changeset.clear_attention()
+    yield
+    kea_changeset.clear_attention()
+
+
 class _RefusesThenAnswers(_FakeHTTP):
     """A socket that isn't listening yet: ConnectionError for the first
     `refuse` posts to `frag`, then normal answers — a daemon opening its
@@ -215,11 +225,49 @@ class TestHttpFlowSuccess:
     def test_a_socket_that_never_answers_reports_the_attempts(
         self, logged_in_client, db, isolated_config, fake, http, no_probe_sleep
     ):
+        from jen.services import kea_changeset
+
+        kea_changeset.clear_attention()
         http({"1.2.3.4:8000": _ok("3.0.4")})
         r = _setup(logged_in_client)
         assert b"after 8 attempts over 16 s" in r.data
         assert len(no_probe_sleep) == 7
         assert _on_disk(isolated_config).get("kea", "connection_mode", fallback="ca") == "ca"
+        # Q187 (AC1/AC3): nothing was replaced (the daemon had only its unix socket), so the new one STAYS - as a recorded, unproved state, not only a flash
+        assert [(i["server_id"], i["category"]) for i in kea_changeset.recovery_incidents()] == [(1, "probe-pending")]
+        kea_changeset.clear_attention()
+
+    def test_a_replacement_that_never_answers_puts_the_socket_you_had_back(
+        self, logged_in_client, db, isolated_config, fake, http, no_probe_sleep
+    ):
+        """Q187 (AC1): the executed P1 of beta.17 - the new socket replaced a working one in place and, when it did not answer, the old one was simply gone."""
+        import copy
+
+        from jen.services import kea_changeset
+        from jen.services.kea_authoring import build_control_socket
+
+        kea_changeset.clear_attention()
+        original = [
+            fake.configs[(1, "dhcp4")]["Dhcp4"].pop("control-socket"),
+            build_control_socket("http", "10.0.0.9", 8004, "u4", "p4"),
+        ]
+        fake.configs[(1, "dhcp4")]["Dhcp4"]["control-sockets"] = copy.deepcopy(original)
+
+        def apply(server, op, payload):
+            fake.configs[(server.get("id"), payload["service"])] = copy.deepcopy(payload["config"])
+            return {"ok": True, "backup": None, "sha256": "sha-new"}
+
+        fake.responses["apply-config"] = apply
+        http({"1.2.3.4:8000": _ok("3.0.4")})
+        r = _setup(logged_in_client)
+        assert b"The socket you had (http 10.0.0.9:8004) is back" in r.data
+        assert b"the new one (http 10.0.0.5:8004) did not answer" in r.data
+        assert fake.configs[(1, "dhcp4")]["Dhcp4"]["control-sockets"] == original, (
+            "the daemon's list is what it was, key for key"
+        )
+        on_disk = _on_disk(isolated_config)
+        assert on_disk.get("kea", "connection_mode", fallback="ca") == "ca" and on_disk.get("kea", "api_url") == CA_URL
+        assert kea_changeset.recovery_incidents() == []
 
     def test_blank_credentials_default_to_the_pair_jen_already_uses(
         self, logged_in_client, db, isolated_config, fake, http
@@ -519,7 +567,13 @@ class TestSwitchBack:
     def test_mode_stays_direct_while_another_server_answers_as_dhcp4(
         self, logged_in_client, db, direct_primary, fake, http
     ):
-        http({"kea02:8000": _ok("3.0.4")}, config_replies={"kea02:8000": DHCP4_OK})
+        http(
+            {"kea02:8000": _ok("3.0.4"), "1.2.3.4:8000": _ok("3.0.4")},
+            config_replies={
+                "kea02:8000": DHCP4_OK,
+                "1.2.3.4:8000": AS_CA,
+            },  # (Q187, AC6: the saved address is identified here too)
+        )
         r = logged_in_client.post(
             "/settings/infrastructure/direct-socket/1/dhcp4/remove", data={"password": "p4"}, follow_redirects=True
         )

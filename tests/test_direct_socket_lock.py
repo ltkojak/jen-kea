@@ -15,6 +15,8 @@ No database and no Kea: the route bodies are driven in a bare Flask request cont
 import copy
 import inspect
 import json
+import os
+import pathlib
 import threading
 import time
 
@@ -123,6 +125,8 @@ def wire(monkeypatch, caplog):
         "held_during_apply": [],
         "results": [],  # a forced ChangeSetResult per call (the mutate still runs on the simulated host)
         "codes": [],
+        "incidents": [],  # Q187: what record_attention was asked to keep in front of the operator
+        "resolved": [],  # ... and the (server, service) pairs a verified recovery cleared
         "host": {"Dhcp4": {"control-sockets": [copy.deepcopy(UNIX)]}},
     }
     server = {"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5", "api_url": "http://10.0.0.5:8000"}
@@ -146,6 +150,16 @@ def wire(monkeypatch, caplog):
         return parser
 
     monkeypatch.setattr(jconfig.app_config, "_read_parser", fresh_parser)
+    monkeypatch.setattr(
+        "jen.services.kea_changeset.record_attention",
+        lambda server_id, service, operation, category, when=None, **kw: (
+            log["incidents"].append((server_id, service, category, operation)) or True
+        ),
+    )
+    monkeypatch.setattr(
+        "jen.services.kea_changeset.resolve_attention",
+        lambda server_id, service, **kw: log["resolved"].append((server_id, service)) or 0,
+    )
     monkeypatch.setattr("jen.services.capabilities.is_ca", lambda: False)
     monkeypatch.setattr("jen.services.kea.kea_command", lambda *a, **k: {"result": 1})
     monkeypatch.setattr(jconfig.app_config, "preflight_identity_change", lambda change, typed=None: None)
@@ -439,3 +453,297 @@ class TestAFailedWriteOfJensSettingsIsHandledLikeARefusal:
         texts = " ".join(t for _s, t in wire["flashes"])
         assert "No space left on device" in texts and "was undone" in texts
         assert json.dumps(wire["host"]) == original
+
+
+# ── Q187 (AC1): the probe-failure branch compensates a replacement ─────────────────────────────────────────────────────────────────────────────────
+PROBE_FORM = {"scheme": "http", "address": "10.0.0.7", "port": "8014", "user": "u", "password": "p"}
+
+
+def _never_written(monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("a failed probe must not write Jen's settings")
+
+    monkeypatch.setattr(infra, "_write_direct_socket_config", boom)
+
+
+class TestAProbeThatFailsAfterAReplacementPutsTheWorkingSocketBack:
+    """The executed P1 of beta.17: `setup_direct_socket` REPLACES the daemon's http socket in place; when the new one does not answer the old code returned with the working socket gone
+    and Jen still dialling it. The whole list - and the certificate - go back, exactly as for a refused write."""
+
+    def _silent(self, monkeypatch):
+        monkeypatch.setattr(infra, "_probe_after_restart", lambda *a, **k: ("", "connection refused"))
+
+    def test_the_socket_you_had_is_back_byte_equal_and_the_flash_says_both(self, wire, monkeypatch):
+        self._silent(monkeypatch)
+        _never_written(monkeypatch)
+        wire["host"] = {"Dhcp4": {"a": 1, "control-sockets": [copy.deepcopy(UNIX), copy.deepcopy(CLIENT_SOCKET)]}}
+        original = json.dumps(wire["host"])
+        _post(_inner(infra.setup_direct_socket), **PROBE_FORM)
+        assert json.dumps(wire["host"]) == original
+        texts = " ".join(t for _s, t in wire["flashes"])
+        assert "The socket you had (https 10.0.0.7:8005) is back" in texts
+        assert "the new one (http 10.0.0.7:8014) did not answer" in texts and "connection refused" in texts
+        assert "PARTIAL" not in texts and [a[0] for a in wire["audits"]] == [
+            "SETUP_DIRECT_SOCKET",
+            "DIRECT_SOCKET_COMPENSATED",
+        ]
+        assert wire["incidents"] == [] and wire["resolved"] == []
+        assert SECRET not in _everything_printed(wire)
+
+    def test_a_socket_that_answers_as_the_control_agent_is_compensated_the_same_way(self, wire, monkeypatch):
+        monkeypatch.setattr(infra, "_identify_daemon", lambda *a, **k: "Control-agent")
+        _never_written(monkeypatch)
+        wire["host"] = {"Dhcp4": {"control-sockets": [copy.deepcopy(UNIX), copy.deepcopy(CLIENT_SOCKET)]}}
+        original = json.dumps(wire["host"])
+        _post(_inner(infra.setup_direct_socket), **PROBE_FORM)
+        assert json.dumps(wire["host"]) == original
+        assert "answered as the Control Agent, not kea-dhcp4" in " ".join(t for _s, t in wire["flashes"])
+
+    def test_the_compensations_own_failure_is_a_recorded_incident_not_only_a_flash(self, wire, monkeypatch):
+        self._silent(monkeypatch)
+        _never_written(monkeypatch)
+        wire["host"] = {"Dhcp4": {"control-sockets": [copy.deepcopy(UNIX), copy.deepcopy(CLIENT_SOCKET)]}}
+        wire["results"] = [
+            _ok(),
+            ChangeSetResult("rollback_failed", "restart-failed", [("error", "the daemon did not restart")]),
+        ]
+        _post(_inner(infra.setup_direct_socket), **PROBE_FORM)
+        assert [(i[0], i[1], i[2]) for i in wire["incidents"]] == [(1, "dhcp4", "restart-failed")]
+        assert SECRET not in json.dumps(wire["incidents"])
+
+    def test_a_first_socket_stays_and_is_recorded_as_probe_pending(self, wire, monkeypatch):
+        self._silent(monkeypatch)
+        _never_written(monkeypatch)
+        _post(_inner(infra.setup_direct_socket), **PROBE_FORM)
+        assert ed.control_sockets(wire["host"], "dhcp4")[-1]["socket-port"] == 8014, (
+            "nothing was replaced: the new socket stays in the daemon's config"
+        )
+        assert len(wire["applies"]) == 1, "no compensation call"
+        assert [(i[0], i[1], i[2]) for i in wire["incidents"]] == [(1, "dhcp4", "probe-pending")]
+        assert "http 10.0.0.7:8014" in wire["incidents"][0][3] and SECRET not in json.dumps(wire["incidents"])
+        assert "run this again" in " ".join(t for _s, t in wire["flashes"])
+
+    def test_a_socket_that_was_already_there_is_not_compensated_and_is_pending(self, wire, monkeypatch):
+        self._silent(monkeypatch)
+        _never_written(monkeypatch)
+        wire["host"] = {
+            "Dhcp4": {
+                "control-sockets": [copy.deepcopy(UNIX), build_control_socket("http", "10.0.0.7", 8014, "u", "p")]
+            }
+        }
+        before = json.dumps(wire["host"])
+        _post(_inner(infra.setup_direct_socket), **PROBE_FORM)
+        assert json.dumps(wire["host"]) == before and len(wire["applies"]) == 1
+        assert [i[2] for i in wire["incidents"]] == ["probe-pending"]
+
+    def test_a_later_probe_that_answers_clears_the_incident_of_that_server_and_service(self, wire, monkeypatch):
+        monkeypatch.setattr(infra, "_write_direct_socket_config", lambda *a, **k: "url written")
+        _post(_inner(infra.setup_direct_socket), **PROBE_FORM)
+        assert wire["resolved"] == [(1, "dhcp4")] and wire["incidents"] == []
+
+
+# ── Q187 (AC2/AC3): the unit of recovery is the usable endpoint ──────────────────────────────────────────────────────────────────────────────────
+class TestTheTlsMaterialIsPartOfTheSnapshot:
+    """An https change installs a new certificate over the old at fixed paths BEFORE the socket change; a restored socket entry must meet the certificate it was issued with."""
+
+    FORM_A = {"scheme": "https", "address": "10.0.0.5", "port": "8004", "user": "u", "password": "p"}
+    FORM_B = {"scheme": "https", "address": "10.0.0.7", "port": "8005", "user": "u", "password": "p"}
+
+    @pytest.fixture
+    def tls_world(self, wire, monkeypatch, tmp_path):
+        import types
+
+        from jen import extensions
+        from jen.services import kea_host, kea_tls
+
+        monkeypatch.setattr(kea_tls, "SSL_DIR", str(tmp_path))
+        monkeypatch.setattr(extensions, "KEA_API_CA", "")
+        monkeypatch.setattr(extensions, "KEA_API_CLIENT_CERT", "")
+        monkeypatch.setattr(
+            "jen.services.capabilities.for_server", lambda sid, probe_kea=True: types.SimpleNamespace(tls=True)
+        )
+        world = {"installed": [], "now": None, "fail_install_at": None, "restarts": [], "tls": kea_tls}
+
+        def install_tls(server, service, files):
+            n = len(world["installed"]) + 1
+            if world["fail_install_at"] == n:
+                world["installed"].append(None)
+                return {"ok": False, "detail": "the helper refused it"}
+            world["installed"].append(copy.deepcopy(files))
+            world["now"] = copy.deepcopy(files)
+            return {"ok": True}
+
+        monkeypatch.setattr(kea_host, "install_tls", install_tls)
+        monkeypatch.setattr(
+            kea_host,
+            "service_action",
+            lambda server, service, action, *a, **k: world["restarts"].append(action) or {"ok": True},
+        )
+        wire["tls"] = world
+        return wire
+
+    def _first_https(self, world, monkeypatch):
+        """A successful https setup at 10.0.0.5: the host now holds pair A and an https socket on Jen's paths; Jen's own pair is A."""
+        monkeypatch.setattr(infra, "_write_direct_socket_config", lambda *a, **k: "url written")
+        _post(_inner(infra.setup_direct_socket), **self.FORM_A)
+        a_files = copy.deepcopy(world["tls"]["now"])
+        assert a_files and world["host"]["Dhcp4"]["control-sockets"][-1]["socket-type"] == "https"
+        return a_files
+
+    @staticmethod
+    def _sans(pem: str):
+        from cryptography import x509
+
+        cert = x509.load_pem_x509_certificate(pem.encode())
+        return [str(v.value) for v in cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value]
+
+    def test_https_a_then_https_b_with_the_write_refused_puts_the_sockets_and_the_certificate_back(
+        self, tls_world, monkeypatch
+    ):
+        world = tls_world["tls"]
+        a_files = self._first_https(tls_world, monkeypatch)
+        host_after_a = json.dumps(tls_world["host"])
+        _refuse_the_write(monkeypatch)
+        tls_world["flashes"].clear()
+        _post(_inner(infra.setup_direct_socket), **self.FORM_B)
+        assert json.dumps(tls_world["host"]) == host_after_a, "the sockets are back, key for key"
+        assert world["now"] == a_files, (
+            "the host's certificate AND key are the ones the restored socket was issued with"
+        )
+        assert "10.0.0.5" in self._sans(world["now"]["server.crt"]) and "10.0.0.7" not in self._sans(
+            world["now"]["server.crt"]
+        )
+        kt = world["tls"]
+        assert pathlib.Path(kt.server_copy_path(1, "dhcp4")).read_text(encoding="ascii") == a_files["server.crt"], (
+            "Jen's own copy agrees with the host again"
+        )
+        assert pathlib.Path(kt.server_key_path(1, "dhcp4")).read_text(encoding="ascii") == a_files["server.key"]
+        assert not os.path.exists(kt.server_copy_path(1, "dhcp4") + ".prev"), (
+            "the previous pair is retired once it is back"
+        )
+        texts = " ".join(t for _s, t in tls_world["flashes"])
+        assert "was undone" in texts and "PARTIAL" not in texts
+        assert tls_world["incidents"] == []
+        printed = _everything_printed(tls_world)
+        assert "PRIVATE KEY" not in printed and "BEGIN CERTIFICATE" not in printed
+
+    def test_the_previous_pair_was_reinstalled_before_the_restart_the_compensation_makes(self, tls_world, monkeypatch):
+        world = tls_world["tls"]
+        a_files = self._first_https(tls_world, monkeypatch)
+        _refuse_the_write(monkeypatch)
+        order = []
+        real_apply = tls_world["applies"]
+        monkeypatch.setattr(
+            "jen.services.kea_host.install_tls",
+            lambda server, service, files: order.append("install") or world.__setitem__("now", files) or {"ok": True},
+        )
+        import jen.services.kea_changeset as kc
+
+        inner = kc.apply_change
+        monkeypatch.setattr(kc, "apply_change", lambda *a, **k: order.append("apply:" + a[2][:8]) or inner(*a, **k))
+        _post(_inner(infra.setup_direct_socket), **self.FORM_B)
+        assert order == ["install", "apply:added an", "install", "apply:restored"], order
+        assert world["now"] == a_files and real_apply
+
+    def test_https_to_http_followed_by_a_refused_write_touches_no_certificate(self, tls_world, monkeypatch):
+        world = tls_world["tls"]
+        self._first_https(tls_world, monkeypatch)
+        installs = len(world["installed"])
+        host_after_a = json.dumps(tls_world["host"])
+        _refuse_the_write(monkeypatch)
+        _post(_inner(infra.setup_direct_socket), **dict(PROBE_FORM, address="10.0.0.9", port="8014"))
+        assert json.dumps(tls_world["host"]) == host_after_a and len(world["installed"]) == installs
+        assert tls_world["incidents"] == []
+
+    def test_the_config_check_failing_after_the_install_puts_the_certificate_back(self, tls_world, monkeypatch):
+        world = tls_world["tls"]
+        a_files = self._first_https(tls_world, monkeypatch)
+        tls_world["results"] = [ChangeSetResult("aborted", "testerror", [("error", "config validation failed")])]
+        tls_world["flashes"].clear()
+        _post(_inner(infra.setup_direct_socket), **self.FORM_B)
+        assert world["now"] == a_files and world["restarts"] == [], (
+            "nothing was restarted: the daemon never left the old config"
+        )
+        texts = " ".join(t for _s, t in tls_world["flashes"])
+        assert "were put back" in texts and "PARTIAL" not in texts and tls_world["incidents"] == []
+
+    def test_a_restart_that_failed_and_was_rolled_back_gets_the_old_certificate_and_one_more_restart(
+        self, tls_world, monkeypatch
+    ):
+        world = tls_world["tls"]
+        a_files = self._first_https(tls_world, monkeypatch)
+        tls_world["results"] = [ChangeSetResult("rolled_back", "restart-failed", [("error", "did NOT restart")])]
+        _post(_inner(infra.setup_direct_socket), **self.FORM_B)
+        assert world["now"] == a_files and world["restarts"] == ["restart"], (
+            "the changeset restarted the daemon on the NEW files; it is restarted once more on the old ones"
+        )
+        assert tls_world["incidents"] == []
+
+    def test_a_restart_that_cannot_be_repeated_is_a_recorded_incident(self, tls_world, monkeypatch):
+        self._first_https(tls_world, monkeypatch)
+        monkeypatch.setattr(
+            "jen.services.kea_host.service_action", lambda *a, **k: {"ok": False, "detail": "unit failed"}
+        )
+        tls_world["results"] = [ChangeSetResult("rolled_back", "restart-failed", [("error", "did NOT restart")])]
+        _post(_inner(infra.setup_direct_socket), **self.FORM_B)
+        assert [i[2] for i in tls_world["incidents"]] == ["restart-failed"]
+
+    def test_the_tls_rollback_itself_failing_is_partial_with_the_tls_not_restored_category(
+        self, tls_world, monkeypatch
+    ):
+        world = tls_world["tls"]
+        self._first_https(tls_world, monkeypatch)
+        _refuse_the_write(monkeypatch)
+        world["fail_install_at"] = (
+            len(world["installed"]) + 2
+        )  # the install of B succeeds, the reinstall of A is refused
+        _post(_inner(infra.setup_direct_socket), **self.FORM_B)
+        texts = _everything_printed(tls_world)
+        assert "PARTIAL STATE on kea-a" in texts and "certificate" in texts and "was undone" not in texts
+        assert "tls-not-restored" in [i[2] for i in tls_world["incidents"]]
+        assert "PRIVATE KEY" not in texts
+
+    def test_no_earlier_copy_means_the_sockets_come_back_and_the_certificate_is_a_recorded_incident(
+        self, tls_world, monkeypatch
+    ):
+        """A certificate installed by hand (or one issued before Jen kept the key): there is no `.prev` pair to put back."""
+        kt = tls_world["tls"]["tls"]
+        tls_world["host"] = {
+            "Dhcp4": {
+                "control-sockets": [
+                    copy.deepcopy(UNIX),
+                    build_control_socket("https", "10.0.0.5", 8004, "u", "p", tls=kt.remote_tls_paths("dhcp4")),
+                ]
+            }
+        }
+        original = json.dumps(tls_world["host"])
+        _refuse_the_write(monkeypatch)
+        _post(_inner(infra.setup_direct_socket), **self.FORM_B)
+        assert json.dumps(tls_world["host"]) == original
+        texts = _everything_printed(tls_world)
+        assert "PARTIAL STATE" in texts and "no earlier copy" in texts and "was undone" not in texts
+        assert [i[2] for i in tls_world["incidents"]] == ["tls-not-restored"]
+
+    def test_a_first_https_socket_has_nothing_to_put_back_and_says_nothing_false(self, tls_world, monkeypatch):
+        _refuse_the_write(monkeypatch)
+        _post(_inner(infra.setup_direct_socket), **self.FORM_B)
+        assert tls_world["host"] == {"Dhcp4": {"control-sockets": [UNIX]}}
+        assert tls_world["incidents"] == [] and "was undone" in " ".join(t for _s, t in tls_world["flashes"])
+
+    def test_a_retry_after_a_failed_attempt_keeps_the_pair_the_daemon_actually_had(self, tls_world, monkeypatch):
+        """Two attempts in a row both fail before the TLS is put back: the `.prev` pair stays the ORIGINAL, never the first attempt's."""
+        world = tls_world["tls"]
+        a_files = self._first_https(tls_world, monkeypatch)
+        kt = world["tls"]
+        first_new = kt.issue_server_cert({"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5"}, "dhcp4", "10.0.0.7")
+        second_new = kt.issue_server_cert({"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5"}, "dhcp4", "10.0.0.8")
+        assert first_new["server.key"] != second_new["server.key"]
+        assert kt.previous_material(1, "dhcp4")["server.key"] == a_files["server.key"]
+
+    def test_a_success_retires_the_previous_pair(self, tls_world, monkeypatch):
+        kt = tls_world["tls"]["tls"]
+        self._first_https(tls_world, monkeypatch)
+        monkeypatch.setattr(infra, "_write_direct_socket_config", lambda *a, **k: "url written")
+        _post(_inner(infra.setup_direct_socket), **self.FORM_B)
+        assert kt.previous_material(1, "dhcp4") is None
+        assert tls_world["resolved"][-1] == (1, "dhcp4")

@@ -501,7 +501,8 @@ read the change is planned on, and compensates ONLY by restoring that snapshot -
 one API socket: a daemon with more than one is refused before anything is sent, and a removal removes only the entry it names. "Undone" is said only when the restored list equals the snapshot and the
 daemon was restarted (the change set's `ok`); a file that already matched, a plan that never read the config, or a restore that fails is the partial state, said, with the by-hand step. Recovery text,
 audit rows and log lines name a socket by type, address and port (`describe_socket`) and never print its entry (a Basic client's password, TLS paths): LEAK-001's family.
-**Established.** Q186 (ChatGPT's review of beta.16 and Fable's executing pass: the compensation of a replaced socket deleted it, the recovery sentence printed the removed entry).
+The unit of recovery is the USABLE endpoint (Q187): the socket list, the certificate and key Jen installed (kept locally as a `.prev` pair, reinstalled before the restart the compensation makes), and a restarted daemon - at EVERY failure branch, the probe-failure branch included (a replacement that does not answer puts the working socket back; a first socket stays, recorded as probe-pending). What cannot be proved restored (no snapshot, a file that already matched, a restart that did not verify, a certificate with no earlier copy, a socket that never answered) is a persistent incident in a category - on Servers and in Health until a verified recovery of THAT server and service or a superadmin acknowledges it - never only a flash and an audit row, and never "undone".
+**Established.** Q186 (ChatGPT's review of beta.16 and Fable's executing pass: the compensation of a replaced socket deleted it, the recovery sentence printed the removed entry); extended by Q187 (the probe-failure branch, the TLS material, the persistent incident).
 **Enforced at.** `kea_config_edit.control_sockets` / `restore_control_sockets` / `describe_socket`; `infrastructure._undo_remote_change` (the one compensation both direct-socket routes call).
 **Tests.**
 - `tests/test_kea_config_edit.py::TestControlSocketSnapshotAndRestore`
@@ -510,6 +511,12 @@ audit rows and log lines name a socket by type, address and port (`describe_sock
 - `tests/test_direct_socket_lock.py::TestAFailedWriteOfJensSettingsIsHandledLikeARefusal`
 - `tests/test_invariant_sweeps.py::TestS11bASocketEntryNeverReachesText`
 - `tests/system/test_boundaries.py::test_22_a_failed_write_of_jens_settings_after_a_socket_change_puts_the_daemons_sockets_back`
+- `tests/system/test_boundaries.py::test_22_b_a_replacement_that_never_answers_puts_the_working_socket_back`
+- `tests/system/test_boundaries.py::test_22_c_an_https_replacement_whose_write_fails_puts_the_sockets_and_the_certificate_back`
+- `tests/test_direct_socket_lock.py::TestAProbeThatFailsAfterAReplacementPutsTheWorkingSocketBack`
+- `tests/test_direct_socket_lock.py::TestTheTlsMaterialIsPartOfTheSnapshot`
+- `tests/test_kea_changeset.py::TestAnUnprovedRecoveryIsAPersistentIncident`
+- `tests/test_servers.py::TestARecoveryThatWasNotProvedIsShownUntilItIsAcknowledged`
 
 ### LOG-CACHE-002 - What a cache remembers about its readers is bounded by what is in flight, an unrelated key never waits, and a read begun before a clear is not kept
 **Rule.** A second reader of the SAME key waits for the first one's read through a table of in-flight reads whose entries live only as long as their read - never one lock per key kept for the life of the process,

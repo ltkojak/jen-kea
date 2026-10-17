@@ -631,8 +631,11 @@ def restore_control_sockets(cfg: dict, service: str, snapshot: list):
     daemon already has exactly that list) or "unsupported" (no daemon block, or a `control-sockets` that is not the list form)."""
     cfg = copy.deepcopy(cfg)
     section = _daemon_section(cfg, service)
-    if section is None:
-        return cfg, "unsupported"
+    if section is None or not isinstance(snapshot, list) or not all(isinstance(s, dict) for s in snapshot):
+        return (
+            cfg,
+            "unsupported",
+        )  # (Q187, AC6) a snapshot that is not a list of entries is not one this function writes
     if "control-sockets" in section and not isinstance(section["control-sockets"], list):
         return cfg, "unsupported"
     if "control-socket" in section and (
@@ -662,12 +665,27 @@ def describe_socket(entry) -> str:
     fields are NEVER printed: a Basic client's password is in the entry, and the entry must never reach text (LEAK-001)."""
     if not isinstance(entry, dict):
         return "an unreadable socket entry"
-    kind = str(entry.get("socket-type") or "?")
+
+    def plain(value) -> str:
+        """Only a string or an integer is printed (Q187, AC6): a dict, a list or a boolean in a field the entry should carry as text is '?', never its repr (which could be anything)."""
+        if isinstance(value, bool) or not isinstance(value, str | int):
+            return "?"
+        return str(value) or "?"
+
+    kind = (
+        plain(entry["socket-type"]) if "socket-type" in entry else "unix"
+    )  # Kea's default: a type-less entry is a unix socket
     if kind == "unix":
-        return f"unix {entry.get('socket-name') or '?'}"
-    address = str(entry.get("socket-address") or "?")
+        return f"unix {plain(entry.get('socket-name'))}"
+    address = plain(entry.get("socket-address"))
     host = f"[{address}]" if ":" in address else address
-    return f"{kind} {host}:{entry.get('socket-port', '?')}"
+    return f"{kind} {host}:{plain(entry.get('socket-port'))}"
+
+
+def uses_singular_socket(cfg: dict, service: str) -> bool:
+    """Does the daemon still carry the pre-2.7.2 singular `control-socket` map (and no list)? A change that touches its sockets rewrites it in the list form (Q187, AC6); the route says so."""
+    section = _daemon_section(cfg, service)
+    return section is not None and "control-socket" in section and "control-sockets" not in section
 
 
 def remove_control_socket(cfg: dict, service: str, address: str | None = None, port: int | None = None):
@@ -681,10 +699,12 @@ def remove_control_socket(cfg: dict, service: str, address: str | None = None, p
     section = _daemon_section(cfg, service)
     if section is None:
         return cfg, "unsupported"
-    sockets = section.get("control-sockets")
-    if sockets is None:
+    if "control-sockets" not in section and "control-socket" not in section:
         return cfg, "nochange"
-    if not isinstance(sockets, list):
+    sockets = _control_sockets(
+        section
+    )  # (Q187, AC6) reads - and converts, in place - the singular map the snapshot already reads
+    if sockets is None:
         return cfg, "unsupported"
     api = [s for s in sockets if _is_api_socket(s)]
     if address is None and port is None:

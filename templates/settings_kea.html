@@ -15,7 +15,7 @@
     <div style="margin-top:8px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:12px;">
         <form method="POST" action="/settings/infrastructure/direct-socket/{{ server_id }}/{{ service }}" data-confirm="Edit {{ conf }} on {{ ssh_host }}, restart {{ daemon }}, and probe the new socket? Jen only switches over if the socket answers as {{ daemon }}.">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <div class="form-hint u-761d3a">Jen adds the socket entry to <code>control-sockets</code> in <code>{{ conf }}</code> on <code>{{ ssh_host }}</code> (the unix socket stays), validates the file with <code>-t</code>, restarts {{ daemon }}, probes the new socket, and only if it answers <em>as {{ daemon }}</em> points Jen at it{% if service == 'dhcp4' %} and switches to direct mode{% endif %}. If the probe fails, nothing in Jen changes.</div>
+            <div class="form-hint u-761d3a">Jen adds the socket entry to <code>control-sockets</code> in <code>{{ conf }}</code> on <code>{{ ssh_host }}</code> (the unix socket stays), validates the file with <code>-t</code>, restarts {{ daemon }}, probes the new socket, and only if it answers <em>as {{ daemon }}</em> points Jen at it{% if service == 'dhcp4' %} and switches to direct mode{% endif %}. If the probe fails, the daemon's sockets (and, for https, the certificate it had) are put back as they were and nothing in Jen changes; a first socket stays in the daemon's config and is re-probed when you run this again.</div>
             <div class="form-row">
                 <div class="form-group">
                     <label for="f-scheme">Scheme</label>
@@ -51,9 +51,9 @@
         <form method="POST" action="/settings/infrastructure/direct-socket/{{ server_id }}/{{ service }}/remove" class="u-2d191d" data-confirm="Remove the http control socket from {{ conf }} on {{ ssh_host }} and restart {{ daemon }}? {% if service == 'dhcp4' %}Jen returns to Control Agent mode unless another server still has its own socket.{% else %}Jen clears this daemon's URL override{% if infra.kea_connection_mode != 'direct' %} and its own user and password (they were the socket's; it then uses the Control Agent's){% endif %}.{% endif %}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="form-group">
-                {% if service == 'dhcp4' and server_id in infra.needs_ca_url %}<label>The Control Agent's address (Jen has none saved to return to)
+                {% if service == 'dhcp4' %}<label>The Control Agent's address ({% if server_id in infra.needs_ca_url %}required: Jen has none to return to{% else %}blank uses the saved address, {{ infra.prev_urls.get(server_id) }}{% endif %})
                     <input type="text" name="ca_url" placeholder="http://{{ ssh_host }}:8000" autocomplete="off"></label>
-                <div class="form-hint">Needed unless another server keeps its own socket. Jen asks the address who answers before it removes the socket, using the user and password below.</div>{% endif %}
+                <div class="form-hint">{% if server_id in infra.needs_ca_url %}Needed unless a server besides this one keeps its own socket.{% else %}Type one to use a different address.{% endif %} Jen asks the address who answers before it removes the socket, using the user and password below; it must answer as a Control Agent.</div>{% endif %}
                 {% if service == 'dhcp4' %}<input type="text" name="user" aria-label="The Control Agent's user (blank keeps the current one)" placeholder="user (blank keeps the current one)" autocomplete="off">{% endif %}
                 <label>{% if service == 'dhcp4' %}The password Jen will use at {{ infra.prev_urls.get(server_id) or 'the Control Agent address (set it above)' }}{% else %}Replace this daemon's saved password{% endif %}
                     <input type="password" name="password" placeholder="{% if service == 'dhcp4' %}(blank keeps the socket's pair){% else %}(blank keeps what is saved){% endif %}" autocomplete="new-password"></label>
