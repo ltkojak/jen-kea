@@ -591,21 +591,44 @@ _MAX_INCIDENTS = 20
 _INCIDENTS_HARD_CEILING = 200
 
 
-def _incidents_of(raw) -> list[dict]:
+class MalformedNote(ValueError):
+    """The stored recovery note is text that is not a note (Q189, AE3). A read that must not turn it into "nothing is waiting" raises this; a write that would put a new incident over it refuses."""
+
+
+def _incidents_of(raw, strict: bool = False) -> list[dict]:
     """The unresolved incidents in a stored note (v5.65.10, Q99). The note is `{"incidents": [...]}`; the
     single-note shape written by 5.65.1 to 5.65.9 (`{"status": ..., "service": ...}`) is read as a list of
-    one, so a note recorded before an upgrade is neither lost nor misread."""
+    one, so a note recorded before an upgrade is neither lost nor misread.
+
+    `strict` (Q189, AE3): the only shapes are (a) nothing - `None` or `""`, (b) a dict whose `incidents` is a list of dicts, (c) the 5.65.x single note, a dict with a `status`. Anything else
+    raises `MalformedNote` - a writer that read it as `[]` would write its new incident over text it never understood, and the next recording would silently turn it into a valid note.
+    Without `strict` the reader stays forgiving (the Servers banner reads the note on every page load): anything unreadable is no incidents."""
     import json
 
+    if raw is None or raw == "":
+        return []
     try:
         data = json.loads(raw) if isinstance(raw, str) else raw
     except Exception:
+        if strict:
+            raise MalformedNote("the incident note is not readable") from None
         return []
     if not isinstance(data, dict):
+        if strict:
+            raise MalformedNote("the incident note is not readable")
         return []
+    if "incidents" in data and strict:
+        listed = data["incidents"]
+        if isinstance(listed, list) and all(isinstance(i, dict) for i in listed):
+            return list(listed)
+        raise MalformedNote("the incident note is not readable")
     if isinstance(data.get("incidents"), list):
         return [i for i in data["incidents"] if isinstance(i, dict)]
-    return [data] if data.get("status") else []
+    if data.get("status"):
+        return [data]
+    if strict:
+        raise MalformedNote("the incident note is not readable")
+    return []
 
 
 def _incident_servers(incident: dict) -> list[str]:
@@ -635,16 +658,19 @@ def _incident_cleared(incident: dict, result: ChangeSetResult, service: str) -> 
     )  # an incident recorded before ids were kept, or a result built without them
 
 
-def _with_attention(fn) -> bool:
+def _with_attention(fn, strict: bool = True) -> bool:
     """Read-modify-write the incident note as ONE locked transaction (v5.69.0-beta.19, Q188, AD5). `fn(incidents: list[dict]) -> list[dict] | None` receives the incidents as the note holds them
     UNDER the row lock and returns the new list (None: leave the note alone); the note is the settings row `changeset_attention`, read `FOR UPDATE` and written in the same transaction, so two workers
-    recording two incidents (or one recording while another acknowledges) both land. Returns False - never raises, never reports as done what is not - when the transaction could not complete."""
+    recording two incidents (or one recording while another acknowledges) both land. Returns False - never raises, never reports as done what is not - when the transaction could not complete.
+
+    Q189 (AE3): the stored note is parsed STRICTLY. A value that is not a note makes the transaction refuse (nothing is written, False comes back) - it is never read as `[]` and written over.
+    `strict=False` is the one sanctioned reset, used by `set_aside_unreadable_note` after the raw value has been copied to a key of its own."""
     import json
 
     from jen.models import user as _user
 
     def mutate(raw):
-        new = fn(_incidents_of(raw))
+        new = fn(_incidents_of(raw, strict=strict))
         if new is None:
             return None
         return json.dumps({"incidents": new}) if new else ""
@@ -656,7 +682,7 @@ def _with_attention(fn) -> bool:
         return False
 
 
-def record_outcome(result: ChangeSetResult, service: str, summary: str) -> None:
+def record_outcome(result: ChangeSetResult, service: str, summary: str) -> bool:
     """Remember a rolled-back / failed-rollback outcome for the Servers page; resolve incidents after a
     clean run. Best-effort telemetry: never raises, never changes the result.
 
@@ -665,7 +691,10 @@ def record_outcome(result: ChangeSetResult, service: str, summary: str) -> None:
     `rollback_failed` on kea-a ("nothing was changed", and the next clean run cleared it while a daemon
     was still stopped), and a second `rollback_failed` replaced the first one's `needs_hands`. Now each
     outcome is appended; a clean run drops the incidents it covers and the key is cleared only when none
-    is left. v5.69.0-beta.19 (Q188, AD5): through `_with_attention` - one locked transaction."""
+    is left. v5.69.0-beta.19 (Q188, AD5): through `_with_attention` - one locked transaction.
+
+    Q189 (AE3): returns False when the note could not be updated (an unreadable stored note is refused, never overwritten); True otherwise."""
+    done = True
     try:
         from datetime import datetime, timezone
 
@@ -710,7 +739,7 @@ def record_outcome(result: ChangeSetResult, service: str, summary: str) -> None:
                     del incidents[: len(incidents) - _INCIDENTS_HARD_CEILING]
                 return incidents
 
-            _with_attention(add)
+            done = _with_attention(add)
             # v5.65.8 (Q97): the audit log used to record only that someone DISMISSED the notice. A rollback
             # is an event in its own right (and a rollback_failed is a server that may be stopped).
             _user.audit(
@@ -726,9 +755,11 @@ def record_outcome(result: ChangeSetResult, service: str, summary: str) -> None:
                 left = [i for i in incidents if not _incident_cleared(i, result, service)]
                 return left if len(left) != len(incidents) else None
 
-            _with_attention(clear)
+            done = _with_attention(clear)
     except Exception as e:
         logger.debug(f"kea_changeset: could not record the outcome: {e}")
+        return False
+    return done
 
 
 # ── an unproved recovery is a persistent incident (v5.69.0-beta.18, Q187, AC3) ───────────────────────────────────────────────────────────────
@@ -851,22 +882,13 @@ def recovery_incidents(strict: bool = False) -> list[dict]:
     note) raises ValueError instead of reading as "none" - Health says "unknown", not "ok". Strict reads the table itself (`get_global_setting(strict=True)`): the cache's cold-start default and
     its stale copy are exactly what must not answer "nothing is waiting" when the database is down."""
     if strict:
-        import json
-
         from jen.models import user as _user
 
         try:
             raw = _user.get_global_setting(ATTENTION_KEY, "", strict=True)
         except Exception as e:
             raise ValueError(f"the incident note could not be read ({type(e).__name__})") from e
-        if raw:
-            try:
-                data = json.loads(raw) if isinstance(raw, str) else raw
-            except ValueError as e:
-                raise ValueError("the incident note is not readable") from e
-            if not isinstance(data, dict):
-                raise ValueError("the incident note is not readable")
-        incidents = _incidents_of(raw)
+        incidents = _incidents_of(raw, strict=True)  # (raises MalformedNote for stored text that is not a note)
         return [i for i in incidents if i.get("kind") == ATTENTION_KIND]
     note = attention()
     return [i for i in (note or {}).get("incidents", []) if i.get("kind") == ATTENTION_KIND]
@@ -900,12 +922,13 @@ def acknowledge_recovery(server_id=None, service: str | None = None, category: s
         return None
 
 
-def dismiss_rollback_notes() -> None:
-    """The Servers page's old Dismiss button (rolled_back / rollback_failed): leaves the recovery incidents, which a superadmin acknowledges (Q187)."""
+def dismiss_rollback_notes() -> bool:
+    """The Servers page's old Dismiss button (rolled_back / rollback_failed): leaves the recovery incidents, which a superadmin acknowledges (Q187). False when the note could not be updated (Q189)."""
     try:
-        _with_attention(lambda incidents: [i for i in incidents if i.get("kind") == ATTENTION_KIND])
+        return _with_attention(lambda incidents: [i for i in incidents if i.get("kind") == ATTENTION_KIND])
     except Exception as e:
         logger.debug(f"kea_changeset: could not dismiss the rollback notes: {e}")
+        return False
 
 
 def attention() -> dict | None:
@@ -919,11 +942,55 @@ def attention() -> dict | None:
         return None
 
 
-def clear_attention() -> None:
+def clear_attention() -> bool:
     try:
-        _with_attention(lambda incidents: [])  # (a locked transaction like every other writer of the note)
+        return _with_attention(
+            lambda incidents: []
+        )  # (a locked transaction like every other writer of the note; an unreadable note is refused, not cleared)
     except Exception as e:
         logger.debug(f"kea_changeset: could not clear the outcome: {e}")
+        return False
+
+
+def note_state() -> str:
+    """'ok' | 'malformed' | 'unavailable': can the stored recovery note be read as a note (Q189, AE3)? The Servers page offers a superadmin the set-aside only for 'malformed'."""
+    try:
+        recovery_incidents(strict=True)
+        return "ok"
+    except MalformedNote:
+        return "malformed"
+    except ValueError:
+        return "unavailable"
+
+
+def set_aside_unreadable_note() -> tuple[str, str, int]:
+    """The ONE sanctioned reset of an unreadable recovery note (Q189, AE3), for a superadmin's explicit request: copy the raw stored value to the settings row
+    `changeset_attention_set_aside_<utc timestamp>` (one locked `update_global_setting`), then clear the note through `_with_attention(strict=False)`. Returns `(status, key, length)`:
+    'not-needed' (the note reads fine - nothing is touched), 'done', or 'failed' (the copy or the clear did not happen: the note is left as it was, and the copy, if made, is a spare).
+    Never returns the text; the caller audits the length and the key."""
+    from datetime import datetime, timezone
+
+    from jen.models import user as _user
+
+    try:
+        raw = _user.get_global_setting(ATTENTION_KEY, "", strict=True)
+    except Exception:
+        return "failed", "", 0
+    try:
+        _incidents_of(raw, strict=True)
+        return "not-needed", "", 0
+    except MalformedNote:
+        pass
+    key = f"{ATTENTION_KEY}_set_aside_{datetime.now(timezone.utc):%Y%m%dT%H%M%S%fZ}"
+    value = raw if isinstance(raw, str) else str(raw)
+    try:
+        if not _user.update_global_setting(key, lambda current: value):
+            return "failed", "", 0
+        if not _with_attention(lambda incidents: [], strict=False):
+            return "failed", key, len(value)
+    except Exception:
+        return "failed", "", 0
+    return "done", key, len(value)
 
 
 def apply_change(service: str, mutate_fn, summary: str, **kwargs) -> ChangeSetResult:

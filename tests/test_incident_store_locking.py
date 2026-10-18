@@ -176,3 +176,32 @@ def test_a_deadlock_victim_retries_instead_of_losing_the_update(monkeypatch):
 
     monkeypatch.setattr("jen.models.db.jen_db", broken)
     assert cs.record_attention(2, "dhcp4", "y", "aborted") is False
+
+
+@pytest.mark.parametrize("bad", ["{broken json!!!", "[]", '{"incidents": "x"}'])
+def test_a_note_that_is_not_a_note_is_refused_unchanged_by_every_writer(bad):
+    """Q189 (AE3): on the REAL table. The transaction reads the stored value under the row lock, the strict parse raises inside it, the transaction rolls back, False comes back - and the value is
+    byte-equal afterwards. (Before: `_incidents_of` read it as `[]`, the writer wrote its new incident over it.)"""
+    user_mod.set_global_setting(cs.ATTENTION_KEY, bad)
+    assert cs.record_attention(1, "dhcp4", "x", "aborted", server_name="kea-a") is False
+    assert cs.acknowledge_recovery(1, "dhcp4", "aborted") is None
+    with jen_db() as c, c.cursor() as cur:
+        cur.execute("SELECT setting_value FROM settings WHERE setting_key = %s", (cs.ATTENTION_KEY,))
+        row = cur.fetchone()
+    assert (row["setting_value"] if isinstance(row, dict) else row[0]) == bad
+    assert cs.note_state() == "malformed"
+
+
+def test_the_set_aside_keeps_the_text_in_a_row_of_its_own_and_the_note_works_again():
+    user_mod.set_global_setting(cs.ATTENTION_KEY, "{broken json!!!")
+    status, key, length = cs.set_aside_unreadable_note()
+    try:
+        assert status == "done" and length == len("{broken json!!!")
+        with jen_db() as c, c.cursor() as cur:
+            cur.execute("SELECT setting_value FROM settings WHERE setting_key = %s", (key,))
+            row = cur.fetchone()
+        assert (row["setting_value"] if isinstance(row, dict) else row[0]) == "{broken json!!!"
+        assert cs.note_state() == "ok" and cs.record_attention(1, "dhcp4", "x", "aborted") is True
+    finally:
+        with jen_db() as c, c.cursor() as cur:
+            cur.execute("DELETE FROM settings WHERE setting_key LIKE %s", (cs.ATTENTION_KEY + "_set_aside_%",))

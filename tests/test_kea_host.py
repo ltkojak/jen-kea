@@ -2330,3 +2330,47 @@ class TestReadConfigForAValueNotForHistory:
         )
         assert kea_host.read_config_versioned(SERVER, "dhcp4", helper_only=True, capture=False) == (None, None)
         assert flagged == [SERVER], "the host is still recorded as having no helper"
+
+
+class TestReadConfigIsATransportBoundaryToo:
+    """Q189 (AE4): paramiko's `socket.timeout`, an `EOFError`, an `SSHException` or a reset socket from the channel is a FAILED READ - `(None, None)` and a sentence in `errors` - never an exception. The
+    two direct-socket routes read the daemon's config before they send anything; an exception there was a 500 with every flash dropped (Q158 F7c, fixed for `install_tls` and `tail_log`)."""
+
+    @pytest.mark.parametrize(
+        "exc",
+        [TimeoutError("timed out"), EOFError(), OSError(104, "Connection reset by peer")],
+        ids=["timeout", "eof", "reset"],
+    )
+    def test_each_class_is_a_failed_read(self, monkeypatch, exc):
+        def raising(*a, **k):
+            raise exc
+
+        monkeypatch.setattr(kea_host, "helper_call", raising)
+        errors = []
+        assert kea_host.read_config_versioned(SERVER, "dhcp4", errors=errors, capture=False) == (None, None)
+        assert len(errors) == 1 and type(exc).__name__ in errors[0]
+        assert kea_host.read_config(SERVER, "dhcp4", capture=False) is None
+
+    def test_a_missing_file_still_appends_nothing(self, monkeypatch):
+        monkeypatch.setattr(kea_host, "helper_call", lambda *a, **k: {"ok": False, "error": "missing"})
+        monkeypatch.setattr(kea_host, "_record_from_resp", lambda *a: None)
+        errors = []
+        assert kea_host.read_config_versioned(SERVER, "dhcp4", errors=errors, capture=False) == (None, None)
+        assert errors == []
+
+    def test_the_bare_read_config_call_sites_in_the_routes_can_only_go_down(self):
+        """The 12 route call sites other than the direct-socket pre-read (ddns.py x3, servers.py, authoring.py, subnets.py x7) are protected by the boundary above but still treat None without a
+        message of their own; they are on the PENDING register. This counts them (AST, whole tree) so a new one has to be argued."""
+        import ast
+
+        count = 0
+        for path in sorted(pathlib.Path("jen/routes").rglob("*.py")):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if isinstance(node, ast.Call):
+                    f = node.func
+                    name = f.attr if isinstance(f, ast.Attribute) else (f.id if isinstance(f, ast.Name) else "")
+                    if name in ("read_config", "read_config_versioned"):
+                        count += 1
+        assert count <= 13, (
+            f"{count} route call sites of read_config (13 = the 12 registered + the direct-socket pre-read)"
+        )

@@ -322,7 +322,10 @@ def update_global_setting(key: str, mutate) -> bool:
             if code in (1213, 1205):  # deadlock victim / lock wait timeout: nothing was written
                 continue
             break
-    logger.error(f"update_global_setting({key}): {type(last).__name__}: {last}")
+    # the class and, for a database error, its code - never the message: a transaction refused because the stored value is not what its caller expects (Q189, AE3) must not
+    # print that value, and a database message can carry the row
+    code = last.args[0] if last is not None and getattr(last, "args", None) and isinstance(last.args[0], int) else None
+    logger.error(f"update_global_setting({key}): {type(last).__name__}" + (f" (error {code})" if code else ""))
     return False
 
 

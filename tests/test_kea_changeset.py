@@ -17,6 +17,7 @@ import pytest
 
 from jen.services import kea_changeset as cs
 from jen.services import kea_host
+from jen.services.kea_changeset import ChangeSetResult
 from tests._kea_host_fakes import FakeHelper
 
 
@@ -858,7 +859,12 @@ def _the_locked_update_runs_over_each_tests_own_settings_stub(monkeypatch):
 
     def update(key, mutate):
         current = user_mod.get_global_setting(key, "")
-        new = mutate(current or "")
+        try:
+            new = mutate(current or "")
+        except (
+            Exception
+        ):  # the real transaction rolls back and answers False (Q189: a note that is not a note is refused)
+            return False
         return not (new is not None and new != current and user_mod.set_global_setting(key, new) is False)
 
     monkeypatch.setattr(user_mod, "update_global_setting", update)
@@ -1094,3 +1100,117 @@ class TestTheIncidentNoteQ188:
         )
         cs.resolve_attention(1, "dhcp4")
         assert health._kea_tls_expiry({}).status == "ok"
+
+
+class TestMalformedNote:
+    """Q189 (AE3): the stored recovery note is text Jen may not be able to read as a note (a hand edit, a failed write, a bad restore). A writer that read it as "no incidents" wrote its new
+    incident OVER the text; the next recording then silently made it a valid, one-incident note. Now every writer refuses it, byte for byte unchanged, and a superadmin sets it aside."""
+
+    GOOD_LEGACY = json.dumps(
+        {
+            "status": "rolled_back",
+            "service": "dhcp4",
+            "summary": "an old change",
+            "at": "2026-01-01T00:00:00+00:00",
+            "needs_hands": [],
+        }
+    )
+    BAD = [
+        "{broken json!!!",
+        "[]",
+        '{"incidents": "x"}',
+        '{"incidents": [1, 2]}',
+        "{}",
+        '{"foo": 1}',
+        '"just a string"',
+        "42",
+    ]
+
+    @pytest.fixture
+    def store(self, monkeypatch):
+        data = {}
+        from jen.models import user as user_mod
+
+        monkeypatch.setattr(user_mod, "get_global_setting", lambda k, d="", strict=False: data.get(k, d))
+        monkeypatch.setattr(user_mod, "set_global_setting", lambda k, v: data.__setitem__(k, v))
+        monkeypatch.setattr(user_mod, "audit", lambda *a, **k: None)
+        monkeypatch.setattr(cs, "record_outcome", _REAL_RECORD_OUTCOME)
+        return data
+
+    def _record(self):
+        return cs.record_attention(1, "dhcp4", "setup of a socket", "tls-not-restored", server_name="Primary")
+
+    @pytest.mark.parametrize(
+        "stored", [None, "", '{"incidents": []}'], ids=["missing row", "empty string", "valid empty"]
+    )
+    def test_nothing_recorded_yet_is_recorded(self, store, stored):
+        if stored is not None:
+            store[cs.ATTENTION_KEY] = stored
+        assert self._record() is True
+        assert [i["category"] for i in cs.recovery_incidents(strict=True)] == ["tls-not-restored"]
+
+    def test_a_valid_note_is_appended_to(self, store):
+        assert self._record() is True
+        assert cs.record_attention(2, "dhcp4", "another", "restart-failed", server_name="Standby") is True
+        assert sorted(i["server_id"] for i in cs.recovery_incidents(strict=True)) == [1, 2]
+
+    def test_the_legacy_single_note_is_read_as_one_and_appended_to(self, store):
+        store[cs.ATTENTION_KEY] = self.GOOD_LEGACY
+        assert self._record() is True
+        notes = cs._incidents_of(store[cs.ATTENTION_KEY], strict=True)
+        assert [i.get("status") for i in notes] == ["rolled_back", "tls-not-restored"]
+
+    @pytest.mark.parametrize("bad", BAD)
+    def test_every_writer_refuses_it_and_the_stored_value_is_byte_equal_afterwards(self, store, bad):
+        store[cs.ATTENTION_KEY] = bad
+        result = ChangeSetResult("rolled_back", "x", [("error", "boom")], needs_hands=["kea-a"], needs_hands_ids=[1])
+        assert self._record() is False
+        assert cs.resolve_attention(1, "dhcp4") == 0
+        assert cs.acknowledge_recovery(1, "dhcp4", "tls-not-restored") is None
+        assert cs.record_outcome(result, "dhcp4", "a pool edit") is False
+        assert cs.record_outcome(ChangeSetResult("ok", "ok", []), "dhcp4", "a pool edit") is False
+        assert cs.dismiss_rollback_notes() is False
+        assert cs.clear_attention() is False
+        assert store[cs.ATTENTION_KEY] == bad, "NOT ONE writer touched it"
+
+    @pytest.mark.parametrize("bad", BAD)
+    def test_a_strict_read_raises_the_malformed_error_and_the_display_stays_empty(self, store, bad):
+        store[cs.ATTENTION_KEY] = bad
+        with pytest.raises(cs.MalformedNote):
+            cs.recovery_incidents(strict=True)
+        assert cs.note_state() == "malformed"
+        assert cs.attention() is None, "the banner reads leniently: nothing to show"
+
+    def test_health_says_unknown_before_the_set_aside_and_ok_after(self, store):
+        from jen.services import health
+
+        store[cs.ATTENTION_KEY] = "{broken json!!!"
+        before = health._direct_socket_recovery(None)
+        assert before.status == "skip" and "could not be read" in before.detail
+        status, key, length = cs.set_aside_unreadable_note()
+        assert (
+            status == "done" and key.startswith(cs.ATTENTION_KEY + "_set_aside_") and length == len("{broken json!!!")
+        )
+        assert health._direct_socket_recovery(None).status == "ok"
+
+    def test_the_set_aside_moves_the_text_and_clears_the_note(self, store):
+        store[cs.ATTENTION_KEY] = "{broken json!!!"
+        status, key, length = cs.set_aside_unreadable_note()
+        assert status == "done" and store[key] == "{broken json!!!" and store[cs.ATTENTION_KEY] == ""
+        assert cs.note_state() == "ok" and self._record() is True
+
+    def test_a_note_that_reads_fine_is_not_set_aside(self, store):
+        self._record()
+        before = store[cs.ATTENTION_KEY]
+        assert cs.set_aside_unreadable_note() == ("not-needed", "", 0)
+        assert store[cs.ATTENTION_KEY] == before and not [k for k in store if "set_aside" in k]
+
+    def test_an_unavailable_store_is_not_malformed(self, monkeypatch):
+        from jen.models import user as user_mod
+
+        def down(key, default=None, strict=False):
+            raise RuntimeError("the database is down")
+
+        monkeypatch.setattr(user_mod, "get_global_setting", down)
+        assert cs.note_state() == "unavailable"
+        assert cs.set_aside_unreadable_note() == ("failed", "", 0)

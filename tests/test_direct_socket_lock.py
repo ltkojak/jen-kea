@@ -28,6 +28,7 @@ import jen.routes.settings.infrastructure as infra
 from jen.services import kea_config_edit as ed
 from jen.services.kea_authoring import build_control_socket
 from jen.services.kea_changeset import ChangeSetResult
+from tests._fs_flake import retry_transient_replace  # noqa: F401 (autouse)
 
 pytest_plugins = ("tests._investigation_world",)
 
@@ -126,6 +127,7 @@ def wire(monkeypatch, caplog):
         "results": [],  # a forced ChangeSetResult per call (the mutate still runs on the simulated host)
         "codes": [],
         "incidents": [],  # Q187: what record_attention was asked to keep in front of the operator
+        "details": [],  # ... and the by-hand sentence each came with (Q189)
         "resolved": [],  # ... and the (server, service) pairs a verified recovery cleared
         "resolved_categories": [],  # ... and which categories each of those clearings was allowed to clear (None: all)
         "host": {"Dhcp4": {"control-sockets": [copy.deepcopy(UNIX)]}},
@@ -147,7 +149,7 @@ def wire(monkeypatch, caplog):
     monkeypatch.setattr(
         infra,
         "_api_sockets_of",
-        lambda s, svc: [x for x in ed.control_sockets(log["host"], svc) if ed._is_api_socket(x)],
+        lambda s, svc, errors=None: [x for x in ed.control_sockets(log["host"], svc) if ed._is_api_socket(x)],
     )
 
     def fresh_parser():
@@ -159,9 +161,20 @@ def wire(monkeypatch, caplog):
     monkeypatch.setattr(
         "jen.services.kea_changeset.record_attention",
         lambda server_id, service, operation, category, when=None, **kw: (
-            log["incidents"].append((server_id, service, category, operation)) or True
+            (
+                log["incidents"].append((server_id, service, category, operation)),
+                log["details"].append(kw.get("detail", "")),
+            )
+            and True
         ),
     )
+    monkeypatch.setattr(
+        "jen.services.kea_changeset.recovery_incidents",
+        lambda strict=False: [
+            {"kind": "attention", "category": c, "status": c, "service": s, "server_id": sid, "server_name": "kea-a"}
+            for sid, s, c, _op in log["incidents"]
+        ],
+    )  # (Q189: `kea_tls.host_material` reads the durable record; here it is the list the run recorded)
     monkeypatch.setattr(
         "jen.services.kea_changeset.resolve_attention",
         lambda server_id, service, **kw: (
@@ -347,7 +360,7 @@ class TestALateRefusalOnSetupPutsTheHostBack:
 
     def test_a_second_socket_that_appears_after_the_check_aborts_the_plan_not_the_file(self, wire, monkeypatch):
         """The pre-read said one, the plan sees two (a hand edit between): `set_control_socket` answers `multiple` and the change set aborts before any write."""
-        monkeypatch.setattr(infra, "_api_sockets_of", lambda s, svc: [])
+        monkeypatch.setattr(infra, "_api_sockets_of", lambda s, svc, errors=None: [])
         wire["host"] = {
             "Dhcp4": {"control-sockets": [copy.deepcopy(UNIX), copy.deepcopy(SOCKET), copy.deepcopy(CLIENT_SOCKET)]}
         }
@@ -605,7 +618,34 @@ def tls_world(wire, monkeypatch, tmp_path):
         lambda server, service, action, *a, **k: world["restarts"].append(action) or {"ok": True},
     )
     wire["tls"] = world
-    return wire
+    yield wire
+    _assert_the_tls_invariants(wire)
+
+
+def _assert_the_tls_invariants(wire):
+    """Q189 (AE0), for every setup / remove scenario that touches TLS: T1 - when a socket of the daemon references Jen's TLS files, Jen's record of what the host holds (`host_material`) is
+    byte-equal to the pair the host holds, or it is None and a `tls-local-stale` / `remote-unknown` / `tls-not-restored` incident names the server; T4 - nothing printed carries key material or the password.
+    (A host's files that NO socket references are the host's, said in the flash - not a record Jen owes.)"""
+    from jen.services import kea_tls
+
+    world = wire["tls"]
+    held = world["now"]
+    if held:
+        sockets = ed.control_sockets(wire["host"], "dhcp4")
+        if infra._uses_jen_tls(sockets, "dhcp4"):
+            record = kea_tls.host_material(1, "dhcp4")
+            if record is None:
+                assert any(
+                    i[0] == 1 and i[1] == "dhcp4" and i[2] in ("tls-local-stale", "remote-unknown", "tls-not-restored")
+                    for i in wire["incidents"]
+                ), "T1: Jen has no record of the pair the host holds and no incident says so"
+            else:
+                assert (record["server.crt"], record["server.key"]) == (
+                    held["server.crt"],
+                    held["server.key"],
+                ), "T1: Jen's record of the host's pair is not the pair the host holds"
+    printed = _everything_printed(wire)
+    assert "PRIVATE KEY" not in printed and SECRET not in printed, "T4: a secret was printed"
 
 
 class TestTheTlsMaterialIsPartOfTheSnapshot:
@@ -1087,29 +1127,53 @@ class TestAnUnreadableConfigIsNotNoSocketUsesJensFiles:
     FORM_B = TestTheTlsMaterialIsPartOfTheSnapshot.FORM_B
 
     def test_the_https_path_refuses_before_the_install_when_the_pre_read_is_none(self, tls_world, monkeypatch):
-        monkeypatch.setattr(infra, "_api_sockets_of", lambda s, svc: None)
+        monkeypatch.setattr(infra, "_api_sockets_of", lambda s, svc, errors=None: None)
         _post(_inner(infra.setup_direct_socket), **self.FORM_B)
         assert tls_world["tls"]["installed"] == [] and tls_world["applies"] == []
         assert "could not read" in " ".join(t for _s, t in tls_world["flashes"])
 
     def test_the_http_path_is_unchanged(self, wire, monkeypatch):
         """(the observation matters where files at fixed paths are replaced)"""
-        monkeypatch.setattr(infra, "_api_sockets_of", lambda s, svc: None)
+        monkeypatch.setattr(infra, "_api_sockets_of", lambda s, svc, errors=None: None)
         monkeypatch.setattr(infra, "_write_direct_socket_config", lambda *a, **k: "url written")
         _post(_inner(infra.setup_direct_socket), **PROBE_FORM)
         assert len(wire["applies"]) == 1
 
-    def test_a_snapshot_that_was_never_taken_with_nothing_to_put_back_is_a_remote_unknown_incident(
+    def test_a_plan_that_could_not_read_after_a_pre_read_that_did_means_nothing_references_the_files(
         self, tls_world, monkeypatch
     ):
+        """Q189 (AE6b), the first half of the case beta.19 pinned as 'remote-unknown': the PRE-read read the daemon's sockets and none referenced Jen's files; only the plan's read failed. The material
+        the failed attempt installed is unreferenced - 'nothing to put back' is the answer, said, with no incident - and Jen drops its own copy of files no socket uses (AE6c)."""
         monkeypatch.setattr(
             "jen.services.kea_changeset.apply_change",
             lambda *a, **k: ChangeSetResult("aborted", "error", [("error", "could not read the config")]),
         )
         _post(_inner(infra.setup_direct_socket), **self.FORM_B)
         texts = _everything_printed(tls_world)
-        assert "PARTIAL STATE" in texts and "could not read what" in texts
-        assert [i[2] for i in tls_world["incidents"]] == ["remote-unknown"]
+        assert (
+            "no socket references" in texts and "dropped its own copy" in texts and "could not read what" not in texts
+        )
+        assert tls_world["incidents"] == []
+        kt = tls_world["tls"]["tls"]
+        assert not pathlib.Path(kt.server_copy_path(1, "dhcp4")).exists(), "the copy of the unreferenced pair is gone"
+
+    def test_a_plan_that_could_not_read_after_a_pre_read_that_found_jens_files_in_use_puts_the_old_pair_back(
+        self, tls_world, monkeypatch
+    ):
+        """... and the second half: the pre-read saw an https socket on Jen's files; the previous pair cannot be put back. That is `tls-not-restored` - the pre-read DID read the sockets, so it is
+        not `remote-unknown` ('could not read what the sockets referenced' would be false)."""
+        TestTheTlsMaterialIsPartOfTheSnapshot()._first_https(tls_world, monkeypatch)
+        monkeypatch.setattr(
+            "jen.services.kea_changeset.apply_change",
+            lambda *a, **k: ChangeSetResult("aborted", "error", [("error", "could not read the config")]),
+        )
+        tls_world["tls"]["fail_install_at"] = (
+            len(tls_world["tls"]["installed"]) + 2
+        )  # B installs; the reinstall of A is refused
+        tls_world["incidents"].clear()
+        _post(_inner(infra.setup_direct_socket), **self.FORM_B)
+        assert [i[2] for i in tls_world["incidents"]] == ["tls-not-restored"]
+        assert "could not read what" not in _everything_printed(tls_world)
 
 
 class TestTheChangeSetsTwoRollbackFailedStates:
@@ -1158,3 +1222,95 @@ class TestANochangeRerunDoesNotReplaceFilesTheDaemonWillNotReload:
         assert len(world["installed"]) == installs and world["now"] == a_files
         texts = " ".join(t for _s, t in tls_world["flashes"])
         assert "was not restarted" in texts and "restarted with the new socket" not in texts
+
+
+_REAL_API_SOCKETS_OF = (
+    infra._api_sockets_of
+)  # (the fixtures above replace it with a fake; the pre-read tests below need the real one)
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [TimeoutError("timed out"), EOFError(), OSError(104, "Connection reset by peer")],
+    ids=["timeout", "eof", "reset"],
+)
+class TestThePreReadIsACallSiteToo:
+    """Q189 (AE4): the routes read the daemon's config before they send anything. A channel exception there was a 500 with every flash dropped (executed: 3 classes x setup-http, setup-https, remove).
+    Now it is a refusal that says so - and nothing was sent."""
+
+    def _break_the_read(self, monkeypatch, exc):
+        from jen.services import kea_host
+
+        monkeypatch.setattr(infra, "_api_sockets_of", _REAL_API_SOCKETS_OF)
+
+        def helper_call(server, op, payload=None, timeout=60):
+            if op == "read-config":
+                raise exc
+            raise AssertionError(f"nothing else may be sent: {op}")
+
+        monkeypatch.setattr(kea_host, "helper_call", helper_call)
+
+    def _assert_a_refusal_that_sent_nothing(self, wire, exc):
+        texts = " ".join(t for _s, t in wire["flashes"])
+        assert (
+            "Jen could not reach kea-a to read" in texts
+            and "nothing was changed" in texts
+            and type(exc).__name__ in texts
+        )
+        assert wire["applies"] == [], "nothing was sent to the Kea host"
+        assert [a[0] for a in wire["audits"]] == []
+        assert SECRET not in _everything_printed(wire)
+
+    def test_setup_http(self, wire, monkeypatch, exc):
+        self._break_the_read(monkeypatch, exc)
+        _post(_inner(infra.setup_direct_socket), **TestALateRefusalOnSetupPutsTheHostBack.FORM)
+        self._assert_a_refusal_that_sent_nothing(wire, exc)
+
+    def test_setup_https(self, tls_world, monkeypatch, exc):
+        self._break_the_read(monkeypatch, exc)
+        _post(_inner(infra.setup_direct_socket), **TestTheTlsMaterialIsPartOfTheSnapshot.FORM_A)
+        self._assert_a_refusal_that_sent_nothing(tls_world, exc)
+        assert tls_world["tls"]["installed"] == [], "no certificate was installed either"
+
+    def test_remove(self, wire, monkeypatch, exc):
+        self._break_the_read(monkeypatch, exc)
+        wire["host"] = {"Dhcp4": {"control-sockets": [copy.deepcopy(UNIX), copy.deepcopy(SOCKET)]}}
+        _post(_inner(infra.remove_direct_socket))
+        self._assert_a_refusal_that_sent_nothing(wire, exc)
+
+
+class TestAFirstSocketThatPresentsAnotherCertificateIsOneAnswer:
+    """Q189 (AE5): a socket that answers as the daemon but presents a certificate that is not the one Jen holds - the flash said 'remove the socket and set it up again', the incident said
+    `probe-pending` 'run the setup again' (unsatisfiable, and Health 'warn' for a state that is not a probe still pending). One category, `tls-local-stale`, one by-hand sentence."""
+
+    FORM_A = TestTheTlsMaterialIsPartOfTheSnapshot.FORM_A
+
+    def test_the_first_socket_case(self, tls_world, monkeypatch):
+        from jen.services import health
+
+        monkeypatch.setattr(infra, "_presented_fingerprint", lambda url, client: "0" * 64)
+        tls_world["flashes"].clear()
+        _post(_inner(infra.setup_direct_socket), **self.FORM_A)
+        texts = " ".join(t for _s, t in tls_world["flashes"])
+        assert "not the one Jen holds" in texts and "remove the direct socket and set it up again" in texts
+        assert [i[2] for i in tls_world["incidents"]] == ["tls-local-stale"], "ONE category, not probe-pending"
+        assert "remove the direct socket and set it up again" in tls_world["details"][0], "the two sentences agree"
+        assert health._tls_local_stale_labels() == ["kea-a kea-dhcp4"], "Health's certificate row carries it"
+
+    def test_a_nochange_rerun_is_the_same_answer(self, tls_world, monkeypatch):
+        TestTheTlsMaterialIsPartOfTheSnapshot()._first_https(tls_world, monkeypatch)
+        monkeypatch.setattr(infra, "_presented_fingerprint", lambda url, client: "0" * 64)
+        tls_world["incidents"].clear()
+        _post(_inner(infra.setup_direct_socket), **self.FORM_A)
+        assert [i[2] for i in tls_world["incidents"]] == ["tls-local-stale"]
+
+    def test_a_later_setup_that_passes_the_fingerprint_gate_clears_it(self, tls_world, monkeypatch):
+        TestTheTlsMaterialIsPartOfTheSnapshot()._first_https(tls_world, monkeypatch)
+        monkeypatch.setattr(infra, "_write_direct_socket_config", lambda *a, **k: "url written")
+        before = len(tls_world["resolved_categories"])
+        _post(
+            _inner(infra.setup_direct_socket), **self.FORM_A
+        )  # a rerun of the same socket: nothing replaced, and the socket presents Jen's own certificate
+        assert tls_world["resolved_categories"][before:] == [None], (
+            "the socket presented exactly the certificate Jen holds: every category of this server and service may clear, the certificate ones included"
+        )

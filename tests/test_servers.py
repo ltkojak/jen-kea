@@ -615,3 +615,81 @@ class TestARecoveryThatWasNotProvedIsShownUntilItIsAcknowledged:
         data = logged_in_client.get("/health-center/data").get_json()
         row = next(c for c in data["checks"] if c["id"] == "direct_socket_recovery")
         assert row["status"] == "fail" and "Primary (dhcp4)" in row["detail"]
+
+
+class TestAnUnreadableRecoveryRecordIsSetAsideNeverOverwritten:
+    """Q189 (AE3): the stored recovery note is text that is not a note. Servers offers a superadmin a way out; nobody else; and the text is kept, not lost."""
+
+    BAD = "{broken json!!!"
+
+    def _break(self):
+        from jen.models import user as user_mod
+        from jen.services import kea_changeset
+
+        user_mod.set_global_setting(kea_changeset.ATTENTION_KEY, self.BAD)
+
+    def teardown_method(self):
+        from jen.models import user as user_mod
+        from jen.models.db import jen_db
+        from jen.services import kea_changeset
+
+        user_mod.set_global_setting(kea_changeset.ATTENTION_KEY, "")
+        with jen_db() as c, c.cursor() as cur:
+            cur.execute(
+                "DELETE FROM settings WHERE setting_key LIKE %s", (kea_changeset.ATTENTION_KEY + "_set_aside_%",)
+            )
+            c.commit()
+
+    def test_the_page_offers_the_set_aside_to_a_superadmin(self, logged_in_client, mock_kea, db):
+        self._break()
+        body = logged_in_client.get("/servers").data.decode()
+        assert "Jen's recovery record is not readable" in body and "Set aside and clear" in body
+
+    def test_the_page_offers_nothing_while_the_record_reads_fine(self, logged_in_client, mock_kea, db):
+        body = logged_in_client.get("/servers").data.decode()
+        assert "recovery record is not readable" not in body
+
+    def test_the_set_aside_moves_the_text_clears_the_note_and_audits_the_length_not_the_text(
+        self, logged_in_client, mock_kea, db
+    ):
+        from jen.models import user as user_mod
+        from jen.services import kea_changeset
+
+        self._break()
+        r = logged_in_client.post("/servers/recovery-record/set-aside", follow_redirects=True)
+        assert r.status_code == 200 and b"was set aside" in r.data and b"not readable" not in r.data
+        assert kea_changeset.note_state() == "ok"
+        with db.cursor() as cur:
+            cur.execute("SELECT details FROM audit_log WHERE action = 'CLEAR_RECOVERY_RECORD' ORDER BY id DESC LIMIT 1")
+            row = cur.fetchone()
+            cur.execute(
+                "SELECT setting_key, setting_value FROM settings WHERE setting_key LIKE %s",
+                (kea_changeset.ATTENTION_KEY + "_set_aside_%",),
+            )
+            kept = cur.fetchall()
+        details = row["details"] if isinstance(row, dict) else row[0]
+        assert f"length={len(self.BAD)}" in details and "set_aside_key=" in details and self.BAD not in details
+        assert len(kept) == 1 and (kept[0]["setting_value"] if isinstance(kept[0], dict) else kept[0][1]) == self.BAD
+        assert user_mod.get_global_setting(kea_changeset.ATTENTION_KEY, "x", strict=True) == ""
+
+    def test_an_admin_who_is_not_a_superadmin_cannot_set_it_aside(self, client, mock_kea, db):
+        from jen.models import user as user_mod
+        from jen.services import kea_changeset
+        from tests.conftest import restricted_client
+
+        self._break()
+        c, _uid = restricted_client(client, db, allowed_subnets=[], role="admin")
+        r = c.post("/servers/recovery-record/set-aside", follow_redirects=False)
+        assert r.status_code in (302, 403)
+        assert user_mod.get_global_setting(kea_changeset.ATTENTION_KEY, "", strict=True) == self.BAD
+
+    def test_the_acknowledge_and_dismiss_routes_say_the_record_could_not_be_updated(
+        self, logged_in_client, mock_kea, db
+    ):
+        self._break()
+        r = logged_in_client.post(
+            "/servers/recovery-incident/acknowledge", data={"server_id": "1"}, follow_redirects=True
+        )
+        assert b"could not be updated" in r.data
+        r = logged_in_client.post("/servers/changeset-attention/dismiss", follow_redirects=True)
+        assert b"could not be updated" in r.data

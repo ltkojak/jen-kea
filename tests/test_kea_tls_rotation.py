@@ -7,15 +7,31 @@ v5.69.0-beta.19 (Q188, AD1 / AD6 / AD8) - CA rotation is ONE transaction, driven
     are saved, and only then is the staging promoted - each step inside one exception boundary, so a step that fails (or raises) stops the rotation and every attempted target is put back
     on the CA Jen still trusts, restarted, and PROBED with it;
   * the host is a simulated helper (`kea_host.helper_call`: install-tls stores the files, a restart makes the daemon load them) and the daemon is a fake that answers version-get only when
-    the certificate it LOADED was issued by the CA it was asked with - so "answering" means something. The real `install_tls` / `service_action` wrappers sit on top, which is how a
-    `socket.timeout`, `EOFError` or `SSHException` from the channel reaches the route (AD6);
+    the certificate it LOADED was issued by the CA it was asked with, and only to a client certificate issued by the CA IT loaded - so "answering" means something. The real `install_tls` /
+    `service_action` wrappers sit on top, which is how a `socket.timeout`, `EOFError` or `SSHException` from the channel reaches the route (AD6);
   * never a success counter: every test reads the files on disk and what the fake daemon would answer.
+
+v5.69.0-beta.20 (Q189, AE0) - THE INVARIANTS RUN AFTER EVERY TEST IN THIS FILE. The `lab` fixture calls `Lab.check_invariants()` in its teardown, so no test has to think of the question:
+
+  T1 host record  - Jen's record of what each host holds (`kea_tls.host_material`) is byte-equal to the pair the fake host holds, OR it is None and a `tls-local-stale` / `remote-unknown`
+                    incident names that server and service. Never a third state.
+  T2 CA pair      - Jen's CA certificate and key are a pair, or every target has a `tls-not-restored` incident and the flash says the CA is not a pair.
+  T3 trust        - every daemon the fake host runs answers Jen's probe with Jen's LIVE client certificate against Jen's LIVE CA, OR an incident names it. A rotation that "succeeded" with a
+                    daemon Jen can no longer reach fails here.
+  T4 no secret    - the flashes, audit rows, log lines and incident records contain no PEM, no key material and no password.
+  T5 refusal      - when the route answered with a refusal (no remote action happened and nothing was rotated) the fake hosts' files and every file under Jen's SSL directory are
+                    byte-equal to their state before the request.
+
+`TestTheInvariantsBite` has one deliberately failing test per invariant: it breaks the product on purpose and asserts the teardown check names the invariant, so a later edit cannot quietly
+weaken a check. Why this and not more assertions: Q188 had a test that asserted `.prev` EXISTS and the marker is set; nobody asserted `.prev` was the right pair. An invariant over the host's
+state does not need someone to think of the question.
 
 Pure - no database, no Kea, no SSH (`pytest --noconftest tests/test_kea_tls_rotation.py`).
 """
 
 import copy
 import inspect
+import logging
 import os
 import pathlib
 import types
@@ -25,7 +41,9 @@ import pytest
 
 import jen.config as jconfig
 import jen.routes.settings.infrastructure as infra
+from jen import extensions
 from jen.services import kea_changeset, kea_host, kea_tls
+from tests._fs_flake import retry_transient_replace, retrying_replace  # noqa: F401 (the fixture is autouse)
 
 pytest_plugins = ("tests._investigation_world",)
 
@@ -34,6 +52,16 @@ SERVERS = {
     2: {"id": 2, "name": "standby", "ssh_host": "10.0.0.6"},
 }
 URLS = {1: "https://10.0.0.5:8004", 2: "https://10.0.0.6:8004"}
+CRED = ("lab-user", "lab-secret-9137")  # distinctive: T4 looks for the password in everything the route printed
+_ACTIVE: list = []  # the lab of the running test, so `_rotate()` needs no argument
+#: the categories whose presence "names" a server for T1 / T3: Jen says it does not know, or that it is not right, there
+_NAMES_A_SERVER = (
+    "tls-not-restored",
+    "restart-failed",
+    "restored-endpoint-unreachable",
+    "remote-unknown",
+    "tls-local-stale",
+)
 
 
 def _issued_by(cert_pem: str, ca_path: str) -> bool:
@@ -48,32 +76,227 @@ def _issued_by(cert_pem: str, ca_path: str) -> bool:
         return False
 
 
+def _issued_by_pem(cert_pem: str, ca_pem: str) -> bool:
+    from cryptography import x509
+
+    try:
+        cert = x509.load_pem_x509_certificate(cert_pem.encode())
+        ca = x509.load_pem_x509_certificate(ca_pem.encode())
+        cert.verify_directly_issued_by(ca)
+        return True
+    except Exception:
+        return False
+
+
+def _tree(root) -> dict:
+    """Every file under `root` as {relative path: bytes} - what T5 compares."""
+    out = {}
+    for dirpath, _dirs, files in os.walk(root):
+        for name in files:
+            path = os.path.join(dirpath, name)
+            try:
+                out[os.path.relpath(path, root)] = pathlib.Path(path).read_bytes()
+            except OSError:
+                out[os.path.relpath(path, root)] = b"<unreadable>"
+    return out
+
+
 class Lab:
     """The simulated Kea hosts, the fake daemons and everything the route reports."""
 
     def __init__(self):
+        self.servers = {sid: dict(s) for sid, s in SERVERS.items()}
+        self.urls = dict(URLS)
+        self.managed = set(SERVERS)  # the servers whose certificate Jen issued: T1 and T3 are about these
         self.hosts = {
             sid: {"files": None, "loaded": None, "installs": [], "restarts": 0, "calls": {}} for sid in SERVERS
         }
         self.refuse = set()  # (server id, op, nth call of that op): the helper answers not-ok
         self.raise_at = {}  # (server id, op, nth call): an exception the channel raises
         self.flashes, self.audits, self.incidents, self.settings_writes = [], [], [], []
+        self.incident_records = []  # the whole record_attention call, for T4
         self.settings_error = None
         self.ca_a = None  # bytes of the CA Jen trusts before the rotation
+        self.caplog = None
+        self.expected_violations: set = (
+            set()
+        )  # a test that breaks the product on purpose names the invariants it expects the teardown to find
+        self.before = None  # the state before the last request (T5)
+        self.flash_mark = 0
 
     def texts(self) -> str:
         return " ".join(t for _s, t in self.flashes)
 
-    def answers(self, sid, ca_path) -> bool:
-        """Would the daemon of server `sid` answer a client that trusts the CA at `ca_path`?"""
+    def everything_printed(self) -> str:
+        logs = " ".join(r.getMessage() for r in self.caplog.records) if self.caplog is not None else ""
+        return " ".join(
+            [self.texts(), " ".join(str(a) for a in self.audits), " ".join(map(str, self.incident_records)), logs]
+        )
+
+    def answers(self, sid, ca_path, client_path=None) -> bool:
+        """Would the daemon of server `sid` answer a client that trusts the CA at `ca_path` - and, with `client_path`, that presents the client certificate there? The daemon answers only to a
+        client certificate issued by the CA IT loaded (`ca.crt` of the files it started with)."""
         loaded = self.hosts[sid]["loaded"]
-        return bool(loaded) and _issued_by(loaded["server.crt"], ca_path)
+        if not loaded or not _issued_by(loaded["server.crt"], ca_path):
+            return False
+        if client_path is not None:
+            try:
+                client_pem = pathlib.Path(client_path).read_text(encoding="ascii")
+            except OSError:
+                return False
+            return _issued_by_pem(client_pem, loaded["ca.crt"])
+        return True
+
+    def add_server(self, sid, name, ssh_host, url, *, jen_issued=True, ca=None):
+        """A server the rotation can see: configured, with a daemon that has loaded a certificate. `jen_issued` False is an administrator-managed endpoint (a certificate Jen's CA did not issue)."""
+        server = {"id": sid, "name": name, "ssh_host": ssh_host}
+        self.servers[sid] = server
+        self.urls[sid] = url
+        self.hosts[sid] = {"files": None, "loaded": None, "installs": [], "restarts": 0, "calls": {}}
+        if jen_issued:
+            self.managed.add(sid)
+            files = kea_tls.issue_server_cert(server, "dhcp4", ssh_host)
+        else:
+            files = ca or _external_files(ssh_host)
+        self.hosts[sid]["files"] = self.hosts[sid]["loaded"] = copy.deepcopy(files)
+        extensions.KEA_SERVERS[:] = list(self.servers.values())
+        return server
+
+    def install(self, sid, files):
+        """What the route does: ask the helper to install `files` (the real `install_tls`, over the simulated helper)."""
+        return kea_host.install_tls(self.servers[sid], "dhcp4", files)
+
+    # ── the state before a request, and the invariants after every test ──
+    def remote_actions(self) -> int:
+        return sum(len(h["installs"]) + h["restarts"] for h in self.hosts.values())
+
+    def snapshot(self) -> dict:
+        return {
+            "local": _tree(kea_tls.SSL_DIR),
+            "hosts": {sid: copy.deepcopy(h["files"]) for sid, h in self.hosts.items()},
+            "remote": self.remote_actions(),
+        }
+
+    def begin(self):
+        """Called by `_rotate()` just before the route runs."""
+        self.before = self.snapshot()
+        self.flash_mark = len(self.flashes)
+
+    def _named(self, sid, categories) -> bool:
+        return any(i[0] == sid and i[1] == "dhcp4" and i[2] in categories for i in self.incidents)
+
+    def check_invariants(self) -> list:
+        """[(invariant, what is wrong)] - empty when T1-T5 hold."""
+        bad = []
+        # T1 - Jen's record of what each host holds IS what it holds, or Jen says it does not know
+        for sid in sorted(self.managed):
+            files = self.hosts[sid]["files"]
+            if not files:
+                continue
+            record = kea_tls.host_material(sid, "dhcp4")
+            if record is None:
+                if not self._named(sid, ("tls-local-stale", "remote-unknown", "tls-not-restored")):
+                    bad.append(
+                        ("T1", f"server {sid}: Jen has no record of the pair its host holds and no incident says so")
+                    )
+            elif record["server.crt"] != files["server.crt"] or record["server.key"] != files["server.key"]:
+                bad.append(("T1", f"server {sid}: host_material is not the pair the host holds"))
+        # T2 - the CA is a pair, or every target says it is not
+        if not kea_tls.ca_consistent() and not (
+            all(self._named(sid, ("tls-not-restored",)) for sid in self.managed)
+            and "no longer a matching pair" in self.texts()
+        ):
+            bad.append(("T2", "Jen's CA certificate and key are not a pair and nothing says so"))
+        # T3 - every running daemon answers Jen's live identity, or an incident names it
+        ca, client = kea_tls.ca_paths()[0], kea_tls.client_paths()[0]
+        for sid in sorted(self.managed):
+            if (
+                self.hosts[sid]["loaded"]
+                and not self.answers(sid, ca, client)
+                and not self._named(sid, _NAMES_A_SERVER)
+            ):
+                bad.append(
+                    (
+                        "T3",
+                        f"server {sid}'s daemon does not answer Jen's live CA and client certificate and no incident names it",
+                    )
+                )
+        # T4 - no secret was printed anywhere
+        printed = self.everything_printed()
+        secrets = ["PRIVATE KEY", "BEGIN CERTIFICATE", CRED[1]]
+        for host in self.hosts.values():
+            if host["files"]:
+                body = [ln for ln in host["files"]["server.key"].splitlines() if ln and "-----" not in ln]
+                secrets.extend(body[:1])
+        for needle in secrets:
+            if needle and needle in printed:
+                bad.append(("T4", f"a secret was printed: {needle[:12]}..."))
+                break
+        # T5 - a refusal changed nothing
+        if self.before is not None:
+            refused = self.remote_actions() == self.before["remote"] and "Kea CA rotated" not in " ".join(
+                t for _s, t in self.flashes[self.flash_mark :]
+            )
+            if refused:
+                if _tree(kea_tls.SSL_DIR) != self.before["local"]:
+                    bad.append(("T5", "a refusal changed a file under Jen's SSL directory"))
+                if {sid: h["files"] for sid, h in self.hosts.items()} != self.before["hosts"]:
+                    bad.append(("T5", "a refusal changed what a host holds"))
+        return bad
+
+
+def _external_files(ssh_host):
+    """A certificate a Jen CA did not issue - an administrator's own CA."""
+    import datetime
+    import ipaddress
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    def name(cn):
+        return x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cn)])
+
+    now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+    ca_key, key = ec.generate_private_key(ec.SECP256R1()), ec.generate_private_key(ec.SECP256R1())
+    ca = (
+        x509.CertificateBuilder()
+        .subject_name(name("the administrator's CA"))
+        .issuer_name(name("the administrator's CA"))
+        .public_key(ca_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(minutes=5))
+        .not_valid_after(now + datetime.timedelta(days=30))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        .sign(ca_key, hashes.SHA256())
+    )
+    leaf = (
+        x509.CertificateBuilder()
+        .subject_name(name("kea"))
+        .issuer_name(ca.subject)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(minutes=5))
+        .not_valid_after(now + datetime.timedelta(days=30))
+        .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address(ssh_host))]), critical=False)
+        .sign(ca_key, hashes.SHA256())
+    )
+    pem = serialization.Encoding.PEM
+    return {
+        "ca.crt": ca.public_bytes(pem).decode(),
+        "server.crt": leaf.public_bytes(pem).decode(),
+        "server.key": key.private_bytes(pem, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()).decode(),
+    }
 
 
 @pytest.fixture
-def lab(monkeypatch, tmp_path):
+def lab(monkeypatch, tmp_path, caplog):
+    caplog.set_level(logging.DEBUG)
     lab = Lab()
+    lab.caplog = caplog
     monkeypatch.setattr(kea_tls, "SSL_DIR", str(tmp_path))
+    monkeypatch.setattr(extensions, "KEA_SERVERS", list(lab.servers.values()))
 
     def helper_call(server, op, payload=None, timeout=60):
         sid = server["id"]
@@ -98,31 +321,57 @@ def lab(monkeypatch, tmp_path):
     monkeypatch.setattr(kea_host, "_known_version", lambda *a, **k: 4)
 
     def probe(url, user, pwd, service, verify=None, cert=None):
-        sid = next(i for i, u in URLS.items() if u == url)
+        sid = next(i for i, u in lab.urls.items() if u == url)
         if not lab.hosts[sid]["loaded"]:
             return "", "nothing is listening"
         if verify and not lab.answers(sid, verify):
             return "", "certificate verify failed"
+        if cert and not lab.answers(sid, verify or lab_ca_for(sid), client_path=cert[0]):
+            return "", "client certificate rejected"
         return "Kea 3.0.3", None
+
+    def lab_ca_for(sid):
+        return kea_tls.ca_paths()[0]
 
     monkeypatch.setattr(infra, "_probe_after_restart", probe)
     monkeypatch.setattr(infra, "_identify_daemon", lambda *a, **k: "Dhcp4")
-    monkeypatch.setattr(infra, "_server_by_id", lambda sid: SERVERS.get(sid))
-    monkeypatch.setattr(infra, "_service_url", lambda server, service: URLS[server["id"]])
-    monkeypatch.setattr(infra, "_daemon_creds", lambda server, service, url="": ("u", "p"))
+    monkeypatch.setattr(infra, "_server_by_id", lambda sid: lab.servers.get(sid))
+    monkeypatch.setattr(
+        infra, "_service_url", lambda server, service: lab.urls[server["id"]] if service == "dhcp4" else ""
+    )
+    monkeypatch.setattr(infra, "_daemon_creds", lambda server, service, url="": CRED)
     monkeypatch.setattr(infra, "url_for", lambda *a, **k: "/settings/kea")
     monkeypatch.setattr(infra, "flash", lambda text, style="message": lab.flashes.append((style, str(text))))
     monkeypatch.setattr(infra.__dict__["__user"], "audit", lambda *a, **k: lab.audits.append(a))
     monkeypatch.setattr(
         "jen.services.capabilities.for_server", lambda sid, probe_kea=True: types.SimpleNamespace(tls=True)
     )
-    monkeypatch.setattr(
-        kea_changeset,
-        "record_attention",
-        lambda server_id, service, operation, category, when=None, **kw: (
-            lab.incidents.append((server_id, service, category)) or True
-        ),
-    )
+
+    def record_attention(server_id, service, operation, category, when=None, **kw):
+        lab.incidents.append((server_id, service, category))
+        lab.incident_records.append(
+            (server_id, service, operation, category, kw.get("server_name", ""), kw.get("detail", ""))
+        )
+        return True
+
+    def recovery_incidents(strict=False):
+        return [
+            {"kind": "attention", "category": c, "status": c, "service": s, "server_id": sid}
+            for sid, s, c in lab.incidents
+        ]
+
+    def resolve_attention(server_id, service, *, categories=None):
+        before = len(lab.incidents)
+        lab.incidents[:] = [
+            i
+            for i in lab.incidents
+            if not (str(i[0]) == str(server_id) and i[1] == service and (categories is None or i[2] in categories))
+        ]
+        return before - len(lab.incidents)
+
+    monkeypatch.setattr(kea_changeset, "record_attention", record_attention)
+    monkeypatch.setattr(kea_changeset, "recovery_incidents", recovery_incidents)
+    monkeypatch.setattr(kea_changeset, "resolve_attention", resolve_attention)
 
     def write_values(items, typed=None):
         if lab.settings_error:
@@ -134,21 +383,51 @@ def lab(monkeypatch, tmp_path):
     # the state before the rotation: the CA and Jen's client pair (CA-A), and a certificate issued by it on each host, loaded by its daemon
     kea_tls.ensure_ca()
     kea_tls.issue_client_cert()
-    for sid, server in SERVERS.items():
+    for sid, server in lab.servers.items():
         files = kea_tls.issue_server_cert(server, "dhcp4", server["ssh_host"])
         lab.hosts[sid]["files"] = lab.hosts[sid]["loaded"] = copy.deepcopy(files)
         lab.hosts[sid]["installs"].clear()
     lab.ca_a = pathlib.Path(kea_tls.ca_paths()[0]).read_bytes()
     lab.client_a = pathlib.Path(kea_tls.client_paths()[1]).read_bytes()
-    return lab
+    _ACTIVE.append(lab)
+    yield lab
+    _ACTIVE.pop()
+    # AE0: the invariants, after EVERY test in this file
+    found = lab.check_invariants()
+    names = {name for name, _what in found}
+    if lab.expected_violations:
+        assert lab.expected_violations <= names, (
+            f"the teardown should have named {sorted(lab.expected_violations)} (it found {sorted(names)}): {found}"
+        )
+    else:
+        assert not found, f"INVARIANT(S) BROKEN at the end of the test: {found}"
 
 
 def _rotate():
+    lab = _ACTIVE[-1] if _ACTIVE else None
+    if lab is not None:
+        lab.begin()
     rotate = inspect.unwrap(infra.rotate_kea_ca)
     app = flask.Flask(__name__)
     app.secret_key = "x"
     with app.test_request_context(method="POST"):
         rotate()
+
+
+def _fail_replace(monkeypatch, suffix: str, nth: int):
+    """Make the `nth` `os.replace` whose destination ends with `suffix` raise (an I/O error at the FILE layer - below every function of the product that records things)."""
+    real, seen = os.replace, [0]
+    retrying = retrying_replace(real)
+
+    def failing(src, dst, *a, **k):
+        if str(dst).endswith(suffix):
+            seen[0] += 1
+            if seen[0] == nth:
+                raise OSError(5, "Input/output error")
+        return retrying(src, dst, *a, **k)
+
+    monkeypatch.setattr(os, "replace", failing)
+    return lambda: monkeypatch.setattr(os, "replace", real)  # the failure is over
 
 
 def _local_pair_agrees_with_host(lab, sid):
@@ -185,11 +464,12 @@ class TestAPromotionThatFailsPutsEveryTargetBack:
     def test_a_file_of_the_set_that_cannot_be_replaced(self, lab, monkeypatch, victim):
         """The REAL `commit_rotation` -> `commit_file_set`: the set is replaced member by member and the failure of one puts the replaced ones back byte for byte."""
         real = os.replace
+        retrying = retrying_replace(real)
 
         def failing(src, dst, *a, **k):
             if str(dst).endswith(victim):
                 raise OSError(13, "Permission denied")
-            return real(src, dst, *a, **k)
+            return retrying(src, dst, *a, **k)
 
         monkeypatch.setattr(os, "replace", failing)
         _rotate()
@@ -377,18 +657,13 @@ class TestTheSecondPassOfQ188:
     """The findings of the adversarial second pass, each as the sequence that found it."""
 
     def test_the_previous_ca_pair_that_cannot_be_kept_locally_is_a_stale_copy_not_a_stuck_host(self, lab, monkeypatch):
-        """The rollback put the CA-A pair on the host and the daemon answers; only Jen's own copy of it could not follow. That is `tls-local-stale` - not `tls-not-restored`, and the host is still restarted and probed."""
-        real = kea_tls.commit_issued
-        seen = []
-
-        def failing_on_the_rollback_of_server_1(sid, service, files):
-            seen.append(sid)
-            if sid == 1 and seen.count(1) == 2:
-                raise OSError(28, "No space left on device")
-            return real(sid, service, files)
-
-        monkeypatch.setattr(kea_tls, "commit_issued", failing_on_the_rollback_of_server_1)
+        """The rollback put the CA-A pair on the host and the daemon answers; only Jen's own copy of it could not follow. That is `tls-local-stale` - not `tls-not-restored`, and the host is still
+        restarted and probed. Q189 (AE2): and the record of what the host holds is that pair - `.prev` IS the pair the host was given, and `host_material` answers it byte for byte.
+        (Adjusted from beta.19: the failure used to be injected by replacing `commit_issued` itself, which also replaced the very recording this Q is about; it is injected at the file layer now.)"""
         monkeypatch.setattr(kea_tls, "commit_rotation", lambda staged: (_ for _ in ()).throw(OSError(28, "full")))
+        _fail_replace(
+            monkeypatch, "1-dhcp4.key", nth=2
+        )  # the 2nd write of server 1's live key is the rollback's, before either file of the pair
         _rotate()
         ca = kea_tls.ca_paths()[0]
         assert lab.answers(1, ca) and lab.answers(2, ca), "both daemons answer on CA-A afterwards"
@@ -396,9 +671,14 @@ class TestTheSecondPassOfQ188:
             i[2] == "tls-not-restored" for i in lab.incidents
         )
         assert kea_tls.is_stale(1, "dhcp4") and not kea_tls.is_stale(2, "dhcp4")
-        assert pathlib.Path(kea_tls.server_copy_path(1, "dhcp4") + ".prev").exists(), (
-            "its .prev is kept: it is the host's truth now"
+        held = lab.hosts[1]["files"]
+        record = kea_tls.host_material(1, "dhcp4")
+        assert record is not None and (record["server.crt"], record["server.key"]) == (
+            held["server.crt"],
+            held["server.key"],
         )
+        prev = kea_tls.server_copy_path(1, "dhcp4") + ".prev"
+        assert pathlib.Path(prev).read_bytes().decode() == held["server.crt"], "`.prev` IS the pair the host was given"
 
     def test_a_ca_whose_certificate_and_key_are_apart_issues_nothing(self, lab, monkeypatch):
         """A promotion that replaced the CA certificate and could not put it back leaves a certificate and key that are not a pair; nothing is issued from it and the sentence does not say Jen still trusts the previous CA."""
@@ -466,9 +746,14 @@ class TestAStaleCopyIsTheHostsPreviousPair:
     def test_the_marker_decides_which_pair_is_the_hosts_and_a_commit_ends_it(self, lab, monkeypatch):
         sid = 1
         first = pathlib.Path(kea_tls.server_copy_path(sid, "dhcp4")).read_text(encoding="ascii")
-        kea_tls.stage_issued(sid, "dhcp4", self._issue(sid, "10.0.0.5"))
+        staged = self._issue(sid, "10.0.0.5")
+        kea_tls.stage_issued(sid, "dhcp4", staged)
+        assert lab.install(sid, staged)["ok"]  # the host takes the new pair, as the route does before it promotes
         kea_tls.promote_staged(sid, "dhcp4")  # live = B, .prev = the pair the host had (first)
         assert not kea_tls.is_stale(sid, "dhcp4")
+        assert lab.install(sid, kea_tls.previous_material(sid, "dhcp4"))[
+            "ok"
+        ]  # ... and the route puts the previous pair back on the host
         with monkeypatch.context() as scoped:
             scoped.setattr(kea_tls, "commit_file_set", lambda *a, **k: (_ for _ in ()).throw(OSError(13, "denied")))
             assert kea_tls.restore_previous(sid, "dhcp4") is False
@@ -480,6 +765,7 @@ class TestAStaleCopyIsTheHostsPreviousPair:
         assert pathlib.Path(kea_tls.server_copy_path(sid, "dhcp4") + ".prev").read_text(encoding="ascii") == first, (
             "the next operation does not overwrite the host's pair with the live one"
         )
+        assert lab.install(sid, again)["ok"]
         kea_tls.promote_staged(sid, "dhcp4")
         kea_tls.commit_issued(sid, "dhcp4", again)
         assert not kea_tls.is_stale(sid, "dhcp4"), "a commit means the host was given exactly this pair"
@@ -487,8 +773,11 @@ class TestAStaleCopyIsTheHostsPreviousPair:
     def test_a_re_assert_installs_the_pair_the_host_holds_not_jens_stale_live_copy(self, lab, monkeypatch):
         sid = 1
         first = pathlib.Path(kea_tls.server_copy_path(sid, "dhcp4")).read_text(encoding="ascii")
-        kea_tls.stage_issued(sid, "dhcp4", self._issue(sid, "10.0.0.5"))
+        staged = self._issue(sid, "10.0.0.5")
+        kea_tls.stage_issued(sid, "dhcp4", staged)
+        assert lab.install(sid, staged)["ok"]
         kea_tls.promote_staged(sid, "dhcp4")
+        assert lab.install(sid, kea_tls.previous_material(sid, "dhcp4"))["ok"]
         with monkeypatch.context() as scoped:
             scoped.setattr(kea_tls, "commit_file_set", lambda *a, **k: (_ for _ in ()).throw(OSError(13, "denied")))
             assert kea_tls.restore_previous(sid, "dhcp4") is False
@@ -499,9 +788,350 @@ class TestAStaleCopyIsTheHostsPreviousPair:
 
     def test_a_first_setup_whose_promotion_fails_does_not_claim_a_certificate_was_put_back(self, lab):
         sid = 1
+        lab.hosts[sid]["files"] = lab.hosts[sid]["loaded"] = (
+            None  # a FIRST https setup: the host holds no Jen pair, and Jen keeps none
+        )
         for suffix in ("", ".prev"):
             for path in (kea_tls.server_copy_path(sid, "dhcp4"), kea_tls.server_key_path(sid, "dhcp4")):
                 if os.path.exists(path + suffix):
                     os.unlink(path + suffix)
         infra._stop_after_failed_promotion(SERVERS[sid], "dhcp4", OSError(13, "Permission denied"), [], None)
         assert "was put back" not in lab.texts() and "no earlier copy to put back" in lab.texts(), lab.texts()
+
+
+class TestInventory:
+    """Q189 (AE1): the rotation's targets are every https endpoint Jen DIALS, each with a complete record of its certificate - never the listing of local copy files. T5 (a refusal changes
+    nothing) is checked by the fixture's teardown after every one of these."""
+
+    def _no_remote_action(self, lab):
+        assert lab.remote_actions() == 0, "a refusal happens before any host is touched"
+        assert pathlib.Path(kea_tls.ca_paths()[0]).read_bytes() == lab.ca_a
+
+    def test_both_copies_present_two_targets_rotated(self, lab):
+        _rotate()
+        ca, client = kea_tls.ca_paths()[0], kea_tls.client_paths()[0]
+        assert (
+            "Kea CA rotated" in lab.texts() and "kea-a kea-dhcp4" in lab.texts() and "standby kea-dhcp4" in lab.texts()
+        )
+        assert lab.answers(1, ca, client) and lab.answers(2, ca, client)
+        assert pathlib.Path(ca).read_bytes() != lab.ca_a
+
+    def test_a_missing_copy_is_a_refusal_naming_the_server_and_its_url(self, lab):
+        lab.managed.discard(2)  # the test destroys Jen's record of this server on purpose
+        os.unlink(kea_tls.server_copy_path(2, "dhcp4"))
+        _rotate()
+        text = lab.texts()
+        assert "Rotate refused" in text and "standby kea-dhcp4" in text and "https://10.0.0.6:8004" in text
+        assert "no complete record of its certificate" in text and "missing" in text
+        assert "nothing to rotate" not in text.lower() and "Kea CA rotated" not in text
+        self._no_remote_action(lab)
+
+    def test_the_copies_directory_missing_with_https_endpoints_is_a_refusal_for_each(self, lab):
+        lab.managed.clear()  # the test destroys Jen's records on purpose
+        import shutil
+
+        shutil.rmtree(os.path.dirname(kea_tls.server_copy_path(1, "dhcp4")))
+        _rotate()
+        text = lab.texts()
+        assert (
+            text.count("no complete record of its certificate") == 2
+            and "kea-a kea-dhcp4" in text
+            and "standby kea-dhcp4" in text
+        )
+        self._no_remote_action(lab)
+
+    def test_a_directory_that_cannot_be_listed_is_a_refusal_not_nothing_to_rotate(self, lab, monkeypatch):
+        directory = os.path.dirname(kea_tls.server_copy_path(1, "dhcp4"))
+        real = os.listdir
+
+        def listdir(path="."):
+            if os.fspath(path) == directory:
+                raise PermissionError(13, "Permission denied")
+            return real(path)
+
+        monkeypatch.setattr(os, "listdir", listdir)
+        _rotate()
+        text = lab.texts()
+        assert "could not read its certificate directory" in text and directory in text and "Rotate refused" in text
+        assert "Kea CA rotated" not in text
+        self._no_remote_action(lab)
+        # strict raises; the non-strict form (Health's) stays quiet
+        with pytest.raises(PermissionError):
+            kea_tls.issued_server_copies(strict=True)
+        assert kea_tls.issued_server_copies() == []
+
+    def test_a_copy_that_is_not_a_certificate_is_a_refusal(self, lab):
+        lab.managed.discard(1)  # the test destroys Jen's record of this server on purpose
+        pathlib.Path(kea_tls.server_copy_path(1, "dhcp4")).write_text("this is not a certificate", encoding="ascii")
+        _rotate()
+        assert "malformed" in lab.texts() and "kea-a kea-dhcp4" in lab.texts()
+        self._no_remote_action(lab)
+
+    def test_a_copy_with_its_key_missing_is_a_refusal(self, lab):
+        lab.managed.discard(1)  # the test destroys Jen's record of this server on purpose
+        os.unlink(kea_tls.server_key_path(1, "dhcp4"))
+        _rotate()
+        assert "its key is missing" in lab.texts()
+        self._no_remote_action(lab)
+
+    def test_a_key_that_is_another_certificates_is_a_refusal(self, lab):
+        lab.managed.discard(1)  # the test destroys Jen's record of this server on purpose
+        other = kea_tls.issue_server_cert(
+            {"id": 7, "name": "x", "ssh_host": "10.0.0.7"}, "dhcp4", "10.0.0.7", commit=False
+        )
+        pathlib.Path(kea_tls.server_key_path(1, "dhcp4")).write_text(other["server.key"], encoding="ascii")
+        _rotate()
+        assert "not a pair" in lab.texts()
+        self._no_remote_action(lab)
+
+    def test_a_certificate_an_earlier_jen_ca_issued_is_a_refusal_not_an_external_endpoint(self, lab):
+        lab.managed.clear()  # the test moves Jen to a new CA by hand: no daemon follows
+        """Jen's own CA name on the issuer is the difference: an endpoint left on CA-A after a rotation moved Jen to CA-B is Jen's to fix, not an administrator's to leave alone."""
+        staged = kea_tls.stage_rotation()
+        kea_tls.commit_rotation(staged)  # Jen's live CA is now CA-B; server copies are still CA-A's
+        _rotate()
+        assert "earlier Jen CA" in lab.texts() and "Kea CA rotated" not in lab.texts()
+
+    def test_an_administrator_managed_endpoint_is_named_and_left_alone(self, lab):
+        server = lab.add_server(3, "external", "10.0.0.7", "https://10.0.0.7:8004", jen_issued=False)
+        external = lab.hosts[3]["files"]
+        pathlib.Path(kea_tls.server_copy_path(3, "dhcp4")).write_text(external["server.crt"], encoding="ascii")
+        pathlib.Path(kea_tls.server_key_path(3, "dhcp4")).write_text(external["server.key"], encoding="ascii")
+        assert server["id"] == 3
+        _rotate()
+        text = lab.texts()
+        assert "Not on Jen's CA, so not rotated and left alone" in text and "external" in text
+        assert "Kea CA rotated" in text
+        assert lab.hosts[3]["installs"] == [] and lab.hosts[3]["restarts"] == 0, (
+            "the administrator's endpoint was never touched"
+        )
+        ca, client = kea_tls.ca_paths()[0], kea_tls.client_paths()[0]
+        assert lab.answers(1, ca, client) and lab.answers(2, ca, client)
+
+    def test_a_copy_for_a_server_that_is_gone_is_ignored_and_said(self, lab):
+        kea_tls.issue_server_cert({"id": 9, "name": "gone", "ssh_host": "10.0.0.9"}, "dhcp4", "10.0.0.9")
+        _rotate()
+        assert "Kea CA rotated" in lab.texts() and "9-dhcp4" in lab.texts() and "ignored" in lab.texts()
+
+    def test_zero_https_endpoints_rotates_jens_ca_and_client_only(self, lab):
+        for sid in (1, 2):
+            lab.urls[sid] = lab.urls[sid].replace("https://", "http://")
+            lab.hosts[sid]["files"] = lab.hosts[sid]["loaded"] = None  # no daemon runs Jen's TLS material
+        _rotate()
+        assert "Kea CA rotated" in lab.texts() and "no server certificate was involved" in lab.texts()
+        assert pathlib.Path(kea_tls.ca_paths()[0]).read_bytes() != lab.ca_a
+        assert lab.remote_actions() == 0
+
+    def test_a_server_without_an_ssh_host_still_blocks_the_rotation(self, lab):
+        lab.servers[2]["ssh_host"] = ""
+        _rotate()
+        assert "no SSH host" in lab.texts() and "Rotate refused" in lab.texts()
+        self._no_remote_action(lab)
+
+    def test_the_confirm_page_summary_is_the_inventory(self, lab):
+        lab.managed.discard(2)  # the test deletes Jen's copy for server 2 on purpose
+        summary = infra._kea_ca_summary()
+        assert [(n, s) for n, s, _d in summary["issued"]] == [("kea-a", "dhcp4"), ("standby", "dhcp4")]
+        os.unlink(kea_tls.server_copy_path(2, "dhcp4"))
+        summary = infra._kea_ca_summary()
+        assert [(n, s) for n, s, _d in summary["issued"]] == [("kea-a", "dhcp4")]
+        assert summary["refused"] and "standby kea-dhcp4" in summary["refused"][0]
+
+
+class TestHostRecord:
+    """Q189 (AE2): Jen's record of what a host holds is the exact payload that host accepted - or "unknown". The review's sequence, on real files: A1 under CA-A, B under the staged CA-B
+    committed, the promotion fails, A2 is issued and installed on the rollback, and Jen's write of A2 fails."""
+
+    @staticmethod
+    def _rollback_with_the_write_of_a2_failing(monkeypatch, suffix, nth):
+        monkeypatch.setattr(kea_tls, "commit_rotation", lambda staged: (_ for _ in ()).throw(OSError(28, "full")))
+        return _fail_replace(monkeypatch, suffix, nth)
+
+    def _record_is_the_hosts_pair(self, lab, sid=1):
+        held = lab.hosts[sid]["files"]
+        record = kea_tls.host_material(sid, "dhcp4")
+        assert record is not None, "Jen's record names the pair the host holds"
+        assert (record["server.crt"], record["server.key"]) == (held["server.crt"], held["server.key"])
+        prev = kea_tls.server_copy_path(sid, "dhcp4") + ".prev"
+        assert pathlib.Path(prev).read_bytes().decode() == held["server.crt"], (
+            "`.prev` IS the payload the host accepted"
+        )
+        assert pathlib.Path(kea_tls.server_key_path(sid, "dhcp4") + ".prev").read_bytes().decode() == held["server.key"]
+        assert kea_tls.is_stale(sid, "dhcp4")
+        return held
+
+    def test_the_reviews_sequence_a2_fails_before_either_file(self, lab, monkeypatch):
+        before = copy.deepcopy(lab.hosts[1]["files"])
+        self._rollback_with_the_write_of_a2_failing(monkeypatch, "1-dhcp4.key", nth=2)
+        _rotate()
+        held = self._record_is_the_hosts_pair(lab)
+        assert held["server.crt"] != before["server.crt"], "the host holds a NEW pair (A2), not the one it started with"
+        assert (1, "dhcp4", "tls-local-stale") in lab.incidents
+        # the live local pair is still the staged-CA pair (B), and is NOT what the host holds - exactly the state the beta.19 code called 'the host's truth'
+        assert kea_tls.current_material(1, "dhcp4")["server.crt"] != held["server.crt"]
+
+    def test_the_same_with_the_failure_after_the_first_file(self, lab, monkeypatch):
+        """The key is replaced, the certificate is not: `commit_file_set` puts the key back, and the record is still A2."""
+        self._rollback_with_the_write_of_a2_failing(monkeypatch, "1-dhcp4.crt", nth=2)
+        _rotate()
+        self._record_is_the_hosts_pair(lab)
+        assert (1, "dhcp4", "tls-local-stale") in lab.incidents
+
+    def test_a_re_assert_installs_the_pair_the_host_holds(self, lab, monkeypatch):
+        stop = self._rollback_with_the_write_of_a2_failing(monkeypatch, "1-dhcp4.key", nth=2)
+        _rotate()
+        held = copy.deepcopy(lab.hosts[1]["files"])
+        stop()  # the file-layer failure is over
+        assert infra._reinstall_live_material(SERVERS[1], "dhcp4") == "restored"
+        assert lab.hosts[1]["installs"][-1]["server.crt"] == held["server.crt"], (
+            "the host gets ITS pair back - never the CA-B pair that is Jen's live copy"
+        )
+
+    def test_an_unwritable_ssl_directory_loses_the_record_and_Jen_says_so(self, lab, monkeypatch):
+        """Neither the live pair nor `.prev` nor the marker can be written: HostRecordLost, a remote-unknown incident, host_material None - and a following re-assert installs NOTHING."""
+        from jen.services import private_files
+
+        state = {"on": False}
+        real_commit, real_write = kea_tls.commit_file_set, private_files.write_private_file
+
+        def commit(*a, **k):
+            if state["on"]:
+                raise OSError(30, "Read-only file system")
+            return real_commit(*a, **k)
+
+        def write(*a, **k):
+            if state["on"]:
+                raise OSError(30, "Read-only file system")
+            return real_write(*a, **k)
+
+        monkeypatch.setattr(kea_tls, "commit_file_set", commit)
+        monkeypatch.setattr(private_files, "write_private_file", write)
+
+        def promotion_fails_and_the_directory_goes_read_only(staged):
+            state["on"] = True
+            raise OSError(28, "full")
+
+        monkeypatch.setattr(kea_tls, "commit_rotation", promotion_fails_and_the_directory_goes_read_only)
+        _rotate()
+        assert (1, "dhcp4", "remote-unknown") in lab.incidents and (2, "dhcp4", "remote-unknown") in lab.incidents
+        assert "cannot record which certificate" in lab.texts() and "do not rely on Jen's copy" in lab.texts()
+        assert kea_tls.host_material(1, "dhcp4") is None
+        state["on"] = False
+        installs = len(lab.hosts[1]["installs"])
+        assert infra._reinstall_live_material(SERVERS[1], "dhcp4") == "none", "unknown: no install"
+        assert len(lab.hosts[1]["installs"]) == installs
+
+    def test_commit_issued_raises_host_record_lost_when_nothing_can_be_recorded(self, lab, monkeypatch):
+        files = kea_tls.issue_server_cert(SERVERS[1], "dhcp4", "10.0.0.5", commit=False)
+        monkeypatch.setattr(
+            kea_tls, "commit_file_set", lambda *a, **k: (_ for _ in ()).throw(OSError(30, "Read-only file system"))
+        )
+        with pytest.raises(kea_tls.HostRecordLost):
+            kea_tls.commit_issued(1, "dhcp4", files)
+        # whatever `.prev` is left is not mistaken for the host's pair
+        assert not pathlib.Path(kea_tls.server_copy_path(1, "dhcp4") + ".prev").exists()
+        lab.expected_violations = (
+            set()
+        )  # (the host still holds the pair it started with: nothing was installed in this test)
+
+    def test_a_retry_that_succeeds_clears_the_marker(self, lab, monkeypatch):
+        stop = self._rollback_with_the_write_of_a2_failing(monkeypatch, "1-dhcp4.key", nth=2)
+        _rotate()
+        stop()
+        held = copy.deepcopy(lab.hosts[1]["files"])
+        kea_tls.commit_issued(1, "dhcp4", held)  # the directory is writable again: the host holds exactly `held`
+        assert not kea_tls.is_stale(1, "dhcp4")
+        # a standing 'Jen's copy differs' note with no marker left is UNKNOWN until the route that retried resolves it (the route does, after the answer it got)
+        assert kea_tls.host_material(1, "dhcp4") is None
+        assert kea_changeset.resolve_attention(1, "dhcp4", categories=("tls-local-stale",)) == 1
+        record = kea_tls.host_material(1, "dhcp4")
+        assert record is not None and record["server.crt"] == held["server.crt"]
+
+    def test_the_marker_is_a_file_so_it_survives_a_restart(self, lab, monkeypatch):
+        self._rollback_with_the_write_of_a2_failing(monkeypatch, "1-dhcp4.key", nth=2)
+        _rotate()
+        marker = kea_tls.server_copy_path(1, "dhcp4") + ".stale"
+        assert os.path.exists(marker) and kea_tls.is_stale(1, "dhcp4")
+        # a new process reads the same directory: nothing is held in memory
+        assert kea_tls.host_material(1, "dhcp4")["server.crt"] == lab.hosts[1]["files"]["server.crt"]
+
+    def test_a_later_successful_setup_on_that_server_clears_it(self, lab, monkeypatch):
+        stop = self._rollback_with_the_write_of_a2_failing(monkeypatch, "1-dhcp4.key", nth=2)
+        _rotate()
+        stop()
+        staged = kea_tls.issue_server_cert(SERVERS[1], "dhcp4", "10.0.0.5", commit=False)
+        kea_tls.stage_issued(1, "dhcp4", staged)
+        assert lab.install(1, staged)["ok"]
+        kea_tls.promote_staged(1, "dhcp4")
+        kea_tls.retire_previous(1, "dhcp4")  # what the setup route does when it stands
+        assert not kea_tls.is_stale(1, "dhcp4")
+        kea_changeset.resolve_attention(1, "dhcp4")
+
+
+class TestTheInvariantsBite:
+    """Q189 (AE0): one deliberately failing test per invariant - the product is broken on purpose and the teardown check must name the invariant, so a later edit cannot quietly weaken a check."""
+
+    def test_T1_bites_when_the_record_is_made_the_way_beta19_made_it(self, lab, monkeypatch):
+        lab.expected_violations = {"T1"}
+        monkeypatch.setattr(
+            kea_tls,
+            "_record_host_pair",
+            lambda server_id, service, files, cause: kea_tls.mark_stale(server_id, service),
+        )  # the beta.19 behaviour: `.prev` is whatever commit_file_set copied
+        monkeypatch.setattr(kea_tls, "commit_rotation", lambda staged: (_ for _ in ()).throw(OSError(28, "full")))
+        _fail_replace(monkeypatch, "1-dhcp4.key", nth=2)
+        _rotate()
+        assert (1, "dhcp4", "tls-local-stale") in lab.incidents, (
+            "the route still said so - and the record it points at is the wrong pair"
+        )
+
+    def test_T2_bites_when_a_split_ca_is_not_said(self, lab, monkeypatch):
+        lab.expected_violations = {"T2"}
+
+        def half(staged):
+            pathlib.Path(kea_tls.ca_paths()[0]).write_bytes(pathlib.Path(staged["ca_cert"]).read_bytes())
+            raise OSError(5, "Input/output error")
+
+        monkeypatch.setattr(kea_tls, "commit_rotation", half)
+        monkeypatch.setattr(kea_changeset, "record_attention", lambda *a, **k: True)  # the incidents are lost
+        monkeypatch.setattr(infra, "flash", lambda text, style="message": None)  # ... and so is the sentence
+        _rotate()
+        assert not kea_tls.ca_consistent()
+
+    def test_T3_bites_when_the_rotation_forgets_an_endpoint(self, lab, monkeypatch):
+        """The beta.19 defect itself: the targets came from a listing of local files, an unlistable one read as empty, the rotation 'succeeded', and every daemon still presented CA-A material."""
+        lab.expected_violations = {"T3"}
+        monkeypatch.setattr(
+            kea_tls,
+            "rotation_inventory",
+            lambda servers, url_for=None: kea_tls.RotationInventory([], [], [], [], frozenset()),
+        )
+        _rotate()
+        assert "Kea CA rotated" in lab.texts(), "the rotation reported success"
+
+    def test_T4_bites_when_a_key_reaches_a_sentence(self, lab, monkeypatch):
+        lab.expected_violations = {"T4"}
+        key = lab.hosts[1]["files"]["server.key"]
+        real = kea_host.service_action
+        monkeypatch.setattr(
+            kea_host,
+            "service_action",
+            lambda server, service, action: (
+                {"ok": False, "detail": key} if server["id"] == 1 else real(server, service, action)
+            ),
+        )
+        _rotate()
+
+    def test_T5_bites_when_a_refusal_leaves_a_file_behind(self, lab, monkeypatch):
+        lab.expected_violations = {"T5"}
+        real = kea_tls.rotation_inventory
+
+        def refusing_after_writing(servers, url_for=None):
+            (pathlib.Path(kea_tls.SSL_DIR) / "stray-file").write_text("left behind", encoding="ascii")
+            inv = real(servers, url_for=url_for)
+            inv.refusals.append("refused on purpose")
+            return inv
+
+        monkeypatch.setattr(kea_tls, "rotation_inventory", refusing_after_writing)
+        _rotate()
+        assert "Rotate refused" in lab.texts()

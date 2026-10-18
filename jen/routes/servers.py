@@ -254,6 +254,7 @@ def servers():
         ha_actions=__ha.HA_ACTIONS,
         compare_rows=compare_rows,
         changeset_attention=__changeset.attention(),
+        recovery_record_unreadable=current_user.role == "superadmin" and __changeset.note_state() == "malformed",
         investigation={e["server_id"]: e for e in __inv.active()},
         investigation_orphans=[{**e, "by_hand": __inv.by_hand(e)} for e in __inv.active() if e.get("removed")],
         investigation_damaged=[
@@ -281,7 +282,11 @@ def servers():
 def dismiss_changeset_attention():
     """v5.65.1 (Q90) - clear the "a change was rolled back / a rollback failed" banner."""
     note = __changeset.attention()
-    __changeset.dismiss_rollback_notes()  # Q187: an unproved recovery is acknowledged by a superadmin (below), not dismissed with the rollback notes
+    if (
+        not __changeset.dismiss_rollback_notes()
+    ):  # Q187: an unproved recovery is acknowledged by a superadmin (below), not dismissed with the rollback notes
+        flash(_RECORD_NOT_UPDATED, "error")
+        return redirect(url_for("servers.servers"))
     if note:
         incidents = [i for i in note["incidents"] if i.get("kind") != __changeset.ATTENTION_KIND]
         if incidents:
@@ -311,10 +316,12 @@ def acknowledge_recovery_incident():
     cleared = __changeset.acknowledge_recovery(server_id, service, category)
     if cleared is None:
         flash(
-            "The acknowledgement could not be saved - the incident is still shown. The reason is in the Jen log.",
+            "The acknowledgement could not be saved - the incident is still shown. " + _RECORD_NOT_UPDATED,
             "error",
         )
-    elif cleared:
+    elif cleared == 0:
+        flash("Already cleared - nothing matched (another request or a verified recovery got there first).", "info")
+    else:
         __user.audit(
             "ACKNOWLEDGE_RECOVERY_INCIDENT",
             service or "all",
@@ -322,6 +329,31 @@ def acknowledge_recovery_incident():
         )
         flash("Acknowledged. The daemon was not touched: check it before relying on it.", "success")
     return redirect(url_for("servers.servers"))
+
+
+@bp.route("/servers/recovery-record/set-aside", methods=["POST"])
+@login_required
+@_superadmin_required
+def set_aside_recovery_record():
+    """Q189 (AE3) - the stored recovery note is text Jen cannot read as a note. Every writer refuses it (it is never written over), Health says 'unknown', and this is the way out: a superadmin
+    sets it aside - the raw value is copied to a settings row of its own, the note is cleared, and the audit row carries the length and that key, never the text. Nothing is sent to a Kea host."""
+    status, key, length = __changeset.set_aside_unreadable_note()
+    if status == "done":
+        __user.audit("CLEAR_RECOVERY_RECORD", "changeset_attention", f"length={length} set_aside_key={key}")
+        flash(
+            f"The unreadable recovery record was set aside (kept in the setting {key}) and cleared. Anything it held is gone from Servers and Health: check each daemon you changed recently.",
+            "success",
+        )
+    elif status == "not-needed":
+        flash("The recovery record reads fine now; nothing was set aside.", "info")
+    else:
+        flash("The recovery record could not be set aside - it was left as it was. " + _RECORD_NOT_UPDATED, "error")
+    return redirect(url_for("servers.servers"))
+
+
+_RECORD_NOT_UPDATED = (
+    "The recovery record could not be updated; Health shows it as unknown. The reason is in the Jen log."
+)
 
 
 @bp.route("/servers/<int:server_id>/investigation-logging/<action>", methods=["POST"])

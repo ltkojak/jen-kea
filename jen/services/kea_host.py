@@ -571,6 +571,31 @@ def read_config_versioned(
     helper_only: bool = False,
     capture: bool = True,
 ) -> tuple[dict | None, str | None]:
+    """`_read_config_versioned` (below) with the transport boundary of Q189 (AE4): paramiko's `socket.timeout`, an `EOFError`, an `SSHException` or a reset socket from the channel is a FAILED READ -
+    `(None, None)`, with a sentence appended to `errors` - never an exception. The two direct-socket routes read the daemon's config BEFORE they send anything; an exception there was a 500 with
+    every flash dropped (Q158 F7c: `install_tls` and `tail_log` were fixed, this one was not). The class is named in the sentence and logged; the exception text is only logged."""
+    try:
+        return _read_config_versioned(
+            server, service, errors=errors, timeout=timeout, helper_only=helper_only, capture=capture
+        )
+    except Exception as e:
+        logger.warning(f"read-config on {server.get('name') or server.get('ssh_host')}: {type(e).__name__}: {e}")
+        if errors is not None:
+            errors.append(
+                f"the connection to {server.get('name') or server.get('ssh_host') or 'the host'} failed while reading the config ({type(e).__name__})"
+            )
+        return None, None
+
+
+def _read_config_versioned(
+    server: dict,
+    service: str,
+    *,
+    errors: list | None = None,
+    timeout: int | None = None,
+    helper_only: bool = False,
+    capture: bool = True,
+) -> tuple[dict | None, str | None]:
     """(parsed config, sha256-of-raw-bytes or a canonical sentinel).
 
     v5.69.0-beta.6 (Q175): `timeout` bounds the SSH round trip (default 60 s); `helper_only` never uses the legacy root-python read (a host with no helper is

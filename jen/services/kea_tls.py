@@ -342,15 +342,46 @@ def issue_server_cert(
     return files
 
 
+class HostRecordLost(OSError):
+    """Q189 (AE2): Jen cannot record which pair a host holds - neither as its live copy nor as the `.prev` pair a marker points at. The caller records a `remote-unknown` incident (the
+    database is then the durable record the SSL directory could not hold) and `host_material` answers None for that server and service until a later commit succeeds."""
+
+
 def commit_issued(server_id, service: str, files: dict) -> None:
     """Make Jen's own pair for this server and service `files` (Q187, AC2): the key and the certificate that names it, installed as ONE set, and the pair they replace kept as `.prev`. The
     setup route calls this only AFTER the host has accepted the pair (`install_tls`), so the live pair is always what Jen last put on the host - never a pair that was issued and not
     installed - and `.prev` is always what the host had immediately before THIS operation, which is what a failure puts back. (An earlier version kept the first `.prev` across attempts;
-    that restored material from before an earlier operation that had since stood.)"""
+    that restored material from before an earlier operation that had since stood.)
+
+    Q189 (AE2): Jen's record of what a host holds IS the exact payload that host accepted, or "unknown" - never a copy made by the mechanism that failed. When the write fails,
+    `commit_file_set` has already copied the LIVE pair to `.prev`, and that is not what the host holds (the host holds `files`): so `files` itself is written as `.prev` and the pair is
+    marked stale (`host_material` then answers `.prev`), and the OSError is re-raised. When even that cannot be written the error is `HostRecordLost`."""
     copy_path, key_path = server_copy_path(server_id, service), server_key_path(server_id, service)
-    _ensure_dir(os.path.dirname(copy_path))
-    commit_file_set([(key_path, files["server.key"], 0o600), (copy_path, files["server.crt"], 0o644)])
+    try:
+        _ensure_dir(os.path.dirname(copy_path))
+        commit_file_set([(key_path, files["server.key"], 0o600), (copy_path, files["server.crt"], 0o644)])
+    except OSError as failure:
+        _record_host_pair(server_id, service, files, failure)
+        raise
     clear_stale(server_id, service)  # the host was just given exactly this pair: Jen's copy agrees again
+
+
+def _record_host_pair(server_id, service: str, files: dict, cause: BaseException) -> None:
+    """Q189 (AE2): record `files` - the payload the host accepted - as `.prev`, THEN mark the live pair stale (in that order: a marker over a `.prev` that is not the host's pair is the bug).
+    Raises `HostRecordLost` (from `cause`) when either cannot be written; whatever `.prev` is left is removed so a copy of the live pair does not stand as the host's."""
+    crt, key = server_copy_path(server_id, service), server_key_path(server_id, service)
+    try:
+        commit_file_set(
+            [(key + ".prev", files["server.key"], 0o600), (crt + ".prev", files["server.crt"], 0o644)], keep_prev=False
+        )
+        mark_stale(server_id, service)
+    except OSError as lost:
+        for path in (crt + ".prev", key + ".prev"):
+            with contextlib.suppress(OSError):
+                os.unlink(path)
+        raise HostRecordLost(
+            f"Jen cannot record which certificate server {server_id} {service} holds ({type(lost).__name__})"
+        ) from cause
 
 
 def _material(crt: str, key: str) -> dict | None:
@@ -380,11 +411,14 @@ def stage_issued(server_id, service: str, files: dict) -> None:
 
     crt, key = server_copy_path(server_id, service), server_key_path(server_id, service)
     _ensure_dir(os.path.dirname(crt))
-    if is_stale(server_id, service):
+    held = host_material(server_id, service)  # Q189: what Jen can say the HOST holds - not what happens to be live
+    if held is None:
+        # nothing is the host's previous material (a first https socket, a certificate installed by hand) - or Jen does not know which pair it is: either way there is nothing to put back
+        retire_previous(server_id, service)
+        live_crt = live_key = None
+    elif is_stale(server_id, service):
         # Jen's live pair is KNOWN not to be the host's: `.prev` is (and stays) what the host has, so it must not be overwritten with the live pair
         live_crt = live_key = None
-        if previous_material(server_id, service) is None:
-            retire_previous(server_id, service)
     else:
         try:
             with open(crt, "rb") as f:
@@ -397,8 +431,6 @@ def stage_issued(server_id, service: str, files: dict) -> None:
         commit_file_set(
             [(key, live_key, 0o600), (crt, live_crt, 0o644)]
         )  # an identity commit: leaves `.prev` equal to the live pair (the one place `.prev` is made)
-    elif not is_stale(server_id, service):
-        retire_previous(server_id, service)  # no live pair: nothing is the host's previous material
     write_private_file(key + ".staged", files["server.key"], 0o600)
     write_private_file(crt + ".staged", files["server.crt"], 0o644)
 
@@ -467,13 +499,27 @@ def restore_previous(server_id, service: str) -> bool:
         with open(key + ".prev", "rb") as f:
             old_key = f.read()
         commit_file_set([(key, old_key, 0o600), (crt, old_crt, 0o644)], keep_prev=False)
-    except OSError:
-        mark_stale(
-            server_id, service
-        )  # the host has the previous pair and Jen's live copy is not it: `.prev` stays the host's truth until a later commit
+    except OSError as failure:
+        # the host has the previous pair (the caller installed `.prev`) and Jen's live copy is not it: `.prev` stays the host's truth until a later commit
+        try:
+            mark_stale(server_id, service)
+        except OSError as lost:
+            raise HostRecordLost(
+                f"Jen cannot record which certificate server {server_id} {service} holds ({type(lost).__name__})"
+            ) from failure
         return False
     retire_previous(server_id, service)
     return True
+
+
+def discard_local_record(server_id, service: str) -> None:
+    """Q189 (AE6c): drop Jen's own copy of the pair for this server and service - the live pair, `.prev`, `.staged` and the stale marker. For a failed https attempt on a daemon whose sockets do
+    not reference Jen's TLS files: the host's files at the fixed paths are unreferenced, and a copy Jen keeps for them is a record of an endpoint that does not exist."""
+    for base in (server_copy_path(server_id, service), server_key_path(server_id, service)):
+        for suffix in ("", ".prev", ".staged"):
+            with contextlib.suppress(OSError):
+                os.unlink(base + suffix)
+    clear_stale(server_id, service)
 
 
 def retire_previous(server_id, service: str) -> None:
@@ -493,8 +539,7 @@ def mark_stale(server_id, service: str) -> None:
     commit the host's truth is `.prev`, not the live pair, and `host_material` says so. A marker file, so it survives a restart; it holds no secret."""
     from jen.services.private_files import write_private_file
 
-    with contextlib.suppress(OSError):
-        write_private_file(_stale_path(server_id, service), b"live differs from the host; .prev is the host's\n", 0o600)
+    write_private_file(_stale_path(server_id, service), b"live differs from the host; .prev is the host's\n", 0o600)
 
 
 def clear_stale(server_id, service: str) -> None:
@@ -506,11 +551,40 @@ def is_stale(server_id, service: str) -> bool:
     return os.path.exists(_stale_path(server_id, service))
 
 
+def _open_incident_categories(server_id, service: str):
+    """The categories of the unresolved recovery incidents for this server and service, or None when the incident record cannot be read (Q189, AE2). The database is the durable record the SSL
+    directory could not hold."""
+    try:
+        from jen.services import kea_changeset
+
+        return {
+            i.get("category")
+            for i in kea_changeset.recovery_incidents(strict=True)
+            if str(i.get("server_id")) == str(server_id) and i.get("service") == service
+        }
+    except Exception as e:
+        logger.warning(
+            f"kea_tls: the recovery incidents could not be read ({type(e).__name__}); host_material answers unknown"
+        )
+        return None
+
+
 def host_material(server_id, service: str) -> dict | None:
-    """The pair the HOST holds, as far as Jen can tell: its live pair, unless a recorded divergence says the host has the `.prev` pair instead; None when that is not known."""
-    return (
-        previous_material(server_id, service) if is_stale(server_id, service) else current_material(server_id, service)
-    )
+    """The pair the HOST holds, as far as Jen can tell, or None when Jen does not know (Q189, AE2) - never a guess:
+    * an unresolved `remote-unknown` or `tls-not-restored` incident for this server and service: unknown, whatever the files say (the second says the host holds a certificate Jen did not
+      mean to leave there - its live copy may well be a different pair);
+    * the incident record cannot be read: unknown;
+    * the live pair is marked stale: the `.prev` pair (unknown when it does not load);
+    * a `tls-local-stale` incident with no marker (the marker could not be written): unknown;
+    * otherwise its live pair (unknown when it does not load)."""
+    categories = _open_incident_categories(server_id, service)
+    if categories is None or categories & {"remote-unknown", "tls-not-restored"}:
+        return None
+    if is_stale(server_id, service):
+        return previous_material(server_id, service)
+    if "tls-local-stale" in categories:
+        return None
+    return current_material(server_id, service)
 
 
 def ca_consistent() -> bool:
@@ -564,6 +638,115 @@ def rotate_ca() -> dict:
     ca = ensure_ca(force=True)
     client = issue_client_cert(force=True)
     return {"ca": ca, "client": client}
+
+
+# ── the rotation's inventory (Q189, AE1) ────────────────────────────────────
+#
+# A multi-host operation enumerates its targets from the CONFIGURATION - every endpoint Jen dials - and refuses when its record of any one of them is missing or unreadable. The rotation
+# used to take its targets from a listing of the local copies (v5.29.0): a missing copy dropped a live https endpoint from the rotation, and an unlistable directory read as "nothing to
+# rotate" - a rotation that "succeeded" cut Jen off from every daemon still presenting CA-A material.
+
+INVENTORY_SERVICES = ("dhcp4", "dhcp6", "d2")
+_DAEMON_LABEL = {"dhcp4": "kea-dhcp4", "dhcp6": "kea-dhcp6", "d2": "kea-dhcp-ddns"}
+
+
+class RotationInventory:
+    """`targets, refusals = inventory` unpacks the two things a rotation needs: `targets` are `(server, service, bind_address)` for every https endpoint Jen holds a complete record of;
+    `refusals` are sentences, empty when the rotation may go ahead. `external` are the https endpoints whose certificate Jen's CA did not issue (named, left alone, never silently included
+    or skipped), `stale` the copies of a server or service that is no longer an https endpoint (listed, ignored)."""
+
+    def __init__(self, targets, refusals, external, stale, endpoints=frozenset()):
+        self.targets, self.refusals, self.external, self.stale = targets, refusals, external, stale
+        self.endpoints = frozenset(
+            endpoints
+        )  # every https endpoint Jen dials, (server id, service), whatever Jen holds for it - what a running rotation is compared with
+
+    def __iter__(self):
+        return iter((self.targets, self.refusals))
+
+
+def _server_label(server: dict, service: str) -> str:
+    return (
+        f"{server.get('name') or 'Kea Server ' + str(server.get('id'))} {_DAEMON_LABEL.get(service, 'kea-' + service)}"
+    )
+
+
+def record_state(server_id, service: str) -> tuple[str, str]:
+    """What Jen holds for one server and service, as `(state, why)`: `("jen", "")` - a certificate and key that load, are a pair and were issued by Jen's live CA; `("external", "")` - a pair
+    whose certificate no Jen CA issued; `("refuse", why)` - anything Jen cannot rotate safely: copy missing, key missing, unreadable, malformed, not a pair, issued by an earlier Jen CA."""
+    crt, key = server_copy_path(server_id, service), server_key_path(server_id, service)
+    try:
+        with open(crt, "rb") as f:
+            crt_pem = f.read()
+    except FileNotFoundError:
+        return "refuse", "its certificate copy is missing"
+    except OSError:
+        return "refuse", "its certificate copy cannot be read"
+    try:
+        with open(key, "rb") as f:
+            key_pem = f.read()
+    except FileNotFoundError:
+        return "refuse", "its key is missing"
+    except OSError:
+        return "refuse", "its key cannot be read"
+    try:
+        cert = x509.load_pem_x509_certificate(crt_pem)
+        private = serialization.load_pem_private_key(key_pem, password=None)
+    except (ValueError, TypeError):
+        return "refuse", "its certificate or key is malformed"
+    spki = serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+    if cert.public_key().public_bytes(*spki) != private.public_key().public_bytes(*spki):
+        return "refuse", "its certificate and key are not a pair"
+    if issued_by(crt, ca_paths()[0]):
+        return "jen", ""
+    if any(a.value == "Jen" for a in cert.issuer.get_attributes_for_oid(NameOID.ORGANIZATION_NAME)):
+        return "refuse", "its certificate was issued by an earlier Jen CA, not the current one"
+    return "external", ""
+
+
+def rotation_inventory(servers, url_for=None) -> RotationInventory:
+    """The ONE source of a rotation's targets (Q189, AE1): for every configured server and each of dhcp4 / dhcp6 / d2, the URL Jen dials (`url_for(server, service)`, default the Kea
+    client's `_endpoint_for`); every `https://` endpoint is a target when Jen holds a complete record of its certificate (`record_state`) and a REFUSAL, with a sentence, when it does not.
+    A certificate no Jen CA issued is an administrator-managed endpoint: named in `external`, left alone. A directory that cannot be listed is a refusal naming it - never an empty set.
+    A copy for a server or service that is not an https endpoint now is `stale`: said, ignored. Pure (no network): only Jen's configuration and Jen's own files."""
+    if url_for is None:
+        from jen.services import kea as _kea
+
+        def url_for(server, service):
+            ep = _kea._endpoint_for(server, service)
+            return ep[0] if isinstance(ep, tuple) else ""
+
+    targets, refusals, external = [], [], []
+    try:
+        listed = issued_server_copies(strict=True)
+    except OSError as e:
+        listed = []
+        refusals.append(
+            f"Jen could not read its certificate directory {_copies_dir()} ({type(e).__name__}, errno {getattr(e, 'errno', '?')}), so it cannot tell which servers it issued certificates to; fix its permissions before rotating"
+        )
+    endpoints = set()
+    for server in servers or []:
+        for service in INVENTORY_SERVICES:
+            url = (url_for(server, service) or "").strip()
+            if not url.lower().startswith("https://"):
+                continue
+            sid = server.get("id")
+            endpoints.add((str(sid), service))
+            label = _server_label(server, service)
+            state, why = record_state(sid, service)
+            if state == "jen":
+                from urllib.parse import urlparse
+
+                targets.append((server, service, urlparse(url).hostname or ""))
+            elif state == "external":
+                external.append(f"{label} ({url})")
+            else:
+                refusals.append(
+                    f"{label} is an https endpoint at {url} and Jen has no complete record of its certificate ({why}); remove the direct socket and set it up again so Jen issues "
+                    "and keeps a certificate for it, or point Jen at a socket that is not on its CA, before rotating"
+                )
+    stale = [f"{c['server_id']}-{c['service']}" for c in listed if (str(c["server_id"]), c["service"]) not in endpoints]
+    return RotationInventory(targets, refusals, external, stale, endpoints)
 
 
 # ── staged rotation (the route's "all servers or nothing" Rotate) ───────────
@@ -627,14 +810,25 @@ def discard_rotation(staged: dict) -> None:
             os.unlink(p)
 
 
-def issued_server_copies() -> list[dict]:
+def _copies_dir() -> str:
+    return os.path.join(SSL_DIR, "kea-servers")
+
+
+def issued_server_copies(strict: bool = False) -> list[dict]:
     """[{server_id, service, path, days_left}] for every server cert copy
-    Jen keeps — Health's input."""
-    d = os.path.join(SSL_DIR, "kea-servers")
+    Jen keeps — Health's input. A directory that is not there lists as none; one that
+    cannot be LISTED (a permission, a bad mount) lists as none too unless `strict`
+    (Q189, AE1): then the OSError is raised, so an unreadable inventory is a refusal
+    and never an empty set."""
+    d = _copies_dir()
     out = []
     try:
         names = sorted(os.listdir(d))
+    except FileNotFoundError:
+        return out
     except OSError:
+        if strict:
+            raise
         return out
     for n in names:
         if not n.endswith(".crt") or "-" not in n:

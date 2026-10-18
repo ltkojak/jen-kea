@@ -620,7 +620,9 @@ def route_remove(
             mock.patch.object(
                 infra,
                 "_api_sockets_of",
-                lambda s, svc: [x for x in _edit.control_sockets(host_state["cfg"], svc) if _edit._is_api_socket(x)],
+                lambda s, svc, errors=None: [
+                    x for x in _edit.control_sockets(host_state["cfg"], svc) if _edit._is_api_socket(x)
+                ],
             )
         )
         stack.enter_context(mock.patch.object(extensions, "KEA_SERVERS", list(others or [])))
