@@ -579,12 +579,21 @@ def read_config_versioned(
             server, service, errors=errors, timeout=timeout, helper_only=helper_only, capture=capture
         )
     except Exception as e:
+        if not _is_transport_error(e):
+            raise  # a bug or a database error is not an SSH failure and is not reported as one (second pass, finding 9)
         logger.warning(f"read-config on {server.get('name') or server.get('ssh_host')}: {type(e).__name__}: {e}")
         if errors is not None:
             errors.append(
                 f"the connection to {server.get('name') or server.get('ssh_host') or 'the host'} failed while reading the config ({type(e).__name__})"
             )
         return None, None
+
+
+def _is_transport_error(e: BaseException) -> bool:
+    """The exceptions a channel raises: a timeout, an EOF, a reset or refused socket (`OSError` and its subclasses) and anything paramiko derives from `SSHException`."""
+    return isinstance(e, (OSError, EOFError, TimeoutError)) or any(
+        c.__name__ == "SSHException" for c in type(e).__mro__
+    )
 
 
 def _read_config_versioned(

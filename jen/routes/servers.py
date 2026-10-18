@@ -313,6 +313,32 @@ def acknowledge_recovery_incident():
     if service is not None and service not in ("dhcp4", "dhcp6", "d2"):
         flash("Unknown Kea service.", "error")  # (Q188, AD9) validated before the audit row, like the category
         return redirect(url_for("servers.servers"))
+    # Q189 (second pass, finding 2): acknowledging a note that says Jen does not know (or doubts) which certificate a host holds must not make the live copy the host's pair again - the fact
+    # goes to a FILE first; when Jen cannot write it the acknowledgement is refused (the directory has to be fixed, which is the point of the note)
+    from jen.services import kea_tls as __tls
+
+    try:
+        wanted = [
+            i
+            for i in __changeset.recovery_incidents(strict=True)
+            if i.get("category") in ("remote-unknown", "tls-not-restored", "tls-local-stale")
+            and (server_id is None or str(i.get("server_id")) == str(server_id))
+            and (service is None or i.get("service") == service)
+            and (category is None or i.get("category") == category)
+        ]
+    except ValueError:
+        wanted = []
+    for incident in wanted:
+        if __tls.is_stale(incident.get("server_id"), incident.get("service")):
+            continue  # the file layer already says which pair it is
+        try:
+            __tls.mark_unknown(incident.get("server_id"), incident.get("service"))
+        except OSError:
+            flash(
+                "Not acknowledged: Jen's SSL folder is not writable, so it cannot remember that it does not know which certificate the host holds. Fix the folder's permissions, then acknowledge.",
+                "error",
+            )
+            return redirect(url_for("servers.servers"))
     cleared = __changeset.acknowledge_recovery(server_id, service, category)
     if cleared is None:
         flash(
@@ -334,7 +360,7 @@ def acknowledge_recovery_incident():
 @bp.route("/servers/recovery-record/set-aside", methods=["POST"])
 @login_required
 @_superadmin_required
-def set_aside_recovery_record():
+def set_aside_recovery_note():
     """Q189 (AE3) - the stored recovery note is text Jen cannot read as a note. Every writer refuses it (it is never written over), Health says 'unknown', and this is the way out: a superadmin
     sets it aside - the raw value is copied to a settings row of its own, the note is cleared, and the audit row carries the length and that key, never the text. Nothing is sent to a Kea host."""
     status, key, length = __changeset.set_aside_unreadable_note()
@@ -346,6 +372,11 @@ def set_aside_recovery_record():
         )
     elif status == "not-needed":
         flash("The recovery record reads fine now; nothing was set aside.", "info")
+    elif status == "changed":
+        flash(
+            f"The recovery record changed while it was being set aside, so nothing was cleared (the earlier text is kept in the setting {key}). Look at Servers again.",
+            "warning",
+        )
     else:
         flash("The recovery record could not be set aside - it was left as it was. " + _RECORD_NOT_UPDATED, "error")
     return redirect(url_for("servers.servers"))

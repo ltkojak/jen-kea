@@ -693,3 +693,64 @@ class TestAnUnreadableRecoveryRecordIsSetAsideNeverOverwritten:
         assert b"could not be updated" in r.data
         r = logged_in_client.post("/servers/changeset-attention/dismiss", follow_redirects=True)
         assert b"could not be updated" in r.data
+
+
+class TestAcknowledgingAnIncidentAboutACertificateRecordsThatJenDoesNotKnow:
+    """Q189 second pass, finding 2: an acknowledged note must not make the live copy the host's pair again. The fact goes to a file first; when Jen cannot write it the acknowledgement is refused."""
+
+    def _record(self, category="tls-not-restored"):
+        from jen.services import kea_changeset
+
+        kea_changeset.clear_attention()
+        kea_changeset.record_attention(1, "dhcp4", "setup of a socket", category, server_name="Primary")
+
+    def teardown_method(self):
+        from jen.services import kea_changeset
+
+        kea_changeset.clear_attention()
+
+    def test_the_marker_is_written_before_the_note_is_cleared(
+        self, logged_in_client, mock_kea, db, monkeypatch, tmp_path
+    ):
+        from jen.services import kea_changeset, kea_tls
+
+        monkeypatch.setattr(kea_tls, "SSL_DIR", str(tmp_path))
+        kea_tls.ensure_ca()
+        kea_tls.issue_server_cert({"id": 1, "name": "Primary", "ssh_host": "10.0.0.5"}, "dhcp4", "10.0.0.5")
+        self._record()
+        logged_in_client.post(
+            "/servers/recovery-incident/acknowledge",
+            data={"server_id": "1", "service": "dhcp4", "category": "tls-not-restored"},
+            follow_redirects=True,
+        )
+        assert kea_changeset.recovery_incidents() == [] and kea_tls.is_unknown(1, "dhcp4")
+        assert kea_tls.host_material(1, "dhcp4") is None
+
+    def test_an_acknowledgement_that_cannot_leave_the_marker_is_refused(
+        self, logged_in_client, mock_kea, db, monkeypatch
+    ):
+        from jen.services import kea_changeset, kea_tls
+
+        def refuse(server_id, service):
+            raise OSError(13, "Permission denied")
+
+        monkeypatch.setattr(kea_tls, "mark_unknown", refuse)
+        self._record()
+        r = logged_in_client.post(
+            "/servers/recovery-incident/acknowledge",
+            data={"server_id": "1", "service": "dhcp4", "category": "tls-not-restored"},
+            follow_redirects=True,
+        )
+        assert b"Not acknowledged" in r.data and len(kea_changeset.recovery_incidents()) == 1
+
+    def test_an_incident_with_no_certificate_in_it_is_acknowledged_as_before(
+        self, logged_in_client, mock_kea, db, monkeypatch, tmp_path
+    ):
+        from jen.services import kea_changeset, kea_tls
+
+        monkeypatch.setattr(
+            kea_tls, "SSL_DIR", str(tmp_path)
+        )  # an empty directory: Jen holds no pair, so there is nothing to doubt
+        self._record("remote-unknown")
+        logged_in_client.post("/servers/recovery-incident/acknowledge", data={"server_id": "1"}, follow_redirects=True)
+        assert kea_changeset.recovery_incidents() == [] and not kea_tls.is_unknown(1, "dhcp4")

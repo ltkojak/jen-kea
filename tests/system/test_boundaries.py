@@ -2504,8 +2504,10 @@ ca_before = hashlib.sha256(open(ca, "rb").read()).hexdigest()
 view = inspect.unwrap(infra.rotate_kea_ca)
 with app.test_request_context(method="POST"), contextlib.ExitStack() as stack:
     stack.enter_context(mock.patch.object(infra, "flash", lambda text, style="message": flashes.append(str(text))))
+    stack.enter_context(mock.patch.object(extensions, "KEA_API_CA", ca))  # (the https setup's Jen-side write is a stand-in here: tell Jen it verifies against its own CA, as the real setup saves)
     # the stand-ins: Jen's own config is not touched by this scenario (it already points where it should), and the promotion of the staged CA fails after every target carries CA-B
     stack.enter_context(mock.patch.object(infra, "_service_url", lambda server, service: url if (server.get("id"), service) == (1, "dhcp4") else ""))
+    stack.enter_context(mock.patch.object(infra, "_configured_url", lambda server, service: url if (server.get("id"), service) == (1, "dhcp4") else ""))
     stack.enter_context(mock.patch.object(infra, "_daemon_creds", lambda server, service, url="": ("sysuser", "syspass-123")))
     stack.enter_context(mock.patch.object(jconfig.app_config, "write_values", lambda *a, **k: None))
     stack.enter_context(mock.patch.object(kea_tls, "commit_rotation", side_effect=OSError(28, "No space left on device")))
@@ -2560,7 +2562,9 @@ os.unlink(kea_tls.server_copy_path(1, "dhcp4"))  # Jen's record of kea-a's certi
 view = inspect.unwrap(infra.rotate_kea_ca)
 with app.test_request_context(method="POST"), contextlib.ExitStack() as stack:
     stack.enter_context(mock.patch.object(infra, "flash", lambda text, style="message": flashes.append(str(text))))
+    stack.enter_context(mock.patch.object(extensions, "KEA_API_CA", ca))
     stack.enter_context(mock.patch.object(infra, "_service_url", lambda server, service: url if (server.get("id"), service) == (1, "dhcp4") else ""))
+    stack.enter_context(mock.patch.object(infra, "_configured_url", lambda server, service: url if (server.get("id"), service) == (1, "dhcp4") else ""))
     stack.enter_context(mock.patch.object(infra, "_daemon_creds", lambda server, service, url="": ("sysuser", "syspass-123")))
     view()
 after = {p: hashlib.sha256(open(p, "rb").read()).hexdigest() for p in before}

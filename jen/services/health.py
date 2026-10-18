@@ -1134,6 +1134,18 @@ def _kea_tls_expiry(ctx) -> Check:
     if unlisted:
         c.status = "fail" if c.status == "fail" else "warn"
         c.detail += f" — but {unlisted}"
+    unreadable = [n for n, d in items if d is None]
+    if unreadable:
+        # (Q189, second pass, finding 8) a certificate that cannot be read has no expiry to watch - it is not counted as valid
+        c.status = "fail" if c.status == "fail" else "warn"
+        c.detail += f" — the certificate for {', '.join(unreadable)} cannot be read, so its expiry is unknown"
+    refused = kea_tls.rotation_inventory(extensions.KEA_SERVERS).refusals
+    if refused:
+        # an https endpoint Jen has no complete record of: the Settings page says Rotate would be refused, and so does this row
+        c.status = "fail" if c.status == "fail" else "warn"
+        c.detail += f" — Rotate Kea CA would be refused: {refused[0]}" + (
+            f" (and {len(refused) - 1} more)" if len(refused) > 1 else ""
+        )
     if stale:
         # Q188 (AD3): while a `tls-local-stale` incident stands, the copy these dates are read from may not be the certificate on the host
         c.status = "fail" if c.status == "fail" else "warn"

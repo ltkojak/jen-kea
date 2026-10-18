@@ -1462,6 +1462,9 @@ def _tls_lab(stack, incidents=None):
 
     directory = tempfile.mkdtemp(prefix="probe-ssl-")
     stack.enter_context(mock.patch.object(kea_tls, "SSL_DIR", directory))
+    stack.enter_context(
+        mock.patch.object(extensions, "KEA_API_CA", kea_tls.ca_paths()[0])
+    )  # Jen verifies against its own CA (the setup saved it): its https endpoints are Jen's
     incidents = incidents if incidents is not None else []
     stack.enter_context(
         mock.patch.object(
@@ -1495,6 +1498,7 @@ def q189_ae1_every_inventory_shape_is_a_target_a_refusal_or_left_alone():
 
     for shape in (
         "complete",
+        "administrators trust",
         "copy missing",
         "key missing",
         "malformed",
@@ -1545,6 +1549,10 @@ def q189_ae1_every_inventory_shape_is_a_target_a_refusal_or_left_alone():
                         serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
                     )
                 )
+            elif shape == "administrators trust":
+                os.unlink(crt)
+                os.unlink(key)
+                stack.enter_context(mock.patch.object(extensions, "KEA_API_CA", "/etc/ssl/the-administrators-ca.pem"))
             elif shape == "directory missing":
                 import shutil
 
@@ -2017,6 +2025,7 @@ EXPECTED = {
     "q189_ae1_an_unlistable_directory_is_a_refusal_never_an_empty_set": (1, True, True, []),
     "q189_ae1_every_inventory_shape_is_a_target_a_refusal_or_left_alone": {
         "complete": (1, 0, 0, 0),
+        "administrators trust": (0, 0, 1, 0),
         "copy missing": (0, 1, 0, 0),
         "key missing": (0, 1, 0, 0),
         "malformed": (0, 1, 0, 0),

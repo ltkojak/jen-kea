@@ -517,12 +517,16 @@ greps `fallback=primary_pass` and `or server.get("api_pass"` over `jen/` find no
    recovery incident (the hard ceiling keeps the newest 200). An incident never carries a socket entry, a key or a credential.
 6. **A multi-host operation enumerates its targets from the CONFIGURATION (every endpoint Jen dials) and refuses when its record of any one of them is missing or unreadable (Q189).** The rotation's targets are
    `kea_tls.rotation_inventory`: every https endpoint of every configured server, each with a certificate and key that load, are a pair and were issued by Jen's live CA - a missing, malformed or mismatched
-   record, or a copies directory that cannot be listed, is a REFUSAL before the staging; an unlistable inventory is a refusal, never an empty set. A certificate no Jen CA issued is an administrator's endpoint:
-   named, left alone. A success is proved against the same set (the endpoints that answered with the new identity are the endpoints planned).
+   record, or a copies directory that cannot be listed, is a REFUSAL before the staging; an unlistable inventory is a refusal, never an empty set. The endpoints are read from the CONFIGURED address
+   (`kea.configured_url`), never from the transport's answer - an endpoint whose password the resolver withheld still exists and still runs Jen's material, so it blocks the rotation instead of dropping out of it.
+   When Jen's trust anchor is not its own CA (`[kea] api_ca`) every https endpoint is an administrator's: named, left alone, never a refusal; so is a certificate no Jen CA issued. A success is proved against
+   the same set (the endpoints that answered with the new identity are the endpoints planned).
 7. **Jen's record of what a host holds is the exact payload that host accepted, or "unknown" - never a copy made by the mechanism that failed (Q189).** `commit_issued` writes the pair the host was given
    as `.prev` and marks the live copy stale when its own write fails; when even that cannot be written (`HostRecordLost`) the route records `remote-unknown`, and `host_material` answers None - for an open
-   `remote-unknown` or `tls-not-restored` incident, a `tls-local-stale` incident whose marker is missing, a record that cannot be read, or a pair that does not load. No re-assert installs a pair Jen does not
-   know the host holds.
+   `remote-unknown` or `tls-not-restored` incident, a `tls-local-stale` incident whose marker is missing, a record that cannot be read, or a pair that does not load. The fact is ALSO a file beside the pair
+   (`.unknown`): an incident is acknowledged away by a person and resolved by a verified recovery, and neither makes the live copy the host's pair again - only an operation that gives the host a pair Jen then
+   records (`commit_issued`, `promote_staged`, `restore_previous`) clears it, and an acknowledgement that cannot leave the marker is refused. A stale marker over a `.prev` pair that loads is the file layer
+   KNOWING, and a transient failure to read the incident record does not destroy it. No re-assert installs a pair Jen does not know the host holds.
 8. **A stored record of unresolved incidents that cannot be read is never written over (Q189).** `_incidents_of(strict=True)` admits three shapes (nothing; `{"incidents": [dicts]}`; the 5.65.x single note);
    anything else makes every writer refuse - unchanged, False - and a superadmin sets it aside (the raw value copied to its own settings row, the note cleared, the audit row carrying the length and the key).
 9. **The pre-read is a call site (Q189).** `kea_host.read_config_versioned` answers a transport exception as a failed read; both routes refuse before they send anything.
@@ -558,6 +562,11 @@ endpoint that must answer, the locked incident store, the transport boundary), Q
 - `tests/test_kea_tls_rotation.py::TestInventory`
 - `tests/test_kea_tls_rotation.py::TestHostRecord`
 - `tests/test_kea_tls_rotation.py::TestTheInvariantsBite`
+- `tests/test_kea_tls_rotation.py::TestTheSecondPassOfQ189`
+- `tests/test_direct_socket_lock.py::TestANewEntryStillInTheConfigIsNotNoSocketReferencesTheFiles`
+- `tests/test_kea_changeset.py::TestTheSetAsideClearsOnlyWhatItCopied`
+- `tests/test_kea_host.py::TestOnlyTheChannelsFailuresAreFailedReads`
+- `tests/test_servers.py::TestAcknowledgingAnIncidentAboutACertificateRecordsThatJenDoesNotKnow`
 - `tests/test_kea_changeset.py::TestMalformedNote`
 - `tests/test_incident_store_locking.py::test_a_note_that_is_not_a_note_is_refused_unchanged_by_every_writer`
 - `tests/test_servers.py::TestAnUnreadableRecoveryRecordIsSetAsideNeverOverwritten`

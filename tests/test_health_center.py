@@ -1367,6 +1367,29 @@ class TestKeaTlsExpiry:
         c = health._kea_tls_expiry(_ctx())
         assert c.status == "warn" and "could not read its certificate directory" in c.detail and "unknown" in c.detail
 
+    def test_a_certificate_that_cannot_be_read_is_not_counted_as_valid(self, monkeypatch):
+        self._wire(monkeypatch, copies=[("1", "dhcp4", 1700), ("2", "dhcp4", None)])
+        c = health._kea_tls_expiry(_ctx())
+        assert c.status == "warn" and "kea-b kea-dhcp4 cannot be read" in c.detail and "expiry is unknown" in c.detail
+
+    def test_an_https_endpoint_without_a_record_makes_the_row_say_rotate_would_be_refused(self, monkeypatch):
+        import types
+
+        from jen.services import kea_tls
+
+        self._wire(monkeypatch)
+        monkeypatch.setattr(
+            kea_tls,
+            "rotation_inventory",
+            lambda servers, url_for=None: types.SimpleNamespace(
+                refusals=[
+                    "kea-b kea-dhcp4 is an https endpoint at https://10.0.0.6:8004 and Jen has no complete record"
+                ]
+            ),
+        )
+        c = health._kea_tls_expiry(_ctx())
+        assert c.status == "warn" and "Rotate Kea CA would be refused" in c.detail and "kea-b kea-dhcp4" in c.detail
+
     def test_registered_in_the_jen_group(self):
         assert "kea_tls_expiry" in health.CHECK_IDS
         assert health._CHECK_META["kea_tls_expiry"][1] == "jen"

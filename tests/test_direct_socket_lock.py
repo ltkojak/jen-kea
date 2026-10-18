@@ -1314,3 +1314,22 @@ class TestAFirstSocketThatPresentsAnotherCertificateIsOneAnswer:
         assert tls_world["resolved_categories"][before:] == [None], (
             "the socket presented exactly the certificate Jen holds: every category of this server and service may clear, the certificate ones included"
         )
+
+
+class TestANewEntryStillInTheConfigIsNotNoSocketReferencesTheFiles:
+    """Q189 second pass, finding 4: a FIRST https setup whose revert failed (`rollback_failed`, the NEW entry is still in the daemon's config) references the files it installed. The
+    'no socket references them' shortcut (AE6b/c) must not fire - and must not delete Jen's only record of the pair the config now points at."""
+
+    def test_the_local_pair_is_kept_and_the_incident_is_recorded(self, tls_world, monkeypatch):
+        kt = tls_world["tls"]["tls"]
+        tls_world["results"] = [
+            ChangeSetResult("rollback_failed", "error", [("error", "revert failed")], still_new_ids=[1])
+        ]
+        _post(_inner(infra.setup_direct_socket), **TestTheTlsMaterialIsPartOfTheSnapshot.FORM_A)
+        texts = _everything_printed(tls_world)
+        assert "still in kea-dhcp4's config" in texts and "no socket references" not in texts
+        assert (
+            pathlib.Path(kt.server_copy_path(1, "dhcp4")).exists()
+            and pathlib.Path(kt.server_key_path(1, "dhcp4")).exists()
+        )
+        assert [i[2] for i in tls_world["incidents"]] == ["tls-not-restored"]

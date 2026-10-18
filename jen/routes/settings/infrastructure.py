@@ -175,7 +175,7 @@ def _kea_ca_summary() -> dict:
     out["external"], out["refused"] = [], []
     if present:
         # Q189 (AE1): what Rotate will do is the INVENTORY (every https endpoint Jen dials), not the listing of local copy files
-        inventory = kea_tls.rotation_inventory(extensions.KEA_SERVERS, url_for=_service_url)
+        inventory = kea_tls.rotation_inventory(extensions.KEA_SERVERS, url_for=_configured_url)
         for server, service, _bind in inventory.targets:
             name = server.get("name") or f"server {server.get('id')}"
             out["issued"].append(
@@ -1631,6 +1631,18 @@ def _record_incident(server: dict, service: str, operation: str, category: str, 
     """Q187 (AC3): an unproved recovery stays in front of the operator (Servers, Health) until a later operation on this server and service probes the endpoint, or a superadmin acknowledges it."""
     from jen.services import kea_changeset as __changeset
 
+    if category in ("remote-unknown", "tls-not-restored", "tls-local-stale"):
+        # Q189 (second pass, finding 2): these categories say Jen's live copy may not be the pair the host holds. A recovery note is acknowledged away by a person and resolved by a verified
+        # recovery; neither makes the live copy the host's pair again - so the fact is also kept in a FILE beside the pair (unless a stale marker over a `.prev` pair already says which pair it is)
+        from jen.services import kea_tls as __tls
+
+        if not __tls.is_stale(server.get("id"), service):
+            try:
+                __tls.mark_unknown(server.get("id"), service)
+            except OSError:
+                logger.warning(
+                    f"kea_tls: could not leave the 'unknown' marker for server {server.get('id')}/{service}; the incident note is the only record"
+                )
     kept = __changeset.record_attention(
         server.get("id"),
         service,
@@ -1851,16 +1863,18 @@ def _tls_after_unapplied_change(server: dict, service: str, snapshot, result, pr
     daemon = _DAEMON_NAME[service]
     # Q189 (AE6b): what the sockets referenced is known from the PLAN's read, or - when only that read failed - from the pre-read that preceded the install. Only when neither was made is it unknown.
     known = snapshot if snapshot is not None else pre_read
-    if known is not None and not _uses_jen_tls(known, service):
-        # nothing references the files the failed attempt installed: the host's unreferenced files are said, not an incident, and Jen keeps no record of an endpoint that does not exist (AE6c)
+    operation = f"the failed {daemon} socket change"
+    new_entry_still_there = result.status == "rollback_failed" and server.get("id") in (result.still_new_ids or [])
+    if known is not None and not _uses_jen_tls(known, service) and not new_entry_still_there:
+        # nothing references the files the failed attempt installed: the host's unreferenced files are said, not an incident, and Jen keeps no record of an endpoint that does not exist (AE6c).
+        # (Second pass, finding 4: NOT when the revert failed - the NEW https entry is then still in the config and DOES reference them.)
         __tls.discard_local_record(server.get("id"), service)
         flash(
             f"The failed attempt left certificate files for {daemon} on {name} that no socket references; Jen dropped its own copy of them. Nothing else was changed.",
             "info",
         )
         return
-    operation = f"the failed {daemon} socket change"
-    if result.status == "rollback_failed" and server.get("id") in (result.still_new_ids or []):
+    if new_entry_still_there:
         flash(
             f"PARTIAL STATE on {name}: the NEW socket entry is still in {daemon}'s config (its revert failed), so the previous certificate was NOT put back under it - the new certificate "
             "stays beside the entry it was issued for. Restore the last good config from Config history, then set the direct socket up again.",
@@ -2356,6 +2370,12 @@ def setup_direct_socket(server_id, service):
     return back
 
 
+def _configured_url(server: dict, service: str) -> str:
+    """Q189 (second pass, finding 1): the address Jen is CONFIGURED to dial - `_service_url` is "" for an endpoint whose credential the resolver withheld, and an endpoint that drops out of an
+    enumeration the day its password is withheld is the AE1 failure through another door."""
+    return __kea.configured_url(server, service)
+
+
 def _service_url(server: dict, service: str) -> str:
     """The URL Jen dials for `service` on `server` (its per-daemon
     override, else the v4 URL in ca mode), or "" when it has none."""
@@ -2396,12 +2416,17 @@ def rotate_kea_ca():
     # Q189 (AE1): the targets are every https endpoint Jen DIALS (the configuration), each with a complete record of its certificate - never the listing of local copy files. A missing or
     # unreadable record, or a directory that cannot be listed, is a REFUSAL here, before the staging and before any host is touched: a rotation that dropped a live endpoint would promote
     # a CA that daemon never learned, and Jen would be cut off from it.
-    inventory = __tls.rotation_inventory(extensions.KEA_SERVERS, url_for=_service_url)
+    inventory = __tls.rotation_inventory(extensions.KEA_SERVERS, url_for=_configured_url)
     all_targets, blocked = inventory
     blocked = list(blocked)
     targets = []  # (server, service, bind address)
     for server, service, bind in all_targets:
         label = f"{server.get('name') or 'Kea Server ' + str(server.get('id'))} kea-{service}"
+        if not _service_url(server, service):
+            blocked.append(
+                f"{label} (Jen has no credential it may send to that address - set one under Settings → Kea)"
+            )
+            continue
         if not server.get("ssh_host"):
             blocked.append(f"{label} (no SSH host)")
             continue
@@ -2512,7 +2537,7 @@ def rotate_kea_ca():
             # (the endpoints, not the records: a target Jen already committed carries a certificate from the staged CA, which the live-CA record check would call 'an earlier Jen CA')
             if (
                 not failure
-                and __tls.rotation_inventory(extensions.KEA_SERVERS, url_for=_service_url).endpoints
+                and __tls.rotation_inventory(extensions.KEA_SERVERS, url_for=_configured_url).endpoints
                 != inventory.endpoints
             ):
                 failure = "the set of https endpoints changed while the rotation ran"

@@ -2374,3 +2374,35 @@ class TestReadConfigIsATransportBoundaryToo:
         assert count <= 13, (
             f"{count} route call sites of read_config (13 = the 12 registered + the direct-socket pre-read)"
         )
+
+
+class TestOnlyTheChannelsFailuresAreFailedReads:
+    """Q189 second pass, finding 9: a bug or a database error is not an SSH failure and is not reported as one."""
+
+    def test_a_bug_in_the_capture_propagates(self, monkeypatch):
+        monkeypatch.setattr(
+            kea_host, "helper_call", lambda *a, **k: {"ok": True, "config": {"Dhcp4": {}}, "sha256": "abc"}
+        )
+        monkeypatch.setattr(kea_host, "_record_from_resp", lambda *a: None)
+
+        def broken(*a):
+            raise RuntimeError("a bug in the capture")
+
+        monkeypatch.setattr(kea_host, "_capture_baseline_or_external_change", broken)
+        with pytest.raises(RuntimeError):
+            kea_host.read_config_versioned(SERVER, "dhcp4")
+
+    def test_a_paramiko_style_ssh_exception_is_a_failed_read(self, monkeypatch):
+        class SSHException(Exception):
+            pass
+
+        class AuthenticationException(SSHException):
+            pass
+
+        def raising(*a, **k):
+            raise AuthenticationException("no")
+
+        monkeypatch.setattr(kea_host, "helper_call", raising)
+        errors = []
+        assert kea_host.read_config_versioned(SERVER, "dhcp4", errors=errors, capture=False) == (None, None)
+        assert errors and "AuthenticationException" in errors[0]

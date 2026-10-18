@@ -1030,6 +1030,22 @@ class TestHttpsFlow:
         tls_env.ensure_ca()
         tls_env.issue_client_cert()
         tls_env.issue_server_cert(extensions.KEA_SERVERS[1], "dhcp4", "10.0.0.6")
+        # Q189 (AE1): the page lists what Rotate WILL do, and that is the inventory - the https endpoints Jen dials, on Jen's CA - not whatever copy files exist. So the standby is an https
+        # endpoint on Jen's CA here (the setup would have saved it), as in TestRotateKeaCa.
+        ca_crt, _ = tls_env.ca_paths()
+        pem, key = tls_env.client_paths()
+        app_config.write_values(
+            [
+                ("kea", "connection_mode", "direct"),
+                ("kea", "api_url", "https://10.0.0.5:8004"),
+                ("kea_server_2", "api_url", "https://10.0.0.6:8004"),
+                ("kea", "api_ca", ca_crt),
+                ("kea", "api_client_cert", pem),
+                ("kea", "api_client_key", key),
+                ("kea", "api_tls_verify", "true"),
+            ],
+            typed={"kea", "server_2"},
+        )
         body = logged_in_client.get("/settings/kea").data
         assert b"Jen Kea CA jenhost" in body
         assert b"Rotate Kea CA" in body

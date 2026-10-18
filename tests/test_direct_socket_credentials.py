@@ -642,6 +642,7 @@ class TestTheProbeRowsOfQ189:
     def test_every_inventory_shape_is_a_target_a_refusal_or_left_alone(self):
         assert probe.q189_ae1_every_inventory_shape_is_a_target_a_refusal_or_left_alone() == {
             "complete": (1, 0, 0, 0),
+            "administrators trust": (0, 0, 1, 0),
             "copy missing": (0, 1, 0, 0),
             "key missing": (0, 1, 0, 0),
             "malformed": (0, 1, 0, 0),

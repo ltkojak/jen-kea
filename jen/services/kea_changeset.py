@@ -966,7 +966,8 @@ def note_state() -> str:
 def set_aside_unreadable_note() -> tuple[str, str, int]:
     """The ONE sanctioned reset of an unreadable recovery note (Q189, AE3), for a superadmin's explicit request: copy the raw stored value to the settings row
     `changeset_attention_set_aside_<utc timestamp>` (one locked `update_global_setting`), then clear the note through `_with_attention(strict=False)`. Returns `(status, key, length)`:
-    'not-needed' (the note reads fine - nothing is touched), 'done', or 'failed' (the copy or the clear did not happen: the note is left as it was, and the copy, if made, is a spare).
+    'not-needed' (the note reads fine - nothing is touched), 'done', 'changed' (the stored value changed while it was being set aside: nothing was cleared, the copy is a spare) or 'failed' (the copy
+    or the clear did not happen: the note is left as it was, and the copy, if made, is a spare).
     Never returns the text; the caller audits the length and the key."""
     from datetime import datetime, timezone
 
@@ -983,14 +984,24 @@ def set_aside_unreadable_note() -> tuple[str, str, int]:
         pass
     key = f"{ATTENTION_KEY}_set_aside_{datetime.now(timezone.utc):%Y%m%dT%H%M%S%fZ}"
     value = raw if isinstance(raw, str) else str(raw)
+    cleared = [False]
+
+    def clear_if_unchanged(current):
+        # (second pass, finding 6) the clear happens in the same locked transaction that checks the value is still the one that was copied: a second superadmin's set-aside, or a real
+        # incident recorded in between, is never wiped by a request that read the note a moment ago
+        if current == value:
+            cleared[0] = True
+            return ""
+        return None
+
     try:
         if not _user.update_global_setting(key, lambda current: value):
             return "failed", "", 0
-        if not _with_attention(lambda incidents: [], strict=False):
+        if not _user.update_global_setting(ATTENTION_KEY, clear_if_unchanged):
             return "failed", key, len(value)
     except Exception:
         return "failed", "", 0
-    return "done", key, len(value)
+    return ("done" if cleared[0] else "changed"), key, len(value)
 
 
 def apply_change(service: str, mutate_fn, summary: str, **kwargs) -> ChangeSetResult:

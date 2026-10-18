@@ -53,6 +53,7 @@ import ssl
 from datetime import datetime, timedelta, timezone
 
 from cryptography import x509
+from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
@@ -363,7 +364,7 @@ def commit_issued(server_id, service: str, files: dict) -> None:
     except OSError as failure:
         _record_host_pair(server_id, service, files, failure)
         raise
-    clear_stale(server_id, service)  # the host was just given exactly this pair: Jen's copy agrees again
+    _known_again(server_id, service)  # the host was just given exactly this pair: Jen's copy agrees again
 
 
 def _record_host_pair(server_id, service: str, files: dict, cause: BaseException) -> None:
@@ -379,6 +380,10 @@ def _record_host_pair(server_id, service: str, files: dict, cause: BaseException
         for path in (crt + ".prev", key + ".prev"):
             with contextlib.suppress(OSError):
                 os.unlink(path)
+        with contextlib.suppress(OSError):
+            mark_unknown(
+                server_id, service
+            )  # Jen does not know which pair the host holds: say so in a FILE too (no acknowledgement removes it)
         raise HostRecordLost(
             f"Jen cannot record which certificate server {server_id} {service} holds ({type(lost).__name__})"
         ) from cause
@@ -398,7 +403,7 @@ def _material(crt: str, key: str) -> dict | None:
             key_pem = f.read().decode()
         with open(ca_paths()[0], "rb") as f:
             ca_pem = f.read().decode()
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError, UnsupportedAlgorithm):
         return None
     return {"ca.crt": ca_pem, "server.crt": crt_pem, "server.key": key_pem}
 
@@ -411,7 +416,11 @@ def stage_issued(server_id, service: str, files: dict) -> None:
 
     crt, key = server_copy_path(server_id, service), server_key_path(server_id, service)
     _ensure_dir(os.path.dirname(crt))
-    held = host_material(server_id, service)  # Q189: what Jen can say the HOST holds - not what happens to be live
+    # Q189: what Jen can say the HOST holds - not what happens to be live. A stale marker over a `.prev` pair that loads is the file layer KNOWING (second pass, finding 3): it is kept even
+    # when the incident record cannot be read at this moment - a transient blip must not destroy the host's only file-layer record.
+    held = previous_material(server_id, service) if is_stale(server_id, service) else None
+    if held is None:
+        held = host_material(server_id, service)
     if held is None:
         # nothing is the host's previous material (a first https socket, a certificate installed by hand) - or Jen does not know which pair it is: either way there is nothing to put back
         retire_previous(server_id, service)
@@ -445,6 +454,9 @@ def promote_staged(server_id, service: str) -> None:
         staged_crt = f.read()
     commit_file_set([(key, staged_key, 0o600), (crt, staged_crt, 0o644)], keep_prev=False)
     discard_staged(server_id, service)
+    _known_again(
+        server_id, service
+    )  # live IS the pair the host accepted: a divergence noted before this operation is over
 
 
 def discard_staged(server_id, service: str) -> None:
@@ -457,7 +469,7 @@ def fingerprint(path: str) -> str | None:
     """SHA-256 of the certificate's DER encoding - what a TLS peer presents, comparable with `presented_fingerprint`."""
     try:
         return hashlib.sha256(load_cert(path).public_bytes(serialization.Encoding.DER)).hexdigest()
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError, UnsupportedAlgorithm):
         return None
 
 
@@ -504,11 +516,14 @@ def restore_previous(server_id, service: str) -> bool:
         try:
             mark_stale(server_id, service)
         except OSError as lost:
+            with contextlib.suppress(OSError):
+                mark_unknown(server_id, service)
             raise HostRecordLost(
                 f"Jen cannot record which certificate server {server_id} {service} holds ({type(lost).__name__})"
             ) from failure
         return False
     retire_previous(server_id, service)
+    _known_again(server_id, service)
     return True
 
 
@@ -520,6 +535,8 @@ def discard_local_record(server_id, service: str) -> None:
             with contextlib.suppress(OSError):
                 os.unlink(base + suffix)
     clear_stale(server_id, service)
+    with contextlib.suppress(OSError):
+        os.unlink(_unknown_path(server_id, service))
 
 
 def retire_previous(server_id, service: str) -> None:
@@ -532,6 +549,41 @@ def retire_previous(server_id, service: str) -> None:
 
 def _stale_path(server_id, service: str) -> str:
     return server_copy_path(server_id, service) + ".stale"
+
+
+def _unknown_path(server_id, service: str) -> str:
+    return server_copy_path(server_id, service) + ".unknown"
+
+
+def mark_unknown(server_id, service: str) -> None:
+    """Q189 (second pass, finding 2): Jen does NOT know which pair this host holds, and the fact is kept in a FILE beside the pair - a recovery note is acknowledged away by a person, a
+    verified recovery clears it, a database blip hides it; none of those makes the live copy the host's pair again. Cleared only by an operation that gives the host a pair Jen then records
+    (`commit_issued`, `promote_staged`, `restore_previous`). Raises OSError when it cannot be written; the caller treats that as 'no durable record'."""
+    from jen.services.private_files import write_private_file
+
+    crt, key = server_copy_path(server_id, service), server_key_path(server_id, service)
+    if not any(os.path.exists(p) for p in (crt, key, crt + ".prev", key + ".prev")):
+        return  # Jen holds no pair for this server and service: there is no record that could be wrong, and `host_material` is already None
+    _ensure_dir(os.path.dirname(crt))
+    write_private_file(_unknown_path(server_id, service), b"Jen does not know which pair the host holds\n", 0o600)
+
+
+def is_unknown(server_id, service: str) -> bool:
+    return os.path.exists(_unknown_path(server_id, service))
+
+
+def _known_again(server_id, service: str) -> None:
+    """The host was just given a pair Jen has recorded as its live copy: the divergence marker and the 'unknown' marker are over. A marker that cannot be removed is a record that now LIES
+    (it would make `host_material` answer a pair the host no longer holds), so that is `HostRecordLost`, not a silence."""
+    for path in (_stale_path(server_id, service), _unknown_path(server_id, service)):
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            raise HostRecordLost(
+                f"Jen cannot clear its note about server {server_id} {service} ({type(e).__name__})"
+            ) from e
 
 
 def mark_stale(server_id, service: str) -> None:
@@ -571,12 +623,15 @@ def _open_incident_categories(server_id, service: str):
 
 def host_material(server_id, service: str) -> dict | None:
     """The pair the HOST holds, as far as Jen can tell, or None when Jen does not know (Q189, AE2) - never a guess:
+    * the `.unknown` marker beside the pair (a file: no acknowledgement, resolution or database blip removes it - only an operation that gives the host a pair Jen records);
     * an unresolved `remote-unknown` or `tls-not-restored` incident for this server and service: unknown, whatever the files say (the second says the host holds a certificate Jen did not
       mean to leave there - its live copy may well be a different pair);
     * the incident record cannot be read: unknown;
     * the live pair is marked stale: the `.prev` pair (unknown when it does not load);
     * a `tls-local-stale` incident with no marker (the marker could not be written): unknown;
     * otherwise its live pair (unknown when it does not load)."""
+    if is_unknown(server_id, service):
+        return None
     categories = _open_incident_categories(server_id, service)
     if categories is None or categories & {"remote-unknown", "tls-not-restored"}:
         return None
@@ -594,7 +649,7 @@ def ca_consistent() -> bool:
     try:
         spki = serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
         return load_cert(crt).public_key().public_bytes(*spki) == load_key(key).public_key().public_bytes(*spki)
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError, UnsupportedAlgorithm):
         return False
 
 
@@ -665,6 +720,26 @@ class RotationInventory:
         return iter((self.targets, self.refusals))
 
 
+def _trust_is_jens() -> bool:
+    """Does Jen verify the https endpoints it dials against ITS OWN CA (Q189, second pass, finding 5)? `[kea] api_ca` is Jen's CA once Jen has set up an https socket (the setup saves it);
+    an administrator who brought their own CA, or none, has endpoints Jen never issued a certificate for - they are not Jen's to rotate, and a missing copy there is not a lost record."""
+    configured = getattr(extensions, "KEA_API_CA", "") or ""
+    return bool(configured) and os.path.normpath(configured) == os.path.normpath(ca_paths()[0])
+
+
+def _shown(url: str) -> str:
+    """An address as a sentence may carry it: scheme, host and port - never user-info, a path or a query (the old text printed `https://admin:secret@host` as typed)."""
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+        host = f"[{host}]" if ":" in host else host
+        return f"{parts.scheme}://{host}" + (f":{parts.port}" if parts.port else "")
+    except ValueError:
+        return "an address Jen cannot read"
+
+
 def _server_label(server: dict, service: str) -> str:
     return (
         f"{server.get('name') or 'Kea Server ' + str(server.get('id'))} {_DAEMON_LABEL.get(service, 'kea-' + service)}"
@@ -692,10 +767,11 @@ def record_state(server_id, service: str) -> tuple[str, str]:
     try:
         cert = x509.load_pem_x509_certificate(crt_pem)
         private = serialization.load_pem_private_key(key_pem, password=None)
-    except (ValueError, TypeError):
+        spki = serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+        paired = cert.public_key().public_bytes(*spki) == private.public_key().public_bytes(*spki)
+    except (ValueError, TypeError, UnsupportedAlgorithm):
         return "refuse", "its certificate or key is malformed"
-    spki = serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
-    if cert.public_key().public_bytes(*spki) != private.public_key().public_bytes(*spki):
+    if not paired:
         return "refuse", "its certificate and key are not a pair"
     if issued_by(crt, ca_paths()[0]):
         return "jen", ""
@@ -712,11 +788,10 @@ def rotation_inventory(servers, url_for=None) -> RotationInventory:
     if url_for is None:
         from jen.services import kea as _kea
 
-        def url_for(server, service):
-            ep = _kea._endpoint_for(server, service)
-            return ep[0] if isinstance(ep, tuple) else ""
+        url_for = _kea.configured_url  # the CONFIGURED address, whatever the credential rule says about the password
 
     targets, refusals, external = [], [], []
+    jens = _trust_is_jens()
     try:
         listed = issued_server_copies(strict=True)
     except OSError as e:
@@ -733,16 +808,20 @@ def rotation_inventory(servers, url_for=None) -> RotationInventory:
             sid = server.get("id")
             endpoints.add((str(sid), service))
             label = _server_label(server, service)
+            if not jens:
+                # Jen does not verify against its own CA: this endpoint is the administrator's (its certificate was never Jen's to issue or to lose) - named, left alone
+                external.append(f"{label} ({_shown(url)})")
+                continue
             state, why = record_state(sid, service)
             if state == "jen":
                 from urllib.parse import urlparse
 
                 targets.append((server, service, urlparse(url).hostname or ""))
             elif state == "external":
-                external.append(f"{label} ({url})")
+                external.append(f"{label} ({_shown(url)})")
             else:
                 refusals.append(
-                    f"{label} is an https endpoint at {url} and Jen has no complete record of its certificate ({why}); remove the direct socket and set it up again so Jen issues "
+                    f"{label} is an https endpoint at {_shown(url)} and Jen has no complete record of its certificate ({why}); remove the direct socket and set it up again so Jen issues "
                     "and keeps a certificate for it, or point Jen at a socket that is not on its CA, before rotating"
                 )
     stale = [f"{c['server_id']}-{c['service']}" for c in listed if (str(c["server_id"]), c["service"]) not in endpoints]

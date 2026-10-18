@@ -353,6 +353,19 @@ def _endpoint_for(server: dict, service: str):
     return server.get("api_url", ""), server.get("api_user", ""), server.get("api_pass", "")
 
 
+def configured_url(server: dict | None, service: str) -> str:
+    """The address Jen is CONFIGURED to dial for this daemon (Q189, second pass, finding 1) - "" when it has none. `_endpoint_for` answers a sentence, not a url, for an endpoint whose password
+    the credential rule withheld; but that endpoint still EXISTS and still runs whatever TLS material Jen put on its host. A caller that enumerates endpoints (the rotation's inventory) asks this,
+    never `_endpoint_for`, or an endpoint drops out of its set the day its credential is withheld."""
+    if service in ("d2", "dhcp6"):
+        if server is None:
+            return (extensions.D2_API_URL if service == "d2" else extensions.KEA6_API_URL) or ""
+        return server.get("api_d2_url" if service == "d2" else "api6_url", "") or ""
+    if server is None:
+        return extensions.KEA_API_URL or ""
+    return server.get("api_url", "") or ""
+
+
 def kea_command(
     command: str, service: str = "dhcp4", arguments: dict = None, server: dict = None, timeout: int = 10
 ) -> dict:

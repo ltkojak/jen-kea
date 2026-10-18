@@ -12,7 +12,7 @@
 <div class="alert alert-warning u-3bceda">
     {{ icon("siren") }} <strong>Jen's recovery record is not readable.</strong>
     It holds text that is not a list of unresolved recoveries, so Jen cannot say whether a direct-socket change is still waiting to be proved, and it will not write a new note over it. Health shows the recovery check as unknown until it is set aside.
-    <form method="POST" action="{{ url_for('servers.set_aside_recovery_record') }}" class="u-8a77e5">
+    <form method="POST" action="{{ url_for('servers.set_aside_recovery_note') }}" class="u-8a77e5">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit" class="btn btn-sm btn-secondary">Set aside and clear</button>
     </form>

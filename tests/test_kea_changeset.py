@@ -1214,3 +1214,37 @@ class TestMalformedNote:
         monkeypatch.setattr(user_mod, "get_global_setting", down)
         assert cs.note_state() == "unavailable"
         assert cs.set_aside_unreadable_note() == ("failed", "", 0)
+
+
+class TestTheSetAsideClearsOnlyWhatItCopied:
+    """Q189 second pass, finding 6: the clear is conditional on the stored value still being the one that was copied (one locked transaction), so a second superadmin's set-aside, or a real
+    incident recorded in between, is never wiped."""
+
+    def test_a_note_that_changed_in_between_is_not_cleared(self, monkeypatch):
+        import json
+
+        from jen.models import user as user_mod
+
+        store = {cs.ATTENTION_KEY: "{broken json!!!"}
+        reads = []
+
+        def get(key, default="", strict=False):
+            value = store.get(key, default)
+            if key == cs.ATTENTION_KEY and not reads:
+                reads.append(1)
+                # a rotation records a REAL incident right after the first read
+                store[key] = json.dumps(
+                    {
+                        "incidents": [
+                            {"kind": "attention", "category": "tls-not-restored", "service": "dhcp4", "server_id": 1}
+                        ]
+                    }
+                )
+            return value
+
+        monkeypatch.setattr(user_mod, "get_global_setting", get)
+        monkeypatch.setattr(user_mod, "set_global_setting", lambda k, v: store.__setitem__(k, v))
+        status, key, length = cs.set_aside_unreadable_note()
+        assert status == "changed" and length == len("{broken json!!!")
+        assert "tls-not-restored" in store[cs.ATTENTION_KEY], "the incident recorded in between survived"
+        assert store[key] == "{broken json!!!", "the earlier text is kept as a spare"
