@@ -258,7 +258,8 @@ class TestHttpFlowSuccess:
             return {"ok": True, "backup": None, "sha256": "sha-new"}
 
         fake.responses["apply-config"] = apply
-        http({"1.2.3.4:8000": _ok("3.0.4")})
+        # (Q188: "undone" needs the endpoint Jen dials - the Control Agent at 1.2.3.4:8000 - to answer as one, so it identifies itself)
+        http({"1.2.3.4:8000": _ok("3.0.4")}, config_replies={"1.2.3.4:8000": AS_CA})
         r = _setup(logged_in_client)
         assert b"The socket you had (http 10.0.0.9:8004) is back" in r.data
         assert b"the new one (http 10.0.0.5:8004) did not answer" in r.data
