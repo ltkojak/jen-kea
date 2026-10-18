@@ -295,22 +295,35 @@ def update_global_setting(key: str, mutate) -> bool:
     caller never reports as done what is not."""
     from jen.models.db import jen_db
 
-    try:
-        with jen_db() as db:
-            with db.cursor() as cur:
-                cur.execute("INSERT IGNORE INTO settings (setting_key, setting_value) VALUES (%s, %s)", (key, ""))
-                cur.execute("SELECT setting_value FROM settings WHERE setting_key = %s FOR UPDATE", (key,))
-                row = cur.fetchone()
-                current = (row["setting_value"] if isinstance(row, dict) else row[0]) if row is not None else ""
-                new = mutate(current or "")
-                if new is not None and new != current:
-                    cur.execute("UPDATE settings SET setting_value = %s WHERE setting_key = %s", (new, key))
-            db.commit()
-        _invalidate_settings_cache()
-        return True
-    except Exception as e:
-        logger.error(f"update_global_setting({key}): {type(e).__name__}: {e}")
-        return False
+    # (second pass, Q188: `INSERT IGNORE` on a row that EXISTS takes a shared lock on the duplicate record, and two transactions that both hold it and then ask for the exclusive lock of
+    # `SELECT ... FOR UPDATE` deadlock - one loses its update. So the row is created in its OWN autocommitted statement first, and the transaction that follows only ever takes the exclusive lock.
+    # A deadlock or lock-wait timeout that still happens is retried, because the loser rolled back and nothing was written.)
+    last: Exception | None = None
+    for _attempt in range(3):
+        try:
+            with jen_db() as db:
+                with db.cursor() as cur:
+                    cur.execute("INSERT IGNORE INTO settings (setting_key, setting_value) VALUES (%s, %s)", (key, ""))
+                db.commit()  # the row exists now, and no lock on it is held
+            with jen_db() as db:
+                with db.cursor() as cur:
+                    cur.execute("SELECT setting_value FROM settings WHERE setting_key = %s FOR UPDATE", (key,))
+                    row = cur.fetchone()
+                    current = (row["setting_value"] if isinstance(row, dict) else row[0]) if row is not None else ""
+                    new = mutate(current or "")
+                    if new is not None and new != current:
+                        cur.execute("UPDATE settings SET setting_value = %s WHERE setting_key = %s", (new, key))
+                db.commit()
+            _invalidate_settings_cache()
+            return True
+        except Exception as e:
+            last = e
+            code = e.args[0] if getattr(e, "args", None) and isinstance(e.args[0], int) else None
+            if code in (1213, 1205):  # deadlock victim / lock wait timeout: nothing was written
+                continue
+            break
+    logger.error(f"update_global_setting({key}): {type(last).__name__}: {last}")
+    return False
 
 
 def audit(action: str, entity: str, details: str = "") -> None:

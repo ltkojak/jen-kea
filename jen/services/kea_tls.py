@@ -350,6 +350,7 @@ def commit_issued(server_id, service: str, files: dict) -> None:
     copy_path, key_path = server_copy_path(server_id, service), server_key_path(server_id, service)
     _ensure_dir(os.path.dirname(copy_path))
     commit_file_set([(key_path, files["server.key"], 0o600), (copy_path, files["server.crt"], 0o644)])
+    clear_stale(server_id, service)  # the host was just given exactly this pair: Jen's copy agrees again
 
 
 def _material(crt: str, key: str) -> dict | None:
@@ -379,18 +380,24 @@ def stage_issued(server_id, service: str, files: dict) -> None:
 
     crt, key = server_copy_path(server_id, service), server_key_path(server_id, service)
     _ensure_dir(os.path.dirname(crt))
-    try:
-        with open(crt, "rb") as f:
-            live_crt = f.read()
-        with open(key, "rb") as f:
-            live_key = f.read()
-    except OSError:
+    if is_stale(server_id, service):
+        # Jen's live pair is KNOWN not to be the host's: `.prev` is (and stays) what the host has, so it must not be overwritten with the live pair
         live_crt = live_key = None
+        if previous_material(server_id, service) is None:
+            retire_previous(server_id, service)
+    else:
+        try:
+            with open(crt, "rb") as f:
+                live_crt = f.read()
+            with open(key, "rb") as f:
+                live_key = f.read()
+        except OSError:
+            live_crt = live_key = None
     if live_crt is not None and live_key is not None:
         commit_file_set(
             [(key, live_key, 0o600), (crt, live_crt, 0o644)]
         )  # an identity commit: leaves `.prev` equal to the live pair (the one place `.prev` is made)
-    else:
+    elif not is_stale(server_id, service):
         retire_previous(server_id, service)  # no live pair: nothing is the host's previous material
     write_private_file(key + ".staged", files["server.key"], 0o600)
     write_private_file(crt + ".staged", files["server.crt"], 0o644)
@@ -461,16 +468,60 @@ def restore_previous(server_id, service: str) -> bool:
             old_key = f.read()
         commit_file_set([(key, old_key, 0o600), (crt, old_crt, 0o644)], keep_prev=False)
     except OSError:
+        mark_stale(
+            server_id, service
+        )  # the host has the previous pair and Jen's live copy is not it: `.prev` stays the host's truth until a later commit
         return False
     retire_previous(server_id, service)
     return True
 
 
 def retire_previous(server_id, service: str) -> None:
-    """The operation that replaced the pair succeeded: the pair before it is no longer needed."""
+    """The operation that replaced the pair succeeded: the pair before it is no longer needed - and any known divergence between Jen's copy and the host is over."""
     for p in (server_copy_path(server_id, service) + ".prev", server_key_path(server_id, service) + ".prev"):
         with contextlib.suppress(OSError):
             os.unlink(p)
+    clear_stale(server_id, service)
+
+
+def _stale_path(server_id, service: str) -> str:
+    return server_copy_path(server_id, service) + ".stale"
+
+
+def mark_stale(server_id, service: str) -> None:
+    """Q188 (second pass, finding 3): Jen's LIVE pair is KNOWN not to be what the host holds (the host took the previous pair back and Jen's own copy could not follow). Until the next successful
+    commit the host's truth is `.prev`, not the live pair, and `host_material` says so. A marker file, so it survives a restart; it holds no secret."""
+    from jen.services.private_files import write_private_file
+
+    with contextlib.suppress(OSError):
+        write_private_file(_stale_path(server_id, service), b"live differs from the host; .prev is the host's\n", 0o600)
+
+
+def clear_stale(server_id, service: str) -> None:
+    with contextlib.suppress(OSError):
+        os.unlink(_stale_path(server_id, service))
+
+
+def is_stale(server_id, service: str) -> bool:
+    return os.path.exists(_stale_path(server_id, service))
+
+
+def host_material(server_id, service: str) -> dict | None:
+    """The pair the HOST holds, as far as Jen can tell: its live pair, unless a recorded divergence says the host has the `.prev` pair instead; None when that is not known."""
+    return (
+        previous_material(server_id, service) if is_stale(server_id, service) else current_material(server_id, service)
+    )
+
+
+def ca_consistent() -> bool:
+    """Is Jen's CA a PAIR - the certificate at `kea-ca.crt` belongs to the key at `kea-ca.key`? A promotion whose restore also failed can leave them apart, and every certificate issued from
+    that CA is then signed by a key its certificate does not name."""
+    crt, key = ca_paths()
+    try:
+        spki = serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+        return load_cert(crt).public_key().public_bytes(*spki) == load_key(key).public_key().public_bytes(*spki)
+    except (OSError, ValueError, TypeError):
+        return False
 
 
 def client_cert_ok() -> bool:
@@ -541,10 +592,14 @@ def stage_rotation() -> dict:
         "client_cert": pem + _STAGE_SUFFIX,
         "client_key": client_key_path + _STAGE_SUFFIX,
     }
-    write_atomically(staged["ca_key"], _key_pem(ca_key), 0o600)
-    write_atomically(staged["ca_cert"], _cert_pem(ca_cert), 0o644)
-    write_atomically(staged["client_key"], _key_pem(client_key), 0o600)
-    write_atomically(staged["client_cert"], _cert_pem(client_cert), 0o644)
+    try:
+        write_atomically(staged["ca_key"], _key_pem(ca_key), 0o600)
+        write_atomically(staged["ca_cert"], _cert_pem(ca_cert), 0o644)
+        write_atomically(staged["client_key"], _key_pem(client_key), 0o600)
+        write_atomically(staged["client_cert"], _cert_pem(client_cert), 0o644)
+    except BaseException:
+        discard_rotation(staged)  # (second pass, Q188: a staging that stopped half written leaves no key behind)
+        raise
     return staged
 
 

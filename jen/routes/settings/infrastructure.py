@@ -1514,7 +1514,7 @@ def _jen_endpoint(server: dict, service: str):
     there (the daemon in direct mode, the Control Agent otherwise). Recorded before the first remote change: after a failed operation Jen's settings are unchanged, so THIS is the endpoint
     that has to work again before anything is called 'undone'. None when Jen has no endpoint for it (nothing to prove)."""
     ep = __kea._endpoint_for(server, service)
-    if not isinstance(ep, tuple):
+    if not isinstance(ep, tuple) or not ep[0]:
         return None
     url, user, pwd = ep
     return {
@@ -1527,12 +1527,21 @@ def _jen_endpoint(server: dict, service: str):
     }
 
 
+_ENDPOINT_WINDOWS = 3  # probe windows (each `_PROBE_ATTEMPTS` x `_PROBE_DELAY_S`) the restored endpoint is given before it is called unreachable
+
+
 def _endpoint_answers(ctx: dict, service: str) -> tuple[bool, str]:
     """Q188 (AD4): does the recorded endpoint answer, with its recorded credentials and TLS context, as the daemon it should be? (True, "") or (False, <what did not happen>) - the words carry
     the class of failure, never a credential."""
-    version, err = _probe_after_restart(
-        ctx["url"], ctx["user"], ctx["password"], service, verify=ctx["verify"], cert=ctx["cert"]
-    )
+    # (the system suite, Q188: a daemon restarted twice in a row on a loaded box needs longer than the ~16 s a fresh socket is given, and a false "did not answer" is an incident
+    # the operator has to acknowledge - so the proof of an UNDO is asked for over `_ENDPOINT_WINDOWS` windows, and only the last failure is reported)
+    version, err = "", ""
+    for _window in range(_ENDPOINT_WINDOWS):
+        version, err = _probe_after_restart(
+            ctx["url"], ctx["user"], ctx["password"], service, verify=ctx["verify"], cert=ctx["cert"]
+        )
+        if version:
+            break
     if not version:
         return False, f"did not answer a version-get ({err})"
     who = _identify_daemon(ctx["url"], ctx["user"], ctx["password"], service, verify=ctx["verify"], cert=ctx["cert"])
@@ -1559,7 +1568,7 @@ def _tls_unknown_after_failed_install(server: dict, service: str, existing_api) 
         return
     flash(
         f"PARTIAL STATE on {name}: the certificate for {_DAEMON_NAME[service]}'s https socket may have been replaced and Jen could not re-assert the one it had. "
-        "Run 'Set up direct socket' again to issue a matching one, or install the certificate you had by hand.",
+        "Remove the direct socket and set it up again to issue a matching one, or install the certificate you had by hand.",
         "error",
     )
     __user.audit("DIRECT_SOCKET_PARTIAL", "kea_api", f"server={name} service={service} certificate state unknown")
@@ -1675,13 +1684,13 @@ def _undo_remote_change(
         bits.append("certificate " + tls["remote"])
         by_hand = (
             f"The certificate Jen installed for the https socket could not be put back ({'there is no earlier copy' if tls['remote'] == 'none-saved' else 'the helper refused it'}), so a restored https socket may meet a certificate issued for another address: "
-            f"run 'Set up direct socket' for {daemon} again to issue a matching one, or install the certificate you had by hand. {by_hand}"
+            f"remove the {daemon} direct socket and set it up again to issue a matching one, or install the certificate you had by hand. {by_hand}"
         )
     if tls_stale:
         categories.append("tls-local-stale")
         bits.append("Jen's copy of the certificate not updated")
         by_hand = (
-            "The previous certificate IS back on the host, but Jen could not update its own copy of it (the one its expiry warning and the next recovery read): run 'Set up direct socket' again to refresh it. "
+            "The previous certificate IS back on the host, but Jen could not refresh its own copy of it (the one its expiry warning and the next recovery read): remove the direct socket and set it up again, once Jen's SSL directory is writable. "
             + by_hand
         )
     if endpoint_problem is not None:
@@ -1716,7 +1725,7 @@ def _stop_after_failed_promotion(server: dict, service: str, error: OSError, exi
     if restored == "failed" or (restored == "none" and uses):
         flash(
             f"PARTIAL STATE on {name}: {base}, and the certificate the host had could not be put back - the socket {daemon} has may meet a certificate issued for another address. "
-            f"Fix Jen's SSL directory, then run 'Set up direct socket' again, or install the certificate you had by hand.",
+            "Fix Jen's SSL directory, then remove the direct socket and set it up again, or install the certificate you had by hand.",
             "error",
         )
         __user.audit(
@@ -1760,7 +1769,7 @@ def _tls_after_unapplied_change(server: dict, service: str, snapshot, result) ->
     if result.status == "rollback_failed" and server.get("id") in (result.still_new_ids or []):
         flash(
             f"PARTIAL STATE on {name}: the NEW socket entry is still in {daemon}'s config (its revert failed), so the previous certificate was NOT put back under it - the new certificate "
-            "stays beside the entry it was issued for. Restore the last good config from Config history, then run 'Set up direct socket' again.",
+            "stays beside the entry it was issued for. Restore the last good config from Config history, then set the direct socket up again.",
             "error",
         )
         __user.audit(
@@ -1781,7 +1790,7 @@ def _tls_after_unapplied_change(server: dict, service: str, snapshot, result) ->
         flash(f"The certificate and key {name} had for {daemon} were put back.", "info")
         if tls["local"] == "failed":
             flash(
-                "The previous certificate is back on the host, but Jen could not update its own copy of it (the one its expiry warnings read): run 'Set up direct socket' again to refresh it.",
+                "The previous certificate is back on the host, but Jen could not refresh its own copy of it (the one its expiry warnings read): remove the direct socket and set it up again, once Jen's SSL directory is writable.",
                 "warning",
             )
             _record_incident(server, service, operation, "tls-local-stale")
@@ -1797,7 +1806,7 @@ def _tls_after_unapplied_change(server: dict, service: str, snapshot, result) ->
     if snapshot is None and tls["remote"] == "none-saved":
         flash(
             f"PARTIAL STATE on {name}: Jen could not read what {daemon}'s sockets referenced before the change, and it has no earlier copy of the certificate it installed: the socket {daemon} had may meet "
-            "a certificate issued for another address. Run 'Set up direct socket' again to issue a matching one, or install the certificate you had by hand.",
+            "a certificate issued for another address. Remove the direct socket and set it up again to issue a matching one, or install the certificate you had by hand.",
             "error",
         )
         __user.audit(
@@ -1809,7 +1818,7 @@ def _tls_after_unapplied_change(server: dict, service: str, snapshot, result) ->
         return
     flash(
         f"PARTIAL STATE on {name}: the certificate Jen installed for the https socket could not be put back ({'there is no earlier copy' if tls['remote'] == 'none-saved' else 'the helper refused it'}). "
-        f"The socket {daemon} had may meet a certificate issued for another address: run 'Set up direct socket' again to issue a matching one, or install the certificate you had by hand.",
+        f"The socket {daemon} had may meet a certificate issued for another address: remove the direct socket and set it up again to issue a matching one, or install the certificate you had by hand.",
         "error",
     )
     __user.audit(
@@ -2038,6 +2047,7 @@ def setup_direct_socket(server_id, service):
                 __tls.stage_issued(server_id, service, files)
             except OSError as e:
                 logger.error(f"kea_tls: could not stage the new pair for {name}/{service}: {type(e).__name__}")
+                __tls.discard_staged(server_id, service)
                 flash(
                     f"Jen cannot keep its own copy of the new certificate ({type(e).__name__}, errno {getattr(e, 'errno', '?')}), so it did not install it. Nothing was changed on {name}.",
                     "error",
@@ -2136,9 +2146,13 @@ def setup_direct_socket(server_id, service):
         )
         msg = (
             f"{daemon} on {name} {started}, but {new_url} {reason} from the Jen host — "
-            f"Jen stays in {mode_now} mode and none of its settings were changed. Check that {address}:{port} "
-            f"is reachable from here (firewall? management VLAN?) and that {daemon}'s log shows it listening, "
-            f"then run this again (the socket is already in {conf}, so it will just re-probe)."
+            f"Jen stays in {mode_now} mode and none of its settings were changed. "
+            + (
+                "A repeat would only re-probe the same socket, so remove the direct socket and set it up again to issue a certificate it will present."
+                if fingerprint_problem
+                else f"Check that {address}:{port} is reachable from here (firewall? management VLAN?) and that {daemon}'s log shows it listening, "
+                f"then run this again (the socket is already in {conf}, so it will just re-probe)."
+            )
         )
         __user.audit("SETUP_DIRECT_SOCKET", "kea_api", f"server={name} service={service} url={new_url} probe=failed")
         if replaced_api:
@@ -2198,8 +2212,12 @@ def setup_direct_socket(server_id, service):
         server_id, service
     )  # (Q187) the operation stands: the material before it is no longer needed
     __changeset.resolve_attention(
-        server_id, service
-    )  # ... and the endpoint was just probed and answered as the daemon: a verified recovery of THIS server and service
+        server_id,
+        service,
+        categories=None
+        if tls_replaced
+        else tuple(c for c in __changeset.ATTENTION_CATEGORIES if c not in ("tls-not-restored", "tls-local-stale")),
+    )  # ... and the endpoint was just probed and answered as the daemon: a verified recovery of THIS server and service (of the certificate only when this run replaced it)
     flash(f"{daemon} on {name} answers directly at {new_url} — written: {written}.", "success")
     if service != "dhcp4" and __caps.is_ca():
         flash(
@@ -2231,6 +2249,7 @@ def _service_url(server: dict, service: str) -> str:
 @login_required
 @_superadmin_required
 @_recent_auth_required(minutes=10)
+@_holding_identity_lock
 def rotate_kea_ca():
     """v5.29.0 (Q29, C4) — a new Jen Kea CA and client certificate, and a
     new server certificate pushed to every (server, daemon) Jen ever
@@ -2287,13 +2306,28 @@ def rotate_kea_ca():
     # Q188 (AD1/AD6/AD8): the rotation is ONE transaction. Jen's own state is staged first (`stage_rotation`: the new CA and client pair beside the live files), every target is issued, installed,
     # restarted and probed with the STAGED identity, Jen's TLS settings are saved, and only then is the staging promoted as one set - each step inside one exception boundary, so a step
     # that fails (or raises) stops the rotation and every attempted target is put back on the CA Jen still trusts. The staging is discarded in a `finally`; `.prev` pairs stay until the end.
-    staged = __tls.stage_rotation()
+    staged = None
     done: list[tuple[dict, str, str]] = []
     confirmed: set = set()  # targets the host is KNOWN to hold the staged pair for (its install was acknowledged)
     attempted: list[tuple[dict, str, str]] = []  # every target the host may now hold STAGED-CA material for
     failure = ""
-    outcome: dict = {"rolled": [], "restart_stuck": [], "pair_stuck": [], "unreachable": [], "unknown": []}
+    outcome: dict = {
+        "rolled": [],
+        "restart_stuck": [],
+        "pair_stuck": [],
+        "unreachable": [],
+        "unknown": [],
+        "local_stale": [],
+    }
     try:
+        try:
+            staged = __tls.stage_rotation()
+        except Exception as e:
+            logger.error(f"kea_tls: could not stage the new CA: {type(e).__name__}: {e}")
+            flash(
+                "Rotate refused - Jen could not write the staged CA beside the live one. Nothing was changed.", "error"
+            )
+            return back
         try:
             for server, service, bind in targets:
                 sname = server.get("name") or f"Kea Server {server.get('id')}"
@@ -2361,6 +2395,7 @@ def rotate_kea_ca():
         if failure:
             ca_live = __tls.ca_paths()[0]
             client_live = __tls.client_paths()
+            ca_ok = __tls.ca_consistent()  # a promotion whose own put-back failed can leave Jen's CA certificate and key apart: nothing can be issued from it
             for server, service, bind in attempted:
                 sname = server.get("name") or f"Kea Server {server.get('id')}"
                 label = f"{sname} {_DAEMON_NAME[service]}"
@@ -2371,32 +2406,56 @@ def rotate_kea_ca():
                     if _reinstall_live_material(server, service) != "restored":
                         outcome["unknown"].append((server, service, label))
                     continue
+                if not ca_ok:
+                    outcome["pair_stuck"].append((server, service, label))
+                    continue
+                local_ok = True
                 try:
                     old = __tls.issue_server_cert(server, service, bind, commit=False)  # the OLD CA - still live
                     installed = __host.install_tls(server, service, old).get("ok")
                     if installed:
-                        __tls.commit_issued(server.get("id"), service, old)
+                        try:
+                            __tls.commit_issued(server.get("id"), service, old)
+                        except OSError as e:
+                            logger.error(
+                                f"kea_tls: the previous-CA pair is on {label} but Jen could not keep its copy: {type(e).__name__}"
+                            )
+                            local_ok = False
+                            __tls.mark_stale(
+                                server.get("id"), service
+                            )  # the host holds the old-CA pair; Jen's live copy is still the staged one
                 except Exception as e:
                     logger.error(f"kea_tls: rollback issue failed for {label}: {type(e).__name__}: {e}")
                     installed = False
                 if not installed:
                     outcome["pair_stuck"].append((server, service, label))
                     continue
-                if not __host.service_action(server, service, "restart").get("ok"):
-                    outcome["restart_stuck"].append((server, service, label))
-                    continue
-                answered, _why = _endpoint_answers(
-                    {
-                        "url": _service_url(server, service),
-                        "user": _daemon_creds(server, service)[0],
-                        "password": _daemon_creds(server, service)[1],
-                        "verify": ca_live,
-                        "cert": client_live,
-                        "expect": _DAEMON_KEY[service],
-                    },
-                    service,
-                )
+                if not local_ok:
+                    outcome["local_stale"].append(
+                        (server, service, label)
+                    )  # (the daemon is still restarted and probed below)
+                try:
+                    if not __host.service_action(server, service, "restart").get("ok"):
+                        outcome["restart_stuck"].append((server, service, label))
+                        continue
+                    creds = _daemon_creds(server, service)
+                    answered, _why = _endpoint_answers(
+                        {
+                            "url": _service_url(server, service),
+                            "user": creds[0],
+                            "password": creds[1],
+                            "verify": ca_live,
+                            "cert": client_live,
+                            "expect": _DAEMON_KEY[service],
+                        },
+                        service,
+                    )
+                except Exception as e:  # nothing escapes the rollback of one target before the next is tried
+                    logger.error(f"kea_tls: rollback of {label} stopped on {type(e).__name__}: {e}")
+                    answered = False
                 (outcome["rolled"] if answered else outcome["unreachable"]).append((server, service, label))
+            for server, service, _label in outcome["local_stale"]:
+                _record_incident(server, service, "the failed CA rotation", "tls-local-stale")
             for server, service, _label in outcome["pair_stuck"] + outcome["unknown"]:
                 _record_incident(server, service, "the failed CA rotation", "tls-not-restored")
             for server, service, _label in outcome["restart_stuck"]:
@@ -2404,23 +2463,38 @@ def rotate_kea_ca():
             for server, service, _label in outcome["unreachable"]:
                 _record_incident(server, service, "the failed CA rotation", "restored-endpoint-unreachable")
             for server, service, _bind in targets:
-                if not any(server is s and service == sv for s, sv, _l in outcome["pair_stuck"] + outcome["unknown"]):
+                if not any(
+                    server is s and service == sv
+                    for s, sv, _l in outcome["pair_stuck"] + outcome["unknown"] + outcome["local_stale"]
+                ):
                     __tls.retire_previous(
                         server.get("id"), service
                     )  # the pair before this attempt is not a recovery point for an operation that is over - unless it is the only copy of what a stuck host should hold
-            msg = f"Rotate stopped at {failure}. Jen still trusts the previous CA."
+            msg = f"Rotate stopped at {failure}." + (" Jen still trusts the previous CA." if ca_ok else "")
+            if not ca_ok:
+                flash(
+                    "Jen's CA certificate and CA key are no longer a matching pair (a promotion failed part-way and its own put-back failed too), so nothing can be issued from them. "
+                    "Restore kea-ca.crt and kea-ca.key together from a backup, or from the .prev copies beside them, before any other CA or socket action.",
+                    "error",
+                )
             if outcome["rolled"]:
                 msg += f" Rolled back to the previous CA, restarted and answering: {', '.join(lb for _s, _v, lb in outcome['rolled'])}."
             flash(msg, "error")
             if outcome["pair_stuck"]:
                 flash(
                     f"ROLLBACK FAILED on {', '.join(lb for _s, _v, lb in outcome['pair_stuck'])} — they hold certificates from a CA Jen never adopted and won't answer Jen until fixed: "
-                    "run Set up direct socket (https) again for each.",
+                    "remove the direct socket and set it up again for each.",
                     "error",
                 )
             if outcome["restart_stuck"]:
                 flash(
                     f"{', '.join(lb for _s, _v, lb in outcome['restart_stuck'])}: the previous certificate is back but the daemon did not restart on it - it may be stopped. Restart it on the Kea host.",
+                    "error",
+                )
+            if outcome["local_stale"]:
+                flash(
+                    f"{', '.join(lb for _s, _v, lb in outcome['local_stale'])}: the previous-CA certificate is on the host, but Jen could not refresh its own copy of it (its expiry warning reads that copy): "
+                    "remove the direct socket and set it up again, once Jen's SSL directory is writable.",
                     "error",
                 )
             if outcome["unreachable"]:
@@ -2441,7 +2515,8 @@ def rotate_kea_ca():
             )
             return back
     finally:
-        __tls.discard_rotation(staged)
+        if staged is not None:
+            __tls.discard_rotation(staged)
 
     for server, service, _bind in targets:
         __tls.retire_previous(

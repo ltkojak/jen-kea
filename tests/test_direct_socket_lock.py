@@ -43,7 +43,7 @@ def _inner(view):
 
 class TestBothRoutesHoldTheLock:
     def test_the_marker_is_on_both_routes(self):
-        for view in (infra.setup_direct_socket, infra.remove_direct_socket):
+        for view in (infra.setup_direct_socket, infra.remove_direct_socket, infra.rotate_kea_ca):
             assert getattr(view, "__holds_identity_lock__", False), view.__name__
 
     def test_no_other_route_in_the_module_claims_it(self):
@@ -52,7 +52,7 @@ class TestBothRoutesHoldTheLock:
             for name, fn in vars(infra).items()
             if inspect.isfunction(fn) and getattr(fn, "__holds_identity_lock__", False) and not name.startswith("_")
         }
-        assert held == {"setup_direct_socket", "remove_direct_socket"}
+        assert held == {"setup_direct_socket", "remove_direct_socket", "rotate_kea_ca"}
 
 
 class TestTurnOnWaitsBehindIt:
@@ -127,6 +127,7 @@ def wire(monkeypatch, caplog):
         "codes": [],
         "incidents": [],  # Q187: what record_attention was asked to keep in front of the operator
         "resolved": [],  # ... and the (server, service) pairs a verified recovery cleared
+        "resolved_categories": [],  # ... and which categories each of those clearings was allowed to clear (None: all)
         "host": {"Dhcp4": {"control-sockets": [copy.deepcopy(UNIX)]}},
     }
     server = {
@@ -163,7 +164,9 @@ def wire(monkeypatch, caplog):
     )
     monkeypatch.setattr(
         "jen.services.kea_changeset.resolve_attention",
-        lambda server_id, service, **kw: log["resolved"].append((server_id, service)) or 0,
+        lambda server_id, service, **kw: (
+            log["resolved"].append((server_id, service)) or log["resolved_categories"].append(kw.get("categories")) or 0
+        ),
     )
     monkeypatch.setattr("jen.services.capabilities.is_ca", lambda: False)
     monkeypatch.setattr(
@@ -848,6 +851,9 @@ class TestTheTlsMaterialIsPartOfTheSnapshot:
         _post(_inner(infra.setup_direct_socket), **self.FORM_B)
         assert kt.previous_material(1, "dhcp4") is None
         assert tls_world["resolved"][-1] == (1, "dhcp4")
+        assert tls_world["resolved_categories"][-1] is None, (
+            "this run replaced the certificate and it was proved: every category of the server and service may clear"
+        )
 
 
 class TestAnHttpsSocketIsOnJensFilesByAnyOfTheThree:
@@ -1063,6 +1069,16 @@ def test_an_endpoint_that_answers_makes_the_undo_complete(wire, monkeypatch):
     _refuse_the_write(monkeypatch)
     _post(_inner(infra.setup_direct_socket), **TestUndoneMeansTheEndpointAnswered.FORM)
     assert "was undone" in " ".join(t for _s, t in wire["flashes"]) and wire["incidents"] == []
+
+
+def test_an_http_success_proves_nothing_about_a_certificate(wire, monkeypatch):
+    """Second pass (Q188): a plain-http socket that answers clears the recovery categories about the sockets and the daemon - never `tls-not-restored` or `tls-local-stale`, which are about
+    a certificate this run did not touch."""
+    monkeypatch.setattr(infra, "_write_direct_socket_config", lambda *a, **k: "url written")
+    _post(_inner(infra.setup_direct_socket), **TestUndoneMeansTheEndpointAnswered.FORM)
+    cleared = wire["resolved_categories"][-1]
+    assert cleared is not None and "tls-not-restored" not in cleared and "tls-local-stale" not in cleared
+    assert "probe-pending" in cleared and "remote-unknown" in cleared
 
 
 class TestAnUnreadableConfigIsNotNoSocketUsesJensFiles:

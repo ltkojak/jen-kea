@@ -921,9 +921,7 @@ def attention() -> dict | None:
 
 def clear_attention() -> None:
     try:
-        from jen.models import user as _user
-
-        _user.set_global_setting(ATTENTION_KEY, "")
+        _with_attention(lambda incidents: [])  # (a locked transaction like every other writer of the note)
     except Exception as e:
         logger.debug(f"kea_changeset: could not clear the outcome: {e}")
 

@@ -371,3 +371,115 @@ def test_a_programming_error_in_the_rotation_still_leaves_the_hosts_where_they_w
     _rotate()
     assert "Rotate stopped" in lab.texts()
     _everyone_is_back_on_ca_a_and_answering(lab)
+
+
+class TestTheSecondPassOfQ188:
+    """The findings of the adversarial second pass, each as the sequence that found it."""
+
+    def test_the_previous_ca_pair_that_cannot_be_kept_locally_is_a_stale_copy_not_a_stuck_host(self, lab, monkeypatch):
+        """The rollback put the CA-A pair on the host and the daemon answers; only Jen's own copy of it could not follow. That is `tls-local-stale` - not `tls-not-restored`, and the host is still restarted and probed."""
+        real = kea_tls.commit_issued
+        seen = []
+
+        def failing_on_the_rollback_of_server_1(sid, service, files):
+            seen.append(sid)
+            if sid == 1 and seen.count(1) == 2:
+                raise OSError(28, "No space left on device")
+            return real(sid, service, files)
+
+        monkeypatch.setattr(kea_tls, "commit_issued", failing_on_the_rollback_of_server_1)
+        monkeypatch.setattr(kea_tls, "commit_rotation", lambda staged: (_ for _ in ()).throw(OSError(28, "full")))
+        _rotate()
+        ca = kea_tls.ca_paths()[0]
+        assert lab.answers(1, ca) and lab.answers(2, ca), "both daemons answer on CA-A afterwards"
+        assert (1, "dhcp4", "tls-local-stale") in lab.incidents and not any(
+            i[2] == "tls-not-restored" for i in lab.incidents
+        )
+        assert kea_tls.is_stale(1, "dhcp4") and not kea_tls.is_stale(2, "dhcp4")
+        assert pathlib.Path(kea_tls.server_copy_path(1, "dhcp4") + ".prev").exists(), (
+            "its .prev is kept: it is the host's truth now"
+        )
+
+    def test_a_ca_whose_certificate_and_key_are_apart_issues_nothing(self, lab, monkeypatch):
+        """A promotion that replaced the CA certificate and could not put it back leaves a certificate and key that are not a pair; nothing is issued from it and the sentence does not say Jen still trusts the previous CA."""
+        real_commit = kea_tls.commit_rotation
+
+        def half(staged):
+            pathlib.Path(kea_tls.ca_paths()[0]).write_bytes(pathlib.Path(staged["ca_cert"]).read_bytes())
+            raise OSError(5, "Input/output error")
+
+        monkeypatch.setattr(kea_tls, "commit_rotation", half)
+        issued = []
+        real_issue = kea_tls.issue_server_cert
+        monkeypatch.setattr(
+            kea_tls,
+            "issue_server_cert",
+            lambda *a, **k: issued.append(k.get("ca")) or real_issue(*a, **k),
+        )
+        assert real_commit is not None
+        _rotate()
+        assert not kea_tls.ca_consistent()
+        assert issued.count(None) == 0, "no certificate is issued from a CA that is not a pair"
+        assert "no longer a matching pair" in lab.texts() and "Jen still trusts the previous CA" not in lab.texts()
+        assert sorted(i[2] for i in lab.incidents) == ["tls-not-restored", "tls-not-restored"]
+
+    def test_a_staging_that_stops_half_written_leaves_no_key_behind(self, lab, monkeypatch):
+        real = kea_tls.write_atomically
+        calls = []
+
+        def third_fails(path, data, mode):
+            calls.append(path)
+            if len(calls) == 3:
+                raise OSError(28, "No space left on device")
+            return real(path, data, mode)
+
+        monkeypatch.setattr(kea_tls, "write_atomically", third_fails)
+        _rotate()
+        ca = kea_tls.ca_paths()[0]
+        assert "Rotate refused" in lab.texts() and "Nothing was changed" in lab.texts()
+        assert not any(pathlib.Path(ca).parent.glob("*.next")), "the staging is gone, key included"
+        assert all(h["installs"] == [] and h["restarts"] == 0 for h in lab.hosts.values()), "no host was touched"
+
+    def test_an_exception_in_the_rollback_of_one_target_does_not_stop_the_next(self, lab, monkeypatch):
+        monkeypatch.setattr(kea_tls, "commit_rotation", lambda staged: (_ for _ in ()).throw(OSError(28, "full")))
+        real = infra._endpoint_answers
+        calls = []
+
+        def boom_once(ctx, service):
+            calls.append(ctx["url"])
+            if len(calls) == 1:
+                raise RuntimeError("a bug")
+            return real(ctx, service)
+
+        monkeypatch.setattr(infra, "_endpoint_answers", boom_once)
+        _rotate()
+        assert len(calls) >= 2, "the second target was still rolled back and probed"
+        assert (1, "dhcp4", "restored-endpoint-unreachable") in lab.incidents
+
+
+class TestAStaleCopyIsTheHostsPreviousPair:
+    """`.stale`: Jen's live pair is KNOWN not to be the host's; `.prev` is, until a later commit."""
+
+    def _issue(self, sid, host):
+        return kea_tls.issue_server_cert({"id": sid, "name": "k", "ssh_host": host}, "dhcp4", host, commit=False)
+
+    def test_the_marker_decides_which_pair_is_the_hosts_and_a_commit_ends_it(self, lab, monkeypatch):
+        sid = 1
+        first = pathlib.Path(kea_tls.server_copy_path(sid, "dhcp4")).read_text(encoding="ascii")
+        kea_tls.stage_issued(sid, "dhcp4", self._issue(sid, "10.0.0.5"))
+        kea_tls.promote_staged(sid, "dhcp4")  # live = B, .prev = the pair the host had (first)
+        assert not kea_tls.is_stale(sid, "dhcp4")
+        with monkeypatch.context() as scoped:
+            scoped.setattr(kea_tls, "commit_file_set", lambda *a, **k: (_ for _ in ()).throw(OSError(13, "denied")))
+            assert kea_tls.restore_previous(sid, "dhcp4") is False
+        assert kea_tls.is_stale(sid, "dhcp4")
+        host = kea_tls.host_material(sid, "dhcp4")
+        assert host is not None and host["server.crt"] == first, "the host's truth is .prev, not the live pair"
+        again = self._issue(sid, "10.0.0.5")
+        kea_tls.stage_issued(sid, "dhcp4", again)
+        assert pathlib.Path(kea_tls.server_copy_path(sid, "dhcp4") + ".prev").read_text(encoding="ascii") == first, (
+            "the next operation does not overwrite the host's pair with the live one"
+        )
+        kea_tls.promote_staged(sid, "dhcp4")
+        kea_tls.commit_issued(sid, "dhcp4", again)
+        assert not kea_tls.is_stale(sid, "dhcp4"), "a commit means the host was given exactly this pair"

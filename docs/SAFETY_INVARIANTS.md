@@ -537,9 +537,13 @@ endpoint that must answer, the locked incident store, the transport boundary).
 - `tests/test_kea_tls_rotation.py::TestATargetThatFailsAfterTheFirstIsRolledBackAndTheNextIsNeverTouched`
 - `tests/test_kea_tls_rotation.py::TestARollbackThatCannotCompleteIsNamed`
 - `tests/test_kea_tls_rotation.py::TestATransportExceptionNeverEscapes`
+- `tests/test_kea_tls_rotation.py::TestTheSecondPassOfQ188`
+- `tests/test_kea_tls_rotation.py::TestAStaleCopyIsTheHostsPreviousPair`
+- `tests/test_direct_socket_lock.py::test_an_http_success_proves_nothing_about_a_certificate`
 - `tests/test_kea_changeset.py::TestAnUnprovedRecoveryIsAPersistentIncident`
 - `tests/test_kea_changeset.py::TestTheIncidentNoteQ188`
 - `tests/test_incident_store_locking.py::test_two_workers_recording_two_servers_both_land`
+- `tests/test_incident_store_locking.py::test_two_workers_on_a_row_that_already_exists_neither_deadlocks_nor_loses_its_update`
 - `tests/test_servers.py::TestARecoveryThatWasNotProvedIsShownUntilItIsAcknowledged`
 - `tests/test_invariant_sweeps.py::TestS11bASocketEntryNeverReachesText`
 - `tests/system/test_boundaries.py::test_22_a_failed_write_of_jens_settings_after_a_socket_change_puts_the_daemons_sockets_back`

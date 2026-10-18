@@ -2356,7 +2356,8 @@ elif mode == "write-ok":
     patches.append(mock.patch.object(infra, "_write_direct_socket_config", lambda *a, **k: "stand-in: Jen's file is untouched"))
 elif mode == "silent-probe":
     # the stand-in for a new socket nothing can reach from the Jen host (a firewall): the daemon really restarted with it; only the probe is made to fail
-    patches.append(mock.patch.object(infra, "_probe_after_restart", lambda *a, **k: ("", "stand-in: nothing answers")))
+    real_probe = infra._probe_after_restart
+    patches.append(mock.patch.object(infra, "_probe_after_restart", lambda url, *a, **k: ("", "stand-in: nothing answers") if ":__PORT__" in url else real_probe(url, *a, **k)))  # (only the NEW socket is silent: the original endpoint is probed for real)
 elif mode == "promote-fails":
     # the stand-in for Jen's own SSL directory becoming unwritable AFTER the host accepted the new pair (Q188, AD2): only the promotion of Jen's staged copy to live fails
     from jen.services import kea_tls

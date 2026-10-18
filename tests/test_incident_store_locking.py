@@ -137,3 +137,42 @@ def test_a_commit_that_fails_is_reported_false_and_leaves_the_stored_list_unchan
     monkeypatch.setattr("jen.models.db.jen_db", real)
     assert [i["server_id"] for i in _stored()] == [1], "the failed transaction changed nothing"
     assert cs.resolve_attention(1, "dhcp4") == 1, "and the note is still usable afterwards"
+
+
+@pytest.mark.parametrize("round_", range(12))
+def test_two_workers_on_a_row_that_already_exists_neither_deadlocks_nor_loses_its_update(round_):
+    """Second pass (Q188): `INSERT IGNORE` of an EXISTING row takes a shared lock on the duplicate; two transactions holding it and then asking for `FOR UPDATE` deadlock and one update is lost.
+    The row is made in its own autocommitted statement now, so only the exclusive lock is ever asked for."""
+    cs.record_attention(9, "dhcp4", "already there", "aborted")
+    assert _rows() == 1
+    _together(
+        lambda: cs.record_attention(1, "dhcp4", "x", "probe-pending"),
+        lambda: cs.record_attention(2, "dhcp4", "y", "restart-failed"),
+        lambda: cs.record_attention(3, "dhcp6", "z", "tls-not-restored"),
+    )
+    assert sorted(i["server_id"] for i in _stored()) == [1, 2, 3, 9]
+
+
+def test_a_deadlock_victim_retries_instead_of_losing_the_update(monkeypatch):
+    """A 1213 (deadlock victim) or 1205 (lock wait timeout) rolled everything back, so the same read-modify-write is tried again; any other error is reported False at once."""
+    real = jen_db
+    state = {"raised": 0}
+
+    class Boom(Exception):
+        pass
+
+    def flaky():
+        if state["raised"] == 0:
+            state["raised"] += 1
+            raise Boom(1213, "Deadlock found when trying to get lock; try restarting transaction")
+        return real()
+
+    monkeypatch.setattr("jen.models.db.jen_db", flaky)
+    assert cs.record_attention(1, "dhcp4", "x", "aborted") is True
+    assert state["raised"] == 1 and [i["server_id"] for i in _stored()] == [1]
+
+    def broken():
+        raise Boom(1045, "Access denied")
+
+    monkeypatch.setattr("jen.models.db.jen_db", broken)
+    assert cs.record_attention(2, "dhcp4", "y", "aborted") is False

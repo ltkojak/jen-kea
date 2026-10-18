@@ -675,6 +675,7 @@ def _direct_socket_recovery(ctx) -> Check:
         "restart-failed",
         "tls-not-restored",
         "aborted",
+        "restored-endpoint-unreachable",
     }  # the daemon may be stopped, or still carry the failed change
     c.status = "fail" if any(i.get("category") in stopped for i in incidents) else "warn"
     c.detail = "; ".join(
