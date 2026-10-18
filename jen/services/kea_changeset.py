@@ -599,6 +599,24 @@ _OUTCOME_STATUSES = ("rolled_back", "rollback_failed")
 _OUTCOME_OPTIONAL_LISTS = ("needs_hands", "needs_hands_ids", "lines", "failed_restart")
 
 
+def _is_server_id(value) -> bool:
+    """A server id as Jen writes one: an int (not a bool) or a non-blank string (second pass, Q190: `server_id: false` and `[]` were 'a server id')."""
+    return (isinstance(value, int) and not isinstance(value, bool)) or (isinstance(value, str) and bool(value.strip()))
+
+
+def _is_timestamp(value) -> bool:
+    """`at` as Jen writes it (an ISO-8601 time) - text that does not parse is not a time Jen wrote."""
+    if not isinstance(value, str):
+        return False
+    from datetime import datetime
+
+    try:
+        datetime.fromisoformat(value.strip())
+    except ValueError:
+        return False
+    return True
+
+
 def recognised_incident(entry) -> bool:
     """Is `entry` an incident Jen wrote (Q190, AF3)? An ATTENTION incident is `kind == "attention"` with a known `category`, a `service` of dhcp4 / dhcp6 / d2, a `server_id` and a `summary` and
     `at` that are text. An OUTCOME incident (a rolled-back or failed-rollback change, and the single note of 5.65.x) is a `status` of `rolled_back` or `rollback_failed` with a `service` and an
@@ -610,14 +628,14 @@ def recognised_incident(entry) -> bool:
         return (
             entry.get("category") in ATTENTION_CATEGORIES
             and entry.get("service") in ("dhcp4", "dhcp6", "d2")
-            and entry.get("server_id") is not None
+            and _is_server_id(entry.get("server_id"))
             and isinstance(entry.get("summary"), str)
-            and isinstance(entry.get("at"), str)
+            and _is_timestamp(entry.get("at"))
         )
     return (
         entry.get("status") in _OUTCOME_STATUSES
         and isinstance(entry.get("service"), str)
-        and isinstance(entry.get("at"), str)
+        and _is_timestamp(entry.get("at"))
         and all(isinstance(entry[k], list) for k in _OUTCOME_OPTIONAL_LISTS if k in entry)
     )
 
@@ -967,16 +985,31 @@ def dismiss_rollback_notes() -> bool:
         return False
 
 
+def _listed_count(raw) -> int:
+    """How many entries the stored note LISTS, of any type (the lenient reader drops what is not a dict)."""
+    import json
+
+    try:
+        data = json.loads(raw) if isinstance(raw, str) and raw else raw
+    except Exception:
+        return 0
+    listed = data.get("incidents") if isinstance(data, dict) else None
+    return len(listed) if isinstance(listed, list) else 0
+
+
 def attention() -> dict | None:
     """The unresolved incidents for the Servers page banner, `{"incidents": [...], "unrecognised": n}` oldest first, or None. `incidents` holds only the entries Jen recognises (the banner renders
     those); `unrecognised` counts the dicts it does not (Q190, AF3) - the banner says an incident Jen cannot read is on record, with the set-aside for a superadmin."""
     try:
         from jen.models import user as _user
 
-        entries = _incidents_of(_user.get_global_setting(ATTENTION_KEY, ""))
+        raw = _user.get_global_setting(ATTENTION_KEY, "")
+        entries = _incidents_of(raw)
         incidents = [i for i in entries if recognised_incident(i)]
-        unrecognised = len(entries) - len(incidents)
-        return {"incidents": incidents, "unrecognised": unrecognised} if entries else None
+        unrecognised = max(len(entries), _listed_count(raw)) - len(
+            incidents
+        )  # (an entry that is not even a dict is on record too)
+        return {"incidents": incidents, "unrecognised": unrecognised} if entries or unrecognised else None
     except Exception:
         return None
 

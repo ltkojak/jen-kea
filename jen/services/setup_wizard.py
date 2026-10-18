@@ -272,7 +272,11 @@ def test_kea_connection(
 
         key = __kea.identify_daemon(cand_url, user, password, verify=verify, cert=cert)
         if key in _DAEMON_KEYS and _DAEMON_KEYS[key] != service:
-            attempt["error"] = f"{cand_url} is kea-{_DAEMON_KEYS[key]}'s control socket, not kea-{service}'s."
+            from jen.services.auth import shown_url
+
+            attempt["error"] = (
+                f"{shown_url(cand_url)} is kea-{_DAEMON_KEYS[key]}'s control socket, not kea-{service}'s."
+            )
             continue
         if key in _DAEMON_KEYS:
             mode = "direct"

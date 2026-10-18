@@ -25,6 +25,7 @@ import pytest
 
 import jen.config as jconfig
 import jen.routes.settings.infrastructure as infra
+from jen import extensions
 from jen.services import kea_config_edit as ed
 from jen.services.kea_authoring import build_control_socket
 from jen.services.kea_changeset import ChangeSetResult
@@ -1362,3 +1363,86 @@ class TestALegacyUrlWithAPasswordNeverReachesTheRecoveryLines:
         assert self.PASSWORD not in " ".join(str(d) for d in wire["details"]) + " ".join(
             str(i) for i in wire["incidents"]
         )
+
+
+class TestTheSetupGateAndTheWriterJudgeTheTrustByCertificate:
+    """The second pass of Q190 (findings 3, 8): the https setup is for a Jen that trusts Jen's CA (and nothing else); an alias or a copy of it is fine and is NOT overwritten by the writer, a bundle
+    that also holds an administrator's CA is refused (the writer would have replaced it with Jen's file alone), and the writer fills in what is missing instead of comparing paths."""
+
+    FORM = {"scheme": "https", "address": "10.0.0.5", "port": "8004", "user": "u", "password": "p"}
+
+    @staticmethod
+    def _administrators_ca_pem():
+        from tests.test_kea_tls_rotation import _external_files
+
+        return _external_files("10.0.0.9")["ca.crt"]
+
+    def _refused_before_anything_was_sent(self, tls_world):
+        texts = " ".join(t for _s, t in tls_world["flashes"])
+        assert "not Jen's CA alone" in texts, texts
+        assert tls_world["tls"]["installed"] == [] and tls_world["tls"]["restarts"] == []
+        assert tls_world["applies"] == []
+
+    def test_a_bundle_that_holds_jens_ca_and_another_is_refused(self, tls_world, monkeypatch, tmp_path):
+        kt = tls_world["tls"]["tls"]
+        kt.ensure_ca()
+        bundle = tmp_path / "bundle.pem"
+        bundle.write_text(
+            pathlib.Path(kt.ca_paths()[0]).read_text(encoding="ascii") + self._administrators_ca_pem(), encoding="ascii"
+        )
+        monkeypatch.setattr(extensions, "KEA_API_CA", str(bundle))
+        _post(_inner(infra.setup_direct_socket), **self.FORM)
+        self._refused_before_anything_was_sent(tls_world)
+
+    def test_an_administrators_ca_alone_is_refused(self, tls_world, monkeypatch, tmp_path):
+        other = tmp_path / "other.pem"
+        other.write_text(self._administrators_ca_pem(), encoding="ascii")
+        monkeypatch.setattr(extensions, "KEA_API_CA", str(other))
+        _post(_inner(infra.setup_direct_socket), **self.FORM)
+        self._refused_before_anything_was_sent(tls_world)
+
+    def test_a_file_that_cannot_be_read_is_refused(self, tls_world, monkeypatch, tmp_path):
+        monkeypatch.setattr(extensions, "KEA_API_CA", str(tmp_path / "missing.pem"))
+        _post(_inner(infra.setup_direct_socket), **self.FORM)
+        self._refused_before_anything_was_sent(tls_world)
+
+    def test_a_copy_of_jens_ca_is_not_refused(self, tls_world, monkeypatch, tmp_path):
+        kt = tls_world["tls"]["tls"]
+        kt.ensure_ca()
+        copy_path = tmp_path / "copy.crt"
+        copy_path.write_bytes(pathlib.Path(kt.ca_paths()[0]).read_bytes())
+        monkeypatch.setattr(extensions, "KEA_API_CA", str(copy_path))
+        monkeypatch.setattr(infra, "_write_direct_socket_config", lambda *a, **k: "url written")
+        _post(_inner(infra.setup_direct_socket), **self.FORM)
+        assert len(tls_world["tls"]["installed"]) == 1, " ".join(t for _s, t in tls_world["flashes"])
+
+    def _edit(self, tls_world, api_ca=None):
+        import configparser
+
+        cfg = configparser.ConfigParser(interpolation=None)
+        text = JEN_CONFIG if api_ca is None else JEN_CONFIG.replace("[kea]\n", "[kea]\napi_ca = " + api_ca + "\n", 1)
+        cfg.read_string(text)
+        apply_fn, changed = infra._direct_socket_edit(
+            tls_world["server"], "dhcp4", "https://10.0.0.5:8004", "u", "p", True
+        )
+        apply_fn(cfg)
+        return cfg, changed
+
+    def test_the_writer_fills_in_what_is_missing(self, tls_world):
+        kt = tls_world["tls"]["tls"]
+        kt.ensure_ca()
+        kt.issue_client_cert()
+        cfg, changed = self._edit(tls_world)
+        assert (
+            cfg.get("kea", "api_ca") == kt.ca_paths()[0] and cfg.get("kea", "api_client_cert") == kt.client_paths()[0]
+        )
+        assert any("api_ca (Jen's CA)" in c for c in changed)
+
+    def test_the_writer_leaves_an_api_ca_the_operator_wrote(self, tls_world, tmp_path):
+        kt = tls_world["tls"]["tls"]
+        kt.ensure_ca()
+        kt.issue_client_cert()
+        cfg, changed = self._edit(tls_world, api_ca=f"{tmp_path}/an-alias.crt")
+        assert cfg.get("kea", "api_ca") == f"{tmp_path}/an-alias.crt", "the operator's spelling is left as written"
+        assert cfg.get("kea", "api_client_cert") == kt.client_paths()[0], "the missing client certificate is filled in"
+        assert not any("api_ca (Jen's CA)" in c for c in changed)

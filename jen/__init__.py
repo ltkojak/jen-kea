@@ -192,6 +192,10 @@ def create_app() -> Flask:
         app.wsgi_app = TrustedProxyMiddleware(app.wsgi_app, extensions.TRUSTED_PROXIES)
 
     # ── Jinja filters ─────────────────────────────────────────────────────────
+    from jen.services.auth import register_url_filters
+
+    register_url_filters(app.jinja_env)  # Q190 (AF2): an address in a page is shown without user-info
+
     @app.template_filter("utcfmt")
     def utcfmt_filter(value, fmt="%Y-%m-%d %H:%M"):
         """Format a datetime as UTC, appending ' UTC' suffix for clarity."""

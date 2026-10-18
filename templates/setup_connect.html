@@ -14,7 +14,7 @@
         <div class="form-row">
             <div class="form-group">
                 <label for="f-api_url">Kea API URL</label>
-                <input id="f-api_url" type="text" name="api_url" value="{{ api_url }}" placeholder="http://your-kea-server:8000" required>
+                <input id="f-api_url" type="text" name="api_url" value="{{ api_url|no_userinfo }}" placeholder="http://your-kea-server:8000" required>
                 <div class="form-hint">The Control Agent, or a daemon's own control socket — Jen tries both.</div>
             </div>
         </div>

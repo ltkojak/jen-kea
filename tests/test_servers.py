@@ -384,6 +384,7 @@ class TestChangesetAttentionBanner:
             json.dumps(
                 {
                     "status": "rollback_failed",
+                    "service": "dhcp4",
                     "summary": "add a pool",
                     "at": "2026-09-25T10:00:00+00:00",
                     "needs_hands": ["kea-b"],
@@ -399,14 +400,33 @@ class TestChangesetAttentionBanner:
     def test_rolled_back_banner_says_nothing_was_changed(self, logged_in_client, mock_kea, db):
         self._set(
             db,
-            json.dumps({"status": "rolled_back", "summary": "s", "at": "t", "failed_restart": ["kea-a"], "lines": []}),
+            json.dumps(
+                {
+                    "status": "rolled_back",
+                    "service": "dhcp4",
+                    "summary": "s",
+                    "at": "2026-09-25T10:00:00+00:00",
+                    "failed_restart": ["kea-a"],
+                    "lines": [],
+                }
+            ),
         )
         body = logged_in_client.get("/servers").data.decode()
         assert "was rolled back" in body and "Nothing was changed" in body
 
     def test_dismiss_clears_it(self, logged_in_client, mock_kea, db):
         self._set(
-            db, json.dumps({"status": "rolled_back", "summary": "s", "at": "t", "failed_restart": [], "lines": []})
+            db,
+            json.dumps(
+                {
+                    "status": "rolled_back",
+                    "service": "dhcp4",
+                    "summary": "s",
+                    "at": "2026-09-25T10:00:00+00:00",
+                    "failed_restart": [],
+                    "lines": [],
+                }
+            ),
         )
         r = logged_in_client.post("/servers/changeset-attention/dismiss", follow_redirects=True)
         assert r.status_code == 200 and b"was rolled back" not in r.data
@@ -422,6 +442,7 @@ class TestBannerDetailLinesAreAdminOnly:
 
     NOTE = {
         "status": "rollback_failed",
+        "service": "dhcp4",
         "summary": "add a pool",
         "at": "2026-09-25T10:00:00+00:00",
         "needs_hands": ["kea-b"],

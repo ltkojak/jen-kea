@@ -41,7 +41,7 @@
     </ul>
     {% for peer in found.ha_view.peers if not peer.managed %}
     <p class="u-865c33">
-        Kea's pair includes <strong>{{ peer.name or peer.url }}</strong>{% if peer.url %} (<code>{{ peer.url }}</code>){% endif %}, which Jen does not manage yet.
+        Kea's pair includes <strong>{{ peer.name or (peer.url|shown_url) }}</strong>{% if peer.url %} (<code>{{ peer.url|shown_url }}</code>){% endif %}, which Jen does not manage yet.
         <a class="btn btn-sm btn-secondary" href="{{ url_for('settings.settings_kea', add_server_name=peer.name, add_server_url=peer.add_url, add_server_role=peer.add_role) }}#extra-servers-list">Add this peer to Jen</a>
         — it still needs that server's API credentials and SSH details.
     </p>
@@ -58,7 +58,7 @@
     <form method="POST" action="/setup/found">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="action" value="enable_v6">
-        {% if v6_url %}<input type="hidden" name="v6_url" value="{{ v6_url }}">{% endif %}
+        {% if v6_url %}<input type="hidden" name="v6_url" value="{{ v6_url|no_userinfo }}">{% endif %}
         {% if found.connection_mode == "direct" %}
         <div class="form-group u-4a724c">
             <label>DHCPv6 API password</label>

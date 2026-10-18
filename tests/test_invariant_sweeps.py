@@ -892,6 +892,7 @@ _S14_SINKS = {"flash", "audit", "_record_incident", "record_attention"}
 _S14_LOG_METHODS = {"debug", "info", "warning", "error", "exception", "critical"}
 _S14_SAFE_CALLEES = {
     "shown_url",
+    "_shown",  # jen/services/kea.py's one-line wrapper of `auth.shown_url`
     "scrub_urls",
     "host_of",
     "len",
@@ -1055,8 +1056,8 @@ def s13_sites(source: str, rel: str) -> list[tuple[str, int, str]]:
                 return True
             if isinstance(sub, ast.Attribute) and sub.attr == "KEA_API_CA":
                 return True
-            if isinstance(sub, ast.Constant) and sub.value == "KEA_API_CA":
-                return True
+            if isinstance(sub, ast.Constant) and sub.value in ("KEA_API_CA", "api_ca"):
+                return True  # (the config key too: `cfg.get("kea", "api_ca") != ca_crt` is the same comparison - second pass of Q190)
         return False
 
     def derived(expr, tainted):
@@ -1073,6 +1074,8 @@ def s13_sites(source: str, rel: str) -> list[tuple[str, int, str]]:
             f = expr.func
             if isinstance(f, ast.Name) and f.id == "getattr":
                 return any(isinstance(a, ast.Constant) and a.value == "KEA_API_CA" for a in expr.args)
+            if any(isinstance(a, ast.Constant) and a.value == "api_ca" for a in expr.args):
+                return True  # cfg.get("kea", "api_ca", fallback="")
             return derived(f, tainted) or any(derived(a, tainted) for a in expr.args)
         return False
 
@@ -1125,6 +1128,92 @@ class TestS13ATrustPathIsNeverComparedAsAString:
             "    return {'external_ca': bool(extensions.KEA_API_CA) and ca_crt != extensions.KEA_API_CA}\n"
             "def fine():\n"
             "    return bool(extensions.KEA_API_CA) and extensions.KEA_API_CA != ''\n"
+            "def writer(cfg, ca_crt):\n"
+            "    if cfg.get('kea', 'api_ca', fallback='') != ca_crt:\n"
+            "        pass\n"
         )
         got = [(line, what) for _r, line, what in s13_sites(planted, "jen/routes/x.py")]
-        assert got == [(3, "comparison"), (3, "normpath"), (5, "comparison")], got
+        assert got == [(3, "comparison"), (3, "normpath"), (5, "comparison"), (9, "comparison")], got
+
+
+# ── S14b: the same rule for the SERVICES that build the text a route shows (Q190, second pass; LEAK-001, CRED-005) ───────────────────────────────
+
+#: (file, holder): an f-string over an address that is NOT text a person reads, with the reason. Everything else in jen/services/ shows an address through `shown_url`.
+S14B_ALLOWED = {
+    (
+        "jen/services/alerts.py",
+        "url",
+    ): "the request target of a webhook the operator configured (`f'{url}/{topic}'`), never shown",
+    (
+        "jen/services/plugins.py",
+        "download_url",
+    ): "the request target of a plugin download (`f'{download_url}/plugin.zip'`), never shown",
+}
+
+
+def s14b_sites(source: str, rel: str) -> list[tuple[str, int, str]]:
+    """Every f-string that formats a name holding an address (`url`, `api_url`, `x['url']`, `x.url`) without `shown_url` / `scrub_urls` / `host_of` around it - in a SERVICE module, where the
+    text is returned to a route (`{"text": f"Cannot connect to Kea API at {url}"}`) and no sink call names it."""
+    tree = ast.parse(source)
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            child.parent = parent  # type: ignore[attr-defined]
+
+    def callee(call):
+        f = call.func
+        return f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", "")
+
+    sites = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.JoinedStr):
+            continue
+        for sub in ast.walk(node):
+            holder = None
+            if isinstance(sub, ast.Name):
+                holder = sub.id
+            elif isinstance(sub, ast.Attribute):
+                holder = sub.attr
+            elif (
+                isinstance(sub, ast.Subscript)
+                and isinstance(sub.slice, ast.Constant)
+                and isinstance(sub.slice.value, str)
+            ):
+                holder = sub.slice.value
+            if not holder or not holder.lower().endswith("url"):
+                continue
+            cur, safe = sub, False
+            while cur is not node and getattr(cur, "parent", None) is not None:
+                cur = cur.parent
+                if isinstance(cur, ast.Call) and callee(cur) in _S14_SAFE_CALLEES:
+                    safe = True
+                    break
+            if not safe:
+                sites.append((rel, sub.lineno, holder))
+    return sorted(set(sites))
+
+
+class TestS14bAServiceShowsAnAddressByTheHelperToo:
+    def test_no_service_formats_an_address_without_shown_url(self):
+        found = []
+        for path in sorted((ROOT / "jen" / "services").rglob("*.py")):
+            rel = path.relative_to(ROOT).as_posix()
+            if rel == "jen/services/auth.py":
+                continue  # the helper's own home
+            found += [s for s in s14b_sites(path.read_text(encoding="utf-8"), rel) if (s[0], s[2]) not in S14B_ALLOWED]
+        assert found == [], (
+            "a service formats an address into text without `auth.shown_url` - a legacy URL with user-info would print its password (CRED-005 / LEAK-001, second pass of Q190): "
+            f"{found}"
+        )
+
+    def test_the_sweep_refuses_the_pattern_that_shipped_in_the_first_pass(self):
+        planted = (
+            "def a(url):\n return {'text': f'Cannot connect to Kea API at {url}'}\n"
+            "def b(srv):\n return f\"at {srv['api_url']}\"\n"
+            "def c(url):\n return f'at {shown_url(url)} and {host_of(url)}'\n"
+        )
+        got = [(line, name) for _r, line, name in s14b_sites(planted, "jen/services/x.py")]
+        assert got == [(2, "url"), (4, "api_url")], got
+
+    def test_the_reviewed_list_names_sites_that_still_exist(self):
+        for (rel, holder), _why in S14B_ALLOWED.items():
+            assert holder in (ROOT / rel).read_text(encoding="utf-8"), f"{rel} no longer formats {holder}: remove it"

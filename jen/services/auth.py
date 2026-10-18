@@ -370,7 +370,14 @@ def scrub_urls(text) -> str:
     answer - that may carry the address as it was typed. Idempotent; a text with no URL comes back unchanged."""
     import re
 
-    return re.sub(r"(?i)\b(https?://)[^\s/@'\"<>]*@", r"\1", str(text if text is not None else ""))
+    # (second pass, finding 5: the user-info runs to the LAST '@' before the path - a password may contain one - so the pattern is greedy up to a delimiter)
+    return re.sub(r"(?i)\b(https?://)[^\s/?#'\"<>]*@", r"\1", str(text if text is not None else ""))
+
+
+def register_url_filters(jinja_env) -> None:
+    """The two page filters of Q190 (AF2): `shown_url` - an address as scheme, host and port - and `no_userinfo` - a saved address for a form field, without a legacy password."""
+    jinja_env.filters["shown_url"] = shown_url
+    jinja_env.filters["no_userinfo"] = lambda value: scrub_urls(value) if value else ""
 
 
 def urls_with_userinfo(cfg) -> list[tuple[str, str]]:
@@ -380,8 +387,10 @@ def urls_with_userinfo(cfg) -> list[tuple[str, str]]:
 
     found = []
     for section in cfg.sections():
+        if section == "ddns":
+            continue  # a DNS provider's address has no Kea user and password fields to move anything to
         for key, value in cfg.items(section, raw=True):
-            if not (key == "url" or key.endswith("_url")):
+            if key not in ("api_url", "api6_url", "api_d2_url", "direct_prev_api_url"):
                 continue
             try:
                 netloc = urlsplit((value or "").strip(_PADDING)).netloc

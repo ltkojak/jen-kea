@@ -852,16 +852,15 @@ def rotation_inventory(servers, url_for=None) -> RotationInventory:
                 # Q190 (AF1): Jen holds no record of this endpoint's certificate. Whose endpoint it is is a fact about CERTIFICATES, decided here - and only here, as the tiebreak - from what Jen is
                 # configured to trust, by identity (`trust_bundle`), never from a path string: an endpoint with a Jen-issued copy is a target whatever the trust path says.
                 if not configured_ca:
-                    verified = getattr(extensions, "KEA_API_TLS_VERIFY", True)
-                    external.append(
-                        f"{label} ({shown_url(url)}; "
-                        + (
-                            "verified against the system's CAs, not Jen's"
-                            if verified
-                            else "not verified, not on Jen's CA"
+                    if getattr(extensions, "KEA_API_TLS_VERIFY", True):
+                        # (verified against the system's CAs: Jen's CA is not what Jen trusts, so a certificate Jen did not issue is the administrator's)
+                        external.append(f"{label} ({shown_url(url)}; verified against the system's CAs, not Jen's)")
+                    else:
+                        # (second pass, finding 4) NOTHING is verified: Jen looks at no certificate, so it cannot tell whose endpoint this is - and an ambiguity is a refusal
+                        refusals.append(
+                            f"{label} is an https endpoint at {shown_url(url)}, Jen holds no certificate record for it and Jen is set not to verify any certificate - it cannot tell whose CA the endpoint is on; "
+                            "set the CA bundle under Settings → Kea (Jen's CA, or the administrator's) before rotating"
                         )
-                        + ")"
-                    )
                 elif bundle is None:
                     refusals.append(
                         f"Jen cannot read the CA bundle at {configured_ca} to tell whose CA {label} ({shown_url(url)}) is on; fix the CA bundle under Settings → Kea before rotating"
@@ -889,6 +888,16 @@ def rotation_inventory(servers, url_for=None) -> RotationInventory:
                     f"{label} is an https endpoint at {shown_url(url)} and Jen has no complete record of its certificate ({why}); remove the direct socket and set it up again so Jen issues "
                     "and keeps a certificate for it, or point Jen at a socket that is not on its CA, before rotating"
                 )
+    kind = trust_kind()
+    if targets and kind in ("copy", "bundle"):
+        # (second pass, finding 1) Jen-issued endpoints depend on Jen's CA, and Jen verifies them against a file that holds a COPY of that CA which Rotate cannot rewrite: after the promotion
+        # Jen would hold the old CA and every rotated endpoint would present the new one. Refused BEFORE anything is staged, naming the path and the fix.
+        refusals.append(
+            f"Jen verifies its https endpoints against {configured_ca}, which holds "
+            + ("a copy of Jen's CA" if kind == "copy" else "Jen's CA beside another CA")
+            + " - Rotate cannot rewrite that file, so after the rotation Jen could not verify the endpoints it issued certificates to. "
+            "Point the CA bundle under Settings → Kea at Jen's own CA file (kea-ca.crt in Jen's SSL folder, or a link to it) before rotating"
+        )
     stale = [f"{c['server_id']}-{c['service']}" for c in listed if (str(c["server_id"]), c["service"]) not in endpoints]
     return RotationInventory(targets, refusals, external, stale, endpoints)
 

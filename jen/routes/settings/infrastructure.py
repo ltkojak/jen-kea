@@ -266,10 +266,16 @@ def settings_kea():
     if __caps.is_direct():
 
         def _needs_port(u):
-            return bool(u) and not __auth.valid_api_url(u, require_port=True)
+            # (second pass, Q190: the PORT question only - an address that also carries a user name is its own warning, and must not read as 'no port')
+            from urllib.parse import urlsplit
+
+            try:
+                return bool(u) and urlsplit(u.strip()).port is None
+            except ValueError:
+                return bool(u)
 
         if __kea6.is_ipv6_enabled() and _needs_port(extensions.cfg.get("kea6", "api_url", fallback="")):
-            direct_port_warnings.append(f"[kea6] api_url ({extensions.cfg.get('kea6', 'api_url')})")
+            direct_port_warnings.append(f"[kea6] api_url ({__auth.shown_url(extensions.cfg.get('kea6', 'api_url'))})")
         for srv in extensions.KEA_SERVERS:
             if _needs_port(srv.get("api_url", "")):
                 direct_port_warnings.append(
@@ -597,6 +603,9 @@ def save_infra_kea6():
     inherit_db_pass = request.form.get("inherit_db_pass", "") == "1"
     db_name = request.form.get("db_name", "").strip()
 
+    if api_url and __auth.userinfo_sentence(api_url):
+        flash(__auth.userinfo_sentence(api_url), "error")  # Q190 (CRED-005)
+        return redirect(url_for("settings.settings_kea"))
     if api_url and not __auth.valid_api_url(api_url, require_port=(__caps.is_direct())):
         if __caps.is_direct():
             flash(
@@ -756,6 +765,9 @@ def save_infra_d2():
     inherit_api_pass = request.form.get("inherit_api_pass", "") == "1"
     no_api_pass = request.form.get("no_api_pass", "") == "1"  # Q180 second pass: an explicit "no authentication"
 
+    if api_url and __auth.userinfo_sentence(api_url):
+        flash(__auth.userinfo_sentence(api_url), "error")  # Q190 (CRED-005)
+        return redirect(url_for("settings.settings_kea"))
     if api_url and not __auth.valid_api_url(api_url, require_port=(__caps.is_direct())):
         if __caps.is_direct():
             flash(
@@ -1344,11 +1356,14 @@ def _direct_socket_edit(server: dict, service: str, url: str, user: str, passwor
             client_pem, client_key = __tls.client_paths()
             if not cfg.has_section("kea"):
                 cfg.add_section("kea")
-            if cfg.get("kea", "api_ca", fallback="") != ca_crt:
+            # (second pass, Q190: not a comparison of paths - an alias or copy of Jen's CA the gate let through is left as the operator wrote it; only a missing value is filled in)
+            if not cfg.get("kea", "api_ca", fallback="").strip():
                 cfg.set("kea", "api_ca", ca_crt)
+                changed.append("[kea] api_ca (Jen's CA)")
+            if not cfg.get("kea", "api_client_cert", fallback="").strip():
                 cfg.set("kea", "api_client_cert", client_pem)
                 cfg.set("kea", "api_client_key", client_key)
-                changed.append("[kea] api_ca/api_client_cert/api_client_key (Jen's CA and client certificate)")
+                changed.append("[kea] api_client_cert/api_client_key (Jen's client certificate)")
             cfg.set("kea", "api_tls_verify", "true")
         sec, url_key, user_key, pass_key = _socket_keys(server, service)
         if not cfg.has_section(sec):
@@ -2136,9 +2151,9 @@ def setup_direct_socket(server_id, service):
             return back
         jen_ca, _jen_ca_key = __tls.ca_paths()
         jen_client_cert, jen_client_key = __tls.client_paths()
-        if extensions.KEA_API_CA and __tls.trust_includes_jens_ca() is not True:
+        if extensions.KEA_API_CA and __tls.trust_kind() not in ("jens-file", "alias", "copy"):
             flash(
-                f"The CA bundle above points at {extensions.KEA_API_CA}, which does not contain Jen's own CA (or cannot be read) — Jen manages one trust "
+                f"The CA bundle above points at {extensions.KEA_API_CA}, which is not Jen's CA alone (an administrator's CA, a bundle that also holds one, or a file that cannot be read) — Jen manages one trust "
                 "anchor for every Kea server. Clear the CA bundle field (and the client certificate fields) to use "
                 "Jen's CA, or set up https by hand with your own CA per the admin guide.",
                 "error",
@@ -2499,7 +2514,7 @@ def rotate_kea_ca():
         try:
             staged = __tls.stage_rotation()
         except Exception as e:
-            logger.error(f"kea_tls: could not stage the new CA: {type(e).__name__}: {e}")
+            logger.error(f"kea_tls: could not stage the new CA: {type(e).__name__}: {__auth.scrub_urls(str(e))}")
             flash(
                 "Rotate refused - Jen could not write the staged CA beside the live one. Nothing was changed.", "error"
             )
@@ -2513,7 +2528,9 @@ def rotate_kea_ca():
                         server, service, bind, ca=(staged["ca_cert"], staged["ca_key"]), commit=False
                     )  # Jen's own pair changes only once the host has this one and it answers
                 except Exception as e:
-                    logger.error(f"kea_tls: staged issue failed for {sname}/{service}: {type(e).__name__}: {e}")
+                    logger.error(
+                        f"kea_tls: staged issue failed for {sname}/{service}: {type(e).__name__}: {__auth.scrub_urls(str(e))}"
+                    )
                     failure = f"{sname} {daemon}: could not issue its certificate (see the server log)"
                     break
                 attempted.append((server, service, bind))
@@ -2580,7 +2597,9 @@ def rotate_kea_ca():
                 except OSError as e:
                     failure = f"Jen could not promote the new CA locally ({type(e).__name__}, errno {getattr(e, 'errno', '?')})"
         except Exception as e:  # the boundary: nothing escapes with the hosts on one CA and Jen on another
-            logger.error(f"kea_tls: the rotation stopped on an unexpected {type(e).__name__}: {e}")
+            logger.error(
+                f"kea_tls: the rotation stopped on an unexpected {type(e).__name__}: {__auth.scrub_urls(str(e))}"
+            )
             failure = failure or f"an unexpected {type(e).__name__}"
 
         if failure:
@@ -2734,17 +2753,6 @@ def rotate_kea_ca():
         flash(
             f"Jen's CA file changed under {configured_ca}: that path is another name for it, so Jen verifies the rotated endpoints against the new CA without a change.",
             "info",
-        )
-    elif trust == "copy":
-        flash(
-            f"{configured_ca} is a COPY of Jen's old CA and Jen did not rewrite it: replace it with the new CA (kea-ca.crt in Jen's SSL folder) or Jen cannot verify the rotated endpoints.",
-            "warning",
-        )
-    elif trust == "bundle":
-        flash(
-            f"{configured_ca} holds Jen's old CA beside another CA and Jen did not rewrite it: replace Jen's old certificate inside it with the new CA (the old one is beside the new as kea-ca.crt.prev) "
-            "or Jen cannot verify the rotated endpoints.",
-            "warning",
         )
     flash(
         "Kea CA rotated — new CA and client certificate issued"
@@ -2907,12 +2915,12 @@ def remove_direct_socket(server_id, service):
                     for k in (_PREV_USER_KEY, _PREV_PASS_KEY, _PREV_USER_ABSENT_KEY, _PREV_PASS_ABSENT_KEY)
                 ):
                     changed.append(
-                        f"[{sec}] the Control Agent's saved user and password (for {saved_prev or 'the earlier address'}) were DISCARDED - the pair typed here is used"
+                        f"[{sec}] the Control Agent's saved user and password (for {__auth.shown_url(saved_prev) if saved_prev else 'the earlier address'}) were DISCARDED - the pair typed here is used"
                     )
             elif prev:
                 cfg.set(sec, url_key, prev)
                 cfg.remove_option(sec, _PREV_URL_KEY)
-                changed.append(f"[{sec}] {url_key} restored to {prev}")
+                changed.append(f"[{sec}] {url_key} restored to {__auth.shown_url(prev)}")
             else:
                 changed.append(
                     f"[{sec}] {url_key} left as-is (no Control Agent URL on record; another server keeps direct mode)"
@@ -3500,11 +3508,17 @@ def save_extra_servers():
     _require_port = __caps.is_direct()
     for u in api_urls:
         if u.strip() and not __auth.valid_api_url(u.strip(), require_port=_require_port):
-            flash(f"Invalid API URL: {u.strip()}", "error")
+            flash(
+                __auth.userinfo_sentence(u) or f"Invalid API URL: {__auth.shown_url(u.strip())}", "error"
+            )  # (second pass, Q190: a refused address is shown without its user-info)
             return redirect(url_for("settings.settings_kea"))
     for u in api6_urls:
         if u.strip() and not __auth.valid_api_url(u.strip(), require_port=_require_port):
-            flash(f"Invalid IPv6 API URL: {u.strip()} (direct mode needs an explicit port)", "error")
+            flash(
+                __auth.userinfo_sentence(u)
+                or f"Invalid IPv6 API URL: {__auth.shown_url(u.strip())} (direct mode needs an explicit port)",
+                "error",
+            )
             return redirect(url_for("settings.settings_kea"))
 
     # v5.68.0-beta.9 (Q144): a server this form drops (its row removed, its API URL or its SSH host blanked) is one Jen can no longer put an
@@ -3919,7 +3933,10 @@ def save_infra_ddns():
         flash("Unknown DNS provider.", "error")
         return redirect(home)
     if api_url and not __auth.valid_api_url(api_url):
-        flash("The DNS provider's API URL must start with http:// or https://.", "error")
+        flash(
+            __auth.userinfo_sentence(api_url) or "The DNS provider's API URL must start with http:// or https://.",
+            "error",
+        )
         return redirect(home)
     # v5.69.0-beta.2 (Q171): a blank field clears its key - the page used to say "saved" and keep the old value, so a provider's URL, user, zone or log path could never
     # be unset. The token is the one secret here and the page promises "leave blank to keep": it is replaced when typed and removed by its own checkbox - and, since

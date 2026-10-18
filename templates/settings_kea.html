@@ -51,15 +51,15 @@
         <form method="POST" action="/settings/infrastructure/direct-socket/{{ server_id }}/{{ service }}/remove" class="u-2d191d" data-confirm="Remove the http control socket from {{ conf }} on {{ ssh_host }} and restart {{ daemon }}? {% if service == 'dhcp4' %}Jen returns to Control Agent mode unless another server still has its own socket.{% else %}Jen clears this daemon's URL override{% if infra.kea_connection_mode != 'direct' %} and its own user and password (they were the socket's; it then uses the Control Agent's){% endif %}.{% endif %}">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="form-group">
-                {% if service == 'dhcp4' %}<label>The Control Agent's address ({% if server_id in infra.needs_ca_url %}required: Jen has none to return to{% else %}blank uses the saved address, {{ infra.prev_urls.get(server_id) }}{% endif %})
+                {% if service == 'dhcp4' %}<label>The Control Agent's address ({% if server_id in infra.needs_ca_url %}required: Jen has none to return to{% else %}blank uses the saved address, {{ infra.prev_urls.get(server_id)|shown_url }}{% endif %})
                     <input type="text" name="ca_url" placeholder="http://{{ ssh_host }}:8000" autocomplete="off"></label>
                 <div class="form-hint">{% if server_id in infra.needs_ca_url %}Needed unless a server besides this one keeps its own socket.{% else %}Type one to use a different address.{% endif %} Jen asks the address who answers before it removes the socket, using the user and password below; it must answer as a Control Agent.</div>{% endif %}
                 {% if service == 'dhcp4' %}<input type="text" name="user" aria-label="The Control Agent's user (blank keeps the current one)" placeholder="user (blank keeps the current one)" autocomplete="off">{% endif %}
-                <label>{% if service == 'dhcp4' %}The password Jen will use at {{ infra.prev_urls.get(server_id) or 'the Control Agent address (set it above)' }}{% else %}Replace this daemon's saved password{% endif %}
+                <label>{% if service == 'dhcp4' %}The password Jen will use at {{ (infra.prev_urls.get(server_id)|shown_url) if infra.prev_urls.get(server_id) else 'the Control Agent address (set it above)' }}{% else %}Replace this daemon's saved password{% endif %}
                     <input type="password" name="password" placeholder="{% if service == 'dhcp4' %}(blank keeps the socket's pair){% else %}(blank keeps what is saved){% endif %}" autocomplete="new-password"></label>
                 <div class="form-hint">{% if service == 'dhcp4' %}A saved password is never moved to a different address by this button: type the Control Agent's, tick No password, or restore the one saved when this socket was set up.{% else %}Leave it blank unless this daemon's password changes. A password saved for a daemon whose address moves must be typed under Settings → Kea first.{% endif %}</div>
                 <label><input type="checkbox" name="no_password" value="1" class="u-30e741"> No password (nothing there is authenticated)</label>
-                {% if service == 'dhcp4' and server_id in infra.prev_pairs and infra.prev_urls.get(server_id) %}<label><input type="checkbox" name="restore_saved" value="1" class="u-30e741"> Restore the Control Agent's user and password saved for {{ infra.prev_urls.get(server_id) }}</label>{% endif %}
+                {% if service == 'dhcp4' and server_id in infra.prev_pairs and infra.prev_urls.get(server_id) %}<label><input type="checkbox" name="restore_saved" value="1" class="u-30e741"> Restore the Control Agent's user and password saved for {{ infra.prev_urls.get(server_id)|shown_url }}</label>{% endif %}
             </div>
             <button type="submit" class="btn btn-sm btn-secondary">{{ icon("undo-2") }} Switch back to the Control Agent</button>
         </form>
@@ -102,7 +102,7 @@
     {% if current_user.role != 'superadmin' %}
     <div class="form-row">
         <div class="form-group"><label>Connection Mode</label><div>{% if infra.kea_connection_mode == 'direct' %}Direct to daemons{% else %}Control Agent{% endif %}</div></div>
-        <div class="form-group"><label>{% if infra.kea_connection_mode == 'direct' %}kea-dhcp4 control socket URL{% else %}Control Agent URL{% endif %}</label><div class="mono">{{ infra.kea_api_url or '(not set)' }}</div></div>
+        <div class="form-group"><label>{% if infra.kea_connection_mode == 'direct' %}kea-dhcp4 control socket URL{% else %}Control Agent URL{% endif %}</label><div class="mono">{{ (infra.kea_api_url|shown_url) if infra.kea_api_url else '(not set)' }}</div></div>
         <div class="form-group"><label>API Username</label><div class="mono">{{ infra.kea_api_user or '(not set)' }}</div></div>
         <div class="form-group"><label>API Password</label><div>{% if infra.kea_api_pass_set %}saved{% else %}not set{% endif %}</div></div>
     </div>
@@ -139,7 +139,7 @@
         <div class="form-row">
             <div class="form-group">
                 <label id="kea-url-label" for="kea-url-input">Control Agent URL</label>
-                <input type="text" name="api_url" value="{{ infra.kea_api_url }}" placeholder="http://YOUR-KEA-SERVER:8000" id="kea-url-input">
+                <input type="text" name="api_url" value="{{ infra.kea_api_url|no_userinfo }}" placeholder="http://YOUR-KEA-SERVER:8000" id="kea-url-input">
             </div>
             <div class="form-group">
                 <label>API Username</label>
@@ -381,7 +381,7 @@
             <thead><tr><th class="u-b7efde">Server</th><th class="u-b7efde">Role</th><th class="u-b7efde">API URL</th><th class="u-b7efde">API password</th><th class="u-b7efde">SSH host</th></tr></thead>
             <tbody>
             {% for srv in infra.extra_servers %}
-            <tr><td data-m="primary" class="u-f26165">{{ srv.name }}</td><td data-m="secondary" class="u-f26165">{{ srv.role }}</td><td data-m="secondary" class="mono u-5f26fb">{{ srv.api_url }}</td><td data-m="secondary" class="u-f26165">{% if srv.api_pass_shared %}shared copy{% else %}{{ srv.api_pass_state }}{% endif %}</td><td data-m="secondary" class="mono u-5f26fb">{{ srv.ssh_host or '(not set)' }}</td></tr>
+            <tr><td data-m="primary" class="u-f26165">{{ srv.name }}</td><td data-m="secondary" class="u-f26165">{{ srv.role }}</td><td data-m="secondary" class="mono u-5f26fb">{{ srv.api_url|shown_url }}</td><td data-m="secondary" class="u-f26165">{% if srv.api_pass_shared %}shared copy{% else %}{{ srv.api_pass_state }}{% endif %}</td><td data-m="secondary" class="mono u-5f26fb">{{ srv.ssh_host or '(not set)' }}</td></tr>
             {% endfor %}
             </tbody>
         </table>
@@ -416,7 +416,7 @@
             <div class="form-row">
                 <div class="form-group">
                     <label>API URL</label>
-                    <input type="text" name="extra_api_url[]" value="{{ srv.api_url }}" placeholder="http://YOUR-KEA-SERVER-2:8000">
+                    <input type="text" name="extra_api_url[]" value="{{ srv.api_url|no_userinfo }}" placeholder="http://YOUR-KEA-SERVER-2:8000">
                 </div>
                 <div class="form-group">
                     <label>API Username</label>
@@ -441,7 +441,7 @@
             <div class="form-row">
                 <div class="form-group">
                     <label>IPv6 API URL</label>
-                    <input type="text" name="extra_api6_url[]" value="{{ srv.api6_url }}" placeholder="http://YOUR-KEA-SERVER-2:8006">
+                    <input type="text" name="extra_api6_url[]" value="{{ srv.api6_url|no_userinfo }}" placeholder="http://YOUR-KEA-SERVER-2:8006">
                 </div>
                 <div class="form-group">
                     <label>IPv6 API Username</label>
@@ -454,7 +454,7 @@
                 </div>
             </div>
             {% if srv.api_d2_url %}
-            <label class="u-6125e5"><input type="checkbox" name="extra_d2_no_pass[]" value="1" class="u-30e741"{% if srv.api_d2_pass_none %} checked{% endif %}> The D2 socket ({{ srv.api_d2_url }}) has no password</label>
+            <label class="u-6125e5"><input type="checkbox" name="extra_d2_no_pass[]" value="1" class="u-30e741"{% if srv.api_d2_pass_none %} checked{% endif %}> The D2 socket ({{ srv.api_d2_url|shown_url }}) has no password</label>
             {% endif %}
             <div class="form-hint u-27d304">Only needed when this server's kea-dhcp6 has its own endpoint — required in direct mode if IPv6 is on (a kea-dhcp4 daemon can't answer v6 commands). Blank = this server's own API URL and credentials (ca mode); required in direct mode when IPv6 is on.</div>
             <div class="form-row">
@@ -502,7 +502,7 @@
     <div class="card" id="kea-d2">
         <div class="card-header"><span class="card-title">{{ icon("link") }} D2 Control Socket</span></div>
         <div class="form-row">
-            <div class="form-group"><label>API URL</label><div class="mono">{% if infra.d2_api_url %}{{ infra.d2_api_url }}{% elif infra.kea_connection_mode == 'direct' %}(not set){% else %}(inherited from the Kea API: {{ infra.kea_api_url }}){% endif %}</div></div>
+            <div class="form-group"><label>API URL</label><div class="mono">{% if infra.d2_api_url %}{{ infra.d2_api_url|shown_url }}{% elif infra.kea_connection_mode == 'direct' %}(not set){% else %}(inherited from the Kea API: {{ infra.kea_api_url|shown_url }}){% endif %}</div></div>
             <div class="form-group"><label>API Username</label><div class="mono">{{ infra.d2_api_user or ('(inherited: ' ~ infra.kea_api_user ~ ')') }}</div></div>
         </div>
         <div class="form-hint">Only a superadmin changes where Jen reaches Kea.</div>
@@ -530,7 +530,7 @@
             <div class="form-row">
                 <div class="form-group">
                     <label>{% if infra.kea_connection_mode == 'direct' %}kea-dhcp-ddns control socket URL{% else %}API URL{% endif %}</label>
-                    <input type="text" name="api_url" value="{{ infra.d2_api_url }}" placeholder="{% if infra.kea_connection_mode == 'direct' %}http://YOUR-KEA-SERVER:53001{% else %}{{ infra.kea_api_url }} (inherited){% endif %}">
+                    <input type="text" name="api_url" value="{{ infra.d2_api_url|no_userinfo }}" placeholder="{% if infra.kea_connection_mode == 'direct' %}http://YOUR-KEA-SERVER:53001{% else %}{{ infra.kea_api_url|no_userinfo }} (inherited){% endif %}">
                 </div>
                 <div class="form-group">
                     <label>API Username</label>
@@ -700,7 +700,7 @@
         <div class="form-row">
             <div class="form-group">
                 <label>{% if infra.kea_connection_mode == 'direct' %}kea-dhcp6 control socket URL{% else %}API URL{% endif %}</label>
-                <input type="text" name="api_url" value="{{ infra.kea6_api_url }}" placeholder="{% if infra.kea_connection_mode == 'direct' %}http://YOUR-KEA-SERVER:8006{% else %}{{ infra.kea_api_url }} (inherited){% endif %}">
+                <input type="text" name="api_url" value="{{ infra.kea6_api_url|no_userinfo }}" placeholder="{% if infra.kea_connection_mode == 'direct' %}http://YOUR-KEA-SERVER:8006{% else %}{{ infra.kea_api_url|no_userinfo }} (inherited){% endif %}">
             </div>
             <div class="form-group">
                 <label>API Username</label>

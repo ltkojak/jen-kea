@@ -1192,7 +1192,10 @@ class TestMalformedNote:
         with pytest.raises(cs.MalformedNote):
             cs.recovery_incidents(strict=True)
         assert cs.note_state() == "malformed"
-        assert cs.attention() is None, "the banner reads leniently: nothing to show"
+        shown = cs.attention()
+        # (second pass of Q190, adjusted: a LISTED entry that is not an incident is on record and the banner says so; a note that does not parse at all has nothing to list)
+        listed = cs._listed_count(bad)
+        assert shown is None if listed == 0 else shown == {"incidents": [], "unrecognised": listed}
 
     def test_health_says_unknown_before_the_set_aside_and_ok_after(self, store):
         from jen.services import health
@@ -1330,6 +1333,13 @@ class TestEveryEntryOfTheNoteHasAShape:
         "valid and invalid mixed": {"incidents": [_attention(), {}, _outcome()]},
         "the single note without a service": {"status": "rolled_back"},
         "a list at the top": [_outcome()],
+        # (second pass of Q190: a type is not a shape)
+        "a boolean for the server id": {"incidents": [_attention(server_id=False)]},
+        "a list for the server id": {"incidents": [_attention(server_id=[])]},
+        "a blank server id": {"incidents": [_attention(server_id="  ")]},
+        "a time that is not a time": {"incidents": [_outcome(at="yesterday-ish")]},
+        "a time that is a number": {"incidents": [_outcome(at=12)]},
+        "an attention incident whose time is not a time": {"incidents": [_attention(at="soon")]},
     }
 
     @pytest.mark.parametrize("name", sorted(GOOD))
@@ -1377,6 +1387,17 @@ class TestEveryEntryOfTheNoteHasAShape:
         store[cs.ATTENTION_KEY] = json.dumps({"incidents": [{}]})
         only = cs.attention()
         assert only == {"incidents": [], "unrecognised": 1}
+
+    def test_the_banner_counts_an_entry_that_is_not_even_a_dict(self, store):
+        store[cs.ATTENTION_KEY] = json.dumps({"incidents": ["x", 5, None, _attention()]})
+        note = cs.attention()
+        assert len(note["incidents"]) == 1 and note["unrecognised"] == 3
+        store[cs.ATTENTION_KEY] = json.dumps({"incidents": ["x"]})
+        assert cs.attention() == {"incidents": [], "unrecognised": 1}
+
+    def test_an_integer_server_id_and_an_iso_time_still_read(self):
+        assert cs.recognised_incident(_attention(server_id=3)) and cs.recognised_incident(_attention(server_id="3"))
+        assert cs.recognised_incident(_outcome(at="2026-01-01T00:00:00+00:00"))
 
     def test_a_note_that_reads_has_no_unrecognised_entries(self, store):
         store[cs.ATTENTION_KEY] = json.dumps({"incidents": [_attention()]})

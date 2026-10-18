@@ -77,6 +77,24 @@ def _issued_by(cert_pem: str, ca_path: str) -> bool:
         return False
 
 
+def _issued_by_any(cert_pem: str, bundle_path: str) -> bool:
+    """Was this certificate issued by ANY certificate of the PEM bundle at `bundle_path`? (A client that trusts a bundle trusts each of its certificates.)"""
+    from cryptography import x509
+
+    try:
+        cert = x509.load_pem_x509_certificate(cert_pem.encode())
+        found = x509.load_pem_x509_certificates(pathlib.Path(bundle_path).read_bytes())
+    except Exception:
+        return False
+    for ca in found:
+        try:
+            cert.verify_directly_issued_by(ca)
+            return True
+        except Exception:  # nosec B112 - not this one
+            continue
+    return False
+
+
 def _issued_by_pem(cert_pem: str, ca_pem: str) -> bool:
     from cryptography import x509
 
@@ -135,6 +153,7 @@ class Lab:
         self.before = None  # the state before the last request (T5, T3)
         self.flash_mark = 0
         self.answered_before: dict = {}  # server id -> did its daemon answer Jen's live identity before the last request (T3)
+        self.dial_before: dict = {}  # server id -> did its daemon answer Jen's CONFIGURED dial (api_ca bundle + client certificate) before the last request (T3, second pass of Q190)
 
     def texts(self) -> str:
         return " ".join(t for _s, t in self.flashes)
@@ -165,6 +184,32 @@ class Lab:
     def answers_jens_live_identity(self, sid) -> bool:
         return self.answers(sid, kea_tls.ca_paths()[0], kea_tls.client_paths()[0])
 
+    def answers_jens_configured_dial(self, sid) -> bool:
+        """Would the daemon answer Jen as Jen is CONFIGURED to dial it: a server certificate issued by ANY certificate of the bundle at `[kea] api_ca` (or no verification at all when it is empty
+        and verification is off), and the client certificate Jen presents issued by the CA the daemon loaded? A rotation that leaves the configured bundle on the old CA cuts this off even though
+        the daemon answers Jen's live identity (the second pass of Q190: the dial, not the file Jen would like to be dialling with)."""
+        loaded = self.hosts[sid]["loaded"]
+        if not loaded:
+            return False
+        bundle = (extensions.KEA_API_CA or "").strip()
+        if bundle:
+            if not _issued_by_any(loaded["server.crt"], bundle):
+                return False
+        elif getattr(extensions, "KEA_API_TLS_VERIFY", True):
+            return False
+        client = (extensions.KEA_API_CLIENT_CERT or "").strip()
+        if not client:
+            return False
+        try:
+            return _issued_by_pem(pathlib.Path(client).read_text(encoding="ascii"), loaded["ca.crt"])
+        except OSError:
+            return False
+
+    def snapshot_dial(self):
+        self.dial_before = {
+            sid: self.answers_jens_configured_dial(sid) for sid in self.hosts if self.hosts[sid]["loaded"]
+        }
+
     def add_server(self, sid, name, ssh_host, url, *, jen_issued=True, ca=None, password=None):
         """A server the rotation can see: configured, with a daemon that has loaded a certificate. `jen_issued` False is an administrator-managed endpoint (a certificate Jen's CA did not issue);
         a `password` is a secret the Lab configured, so T4 looks for it."""
@@ -181,6 +226,7 @@ class Lab:
             self.passwords.append(password)
         extensions.KEA_SERVERS[:] = list(self.servers.values())
         self.answered_before[sid] = self.answers_jens_live_identity(sid)
+        self.snapshot_dial()
         return server
 
     def install(self, sid, files):
@@ -206,6 +252,7 @@ class Lab:
         self.answered_before = {
             sid: self.answers_jens_live_identity(sid) for sid in self.hosts if self.hosts[sid]["loaded"]
         }
+        self.snapshot_dial()
 
     def _named(self, sid, categories) -> bool:
         return any(i[0] == sid and i[1] == "dhcp4" and i[2] in categories for i in self.incidents)
@@ -271,6 +318,17 @@ class Lab:
                 continue
             before = self.answered_before.get(sid)
             now = self.answers_jens_live_identity(sid)
+            if (
+                self.dial_before.get(sid)
+                and not self.answers_jens_configured_dial(sid)
+                and not self._named(sid, _NAMES_A_SERVER)
+            ):
+                bad.append(
+                    (
+                        "T3",
+                        f"server {sid}'s daemon answered Jen's CONFIGURED dial (api_ca and client certificate) before the request and does not now, and no incident names it",
+                    )
+                )
             if before and not now and not self._named(sid, _NAMES_A_SERVER):
                 bad.append(
                     (
@@ -496,7 +554,10 @@ def lab(monkeypatch, tmp_path, caplog):
         lab.hosts[sid]["installs"].clear()
     lab.ca_a = pathlib.Path(kea_tls.ca_paths()[0]).read_bytes()
     lab.client_a = pathlib.Path(kea_tls.client_paths()[1]).read_bytes()
+    monkeypatch.setattr(extensions, "KEA_API_CLIENT_CERT", kea_tls.client_paths()[0])
+    monkeypatch.setattr(extensions, "KEA_API_CLIENT_KEY", kea_tls.client_paths()[1])
     lab.answered_before = {sid: lab.answers_jens_live_identity(sid) for sid in lab.hosts}
+    lab.snapshot_dial()
     _ACTIVE.append(lab)
     yield lab
     _ACTIVE.pop()
@@ -1477,16 +1538,22 @@ class TestWhoIsOnJensCaIsDecidedByCertificatesNotPaths:
         _rotate()
         self._rotated_and_every_daemon_answers_the_new_identity(lab)
 
-    def test_a_byte_copy_at_another_path_is_jens_ca_and_is_said_not_rewritten(self, lab, monkeypatch, tmp_path):
+    def test_a_byte_copy_at_another_path_is_jens_ca_and_the_rotation_is_refused_because_it_cannot_be_rewritten(
+        self, lab, monkeypatch, tmp_path
+    ):
         copy_path = tmp_path / "a-copy-of-jens-ca.crt"
         copy_path.write_bytes(pathlib.Path(kea_tls.ca_paths()[0]).read_bytes())
         monkeypatch.setattr(extensions, "KEA_API_CA", str(copy_path))
         assert kea_tls.trust_kind() == "copy"
         _rotate()
-        self._rotated_and_every_daemon_answers_the_new_identity(lab)
-        assert lab.settings_writes == [] and "is a COPY of Jen's old CA" in lab.texts()
+        # (second pass) Rotate cannot rewrite a copy, so after a rotation Jen's dial would hold the OLD CA: the whole rotation is refused before anything is staged or any host is asked
+        assert "Rotate refused" in lab.texts() and "a copy of Jen's CA" in lab.texts() and str(copy_path) in lab.texts()
+        assert lab.remote_actions() == 0 and lab.settings_writes == []
+        assert pathlib.Path(kea_tls.ca_paths()[0]).read_bytes() == lab.ca_a
 
-    def test_a_bundle_with_jens_ca_and_another_rotates_the_endpoints_with_a_jen_copy(self, lab, monkeypatch, tmp_path):
+    def test_a_bundle_with_jens_ca_and_another_is_refused_when_a_jen_issued_endpoint_depends_on_it(
+        self, lab, monkeypatch, tmp_path
+    ):
         bundle = tmp_path / "bundle.pem"
         bundle.write_text(
             pathlib.Path(kea_tls.ca_paths()[0]).read_text(encoding="ascii") + _external_files("10.0.0.9")["ca.crt"],
@@ -1495,8 +1562,9 @@ class TestWhoIsOnJensCaIsDecidedByCertificatesNotPaths:
         monkeypatch.setattr(extensions, "KEA_API_CA", str(bundle))
         assert kea_tls.trust_kind() == "bundle" and kea_tls.trust_includes_jens_ca() is True
         _rotate()
-        self._rotated_and_every_daemon_answers_the_new_identity(lab)
-        assert lab.settings_writes == [] and "holds Jen's old CA beside another CA" in lab.texts()
+        assert "Rotate refused" in lab.texts() and "Jen's CA beside another CA" in lab.texts()
+        assert lab.remote_actions() == 0 and lab.settings_writes == []
+        assert pathlib.Path(kea_tls.ca_paths()[0]).read_bytes() == lab.ca_a
 
     def test_the_same_bundle_and_an_endpoint_with_no_copy_is_a_refusal_because_the_bundle_does_not_say(
         self, lab, monkeypatch, tmp_path
@@ -1511,7 +1579,10 @@ class TestWhoIsOnJensCaIsDecidedByCertificatesNotPaths:
         inv = kea_tls.rotation_inventory(
             extensions.KEA_SERVERS, url_for=lambda s, svc: lab.urls[s["id"]] if svc == "dhcp4" else ""
         )
-        assert [s["id"] for s, _svc, _b in inv.targets] == [1] and len(inv.refusals) == 1
+        assert [s["id"] for s, _svc, _b in inv.targets] == [1]
+        assert (
+            len(inv.refusals) == 2
+        )  # the endpoint with no record (the bundle does not say) AND the bundle itself (Rotate cannot rewrite it with a target on it)
         _rotate()
         assert (
             "Jen's CA AND another CA" in lab.texts() and "Rotate refused" in lab.texts() and lab.remote_actions() == 0
@@ -1561,14 +1632,16 @@ class TestWhoIsOnJensCaIsDecidedByCertificatesNotPaths:
         assert "Kea CA rotated" in lab.texts() and "verified against the system's CAs" in lab.texts()
         assert lab.answers_jens_live_identity(1) and lab.hosts[2]["installs"] == [] and lab.hosts[2]["restarts"] == 0
 
-    def test_no_bundle_and_verification_off_is_said_not_verified(self, lab, monkeypatch):
+    def test_no_bundle_and_verification_off_is_a_refusal_for_an_endpoint_with_no_record_because_nothing_is_looked_at(
+        self, lab, monkeypatch
+    ):
         monkeypatch.setattr(extensions, "KEA_API_CA", "")
         monkeypatch.setattr(extensions, "KEA_API_TLS_VERIFY", False)
         for sid in (1, 2):
             lab.hosts[sid]["files"] = lab.hosts[sid]["loaded"] = _external_files(lab.servers[sid]["ssh_host"])
             _drop_jens_record(sid)
         _rotate()
-        assert "not verified, not on Jen's CA" in lab.texts() and "Kea CA rotated" in lab.texts()
+        assert "set not to verify any certificate" in lab.texts() and "Rotate refused" in lab.texts()
         assert lab.remote_actions() == 0
 
     def test_an_administrators_endpoint_with_its_own_client_credentials_is_untouched_and_answers_the_same(self, lab):
@@ -1651,6 +1724,25 @@ class TestTheInvariantsBiteTooQ190:
         _rotate()
         assert "Kea CA rotated" in lab.texts()
         assert lab.answered_before[2] and not lab.answers_jens_live_identity(2)
+
+    def test_T3_bites_on_the_configured_dial_when_the_bundle_jen_verifies_against_holds_the_old_ca(
+        self, lab, monkeypatch, tmp_path
+    ):
+        """The second pass's cut-off: the daemon answers Jen's LIVE identity but Jen is configured to verify against a copy of the OLD CA - Jen is cut off, and no incident says so."""
+        lab.expected_violations = {"T3"}
+        old_copy = tmp_path / "old-ca-copy.crt"
+        old_copy.write_bytes(lab.ca_a)
+        monkeypatch.setattr(extensions, "KEA_API_CA", str(old_copy))
+        lab.begin()  # the dial answers: the copy IS the CA the daemons were issued by
+        assert all(lab.dial_before.values())
+        staged = kea_tls.stage_rotation()
+        kea_tls.commit_rotation(staged)  # Jen's CA is replaced; the copy keeps the old one
+        for sid, server in lab.servers.items():
+            files = kea_tls.issue_server_cert(server, "dhcp4", server["ssh_host"])
+            lab.hosts[sid]["files"] = lab.hosts[sid]["loaded"] = copy.deepcopy(files)
+        assert all(lab.answers_jens_live_identity(sid) for sid in lab.hosts) and not any(
+            lab.answers_jens_configured_dial(sid) for sid in lab.hosts
+        )
 
     def test_T1_bites_when_a_jen_issued_pair_has_no_record_and_nothing_says_so(self, lab):
         """Judged by the HOST's certificate: the daemon runs a pair a Jen CA issued; Jen's files for it are gone; no request, no incident, no marker says so."""

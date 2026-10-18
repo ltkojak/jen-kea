@@ -327,7 +327,10 @@ host names and paths. The reviewed list is empty.
 **Tests.**
 - `tests/test_invariant_sweeps.py::TestS11ARouteNeverShowsWhatABroadExceptCaught`
 - `tests/test_invariant_sweeps.py::TestS14AnAddressIsShownByOneHelper`
+- `tests/test_invariant_sweeps.py::TestS14bAServiceShowsAnAddressByTheHelperToo`
 - `tests/test_url_never_carries_a_password.py::TestShownUrl`
+- `tests/test_url_never_carries_a_password.py::TestTheSecondPassOfQ190`
+- `tests/test_url_never_carries_a_password.py::TestTheKeaClientNeverPrintsALegacyPassword`
 - `tests/test_q171_access.py::TestDdnsLookupErrorNeverCarriesTheProviderUrl`
 - `tests/test_alert_delivery.py::TestAChannelsSecretNeverLandsInText`
 - `tests/test_no_raw_exception_leaks.py::TestNoUnexplainedRawExceptionLeaksInRoutes`
@@ -541,9 +544,11 @@ it to the user and password fields, and Jen keeps dialling it as written (the cr
    copy issued by Jen's live CA is a target whatever the trust path says (its daemon presents Jen's material; rotating Jen's identity without it cuts Jen off); a copy issued by another CA is the
    administrator's, named and left alone; one issued by an earlier Jen CA is a refusal. Only an endpoint with NO copy at all asks the trust path - as the tiebreak, by identity (`kea_tls.trust_bundle`:
    every certificate of the bundle at `[kea] api_ca` compared by DER with Jen's live CA): Jen's CA only -> a refusal (it verifies this endpoint against its own CA and holds no record); Jen's CA AND another
-   -> a refusal (the bundle does not say which - ambiguity is a refusal); another CA only, or no bundle -> the administrator's; unreadable -> a refusal. Rotate rewrites `api_ca` only when it IS Jen's own file
-   (`trust_kind() == "jens-file"`); an alias, a copy or a bundle is left as the operator wrote it and the flash says what changed under it. `tests/test_invariant_sweeps.py` S13 refuses any other comparison of
-   `KEA_API_CA` with a path.
+   -> a refusal (the bundle does not say which - ambiguity is a refusal); another CA only -> the administrator's; no bundle -> the administrator's when Jen verifies against the system's CAs and a REFUSAL when
+   Jen verifies nothing (it looks at no certificate, so it cannot tell); unreadable -> a refusal. Rotate rewrites `api_ca` only when it IS Jen's own file (`trust_kind() == "jens-file"`); an alias follows the file
+   and is left as the operator wrote it (the flash says so); a COPY of Jen's CA, or a bundle that holds it, cannot be rewritten and would leave Jen holding the old CA, so a rotation with a Jen-issued target and
+   either of them is a REFUSAL before anything is staged, naming the path. `tests/test_invariant_sweeps.py` S13 refuses any other comparison of `KEA_API_CA` (or the config key `api_ca`) with a path. The https setup
+   gate passes only Jen's own file, an alias or a copy (never a bundle, an administrator's CA or an unreadable file), and its writer fills in a MISSING `api_ca` / client certificate instead of comparing paths.
 11. **A stored incident Jen cannot recognise is kept (Q190).** Each entry of the recovery record has a shape (`kea_changeset.recognised_incident`: an attention incident has a known category, a service, a server
    id, a summary and a time; an outcome incident a `rolled_back`/`rollback_failed` status, a service and a time); `_incidents_of(strict=True)` raises `MalformedNote` naming the entry's INDEX, every writer
    refuses the whole note, `_incident_cleared` is False for an entry it cannot read (fail closed, in the lenient reader too), and the Servers banner says an incident Jen cannot read is on record.
@@ -593,6 +598,7 @@ Jen's CA by certificate identity, per endpoint; an invariant with no knob; an in
 - `tests/test_kea_tls_rotation.py::TestHostRecord`
 - `tests/test_kea_tls_rotation.py::TestTheInvariantsBite`
 - `tests/test_kea_tls_rotation.py::TestTheSecondPassOfQ189`
+- `tests/test_direct_socket_lock.py::TestTheSetupGateAndTheWriterJudgeTheTrustByCertificate`
 - `tests/test_kea_tls_rotation.py::TestWhoIsOnJensCaIsDecidedByCertificatesNotPaths`
 - `tests/test_kea_tls_rotation.py::TestALegacyUrlWithAPasswordNeverReachesText`
 - `tests/test_kea_tls_rotation.py::TestTheInvariantsBiteTooQ190`

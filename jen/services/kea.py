@@ -285,6 +285,13 @@ def _auth(user, password):
     return (user, password) if (user or password) else _NO_AUTH
 
 
+def _shown(url) -> str:
+    """The ONE way this module puts an address into text a person reads (Q190, AF2): scheme, host and port, never user-info (`auth.shown_url`)."""
+    from jen.services.auth import shown_url
+
+    return shown_url(url)
+
+
 def _endpoint_for(server: dict, service: str):
     """
     (url, user, pwd) for one command - or an error dict when the endpoint has no address or no credential it may use.
@@ -305,7 +312,7 @@ def _endpoint_for(server: dict, service: str):
         return {
             "result": 1,
             "text": (
-                f"{who} has no credential: {url} is on a different host from the one whose password it would inherit ({_cred.label(withheld)}) - "
+                f"{who} has no credential: {_shown(url)} is on a different host from the one whose password it would inherit ({_cred.label(withheld)}) - "
                 'set its own under Settings → Kea (or tick "No password" there if it has no authentication)'
             ),
         }
@@ -412,7 +419,7 @@ def kea_command(
                 return {
                     "result": 1,
                     "text": (
-                        f"{url} answered config-get as {found or 'an unknown daemon'}, not kea-{service} — "
+                        f"{_shown(url)} answered config-get as {found or 'an unknown daemon'}, not kea-{service} — "
                         "direct mode needs each daemon's own http control socket (conventionally :8004 for "
                         "dhcp4, :8006 for dhcp6), not the Control Agent (:8000). Settings → Kea → Probe, "
                         'or let Jen add the socket: Settings → Kea → "Set up direct socket".'
@@ -420,7 +427,7 @@ def kea_command(
                 }
         return reply
     except http.exceptions.ConnectionError:
-        return {"result": 1, "text": f"Cannot connect to Kea API at {url}"}
+        return {"result": 1, "text": f"Cannot connect to Kea API at {_shown(url)}"}
     except http.exceptions.Timeout:
         return {"result": 1, "text": "Kea API request timed out."}
     except Exception as e:

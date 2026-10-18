@@ -106,3 +106,117 @@ class TestLegacyUrls:
         monkeypatch.setattr(extensions, "cfg", self._cfg("[kea]\napi_url = https://h:8004\n"))
         monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-a"}])
         assert health._endpoint_credentials({}).status == "ok"
+
+
+class TestTheSecondPassOfQ190:
+    """The rows of the second pass (findings 5, 12, 2): the scrub reaches the LAST '@', only Kea's address keys are legacy input, and an address on a page is shown by a filter."""
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("failed: https://admin:p@ss@10.0.0.5:8004/x", "failed: https://10.0.0.5:8004/x"),
+            ("failed: https://admin:p@ss:word@10.0.0.5:8004", "failed: https://10.0.0.5:8004"),
+            ("https://u:a@b@c@h:1 and more", "https://h:1 and more"),
+            ("see https://u:p@h:8004/path and mail me@example.com", "see https://h:8004/path and mail me@example.com"),
+            ("(https://u:p@h:8004)", "(https://h:8004)"),
+        ],
+    )
+    def test_the_scrub_removes_user_info_to_the_last_at_sign_and_only_that(self, text, expected):
+        assert auth.scrub_urls(text) == expected
+
+    def test_only_the_keys_a_kea_endpoint_has_are_legacy_input(self):
+        cfg = configparser.ConfigParser(interpolation=None)
+        cfg.read_string(
+            "[ddns]\napi_url = https://u:p@dns:1\n[kea]\napi_url = https://h:1\nsome_other_url = https://u:p@x:1\n"
+            "[plugins]\nurl = https://u:p@y:1\n[kea_server_2]\ndirect_prev_api_url = http://u:p@h:8000\n"
+        )
+        assert auth.urls_with_userinfo(cfg) == [("kea_server_2", "direct_prev_api_url")]
+
+    def test_the_page_filters_show_and_prefill_without_the_password(self):
+        import jinja2
+
+        env = jinja2.Environment(autoescape=True, undefined=jinja2.StrictUndefined)
+        auth.register_url_filters(env)
+        legacy = "https://admin:s3cret@10.0.0.5:8004/x"
+        shown = env.from_string(
+            "{{ u|shown_url }}|{{ u|no_userinfo }}|{{ ''|no_userinfo }}|{{ none|no_userinfo }}"
+        ).render(u=legacy)
+        assert shown == "https://10.0.0.5:8004|https://10.0.0.5:8004/x||"
+        assert "s3cret" not in shown
+
+    def test_every_template_that_prints_a_kea_address_goes_through_a_filter(self):
+        """The template half of S14: a `{{ ... api_url ... }}` print on a page names `shown_url` or `no_userinfo` (a condition or a macro argument prints nothing)."""
+        import pathlib
+        import re
+
+        root = pathlib.Path(__file__).resolve().parents[1] / "templates"
+        printed = re.compile(
+            r"\{\{(?P<expr>[^}]*?(?:api6?_url|api_d2_url|kea6?_api_url|d2_api_url|prev_urls)[^}]*)\}\}"
+        )
+        found = []
+        for path in sorted(root.rglob("*.html")):
+            for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                for m in printed.finditer(line):
+                    expr = m.group("expr")
+                    if "shown_url" in expr or "no_userinfo" in expr or expr.strip().startswith("direct_socket_setup"):
+                        continue
+                    found.append(f"{path.name}:{n}: {expr.strip()[:60]}")
+        assert found == [], f"a page prints a Kea address without `shown_url` / `no_userinfo` (CRED-005): {found}"
+
+
+class TestTheKeaClientNeverPrintsALegacyPassword:
+    """Second pass, finding 2: the Kea client's own sentences (`Cannot connect to Kea API at ...`, the wrong-daemon text, the no-credential text) are shown on the dashboard, Health and the Doctor page
+    to every role - a legacy URL with user-info must reach none of them."""
+
+    URL = "https://admin:s3cret@10.0.0.5:8004/x"
+
+    @pytest.fixture
+    def kea_world(self, monkeypatch):
+        import types
+
+        import requests
+
+        from jen import extensions
+        from jen.services import kea
+
+        monkeypatch.setattr(extensions, "KEA_CONNECTION_MODE", "direct")
+        monkeypatch.setattr(kea, "_endpoint_for", lambda server, service: (self.URL, "u", "p"))
+        monkeypatch.setattr(kea, "_tls_verify", lambda: True)
+        monkeypatch.setattr(kea, "_tls_client_cert", lambda: None)
+        world = types.SimpleNamespace(post=None, exceptions=requests.exceptions)
+        monkeypatch.setattr(kea, "http", world)
+        return kea, world
+
+    def test_cannot_connect_names_the_host_not_the_password(self, kea_world):
+        import requests
+
+        kea, world = kea_world
+
+        def post(*a, **k):
+            raise requests.exceptions.ConnectionError(f"Max retries exceeded with url: {self.URL}")
+
+        world.post = post
+        text = kea.kea_command("version-get")["text"]
+        assert "10.0.0.5:8004" in text and "s3cret" not in text and "admin" not in text
+
+    def test_the_wrong_daemon_sentence_names_the_host_not_the_password(self, kea_world):
+        kea, world = kea_world
+
+        class Reply:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return [{"result": 0, "arguments": {"Control-agent": {}}}]
+
+        world.post = lambda *a, **k: Reply()
+        text = kea.kea_command("config-get")["text"]
+        assert "the Control Agent" in text and "10.0.0.5:8004" in text and "s3cret" not in text
+
+    def test_the_no_credential_sentence_names_the_host_not_the_password(self):
+        import inspect
+
+        from jen.services import kea
+
+        source = inspect.getsource(kea._endpoint_for)
+        assert "_shown(url)" in source and "{url}" not in source, "the sentence goes through the helper"

@@ -283,6 +283,7 @@ def setup_found():
     # own control socket from dhcp4's, so it needs the operator's own
     # URL for it.
     if action in ("check_v6", "enable_v6"):
+        from jen.services import auth as __auth
         from jen.services import capabilities as __caps
 
         # RBAC-004 / CRED-004 (Q180, U4): the probe sends a credential to the address it is given, and enabling saves where Jen reaches the v6 daemon - the same step-up as the
@@ -298,7 +299,6 @@ def setup_found():
         v6_user_typed = request.form.get("v6_user", "").strip()
         if __caps.is_direct():
             v6_url = request.form.get("v6_url", "").strip()
-            from jen.services import auth as __auth
 
             if not v6_url or not __auth.valid_api_url(v6_url, require_port=True):
                 flash("Enter a valid DHCPv6 control socket URL (e.g. http://kea:8006).", "error")
