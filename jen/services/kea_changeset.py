@@ -595,14 +595,43 @@ class MalformedNote(ValueError):
     """The stored recovery note is text that is not a note (Q189, AE3). A read that must not turn it into "nothing is waiting" raises this; a write that would put a new incident over it refuses."""
 
 
+_OUTCOME_STATUSES = ("rolled_back", "rollback_failed")
+_OUTCOME_OPTIONAL_LISTS = ("needs_hands", "needs_hands_ids", "lines", "failed_restart")
+
+
+def recognised_incident(entry) -> bool:
+    """Is `entry` an incident Jen wrote (Q190, AF3)? An ATTENTION incident is `kind == "attention"` with a known `category`, a `service` of dhcp4 / dhcp6 / d2, a `server_id` and a `summary` and
+    `at` that are text. An OUTCOME incident (a rolled-back or failed-rollback change, and the single note of 5.65.x) is a `status` of `rolled_back` or `rollback_failed` with a `service` and an
+    `at` that are text; `needs_hands`, `needs_hands_ids`, `lines` and `failed_restart` are optional, and when present are lists - a record from before ids were kept stays valid. Anything else is an
+    entry Jen cannot read: it is KEPT (never cleared by a clean run, never written over) until a superadmin sets the note aside."""
+    if not isinstance(entry, dict):
+        return False
+    if entry.get("kind") == ATTENTION_KIND:
+        return (
+            entry.get("category") in ATTENTION_CATEGORIES
+            and entry.get("service") in ("dhcp4", "dhcp6", "d2")
+            and entry.get("server_id") is not None
+            and isinstance(entry.get("summary"), str)
+            and isinstance(entry.get("at"), str)
+        )
+    return (
+        entry.get("status") in _OUTCOME_STATUSES
+        and isinstance(entry.get("service"), str)
+        and isinstance(entry.get("at"), str)
+        and all(isinstance(entry[k], list) for k in _OUTCOME_OPTIONAL_LISTS if k in entry)
+    )
+
+
 def _incidents_of(raw, strict: bool = False) -> list[dict]:
     """The unresolved incidents in a stored note (v5.65.10, Q99). The note is `{"incidents": [...]}`; the
     single-note shape written by 5.65.1 to 5.65.9 (`{"status": ..., "service": ...}`) is read as a list of
     one, so a note recorded before an upgrade is neither lost nor misread.
 
-    `strict` (Q189, AE3): the only shapes are (a) nothing - `None` or `""`, (b) a dict whose `incidents` is a list of dicts, (c) the 5.65.x single note, a dict with a `status`. Anything else
-    raises `MalformedNote` - a writer that read it as `[]` would write its new incident over text it never understood, and the next recording would silently turn it into a valid note.
-    Without `strict` the reader stays forgiving (the Servers banner reads the note on every page load): anything unreadable is no incidents."""
+    `strict` (Q189, AE3; Q190, AF3): the only shapes are (a) nothing - `None` or `""`, (b) a dict whose `incidents` is a list of RECOGNISED incidents (`recognised_incident`), (c) the 5.65.x
+    single note, which is one recognised outcome incident. Anything else raises `MalformedNote` naming the entry's INDEX, never its text - a writer that read it as `[]` would write its new
+    incident over text it never understood, and "a list of dicts" is not a shape: `{"incidents": [{}]}` was accepted, and a clean run deleted the empty entry as "resolved".
+    Without `strict` the reader stays forgiving (the Servers banner reads the note on every page load): anything unreadable is no incidents, and an entry that is a dict is kept in the list
+    (`_incident_cleared` keeps it, and the banner says an incident Jen cannot read is on record)."""
     import json
 
     if raw is None or raw == "":
@@ -619,15 +648,20 @@ def _incidents_of(raw, strict: bool = False) -> list[dict]:
         return []
     if "incidents" in data and strict:
         listed = data["incidents"]
-        if isinstance(listed, list) and all(isinstance(i, dict) for i in listed):
-            return list(listed)
-        raise MalformedNote("the incident note is not readable")
+        if not isinstance(listed, list):
+            raise MalformedNote("the incident note is not readable")
+        for index, entry in enumerate(listed):
+            if not recognised_incident(entry):
+                raise MalformedNote(f"entry {index} of the incident note is not an incident Jen recognises")
+        return list(listed)
     if isinstance(data.get("incidents"), list):
         return [i for i in data["incidents"] if isinstance(i, dict)]
+    if strict:
+        if data.get("status") and recognised_incident(data):
+            return [data]  # the single note of 5.65.x is one outcome incident by the same rule
+        raise MalformedNote("the incident note is not readable")
     if data.get("status"):
         return [data]
-    if strict:
-        raise MalformedNote("the incident note is not readable")
     return []
 
 
@@ -644,6 +678,8 @@ def _incident_cleared(incident: dict, result: ChangeSetResult, service: str) -> 
     clean run clears it only when it was for the same service and covered every server in its
     `needs_hands` (a clean restart of each is proof it is running); otherwise it stays until an admin
     dismisses it."""
+    if not recognised_incident(incident):
+        return False  # Q190 (AF3): FAIL CLOSED - an entry Jen cannot read is kept, never cleared by a clean run (an empty dict used to read as 'a rolled_back note' and be deleted)
     if incident.get("kind") == ATTENTION_KIND:
         return False  # Q187: an unproved recovery is cleared by a verified recovery of THAT server and service, or acknowledged - never by an unrelated change
     if incident.get("status") != "rollback_failed":
@@ -932,12 +968,15 @@ def dismiss_rollback_notes() -> bool:
 
 
 def attention() -> dict | None:
-    """The unresolved incidents for the Servers page banner, `{"incidents": [...]}` oldest first, or None."""
+    """The unresolved incidents for the Servers page banner, `{"incidents": [...], "unrecognised": n}` oldest first, or None. `incidents` holds only the entries Jen recognises (the banner renders
+    those); `unrecognised` counts the dicts it does not (Q190, AF3) - the banner says an incident Jen cannot read is on record, with the set-aside for a superadmin."""
     try:
         from jen.models import user as _user
 
-        incidents = _incidents_of(_user.get_global_setting(ATTENTION_KEY, ""))
-        return {"incidents": incidents} if incidents else None
+        entries = _incidents_of(_user.get_global_setting(ATTENTION_KEY, ""))
+        incidents = [i for i in entries if recognised_incident(i)]
+        unrecognised = len(entries) - len(incidents)
+        return {"incidents": incidents, "unrecognised": unrecognised} if entries else None
     except Exception:
         return None
 

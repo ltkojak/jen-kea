@@ -754,3 +754,70 @@ class TestAcknowledgingAnIncidentAboutACertificateRecordsThatJenDoesNotKnow:
         self._record("remote-unknown")
         logged_in_client.post("/servers/recovery-incident/acknowledge", data={"server_id": "1"}, follow_redirects=True)
         assert kea_changeset.recovery_incidents() == [] and not kea_tls.is_unknown(1, "dhcp4")
+
+
+class TestAnIncidentJenCannotReadIsKeptAndSaid:
+    """Q190 (AF3): an entry in the recovery record that Jen does not recognise is KEPT - a clean change never clears it, nothing is written over it - and the Servers page says an incident Jen
+    cannot read is on record, to everyone, with the set-aside for a superadmin."""
+
+    RAW = '{"incidents": [{}]}'
+
+    def _break(self):
+        from jen.models import user as user_mod
+        from jen.services import kea_changeset
+
+        user_mod.set_global_setting(kea_changeset.ATTENTION_KEY, self.RAW)
+
+    def teardown_method(self):
+        from jen.models import user as user_mod
+        from jen.models.db import jen_db
+        from jen.services import kea_changeset
+
+        user_mod.set_global_setting(kea_changeset.ATTENTION_KEY, "")
+        with jen_db() as c, c.cursor() as cur:
+            cur.execute(
+                "DELETE FROM settings WHERE setting_key LIKE %s", (kea_changeset.ATTENTION_KEY + "_set_aside_%",)
+            )
+            c.commit()
+
+    def test_the_banner_says_so_and_a_superadmin_can_set_it_aside(self, logged_in_client, mock_kea, db):
+        self._break()
+        body = logged_in_client.get("/servers").data.decode()
+        assert "An incident Jen cannot read is on record" in body and "Set aside and clear" in body
+
+    def test_acknowledge_and_dismiss_are_refused_with_the_flash_and_the_record_is_byte_equal(
+        self, logged_in_client, mock_kea, db
+    ):
+        from jen.models import user as user_mod
+        from jen.services import kea_changeset
+
+        self._break()
+        r = logged_in_client.post(
+            "/servers/recovery-incident/acknowledge", data={"server_id": "1"}, follow_redirects=True
+        )
+        assert b"could not be updated" in r.data
+        r = logged_in_client.post("/servers/changeset-attention/dismiss", follow_redirects=True)
+        assert b"could not be updated" in r.data
+        assert user_mod.get_global_setting(kea_changeset.ATTENTION_KEY, "", strict=True) == self.RAW
+
+    def test_a_clean_change_does_not_clear_it(self, logged_in_client, mock_kea, db):
+        from jen.models import user as user_mod
+        from jen.services import kea_changeset
+
+        self._break()
+        kea_changeset.record_outcome(kea_changeset.ChangeSetResult("ok", "ok", []), "dhcp4", "a clean change")
+        assert user_mod.get_global_setting(kea_changeset.ATTENTION_KEY, "", strict=True) == self.RAW
+
+    def test_the_set_aside_moves_it_and_audits_the_length(self, logged_in_client, mock_kea, db):
+        from jen.models import user as user_mod
+        from jen.services import kea_changeset
+
+        self._break()
+        r = logged_in_client.post("/servers/recovery-record/set-aside", follow_redirects=True)
+        assert b"was set aside" in r.data
+        assert user_mod.get_global_setting(kea_changeset.ATTENTION_KEY, "x", strict=True) == ""
+        with db.cursor() as cur:
+            cur.execute("SELECT details FROM audit_log WHERE action = 'CLEAR_RECOVERY_RECORD' ORDER BY id DESC LIMIT 1")
+            row = cur.fetchone()
+        details = row["details"] if isinstance(row, dict) else row[0]
+        assert f"length={len(self.RAW)}" in details and self.RAW not in details

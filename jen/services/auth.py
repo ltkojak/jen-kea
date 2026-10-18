@@ -330,7 +330,66 @@ def valid_api_url(url: str, require_port: bool = False) -> bool:
         return False
     if p.scheme not in ("http", "https") or not p.hostname or not _plain_host(p.hostname):
         return False
+    if "@" in p.netloc:
+        return False  # Q190 (AF2, CRED-005): a URL never carries a user name or a password - the credential rule's fields are the only place a Kea password lives
     return not (require_port and port is None)
+
+
+USERINFO_SENTENCE = "The address carries a user name or password. A URL never carries a password - put the user name and password in their own fields, and leave them out of the address."
+
+
+def userinfo_sentence(url) -> str:
+    """`USERINFO_SENTENCE` when `url` carries user-info (the reason `valid_api_url` refused it), else "" (Q190, AF2; CRED-005). Never echoes the address."""
+    from urllib.parse import urlsplit
+
+    try:
+        return USERINFO_SENTENCE if "@" in urlsplit(str(url or "").strip(_PADDING)).netloc else ""
+    except ValueError:
+        return ""
+
+
+def shown_url(url) -> str:
+    """The ONE way an address is put into a sentence, an audit row or a log line (Q190, AF2; LEAK-001): scheme, host and port - never user-info, a path or a query. `https://admin:s3cret@10.0.0.5:8004/x?y`
+    is `https://10.0.0.5:8004`. A value that is not a URL Jen can read is `an address Jen cannot read`; it is never echoed. tests/test_invariant_sweeps.py S14 refuses a route that formats a `*url`
+    name into text without it."""
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(str(url or "").strip(_PADDING))
+        host = parts.hostname or ""
+        if not host or parts.scheme not in ("http", "https"):
+            return "an address Jen cannot read"
+        host = f"[{host}]" if ":" in host else host
+        return f"{parts.scheme}://{host}" + (f":{parts.port}" if parts.port else "")
+    except ValueError:
+        return "an address Jen cannot read"
+
+
+def scrub_urls(text) -> str:
+    """Q190 (AF2): `text` with the user-info of every URL in it removed (`https://u:p@h:8004/x` -> `https://h:8004/x`). For text Jen did not write - a `requests` exception's message, a transport's
+    answer - that may carry the address as it was typed. Idempotent; a text with no URL comes back unchanged."""
+    import re
+
+    return re.sub(r"(?i)\b(https?://)[^\s/@'\"<>]*@", r"\1", str(text if text is not None else ""))
+
+
+def urls_with_userinfo(cfg) -> list[tuple[str, str]]:
+    """[(section, key)] of every URL option in a loaded ConfigParser whose value carries user-info (`user:pass@host`) - legacy input from before `valid_api_url` refused it (Q190, AF2). Names only,
+    never a value. Jen keeps dialling such a URL as before; the credential rule is not touched by this."""
+    from urllib.parse import urlsplit
+
+    found = []
+    for section in cfg.sections():
+        for key, value in cfg.items(section, raw=True):
+            if not (key == "url" or key.endswith("_url")):
+                continue
+            try:
+                netloc = urlsplit((value or "").strip(_PADDING)).netloc
+            except ValueError:
+                continue
+            if "@" in netloc:
+                found.append((section, key))
+    return found
 
 
 # ─────────────────────────────────────────

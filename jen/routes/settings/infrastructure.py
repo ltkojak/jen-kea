@@ -169,8 +169,8 @@ def _kea_ca_summary() -> dict:
         "days_left": kea_tls.days_left(ca_crt) if present else None,
         "client_ok": kea_tls.client_cert_ok() if present else False,
         "issued": [],
-        # a [kea] api_ca that isn't Jen's = the operator brought their own CA
-        "external_ca": bool(extensions.KEA_API_CA) and ca_crt != extensions.KEA_API_CA,
+        # a [kea] api_ca whose certificates do not include Jen's = the operator brought their own CA (Q190, AF1: decided by certificate identity, never by comparing paths)
+        "external_ca": bool(extensions.KEA_API_CA) and kea_tls.trust_includes_jens_ca() is False,
     }
     out["external"], out["refused"] = [], []
     if present:
@@ -272,9 +272,13 @@ def settings_kea():
             direct_port_warnings.append(f"[kea6] api_url ({extensions.cfg.get('kea6', 'api_url')})")
         for srv in extensions.KEA_SERVERS:
             if _needs_port(srv.get("api_url", "")):
-                direct_port_warnings.append(f"{srv.get('name', 'Kea Server')} api_url ({srv['api_url']})")
+                direct_port_warnings.append(
+                    f"{srv.get('name', 'Kea Server')} api_url ({__auth.shown_url(srv['api_url'])})"
+                )
             if _needs_port(srv.get("api6_url", "")):
-                direct_port_warnings.append(f"{srv.get('name', 'Kea Server')} api6_url ({srv['api6_url']})")
+                direct_port_warnings.append(
+                    f"{srv.get('name', 'Kea Server')} api6_url ({__auth.shown_url(srv['api6_url'])})"
+                )
 
     # Z1/Z2 (Q184): the Remove form shows where the Control Agent will be reached and whether its own password was saved
     _prev_urls, _prev_pairs, _needs_ca_url = {}, set(), set()
@@ -449,6 +453,9 @@ def save_infra_kea():
         flash("Connection mode must be 'ca' or 'direct'.", "error")
         return redirect(url_for("settings.settings_kea"))
     # v5.10.2 — validate against the mode being SAVED, not the current global.
+    if __auth.userinfo_sentence(api_url):
+        flash(__auth.userinfo_sentence(api_url), "error")  # Q190 (AF2, CRED-005)
+        return redirect(url_for("settings.settings_kea"))
     if not __auth.valid_api_url(api_url, require_port=(connection_mode == "direct")):
         if connection_mode == "direct":
             flash(
@@ -509,7 +516,7 @@ def save_infra_kea():
     __user.audit(
         "SAVE_INFRA",
         "kea_api",
-        f"url={api_url} user={api_user} mode={connection_mode} client_cert={'set' if api_client_cert else 'none'}",
+        f"url={__auth.shown_url(api_url)} user={api_user} mode={connection_mode} client_cert={'set' if api_client_cert else 'none'}",
     )
     return redirect(url_for("settings.settings_kea"))
 
@@ -870,7 +877,10 @@ def _probe_after_restart(url, user, pwd, service, verify=None, cert=None):
             return version_text, ""
         if attempt < _PROBE_ATTEMPTS - 1:
             time.sleep(_PROBE_DELAY_S)
-    return "", f"{err} — after {_PROBE_ATTEMPTS} attempts over {int(_PROBE_ATTEMPTS * _PROBE_DELAY_S)} s"
+    return (
+        "",
+        f"{__auth.scrub_urls(err)} — after {_PROBE_ATTEMPTS} attempts over {int(_PROBE_ATTEMPTS * _PROBE_DELAY_S)} s",
+    )
 
 
 def _identify_daemon(url, user, pwd, service, verify=None, cert=None):
@@ -1028,7 +1038,7 @@ def probe_kea():
             # the file and key, and point at the button that now does
             # it (Set up direct socket, on this page).
             rec = (
-                f"{answered_url} is the Control Agent, not kea-{service}'s own control socket — Kea {version} "
+                f"{__auth.shown_url(answered_url)} is the Control Agent, not kea-{service}'s own control socket — Kea {version} "
                 f"still supports the Control Agent, so stay on Control Agent mode until kea-{service} has an "
                 f"http control socket of its own (an http entry in the control-sockets list of "
                 f"/etc/kea/kea-{_CONF_STEM[service]}.conf on that host, keeping the unix entry, conventionally "
@@ -1043,7 +1053,7 @@ def probe_kea():
             # to the daemon, not just pointing at a different port, so
             # the recommendation points at where that's actually done.
             rec = (
-                f"{answered_url} is the Control Agent, not kea-{service}'s own control socket — direct mode "
+                f"{__auth.shown_url(answered_url)} is the Control Agent, not kea-{service}'s own control socket — direct mode "
                 f"needs the daemon's http socket (conventionally :{daemon_port}). Either switch back to "
                 f'Control Agent mode, or give kea-{service} its own http control socket: "Set up direct '
                 f"socket\" on this page adds it to /etc/kea/kea-{_CONF_STEM[service]}.conf's control-sockets "
@@ -1053,7 +1063,7 @@ def probe_kea():
             )
     elif candidate:
         rec = (
-            f"Kea {version} answered on {answered_url} — set this as the API URL and switch to Direct mode.",
+            f"Kea {version} answered on {__auth.shown_url(answered_url)} — set this as the API URL and switch to Direct mode.",
             "ok",
         )
     elif answered_mode == "direct":
@@ -1097,12 +1107,12 @@ def probe_kea():
             attempts.append({"url": jen_socket["url"], "mode": "direct (Jen's CA)", "error": jen_socket["error"]})
             if jen_socket["ok"]:
                 extra = (
-                    f' The https socket Jen set up on {jen_socket["url"]} answers as kea-{service} — run "Set up '
+                    f' The https socket Jen set up on {__auth.shown_url(jen_socket["url"])} answers as kea-{service} — run "Set up '
                     'direct socket" again and Jen switches over.'
                 )
             else:
                 extra = (
-                    f" The https socket Jen set up on {jen_socket['url']} does not answer ({jen_socket['error']}) — "
+                    f" The https socket Jen set up on {__auth.shown_url(jen_socket['url'])} does not answer ({jen_socket['error']}) — "
                     f"kea-{service} isn't listening on it: check `journalctl -u kea-{_CONF_STEM[service]}-server -n 30` "
                     f"on the host (TLS files under /etc/kea/tls/{service}/ the daemon's user can't read are the usual cause)."
                 )
@@ -1453,7 +1463,7 @@ def _servers_not_on_direct_sockets(except_id) -> list[str]:
         if s.get("id") == except_id or not s.get("api_url"):
             continue
         if _identify_daemon(s["api_url"], s.get("api_user", ""), s.get("api_pass", ""), "dhcp4") != "Dhcp4":
-            names.append(f"{s.get('name', 'Kea Server')} ({s['api_url']})")
+            names.append(f"{s.get('name', 'Kea Server')} ({__auth.shown_url(s['api_url'])})")
     return names
 
 
@@ -1574,7 +1584,10 @@ def _endpoint_answers(ctx: dict, service: str) -> tuple[bool, str]:
         if version:
             break
     if not version:
-        return False, f"did not answer a version-get ({err})"
+        return (
+            False,
+            f"did not answer a version-get ({__auth.scrub_urls(err)})",
+        )  # (Q190, AF2: the text came from below; it may carry the address as typed)
     who = _identify_daemon(ctx["url"], ctx["user"], ctx["password"], service, verify=ctx["verify"], cert=ctx["cert"])
     if who != ctx["expect"]:
         return False, f"answered as {who or 'an unknown daemon'}, not {ctx['expect']}"
@@ -2031,7 +2044,7 @@ def setup_direct_socket(server_id, service):
     password = request.form.get("password", "").strip() or default_pass
     if not user or not password:
         flash(
-            f"The socket needs a basic-auth username and password — Jen has none to send to {new_url} for {daemon} on "
+            f"The socket needs a basic-auth username and password — Jen has none to send to {__auth.shown_url(new_url)} for {daemon} on "
             f"{name} (a saved password is never sent to a different host from the one it belongs to), so fill both in.",
             "error",
         )
@@ -2045,7 +2058,7 @@ def setup_direct_socket(server_id, service):
         ca = urlparse(server.get("api_url", ""))
         if ca.hostname == address and ca.port == port:
             flash(
-                f"{new_url} is the Control Agent's own address on {name} — {daemon}'s socket needs its own port "
+                f"{__auth.shown_url(new_url)} is the Control Agent's own address on {name} — {daemon}'s socket needs its own port "
                 f"(conventionally :{DIRECT_SOCKET_DEFAULT_PORTS[service]}).",
                 "error",
             )
@@ -2123,9 +2136,9 @@ def setup_direct_socket(server_id, service):
             return back
         jen_ca, _jen_ca_key = __tls.ca_paths()
         jen_client_cert, jen_client_key = __tls.client_paths()
-        if extensions.KEA_API_CA and jen_ca != extensions.KEA_API_CA:
+        if extensions.KEA_API_CA and __tls.trust_includes_jens_ca() is not True:
             flash(
-                f"The CA bundle above points at {extensions.KEA_API_CA}, not Jen's own CA — Jen manages one trust "
+                f"The CA bundle above points at {extensions.KEA_API_CA}, which does not contain Jen's own CA (or cannot be read) — Jen manages one trust "
                 "anchor for every Kea server. Clear the CA bundle field (and the client certificate fields) to use "
                 "Jen's CA, or set up https by hand with your own CA per the admin guide.",
                 "error",
@@ -2267,7 +2280,7 @@ def setup_direct_socket(server_id, service):
             else "was not restarted (the socket was already in its config)"
         )
         msg = (
-            f"{daemon} on {name} {started}, but {new_url} {reason} from the Jen host — "
+            f"{daemon} on {name} {started}, but {__auth.shown_url(new_url)} {reason} from the Jen host — "
             f"Jen stays in {mode_now} mode and none of its settings were changed. "
             + (
                 "A repeat would only re-probe the same socket, so remove the direct socket and set it up again to issue a certificate it will present."
@@ -2276,7 +2289,11 @@ def setup_direct_socket(server_id, service):
                 f"then run this again (the socket is already in {conf}, so it will just re-probe)."
             )
         )
-        __user.audit("SETUP_DIRECT_SOCKET", "kea_api", f"server={name} service={service} url={new_url} probe=failed")
+        __user.audit(
+            "SETUP_DIRECT_SOCKET",
+            "kea_api",
+            f"server={name} service={service} url={__auth.shown_url(new_url)} probe=failed",
+        )
         if replaced_api:
             # Q187 (AC1): the change REPLACED a working socket, so a replacement that does not answer must not leave the working one gone while Jen still dials it: the whole list - and the
             # certificate an https socket was issued for - go back, exactly as for a refused write.
@@ -2350,7 +2367,7 @@ def setup_direct_socket(server_id, service):
         if (tls_replaced or fingerprint_ok)
         else tuple(c for c in __changeset.ATTENTION_CATEGORIES if c not in ("tls-not-restored", "tls-local-stale")),
     )  # ... and the endpoint was just probed and answered as the daemon: a verified recovery of THIS server and service (of the certificate only when this run replaced it, or when the socket presented exactly the one Jen holds)
-    flash(f"{daemon} on {name} answers directly at {new_url} — written: {written}.", "success")
+    flash(f"{daemon} on {name} answers directly at {__auth.shown_url(new_url)} — written: {written}.", "success")
     if service != "dhcp4" and __caps.is_ca():
         flash(
             "Jen is still in Control Agent mode — set up kea-dhcp4's direct socket to switch it over; "
@@ -2366,7 +2383,9 @@ def setup_direct_socket(server_id, service):
                 "their Dashboard cards show the Control Agent error.",
                 "warning",
             )
-    __user.audit("SETUP_DIRECT_SOCKET", "kea_api", f"server={name} service={service} url={new_url} user={user}")
+    __user.audit(
+        "SETUP_DIRECT_SOCKET", "kea_api", f"server={name} service={service} url={__auth.shown_url(new_url)} user={user}"
+    )
     return back
 
 
@@ -2453,6 +2472,7 @@ def rotate_kea_ca():
             + ", which are not https endpoints now; they are ignored.",
             "info",
         )
+    trust = __tls.trust_kind()  # Q190 (AF1): how the CA bundle relates to Jen's CA, by certificate identity - what may be rewritten after the promotion follows from it
     planned = {(server.get("id"), service) for server, service, _bind in targets}
     record_lost: set = set()  # AE2: the targets whose pair Jen cannot record (the host holds one Jen cannot name)
     probed: set = (
@@ -2517,7 +2537,7 @@ def rotate_kea_ca():
                     cert=(staged["client_cert"], staged["client_key"]),
                 )
                 if not version_text:
-                    failure = f"{sname} {daemon}: {url} did not answer with the new certificates ({probe_err})"
+                    failure = f"{sname} {daemon}: {__auth.shown_url(url)} did not answer with the new certificates ({probe_err})"
                     break
                 probed.add((server.get("id"), service))
                 try:
@@ -2541,7 +2561,8 @@ def rotate_kea_ca():
                 != inventory.endpoints
             ):
                 failure = "the set of https endpoints changed while the rotation ran"
-            if not failure and targets:
+            if not failure and targets and trust == "jens-file":
+                # Q190 (AF1): the settings are rewritten only when the bundle IS Jen's own file; an alias, a copy, a bundle that contains Jen's CA or an administrator's CA is left exactly as the operator wrote it
                 try:  # Jen's own settings BEFORE the promotion: a refused write stops the rotation while every target can still be put back
                     __config.app_config.write_values(
                         [
@@ -2708,6 +2729,23 @@ def rotate_kea_ca():
     names = ", ".join(
         f"{s.get('name') or 'Kea Server ' + str(s.get('id'))} {_DAEMON_NAME[svc]}" for s, svc, _b in targets
     )
+    configured_ca = (extensions.KEA_API_CA or "").strip()
+    if trust == "alias":
+        flash(
+            f"Jen's CA file changed under {configured_ca}: that path is another name for it, so Jen verifies the rotated endpoints against the new CA without a change.",
+            "info",
+        )
+    elif trust == "copy":
+        flash(
+            f"{configured_ca} is a COPY of Jen's old CA and Jen did not rewrite it: replace it with the new CA (kea-ca.crt in Jen's SSL folder) or Jen cannot verify the rotated endpoints.",
+            "warning",
+        )
+    elif trust == "bundle":
+        flash(
+            f"{configured_ca} holds Jen's old CA beside another CA and Jen did not rewrite it: replace Jen's old certificate inside it with the new CA (the old one is beside the new as kea-ca.crt.prev) "
+            "or Jen cannot verify the rotated endpoints.",
+            "warning",
+        )
     flash(
         "Kea CA rotated — new CA and client certificate issued"
         + (
@@ -2861,7 +2899,9 @@ def remove_direct_socket(server_id, service):
                 cfg.set(sec, url_key, ca_url)
                 if saved_prev:
                     cfg.remove_option(sec, _PREV_URL_KEY)
-                changed.append(f"[{sec}] {url_key} set to {ca_url} (the Control Agent's address, typed)")
+                changed.append(
+                    f"[{sec}] {url_key} set to {__auth.shown_url(ca_url)} (the Control Agent's address, typed)"
+                )
                 if any(
                     cfg.has_option(sec, k)
                     for k in (_PREV_USER_KEY, _PREV_PASS_KEY, _PREV_USER_ABSENT_KEY, _PREV_PASS_ABSENT_KEY)
@@ -3027,14 +3067,14 @@ def remove_direct_socket(server_id, service):
                 return back
             if ca_url.rstrip("/") == _current_url:
                 flash(
-                    f"{ca_url} is the socket being removed, not a Control Agent. Type the Control Agent's address. Nothing was changed on {name}.",
+                    f"{__auth.shown_url(ca_url)} is the socket being removed, not a Control Agent. Type the Control Agent's address. Nothing was changed on {name}.",
                     "error",
                 )
                 return back
             for s in extensions.KEA_SERVERS:
                 if s.get("id") != sid and s.get("api_url") and __auth.same_endpoint(s["api_url"], ca_url):
                     flash(
-                        f"{ca_url} is {s.get('name', 'a different server')}'s own address, not {name}'s Control Agent: {name} would be managed through the wrong box. Nothing was changed on {name}.",
+                        f"{__auth.shown_url(ca_url)} is {s.get('name', 'a different server')}'s own address, not {name}'s Control Agent: {name} would be managed through the wrong box. Nothing was changed on {name}.",
                         "error",
                     )
                     return back
@@ -3047,7 +3087,7 @@ def remove_direct_socket(server_id, service):
             _probed = _identify_daemon(ca_url, *_pair_after_removal(), "dhcp4")
             if _probed != "Control-agent":
                 flash(
-                    f"{ca_url} "
+                    f"{__auth.shown_url(ca_url)} "
                     + ("did not answer" if not _probed else f"answered as {_probed}, not as a Control Agent")
                     + f" with that user and password. Nothing was changed on {name}.",
                     "error",
@@ -3068,7 +3108,7 @@ def remove_direct_socket(server_id, service):
             _probed = _identify_daemon(_saved_url, *_pair_after_removal(), "dhcp4")
             if _probed != "Control-agent":
                 flash(
-                    f"The Control Agent address Jen saved ({_saved_url}) "
+                    f"The Control Agent address Jen saved ({__auth.shown_url(_saved_url)}) "
                     + ("did not answer" if not _probed else f"answered as {_probed}, not as a Control Agent")
                     + f". Type the Control Agent's address (URL, user, password) on this form. Nothing was changed on {name}.",
                     "error",

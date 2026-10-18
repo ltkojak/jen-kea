@@ -319,12 +319,15 @@ fails CLOSED there (a refusal, not a permission). A failed settings read answers
 - `tests/test_invariant_sweeps.py::TestS10FailedReadsOnSecurityPathsAreNotEmptyResults`
 
 ### LEAK-001 - A route never shows what a broad `except` caught
-**Rule.** In `jen/routes/`, the name bound by `except Exception as e` is used only to log or to name its class: the text of a driver, `requests` or SSH error carries URLs with their query strings, account and
+**Rule.** (Q190, second half:) an ADDRESS is shown by one helper, `auth.shown_url` - scheme, host and port, never user-info, a path or a query - in every flash, audit row, log line and incident, and text Jen did not write (a `requests` message) goes through `auth.scrub_urls`; `tests/test_invariant_sweeps.py` S14 refuses a route that formats a `*url` name into text without it (the reviewed list is empty). 
+In `jen/routes/`, the name bound by `except Exception as e` is used only to log or to name its class: the text of a driver, `requests` or SSH error carries URLs with their query strings, account and
 host names and paths. The reviewed list is empty.
 **Established.** Q171 (sweep S11; the older line scanner in `test_no_raw_exception_leaks.py` stays), Q172 (an alert channel's token, webhook URL or password is redacted from `alert_log.error`, the event detail, the log and the test button; a transport error is stored by class).
 **Enforced at.** The route that catches: `logger.exception(...)` and a fixed sentence.
 **Tests.**
 - `tests/test_invariant_sweeps.py::TestS11ARouteNeverShowsWhatABroadExceptCaught`
+- `tests/test_invariant_sweeps.py::TestS14AnAddressIsShownByOneHelper`
+- `tests/test_url_never_carries_a_password.py::TestShownUrl`
 - `tests/test_q171_access.py::TestDdnsLookupErrorNeverCarriesTheProviderUrl`
 - `tests/test_alert_delivery.py::TestAChannelsSecretNeverLandsInText`
 - `tests/test_no_raw_exception_leaks.py::TestNoUnexplainedRawExceptionLeaksInRoutes`
@@ -495,6 +498,20 @@ greps `fallback=primary_pass` and `or server.get("api_pass"` over `jen/` find no
 - `tests/test_direct_socket_credentials.py::TestARemovalNeverLeavesJenPointingAtTheSocketItRemoved`
 - `tests/test_direct_socket_credentials.py::TestARestorePutsBackAbsenceAndTheKeepNeedsAnOwnPassword`
 
+### CRED-005 - A URL never carries a password
+**Rule.** (Q190.) The credential rule's fields (`api_user`, `api_pass` and their per-daemon twins, resolved by `credentials.resolve`) are the ONLY place a Kea password lives. `auth.valid_api_url` refuses an address
+with user-info (`https://user:password@host:8004`, `https://user@host`), the forms say so (`auth.userinfo_sentence`), and the same function is the one definition at every form and in the wizard. An address
+that already carries user-info in jen.config is legacy input: `AppConfig.apply` logs ONE warning per section and key (never the value), Health's "Every endpoint has a credential" row names it and says to move
+it to the user and password fields, and Jen keeps dialling it as written (the credential rule is not touched). Every sentence that shows an address goes through `auth.shown_url` (LEAK-001).
+**Established.** Q190 (beta.20's review: `valid_api_url` accepted user-info and Rotate's probe-failure flash, the connection form's audit row and the authoring flash printed the address as typed).
+**Enforced at.** `auth.valid_api_url` / `userinfo_sentence` / `shown_url` / `scrub_urls` / `urls_with_userinfo`; `config._warn_userinfo_urls`; `health._endpoint_credentials`.
+**Tests.**
+- `tests/test_url_never_carries_a_password.py::TestValidApiUrl`
+- `tests/test_url_never_carries_a_password.py::TestLegacyUrls`
+- `tests/test_kea_tls_rotation.py::TestALegacyUrlWithAPasswordNeverReachesText`
+- `tests/test_direct_socket_lock.py::TestALegacyUrlWithAPasswordNeverReachesTheRecoveryLines`
+- `tests/test_invariant_sweeps.py::TestS14AnAddressIsShownByOneHelper`
+
 ### REMOTE-001 - A TLS or socket operation is one transaction: local state first, every step proved, the restored endpoint answers, every unproved state durable, every target from the configuration, every record the host's own
 **Rule.** (Final form, Q188; the target set and the record added by Q189.) A direct-socket or CA operation changes a Kea host and then Jen's own state. It is ONE transaction:
 1. **Jen's own recovery state is committed before the host is touched.** The https setup writes `.prev` (a copy of the live pair: what the host has) and `.staged` (what it is about to be given) before
@@ -519,8 +536,20 @@ greps `fallback=primary_pass` and `or server.get("api_pass"` over `jen/` find no
    `kea_tls.rotation_inventory`: every https endpoint of every configured server, each with a certificate and key that load, are a pair and were issued by Jen's live CA - a missing, malformed or mismatched
    record, or a copies directory that cannot be listed, is a REFUSAL before the staging; an unlistable inventory is a refusal, never an empty set. The endpoints are read from the CONFIGURED address
    (`kea.configured_url`), never from the transport's answer - an endpoint whose password the resolver withheld still exists and still runs Jen's material, so it blocks the rotation instead of dropping out of it.
-   When Jen's trust anchor is not its own CA (`[kea] api_ca`) every https endpoint is an administrator's: named, left alone, never a refusal; so is a certificate no Jen CA issued. A success is proved against
-   the same set (the endpoints that answered with the new identity are the endpoints planned).
+   A success is proved against the same set (the endpoints that answered with the new identity are the endpoints planned).
+10. **Whether an endpoint depends on Jen's CA is a fact about CERTIFICATES, decided per endpoint - never from a path string and never for all endpoints at once (Q190).** `record_state` is asked FIRST: a
+   copy issued by Jen's live CA is a target whatever the trust path says (its daemon presents Jen's material; rotating Jen's identity without it cuts Jen off); a copy issued by another CA is the
+   administrator's, named and left alone; one issued by an earlier Jen CA is a refusal. Only an endpoint with NO copy at all asks the trust path - as the tiebreak, by identity (`kea_tls.trust_bundle`:
+   every certificate of the bundle at `[kea] api_ca` compared by DER with Jen's live CA): Jen's CA only -> a refusal (it verifies this endpoint against its own CA and holds no record); Jen's CA AND another
+   -> a refusal (the bundle does not say which - ambiguity is a refusal); another CA only, or no bundle -> the administrator's; unreadable -> a refusal. Rotate rewrites `api_ca` only when it IS Jen's own file
+   (`trust_kind() == "jens-file"`); an alias, a copy or a bundle is left as the operator wrote it and the flash says what changed under it. `tests/test_invariant_sweeps.py` S13 refuses any other comparison of
+   `KEA_API_CA` with a path.
+11. **A stored incident Jen cannot recognise is kept (Q190).** Each entry of the recovery record has a shape (`kea_changeset.recognised_incident`: an attention incident has a known category, a service, a server
+   id, a summary and a time; an outcome incident a `rolled_back`/`rollback_failed` status, a service and a time); `_incidents_of(strict=True)` raises `MalformedNote` naming the entry's INDEX, every writer
+   refuses the whole note, `_incident_cleared` is False for an entry it cannot read (fail closed, in the lenient reader too), and the Servers banner says an incident Jen cannot read is on record.
+12. **An invariant has no knob (Q190).** `Lab.check_invariants` ranges over the simulated host's daemons - T1 is judged by the certificate the HOST holds, T3 is relative (a daemon that answered Jen's live
+   identity before a request answers after it, or an incident names it; one that did not is untouched), T4 looks for every configured secret including the password inside a configured address - and a test may
+   not narrow it.
 7. **Jen's record of what a host holds is the exact payload that host accepted, or "unknown" - never a copy made by the mechanism that failed (Q189).** `commit_issued` writes the pair the host was given
    as `.prev` and marks the live copy stale when its own write fails; when even that cannot be written (`HostRecordLost`) the route records `remote-unknown`, and `host_material` answers None - for an open
    `remote-unknown` or `tls-not-restored` incident, a `tls-local-stale` incident whose marker is missing, a record that cannot be read, or a pair that does not load. The fact is ALSO a file beside the pair
@@ -534,11 +563,12 @@ greps `fallback=primary_pass` and `or server.get("api_pass"` over `jen/` find no
 pair is byte-equal to the pair the host holds, or None with an incident naming the server), T2 (the CA is a pair, or every target says it is not), T3 (every running daemon answers Jen's live CA and client
 certificate, or an incident names it), T4 (nothing printed carries key material or the password), T5 (a refusal changes nothing); `TestTheInvariantsBite` breaks the product on purpose, once per invariant.
 **Established.** Q186 (the snapshot, `describe_socket`), Q187 (the probe-failure branch, the TLS material, the persistent incident), Q188 (the transaction: local state first, the promotion, the rotation, the
-endpoint that must answer, the locked incident store, the transport boundary), Q189 (the inventory, the host's record, the unreadable note, the pre-read, the invariants after every scenario).
+endpoint that must answer, the locked incident store, the transport boundary), Q189 (the inventory, the host's record, the unreadable note, the pre-read, the invariants after every scenario), Q190 (who is on
+Jen's CA by certificate identity, per endpoint; an invariant with no knob; an incident Jen cannot recognise is kept).
 **Enforced at.** `kea_config_edit.control_sockets` / `restore_control_sockets` / `describe_socket`; `kea_tls.stage_issued` / `promote_staged` / `commit_issued` / `commit_rotation`;
 `infrastructure._undo_remote_change` (the one compensation both direct-socket routes call), `_put_tls_back`, `_endpoint_answers`, `rotate_kea_ca`; `kea_changeset._with_attention`;
 `user.update_global_setting`; `kea_host.install_tls` / `service_action` / `read_config_versioned` (the transport boundary); `kea_tls.rotation_inventory` / `record_state` / `commit_issued` /
-`host_material` / `HostRecordLost`; `kea_changeset._incidents_of(strict)` / `set_aside_unreadable_note`.
+`host_material` / `HostRecordLost`; `kea_tls.trust_bundle` / `trust_kind` / `trust_includes_jens_ca`; `kea_changeset._incidents_of(strict)` / `recognised_incident` / `_incident_cleared` / `set_aside_unreadable_note`.
 **Tests.**
 - `tests/test_kea_config_edit.py::TestControlSocketSnapshotAndRestore`
 - `tests/test_direct_socket_lock.py::TestALateRefusalOnSetupPutsTheHostBack`
@@ -563,6 +593,13 @@ endpoint that must answer, the locked incident store, the transport boundary), Q
 - `tests/test_kea_tls_rotation.py::TestHostRecord`
 - `tests/test_kea_tls_rotation.py::TestTheInvariantsBite`
 - `tests/test_kea_tls_rotation.py::TestTheSecondPassOfQ189`
+- `tests/test_kea_tls_rotation.py::TestWhoIsOnJensCaIsDecidedByCertificatesNotPaths`
+- `tests/test_kea_tls_rotation.py::TestALegacyUrlWithAPasswordNeverReachesText`
+- `tests/test_kea_tls_rotation.py::TestTheInvariantsBiteTooQ190`
+- `tests/test_kea_changeset.py::TestEveryEntryOfTheNoteHasAShape`
+- `tests/test_servers.py::TestAnIncidentJenCannotReadIsKeptAndSaid`
+- `tests/test_invariant_sweeps.py::TestS13ATrustPathIsNeverComparedAsAString`
+- `tests/test_direct_socket_credentials.py::TestTheProbeRowsOfQ190`
 - `tests/test_direct_socket_lock.py::TestANewEntryStillInTheConfigIsNotNoSocketReferencesTheFiles`
 - `tests/test_kea_changeset.py::TestTheSetAsideClearsOnlyWhatItCopied`
 - `tests/test_kea_host.py::TestOnlyTheChannelsFailuresAreFailedReads`
@@ -587,6 +624,7 @@ endpoint that must answer, the locked incident store, the transport boundary), Q
 - `tests/system/test_boundaries.py::test_22_d_an_https_replacement_whose_local_commit_fails_stops_with_the_previous_material_back`
 - `tests/system/test_boundaries.py::test_22_e_a_ca_rotation_whose_promotion_fails_leaves_every_endpoint_answering_on_the_old_ca`
 - `tests/system/test_boundaries.py::test_22_f_a_rotation_with_a_missing_record_is_refused_and_nothing_on_either_host_changes`
+- `tests/system/test_boundaries.py::test_22_g_a_rotation_with_the_ca_bundle_an_alias_of_jens_ca_still_re_issues_and_answers`
 
 ### LOG-CACHE-002 - What a cache remembers about its readers is bounded by what is in flight, an unrelated key never waits, and a read begun before a clear is not kept
 **Rule.** A second reader of the SAME key waits for the first one's read through a table of in-flight reads whose entries live only as long as their read - never one lock per key kept for the life of the process,

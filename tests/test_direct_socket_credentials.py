@@ -642,7 +642,7 @@ class TestTheProbeRowsOfQ189:
     def test_every_inventory_shape_is_a_target_a_refusal_or_left_alone(self):
         assert probe.q189_ae1_every_inventory_shape_is_a_target_a_refusal_or_left_alone() == {
             "complete": (1, 0, 0, 0),
-            "administrators trust": (0, 0, 1, 0),
+            "administrators trust": (0, 1, 0, 0),
             "copy missing": (0, 1, 0, 0),
             "key missing": (0, 1, 0, 0),
             "malformed": (0, 1, 0, 0),
@@ -679,6 +679,43 @@ class TestTheProbeRowsOfQ189:
             probe.q189_ae4_a_removal_whose_preread_is_cut_sends_nothing_and_says_so()
             == ((False, False, True, True),) * 3
         )
+
+
+class TestTheProbeRowsOfQ190:
+    """AF1-AF3: whose CA a trust path is (by certificate identity), an address with user-info, and the shape of each entry of the recovery record."""
+
+    def test_the_bundle_a_trust_path_names_is_judged_by_certificate_identity(self):
+        assert probe.q190_af1_the_bundle_a_trust_path_names_is_judged_by_certificate_identity_not_by_its_path() == {
+            "jens file": ("jens-file", True, 0, 1, 0),
+            "equivalent spelling": ("jens-file", True, 0, 1, 0),
+            "byte copy": ("copy", True, 0, 1, 0),
+            "bundle with another": ("bundle", True, 0, 1, 0),
+            "another only": ("other", False, 0, 0, 1),
+            "unreadable": ("unreadable", None, 0, 1, 0),
+            "empty": ("none", None, 0, 0, 1),
+        }
+
+    def test_a_url_with_user_info_is_refused_shown_without_it_and_scrubbed(self):
+        assert probe.q190_af2_a_url_with_user_info_is_refused_shown_without_it_and_scrubbed_from_text() == (
+            False,
+            True,
+            "https://10.0.0.5:8004",
+            False,
+            True,
+        )
+
+    def test_every_entry_of_the_note_has_a_shape(self):
+        assert probe.q190_af3_every_entry_of_the_note_has_a_shape_and_an_unrecognised_one_is_refused() == {
+            "empty list": "read",
+            "attention": "read",
+            "outcome without ids": "read",
+            "5.65.x single note": "read",
+            "empty entry": "refused",
+            "unknown status": "refused",
+            "unknown category": "refused",
+            "mixed": "refused",
+            "top-level list": "refused",
+        }
 
 
 class TestTheSecondPassOfQ187:

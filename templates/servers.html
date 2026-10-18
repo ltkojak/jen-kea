@@ -7,7 +7,21 @@
     <p>{% if single_server %}Single server deployment{% else %}Multi-server / HA deployment — {{ statuses|length }} servers configured{% endif %}</p>
 </div>
 
-{% if recovery_record_unreadable %}
+{% if changeset_attention and changeset_attention.unrecognised %}
+{# v5.69.0-beta.21 (Q190, AF3): an entry in the recovery record that Jen does not recognise is KEPT - a clean change never clears it and nothing is written over it - and said, to everyone; a superadmin sets the record aside #}
+<div class="alert alert-warning u-3bceda">
+    {{ icon("siren") }} <strong>An incident Jen cannot read is on record.</strong>
+    The recovery record holds {{ changeset_attention.unrecognised }} entr{{ "y" if changeset_attention.unrecognised == 1 else "ies" }} Jen does not recognise, so it keeps {{ "it" if changeset_attention.unrecognised == 1 else "them" }}, writes nothing over {{ "it" if changeset_attention.unrecognised == 1 else "them" }} and cannot say whether a change is still waiting to be proved.
+    {% if current_user.role == 'superadmin' %}
+    <form method="POST" action="{{ url_for('servers.set_aside_recovery_note') }}" class="u-8a77e5">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-sm btn-secondary">Set aside and clear</button>
+    </form>
+    {% else %}A superadmin can set it aside.{% endif %}
+</div>
+{% endif %}
+
+{% if recovery_record_unreadable and not (changeset_attention and changeset_attention.unrecognised) %}
 {# v5.69.0-beta.20 (Q189, AE3): the stored recovery record is text Jen cannot read as a note. Every writer refuses it, so it is never written over; a superadmin sets it aside (the raw value is kept in a setting of its own) and clears it #}
 <div class="alert alert-warning u-3bceda">
     {{ icon("siren") }} <strong>Jen's recovery record is not readable.</strong>
@@ -19,7 +33,7 @@
 </div>
 {% endif %}
 
-{% if changeset_attention %}
+{% if changeset_attention and changeset_attention.incidents %}
 {# v5.65.10 (Q99): every unresolved incident is listed; a later rolled-back never replaces a failed rollback #}
 <div class="alert alert-warning u-3bceda">
     {% for ca in changeset_attention.incidents %}

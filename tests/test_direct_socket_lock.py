@@ -644,8 +644,10 @@ def _assert_the_tls_invariants(wire):
                     held["server.crt"],
                     held["server.key"],
                 ), "T1: Jen's record of the host's pair is not the pair the host holds"
-    printed = _everything_printed(wire)
-    assert "PRIVATE KEY" not in printed and SECRET not in printed, "T4: a secret was printed"
+    from tests._tls_invariants import printed_secret, secrets_of
+
+    secrets = secrets_of([SECRET], [wire["server"].get("api_url", "")], [held["server.key"]] if held else [])
+    assert printed_secret(_everything_printed(wire), secrets) is None, "T4: a secret was printed"
 
 
 class TestTheTlsMaterialIsPartOfTheSnapshot:
@@ -1333,3 +1335,30 @@ class TestANewEntryStillInTheConfigIsNotNoSocketReferencesTheFiles:
             and pathlib.Path(kt.server_key_path(1, "dhcp4")).exists()
         )
         assert [i[2] for i in tls_world["incidents"]] == ["tls-not-restored"]
+
+
+class TestALegacyUrlWithAPasswordNeverReachesTheRecoveryLines:
+    """Q190 (AF2): the endpoint Jen dials is configured with `http://admin:<password>@10.0.0.5:8004` (legacy input). The compensation names it by host and port, and nothing it prints - the
+    flash, the audit row, the incident, the log - carries the password or the user-info."""
+
+    PASSWORD = "s3cret-legacy-pw"
+
+    def test_the_undo_lines_the_audit_row_and_the_log(self, wire, monkeypatch):
+        wire["server"]["api_url"] = f"http://admin:{self.PASSWORD}@10.0.0.5:8004"
+
+        def probe(url, user, pwd, service, verify=None, cert=None):
+            if "10.0.0.5:8004" in url:
+                return "", f"HTTPConnectionPool: Max retries exceeded with url: {url} (Caused by NewConnectionError)"
+            return "Kea 3.0.3", None
+
+        monkeypatch.setattr(infra, "_probe_after_restart", probe)
+        _refuse_the_write(monkeypatch)
+        wire["flashes"].clear()
+        _post(_inner(infra.setup_direct_socket), **TestUndoneMeansTheEndpointAnswered.FORM)
+        printed = _everything_printed(wire)
+        assert "PARTIAL STATE" in printed and "10.0.0.5:8004" in printed
+        assert self.PASSWORD not in printed and "admin:" not in printed
+        assert [i[2] for i in wire["incidents"]] == ["restored-endpoint-unreachable"]
+        assert self.PASSWORD not in " ".join(str(d) for d in wire["details"]) + " ".join(
+            str(i) for i in wire["incidents"]
+        )

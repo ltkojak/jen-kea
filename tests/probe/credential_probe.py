@@ -1717,6 +1717,148 @@ def q189_ae4_a_removal_whose_preread_is_cut_sends_nothing_and_says_so():
     return tuple(rows)
 
 
+def q190_af1_the_bundle_a_trust_path_names_is_judged_by_certificate_identity_not_by_its_path():
+    """For each way an operator can point `[kea] api_ca` at (or away from) Jen's CA: what `trust_kind` says, and what the inventory does with an endpoint Jen holds NO record of."""
+    import pathlib
+    import shutil
+
+    server = {"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5"}
+    out = {}
+
+    def foreign_ca_pem():
+        import datetime
+
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import ec
+        from cryptography.x509.oid import NameOID
+
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "an administrator")])
+        k = ec.generate_private_key(ec.SECP256R1())
+        now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(name)
+            .issuer_name(name)
+            .public_key(k.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - datetime.timedelta(minutes=5))
+            .not_valid_after(now + datetime.timedelta(days=9))
+            .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+            .sign(k, hashes.SHA256())
+        )
+        return cert.public_bytes(serialization.Encoding.PEM).decode()
+
+    for shape in (
+        "jens file",
+        "equivalent spelling",
+        "byte copy",
+        "bundle with another",
+        "another only",
+        "unreadable",
+        "empty",
+    ):
+        with contextlib.ExitStack() as stack:
+            kea_tls, directory, _ = _tls_lab(stack)
+            jens = kea_tls.ca_paths()[0]
+            where = pathlib.Path(directory) / "elsewhere"
+            where.mkdir()
+            if shape == "equivalent spelling":
+                path = str(pathlib.Path(directory) / ".." / pathlib.Path(directory).name / "kea-ca.crt")
+            elif shape == "byte copy":
+                shutil.copy(jens, where / "copy.pem")
+                path = str(where / "copy.pem")
+            elif shape == "bundle with another":
+                (where / "bundle.pem").write_text(
+                    pathlib.Path(jens).read_text(encoding="ascii") + foreign_ca_pem(), encoding="ascii"
+                )
+                path = str(where / "bundle.pem")
+            elif shape == "another only":
+                (where / "other.pem").write_text(foreign_ca_pem(), encoding="ascii")
+                path = str(where / "other.pem")
+            elif shape == "unreadable":
+                path = str(where / "missing.pem")
+            elif shape == "empty":
+                path = ""
+            else:
+                path = jens
+            stack.enter_context(mock.patch.object(extensions, "KEA_API_CA", path))
+            stack.enter_context(mock.patch.object(extensions, "KEA_API_TLS_VERIFY", True))
+            inv = kea_tls.rotation_inventory(
+                [server], url_for=lambda s, svc: "https://10.0.0.5:8004" if svc == "dhcp4" else ""
+            )
+            out[shape] = (
+                kea_tls.trust_kind(),
+                kea_tls.trust_includes_jens_ca(),
+                len(inv.targets),
+                len(inv.refusals),
+                len(inv.external),
+            )
+    return out
+
+
+def q190_af2_a_url_with_user_info_is_refused_shown_without_it_and_scrubbed_from_text():
+    from jen.services import auth
+
+    url = "https://admin:s3cret@10.0.0.5:8004/x?y=1"
+    return (
+        auth.valid_api_url(url),
+        auth.valid_api_url("https://10.0.0.5:8004"),
+        auth.shown_url(url),
+        "s3cret" in auth.scrub_urls(f"Max retries exceeded with url: {url} (Caused by x)"),
+        auth.userinfo_sentence(url) == auth.USERINFO_SENTENCE,
+    )
+
+
+def q190_af3_every_entry_of_the_note_has_a_shape_and_an_unrecognised_one_is_refused():
+    import json
+
+    from jen.services import kea_changeset as cs
+
+    good_at = "2026-01-01T00:00:00+00:00"
+    shapes = {
+        "empty list": {"incidents": []},
+        "attention": {
+            "incidents": [
+                {
+                    "kind": "attention",
+                    "category": "aborted",
+                    "service": "dhcp4",
+                    "server_id": 1,
+                    "summary": "s",
+                    "at": good_at,
+                }
+            ]
+        },
+        "outcome without ids": {"incidents": [{"status": "rolled_back", "service": "dhcp4", "at": good_at}]},
+        "5.65.x single note": {"status": "rollback_failed", "service": "dhcp4", "at": good_at},
+        "empty entry": {"incidents": [{}]},
+        "unknown status": {"incidents": [{"status": "fine", "service": "dhcp4", "at": good_at}]},
+        "unknown category": {
+            "incidents": [
+                {
+                    "kind": "attention",
+                    "category": "x",
+                    "service": "dhcp4",
+                    "server_id": 1,
+                    "summary": "s",
+                    "at": good_at,
+                }
+            ]
+        },
+        "mixed": {"incidents": [{"status": "rolled_back", "service": "dhcp4", "at": good_at}, {}]},
+        "top-level list": [{"status": "rolled_back", "service": "dhcp4", "at": good_at}],
+    }
+    result = {}
+    for name, value in shapes.items():
+        try:
+            cs._incidents_of(json.dumps(value), strict=True)
+            result[name] = "read"
+        except cs.MalformedNote:
+            result[name] = "refused"
+    return result
+
+
 def q185_aa3_a_trailing_no_break_space_is_refused_and_ordinary_padding_is_not():
     from jen.services import auth
 
@@ -1757,7 +1899,8 @@ def q183_p2_f6_a_backslash_url_is_not_the_primarys_host():
 SCENARIOS = {
     name: fn
     for name, fn in sorted(globals().items())
-    if name.startswith(("b12_", "b13_", "q183_", "q184_", "q185_", "q186_", "q187_", "q188_", "q189_")) and callable(fn)
+    if name.startswith(("b12_", "b13_", "q183_", "q184_", "q185_", "q186_", "q187_", "q188_", "q189_", "q190_"))
+    and callable(fn)
 }
 
 #: scenario -> the observation the rule requires
@@ -2025,7 +2168,7 @@ EXPECTED = {
     "q189_ae1_an_unlistable_directory_is_a_refusal_never_an_empty_set": (1, True, True, []),
     "q189_ae1_every_inventory_shape_is_a_target_a_refusal_or_left_alone": {
         "complete": (1, 0, 0, 0),
-        "administrators trust": (0, 0, 1, 0),
+        "administrators trust": (0, 1, 0, 0),
         "copy missing": (0, 1, 0, 0),
         "key missing": (0, 1, 0, 0),
         "malformed": (0, 1, 0, 0),
@@ -2045,6 +2188,33 @@ EXPECTED = {
         (False, False, True, True),
         (False, False, True, True),
     ),
+    "q190_af1_the_bundle_a_trust_path_names_is_judged_by_certificate_identity_not_by_its_path": {
+        "jens file": ("jens-file", True, 0, 1, 0),
+        "equivalent spelling": ("jens-file", True, 0, 1, 0),
+        "byte copy": ("copy", True, 0, 1, 0),
+        "bundle with another": ("bundle", True, 0, 1, 0),
+        "another only": ("other", False, 0, 0, 1),
+        "unreadable": ("unreadable", None, 0, 1, 0),
+        "empty": ("none", None, 0, 0, 1),
+    },
+    "q190_af2_a_url_with_user_info_is_refused_shown_without_it_and_scrubbed_from_text": (
+        False,
+        True,
+        "https://10.0.0.5:8004",
+        False,
+        True,
+    ),
+    "q190_af3_every_entry_of_the_note_has_a_shape_and_an_unrecognised_one_is_refused": {
+        "empty list": "read",
+        "attention": "read",
+        "outcome without ids": "read",
+        "5.65.x single note": "read",
+        "empty entry": "refused",
+        "unknown status": "refused",
+        "unknown category": "refused",
+        "mixed": "refused",
+        "top-level list": "refused",
+    },
     "q185_aa3_a_trailing_no_break_space_is_refused_and_ordinary_padding_is_not": (False, True, False, True),
     "q184_z3_a_trailing_dot_is_a_different_name_and_odd_spaces_are_no_url": (False, True, False, False, False, True),
     "q184_z2_the_saved_pair_is_masked_in_a_support_bundle": (False, True),

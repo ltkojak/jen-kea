@@ -698,16 +698,31 @@ def _endpoint_credentials(ctx) -> Check:
         for f in config_doctor.diagnose(None, jen_config=extensions.cfg)
         if f["id"] in ("endpoint-has-no-credential", "credential-model-invalid", "kea6-database-blank")
     ]
-    if not missing:
+    # Q190 (AF2, CRED-005): a URL that carries a user name or password is legacy input - the row says where and what to do (names only, never the value)
+    from jen.services.auth import urls_with_userinfo
+
+    legacy = []
+    for section, key in urls_with_userinfo(extensions.cfg) if extensions.cfg is not None else []:
+        who = section
+        if section.startswith("kea_server_") and section[len("kea_server_") :].isdigit():
+            who = next(
+                (_server_name(s) for s in extensions.KEA_SERVERS if str(s.get("id")) == section[len("kea_server_") :]),
+                section,
+            )
+        elif section == "kea":
+            who = _server_name(extensions.KEA_SERVERS[0]) if extensions.KEA_SERVERS else "the primary Kea server"
+        legacy.append(
+            f"the API URL for {who} ({section} {key}) carries a user name; move it to the user and password fields"
+        )
+    if not missing and not legacy:
         c.status, c.detail = (
             "ok",
             "no endpoint has been refused a password: each uses its own, one shared with a daemon of its own host, or none on purpose",
         )
         return c
     c.status = "warn"
-    c.detail = "; ".join(f["detail"] for f in missing[:3]) + (
-        f" - and {len(missing) - 3} more" if len(missing) > 3 else ""
-    )
+    notes = [f["detail"] for f in missing] + legacy
+    c.detail = "; ".join(notes[:3]) + (f" - and {len(notes) - 3} more" if len(notes) > 3 else "")
     return c
 
 

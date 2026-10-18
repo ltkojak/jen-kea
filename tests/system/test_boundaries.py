@@ -2603,3 +2603,62 @@ def test_22_f_a_rotation_with_a_missing_record_is_refused_and_nothing_on_either_
     assert json.loads(after["conf"]) == json.loads(baseline["conf"]), "INVARIANT: kea-a's daemon config is the baseline"
     assert result["answers"] is True, "INVARIANT: kea-a still answers Jen over its https socket"
     st.wait_for(lambda: st.kea_answers("kea-b"), timeout=60, what="kea-b answering on its own socket")
+
+
+S22G_SCRIPT = r"""
+import contextlib, hashlib, inspect, os, tempfile
+from unittest import mock
+import jen.config as jconfig
+from jen.routes.settings import infrastructure as infra
+from jen.services import kea_tls
+
+flashes = []
+url = "https://__ADDR__:8014"
+ca = kea_tls.ca_paths()[0]
+ca_before = hashlib.sha256(open(ca, "rb").read()).hexdigest()
+alias = os.path.join(tempfile.mkdtemp(prefix="alias-"), "the-operators-name-for-jens-ca.crt")
+os.symlink(ca, alias)  # the operator pointed [kea] api_ca at ANOTHER NAME for Jen's CA file
+view = inspect.unwrap(infra.rotate_kea_ca)
+with app.test_request_context(method="POST"), contextlib.ExitStack() as stack:
+    stack.enter_context(mock.patch.object(infra, "flash", lambda text, style="message": flashes.append(str(text))))
+    stack.enter_context(mock.patch.object(extensions, "KEA_API_CA", alias))
+    stack.enter_context(mock.patch.object(infra, "_service_url", lambda server, service: url if (server.get("id"), service) == (1, "dhcp4") else ""))
+    stack.enter_context(mock.patch.object(infra, "_configured_url", lambda server, service: url if (server.get("id"), service) == (1, "dhcp4") else ""))
+    stack.enter_context(mock.patch.object(infra, "_daemon_creds", lambda server, service, url="": ("sysuser", "syspass-123")))
+    stack.enter_context(mock.patch.object(jconfig.app_config, "write_values", lambda *a, **k: flashes.append("WRITE_VALUES WAS CALLED")))
+    view()
+version, _err = infra._probe_after_restart(url, "sysuser", "syspass-123", "dhcp4", verify=ca, cert=kea_tls.client_paths())
+copy = kea_tls.server_copy_path(1, "dhcp4")
+emit({
+    "flashes": flashes,
+    "answers_the_new_identity": bool(version),
+    "ca_changed": ca_before != hashlib.sha256(open(ca, "rb").read()).hexdigest(),
+    "alias_is_still_a_symlink": os.path.islink(alias),
+    "local_crt": open(copy).read(),
+    "local_issued_by_live_ca": kea_tls.issued_by(copy, ca),
+})
+"""
+
+
+def test_22_g_a_rotation_with_the_ca_bundle_an_alias_of_jens_ca_still_re_issues_and_answers(stack):
+    """REMOTE-001 / Q190 (AF1, the P1): `[kea] api_ca` is a SYMLINK to Jen's CA file. Beta.20 compared the path with Jen's own, called every Jen-issued endpoint 'the administrator's', rotated with
+    ZERO targets and promoted the new CA - kea-a kept presenting CA-A material to a Jen that now trusted CA-B. Now the endpoint is classified by certificates: it has a Jen-issued copy, so it is a
+    target; it is re-issued, restarted and PROBED with the new identity, the new CA is Jen's, the alias is left as written and Jen's settings are not rewritten under it."""
+    out, proc = _s22_run("write-ok", scheme="https", port="8014")
+    assert emitted(out) is not None, f"no result from the https setup:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    ip = st.container_ip(st.KEA_A)
+    out, proc = st.jen_py(S22G_SCRIPT.replace("__ADDR__", ip), timeout=500)
+    result = emitted(out)
+    assert result is not None, f"no result from the rotation:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    texts = " ".join(result["flashes"])
+    assert "Kea CA rotated" in texts and "kea-a kea-dhcp4" in texts and "Jen's CA file changed under" in texts, texts
+    assert "WRITE_VALUES WAS CALLED" not in texts and result["alias_is_still_a_symlink"], (
+        "INVARIANT: the alias is left as the operator wrote it"
+    )
+    assert result["ca_changed"], "INVARIANT: the new CA is Jen's"
+    assert result["answers_the_new_identity"] is True, (
+        "INVARIANT: kea-a answers Jen's NEW CA and client certificate (the host's answer, not the classifier's word)"
+    )
+    assert result["local_issued_by_live_ca"], "INVARIANT: Jen's copy of the pair was issued by the CA Jen now trusts"
+    host = _s22_host_state()
+    assert host["server.crt"] == result["local_crt"], "INVARIANT: the certificate on the host IS the one Jen holds"

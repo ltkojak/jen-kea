@@ -232,7 +232,9 @@ def probe_command(
             return None, d.get("text", "Kea returned an error")
         return d, ""
     except Exception as e:
-        return None, str(e)
+        from jen.services.auth import scrub_urls
+
+        return None, scrub_urls(str(e))  # (Q190, AF2: a `requests` message may carry the address as it was typed)
 
 
 # The top-level key a daemon (or the Control Agent) answers a direct-style `config-get` with.
@@ -427,7 +429,11 @@ def kea_command(
         # failure, a malformed response, any other transport exception - used to render the raw
         # exception text on the dashboard's config-error banner and the Doctor page. Canned here too;
         # the real text is logged, with the URL and command, for whoever reads Jen's log.
-        logger.error(f"kea_command({command!r}) against {url} raised {type(e).__name__}: {e}")
+        from jen.services.auth import scrub_urls, shown_url
+
+        logger.error(
+            f"kea_command({command!r}) against {shown_url(url)} raised {type(e).__name__}: {scrub_urls(str(e))}"
+        )
         return {"result": 1, "text": "Kea API call failed — the details are in Jen's log."}
 
 

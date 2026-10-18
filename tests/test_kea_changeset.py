@@ -599,9 +599,12 @@ class TestOutcomeReachesTheServersPage:
 
     def test_dismiss_clears_it(self, store):
         store[cs.ATTENTION_KEY] = (
-            '{"status": "rolled_back"}'  # the pre-5.65.10 single-note shape reads as a list of one
+            '{"status": "rolled_back", "service": "dhcp4", "at": "2026-01-01T00:00:00+00:00"}'  # the pre-5.65.10 single-note shape reads as a list of one
         )
-        assert cs.attention() == {"incidents": [{"status": "rolled_back"}]}
+        assert cs.attention() == {
+            "incidents": [{"status": "rolled_back", "service": "dhcp4", "at": "2026-01-01T00:00:00+00:00"}],
+            "unrecognised": 0,
+        }
         cs.clear_attention()
         assert cs.attention() is None
 
@@ -667,7 +670,7 @@ class TestARollbackFailedBannerIsClearedOnlyByARunThatCoveredTheServer:
         assert cs.attention() is None
 
     def test_a_rolled_back_note_is_still_cleared_by_any_clean_run(self, fake, store):
-        store[cs.ATTENTION_KEY] = '{"status": "rolled_back", "service": "dhcp4"}'
+        store[cs.ATTENTION_KEY] = '{"status": "rolled_back", "service": "dhcp4", "at": "2026-01-01T00:00:00+00:00"}'
         fake.responses["test-config"] = {"ok": True}
         fake.responses["apply-config"] = {"ok": True, "sha256": "n", "helper_version": 2}
         fake.responses["service"] = {"ok": True, "unit": "u", "state": "active"}
@@ -824,7 +827,7 @@ class TestIncidentsAreAListNotASlot:
 
     def test_a_note_recorded_before_the_upgrade_is_read_and_then_extended(self, store):
         store[cs.ATTENTION_KEY] = (
-            '{"status": "rollback_failed", "service": "dhcp4", "needs_hands": ["kea-a"], "summary": "old"}'
+            '{"status": "rollback_failed", "service": "dhcp4", "at": "2026-01-01T00:00:00+00:00", "needs_hands": ["kea-a"], "summary": "old"}'
         )
         _REAL_RECORD_OUTCOME(self._back("kea-b"), "dhcp4", "edit b")
         assert self._statuses() == [("rollback_failed", ("kea-a",)), ("rolled_back", ())]
@@ -934,7 +937,14 @@ class TestAnUnprovedRecoveryIsAPersistentIncident:
         store[cs.ATTENTION_KEY] = json.dumps(
             {
                 "incidents": cs.attention()["incidents"]
-                + [{"status": "rollback_failed", "service": "dhcp4", "needs_hands": ["kea-a"]}]
+                + [
+                    {
+                        "status": "rollback_failed",
+                        "service": "dhcp4",
+                        "at": "2026-01-01T00:00:00+00:00",
+                        "needs_hands": ["kea-a"],
+                    }
+                ]
             }
         )
         assert cs.resolve_attention(1, "dhcp4") == 1
@@ -961,7 +971,10 @@ class TestAnUnprovedRecoveryIsAPersistentIncident:
     def test_the_old_dismiss_leaves_the_recovery_incidents_and_clear_attention_still_clears_all(self, store):
         cs.record_attention(1, "dhcp4", "x", "aborted")
         store[cs.ATTENTION_KEY] = json.dumps(
-            {"incidents": cs.attention()["incidents"] + [{"status": "rolled_back", "service": "dhcp4"}]}
+            {
+                "incidents": cs.attention()["incidents"]
+                + [{"status": "rolled_back", "service": "dhcp4", "at": "2026-01-01T00:00:00+00:00"}]
+            }
         )
         cs.dismiss_rollback_notes()
         assert [i["status"] for i in cs.attention()["incidents"]] == ["aborted"]
@@ -1248,3 +1261,136 @@ class TestTheSetAsideClearsOnlyWhatItCopied:
         assert status == "changed" and length == len("{broken json!!!")
         assert "tls-not-restored" in store[cs.ATTENTION_KEY], "the incident recorded in between survived"
         assert store[key] == "{broken json!!!", "the earlier text is kept as a spare"
+
+
+def _attention(**over):
+    entry = {
+        "kind": "attention",
+        "status": "tls-not-restored",
+        "category": "tls-not-restored",
+        "service": "dhcp4",
+        "server_id": 1,
+        "server_name": "kea-a",
+        "summary": "setup of a socket",
+        "detail": "x",
+        "at": "2026-01-01T00:00:00+00:00",
+        "needs_hands": [],
+        "needs_hands_ids": [],
+        "lines": [],
+    }
+    entry.update(over)
+    return entry
+
+
+def _outcome(**over):
+    entry = {"status": "rolled_back", "service": "dhcp4", "summary": "a pool edit", "at": "2026-01-01T00:00:00+00:00"}
+    entry.update(over)
+    return entry
+
+
+class TestEveryEntryOfTheNoteHasAShape:
+    """Q190 (AF3): `{"incidents": [{}]}` was accepted ("a list of dicts"), and `_incident_cleared` returned True for any entry whose status was not `rollback_failed` - an empty dict included - so a clean
+    run DELETED a record nobody could read. A recognised incident has a shape; one that is not recognised is KEPT until a superadmin sets the note aside."""
+
+    @pytest.fixture
+    def store(self, monkeypatch):
+        data = {}
+        from jen.models import user as user_mod
+
+        monkeypatch.setattr(user_mod, "get_global_setting", lambda k, d="", strict=False: data.get(k, d))
+        monkeypatch.setattr(user_mod, "set_global_setting", lambda k, v: data.__setitem__(k, v))
+        monkeypatch.setattr(user_mod, "audit", lambda *a, **k: None)
+        monkeypatch.setattr(cs, "record_outcome", _REAL_RECORD_OUTCOME)
+        return data
+
+    GOOD = {
+        "an empty list": {"incidents": []},
+        "a current attention incident": {"incidents": [_attention()]},
+        "a historical rolled_back without ids": {"incidents": [_outcome()]},
+        "a rollback_failed without ids": {"incidents": [_outcome(status="rollback_failed", needs_hands=["kea-a"])]},
+        "a rollback_failed with ids": {
+            "incidents": [_outcome(status="rollback_failed", needs_hands=["a"], needs_hands_ids=[1], lines=["x"])]
+        },
+        "the 5.65.x single note": _outcome(),
+        "attention for dhcp6 and d2": {
+            "incidents": [_attention(service="dhcp6"), _attention(service="d2", server_id="2")]
+        },
+    }
+    BAD = {
+        "an empty dict entry": {"incidents": [{}]},
+        "no status": {"incidents": [_outcome(status=None)]},
+        "no service": {"incidents": [{k: v for k, v in _outcome().items() if k != "service"}]},
+        "an unknown status": {"incidents": [_outcome(status="all-fine")]},
+        "an unknown category": {"incidents": [_attention(category="made-up")]},
+        "an attention incident for no server": {"incidents": [_attention(server_id=None)]},
+        "an attention incident for an unknown service": {"incidents": [_attention(service="dhcp9")]},
+        "no time": {"incidents": [{k: v for k, v in _outcome().items() if k != "at"}]},
+        "needs_hands that is not a list": {"incidents": [_outcome(needs_hands="kea-a")]},
+        "a string among incidents": {"incidents": [_outcome(), "x"]},
+        "valid and invalid mixed": {"incidents": [_attention(), {}, _outcome()]},
+        "the single note without a service": {"status": "rolled_back"},
+        "a list at the top": [_outcome()],
+    }
+
+    @pytest.mark.parametrize("name", sorted(GOOD))
+    def test_every_recognised_shape_reads(self, store, name):
+        raw = json.dumps(self.GOOD[name])
+        notes = cs._incidents_of(raw, strict=True)
+        assert all(cs.recognised_incident(n) for n in notes)
+
+    @pytest.mark.parametrize("name", sorted(BAD))
+    def test_every_unrecognised_shape_raises_naming_the_index_never_the_text(self, name):
+        raw = json.dumps(self.BAD[name])
+        with pytest.raises(cs.MalformedNote) as e:
+            cs._incidents_of(raw, strict=True)
+        assert "s3cret" not in str(e.value) and raw not in str(e.value)
+
+    def test_the_message_names_the_index(self):
+        with pytest.raises(cs.MalformedNote, match="entry 1 "):
+            cs._incidents_of(json.dumps({"incidents": [_attention(), {}]}), strict=True)
+
+    @pytest.mark.parametrize("name", sorted(BAD))
+    def test_every_writer_refuses_the_whole_note_and_it_is_byte_equal_afterwards(self, store, name):
+        raw = json.dumps(self.BAD[name])
+        store[cs.ATTENTION_KEY] = raw
+        clean = ChangeSetResult("ok", "ok", [])
+        assert cs.record_attention(1, "dhcp4", "x", "aborted") is False
+        assert cs.resolve_attention(1, "dhcp4") == 0
+        assert cs.acknowledge_recovery(1, "dhcp4", "tls-not-restored") is None
+        assert cs.record_outcome(clean, "dhcp4", "a clean change") is False
+        assert cs.record_outcome(ChangeSetResult("rolled_back", "x", [], needs_hands=["a"]), "dhcp4", "x") is False
+        assert store[cs.ATTENTION_KEY] == raw, "a clean change deleted nothing, a failed one wrote nothing"
+
+    def test_a_clean_run_never_clears_what_it_cannot_read(self):
+        clean = ChangeSetResult("ok", "ok", [])
+        assert cs._incident_cleared({}, clean, "dhcp4") is False
+        assert cs._incident_cleared({"status": "rolled_back"}, clean, "dhcp4") is False
+        assert cs._incident_cleared(_attention(), clean, "dhcp4") is False
+        assert cs._incident_cleared(_outcome(), clean, "dhcp4") is True, (
+            "a RECOGNISED rolled_back note is still cleared by any clean run"
+        )
+
+    def test_the_banner_counts_what_it_cannot_read_and_keeps_it(self, store):
+        store[cs.ATTENTION_KEY] = json.dumps({"incidents": [_attention(), {}, {"kind": "attention"}]})
+        note = cs.attention()
+        assert len(note["incidents"]) == 1 and note["unrecognised"] == 2
+        store[cs.ATTENTION_KEY] = json.dumps({"incidents": [{}]})
+        only = cs.attention()
+        assert only == {"incidents": [], "unrecognised": 1}
+
+    def test_a_note_that_reads_has_no_unrecognised_entries(self, store):
+        store[cs.ATTENTION_KEY] = json.dumps({"incidents": [_attention()]})
+        assert cs.attention()["unrecognised"] == 0
+
+    def test_recovery_incidents_strict_raises_on_one(self, store):
+        store[cs.ATTENTION_KEY] = json.dumps({"incidents": [_attention(), {}]})
+        with pytest.raises(cs.MalformedNote):
+            cs.recovery_incidents(strict=True)
+        assert cs.note_state() == "malformed"
+
+    def test_the_set_aside_moves_it_and_clears_it(self, store):
+        raw = json.dumps({"incidents": [_attention(), {}]})
+        store[cs.ATTENTION_KEY] = raw
+        status, key, length = cs.set_aside_unreadable_note()
+        assert status == "done" and store[key] == raw and store[cs.ATTENTION_KEY] == "" and length == len(raw)
+        assert cs.record_attention(1, "dhcp4", "x", "aborted") is True

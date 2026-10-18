@@ -513,6 +513,12 @@ S10_ALLOWED = {
     ("jen/services/access.py", "filter_client_view.ok", "(TypeError, ValueError)", "return False"): (
         "an unreadable subnet id is NOT in the accessible set: the row is hidden"
     ),
+    ("jen/services/auth.py", "userinfo_sentence", "ValueError", 'return ""'): (
+        "an address `urlsplit` cannot parse gets no user-info SENTENCE, and `valid_api_url` - which refuses it first on its own `ValueError` - has already said no; the sentence only chooses which refusal to show (Q190)"
+    ),
+    ("jen/config.py", "_warn_userinfo_urls", "Exception", "return"): (
+        "the legacy-URL warning is a LOG LINE; a failure to look for user-info must never break a config load, and nothing is decided from it - the credential rule is untouched and Health looks again (Q190)"
+    ),
     ("jen/models/user.py", "set_global_setting", "Exception", "return False"): (
         "the write is reported as NOT stored; every caller that needs the write (the investigation record, the audit) acts on that False (Q158)"
     ),
@@ -877,3 +883,248 @@ class TestS11bASocketEntryNeverReachesText:
             (4, "entry"),
             (6, "snapshot"),
         ]
+
+
+# ── S14: an address is shown by ONE helper; a URL never carries a password (Q190, AF2; LEAK-001, CRED-005) ─────────────────────────────────────────
+
+S14_ALLOWED: dict = {}  # the reviewed list is EMPTY: a route shows an address through `auth.shown_url`, always
+_S14_SINKS = {"flash", "audit", "_record_incident", "record_attention"}
+_S14_LOG_METHODS = {"debug", "info", "warning", "error", "exception", "critical"}
+_S14_SAFE_CALLEES = {
+    "shown_url",
+    "scrub_urls",
+    "host_of",
+    "len",
+    "bool",
+    "userinfo_sentence",
+}  # what turns an address into something that cannot carry user-info
+
+
+def s14_sites(source: str, rel: str) -> list[tuple[str, int, str]]:
+    """Every place a name that holds an address (`url`, `api_url`, `new_url`, `x['url']`, `x.api_url`, `.get('url')`) reaches the text of a `flash(`, an audit row, a log call or
+    `_record_incident(` without going through `shown_url` - directly, or through a name assigned from such an expression in the same function (`msg = f"... {url}"; flash(msg)`)."""
+    tree = ast.parse(source)
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            child.parent = parent  # type: ignore[attr-defined]
+
+    def callee(call):
+        f = call.func
+        return f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", "")
+
+    def is_sink(call):
+        name = callee(call)
+        if name in _S14_SINKS:
+            return True
+        f = call.func
+        return (
+            name in _S14_LOG_METHODS
+            and isinstance(f, ast.Attribute)
+            and isinstance(f.value, ast.Name)
+            and "log" in f.value.id.lower()
+        )
+
+    def unsafe(expr):
+        """The address-holding sub-expressions of `expr` that are not under a safe callee."""
+        out = []
+        for sub in ast.walk(expr):
+            holder = None
+            if isinstance(sub, ast.Name):
+                holder = sub.id
+            elif isinstance(sub, ast.Attribute):
+                holder = sub.attr
+            elif (
+                isinstance(sub, ast.Subscript)
+                and isinstance(sub.slice, ast.Constant)
+                and isinstance(sub.slice.value, str)
+            ):
+                holder = sub.slice.value
+            elif (
+                isinstance(sub, ast.Call)
+                and callee(sub) == "get"
+                and sub.args
+                and isinstance(sub.args[0], ast.Constant)
+                and isinstance(sub.args[0].value, str)
+            ):
+                holder = sub.args[0].value
+            if not holder or not holder.lower().endswith("url"):
+                continue
+            cur, safe = sub, False
+            while cur is not expr and getattr(cur, "parent", None) is not None:
+                cur = cur.parent
+                if isinstance(cur, ast.Call) and callee(cur) in _S14_SAFE_CALLEES:
+                    safe = True
+                    break
+            if not safe:
+                out.append((sub, holder))
+        return out
+
+    def builds_text(expr, hits):
+        """Is any of `hits` (address-holding sub-expressions of `expr`) put into TEXT by `expr` - an f-string, `%`, `+`, `.format` - rather than handed to a call that answers something else
+        (`valid_api_url(url)` answers a bool and builds no text)?"""
+        for sub, _holder in hits:
+            cur = sub
+            while cur is not expr and getattr(cur, "parent", None) is not None:
+                cur = cur.parent
+                if isinstance(cur, ast.Call) and callee(cur) not in {"str", "repr", "format", "join"}:
+                    break
+            else:
+                return True
+        return False
+
+    sites = []
+    for fn in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))] + [tree]:
+        tainted = set()
+        for node in ast.walk(fn):
+            if isinstance(node, (ast.Assign, ast.AugAssign)) and node.value is not None:
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                carried = isinstance(node.value, (ast.JoinedStr, ast.BinOp)) and any(
+                    isinstance(s, ast.Name) and s.id in tainted for s in ast.walk(node.value)
+                )
+                if builds_text(node.value, unsafe(node.value)) or carried:
+                    tainted |= {t.id for t in targets if isinstance(t, ast.Name)}
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Call) and is_sink(node):
+                for arg in list(node.args) + [k.value for k in node.keywords]:
+                    for sub, holder in unsafe(arg):
+                        sites.append((rel, sub.lineno, holder))
+                    for sub in ast.walk(arg):
+                        if isinstance(sub, ast.Name) and sub.id in tainted:
+                            cur, safe = sub, False
+                            while cur is not arg and getattr(cur, "parent", None) is not None:
+                                cur = cur.parent
+                                if isinstance(cur, ast.Call) and callee(cur) in _S14_SAFE_CALLEES:
+                                    safe = True
+                                    break
+                            if not safe:
+                                sites.append((rel, sub.lineno, sub.id + " (built from an address)"))
+    return sorted(set(sites))
+
+
+class TestS14AnAddressIsShownByOneHelper:
+    def test_no_route_puts_an_address_into_text_without_shown_url(self):
+        found = []
+        for path in sorted((ROOT / "jen" / "routes").rglob("*.py")):
+            rel = path.relative_to(ROOT).as_posix()
+            found += [s for s in s14_sites(path.read_text(encoding="utf-8"), rel) if (s[0], s[2]) not in S14_ALLOWED]
+        assert found == [], (
+            "an address reaches a flash, an audit row, a log line or an incident without `auth.shown_url` - a URL typed with user-info would print its password "
+            f"(CRED-005 / LEAK-001): {found}"
+        )
+
+    def test_the_sweep_refuses_a_planted_fstring(self):
+        """The sweep's own test: it breaks the rule on purpose and sees it refused - directly, through a message variable, in an audit row and a log line - and passes the safe shapes."""
+        planted = (
+            "def a(new_url):\n flash(f'it is at {new_url}', 'error')\n"
+            "def b(api_url):\n msg = f'failed: {api_url}'\n flash(msg)\n"
+            "def c(srv):\n __user.audit('X', 'y', f\"url={srv['api_url']}\")\n"
+            "def d(url):\n logger.warning('x %s', url)\n"
+            "def e(new_url):\n flash(f'ok {__auth.shown_url(new_url)}')\n"
+            "def f(endpoint):\n flash(f'host {__credentials.host_of(endpoint.url)}')\n"
+            "def g(dns_url):\n r = req.get(f'{dns_url}/api')\n"
+            "def h(url):\n _record_incident(1, 's', f'at {url}', 'x')\n"
+        )
+        got = [(line, name) for _r, line, name in s14_sites(planted, "jen/routes/x.py")]
+        assert got == [
+            (2, "new_url"),
+            (5, "msg (built from an address)"),
+            (7, "api_url"),
+            (9, "url"),
+            (17, "url"),
+        ], got
+
+
+# ── S13: whose CA a trust path is, is decided by certificate identity - never by comparing the path (Q190, AF1; REMOTE-001) ───────────────────────
+
+#: (file, function): the ONE place a trust path is interpreted. `trust_kind` is allowed to say whether a path is Jen's own file because it has ALREADY judged the certificates in it.
+S13_ALLOWED = {("jen/services/kea_tls.py", "trust_kind")}
+_S13_PATH_FUNCS = {"normpath", "realpath", "abspath", "samefile", "commonpath", "relpath", "expanduser", "resolve"}
+
+
+def s13_sites(source: str, rel: str) -> list[tuple[str, int, str]]:
+    """Every comparison of `[kea] api_ca` (`KEA_API_CA`, or a name assigned from it) with something that is not a constant, and every path function applied to it, outside the reviewed list."""
+    tree = ast.parse(source)
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            child.parent = parent  # type: ignore[attr-defined]
+    parents = _parents(tree)
+
+    def mentions(expr, tainted):
+        for sub in ast.walk(expr):
+            if isinstance(sub, ast.Name) and (sub.id == "KEA_API_CA" or sub.id in tainted):
+                return True
+            if isinstance(sub, ast.Attribute) and sub.attr == "KEA_API_CA":
+                return True
+            if isinstance(sub, ast.Constant) and sub.value == "KEA_API_CA":
+                return True
+        return False
+
+    def derived(expr, tainted):
+        """Is `expr` the bundle path itself (or the path with a `.strip()` / `or` / `getattr` around it) - not a dict, a sentence or a comparison that merely mentions it?"""
+        if isinstance(expr, ast.Name):
+            return expr.id == "KEA_API_CA" or expr.id in tainted
+        if isinstance(expr, ast.Attribute):
+            return expr.attr == "KEA_API_CA" or derived(expr.value, tainted)
+        if isinstance(expr, ast.BoolOp):
+            return any(derived(v, tainted) for v in expr.values)
+        if isinstance(expr, ast.IfExp):
+            return derived(expr.body, tainted) or derived(expr.orelse, tainted)
+        if isinstance(expr, ast.Call):
+            f = expr.func
+            if isinstance(f, ast.Name) and f.id == "getattr":
+                return any(isinstance(a, ast.Constant) and a.value == "KEA_API_CA" for a in expr.args)
+            return derived(f, tainted) or any(derived(a, tainted) for a in expr.args)
+        return False
+
+    sites = []
+    scopes = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))] + [tree]
+    for scope in scopes:
+        tainted: set = set()
+        for node in ast.walk(scope):
+            if isinstance(node, ast.Assign) and derived(node.value, tainted):
+                tainted |= {t.id for t in node.targets if isinstance(t, ast.Name)}
+        for node in ast.walk(scope):
+            hit = None
+            if isinstance(node, ast.Compare) and any(
+                isinstance(op, (ast.Eq, ast.NotEq, ast.Is, ast.IsNot, ast.In, ast.NotIn)) for op in node.ops
+            ):
+                operands = [node.left, *node.comparators]
+                if any(mentions(o, tainted) for o in operands) and any(
+                    not isinstance(o, ast.Constant) and not mentions(o, tainted) for o in operands
+                ):
+                    hit = "comparison"
+            elif isinstance(node, ast.Call):
+                f = node.func
+                name = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", "")
+                if name in _S13_PATH_FUNCS and any(mentions(a, tainted) for a in list(node.args) + [f]):
+                    hit = name
+            if hit:
+                fn = _enclosing_function(node, parents)
+                if (rel, fn.split(".")[-1]) not in S13_ALLOWED:
+                    sites.append((rel, node.lineno, hit))
+    return sorted(set(sites))
+
+
+class TestS13ATrustPathIsNeverComparedAsAString:
+    def test_no_module_compares_the_ca_bundle_path(self):
+        found = []
+        for path in _py_files():
+            if path.suffix == ".py" and "jen" in path.parts:
+                found += s13_sites(path.read_text(encoding="utf-8"), path.relative_to(ROOT).as_posix())
+        assert found == [], (
+            "a module compares `[kea] api_ca` as a path (or normalises it): a symlink, a copy or a bundle of Jen's own CA is 'not Jen's', and Rotate leaves every Jen-issued endpoint behind "
+            f"(Q190, AF1). Ask `kea_tls.trust_includes_jens_ca()` / `trust_kind()` instead: {found}"
+        )
+
+    def test_the_sweep_refuses_the_pattern_that_shipped_in_beta20(self):
+        planted = (
+            "def _trust_is_jens():\n"
+            "    configured = getattr(extensions, 'KEA_API_CA', '') or ''\n"
+            "    return bool(configured) and os.path.normpath(configured) == os.path.normpath(ca_paths()[0])\n"
+            "def page(ca_crt):\n"
+            "    return {'external_ca': bool(extensions.KEA_API_CA) and ca_crt != extensions.KEA_API_CA}\n"
+            "def fine():\n"
+            "    return bool(extensions.KEA_API_CA) and extensions.KEA_API_CA != ''\n"
+        )
+        got = [(line, what) for _r, line, what in s13_sites(planted, "jen/routes/x.py")]
+        assert got == [(3, "comparison"), (3, "normpath"), (5, "comparison")], got

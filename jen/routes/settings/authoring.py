@@ -295,11 +295,11 @@ def _direct_control_socket(service: str, server: dict, form_tls: dict):
     url, user, pwd = ep
     p = urlparse(url or "")
     if p.scheme not in ("http", "https"):
-        return None, f"{name}: API URL {url!r} must be http:// or https://."
+        return None, f"{name}: API URL {__auth.shown_url(url)!r} must be http:// or https://."
     port = __authoring.socket_port_from_url(url)
     if port is None:
         return None, (
-            f"{name}: API URL {url} has no explicit port — direct mode requires one "
+            f"{name}: API URL {__auth.shown_url(url)} has no explicit port — direct mode requires one "
             "(Settings → Kea / Additional Servers)."
         )
     if not (user and pwd):

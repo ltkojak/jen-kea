@@ -467,6 +467,27 @@ def _serialized(fn):
     return wrapper
 
 
+_USERINFO_WARNED: set = set()
+
+
+def _warn_userinfo_urls(cfg) -> None:
+    """Q190 (AF2, CRED-005): a URL with a user name or password in it is legacy input (`valid_api_url` refuses it on save now). ONE warning per (section, key) per process, naming the section and key
+    - never the value. Jen keeps dialling it as before; the credential rule is not touched."""
+    try:
+        from jen.services.auth import urls_with_userinfo
+
+        found = urls_with_userinfo(cfg)
+    except Exception as e:  # a log line must never break a config load
+        logger.debug(f"could not look for user-info in the configured URLs: {type(e).__name__}")
+        return
+    for section, key in found:
+        if (section, key) not in _USERINFO_WARNED:
+            _USERINFO_WARNED.add((section, key))
+            logger.warning(
+                f"jen.config [{section}] {key} carries a user name or password inside the URL - move them to the user and password fields (a URL never carries a password); Jen still dials it as written"
+            )
+
+
 class AppConfig:
     """Owns loading, writing, and derivation of jen.config."""
 
@@ -544,6 +565,7 @@ class AppConfig:
         # install). See jen/services/kea.py::_endpoint_for().
         _mode = cfg.get("kea", "connection_mode", fallback="ca").strip().lower()
         extensions.KEA_CONNECTION_MODE = _mode if _mode in ("ca", "direct") else "ca"
+        _warn_userinfo_urls(cfg)
         extensions.KEA_API_CA = cfg.get("kea", "api_ca", fallback="").strip()
         extensions.KEA_API_TLS_VERIFY = cfg.getboolean("kea", "api_tls_verify", fallback=True)
         # v5.10.2 — client certificate for Kea's default mTLS https socket.

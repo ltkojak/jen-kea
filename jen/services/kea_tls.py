@@ -720,24 +720,54 @@ class RotationInventory:
         return iter((self.targets, self.refusals))
 
 
-def _trust_is_jens() -> bool:
-    """Does Jen verify the https endpoints it dials against ITS OWN CA (Q189, second pass, finding 5)? `[kea] api_ca` is Jen's CA once Jen has set up an https socket (the setup saves it);
-    an administrator who brought their own CA, or none, has endpoints Jen never issued a certificate for - they are not Jen's to rotate, and a missing copy there is not a lost record."""
-    configured = getattr(extensions, "KEA_API_CA", "") or ""
-    return bool(configured) and os.path.normpath(configured) == os.path.normpath(ca_paths()[0])
-
-
-def _shown(url: str) -> str:
-    """An address as a sentence may carry it: scheme, host and port - never user-info, a path or a query (the old text printed `https://admin:secret@host` as typed)."""
-    from urllib.parse import urlsplit
-
+def trust_bundle() -> tuple[bool, bool] | None:
+    """What the CA bundle Jen verifies its https endpoints against (`[kea] api_ca`) CONTAINS, by certificate identity (Q190, AF1): `(includes_jens_ca, includes_another_ca)`. Every certificate in
+    the file is loaded (a PEM bundle) and compared by DER with Jen's live CA certificate - so the bundle IS Jen's CA whether the path is Jen's own, a symlink, an equivalent path, a byte-copy or
+    a bundle that contains it, and is the administrator's whatever it is named. `None` when there is nothing to judge: the path is empty, missing (a dangling symlink), unreadable, holds no PEM
+    certificate, or Jen's own CA cannot be loaded. This and `trust_includes_jens_ca` are the only places a trust path is interpreted: tests/test_invariant_sweeps.py S13 refuses a comparison of
+    `KEA_API_CA` with a path anywhere else (a path string is not an identity - the alias that was not Jen's own path made every Jen-issued endpoint 'the administrator's')."""
+    configured = (getattr(extensions, "KEA_API_CA", "") or "").strip()
+    if not configured:
+        return None
     try:
-        parts = urlsplit(url)
-        host = parts.hostname or ""
-        host = f"[{host}]" if ":" in host else host
-        return f"{parts.scheme}://{host}" + (f":{parts.port}" if parts.port else "")
-    except ValueError:
-        return "an address Jen cannot read"
+        with open(configured, "rb") as f:
+            found = x509.load_pem_x509_certificates(f.read())
+        jens = load_cert(ca_paths()[0]).public_bytes(serialization.Encoding.DER)
+        ders = [c.public_bytes(serialization.Encoding.DER) for c in found]
+    except (OSError, ValueError, TypeError, UnsupportedAlgorithm):
+        return None
+    if not ders:
+        return None
+    return any(d == jens for d in ders), any(d != jens for d in ders)
+
+
+def trust_kind() -> str:
+    """HOW the CA bundle Jen verifies against relates to Jen's CA, by certificate identity first and only then by path (Q190, AF1) - the one function that looks at the path itself:
+    `none` (empty), `unreadable` (missing, dangling, not PEM), `other` (an administrator's CAs only), `jens-file` (Jen's own file, or an equivalent spelling of its path), `alias` (the same
+    file through a symlink), `copy` (a byte-copy of Jen's CA somewhere else), `bundle` (Jen's CA AND another CA in one file). What Rotate may rewrite follows from it: only `jens-file`."""
+    configured = (getattr(extensions, "KEA_API_CA", "") or "").strip()
+    if not configured:
+        return "none"
+    bundle = trust_bundle()
+    if bundle is None:
+        return "unreadable"
+    includes_jens, includes_other = bundle
+    if not includes_jens:
+        return "other"
+    if includes_other:
+        return "bundle"
+    jens_file = ca_paths()[0]
+    if os.path.normpath(os.path.abspath(configured)) == os.path.normpath(os.path.abspath(jens_file)):
+        return "jens-file"
+    # an ALIAS follows Jen's file when it is replaced (a symlink, a symlinked directory, a junction); a hard link or a copy does not - it keeps the OLD certificate
+    return "alias" if os.path.realpath(configured) == os.path.realpath(jens_file) else "copy"
+
+
+def trust_includes_jens_ca() -> bool | None:
+    """Is Jen's CA among the certificates Jen verifies its https endpoints against? True - the bundle holds it (the path is Jen's CA, an alias of it, a copy of it, or a bundle that contains it);
+    False - it holds only an administrator's CAs; None - empty, unreadable or not PEM: ambiguous, and an ambiguity is a refusal wherever it matters (Q190, AF1)."""
+    bundle = trust_bundle()
+    return None if bundle is None else bundle[0]
 
 
 def _server_label(server: dict, service: str) -> str:
@@ -748,12 +778,18 @@ def _server_label(server: dict, service: str) -> str:
 
 def record_state(server_id, service: str) -> tuple[str, str]:
     """What Jen holds for one server and service, as `(state, why)`: `("jen", "")` - a certificate and key that load, are a pair and were issued by Jen's live CA; `("external", "")` - a pair
-    whose certificate no Jen CA issued; `("refuse", why)` - anything Jen cannot rotate safely: copy missing, key missing, unreadable, malformed, not a pair, issued by an earlier Jen CA."""
+    whose certificate no Jen CA issued; `("none", why)` - NEITHER file exists; `("refuse", why)` - anything Jen cannot rotate safely: one file missing, unreadable, malformed, not a pair, issued
+    by an earlier Jen CA."""
     crt, key = server_copy_path(server_id, service), server_key_path(server_id, service)
     try:
         with open(crt, "rb") as f:
             crt_pem = f.read()
     except FileNotFoundError:
+        if not os.path.lexists(key):
+            return (
+                "none",
+                "Jen holds no certificate record for it",
+            )  # neither file: Jen never issued one for this endpoint (or lost both) - the trust path breaks the tie
         return "refuse", "its certificate copy is missing"
     except OSError:
         return "refuse", "its certificate copy cannot be read"
@@ -785,13 +821,16 @@ def rotation_inventory(servers, url_for=None) -> RotationInventory:
     client's `_endpoint_for`); every `https://` endpoint is a target when Jen holds a complete record of its certificate (`record_state`) and a REFUSAL, with a sentence, when it does not.
     A certificate no Jen CA issued is an administrator-managed endpoint: named in `external`, left alone. A directory that cannot be listed is a refusal naming it - never an empty set.
     A copy for a server or service that is not an https endpoint now is `stale`: said, ignored. Pure (no network): only Jen's configuration and Jen's own files."""
+    from jen.services.auth import shown_url  # (the ONE helper that shows an address - Q190, AF2)
+
     if url_for is None:
         from jen.services import kea as _kea
 
         url_for = _kea.configured_url  # the CONFIGURED address, whatever the credential rule says about the password
 
     targets, refusals, external = [], [], []
-    jens = _trust_is_jens()
+    bundle = trust_bundle()
+    configured_ca = (getattr(extensions, "KEA_API_CA", "") or "").strip()
     try:
         listed = issued_server_copies(strict=True)
     except OSError as e:
@@ -808,20 +847,46 @@ def rotation_inventory(servers, url_for=None) -> RotationInventory:
             sid = server.get("id")
             endpoints.add((str(sid), service))
             label = _server_label(server, service)
-            if not jens:
-                # Jen does not verify against its own CA: this endpoint is the administrator's (its certificate was never Jen's to issue or to lose) - named, left alone
-                external.append(f"{label} ({_shown(url)})")
-                continue
             state, why = record_state(sid, service)
-            if state == "jen":
+            if state == "none":
+                # Q190 (AF1): Jen holds no record of this endpoint's certificate. Whose endpoint it is is a fact about CERTIFICATES, decided here - and only here, as the tiebreak - from what Jen is
+                # configured to trust, by identity (`trust_bundle`), never from a path string: an endpoint with a Jen-issued copy is a target whatever the trust path says.
+                if not configured_ca:
+                    verified = getattr(extensions, "KEA_API_TLS_VERIFY", True)
+                    external.append(
+                        f"{label} ({shown_url(url)}; "
+                        + (
+                            "verified against the system's CAs, not Jen's"
+                            if verified
+                            else "not verified, not on Jen's CA"
+                        )
+                        + ")"
+                    )
+                elif bundle is None:
+                    refusals.append(
+                        f"Jen cannot read the CA bundle at {configured_ca} to tell whose CA {label} ({shown_url(url)}) is on; fix the CA bundle under Settings → Kea before rotating"
+                    )
+                elif bundle[0] and bundle[1]:
+                    refusals.append(
+                        f"{label} is an https endpoint at {shown_url(url)} and Jen holds no certificate record for it, and the CA bundle at {configured_ca} holds Jen's CA AND another CA - it does not say "
+                        "which one this endpoint is on; remove the direct socket and set it up again so Jen issues and keeps a certificate for it, or give Jen a bundle that names one, before rotating"
+                    )
+                elif bundle[0]:
+                    refusals.append(
+                        f"{label} is an https endpoint at {shown_url(url)}: Jen verifies it against its own CA and holds no certificate record for it; remove the direct socket and set it up again "
+                        "so Jen issues and keeps a certificate for it, before rotating"
+                    )
+                else:
+                    external.append(f"{label} ({shown_url(url)}; its CA is not Jen's)")
+            elif state == "jen":
                 from urllib.parse import urlparse
 
                 targets.append((server, service, urlparse(url).hostname or ""))
             elif state == "external":
-                external.append(f"{label} ({_shown(url)})")
+                external.append(f"{label} ({shown_url(url)}; its certificate was not issued by Jen)")
             else:
                 refusals.append(
-                    f"{label} is an https endpoint at {_shown(url)} and Jen has no complete record of its certificate ({why}); remove the direct socket and set it up again so Jen issues "
+                    f"{label} is an https endpoint at {shown_url(url)} and Jen has no complete record of its certificate ({why}); remove the direct socket and set it up again so Jen issues "
                     "and keeps a certificate for it, or point Jen at a socket that is not on its CA, before rotating"
                 )
     stale = [f"{c['server_id']}-{c['service']}" for c in listed if (str(c["server_id"]), c["service"]) not in endpoints]

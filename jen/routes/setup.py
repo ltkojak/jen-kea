@@ -140,7 +140,7 @@ def setup_connect():
             flash("Enter a valid database port (1–65535).", "error")
             return render_template("setup_connect.html", progress=_progress(), **retry_ctx)
     if not api_url or not __auth.valid_api_url(api_url, require_port=False):
-        flash("Enter a valid Kea API URL (http:// or https://).", "error")
+        flash(__auth.userinfo_sentence(api_url) or "Enter a valid Kea API URL (http:// or https://).", "error")
         return render_template("setup_connect.html", progress=_progress(), **retry_ctx)
     if not kea_db_host or not kea_db_user:
         flash("Kea's database host and username are required.", "error")
@@ -204,11 +204,13 @@ def setup_connect():
             guessed = [a for a in attempts if not a.get("typed") and a.get("error")]
             first = typed[-1] if typed else (attempts[0] if attempts else {})
             flash(
-                f"Could not reach Kea's API at {first.get('url', api_url)}: {first.get('error') or 'no response'}.",
+                f"Could not reach Kea's API at {__auth.shown_url(first.get('url', api_url))}: {first.get('error') or 'no response'}.",
                 "error",
             )
             for a in guessed:
-                flash(f"Also tried {a['url']} (a control socket's default port): {a['error']}.", "error")
+                flash(
+                    f"Also tried {__auth.shown_url(a['url'])} (a control socket's default port): {a['error']}.", "error"
+                )
         if not db_ok:
             # v5.69.0-beta.2 (Q171): a driver message names the account and the host the probe tried; the page says which part failed, the log says why
             logger.warning("setup: Kea's database was not reachable: %s", db_info)
@@ -234,11 +236,11 @@ def setup_connect():
         api_client_cert=api_client_cert,
         api_client_key=api_client_key,
     )
-    __user.audit("SETUP_WIZARD", "connect", f"url={kea_result['url']} mode={kea_result['mode']}")
+    __user.audit("SETUP_WIZARD", "connect", f"url={__auth.shown_url(kea_result['url'])} mode={kea_result['mode']}")
     flash(f"Connected — Kea {kea_result['version'] or 'unknown version'}, {kea_result['mode']} mode.", "success")
     if kea_result["identified"] is None:
         flash(
-            f"Jen could not tell whether {kea_result['url']} is the Control Agent or a daemon's own control "
+            f"Jen could not tell whether {__auth.shown_url(kea_result['url'])} is the Control Agent or a daemon's own control "
             f"socket (it would not answer config-get), so it kept {kea_result['mode']} mode — check "
             "Settings → Kea if that is wrong.",
             "warning",
@@ -408,7 +410,7 @@ def setup_found():
         __user.audit(
             "SETUP_WIZARD",
             "enable_v6",
-            f"url={v6_url} subnets={v6_probe['subnet6_count']} removed={len(remove6)}",
+            f"url={__auth.shown_url(v6_url)} subnets={v6_probe['subnet6_count']} removed={len(remove6)}",
         )
         flash(f"IPv6 is now managed in Jen — Kea {v6_probe['version'] or 'unknown version'}.", "success")
         return redirect(url_for("setup.setup_found"))

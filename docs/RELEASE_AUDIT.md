@@ -78,6 +78,17 @@ hypothesis.
 3. **A register item is executed before it is registered.** An entry dismissed from reading is a hypothesis too: Q188's register item (f) ("the pre-rotation pair, same CA") was dismissed from reading and,
    executed, was the staged-CA pair - the opposite of what the marker promised. The register says which of its items were executed.
 
+**(p) A classification is a row, everywhere (v5.69.0-beta.21, Q190).** Step (n) generalised from the credential rule. Any code that sorts targets into acted-on / left-alone / refused has a row
+per CLASS, written before the classifier, and the left-alone class is proved by the invariant over the HOST (the daemon's own answer, its files, its trust relationship before and after), never by
+the classifier's own word: beta.20's `_trust_is_jens` was a global path-string switch added by a second-pass fix, it made every Jen-issued endpoint 'the administrator's', and the invariant that
+should have caught it only looked at a set the tests populated. Three rules follow.
+1. **The second pass's FIX is a Q item.** A fixup that adds a class, an exemption, a switch or a short-circuit is written in the report as a row BEFORE it is code, and the release report lists each
+   fixup with its row. A fixup is also a change (step (j)): the full harness runs after it so the invariants judge it.
+2. **An invariant has no knob.** A `check_invariants` ranges over the simulated world; a test may not narrow it (no `managed` set, no `discard`). It is RELATIVE where a classification would be needed
+   (a daemon that answered before answers after, or an incident names it), and judged by what the host holds, not by what Jen's files say.
+3. **A path string is not an identity.** Whose CA a trust path is, which file is Jen's, what an address contains - are decided from the certificate or the parsed value, in ONE function, and a sweep
+   (S13, S14) refuses the comparison anywhere else.
+
 ## The second pass (adversarial)
 
 Run as a separate subagent on the same diff, with the reviewer's method as its prompt, so that it does not inherit the first pass's assumptions. Its findings are reconciled against the first pass's
@@ -109,7 +120,7 @@ The prompt is below, verbatim; replace `<repo root>` and `<previous tag>` and ch
 
 ```
 You are an independent adversarial release reviewer for Jen at <repo root>. Read-only: change no file; report findings only. Scope: `git diff <previous tag>..HEAD`
-(run it). Read docs/RELEASE_AUDIT.md first and apply its steps (h)-(o). Read the WHOLE diff, then the CURRENT text of every changed function in full - never the hunk alone.
+(run it). Read docs/RELEASE_AUDIT.md first and apply its steps (h)-(p). Read the WHOLE diff, then the CURRENT text of every changed function in full - never the hunk alone.
 For every piece of evidence, guard or check the diff adds, ask what else could produce the same observation without the thing it is taken to prove; for every
 check-then-act, name what could change between the two; for every except, say whether a failure reads as success; for every new state or field, find every reader and
 writer; for every multi-step operation, inject a failure at each step and say what state is left and whether it is visible. Compare what the tests pin with what the
