@@ -1313,7 +1313,7 @@ class TestKeaTlsExpiry:
         monkeypatch.setattr(
             kea_tls,
             "issued_server_copies",
-            lambda: [
+            lambda strict=False: [
                 {"server_id": sid, "service": svc, "path": f"/ssl/kea-servers/{sid}-{svc}.crt", "days_left": d}
                 for sid, svc, d in copies
             ],
@@ -1351,6 +1351,21 @@ class TestKeaTlsExpiry:
         self._wire(monkeypatch, client_ok=False)
         c = health._kea_tls_expiry(_ctx())
         assert c.status == "fail" and "not signed by the current CA" in c.detail
+
+    def test_a_directory_that_cannot_be_listed_is_unknown_not_none_issued(self, monkeypatch):
+        """Q189 (AE1): `issued_server_copies(strict=True)` raises on an unlistable directory; the row says the expiry is UNKNOWN (a warning), never 'valid' with zero servers."""
+        from jen.services import kea_tls
+
+        self._wire(monkeypatch)
+
+        def unlistable(strict=False):
+            if strict:
+                raise PermissionError(13, "Permission denied")
+            return []
+
+        monkeypatch.setattr(kea_tls, "issued_server_copies", unlistable)
+        c = health._kea_tls_expiry(_ctx())
+        assert c.status == "warn" and "could not read its certificate directory" in c.detail and "unknown" in c.detail
 
     def test_registered_in_the_jen_group(self):
         assert "kea_tls_expiry" in health.CHECK_IDS

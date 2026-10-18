@@ -570,7 +570,16 @@ def _answers_like_a_lab(url):
 
 
 def route_remove(
-    text, service, form=None, *, ssh_host="10.0.0.5", server_id=1, identify=_answers_like_a_lab, host=None, others=None
+    text,
+    service,
+    form=None,
+    *,
+    ssh_host="10.0.0.5",
+    server_id=1,
+    identify=_answers_like_a_lab,
+    host=None,
+    others=None,
+    preread_exc=None,
 ):
     """The real "Remove socket" route body (`remove_direct_socket`) on a real jen.config, with the Kea host stubbed (the change set records that it was asked, and applies): what a person
     pressing the button would cause. Returns {"touched": the Kea host was changed, "changed": jen.config changed, "flashes": the words shown, "text": the file after}. Flask is the only
@@ -616,15 +625,26 @@ def route_remove(
                 lambda sid, svc, **kw: resolved.append((sid, svc, kw.get("categories"))) or 0,
             )
         )
-        stack.enter_context(
-            mock.patch.object(
-                infra,
-                "_api_sockets_of",
-                lambda s, svc, errors=None: [
-                    x for x in _edit.control_sockets(host_state["cfg"], svc) if _edit._is_api_socket(x)
-                ],
+        if preread_exc is None:
+            stack.enter_context(
+                mock.patch.object(
+                    infra,
+                    "_api_sockets_of",
+                    lambda s, svc, errors=None: [
+                        x for x in _edit.control_sockets(host_state["cfg"], svc) if _edit._is_api_socket(x)
+                    ],
+                )
             )
-        )
+        else:
+            # Q189 (AE4): the REAL pre-read, over a channel that raises - the exception is a failed read, never an escape
+            from jen.services import kea_host as _kea_host
+
+            def _cut(server, op, payload=None, timeout=60):
+                if op == "read-config":
+                    raise preread_exc
+                raise AssertionError(f"nothing else may be sent: {op}")
+
+            stack.enter_context(mock.patch.object(_kea_host, "helper_call", _cut))
         stack.enter_context(mock.patch.object(extensions, "KEA_SERVERS", list(others or [])))
         stack.enter_context(
             mock.patch.dict(
@@ -1434,6 +1454,261 @@ def q188_ad9_s2_ipv6_literals_are_compared_as_addresses_and_names_stay_as_writte
     )
 
 
+def _tls_lab(stack, incidents=None):
+    """A temporary SSL directory for `kea_tls`, a CA and Jen's client pair, and the incident record stubbed over a list (Q189): what the invariants of tests/test_kea_tls_rotation.py read."""
+    import tempfile
+
+    from jen.services import kea_changeset, kea_tls
+
+    directory = tempfile.mkdtemp(prefix="probe-ssl-")
+    stack.enter_context(mock.patch.object(kea_tls, "SSL_DIR", directory))
+    incidents = incidents if incidents is not None else []
+    stack.enter_context(
+        mock.patch.object(
+            kea_changeset,
+            "recovery_incidents",
+            lambda strict=False: [
+                {"kind": "attention", "category": c, "status": c, "service": s, "server_id": sid}
+                for sid, s, c in incidents
+            ],
+        )
+    )
+    kea_tls.ensure_ca()
+    kea_tls.issue_client_cert()
+    return kea_tls, directory, incidents
+
+
+def q189_ae1_every_inventory_shape_is_a_target_a_refusal_or_left_alone():
+    """The rotation's targets come from the configuration: for each shape of what Jen holds for an https endpoint, what the inventory makes of it."""
+    import os
+    import pathlib
+
+    shapes = {}
+    server = {"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5"}
+
+    def url_for(s, svc):
+        return "https://10.0.0.5:8004" if svc == "dhcp4" else ""
+
+    def seen(kea_tls):
+        inv = kea_tls.rotation_inventory([server], url_for=url_for)
+        return (len(inv.targets), len(inv.refusals), len(inv.external), len(inv.stale))
+
+    for shape in (
+        "complete",
+        "copy missing",
+        "key missing",
+        "malformed",
+        "not a pair",
+        "external",
+        "directory missing",
+        "earlier Jen CA",
+    ):
+        with contextlib.ExitStack() as stack:
+            kea_tls, directory, _ = _tls_lab(stack)
+            files = kea_tls.issue_server_cert(server, "dhcp4", "10.0.0.5")
+            crt, key = kea_tls.server_copy_path(1, "dhcp4"), kea_tls.server_key_path(1, "dhcp4")
+            if shape == "copy missing":
+                os.unlink(crt)
+            elif shape == "key missing":
+                os.unlink(key)
+            elif shape == "malformed":
+                pathlib.Path(crt).write_text("not a certificate", encoding="ascii")
+            elif shape == "not a pair":
+                other = kea_tls.issue_server_cert(
+                    {"id": 9, "name": "x", "ssh_host": "10.0.0.9"}, "dhcp4", "10.0.0.9", commit=False
+                )
+                pathlib.Path(key).write_text(other["server.key"], encoding="ascii")
+            elif shape == "external":
+                import datetime
+
+                from cryptography import x509
+                from cryptography.hazmat.primitives import hashes, serialization
+                from cryptography.hazmat.primitives.asymmetric import ec
+                from cryptography.x509.oid import NameOID
+
+                name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "an administrator")])
+                k = ec.generate_private_key(ec.SECP256R1())
+                now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+                cert = (
+                    x509.CertificateBuilder()
+                    .subject_name(name)
+                    .issuer_name(name)
+                    .public_key(k.public_key())
+                    .serial_number(x509.random_serial_number())
+                    .not_valid_before(now - datetime.timedelta(minutes=5))
+                    .not_valid_after(now + datetime.timedelta(days=9))
+                    .sign(k, hashes.SHA256())
+                )
+                pathlib.Path(crt).write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+                pathlib.Path(key).write_bytes(
+                    k.private_bytes(
+                        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+                    )
+                )
+            elif shape == "directory missing":
+                import shutil
+
+                shutil.rmtree(os.path.dirname(crt))
+            elif shape == "earlier Jen CA":
+                kea_tls.commit_rotation(kea_tls.stage_rotation())
+            assert files
+            shapes[shape] = seen(kea_tls)
+    return shapes
+
+
+def q189_ae1_an_unlistable_directory_is_a_refusal_never_an_empty_set():
+    import os
+
+    server = {"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5"}
+    with contextlib.ExitStack() as stack:
+        kea_tls, directory, _ = _tls_lab(stack)
+        kea_tls.issue_server_cert(server, "dhcp4", "10.0.0.5")
+        real = os.listdir
+        listed_dir = os.path.dirname(kea_tls.server_copy_path(1, "dhcp4"))
+
+        def listdir(path="."):
+            if os.fspath(path) == listed_dir:
+                raise PermissionError(13, "Permission denied")
+            return real(path)
+
+        stack.enter_context(mock.patch.object(os, "listdir", listdir))
+        inv = kea_tls.rotation_inventory(
+            [server], url_for=lambda s, svc: "https://10.0.0.5:8004" if svc == "dhcp4" else ""
+        )
+        try:
+            kea_tls.issued_server_copies(strict=True)
+            strict_raises = False
+        except PermissionError:
+            strict_raises = True
+        return (
+            len(inv.refusals),
+            "could not read its certificate directory" in inv.refusals[0],
+            strict_raises,
+            kea_tls.issued_server_copies(),
+        )
+
+
+def q189_ae2_the_reviews_sequence_records_the_pair_the_host_accepted():
+    """A1 under CA-A is live; B is committed; A2 is installed on the rollback and Jen's write of A2 fails before either file: `host_material` is A2 byte for byte, `.prev` is A2, the pair is marked stale."""
+    import os
+    import pathlib
+
+    server = {"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5"}
+    with contextlib.ExitStack() as stack:
+        kea_tls, directory, incidents = _tls_lab(stack)
+        kea_tls.issue_server_cert(server, "dhcp4", "10.0.0.5")  # A1 is live
+        b = kea_tls.issue_server_cert(server, "dhcp4", "10.0.0.5", commit=False)
+        kea_tls.commit_issued(1, "dhcp4", b)  # B is committed (live = B, .prev = A1)
+        a2 = kea_tls.issue_server_cert(
+            server, "dhcp4", "10.0.0.5", commit=False
+        )  # ... A2 is issued and installed on the host
+        real = os.replace
+        key = kea_tls.server_key_path(1, "dhcp4")
+
+        def failing(src, dst, *a, **k):
+            if str(dst) == key:
+                raise OSError(5, "Input/output error")
+            return real(src, dst, *a, **k)
+
+        stack.enter_context(mock.patch.object(os, "replace", failing))
+        try:
+            kea_tls.commit_issued(1, "dhcp4", a2)
+            raised = None
+        except OSError as e:
+            raised = type(e).__name__
+        record = kea_tls.host_material(1, "dhcp4")
+        prev = pathlib.Path(kea_tls.server_copy_path(1, "dhcp4") + ".prev").read_text(encoding="ascii")
+        return (
+            raised,
+            record is not None
+            and record["server.crt"] == a2["server.crt"]
+            and record["server.key"] == a2["server.key"],
+            prev == a2["server.crt"],
+            kea_tls.is_stale(1, "dhcp4"),
+            kea_tls.current_material(1, "dhcp4")["server.crt"] == a2["server.crt"],
+        )
+
+
+def q189_ae2_a_read_only_ssl_directory_loses_the_record_and_host_material_says_unknown():
+    import pathlib
+
+    from jen.services import private_files
+
+    server = {"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5"}
+    with contextlib.ExitStack() as stack:
+        kea_tls, directory, incidents = _tls_lab(stack)
+        kea_tls.issue_server_cert(server, "dhcp4", "10.0.0.5")
+        a2 = kea_tls.issue_server_cert(server, "dhcp4", "10.0.0.5", commit=False)
+
+        def refuse(*a, **k):
+            raise OSError(30, "Read-only file system")
+
+        stack.enter_context(mock.patch.object(kea_tls, "commit_file_set", refuse))
+        stack.enter_context(mock.patch.object(private_files, "write_private_file", refuse))
+        try:
+            kea_tls.commit_issued(1, "dhcp4", a2)
+            lost = False
+        except kea_tls.HostRecordLost:
+            lost = True
+        incidents.append((1, "dhcp4", "remote-unknown"))  # the route records this
+        return (
+            lost,
+            kea_tls.host_material(1, "dhcp4"),
+            pathlib.Path(kea_tls.server_copy_path(1, "dhcp4") + ".prev").exists(),
+        )
+
+
+def q189_ae3_a_note_that_is_not_a_note_is_refused_unchanged_and_set_aside_on_request():
+    from jen.models import user as user_mod
+    from jen.services import kea_changeset as cs
+
+    stored = {}
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(
+            mock.patch.object(user_mod, "get_global_setting", lambda k, d="", strict=False: stored.get(k, d))
+        )
+        stack.enter_context(mock.patch.object(user_mod, "set_global_setting", lambda k, v: stored.__setitem__(k, v)))
+        stack.enter_context(mock.patch.object(user_mod, "audit", lambda *a, **k: None))
+
+        def update(key, mutate):
+            current = stored.get(key, "")
+            try:
+                new = mutate(current or "")
+            except Exception:
+                return False
+            if new is not None and new != current:
+                stored[key] = new
+            return True
+
+        stack.enter_context(mock.patch.object(user_mod, "update_global_setting", update))
+        results = []
+        for bad in ("{broken json!!!", "[]", '{"incidents": "x"}', "{}"):
+            stored[cs.ATTENTION_KEY] = bad
+            refused = cs.record_attention(1, "dhcp4", "x", "aborted") is False and cs.resolve_attention(1, "dhcp4") == 0
+            results.append((refused, stored[cs.ATTENTION_KEY] == bad, cs.note_state()))
+        stored[cs.ATTENTION_KEY] = "{broken json!!!"
+        status, key, length = cs.set_aside_unreadable_note()
+        after = (
+            status,
+            key.startswith(cs.ATTENTION_KEY + "_set_aside_"),
+            length,
+            stored[key] == "{broken json!!!",
+            stored[cs.ATTENTION_KEY],
+            cs.note_state(),
+        )
+        return (tuple(results), after)
+
+
+def q189_ae4_a_removal_whose_preread_is_cut_sends_nothing_and_says_so():
+    rows = []
+    for exc in (TimeoutError("timed out"), EOFError(), OSError(104, "Connection reset by peer")):
+        r = route_remove(PROXY, "dhcp4", {"password": "CAPW"}, preread_exc=exc)
+        rows.append(
+            (r["touched"], r["changed"], "Jen could not reach" in r["flashes"], type(exc).__name__ in r["flashes"])
+        )
+    return tuple(rows)
+
+
 def q185_aa3_a_trailing_no_break_space_is_refused_and_ordinary_padding_is_not():
     from jen.services import auth
 
@@ -1474,7 +1749,7 @@ def q183_p2_f6_a_backslash_url_is_not_the_primarys_host():
 SCENARIOS = {
     name: fn
     for name, fn in sorted(globals().items())
-    if name.startswith(("b12_", "b13_", "q183_", "q184_", "q185_", "q186_", "q187_", "q188_")) and callable(fn)
+    if name.startswith(("b12_", "b13_", "q183_", "q184_", "q185_", "q186_", "q187_", "q188_", "q189_")) and callable(fn)
 }
 
 #: scenario -> the observation the rule requires
@@ -1738,6 +2013,28 @@ EXPECTED = {
         True,
         False,
         True,
+    ),
+    "q189_ae1_an_unlistable_directory_is_a_refusal_never_an_empty_set": (1, True, True, []),
+    "q189_ae1_every_inventory_shape_is_a_target_a_refusal_or_left_alone": {
+        "complete": (1, 0, 0, 0),
+        "copy missing": (0, 1, 0, 0),
+        "key missing": (0, 1, 0, 0),
+        "malformed": (0, 1, 0, 0),
+        "not a pair": (0, 1, 0, 0),
+        "external": (0, 0, 1, 0),
+        "directory missing": (0, 1, 0, 0),
+        "earlier Jen CA": (0, 1, 0, 0),
+    },
+    "q189_ae2_a_read_only_ssl_directory_loses_the_record_and_host_material_says_unknown": (True, None, False),
+    "q189_ae2_the_reviews_sequence_records_the_pair_the_host_accepted": ("OSError", True, True, True, False),
+    "q189_ae3_a_note_that_is_not_a_note_is_refused_unchanged_and_set_aside_on_request": (
+        ((True, True, "malformed"), (True, True, "malformed"), (True, True, "malformed"), (True, True, "malformed")),
+        ("done", True, 15, True, "", "ok"),
+    ),
+    "q189_ae4_a_removal_whose_preread_is_cut_sends_nothing_and_says_so": (
+        (False, False, True, True),
+        (False, False, True, True),
+        (False, False, True, True),
     ),
     "q185_aa3_a_trailing_no_break_space_is_refused_and_ordinary_padding_is_not": (False, True, False, True),
     "q184_z3_a_trailing_dot_is_a_different_name_and_odd_spaces_are_no_url": (False, True, False, False, False, True),

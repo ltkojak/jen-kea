@@ -2505,7 +2505,7 @@ view = inspect.unwrap(infra.rotate_kea_ca)
 with app.test_request_context(method="POST"), contextlib.ExitStack() as stack:
     stack.enter_context(mock.patch.object(infra, "flash", lambda text, style="message": flashes.append(str(text))))
     # the stand-ins: Jen's own config is not touched by this scenario (it already points where it should), and the promotion of the staged CA fails after every target carries CA-B
-    stack.enter_context(mock.patch.object(infra, "_service_url", lambda server, service: url))
+    stack.enter_context(mock.patch.object(infra, "_service_url", lambda server, service: url if (server.get("id"), service) == (1, "dhcp4") else ""))
     stack.enter_context(mock.patch.object(infra, "_daemon_creds", lambda server, service, url="": ("sysuser", "syspass-123")))
     stack.enter_context(mock.patch.object(jconfig.app_config, "write_values", lambda *a, **k: None))
     stack.enter_context(mock.patch.object(kea_tls, "commit_rotation", side_effect=OSError(28, "No space left on device")))
@@ -2542,3 +2542,60 @@ def test_22_e_a_ca_rotation_whose_promotion_fails_leaves_every_endpoint_answerin
     assert result["local_issued_by_live_ca"], "INVARIANT: Jen's copy of the pair was issued by the CA Jen trusts"
     host = _s22_host_state()
     assert host["server.crt"] == result["local_crt"], "INVARIANT: the certificate on the host IS the one Jen holds"
+
+
+S22F_SCRIPT = r"""
+import contextlib, hashlib, inspect, os
+from unittest import mock
+import jen.config as jconfig
+from jen.routes.settings import infrastructure as infra
+from jen.services import kea_tls
+
+flashes = []
+url = "https://__ADDR__:8014"
+ca = kea_tls.ca_paths()[0]
+client = kea_tls.client_paths()
+before = {p: hashlib.sha256(open(p, "rb").read()).hexdigest() for p in (ca, kea_tls.ca_paths()[1], client[0], client[1])}
+os.unlink(kea_tls.server_copy_path(1, "dhcp4"))  # Jen's record of kea-a's certificate is gone
+view = inspect.unwrap(infra.rotate_kea_ca)
+with app.test_request_context(method="POST"), contextlib.ExitStack() as stack:
+    stack.enter_context(mock.patch.object(infra, "flash", lambda text, style="message": flashes.append(str(text))))
+    stack.enter_context(mock.patch.object(infra, "_service_url", lambda server, service: url if (server.get("id"), service) == (1, "dhcp4") else ""))
+    stack.enter_context(mock.patch.object(infra, "_daemon_creds", lambda server, service, url="": ("sysuser", "syspass-123")))
+    view()
+after = {p: hashlib.sha256(open(p, "rb").read()).hexdigest() for p in before}
+version, _err = infra._probe_after_restart(url, "sysuser", "syspass-123", "dhcp4", verify=ca, cert=client)
+emit({
+    "flashes": flashes,
+    "jen_files_unchanged": before == after,
+    "staging_left": [f for f in os.listdir(os.path.dirname(ca)) if f.endswith(".next")],
+    "answers": bool(version),
+})
+"""
+
+
+def test_22_f_a_rotation_with_a_missing_record_is_refused_and_nothing_on_either_host_changes(stack):
+    """REMOTE-001 / Q189 (AE1): kea-a is really on an https socket Jen issued the certificate for; Jen's local copy of that certificate is deleted. The rotation takes its targets from the CONFIGURATION,
+    finds an https endpoint with no complete record, and REFUSES - before the staging, before any host is touched. (Before: the targets came from a listing of the copy files, kea-a dropped
+    out, the rotation 'succeeded' with no targets, and kea-a still presented CA-A material to a Jen that now trusted CA-B.) Both daemons' TLS files on the hosts are byte-for-byte the baseline and
+    both endpoints still answer."""
+    out, proc = _s22_run("write-ok", scheme="https", port="8014")
+    assert emitted(out) is not None, f"no result from the https setup:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    baseline = _s22_host_state()
+    ip = st.container_ip(st.KEA_A)
+    out, proc = st.jen_py(S22F_SCRIPT.replace("__ADDR__", ip), timeout=500)
+    result = emitted(out)
+    assert result is not None, f"no result from the rotation:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    texts = " ".join(result["flashes"])
+    assert (
+        "Rotate refused" in texts and "no complete record of its certificate" in texts and "Kea CA rotated" not in texts
+    ), texts
+    assert result["jen_files_unchanged"] and result["staging_left"] == [], (
+        "INVARIANT: a refusal changes nothing on the Jen host"
+    )
+    after = _s22_host_state()
+    for name in S22_TLS_FILES:
+        assert after[name] == baseline[name], f"INVARIANT: {name} on kea-a is the baseline"
+    assert json.loads(after["conf"]) == json.loads(baseline["conf"]), "INVARIANT: kea-a's daemon config is the baseline"
+    assert result["answers"] is True, "INVARIANT: kea-a still answers Jen over its https socket"
+    st.wait_for(lambda: st.kea_answers("kea-b"), timeout=60, what="kea-b answering on its own socket")

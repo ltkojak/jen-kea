@@ -495,8 +495,8 @@ greps `fallback=primary_pass` and `or server.get("api_pass"` over `jen/` find no
 - `tests/test_direct_socket_credentials.py::TestARemovalNeverLeavesJenPointingAtTheSocketItRemoved`
 - `tests/test_direct_socket_credentials.py::TestARestorePutsBackAbsenceAndTheKeepNeedsAnOwnPassword`
 
-### REMOTE-001 - A TLS or socket operation is one transaction: local state first, every step proved, the restored endpoint answers, every unproved state durable
-**Rule.** (Final form, Q188.) A direct-socket or CA operation changes a Kea host and then Jen's own state. It is ONE transaction:
+### REMOTE-001 - A TLS or socket operation is one transaction: local state first, every step proved, the restored endpoint answers, every unproved state durable, every target from the configuration, every record the host's own
+**Rule.** (Final form, Q188; the target set and the record added by Q189.) A direct-socket or CA operation changes a Kea host and then Jen's own state. It is ONE transaction:
 1. **Jen's own recovery state is committed before the host is touched.** The https setup writes `.prev` (a copy of the live pair: what the host has) and `.staged` (what it is about to be given) before
    `install_tls`; the rotation stages the new CA and client pair beside the live files. A copy Jen cannot keep stops the operation with nothing changed. A stale `.prev` from an older operation is never
    the rollback source.
@@ -515,11 +515,26 @@ greps `fallback=primary_pass` and `or server.get("api_pass"` over `jen/` find no
    `probe-pending` note of the socket it removed) or a superadmin's acknowledgement. The incident note is one settings row read-modify-written as a `SELECT ... FOR UPDATE` transaction
    (`kea_changeset._with_attention`), so two workers lose neither; a write that did not happen is never reported as done; an unreadable note is Health "unknown", not "ok"; the soft cap never evicts a
    recovery incident (the hard ceiling keeps the newest 200). An incident never carries a socket entry, a key or a credential.
+6. **A multi-host operation enumerates its targets from the CONFIGURATION (every endpoint Jen dials) and refuses when its record of any one of them is missing or unreadable (Q189).** The rotation's targets are
+   `kea_tls.rotation_inventory`: every https endpoint of every configured server, each with a certificate and key that load, are a pair and were issued by Jen's live CA - a missing, malformed or mismatched
+   record, or a copies directory that cannot be listed, is a REFUSAL before the staging; an unlistable inventory is a refusal, never an empty set. A certificate no Jen CA issued is an administrator's endpoint:
+   named, left alone. A success is proved against the same set (the endpoints that answered with the new identity are the endpoints planned).
+7. **Jen's record of what a host holds is the exact payload that host accepted, or "unknown" - never a copy made by the mechanism that failed (Q189).** `commit_issued` writes the pair the host was given
+   as `.prev` and marks the live copy stale when its own write fails; when even that cannot be written (`HostRecordLost`) the route records `remote-unknown`, and `host_material` answers None - for an open
+   `remote-unknown` or `tls-not-restored` incident, a `tls-local-stale` incident whose marker is missing, a record that cannot be read, or a pair that does not load. No re-assert installs a pair Jen does not
+   know the host holds.
+8. **A stored record of unresolved incidents that cannot be read is never written over (Q189).** `_incidents_of(strict=True)` admits three shapes (nothing; `{"incidents": [dicts]}`; the 5.65.x single note);
+   anything else makes every writer refuse - unchanged, False - and a superadmin sets it aside (the raw value copied to its own settings row, the note cleared, the audit row carrying the length and the key).
+9. **The pre-read is a call site (Q189).** `kea_host.read_config_versioned` answers a transport exception as a failed read; both routes refuse before they send anything.
+**The invariants run after EVERY scenario (Q189, AE0).** `tests/test_kea_tls_rotation.py`'s `Lab.check_invariants()` runs in the fixture's teardown for every test in the file: T1 (Jen's record of each host's
+pair is byte-equal to the pair the host holds, or None with an incident naming the server), T2 (the CA is a pair, or every target says it is not), T3 (every running daemon answers Jen's live CA and client
+certificate, or an incident names it), T4 (nothing printed carries key material or the password), T5 (a refusal changes nothing); `TestTheInvariantsBite` breaks the product on purpose, once per invariant.
 **Established.** Q186 (the snapshot, `describe_socket`), Q187 (the probe-failure branch, the TLS material, the persistent incident), Q188 (the transaction: local state first, the promotion, the rotation, the
-endpoint that must answer, the locked incident store, the transport boundary).
+endpoint that must answer, the locked incident store, the transport boundary), Q189 (the inventory, the host's record, the unreadable note, the pre-read, the invariants after every scenario).
 **Enforced at.** `kea_config_edit.control_sockets` / `restore_control_sockets` / `describe_socket`; `kea_tls.stage_issued` / `promote_staged` / `commit_issued` / `commit_rotation`;
 `infrastructure._undo_remote_change` (the one compensation both direct-socket routes call), `_put_tls_back`, `_endpoint_answers`, `rotate_kea_ca`; `kea_changeset._with_attention`;
-`user.update_global_setting`; `kea_host.install_tls` / `service_action` (the transport boundary).
+`user.update_global_setting`; `kea_host.install_tls` / `service_action` / `read_config_versioned` (the transport boundary); `kea_tls.rotation_inventory` / `record_state` / `commit_issued` /
+`host_material` / `HostRecordLost`; `kea_changeset._incidents_of(strict)` / `set_aside_unreadable_note`.
 **Tests.**
 - `tests/test_kea_config_edit.py::TestControlSocketSnapshotAndRestore`
 - `tests/test_direct_socket_lock.py::TestALateRefusalOnSetupPutsTheHostBack`
@@ -540,6 +555,17 @@ endpoint that must answer, the locked incident store, the transport boundary).
 - `tests/test_kea_tls_rotation.py::TestTheSecondPassOfQ188`
 - `tests/test_kea_tls_rotation.py::TestAStaleCopyIsTheHostsPreviousPair`
 - `tests/test_direct_socket_lock.py::test_an_http_success_proves_nothing_about_a_certificate`
+- `tests/test_kea_tls_rotation.py::TestInventory`
+- `tests/test_kea_tls_rotation.py::TestHostRecord`
+- `tests/test_kea_tls_rotation.py::TestTheInvariantsBite`
+- `tests/test_kea_changeset.py::TestMalformedNote`
+- `tests/test_incident_store_locking.py::test_a_note_that_is_not_a_note_is_refused_unchanged_by_every_writer`
+- `tests/test_servers.py::TestAnUnreadableRecoveryRecordIsSetAsideNeverOverwritten`
+- `tests/test_kea_host.py::TestReadConfigIsATransportBoundaryToo`
+- `tests/test_direct_socket_lock.py::TestThePreReadIsACallSiteToo`
+- `tests/test_direct_socket_lock.py::TestAFirstSocketThatPresentsAnotherCertificateIsOneAnswer`
+- `tests/test_direct_socket_credentials.py::TestTheProbeRowsOfQ189`
+- `tests/test_health_center.py::TestKeaTlsExpiry`
 - `tests/test_kea_changeset.py::TestAnUnprovedRecoveryIsAPersistentIncident`
 - `tests/test_kea_changeset.py::TestTheIncidentNoteQ188`
 - `tests/test_incident_store_locking.py::test_two_workers_recording_two_servers_both_land`
@@ -551,6 +577,7 @@ endpoint that must answer, the locked incident store, the transport boundary).
 - `tests/system/test_boundaries.py::test_22_c_an_https_replacement_whose_write_fails_puts_the_sockets_and_the_certificate_back`
 - `tests/system/test_boundaries.py::test_22_d_an_https_replacement_whose_local_commit_fails_stops_with_the_previous_material_back`
 - `tests/system/test_boundaries.py::test_22_e_a_ca_rotation_whose_promotion_fails_leaves_every_endpoint_answering_on_the_old_ca`
+- `tests/system/test_boundaries.py::test_22_f_a_rotation_with_a_missing_record_is_refused_and_nothing_on_either_host_changes`
 
 ### LOG-CACHE-002 - What a cache remembers about its readers is bounded by what is in flight, an unrelated key never waits, and a read begun before a clear is not kept
 **Rule.** A second reader of the SAME key waits for the first one's read through a table of in-flight reads whose entries live only as long as their read - never one lock per key kept for the life of the process,

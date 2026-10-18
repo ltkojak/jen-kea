@@ -1104,7 +1104,14 @@ def _kea_tls_expiry(ctx) -> Check:
         c.status = "fail"
         c.detail = "Jen's client certificate is missing or not signed by the current CA — Rotate the Kea CA, or set up an https socket again"
         return c
-    for copy in kea_tls.issued_server_copies():
+    unlisted = ""
+    try:
+        copies = kea_tls.issued_server_copies(strict=True)
+    except OSError as e:
+        # Q189 (AE1): a directory that cannot be listed is UNKNOWN, not "none issued" - the expiry of every server certificate in it cannot be watched
+        copies = []
+        unlisted = f"Jen could not read its certificate directory ({type(e).__name__}), so the expiry of the server certificates it issued is unknown"
+    for copy in copies:
         items.append((f"{_server_name_by_id(copy['server_id'])} kea-{copy['service']}", copy["days_left"]))
 
     expired = [(n, d) for n, d in items if d is not None and d < 0]
@@ -1124,6 +1131,9 @@ def _kea_tls_expiry(ctx) -> Check:
         n_servers = len(items) - 2
         c.status = "ok"
         c.detail = f"CA, client and {n_servers} server certificate(s) valid — soonest expiry in {soonest} day(s)"
+    if unlisted:
+        c.status = "fail" if c.status == "fail" else "warn"
+        c.detail += f" — but {unlisted}"
     if stale:
         # Q188 (AD3): while a `tls-local-stale` incident stands, the copy these dates are read from may not be the certificate on the host
         c.status = "fail" if c.status == "fail" else "warn"

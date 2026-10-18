@@ -69,6 +69,15 @@ crafted configurations. That is now the procedure, and its instrument is `tests/
 exemption used for a purpose its comment does not state, runs it, and reports each finding with the executed input and the observed output; a finding reported from reading alone is a
 hypothesis.
 
+**(o) The inventory and the record (v5.69.0-beta.20, Q189).** Three questions, asked of every operation that acts on more than one host or keeps a local record of what a host holds.
+1. **The SOURCE of the target set.** For every multi-host operation, name where its targets come from and EXECUTE the empty and the unreadable source. The rotation's targets came from a listing of local
+   copy files (v5.29.0); a missing copy dropped a live endpoint and an unlistable directory read as "nothing to rotate" - a rotation that 'succeeded' cut Jen off from every daemon. Targets come from the
+   configuration (what Jen dials); a record missing for one of them is a refusal.
+2. **The record equals what the host was given, byte for byte, checked after EVERY scenario.** For every local record of remote state, an invariant over the harness's fake host (`Lab.check_invariants`, T1-T5
+   in `tests/test_kea_tls_rotation.py`) - not an assertion someone thought to write. Q188 said ".prev is the host's truth" and let `commit_file_set` make `.prev` from the LIVE pair on the failing path.
+3. **A register item is executed before it is registered.** An entry dismissed from reading is a hypothesis too: Q188's register item (f) ("the pre-rotation pair, same CA") was dismissed from reading and,
+   executed, was the staged-CA pair - the opposite of what the marker promised. The register says which of its items were executed.
+
 ## The second pass (adversarial)
 
 Run as a separate subagent on the same diff, with the reviewer's method as its prompt, so that it does not inherit the first pass's assumptions. Its findings are reconciled against the first pass's
@@ -100,7 +109,7 @@ The prompt is below, verbatim; replace `<repo root>` and `<previous tag>` and ch
 
 ```
 You are an independent adversarial release reviewer for Jen at <repo root>. Read-only: change no file; report findings only. Scope: `git diff <previous tag>..HEAD`
-(run it). Read docs/RELEASE_AUDIT.md first and apply its steps (h)-(n). Read the WHOLE diff, then the CURRENT text of every changed function in full - never the hunk alone.
+(run it). Read docs/RELEASE_AUDIT.md first and apply its steps (h)-(o). Read the WHOLE diff, then the CURRENT text of every changed function in full - never the hunk alone.
 For every piece of evidence, guard or check the diff adds, ask what else could produce the same observation without the thing it is taken to prove; for every
 check-then-act, name what could change between the two; for every except, say whether a failure reads as success; for every new state or field, find every reader and
 writer; for every multi-step operation, inject a failure at each step and say what state is left and whether it is visible. Compare what the tests pin with what the

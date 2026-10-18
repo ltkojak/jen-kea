@@ -636,6 +636,50 @@ class TestTheSmallOnesOfQ188:
         )
 
 
+class TestTheProbeRowsOfQ189:
+    """AE6g: the rows the probe harness reaches for the inventory, the host's record, the recovery note and the pre-read."""
+
+    def test_every_inventory_shape_is_a_target_a_refusal_or_left_alone(self):
+        assert probe.q189_ae1_every_inventory_shape_is_a_target_a_refusal_or_left_alone() == {
+            "complete": (1, 0, 0, 0),
+            "copy missing": (0, 1, 0, 0),
+            "key missing": (0, 1, 0, 0),
+            "malformed": (0, 1, 0, 0),
+            "not a pair": (0, 1, 0, 0),
+            "external": (0, 0, 1, 0),
+            "directory missing": (0, 1, 0, 0),
+            "earlier Jen CA": (0, 1, 0, 0),
+        }
+
+    def test_an_unlistable_directory_is_a_refusal_never_an_empty_set(self):
+        assert probe.q189_ae1_an_unlistable_directory_is_a_refusal_never_an_empty_set() == (1, True, True, [])
+
+    def test_the_reviews_sequence_records_the_pair_the_host_accepted(self):
+        raised, record_is_a2, prev_is_a2, stale, live_is_a2 = (
+            probe.q189_ae2_the_reviews_sequence_records_the_pair_the_host_accepted()
+        )
+        assert (raised, record_is_a2, prev_is_a2, stale) == ("OSError", True, True, True)
+        assert live_is_a2 is False, "Jen's live copy is still the CA-B pair - and the record does not point at it"
+
+    def test_a_read_only_directory_loses_the_record_and_the_answer_is_unknown(self):
+        assert probe.q189_ae2_a_read_only_ssl_directory_loses_the_record_and_host_material_says_unknown() == (
+            True,
+            None,
+            False,
+        )
+
+    def test_a_note_that_is_not_a_note_is_never_written_over(self):
+        refused, after = probe.q189_ae3_a_note_that_is_not_a_note_is_refused_unchanged_and_set_aside_on_request()
+        assert all(row == (True, True, "malformed") for row in refused) and len(refused) == 4
+        assert after == ("done", True, len("{broken json!!!"), True, "", "ok")
+
+    def test_a_removal_whose_preread_is_cut_sends_nothing_for_each_channel_exception(self):
+        assert (
+            probe.q189_ae4_a_removal_whose_preread_is_cut_sends_nothing_and_says_so()
+            == ((False, False, True, True),) * 3
+        )
+
+
 class TestTheSecondPassOfQ187:
     """The executed findings of the adversarial pass on beta.18's routes, each as a probe row."""
 
