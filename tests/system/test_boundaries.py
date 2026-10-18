@@ -2301,7 +2301,7 @@ with app.app_context():
 
 
 # ── 22. a failed write of Jen's own settings after a socket change puts the daemon's sockets back ──────────────────────────
-def _s22_run(mode, scheme="http", port="8014", probe=""):
+def _s22_run(mode, scheme="http", port="8014", probe="", orig=""):
     ip = st.container_ip(st.KEA_A)
     script = (
         S22_SCRIPT.replace("__ADDR__", ip)
@@ -2309,6 +2309,7 @@ def _s22_run(mode, scheme="http", port="8014", probe=""):
         .replace("__SCHEME__", scheme)
         .replace("__PORT__", port)
         .replace("__PROBE__", probe.replace("__ADDR__", ip))
+        .replace("__ORIG__", orig.replace("__ADDR__", ip))
     )
     return st.jen_py(script, timeout=500)
 
@@ -2362,6 +2363,12 @@ elif mode == "promote-fails":
     # the stand-in for Jen's own SSL directory becoming unwritable AFTER the host accepted the new pair (Q188, AD2): only the promotion of Jen's staged copy to live fails
     from jen.services import kea_tls
     patches.append(mock.patch.object(kea_tls, "promote_staged", side_effect=OSError(13, "Permission denied")))
+orig_url = "__ORIG__"
+if orig_url:
+    # the stand-in for Jen's own file already pointing at the https socket an earlier step set up (the earlier step's write is a stand-in, so Jen's recorded endpoint is told here)
+    from jen.services import kea_tls
+    orig_ctx = {"url": orig_url, "user": "sysuser", "password": "syspass-123", "verify": kea_tls.ca_paths()[0], "cert": kea_tls.client_paths(), "expect": "Dhcp4"}
+    patches.append(mock.patch.object(infra, "_jen_endpoint", lambda *a, **k: orig_ctx))
 with app.test_request_context(method="POST", data=form), contextlib.ExitStack() as stack:
     for p in patches:
         stack.enter_context(p)
@@ -2437,7 +2444,7 @@ def test_22_c_an_https_replacement_whose_write_fails_puts_the_sockets_and_the_ce
     assert after_a["server.crt"] and after_a["server.key"] and after_a["ca.crt"], (
         f"the first change installed no certificate: {first['flashes']}"
     )
-    out, proc = _s22_run("write-fails", scheme="https", port="8015")
+    out, proc = _s22_run("write-fails", scheme="https", port="8015", orig="https://__ADDR__:8014")
     second = emitted(out)
     assert second is not None, f"no result from the second https change:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
     texts = " ".join(second["flashes"])
@@ -2463,11 +2470,14 @@ def test_22_d_an_https_replacement_whose_local_commit_fails_stops_with_the_previ
     )
     after_a = _s22_host_state()
     assert after_a["server.crt"] and after_a["server.key"] and after_a["ca.crt"]
-    out, proc = _s22_run("promote-fails", scheme="https", port="8015", probe="https://__ADDR__:8014")
+    out, proc = _s22_run(
+        "promote-fails", scheme="https", port="8015", probe="https://__ADDR__:8014", orig="https://__ADDR__:8014"
+    )
     second = emitted(out)
     assert second is not None, f"no result from the second https change:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
     texts = " ".join(second["flashes"])
     assert "Jen cannot keep its own copy of the new certificate" in texts and "answers directly" not in texts, texts
+    assert "PARTIAL" not in texts, texts
     after_b = _s22_host_state()
     assert json.loads(after_b["conf"]) == json.loads(after_a["conf"]), "INVARIANT: the socket change never started"
     for name in S22_TLS_FILES:
