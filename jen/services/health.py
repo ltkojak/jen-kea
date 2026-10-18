@@ -1109,6 +1109,7 @@ def _kea_tls_expiry(ctx) -> Check:
     expired = [(n, d) for n, d in items if d is not None and d < 0]
     failing = [(n, d) for n, d in items if d is not None and 0 <= d <= 14]
     warning = [(n, d) for n, d in items if d is not None and 14 < d <= 90]
+    stale = _tls_local_stale_labels()
     if expired or failing:
         parts = [f"{n} expired {abs(d)} day(s) ago" for n, d in expired] + [
             f"{n} expires in {d} day(s)" for n, d in failing
@@ -1122,7 +1123,23 @@ def _kea_tls_expiry(ctx) -> Check:
         n_servers = len(items) - 2
         c.status = "ok"
         c.detail = f"CA, client and {n_servers} server certificate(s) valid — soonest expiry in {soonest} day(s)"
+    if stale:
+        # Q188 (AD3): while a `tls-local-stale` incident stands, the copy these dates are read from may not be the certificate on the host
+        c.status = "fail" if c.status == "fail" else "warn"
+        c.detail += (
+            f" — but Jen's own copy for {', '.join(stale)} may not match the certificate on the host (see Servers)"
+        )
     return c
+
+
+def _tls_local_stale_labels() -> list[str]:
+    from jen.services import kea_changeset
+
+    labels = []
+    for i in kea_changeset.recovery_incidents():
+        if i.get("category") == "tls-local-stale":
+            labels.append(f"{i.get('server_name') or 'server ' + str(i.get('server_id'))} kea-{i.get('service')}")
+    return labels
 
 
 def _server_name_by_id(server_id) -> str:

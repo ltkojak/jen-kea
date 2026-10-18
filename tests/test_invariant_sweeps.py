@@ -516,6 +516,9 @@ S10_ALLOWED = {
     ("jen/models/user.py", "set_global_setting", "Exception", "return False"): (
         "the write is reported as NOT stored; every caller that needs the write (the investigation record, the audit) acts on that False (Q158)"
     ),
+    ("jen/models/user.py", "update_global_setting", "Exception", "return False"): (
+        "the locked read-modify-write is rolled back and reported as NOT done; every caller (the incident note) acts on that False and never says it recorded or cleared anything (Q188, AD5)"
+    ),
     ("jen/models/user.py", "set_global_setting_and_audit", "Exception", "return False"): (
         "both statements are rolled back and the caller is told it did not happen; the decision stays open"
     ),

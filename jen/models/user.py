@@ -202,14 +202,27 @@ def get_stale_device_days() -> int:
     return days if days > 0 else STALE_DEVICE_DAYS_DEFAULT
 
 
-def get_global_setting(key: str, default=None):
+def get_global_setting(key: str, default=None, strict: bool = False):
     """
     Read a value from the settings table.
     Results are cached for 30 seconds to avoid a DB round trip on every
     request — check_session_timeout in before_request calls this twice
     per page load otherwise.
+
+    `strict=True` (v5.69.0-beta.19, Q188): read THIS key from the table, bypassing the cache, and RAISE when the table cannot be read - a caller that must not turn "the database is
+    down" into "nothing is recorded" (Health's row for unproved recoveries) asks this way. The cold-start default and the stale cache are exactly what it must not return.
     """
     import time
+
+    if strict:
+        from jen.models.db import jen_db
+
+        with jen_db() as db, db.cursor() as cur:
+            cur.execute("SELECT setting_value FROM settings WHERE setting_key = %s", (key,))
+            row = cur.fetchone()
+        if row is None:
+            return default
+        return row["setting_value"] if isinstance(row, dict) else row[0]
 
     global _settings_cache, _settings_cache_ts, _settings_next_try_mono, _settings_ever_loaded
     now = time.time()
@@ -271,6 +284,32 @@ def set_global_setting(key: str, value: str) -> bool:
         return True
     except Exception as e:
         logger.error(f"set_global_setting({key}): {e}")
+        return False
+
+
+def update_global_setting(key: str, mutate) -> bool:
+    """Read-modify-write ONE settings row as a locked transaction (v5.69.0-beta.19, Q188, AD5). Two workers doing `get_global_setting` then `set_global_setting` on the same row each read the
+    old value and the second write erased the first's change (two incidents recorded at once kept one). Here one connection: the row is created with `INSERT IGNORE` (so two FIRST writers lock
+    the same row), `SELECT ... FOR UPDATE` reads it under the lock, `mutate(current: str) -> str | None` returns the new value (None: leave it), one UPDATE, commit. The settings cache is
+    invalidated on success. Returns True when the row now holds what `mutate` returned (or `mutate` asked for no change); False - logged, never raised - when it could not be written, so the
+    caller never reports as done what is not."""
+    from jen.models.db import jen_db
+
+    try:
+        with jen_db() as db:
+            with db.cursor() as cur:
+                cur.execute("INSERT IGNORE INTO settings (setting_key, setting_value) VALUES (%s, %s)", (key, ""))
+                cur.execute("SELECT setting_value FROM settings WHERE setting_key = %s FOR UPDATE", (key,))
+                row = cur.fetchone()
+                current = (row["setting_value"] if isinstance(row, dict) else row[0]) if row is not None else ""
+                new = mutate(current or "")
+                if new is not None and new != current:
+                    cur.execute("UPDATE settings SET setting_value = %s WHERE setting_key = %s", (new, key))
+            db.commit()
+        _invalidate_settings_cache()
+        return True
+    except Exception as e:
+        logger.error(f"update_global_setting({key}): {type(e).__name__}: {e}")
         return False
 
 

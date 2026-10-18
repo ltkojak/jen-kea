@@ -1392,6 +1392,46 @@ def q187_sp6_describe_socket_prints_one_short_printable_line():
     return (len(long_one) < 100, chr(10) in long_one)
 
 
+def q188_ad9_s1_the_twin_refusal_covers_dhcp6_and_d2():
+    d6 = DIRECT + "[kea6]" + chr(10) + "api_url = http://10.0.0.5:8006" + chr(10)
+    d2 = DIRECT + "[d2]" + chr(10) + "api_url = http://10.0.0.5:53001" + chr(10)
+    t6 = route_remove(
+        d6,
+        "dhcp6",
+        {},
+        host={"Dhcp6": {"control-sockets": [dict(_UNIX_SOCKET), {**_API_SOCKET, "socket-port": 8006}]}},
+        others=[{"id": 2, "name": "standby", "api6_url": "http://10.0.0.5:8006/"}],
+    )
+    t2 = route_remove(
+        d2,
+        "d2",
+        {},
+        host={"DhcpDdns": {"control-sockets": [dict(_UNIX_SOCKET), {**_API_SOCKET, "socket-port": 53001}]}},
+        others=[{"id": 2, "name": "standby", "api_d2_url": "http://10.0.0.5:53001"}],
+    )
+    fine = route_remove(
+        d6,
+        "dhcp6",
+        {},
+        host={"Dhcp6": {"control-sockets": [dict(_UNIX_SOCKET), {**_API_SOCKET, "socket-port": 8006}]}},
+        others=[{"id": 2, "name": "standby", "api6_url": "http://10.0.0.6:8006"}],
+    )
+    return tuple((r["touched"], r["changed"], "uses this same socket" in r["flashes"]) for r in (t6, t2, fine))
+
+
+def q188_ad9_s2_ipv6_literals_are_compared_as_addresses_and_names_stay_as_written():
+    from jen.services import auth
+
+    return (
+        auth.same_endpoint("http://[FD00:0:0:0:0:0:0:5]:8004", "http://[fd00::5]:8004"),
+        auth.same_endpoint("http://[::ffff:10.0.0.5]:8004", "http://10.0.0.5:8004"),
+        auth.same_endpoint("http://[fd00::5]:8004", "http://[fd00::6]:8004"),
+        auth.same_endpoint("http://KEA-A:8004", "http://kea-a:8004"),
+        auth.same_endpoint("http://kea-a.:8004", "http://kea-a:8004"),
+        auth.same_host("http://[FD00::5]:1", "https://[fd00:0:0:0:0:0:0:5]:2"),
+    )
+
+
 def q185_aa3_a_trailing_no_break_space_is_refused_and_ordinary_padding_is_not():
     from jen.services import auth
 
@@ -1432,7 +1472,7 @@ def q183_p2_f6_a_backslash_url_is_not_the_primarys_host():
 SCENARIOS = {
     name: fn
     for name, fn in sorted(globals().items())
-    if name.startswith(("b12_", "b13_", "q183_", "q184_", "q185_", "q186_", "q187_")) and callable(fn)
+    if name.startswith(("b12_", "b13_", "q183_", "q184_", "q185_", "q186_", "q187_", "q188_")) and callable(fn)
 }
 
 #: scenario -> the observation the rule requires
@@ -1683,6 +1723,19 @@ EXPECTED = {
     "q187_sp8_a_typed_address_that_is_another_servers_own_is_refused": (
         (False, False, True, ["http://10.0.0.9:8000"]),
         (True, ["http://10.0.0.8:8000", "http://10.0.0.9:8000"]),
+    ),
+    "q188_ad9_s1_the_twin_refusal_covers_dhcp6_and_d2": (
+        (False, False, True),
+        (False, False, True),
+        (True, True, False),
+    ),
+    "q188_ad9_s2_ipv6_literals_are_compared_as_addresses_and_names_stay_as_written": (
+        True,
+        True,
+        False,
+        True,
+        False,
+        True,
     ),
     "q185_aa3_a_trailing_no_break_space_is_refused_and_ordinary_padding_is_not": (False, True, False, True),
     "q184_z3_a_trailing_dot_is_a_different_name_and_odd_spaces_are_no_url": (False, True, False, False, False, True),

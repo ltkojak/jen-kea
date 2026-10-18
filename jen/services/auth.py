@@ -284,6 +284,13 @@ def _endpoint_parts(u):
         port = p.port or {"https": 443, "http": 80}.get(scheme)
     except ValueError:
         return None
+    # Q188 (AD9): a host that IS an address is compared as one - `[FD00:0:0:0:0:0:0:5]` and `[fd00::5]` are one place, and so are `::ffff:10.0.0.5` and `10.0.0.5`. A NAME stays as written (no DNS).
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None  # a name
+    if ip is not None:
+        host = str(getattr(ip, "ipv4_mapped", None) or ip)
     return (scheme, host, port) if host else None
 
 

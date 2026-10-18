@@ -568,6 +568,24 @@ class TestARecoveryThatWasNotProvedIsShownUntilItIsAcknowledged:
 
         assert len(kea_changeset.recovery_incidents()) == 1
 
+    def test_an_unknown_service_is_refused_before_any_audit_row(self, logged_in_client, mock_kea, db):
+        """Q188 (AD9): `service` is validated against the three names, like the category - a posted value never reaches the audit text."""
+        self._record()
+        r = logged_in_client.post(
+            "/servers/recovery-incident/acknowledge", data={"service": "x; DROP"}, follow_redirects=True
+        )
+        assert b"Unknown Kea service" in r.data
+        from jen.services import kea_changeset
+
+        assert len(kea_changeset.recovery_incidents()) == 1
+
+    def test_a_posted_id_matches_the_stored_one_as_a_string(self, logged_in_client, mock_kea, db):
+        self._record()
+        logged_in_client.post("/servers/recovery-incident/acknowledge", data={"server_id": "1"}, follow_redirects=True)
+        from jen.services import kea_changeset
+
+        assert kea_changeset.recovery_incidents() == []
+
     def test_an_unknown_category_is_refused(self, logged_in_client, mock_kea, db):
         self._record()
         r = logged_in_client.post(

@@ -864,6 +864,22 @@ def tls_env(tmp_path, monkeypatch, fake):
     monkeypatch.setattr(kea_tls, "SSL_DIR", str(tmp_path / "ssl"))
     monkeypatch.setattr(kea_tls, "_hostname", lambda: "jenhost")
     monkeypatch.setattr(kea_host, "helper_status", lambda: {"1": {"version": 4}, "2": {"version": 4}})
+
+    def presented(url, client):
+        """Q188 (AD2): a completed https setup is reported only when the socket presents the certificate Jen holds for it. There is no TLS listener here, so the fake daemon presents exactly that
+        (found from the url: the port names the daemon, the host names the server) - the route's own comparison still runs."""
+        from urllib.parse import urlparse
+
+        parts = urlparse(url)
+        service = {8004: "dhcp4", 8006: "dhcp6", 53001: "d2"}.get(parts.port, "dhcp4")
+        for s in extensions.KEA_SERVERS:
+            if parts.hostname in (s.get("ssh_host"), urlparse(s.get("api_url", "")).hostname):
+                return kea_tls.fingerprint(kea_tls.server_copy_path(s["id"], service))
+        return None
+
+    from jen.routes.settings import infrastructure as _infra
+
+    monkeypatch.setattr(_infra, "_presented_fingerprint", presented)
     fake.responses["install-tls"] = lambda server, op, payload: {
         "ok": True,
         "paths": {n: f"/etc/kea/tls/{payload['service']}/{n}" for n in ("ca.crt", "server.crt", "server.key")},
@@ -1106,7 +1122,7 @@ class TestRotateKeaCa:
         assert b"Rotate stopped at standby kea-dhcp-ddns" not in r.data
         assert b"Rotate stopped at standby kea-dhcp4" in r.data
         assert b"read-only fs" in r.data
-        assert b"Rolled back to the previous CA: Kea Server 1 kea-dhcp4" in r.data
+        assert b"Rolled back to the previous CA, restarted and answering: Kea Server 1 kea-dhcp4" in r.data
         assert tls.client_cert_ok()  # still the old pair, still consistent
 
     def test_refuses_when_a_server_on_the_ca_cannot_be_repushed(

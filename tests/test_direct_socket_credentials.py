@@ -615,6 +615,27 @@ class TestTheControlAgentAddressIsAlwaysOfferedAndTheProbeUsesTheResolver:
         assert touched and pairs == [("http://10.0.0.5:8100", "pu", "PS")]
 
 
+class TestTheSmallOnesOfQ188:
+    """AD9."""
+
+    def test_the_twin_refusal_covers_dhcp6_and_d2(self):
+        kea6, d2, fine = probe.q188_ad9_s1_the_twin_refusal_covers_dhcp6_and_d2()
+        assert kea6 == (False, False, True) and d2 == (False, False, True), (
+            "refused before the host is touched, naming the other record"
+        )
+        assert fine[:2] == (True, True) and fine[2] is False, "a record at a different address is no reason to refuse"
+
+    def test_ipv6_literals_are_compared_as_addresses_and_names_stay_as_written(self):
+        assert probe.q188_ad9_s2_ipv6_literals_are_compared_as_addresses_and_names_stay_as_written() == (
+            True,
+            True,
+            False,
+            True,
+            False,
+            True,
+        )
+
+
 class TestTheSecondPassOfQ187:
     """The executed findings of the adversarial pass on beta.18's routes, each as a probe row."""
 

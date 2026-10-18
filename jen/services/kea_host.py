@@ -1115,7 +1115,21 @@ _SERVICE_UNIT_FAM = {"dhcp4": "dhcp4", "dhcp6": "dhcp6", "d2": "dhcp-ddns"}
 
 
 def service_action(server: dict, service: str, action: str) -> dict:
-    """action ∈ restart | enable | disable | status."""
+    """action ∈ restart | enable | disable | status.
+
+    v5.69.0-beta.19 (Q188, AD6): a transport exception (paramiko's `socket.timeout`, `EOFError`, `SSHException`, a reset socket) is a FAILED ANSWER, not an exception - the routes call this unwrapped, and
+    the first step of a compensation is one: an escape abandoned the compensation, dropped every flash and left the working socket gone. The class stays in the detail, is logged, and `transport` is
+    set so a caller that must tell a refusal from a lost channel can."""
+    try:
+        return _service_action(server, service, action)
+    except Exception as e:
+        logger.warning(
+            f"service_action {action} on {server.get('name') or server.get('ssh_host')}: {type(e).__name__}: {e}"
+        )
+        return {"ok": False, "code": "error", "detail": type(e).__name__, "via": "helper", "transport": True}
+
+
+def _service_action(server: dict, service: str, action: str) -> dict:
     try:
         resp = helper_call(server, "service", {"service": service, "action": action})
         _record_from_resp(server.get("id"), resp)
@@ -1175,6 +1189,16 @@ def service_action(server: dict, service: str, action: str) -> dict:
 
 
 def install_tls(server: dict, service: str, files: dict) -> dict:
+    """`_install_tls` (below) with the transport boundary of Q188 (AD6): a `socket.timeout`, `EOFError` or `SSHException` from the channel is `{"ok": False, "transport": True, "detail": <class>}` - and
+    the caller treats it as 'the host may have applied it' (a lost reply), not as a refusal. The exception text is logged, never returned: it can carry paths."""
+    try:
+        return _install_tls(server, service, files)
+    except Exception as e:
+        logger.warning(f"install_tls on {server.get('name') or server.get('ssh_host')}: {type(e).__name__}: {e}")
+        return {"ok": False, "code": "error", "detail": type(e).__name__, "via": "helper", "transport": True}
+
+
+def _install_tls(server: dict, service: str, files: dict) -> dict:
     """v5.29.0 (Q29, C2) — push one daemon's https material to the Kea
     host: `files` is exactly {"ca.crt", "server.crt", "server.key"} →
     PEM str (what kea_tls.issue_server_cert() returns); the helper

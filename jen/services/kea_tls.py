@@ -44,10 +44,12 @@ given the inputs except the keys and serial numbers.
 """
 
 import contextlib
+import hashlib
 import ipaddress
 import logging
 import os
 import socket
+import ssl
 from datetime import datetime, timedelta, timezone
 
 from cryptography import x509
@@ -367,6 +369,75 @@ def _material(crt: str, key: str) -> dict | None:
     except (OSError, ValueError, TypeError):
         return None
     return {"ca.crt": ca_pem, "server.crt": crt_pem, "server.key": key_pem}
+
+
+def stage_issued(server_id, service: str, files: dict) -> None:
+    """Q188 (AD2): Jen's own recovery state is committed BEFORE the host is touched. `.prev` becomes a copy of the live pair - what the host has now, so what a failure puts back; a stale `.prev`
+    from an older operation is removed, never kept as the rollback source - and the new pair is written beside the live one as `.staged` (private files). Nothing live changes. Raises
+    OSError when it cannot be written: the caller stops before `install_tls`, with nothing changed on the host."""
+    from jen.services.private_files import write_private_file
+
+    crt, key = server_copy_path(server_id, service), server_key_path(server_id, service)
+    _ensure_dir(os.path.dirname(crt))
+    try:
+        with open(crt, "rb") as f:
+            live_crt = f.read()
+        with open(key, "rb") as f:
+            live_key = f.read()
+    except OSError:
+        live_crt = live_key = None
+    if live_crt is not None and live_key is not None:
+        commit_file_set(
+            [(key, live_key, 0o600), (crt, live_crt, 0o644)]
+        )  # an identity commit: leaves `.prev` equal to the live pair (the one place `.prev` is made)
+    else:
+        retire_previous(server_id, service)  # no live pair: nothing is the host's previous material
+    write_private_file(key + ".staged", files["server.key"], 0o600)
+    write_private_file(crt + ".staged", files["server.crt"], 0o644)
+
+
+def promote_staged(server_id, service: str) -> None:
+    """Q188 (AD2): the host accepted the staged pair - make it Jen's live pair, as ONE set (the key before the certificate that names it), leaving `.prev` as `stage_issued` made it. Raises OSError
+    (the live pair untouched: `commit_file_set` puts back what it replaced) when it cannot; the route then reinstalls the previous material on the host and stops."""
+    crt, key = server_copy_path(server_id, service), server_key_path(server_id, service)
+    with open(key + ".staged", "rb") as f:
+        staged_key = f.read()
+    with open(crt + ".staged", "rb") as f:
+        staged_crt = f.read()
+    commit_file_set([(key, staged_key, 0o600), (crt, staged_crt, 0o644)], keep_prev=False)
+    discard_staged(server_id, service)
+
+
+def discard_staged(server_id, service: str) -> None:
+    for p in (server_copy_path(server_id, service) + ".staged", server_key_path(server_id, service) + ".staged"):
+        with contextlib.suppress(OSError):
+            os.unlink(p)
+
+
+def fingerprint(path: str) -> str | None:
+    """SHA-256 of the certificate's DER encoding - what a TLS peer presents, comparable with `presented_fingerprint`."""
+    try:
+        return hashlib.sha256(load_cert(path).public_bytes(serialization.Encoding.DER)).hexdigest()
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def presented_fingerprint(
+    host: str, port: int, client: tuple[str, str] | None = None, timeout: float = 8.0
+) -> str | None:
+    """The SHA-256 of the certificate the listener at host:port PRESENTS (DER), or None when it cannot be read. Trust is not judged here - the Kea probe does that; this only says WHICH
+    certificate answered, so a completed setup can be reported only when it is the one Jen holds (Q188, AD2)."""
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    try:
+        if client:
+            context.load_cert_chain(*client)
+        with socket.create_connection((host, port), timeout=timeout) as raw, context.wrap_socket(raw) as tls:
+            der = tls.getpeercert(binary_form=True)
+    except (OSError, ssl.SSLError, ValueError):
+        return None
+    return hashlib.sha256(der).hexdigest() if der else None
 
 
 def previous_material(server_id, service: str) -> dict | None:

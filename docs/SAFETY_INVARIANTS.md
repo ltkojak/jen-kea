@@ -495,28 +495,58 @@ greps `fallback=primary_pass` and `or server.get("api_pass"` over `jen/` find no
 - `tests/test_direct_socket_credentials.py::TestARemovalNeverLeavesJenPointingAtTheSocketItRemoved`
 - `tests/test_direct_socket_credentials.py::TestARestorePutsBackAbsenceAndTheKeepNeedsAnOwnPassword`
 
-### REMOTE-001 - A failed write after a remote change restores the exact prior remote state, and says so only when it did
-**Rule.** A route that changes a Kea host and then writes Jen's own settings takes a SNAPSHOT of what it is about to change (a daemon's whole `control-sockets` list, every entry in order) from the very
-read the change is planned on, and compensates ONLY by restoring that snapshot - never by an inverse of the change (an inverse deletes what the change replaced and flattens what it did not name). Jen manages
-one API socket: a daemon with more than one is refused before anything is sent, and a removal removes only the entry it names. "Undone" is said only when the restored list equals the snapshot and the
-daemon was restarted (the change set's `ok`); a file that already matched, a plan that never read the config, or a restore that fails is the partial state, said, with the by-hand step. Recovery text,
-audit rows and log lines name a socket by type, address and port (`describe_socket`) and never print its entry (a Basic client's password, TLS paths): LEAK-001's family.
-The unit of recovery is the USABLE endpoint (Q187): the socket list, the certificate and key Jen installed (kept locally as a `.prev` pair, reinstalled before the restart the compensation makes), and a restarted daemon - at EVERY failure branch, the probe-failure branch included (a replacement that does not answer puts the working socket back; a first socket stays, recorded as probe-pending). What cannot be proved restored (no snapshot, a file that already matched, a restart that did not verify, a certificate with no earlier copy, a socket that never answered) is a persistent incident in a category - on Servers and in Health until a verified recovery of THAT server and service or a superadmin acknowledges it - never only a flash and an audit row, and never "undone".
-**Established.** Q186 (ChatGPT's review of beta.16 and Fable's executing pass: the compensation of a replaced socket deleted it, the recovery sentence printed the removed entry); extended by Q187 (the probe-failure branch, the TLS material, the persistent incident).
-**Enforced at.** `kea_config_edit.control_sockets` / `restore_control_sockets` / `describe_socket`; `infrastructure._undo_remote_change` (the one compensation both direct-socket routes call).
+### REMOTE-001 - A TLS or socket operation is one transaction: local state first, every step proved, the restored endpoint answers, every unproved state durable
+**Rule.** (Final form, Q188.) A direct-socket or CA operation changes a Kea host and then Jen's own state. It is ONE transaction:
+1. **Jen's own recovery state is committed before the host is touched.** The https setup writes `.prev` (a copy of the live pair: what the host has) and `.staged` (what it is about to be given) before
+   `install_tls`; the rotation stages the new CA and client pair beside the live files. A copy Jen cannot keep stops the operation with nothing changed. A stale `.prev` from an older operation is never
+   the rollback source.
+2. **Every step after the first remote change either proves itself or the operation stops and compensates.** The promotion of the staged pair to live is one: when it fails the previous material is
+   reinstalled, the existing socket is probed, `.prev` is kept and the socket change never starts. A completed setup is reported only when the certificate the socket PRESENTS is the one Jen holds. The
+   rotation promotes the staged CA last, inside one exception boundary, after Jen's TLS settings are saved; a failure rolls EVERY attempted target back to a CA-A certificate, restarts and probes it, and
+   discards the staging in a `finally`. A transport exception from the channel (`socket.timeout`, `EOFError`, `SSHException`) is a failed answer from `install_tls` / `service_action`, never an escape.
+3. **The compensation is a SNAPSHOT, not an inverse.** The daemon's whole `control-sockets` list is taken from the very read the change is planned on and the only compensation is restoring it; the TLS
+   material the change replaced goes back BEFORE the restart the compensation makes. Jen manages one API socket: a daemon with more than one is refused before anything is sent, and a removal removes only
+   the entry it names. An unreadable daemon config refuses an https change before any file is replaced (an unavailable observation never reads as safe).
+4. **"Undone" means: config restored, material restored (both halves), daemon restarted, and the endpoint Jen dials ANSWERS as the right daemon with its recorded credentials and TLS context.** A
+   file that already matched, a plan that never read the config, a restore that fails, a certificate whose Jen-side copy could not follow, or an endpoint that does not answer is the partial state, said,
+   with the by-hand step. Recovery text, audit rows and log lines name a socket by type, address and port (`describe_socket`) and never print its entry (LEAK-001's family).
+5. **What cannot be proved is a durable incident, written under a lock.** Eight categories (`remote-unknown`, `restored-restart-unverified`, `restart-failed`, `tls-not-restored`, `tls-local-stale`,
+   `restored-endpoint-unreachable`, `probe-pending`, `aborted`), shown on Servers and in Health until a verified recovery of THAT server and service (a probe that got its answer; a removal clears only the
+   `probe-pending` note of the socket it removed) or a superadmin's acknowledgement. The incident note is one settings row read-modify-written as a `SELECT ... FOR UPDATE` transaction
+   (`kea_changeset._with_attention`), so two workers lose neither; a write that did not happen is never reported as done; an unreadable note is Health "unknown", not "ok"; the soft cap never evicts a
+   recovery incident (the hard ceiling keeps the newest 200). An incident never carries a socket entry, a key or a credential.
+**Established.** Q186 (the snapshot, `describe_socket`), Q187 (the probe-failure branch, the TLS material, the persistent incident), Q188 (the transaction: local state first, the promotion, the rotation, the
+endpoint that must answer, the locked incident store, the transport boundary).
+**Enforced at.** `kea_config_edit.control_sockets` / `restore_control_sockets` / `describe_socket`; `kea_tls.stage_issued` / `promote_staged` / `commit_issued` / `commit_rotation`;
+`infrastructure._undo_remote_change` (the one compensation both direct-socket routes call), `_put_tls_back`, `_endpoint_answers`, `rotate_kea_ca`; `kea_changeset._with_attention`;
+`user.update_global_setting`; `kea_host.install_tls` / `service_action` (the transport boundary).
 **Tests.**
 - `tests/test_kea_config_edit.py::TestControlSocketSnapshotAndRestore`
 - `tests/test_direct_socket_lock.py::TestALateRefusalOnSetupPutsTheHostBack`
 - `tests/test_direct_socket_lock.py::TestALateRefusalOnRemovalPutsTheSocketBack`
 - `tests/test_direct_socket_lock.py::TestAFailedWriteOfJensSettingsIsHandledLikeARefusal`
+- `tests/test_direct_socket_lock.py::TestAProbeThatFailsAfterAReplacementPutsTheWorkingSocketBack`
+- `tests/test_direct_socket_lock.py::TestTheTlsMaterialIsPartOfTheSnapshot`
+- `tests/test_direct_socket_lock.py::TestTheHttpsSetupCommitsJensStateFirstAndStopsAtTheFirstUnprovedStep`
+- `tests/test_direct_socket_lock.py::TestAPartialTlsRestoreIsPartial`
+- `tests/test_direct_socket_lock.py::TestUndoneMeansTheEndpointAnswered`
+- `tests/test_direct_socket_lock.py::TestAnUnreadableConfigIsNotNoSocketUsesJensFiles`
+- `tests/test_direct_socket_lock.py::TestTheChangeSetsTwoRollbackFailedStates`
+- `tests/test_direct_socket_lock.py::TestANochangeRerunDoesNotReplaceFilesTheDaemonWillNotReload`
+- `tests/test_kea_tls_rotation.py::TestAPromotionThatFailsPutsEveryTargetBack`
+- `tests/test_kea_tls_rotation.py::TestATargetThatFailsAfterTheFirstIsRolledBackAndTheNextIsNeverTouched`
+- `tests/test_kea_tls_rotation.py::TestARollbackThatCannotCompleteIsNamed`
+- `tests/test_kea_tls_rotation.py::TestATransportExceptionNeverEscapes`
+- `tests/test_kea_changeset.py::TestAnUnprovedRecoveryIsAPersistentIncident`
+- `tests/test_kea_changeset.py::TestTheIncidentNoteQ188`
+- `tests/test_incident_store_locking.py::test_two_workers_recording_two_servers_both_land`
+- `tests/test_servers.py::TestARecoveryThatWasNotProvedIsShownUntilItIsAcknowledged`
 - `tests/test_invariant_sweeps.py::TestS11bASocketEntryNeverReachesText`
 - `tests/system/test_boundaries.py::test_22_a_failed_write_of_jens_settings_after_a_socket_change_puts_the_daemons_sockets_back`
 - `tests/system/test_boundaries.py::test_22_b_a_replacement_that_never_answers_puts_the_working_socket_back`
 - `tests/system/test_boundaries.py::test_22_c_an_https_replacement_whose_write_fails_puts_the_sockets_and_the_certificate_back`
-- `tests/test_direct_socket_lock.py::TestAProbeThatFailsAfterAReplacementPutsTheWorkingSocketBack`
-- `tests/test_direct_socket_lock.py::TestTheTlsMaterialIsPartOfTheSnapshot`
-- `tests/test_kea_changeset.py::TestAnUnprovedRecoveryIsAPersistentIncident`
-- `tests/test_servers.py::TestARecoveryThatWasNotProvedIsShownUntilItIsAcknowledged`
+- `tests/system/test_boundaries.py::test_22_d_an_https_replacement_whose_local_commit_fails_stops_with_the_previous_material_back`
+- `tests/system/test_boundaries.py::test_22_e_a_ca_rotation_whose_promotion_fails_leaves_every_endpoint_answering_on_the_old_ca`
 
 ### LOG-CACHE-002 - What a cache remembers about its readers is bounded by what is in flight, an unrelated key never waits, and a read begun before a clear is not kept
 **Rule.** A second reader of the SAME key waits for the first one's read through a table of in-flight reads whose entries live only as long as their read - never one lock per key kept for the life of the process,

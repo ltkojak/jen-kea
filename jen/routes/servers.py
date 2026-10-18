@@ -305,6 +305,9 @@ def acknowledge_recovery_incident():
     if category is not None and category not in __changeset.ATTENTION_CATEGORIES:
         flash("Unknown incident category.", "error")
         return redirect(url_for("servers.servers"))
+    if service is not None and service not in ("dhcp4", "dhcp6", "d2"):
+        flash("Unknown Kea service.", "error")  # (Q188, AD9) validated before the audit row, like the category
+        return redirect(url_for("servers.servers"))
     cleared = __changeset.acknowledge_recovery(server_id, service, category)
     if cleared is None:
         flash(

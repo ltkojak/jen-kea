@@ -849,6 +849,21 @@ class TestIncidentsAreAListNotASlot:
         assert self._statuses() == [("rollback_failed", ("kea-a",)), ("rolled_back", ())]
 
 
+@pytest.fixture(autouse=True)
+def _the_locked_update_runs_over_each_tests_own_settings_stub(monkeypatch):
+    """Q188 (AD5): the incident note is now written through `user.update_global_setting` (one locked transaction). These pure tests stub `get_global_setting` / `set_global_setting` per test; the
+    transaction is replaced by the same read-mutate-write over whatever the test installed, so a stub that answers False or raises still fails the write. The REAL transaction is exercised by the
+    database tests (`tests/test_incident_store_locking.py`)."""
+    from jen.models import user as user_mod
+
+    def update(key, mutate):
+        current = user_mod.get_global_setting(key, "")
+        new = mutate(current or "")
+        return not (new is not None and new != current and user_mod.set_global_setting(key, new) is False)
+
+    monkeypatch.setattr(user_mod, "update_global_setting", update)
+
+
 class TestAnUnprovedRecoveryIsAPersistentIncident:
     """v5.69.0-beta.18 (Q187, AC3): a direct-socket recovery Jen could not PROVE is kept in front of the operator in a category - on Servers and in Health - until a verified recovery of THAT
     server and service clears it or a superadmin acknowledges it. An unrelated change never clears it; it is a settings row, so it survives a restart; it carries no socket entry."""
@@ -858,18 +873,20 @@ class TestAnUnprovedRecoveryIsAPersistentIncident:
         data = {}
         from jen.models import user as user_mod
 
-        monkeypatch.setattr(user_mod, "get_global_setting", lambda k, d="": data.get(k, d))
+        monkeypatch.setattr(user_mod, "get_global_setting", lambda k, d="", strict=False: data.get(k, d))
         monkeypatch.setattr(user_mod, "set_global_setting", lambda k, v: data.__setitem__(k, v))
         monkeypatch.setattr(user_mod, "audit", lambda *a, **k: None)
         monkeypatch.setattr(cs, "record_outcome", _REAL_RECORD_OUTCOME)
         return data
 
-    def test_the_six_categories_are_the_ones_the_q_names(self):
+    def test_the_eight_categories_are_the_ones_the_q_names(self):
         assert set(cs.ATTENTION_CATEGORIES) == {
             "remote-unknown",
             "restored-restart-unverified",
             "restart-failed",
             "tls-not-restored",
+            "tls-local-stale",
+            "restored-endpoint-unreachable",
             "probe-pending",
             "aborted",
         }
@@ -998,3 +1015,82 @@ class TestAnUnprovedRecoveryIsAPersistentIncident:
         cs.record_attention(1, "dhcp4", "y", "remote-unknown", server_name="kea-a")
         check = health._direct_socket_recovery({})
         assert check.status == "fail" and "kea-a (dhcp4)" in check.detail and check.fix_url == "/servers"
+
+
+class TestTheIncidentNoteQ188:
+    """v5.69.0-beta.19 (Q188, AD3 / AD5 / AD9): the eight categories, ids compared as strings, a strict read that raises when the table cannot be read, Health's certificate row while a
+    `tls-local-stale` incident stands. (The locked transaction itself is `tests/test_incident_store_locking.py`, against the real table.)"""
+
+    @pytest.fixture
+    def store(self, monkeypatch):
+        data = {}
+        from jen.models import user as user_mod
+
+        monkeypatch.setattr(user_mod, "get_global_setting", lambda k, d="", strict=False: data.get(k, d))
+        monkeypatch.setattr(user_mod, "set_global_setting", lambda k, v: data.__setitem__(k, v) or True)
+        monkeypatch.setattr(user_mod, "audit", lambda *a, **k: None)
+        return data
+
+    def test_ids_are_compared_as_strings_by_every_clearing_path(self, store):
+        cs.record_attention(1, "dhcp4", "x", "aborted")
+        cs.record_attention(2, "dhcp4", "y", "aborted")
+        assert cs.resolve_attention("1", "dhcp4") == 1, "a stored 1 and a posted '1' are one server"
+        assert cs.acknowledge_recovery("2") == 1
+        assert cs.attention() is None
+
+    def test_the_soft_cap_never_evicts_a_recovery_incident_and_the_hard_ceiling_keeps_the_newest(
+        self, store, monkeypatch
+    ):
+        def churn(start, count):
+            for n in range(start, start + count):
+                cs.record_outcome(
+                    cs.ChangeSetResult("rolled_back", "x", [], needs_hands=[f"kea-{n}"], needs_hands_ids=[n]),
+                    "dhcp4",
+                    f"s{n}",
+                )
+
+        cs.record_attention(1, "dhcp4", "x", "restart-failed")
+        churn(0, 25)
+        kept = cs.attention()["incidents"]
+        assert len(kept) == 20 and kept[0].get("category") == "restart-failed", (
+            "the soft cap trims old rolled-back notes, never an unproved recovery"
+        )
+        monkeypatch.setattr(cs, "_INCIDENTS_HARD_CEILING", 5)
+        churn(25, 3)
+        kept = cs.attention()["incidents"]
+        assert len(kept) == 5 and [i["summary"] for i in kept][-3:] == ["s25", "s26", "s27"], (
+            "the hard ceiling keeps the NEWEST"
+        )
+
+    def test_a_strict_read_raises_when_the_table_cannot_be_read(self, monkeypatch):
+        """The REAL `get_global_setting(strict=True)` reads the key itself; with the database down it raises (it never answers the cold-start default), so Health says 'unknown'."""
+        from jen.models import db as db_mod
+        from jen.services import health
+
+        def down():
+            raise RuntimeError("connection refused")
+
+        monkeypatch.setattr(db_mod, "jen_db", down)
+        with pytest.raises(ValueError):
+            cs.recovery_incidents(strict=True)
+        assert health._direct_socket_recovery({}).status == "skip"
+
+    def test_the_certificate_row_says_the_copy_may_not_match_while_the_incident_stands(
+        self, store, tmp_path, monkeypatch
+    ):
+        from jen.services import health, kea_tls
+
+        monkeypatch.setattr(kea_tls, "SSL_DIR", str(tmp_path))
+        kea_tls.ensure_ca()
+        kea_tls.issue_client_cert()
+        kea_tls.issue_server_cert({"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5"}, "dhcp4", "10.0.0.5")
+        assert health._kea_tls_expiry({}).status == "ok"
+        cs.record_attention(1, "dhcp4", "x", "tls-local-stale", server_name="kea-a")
+        row = health._kea_tls_expiry({})
+        assert (
+            row.status == "warn"
+            and "may not match the certificate on the host" in row.detail
+            and "kea-a kea-dhcp4" in row.detail
+        )
+        cs.resolve_attention(1, "dhcp4")
+        assert health._kea_tls_expiry({}).status == "ok"

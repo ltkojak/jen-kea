@@ -2301,13 +2301,14 @@ with app.app_context():
 
 
 # ── 22. a failed write of Jen's own settings after a socket change puts the daemon's sockets back ──────────────────────────
-def _s22_run(mode, scheme="http", port="8014"):
+def _s22_run(mode, scheme="http", port="8014", probe=""):
     ip = st.container_ip(st.KEA_A)
     script = (
         S22_SCRIPT.replace("__ADDR__", ip)
         .replace("__MODE__", mode)
         .replace("__SCHEME__", scheme)
         .replace("__PORT__", port)
+        .replace("__PROBE__", probe.replace("__ADDR__", ip))
     )
     return st.jen_py(script, timeout=500)
 
@@ -2356,6 +2357,10 @@ elif mode == "write-ok":
 elif mode == "silent-probe":
     # the stand-in for a new socket nothing can reach from the Jen host (a firewall): the daemon really restarted with it; only the probe is made to fail
     patches.append(mock.patch.object(infra, "_probe_after_restart", lambda *a, **k: ("", "stand-in: nothing answers")))
+elif mode == "promote-fails":
+    # the stand-in for Jen's own SSL directory becoming unwritable AFTER the host accepted the new pair (Q188, AD2): only the promotion of Jen's staged copy to live fails
+    from jen.services import kea_tls
+    patches.append(mock.patch.object(kea_tls, "promote_staged", side_effect=OSError(13, "Permission denied")))
 with app.test_request_context(method="POST", data=form), contextlib.ExitStack() as stack:
     for p in patches:
         stack.enter_context(p)
@@ -2365,7 +2370,14 @@ after = hashlib.sha256(open(cfg_path, "rb").read()).hexdigest()
 with app.app_context(), jen_db() as c, c.cursor() as cur:
     cur.execute("SELECT action, details FROM audit_log WHERE action LIKE 'DIRECT_SOCKET%%' ORDER BY id DESC LIMIT 5")
     rows = [(r["action"], r["details"]) if isinstance(r, dict) else (r[0], r[1]) for r in cur.fetchall()]
-emit({"flashes": flashes, "cfg_unchanged": before == after, "audit": rows})
+answers = None
+probe_url = "__PROBE__"
+if probe_url:
+    # does the endpoint Jen dials ANSWER afterwards - with the credentials and the TLS context of Jen's own files (Q188, AD4)?
+    from jen.services import kea_tls
+    version, _err = infra._probe_after_restart(probe_url, "sysuser", "syspass-123", "dhcp4", verify=kea_tls.ca_paths()[0], cert=kea_tls.client_paths())
+    answers = bool(version)
+emit({"flashes": flashes, "cfg_unchanged": before == after, "audit": rows, "answers": answers})
 """
 
 
@@ -2438,3 +2450,84 @@ def test_22_c_an_https_replacement_whose_write_fails_puts_the_sockets_and_the_ce
             f"INVARIANT: {name} on the host is the certificate material the restored socket was issued with"
         )
     assert "PRIVATE KEY" not in texts and "syspass-123" not in texts
+
+
+def test_22_d_an_https_replacement_whose_local_commit_fails_stops_with_the_previous_material_back(stack):
+    """REMOTE-001 / Q188 (AD2): an https socket on Jen's CA is really set up on kea-a (certificate A on the host), then a second https change installs certificate B on the host and Jen's own
+    promotion of its staged copy FAILS (the stand-in: its SSL directory became unwritable). The operation stops BEFORE the socket change: the daemon file AND the three TLS files on the host
+    are byte-for-byte what they were, and the original endpoint - the https socket - still answers with Jen's own files."""
+    out, proc = _s22_run("write-ok", scheme="https", port="8014")
+    assert emitted(out) is not None, (
+        f"no result from the first https change:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    )
+    after_a = _s22_host_state()
+    assert after_a["server.crt"] and after_a["server.key"] and after_a["ca.crt"]
+    out, proc = _s22_run("promote-fails", scheme="https", port="8015", probe="https://__ADDR__:8014")
+    second = emitted(out)
+    assert second is not None, f"no result from the second https change:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    texts = " ".join(second["flashes"])
+    assert "Jen cannot keep its own copy of the new certificate" in texts and "answers directly" not in texts, texts
+    after_b = _s22_host_state()
+    assert json.loads(after_b["conf"]) == json.loads(after_a["conf"]), "INVARIANT: the socket change never started"
+    for name in S22_TLS_FILES:
+        assert after_b[name] == after_a[name], (
+            f"INVARIANT: {name} on the host is the material the existing socket was issued with"
+        )
+    assert second["answers"] is True, (
+        "INVARIANT: the original endpoint answers afterwards, as the daemon, with Jen's own files"
+    )
+    assert "PRIVATE KEY" not in texts and "syspass-123" not in texts
+
+
+S22_ROTATE_SCRIPT = r"""
+import contextlib, hashlib, inspect, os
+from unittest import mock
+import jen.config as jconfig
+from jen.routes.settings import infrastructure as infra
+from jen.services import kea_tls
+
+flashes = []
+url = "https://__ADDR__:8014"
+ca = kea_tls.ca_paths()[0]
+ca_before = hashlib.sha256(open(ca, "rb").read()).hexdigest()
+view = inspect.unwrap(infra.rotate_kea_ca)
+with app.test_request_context(method="POST"), contextlib.ExitStack() as stack:
+    stack.enter_context(mock.patch.object(infra, "flash", lambda text, style="message": flashes.append(str(text))))
+    # the stand-ins: Jen's own config is not touched by this scenario (it already points where it should), and the promotion of the staged CA fails after every target carries CA-B
+    stack.enter_context(mock.patch.object(infra, "_service_url", lambda server, service: url))
+    stack.enter_context(mock.patch.object(infra, "_daemon_creds", lambda server, service, url="": ("sysuser", "syspass-123")))
+    stack.enter_context(mock.patch.object(jconfig.app_config, "write_values", lambda *a, **k: None))
+    stack.enter_context(mock.patch.object(kea_tls, "commit_rotation", side_effect=OSError(28, "No space left on device")))
+    view()
+version, _err = infra._probe_after_restart(url, "sysuser", "syspass-123", "dhcp4", verify=ca, cert=kea_tls.client_paths())
+copy = kea_tls.server_copy_path(1, "dhcp4")
+emit({
+    "flashes": flashes,
+    "answers": bool(version),
+    "ca_unchanged": ca_before == hashlib.sha256(open(ca, "rb").read()).hexdigest(),
+    "local_crt": open(copy).read(),
+    "local_issued_by_live_ca": kea_tls.issued_by(copy, ca),
+    "staging_left": os.path.exists(ca + ".next"),
+})
+"""
+
+
+def test_22_e_a_ca_rotation_whose_promotion_fails_leaves_every_endpoint_answering_on_the_old_ca(stack):
+    """REMOTE-001 / Q188 (AD1): a CA rotation really pushes a CA-B certificate to kea-a, restarts it and probes it with the staged identity, and then the promotion of the staged CA on the Jen
+    host fails (the stand-in). Every attempted target is put back on CA-A - a freshly issued CA-A pair, installed, restarted and PROBED - Jen still trusts CA-A, the staging is discarded, and the
+    certificate on the host is the one Jen holds."""
+    out, proc = _s22_run("write-ok", scheme="https", port="8014")
+    assert emitted(out) is not None, f"no result from the https setup:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    ip = st.container_ip(st.KEA_A)
+    out, proc = st.jen_py(S22_ROTATE_SCRIPT.replace("__ADDR__", ip), timeout=500)
+    result = emitted(out)
+    assert result is not None, f"no result from the rotation:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    texts = " ".join(result["flashes"])
+    assert "Jen could not promote the new CA locally" in texts and "restarted and answering" in texts, texts
+    assert result["ca_unchanged"] and not result["staging_left"], (
+        "INVARIANT: Jen still trusts the previous CA and the staging is gone"
+    )
+    assert result["answers"] is True, "INVARIANT: the endpoint answers, with CA-A, after the rollback"
+    assert result["local_issued_by_live_ca"], "INVARIANT: Jen's copy of the pair was issued by the CA Jen trusts"
+    host = _s22_host_state()
+    assert host["server.crt"] == result["local_crt"], "INVARIANT: the certificate on the host IS the one Jen holds"
