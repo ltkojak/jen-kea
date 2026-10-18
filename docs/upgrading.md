@@ -246,3 +246,15 @@ One step (5.69.0-beta.18). It adds no migration and there is nothing for you to 
 **Jen keeps the server key it installs.** From the next https change on, the key Jen puts on a Kea host is also kept, private, beside the certificate copy on the Jen host (`kea-servers`), so a failed change can put the previous certificate back. A certificate installed before this release, or by hand, has no earlier copy: if a change to it fails the sockets come back and the notice says the certificate could not be.
 
 **The Remove form always shows the Control Agent address field.** It says whether leaving it blank uses the saved address, and which; when Jen has none saved, a switch-back needs one. The address you type, or the saved one, is asked who it is before the socket is removed, and a switch-back is refused when a second server record names the very socket being removed.
+
+## An https setup stops when Jen cannot keep its own copy; a recovery is undone only when the endpoint answered
+
+One step (5.69.0-beta.19). It adds no migration and there is nothing for you to do. What you may notice:
+
+**An https setup stops when Jen cannot keep its own copy of the certificate.** "Set up direct socket" for https now saves its own copy of the new certificate and of the one the host has before anything is installed on the Kea host. If Jen cannot write them (its SSL directory is full or read-only) the setup stops with the host untouched. If the host takes the new certificate and Jen then cannot make its copy live, the certificate the host had is installed again and the socket change never starts. A socket that is already in the daemon's config is only checked again; no new certificate is written under it. If the socket answers with a certificate that is not the one Jen holds, the setup says so, and the way to fix it is to remove the socket and set it up again.
+
+**A CA rotation is all or nothing.** Rotate keeps the new CA beside the live one, pushes a certificate to each server, restarts it and checks it with the new CA, and only then makes the new CA live. Any failure puts every server it touched back on the CA Jen still trusts, restarts it and checks that it answers; the message lists which servers are back and which need you.
+
+**A recovery is called undone only when the endpoint answered.** After a failed change Jen restores the sockets and the certificate, restarts the daemon, and then asks the address it uses for that daemon who it is, with the credentials and certificates it has saved. If that does not answer, Servers and Health show the server as unreachable after the recovery instead of saying the change was undone. A previous certificate that is back on the host but whose Jen-side copy could not be refreshed is shown the same way; remove the socket and set it up again once Jen's SSL directory is writable.
+
+**Incidents on Servers do not get lost.** Two changes that fail at the same moment on two servers now both stay on the Servers page; the note that holds them is updated as one step. Eight kinds of notice exist; an http socket that answers does not clear a certificate notice, and neither does a run that left the certificate alone.

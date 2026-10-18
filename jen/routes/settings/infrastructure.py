@@ -1503,7 +1503,9 @@ def _reinstall_live_material(server: dict, service: str) -> str:
     from jen.services import kea_host as __host
     from jen.services import kea_tls as __tls
 
-    files = __tls.current_material(server.get("id"), service)
+    files = __tls.host_material(
+        server.get("id"), service
+    )  # (second pass, Q188: Jen's live pair, unless a recorded divergence says the host holds the previous one)
     if files is None:
         return "none"
     return "restored" if __host.install_tls(server, service, files).get("ok") else "failed"
@@ -1749,7 +1751,16 @@ def _stop_after_failed_promotion(server: dict, service: str, error: OSError, exi
             )
             _record_incident(server, service, operation, "restored-endpoint-unreachable")
             return
-    flash(f"{base}; the certificate the host had was put back. Nothing else was changed on {name}.", "error")
+    flash(
+        f"{base}; "
+        + (
+            "the certificate the host had was put back"
+            if restored == "restored"
+            else "no socket of the daemon uses those files, and Jen has no earlier copy to put back"
+        )
+        + f". Nothing else was changed on {name}.",
+        "error",
+    )
 
 
 def _tls_after_unapplied_change(server: dict, service: str, snapshot, result) -> None:

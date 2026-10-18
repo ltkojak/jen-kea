@@ -483,3 +483,25 @@ class TestAStaleCopyIsTheHostsPreviousPair:
         kea_tls.promote_staged(sid, "dhcp4")
         kea_tls.commit_issued(sid, "dhcp4", again)
         assert not kea_tls.is_stale(sid, "dhcp4"), "a commit means the host was given exactly this pair"
+
+    def test_a_re_assert_installs_the_pair_the_host_holds_not_jens_stale_live_copy(self, lab, monkeypatch):
+        sid = 1
+        first = pathlib.Path(kea_tls.server_copy_path(sid, "dhcp4")).read_text(encoding="ascii")
+        kea_tls.stage_issued(sid, "dhcp4", self._issue(sid, "10.0.0.5"))
+        kea_tls.promote_staged(sid, "dhcp4")
+        with monkeypatch.context() as scoped:
+            scoped.setattr(kea_tls, "commit_file_set", lambda *a, **k: (_ for _ in ()).throw(OSError(13, "denied")))
+            assert kea_tls.restore_previous(sid, "dhcp4") is False
+        assert infra._reinstall_live_material(SERVERS[sid], "dhcp4") == "restored"
+        assert lab.hosts[sid]["installs"][-1]["server.crt"] == first, (
+            "the host gets ITS pair back, not Jen's newer live one"
+        )
+
+    def test_a_first_setup_whose_promotion_fails_does_not_claim_a_certificate_was_put_back(self, lab):
+        sid = 1
+        for suffix in ("", ".prev"):
+            for path in (kea_tls.server_copy_path(sid, "dhcp4"), kea_tls.server_key_path(sid, "dhcp4")):
+                if os.path.exists(path + suffix):
+                    os.unlink(path + suffix)
+        infra._stop_after_failed_promotion(SERVERS[sid], "dhcp4", OSError(13, "Permission denied"), [], None)
+        assert "was put back" not in lab.texts() and "no earlier copy to put back" in lab.texts(), lab.texts()
