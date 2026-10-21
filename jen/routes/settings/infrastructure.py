@@ -2632,8 +2632,10 @@ def rotate_kea_ca():
             else:
                 staged = __tls.stage_rotation()
         except __tls.PreparedUnreadable as e:
+            logger.error(f"kea_tls: the prepared CA cannot be read: {type(e).__name__}")
             flash(
-                f"Rotate refused - {e}, and Jen will not overwrite a CA it cannot read. Nothing was changed.", "error"
+                "Rotate refused - the prepared CA cannot be read right now, and Jen will not overwrite a CA it cannot read. Nothing was changed.",
+                "error",
             )
             return back
         except Exception as e:
@@ -2925,7 +2927,11 @@ def prepare_kea_ca():
     try:
         staged, note = __tls.prepared_rotation(discard=True)
     except __tls.PreparedUnreadable as e:
-        flash(f"Prepare refused - {e}, and Jen will not overwrite a CA it cannot read. Nothing was changed.", "error")
+        logger.error(f"kea_tls: the prepared CA cannot be read: {type(e).__name__}")
+        flash(
+            "Prepare refused - the prepared CA cannot be read right now, and Jen will not overwrite a CA it cannot read. Nothing was changed.",
+            "error",
+        )
         return back
     if note:
         flash(note[:1].upper() + note[1:] + ".", "info")

@@ -1758,8 +1758,11 @@ class TestTheWorldsOfTheSetupHarness:
         assert tls_world["tls"]["installed"] == []
 
     @_setup_worlds
-    def test_remove_changes_no_identity_file(self, setup_world, tls_world):
+    def test_remove_changes_no_identity_file(self, setup_world, tls_world, monkeypatch):
         world, kt, matrix = setup_world
         before = matrix.worlds.tree(kt.SSL_DIR)
+        monkeypatch.setattr(
+            type(jconfig.app_config), "mutate", lambda self, fn, reload=True, typed=None: None
+        )  # (nothing to remove: the settings are not written - and CI's real config must not be reloaded)
         _post(_inner(infra.remove_direct_socket))
         assert matrix.worlds.tree(kt.SSL_DIR) == before, "T6: a removal touches no TLS file of Jen's"
