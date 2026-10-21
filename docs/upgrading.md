@@ -282,3 +282,13 @@ One step (5.69.0-beta.21). It adds no migration. What you may notice:
 **Addresses in messages show only the scheme, host and port.** That includes the dashboard, Health and the Doctor page, which could print the full address a connection error named.
 
 **A recovery record Jen cannot recognise is kept.** Servers now says when an entry of the stored recovery record is not an incident Jen wrote, and a successful change no longer deletes it. A superadmin can set the record aside from the same page, as before.
+
+## A client certificate that is a copy of Jen's own is refused; a user name in a URL was never sent
+
+One step (5.69.0-beta.22). It adds no migration and there is nothing for you to do. What you may notice:
+
+**Rotate Kea CA and the https setup look at the client certificate Jen presents, as well as the CA bundle.** If the client certificate and key under Settings → Kea are a copy of Jen's own pair (a file at a different path with the same certificate, or one Jen's CA issued), or are a pair Jen's CA did not issue, or cannot be loaded as a pair, and Jen has issued a certificate to an https endpoint, Rotate stops before it changes anything and names the file: after a rotation the copy would no longer be the certificate the daemons accept. The https setup stops for the same reasons. Point the client certificate and key at Jen's own files (`jen-kea-client.pem` and `jen-kea-client.key` in Jen's SSL folder), at a link to them, or clear the fields. The Settings → Kea form refuses a copy of Jen's pair when you save it; your own certificate authority's pair is still accepted there.
+
+**A user name or password written inside a Kea API URL was never sent.** Jen has always sent the user and password fields, and the HTTP library ignores a user name in the address whenever those are given. Saving Settings → Kea with an address that carries one therefore removes text that never authenticated, and nothing about how Jen authenticates changes. Messages that name an address show only its scheme, host and port. The DNS provider's address is the one place where a user name in the URL was sent: its lookups carry no separate pair, so a provider behind a proxy that asked for one will refuse them after a save removes it, and the save says so.
+
+**Settings → Kea shows the DNS provider's address without a user name or password,** and the installer's configure step prints a warning naming the section and key of any Kea or DNS address that still carries one.

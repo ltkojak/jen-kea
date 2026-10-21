@@ -1560,7 +1560,8 @@ class TestTheSecondPassOfQ191:
 
         parser = configparser.ConfigParser(interpolation=None)
         parser.read_string(f"[ddns]\ndns_provider = pihole\napi_url = {stored}\napi_token = TOK\n")
-        monkeypatch.setattr(jconfig.app_config, "mutate", lambda fn, typed=None: fn(parser))
+        # (on the CLASS, as tests/test_q171_access.py does: monkeypatch restores an INSTANCE attribute to the bound original, which would shadow a later test's class-level patch and leak into the DDNS tests)
+        monkeypatch.setattr(type(jconfig.app_config), "mutate", lambda self, fn, reload=True, typed=None: fn(parser))
         app = flask.Flask(__name__)
         app.secret_key = "x"
         data = {"dns_provider": "pihole", "api_url_pihole": submitted}
