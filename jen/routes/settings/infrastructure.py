@@ -2479,8 +2479,9 @@ def rotate_kea_ca():
         targets.append((server, service, bind))
     if blocked:
         flash(
-            "Rotate refused — every server on Jen's CA must be reachable for a new certificate, or it would be cut "
-            "off by the new CA: " + "; ".join(blocked) + ". Nothing was changed.",
+            "Rotate refused — a rotation would cut a server off from Jen's CA, or Jen cannot tell: "
+            + "; ".join(blocked)
+            + ". Nothing was changed.",
             "error",
         )
         return back
@@ -3963,6 +3964,7 @@ def save_infra_ddns():
         previous = __ddns_writers.effective_provider(cfg)
         # a different PROVIDER, or the same provider at a different ENDPOINT (CRED-002, Q178): a Technitium token typed for server A is not Technitium server B's
         stored_url = cfg.get("ddns", "api_url", fallback="")
+        seen["userinfo_dropped"] = bool(__auth.userinfo_sentence(stored_url)) and not __auth.userinfo_sentence(api_url)
         url_changed = bool(stored_url.strip() or api_url) and not __auth.same_endpoint(stored_url, api_url)
         switched = seen["switched"] = previous != dns_provider or url_changed
         seen["provider_changed"] = previous != dns_provider
@@ -3991,6 +3993,14 @@ def save_infra_ddns():
 
     __config.app_config.mutate(_apply)
     flash("DDNS settings saved.", "success")
+    if seen.get("userinfo_dropped"):
+        # (second pass, finding 2) the form is pre-filled WITHOUT the user name or password the stored address carried, so any save removes it; the DNS calls send no separate pair, so a proxy that
+        # needed it will refuse them now. Said (names the setting, never the value) - not refused: an address with user-info can no longer be submitted, so refusing would trap every later save.
+        flash(
+            "The saved DNS provider address carried a user name or password inside the URL, and this save removed it (a URL never carries a password). If the provider sits behind a proxy that asked for it, "
+            "DNS lookups will fail until that proxy is set up another way.",
+            "warning",
+        )
     if seen.get("switched") and dns_provider in _CREDENTIAL_PROVIDERS and not api_token:
         what = "Provider changed to" if seen.get("provider_changed") else "The address of"
         flash(
@@ -3998,7 +4008,12 @@ def save_infra_ddns():
             + (" - the saved one was not carried over." if seen.get("had_token") else "."),
             "warning",
         )
-    __user.audit("SAVE_INFRA", "ddns", f"log={log_path} provider={dns_provider} token={seen.get('token', 'none')}")
+    __user.audit(
+        "SAVE_INFRA",
+        "ddns",
+        f"log={log_path} provider={dns_provider} token={seen.get('token', 'none')}"
+        + (" url_userinfo_removed=yes" if seen.get("userinfo_dropped") else ""),
+    )
     return redirect(home)
 
 

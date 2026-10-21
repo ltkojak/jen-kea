@@ -1528,3 +1528,53 @@ class TestTheTwinRefusalShowsTheAddressThroughTheHelper:
         texts = _everything_printed(wire)
         assert auth.USERINFO_SENTENCE in texts and "Nothing was changed" in texts
         assert self.PASSWORD not in texts and "must look like" not in texts
+
+
+class TestTheSecondPassOfQ191:
+    """The two P2s of the adversarial second pass of the code commit (each row written before its code)."""
+
+    # finding 1 - a damaged pair of Jen's OWN is repaired by the setup, not refused with advice that points where the config already points
+    def test_a_damaged_pair_of_jens_own_files_goes_through_the_gate_and_is_issued_again(
+        self, tls_world, monkeypatch, tmp_path
+    ):
+        import os
+
+        from tests.test_kea_tls_rotation import _client_world
+
+        kt = tls_world["tls"]["tls"]
+        kt.ensure_ca()
+        kt.issue_client_cert()
+        _client_world("jens-file", tmp_path, monkeypatch)
+        for path in kt.client_paths():
+            os.unlink(path)
+        assert kt.client_kind() == "jens-file" and not kt.client_cert_ok()
+        monkeypatch.setattr(infra, "_write_direct_socket_config", lambda *a, **k: "url written")
+        _post(_inner(infra.setup_direct_socket), **TestTheSetupGateJudgesTheClientPairByCertificate.FORM)
+        texts = " ".join(t for _s, t in tls_world["flashes"])
+        assert len(tls_world["tls"]["installed"]) == 1, texts
+        assert kt.client_cert_ok(), "the setup issued Jen's pair again"
+
+    # finding 2 - a DDNS save that removes user-info from the stored address says so
+    def _save_ddns(self, monkeypatch, stored, submitted):
+        import configparser
+
+        parser = configparser.ConfigParser(interpolation=None)
+        parser.read_string(f"[ddns]\ndns_provider = pihole\napi_url = {stored}\napi_token = TOK\n")
+        monkeypatch.setattr(jconfig.app_config, "mutate", lambda fn, typed=None: fn(parser))
+        app = flask.Flask(__name__)
+        app.secret_key = "x"
+        data = {"dns_provider": "pihole", "api_url_pihole": submitted}
+        with app.test_request_context(method="POST", data=data):
+            inspect.unwrap(infra.save_infra_ddns)()
+        return parser
+
+    def test_removing_the_user_info_is_said_and_never_echoes_the_value(self, wire, monkeypatch):
+        parser = self._save_ddns(monkeypatch, "https://proxyuser:proxypw@pi.lan:443", "https://pi.lan:443")
+        texts = _everything_printed(wire)
+        assert "this save removed it" in texts and "proxypw" not in texts and "proxyuser" not in texts
+        assert parser.get("ddns", "api_url") == "https://pi.lan:443" and parser.get("ddns", "api_token") == "TOK"
+        assert any("url_userinfo_removed=yes" in str(a) for a in wire["audits"])
+
+    def test_a_save_of_a_clean_address_says_nothing_of_it(self, wire, monkeypatch):
+        self._save_ddns(monkeypatch, "https://pi.lan:443", "https://pi.lan:443")
+        assert "this save removed it" not in _everything_printed(wire)

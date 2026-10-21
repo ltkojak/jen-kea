@@ -776,6 +776,15 @@ def client_kind(cert_path: str | None = None, key_path: str | None = None) -> st
         return "none"
     if not cert or not key:
         return "unreadable"  # Jen sends a pair or nothing (`kea._tls_client_cert`): one half is a dial with no client certificate
+    jens_cert, jens_key = client_paths()
+    if os.path.realpath(cert) == os.path.realpath(jens_cert) and os.path.realpath(key) == os.path.realpath(jens_key):
+        # (second pass, finding 1) these ARE Jen's files, whatever they hold: a missing or damaged pair of Jen's own is Jen's to repair (the https setup issues it again, the rotation replaces it), and
+        # calling it `unreadable` sent the operator to "point them at Jen's own files" - where they already pointed
+        spelled = os.path.normpath(os.path.abspath(cert)) == os.path.normpath(os.path.abspath(jens_cert))
+        spelled = spelled and os.path.normpath(os.path.abspath(key)) == os.path.normpath(os.path.abspath(jens_key))
+        return (
+            "jens-file" if spelled else "alias"
+        )  # an alias follows Jen's file when it is replaced (a link, a junction); a hard link or a copy does not - it keeps the OLD certificate
     spki = serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
     try:
         mine = load_cert(cert)
@@ -784,13 +793,6 @@ def client_kind(cert_path: str | None = None, key_path: str | None = None) -> st
         mine_der = mine.public_bytes(serialization.Encoding.DER)
     except (OSError, ValueError, TypeError, UnsupportedAlgorithm):
         return "unreadable"
-    jens_cert, jens_key = client_paths()
-    if os.path.realpath(cert) == os.path.realpath(jens_cert) and os.path.realpath(key) == os.path.realpath(jens_key):
-        spelled = os.path.normpath(os.path.abspath(cert)) == os.path.normpath(os.path.abspath(jens_cert))
-        spelled = spelled and os.path.normpath(os.path.abspath(key)) == os.path.normpath(os.path.abspath(jens_key))
-        return (
-            "jens-file" if spelled else "alias"
-        )  # an alias follows Jen's file when it is replaced (a link, a junction); a hard link or a copy does not - it keeps the OLD certificate
     try:
         live_der = load_cert(jens_cert).public_bytes(serialization.Encoding.DER)
     except (OSError, ValueError, TypeError, UnsupportedAlgorithm):
@@ -813,7 +815,7 @@ def client_refusal(kind: str | None = None, cert_path: str | None = None) -> str
         )
     if kind == "other":
         return (
-            f"The client certificate configured at {cert} was not issued by Jen's CA, so the daemons Jen issued certificates to never accepted it. "
+            f"The client certificate configured at {cert} was not issued by Jen's current CA (it is an operator's own, or a copy from before a rotation), so the daemons Jen issued certificates to do not accept it. "
             f"Point the client certificate and key under Settings → Kea at Jen's own files ({mine}) or clear them"
         )
     if kind == "unreadable":

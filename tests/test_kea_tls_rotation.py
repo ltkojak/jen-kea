@@ -1868,7 +1868,7 @@ class TestClientIdentity:
         lab.begin()
         assert not any(lab.dial_before.values()), "the dial never worked with it"
         _rotate()
-        self._refused_before_staging(lab, "never accepted it")
+        self._refused_before_staging(lab, "do not accept it")
 
     def test_an_unreadable_pair_is_refused(self, lab, monkeypatch, tmp_path):
         _client_world("unreadable", tmp_path, monkeypatch)
@@ -1987,3 +1987,35 @@ class TestTheInvariantsBiteTooQ191:
         assert "Kea CA rotated" in lab.texts(), "the rotation reported success"
         assert all(lab.answers_jens_live_identity(sid) for sid in lab.hosts)
         assert lab.dial_before and not any(lab.answers_jens_configured_dial(sid) for sid in lab.hosts)
+
+
+class TestTheSecondPassOfQ191:
+    """The findings of the adversarial second pass of the code commit, each as the sequence that found it (the rows were written before the code)."""
+
+    # finding 1 - Jen's own files are Jen's to repair, whatever they hold
+    @pytest.mark.parametrize("damage", ["missing", "garbage"])
+    def test_a_configured_pair_that_IS_jens_own_file_is_never_unreadable(self, lab, damage):
+        pem, key = kea_tls.client_paths()
+        if damage == "missing":
+            os.unlink(pem)
+            os.unlink(key)
+        else:
+            pathlib.Path(pem).write_text("not a certificate", encoding="ascii")
+        assert kea_tls.client_kind() == "jens-file"
+        assert kea_tls.client_refusal() == ""
+        lab.begin()  # (the damage is the world; this is the state before any request)
+
+    # finding 7 - the lists are CROSSED, not sampled
+    @pytest.mark.parametrize("bundle", ["jens-file", "alias", "empty-verify-off"])
+    @pytest.mark.parametrize("client", ["none", "jens-file", "alias", "copy", "other", "unreadable"])
+    def test_every_client_shape_crossed_with_every_bundle_shape(self, lab, monkeypatch, tmp_path, bundle, client):
+        _bundle_world(bundle, tmp_path, monkeypatch)
+        _client_world(client, tmp_path, monkeypatch)
+        lab.begin()
+        _rotate()
+        if client in ("copy", "other", "unreadable"):
+            assert "Rotate refused" in lab.texts() and lab.remote_actions() == 0, (bundle, client, lab.texts())
+        else:
+            assert "Kea CA rotated" in lab.texts(), (bundle, client, lab.texts())
+            assert all(lab.answers_jens_live_identity(sid) for sid in lab.hosts)
+        # (the teardown's T1-T5 judge every world)

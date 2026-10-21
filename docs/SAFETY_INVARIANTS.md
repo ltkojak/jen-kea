@@ -609,6 +609,8 @@ Jen's CA by certificate identity, per endpoint; an invariant with no knob; an in
 - `tests/test_kea_tls_rotation.py::TestClientIdentity`
 - `tests/test_kea_tls_rotation.py::TestTheConnectionFormJudgesTheClientPair`
 - `tests/test_kea_tls_rotation.py::TestTheInvariantsBiteTooQ191`
+- `tests/test_kea_tls_rotation.py::TestTheSecondPassOfQ191`
+- `tests/test_direct_socket_lock.py::TestTheSecondPassOfQ191`
 - `tests/test_direct_socket_lock.py::TestTheSetupGateJudgesTheClientPairByCertificate`
 - `tests/test_direct_socket_credentials.py::TestTheProbeRowsOfQ191`
 - `tests/test_kea_tls_rotation.py::TestWhoIsOnJensCaIsDecidedByCertificatesNotPaths`

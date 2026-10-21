@@ -925,13 +925,21 @@ def s14_sites(source: str, rel: str) -> list[tuple[str, int, str]]:
             and "log" in f.value.id.lower()
         )
 
-    def unsafe(expr):
-        """The address-holding sub-expressions of `expr` that are not under a safe callee."""
+    valued_now: set = (
+        set()
+    )  # the function being scanned: names assigned from a place that holds an address (filled below)
+
+    def unsafe(expr, include_valued=False):
+        """The address-holding sub-expressions of `expr` that are not under a safe callee. `include_valued` (the chain `now = <address setting>; msg = f"... {now}"; flash(msg)`, second pass of Q191) also
+        counts a name read from an address setting."""
         out = []
         for sub in ast.walk(expr):
             holder = None
             if isinstance(sub, ast.Name):
                 holder = sub.id
+                if include_valued and sub.id in valued_now:
+                    out.append((sub, holder))
+                    continue
             elif isinstance(sub, ast.Attribute):
                 holder = sub.attr
             elif (
@@ -965,11 +973,15 @@ def s14_sites(source: str, rel: str) -> list[tuple[str, int, str]]:
         (`valid_api_url(url)` answers a bool and builds no text)?"""
         for sub, _holder in hits:
             cur = sub
+            text = sub is expr  # a plain copy (`msg = now`) carries the address as it is
             while cur is not expr and getattr(cur, "parent", None) is not None:
                 cur = cur.parent
+                if isinstance(cur, (ast.JoinedStr, ast.BinOp)):
+                    text = True  # (second pass of Q191: a bare mention in a `bool` / comparison / comprehension builds no text - `twins = [... if _socket_now and same_endpoint(...)]` is not a sentence)
                 if isinstance(cur, ast.Call) and callee(cur) not in {"str", "repr", "format", "join"}:
+                    text = False
                     break
-            else:
+            if text:
                 return True
         return False
 
@@ -1003,13 +1015,15 @@ def s14_sites(source: str, rel: str) -> list[tuple[str, int, str]]:
         for node in ast.walk(fn):
             if isinstance(node, ast.Assign) and url_valued(node.value):
                 valued |= {t.id for t in node.targets if isinstance(t, ast.Name)}
+        valued_now.clear()
+        valued_now.update(valued)
         for node in ast.walk(fn):
             if isinstance(node, (ast.Assign, ast.AugAssign)) and node.value is not None:
                 targets = node.targets if isinstance(node, ast.Assign) else [node.target]
                 carried = isinstance(node.value, (ast.JoinedStr, ast.BinOp)) and any(
                     isinstance(s, ast.Name) and s.id in tainted for s in ast.walk(node.value)
                 )
-                if builds_text(node.value, unsafe(node.value)) or carried:
+                if builds_text(node.value, unsafe(node.value, include_valued=True)) or carried:
                     tainted |= {t.id for t in targets if isinstance(t, ast.Name)}
         for node in ast.walk(fn):
             if isinstance(node, ast.Call) and is_sink(node):
@@ -1064,6 +1078,7 @@ class TestS14AnAddressIsShownByOneHelper:
             "def j(request):\n typed = request.form.get('ca_url')\n flash(f'at {typed}')\n"
             "def k(_live, _sec, _url_key):\n _now = _live.get(_sec, _url_key, fallback='')\n flash(f'at {__auth.shown_url(_now)}', 'error')\n"
             "def m(cfg):\n port = cfg.get('kea', 'port')\n flash(f'on {port}')\n"
+            "def n(_live, _sec, _url_key):\n now = _live.get(_sec, _url_key, fallback='')\n msg = f'uses {now}'\n flash(msg)\n"
         )
         got = [(line, name) for _r, line, name in s14_sites(planted, "jen/routes/x.py")]
         assert got == [
@@ -1075,6 +1090,10 @@ class TestS14AnAddressIsShownByOneHelper:
             # Q191 (AG2): provenance, not the name - i is the shape beta.21 shipped at the Remove form's twin refusals, j a typed address; k (through shown_url) and m (a setting that is not an address) pass
             (20, "_socket_now (read from an address setting)"),
             (23, "typed (built from an address)"),  # (the form key names `url`: the older grammar sees this one too)
+            (
+                33,
+                "msg (built from an address)",
+            ),  # n: the chain `now = <address setting>; msg = f"uses {now}"; flash(msg)` (second pass of Q191)
         ], got
 
 
