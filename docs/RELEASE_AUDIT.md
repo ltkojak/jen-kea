@@ -81,13 +81,16 @@ hypothesis.
 **(p) A classification is a row, everywhere (v5.69.0-beta.21, Q190).** Step (n) generalised from the credential rule. Any code that sorts targets into acted-on / left-alone / refused has a row
 per CLASS, written before the classifier, and the left-alone class is proved by the invariant over the HOST (the daemon's own answer, its files, its trust relationship before and after), never by
 the classifier's own word: beta.20's `_trust_is_jens` was a global path-string switch added by a second-pass fix, it made every Jen-issued endpoint 'the administrator's', and the invariant that
-should have caught it only looked at a set the tests populated. Three rules follow.
+should have caught it only looked at a set the tests populated. Four rules follow.
 1. **The second pass's FIX is a Q item.** A fixup that adds a class, an exemption, a switch or a short-circuit is written in the report as a row BEFORE it is code, and the release report lists each
    fixup with its row. A fixup is also a change (step (j)): the full harness runs after it so the invariants judge it.
 2. **An invariant has no knob.** A `check_invariants` ranges over the simulated world; a test may not narrow it (no `managed` set, no `discard`). It is RELATIVE where a classification would be needed
    (a daemon that answered before answers after, or an incident names it), and judged by what the host holds, not by what Jen's files say.
 3. **A path string is not an identity.** Whose CA a trust path is, which file is Jen's, what an address contains - are decided from the certificate or the parsed value, in ONE function, and a sweep
    (S13, S14) refuses the comparison anywhere else.
+4. **An invariant needs its WORLDS (Q191).** Every configured input to an identity or a trust decision is enumerated as a SHAPE LIST in the Q (the CA bundle: Jen's file / alias / copy / bundle / other /
+   empty / unreadable; the client pair: none / Jen's file / alias / copy / other / unreadable), and the harness builds one world per shape and crosses the lists: an invariant fires only in a world that has the
+   shape, and beta.21's P1 lived in the one world no shipped test built (a client certificate that was a copy). A new input to the identity is a new list in the same commit.
 
 ## The second pass (adversarial)
 

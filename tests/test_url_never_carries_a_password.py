@@ -124,13 +124,14 @@ class TestTheSecondPassOfQ190:
     def test_the_scrub_removes_user_info_to_the_last_at_sign_and_only_that(self, text, expected):
         assert auth.scrub_urls(text) == expected
 
-    def test_only_the_keys_a_kea_endpoint_has_are_legacy_input(self):
+    def test_only_the_keys_an_endpoint_has_are_legacy_input(self):
         cfg = configparser.ConfigParser(interpolation=None)
         cfg.read_string(
             "[ddns]\napi_url = https://u:p@dns:1\n[kea]\napi_url = https://h:1\nsome_other_url = https://u:p@x:1\n"
             "[plugins]\nurl = https://u:p@y:1\n[kea_server_2]\ndirect_prev_api_url = http://u:p@h:8000\n"
         )
-        assert auth.urls_with_userinfo(cfg) == [("kea_server_2", "direct_prev_api_url")]
+        # (Q191, AG3 b: the DNS provider's address is covered too, with its own sentence - its user name and token are the provider's own fields)
+        assert auth.urls_with_userinfo(cfg) == [("ddns", "api_url"), ("kea_server_2", "direct_prev_api_url")]
 
     def test_the_page_filters_show_and_prefill_without_the_password(self):
         import jinja2
@@ -151,7 +152,7 @@ class TestTheSecondPassOfQ190:
 
         root = pathlib.Path(__file__).resolve().parents[1] / "templates"
         printed = re.compile(
-            r"\{\{(?P<expr>[^}]*?(?:api6?_url|api_d2_url|kea6?_api_url|d2_api_url|prev_urls)[^}]*)\}\}"
+            r"\{\{(?P<expr>[^}]*?(?:api6?_url|api_d2_url|kea6?_api_url|d2_api_url|prev_urls|ddns_url)[^}]*)\}\}"
         )
         found = []
         for path in sorted(root.rglob("*.html")):
@@ -220,3 +221,94 @@ class TestTheKeaClientNeverPrintsALegacyPassword:
 
         source = inspect.getsource(kea._endpoint_for)
         assert "_shown(url)" in source and "{url}" not in source, "the sentence goes through the helper"
+
+
+class TestTheDnsProvidersAddressAndTheRestOfQ191:
+    """Q191 (AG3): the DNS provider's URL is pre-filled without a legacy password, warned about once with its own sentence, named by Health, and the installer merge says where a user name sits."""
+
+    def test_the_legacy_sentence_for_a_dns_provider_names_its_own_fields(self):
+        note = auth.userinfo_legacy_note("ddns", "api_url")
+        assert "DNS provider's URL" in note and "user and token fields" in note and "[ddns] api_url" in note
+        assert "user and password fields" in auth.userinfo_legacy_note("kea", "api_url")
+
+    def test_apply_warns_once_for_ddns_naming_no_value(self, caplog, monkeypatch):
+        from jen import config as jconfig
+
+        monkeypatch.setattr(jconfig, "_USERINFO_WARNED", set())
+        cfg = configparser.ConfigParser(interpolation=None)
+        cfg.read_string("[ddns]\napi_url = https://admin:s3cret@dns.example:5380\n")
+        with caplog.at_level(logging.WARNING, logger="jen.config"):
+            jconfig._warn_userinfo_urls(cfg)
+            jconfig._warn_userinfo_urls(cfg)
+        lines = [r.getMessage() for r in caplog.records if "carries a user name" in r.getMessage()]
+        assert len(lines) == 1 and "DNS provider" in lines[0] and "s3cret" not in lines[0]
+
+    def test_health_names_the_dns_provider(self, monkeypatch):
+        from jen import extensions
+        from jen.services import health
+
+        cfg = configparser.ConfigParser(interpolation=None)
+        cfg.read_string("[kea]\napi_url = https://h:8004\n[ddns]\napi_url = https://u:s3cret@dns:5380\n")
+        monkeypatch.setattr(extensions, "cfg", cfg)
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-a"}])
+        row = health._endpoint_credentials({})
+        assert row.status == "warn" and "DNS provider's URL (ddns api_url)" in row.detail
+        assert "s3cret" not in row.detail
+
+    def test_the_dns_fields_are_prefilled_without_user_info(self):
+        import pathlib
+
+        source = (pathlib.Path(__file__).resolve().parents[1] / "templates" / "settings_kea.html").read_text(
+            encoding="utf-8"
+        )
+        assert source.count("infra.ddns_url|no_userinfo") == 3 and "{{ infra.ddns_url }}" not in source
+
+    def test_the_installer_merge_names_a_url_with_a_user_name_and_never_the_value(self):
+        from tools import config_merge
+
+        text = "[kea]\napi_url = https://u:s3cret@h:8004\n[kea_server_2]\napi6_url = https://h:8006\n[ddns]\napi_url = http://a@dns\n[other]\napi_url = http://x:y@z\n"
+        assert config_merge.userinfo_warnings(text) == ["[kea] api_url", "[ddns] api_url"]
+
+    def test_the_merge_command_warns_on_stderr_and_still_prints_the_file(self, tmp_path, capsys):
+        from tools import config_merge
+
+        live = tmp_path / "live.config"
+        live.write_text("[kea]\napi_url = https://u:s3cret@h:8004\n", encoding="utf-8")
+        snapshot = tmp_path / "snap.config"
+        snapshot.write_text(live.read_text(encoding="utf-8"), encoding="utf-8")
+        import io
+        import sys
+
+        stdin = sys.stdin
+        sys.stdin = io.StringIO("[kea]\napi_url = https://u:s3cret@h:8004\n")
+        try:
+            code = config_merge.main(["--snapshot", str(snapshot), "--live", str(live)])
+        finally:
+            sys.stdin = stdin
+        out = capsys.readouterr()
+        assert code == 0 and "[kea] api_url" in out.err and "s3cret" not in out.err and "api_url" in out.out
+
+    def test_no_server_dict_carries_a_url_key_so_the_dashboards_raw_print_is_unreachable(self):
+        """The dashboard prints `s.server.get('url', '?')` only after `name`; no server dict has a `url` key (they have `api_url`), so that print is a fallback nothing reaches. A source test, so the day
+        a `url` key is added to a server dict this fails and the print goes through `shown_url`."""
+        import ast
+        import pathlib
+
+        tree = ast.parse(
+            (pathlib.Path(__file__).resolve().parents[1] / "jen" / "config.py").read_text(encoding="utf-8")
+        )
+        fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "derive_kea_servers")
+        keys = {
+            k.value
+            for d in ast.walk(fn)
+            if isinstance(d, ast.Dict)
+            for k in d.keys
+            if isinstance(k, ast.Constant) and isinstance(k.value, str)
+        }
+        assert "url" not in keys and "api_url" in keys
+        sets = [
+            n
+            for n in ast.walk(fn)
+            if isinstance(n, ast.Subscript) and isinstance(n.slice, ast.Constant) and n.slice.value == "url"
+        ]
+        assert sets == []

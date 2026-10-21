@@ -973,9 +973,36 @@ def s14_sites(source: str, rel: str) -> list[tuple[str, int, str]]:
                 return True
         return False
 
+    def url_valued(value):
+        """Is `value` ITSELF an address READ from a place that holds one - `<anything>.get(<sec>, <key>)` / `.get(<key>)` whose key is (or is named) something with `url` in it, or a
+        `urlparse`/`urlsplit` result's `geturl()`, possibly behind `.strip()` / `.rstrip(...)`, `x if c else y` or `a or b`? (Q191, AG2: the name grammar missed
+        `_socket_now = _live.get(_sec, _url_key, ...)` - an address is an address whatever the variable is called. A sentence BUILT from an address by a function is not one.)"""
+        if isinstance(value, ast.IfExp):
+            return url_valued(value.body) or url_valued(value.orelse)
+        if isinstance(value, ast.BoolOp):
+            return any(url_valued(v) for v in value.values)
+        if not isinstance(value, ast.Call):
+            return False
+        name = callee(value)
+        if name == "geturl":
+            return True
+        if name == "get":
+            for a in value.args:
+                if isinstance(a, ast.Constant) and isinstance(a.value, str) and "url" in a.value.lower():
+                    return True
+                if isinstance(a, ast.Name) and "url" in a.id.lower():
+                    return True
+        if isinstance(value.func, ast.Attribute):
+            return url_valued(value.func.value)  # a chain: .get(...).strip()
+        return False
+
     sites = []
     for fn in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))] + [tree]:
         tainted = set()
+        valued = set()  # names assigned (anywhere in the function) from a place that holds an address
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Assign) and url_valued(node.value):
+                valued |= {t.id for t in node.targets if isinstance(t, ast.Name)}
         for node in ast.walk(fn):
             if isinstance(node, (ast.Assign, ast.AugAssign)) and node.value is not None:
                 targets = node.targets if isinstance(node, ast.Assign) else [node.target]
@@ -990,6 +1017,15 @@ def s14_sites(source: str, rel: str) -> list[tuple[str, int, str]]:
                     for sub, holder in unsafe(arg):
                         sites.append((rel, sub.lineno, holder))
                     for sub in ast.walk(arg):
+                        if isinstance(sub, ast.Name) and sub.id in valued and sub.id not in tainted:
+                            cur, safe = sub, False
+                            while cur is not arg and getattr(cur, "parent", None) is not None:
+                                cur = cur.parent
+                                if isinstance(cur, ast.Call) and callee(cur) in _S14_SAFE_CALLEES:
+                                    safe = True
+                                    break
+                            if not safe and builds_text(arg, [(sub, sub.id)]):
+                                sites.append((rel, sub.lineno, sub.id + " (read from an address setting)"))
                         if isinstance(sub, ast.Name) and sub.id in tainted:
                             cur, safe = sub, False
                             while cur is not arg and getattr(cur, "parent", None) is not None:
@@ -1024,6 +1060,10 @@ class TestS14AnAddressIsShownByOneHelper:
             "def f(endpoint):\n flash(f'host {__credentials.host_of(endpoint.url)}')\n"
             "def g(dns_url):\n r = req.get(f'{dns_url}/api')\n"
             "def h(url):\n _record_incident(1, 's', f'at {url}', 'x')\n"
+            "def i(_live, _sec, _url_key):\n _socket_now = _live.get(_sec, _url_key, fallback='').strip()\n flash(f'uses this same socket ({_socket_now})', 'error')\n"
+            "def j(request):\n typed = request.form.get('ca_url')\n flash(f'at {typed}')\n"
+            "def k(_live, _sec, _url_key):\n _now = _live.get(_sec, _url_key, fallback='')\n flash(f'at {__auth.shown_url(_now)}', 'error')\n"
+            "def m(cfg):\n port = cfg.get('kea', 'port')\n flash(f'on {port}')\n"
         )
         got = [(line, name) for _r, line, name in s14_sites(planted, "jen/routes/x.py")]
         assert got == [
@@ -1032,13 +1072,19 @@ class TestS14AnAddressIsShownByOneHelper:
             (7, "api_url"),
             (9, "url"),
             (17, "url"),
+            # Q191 (AG2): provenance, not the name - i is the shape beta.21 shipped at the Remove form's twin refusals, j a typed address; k (through shown_url) and m (a setting that is not an address) pass
+            (20, "_socket_now (read from an address setting)"),
+            (23, "typed (built from an address)"),  # (the form key names `url`: the older grammar sees this one too)
         ], got
 
 
 # ── S13: whose CA a trust path is, is decided by certificate identity - never by comparing the path (Q190, AF1; REMOTE-001) ───────────────────────
 
 #: (file, function): the ONE place a trust path is interpreted. `trust_kind` is allowed to say whether a path is Jen's own file because it has ALREADY judged the certificates in it.
-S13_ALLOWED = {("jen/services/kea_tls.py", "trust_kind")}
+S13_ALLOWED = {("jen/services/kea_tls.py", "trust_kind"), ("jen/services/kea_tls.py", "client_kind")}
+#: the settings an identity is made of (Q191, AG1: Jen's identity to a daemon is its CA bundle AND its client pair) - the globals and the config keys
+_S13_NAMES = {"KEA_API_CA", "KEA_API_CLIENT_CERT", "KEA_API_CLIENT_KEY"}
+_S13_KEYS = {"api_ca", "api_client_cert", "api_client_key"}
 _S13_PATH_FUNCS = {"normpath", "realpath", "abspath", "samefile", "commonpath", "relpath", "expanduser", "resolve"}
 
 
@@ -1052,20 +1098,20 @@ def s13_sites(source: str, rel: str) -> list[tuple[str, int, str]]:
 
     def mentions(expr, tainted):
         for sub in ast.walk(expr):
-            if isinstance(sub, ast.Name) and (sub.id == "KEA_API_CA" or sub.id in tainted):
+            if isinstance(sub, ast.Name) and (sub.id in _S13_NAMES or sub.id in tainted):
                 return True
-            if isinstance(sub, ast.Attribute) and sub.attr == "KEA_API_CA":
+            if isinstance(sub, ast.Attribute) and sub.attr in _S13_NAMES:
                 return True
-            if isinstance(sub, ast.Constant) and sub.value in ("KEA_API_CA", "api_ca"):
+            if isinstance(sub, ast.Constant) and sub.value in (_S13_NAMES | _S13_KEYS):
                 return True  # (the config key too: `cfg.get("kea", "api_ca") != ca_crt` is the same comparison - second pass of Q190)
         return False
 
     def derived(expr, tainted):
         """Is `expr` the bundle path itself (or the path with a `.strip()` / `or` / `getattr` around it) - not a dict, a sentence or a comparison that merely mentions it?"""
         if isinstance(expr, ast.Name):
-            return expr.id == "KEA_API_CA" or expr.id in tainted
+            return expr.id in _S13_NAMES or expr.id in tainted
         if isinstance(expr, ast.Attribute):
-            return expr.attr == "KEA_API_CA" or derived(expr.value, tainted)
+            return expr.attr in _S13_NAMES or derived(expr.value, tainted)
         if isinstance(expr, ast.BoolOp):
             return any(derived(v, tainted) for v in expr.values)
         if isinstance(expr, ast.IfExp):
@@ -1073,20 +1119,35 @@ def s13_sites(source: str, rel: str) -> list[tuple[str, int, str]]:
         if isinstance(expr, ast.Call):
             f = expr.func
             if isinstance(f, ast.Name) and f.id == "getattr":
-                return any(isinstance(a, ast.Constant) and a.value == "KEA_API_CA" for a in expr.args)
-            if any(isinstance(a, ast.Constant) and a.value == "api_ca" for a in expr.args):
-                return True  # cfg.get("kea", "api_ca", fallback="")
+                return any(isinstance(a, ast.Constant) and a.value in _S13_NAMES for a in expr.args)
+            if any(isinstance(a, ast.Constant) and a.value in _S13_KEYS for a in expr.args):
+                return True  # cfg.get("kea", "api_ca", fallback="") - and the client pair's keys
             return derived(f, tainted) or any(derived(a, tainted) for a in expr.args)
         return False
+
+    def own(scope):
+        """The nodes of one scope: a function's whole body, but for the module only what is NOT inside a function or class (their names are theirs - a `cert` in one function is not the `cert` in another)."""
+        if not isinstance(scope, ast.Module):
+            yield from ast.walk(scope)
+            return
+        stack = [scope]
+        while stack:
+            n = stack.pop()
+            yield n
+            stack.extend(
+                c
+                for c in ast.iter_child_nodes(n)
+                if not isinstance(c, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            )
 
     sites = []
     scopes = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))] + [tree]
     for scope in scopes:
         tainted: set = set()
-        for node in ast.walk(scope):
+        for node in own(scope):
             if isinstance(node, ast.Assign) and derived(node.value, tainted):
                 tainted |= {t.id for t in node.targets if isinstance(t, ast.Name)}
-        for node in ast.walk(scope):
+        for node in own(scope):
             hit = None
             if isinstance(node, ast.Compare) and any(
                 isinstance(op, (ast.Eq, ast.NotEq, ast.Is, ast.IsNot, ast.In, ast.NotIn)) for op in node.ops
@@ -1131,9 +1192,22 @@ class TestS13ATrustPathIsNeverComparedAsAString:
             "def writer(cfg, ca_crt):\n"
             "    if cfg.get('kea', 'api_ca', fallback='') != ca_crt:\n"
             "        pass\n"
+            "def gate(jen_client_cert):\n"
+            "    if extensions.KEA_API_CLIENT_CERT and jen_client_cert != extensions.KEA_API_CLIENT_CERT:\n"
+            "        pass\n"
+            "def spelled(cfg, mine):\n"
+            "    return os.path.realpath(cfg.get('kea', 'api_client_key', fallback='')) == mine\n"
         )
         got = [(line, what) for _r, line, what in s13_sites(planted, "jen/routes/x.py")]
-        assert got == [(3, "comparison"), (3, "normpath"), (5, "comparison"), (9, "comparison")], got
+        assert got == [
+            (3, "comparison"),
+            (3, "normpath"),
+            (5, "comparison"),
+            (9, "comparison"),
+            (12, "comparison"),
+            (15, "comparison"),
+            (15, "realpath"),
+        ], got  # (the last two functions are the client pair: Q191, AG1)
 
 
 # ── S14b: the same rule for the SERVICES that build the text a route shows (Q190, second pass; LEAK-001, CRED-005) ───────────────────────────────

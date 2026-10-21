@@ -704,6 +704,11 @@ def _endpoint_credentials(ctx) -> Check:
     legacy = []
     for section, key in urls_with_userinfo(extensions.cfg) if extensions.cfg is not None else []:
         who = section
+        if section == "ddns":
+            legacy.append(
+                f"the DNS provider's URL ({section} {key}) carries a user name or password; move them to the provider's user and token fields"
+            )
+            continue
         if section.startswith("kea_server_") and section[len("kea_server_") :].isdigit():
             who = next(
                 (_server_name(s) for s in extensions.KEA_SERVERS if str(s.get("id")) == section[len("kea_server_") :]),

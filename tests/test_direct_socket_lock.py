@@ -1446,3 +1446,85 @@ class TestTheSetupGateAndTheWriterJudgeTheTrustByCertificate:
         assert cfg.get("kea", "api_ca") == f"{tmp_path}/an-alias.crt", "the operator's spelling is left as written"
         assert cfg.get("kea", "api_client_cert") == kt.client_paths()[0], "the missing client certificate is filled in"
         assert not any("api_ca (Jen's CA)" in c for c in changed)
+
+
+class TestTheSetupGateJudgesTheClientPairByCertificate:
+    """Q191 (AG1): the https setup used to compare the configured client path with Jen's - a PATH comparison. By certificate: none / Jen's own files / an alias pass; a copy, a pair no Jen CA issued and a
+    pair that does not load are refused before anything is sent to the host."""
+
+    FORM = {"scheme": "https", "address": "10.0.0.5", "port": "8004", "user": "u", "password": "p"}
+
+    def _world(self, tls_world, monkeypatch, tmp_path, kind):
+        from tests.test_kea_tls_rotation import _client_world
+
+        kt = tls_world["tls"]["tls"]
+        kt.ensure_ca()
+        kt.issue_client_cert()
+        _client_world(kind, tmp_path, monkeypatch)
+        monkeypatch.setattr(infra, "_write_direct_socket_config", lambda *a, **k: "url written")
+
+    @pytest.mark.parametrize("kind", ["copy", "other", "unreadable"])
+    def test_a_pair_the_rotation_cannot_carry_is_refused_before_anything_is_sent(
+        self, tls_world, monkeypatch, tmp_path, kind
+    ):
+        self._world(tls_world, monkeypatch, tmp_path, kind)
+        _post(_inner(infra.setup_direct_socket), **self.FORM)
+        texts = " ".join(t for _s, t in tls_world["flashes"])
+        assert "Nothing was changed" in texts and "Jen's own files" in texts, texts
+        assert tls_world["tls"]["installed"] == [] and tls_world["applies"] == []
+
+    @pytest.mark.parametrize("kind", ["none", "jens-file", "alias"])
+    def test_none_jens_own_files_and_an_alias_go_ahead(self, tls_world, monkeypatch, tmp_path, kind):
+        self._world(tls_world, monkeypatch, tmp_path, kind)
+        _post(_inner(infra.setup_direct_socket), **self.FORM)
+        assert len(tls_world["tls"]["installed"]) == 1, " ".join(t for _s, t in tls_world["flashes"])
+
+
+class TestTheTwinRefusalShowsTheAddressThroughTheHelper:
+    """Q191 (AG2, the P2): the Remove form's twin refusal printed the configured socket URL raw - executed, with the password of a legacy URL in the flash. Both twin refusals (kea-dhcp4's and
+    the dhcp6 / d2 one) show scheme, host and port, and the sweep S14 now sees a value READ from an address setting whatever the variable is called."""
+
+    PASSWORD = "twin-legacy-pw"
+
+    def _config(self, monkeypatch, text):
+        import configparser
+
+        def parser():
+            p = configparser.ConfigParser(interpolation=None)
+            p.read_string(text)
+            return p
+
+        monkeypatch.setattr(jconfig.app_config, "_read_parser", parser)
+
+    def test_the_dhcp4_twin_refusal(self, wire, monkeypatch):
+        self._config(
+            monkeypatch, JEN_CONFIG.replace("http://10.0.0.5:8004", f"http://admin:{self.PASSWORD}@10.0.0.5:8004", 1)
+        )
+        monkeypatch.setattr(
+            extensions, "KEA_SERVERS", [wire["server"], {"id": 2, "name": "kea-b", "api_url": "http://10.0.0.5:8004"}]
+        )
+        _post(_inner(infra.remove_direct_socket))
+        texts = _everything_printed(wire)
+        assert "uses this same socket (http://10.0.0.5:8004)" in texts, texts
+        assert self.PASSWORD not in texts and "admin:" not in texts
+
+    def test_the_dhcp6_twin_refusal(self, wire, monkeypatch):
+        self._config(
+            monkeypatch,
+            JEN_CONFIG + f"[kea6]\napi_url = http://admin:{self.PASSWORD}@10.0.0.5:8006\n",
+        )
+        monkeypatch.setattr(
+            extensions, "KEA_SERVERS", [wire["server"], {"id": 2, "name": "kea-b", "api6_url": "http://10.0.0.5:8006"}]
+        )
+        _post(_inner(infra.remove_direct_socket), service="dhcp6")
+        texts = _everything_printed(wire)
+        assert "uses this same socket (http://10.0.0.5:8006)" in texts, texts
+        assert self.PASSWORD not in texts and "admin:" not in texts
+
+    def test_a_typed_control_agent_address_with_user_info_gets_the_user_info_sentence(self, wire, monkeypatch):
+        from jen.services import auth
+
+        _post(_inner(infra.remove_direct_socket), ca_url=f"http://admin:{self.PASSWORD}@10.0.0.5:8000")
+        texts = _everything_printed(wire)
+        assert auth.USERINFO_SENTENCE in texts and "Nothing was changed" in texts
+        assert self.PASSWORD not in texts and "must look like" not in texts

@@ -244,6 +244,28 @@ def escape_line(value):
     return value.replace("\\", "\\\\").replace("\r", "").replace("\n", "\\n")
 
 
+_USERINFO_KEYS = ("api_url", "api6_url", "api_d2_url", "direct_prev_api_url")
+
+
+def userinfo_warnings(text):
+    """The `[section] key` of every Kea or DNS address in `text` that carries a user name or password inside the URL (Q191, AG3 b) - names only, never the value. The installer merge prints
+    these on stderr and carries on: Jen still dials such an address as written, but a URL never carries a password and the operator is told where it is."""
+    from urllib.parse import urlsplit
+
+    parser = _parse(text, "the merged file")
+    found = []
+    for section in parser.sections():
+        if not (section in ("ddns", "kea", "kea6", "d2") or section.startswith("kea_server_")):
+            continue
+        for key in _USERINFO_KEYS:
+            try:
+                if "@" in urlsplit(parser.get(section, key, raw=True, fallback="").strip()).netloc:
+                    found.append(f"[{section}] {key}")
+            except ValueError:
+                continue
+    return found
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Merge the installer wizard's jen.config into the live one.")
     ap.add_argument(
@@ -281,6 +303,10 @@ def main(argv=None):
     if refusal:
         sys.stderr.write(f"config_merge: refused - {refusal}\n")
         return 4
+    for where in userinfo_warnings(merged):
+        sys.stderr.write(
+            f"config_merge: warning - jen.config {where} carries a user name or password inside the URL; move them to their own fields (a URL never carries a password). Jen still dials it as written.\n"
+        )
     sys.stdout.write(header + ("\n" if header else "") + merged)
     return 0
 

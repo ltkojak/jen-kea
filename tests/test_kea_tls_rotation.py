@@ -1749,3 +1749,241 @@ class TestTheInvariantsBiteTooQ190:
         lab.expected_violations = {"T1"}
         _drop_jens_record(1)
         lab.begin()
+
+
+# ── Q191 (AG1): Jen's identity to a daemon is its CA bundle AND its client pair ──────────────────────────────────────────────────────────────────────
+
+
+def _alias_dir(tmp_path):
+    """A directory that is ANOTHER NAME for Jen's SSL folder and follows it when a file in it is replaced: a directory symlink; on Windows without that privilege, a junction (none needed).
+    Skips when neither can be made."""
+    link = tmp_path / "ssl-alias"
+    if os.path.lexists(link):
+        return link  # (one alias per world: the bundle and the client pair may both go through it)
+    try:
+        os.symlink(kea_tls.SSL_DIR, link, target_is_directory=True)
+        return link
+    except (OSError, NotImplementedError):
+        pass
+    if os.name == "nt":
+        import subprocess
+
+        done = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), kea_tls.SSL_DIR], capture_output=True, check=False
+        )
+        if done.returncode == 0:
+            return link
+    pytest.skip("this platform will not create an alias of a directory here")
+
+
+def _client_world(kind, tmp_path, monkeypatch):
+    """Configure `[kea] api_client_cert` / `api_client_key` as a client pair of the given SHAPE and return its (cert, key) paths - one world per shape of the identity's input."""
+    pem, key = kea_tls.client_paths()
+    if kind == "jens-file":
+        cert_path, key_path = pem, key
+    elif kind == "alias":
+        folder = _alias_dir(tmp_path)
+        cert_path, key_path = str(folder / os.path.basename(pem)), str(folder / os.path.basename(key))
+    elif kind == "copy":
+        cert_path, key_path = str(tmp_path / "copy-client.pem"), str(tmp_path / "copy-client.key")
+        pathlib.Path(cert_path).write_bytes(pathlib.Path(pem).read_bytes())
+        pathlib.Path(key_path).write_bytes(pathlib.Path(key).read_bytes())
+    elif kind == "other":
+        mine = _external_files("10.0.0.99")
+        cert_path, key_path = str(tmp_path / "own-pki.pem"), str(tmp_path / "own-pki.key")
+        pathlib.Path(cert_path).write_text(mine["server.crt"], encoding="ascii")
+        pathlib.Path(key_path).write_text(mine["server.key"], encoding="ascii")
+    elif kind == "unreadable":
+        cert_path, key_path = str(tmp_path / "garbage.pem"), str(tmp_path / "garbage.key")
+        pathlib.Path(cert_path).write_text("not a certificate", encoding="ascii")
+        pathlib.Path(key_path).write_text("not a key", encoding="ascii")
+    elif kind == "none":
+        cert_path, key_path = "", ""
+    else:
+        raise AssertionError(kind)
+    monkeypatch.setattr(extensions, "KEA_API_CLIENT_CERT", cert_path)
+    monkeypatch.setattr(extensions, "KEA_API_CLIENT_KEY", key_path)
+    return cert_path, key_path
+
+
+def _bundle_world(kind, tmp_path, monkeypatch):
+    """Configure the CA bundle as one SHAPE: Jen's own file, an alias of it, or no bundle with verification off."""
+    if kind == "jens-file":
+        return
+    if kind == "alias":
+        monkeypatch.setattr(
+            extensions, "KEA_API_CA", str(_alias_dir(tmp_path) / os.path.basename(kea_tls.ca_paths()[0]))
+        )
+    elif kind == "empty-verify-off":
+        monkeypatch.setattr(extensions, "KEA_API_CA", "")
+        monkeypatch.setattr(extensions, "KEA_API_TLS_VERIFY", False)
+    else:
+        raise AssertionError(kind)
+
+
+class TestClientIdentity:
+    """Q191 (AG1, the P1): the client pair is half of what a daemon with `cert-required` checks, and beta.21 judged only the CA bundle. With `api_client_cert` a byte COPY of Jen's client pem and the
+    bundle an alias (or empty with verification off), a rotation promoted the new CA and client pair, every daemon demanded a certificate from the NEW CA, Jen kept dialling with the old copy, and the
+    screen said "rotated". Every row is a WORLD the Lab builds from a shape of the input; the teardown's T3 judges the daemon's answer to the CONFIGURED dial."""
+
+    def _refused_before_staging(self, lab, needle):
+        assert "Rotate refused" in lab.texts() and needle in lab.texts(), lab.texts()
+        assert lab.remote_actions() == 0 and lab.settings_writes == []
+        assert pathlib.Path(kea_tls.ca_paths()[0]).read_bytes() == lab.ca_a, "nothing was staged or promoted"
+        assert not os.path.exists(kea_tls.ca_paths()[0] + ".next")
+
+    @pytest.mark.parametrize("bundle", ["jens-file", "alias", "empty-verify-off"])
+    def test_a_copy_of_jens_client_pair_is_refused_before_staging_whatever_the_bundle(
+        self, lab, monkeypatch, tmp_path, bundle
+    ):
+        _bundle_world(bundle, tmp_path, monkeypatch)
+        cert_path, _key = _client_world("copy", tmp_path, monkeypatch)
+        assert kea_tls.client_kind() == "copy"
+        lab.begin()
+        assert all(lab.dial_before.values()), (
+            "in this world the daemons ANSWER Jen's configured dial before the request"
+        )
+        _rotate()
+        self._refused_before_staging(lab, "configured as a copy")
+        assert cert_path in lab.texts()
+        assert all(lab.answers_jens_configured_dial(sid) for sid in lab.hosts), "the dial is unchanged"
+
+    @pytest.mark.parametrize("bundle", ["jens-file", "alias"])
+    def test_an_alias_of_jens_client_pair_follows_the_rotation_and_the_dial_holds(
+        self, lab, monkeypatch, tmp_path, bundle
+    ):
+        _bundle_world(bundle, tmp_path, monkeypatch)
+        _client_world("alias", tmp_path, monkeypatch)
+        assert kea_tls.client_kind() == "alias"
+        lab.begin()
+        assert all(lab.dial_before.values())
+        _rotate()
+        assert "Kea CA rotated" in lab.texts(), lab.texts()
+        assert all(lab.answers_jens_live_identity(sid) for sid in lab.hosts)
+        assert all(lab.answers_jens_configured_dial(sid) for sid in lab.hosts), "the alias follows the replaced file"
+
+    def test_a_pair_no_jen_ca_issued_with_a_jen_issued_target_is_refused_and_said(self, lab, monkeypatch, tmp_path):
+        _client_world("other", tmp_path, monkeypatch)
+        assert kea_tls.client_kind() == "other"
+        lab.begin()
+        assert not any(lab.dial_before.values()), "the dial never worked with it"
+        _rotate()
+        self._refused_before_staging(lab, "never accepted it")
+
+    def test_an_unreadable_pair_is_refused(self, lab, monkeypatch, tmp_path):
+        _client_world("unreadable", tmp_path, monkeypatch)
+        assert kea_tls.client_kind() == "unreadable"
+        _rotate()
+        self._refused_before_staging(lab, "cannot be loaded as a pair")
+
+    def test_one_half_of_a_pair_is_unreadable(self, lab, monkeypatch):
+        monkeypatch.setattr(extensions, "KEA_API_CLIENT_KEY", "")
+        assert kea_tls.client_kind() == "unreadable"
+
+    def test_no_pair_rotates_as_before(self, lab, monkeypatch, tmp_path):
+        _client_world("none", tmp_path, monkeypatch)
+        assert kea_tls.client_kind() == "none"
+        _rotate()
+        assert "Kea CA rotated" in lab.texts(), lab.texts()
+        assert all(lab.answers_jens_live_identity(sid) for sid in lab.hosts)
+
+    def test_jens_own_files_rotate_and_the_settings_are_rewritten(self, lab):
+        assert kea_tls.client_kind() == "jens-file"
+        _rotate()
+        assert "Kea CA rotated" in lab.texts() and lab.settings_writes
+
+    @pytest.mark.parametrize("kind", ["copy", "other", "unreadable"])
+    def test_a_pair_the_rotation_cannot_carry_does_not_matter_when_no_jen_issued_endpoint_depends_on_it(
+        self, lab, monkeypatch, tmp_path, kind
+    ):
+        """No target, nothing to cut off: an administrator's endpoints only. (The refusal is for a Jen-issued target.)"""
+        bundle = tmp_path / "administrators.pem"
+        bundle.write_text(_external_files("10.0.0.7")["ca.crt"], encoding="ascii")
+        monkeypatch.setattr(extensions, "KEA_API_CA", str(bundle))
+        for sid in lab.hosts:
+            lab.hosts[sid]["files"] = lab.hosts[sid]["loaded"] = _external_files(lab.servers[sid]["ssh_host"])
+            _drop_jens_record(sid)
+        _client_world(kind, tmp_path, monkeypatch)
+        lab.begin()
+        _rotate()
+        assert "Kea CA rotated" in lab.texts() and "no server certificate was involved" in lab.texts(), lab.texts()
+
+    def test_the_kinds_are_decided_by_certificate_not_by_path(self, lab, monkeypatch, tmp_path):
+        """A copy at a path that merely LOOKS like Jen's (same file name, other folder) is a copy; Jen's own file spelled with a `..` is Jen's own file; a certificate Jen's live CA issued but Jen does
+        not hold is a copy too (a pair Jen cannot carry)."""
+        folder = tmp_path / "elsewhere"
+        folder.mkdir()
+        pem, key = kea_tls.client_paths()
+        (folder / os.path.basename(pem)).write_bytes(pathlib.Path(pem).read_bytes())
+        (folder / os.path.basename(key)).write_bytes(pathlib.Path(key).read_bytes())
+        monkeypatch.setattr(extensions, "KEA_API_CLIENT_CERT", str(folder / os.path.basename(pem)))
+        monkeypatch.setattr(extensions, "KEA_API_CLIENT_KEY", str(folder / os.path.basename(key)))
+        assert kea_tls.client_kind() == "copy"
+        spelled = os.path.join(kea_tls.SSL_DIR, "..", os.path.basename(kea_tls.SSL_DIR))
+        monkeypatch.setattr(extensions, "KEA_API_CLIENT_CERT", os.path.join(spelled, os.path.basename(pem)))
+        monkeypatch.setattr(extensions, "KEA_API_CLIENT_KEY", os.path.join(spelled, os.path.basename(key)))
+        assert kea_tls.client_kind() == "jens-file"
+        # a client certificate Jen's live CA issued, whose files Jen does not hold at its own path
+        ca_cert, ca_key = kea_tls._load_ca()
+        newkey = kea_tls._new_key()
+        issued = kea_tls._leaf(ca_cert, ca_key, newkey, "someone else", [], client=True)
+        (folder / "issued.pem").write_bytes(kea_tls._cert_pem(issued))
+        (folder / "issued.key").write_bytes(kea_tls._key_pem(newkey))
+        monkeypatch.setattr(extensions, "KEA_API_CLIENT_CERT", str(folder / "issued.pem"))
+        monkeypatch.setattr(extensions, "KEA_API_CLIENT_KEY", str(folder / "issued.key"))
+        assert kea_tls.client_kind() == "copy"
+
+
+class TestTheConnectionFormJudgesTheClientPair:
+    """Q191 (AG1): nothing legitimate needs a COPY of Jen's own pair as the client pair - it is the configuration the P1 needs - so the connection form refuses it; an alias and an operator's own PKI
+    stay allowed."""
+
+    def _save(self, lab, monkeypatch, cert, key):
+        import configparser
+
+        monkeypatch.setattr(extensions, "cfg", configparser.ConfigParser(interpolation=None))
+        monkeypatch.setattr(infra.__dict__["__user"], "set_global_setting", lambda *a, **k: True)
+        form = {
+            "api_url": "https://10.0.0.5:8004",
+            "connection_mode": "direct",
+            "api_ca": kea_tls.ca_paths()[0],
+            "api_tls_verify": "1",
+            "api_client_cert": cert,
+            "api_client_key": key,
+        }
+        lab.begin()  # the world (the configured pair) is built: this is the state before the request
+        app = flask.Flask(__name__)
+        app.secret_key = "x"
+        with app.test_request_context(method="POST", data=form):
+            inspect.unwrap(infra.save_infra_kea)()
+
+    def test_a_copy_is_refused_and_nothing_is_written(self, lab, monkeypatch, tmp_path):
+        cert, key = _client_world("copy", tmp_path, monkeypatch)
+        self._save(lab, monkeypatch, cert, key)
+        assert "TLS settings not saved" in lab.texts() and "configured as a copy" in lab.texts()
+        assert cert in lab.texts(), "the SUBMITTED path is named, not the configured one"
+        assert lab.settings_writes == []
+
+    @pytest.mark.parametrize("kind", ["alias", "other", "jens-file"])
+    def test_an_alias_an_own_pki_and_jens_own_files_are_saved(self, lab, monkeypatch, tmp_path, kind):
+        cert, key = _client_world(kind, tmp_path, monkeypatch)
+        self._save(lab, monkeypatch, cert, key)
+        assert "Kea API settings saved" in lab.texts(), lab.texts()
+        assert lab.settings_writes
+
+
+class TestTheInvariantsBiteTooQ191:
+    def test_T3_bites_on_the_P1_world_when_the_client_refusal_is_monkeypatched_away(self, lab, monkeypatch, tmp_path):
+        """The pass's C1X, now a shipped test: client pair a COPY, bundle an alias - with the refusal removed the rotation promotes a new CA and client pair, every daemon demands a certificate from the
+        new CA, Jen keeps dialling with the old copy, and the teardown names it."""
+        lab.expected_violations = {"T3"}
+        _bundle_world("alias", tmp_path, monkeypatch)
+        _client_world("copy", tmp_path, monkeypatch)
+        real = kea_tls.client_kind
+        monkeypatch.setattr(kea_tls, "client_kind", lambda *a, **k: "jens-file")
+        lab.begin()
+        _rotate()
+        monkeypatch.setattr(kea_tls, "client_kind", real)
+        assert "Kea CA rotated" in lab.texts(), "the rotation reported success"
+        assert all(lab.answers_jens_live_identity(sid) for sid in lab.hosts)
+        assert lab.dial_before and not any(lab.answers_jens_configured_dial(sid) for sid in lab.hosts)

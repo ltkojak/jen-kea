@@ -380,6 +380,14 @@ def register_url_filters(jinja_env) -> None:
     jinja_env.filters["no_userinfo"] = lambda value: scrub_urls(value) if value else ""
 
 
+def userinfo_legacy_note(section: str, key: str) -> str:
+    """The sentence for ONE legacy address that carries user-info, naming the section and key - never the value (Q191, AG3 b). A DNS provider's address has its own sentence: its user name and
+    token are the provider's own fields."""
+    if section == "ddns":
+        return f"jen.config [{section}] {key} carries a user name or password inside the DNS provider's URL - move them to the provider's user and token fields (a URL never carries a password); Jen still dials it as written"
+    return f"jen.config [{section}] {key} carries a user name or password inside the URL - move them to the user and password fields (a URL never carries a password); Jen still dials it as written"
+
+
 def urls_with_userinfo(cfg) -> list[tuple[str, str]]:
     """[(section, key)] of every URL option in a loaded ConfigParser whose value carries user-info (`user:pass@host`) - legacy input from before `valid_api_url` refused it (Q190, AF2). Names only,
     never a value. Jen keeps dialling such a URL as before; the credential rule is not touched by this."""
@@ -387,10 +395,11 @@ def urls_with_userinfo(cfg) -> list[tuple[str, str]]:
 
     found = []
     for section in cfg.sections():
-        if section == "ddns":
-            continue  # a DNS provider's address has no Kea user and password fields to move anything to
         for key, value in cfg.items(section, raw=True):
+            # Kea's four address keys, and the DNS provider's address (Q191, AG3 b: its user and token have their own fields too); no other option is a Kea or DNS endpoint
             if key not in ("api_url", "api6_url", "api_d2_url", "direct_prev_api_url"):
+                continue
+            if section not in ("ddns", "kea", "kea6", "d2") and not section.startswith("kea_server_"):
                 continue
             try:
                 netloc = urlsplit((value or "").strip(_PADDING)).netloc

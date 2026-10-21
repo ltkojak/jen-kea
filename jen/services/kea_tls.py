@@ -763,6 +763,67 @@ def trust_kind() -> str:
     return "alias" if os.path.realpath(configured) == os.path.realpath(jens_file) else "copy"
 
 
+def client_kind(cert_path: str | None = None, key_path: str | None = None) -> str:
+    """HOW the client pair Jen presents to a daemon relates to Jen's own client pair, by certificate identity first and only then by path (Q191, AG1) - the twin of `trust_kind` and the
+    ONE definition: `none` (no pair configured - a dial with no client certificate), `unreadable` (one half missing, a file that is not PEM, or a certificate and key that are not a pair),
+    `jens-file` (Jen's own files, or an equivalent spelling of their paths), `alias` (the same files through a link, which follows a replacement), `copy` (a certificate Jen's CA issued, or
+    that equals Jen's live client certificate by DER, at a path that does NOT follow Jen's files - after a rotation it is no longer the certificate the daemons accept), `other` (a certificate
+    no Jen CA issued: the operator's own PKI). With no arguments it judges the configured pair (`[kea] api_client_cert` / `api_client_key`); the connection form passes the pair it was SUBMITTED.
+    A daemon with `cert-required` checks this pair as well as the CA bundle, so it is part of the same identity (REMOTE-001 section 10)."""
+    cert = ((getattr(extensions, "KEA_API_CLIENT_CERT", "") if cert_path is None else cert_path) or "").strip()
+    key = ((getattr(extensions, "KEA_API_CLIENT_KEY", "") if key_path is None else key_path) or "").strip()
+    if not cert and not key:
+        return "none"
+    if not cert or not key:
+        return "unreadable"  # Jen sends a pair or nothing (`kea._tls_client_cert`): one half is a dial with no client certificate
+    spki = serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+    try:
+        mine = load_cert(cert)
+        if mine.public_key().public_bytes(*spki) != load_key(key).public_key().public_bytes(*spki):
+            return "unreadable"
+        mine_der = mine.public_bytes(serialization.Encoding.DER)
+    except (OSError, ValueError, TypeError, UnsupportedAlgorithm):
+        return "unreadable"
+    jens_cert, jens_key = client_paths()
+    if os.path.realpath(cert) == os.path.realpath(jens_cert) and os.path.realpath(key) == os.path.realpath(jens_key):
+        spelled = os.path.normpath(os.path.abspath(cert)) == os.path.normpath(os.path.abspath(jens_cert))
+        spelled = spelled and os.path.normpath(os.path.abspath(key)) == os.path.normpath(os.path.abspath(jens_key))
+        return (
+            "jens-file" if spelled else "alias"
+        )  # an alias follows Jen's file when it is replaced (a link, a junction); a hard link or a copy does not - it keeps the OLD certificate
+    try:
+        live_der = load_cert(jens_cert).public_bytes(serialization.Encoding.DER)
+    except (OSError, ValueError, TypeError, UnsupportedAlgorithm):
+        live_der = None
+    if mine_der == live_der or issued_by(cert, ca_paths()[0]):
+        return "copy"
+    return "other"
+
+
+def client_refusal(kind: str | None = None, cert_path: str | None = None) -> str:
+    """The sentence for a client pair a rotation, an https setup or the connection form cannot carry - "" when the pair is fine (`none`, `jens-file`, `alias`; `other` is the operator's own PKI,
+    refused only where a Jen-issued endpoint depends on it). One text, so the three places say the same thing (Q191, AG1)."""
+    kind = client_kind() if kind is None else kind
+    cert = ((getattr(extensions, "KEA_API_CLIENT_CERT", "") if cert_path is None else cert_path) or "").strip()
+    mine = ", ".join(client_paths())
+    if kind == "copy":
+        return (
+            f"Jen's client certificate is configured as a copy at {cert}; after a rotation that copy would no longer be the certificate the daemons accept. "
+            f"Point the client certificate and key under Settings → Kea at Jen's own files ({mine}) or clear them"
+        )
+    if kind == "other":
+        return (
+            f"The client certificate configured at {cert} was not issued by Jen's CA, so the daemons Jen issued certificates to never accepted it. "
+            f"Point the client certificate and key under Settings → Kea at Jen's own files ({mine}) or clear them"
+        )
+    if kind == "unreadable":
+        return (
+            "The client certificate and key configured under Settings → Kea cannot be loaded as a pair, so Jen would dial the daemons without one. "
+            f"Point them at Jen's own files ({mine}) or clear them"
+        )
+    return ""
+
+
 def trust_includes_jens_ca() -> bool | None:
     """Is Jen's CA among the certificates Jen verifies its https endpoints against? True - the bundle holds it (the path is Jen's CA, an alias of it, a copy of it, or a bundle that contains it);
     False - it holds only an administrator's CAs; None - empty, unreadable or not PEM: ambiguous, and an ambiguity is a refusal wherever it matters (Q190, AF1)."""
@@ -859,7 +920,7 @@ def rotation_inventory(servers, url_for=None) -> RotationInventory:
                         # (second pass, finding 4) NOTHING is verified: Jen looks at no certificate, so it cannot tell whose endpoint this is - and an ambiguity is a refusal
                         refusals.append(
                             f"{label} is an https endpoint at {shown_url(url)}, Jen holds no certificate record for it and Jen is set not to verify any certificate - it cannot tell whose CA the endpoint is on; "
-                            "set the CA bundle under Settings → Kea (Jen's CA, or the administrator's) before rotating"
+                            "set the CA bundle under Settings → Kea to Jen's CA, then remove the direct socket and set it up again so Jen holds its certificate (or point Jen at a socket that is not on its CA), before rotating"
                         )
                 elif bundle is None:
                     refusals.append(
@@ -898,6 +959,12 @@ def rotation_inventory(servers, url_for=None) -> RotationInventory:
             + " - Rotate cannot rewrite that file, so after the rotation Jen could not verify the endpoints it issued certificates to. "
             "Point the CA bundle under Settings → Kea at Jen's own CA file (kea-ca.crt in Jen's SSL folder, or a link to it) before rotating"
         )
+    if targets:
+        # Q191 (AG1): Jen's identity to a daemon is its CA bundle AND its client pair. The pair is judged by certificate like the bundle: a copy (or a pair the dial never worked with, or one that
+        # does not load) under a Jen-issued endpoint is a refusal BEFORE anything is staged - a rotation would replace Jen's own pair and leave the daemons demanding a certificate Jen no longer sends.
+        client_kind_now = client_kind()
+        if client_kind_now in ("copy", "other", "unreadable"):
+            refusals.append(client_refusal(client_kind_now) + " before rotating")
     stale = [f"{c['server_id']}-{c['service']}" for c in listed if (str(c["server_id"]), c["service"]) not in endpoints]
     return RotationInventory(targets, refusals, external, stale, endpoints)
 

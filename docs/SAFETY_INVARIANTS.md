@@ -328,6 +328,8 @@ host names and paths. The reviewed list is empty.
 - `tests/test_invariant_sweeps.py::TestS11ARouteNeverShowsWhatABroadExceptCaught`
 - `tests/test_invariant_sweeps.py::TestS14AnAddressIsShownByOneHelper`
 - `tests/test_invariant_sweeps.py::TestS14bAServiceShowsAnAddressByTheHelperToo`
+- `tests/test_direct_socket_lock.py::TestTheTwinRefusalShowsTheAddressThroughTheHelper`
+- `tests/test_url_never_carries_a_password.py::TestTheDnsProvidersAddressAndTheRestOfQ191`
 - `tests/test_url_never_carries_a_password.py::TestShownUrl`
 - `tests/test_url_never_carries_a_password.py::TestTheSecondPassOfQ190`
 - `tests/test_url_never_carries_a_password.py::TestTheKeaClientNeverPrintsALegacyPassword`
@@ -549,6 +551,11 @@ it to the user and password fields, and Jen keeps dialling it as written (the cr
    and is left as the operator wrote it (the flash says so); a COPY of Jen's CA, or a bundle that holds it, cannot be rewritten and would leave Jen holding the old CA, so a rotation with a Jen-issued target and
    either of them is a REFUSAL before anything is staged, naming the path. `tests/test_invariant_sweeps.py` S13 refuses any other comparison of `KEA_API_CA` (or the config key `api_ca`) with a path. The https setup
    gate passes only Jen's own file, an alias or a copy (never a bundle, an administrator's CA or an unreadable file), and its writer fills in a MISSING `api_ca` / client certificate instead of comparing paths.
+   **Jen's identity to a daemon is its CA bundle AND its client pair (Q191).** A daemon with `cert-required` checks both, so every configured input to that identity is judged by certificate, per shape, before
+   the first remote change, and a shape the rotation cannot carry (a copy) is a refusal. `kea_tls.client_kind()` is the ONE definition of the configured pair (`none` / `jens-file` / `alias` / `copy` / `other` /
+   `unreadable`, by realpath and DER - S13 refuses any other comparison of `KEA_API_CLIENT_CERT` / `_KEY` or their config keys): the rotation asks it after the bundle and before staging, and with a Jen-issued
+   target a `copy`, an `other` (the dial never worked) and an `unreadable` pair are a REFUSAL naming the path; an `alias` follows the replaced file; the https setup gate refuses the same three; the connection
+   form refuses a `copy` (an operator's own PKI stays allowed).
 11. **A stored incident Jen cannot recognise is kept (Q190).** Each entry of the recovery record has a shape (`kea_changeset.recognised_incident`: an attention incident has a known category, a service, a server
    id, a summary and a time; an outcome incident a `rolled_back`/`rollback_failed` status, a service and a time); `_incidents_of(strict=True)` raises `MalformedNote` naming the entry's INDEX, every writer
    refuses the whole note, `_incident_cleared` is False for an entry it cannot read (fail closed, in the lenient reader too), and the Servers banner says an incident Jen cannot read is on record.
@@ -599,6 +606,11 @@ Jen's CA by certificate identity, per endpoint; an invariant with no knob; an in
 - `tests/test_kea_tls_rotation.py::TestTheInvariantsBite`
 - `tests/test_kea_tls_rotation.py::TestTheSecondPassOfQ189`
 - `tests/test_direct_socket_lock.py::TestTheSetupGateAndTheWriterJudgeTheTrustByCertificate`
+- `tests/test_kea_tls_rotation.py::TestClientIdentity`
+- `tests/test_kea_tls_rotation.py::TestTheConnectionFormJudgesTheClientPair`
+- `tests/test_kea_tls_rotation.py::TestTheInvariantsBiteTooQ191`
+- `tests/test_direct_socket_lock.py::TestTheSetupGateJudgesTheClientPairByCertificate`
+- `tests/test_direct_socket_credentials.py::TestTheProbeRowsOfQ191`
 - `tests/test_kea_tls_rotation.py::TestWhoIsOnJensCaIsDecidedByCertificatesNotPaths`
 - `tests/test_kea_tls_rotation.py::TestALegacyUrlWithAPasswordNeverReachesText`
 - `tests/test_kea_tls_rotation.py::TestTheInvariantsBiteTooQ190`

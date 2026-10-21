@@ -474,7 +474,7 @@ def _warn_userinfo_urls(cfg) -> None:
     """Q190 (AF2, CRED-005): a URL with a user name or password in it is legacy input (`valid_api_url` refuses it on save now). ONE warning per (section, key) per process, naming the section and key
     - never the value. Jen keeps dialling it as before; the credential rule is not touched."""
     try:
-        from jen.services.auth import urls_with_userinfo
+        from jen.services.auth import urls_with_userinfo, userinfo_legacy_note
 
         found = urls_with_userinfo(cfg)
     except Exception as e:  # a log line must never break a config load
@@ -483,9 +483,7 @@ def _warn_userinfo_urls(cfg) -> None:
     for section, key in found:
         if (section, key) not in _USERINFO_WARNED:
             _USERINFO_WARNED.add((section, key))
-            logger.warning(
-                f"jen.config [{section}] {key} carries a user name or password inside the URL - move them to the user and password fields (a URL never carries a password); Jen still dials it as written"
-            )
+            logger.warning(userinfo_legacy_note(section, key))
 
 
 class AppConfig:

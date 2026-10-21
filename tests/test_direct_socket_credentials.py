@@ -718,6 +718,27 @@ class TestTheProbeRowsOfQ190:
         }
 
 
+class TestTheProbeRowsOfQ191:
+    """AG1-AG2: the client pair is judged by certificate like the bundle (a copy, a pair no Jen CA issued and a pair that does not load are a refusal under a Jen-issued target), and the sweep sees the twin
+    refusal's address by where the value was READ."""
+
+    def test_the_client_pair_is_judged_by_certificate(self):
+        assert probe.q191_ag1_the_client_pair_is_judged_by_certificate_like_the_bundle() == {
+            "none": ("none", 1, 0),
+            "jens-file": ("jens-file", 1, 0),
+            "copy": ("copy", 1, 1),
+            "other": ("other", 1, 1),
+            "unreadable": ("unreadable", 1, 1),
+            "half": ("unreadable", 1, 1),
+        }
+
+    def test_the_sweep_sees_the_twin_refusal_by_provenance(self):
+        assert probe.q191_ag2_the_twin_refusal_shape_is_seen_by_the_sweep_by_provenance_not_by_name() == [
+            "_socket_now",
+            "here",
+        ]
+
+
 class TestTheSecondPassOfQ187:
     """The executed findings of the adversarial pass on beta.18's routes, each as a probe row."""
 

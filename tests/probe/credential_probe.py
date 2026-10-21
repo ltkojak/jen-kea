@@ -1859,6 +1859,90 @@ def q190_af3_every_entry_of_the_note_has_a_shape_and_an_unrecognised_one_is_refu
     return result
 
 
+def q191_ag1_the_client_pair_is_judged_by_certificate_like_the_bundle():
+    """For each shape of the configured client pair, with ONE Jen-issued target: what `client_kind` says and what the inventory makes of it (targets, refusals)."""
+    import pathlib
+    import shutil
+
+    server = {"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5"}
+    out = {}
+    for shape in ("none", "jens-file", "copy", "other", "unreadable", "half"):
+        with contextlib.ExitStack() as stack:
+            kea_tls, directory, _ = _tls_lab(stack)
+            kea_tls.issue_server_cert(server, "dhcp4", "10.0.0.5")
+            pem, key = kea_tls.client_paths()
+            where = pathlib.Path(directory) / "elsewhere"
+            where.mkdir()
+            cert_path, key_path = {
+                "none": ("", ""),
+                "jens-file": (pem, key),
+                "copy": (str(where / "c.pem"), str(where / "c.key")),
+                "other": (str(where / "o.pem"), str(where / "o.key")),
+                "unreadable": (str(where / "u.pem"), str(where / "u.key")),
+                "half": (pem, ""),
+            }[shape]
+            if shape == "copy":
+                shutil.copy(pem, cert_path)
+                shutil.copy(key, key_path)
+            elif shape == "other":
+                files = _foreign_client_pair()
+                pathlib.Path(cert_path).write_text(files[0], encoding="ascii")
+                pathlib.Path(key_path).write_text(files[1], encoding="ascii")
+            elif shape == "unreadable":
+                pathlib.Path(cert_path).write_text("not a certificate", encoding="ascii")
+                pathlib.Path(key_path).write_text("not a key", encoding="ascii")
+            stack.enter_context(mock.patch.object(extensions, "KEA_API_CLIENT_CERT", cert_path))
+            stack.enter_context(mock.patch.object(extensions, "KEA_API_CLIENT_KEY", key_path))
+            inv = kea_tls.rotation_inventory(
+                [server], url_for=lambda s, svc: "https://10.0.0.5:8004" if svc == "dhcp4" else ""
+            )
+            out[shape] = (kea_tls.client_kind(), len(inv.targets), len(inv.refusals))
+    return out
+
+
+def _foreign_client_pair():
+    """A certificate and key no Jen CA issued (an operator's own PKI), as PEM text."""
+    import datetime
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "an operator")])
+    k = ec.generate_private_key(ec.SECP256R1())
+    now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(k.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(minutes=5))
+        .not_valid_after(now + datetime.timedelta(days=9))
+        .sign(k, hashes.SHA256())
+    )
+    return (
+        cert.public_bytes(serialization.Encoding.PEM).decode(),
+        k.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+        ).decode(),
+    )
+
+
+def q191_ag2_the_twin_refusal_shape_is_seen_by_the_sweep_by_provenance_not_by_name():
+    """The shape beta.21 shipped (`_socket_now = _live.get(_sec, _url_key, ...)` into a flash), a typed form value, and the safe shape: which of them the sweep refuses."""
+    from tests.test_invariant_sweeps import s14_sites
+
+    planted = (
+        "def twin(_live, _sec, _url_key):\n _socket_now = _live.get(_sec, _url_key, fallback='').strip()\n flash(f'uses this socket ({_socket_now})')\n"
+        "def typed(request):\n here = request.form.get('ca_url')\n flash(f'at {here}')\n"
+        "def safe(_live, _sec, _url_key):\n now = _live.get(_sec, _url_key, fallback='')\n flash(f'at {__auth.shown_url(now)}')\n"
+        "def other(cfg):\n port = cfg.get('kea', 'port')\n flash(f'on {port}')\n"
+    )
+    return sorted({name.split(" ")[0] for _r, _l, name in s14_sites(planted, "jen/routes/x.py")})
+
+
 def q185_aa3_a_trailing_no_break_space_is_refused_and_ordinary_padding_is_not():
     from jen.services import auth
 
@@ -1899,7 +1983,9 @@ def q183_p2_f6_a_backslash_url_is_not_the_primarys_host():
 SCENARIOS = {
     name: fn
     for name, fn in sorted(globals().items())
-    if name.startswith(("b12_", "b13_", "q183_", "q184_", "q185_", "q186_", "q187_", "q188_", "q189_", "q190_"))
+    if name.startswith(
+        ("b12_", "b13_", "q183_", "q184_", "q185_", "q186_", "q187_", "q188_", "q189_", "q190_", "q191_")
+    )
     and callable(fn)
 }
 
@@ -2204,6 +2290,15 @@ EXPECTED = {
         False,
         True,
     ),
+    "q191_ag1_the_client_pair_is_judged_by_certificate_like_the_bundle": {
+        "none": ("none", 1, 0),
+        "jens-file": ("jens-file", 1, 0),
+        "copy": ("copy", 1, 1),
+        "other": ("other", 1, 1),
+        "unreadable": ("unreadable", 1, 1),
+        "half": ("unreadable", 1, 1),
+    },
+    "q191_ag2_the_twin_refusal_shape_is_seen_by_the_sweep_by_provenance_not_by_name": ["_socket_now", "here"],
     "q190_af3_every_entry_of_the_note_has_a_shape_and_an_unrecognised_one_is_refused": {
         "empty list": "read",
         "attention": "read",

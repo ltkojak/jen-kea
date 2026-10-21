@@ -490,6 +490,14 @@ def save_infra_kea():
     if tls_err:
         flash(f"TLS settings not saved: {tls_err}.", "error")
         return redirect(url_for("settings.settings_kea"))
+    if api_client_cert:
+        from jen.services import kea_tls as __tls
+
+        if (
+            __tls.client_kind(api_client_cert, api_client_key) == "copy"
+        ):  # Q191 (AG1): nothing legitimate needs a copy of Jen's own pair; an alias and the operator's own PKI stay allowed
+            flash(f"TLS settings not saved: {__tls.client_refusal('copy', api_client_cert)}.", "error")
+            return redirect(url_for("settings.settings_kea"))
 
     refusal = _secret_for_new_endpoint(
         extensions.cfg.get("kea", "api_url", fallback=""),
@@ -2159,10 +2167,11 @@ def setup_direct_socket(server_id, service):
                 "error",
             )
             return back
-        if extensions.KEA_API_CLIENT_CERT and jen_client_cert != extensions.KEA_API_CLIENT_CERT:
+        client_kind_now = __tls.client_kind()  # Q191 (AG1): by certificate - none / jens-file / alias pass; a copy, a pair no Jen CA issued or one that does not load is refused
+        if client_kind_now in ("copy", "other", "unreadable"):
             flash(
-                f"The client certificate above is {extensions.KEA_API_CLIENT_CERT}, not the one Jen's CA issues — "
-                "clear the client certificate fields to use Jen's CA, or set up https by hand.",
+                __tls.client_refusal(client_kind_now)
+                + " - or set up https by hand with your own CA per the admin guide. Nothing was changed.",
                 "error",
             )
             return back
@@ -2865,7 +2874,7 @@ def remove_direct_socket(server_id, service):
                 others_still_direct.append(s.get("name", "Kea Server"))
         if twins:
             flash(
-                f"{', '.join(twins)} uses this same socket ({_socket_now}); remove it there first or point it elsewhere. Nothing was changed on {name}.",
+                f"{', '.join(twins)} uses this same socket ({__auth.shown_url(_socket_now)}); remove it there first or point it elsewhere. Nothing was changed on {name}.",
                 "error",
             )
             return back
@@ -2884,7 +2893,7 @@ def remove_direct_socket(server_id, service):
         ]
         if twins:
             flash(
-                f"{', '.join(twins)} uses this same socket ({_socket_now}); remove it there first or point it elsewhere. Nothing was changed on {name}.",
+                f"{', '.join(twins)} uses this same socket ({__auth.shown_url(_socket_now)}); remove it there first or point it elsewhere. Nothing was changed on {name}.",
                 "error",
             )
             return back
@@ -3067,6 +3076,9 @@ def remove_direct_socket(server_id, service):
             return (endpoint.user, endpoint.password) if endpoint else ("", "")
 
         if ca_url:
+            if __auth.userinfo_sentence(ca_url):
+                flash(__auth.userinfo_sentence(ca_url) + " Nothing was changed.", "error")  # Q191 (AG3 c, CRED-005)
+                return back
             if not (__auth.valid_api_url(ca_url, require_port=True) and _is_kea_url_shape(ca_url)):
                 flash(
                     "The Control Agent's address must look like http://host:8000 (a scheme, a host and a port). Nothing was changed.",
