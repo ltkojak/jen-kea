@@ -556,6 +556,19 @@ it to the user and password fields, and Jen keeps dialling it as written (the cr
    `unreadable`, by realpath and DER - S13 refuses any other comparison of `KEA_API_CLIENT_CERT` / `_KEY` or their config keys): the rotation asks it after the bundle and before staging, and with a Jen-issued
    target a `copy`, an `other` (the dial never worked) and an `unreadable` pair are a REFUSAL naming the path; an `alias` follows the replaced file; the https setup gate refuses the same three; the connection
    form refuses a `copy` (an operator's own PKI stays allowed).
+   **An identity is replaced only after it has been proved, with the replacement, against every endpoint it is presented to; a damaged identity file is a recovery condition surfaced in Health and refused by
+   every ordinary action, never evidence that the identity never existed; a pair is a pair only when the key is the certificate's (Q192).** (1) The rotation stages the new CA and client pair and, BEFORE the
+   install loop, probes every external https endpoint (`rotation_inventory(...).external_endpoints`) with the configured bundle twice - with the LIVE client pair (the baseline: unreachable regardless is a
+   refusal) and with the STAGED one - and refuses one that answers the first and refuses the second: its trust anchor for client certificates is Jen's current CA, and promoting CA-B would lock Jen out of it.
+   "Prepare only" keeps `.next` (the keys private, the fingerprint shown, `PREPARE_KEA_CA` audited) for the operator to add to that daemon beside the current CA, a later Rotate reuses a consistent `.next`
+   (an incomplete or inconsistent one is discarded and said), and a rotation that fails keeps a PREPARED one but discards one it staged itself. (2) `kea_tls.ca_state()` is the ONE definition of Jen's CA
+   (`none` / `ok` / `damaged` with why; `ca_present` is deleted - sweep S15): `ensure_ca` creates only in the uninitialised world (no CA files, no client pair, no server copy of any kind, no prepared rotation, a
+   directory that can be listed - T7) and raises `CaDamaged` otherwise, `issue_server_cert` / `issue_client_cert` raise it instead of signing, the https setup refuses a damaged CA before reading from or sending
+   anything to a host, Health fails, and Rotate replaces a damaged CA only with an explicit acknowledgement that a server which fails part-way cannot be put back (the rollback records `tls-not-restored`).
+   A rotation also refuses before staging when a live identity file is a directory or a link it cannot replace (`promotion_blockers`). (3) `kea_tls.client_state()` is the ONE definition of Jen's client pair
+   (SPKI, the live issuer, `clientAuth`, validity; `none` / `ok` / `expiring` / `damaged`): `issue_client_cert` re-issues a damaged pair from an ok CA (the old pair kept as `.prev`) and the setup that calls it
+   says so. (4) `tests/test_kea_tls_worlds.py` generates a world per (file, state) over every file the module reads, with T6 (no ordinary action replaces a damaged identity file) and T7, and a test lists the
+   module's path functions, suffixes, configured inputs and reading functions so a new one is a new row.
 11. **A stored incident Jen cannot recognise is kept (Q190).** Each entry of the recovery record has a shape (`kea_changeset.recognised_incident`: an attention incident has a known category, a service, a server
    id, a summary and a time; an outcome incident a `rolled_back`/`rollback_failed` status, a service and a time); `_incidents_of(strict=True)` raises `MalformedNote` naming the entry's INDEX, every writer
    refuses the whole note, `_incident_cleared` is False for an entry it cannot read (fail closed, in the lenient reader too), and the Servers banner says an incident Jen cannot read is on record.
@@ -611,6 +624,17 @@ Jen's CA by certificate identity, per endpoint; an invariant with no knob; an in
 - `tests/test_kea_tls_rotation.py::TestTheInvariantsBiteTooQ191`
 - `tests/test_kea_tls_rotation.py::TestTheSecondPassOfQ191`
 - `tests/test_direct_socket_lock.py::TestTheSecondPassOfQ191`
+- `tests/test_kea_tls_rotation.py::TestSplitTrust`
+- `tests/test_kea_tls_rotation.py::TestCaState`
+- `tests/test_kea_tls_rotation.py::TestClientState`
+- `tests/test_kea_tls_rotation.py::TestTheInvariantsBiteTooQ192`
+- `tests/test_kea_tls_worlds.py::TestTheWorldsOfTheLab`
+- `tests/test_kea_tls_worlds.py::TestEveryInputOfTheModuleIsARow`
+- `tests/test_direct_socket_lock.py::TestTheWorldsOfTheSetupHarness`
+- `tests/test_direct_socket_lock.py::TestSetupWithADamagedCaOrClientPair`
+- `tests/test_invariant_sweeps.py::TestS15TheCaIsReadThroughCaState`
+- `tests/test_direct_socket_credentials.py::TestTheProbeRowsOfQ192`
+- `tests/system/test_boundaries.py::test_22_h_a_damaged_ca_refuses_an_https_setup_and_is_replaced_only_by_an_acknowledged_rotation`
 - `tests/test_direct_socket_lock.py::TestTheSetupGateJudgesTheClientPairByCertificate`
 - `tests/test_direct_socket_credentials.py::TestTheProbeRowsOfQ191`
 - `tests/test_kea_tls_rotation.py::TestWhoIsOnJensCaIsDecidedByCertificatesNotPaths`

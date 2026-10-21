@@ -63,15 +63,18 @@ class TestEnsureCa:
         assert stat.S_IMODE(os.stat(r["key"]).st_mode) == 0o600
         assert stat.S_IMODE(os.stat(r["cert"]).st_mode) == 0o644
 
-    def test_a_cert_without_a_key_is_regenerated_as_a_pair(self, ssl_dir):
+    def test_a_cert_without_a_key_is_a_damaged_ca_and_nothing_is_created(self, ssl_dir):
+        """Q192 (AH2, adjusted): this used to read "a cert without a loadable key counts as absent" and make a NEW CA under whatever https sockets existed. A damaged CA is a recovery
+        condition: `ensure_ca` raises, creates nothing and leaves the certificate byte-equal; only the promotion path (`force`) creates."""
         r = kea_tls.ensure_ca()
+        before = pathlib.Path(r["cert"]).read_bytes()
         os.remove(r["key"])
-        old_serial = kea_tls.load_cert(r["cert"]).serial_number
-        r2 = kea_tls.ensure_ca()
-        assert r2["created"] is True
-        assert kea_tls.load_cert(r2["cert"]).serial_number != old_serial
-        assert os.path.isfile(r2["key"])
-        assert os.path.isfile(r["cert"] + ".prev")  # the orphaned cert is kept aside
+        assert kea_tls.ca_state()[0] == "damaged"
+        with pytest.raises(kea_tls.CaDamaged, match="kea-ca.key is missing"):
+            kea_tls.ensure_ca()
+        assert pathlib.Path(r["cert"]).read_bytes() == before and not os.path.exists(r["key"])
+        assert not os.path.exists(r["cert"] + ".prev")
+        assert kea_tls.ensure_ca(force=True)["created"] is True
 
     def test_force_rotates(self, ssl_dir):
         a = kea_tls.load_cert(kea_tls.ensure_ca()["cert"]).serial_number
@@ -213,7 +216,7 @@ class TestExpiryHelpers:
     def test_days_left_on_a_real_cert(self, ssl_dir):
         r = kea_tls.ensure_ca()
         assert 3640 <= kea_tls.days_left(r["cert"]) <= 3650
-        assert kea_tls.ca_present()
+        assert kea_tls.ca_state() == ("ok", "")
 
 
 class TestStagedRotation:

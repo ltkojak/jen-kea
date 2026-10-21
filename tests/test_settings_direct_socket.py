@@ -955,7 +955,7 @@ class TestHttpsFlow:
         r = _setup(logged_in_client, scheme="https")
         assert b"needs jen-kea-helper v4" in r.data
         assert fake.calls == []
-        assert not tls_env.ca_present()  # no CA was even created
+        assert tls_env.ca_state()[0] == "none"  # no CA was even created
         assert _on_disk(isolated_config).get("kea", "api_url") == CA_URL
 
     def test_install_tls_failure_stops_before_the_config_edit(

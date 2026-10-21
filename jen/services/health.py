@@ -1114,15 +1114,35 @@ def _kea_tls_expiry(ctx) -> Check:
     c = Check("kea_tls_expiry", "Kea mTLS certificates", "jen", fix_url="/settings/kea")
     from jen.services import kea_tls
 
-    if not kea_tls.ca_present():
+    ca_state, ca_why = kea_tls.ca_state()  # Q192 (AH2): none / ok / damaged
+    if ca_state == "none":
+        evidence = kea_tls.ca_refusal()
+        if evidence:
+            # an absent CA beside evidence that one existed is not "no CA yet"
+            c.status, c.detail = (
+                "fail",
+                f"Jen's CA is missing, and it existed ({evidence}) - restore it from a backup, or Rotate the Kea CA (acknowledging that a server which fails part-way cannot be put back)",
+            )
+            return c
         c.status, c.detail = "skip", "no Jen-managed Kea CA (Control Agent or http sockets)"
+        return c
+    if ca_state == "damaged":
+        c.status, c.detail = (
+            "fail",
+            f"Jen's CA is damaged ({ca_why}) - restore it from a backup, or Rotate the Kea CA (acknowledging that a server which fails part-way cannot be put back); an https setup is refused until then",
+        )
         return c
     items = [("the Kea CA", kea_tls.days_left(kea_tls.ca_paths()[0]))]
     client_pem = kea_tls.client_paths()[0]
     items.append(("Jen's client certificate", kea_tls.days_left(client_pem)))
-    if not kea_tls.issued_by(client_pem, kea_tls.ca_paths()[0]):
+    client_state, client_why = kea_tls.client_state()
+    if client_state in ("none", "damaged"):
         c.status = "fail"
-        c.detail = "Jen's client certificate is missing or not signed by the current CA — Rotate the Kea CA, or set up an https socket again"
+        c.detail = (
+            f"Jen's client certificate is {'missing' if client_state == 'none' else 'damaged'}"
+            + (f" ({client_why})" if client_why else "")
+            + " — set up an https socket again (it re-issues the pair from the same CA), or Rotate the Kea CA"
+        )
         return c
     unlisted = ""
     try:

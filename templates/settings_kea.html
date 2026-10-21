@@ -201,13 +201,31 @@
     <div id="kea-ca" class="u-10a65a">
         <div class="stat-label u-c81ce4">Jen-managed Kea CA (for https sockets)</div>
         {% if kea_ca.present %}
-        <div class="form-hint u-fdf33f"><code>{{ kea_ca.subject }}</code> — expires in {{ kea_ca.days_left }} day(s). Jen's client certificate: {% if kea_ca.client_ok %}<span class="u-5a4529">valid, signed by this CA</span>{% else %}<span class="u-52df2b">missing or not signed by this CA</span>{% endif %}. Server certificates Rotate will re-issue: {% for n, svc, d in kea_ca.issued %}{{ n }} kea-{{ svc }} ({{ d }} d){% if not loop.last %}, {% endif %}{% else %}none yet{% endfor %}.{% if kea_ca.external %} Not on Jen's CA, so Rotate leaves them alone: {{ kea_ca.external|join(', ') }}.{% endif %}</div>
+        <div class="form-hint u-fdf33f"><code>{{ kea_ca.subject }}</code> — expires in {{ kea_ca.days_left }} day(s). Jen's client certificate: {% if kea_ca.client_ok %}<span class="u-5a4529">valid, signed by this CA</span>{% elif kea_ca.client_state == 'expiring' %}<span class="u-52df2b">{{ kea_ca.client_why }}</span>{% else %}<span class="u-52df2b">{% if kea_ca.client_state == 'none' %}missing{% else %}damaged: {{ kea_ca.client_why }}{% endif %} - setting up an https socket re-issues it from this CA</span>{% endif %}. Server certificates Rotate will re-issue: {% for n, svc, d in kea_ca.issued %}{{ n }} kea-{{ svc }} ({{ d }} d){% if not loop.last %}, {% endif %}{% else %}none yet{% endfor %}.{% if kea_ca.external %} Not on Jen's CA, so Rotate leaves them alone: {{ kea_ca.external|join(', ') }}.{% endif %}</div>
         {% if kea_ca.refused %}<div class="form-hint u-fdf33f"><span class="u-52df2b">Rotate would be refused:</span> {{ kea_ca.refused|join('; ') }}.</div>{% endif %}
         <form method="POST" action="/settings/infrastructure/kea-ca/rotate" class="u-cccfa4" data-confirm="Rotate the Kea CA? Jen issues a new CA and client certificate and pushes a new server certificate to: {% for n, svc, d in kea_ca.issued %}{{ n }} kea-{{ svc }}{% if not loop.last %}, {% endif %}{% else %}(no servers yet){% endfor %}.{% if kea_ca.external %} Not on Jen's CA, so left alone: {{ kea_ca.external|join(', ') }}.{% endif %} Each daemon restarts. If any push fails, everything is rolled back to the current CA.">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="btn btn-sm btn-warning">{{ icon("refresh-cw") }} Rotate Kea CA</button>
         </form>
         <span class="form-hint u-5dd2a6">Re-issues everything — 10-year CA, 5-year certificates. Asks for your password again if it has been a while.</span>
+        <form method="POST" action="/settings/infrastructure/kea-ca/prepare" class="u-cccfa4" data-confirm="Prepare a new Kea CA? Jen writes it beside the current one and changes nothing on any server. Add its certificate to the trust anchor of any daemon that is not on Jen's CA and checks Jen's client certificate, then rotate.">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn-sm btn-secondary">{{ icon("file-pen") }} Prepare only</button>
+        </form>
+        {% if kea_ca.prepared %}
+        <div class="form-hint u-fdf33f">A new CA is prepared: SHA-256 fingerprint <code>{{ kea_ca.prepared_fingerprint }}</code>. A rotation reuses it.</div>
+        <form method="POST" action="/settings/infrastructure/kea-ca/discard" class="u-cccfa4" data-confirm="Discard the prepared CA? A daemon whose trust anchor already holds it will need another one prepared.">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn-sm btn-secondary">{{ icon("trash") }} Discard prepared CA</button>
+        </form>
+        {% elif kea_ca.prepared_note %}<div class="form-hint u-fdf33f">{{ kea_ca.prepared_note }}.</div>{% endif %}
+        {% elif kea_ca.damaged %}
+        <div class="form-hint u-fdf33f"><span class="u-52df2b">Jen's CA is damaged: {{ kea_ca.why }}.</span> Restore the file from a backup, or replace the CA with Rotate. An https setup is refused until then, and Jen's client certificate is left as it is. Server certificates Rotate will re-issue: {% for n, svc, d in kea_ca.issued %}{{ n }} kea-{{ svc }}{% if not loop.last %}, {% endif %}{% else %}none yet{% endfor %}.{% if kea_ca.refused %} <span class="u-52df2b">Rotate would be refused:</span> {{ kea_ca.refused|join('; ') }}.{% endif %}</div>
+        <form method="POST" action="/settings/infrastructure/kea-ca/rotate" class="u-cccfa4" data-confirm="Replace the damaged Kea CA? The current CA cannot sign, so a server that fails part-way CANNOT be put back on it and will need its socket set up again.">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label class="form-hint"><input type="checkbox" name="acknowledge_damaged_ca" value="1"> I understand that a server which fails part-way cannot be put back on the damaged CA</label>
+            <button type="submit" class="btn btn-sm btn-warning">{{ icon("refresh-cw") }} Replace the damaged CA</button>
+        </form>
         {% else %}
         <div class="form-hint">Not created yet — Jen creates it (EC P-256, 10 years, key at <code>{{ jen_layout.config_dir }}/ssl/kea-ca.key</code>) the first time you set up an https socket.{% if kea_ca.external_ca %} The CA bundle above points at your own CA; clear it to use Jen's.{% endif %}</div>
         {% endif %}

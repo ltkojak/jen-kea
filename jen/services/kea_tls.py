@@ -216,25 +216,93 @@ def _build_ca(key, cn: str):
     )
 
 
-def ca_present() -> bool:
+class CaDamaged(Exception):
+    """Q192 (AH2): Jen's CA is not usable and is NOT "absent" - one file missing, either unreadable or malformed, or a certificate and key that are not a pair - or it is absent in a world that
+    shows it once existed (a client certificate, a server copy). Nothing ordinary may replace it: `ensure_ca` raises this instead of creating a new CA under existing https sockets, and
+    `issue_server_cert` / `issue_client_cert` raise it instead of signing with something that cannot sign. `.why` names the damage (a file name and what is wrong with it - never a path's content)."""
+
+    def __init__(self, why: str):
+        super().__init__(why)
+        self.why = why
+
+
+def ca_state() -> tuple[str, str]:
+    """The ONE definition of what Jen's CA is (Q192, AH2): `("none", "")` - neither file exists; `("ok", "")` - both load and are a pair; `("damaged", why)` - one missing, either unreadable
+    or malformed, or the certificate and key are not a pair (`why` says which). There is no other reading: the module used to load the two files independently, and "a cert without a loadable
+    key counts as absent" made a NEW CA under existing https sockets (the existing client certificate no longer valid under the active CA, every server certificate unverifiable)."""
     crt, key = ca_paths()
+    have_crt, have_key = os.path.lexists(crt), os.path.lexists(key)
+    if not have_crt and not have_key:
+        return "none", ""
+    crt_name, key_name = os.path.basename(crt), os.path.basename(key)
+    if not have_crt:
+        return "damaged", f"{crt_name} is missing ({key_name} is there)"
+    if not have_key:
+        return "damaged", f"{key_name} is missing ({crt_name} is there)"
     try:
-        load_cert(crt)
-        load_key(key)
-        return True
-    except (OSError, ValueError, TypeError):
-        return False
+        cert = load_cert(crt)
+    except OSError as e:
+        return "damaged", f"{crt_name} cannot be read ({type(e).__name__})"
+    except (ValueError, TypeError, UnsupportedAlgorithm):
+        return "damaged", f"{crt_name} is not a certificate"
+    try:
+        private = load_key(key)
+    except OSError as e:
+        return "damaged", f"{key_name} cannot be read ({type(e).__name__})"
+    except (ValueError, TypeError, UnsupportedAlgorithm):
+        return "damaged", f"{key_name} is not a private key"
+    spki = serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+    if cert.public_key().public_bytes(*spki) != private.public_key().public_bytes(*spki):
+        return "damaged", f"{crt_name} and {key_name} are not a pair"
+    return "ok", ""
+
+
+def _initialised_evidence() -> str:
+    """Q192 (AH2, T7): why this is NOT the uninitialised world - "" when it is. `ensure_ca` may create a CA only where nothing Jen ever issued can exist: no client certificate files, no copy of
+    any server pair (live, `.prev`, `.staged`, a marker), no prepared rotation, and a directory that can be read at all (an unlistable one is unknown, and unknown is not 'empty')."""
+    pem, key = client_paths()
+    if os.path.lexists(pem) or os.path.lexists(key):
+        return "Jen's client certificate exists, so a CA made it - the CA's files are gone, not never made"
+    for path in (ca_paths()[0] + _STAGE_SUFFIX, ca_paths()[1] + _STAGE_SUFFIX):
+        if os.path.lexists(path):
+            return "a prepared CA is waiting beside the live one"
+    try:
+        names = os.listdir(_copies_dir())
+    except FileNotFoundError:
+        return ""
+    except OSError as e:
+        return f"Jen cannot read its certificate directory ({type(e).__name__}), so it cannot tell whether it ever issued a certificate"
+    if names:
+        return f"Jen holds {len(names)} file(s) for certificates its CA issued, so the CA existed - its files are gone, not never made"
+    return ""
+
+
+def ca_refusal() -> str:
+    """ "" when `ensure_ca()` may proceed (the CA is ok, or this is the uninitialised world); else the sentence for why it may not - the damage, or the evidence that a CA existed (Q192, AH2). Asked
+    by a route BEFORE it reads from or sends anything to a host."""
+    state, why = ca_state()
+    if state == "damaged":
+        return why
+    if state == "none":
+        return _initialised_evidence()
+    return ""
 
 
 def ensure_ca(force: bool = False) -> dict:
-    """Create the CA if it isn't there (or `force`), idempotent
-    otherwise. A cert without a loadable key (or vice versa) counts as
-    absent — both halves are regenerated together; the previous files
-    are kept as `.prev` by write_atomically. Returns
-    {"cert": path, "key": path, "created": bool, "subject": cn}."""
+    """Create the CA ONLY in the uninitialised world (Q192, AH2; invariant T7), or with `force` (a rotation's own promotion path): `ok` returns it unchanged, `damaged` raises `CaDamaged`, and an
+    absent CA beside evidence that one existed (a client certificate, a server copy, a prepared rotation, an unreadable directory) raises it too. It used to read "a cert without a loadable key
+    counts as absent" and create a new CA whenever either file failed to load; the previous files are kept as `.prev` by commit_file_set when a forced creation replaces them.
+    Returns {"cert": path, "key": path, "created": bool, "subject": cn}."""
     crt, key_path = ca_paths()
-    if not force and ca_present():
-        return {"cert": crt, "key": key_path, "created": False, "subject": _cn(crt)}
+    if not force:
+        state, why = ca_state()
+        if state == "ok":
+            return {"cert": crt, "key": key_path, "created": False, "subject": _cn(crt)}
+        if state == "damaged":
+            raise CaDamaged(why)
+        evidence = _initialised_evidence()
+        if evidence:
+            raise CaDamaged(evidence)
     _ensure_dir(SSL_DIR)
     key = _new_key()
     cn = f"Jen Kea CA {_hostname()} {datetime.now(timezone.utc):%Y-%m-%d}"
@@ -254,6 +322,10 @@ def _cn(cert_path: str) -> str:
 
 
 def _load_ca():
+    """The live CA certificate and key - ONLY from an ok CA (Q192, AH2): a damaged or absent one raises `CaDamaged`, and nothing is signed with it."""
+    state, why = ca_state()
+    if state != "ok":
+        raise CaDamaged(why or "Jen has no Kea CA yet")
     crt, key_path = ca_paths()
     return load_cert(crt), load_key(key_path)
 
@@ -653,35 +725,79 @@ def ca_consistent() -> bool:
         return False
 
 
-def client_cert_ok() -> bool:
-    """True iff Jen's client cert exists, was signed by the CURRENT CA,
-    its key loads, and it has more than 30 days left."""
-    pem, key_path = client_paths()
-    crt, _ = ca_paths()
-    if not issued_by(pem, crt):
-        return False
+def client_state() -> tuple[str, str]:
+    """The ONE definition of Jen's client pair (Q192, AH3): `("none", "")` - neither file exists; `("ok", "")` - both load, the key is the certificate's (SPKI), the certificate was issued by the
+    live CA, carries the `clientAuth` extended key usage and is inside its validity with more than 30 days left; `("expiring", why)` - all of that but 30 days or fewer remain; `("damaged", why)` -
+    anything else (one file missing, unreadable or malformed, a key that is not the certificate's, an issuer that is not the live CA - or no CA to judge it against - no `clientAuth`, not yet valid,
+    expired). It used to load the key and never ask whether it belonged to the certificate: Health read a pair of strangers as healthy and `issue_client_cert` skipped the re-issue."""
+    pem, key = client_paths()
+    have_pem, have_key = os.path.lexists(pem), os.path.lexists(key)
+    if not have_pem and not have_key:
+        return "none", ""
+    pem_name, key_name = os.path.basename(pem), os.path.basename(key)
+    if not have_pem:
+        return "damaged", f"{pem_name} is missing ({key_name} is there)"
+    if not have_key:
+        return "damaged", f"{key_name} is missing ({pem_name} is there)"
     try:
-        load_key(key_path)
-    except (OSError, ValueError, TypeError):
-        return False
-    left = days_left(pem)
-    return left is not None and left > 30
+        cert = load_cert(pem)
+    except OSError as e:
+        return "damaged", f"{pem_name} cannot be read ({type(e).__name__})"
+    except (ValueError, TypeError, UnsupportedAlgorithm):
+        return "damaged", f"{pem_name} is not a certificate"
+    try:
+        private = load_key(key)
+    except OSError as e:
+        return "damaged", f"{key_name} cannot be read ({type(e).__name__})"
+    except (ValueError, TypeError, UnsupportedAlgorithm):
+        return "damaged", f"{key_name} is not a private key"
+    spki = serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+    if cert.public_key().public_bytes(*spki) != private.public_key().public_bytes(*spki):
+        return "damaged", f"{key_name} is not the key of {pem_name}"
+    ca_state_now, ca_why = ca_state()
+    if ca_state_now != "ok":
+        return "damaged", f"there is no usable CA to judge {pem_name} against ({ca_why or 'none yet'})"
+    if not issued_by(pem, ca_paths()[0]):
+        return "damaged", f"{pem_name} was not issued by the current CA"
+    try:
+        usages = cert.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
+    except x509.ExtensionNotFound:
+        usages = []
+    if ExtendedKeyUsageOID.CLIENT_AUTH not in usages:
+        return "damaged", f"{pem_name} is not a client certificate (no clientAuth)"
+    now = datetime.now(timezone.utc)
+    if cert.not_valid_before_utc > now:
+        return "damaged", f"{pem_name} is not valid yet"
+    if cert.not_valid_after_utc <= now:
+        return "damaged", f"{pem_name} has expired"
+    left = (cert.not_valid_after_utc - now).days
+    if left <= 30:
+        return "expiring", f"{pem_name} expires in {left} day(s)"
+    return "ok", ""
+
+
+def client_cert_ok() -> bool:
+    """True iff Jen's client pair is a pair that works: `client_state()` is `ok` (Q192, AH3 - the key is the certificate's, the CA is the live one, `clientAuth`, inside its validity, more than
+    30 days left)."""
+    return client_state()[0] == "ok"
 
 
 def issue_client_cert(force: bool = False) -> dict:
-    """Jen's own client certificate (clientAuth). Reissued when missing,
-    not signed by the current CA, expiring, or `force`. Returns
-    {"cert": path, "key": path, "issued": bool}."""
+    """Jen's own client certificate (clientAuth). Re-issued when it is missing, damaged (a key that is not the certificate's, an issuer that is not the live CA, no `clientAuth`, expired), expiring,
+    or `force` - from the live CA, which must be `ok` (the same CA: every daemon that trusts it keeps trusting it); the pair it replaces is kept as `.prev` by `commit_file_set`. A damaged or absent CA
+    raises `CaDamaged` (Q192, AH2): nothing is signed with a CA that cannot sign. Returns {"cert": path, "key": path, "issued": bool, "why": str} - `why` is the damage a re-issue repaired ("" for a first
+    issue, an unforced no-op or a forced one)."""
     pem, key_path = client_paths()
-    if not force and client_cert_ok():
-        return {"cert": pem, "key": key_path, "issued": False}
+    state, why = client_state()
+    if not force and state == "ok":
+        return {"cert": pem, "key": key_path, "issued": False, "why": ""}
     ca_cert, ca_key = _load_ca()
     key = _new_key()
     cert = _leaf(ca_cert, ca_key, key, f"jen {_hostname()}", [], client=True)
     _ensure_dir(SSL_DIR)
     commit_file_set([(key_path, _key_pem(key), 0o600), (pem, _cert_pem(cert), 0o644)])
     logger.info(f"kea_tls: issued Jen's Kea client certificate at {pem}")
-    return {"cert": pem, "key": key_path, "issued": True}
+    return {"cert": pem, "key": key_path, "issued": True, "why": why if state in ("damaged", "expiring") else ""}
 
 
 def rotate_ca() -> dict:
@@ -710,8 +826,10 @@ class RotationInventory:
     `refusals` are sentences, empty when the rotation may go ahead. `external` are the https endpoints whose certificate Jen's CA did not issue (named, left alone, never silently included
     or skipped), `stale` the copies of a server or service that is no longer an https endpoint (listed, ignored)."""
 
-    def __init__(self, targets, refusals, external, stale, endpoints=frozenset()):
+    def __init__(self, targets, refusals, external, stale, endpoints=frozenset(), external_endpoints=()):
         self.targets, self.refusals, self.external, self.stale = targets, refusals, external, stale
+        # Q192 (AH1): the `external` https endpoints as (server, service, url) - what a rotation PROBES with the staged client pair (the names above are sentences)
+        self.external_endpoints = list(external_endpoints)
         self.endpoints = frozenset(
             endpoints
         )  # every https endpoint Jen dials, (server id, service), whatever Jen holds for it - what a running rotation is compared with
@@ -839,7 +957,7 @@ def _server_label(server: dict, service: str) -> str:
     )
 
 
-def record_state(server_id, service: str) -> tuple[str, str]:
+def record_state(server_id, service: str, recovery: bool = False) -> tuple[str, str]:
     """What Jen holds for one server and service, as `(state, why)`: `("jen", "")` - a certificate and key that load, are a pair and were issued by Jen's live CA; `("external", "")` - a pair
     whose certificate no Jen CA issued; `("none", why)` - NEITHER file exists; `("refuse", why)` - anything Jen cannot rotate safely: one file missing, unreadable, malformed, not a pair, issued
     by an earlier Jen CA."""
@@ -875,11 +993,16 @@ def record_state(server_id, service: str) -> tuple[str, str]:
     if issued_by(crt, ca_paths()[0]):
         return "jen", ""
     if any(a.value == "Jen" for a in cert.issuer.get_attributes_for_oid(NameOID.ORGANIZATION_NAME)):
+        if recovery:
+            return (
+                "jen",
+                "",
+            )  # Q192 (AH2): replacing a DAMAGED CA - every Jen-issued pair is a target whichever Jen CA signed it; the live CA cannot be asked
         return "refuse", "its certificate was issued by an earlier Jen CA, not the current one"
     return "external", ""
 
 
-def rotation_inventory(servers, url_for=None) -> RotationInventory:
+def rotation_inventory(servers, url_for=None, recovery: bool = False) -> RotationInventory:
     """The ONE source of a rotation's targets (Q189, AE1): for every configured server and each of dhcp4 / dhcp6 / d2, the URL Jen dials (`url_for(server, service)`, default the Kea
     client's `_endpoint_for`); every `https://` endpoint is a target when Jen holds a complete record of its certificate (`record_state`) and a REFUSAL, with a sentence, when it does not.
     A certificate no Jen CA issued is an administrator-managed endpoint: named in `external`, left alone. A directory that cannot be listed is a refusal naming it - never an empty set.
@@ -892,6 +1015,7 @@ def rotation_inventory(servers, url_for=None) -> RotationInventory:
         url_for = _kea.configured_url  # the CONFIGURED address, whatever the credential rule says about the password
 
     targets, refusals, external = [], [], []
+    external_endpoints = []
     bundle = trust_bundle()
     configured_ca = (getattr(extensions, "KEA_API_CA", "") or "").strip()
     try:
@@ -910,7 +1034,7 @@ def rotation_inventory(servers, url_for=None) -> RotationInventory:
             sid = server.get("id")
             endpoints.add((str(sid), service))
             label = _server_label(server, service)
-            state, why = record_state(sid, service)
+            state, why = record_state(sid, service, recovery=recovery)
             if state == "none":
                 # Q190 (AF1): Jen holds no record of this endpoint's certificate. Whose endpoint it is is a fact about CERTIFICATES, decided here - and only here, as the tiebreak - from what Jen is
                 # configured to trust, by identity (`trust_bundle`), never from a path string: an endpoint with a Jen-issued copy is a target whatever the trust path says.
@@ -918,6 +1042,7 @@ def rotation_inventory(servers, url_for=None) -> RotationInventory:
                     if getattr(extensions, "KEA_API_TLS_VERIFY", True):
                         # (verified against the system's CAs: Jen's CA is not what Jen trusts, so a certificate Jen did not issue is the administrator's)
                         external.append(f"{label} ({shown_url(url)}; verified against the system's CAs, not Jen's)")
+                        external_endpoints.append((server, service, url))
                     else:
                         # (second pass, finding 4) NOTHING is verified: Jen looks at no certificate, so it cannot tell whose endpoint this is - and an ambiguity is a refusal
                         refusals.append(
@@ -940,12 +1065,14 @@ def rotation_inventory(servers, url_for=None) -> RotationInventory:
                     )
                 else:
                     external.append(f"{label} ({shown_url(url)}; its CA is not Jen's)")
+                    external_endpoints.append((server, service, url))
             elif state == "jen":
                 from urllib.parse import urlparse
 
                 targets.append((server, service, urlparse(url).hostname or ""))
             elif state == "external":
                 external.append(f"{label} ({shown_url(url)}; its certificate was not issued by Jen)")
+                external_endpoints.append((server, service, url))
             else:
                 refusals.append(
                     f"{label} is an https endpoint at {shown_url(url)} and Jen has no complete record of its certificate ({why}); remove the direct socket and set it up again so Jen issues "
@@ -968,7 +1095,7 @@ def rotation_inventory(servers, url_for=None) -> RotationInventory:
         if client_kind_now in ("copy", "other", "unreadable"):
             refusals.append(client_refusal(client_kind_now) + " before rotating")
     stale = [f"{c['server_id']}-{c['service']}" for c in listed if (str(c["server_id"]), c["service"]) not in endpoints]
-    return RotationInventory(targets, refusals, external, stale, endpoints)
+    return RotationInventory(targets, refusals, external, stale, endpoints, external_endpoints)
 
 
 # ── staged rotation (the route's "all servers or nothing" Rotate) ───────────
@@ -1030,6 +1157,69 @@ def discard_rotation(staged: dict) -> None:
     for p in staged.values():
         with contextlib.suppress(OSError):
             os.unlink(p)
+
+
+def promotion_blockers() -> list[str]:
+    """Q192 (found by the worlds matrix): why a rotation could NOT be promoted, known BEFORE any host is touched - `commit_file_set` refuses to replace a symlink and cannot replace a directory,
+    so a live identity file that is either would make the promotion fail after every target had moved to the new CA (the rollback then re-issues them, and Jen has changed hosts for nothing).
+    [] when all four live files can be replaced (an absent one is fine: that is a recovery)."""
+    out = []
+    for path in (*ca_paths(), *client_paths()):
+        if os.path.islink(path):
+            out.append(f"{os.path.basename(path)} is a link, which Jen will not replace")
+        elif os.path.isdir(path):
+            out.append(f"{os.path.basename(path)} is a directory where a file belongs")
+    return out
+
+
+def _staged_paths() -> dict:
+    crt, key_path = ca_paths()
+    pem, client_key_path = client_paths()
+    return {
+        "ca_cert": crt + _STAGE_SUFFIX,
+        "ca_key": key_path + _STAGE_SUFFIX,
+        "client_cert": pem + _STAGE_SUFFIX,
+        "client_key": client_key_path + _STAGE_SUFFIX,
+    }
+
+
+def prepared_rotation() -> tuple[dict | None, str]:
+    """Q192 (AH1): the prepared (`Prepare only`) rotation waiting beside the live files, as `(staged, "")` when all four `.next` files exist and are consistent - the new CA is a pair, the new client
+    certificate was issued by it, is a `clientAuth` certificate and its key is its own; `(None, "")` when there is none; `(None, why)` when what is there is half-written or inconsistent (it is
+    DISCARDED, and `why` says so - a rotation never reuses material it cannot prove). A rotation that finds one REUSES it (the same CA-B an external daemon's trust anchor may already hold)."""
+    staged = _staged_paths()
+    present = [k for k, p in staged.items() if os.path.lexists(p)]
+    if not present:
+        return None, ""
+    if len(present) != len(staged):
+        discard_rotation(staged)
+        return None, f"the prepared CA was incomplete ({len(present)} of {len(staged)} files), so it was discarded"
+    spki = serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+    try:
+        ca_cert, ca_key = load_cert(staged["ca_cert"]), load_key(staged["ca_key"])
+        client_cert, client_key = load_cert(staged["client_cert"]), load_key(staged["client_key"])
+        consistent = (
+            ca_cert.public_key().public_bytes(*spki) == ca_key.public_key().public_bytes(*spki)
+            and client_cert.public_key().public_bytes(*spki) == client_key.public_key().public_bytes(*spki)
+            and ExtendedKeyUsageOID.CLIENT_AUTH
+            in client_cert.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
+        )
+        if consistent:
+            client_cert.verify_directly_issued_by(ca_cert)
+    except (
+        Exception
+    ):  # OSError, ValueError, TypeError, InvalidSignature, ExtensionNotFound - none of them a reason to reuse it
+        consistent = False
+    if not consistent:
+        discard_rotation(staged)
+        return None, "the prepared CA was damaged or inconsistent, so it was discarded"
+    return staged, ""
+
+
+def prepared_fingerprint(staged: dict) -> str | None:
+    """SHA-256 of the prepared CA certificate (DER), as the colon-separated hex an operator compares - what to add to an external daemon's trust anchor beside the current CA."""
+    plain = fingerprint(staged["ca_cert"])
+    return ":".join(plain[i : i + 2] for i in range(0, len(plain), 2)).upper() if plain else None
 
 
 def _copies_dir() -> str:

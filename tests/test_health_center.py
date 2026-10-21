@@ -1304,7 +1304,15 @@ class TestKeaTlsExpiry:
         from jen.services import kea_tls
 
         monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-a"}, {"id": 2, "name": "kea-b"}])
-        monkeypatch.setattr(kea_tls, "ca_present", lambda: present)
+        monkeypatch.setattr(
+            kea_tls, "ca_state", lambda: ("ok", "") if present else ("none", "")
+        )  # (Q192: Jen's CA is read ONLY through ca_state)
+        monkeypatch.setattr(kea_tls, "ca_refusal", lambda: "")
+        monkeypatch.setattr(
+            kea_tls,
+            "client_state",
+            lambda: ("ok", "") if client_ok else ("damaged", "jen-kea-client.pem was not issued by the current CA"),
+        )
         monkeypatch.setattr(kea_tls, "ca_paths", lambda: ("/ssl/kea-ca.crt", "/ssl/kea-ca.key"))
         monkeypatch.setattr(kea_tls, "client_paths", lambda: ("/ssl/jen-kea-client.pem", "/ssl/jen-kea-client.key"))
         monkeypatch.setattr(kea_tls, "issued_by", lambda cert, ca_path: client_ok)
@@ -1350,7 +1358,9 @@ class TestKeaTlsExpiry:
     def test_client_cert_not_signed_by_the_current_ca_fails(self, monkeypatch):
         self._wire(monkeypatch, client_ok=False)
         c = health._kea_tls_expiry(_ctx())
-        assert c.status == "fail" and "not signed by the current CA" in c.detail
+        assert (
+            c.status == "fail" and "not issued by the current CA" in c.detail
+        )  # (Q192, adjusted: the reason now comes from `client_state`)
 
     def test_a_directory_that_cannot_be_listed_is_unknown_not_none_issued(self, monkeypatch):
         """Q189 (AE1): `issued_server_copies(strict=True)` raises on an unlistable directory; the row says the expiry is UNKNOWN (a warning), never 'valid' with zero servers."""

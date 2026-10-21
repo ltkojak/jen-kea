@@ -42,7 +42,7 @@ import pytest
 import jen.config as jconfig
 import jen.routes.settings.infrastructure as infra
 from jen import extensions
-from jen.services import kea_changeset, kea_host, kea_tls
+from jen.services import health, kea_changeset, kea_host, kea_tls
 from tests._fs_flake import retry_transient_replace, retrying_replace  # noqa: F401 (the fixture is autouse)
 from tests._tls_invariants import issued_by_a_jen_ca, printed_secret, secrets_of
 
@@ -153,6 +153,8 @@ class Lab:
         self.before = None  # the state before the last request (T5, T3)
         self.flash_mark = 0
         self.answered_before: dict = {}  # server id -> did its daemon answer Jen's live identity before the last request (T3)
+        self.ca_ok_before = True  # was Jen's CA a pair before the last request (T2 is RELATIVE: an action must not be the one that breaks it)
+        self.record_before: dict = {}  # server id -> "match" | "none" | "mismatch": Jen's record of what its host holds, before the last request (T1 is RELATIVE too, Q192)
         self.dial_before: dict = {}  # server id -> did its daemon answer Jen's CONFIGURED dial (api_ca bundle + client certificate) before the last request (T3, second pass of Q190)
 
     def texts(self) -> str:
@@ -184,6 +186,51 @@ class Lab:
     def answers_jens_live_identity(self, sid) -> bool:
         return self.answers(sid, kea_tls.ca_paths()[0], kea_tls.client_paths()[0])
 
+    # ── the fake daemon's two separate relationships (Q192, AH0/AH1): the SERVER certificate it presents, and the CA it trusts for CLIENT certificates ──
+    def jen_issued(self, sid) -> bool:
+        loaded = self.hosts[sid]["loaded"]
+        return bool(loaded) and _issued_by_jens(loaded["server.crt"])
+
+    def accepts_client(self, sid, client_path) -> bool:
+        """Does the daemon accept the client certificate at `client_path` (None: no certificate sent)? `client_trust` is the PEM of the CA it trusts for clients, INDEPENDENT of the CA that issued its
+        server certificate; `None` means it requires no client certificate. The default is the old single-CA world: a Jen-issued daemon trusts the CA it loaded, an administrator's daemon asks for no
+        client certificate."""
+        h = self.hosts[sid]
+        trust = h.get("client_trust", "default")
+        if trust == "default":
+            trust = h["loaded"]["ca.crt"] if self.jen_issued(sid) else None
+        if trust is None:
+            return True
+        if not client_path:
+            return False
+        if trust == "any":
+            return True  # a trust anchor that accepts any client certificate (a bundle that already holds the new CA, or no real check)
+        try:
+            pem = pathlib.Path(client_path).read_text(encoding="ascii")
+        except OSError:
+            return False
+        # `trust` may be a BUNDLE (the operator added the new CA beside the current one): the certificate must be issued by any of them
+        from cryptography import x509
+
+        try:
+            anchors = x509.load_pem_x509_certificates(trust.encode())
+        except ValueError:
+            return False
+        return any(_issued_by_pem(pem, a.public_bytes(kea_tls.serialization.Encoding.PEM).decode()) for a in anchors)
+
+    def server_verifies(self, sid, verify) -> bool:
+        """Would a client verifying with `verify` (a CA bundle path, True for the system's CAs, False for none) accept the daemon's server certificate? `verifies` True is the stand-in for a daemon
+        whose server certificate chains to something the client's configured verification accepts; the default is that an administrator's daemon does and a Jen-issued one must really chain."""
+        h = self.hosts[sid]
+        verifies = h.get("verifies", "default")
+        if verifies == "default":
+            verifies = not self.jen_issued(sid)
+        if verifies or verify is False:
+            return True
+        if isinstance(verify, str):
+            return _issued_by_any(h["loaded"]["server.crt"], verify)
+        return False
+
     def answers_jens_configured_dial(self, sid) -> bool:
         """Would the daemon answer Jen as Jen is CONFIGURED to dial it: a server certificate issued by ANY certificate of the bundle at `[kea] api_ca` (or no verification at all when it is empty
         and verification is off), and the client certificate Jen presents issued by the CA the daemon loaded? A rotation that leaves the configured bundle on the old CA cuts this off even though
@@ -192,18 +239,10 @@ class Lab:
         if not loaded:
             return False
         bundle = (extensions.KEA_API_CA or "").strip()
-        if bundle:
-            if not _issued_by_any(loaded["server.crt"], bundle):
-                return False
-        elif getattr(extensions, "KEA_API_TLS_VERIFY", True):
+        verify = bundle or bool(getattr(extensions, "KEA_API_TLS_VERIFY", True))
+        if not self.server_verifies(sid, verify):
             return False
-        client = (extensions.KEA_API_CLIENT_CERT or "").strip()
-        if not client:
-            return False
-        try:
-            return _issued_by_pem(pathlib.Path(client).read_text(encoding="ascii"), loaded["ca.crt"])
-        except OSError:
-            return False
+        return self.accepts_client(sid, (extensions.KEA_API_CLIENT_CERT or "").strip() or None)
 
     def snapshot_dial(self):
         self.dial_before = {
@@ -248,11 +287,27 @@ class Lab:
     def begin(self):
         """Called by `_rotate()` just before the route runs."""
         self.before = self.snapshot()
+        self.ca_ok_before = kea_tls.ca_consistent()
+        self.record_before = {sid: self.record_state_of(sid) for sid in self.hosts}
         self.flash_mark = len(self.flashes)
         self.answered_before = {
             sid: self.answers_jens_live_identity(sid) for sid in self.hosts if self.hosts[sid]["loaded"]
         }
         self.snapshot_dial()
+
+    def record_state_of(self, sid) -> str:
+        """Jen's record of the pair this server's host holds, against the host: "match", "none" (Jen does not know) or "mismatch" (it names a pair the host does not hold)."""
+        files = self.hosts[sid]["files"]
+        if not files or not _issued_by_jens(files["server.crt"]):
+            return "match"
+        record = kea_tls.host_material(sid, "dhcp4")
+        if record is None:
+            return "none"
+        return (
+            "match"
+            if record["server.crt"] == files["server.crt"] and record["server.key"] == files["server.key"]
+            else "mismatch"
+        )
 
     def _named(self, sid, categories) -> bool:
         return any(i[0] == sid and i[1] == "dhcp4" and i[2] in categories for i in self.incidents)
@@ -279,23 +334,31 @@ class Lab:
         """[(invariant, what is wrong)] - empty when T1-T5 hold."""
         bad = []
         jens_sids = [sid for sid, h in self.hosts.items() if h["files"] and _issued_by_jens(h["files"]["server.crt"])]
-        # T1 - for every daemon whose pair JEN'S CA ISSUED (judged by the HOST's certificate), Jen's record of it is the pair the host holds, or Jen says it does not know
+        # T1 - for every daemon whose pair JEN'S CA ISSUED (judged by the HOST's certificate), Jen's record of it is the pair the host holds, or Jen says it does not know. RELATIVE (Q192): a world that
+        # STARTS with a lost or wrong record is the input (Health and the Rotate refusal say so - the worlds matrix checks that); what an ACTION may not do is lose or falsify a record it had.
         for sid in sorted(self.hosts):
             files = self.hosts[sid]["files"]
             if not files:
                 continue
             if sid in jens_sids:
                 record = kea_tls.host_material(sid, "dhcp4")
+                before_state = self.record_before.get(sid, "match")
                 if record is None:
+                    if before_state == "none":
+                        continue
                     if not (
                         self._named(sid, ("tls-local-stale", "remote-unknown", "tls-not-restored"))
                         or kea_tls.is_unknown(sid, "dhcp4")
                         or self._refusal_names(sid)
+                        or kea_tls.ca_state()[0]
+                        != "ok"  # Q192: the install payload needs the live CA certificate; a CA that is damaged or gone is itself the visible fact (Health fail, https setup refused)
                     ):
                         bad.append(
                             ("T1", f"server {sid}: Jen has no record of the pair its host holds and nothing says so")
                         )
-                elif record["server.crt"] != files["server.crt"] or record["server.key"] != files["server.key"]:
+                elif (
+                    record["server.crt"] != files["server.crt"] or record["server.key"] != files["server.key"]
+                ) and before_state != "mismatch":
                     bad.append(("T1", f"server {sid}: host_material is not the pair the host holds"))
             else:
                 state, _why = kea_tls.record_state(sid, "dhcp4")
@@ -307,9 +370,13 @@ class Lab:
                         )
                     )
         # T2 - the CA is a pair, or every target says it is not
-        if not kea_tls.ca_consistent() and not (
-            all(self._named(sid, ("tls-not-restored",)) for sid in jens_sids)
-            and "no longer a matching pair" in self.texts()
+        if (
+            not kea_tls.ca_consistent()
+            and self.ca_ok_before
+            and not (
+                all(self._named(sid, ("tls-not-restored",)) for sid in jens_sids)
+                and "no longer a matching pair" in self.texts()
+            )
         ):
             bad.append(("T2", "Jen's CA certificate and key are not a pair and nothing says so"))
         # T3 (relative) - a daemon that answered Jen's live identity before the request answers after it, or an incident names it; one that did not answer before is untouched
@@ -336,7 +403,17 @@ class Lab:
                         f"server {sid}'s daemon answered Jen's live CA and client certificate before the request and does not now, and no incident names it",
                     )
                 )
-            if before is False:
+            # Q192: a rotation that REPORTS success is the one request that may move a Jen-issued daemon that did not answer before (a damaged client pair, a damaged CA replaced with the
+            # acknowledgement) - and on that report EVERY Jen-issued daemon must answer Jen's live identity afterwards
+            succeeded = "Kea CA rotated" in self.request_texts()
+            if succeeded and self.jen_issued(sid) and not now:
+                bad.append(
+                    (
+                        "T3",
+                        f"server {sid}: a rotation reported success and its daemon does not answer Jen's live identity",
+                    )
+                )
+            if before is False and not (succeeded and self.jen_issued(sid)):
                 if self.before is not None and self.hosts[sid]["files"] != self.before["hosts"].get(sid):
                     bad.append(
                         (
@@ -344,7 +421,9 @@ class Lab:
                             f"server {sid}'s daemon did not answer Jen before the request and its files on the host CHANGED",
                         )
                     )
-                if now:
+                if (
+                    now and not self.jen_issued(sid)
+                ):  # (a Jen-issued daemon answering once Jen's OWN identity is repaired is Jen's daemon, not a changed trust relationship)
                     bad.append(
                         (
                             "T3",
@@ -473,11 +552,9 @@ def lab(monkeypatch, tmp_path, caplog):
             raise _rq.exceptions.ConnectTimeout(f"{where} (Caused by ConnectTimeoutError)")
         if fault == "handshake":
             raise _rq.exceptions.SSLError(f"{where} (Caused by SSLError: handshake failure)")
-        if isinstance(verify, str) and not _issued_by(loaded["server.crt"], verify):
+        if not lab.server_verifies(sid, verify):
             raise _rq.exceptions.SSLError(f"{where} (Caused by SSLError: certificate verify failed)")
-        if verify is True:
-            raise _rq.exceptions.SSLError(f"{where} (Caused by SSLError: certificate verify failed, the system's CAs)")
-        if cert and not _issued_by_pem(pathlib.Path(cert[0]).read_text(encoding="ascii"), loaded["ca.crt"]):
+        if not lab.accepts_client(sid, cert[0] if cert else None):
             raise _rq.exceptions.SSLError(f"{where} (Caused by SSLError: client certificate rejected)")
         command = (json or {}).get("command")
         if command == "version-get":
@@ -572,14 +649,14 @@ def lab(monkeypatch, tmp_path, caplog):
         assert not found, f"INVARIANT(S) BROKEN at the end of the test: {found}"
 
 
-def _rotate():
+def _rotate(form=None):
     lab = _ACTIVE[-1] if _ACTIVE else None
     if lab is not None:
         lab.begin()
     rotate = inspect.unwrap(infra.rotate_kea_ca)
     app = flask.Flask(__name__)
     app.secret_key = "x"
-    with app.test_request_context(method="POST"):
+    with app.test_request_context(method="POST", data=form or {}):
         rotate()
 
 
@@ -1273,7 +1350,7 @@ class TestTheInvariantsBite:
         monkeypatch.setattr(
             kea_tls,
             "rotation_inventory",
-            lambda servers, url_for=None: kea_tls.RotationInventory([], [], [], [], frozenset()),
+            lambda servers, url_for=None, **kw: kea_tls.RotationInventory([], [], [], [], frozenset()),
         )
         _rotate()
         assert "Kea CA rotated" in lab.texts(), "the rotation reported success"
@@ -1295,9 +1372,9 @@ class TestTheInvariantsBite:
         lab.expected_violations = {"T5"}
         real = kea_tls.rotation_inventory
 
-        def refusing_after_writing(servers, url_for=None):
+        def refusing_after_writing(servers, url_for=None, **kw):
             (pathlib.Path(kea_tls.SSL_DIR) / "stray-file").write_text("left behind", encoding="ascii")
-            inv = real(servers, url_for=url_for)
+            inv = real(servers, url_for=url_for, **kw)
             inv.refusals.append("refused on purpose")
             return inv
 
@@ -1744,11 +1821,19 @@ class TestTheInvariantsBiteTooQ190:
             lab.answers_jens_configured_dial(sid) for sid in lab.hosts
         )
 
-    def test_T1_bites_when_a_jen_issued_pair_has_no_record_and_nothing_says_so(self, lab):
-        """Judged by the HOST's certificate: the daemon runs a pair a Jen CA issued; Jen's files for it are gone; no request, no incident, no marker says so."""
+    def test_T1_bites_when_an_action_silently_loses_a_record_it_had(self, lab, monkeypatch):
+        """Q192 (adjusted: T1 is RELATIVE now - a world that STARTS without a record is the input and Health says so). Judged by the HOST's certificate: the daemon runs a pair a Jen CA issued, Jen
+        HAD a record of it, and the action ends with the files gone and nothing - no request text, no incident, no marker - saying so."""
         lab.expected_violations = {"T1"}
-        _drop_jens_record(1)
-        lab.begin()
+        real = kea_tls.retire_previous
+
+        def retire_and_lose(server_id, service):
+            real(server_id, service)
+            _drop_jens_record(server_id)  # the product loses the record it had, silently
+
+        monkeypatch.setattr(kea_tls, "retire_previous", retire_and_lose)
+        _rotate()
+        assert "Kea CA rotated" in lab.texts()
 
 
 # ── Q191 (AG1): Jen's identity to a daemon is its CA bundle AND its client pair ──────────────────────────────────────────────────────────────────────
@@ -2019,3 +2104,434 @@ class TestTheSecondPassOfQ191:
             assert "Kea CA rotated" in lab.texts(), (bundle, client, lab.texts())
             assert all(lab.answers_jens_live_identity(sid) for sid in lab.hosts)
         # (the teardown's T1-T5 judge every world)
+
+
+# ── Q192 (AH1-AH3): the staged identity is proved against every endpoint it is presented to; a damaged CA is a recovery condition; a pair is a pair ──────────────
+
+
+def _ca_pem() -> str:
+    return pathlib.Path(kea_tls.ca_paths()[0]).read_text(encoding="ascii")
+
+
+def _add_external(lab, sid=3, trust="default", address="10.0.0.7", jen_issued=False):
+    """An administrator's https endpoint Jen also dials: its server certificate is the administrator's, Jen holds the copy of its pair (so the inventory calls it external), and `trust` is the CA it
+    trusts for CLIENT certificates - independent of the CA that issued its server certificate (`"any"`, None = no client certificate required, or the PEM of a CA)."""
+    server = lab.add_server(sid, "external", address, f"https://{address}:8004", jen_issued=jen_issued)
+    external = lab.hosts[sid]["files"]
+    pathlib.Path(kea_tls.server_copy_path(sid, "dhcp4")).write_text(external["server.crt"], encoding="ascii")
+    pathlib.Path(kea_tls.server_key_path(sid, "dhcp4")).write_text(external["server.key"], encoding="ascii")
+    lab.hosts[sid]["client_trust"] = trust
+    lab.snapshot_dial()
+    lab.answered_before[sid] = lab.answers_jens_live_identity(sid)
+    return server
+
+
+def _prepare():
+    prepare = inspect.unwrap(infra.prepare_kea_ca)
+    app = flask.Flask(__name__)
+    app.secret_key = "x"
+    with app.test_request_context(method="POST"):
+        prepare()
+
+
+def _discard_prepared():
+    discard = inspect.unwrap(infra.discard_prepared_kea_ca)
+    app = flask.Flask(__name__)
+    app.secret_key = "x"
+    with app.test_request_context(method="POST"):
+        discard()
+
+
+class TestSplitTrust:
+    """Q192 (AH1, the P1): a daemon's trust for CLIENT certificates is independent of the CA that issued its SERVER certificate. Beta.22 judged the client pair only when a Jen-issued server certificate
+    existed; an external endpoint that accepted Jen's CA-A client certificate was left demanding one after the rotation promoted CA-B - Jen locked out of it with 'rotated' on the screen. Every row is a
+    Lab world with the daemon's `client_trust` set independently; T3 runs in every teardown and T5 after every refusal."""
+
+    def _refused_before_promotion(self, lab, needle):
+        assert "Rotate refused" in lab.texts() and needle in lab.texts(), lab.texts()
+        assert lab.remote_actions() == 0 and lab.settings_writes == []
+        assert pathlib.Path(kea_tls.ca_paths()[0]).read_bytes() == lab.ca_a, "Jen's CA was not replaced"
+        assert not any(os.path.exists(p) for p in kea_tls._staged_paths().values()), "the staging is gone"
+
+    def test_a_jen_server_and_a_jen_client_rotate_as_before(self, lab):
+        _rotate()
+        assert "Kea CA rotated" in lab.texts(), lab.texts()
+
+    def test_an_external_server_with_a_permissive_client_trust_answers_both_pairs_and_rotates(self, lab):
+        _add_external(lab, trust="any")
+        _rotate()
+        assert "Kea CA rotated" in lab.texts(), lab.texts()
+        assert lab.hosts[3]["installs"] == [] and lab.hosts[3]["restarts"] == 0
+
+    def test_an_external_server_that_asks_for_no_client_certificate_rotates(self, lab):
+        _add_external(lab, trust=None)
+        _rotate()
+        assert "Kea CA rotated" in lab.texts(), lab.texts()
+
+    def test_the_P1_an_external_server_that_trusts_jens_current_ca_for_clients_is_refused_before_promotion(self, lab):
+        _add_external(lab, trust=_ca_pem())
+        lab.begin()
+        assert lab.dial_before[3], "in this world the daemon ANSWERS Jen's configured dial today"
+        _rotate()
+        self._refused_before_promotion(lab, "accepts Jen's current client certificate and refuses the new one")
+        assert "external kea-dhcp4" in lab.texts() and "Prepare" in lab.texts(), (
+            "the refusal names the endpoint and the way out"
+        )
+        assert all(lab.answers_jens_configured_dial(sid) for sid in lab.hosts), "the dial holds on every endpoint"
+
+    def test_two_jen_targets_and_one_such_external_are_refused_and_nothing_is_installed_on_the_two(self, lab):
+        _add_external(lab, trust=_ca_pem())
+        _rotate()
+        self._refused_before_promotion(lab, "accepts Jen's current client certificate")
+        assert all(lab.hosts[sid]["installs"] == [] and lab.hosts[sid]["restarts"] == 0 for sid in (1, 2))
+
+    def test_an_external_endpoint_that_does_not_answer_the_live_pair_is_refused_as_unreachable(self, lab):
+        _add_external(lab, trust=_ca_pem())
+        lab.faults[3] = "refused"
+        _rotate()
+        self._refused_before_promotion(lab, "does not answer Jen's current client certificate")
+
+    def test_a_client_kind_of_none_presents_nothing_and_needs_no_probe(self, lab, monkeypatch, tmp_path):
+        _client_world("none", tmp_path, monkeypatch)
+        _add_external(lab, trust=_ca_pem())
+        lab.begin()
+        _rotate()
+        assert "Rotate refused" not in lab.texts() or "accepts Jen's current client certificate" not in lab.texts()
+
+    def test_prepare_keeps_the_next_ca_and_a_later_rotate_reuses_it_after_the_daemons_trust_gained_it(self, lab):
+        _add_external(lab, trust=_ca_pem())
+        _prepare()
+        staged = kea_tls._staged_paths()
+        assert all(os.path.exists(p) for p in staged.values()), "Prepare keeps .next"
+        fingerprint = kea_tls.prepared_fingerprint(staged)
+        assert fingerprint in lab.texts() and staged["ca_cert"] in lab.texts()
+        assert any("PREPARE_KEA_CA" in str(a) for a in lab.audits)
+        assert pathlib.Path(kea_tls.ca_paths()[0]).read_bytes() == lab.ca_a and lab.remote_actions() == 0
+        if os.name != "nt":
+            assert stat_mode(staged["ca_key"]) == 0o600 and stat_mode(staged["client_key"]) == 0o600
+        # the rotation is refused until the external daemon's trust anchor holds the new CA ...
+        _rotate()
+        assert "accepts Jen's current client certificate" in lab.texts()
+        assert all(os.path.exists(p) for p in staged.values()), "a REFUSED rotation keeps the prepared CA"
+        assert "The prepared CA is kept" in lab.texts()
+        # ... the operator adds it beside the current one, and the same CA-B is what the rotation promotes
+        prepared_ca = pathlib.Path(staged["ca_cert"]).read_bytes()
+        lab.hosts[3]["client_trust"] = _ca_pem() + prepared_ca.decode("ascii")
+        lab.flashes.clear()
+        _rotate()
+        assert "Kea CA rotated" in lab.texts(), lab.texts()
+        assert pathlib.Path(kea_tls.ca_paths()[0]).read_bytes() == prepared_ca, "the prepared CA IS the new CA"
+        assert not any(os.path.exists(p) for p in staged.values()), "a successful rotation consumes it"
+        for sid in lab.hosts:
+            assert lab.answers_jens_configured_dial(sid), f"endpoint {sid} answers after the rotation"
+
+    def test_an_inconsistent_prepared_ca_is_discarded_and_said_and_a_fresh_one_is_staged(self, lab):
+        _prepare()
+        staged = kea_tls._staged_paths()
+        pathlib.Path(staged["client_key"]).write_text("not a key", encoding="ascii")
+        lab.flashes.clear()
+        _rotate()
+        assert "damaged or inconsistent, so it was discarded" in lab.texts(), lab.texts()
+        assert "Kea CA rotated" in lab.texts()
+
+    def test_an_incomplete_prepared_ca_is_discarded_and_said(self, lab):
+        _prepare()
+        os.unlink(kea_tls._staged_paths()["client_cert"])
+        lab.flashes.clear()
+        _rotate()
+        assert "was incomplete (3 of 4 files), so it was discarded" in lab.texts(), lab.texts()
+
+    def test_the_discard_button_removes_it(self, lab):
+        _prepare()
+        _discard_prepared()
+        assert not any(os.path.exists(p) for p in kea_tls._staged_paths().values())
+        assert "The prepared CA was discarded" in lab.texts()
+        assert any("DISCARD_PREPARED_KEA_CA" in str(a) for a in lab.audits)
+
+    def test_a_rotation_that_fails_part_way_keeps_a_prepared_ca_but_not_one_it_staged_itself(self, lab, monkeypatch):
+        _prepare()
+        staged = kea_tls._staged_paths()
+        lab.refuse.add((2, "install-tls", 1))
+        _rotate()
+        assert "kept" in lab.texts().lower() and all(os.path.exists(p) for p in staged.values())
+        _discard_prepared()
+        lab.refuse.add((2, "install-tls", 2))
+        lab.flashes.clear()
+        _rotate()
+        assert not any(os.path.exists(p) for p in staged.values()), "a staging this rotation made is discarded"
+
+    def test_the_staged_probe_is_a_failure_at_every_step_still_judged_by_the_invariants(self, lab, monkeypatch):
+        """The probe itself failing in odd ways (a raise from the transport) is a refusal or a rolled-back rotation, never a promotion with the external endpoint unproved."""
+        _add_external(lab, trust=_ca_pem())
+        real = infra._probe_once
+
+        def broken(url, user, pwd, omit_service, **kw):
+            if "10.0.0.7" in url and kw.get("cert") and "next" in str(kw["cert"][0]):
+                raise RuntimeError("the transport failed")
+            return real(url, user, pwd, omit_service, **kw)
+
+        monkeypatch.setattr(infra, "_probe_once", broken)
+        _rotate()
+        assert "could not be probed (RuntimeError)" in lab.texts() and "Rotate refused" in lab.texts(), lab.texts()
+        assert lab.remote_actions() == 0 and lab.settings_writes == []
+        assert not any(os.path.exists(p) for p in kea_tls._staged_paths().values())
+
+
+def stat_mode(path):
+    return os.stat(path).st_mode & 0o777
+
+
+class TestTheInvariantsBiteTooQ192:
+    def test_T3_bites_when_the_staged_identity_check_is_monkeypatched_away(self, lab, monkeypatch):
+        """The P1 world with the new check removed: the rotation promotes CA-B, the external daemon still trusts only CA-A for clients, and Jen keeps presenting CA-B pairs - the teardown names it."""
+        lab.expected_violations = {"T3"}
+        _add_external(lab, trust=_ca_pem())
+        monkeypatch.setattr(infra, "_staged_identity_refusal", lambda *a, **k: "")
+        lab.begin()
+        _rotate()
+        assert "Kea CA rotated" in lab.texts(), "the rotation reported success"
+        assert lab.dial_before[3] and not lab.answers_jens_configured_dial(3)
+
+
+class TestCaState:
+    """Q192 (AH2, the P1): a damaged CA is a recovery condition, never "no CA yet". `ensure_ca` used to read "a cert without a loadable key counts as absent" and made a NEW CA under existing https
+    sockets (the existing client certificate no longer valid under the active CA); a mismatched pair loaded as present and issued certificates no CA verified."""
+
+    def _snapshot(self):
+        from tests import _tls_worlds as worlds
+
+        return worlds.tree(kea_tls.SSL_DIR)
+
+    def test_a_valid_pair_is_ok_and_ensure_ca_returns_it_unchanged(self, lab):
+        assert kea_tls.ca_state() == ("ok", "")
+        before = self._snapshot()
+        assert kea_tls.ensure_ca()["created"] is False and self._snapshot() == before
+
+    def test_both_files_absent_in_a_fresh_world_is_created(self, lab):
+        import shutil
+
+        shutil.rmtree(kea_tls.SSL_DIR)
+        os.makedirs(kea_tls.SSL_DIR)
+        assert kea_tls.ca_state() == ("none", "")
+        assert kea_tls.ensure_ca()["created"] is True and kea_tls.ca_state() == ("ok", "")
+        lab.hosts.clear()  # (no daemon holds anything in this world)
+
+    @pytest.mark.parametrize("keep", ["a server copy", "the client pair", "a prepared rotation"])
+    def test_both_files_absent_beside_evidence_a_CA_existed_is_refused_and_nothing_is_created(self, lab, keep):
+        import shutil
+
+        shutil.rmtree(kea_tls.SSL_DIR)
+        os.makedirs(os.path.join(kea_tls.SSL_DIR, "kea-servers"))
+        if keep == "a server copy":
+            pathlib.Path(kea_tls.server_copy_path(1, "dhcp4")).write_text("x", encoding="ascii")
+        elif keep == "the client pair":
+            pathlib.Path(kea_tls.client_paths()[0]).write_text("x", encoding="ascii")
+        else:
+            pathlib.Path(kea_tls.ca_paths()[0] + ".next").write_text("x", encoding="ascii")
+        before = self._snapshot()
+        lab.begin()
+        assert kea_tls.ca_state() == ("none", "")
+        with pytest.raises(kea_tls.CaDamaged):
+            kea_tls.ensure_ca()
+        assert self._snapshot() == before and not os.path.exists(kea_tls.ca_paths()[0])
+
+    def test_both_files_absent_with_a_jen_issued_https_endpoint_is_refused(self, lab):
+        crt, key = kea_tls.ca_paths()
+        os.unlink(crt)
+        os.unlink(key)
+        lab.begin()
+        with pytest.raises(kea_tls.CaDamaged):
+            kea_tls.ensure_ca()
+        assert not os.path.exists(crt) and not os.path.exists(key)
+
+    @pytest.mark.parametrize(
+        ("damage", "why"),
+        [
+            ("cert-missing", "kea-ca.crt is missing"),
+            ("key-missing", "kea-ca.key is missing"),
+            ("cert-malformed", "kea-ca.crt is not a certificate"),
+            ("key-malformed", "kea-ca.key is not a private key"),
+            ("mismatched", "are not a pair"),
+        ],
+    )
+    def test_every_damage_is_named_refused_and_leaves_the_identity_byte_equal(self, lab, damage, why):
+        from tests import _tls_worlds as worlds
+
+        crt, key = kea_tls.ca_paths()
+        if damage == "cert-missing":
+            os.unlink(crt)
+        elif damage == "key-missing":
+            os.unlink(key)
+        elif damage == "cert-malformed":
+            worlds.malformed(crt)
+        elif damage == "key-malformed":
+            worlds.malformed(key)
+        else:
+            pathlib.Path(key).write_bytes(worlds.another_key_pem())
+        lab.begin()
+        state, said = kea_tls.ca_state()
+        assert state == "damaged" and why in said, said
+        before = self._snapshot()
+        with pytest.raises(kea_tls.CaDamaged, match=why):
+            kea_tls.ensure_ca()
+        with pytest.raises(kea_tls.CaDamaged):
+            kea_tls.issue_client_cert(force=True)
+        with pytest.raises(kea_tls.CaDamaged):
+            kea_tls.issue_server_cert(lab.servers[1], "dhcp4", "10.0.0.5")
+        assert self._snapshot() == before, "no new CA, no new pair, no copy changed (T6)"
+        c = health._kea_tls_expiry({})
+        assert c.status == "fail" and "damaged" in c.detail and why in c.detail
+        lab.begin()
+        _rotate()
+        assert "Rotate refused" not in lab.texts() and "Jen's CA is damaged" in lab.texts()
+        assert "Tick the acknowledgement" in lab.texts() and lab.remote_actions() == 0
+        assert self._snapshot() == before
+
+    def test_rotate_with_the_acknowledgement_replaces_a_damaged_ca_and_re_issues_every_target(self, lab):
+        os.unlink(kea_tls.ca_paths()[1])
+        old_cert = pathlib.Path(kea_tls.ca_paths()[0]).read_bytes()
+        _rotate({"acknowledge_damaged_ca": "1"})
+        assert "Kea CA rotated" in lab.texts(), lab.texts()
+        assert kea_tls.ca_state() == ("ok", "") and pathlib.Path(kea_tls.ca_paths()[0]).read_bytes() != old_cert
+        for sid in lab.hosts:
+            assert lab.answers_jens_live_identity(sid), f"server {sid}'s daemon answers the replacement CA"
+        assert pathlib.Path(kea_tls.ca_paths()[0] + ".prev").read_bytes() == old_cert, (
+            "the old certificate is kept as .prev"
+        )
+        assert any("replaced a damaged CA: acknowledged" in str(a) for a in lab.audits)
+
+    @pytest.mark.parametrize("damage", ["cert-missing", "cert-malformed"])
+    def test_the_recovery_works_when_the_certificate_is_the_missing_half_too(self, lab, damage):
+        from tests import _tls_worlds as worlds
+
+        crt = kea_tls.ca_paths()[0]
+        os.unlink(crt) if damage == "cert-missing" else worlds.malformed(crt)
+        _rotate({"acknowledge_damaged_ca": "1"})
+        assert "Kea CA rotated" in lab.texts(), lab.texts()
+        assert kea_tls.ca_state() == ("ok", "")
+        for sid in lab.hosts:
+            assert lab.answers_jens_live_identity(sid)
+
+    def test_a_failed_target_in_a_recovery_is_tls_not_restored_and_said_beforehand(self, lab):
+        os.unlink(kea_tls.ca_paths()[1])
+        lab.refuse.add((2, "install-tls", 1))
+        _rotate({"acknowledge_damaged_ca": "1"})
+        assert "Kea CA rotated" not in lab.texts()
+        assert (1, "dhcp4", "tls-not-restored") in lab.incidents, lab.incidents
+        assert kea_tls.ca_state()[0] == "damaged", "the damaged CA was not replaced by a rotation that failed"
+        assert not any(os.path.exists(p) for p in kea_tls._staged_paths().values())
+
+
+class TestClientState:
+    """Q192 (AH3, the P2): `client_cert_ok` loaded the key and never asked whether it belonged to the certificate - Health read a pair of strangers as healthy and `issue_client_cert` skipped the
+    re-issue. A pair is a pair only when the key is the certificate's, the CA is the live one, the certificate is a clientAuth one and it is inside its validity."""
+
+    def test_a_valid_pair_is_ok(self, lab):
+        assert kea_tls.client_state() == ("ok", "") and kea_tls.client_cert_ok()
+        assert kea_tls.issue_client_cert()["issued"] is False
+
+    def _reissued(self, lab, expected_why):
+        assert kea_tls.client_cert_ok() is False
+        state, why = kea_tls.client_state()
+        assert state == "damaged" and expected_why in why, why
+        c = health._kea_tls_expiry({})
+        assert c.status == "fail" and "damaged" in c.detail and expected_why in c.detail, c.detail
+        pem, key = kea_tls.client_paths()
+        old_pem = pathlib.Path(pem).read_bytes() if os.path.isfile(pem) else None
+        result = kea_tls.issue_client_cert()
+        lab.before = (
+            None  # (a direct call to the module, not a request: T5 - "a refusal changed nothing" - is about requests)
+        )
+        assert result["issued"] is True and expected_why in result["why"]
+        assert kea_tls.client_state() == ("ok", "")
+        if old_pem is not None:
+            assert pathlib.Path(pem + ".prev").read_bytes() == old_pem, "the pair it replaced is kept as .prev"
+
+    def test_a_valid_certificate_with_an_unrelated_key_is_damaged_and_re_issued(self, lab):
+        from tests import _tls_worlds as worlds
+
+        pathlib.Path(kea_tls.client_paths()[1]).write_bytes(worlds.another_key_pem())
+        self._reissued(lab, "is not the key of")
+
+    def test_a_malformed_certificate_is_re_issued(self, lab):
+        from tests import _tls_worlds as worlds
+
+        worlds.malformed(kea_tls.client_paths()[0])
+        self._reissued(lab, "is not a certificate")
+
+    def test_a_malformed_key_is_re_issued(self, lab):
+        from tests import _tls_worlds as worlds
+
+        worlds.malformed(kea_tls.client_paths()[1])
+        self._reissued(lab, "is not a private key")
+
+    def test_an_unreadable_key_is_damaged_and_a_re_issue_that_cannot_write_says_so(self, lab):
+        from tests import _tls_worlds as worlds
+
+        worlds.unreadable(kea_tls.client_paths()[1])
+        state, why = kea_tls.client_state()
+        assert state == "damaged" and "cannot be read" in why, why
+        assert health._kea_tls_expiry({}).status == "fail"
+        with pytest.raises(OSError):
+            kea_tls.issue_client_cert()  # (a directory where the key belongs: refused as an error, never silently skipped)
+
+    def test_an_expired_pair_is_damaged_and_re_issued(self, lab, monkeypatch):
+        import datetime
+
+        real_now = kea_tls._now
+        monkeypatch.setattr(kea_tls, "_now", lambda: real_now() - datetime.timedelta(days=3000))
+        kea_tls.issue_client_cert(force=True)
+        monkeypatch.setattr(kea_tls, "_now", real_now)
+        self._reissued(lab, "has expired")
+
+    def test_a_pair_that_is_not_valid_yet_is_damaged(self, lab, monkeypatch):
+        import datetime
+
+        real_now = kea_tls._now
+        monkeypatch.setattr(kea_tls, "_now", lambda: real_now() + datetime.timedelta(days=30))
+        kea_tls.issue_client_cert(force=True)
+        monkeypatch.setattr(kea_tls, "_now", real_now)
+        assert kea_tls.client_state()[0] == "damaged" and "not valid yet" in kea_tls.client_state()[1]
+
+    def test_a_pair_issued_by_an_earlier_jen_ca_is_damaged_and_re_issued(self, lab):
+        kea_tls.ensure_ca(force=True)  # a new live CA; the client pair is from the one before
+        lab.begin()  # (the world is built: this is the state before any action)
+        self._reissued(lab, "was not issued by the current CA")
+
+    def test_a_certificate_without_clientAuth_is_damaged_and_re_issued(self, lab):
+        ca_cert, ca_key = kea_tls._load_ca()
+        pem, key_path = kea_tls.client_paths()
+        key = kea_tls._new_key()
+        wrong = kea_tls._leaf(ca_cert, ca_key, key, "a server leaf", [], client=False)
+        pathlib.Path(pem).write_bytes(kea_tls._cert_pem(wrong))
+        pathlib.Path(key_path).write_bytes(kea_tls._key_pem(key))
+        self._reissued(lab, "no clientAuth")
+
+    def test_a_pair_with_thirty_days_left_is_expiring_not_damaged_and_health_warns(self, lab, monkeypatch):
+        import datetime
+
+        real_now = kea_tls._now
+        monkeypatch.setattr(kea_tls, "_now", lambda: real_now() - datetime.timedelta(days=kea_tls.LEAF_DAYS - 20))
+        kea_tls.issue_client_cert(force=True)
+        monkeypatch.setattr(kea_tls, "_now", real_now)
+        state, why = kea_tls.client_state()
+        assert state == "expiring" and "expires in" in why
+        assert kea_tls.client_cert_ok() is False
+        assert health._kea_tls_expiry({}).status in ("warn", "fail")
+        assert kea_tls.issue_client_cert()["issued"] is True
+
+    def test_neither_file_is_none_not_damaged_and_the_first_issue_says_nothing_was_repaired(self, lab):
+        for p in kea_tls.client_paths():
+            os.unlink(p)
+        assert kea_tls.client_state() == ("none", "")
+        assert health._kea_tls_expiry({}).status == "fail"
+        result = kea_tls.issue_client_cert()
+        assert result["issued"] is True and result["why"] == ""
+
+    def test_with_a_damaged_ca_the_client_pair_is_judged_damaged_and_nothing_is_signed(self, lab):
+        os.unlink(kea_tls.ca_paths()[1])
+        lab.begin()
+        state, why = kea_tls.client_state()
+        assert state == "damaged" and "no usable CA" in why
+        with pytest.raises(kea_tls.CaDamaged):
+            kea_tls.issue_client_cert()

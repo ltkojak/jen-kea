@@ -739,6 +739,41 @@ class TestTheProbeRowsOfQ191:
         ]
 
 
+class TestTheProbeRowsOfQ192:
+    """AH1-AH3: the staged client pair is proved against an external endpoint, a damaged CA creates nothing, and a pair is a pair only when the key is the certificate's."""
+
+    def test_a_damaged_ca_is_named_and_ensure_ca_creates_nothing(self):
+        assert probe.q192_ah2_a_damaged_ca_is_named_and_ensure_ca_creates_nothing() == {
+            "fresh": ("none", "created", False),
+            "key-missing": ("damaged", "refused", True),
+            "cert-missing": ("damaged", "refused", True),
+            "cert-malformed": ("damaged", "refused", True),
+            "key-malformed": ("damaged", "refused", True),
+            "mismatched": ("damaged", "refused", True),
+            "absent-beside-a-server-copy": ("none", "refused", True),
+            "absent-beside-the-client-pair": ("none", "refused", True),
+        }
+
+    def test_a_pair_is_a_pair_only_when_the_key_is_the_certificates(self):
+        assert probe.q192_ah3_a_pair_is_a_pair_only_when_the_key_is_the_certificates() == {
+            "valid": ("ok", False, "ok"),
+            "unrelated-key": ("damaged", True, "ok"),
+            "malformed-cert": ("damaged", True, "ok"),
+            "malformed-key": ("damaged", True, "ok"),
+            "earlier-jen-ca": ("damaged", True, "ok"),
+            "other-ca": ("damaged", True, "ok"),
+            "key-missing": ("damaged", True, "ok"),
+        }
+
+    def test_the_staged_client_pair_is_proved_against_an_external_endpoint(self):
+        assert probe.q192_ah1_the_staged_client_pair_is_proved_against_an_external_endpoint_before_promotion() == {
+            "answers-both": (False, False, True),
+            "refuses-the-staged-pair": (True, False, False),
+            "answers-neither": (False, True, False),
+            "no-client-pair": (False, False, True),
+        }
+
+
 class TestTheSecondPassOfQ187:
     """The executed findings of the adversarial pass on beta.18's routes, each as a probe row."""
 

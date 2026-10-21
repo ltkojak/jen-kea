@@ -1310,3 +1310,42 @@ class TestS14bAServiceShowsAnAddressByTheHelperToo:
     def test_the_reviewed_list_names_sites_that_still_exist(self):
         for (rel, holder), _why in S14B_ALLOWED.items():
             assert holder in (ROOT / rel).read_text(encoding="utf-8"), f"{rel} no longer formats {holder}: remove it"
+
+
+# ── S15: Jen's CA is read through `ca_state` - no caller loads the two files independently (Q192, AH2; REMOTE-001) ──────────────────────────────────
+
+#: the functions of kea_tls that may name `ca_paths()` AND `load_key(` together: the one definition (`ca_state`), the signer (`_load_ca`, which asks `ca_state` first), the pair check, and the
+#: three that read the CA CERTIFICATE only for a comparison and load a LEAF's key (`_material`, `client_state`, `client_kind`).
+S15_ALLOWED = {"ca_state", "_load_ca", "ca_consistent", "_material", "client_state", "client_kind"}
+
+
+def s15_sites(source: str) -> list[str]:
+    tree = ast.parse(source)
+    found = []
+    for fn in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+        names = {
+            (c.func.id if isinstance(c.func, ast.Name) else getattr(c.func, "attr", ""))
+            for c in ast.walk(fn)
+            if isinstance(c, ast.Call)
+        }
+        if "ca_paths" in names and "load_key" in names and fn.name not in S15_ALLOWED:
+            found.append(fn.name)
+    return sorted(found)
+
+
+class TestS15TheCaIsReadThroughCaState:
+    def test_ca_present_is_gone_and_no_new_function_loads_the_ca_files_by_itself(self):
+        for path in _py_files():
+            if path.suffix == ".py" and "jen" in path.parts:
+                text = path.read_text(encoding="utf-8")
+                assert "ca_present" not in text, (
+                    f"{path.name} still names `ca_present` (deleted in Q192: ask `ca_state`)"
+                )
+        assert s15_sites((ROOT / "jen" / "services" / "kea_tls.py").read_text(encoding="utf-8")) == []
+
+    def test_the_sweep_refuses_a_function_that_loads_the_two_files_independently(self):
+        planted = (
+            "def ca_present():\n    crt, key = ca_paths()\n    load_cert(crt)\n    load_key(key)\n    return True\n"
+            "def ok(path):\n    return load_key(path)\n"
+        )
+        assert s15_sites(planted) == ["ca_present"]

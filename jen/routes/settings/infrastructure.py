@@ -160,22 +160,35 @@ def _kea_ca_summary() -> dict:
     Jen issued (from the kea-servers/ copies — never SSHes)."""
     from jen.services import kea_tls
 
-    present = kea_tls.ca_present()
+    ca_state, ca_why = kea_tls.ca_state()  # Q192 (AH2): none / ok / damaged - there is no other reading of Jen's CA
+    present = ca_state == "ok"
     ca_crt, _ca_key = kea_tls.ca_paths()
+    client_state, client_why = kea_tls.client_state()
+    prepared, prepared_note = kea_tls.prepared_rotation()
     out = {
         "present": present,
+        "state": ca_state,
+        "damaged": ca_state == "damaged",
+        "why": ca_why,
         "ca_path": ca_crt,
         "subject": kea_tls._cn(ca_crt) if present else "",
         "days_left": kea_tls.days_left(ca_crt) if present else None,
-        "client_ok": kea_tls.client_cert_ok() if present else False,
+        "client_ok": client_state == "ok",
+        "client_state": client_state,
+        "client_why": client_why,
+        "prepared": prepared is not None,
+        "prepared_fingerprint": kea_tls.prepared_fingerprint(prepared) if prepared else "",
+        "prepared_note": prepared_note,
         "issued": [],
         # a [kea] api_ca whose certificates do not include Jen's = the operator brought their own CA (Q190, AF1: decided by certificate identity, never by comparing paths)
         "external_ca": bool(extensions.KEA_API_CA) and kea_tls.trust_includes_jens_ca() is False,
     }
     out["external"], out["refused"] = [], []
-    if present:
+    if present or ca_state == "damaged":
         # Q189 (AE1): what Rotate will do is the INVENTORY (every https endpoint Jen dials), not the listing of local copy files
-        inventory = kea_tls.rotation_inventory(extensions.KEA_SERVERS, url_for=_configured_url)
+        inventory = kea_tls.rotation_inventory(
+            extensions.KEA_SERVERS, url_for=_configured_url, recovery=ca_state == "damaged"
+        )
         for server, service, _bind in inventory.targets:
             name = server.get("name") or f"server {server.get('id')}"
             out["issued"].append(
@@ -885,6 +898,54 @@ def _probe_once(url, user, pwd, omit_service, service="dhcp4", verify=None, cert
 # failure for a socket that was fine two seconds later.
 _PROBE_ATTEMPTS = 8
 _PROBE_DELAY_S = 2.0
+
+
+def _staged_identity_refusal(inventory, kind: str, staged: dict) -> str:
+    """Q192 (AH1, the P1): the staged identity is proved, against every https endpoint Jen PRESENTS its client pair to, BEFORE anything is installed on any host. Jen's pair is global - when it is
+    Jen's own (`jens-file` / `alias`) it goes to every https endpoint, the administrator's included - and an external endpoint whose `cert-required` trust anchor is Jen's CA accepts today's client
+    certificate and refuses the new one: the rotation would promote a CA that daemon never learned, and Jen would be locked out of it with 'rotated' on the screen. Each external endpoint is probed
+    twice with the configured bundle - with the LIVE pair (the baseline: an endpoint that does not answer it is unreachable regardless, and the refusal says so) and with the STAGED pair; one that
+    answers the first and refuses the second DEPENDS on Jen's CA for client authentication. "" when nothing depends. A client kind of `none` presents nothing; a damaged live pair is no baseline
+    (Jen's dial is already broken) - and with an external endpoint present it cannot be proved, so that is a refusal that points at the repair."""
+    from jen.services import kea_tls as __tls
+
+    if kind not in ("jens-file", "alias") or not inventory.external_endpoints:
+        return ""
+    live_state, live_why = __tls.client_state()
+    if live_state not in ("ok", "expiring"):
+        return (
+            f"Jen's client certificate is damaged ({live_why}), so Jen cannot prove whether an endpoint it does not manage depends on it - set up an https socket again (it re-issues the pair from "
+            "the same CA), then rotate"
+        )
+    live_pair = __kea._tls_client_cert()
+    staged_pair = (staged["client_cert"], staged["client_key"])
+    verify = __kea._tls_verify()
+    for server, service, _url in inventory.external_endpoints:
+        url = _service_url(server, service)
+        if not url:
+            continue  # Jen has no credential it may send there: it dials nothing, so it presents no pair to it
+        label = f"{server.get('name') or 'Kea Server ' + str(server.get('id'))} {_DAEMON_NAME[service]} ({__auth.shown_url(url)})"
+        user, pwd = _daemon_creds(server, service)
+        try:
+            live_version, live_err = _probe_once(
+                url, user, pwd, omit_service=True, service=service, verify=verify, cert=live_pair
+            )
+            staged_version, _staged_err = _probe_once(
+                url, user, pwd, omit_service=True, service=service, verify=verify, cert=staged_pair
+            )
+        except Exception as e:  # a probe that raised proved nothing: the refusal is the safe reading (never a promotion with the endpoint unproved)
+            return f"{label} could not be probed ({type(e).__name__}), so Jen cannot tell whether it depends on its client certificate"
+        if not live_version:
+            return (
+                f"{label} does not answer Jen's current client certificate ({__auth.scrub_urls(live_err)}), so Jen cannot tell whether it depends on it - "
+                "it has to answer before a rotation can be proved safe"
+            )
+        if not staged_version:
+            return (
+                f"{label} accepts Jen's current client certificate and refuses the new one: its trust anchor for client certificates is Jen's current CA. "
+                "Prepare the rotation first, install the new CA certificate on it (beside the current one), then rotate"
+            )
+    return ""
 
 
 def _probe_after_restart(url, user, pwd, service, verify=None, cert=None):
@@ -2159,6 +2220,14 @@ def setup_direct_socket(server_id, service):
             return back
         jen_ca, _jen_ca_key = __tls.ca_paths()
         jen_client_cert, jen_client_key = __tls.client_paths()
+        ca_refusal = __tls.ca_refusal()  # Q192 (AH2): a damaged CA (or an absent one beside evidence it existed) is a recovery condition - refused before ANYTHING is read from or sent to the host
+        if ca_refusal:
+            flash(
+                f"Jen's CA is damaged ({ca_refusal}): restore the file from a backup, or run Rotate Kea CA (it replaces a damaged CA once you acknowledge that a server which fails part-way "
+                f"cannot be put back on it). Nothing was changed on {name}.",
+                "error",
+            )
+            return back
         if extensions.KEA_API_CA and __tls.trust_kind() not in ("jens-file", "alias", "copy"):
             flash(
                 f"The CA bundle above points at {extensions.KEA_API_CA}, which is not Jen's CA alone (an administrator's CA, a bundle that also holds one, or a file that cannot be read) — Jen manages one trust "
@@ -2184,12 +2253,23 @@ def setup_direct_socket(server_id, service):
         already_there = entry in (pre_read.get("api") or [])
         try:
             __tls.ensure_ca()
-            __tls.issue_client_cert()
+            client_issued = __tls.issue_client_cert()
             files = None if already_there else __tls.issue_server_cert(server, service, address, commit=False)
+        except __tls.CaDamaged as e:
+            flash(
+                f"Jen's CA is damaged ({e.why}): restore the file from a backup, or run Rotate Kea CA. Nothing was changed on {name}.",
+                "error",
+            )
+            return back
         except Exception as e:
             logger.error(f"kea_tls: could not issue material for {name}/{service}: {e}")
             flash("Jen could not issue the certificates — see the server log. Nothing was changed.", "error")
             return back
+        if client_issued.get("issued") and client_issued.get("why"):
+            flash(
+                f"Jen's client certificate was re-issued ({client_issued['why']}) from the same CA - every daemon that trusts the CA keeps trusting it; the pair it replaced is kept beside it as .prev.",
+                "info",
+            )
         tls_err = __kea.validate_client_tls_material(jen_client_cert, jen_client_key, jen_ca)
         if tls_err:
             flash(f"Jen's own client certificate is unusable ({tls_err}) — nothing was pushed to {name}.", "error")
@@ -2448,18 +2528,29 @@ def rotate_kea_ca():
     from jen.services import kea_tls as __tls
 
     back = redirect(url_for("settings.settings_kea"))
-    if not __tls.ca_present():
+    ca_state, ca_why = __tls.ca_state()
+    if ca_state == "none":
         flash(
             "No Jen-managed Kea CA exists yet — Jen creates it the first time you set up an https socket. "
             "Nothing to rotate.",
             "info",
         )
         return back
+    recovery = ca_state == "damaged"
+    if recovery and request.form.get("acknowledge_damaged_ca", "") != "1":
+        # Q192 (AH2): replacing a DAMAGED CA is the recovery - allowed only once the person has read what it cannot do: the current CA cannot sign, so a server that fails part-way cannot be put
+        # back on it and will need its socket set up again
+        flash(
+            f"Jen's CA is damaged ({ca_why}). Rotate can replace it, but the current CA cannot sign, so a server that fails part-way cannot be put back on it - it would need its socket set up "
+            "again. Tick the acknowledgement on the confirm and rotate again. Nothing was changed.",
+            "error",
+        )
+        return back
 
     # Q189 (AE1): the targets are every https endpoint Jen DIALS (the configuration), each with a complete record of its certificate - never the listing of local copy files. A missing or
     # unreadable record, or a directory that cannot be listed, is a REFUSAL here, before the staging and before any host is touched: a rotation that dropped a live endpoint would promote
     # a CA that daemon never learned, and Jen would be cut off from it.
-    inventory = __tls.rotation_inventory(extensions.KEA_SERVERS, url_for=_configured_url)
+    inventory = __tls.rotation_inventory(extensions.KEA_SERVERS, url_for=_configured_url, recovery=recovery)
     all_targets, blocked = inventory
     blocked = list(blocked)
     targets = []  # (server, service, bind address)
@@ -2477,6 +2568,9 @@ def rotate_kea_ca():
             blocked.append(f"{label} (helper below v4)")
             continue
         targets.append((server, service, bind))
+    for blocker in __tls.promotion_blockers():
+        # Q192 (found by the worlds matrix): a live identity file the promotion cannot replace is known NOW - not after every target has moved to the new CA
+        blocked.append(f"Jen cannot promote a new CA: {blocker}")
     if blocked:
         flash(
             "Rotate refused — a rotation would cut a server off from Jen's CA, or Jen cannot tell: "
@@ -2508,6 +2602,7 @@ def rotate_kea_ca():
     # restarted and probed with the STAGED identity, Jen's TLS settings are saved, and only then is the staging promoted as one set - each step inside one exception boundary, so a step
     # that fails (or raises) stops the rotation and every attempted target is put back on the CA Jen still trusts. The staging is discarded in a `finally`; `.prev` pairs stay until the end.
     staged = None
+    reused = False  # Q192 (AH1): the staging came from a `Prepare only` an external daemon's trust anchor may already hold - kept when this rotation fails, discarded only by success or its button
     done: list[tuple[dict, str, str]] = []
     confirmed: set = set()  # targets the host is KNOWN to hold the staged pair for (its install was acknowledged)
     attempted: list[tuple[dict, str, str]] = []  # every target the host may now hold STAGED-CA material for
@@ -2522,12 +2617,27 @@ def rotate_kea_ca():
     }
     try:
         try:
-            staged = __tls.stage_rotation()
+            prepared, prepared_note = __tls.prepared_rotation()
+            if prepared_note:
+                flash(prepared_note[:1].upper() + prepared_note[1:] + ".", "info")
+            if prepared is not None:
+                staged, reused = prepared, True
+                flash(
+                    f"Rotating to the CA prepared earlier (fingerprint {__tls.prepared_fingerprint(prepared)}).",
+                    "info",
+                )
+            else:
+                staged = __tls.stage_rotation()
         except Exception as e:
             logger.error(f"kea_tls: could not stage the new CA: {type(e).__name__}: {__auth.scrub_urls(str(e))}")
             flash(
                 "Rotate refused - Jen could not write the staged CA beside the live one. Nothing was changed.", "error"
             )
+            return back
+        unproved = _staged_identity_refusal(inventory, __tls.client_kind(), staged)
+        if unproved:
+            # Q192 (AH1): BEFORE the install loop - nothing is on any host yet, so nothing is put back
+            flash(f"Rotate refused - {unproved}. Nothing was changed.", "error")
             return back
         try:
             for server, service, bind in targets:
@@ -2745,8 +2855,14 @@ def rotate_kea_ca():
             )
             return back
     finally:
-        if staged is not None:
+        if staged is not None and not reused:
             __tls.discard_rotation(staged)
+        elif staged is not None and os.path.lexists(staged["ca_cert"]):
+            flash(
+                "The prepared CA is kept (fingerprint "
+                f"{__tls.prepared_fingerprint(staged)}) so a later rotation reuses the same one; discard it under Settings → Kea if you no longer want it.",
+                "info",
+            )
 
     for server, service, _bind in targets:
         __tls.retire_previous(
@@ -2774,8 +2890,67 @@ def rotate_kea_ca():
         + " The previous CA is kept beside the new one as kea-ca.crt.prev.",
         "success",
     )
-    __user.audit("ROTATE_KEA_CA", "kea_api", f"ok: {len(targets)} server certificate(s) re-issued")
+    __user.audit(
+        "ROTATE_KEA_CA",
+        "kea_api",
+        f"ok: {len(targets)} server certificate(s) re-issued"
+        + (" (replaced a damaged CA: acknowledged)" if recovery else ""),
+    )
     return back
+
+
+@bp.route("/settings/infrastructure/kea-ca/prepare", methods=["POST"])
+@login_required
+@_superadmin_required
+@_recent_auth_required(minutes=10)
+@_holding_identity_lock
+def prepare_kea_ca():
+    """Q192 (AH1) - "Prepare only": a new CA and client pair written beside the live files (`.next`, the keys private) and KEPT, with nothing changed on any host and nothing Jen trusts changed. The
+    page shows the new CA certificate's fingerprint and path for the operator to add to an external daemon's trust anchor beside the current one; a later Rotate REUSES it (the same CA-B)."""
+    from jen.services import kea_tls as __tls
+
+    back = redirect(url_for("settings.settings_kea"))
+    ca_state, ca_why = __tls.ca_state()
+    if ca_state != "ok":
+        flash("Nothing to prepare: Jen has no usable CA to rotate" + (f" ({ca_why})" if ca_why else "") + ".", "error")
+        return back
+    staged, note = __tls.prepared_rotation()
+    if note:
+        flash(note[:1].upper() + note[1:] + ".", "info")
+    if staged is None:
+        try:
+            staged = __tls.stage_rotation()
+        except Exception as e:
+            logger.error(f"kea_tls: could not prepare the new CA: {type(e).__name__}: {__auth.scrub_urls(str(e))}")
+            flash("Prepare failed - Jen could not write the new CA beside the live one. Nothing was changed.", "error")
+            return back
+        verb = "prepared"
+    else:
+        verb = "already prepared"
+    flash(
+        f"A new CA is {verb}: {staged['ca_cert']} (SHA-256 fingerprint {__tls.prepared_fingerprint(staged)}). Add it to the trust anchor of any daemon that is not on Jen's CA and checks "
+        "Jen's client certificate - beside the current CA, not instead of it - then rotate. Nothing was changed on any host.",
+        "success",
+    )
+    __user.audit("PREPARE_KEA_CA", "kea_api", f"{verb} {os.path.basename(staged['ca_cert'])}")
+    return back
+
+
+@bp.route("/settings/infrastructure/kea-ca/discard", methods=["POST"])
+@login_required
+@_superadmin_required
+@_recent_auth_required(minutes=10)
+@_holding_identity_lock
+def discard_prepared_kea_ca():
+    """Q192 (AH1) - drop the prepared CA (`.next`): the one other way, beside a successful rotation, that it goes."""
+    from jen.services import kea_tls as __tls
+
+    existed = any(os.path.lexists(p) for p in __tls._staged_paths().values())
+    __tls.discard_rotation(__tls._staged_paths())
+    flash("The prepared CA was discarded." if existed else "There was no prepared CA.", "info")
+    if existed:
+        __user.audit("DISCARD_PREPARED_KEA_CA", "kea_api", "discarded")
+    return redirect(url_for("settings.settings_kea"))
 
 
 @bp.route("/settings/infrastructure/direct-socket/<int:server_id>/<service>/remove", methods=["POST"])

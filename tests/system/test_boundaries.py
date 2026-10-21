@@ -2662,3 +2662,111 @@ def test_22_g_a_rotation_with_the_ca_bundle_an_alias_of_jens_ca_still_re_issues_
     assert result["local_issued_by_live_ca"], "INVARIANT: Jen's copy of the pair was issued by the CA Jen now trusts"
     host = _s22_host_state()
     assert host["server.crt"] == result["local_crt"], "INVARIANT: the certificate on the host IS the one Jen holds"
+
+
+S22H_DAMAGE_SCRIPT = r"""
+import hashlib, os
+from jen.services import kea_tls
+
+crt, key = kea_tls.ca_paths()
+client = kea_tls.client_paths()
+before = {p: hashlib.sha256(open(p, "rb").read()).hexdigest() for p in (crt, client[0], client[1])}
+os.unlink(key)  # Jen's CA key is gone: the CA certificate, the client pair and kea-a's server pair are all that is left
+emit({"state": kea_tls.ca_state(), "before": before})
+"""
+
+
+S22H_CHECK_SCRIPT = r"""
+import hashlib
+from jen.services import kea_tls
+
+crt, key = kea_tls.ca_paths()
+client = kea_tls.client_paths()
+emit({
+    "state": kea_tls.ca_state(),
+    "after": {p: hashlib.sha256(open(p, "rb").read()).hexdigest() for p in (crt, client[0], client[1])},
+    "key_exists": __import__("os").path.exists(key),
+})
+"""
+
+
+S22H_ROTATE_SCRIPT = r"""
+import contextlib, hashlib, inspect, os
+from unittest import mock
+import jen.config as jconfig
+from jen.routes.settings import infrastructure as infra
+from jen.services import kea_tls
+
+flashes = []
+url = "https://__ADDR__:8014"
+ca = kea_tls.ca_paths()[0]
+ca_before = hashlib.sha256(open(ca, "rb").read()).hexdigest()
+view = inspect.unwrap(infra.rotate_kea_ca)
+form = {"acknowledge_damaged_ca": "__ACK__"}
+with app.test_request_context(method="POST", data=form), contextlib.ExitStack() as stack:
+    stack.enter_context(mock.patch.object(infra, "flash", lambda text, style="message": flashes.append(str(text))))
+    stack.enter_context(mock.patch.object(extensions, "KEA_API_CA", ca))
+    stack.enter_context(mock.patch.object(infra, "_service_url", lambda server, service: url if (server.get("id"), service) == (1, "dhcp4") else ""))
+    stack.enter_context(mock.patch.object(infra, "_configured_url", lambda server, service: url if (server.get("id"), service) == (1, "dhcp4") else ""))
+    stack.enter_context(mock.patch.object(infra, "_daemon_creds", lambda server, service, url="": ("sysuser", "syspass-123")))
+    stack.enter_context(mock.patch.object(jconfig.app_config, "write_values", lambda *a, **k: flashes.append("WRITE_VALUES WAS CALLED")))
+    view()
+version, _err = infra._probe_after_restart(url, "sysuser", "syspass-123", "dhcp4", verify=ca, cert=kea_tls.client_paths())
+copy = kea_tls.server_copy_path(1, "dhcp4")
+emit({
+    "flashes": flashes,
+    "answers_the_new_identity": bool(version),
+    "ca_changed": ca_before != hashlib.sha256(open(ca, "rb").read()).hexdigest(),
+    "state": kea_tls.ca_state(),
+    "local_crt": open(copy).read(),
+    "local_issued_by_live_ca": kea_tls.issued_by(copy, ca),
+})
+"""
+
+
+def test_22_h_a_damaged_ca_refuses_an_https_setup_and_is_replaced_only_by_an_acknowledged_rotation(stack):
+    """REMOTE-001 / Q192 (AH2, the P1): kea-a is really on an https socket Jen issued the certificate for; Jen's `kea-ca.key` is then removed. An https setup is REFUSED before anything is sent to
+    a host - both of kea-a's TLS files and its daemon config are byte-for-byte the baseline, Jen's CA certificate and client pair are byte-equal, and NO new CA was created (before: `ensure_ca` read
+    "a cert without a loadable key counts as absent" and made one under the existing socket). A Rotate WITHOUT the acknowledgement is refused too; WITH it the damaged CA is replaced, kea-a is re-issued
+    from the new CA, restarted and PROBED with it, and the certificate on the host is the one Jen holds."""
+    out, proc = _s22_run("write-ok", scheme="https", port="8014")
+    assert emitted(out) is not None, f"no result from the https setup:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    baseline = _s22_host_state()
+    out, proc = st.jen_py(S22H_DAMAGE_SCRIPT, timeout=200)
+    damaged = emitted(out)
+    assert damaged is not None and damaged["state"][0] == "damaged", (damaged, proc.stderr[-1500:])
+    # an https setup now
+    out, proc = _s22_run("write-ok", scheme="https", port="8014")
+    result = emitted(out)
+    assert result is not None, f"no result from the refused setup:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    texts = " ".join(result["flashes"])
+    assert "Jen's CA is damaged" in texts and "kea-ca.key is missing" in texts, texts
+    after = _s22_host_state()
+    for name in S22_TLS_FILES:
+        assert after[name] == baseline[name], f"INVARIANT: {name} on kea-a is the baseline"
+    assert json.loads(after["conf"]) == json.loads(baseline["conf"]), "INVARIANT: kea-a's daemon config is the baseline"
+    out, proc = st.jen_py(S22H_CHECK_SCRIPT, timeout=200)
+    local = emitted(out)
+    assert local["state"][0] == "damaged" and not local["key_exists"], "INVARIANT: no new CA key was created"
+    assert local["after"] == damaged["before"], "INVARIANT: Jen's CA certificate and client pair are byte-equal"
+    # Rotate without the acknowledgement: refused
+    ip = st.container_ip(st.KEA_A)
+    out, proc = st.jen_py(S22H_ROTATE_SCRIPT.replace("__ADDR__", ip).replace("__ACK__", ""), timeout=500)
+    refused = emitted(out)
+    assert refused is not None and "Tick the acknowledgement" in " ".join(refused["flashes"]), (
+        refused,
+        proc.stderr[-1500:],
+    )
+    assert not refused["ca_changed"] and refused["state"][0] == "damaged"
+    # ... and with it: the recovery
+    out, proc = st.jen_py(S22H_ROTATE_SCRIPT.replace("__ADDR__", ip).replace("__ACK__", "1"), timeout=500)
+    recovered = emitted(out)
+    assert recovered is not None, f"no result from the recovery:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    rtexts = " ".join(recovered["flashes"])
+    assert "Kea CA rotated" in rtexts and "kea-a kea-dhcp4" in rtexts, rtexts
+    assert recovered["state"][0] == "ok" and recovered["ca_changed"], "INVARIANT: the damaged CA was replaced by a pair"
+    assert recovered["answers_the_new_identity"] is True, "INVARIANT: kea-a answers Jen's NEW CA and client certificate"
+    assert recovered["local_issued_by_live_ca"], "INVARIANT: Jen's copy of the pair was issued by the CA Jen now trusts"
+    host = _s22_host_state()
+    assert host["server.crt"] == recovered["local_crt"], "INVARIANT: the certificate on the host IS the one Jen holds"
+    st.wait_for(lambda: st.kea_answers("kea-b"), timeout=60, what="kea-b answering on its own socket")

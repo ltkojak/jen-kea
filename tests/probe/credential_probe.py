@@ -1943,6 +1943,139 @@ def q191_ag2_the_twin_refusal_shape_is_seen_by_the_sweep_by_provenance_not_by_na
     return sorted({name.split(" ")[0] for _r, _l, name in s14_sites(planted, "jen/routes/x.py")})
 
 
+def q192_ah2_a_damaged_ca_is_named_and_ensure_ca_creates_nothing():
+    """For each way Jen's CA can be damaged (and the two ways it can be absent): what `ca_state` says, what `ensure_ca()` does, and whether every file in Jen's SSL folder is byte-equal afterwards."""
+    import os
+    import pathlib
+
+    from tests import _tls_worlds as worlds
+
+    out = {}
+    for shape in (
+        "fresh",
+        "key-missing",
+        "cert-missing",
+        "cert-malformed",
+        "key-malformed",
+        "mismatched",
+        "absent-beside-a-server-copy",
+        "absent-beside-the-client-pair",
+    ):
+        with contextlib.ExitStack() as stack:
+            kea_tls, directory, _ = _tls_lab(stack)
+            server = {"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5"}
+            kea_tls.issue_server_cert(server, "dhcp4", "10.0.0.5")
+            crt, key = kea_tls.ca_paths()
+            if shape == "fresh":
+                import shutil
+
+                shutil.rmtree(directory)
+                os.makedirs(directory)
+            elif shape == "key-missing":
+                os.unlink(key)
+            elif shape == "cert-missing":
+                os.unlink(crt)
+            elif shape == "cert-malformed":
+                worlds.malformed(crt)
+            elif shape == "key-malformed":
+                worlds.malformed(key)
+            elif shape == "mismatched":
+                pathlib.Path(key).write_bytes(worlds.another_key_pem())
+            else:
+                os.unlink(crt)
+                os.unlink(key)
+                if shape == "absent-beside-the-client-pair":
+                    import shutil
+
+                    shutil.rmtree(os.path.dirname(kea_tls.server_copy_path(1, "dhcp4")))
+            before = worlds.tree(directory)
+            state = kea_tls.ca_state()[0]
+            try:
+                created = kea_tls.ensure_ca()["created"]
+                outcome = "created" if created else "unchanged"
+            except kea_tls.CaDamaged:
+                outcome = "refused"
+            out[shape] = (state, outcome, worlds.tree(directory) == before)
+    return out
+
+
+def q192_ah3_a_pair_is_a_pair_only_when_the_key_is_the_certificates():
+    """For each shape of Jen's client pair under an ok CA: `client_state` and whether `issue_client_cert()` re-issued it."""
+    import pathlib
+
+    from tests import _tls_worlds as worlds
+
+    out = {}
+    for shape in (
+        "valid",
+        "unrelated-key",
+        "malformed-cert",
+        "malformed-key",
+        "earlier-jen-ca",
+        "other-ca",
+        "key-missing",
+    ):
+        with contextlib.ExitStack() as stack:
+            kea_tls, _directory, _ = _tls_lab(stack)
+            pem, key = kea_tls.client_paths()
+            if shape == "unrelated-key":
+                pathlib.Path(key).write_bytes(worlds.another_key_pem())
+            elif shape == "malformed-cert":
+                worlds.malformed(pem)
+            elif shape == "malformed-key":
+                worlds.malformed(key)
+            elif shape in ("earlier-jen-ca", "other-ca"):
+                worlds.apply_state(shape if shape == "other-ca" else "earlier-jen", pem, key, which="cert", client=True)
+            elif shape == "key-missing":
+                worlds.absent(key)
+            state = kea_tls.client_state()[0]
+            issued = kea_tls.issue_client_cert()["issued"]
+            out[shape] = (state, issued, kea_tls.client_state()[0])
+    return out
+
+
+def q192_ah1_the_staged_client_pair_is_proved_against_an_external_endpoint_before_promotion():
+    """`_staged_identity_refusal`: an external endpoint that answers the LIVE pair and refuses the STAGED one depends on Jen's CA for client authentication. Probed through the route's own helper."""
+    import types
+
+    from jen.routes.settings import infrastructure as infra
+
+    server = {"id": 3, "name": "external", "ssh_host": "10.0.0.7"}
+    inventory = types.SimpleNamespace(external_endpoints=[(server, "dhcp4", "https://10.0.0.7:8004")])
+    staged = {"client_cert": "/x/jen-kea-client.pem.next", "client_key": "/x/jen-kea-client.key.next"}
+    out = {}
+    for shape in ("answers-both", "refuses-the-staged-pair", "answers-neither", "no-client-pair"):
+        with contextlib.ExitStack() as stack:
+            kea_tls, _directory, _ = _tls_lab(stack)
+            stack.enter_context(
+                mock.patch.object(
+                    extensions, "KEA_API_CLIENT_CERT", kea_tls.client_paths()[0] if shape != "no-client-pair" else ""
+                )
+            )
+            stack.enter_context(
+                mock.patch.object(
+                    extensions, "KEA_API_CLIENT_KEY", kea_tls.client_paths()[1] if shape != "no-client-pair" else ""
+                )
+            )
+            stack.enter_context(mock.patch.object(infra, "_service_url", lambda s, svc: "https://10.0.0.7:8004"))
+            stack.enter_context(mock.patch.object(infra, "_daemon_creds", lambda s, svc, url="": ("u", "p")))
+
+            def probe(url, user, pwd, omit_service, service="dhcp4", verify=None, cert=None, _shape=shape):
+                staged_pair = bool(cert) and str(cert[0]).endswith(".next")
+                if _shape == "answers-neither" or (_shape == "refuses-the-staged-pair" and staged_pair):
+                    return "", "certificate required"
+                return "Kea 3.0.3", ""
+
+            stack.enter_context(mock.patch.object(infra, "_probe_once", probe))
+            refusal = infra._staged_identity_refusal(inventory, kea_tls.client_kind(), staged)
+            out[shape] = (
+                "accepts Jen's current client certificate and refuses the new one" in refusal,
+                "does not answer Jen's current client certificate" in refusal,
+                refusal == "",
+            )
+    return out
+
+
 def q185_aa3_a_trailing_no_break_space_is_refused_and_ordinary_padding_is_not():
     from jen.services import auth
 
@@ -1984,7 +2117,7 @@ SCENARIOS = {
     name: fn
     for name, fn in sorted(globals().items())
     if name.startswith(
-        ("b12_", "b13_", "q183_", "q184_", "q185_", "q186_", "q187_", "q188_", "q189_", "q190_", "q191_")
+        ("b12_", "b13_", "q183_", "q184_", "q185_", "q186_", "q187_", "q188_", "q189_", "q190_", "q191_", "q192_")
     )
     and callable(fn)
 }
@@ -2290,6 +2423,31 @@ EXPECTED = {
         False,
         True,
     ),
+    "q192_ah2_a_damaged_ca_is_named_and_ensure_ca_creates_nothing": {
+        "fresh": ("none", "created", False),
+        "key-missing": ("damaged", "refused", True),
+        "cert-missing": ("damaged", "refused", True),
+        "cert-malformed": ("damaged", "refused", True),
+        "key-malformed": ("damaged", "refused", True),
+        "mismatched": ("damaged", "refused", True),
+        "absent-beside-a-server-copy": ("none", "refused", True),
+        "absent-beside-the-client-pair": ("none", "refused", True),
+    },
+    "q192_ah3_a_pair_is_a_pair_only_when_the_key_is_the_certificates": {
+        "valid": ("ok", False, "ok"),
+        "unrelated-key": ("damaged", True, "ok"),
+        "malformed-cert": ("damaged", True, "ok"),
+        "malformed-key": ("damaged", True, "ok"),
+        "earlier-jen-ca": ("damaged", True, "ok"),
+        "other-ca": ("damaged", True, "ok"),
+        "key-missing": ("damaged", True, "ok"),
+    },
+    "q192_ah1_the_staged_client_pair_is_proved_against_an_external_endpoint_before_promotion": {
+        "answers-both": (False, False, True),
+        "refuses-the-staged-pair": (True, False, False),
+        "answers-neither": (False, True, False),
+        "no-client-pair": (False, False, True),
+    },
     "q191_ag1_the_client_pair_is_judged_by_certificate_like_the_bundle": {
         "none": ("none", 1, 0),
         "jens-file": ("jens-file", 1, 0),

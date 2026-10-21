@@ -92,6 +92,13 @@ should have caught it only looked at a set the tests populated. Four rules follo
    empty / unreadable; the client pair: none / Jen's file / alias / copy / other / unreadable), and the harness builds one world per shape and crosses the lists: an invariant fires only in a world that has the
    shape, and beta.21's P1 lived in the one world no shipped test built (a client certificate that was a copy). A new input to the identity is a new list in the same commit.
 
+**(q) A module's inputs are its worlds (v5.69.0-beta.23, Q192).** Step (p)4 for the code a diff did NOT touch. Three reviews in a row found v5.29 TLS functions (`ensure_ca`, `ca_present`, `client_cert_ok`)
+by reading the whole archive while our own passes executed the diff. For a module that reads files or configuration into a decision, the Q lists EVERY input (each file, each configured path, each marker) and
+EVERY state it can be in (absent, present-valid, malformed, unreadable, mismatched with its partner, alias, byte-copy, issued by an earlier CA, issued by another CA), and a test GENERATES the worlds - whether
+or not the diff touched the module - and runs every ordinary action in each with the invariants after it. The enumeration is tied to the code (a test lists the module's path functions, suffixes, configured
+inputs and reading functions and fails on one that is not a row), and the second pass executes the module's OLD functions in the worlds, not only the new ones. An invariant that a world BREAKS before any
+action is made relative to the world (the world is the input; Health and the refusal say so) - never loosened for the action.
+
 ## The second pass (adversarial)
 
 Run as a separate subagent on the same diff, with the reviewer's method as its prompt, so that it does not inherit the first pass's assumptions. Its findings are reconciled against the first pass's
@@ -123,7 +130,7 @@ The prompt is below, verbatim; replace `<repo root>` and `<previous tag>` and ch
 
 ```
 You are an independent adversarial release reviewer for Jen at <repo root>. Read-only: change no file; report findings only. Scope: `git diff <previous tag>..HEAD`
-(run it). Read docs/RELEASE_AUDIT.md first and apply its steps (h)-(p). Read the WHOLE diff, then the CURRENT text of every changed function in full - never the hunk alone.
+(run it). Read docs/RELEASE_AUDIT.md first and apply its steps (h)-(q). Read the WHOLE diff, then the CURRENT text of every changed function in full - never the hunk alone.
 For every piece of evidence, guard or check the diff adds, ask what else could produce the same observation without the thing it is taken to prove; for every
 check-then-act, name what could change between the two; for every except, say whether a failure reads as success; for every new state or field, find every reader and
 writer; for every multi-step operation, inject a failure at each step and say what state is left and whether it is visible. Compare what the tests pin with what the

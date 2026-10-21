@@ -54,7 +54,14 @@ class TestBothRoutesHoldTheLock:
             for name, fn in vars(infra).items()
             if inspect.isfunction(fn) and getattr(fn, "__holds_identity_lock__", False) and not name.startswith("_")
         }
-        assert held == {"setup_direct_socket", "remove_direct_socket", "rotate_kea_ca"}
+        # (Q192, adjusted: Prepare and Discard write and unlink the `.next` files a running rotation reads and consumes, so they hold the identity lock too)
+        assert held == {
+            "setup_direct_socket",
+            "remove_direct_socket",
+            "rotate_kea_ca",
+            "prepare_kea_ca",
+            "discard_prepared_kea_ca",
+        }
 
 
 class TestTurnOnWaitsBehindIt:
@@ -1579,3 +1586,180 @@ class TestTheSecondPassOfQ191:
     def test_a_save_of_a_clean_address_says_nothing_of_it(self, wire, monkeypatch):
         self._save_ddns(monkeypatch, "https://pi.lan:443", "https://pi.lan:443")
         assert "this save removed it" not in _everything_printed(wire)
+
+
+class TestSetupWithADamagedCaOrClientPair:
+    """Q192 (AH2, AH3) at the https setup: a damaged CA is refused BEFORE any remote change and nothing local is replaced; a damaged client pair under an ok CA is re-issued from the SAME CA and said."""
+
+    FORM = {"scheme": "https", "address": "10.0.0.5", "port": "8004", "user": "u", "password": "p"}
+
+    def _baseline(self, tls_world):
+        kt = tls_world["tls"]["tls"]
+        kt.ensure_ca()
+        kt.issue_client_cert()
+        return kt
+
+    @pytest.mark.parametrize("damage", ["cert-missing", "key-missing", "cert-malformed", "key-malformed", "mismatched"])
+    def test_a_damaged_ca_is_refused_before_anything_is_sent_and_nothing_local_changes(
+        self, tls_world, monkeypatch, damage
+    ):
+        from tests import _tls_worlds as worlds
+
+        kt = self._baseline(tls_world)
+        crt, key = kt.ca_paths()
+        if damage == "cert-missing":
+            os.unlink(crt)
+        elif damage == "key-missing":
+            os.unlink(key)
+        elif damage == "cert-malformed":
+            worlds.malformed(crt)
+        elif damage == "key-malformed":
+            worlds.malformed(key)
+        else:
+            pathlib.Path(key).write_bytes(worlds.another_key_pem())
+        before = worlds.tree(kt.SSL_DIR)
+        monkeypatch.setattr(infra, "_write_direct_socket_config", lambda *a, **k: "url written")
+        _post(_inner(infra.setup_direct_socket), **self.FORM)
+        texts = " ".join(t for _s, t in tls_world["flashes"])
+        assert "Jen's CA is damaged" in texts and "Nothing was changed" in texts and "Rotate Kea CA" in texts, texts
+        assert tls_world["tls"]["installed"] == [] and tls_world["tls"]["restarts"] == [] and tls_world["applies"] == []
+        assert worlds.tree(kt.SSL_DIR) == before, "T6: no new CA, and the CA files and the client pair are byte-equal"
+
+    def test_an_http_setup_is_not_a_tls_operation_and_goes_through_beside_a_damaged_ca(self, tls_world, monkeypatch):
+        kt = self._baseline(tls_world)
+        os.unlink(kt.ca_paths()[1])
+        from tests import _tls_worlds as worlds
+
+        before = worlds.tree(kt.SSL_DIR)
+        monkeypatch.setattr(infra, "_write_direct_socket_config", lambda *a, **k: "url written")
+        _post(_inner(infra.setup_direct_socket), **dict(self.FORM, scheme="http"))
+        assert tls_world["tls"]["installed"] == [] and worlds.tree(kt.SSL_DIR) == before
+
+    def test_an_absent_ca_beside_a_client_certificate_is_refused_not_created(self, tls_world, monkeypatch):
+        from tests import _tls_worlds as worlds
+
+        kt = self._baseline(tls_world)
+        os.unlink(kt.ca_paths()[0])
+        os.unlink(kt.ca_paths()[1])
+        before = worlds.tree(kt.SSL_DIR)
+        _post(_inner(infra.setup_direct_socket), **self.FORM)
+        texts = " ".join(t for _s, t in tls_world["flashes"])
+        assert "Jen's CA is damaged" in texts and "client certificate exists" in texts, texts
+        assert tls_world["tls"]["installed"] == [] and worlds.tree(kt.SSL_DIR) == before
+
+    @pytest.mark.parametrize("damage", ["key-unrelated", "cert-malformed", "earlier-ca"])
+    def test_a_damaged_client_pair_under_an_ok_ca_is_re_issued_from_the_same_ca_and_said(
+        self, tls_world, monkeypatch, damage
+    ):
+        from tests import _tls_worlds as worlds
+
+        kt = self._baseline(tls_world)
+        pem, key = kt.client_paths()
+        ca_before = pathlib.Path(kt.ca_paths()[0]).read_bytes()
+        old = pathlib.Path(pem).read_bytes()
+        if damage == "key-unrelated":
+            pathlib.Path(key).write_bytes(worlds.another_key_pem())
+        elif damage == "cert-malformed":
+            worlds.malformed(pem)
+        else:
+            cert_pem, key_pem = worlds.issued_pair(worlds.earlier_jen_ca(), client=True)
+            pathlib.Path(pem).write_bytes(cert_pem)
+            pathlib.Path(key).write_bytes(key_pem)
+        assert not kt.client_cert_ok()
+        monkeypatch.setattr(infra, "_write_direct_socket_config", lambda *a, **k: "url written")
+        _post(_inner(infra.setup_direct_socket), **self.FORM)
+        texts = " ".join(t for _s, t in tls_world["flashes"])
+        assert "client certificate was re-issued" in texts and "from the same CA" in texts, texts
+        assert kt.client_cert_ok() and pathlib.Path(kt.ca_paths()[0]).read_bytes() == ca_before
+        assert len(tls_world["tls"]["installed"]) == 1, "the setup went ahead"
+        assert pathlib.Path(pem + ".prev").exists() and old != pathlib.Path(pem).read_bytes()
+
+
+# ── Q192 (AH0): the worlds matrix through the setup / remove harness ────────────────────────────────────────────────────────────────────────────
+
+
+def _worlds_module():
+    from tests import test_kea_tls_worlds as matrix
+
+    return matrix
+
+
+@pytest.fixture
+def setup_world(request, tls_world, monkeypatch, tmp_path):
+    """The parametrised world applied to a healthy baseline (a CA, Jen's client pair, a server pair for server 1's dhcp4) inside the setup harness (`tls_world`)."""
+    matrix = _worlds_module()
+    world = request.param
+    kt = tls_world["tls"]["tls"]
+    kt.ensure_ca()
+    kt.issue_client_cert()
+    kt.issue_server_cert(tls_world["server"], "dhcp4", "10.0.0.5")
+    matrix.apply_world(world, monkeypatch, tmp_path)
+    monkeypatch.setattr(infra, "_write_direct_socket_config", lambda *a, **k: "url written")
+    return world, kt, matrix
+
+
+def _setup_worlds(test):
+    matrix = _worlds_module()
+    return pytest.mark.parametrize("setup_world", matrix.WORLDS, ids=matrix.IDS, indirect=True)(test)
+
+
+class TestTheWorldsOfTheSetupHarness:
+    """AH0 through `setup_direct_socket` (https and http) and `remove_direct_socket`: every world of the matrix, with T6 (no ordinary action replaces a damaged identity file) and T7 (a CA is created
+    only in the uninitialised world) judged from the files, and the setup harness's own T1 / T4 in its teardown."""
+
+    FORM = {"scheme": "https", "address": "10.0.0.5", "port": "8004", "user": "u", "password": "p"}
+
+    @_setup_worlds
+    def test_https_setup(self, setup_world, tls_world):
+        world, kt, matrix = setup_world
+        before_tree, before_identity = matrix.worlds.tree(kt.SSL_DIR), matrix.identity_files()
+        ca_before = (before_identity["ca_crt"], before_identity["ca_key"])
+        _post(_inner(infra.setup_direct_socket), **self.FORM)
+        texts = " ".join(t for _s, t in tls_world["flashes"])
+        after_identity = matrix.identity_files()
+        installed = tls_world["tls"]["installed"]
+        if matrix.ca_damaged(world):
+            assert "Jen's CA is damaged" in texts and "Nothing was changed" in texts, texts
+            assert installed == [] and tls_world["applies"] == []
+            assert matrix.worlds.tree(kt.SSL_DIR) == before_tree, (
+                "T6: a damaged CA, and everything beside it, is byte-equal"
+            )
+            return
+        if world.klass == "uninitialised":
+            assert kt.ca_state() == ("ok", ""), "T7: the one world a CA is created in"
+            return
+        assert (after_identity["ca_crt"], after_identity["ca_key"]) == ca_before, (
+            "T7/T6: setup never replaces or creates a CA outside the uninitialised world"
+        )
+        if matrix.client_damaged(world):
+            if world.state == "unreadable":
+                assert installed == [] and "Nothing was changed" in texts or "could not issue" in texts, texts
+                assert after_identity == before_identity, "T6"
+            else:
+                assert "client certificate was re-issued" in texts and len(installed) == 1, texts
+                assert kt.client_state() == ("ok", "")
+            return
+        if after_identity != before_identity:
+            raise AssertionError(f"T6: setup replaced an identity file in a world that did not damage it: {world.id}")
+
+    @_setup_worlds
+    def test_http_setup_is_not_a_tls_operation(self, setup_world, tls_world):
+        world, kt, matrix = setup_world
+
+        def live(tree):
+            """The files that ARE material (identity and the live server pair) - not the housekeeping beside them (`.prev`, `.staged`, the markers), which a successful operation retires."""
+            return {k: v for k, v in tree.items() if not k.endswith((".prev", ".staged", ".stale", ".unknown"))}
+
+        before = live(matrix.worlds.tree(kt.SSL_DIR))
+        _post(_inner(infra.setup_direct_socket), **dict(self.FORM, scheme="http"))
+        assert live(matrix.worlds.tree(kt.SSL_DIR)) == before, (
+            "T6: an http setup replaces no identity file and no live pair"
+        )
+        assert tls_world["tls"]["installed"] == []
+
+    @_setup_worlds
+    def test_remove_changes_no_identity_file(self, setup_world, tls_world):
+        world, kt, matrix = setup_world
+        before = matrix.worlds.tree(kt.SSL_DIR)
+        _post(_inner(infra.remove_direct_socket))
+        assert matrix.worlds.tree(kt.SSL_DIR) == before, "T6: a removal touches no TLS file of Jen's"
