@@ -562,9 +562,11 @@ it to the user and password fields, and Jen keeps dialling it as written (the cr
    refusal) and with the STAGED one - and refuses one that answers the first and refuses the second: its trust anchor for client certificates is Jen's current CA, and promoting CA-B would lock Jen out of it.
    "Prepare only" keeps `.next` (the keys private, the fingerprint shown, `PREPARE_KEA_CA` audited) for the operator to add to that daemon beside the current CA, a later Rotate reuses a consistent `.next`
    (an incomplete or inconsistent one is discarded and said), and a rotation that fails keeps a PREPARED one but discards one it staged itself. (2) `kea_tls.ca_state()` is the ONE definition of Jen's CA
-   (`none` / `ok` / `damaged` with why; `ca_present` is deleted - sweep S15): `ensure_ca` creates only in the uninitialised world (no CA files, no client pair, no server copy of any kind, no prepared rotation, a
-   directory that can be listed - T7) and raises `CaDamaged` otherwise, `issue_server_cert` / `issue_client_cert` raise it instead of signing, the https setup refuses a damaged CA before reading from or sending
-   anything to a host, Health fails, and Rotate replaces a damaged CA only with an explicit acknowledgement that a server which fails part-way cannot be put back (the rollback records `tls-not-restored`).
+   (`none` / `ok` / `damaged` with why; `ca_present` is deleted - sweep S15): `none` is the uninitialised world ONLY (no CA files, no client pair, no `.prev`, no `.next`, no `kea-servers` directory at all, nothing
+   unlistable - T7); the same absence beside any of that is `damaged`, as is a certificate that parses but whose public key is unusable (it must never raise). `ensure_ca` creates only in `none` and raises
+   `CaDamaged` otherwise, `issue_server_cert` / `issue_client_cert` raise it instead of signing, `_material` (the install payload) is built only from an ok CA, the https setup refuses a damaged CA before anything
+   is CHANGED on a host, Health fails, and Rotate replaces a damaged CA only with an explicit acknowledgement that a server which fails part-way cannot be put back (the rollback records `tls-not-restored`; a recovery
+   judges the CA bundle by PATH - Jen's file or a link replaced, anything else a copy - because its own certificate cannot be compared, and the live client pair without its issuer).
    A rotation also refuses before staging when a live identity file is a directory or a link it cannot replace (`promotion_blockers`). (3) `kea_tls.client_state()` is the ONE definition of Jen's client pair
    (SPKI, the live issuer, `clientAuth`, validity; `none` / `ok` / `expiring` / `damaged`): `issue_client_cert` re-issues a damaged pair from an ok CA (the old pair kept as `.prev`) and the setup that calls it
    says so. (4) `tests/test_kea_tls_worlds.py` generates a world per (file, state) over every file the module reads, with T6 (no ordinary action replaces a damaged identity file) and T7, and a test lists the
@@ -628,6 +630,7 @@ Jen's CA by certificate identity, per endpoint; an invariant with no knob; an in
 - `tests/test_kea_tls_rotation.py::TestCaState`
 - `tests/test_kea_tls_rotation.py::TestClientState`
 - `tests/test_kea_tls_rotation.py::TestTheInvariantsBiteTooQ192`
+- `tests/test_kea_tls_worlds.py::TestTheSecondPassOfQ192`
 - `tests/test_kea_tls_worlds.py::TestTheWorldsOfTheLab`
 - `tests/test_kea_tls_worlds.py::TestEveryInputOfTheModuleIsARow`
 - `tests/test_direct_socket_lock.py::TestTheWorldsOfTheSetupHarness`

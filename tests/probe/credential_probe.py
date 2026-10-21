@@ -1958,6 +1958,7 @@ def q192_ah2_a_damaged_ca_is_named_and_ensure_ca_creates_nothing():
         "cert-malformed",
         "key-malformed",
         "mismatched",
+        "invalid-public-key",
         "absent-beside-a-server-copy",
         "absent-beside-the-client-pair",
     ):
@@ -1981,6 +1982,10 @@ def q192_ah2_a_damaged_ca_is_named_and_ensure_ca_creates_nothing():
                 worlds.malformed(key)
             elif shape == "mismatched":
                 pathlib.Path(key).write_bytes(worlds.another_key_pem())
+            elif shape == "invalid-public-key":
+                pathlib.Path(crt).write_bytes(
+                    worlds.invalid_public_key(pathlib.Path(crt).read_bytes())
+                )  # it PARSES; `public_key()` raises
             else:
                 os.unlink(crt)
                 os.unlink(key)
@@ -2430,8 +2435,9 @@ EXPECTED = {
         "cert-malformed": ("damaged", "refused", True),
         "key-malformed": ("damaged", "refused", True),
         "mismatched": ("damaged", "refused", True),
-        "absent-beside-a-server-copy": ("none", "refused", True),
-        "absent-beside-the-client-pair": ("none", "refused", True),
+        "invalid-public-key": ("damaged", "refused", True),
+        "absent-beside-a-server-copy": ("damaged", "refused", True),
+        "absent-beside-the-client-pair": ("damaged", "refused", True),
     },
     "q192_ah3_a_pair_is_a_pair_only_when_the_key_is_the_certificates": {
         "valid": ("ok", False, "ok"),

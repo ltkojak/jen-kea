@@ -414,7 +414,12 @@ class Lab:
                     )
                 )
             if before is False and not (succeeded and self.jen_issued(sid)):
-                if self.before is not None and self.hosts[sid]["files"] != self.before["hosts"].get(sid):
+                # (Q192: a recovery that FAILS part-way leaves hosts on the new CA that Jen cannot put back - named by a `tls-not-restored` / `remote-unknown` incident; that is saying so)
+                if (
+                    self.before is not None
+                    and self.hosts[sid]["files"] != self.before["hosts"].get(sid)
+                    and not self._named(sid, _NAMES_A_SERVER)
+                ):
                     bad.append(
                         (
                             "T3",
@@ -2330,7 +2335,8 @@ class TestCaState:
             pathlib.Path(kea_tls.ca_paths()[0] + ".next").write_text("x", encoding="ascii")
         before = self._snapshot()
         lab.begin()
-        assert kea_tls.ca_state() == ("none", "")
+        # (Q192 second pass, finding 4, adjusted: an absent CA beside evidence it existed is DAMAGED - one definition, so Health, setup, the page and Rotate all agree)
+        assert kea_tls.ca_state()[0] == "damaged" and "both CA files are missing" in kea_tls.ca_state()[1]
         with pytest.raises(kea_tls.CaDamaged):
             kea_tls.ensure_ca()
         assert self._snapshot() == before and not os.path.exists(kea_tls.ca_paths()[0])

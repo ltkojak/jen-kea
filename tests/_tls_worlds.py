@@ -20,7 +20,7 @@ import pathlib
 
 from jen.services import kea_tls
 
-STATES = ("absent", "malformed", "unreadable", "mismatched", "earlier-jen", "other-ca")
+STATES = ("absent", "malformed", "unreadable", "mismatched", "earlier-jen", "other-ca", "invalid-key")
 
 
 def _write(path, data):
@@ -31,6 +31,21 @@ def _write(path, data):
         path.unlink()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data if isinstance(data, bytes) else data.encode("ascii"))
+
+
+def invalid_public_key(cert_pem: bytes) -> bytes:
+    """The same certificate with ONE byte of its public key point flipped: valid PEM, valid DER, it PARSES - and `cert.public_key()` raises `ValueError: Invalid key` (Q192, second pass finding 1)."""
+    import base64
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import serialization
+
+    cert = x509.load_pem_x509_certificate(cert_pem)
+    der = cert.public_bytes(serialization.Encoding.DER)
+    spki = cert.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+    bad = bytearray(der)
+    bad[der.find(spki) + len(spki) - 3] ^= 0xFF
+    return b"-----BEGIN CERTIFICATE-----\n" + base64.encodebytes(bytes(bad)) + b"-----END CERTIFICATE-----\n"
 
 
 def absent(path):
@@ -109,6 +124,10 @@ def apply_state(state: str, cert_path, key_path, *, which: str, client: bool, ca
             _write(cert_path, cert_pem)
         else:
             _write(key_path, another_key_pem())
+    elif state == "invalid-key":
+        if which != "cert":
+            raise AssertionError("only a certificate has a public key to corrupt")
+        _write(cert_path, invalid_public_key(pathlib.Path(cert_path).read_bytes()))
     elif state in ("earlier-jen", "other-ca"):
         ca = earlier_jen_ca() if state == "earlier-jen" else other_ca()
         cert_pem, key_pem = issued_pair(ca, client=client)

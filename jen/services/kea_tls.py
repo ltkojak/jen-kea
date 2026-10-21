@@ -233,7 +233,9 @@ def ca_state() -> tuple[str, str]:
     crt, key = ca_paths()
     have_crt, have_key = os.path.lexists(crt), os.path.lexists(key)
     if not have_crt and not have_key:
-        return "none", ""
+        # (second pass, finding 4) neither file - but beside evidence that a CA existed it is DAMAGED, not "no CA yet": one definition, so Health, the setup, the page and Rotate agree
+        evidence = _initialised_evidence()
+        return ("damaged", f"both CA files are missing, and {evidence}") if evidence else ("none", "")
     crt_name, key_name = os.path.basename(crt), os.path.basename(key)
     if not have_crt:
         return "damaged", f"{crt_name} is missing ({key_name} is there)"
@@ -252,7 +254,14 @@ def ca_state() -> tuple[str, str]:
     except (ValueError, TypeError, UnsupportedAlgorithm):
         return "damaged", f"{key_name} is not a private key"
     spki = serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
-    if cert.public_key().public_bytes(*spki) != private.public_key().public_bytes(*spki):
+    try:
+        cert_spki = cert.public_key().public_bytes(*spki)
+    except (ValueError, TypeError, UnsupportedAlgorithm):
+        return (
+            "damaged",
+            f"{crt_name} is a certificate with an unusable public key",
+        )  # (second pass, finding 1: it parses, so it is not 'not a certificate' - and it must not raise)
+    if cert_spki != private.public_key().public_bytes(*spki):
         return "damaged", f"{crt_name} and {key_name} are not a pair"
     return "ok", ""
 
@@ -263,29 +272,37 @@ def _initialised_evidence() -> str:
     pem, key = client_paths()
     if os.path.lexists(pem) or os.path.lexists(key):
         return "Jen's client certificate exists, so a CA made it - the CA's files are gone, not never made"
-    for path in (ca_paths()[0] + _STAGE_SUFFIX, ca_paths()[1] + _STAGE_SUFFIX):
+    for path in (
+        ca_paths()[0] + _STAGE_SUFFIX,
+        ca_paths()[1] + _STAGE_SUFFIX,
+        ca_paths()[0] + ".prev",
+        ca_paths()[1] + ".prev",
+        pem + ".prev",
+        key + ".prev",
+    ):
         if os.path.lexists(path):
-            return "a prepared CA is waiting beside the live one"
+            return f"{os.path.basename(path)} is beside the live files, so a CA existed"
+    directory = _copies_dir()
+    if not os.path.lexists(directory):
+        return ""  # a CA has never issued anything here
     try:
-        names = os.listdir(_copies_dir())
-    except FileNotFoundError:
-        return ""
+        names = os.listdir(directory)
     except OSError as e:
+        # (a directory that cannot be listed - a permission, a bad mount, a dangling link - is unknown, and unknown is not 'empty')
         return f"Jen cannot read its certificate directory ({type(e).__name__}), so it cannot tell whether it ever issued a certificate"
-    if names:
-        return f"Jen holds {len(names)} file(s) for certificates its CA issued, so the CA existed - its files are gone, not never made"
-    return ""
+    # an EXISTING directory, even an empty one, is `commit_issued`'s: it is only made when a pair is issued
+    return (
+        f"Jen holds {len(names)} file(s) for certificates its CA issued, so the CA existed - its files are gone, not never made"
+        if names
+        else "Jen's certificate directory exists, so a CA issued into it"
+    )
 
 
 def ca_refusal() -> str:
     """ "" when `ensure_ca()` may proceed (the CA is ok, or this is the uninitialised world); else the sentence for why it may not - the damage, or the evidence that a CA existed (Q192, AH2). Asked
     by a route BEFORE it reads from or sends anything to a host."""
     state, why = ca_state()
-    if state == "damaged":
-        return why
-    if state == "none":
-        return _initialised_evidence()
-    return ""
+    return why if state == "damaged" else ""
 
 
 def ensure_ca(force: bool = False) -> dict:
@@ -300,9 +317,6 @@ def ensure_ca(force: bool = False) -> dict:
             return {"cert": crt, "key": key_path, "created": False, "subject": _cn(crt)}
         if state == "damaged":
             raise CaDamaged(why)
-        evidence = _initialised_evidence()
-        if evidence:
-            raise CaDamaged(evidence)
     _ensure_dir(SSL_DIR)
     key = _new_key()
     cn = f"Jen Kea CA {_hostname()} {datetime.now(timezone.utc):%Y-%m-%d}"
@@ -464,6 +478,8 @@ def _record_host_pair(server_id, service: str, files: dict, cause: BaseException
 def _material(crt: str, key: str) -> dict | None:
     """The `install-tls` payload of a certificate and key on disk - {"ca.crt", "server.crt", "server.key"} (PEM str) - or None unless BOTH load and the key is the certificate's (a pair that does not
     belong together is never put on a host). The CA is the live one (a rotation re-issues every pair)."""
+    if ca_state()[0] != "ok":
+        return None  # (second pass, finding 3) the payload carries the CA certificate as the host's trust anchor: from a damaged or foreign file it would be pushed as one
     try:
         cert, private = load_cert(crt), load_key(key)
         spki = serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
@@ -725,7 +741,7 @@ def ca_consistent() -> bool:
         return False
 
 
-def client_state() -> tuple[str, str]:
+def client_state(judge_issuer: bool = True) -> tuple[str, str]:
     """The ONE definition of Jen's client pair (Q192, AH3): `("none", "")` - neither file exists; `("ok", "")` - both load, the key is the certificate's (SPKI), the certificate was issued by the
     live CA, carries the `clientAuth` extended key usage and is inside its validity with more than 30 days left; `("expiring", why)` - all of that but 30 days or fewer remain; `("damaged", why)` -
     anything else (one file missing, unreadable or malformed, a key that is not the certificate's, an issuer that is not the live CA - or no CA to judge it against - no `clientAuth`, not yet valid,
@@ -752,13 +768,19 @@ def client_state() -> tuple[str, str]:
     except (ValueError, TypeError, UnsupportedAlgorithm):
         return "damaged", f"{key_name} is not a private key"
     spki = serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
-    if cert.public_key().public_bytes(*spki) != private.public_key().public_bytes(*spki):
+    try:
+        cert_spki = cert.public_key().public_bytes(*spki)
+    except (ValueError, TypeError, UnsupportedAlgorithm):
+        return "damaged", f"{pem_name} is a certificate with an unusable public key"
+    if cert_spki != private.public_key().public_bytes(*spki):
         return "damaged", f"{key_name} is not the key of {pem_name}"
-    ca_state_now, ca_why = ca_state()
-    if ca_state_now != "ok":
-        return "damaged", f"there is no usable CA to judge {pem_name} against ({ca_why or 'none yet'})"
-    if not issued_by(pem, ca_paths()[0]):
-        return "damaged", f"{pem_name} was not issued by the current CA"
+    if judge_issuer:
+        # (`judge_issuer=False` - second pass, finding 5: replacing a DAMAGED CA, the live pair is judged without the issuer, which cannot be asked)
+        ca_state_now, ca_why = ca_state()
+        if ca_state_now != "ok":
+            return "damaged", f"there is no usable CA to judge {pem_name} against ({ca_why or 'none yet'})"
+        if not issued_by(pem, ca_paths()[0]):
+            return "damaged", f"{pem_name} was not issued by the current CA"
     try:
         usages = cert.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
     except x509.ExtensionNotFound:
@@ -866,6 +888,22 @@ def trust_kind() -> str:
     configured = (getattr(extensions, "KEA_API_CA", "") or "").strip()
     if not configured:
         return "none"
+    if ca_state()[0] == "damaged":
+        # (second pass, findings 2 and 12) replacing a DAMAGED CA: its certificate may not load - or may load as something a byte-copy elsewhere is NOT (one flipped byte) - so a bundle cannot be compared
+        # by certificate with it. By PATH alone: Jen's own file, or a link to it, is replaced under the operator; any other file that loads cannot be proved to follow it, so it is a `copy` - and
+        # a copy under a Jen-issued target is a refusal (ambiguity is a refusal)
+        jens_file = ca_paths()[0]
+        if os.path.normpath(os.path.abspath(configured)) == os.path.normpath(os.path.abspath(jens_file)):
+            return "jens-file"
+        if os.path.realpath(configured) == os.path.realpath(jens_file):
+            return "alias"
+        try:
+            with open(configured, "rb") as f:
+                if x509.load_pem_x509_certificates(f.read()):
+                    return "copy"
+        except (OSError, ValueError, TypeError, UnsupportedAlgorithm):
+            pass
+        return "unreadable"
     bundle = trust_bundle()
     if bundle is None:
         return "unreadable"
@@ -1164,11 +1202,15 @@ def promotion_blockers() -> list[str]:
     so a live identity file that is either would make the promotion fail after every target had moved to the new CA (the rollback then re-issues them, and Jen has changed hosts for nothing).
     [] when all four live files can be replaced (an absent one is fine: that is a recovery)."""
     out = []
-    for path in (*ca_paths(), *client_paths()):
-        if os.path.islink(path):
-            out.append(f"{os.path.basename(path)} is a link, which Jen will not replace")
-        elif os.path.isdir(path):
-            out.append(f"{os.path.basename(path)} is a directory where a file belongs")
+    for live in (*ca_paths(), *client_paths()):
+        for path in (
+            live,
+            live + ".prev",
+        ):  # (`commit_file_set` also writes the `.prev` COPY of each member it replaces)
+            if os.path.islink(path):
+                out.append(f"{os.path.basename(path)} is a link, which Jen will not replace")
+            elif os.path.isdir(path):
+                out.append(f"{os.path.basename(path)} is a directory where a file belongs")
     return out
 
 
@@ -1183,36 +1225,50 @@ def _staged_paths() -> dict:
     }
 
 
-def prepared_rotation() -> tuple[dict | None, str]:
+class PreparedUnreadable(OSError):
+    """Q192 (second pass, finding 6): the prepared CA's files could not be READ right now (an I/O error). It is not inconsistent - it is unknown - so it is neither reused nor discarded nor overwritten."""
+
+
+def prepared_rotation(discard: bool = False) -> tuple[dict | None, str]:
     """Q192 (AH1): the prepared (`Prepare only`) rotation waiting beside the live files, as `(staged, "")` when all four `.next` files exist and are consistent - the new CA is a pair, the new client
-    certificate was issued by it, is a `clientAuth` certificate and its key is its own; `(None, "")` when there is none; `(None, why)` when what is there is half-written or inconsistent (it is
-    DISCARDED, and `why` says so - a rotation never reuses material it cannot prove). A rotation that finds one REUSES it (the same CA-B an external daemon's trust anchor may already hold)."""
+    certificate was issued by it, is a `clientAuth` certificate inside its validity with more than 30 days left, and its key is its own; `(None, "")` when there is none; `(None, why)` when what is
+    there is half-written or PROVED inconsistent - a rotation never reuses material it cannot prove. A READ cannot destroy (second pass, finding 6): only a caller that holds the identity lock and
+    passes `discard=True` (Rotate, Prepare) deletes what it proved unusable; the Settings page just says it will be. A set that cannot be READ (an I/O error) raises `PreparedUnreadable` - unknown is
+    neither reused nor discarded nor overwritten. A rotation that finds a consistent one REUSES it (the same CA-B an external daemon's trust anchor may already hold)."""
     staged = _staged_paths()
     present = [k for k, p in staged.items() if os.path.lexists(p)]
     if not present:
         return None, ""
+    verb = "so it was discarded" if discard else "so Rotate or Prepare will discard it"
     if len(present) != len(staged):
-        discard_rotation(staged)
-        return None, f"the prepared CA was incomplete ({len(present)} of {len(staged)} files), so it was discarded"
+        if discard:
+            discard_rotation(staged)
+        return None, f"the prepared CA was incomplete ({len(present)} of {len(staged)} files), {verb}"
     spki = serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
     try:
         ca_cert, ca_key = load_cert(staged["ca_cert"]), load_key(staged["ca_key"])
         client_cert, client_key = load_cert(staged["client_cert"]), load_key(staged["client_key"])
+        now = datetime.now(timezone.utc)
         consistent = (
             ca_cert.public_key().public_bytes(*spki) == ca_key.public_key().public_bytes(*spki)
             and client_cert.public_key().public_bytes(*spki) == client_key.public_key().public_bytes(*spki)
             and ExtendedKeyUsageOID.CLIENT_AUTH
             in client_cert.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
+            # (finding 11) a prepared pair that is expired, not yet valid or about to expire is not one to promote
+            and client_cert.not_valid_before_utc <= now
+            and (client_cert.not_valid_after_utc - now).days > 30
+            and ca_cert.not_valid_before_utc <= now < ca_cert.not_valid_after_utc
         )
         if consistent:
             client_cert.verify_directly_issued_by(ca_cert)
-    except (
-        Exception
-    ):  # OSError, ValueError, TypeError, InvalidSignature, ExtensionNotFound - none of them a reason to reuse it
+    except OSError as e:
+        raise PreparedUnreadable(e.errno, f"the prepared CA cannot be read ({type(e).__name__})") from e
+    except Exception:  # ValueError, TypeError, InvalidSignature, ExtensionNotFound - PROVED unusable, not unread
         consistent = False
     if not consistent:
-        discard_rotation(staged)
-        return None, "the prepared CA was damaged or inconsistent, so it was discarded"
+        if discard:
+            discard_rotation(staged)
+        return None, f"the prepared CA was damaged or inconsistent, {verb}"
     return staged, ""
 
 

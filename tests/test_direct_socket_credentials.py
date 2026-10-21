@@ -750,8 +750,9 @@ class TestTheProbeRowsOfQ192:
             "cert-malformed": ("damaged", "refused", True),
             "key-malformed": ("damaged", "refused", True),
             "mismatched": ("damaged", "refused", True),
-            "absent-beside-a-server-copy": ("none", "refused", True),
-            "absent-beside-the-client-pair": ("none", "refused", True),
+            "invalid-public-key": ("damaged", "refused", True),
+            "absent-beside-a-server-copy": ("damaged", "refused", True),
+            "absent-beside-the-client-pair": ("damaged", "refused", True),
         }
 
     def test_a_pair_is_a_pair_only_when_the_key_is_the_certificates(self):

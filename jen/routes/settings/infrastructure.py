@@ -164,7 +164,10 @@ def _kea_ca_summary() -> dict:
     present = ca_state == "ok"
     ca_crt, _ca_key = kea_tls.ca_paths()
     client_state, client_why = kea_tls.client_state()
-    prepared, prepared_note = kea_tls.prepared_rotation()
+    try:
+        prepared, prepared_note = kea_tls.prepared_rotation()  # a READ: the page never deletes (second pass, finding 6)
+    except kea_tls.PreparedUnreadable as e:
+        prepared, prepared_note = None, str(e)
     out = {
         "present": present,
         "state": ca_state,
@@ -900,7 +903,7 @@ _PROBE_ATTEMPTS = 8
 _PROBE_DELAY_S = 2.0
 
 
-def _staged_identity_refusal(inventory, kind: str, staged: dict) -> str:
+def _staged_identity_refusal(inventory, kind: str, staged: dict, recovery: bool = False) -> str:
     """Q192 (AH1, the P1): the staged identity is proved, against every https endpoint Jen PRESENTS its client pair to, BEFORE anything is installed on any host. Jen's pair is global - when it is
     Jen's own (`jens-file` / `alias`) it goes to every https endpoint, the administrator's included - and an external endpoint whose `cert-required` trust anchor is Jen's CA accepts today's client
     certificate and refuses the new one: the rotation would promote a CA that daemon never learned, and Jen would be locked out of it with 'rotated' on the screen. Each external endpoint is probed
@@ -911,7 +914,7 @@ def _staged_identity_refusal(inventory, kind: str, staged: dict) -> str:
 
     if kind not in ("jens-file", "alias") or not inventory.external_endpoints:
         return ""
-    live_state, live_why = __tls.client_state()
+    live_state, live_why = __tls.client_state(judge_issuer=not recovery)
     if live_state not in ("ok", "expiring"):
         return (
             f"Jen's client certificate is damaged ({live_why}), so Jen cannot prove whether an endpoint it does not manage depends on it - set up an https socket again (it re-issues the pair from "
@@ -2220,7 +2223,7 @@ def setup_direct_socket(server_id, service):
             return back
         jen_ca, _jen_ca_key = __tls.ca_paths()
         jen_client_cert, jen_client_key = __tls.client_paths()
-        ca_refusal = __tls.ca_refusal()  # Q192 (AH2): a damaged CA (or an absent one beside evidence it existed) is a recovery condition - refused before ANYTHING is read from or sent to the host
+        ca_refusal = __tls.ca_refusal()  # Q192 (AH2): a damaged CA (or an absent one beside evidence it existed) is a recovery condition - refused before anything is CHANGED on the host (the read-only version-get above has been asked)
         if ca_refusal:
             flash(
                 f"Jen's CA is damaged ({ca_refusal}): restore the file from a backup, or run Rotate Kea CA (it replaces a damaged CA once you acknowledge that a server which fails part-way "
@@ -2617,7 +2620,7 @@ def rotate_kea_ca():
     }
     try:
         try:
-            prepared, prepared_note = __tls.prepared_rotation()
+            prepared, prepared_note = __tls.prepared_rotation(discard=True)
             if prepared_note:
                 flash(prepared_note[:1].upper() + prepared_note[1:] + ".", "info")
             if prepared is not None:
@@ -2628,16 +2631,21 @@ def rotate_kea_ca():
                 )
             else:
                 staged = __tls.stage_rotation()
+        except __tls.PreparedUnreadable as e:
+            flash(
+                f"Rotate refused - {e}, and Jen will not overwrite a CA it cannot read. Nothing was changed.", "error"
+            )
+            return back
         except Exception as e:
             logger.error(f"kea_tls: could not stage the new CA: {type(e).__name__}: {__auth.scrub_urls(str(e))}")
             flash(
                 "Rotate refused - Jen could not write the staged CA beside the live one. Nothing was changed.", "error"
             )
             return back
-        unproved = _staged_identity_refusal(inventory, __tls.client_kind(), staged)
+        unproved = _staged_identity_refusal(inventory, __tls.client_kind(), staged, recovery=recovery)
         if unproved:
             # Q192 (AH1): BEFORE the install loop - nothing is on any host yet, so nothing is put back
-            flash(f"Rotate refused - {unproved}. Nothing was changed.", "error")
+            flash(f"Rotate refused - {unproved}. Nothing was changed on any host.", "error")
             return back
         try:
             for server, service, bind in targets:
@@ -2914,7 +2922,11 @@ def prepare_kea_ca():
     if ca_state != "ok":
         flash("Nothing to prepare: Jen has no usable CA to rotate" + (f" ({ca_why})" if ca_why else "") + ".", "error")
         return back
-    staged, note = __tls.prepared_rotation()
+    try:
+        staged, note = __tls.prepared_rotation(discard=True)
+    except __tls.PreparedUnreadable as e:
+        flash(f"Prepare refused - {e}, and Jen will not overwrite a CA it cannot read. Nothing was changed.", "error")
+        return back
     if note:
         flash(note[:1].upper() + note[1:] + ".", "info")
     if staged is None:
@@ -2947,6 +2959,13 @@ def discard_prepared_kea_ca():
 
     existed = any(os.path.lexists(p) for p in __tls._staged_paths().values())
     __tls.discard_rotation(__tls._staged_paths())
+    left = [os.path.basename(p) for p in __tls._staged_paths().values() if os.path.lexists(p)]
+    if left:
+        flash(
+            f"The prepared CA could not be discarded: {', '.join(left)} could not be removed (finding 8: never 'discarded' on a failure).",
+            "error",
+        )
+        return redirect(url_for("settings.settings_kea"))
     flash("The prepared CA was discarded." if existed else "There was no prepared CA.", "info")
     if existed:
         __user.audit("DISCARD_PREPARED_KEA_CA", "kea_api", "discarded")

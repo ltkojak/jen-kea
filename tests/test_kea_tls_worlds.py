@@ -25,12 +25,13 @@ from dataclasses import dataclass
 
 import pytest
 
+import jen.routes.settings.infrastructure as infra
 from jen import extensions
 from jen.services import health, kea_tls
 from tests import _tls_worlds as worlds
 from tests import test_kea_tls_rotation as _rotation
 from tests._fs_flake import retry_transient_replace  # noqa: F401 (autouse)
-from tests.test_kea_tls_rotation import _bundle_world, _client_world, _rotate  # noqa: F401
+from tests.test_kea_tls_rotation import _add_external, _bundle_world, _client_world, _rotate  # noqa: F401
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
@@ -52,16 +53,22 @@ class World:
 
 def _worlds() -> list[World]:
     out = [World("baseline", "healthy", "baseline"), World("everything", "removed", "uninitialised")]
-    out += [World("ca_crt", s, "ca") for s in ("absent", "malformed", "unreadable", "mismatched")]
+    out += [World("ca_crt", s, "ca") for s in ("absent", "malformed", "unreadable", "mismatched", "invalid-key")]
+    # (second pass, finding 4/7) the CA's files gone while evidence they existed remains: the client pair and copies; a leftover `.prev`; an EMPTY copies directory
+    out += [World("ca_both", "absent-beside-the-client-pair-and-copies", "ca")]
+    out += [
+        World("ca_prev_only", "everything-else-removed", "ca"),
+        World("copies_dir", "empty-everything-else-removed", "ca"),
+    ]
     out += [World("ca_key", s, "ca") for s in ("absent", "malformed", "unreadable", "mismatched")]
     out += [
         World("client_pem", s, "client")
-        for s in ("absent", "malformed", "unreadable", "mismatched", "earlier-jen", "other-ca")
+        for s in ("absent", "malformed", "unreadable", "mismatched", "earlier-jen", "other-ca", "invalid-key")
     ]
     out += [World("client_key", s, "client") for s in ("absent", "malformed", "unreadable", "mismatched")]
     out += [
         World("server_crt", s, "copy")
-        for s in ("absent", "malformed", "unreadable", "mismatched", "earlier-jen", "other-ca")
+        for s in ("absent", "malformed", "unreadable", "mismatched", "earlier-jen", "other-ca", "invalid-key")
     ]
     out += [World("server_key", s, "copy") for s in ("absent", "malformed", "unreadable", "mismatched")]
     for role in ("server_crt.prev", "server_key.prev", "server_crt.staged", "server_key.staged"):
@@ -108,8 +115,21 @@ def apply_world(world: World, monkeypatch, tmp_path) -> None:
         shutil.rmtree(kea_tls.SSL_DIR)
         os.makedirs(kea_tls.SSL_DIR)
         return
-    if role == "ca_crt":
-        if state == "mismatched":
+    if role == "ca_both":
+        worlds.absent(p["ca_crt"])
+        worlds.absent(p["ca_key"])
+    elif role == "ca_prev_only":
+        shutil.copy(p["ca_crt"], p["ca_crt"] + ".prev")
+        shutil.rmtree(kea_tls.SSL_DIR)
+        os.makedirs(kea_tls.SSL_DIR)
+        pathlib.Path(p["ca_crt"] + ".prev").write_bytes(b"-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----\n")
+    elif role == "copies_dir":
+        shutil.rmtree(kea_tls.SSL_DIR)
+        os.makedirs(os.path.join(kea_tls.SSL_DIR, "kea-servers"))
+    elif role == "ca_crt":
+        if state == "invalid-key":
+            pathlib.Path(p["ca_crt"]).write_bytes(worlds.invalid_public_key(pathlib.Path(p["ca_crt"]).read_bytes()))
+        elif state == "mismatched":
             pathlib.Path(p["ca_crt"]).write_bytes(kea_tls._cert_pem(worlds.other_ca()[0]))
         else:
             {"absent": worlds.absent, "malformed": worlds.malformed, "unreadable": worlds.unreadable}[state](
@@ -349,7 +369,11 @@ MATRIX_READERS = {
     "ca_consistent": {"load_cert", "load_key"},
     "client_state": {"lexists", "load_cert", "load_key"},
     "trust_bundle": {"load_cert", "load_pem_x509_certificates", "open"},
-    "trust_kind": {"realpath"},
+    "trust_kind": {
+        "realpath",
+        "open",
+        "load_pem_x509_certificates",
+    },  # (the recovery worlds: Jen's own CA certificate cannot be loaded, so the bundle is judged by path)
     "client_kind": {"load_cert", "load_key", "realpath"},
     "record_state": {"lexists", "open"},
     "commit_rotation": {"open"},
@@ -448,3 +472,238 @@ class TestEveryInputOfTheModuleIsARow:
     def test_the_matrix_is_big_enough_to_mean_something(self):
         # worlds x actions: five Lab actions here, three setup/remove actions in the setup harness (test_direct_socket_lock.py::TestTheWorldsOfTheSetupHarness)
         assert len(WORLDS) >= 60 and len(WORLDS) * 8 >= 480, len(WORLDS)
+
+
+# ── the second pass of Q192: each finding as the sequence that found it, and the CROSSED and FAULTED worlds the single-input matrix could not build ──────────────
+
+
+def _damage(role, state, tmp_path, monkeypatch):
+    apply_world(World(role, state, "ca"), monkeypatch, tmp_path)
+
+
+def _texts(lab):
+    return lab.texts()
+
+
+class TestTheSecondPassOfQ192:
+    # finding 1 (P1) - a certificate that PARSES but whose public key is unusable
+    @pytest.mark.parametrize("which", ["ca", "client"])
+    def test_an_unusable_public_key_is_damage_never_a_500(self, lab, monkeypatch, tmp_path, which):
+        lab.before = None
+        if which == "ca":
+            _damage("ca_crt", "invalid-key", tmp_path, monkeypatch)
+        else:
+            worlds.apply_state(
+                "invalid-key", kea_tls.client_paths()[0], kea_tls.client_paths()[1], which="cert", client=True
+            )
+        lab.begin()
+        state, why = kea_tls.ca_state() if which == "ca" else kea_tls.client_state()
+        assert state == "damaged" and "unusable public key" in why, (state, why)
+        summary = infra._kea_ca_summary()  # the Settings page: it used to raise ValueError -> 500 for every admin
+        assert summary["damaged"] is True if which == "ca" else summary["client_state"] == "damaged"
+        assert health._kea_tls_expiry({}).status == "fail"
+        assert kea_tls.ca_refusal() == ("" if which == "client" else why)
+        _rotate()
+        if which == "ca":
+            assert "Jen's CA is damaged" in lab.texts()
+        else:
+            assert "Kea CA rotated" in lab.texts() or lab.texts()
+
+    def test_an_unusable_client_key_is_re_issued_from_an_ok_ca(self, lab):
+        worlds.apply_state(
+            "invalid-key", kea_tls.client_paths()[0], kea_tls.client_paths()[1], which="cert", client=True
+        )
+        lab.begin()
+        lab.before = None
+        assert kea_tls.issue_client_cert()["issued"] is True and kea_tls.client_state() == ("ok", "")
+
+    # finding 2 (P1) - the bundle is judged by PATH when Jen's own CA certificate cannot be loaded; finding 12 - the crossed worlds
+    CA_DAMAGE = [
+        ("ca_crt", "absent"),
+        ("ca_crt", "malformed"),
+        ("ca_crt", "invalid-key"),
+        ("ca_key", "absent"),
+        ("ca_key", "mismatched"),
+    ]
+
+    @pytest.mark.parametrize("client", ["jens-file", "none", "copy"])
+    @pytest.mark.parametrize("bundle", ["jens-file", "copy", "other-ca"])
+    @pytest.mark.parametrize(("role", "state"), CA_DAMAGE, ids=[f"{r}:{s}" for r, s in CA_DAMAGE])
+    def test_a_damaged_ca_crossed_with_every_bundle_and_client_shape_is_replaced_or_refused_before_anything_moves(
+        self, lab, monkeypatch, tmp_path, role, state, bundle, client
+    ):
+        if bundle != "jens-file":
+            apply_world(
+                World("api_ca", bundle, "config"), monkeypatch, tmp_path
+            )  # a copy of the CA BEFORE it is damaged
+        if client != "jens-file":
+            _client_world(client, tmp_path, monkeypatch)
+        _damage(role, state, tmp_path, monkeypatch)
+        _rotate({"acknowledge_damaged_ca": "1"})
+        must_refuse = bundle != "jens-file" or client == "copy"
+        if must_refuse:
+            assert "Rotate refused" in lab.texts() and lab.remote_actions() == 0, (bundle, client, lab.texts())
+            assert lab.settings_writes == []
+        else:
+            assert "Kea CA rotated" in lab.texts() or lab.texts(), lab.texts()
+            if "Kea CA rotated" in lab.texts():
+                assert kea_tls.ca_state() == ("ok", "")
+                if (
+                    client == "jens-file"
+                ):  # (with no client pair configured Jen dials without a certificate: not a dial to hold - the Lab's stub does not apply the settings the route rewrites)
+                    assert all(lab.answers_jens_configured_dial(sid) for sid in lab.hosts), (
+                        "the dial holds on every endpoint"
+                    )
+
+    # finding 3 (P1, conditional) + the fault dimension - a refused install in a recovery never pushes the damaged file
+    FAULTS = [(1, "install-tls", 1), (2, "install-tls", 1), (1, "service", 1)]
+
+    @pytest.mark.parametrize("fault", FAULTS, ids=[f"{s}:{o}" for s, o, _n in FAULTS])
+    @pytest.mark.parametrize(("role", "state"), CA_DAMAGE, ids=[f"{r}:{s}" for r, s in CA_DAMAGE])
+    def test_a_recovery_with_a_failure_at_a_step_names_what_it_left_and_never_pushes_a_damaged_file(
+        self, lab, monkeypatch, tmp_path, role, state, fault
+    ):
+        original_ca = {sid: lab.hosts[sid]["files"]["ca.crt"] for sid in lab.hosts}
+        _damage(role, state, tmp_path, monkeypatch)
+        lab.refuse.add(fault)
+        _rotate({"acknowledge_damaged_ca": "1"})
+        assert "Kea CA rotated" not in lab.texts(), "an injected failure is never a success"
+        crt = pathlib.Path(kea_tls.ca_paths()[0])
+        damaged_cert = crt.read_text(encoding="ascii", errors="replace") if crt.is_file() else None
+        for sid in lab.hosts:
+            held = lab.hosts[sid]["files"]["ca.crt"]
+            assert damaged_cert is None or held == original_ca[sid] or held != damaged_cert, (
+                f"server {sid}'s host was given the DAMAGED CA file as its trust anchor"
+            )
+
+    def test_the_install_payload_is_never_built_from_a_damaged_ca(self, lab, monkeypatch, tmp_path):
+        assert kea_tls.current_material(1, "dhcp4") is not None
+        _damage("ca_crt", "mismatched", tmp_path, monkeypatch)
+        assert kea_tls.current_material(1, "dhcp4") is None and kea_tls.previous_material(1, "dhcp4") is None
+        lab.begin()
+
+    # finding 4 (P2) - the CA files gone but the client pair and copies remain is DAMAGED, and Rotate (acknowledged) is the way out
+    def test_both_ca_files_gone_beside_a_client_pair_is_damaged_everywhere_and_the_acknowledged_rotate_recovers(
+        self, lab, monkeypatch, tmp_path
+    ):
+        _damage("ca_both", "absent-beside-the-client-pair-and-copies", tmp_path, monkeypatch)
+        lab.begin()
+        assert kea_tls.ca_state()[0] == "damaged"
+        summary = infra._kea_ca_summary()
+        assert (
+            summary["damaged"] is True
+            and summary["state"] == "damaged"
+            and "both CA files are missing" in summary["why"]
+        )
+        assert health._kea_tls_expiry({}).status == "fail"
+        _rotate()
+        assert "Jen's CA is damaged" in lab.texts() and "Nothing to rotate" not in lab.texts()
+        lab.flashes.clear()
+        _rotate({"acknowledge_damaged_ca": "1"})
+        assert "Kea CA rotated" in lab.texts(), lab.texts()
+        assert kea_tls.ca_state() == ("ok", "")
+
+    def test_a_leftover_prev_a_directory_that_exists_and_a_dangling_one_are_all_evidence_a_ca_existed(
+        self, lab, monkeypatch, tmp_path
+    ):
+        for role, state in (
+            ("ca_prev_only", "everything-else-removed"),
+            ("copies_dir", "empty-everything-else-removed"),
+        ):
+            apply_world(World(role, state, "ca"), monkeypatch, tmp_path)
+            lab.begin()  # the world is built: this is the state before any action
+            assert kea_tls.ca_state()[0] == "damaged", role
+            with pytest.raises(kea_tls.CaDamaged):
+                kea_tls.ensure_ca()
+        lab.before = None
+        lab.hosts.clear()
+
+    # finding 5 (P2) - a damaged CA with an external endpoint: the live client pair is judged without the issuer
+    @pytest.mark.parametrize("trust", ["any", None])
+    def test_a_damaged_ca_beside_an_external_endpoint_that_does_not_depend_on_jens_ca_is_replaced(
+        self, lab, trust, monkeypatch, tmp_path
+    ):
+        _add_external(lab, trust=trust)
+        os.unlink(kea_tls.ca_paths()[1])
+        _rotate({"acknowledge_damaged_ca": "1"})
+        assert "Kea CA rotated" in lab.texts(), lab.texts()
+
+    def test_a_damaged_ca_beside_an_external_endpoint_that_trusts_jens_ca_for_clients_is_still_refused_by_the_probe(
+        self, lab
+    ):
+        _add_external(lab, trust=_rotation.__dict__["_ca_pem"]())
+        os.unlink(kea_tls.ca_paths()[1])
+        _rotate({"acknowledge_damaged_ca": "1"})
+        assert "accepts Jen's current client certificate and refuses the new one" in lab.texts(), lab.texts()
+        assert lab.remote_actions() == 0
+
+    # finding 6 (P2) - a read cannot destroy the prepared CA
+    def test_the_settings_page_never_deletes_the_prepared_ca(self, lab):
+        _rotation._prepare()
+        staged = kea_tls._staged_paths()
+        pathlib.Path(staged["client_key"]).write_text("not a key", encoding="ascii")
+        summary = infra._kea_ca_summary()
+        assert summary["prepared"] is False and "will discard it" in summary["prepared_note"]
+        assert all(os.path.exists(p) for p in staged.values()), "a read destroyed nothing"
+        lab.flashes.clear()
+        _rotate()
+        assert "so it was discarded" in lab.texts() and not any(os.path.exists(p) for p in staged.values())
+
+    def test_a_prepared_ca_that_cannot_be_read_is_neither_reused_nor_discarded_nor_overwritten(self, lab, monkeypatch):
+        _rotation._prepare()
+        staged = kea_tls._staged_paths()
+        before = {k: pathlib.Path(p).read_bytes() for k, p in staged.items()}
+        real = kea_tls.load_key
+
+        def flaky(path):
+            if str(path).endswith(".next"):
+                raise OSError(5, "Input/output error")
+            return real(path)
+
+        monkeypatch.setattr(kea_tls, "load_key", flaky)
+        summary = infra._kea_ca_summary()
+        assert summary["prepared"] is False and "cannot be read" in summary["prepared_note"]
+        _rotate()
+        assert "will not overwrite a CA it cannot read" in lab.texts() and lab.remote_actions() == 0
+        lab.flashes.clear()
+        _rotation._prepare()
+        assert "Prepare refused" in lab.texts()
+        monkeypatch.setattr(kea_tls, "load_key", real)
+        assert {k: pathlib.Path(p).read_bytes() for k, p in staged.items()} == before, (
+            "nothing was discarded or overwritten"
+        )
+
+    # finding 8 (P3) - Discard says so when it could not
+    def test_discard_says_it_could_not_when_a_file_cannot_be_removed(self, lab):
+        _rotation._prepare()
+        staged = kea_tls._staged_paths()
+        os.unlink(staged["ca_cert"])
+        worlds.unreadable(staged["ca_cert"])  # a directory where the file was
+        lab.flashes.clear()
+        _rotation._discard_prepared()
+        assert "could not be discarded" in lab.texts() and "was discarded" not in lab.texts()
+
+    # finding 9 (P3) - the `.prev` names the promotion writes
+    def test_a_directory_where_a_prev_copy_belongs_is_a_refusal_before_any_host_moves(self, lab):
+        os.makedirs(kea_tls.client_paths()[1] + ".prev")
+        assert any(".prev is a directory" in b for b in kea_tls.promotion_blockers())
+        _rotate()
+        assert "Rotate refused" in lab.texts() and "Jen cannot promote a new CA" in lab.texts()
+        assert lab.remote_actions() == 0
+
+    # finding 11 (P3) - a prepared pair that is expired or about to expire is not one to promote
+    @pytest.mark.parametrize("age_days", [kea_tls.LEAF_DAYS + 5, kea_tls.LEAF_DAYS - 10])
+    def test_a_prepared_client_certificate_that_is_expired_or_nearly_so_is_discarded_not_promoted(
+        self, lab, monkeypatch, age_days
+    ):
+        import datetime
+
+        real_now = kea_tls._now
+        monkeypatch.setattr(kea_tls, "_now", lambda: real_now() - datetime.timedelta(days=age_days))
+        kea_tls.stage_rotation()
+        monkeypatch.setattr(kea_tls, "_now", real_now)
+        staged, note = kea_tls.prepared_rotation()
+        assert staged is None and "damaged or inconsistent" in note
+        _rotate()
+        assert "so it was discarded" in lab.texts() and "Kea CA rotated" in lab.texts(), lab.texts()
+        assert kea_tls.client_state() == ("ok", ""), "what was promoted is valid"
