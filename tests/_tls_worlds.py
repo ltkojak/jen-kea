@@ -107,6 +107,106 @@ def issued_pair(ca, client: bool, cn="a leaf", sans=()):
     return kea_tls._cert_pem(leaf), kea_tls._key_pem(key)
 
 
+#: Q194 (AJ1): the SEMANTIC states of a CA - the certificate parses, the key is its key, and it is still not a certificate-signing authority in ONE specific way. Q192's states were syntactic
+#: (absent, malformed, unreadable, mismatched ...); none of them asked what the certificate is FOR.
+SEMANTIC_CA_STATES = (
+    "not-ca",  # BasicConstraints ca=False
+    "no-basic-constraints",
+    "no-key-usage",
+    "no-key-cert-sign",  # KeyUsage present, keyCertSign off
+    "expired",
+    "not-yet-valid",
+    "tampered-signature",  # one byte of the signature flipped: it still parses
+    "issuer-not-subject",
+    "unsupported-key",  # an Ed25519 pair: a pair, but not a kind Jen's CA is made of
+)
+
+
+def semantic_ca(kind: str):
+    """(certificate, key) of a CA in the semantic state `kind`: objects, not PEM - `semantic_ca_pem` has the bytes."""
+    import datetime
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+
+    assert kind in SEMANTIC_CA_STATES, kind
+    key = ed25519.Ed25519PrivateKey.generate() if kind == "unsupported-key" else kea_tls._new_key()
+    name = kea_tls._name(f"Jen Kea CA semantic {kind}")
+    issuer = kea_tls._name("an issuer that is not the subject") if kind == "issuer-not-subject" else name
+    now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+    before, after = now - datetime.timedelta(minutes=5), now + datetime.timedelta(days=3650)
+    if kind == "expired":
+        before, after = now - datetime.timedelta(days=400), now - datetime.timedelta(days=1)
+    elif kind == "not-yet-valid":
+        before, after = now + datetime.timedelta(days=2), now + datetime.timedelta(days=3650)
+    builder = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(issuer)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(before)
+        .not_valid_after(after)
+    )
+    if kind != "no-basic-constraints":
+        builder = builder.add_extension(
+            x509.BasicConstraints(ca=kind != "not-ca", path_length=None if kind == "not-ca" else 0), critical=True
+        )
+    if kind != "no-key-usage":
+        builder = builder.add_extension(
+            x509.KeyUsage(
+                digital_signature=True,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=kind != "no-key-cert-sign",
+                crl_sign=False,
+                encipher_only=False,
+                decipher_only=False,
+            ),
+            critical=True,
+        )
+    cert = builder.sign(key, None if kind == "unsupported-key" else hashes.SHA256())
+    if kind == "tampered-signature":
+        cert = x509.load_pem_x509_certificate(_flip_last_byte_of_the_signature(kea_tls._cert_pem(cert)))
+    return cert, key
+
+
+def _flip_last_byte_of_the_signature(cert_pem: bytes) -> bytes:
+    import base64
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import serialization
+
+    der = bytearray(x509.load_pem_x509_certificate(cert_pem).public_bytes(serialization.Encoding.DER))
+    der[-1] ^= (
+        0x01  # the signature is the last thing in the DER: the certificate parses, its signature no longer verifies
+    )
+    return b"-----BEGIN CERTIFICATE-----\n" + base64.encodebytes(bytes(der)) + b"-----END CERTIFICATE-----\n"
+
+
+def semantic_ca_pem(kind: str) -> tuple[bytes, bytes]:
+    cert, key = semantic_ca(kind)
+    return kea_tls._cert_pem(cert), kea_tls._key_pem(key)
+
+
+def stage_semantic_prepared(kind: str) -> dict:
+    """A prepared rotation (`stage_rotation`'s four `.next` files) whose CA is replaced by the semantic CA `kind` - and, where the CA can sign, with a client certificate that CA CORRECTLY signed (the
+    reviewer's world: a `ca=False` pair, a valid client certificate under it, and every check Q192 had passes)."""
+    staged = kea_tls.stage_rotation()
+    cert, key = semantic_ca(kind)
+    pathlib.Path(staged["ca_cert"]).write_bytes(kea_tls._cert_pem(cert))
+    pathlib.Path(staged["ca_key"]).write_bytes(kea_tls._key_pem(key))
+    if kind != "unsupported-key":
+        client_key = kea_tls._new_key()
+        leaf = kea_tls._leaf(cert, key, client_key, "jen client under a CA that cannot sign", [], client=True)
+        pathlib.Path(staged["client_cert"]).write_bytes(kea_tls._cert_pem(leaf))
+        pathlib.Path(staged["client_key"]).write_bytes(kea_tls._key_pem(client_key))
+    return staged
+
+
 def apply_state(state: str, cert_path, key_path, *, which: str, client: bool, ca_key_for_mismatch=None):
     """Put the file `which` ("cert" or "key") of the pair at (cert_path, key_path) into `state`. `earlier-jen` / `other-ca` replace the WHOLE pair (a consistent pair from the wrong issuer)."""
     target = cert_path if which == "cert" else key_path

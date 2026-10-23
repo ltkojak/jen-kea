@@ -2641,17 +2641,20 @@ class TestTheSecondPassOfQ193:
         _rotate({"acknowledge_damaged_ca": "1"})
         texts = lab.texts()
         assert "Rotate refused" in texts and "Nothing was changed" in texts, texts
-        assert "cannot read or write its certificate directory" in texts and "fix its permissions" in texts, texts
+        assert "cannot write its certificate records" in texts and "fix the folder's permissions" in texts, texts
         assert all(h["installs"] == [] and h["restarts"] == 0 for h in lab.hosts.values()), "no host was touched"
         assert lab.incidents == []
 
-    def test_row_1_the_write_check_is_the_only_new_condition(self, lab, tmp_path, monkeypatch):
+    def test_row_1_the_write_check_proves_by_creating_what_it_checks(self, lab, tmp_path, monkeypatch):
+        """Q194 (AJ2) replaced Q193's inference ("a directory that is not there yet is writable"): the check now CREATES it, so a read-only parent is a refusal and not a surprise at the first commit."""
         assert kea_tls.copies_dir_writable() == ""
         import shutil
 
-        shutil.rmtree(os.path.dirname(kea_tls.server_copy_path(1, "dhcp4")))
-        assert kea_tls.copies_dir_writable() == "", "a directory that is not there yet is made by the first commit"
-        pathlib.Path(os.path.dirname(kea_tls.server_copy_path(1, "dhcp4"))).write_text("x", encoding="ascii")
+        directory = os.path.dirname(kea_tls.server_copy_path(1, "dhcp4"))
+        shutil.rmtree(directory)
+        assert kea_tls.copies_dir_writable() == "" and os.path.isdir(directory), "created, not inferred"
+        shutil.rmtree(directory)
+        pathlib.Path(directory).write_text("x", encoding="ascii")
         assert kea_tls.copies_dir_writable() != ""
         lab.begin()
 
@@ -2712,3 +2715,311 @@ class TestTheSecondPassOfQ193:
         assert "1 of 2 daemon(s) were left in a state that needs it repeated" in texts, texts
         assert "Not changed: standby kea-dhcp4." in texts, texts
         assert "replacement CA's certificate is installed" not in texts
+
+
+# ── Q194: a CA is healthy only when it is a certificate-signing authority; a preflight proves by doing ───────────────────────────────────────────
+
+
+CA_IDENTITY_WHY = {
+    "not-ca": "not marked as a certificate authority (BasicConstraints ca is false)",
+    "no-basic-constraints": "has no BasicConstraints",
+    "no-key-usage": "has no KeyUsage",
+    "no-key-cert-sign": "lacks keyCertSign",
+    "expired": "expired on",
+    "not-yet-valid": "is not valid until",
+    "tampered-signature": "signature does not verify against its own key",
+    "issuer-not-subject": "is not self-signed",
+    "unsupported-key": "key type Jen does not support",
+}
+
+
+def _ca_bytes():
+    return {
+        p: (pathlib.Path(p).read_bytes() if os.path.lexists(p) else None)
+        for p in (*kea_tls.ca_paths(), *kea_tls.client_paths())
+    }
+
+
+class TestCaIdentity:
+    """Q194 (AJ1): `kea_tls.ca_identity` is the ONE judgment of CA material, applied to the live, the prepared and the staged pair. Real certificates, one per way a pair that parses and pairs can still fail to be
+    a certificate-signing authority. Q192's `ca_state` returned `ok` for every one of them and Jen signed with them (the reviewer: `ca=False` -> `ca_state ok`, `issue_client_cert issued=True`, OpenSSL "invalid
+    CA certificate"; an expired CA -> `ok`, `days_left -2`)."""
+
+    def test_jens_own_ca_is_ok(self, lab):
+        assert kea_tls.ca_identity(*kea_tls.ca_paths()) == ("ok", "")
+
+    @pytest.mark.parametrize("kind", __import__("tests._tls_worlds", fromlist=["x"]).SEMANTIC_CA_STATES)
+    def test_every_semantic_damage_is_named_by_the_first_check_it_fails(self, tmp_path, kind):
+        from tests import _tls_worlds as worlds
+
+        cert_pem, key_pem = worlds.semantic_ca_pem(kind)
+        crt, key = tmp_path / "ca.crt", tmp_path / "ca.key"
+        crt.write_bytes(cert_pem)
+        key.write_bytes(key_pem)
+        state, why = kea_tls.ca_identity(str(crt), str(key))
+        assert state == "damaged" and CA_IDENTITY_WHY[kind] in why, (kind, state, why)
+
+    @pytest.mark.parametrize("kind", __import__("tests._tls_worlds", fromlist=["x"]).SEMANTIC_CA_STATES)
+    def test_a_live_ca_that_cannot_sign_is_damaged_never_replaced_and_the_acknowledged_rotate_recovers(self, lab, kind):
+        from tests import _tls_worlds as worlds
+
+        crt, key = kea_tls.ca_paths()
+        cert_pem, key_pem = worlds.semantic_ca_pem(kind)
+        pathlib.Path(crt).write_bytes(cert_pem)
+        pathlib.Path(key).write_bytes(key_pem)
+        lab.begin()
+        lab.before = None  # (direct calls to the module are not requests: T5 is about requests)
+        state, why = kea_tls.ca_state()
+        assert state == "damaged" and CA_IDENTITY_WHY[kind] in why, (kind, state, why)
+        assert not kea_tls.ca_consistent(), "the failure paths ask the same question"
+        before = _ca_bytes()
+        with pytest.raises(kea_tls.CaDamaged):
+            kea_tls.ensure_ca()
+        with pytest.raises(kea_tls.CaDamaged):
+            kea_tls.issue_client_cert()
+        assert _ca_bytes() == before, "T6/T7: nothing was replaced, nothing created"
+        row = health._kea_tls_expiry({})
+        assert row.status == "fail" and CA_IDENTITY_WHY[kind] in row.detail, row.detail
+        lab.begin()
+        _rotate()  # without the acknowledgement: refused, and the files are exactly what they were
+        assert "Jen's CA is damaged" in lab.texts() and _ca_bytes() == before and lab.remote_actions() == 0
+        lab.flashes.clear()
+        _rotate({"acknowledge_damaged_ca": "1"})
+        assert "Kea CA rotated" in lab.texts(), lab.texts()
+        assert kea_tls.ca_state() == ("ok", "") and kea_tls.ca_identity(*kea_tls.ca_paths()) == ("ok", "")
+        for sid in lab.hosts:
+            assert lab.answers_jens_live_identity(sid)
+
+    @pytest.mark.parametrize("kind", __import__("tests._tls_worlds", fromlist=["x"]).SEMANTIC_CA_STATES)
+    def test_a_prepared_ca_that_is_not_an_authority_is_refused_discarded_by_the_writer_and_never_installed(
+        self, lab, kind
+    ):
+        from cryptography import x509
+        from cryptography.hazmat.primitives import serialization
+
+        from tests import _tls_worlds as worlds
+
+        staged = worlds.stage_semantic_prepared(kind)
+        invalid_cert = pathlib.Path(staged["ca_cert"]).read_bytes()
+        found, note = kea_tls.prepared_rotation()  # a READ: it never deletes
+        assert found is None and "damaged or inconsistent" in note and CA_IDENTITY_WHY[kind] in note, note
+        assert all(os.path.lexists(p) for p in staged.values()), "a read left the files where they were"
+        lab.begin()
+        live_before = _ca_bytes()
+        _rotate()  # Rotate (the writer) discards it, says why, and rotates with a fresh CA - never the invalid one
+        texts = lab.texts()
+        assert "damaged or inconsistent" in texts and CA_IDENTITY_WHY[kind] in texts, texts
+        assert "Kea CA rotated" in texts and _ca_bytes() != live_before
+        for sid, host in lab.hosts.items():
+            installed = x509.load_pem_x509_certificate(host["files"]["ca.crt"].encode())
+            assert installed.public_bytes(serialization.Encoding.PEM) != invalid_cert, (
+                f"server {sid} was given the CA that cannot sign"
+            )
+
+    def test_the_prepare_action_discards_it_with_the_reason_and_writes_a_fresh_one(self, lab):
+        from tests import _tls_worlds as worlds
+
+        worlds.stage_semantic_prepared("not-ca")
+        lab.begin()
+        lab.before = None  # (Prepare writes `.next` on purpose)
+        _prepare()
+        assert CA_IDENTITY_WHY["not-ca"] in lab.texts() and "A new CA is prepared" in lab.texts(), lab.texts()
+        found, note = kea_tls.prepared_rotation()
+        assert found is not None and note == ""
+        assert kea_tls.ca_identity(found["ca_cert"], found["ca_key"]) == ("ok", "")
+
+    def test_the_staged_ca_is_judged_once_more_immediately_before_anything_is_installed(self, lab, monkeypatch):
+        """A prepared CA was read earlier; a file can change between that read and the first install. The preflight applies the same function to the set Rotate is about to use."""
+        from tests import _tls_worlds as worlds
+
+        staged = worlds.stage_semantic_prepared("not-ca")
+        monkeypatch.setattr(kea_tls, "prepared_rotation", lambda discard=False: (staged, ""))
+        lab.begin()
+        before = _ca_bytes()
+        _rotate()
+        texts = lab.texts()
+        assert "Rotate refused - the new CA is not a certificate-signing authority" in texts, texts
+        assert CA_IDENTITY_WHY["not-ca"] in texts and lab.remote_actions() == 0 and _ca_bytes() == before
+        assert all(h["installs"] == [] and h["restarts"] == 0 for h in lab.hosts.values())
+
+
+def _can_block_writes_by_mode():
+    return os.name != "nt" and hasattr(os, "geteuid") and os.geteuid() != 0
+
+
+class TestCopiesDir:
+    """Q194 (AJ2): the certificate-record directory is proved writable BY WRITING - created when absent (0700), a probe file written and removed - and on every path that will need it: every rotation's
+    inventory, the https setup before `stage_issued`, and the recovery once more before its first install. Q193's version inferred "a directory that is not there yet is writable" (executed under a
+    read-only parent: `PermissionError errno 13` on the real create) and was asked only when listing raised, so a recovery with the directory MISSING never asked."""
+
+    @staticmethod
+    def _directory():
+        return os.path.dirname(kea_tls.server_copy_path(1, "dhcp4"))
+
+    @staticmethod
+    def _wiped_recovery(lab):
+        import shutil
+
+        shutil.rmtree(TestCopiesDir._directory())
+        os.unlink(kea_tls.ca_paths()[1])  # the common world: the CA damaged AND the record directory gone
+        lab.begin()
+
+    @staticmethod
+    def _parent_is_read_only(monkeypatch):
+        """A read-only parent, portably: the create of the record directory raises what the real create raises (EACCES)."""
+        directory = TestCopiesDir._directory()
+        real = os.makedirs
+
+        def makedirs(path, *a, **k):
+            if os.path.normcase(os.path.abspath(str(path))) == os.path.normcase(os.path.abspath(directory)):
+                raise PermissionError(13, "Permission denied")
+            return real(path, *a, **k)
+
+        monkeypatch.setattr(os, "makedirs", makedirs)
+
+    def test_an_existing_writable_directory_is_ok_and_the_probe_leaves_nothing(self, lab):
+        before = sorted(os.listdir(self._directory()))
+        assert kea_tls.copies_dir_writable() == ""
+        assert sorted(os.listdir(self._directory())) == before
+
+    @pytest.mark.skipif(not _can_block_writes_by_mode(), reason="a privileged account (or Windows) writes anyway")
+    def test_an_existing_read_only_directory_is_refused_with_its_class(self, lab):
+        d = self._directory()
+        os.chmod(d, 0o500)
+        try:
+            why = kea_tls.copies_dir_writable()
+        finally:
+            os.chmod(d, 0o700)
+        assert why.startswith("PermissionError") and "errno 13" in why, why
+
+    def test_an_existing_directory_that_cannot_be_listed_but_can_be_written_is_ok(self, lab, monkeypatch):
+        d = self._directory()
+        real = os.listdir
+
+        def listdir(path="."):
+            if os.path.normcase(os.path.abspath(str(path))) == os.path.normcase(os.path.abspath(d)):
+                raise PermissionError(13, "Permission denied")
+            return real(path)
+
+        monkeypatch.setattr(os, "listdir", listdir)
+        assert kea_tls.copies_dir_writable() == ""
+        os.unlink(kea_tls.ca_paths()[1])
+        lab.begin()
+        inventory = kea_tls.rotation_inventory(
+            extensions.KEA_SERVERS, url_for=lambda s, svc: lab.urls[s["id"]] if svc == "dhcp4" else "", recovery=True
+        )
+        assert not any("certificate records" in r for r in inventory.refusals), inventory.refusals
+
+    def test_a_missing_directory_under_a_writable_parent_is_created_private_and_then_rotated(self, lab):
+        import stat
+
+        self._wiped_recovery(lab)
+        _rotate({"acknowledge_damaged_ca": "1"})
+        assert "Kea CA rotated" in lab.texts(), lab.texts()
+        assert os.path.isdir(self._directory())
+        if os.name != "nt":
+            assert stat.S_IMODE(os.stat(self._directory()).st_mode) == 0o700
+
+    def test_a_missing_directory_under_a_read_only_parent_is_refused_before_staging_with_nothing_changed(
+        self, lab, monkeypatch
+    ):
+        self._wiped_recovery(lab)
+        self._parent_is_read_only(monkeypatch)
+        before = _ca_bytes()
+        _rotate({"acknowledge_damaged_ca": "1"})
+        texts = lab.texts()
+        assert "Rotate refused" in texts and "cannot write its certificate records" in texts, texts
+        assert "PermissionError, errno 13" in texts, "the refusal names the storage failure"
+        assert lab.remote_actions() == 0 and all(h["installs"] == [] for h in lab.hosts.values())
+        assert _ca_bytes() == before, "the CA is byte-equal"
+        assert not list(pathlib.Path(kea_tls.ca_paths()[0]).parent.glob("*.next")), "nothing was staged"
+        assert not os.path.lexists(self._directory())
+
+    def test_a_missing_directory_under_a_read_only_parent_refuses_an_ordinary_rotation_too(self, lab, monkeypatch):
+        """'recovery or not - every rotation records new pairs': Q193 asked only when listing raised."""
+        import shutil
+
+        shutil.rmtree(self._directory())
+        lab.begin()
+        self._parent_is_read_only(monkeypatch)
+        _rotate()
+        assert "cannot write its certificate records" in lab.texts() and lab.remote_actions() == 0, lab.texts()
+
+    def test_the_path_being_a_regular_file_is_refused_with_its_class(self, lab):
+        import shutil
+
+        shutil.rmtree(self._directory())
+        pathlib.Path(self._directory()).write_text("not a directory", encoding="ascii")
+        why = kea_tls.copies_dir_writable()
+        assert why and "errno" in why, why
+        lab.begin()
+
+    def test_a_directory_created_for_a_check_that_then_fails_is_removed_again(self, lab):
+        import shutil
+
+        d = self._directory()
+        shutil.rmtree(d)
+        real_open = os.open
+
+        def deny(path, flags, mode=0o777, **kw):
+            if ".write-probe-" in str(path):
+                raise PermissionError(13, "Permission denied")
+            return real_open(path, flags, mode, **kw)
+
+        import pytest as _pytest
+
+        with _pytest.MonkeyPatch.context() as scoped:
+            scoped.setattr(os, "open", deny)
+            why = kea_tls.copies_dir_writable()
+        assert why.startswith("PermissionError") and not os.path.lexists(d), "the check left no directory behind"
+        lab.begin()
+
+    def test_the_filesystem_made_read_only_between_the_preflight_and_the_first_install_is_refused_before_it(
+        self, lab, monkeypatch
+    ):
+        os.unlink(kea_tls.ca_paths()[1])
+        lab.begin()
+        real, calls = kea_tls.copies_dir_writable, []
+
+        def flaky():
+            calls.append(1)
+            return real() if len(calls) == 1 else "PermissionError, errno 13"
+
+        monkeypatch.setattr(kea_tls, "copies_dir_writable", flaky)
+        before = _ca_bytes()
+        _rotate({"acknowledge_damaged_ca": "1"})
+        texts = lab.texts()
+        assert len(calls) >= 2, "the recovery asked again immediately before the first install"
+        assert "cannot write its certificate records any more" in texts and "Nothing was changed on any host" in texts
+        assert lab.remote_actions() == 0 and all(h["installs"] == [] for h in lab.hosts.values())
+        assert _ca_bytes() == before
+        assert not list(pathlib.Path(kea_tls.ca_paths()[0]).parent.glob("*.next")), "the staging was discarded"
+
+    def test_the_reviewers_sequence_a_prepared_ca_then_a_recovery_with_a_missing_directory_under_a_read_only_parent(
+        self, lab, monkeypatch
+    ):
+        os.unlink(kea_tls.ca_paths()[1])
+        lab.begin()
+        lab.before = None  # (Prepare writes `.next` on purpose)
+        _prepare()
+        import shutil
+
+        shutil.rmtree(self._directory())
+        lab.begin()
+        self._parent_is_read_only(monkeypatch)
+        prepared = {p: pathlib.Path(p).read_bytes() for p in kea_tls._staged_paths().values()}
+        before = _ca_bytes()
+        _rotate({"acknowledge_damaged_ca": "1"})
+        assert "cannot write its certificate records" in lab.texts() and lab.remote_actions() == 0, lab.texts()
+        assert _ca_bytes() == before
+        assert {p: pathlib.Path(p).read_bytes() for p in kea_tls._staged_paths().values()} == prepared, (
+            "the prepared CA an external daemon may already hold is kept"
+        )
+
+    def test_the_https_setup_proves_the_directory_before_it_stages_anything(self):
+        """Source: the setup asks `copies_dir_writable` before `stage_issued` (the setup harness runs the https path; this pins the ORDER, which a mocked collaborator cannot)."""
+        source = (
+            pathlib.Path(__file__).resolve().parents[1] / "jen" / "routes" / "settings" / "infrastructure.py"
+        ).read_text(encoding="utf-8")
+        setup = source[source.index("def setup_direct_socket") :]
+        assert 0 < setup.index("copies_dir_writable()") < setup.index("stage_issued(server_id, service, files)")

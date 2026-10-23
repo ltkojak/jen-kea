@@ -1173,7 +1173,9 @@ def _kea_tls_expiry(ctx) -> Check:
         # (Q189, second pass, finding 8) a certificate that cannot be read has no expiry to watch - it is not counted as valid
         c.status = "fail" if c.status == "fail" else "warn"
         c.detail += f" — the certificate for {', '.join(unreadable)} cannot be read, so its expiry is unknown"
-    refused = kea_tls.rotation_inventory(extensions.KEA_SERVERS).refusals
+    refused = kea_tls.rotation_inventory(
+        extensions.KEA_SERVERS, prove_storage=False
+    ).refusals  # (Q194: Health only reads - it creates no directory)
     if refused:
         # an https endpoint Jen has no complete record of: the Settings page says Rotate would be refused, and so does this row
         c.status = "fail" if c.status == "fail" else "warn"

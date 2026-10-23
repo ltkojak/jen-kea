@@ -99,6 +99,13 @@ or not the diff touched the module - and runs every ordinary action in each with
 inputs and reading functions and fails on one that is not a row), and the second pass executes the module's OLD functions in the worlds, not only the new ones. An invariant that a world BREAKS before any
 action is made relative to the world (the world is the input; Health and the refusal say so) - never loosened for the action.
 
+**(q), continued (v5.69.0-beta.25, Q194).** Two rules the matrix of beta.23 and the sentences of beta.24 each missed. **A file's states include its PURPOSE.** A certificate, a key, a config value is
+enumerated by what it is FOR (CA / client / server; may it sign; is it valid now; does its signature verify) and not only by whether it parses and pairs: Q192's list was syntactic, and a `ca=False` pair, an
+expired CA and a tampered self-signature were all `ok`. Every world list carries a `semantic` row set - the certificate parses, the key is its key, and it is wrong in ONE named way - for the live AND the
+prepared copy. **A preflight proves by doing.** A check that guards a remote change performs the local action it guards (create the directory, write the file, take the lock) rather than inferring it, and
+runs on EVERY path that will need it - Q193's "a directory that is not there yet is writable" was an inference that the real create contradicted under a read-only parent, and it was asked only when
+listing raised. The second pass executes the storage worlds with the filesystem changed BETWEEN the preflight and the commit.
+
 ## The second pass (adversarial)
 
 Run as a separate subagent on the same diff, with the reviewer's method as its prompt, so that it does not inherit the first pass's assumptions. Its findings are reconciled against the first pass's

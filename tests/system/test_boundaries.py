@@ -2770,3 +2770,70 @@ def test_22_h_a_damaged_ca_refuses_an_https_setup_and_is_replaced_only_by_an_ack
     host = _s22_host_state()
     assert host["server.crt"] == recovered["local_crt"], "INVARIANT: the certificate on the host IS the one Jen holds"
     st.wait_for(lambda: st.kea_answers("kea-b"), timeout=60, what="kea-b answering on its own socket")
+
+
+S22I_BLOCK_SCRIPT = r"""
+import hashlib, os, shutil
+from jen.services import kea_tls
+
+crt, key = kea_tls.ca_paths()
+client = kea_tls.client_paths()
+before = {p: hashlib.sha256(open(p, "rb").read()).hexdigest() for p in (crt, client[0], client[1])}
+shutil.rmtree(kea_tls._copies_dir())  # the record directory is gone ...
+os.unlink(key)  # ... and the CA's key with it: the common wiped-directory recovery world
+os.chmod(kea_tls.SSL_DIR, 0o500)  # ... and the SSL folder is read-only
+effective = True
+try:
+    probe = os.path.join(kea_tls.SSL_DIR, ".probe-is-the-folder-really-read-only")
+    os.close(os.open(probe, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+    os.unlink(probe)
+    effective = False  # a privileged account writes anyway: the scenario cannot say anything here
+except OSError:
+    pass
+emit({"effective": effective, "before": before, "state": kea_tls.ca_state()})
+"""
+
+
+S22I_RESTORE_SCRIPT = r"""
+import os
+from jen.services import kea_tls
+
+os.chmod(kea_tls.SSL_DIR, 0o750)
+emit({"restored": os.access(kea_tls.SSL_DIR, os.W_OK)})
+"""
+
+
+def test_22_i_a_recovery_that_cannot_write_its_certificate_records_is_refused_before_any_host_changes(stack):
+    """REMOTE-001 / Q194 (AJ2, the P1/P2): kea-a is really on an https socket Jen issued the certificate for. On the Jen host `kea-servers/` is removed, the CA key is gone (the recovery world) and
+    `/etc/jen/ssl` is made read-only. An acknowledged recovery used to ask whether the record directory was writable only when LISTING it raised - the directory was missing, so it never asked,
+    staged, installed on kea-a and restarted it, and could not keep its copy: the daemon was cut off. Now the inventory CREATES the directory to prove it can (and cannot): the recovery is REFUSED
+    before any host changes - both of kea-a's TLS files and its daemon config are byte-for-byte the baseline, Jen's CA certificate and client pair are byte-equal, and nothing was staged."""
+    out, proc = _s22_run("write-ok", scheme="https", port="8014")
+    assert emitted(out) is not None, f"no result from the https setup:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    baseline = _s22_host_state()
+    out, proc = st.jen_py(S22I_BLOCK_SCRIPT, timeout=200)
+    blocked = emitted(out)
+    assert blocked is not None, (proc.stdout[-1500:], proc.stderr[-1500:])
+    try:
+        if not blocked["effective"]:
+            st.jen_py(S22I_RESTORE_SCRIPT, timeout=200)
+            pytest.skip("the Jen container's account is privileged: a read-only folder does not stop it writing")
+        ip = st.container_ip(st.KEA_A)
+        out, proc = st.jen_py(S22H_ROTATE_SCRIPT.replace("__ADDR__", ip).replace("__ACK__", "1"), timeout=500)
+        result = emitted(out)
+        assert result is not None, f"no result from the recovery:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+        texts = " ".join(result["flashes"])
+        assert "Rotate refused" in texts and "cannot write its certificate records" in texts, texts
+        assert "Kea CA rotated" not in texts and not result["ca_changed"], "INVARIANT: nothing was rotated"
+        after = _s22_host_state()
+        for name in S22_TLS_FILES:
+            assert after[name] == baseline[name], f"INVARIANT: {name} on kea-a is the baseline"
+        assert json.loads(after["conf"]) == json.loads(baseline["conf"]), (
+            "INVARIANT: kea-a's daemon config is the baseline"
+        )
+        out, proc = st.jen_py(S22H_CHECK_SCRIPT, timeout=200)
+        local = emitted(out)
+        assert local["after"] == blocked["before"], "INVARIANT: Jen's CA certificate and client pair are byte-equal"
+    finally:
+        st.jen_py(S22I_RESTORE_SCRIPT, timeout=200)
+    st.wait_for(lambda: st.kea_answers("kea-b"), timeout=60, what="kea-b answering on its own socket")

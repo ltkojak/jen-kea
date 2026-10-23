@@ -53,9 +53,9 @@ import ssl
 from datetime import datetime, timedelta, timezone
 
 from cryptography import x509
-from cryptography.exceptions import UnsupportedAlgorithm
+from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from jen import extensions
@@ -241,10 +241,76 @@ class CaDamaged(Exception):
         self.why = why
 
 
+def ca_identity(cert_path: str, key_path: str, *, raise_io: bool = False) -> tuple[str, str]:
+    """Q194 (AJ1): the ONE judgment of CA material - the live pair, the prepared pair and the staged pair are all judged here. `("ok", "")` only when the certificate and key both load, the key is the
+    certificate's (SPKI), the certificate is inside its validity window NOW (the 30-day expiry warning stays Health's separate `warn`), it carries `BasicConstraints` with `ca=True` and a `KeyUsage` with
+    `keyCertSign`, its issuer is its subject, its self-signature verifies with its own public key, and the key is EC or RSA (the two kinds `_build_ca` can make); else `("damaged", why)` with `why`
+    naming the FIRST failed check. Q192's states were syntactic - absent, malformed, mismatched - and never asked what the certificate is FOR: a `ca=False` certificate, an expired one, one whose
+    signature does not verify were all `ok`, and Jen signed with them. `raise_io` lets a read error (an I/O failure, not a verdict) propagate: the prepared CA's reader treats it as unknown."""
+    crt_name, key_name = os.path.basename(cert_path), os.path.basename(key_path)
+    try:
+        cert = load_cert(cert_path)
+    except OSError as e:
+        if raise_io:
+            raise
+        return "damaged", f"{crt_name} cannot be read ({type(e).__name__})"
+    except (ValueError, TypeError, UnsupportedAlgorithm):
+        return "damaged", f"{crt_name} is not a certificate"
+    try:
+        private = load_key(key_path)
+    except OSError as e:
+        if raise_io:
+            raise
+        return "damaged", f"{key_name} cannot be read ({type(e).__name__})"
+    except (ValueError, TypeError, UnsupportedAlgorithm):
+        return "damaged", f"{key_name} is not a private key"
+    spki = serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+    try:
+        public = cert.public_key()
+        cert_spki = public.public_bytes(*spki)
+    except (ValueError, TypeError, UnsupportedAlgorithm):
+        return (
+            "damaged",
+            f"{crt_name} is a certificate with an unusable public key",
+        )  # (Q192 second pass, finding 1: it parses, so it is not 'not a certificate' - and it must not raise)
+    if cert_spki != private.public_key().public_bytes(*spki):
+        return "damaged", f"{crt_name} and {key_name} are not a pair"
+    try:
+        now = datetime.now(timezone.utc)
+        if cert.not_valid_before_utc > now:
+            return "damaged", f"{crt_name} is not valid until {cert.not_valid_before_utc:%Y-%m-%d}"
+        if now >= cert.not_valid_after_utc:
+            return "damaged", f"{crt_name} expired on {cert.not_valid_after_utc:%Y-%m-%d}"
+        try:
+            constraints = cert.extensions.get_extension_for_class(x509.BasicConstraints).value
+        except x509.ExtensionNotFound:
+            return "damaged", f"{crt_name} has no BasicConstraints, so it is not marked as a certificate authority"
+        if not constraints.ca:
+            return "damaged", f"{crt_name} is not marked as a certificate authority (BasicConstraints ca is false)"
+        try:
+            usage = cert.extensions.get_extension_for_class(x509.KeyUsage).value
+        except x509.ExtensionNotFound:
+            return "damaged", f"{crt_name} has no KeyUsage, so it is not allowed to sign certificates"
+        if not usage.key_cert_sign:
+            return "damaged", f"{crt_name} is not allowed to sign certificates (its KeyUsage lacks keyCertSign)"
+        if not isinstance(public, (ec.EllipticCurvePublicKey, rsa.RSAPublicKey)):
+            return "damaged", f"{crt_name} uses a key type Jen does not support ({type(public).__name__})"
+        if cert.issuer != cert.subject:
+            return "damaged", f"{crt_name} is not self-signed (its issuer is not its subject)"
+        try:
+            cert.verify_directly_issued_by(cert)
+        except (InvalidSignature, ValueError, TypeError, UnsupportedAlgorithm):
+            return "damaged", f"{crt_name}'s signature does not verify against its own key"
+    except (ValueError, TypeError, UnsupportedAlgorithm):
+        return "damaged", f"{crt_name} has an extension Jen cannot read"
+    return "ok", ""
+
+
 def ca_state() -> tuple[str, str]:
-    """The ONE definition of what Jen's CA is (Q192, AH2): `("none", "")` - neither file exists; `("ok", "")` - both load and are a pair; `("damaged", why)` - one missing, either unreadable
-    or malformed, or the certificate and key are not a pair (`why` says which). There is no other reading: the module used to load the two files independently, and "a cert without a loadable
-    key counts as absent" made a NEW CA under existing https sockets (the existing client certificate no longer valid under the active CA, every server certificate unverifiable)."""
+    """The ONE definition of what Jen's CA is (Q192, AH2): `("none", "")` - neither file exists; `("ok", "")` - `ca_identity` says so (a pair that is a certificate-signing authority, valid now);
+    `("damaged", why)` - one missing, or `ca_identity`'s first failed check (`why` says which). There is no other reading: the module used to load the two files independently, and "a cert
+    without a loadable key counts as absent" made a NEW CA under existing https sockets (the existing client certificate no longer valid under the active CA, every server certificate
+    unverifiable) - and from Q192 to Q193 an `ok` CA was only a pair (Q194: and a pair that cannot sign is damaged, never absent, never auto-replaced)."""
     crt, key = ca_paths()
     have_crt, have_key = os.path.lexists(crt), os.path.lexists(key)
     if not have_crt and not have_key:
@@ -256,29 +322,7 @@ def ca_state() -> tuple[str, str]:
         return "damaged", f"{crt_name} is missing ({key_name} is there)"
     if not have_key:
         return "damaged", f"{key_name} is missing ({crt_name} is there)"
-    try:
-        cert = load_cert(crt)
-    except OSError as e:
-        return "damaged", f"{crt_name} cannot be read ({type(e).__name__})"
-    except (ValueError, TypeError, UnsupportedAlgorithm):
-        return "damaged", f"{crt_name} is not a certificate"
-    try:
-        private = load_key(key)
-    except OSError as e:
-        return "damaged", f"{key_name} cannot be read ({type(e).__name__})"
-    except (ValueError, TypeError, UnsupportedAlgorithm):
-        return "damaged", f"{key_name} is not a private key"
-    spki = serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
-    try:
-        cert_spki = cert.public_key().public_bytes(*spki)
-    except (ValueError, TypeError, UnsupportedAlgorithm):
-        return (
-            "damaged",
-            f"{crt_name} is a certificate with an unusable public key",
-        )  # (second pass, finding 1: it parses, so it is not 'not a certificate' - and it must not raise)
-    if cert_spki != private.public_key().public_bytes(*spki):
-        return "damaged", f"{crt_name} and {key_name} are not a pair"
-    return "ok", ""
+    return ca_identity(crt, key)
 
 
 def _initialised_evidence() -> str:
@@ -746,14 +790,10 @@ def host_material(server_id, service: str) -> dict | None:
 
 
 def ca_consistent() -> bool:
-    """Is Jen's CA a PAIR - the certificate at `kea-ca.crt` belongs to the key at `kea-ca.key`? A promotion whose restore also failed can leave them apart, and every certificate issued from
-    that CA is then signed by a key its certificate does not name."""
-    crt, key = ca_paths()
-    try:
-        spki = serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
-        return load_cert(crt).public_key().public_bytes(*spki) == load_key(key).public_key().public_bytes(*spki)
-    except (OSError, ValueError, TypeError, UnsupportedAlgorithm):
-        return False
+    """Can Jen sign with its CA - is `ca_state` `ok`? A promotion whose restore also failed can leave the certificate and key apart, and every certificate issued from that CA is then signed by a
+    key its certificate does not name; since Q194 a pair that is not a certificate-signing authority (expired, not marked CA, no keyCertSign, a signature that does not verify) is equally unusable.
+    The failure paths ask THIS, so "the CA is still damaged" is one answer wherever it is judged."""
+    return ca_state()[0] == "ok"
 
 
 def client_state(judge_issuer: bool = True) -> tuple[str, str]:
@@ -1055,7 +1095,7 @@ def record_state(server_id, service: str, recovery: bool = False) -> tuple[str, 
     return "external", ""
 
 
-def rotation_inventory(servers, url_for=None, recovery: bool = False) -> RotationInventory:
+def rotation_inventory(servers, url_for=None, recovery: bool = False, prove_storage: bool = True) -> RotationInventory:
     """The ONE source of a rotation's targets (Q189, AE1): for every configured server and each of dhcp4 / dhcp6 / d2, the URL Jen dials (`url_for(server, service)`, default the Kea
     client's `_endpoint_for`); every `https://` endpoint is a target when Jen holds a complete record of its certificate (`record_state`) and a REFUSAL, with a sentence, when it does not.
     A certificate no Jen CA issued is an administrator-managed endpoint: named in `external`, left alone. A directory that cannot be listed is a refusal naming it - never an empty set.
@@ -1079,13 +1119,15 @@ def rotation_inventory(servers, url_for=None, recovery: bool = False) -> Rotatio
             refusals.append(
                 f"Jen could not read its certificate directory {_copies_dir()} ({type(e).__name__}, errno {getattr(e, 'errno', '?')}), so it cannot tell which servers it issued certificates to; fix its permissions before rotating"
             )
-        else:
-            blocked = copies_dir_writable()  # (second pass, finding 1: the read is waived, the WRITE is not - the new pairs are recorded there after a host has taken them)
-            if blocked:
-                refusals.append(
-                    f"Jen cannot read or write its certificate directory {_copies_dir()} ({type(e).__name__}, errno {getattr(e, 'errno', '?')}; writing: {blocked}), so it could not keep the "
-                    "certificates the replacement issues and a daemon that took one would be left on a CA Jen never adopted; fix its permissions before rotating"
-                )
+    if prove_storage:
+        # Q194 (AJ2): EVERY rotation records the pairs it issues, so every inventory proves - by creating the directory and writing in it - that Jen can. (A recovery waives the READ of the old copies, never
+        # this: the host would take a pair Jen cannot record.) The page's summary, Health and the end-of-rotation comparison pass `prove_storage=False`: they only read, and a read creates nothing.
+        blocked = copies_dir_writable()
+        if blocked:
+            refusals.append(
+                f"Jen cannot write its certificate records in {_copies_dir()} ({blocked}), so it could not keep the certificate it issues for a server, and a daemon that took one would be left "
+                "on a CA Jen never adopted; fix the folder's permissions or storage before rotating"
+            )
     on_jens_own_ca = recovery and bool(configured_ca) and trust_kind() in ("jens-file", "alias")
     endpoints = set()
     for server in servers or []:
@@ -1307,19 +1349,22 @@ def prepared_rotation(discard: bool = False) -> tuple[dict | None, str]:
     if len(present) != len(staged):
         return None, f"the prepared CA was incomplete ({len(present)} of {len(staged)} files), {discarded()}"
     spki = serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+    identity_why = ""  # (set by the judgment below; a file that cannot even be loaded is "damaged or inconsistent" with no further reason)
     try:
-        ca_cert, ca_key = load_cert(staged["ca_cert"]), load_key(staged["ca_key"])
+        ca_cert = load_cert(staged["ca_cert"])
         client_cert, client_key = load_cert(staged["client_cert"]), load_key(staged["client_key"])
         now = datetime.now(timezone.utc)
+        # Q194 (AJ1): the prepared CA is judged by the SAME function as the live one - a pair that is not a certificate-signing authority (the reviewer's `ca=False` pair with a correctly signed client
+        # certificate) is not one to promote
+        identity, identity_why = ca_identity(staged["ca_cert"], staged["ca_key"], raise_io=True)
         consistent = (
-            ca_cert.public_key().public_bytes(*spki) == ca_key.public_key().public_bytes(*spki)
+            identity == "ok"
             and client_cert.public_key().public_bytes(*spki) == client_key.public_key().public_bytes(*spki)
             and ExtendedKeyUsageOID.CLIENT_AUTH
             in client_cert.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
             # (finding 11) a prepared pair that is expired, not yet valid or about to expire is not one to promote
             and client_cert.not_valid_before_utc <= now
             and (client_cert.not_valid_after_utc - now).days > 30
-            and ca_cert.not_valid_before_utc <= now < ca_cert.not_valid_after_utc
         )
         if consistent:
             client_cert.verify_directly_issued_by(ca_cert)
@@ -1328,7 +1373,9 @@ def prepared_rotation(discard: bool = False) -> tuple[dict | None, str]:
     except Exception:  # ValueError, TypeError, InvalidSignature, ExtensionNotFound - PROVED unusable, not unread
         consistent = False
     if not consistent:
-        return None, f"the prepared CA was damaged or inconsistent, {discarded()}"
+        return None, f"the prepared CA was damaged or inconsistent, {discarded()}" + (
+            f" ({identity_why})" if identity_why else ""
+        )
     return staged, ""
 
 
@@ -1344,20 +1391,27 @@ def _copies_dir() -> str:
 
 
 def copies_dir_writable() -> str:
-    """Q193 second pass (finding 1): "" when Jen can create a file in its certificate directory, else why not (the exception's class and errno). A recovery waives the READ of the old copies (it
-    issues every pair afresh) but never the WRITE: `commit_issued` records each new pair there after the host has taken it, and a host that took a pair Jen cannot record is cut off. A directory
-    that is not there yet is writable in this sense (the first commit makes it)."""
+    """Q194 (AJ2): "" when Jen can keep a certificate record in its certificate directory - PROVED by doing it: the directory is created when it is absent (Jen's own uid, mode 0700) and a probe
+    file is written and removed inside it; else why not, as the exception's class and errno (a path that is a regular file, a directory that refuses the probe, a read-only parent, an unavailable
+    mount). A directory this call created for a check that then fails is removed again. Q193's version inferred "a directory that is not there yet is writable" - and under a read-only parent the
+    real create raised `PermissionError`; a recovery waives the READ of the old copies, never the WRITE: `commit_issued` records each new pair there after the host has taken it, and a host that
+    took a pair Jen cannot record is cut off. Asked on EVERY path that will need it: every rotation's inventory, the https setup before `stage_issued`, and the recovery once more before its first
+    install (the filesystem can change in between; `HostRecordLost` stays as the backstop after that)."""
     d = _copies_dir()
-    probe = os.path.join(d, f".write-probe-{os.getpid()}")
+    created = False
     try:
+        if not os.path.lexists(d):
+            os.makedirs(d, 0o700, exist_ok=True)
+            created = True
+        probe = os.path.join(d, f".write-probe-{os.getpid()}")
         fd = os.open(probe, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except OSError as e:
-        if isinstance(e, FileNotFoundError) and not os.path.lexists(d):
-            return ""
-        return f"{type(e).__name__}, errno {getattr(e, 'errno', '?')}"
-    os.close(fd)
-    with contextlib.suppress(OSError):
+        os.close(fd)
         os.unlink(probe)
+    except OSError as e:
+        if created:
+            with contextlib.suppress(OSError):
+                os.rmdir(d)
+        return f"{type(e).__name__}, errno {getattr(e, 'errno', '?')}"
     return ""
 
 

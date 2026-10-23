@@ -575,7 +575,16 @@ it to the user and password fields, and Jen keeps dialling it as written (the cr
    actions (`kea_tls.DAMAGED_CA_ADVICE`: restore from a backup, or the acknowledged Rotate); Prepare works while the CA is damaged (it mints a fresh CA and reads nothing live); in a recovery an endpoint
    Jen verifies against its OWN CA file is a target whatever record it holds, and an unlistable copies directory is not a refusal while it can be WRITTEN (the read of the old copies is waived, never the write of the new ones: a host that took a pair Jen cannot record is cut off); a recovery that fails at ANY step - the promotion included - is judged by the CA now (as damaged as it was) and says what each daemon is: cut off by the replacement CA's pair (an incident with its own fixed sentence), unknown, or not changed; a sentence about a damaged CA offers the action that works (`_reissue_action`), never the setup; a refused first install is `remote-unknown` (the host's material is
    unknown), `tls-not-restored` only for a host KNOWN to hold the staged pair. (4) `tests/test_kea_tls_worlds.py` generates a world per (file, state) over every file the module reads, with T6 (no ordinary action replaces a damaged identity file) and T7, and a test lists the
-   module's path functions, suffixes, configured inputs and reading functions so a new one is a new row.
+   module's path functions, suffixes, configured inputs and reading functions so a new one is a new row. **A CA is healthy only when it is a certificate-signing authority (Q194).** `kea_tls.ca_identity`
+   is the ONE judgment of CA material - the live, the prepared and the staged pair: both files load, the key is the certificate's, the certificate is inside its validity window now, `BasicConstraints`
+   says `ca=True`, `KeyUsage` has `keyCertSign`, issuer equals subject, the self-signature verifies with its own public key, and the key is EC or RSA. `ca_state`, `_load_ca`, `ensure_ca`,
+   `ca_consistent` (the failure paths' "the CA is still damaged"), `prepared_rotation`, the staged-set check before the first install and Health all ask it; an existing CA that fails it is DAMAGED -
+   never absent, never replaced by an ordinary action - and an invalid prepared CA is refused, discarded by the writer with the reason, and never installed on a host. Q192's states were syntactic
+   (absent, malformed, mismatched ...) and `ok` meant "a pair": a `ca=False` certificate, an expired one and a tampered self-signature were all `ok`. **A preflight that guards a remote change proves by
+   doing the thing it guards (Q194).** `kea_tls.copies_dir_writable` CREATES the certificate-record directory (0700) and writes and removes a probe inside it - Q193's version inferred that a missing
+   directory is writable and was asked only when LISTING raised - and it runs on every path that will need it: every rotation's inventory (recovery or not), the https setup before `stage_issued`, and the
+   recovery once more immediately before its first install (`HostRecordLost` stays the backstop). Read-only callers (the page, Health, the end-of-rotation comparison) pass `prove_storage=False`: a read
+   creates nothing.
 11. **A stored incident Jen cannot recognise is kept (Q190).** Each entry of the recovery record has a shape (`kea_changeset.recognised_incident`: an attention incident has a known category, a service, a server
    id, a summary and a time; an outcome incident a `rolled_back`/`rollback_failed` status, a service and a time); `_incidents_of(strict=True)` raises `MalformedNote` naming the entry's INDEX, every writer
    refuses the whole note, `_incident_cleared` is False for an entry it cannot read (fail closed, in the lenient reader too), and the Servers banner says an incident Jen cannot read is on record.
@@ -641,6 +650,10 @@ Jen's CA by certificate identity, per endpoint; an invariant with no knob; an in
 - `tests/test_direct_socket_credentials.py::TestTheProbeRowsOfQ193`
 - `tests/test_kea_tls_rotation.py::TestTheSecondPassOfQ193`
 - `tests/test_kea_tls_worlds.py::TestTheSecondPassOfQ193`
+- `tests/test_kea_tls_rotation.py::TestCaIdentity`
+- `tests/test_kea_tls_rotation.py::TestCopiesDir`
+- `tests/test_direct_socket_credentials.py::TestTheProbeRowsOfQ194`
+- `tests/system/test_boundaries.py::test_22_i_a_recovery_that_cannot_write_its_certificate_records_is_refused_before_any_host_changes`
 - `tests/test_kea_tls_worlds.py::TestTheWorldsOfTheLab`
 - `tests/test_kea_tls_worlds.py::TestEveryInputOfTheModuleIsARow`
 - `tests/test_direct_socket_lock.py::TestTheWorldsOfTheSetupHarness`

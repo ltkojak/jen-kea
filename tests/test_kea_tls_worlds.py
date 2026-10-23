@@ -61,6 +61,8 @@ def _worlds() -> list[World]:
         World("copies_dir", "empty-everything-else-removed", "ca"),
     ]
     out += [World("ca_key", s, "ca") for s in ("absent", "malformed", "unreadable", "mismatched")]
+    # Q194 (AJ1): the SEMANTIC states - the certificate parses and pairs with its key but is not a certificate-signing authority in one specific way (purpose, validity, self-signature, key type)
+    out += [World("ca_semantic", s, "ca") for s in worlds.SEMANTIC_CA_STATES]
     out += [
         World("client_pem", s, "client")
         for s in ("absent", "malformed", "unreadable", "mismatched", "earlier-jen", "other-ca", "invalid-key")
@@ -75,6 +77,9 @@ def _worlds() -> list[World]:
         out += [World(role, s, "aux") for s in ("valid", "malformed", "mismatched")]
     out += [World("server.stale", "present", "aux"), World("server.unknown", "present", "aux")]
     out += [World("next", "consistent", "aux")]
+    out += [
+        World("next_ca_semantic", s, "aux") for s in worlds.SEMANTIC_CA_STATES
+    ]  # (a prepared CA that cannot sign, with a client certificate it correctly signed)
     for role in ("next_ca_cert", "next_ca_key", "next_client_cert", "next_client_key"):
         out += [World(role, s, "aux") for s in ("absent", "malformed")]
     out += [World("api_ca", s, "config") for s in ("copy", "other-ca", "missing")]
@@ -135,6 +140,12 @@ def apply_world(world: World, monkeypatch, tmp_path) -> None:
             {"absent": worlds.absent, "malformed": worlds.malformed, "unreadable": worlds.unreadable}[state](
                 p["ca_crt"]
             )
+    elif role == "ca_semantic":
+        cert_pem, key_pem = worlds.semantic_ca_pem(state)
+        pathlib.Path(p["ca_crt"]).write_bytes(cert_pem)
+        pathlib.Path(p["ca_key"]).write_bytes(key_pem)
+    elif role == "next_ca_semantic":
+        worlds.stage_semantic_prepared(state)
     elif role == "ca_key":
         if state == "mismatched":
             pathlib.Path(p["ca_key"]).write_bytes(worlds.another_key_pem())
@@ -386,7 +397,11 @@ MATRIX_READERS = {
     "load_key": {"open"},
     "cert_expiry": {"load_cert"},
     "issued_by": {"load_cert"},
-    "ca_state": {"lexists", "load_cert", "load_key"},
+    "ca_identity": {
+        "load_cert",
+        "load_key",
+    },  # Q194 (AJ1): the ONE judgment of CA material - the `ca_semantic` / `next_ca_semantic` worlds
+    "ca_state": {"lexists"},
     "_initialised_evidence": {"lexists", "listdir"},
     "copies_dir_writable": {"lexists", "open"},
     "_cn": {"load_cert"},
@@ -400,7 +415,6 @@ MATRIX_READERS = {
     "mark_unknown": {"exists"},
     "is_unknown": {"exists"},
     "is_stale": {"exists"},
-    "ca_consistent": {"load_cert", "load_key"},
     "client_state": {"lexists", "load_cert", "load_key"},
     "trust_bundle": {"load_cert", "load_pem_x509_certificates", "open"},
     "trust_kind": {

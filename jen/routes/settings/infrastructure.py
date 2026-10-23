@@ -191,7 +191,10 @@ def _kea_ca_summary() -> dict:
     if present or ca_state == "damaged":
         # Q189 (AE1): what Rotate will do is the INVENTORY (every https endpoint Jen dials), not the listing of local copy files
         inventory = kea_tls.rotation_inventory(
-            extensions.KEA_SERVERS, url_for=_configured_url, recovery=ca_state == "damaged"
+            extensions.KEA_SERVERS,
+            url_for=_configured_url,
+            recovery=ca_state == "damaged",
+            prove_storage=False,  # (Q194: a page render only reads - the proof that Jen can write is the rotation's, which creates the directory)
         )
         for server, service, _bind in inventory.targets:
             name = server.get("name") or f"server {server.get('id')}"
@@ -2362,6 +2365,14 @@ def setup_direct_socket(server_id, service):
             flash(f"Jen's own client certificate is unusable ({tls_err}) — nothing was pushed to {name}.", "error")
             return back
         if files is not None:
+            # Q194 (AJ2): Jen proves, by writing, that it can keep the record of what it is about to install - before it asks the host for anything
+            storage_now = __tls.copies_dir_writable()
+            if storage_now:
+                flash(
+                    f"Jen cannot write its certificate records ({storage_now}), so it did not install the certificate. Nothing was changed on {name}.",
+                    "error",
+                )
+                return back
             # Q188 (AD2): Jen's own recovery state is committed BEFORE the host is touched - `.prev` (what the host has) and `.staged` (what it is about to be given) - and the operation stops at the
             # first step it cannot prove: no copy, no install; no promotion, the previous material back on the host and the socket change never starts.
             try:
@@ -2732,6 +2743,22 @@ def rotate_kea_ca():
             # Q192 (AH1): BEFORE the install loop - nothing is on any host yet, so nothing is put back
             flash(f"Rotate refused - {unproved}. Nothing was changed on any host.", "error")
             return back
+        # Q194 (AJ1): the staged CA is judged by the same function as the live one, once more immediately before anything is installed (a prepared CA was read earlier; a file can change in between)
+        staged_ca, staged_ca_why = __tls.ca_identity(staged["ca_cert"], staged["ca_key"])
+        if staged_ca != "ok":
+            flash(
+                f"Rotate refused - the new CA is not a certificate-signing authority ({staged_ca_why}). Nothing was changed on any host.",
+                "error",
+            )
+            return back
+        # Q194 (AJ2): the filesystem can change between the inventory and the first install - Jen proves once more, by writing, that it can keep what it is about to issue
+        storage_now = __tls.copies_dir_writable()
+        if storage_now:
+            flash(
+                f"Rotate refused - Jen cannot write its certificate records any more ({storage_now}), so it could not keep what it issues. Nothing was changed on any host.",
+                "error",
+            )
+            return back
         try:
             for server, service, bind in targets:
                 sname = server.get("name") or f"Kea Server {server.get('id')}"
@@ -2787,7 +2814,9 @@ def rotate_kea_ca():
             # (the endpoints, not the records: a target Jen already committed carries a certificate from the staged CA, which the live-CA record check would call 'an earlier Jen CA')
             if (
                 not failure
-                and __tls.rotation_inventory(extensions.KEA_SERVERS, url_for=_configured_url).endpoints
+                and __tls.rotation_inventory(
+                    extensions.KEA_SERVERS, url_for=_configured_url, prove_storage=False
+                ).endpoints
                 != inventory.endpoints
             ):
                 failure = "the set of https endpoints changed while the rotation ran"

@@ -807,6 +807,25 @@ class TestTheProbeRowsOfQ193:
         }
 
 
+class TestTheProbeRowsOfQ194:
+    """AJ1/AJ2: a CA that cannot sign is damaged (never replaced), and a missing certificate directory is created or refused (never assumed writable)."""
+
+    def test_a_ca_that_cannot_sign_is_damaged_never_replaced(self):
+        assert probe.q194_aj1_a_ca_that_is_not_a_certificate_signing_authority_is_damaged_never_replaced() == {
+            "ok": ("ok", False, False),
+            "not-ca": ("damaged", True, True),
+            "expired": ("damaged", True, True),
+            "no-key-cert-sign": ("damaged", True, True),
+            "tampered-signature": ("damaged", True, True),
+        }
+
+    def test_a_missing_certificate_directory_is_created_or_refused(self):
+        assert probe.q194_aj2_a_missing_certificate_directory_is_created_or_refused_never_assumed_writable() == {
+            "writable-parent": (False, True),
+            "read-only-parent": (True, False),
+        }
+
+
 class TestTheSecondPassOfQ187:
     """The executed findings of the adversarial pass on beta.18's routes, each as a probe row."""
 

@@ -2174,6 +2174,62 @@ def q193_ai4_a_failed_probe_is_classified_a_certificate_rejection_or_a_transport
     }
 
 
+def q194_aj1_a_ca_that_is_not_a_certificate_signing_authority_is_damaged_never_replaced():
+    """For a CA that parses and is a pair but cannot sign - `ca=False`, expired, no keyCertSign, a tampered self-signature - against the one that can: (what `ca_state` says, whether `ensure_ca` refuses
+    to replace it, whether Health fails). Q192's `ca_state` said `ok` for all four."""
+    import pathlib
+
+    from jen.services import health
+    from tests import _tls_worlds as worlds
+
+    out = {}
+    for kind in ("ok", "not-ca", "expired", "no-key-cert-sign", "tampered-signature"):
+        with contextlib.ExitStack() as stack:
+            kea_tls, _directory, _ = _tls_lab(stack)
+            if kind != "ok":
+                crt, key = kea_tls.ca_paths()
+                cert_pem, key_pem = worlds.semantic_ca_pem(kind)
+                pathlib.Path(crt).write_bytes(cert_pem)
+                pathlib.Path(key).write_bytes(key_pem)
+            stack.enter_context(mock.patch.object(extensions, "KEA_SERVERS", []))
+            try:
+                kea_tls.ensure_ca()
+                refused = False
+            except kea_tls.CaDamaged:
+                refused = True
+            out[kind] = (kea_tls.ca_state()[0], refused, health._kea_tls_expiry({}).status == "fail")
+    return out
+
+
+def q194_aj2_a_missing_certificate_directory_is_created_or_refused_never_assumed_writable():
+    """The record directory is gone: under a writable parent the proof CREATES it (the rotation's inventory is not refused); under a read-only parent the real create fails and the inventory refuses.
+    (refused by the inventory, the directory exists afterwards.)"""
+    import os
+    import shutil
+
+    out = {}
+    for world in ("writable-parent", "read-only-parent"):
+        with contextlib.ExitStack() as stack:
+            kea_tls, directory, _ = _tls_lab(stack)
+            records = os.path.join(directory, "kea-servers")
+            shutil.rmtree(records, ignore_errors=True)
+            if world == "read-only-parent":
+                real = os.makedirs
+
+                def makedirs(path, *a, _real=real, _records=records, **k):
+                    if os.path.normcase(os.path.abspath(str(path))) == os.path.normcase(os.path.abspath(_records)):
+                        raise PermissionError(13, "Permission denied")
+                    return _real(path, *a, **k)
+
+                stack.enter_context(mock.patch.object(os, "makedirs", makedirs))
+            inventory = kea_tls.rotation_inventory([], recovery=True)
+            out[world] = (
+                any("cannot write its certificate records" in r for r in inventory.refusals),
+                os.path.isdir(records),
+            )
+    return out
+
+
 def q185_aa3_a_trailing_no_break_space_is_refused_and_ordinary_padding_is_not():
     from jen.services import auth
 
@@ -2229,6 +2285,7 @@ SCENARIOS = {
             "q191_",
             "q192_",
             "q193_",
+            "q194_",
         )
     )
     and callable(fn)
@@ -2535,6 +2592,17 @@ EXPECTED = {
         False,
         True,
     ),
+    "q194_aj1_a_ca_that_is_not_a_certificate_signing_authority_is_damaged_never_replaced": {
+        "ok": ("ok", False, False),
+        "not-ca": ("damaged", True, True),
+        "expired": ("damaged", True, True),
+        "no-key-cert-sign": ("damaged", True, True),
+        "tampered-signature": ("damaged", True, True),
+    },
+    "q194_aj2_a_missing_certificate_directory_is_created_or_refused_never_assumed_writable": {
+        "writable-parent": (False, True),
+        "read-only-parent": (True, False),
+    },
     "q193_ai2_prepare_accepts_a_damaged_ca_and_refuses_only_the_absence_of_one": {
         "ok": ("ok", True, False, True),
         "key-missing": ("damaged", True, False, True),
