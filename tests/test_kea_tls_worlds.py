@@ -303,29 +303,62 @@ class TestTheWorldsOfTheLab:
         assert worlds.tree(kea_tls.SSL_DIR) == before_tree, "T7: nothing was created and nothing replaced"
         assert identity_files() == before_identity, "T6"
 
-    @_all
-    def test_rotate_without_the_acknowledgement_refuses_a_damaged_ca_and_changes_nothing(self, lab, built):
-        before = worlds.tree(kea_tls.SSL_DIR)
-        _rotate()
-        if ca_damaged(built):
-            assert "Jen's CA is damaged" in lab.texts() and "Tick the acknowledgement" in lab.texts(), lab.texts()
-            assert lab.remote_actions() == 0 and worlds.tree(kea_tls.SSL_DIR) == before
-        elif built.klass == "uninitialised":
-            assert "No Jen-managed Kea CA exists yet" in lab.texts() and worlds.tree(kea_tls.SSL_DIR) == before
-        else:
-            assert "Rotate refused" in lab.texts() or "Kea CA rotated" in lab.texts() or lab.texts(), (
-                "the route said SOMETHING - a rotation never ends without a word"
+    # Q193 (AI4 f): the rotate rows assert PER CLASS - what each class of world MEANS - not "the route said something". The expected outcome is stated here, once, per class (and the one state of a
+    # class that differs: a DIRECTORY where an identity file belongs cannot be replaced, which is a refusal before any host moves).
+    @staticmethod
+    def _expected_rotate(world, acknowledged):
+        """'rotated' | 'refused' for the world, by its class."""
+        if world.klass in ("baseline", "aux"):
+            return "rotated"
+        if world.klass == "uninitialised":
+            return "refused"
+        if world.klass == "ca":
+            if not acknowledged:
+                return "refused"
+            return "refused" if world.state == "unreadable" else "rotated"
+        if world.klass == "client":
+            return "refused" if world.state == "unreadable" else "rotated"
+        if world.klass == "copy":
+            return "refused"  # Jen holds no complete record of the endpoint's pair: a refusal naming it, before anything moves
+        if world.klass == "config":
+            refused = (world.role == "api_ca" and world.state == "copy") or (
+                world.role == "api_client" and world.state in ("copy", "other", "unreadable")
             )
+            return "refused" if refused else "rotated"
+        raise AssertionError(world)
+
+    def _check_rotate(self, lab, built, acknowledged, before):
+        expected = self._expected_rotate(built, acknowledged)
+        texts = lab.texts()
+        if expected == "rotated":
+            assert "Kea CA rotated" in texts, (built.id, texts)
+            assert kea_tls.ca_state() == ("ok", ""), "what was promoted is a pair"
+            for sid in lab.hosts:
+                assert lab.answers_jens_live_identity(sid), f"server {sid}'s daemon answers the new identity"
+            return
+        assert "Kea CA rotated" not in texts, (built.id, texts)
+        assert lab.remote_actions() == 0, f"{built.id}: a refusal asked a host for nothing"
+        assert worlds.tree(kea_tls.SSL_DIR) == before, f"{built.id}: a refusal changed a file"
+        if built.klass == "uninitialised":
+            assert "No Jen-managed Kea CA exists yet" in texts
+        elif built.klass == "ca" and not acknowledged:
+            assert "Jen's CA is damaged" in texts and kea_tls.DAMAGED_CA_ADVICE in texts, texts
+        elif built.klass in ("ca", "client") and built.state == "unreadable":
+            assert "Jen cannot promote a new CA" in texts, texts
+        else:
+            assert "Rotate refused" in texts, texts
 
     @_all
-    def test_rotate_with_the_acknowledgement_replaces_a_damaged_ca_or_names_every_stuck_target(self, lab, built):
+    def test_rotate_without_the_acknowledgement_does_what_its_class_means(self, lab, built):
+        before = worlds.tree(kea_tls.SSL_DIR)
+        _rotate()
+        self._check_rotate(lab, built, False, before)
+
+    @_all
+    def test_rotate_with_the_acknowledgement_does_what_its_class_means(self, lab, built):
+        before = worlds.tree(kea_tls.SSL_DIR)
         _rotate({"acknowledge_damaged_ca": "1"})
-        if ca_damaged(built) and "Kea CA rotated" in lab.texts():
-            assert kea_tls.ca_state() == ("ok", ""), "the replacement is a pair"
-            for sid in lab.hosts:
-                assert lab.answers_jens_live_identity(sid), f"server {sid}'s daemon answers the replacement"
-        elif ca_damaged(built):
-            assert lab.texts(), "a failed recovery says why"
+        self._check_rotate(lab, built, True, before)
 
 
 # ── the listing test: a file the module reads that is not a row fails here ───────────────────────────────────────────────────────────────────────
@@ -378,6 +411,9 @@ MATRIX_READERS = {
     "record_state": {"lexists", "open"},
     "commit_rotation": {"open"},
     "prepared_rotation": {"lexists", "load_cert", "load_key"},
+    "discarded": {
+        "lexists"
+    },  # (Q193, AI4 c: the verb after an attempted discard - which file could not be removed; the `next_*` worlds)
     "promotion_blockers": {
         "isdir"
     },  # the `unreadable` (a directory where a file belongs) worlds of the four identity files
@@ -707,3 +743,223 @@ class TestTheSecondPassOfQ192:
         _rotate()
         assert "so it was discarded" in lab.texts() and "Kea CA rotated" in lab.texts(), lab.texts()
         assert kea_tls.client_state() == ("ok", ""), "what was promoted is valid"
+
+
+# ── Q193 (AI2-AI4) ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+class TestTheRecoveryNamesActionsThatWork:
+    # AI2 - Prepare under a damaged CA
+    def test_prepare_works_while_the_ca_is_damaged_and_the_external_dependency_advice_is_satisfiable(self, lab):
+        _add_external(lab, trust=_rotation._ca_pem())
+        os.unlink(kea_tls.ca_paths()[1])  # the CA's KEY is gone; its certificate is intact
+        lab.begin()
+        _rotate({"acknowledge_damaged_ca": "1"})
+        assert (
+            "accepts Jen's current client certificate and refuses the new one" in lab.texts()
+            and "Prepare" in lab.texts()
+        )
+        assert lab.remote_actions() == 0
+        lab.flashes.clear()
+        _rotation._prepare()  # refused before; works now
+        lab.before = None  # (Prepare is not a refusal: it leaves `.next` on purpose)
+        staged = kea_tls._staged_paths()
+        assert all(os.path.exists(p) for p in staged.values()), "Prepare kept .next"
+        assert "A new CA is prepared" in lab.texts() and kea_tls.prepared_fingerprint(staged) in lab.texts()
+        assert (
+            "Nothing to prepare" not in lab.texts() and "with the acknowledgement: Jen's CA is damaged" in lab.texts()
+        )
+        # the operator adds the next CA to the external daemon's trust anchor, beside the current one
+        lab.hosts[3]["client_trust"] = _rotation._ca_pem() + pathlib.Path(staged["ca_cert"]).read_text(encoding="ascii")
+        lab.flashes.clear()
+        _rotate({"acknowledge_damaged_ca": "1"})
+        assert "Kea CA rotated" in lab.texts(), lab.texts()
+        for sid in lab.hosts:
+            assert lab.answers_jens_configured_dial(sid), f"endpoint {sid} answers the configured dial"
+
+    def test_prepare_with_no_ca_at_all_says_there_is_nothing_to_replace(self, lab):
+        import shutil
+
+        shutil.rmtree(kea_tls.SSL_DIR)
+        os.makedirs(kea_tls.SSL_DIR)
+        lab.hosts.clear()
+        lab.begin()
+        _rotation._prepare()
+        assert "Nothing to prepare" in lab.texts() and "set up an https socket" in lab.texts()
+
+    # AI3 - one sentence for a damaged CA with evidence
+    @staticmethod
+    def _wipe_but(keep):
+        import shutil
+
+        shutil.rmtree(kea_tls.SSL_DIR)
+        os.makedirs(kea_tls.SSL_DIR)
+        keep()
+
+    @pytest.mark.parametrize("world", ["client-prev-only", "empty-copies-dir", "unlistable-copies-dir"])
+    def test_a_damaged_ca_with_evidence_is_one_story_in_health_the_page_and_rotate_and_the_acknowledged_rotate_recovers(
+        self, lab, monkeypatch, world
+    ):
+        copies_dir = os.path.join(kea_tls.SSL_DIR, "kea-servers")
+        if world == "client-prev-only":
+            self._wipe_but(lambda: pathlib.Path(kea_tls.client_paths()[0] + ".prev").write_text("x", encoding="ascii"))
+        elif world == "empty-copies-dir":
+            self._wipe_but(lambda: os.makedirs(copies_dir))
+        else:
+            os.unlink(kea_tls.ca_paths()[0])
+            os.unlink(kea_tls.ca_paths()[1])
+            os.unlink(kea_tls.client_paths()[0])
+            os.unlink(kea_tls.client_paths()[1])
+            real = os.listdir
+
+            def listdir(path="."):
+                if os.path.normcase(os.path.abspath(str(path))) == os.path.normcase(os.path.abspath(copies_dir)):
+                    raise PermissionError(13, "Permission denied")
+                return real(path)
+
+            monkeypatch.setattr(os, "listdir", listdir)
+        lab.begin()
+        state, why = kea_tls.ca_state()
+        assert state == "damaged" and "both CA files are missing" in why, (state, why)
+        advice = kea_tls.DAMAGED_CA_ADVICE
+        assert advice in health._kea_tls_expiry({}).detail and health._kea_tls_expiry({}).status == "fail"
+        assert infra._kea_ca_summary()["advice"] == advice
+        _rotate()
+        assert advice in lab.texts(), lab.texts()
+        assert "cannot read the CA bundle" not in lab.texts() and "fix the CA bundle" not in lab.texts()
+        lab.flashes.clear()
+        _rotate({"acknowledge_damaged_ca": "1"})
+        assert "Kea CA rotated" in lab.texts(), lab.texts()
+        assert kea_tls.ca_state() == ("ok", "")
+        for sid in lab.hosts:
+            assert lab.answers_jens_live_identity(sid), f"server {sid}'s daemon answers the replacement"
+
+    def test_the_inventory_never_calls_jens_own_damaged_ca_an_unreadable_bundle(self, lab):
+        for p in (*kea_tls.ca_paths(), *kea_tls.client_paths()):
+            os.unlink(p)
+        for sid in (1, 2):
+            for p in (kea_tls.server_copy_path(sid, "dhcp4"), kea_tls.server_key_path(sid, "dhcp4")):
+                os.unlink(p)
+        lab.begin()
+        inventory = kea_tls.rotation_inventory(
+            extensions.KEA_SERVERS, url_for=lambda s, svc: lab.urls[s["id"]] if svc == "dhcp4" else "", recovery=True
+        )
+        assert [s["id"] for s, _svc, _b in inventory.targets] == [1, 2] and inventory.refusals == []
+
+    # AI4 (a)
+    def test_under_damage_a_readable_bundle_that_is_not_jens_file_cannot_be_proved_to_follow_it(
+        self, lab, monkeypatch, tmp_path
+    ):
+        apply_world(World("api_ca", "copy", "config"), monkeypatch, tmp_path)
+        os.unlink(kea_tls.ca_paths()[1])
+        lab.begin()
+        inventory = kea_tls.rotation_inventory(
+            extensions.KEA_SERVERS, url_for=lambda s, svc: lab.urls[s["id"]] if svc == "dhcp4" else "", recovery=True
+        )
+        text = " ".join(inventory.refusals)
+        assert "cannot be proved to follow the CA being replaced" in text and "holds a copy" not in text, text
+
+    # AI4 (b)
+    def _external_inventory(self, lab):
+        _add_external(lab, trust=_rotation._ca_pem())
+        return kea_tls.rotation_inventory(
+            extensions.KEA_SERVERS, url_for=lambda s, svc: lab.urls[s["id"]] if svc == "dhcp4" else ""
+        )
+
+    @pytest.mark.parametrize(
+        ("err", "expected"),
+        [
+            ("HTTPSConnectionPool: Read timed out", "a timeout"),
+            ("Connection refused", "a refused connection"),
+            ("ConnectionResetError: Connection reset by peer", "a lost connection"),
+            ("something odd", "a transport error"),
+        ],
+    )
+    def test_a_transport_fault_on_the_staged_probe_is_not_called_a_trust_refusal(self, lab, monkeypatch, err, expected):
+        inventory = self._external_inventory(lab)
+        staged = kea_tls.stage_rotation()
+        real = infra._probe_once
+
+        def probe(url, user, pwd, omit_service, service="dhcp4", verify=None, cert=None):
+            if cert and str(cert[0]).endswith(".next"):
+                return "", err
+            return real(url, user, pwd, omit_service, service=service, verify=verify, cert=cert)
+
+        monkeypatch.setattr(infra, "_probe_once", probe)
+        refusal = infra._staged_identity_refusal(inventory, "jens-file", staged)
+        assert f"could not be probed with the new client certificate ({expected})" in refusal, refusal
+        assert "trust anchor" not in refusal
+        kea_tls.discard_rotation(staged)
+
+    def test_a_certificate_rejection_on_the_staged_probe_is_still_the_trust_sentence(self, lab, monkeypatch):
+        inventory = self._external_inventory(lab)
+        staged = kea_tls.stage_rotation()
+        refusal = infra._staged_identity_refusal(
+            inventory, "jens-file", staged
+        )  # the Lab's daemon rejects the certificate
+        assert "refuses the new one" in refusal and "could not be probed" not in refusal
+        kea_tls.discard_rotation(staged)
+
+    # AI4 (c)
+    def test_a_discard_that_cannot_remove_a_file_says_which_and_never_discarded(self, lab):
+        staged = kea_tls.stage_rotation()
+        os.unlink(staged["client_cert"])  # 3 of 4: incomplete
+        os.unlink(staged["ca_key"])
+        os.makedirs(staged["ca_key"])  # a directory where a file was: it cannot be removed
+        found, note = kea_tls.prepared_rotation(discard=True)
+        assert found is None and "kea-ca.key.next could not be removed" in note and "so it was discarded" not in note, (
+            note
+        )
+        assert not os.path.exists(staged["ca_cert"]), "what could be removed was"
+
+    # AI4 (d)
+    def test_the_cosmetic_sentences(self, lab, monkeypatch):
+        inventory = self._external_inventory(lab)
+        staged = kea_tls.stage_rotation()
+        for p in kea_tls.client_paths():
+            os.unlink(p)
+        refusal = infra._staged_identity_refusal(inventory, "jens-file", staged)
+        assert "jen-kea-client.pem and jen-kea-client.key are both missing" in refusal and "()" not in refusal, refusal
+        kea_tls.issue_client_cert()
+        monkeypatch.setattr(infra, "_probe_once", lambda *a, **k: ("", ""))
+        refusal = infra._staged_identity_refusal(inventory, "jens-file", staged)
+        assert "does not answer Jen's current client certificate (no answer)" in refusal and "()" not in refusal, (
+            refusal
+        )
+        kea_tls.discard_rotation(staged)
+
+    def test_the_pages_prepared_note_has_no_errno_prefix_and_the_fingerprint_is_never_None(self, lab, monkeypatch):
+        _rotation._prepare()
+        real = kea_tls.load_key
+
+        def flaky(path):
+            if str(path).endswith(".next"):
+                raise OSError(5, "Input/output error")
+            return real(path)
+
+        monkeypatch.setattr(kea_tls, "load_key", flaky)
+        note = infra._kea_ca_summary()["prepared_note"]
+        assert note == "the prepared CA cannot be read right now (OSError)" and "[Errno" not in note
+        monkeypatch.setattr(kea_tls, "load_key", real)
+        staged = kea_tls._staged_paths()
+        pathlib.Path(staged["ca_cert"]).write_text("not a certificate", encoding="ascii")
+        assert kea_tls.prepared_fingerprint(staged) == "unavailable"
+
+    # AI4 (g)
+    def test_a_put_back_whose_ca_became_unusable_says_so_instead_of_no_earlier_copy(self, lab):
+        crt, key = kea_tls.server_copy_path(1, "dhcp4"), kea_tls.server_key_path(1, "dhcp4")
+        import shutil
+
+        shutil.copy(crt, crt + ".prev")
+        shutil.copy(key, key + ".prev")
+        os.unlink(kea_tls.ca_paths()[1])  # the CA became unusable between the gate and the undo
+        lab.begin()
+        lab.before = None
+        result = infra._put_tls_back(lab.servers[1], "dhcp4")
+        assert result["remote"] == "ca-unusable"
+        reason = infra._not_put_back_reason(result)
+        assert "Jen's CA became unusable during the operation" in reason and "kept at .prev" in reason
+        assert "there is no earlier copy" not in reason
+        shutil.rmtree(os.path.dirname(crt))
+        assert infra._put_tls_back(lab.servers[1], "dhcp4")["remote"] == "none-saved"
+        lab.before = None

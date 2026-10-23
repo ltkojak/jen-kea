@@ -2081,6 +2081,97 @@ def q192_ah1_the_staged_client_pair_is_proved_against_an_external_endpoint_befor
     return out
 
 
+def q193_ai3_every_damaged_ca_sentence_names_the_same_two_actions():
+    """For each way Jen's CA can be damaged: do Health's row and the Settings summary carry `DAMAGED_CA_ADVICE` (restore from a backup, or the acknowledged Rotate)?"""
+    import os
+
+    from jen.routes.settings import infrastructure as infra
+    from jen.services import health
+    from tests import _tls_worlds as worlds
+
+    out = {}
+    for shape in ("key-missing", "cert-missing", "cert-malformed", "both-missing-beside-the-client-pair"):
+        with contextlib.ExitStack() as stack:
+            kea_tls, _directory, _ = _tls_lab(stack)
+            crt, key = kea_tls.ca_paths()
+            if shape == "key-missing":
+                os.unlink(key)
+            elif shape == "cert-missing":
+                os.unlink(crt)
+            elif shape == "cert-malformed":
+                worlds.malformed(crt)
+            else:
+                os.unlink(crt)
+                os.unlink(key)
+            stack.enter_context(mock.patch.object(extensions, "KEA_SERVERS", []))
+            row = health._kea_tls_expiry({})
+            summary = infra._kea_ca_summary()
+            out[shape] = (
+                kea_tls.ca_state()[0],
+                row.status,
+                kea_tls.DAMAGED_CA_ADVICE in row.detail,
+                summary["advice"] == kea_tls.DAMAGED_CA_ADVICE and summary["damaged"],
+            )
+    return out
+
+
+def q193_ai2_prepare_accepts_a_damaged_ca_and_refuses_only_the_absence_of_one():
+    """`prepare_kea_ca` under each CA state: what it flashed and whether `.next` was kept."""
+    import inspect
+    import os
+    import shutil
+
+    import flask
+
+    from jen.routes.settings import infrastructure as infra
+
+    out = {}
+    for shape in ("ok", "key-missing", "none"):
+        with contextlib.ExitStack() as stack:
+            kea_tls, directory, _ = _tls_lab(stack)
+            flashes = []
+            if shape == "key-missing":
+                os.unlink(kea_tls.ca_paths()[1])
+            elif shape == "none":
+                shutil.rmtree(directory)
+                os.makedirs(directory)
+            stack.enter_context(
+                mock.patch.object(infra, "flash", lambda text, style="message", _into=flashes: _into.append(str(text)))
+            )
+            stack.enter_context(mock.patch.object(infra, "url_for", lambda *a, **k: "/settings/kea"))
+            stack.enter_context(mock.patch.object(infra.__dict__["__user"], "audit", lambda *a, **k: None))
+            app = flask.Flask(__name__)
+            app.secret_key = "x"
+            with app.test_request_context(method="POST"):
+                inspect.unwrap(infra.prepare_kea_ca)()
+            kept = all(os.path.exists(p) for p in kea_tls._staged_paths().values())
+            out[shape] = (
+                kea_tls.ca_state()[0],
+                any("A new CA is prepared" in f for f in flashes),
+                any("Nothing to prepare" in f for f in flashes),
+                kept,
+            )
+    return out
+
+
+def q193_ai4_a_failed_probe_is_classified_a_certificate_rejection_or_a_transport_fault():
+    """`_probe_fault_class`: '' for a certificate rejection (the trust evidence), else the class of the transport fault."""
+    from jen.routes.settings import infrastructure as infra
+
+    return {
+        text: infra._probe_fault_class(text)
+        for text in (
+            "SSLError: tlsv13 alert certificate required",
+            "client certificate rejected",
+            "Read timed out",
+            "Connection refused",
+            "ConnectionResetError: Connection reset by peer",
+            "",
+            "something odd",
+        )
+    }
+
+
 def q185_aa3_a_trailing_no_break_space_is_refused_and_ordinary_padding_is_not():
     from jen.services import auth
 
@@ -2122,7 +2213,21 @@ SCENARIOS = {
     name: fn
     for name, fn in sorted(globals().items())
     if name.startswith(
-        ("b12_", "b13_", "q183_", "q184_", "q185_", "q186_", "q187_", "q188_", "q189_", "q190_", "q191_", "q192_")
+        (
+            "b12_",
+            "b13_",
+            "q183_",
+            "q184_",
+            "q185_",
+            "q186_",
+            "q187_",
+            "q188_",
+            "q189_",
+            "q190_",
+            "q191_",
+            "q192_",
+            "q193_",
+        )
     )
     and callable(fn)
 }
@@ -2428,6 +2533,26 @@ EXPECTED = {
         False,
         True,
     ),
+    "q193_ai2_prepare_accepts_a_damaged_ca_and_refuses_only_the_absence_of_one": {
+        "ok": ("ok", True, False, True),
+        "key-missing": ("damaged", True, False, True),
+        "none": ("none", False, True, False),
+    },
+    "q193_ai3_every_damaged_ca_sentence_names_the_same_two_actions": {
+        "key-missing": ("damaged", "fail", True, True),
+        "cert-missing": ("damaged", "fail", True, True),
+        "cert-malformed": ("damaged", "fail", True, True),
+        "both-missing-beside-the-client-pair": ("damaged", "fail", True, True),
+    },
+    "q193_ai4_a_failed_probe_is_classified_a_certificate_rejection_or_a_transport_fault": {
+        "SSLError: tlsv13 alert certificate required": "",
+        "client certificate rejected": "",
+        "Read timed out": "a timeout",
+        "Connection refused": "a refused connection",
+        "ConnectionResetError: Connection reset by peer": "a lost connection",
+        "": "no answer",
+        "something odd": "a transport error",
+    },
     "q192_ah2_a_damaged_ca_is_named_and_ensure_ca_creates_nothing": {
         "fresh": ("none", "created", False),
         "key-missing": ("damaged", "refused", True),

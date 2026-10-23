@@ -569,7 +569,12 @@ it to the user and password fields, and Jen keeps dialling it as written (the cr
    judges the CA bundle by PATH - Jen's file or a link replaced, anything else a copy - because its own certificate cannot be compared, and the live client pair without its issuer).
    A rotation also refuses before staging when a live identity file is a directory or a link it cannot replace (`promotion_blockers`). (3) `kea_tls.client_state()` is the ONE definition of Jen's client pair
    (SPKI, the live issuer, `clientAuth`, validity; `none` / `ok` / `expiring` / `damaged`): `issue_client_cert` re-issues a damaged pair from an ok CA (the old pair kept as `.prev`) and the setup that calls it
-   says so. (4) `tests/test_kea_tls_worlds.py` generates a world per (file, state) over every file the module reads, with T6 (no ordinary action replaces a damaged identity file) and T7, and a test lists the
+   says so. **The recovery's sentences (Q193).** Every sentence on the recovery path says what HAPPENED and names an action the damaged gate does not itself refuse: a failed acknowledged recovery (the CA
+   was damaged before staging, no promotion ran) counts and names the daemons not re-issued, says Jen's CA is still damaged and that the action is to Rotate again with the acknowledgement - never "a
+   promotion failed", never ".prev", never "set it up again" (the https setup is refused while the CA is damaged); Health, the page, Rotate's refusal, the setup's refusal and Prepare carry the SAME two
+   actions (`kea_tls.DAMAGED_CA_ADVICE`: restore from a backup, or the acknowledged Rotate); Prepare works while the CA is damaged (it mints a fresh CA and reads nothing live); in a recovery an endpoint
+   Jen verifies against its OWN CA file is a target whatever record it holds, and an unlistable copies directory is not a refusal; a refused first install is `remote-unknown` (the host's material is
+   unknown), `tls-not-restored` only for a host KNOWN to hold the staged pair. (4) `tests/test_kea_tls_worlds.py` generates a world per (file, state) over every file the module reads, with T6 (no ordinary action replaces a damaged identity file) and T7, and a test lists the
    module's path functions, suffixes, configured inputs and reading functions so a new one is a new row.
 11. **A stored incident Jen cannot recognise is kept (Q190).** Each entry of the recovery record has a shape (`kea_changeset.recognised_incident`: an attention incident has a known category, a service, a server
    id, a summary and a time; an outcome incident a `rolled_back`/`rollback_failed` status, a service and a time); `_incidents_of(strict=True)` raises `MalformedNote` naming the entry's INDEX, every writer
@@ -631,6 +636,9 @@ Jen's CA by certificate identity, per endpoint; an invariant with no knob; an in
 - `tests/test_kea_tls_rotation.py::TestClientState`
 - `tests/test_kea_tls_rotation.py::TestTheInvariantsBiteTooQ192`
 - `tests/test_kea_tls_worlds.py::TestTheSecondPassOfQ192`
+- `tests/test_kea_tls_rotation.py::TestAFailedRecoverySaysWhatHappened`
+- `tests/test_kea_tls_worlds.py::TestTheRecoveryNamesActionsThatWork`
+- `tests/test_direct_socket_credentials.py::TestTheProbeRowsOfQ193`
 - `tests/test_kea_tls_worlds.py::TestTheWorldsOfTheLab`
 - `tests/test_kea_tls_worlds.py::TestEveryInputOfTheModuleIsARow`
 - `tests/test_direct_socket_lock.py::TestTheWorldsOfTheSetupHarness`

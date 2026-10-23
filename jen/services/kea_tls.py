@@ -216,6 +216,14 @@ def _build_ca(key, cn: str):
     )
 
 
+#: Q193 (AI3): the two actions that lead out of a damaged CA - the SAME words in Health, the Settings page, Rotate's refusal, the https setup's refusal and Prepare's: a sentence about a damaged CA names
+#: these two and nothing that the damaged gate itself refuses.
+DAMAGED_CA_ADVICE = (
+    "restore the CA files from a backup, or replace the CA with Rotate Kea CA and tick the acknowledgement "
+    "(a server that fails part-way cannot be put back on a damaged CA and would need its socket set up again)"
+)
+
+
 class CaDamaged(Exception):
     """Q192 (AH2): Jen's CA is not usable and is NOT "absent" - one file missing, either unreadable or malformed, or a certificate and key that are not a pair - or it is absent in a world that
     shows it once existed (a client certificate, a server copy). Nothing ordinary may replace it: `ensure_ca` raises this instead of creating a new CA under existing https sockets, and
@@ -1060,9 +1068,11 @@ def rotation_inventory(servers, url_for=None, recovery: bool = False) -> Rotatio
         listed = issued_server_copies(strict=True)
     except OSError as e:
         listed = []
-        refusals.append(
-            f"Jen could not read its certificate directory {_copies_dir()} ({type(e).__name__}, errno {getattr(e, 'errno', '?')}), so it cannot tell which servers it issued certificates to; fix its permissions before rotating"
-        )
+        if not recovery:  # (Q193, AI3: replacing a damaged CA issues every pair afresh - the old copies are not needed, so an unlistable directory is not a reason to refuse it)
+            refusals.append(
+                f"Jen could not read its certificate directory {_copies_dir()} ({type(e).__name__}, errno {getattr(e, 'errno', '?')}), so it cannot tell which servers it issued certificates to; fix its permissions before rotating"
+            )
+    on_jens_own_ca = recovery and bool(configured_ca) and trust_kind() in ("jens-file", "alias")
     endpoints = set()
     for server in servers or []:
         for service in INVENTORY_SERVICES:
@@ -1073,6 +1083,12 @@ def rotation_inventory(servers, url_for=None, recovery: bool = False) -> Rotatio
             endpoints.add((str(sid), service))
             label = _server_label(server, service)
             state, why = record_state(sid, service, recovery=recovery)
+            if on_jens_own_ca and state in ("none", "refuse"):
+                # Q193 (AI3): Jen verifies this endpoint against its OWN CA - the file being replaced - so it is Jen's, whatever it holds or does not hold for it: the replacement issues it a pair afresh
+                from urllib.parse import urlparse
+
+                targets.append((server, service, urlparse(url).hostname or ""))
+                continue
             if state == "none":
                 # Q190 (AF1): Jen holds no record of this endpoint's certificate. Whose endpoint it is is a fact about CERTIFICATES, decided here - and only here, as the tiebreak - from what Jen is
                 # configured to trust, by identity (`trust_bundle`), never from a path string: an endpoint with a Jen-issued copy is a target whatever the trust path says.
@@ -1120,12 +1136,18 @@ def rotation_inventory(servers, url_for=None, recovery: bool = False) -> Rotatio
     if targets and kind in ("copy", "bundle"):
         # (second pass, finding 1) Jen-issued endpoints depend on Jen's CA, and Jen verifies them against a file that holds a COPY of that CA which Rotate cannot rewrite: after the promotion
         # Jen would hold the old CA and every rotated endpoint would present the new one. Refused BEFORE anything is staged, naming the path and the fix.
-        refusals.append(
-            f"Jen verifies its https endpoints against {configured_ca}, which holds "
-            + ("a copy of Jen's CA" if kind == "copy" else "Jen's CA beside another CA")
-            + " - Rotate cannot rewrite that file, so after the rotation Jen could not verify the endpoints it issued certificates to. "
-            "Point the CA bundle under Settings → Kea at Jen's own CA file (kea-ca.crt in Jen's SSL folder, or a link to it) before rotating"
-        )
+        if recovery:
+            refusals.append(
+                f"Jen verifies its https endpoints against {configured_ca}, which is not Jen's own CA file or a link to it, and Jen's CA is damaged - so it cannot be proved to follow the CA being "
+                "replaced, and Rotate cannot rewrite it. Point the CA bundle under Settings → Kea at Jen's own CA file (kea-ca.crt in Jen's SSL folder, or a link to it) before rotating"
+            )
+        else:
+            refusals.append(
+                f"Jen verifies its https endpoints against {configured_ca}, which holds "
+                + ("a copy of Jen's CA" if kind == "copy" else "Jen's CA beside another CA")
+                + " - Rotate cannot rewrite that file, so after the rotation Jen could not verify the endpoints it issued certificates to. "
+                "Point the CA bundle under Settings → Kea at Jen's own CA file (kea-ca.crt in Jen's SSL folder, or a link to it) before rotating"
+            )
     if targets:
         # Q191 (AG1): Jen's identity to a daemon is its CA bundle AND its client pair. The pair is judged by certificate like the bundle: a copy (or a pair the dial never worked with, or one that
         # does not load) under a Jen-issued endpoint is a refusal BEFORE anything is staged - a rotation would replace Jen's own pair and leave the daemons demanding a certificate Jen no longer sends.
@@ -1240,10 +1262,17 @@ def prepared_rotation(discard: bool = False) -> tuple[dict | None, str]:
     if not present:
         return None, ""
     verb = "so it was discarded" if discard else "so Rotate or Prepare will discard it"
+
+    def discarded() -> str:
+        """The verb after an attempted discard: 'so it was discarded' only when every file is gone, else which one could not be removed (Q193, AI4 c)."""
+        if not discard:
+            return verb
+        discard_rotation(staged)
+        left = [os.path.basename(p) for p in staged.values() if os.path.lexists(p)]
+        return verb if not left else f"but {', '.join(left)} could not be removed"
+
     if len(present) != len(staged):
-        if discard:
-            discard_rotation(staged)
-        return None, f"the prepared CA was incomplete ({len(present)} of {len(staged)} files), {verb}"
+        return None, f"the prepared CA was incomplete ({len(present)} of {len(staged)} files), {discarded()}"
     spki = serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
     try:
         ca_cert, ca_key = load_cert(staged["ca_cert"]), load_key(staged["ca_key"])
@@ -1262,20 +1291,19 @@ def prepared_rotation(discard: bool = False) -> tuple[dict | None, str]:
         if consistent:
             client_cert.verify_directly_issued_by(ca_cert)
     except OSError as e:
-        raise PreparedUnreadable(e.errno, f"the prepared CA cannot be read ({type(e).__name__})") from e
+        raise PreparedUnreadable(e.errno, f"the prepared CA cannot be read right now ({type(e).__name__})") from e
     except Exception:  # ValueError, TypeError, InvalidSignature, ExtensionNotFound - PROVED unusable, not unread
         consistent = False
     if not consistent:
-        if discard:
-            discard_rotation(staged)
-        return None, f"the prepared CA was damaged or inconsistent, {verb}"
+        return None, f"the prepared CA was damaged or inconsistent, {discarded()}"
     return staged, ""
 
 
-def prepared_fingerprint(staged: dict) -> str | None:
-    """SHA-256 of the prepared CA certificate (DER), as the colon-separated hex an operator compares - what to add to an external daemon's trust anchor beside the current CA."""
+def prepared_fingerprint(staged: dict) -> str:
+    """SHA-256 of the prepared CA certificate (DER), as the colon-separated hex an operator compares - what to add to an external daemon's trust anchor beside the current CA. "unavailable" when
+    the certificate cannot be loaded at this instant (Q193, AI4 d: never the word None)."""
     plain = fingerprint(staged["ca_cert"])
-    return ":".join(plain[i : i + 2] for i in range(0, len(plain), 2)).upper() if plain else None
+    return ":".join(plain[i : i + 2] for i in range(0, len(plain), 2)).upper() if plain else "unavailable"
 
 
 def _copies_dir() -> str:

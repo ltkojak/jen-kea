@@ -775,6 +775,36 @@ class TestTheProbeRowsOfQ192:
         }
 
 
+class TestTheProbeRowsOfQ193:
+    """AI2-AI4: Prepare works under a damaged CA, every damaged-CA sentence carries the same two actions, a failed probe is a certificate rejection or a transport fault."""
+
+    def test_prepare_accepts_a_damaged_ca_and_refuses_only_the_absence_of_one(self):
+        assert probe.q193_ai2_prepare_accepts_a_damaged_ca_and_refuses_only_the_absence_of_one() == {
+            "ok": ("ok", True, False, True),
+            "key-missing": ("damaged", True, False, True),
+            "none": ("none", False, True, False),
+        }
+
+    def test_every_damaged_ca_sentence_names_the_same_two_actions(self):
+        assert probe.q193_ai3_every_damaged_ca_sentence_names_the_same_two_actions() == {
+            "key-missing": ("damaged", "fail", True, True),
+            "cert-missing": ("damaged", "fail", True, True),
+            "cert-malformed": ("damaged", "fail", True, True),
+            "both-missing-beside-the-client-pair": ("damaged", "fail", True, True),
+        }
+
+    def test_a_failed_probe_is_classified(self):
+        assert probe.q193_ai4_a_failed_probe_is_classified_a_certificate_rejection_or_a_transport_fault() == {
+            "SSLError: tlsv13 alert certificate required": "",
+            "client certificate rejected": "",
+            "Read timed out": "a timeout",
+            "Connection refused": "a refused connection",
+            "ConnectionResetError: Connection reset by peer": "a lost connection",
+            "": "no answer",
+            "something odd": "a transport error",
+        }
+
+
 class TestTheSecondPassOfQ187:
     """The executed findings of the adversarial pass on beta.18's routes, each as a probe row."""
 

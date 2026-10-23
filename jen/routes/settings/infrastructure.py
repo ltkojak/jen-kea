@@ -167,12 +167,13 @@ def _kea_ca_summary() -> dict:
     try:
         prepared, prepared_note = kea_tls.prepared_rotation()  # a READ: the page never deletes (second pass, finding 6)
     except kea_tls.PreparedUnreadable as e:
-        prepared, prepared_note = None, str(e)
+        prepared, prepared_note = None, e.strerror or "the prepared CA cannot be read right now"
     out = {
         "present": present,
         "state": ca_state,
         "damaged": ca_state == "damaged",
         "why": ca_why,
+        "advice": kea_tls.DAMAGED_CA_ADVICE,
         "ca_path": ca_crt,
         "subject": kea_tls._cn(ca_crt) if present else "",
         "days_left": kea_tls.days_left(ca_crt) if present else None,
@@ -903,6 +904,23 @@ _PROBE_ATTEMPTS = 8
 _PROBE_DELAY_S = 2.0
 
 
+def _probe_fault_class(err: str) -> str:
+    """Q193 (AI4 b): "" when the text of a failed probe is the daemon REJECTING the certificate (a TLS/certificate refusal - the evidence the new client certificate is not accepted); else the CLASS of a
+    transport fault that proves nothing about trust (a timeout, a lost connection, a refused connection, anything else). `probe_command` folds the exception into its text, so the text is what there is."""
+    low = (err or "").lower()
+    if not low.strip():
+        return "no answer"
+    if any(w in low for w in ("certificate", "ssl", "tls", "handshake", "unknown ca", "alert")):
+        return ""
+    if "timed out" in low or "timeout" in low:
+        return "a timeout"
+    if "refused" in low:
+        return "a refused connection"
+    if "eof" in low or "reset" in low or "connection" in low or "broken pipe" in low:
+        return "a lost connection"
+    return "a transport error"
+
+
 def _staged_identity_refusal(inventory, kind: str, staged: dict, recovery: bool = False) -> str:
     """Q192 (AH1, the P1): the staged identity is proved, against every https endpoint Jen PRESENTS its client pair to, BEFORE anything is installed on any host. Jen's pair is global - when it is
     Jen's own (`jens-file` / `alias`) it goes to every https endpoint, the administrator's included - and an external endpoint whose `cert-required` trust anchor is Jen's CA accepts today's client
@@ -916,9 +934,15 @@ def _staged_identity_refusal(inventory, kind: str, staged: dict, recovery: bool 
         return ""
     live_state, live_why = __tls.client_state(judge_issuer=not recovery)
     if live_state not in ("ok", "expiring"):
-        return (
-            f"Jen's client certificate is damaged ({live_why}), so Jen cannot prove whether an endpoint it does not manage depends on it - set up an https socket again (it re-issues the pair from "
-            "the same CA), then rotate"
+        what = (
+            "Jen has no client certificate (jen-kea-client.pem and jen-kea-client.key are both missing)"
+            if live_state == "none"
+            else f"Jen's client certificate is damaged ({live_why})"
+        )
+        return f"{what}, so Jen cannot prove whether an endpoint it does not manage depends on it - " + (
+            "replace the CA with the acknowledged Rotate only after the client pair is restored from a backup"
+            if recovery
+            else "set up an https socket again (it re-issues the pair from the same CA), then rotate"
         )
     live_pair = __kea._tls_client_cert()
     staged_pair = (staged["client_cert"], staged["client_key"])
@@ -933,15 +957,22 @@ def _staged_identity_refusal(inventory, kind: str, staged: dict, recovery: bool 
             live_version, live_err = _probe_once(
                 url, user, pwd, omit_service=True, service=service, verify=verify, cert=live_pair
             )
-            staged_version, _staged_err = _probe_once(
+            staged_version, staged_err = _probe_once(
                 url, user, pwd, omit_service=True, service=service, verify=verify, cert=staged_pair
             )
         except Exception as e:  # a probe that raised proved nothing: the refusal is the safe reading (never a promotion with the endpoint unproved)
             return f"{label} could not be probed ({type(e).__name__}), so Jen cannot tell whether it depends on its client certificate"
         if not live_version:
             return (
-                f"{label} does not answer Jen's current client certificate ({__auth.scrub_urls(live_err)}), so Jen cannot tell whether it depends on it - "
+                f"{label} does not answer Jen's current client certificate ({__auth.scrub_urls(live_err) or _probe_fault_class(live_err) or 'no answer'}), so Jen cannot tell whether it depends on it - "
                 "it has to answer before a rotation can be proved safe"
+            )
+        fault = _probe_fault_class(staged_err) if not staged_version else ""
+        if fault:
+            # (Q193, AI4 b) a transport fault proves nothing about trust - the refusal stands, but it says what happened
+            return (
+                f"{label} could not be probed with the new client certificate ({fault}), so Jen cannot tell whether it depends on the current one - "
+                "try again when the endpoint answers"
             )
         if not staged_version:
             return (
@@ -1590,6 +1621,17 @@ def _uses_jen_tls(sockets, service: str) -> bool:
     )
 
 
+def _not_put_back_reason(tls: dict) -> str:
+    """Q193 (AI4 g): why the certificate could not be put back - 'there is no earlier copy' only when there is none; when the pair IS kept at `.prev` and Jen's CA became unusable between the gate and
+    the undo, it says so (the install payload needs an ok CA); else the helper refused it."""
+    remote = tls.get("remote")
+    if remote == "none-saved":
+        return "there is no earlier copy"
+    if remote == "ca-unusable":
+        return f"Jen's CA became unusable during the operation ({tls.get('why') or 'damaged'}); the previous pair is kept at .prev"
+    return "the helper refused it"
+
+
 def _put_tls_back(server: dict, service: str) -> dict:
     """Q187 (AC2) / Q188 (AD3): put the certificate and key the host had BEFORE this operation back on it (the same `install-tls` op, the same atomic replace), from the `.prev` pair Jen kept, and
     make Jen's own copies agree. The answer has BOTH halves, because they fail independently and mean different things: `remote` is 'restored', 'none-saved' (a first https socket, a
@@ -1600,6 +1642,11 @@ def _put_tls_back(server: dict, service: str) -> dict:
 
     files = __tls.previous_material(server.get("id"), service)
     if files is None:
+        ca_now, ca_now_why = __tls.ca_state()
+        crt = __tls.server_copy_path(server.get("id"), service)
+        if ca_now != "ok" and os.path.lexists(crt + ".prev"):
+            # Q193 (AI4 g): the pair IS kept at `.prev`, but the install payload needs an ok CA and Jen's CA became unusable between the gate and the undo
+            return {"remote": "ca-unusable", "local": "ok", "why": ca_now_why}
         return {"remote": "none-saved", "local": "ok"}
     pushed = __host.install_tls(server, service, files)
     if not pushed.get("ok"):
@@ -1821,7 +1868,7 @@ def _undo_remote_change(
         for style, text in result.lines:
             flash(text, style)
         status = result.status
-    tls_bad = bool(tls) and tls["remote"] in ("none-saved", "failed")
+    tls_bad = bool(tls) and tls["remote"] in ("none-saved", "failed", "ca-unusable")
     tls_lost = bool(tls) and bool(tls.get("lost"))
     tls_stale = bool(tls) and tls["remote"] == "restored" and tls["local"] == "failed" and not tls_lost
     endpoint_problem = None
@@ -1855,7 +1902,7 @@ def _undo_remote_change(
         categories.append("tls-not-restored")
         bits.append("certificate " + tls["remote"])
         by_hand = (
-            f"The certificate Jen installed for the https socket could not be put back ({'there is no earlier copy' if tls['remote'] == 'none-saved' else 'the helper refused it'}), so a restored https socket may meet a certificate issued for another address: "
+            f"The certificate Jen installed for the https socket could not be put back ({_not_put_back_reason(tls)}), so a restored https socket may meet a certificate issued for another address: "
             f"remove the {daemon} direct socket and set it up again to issue a matching one, or install the certificate you had by hand. {by_hand}"
         )
     if tls_lost:
@@ -2031,7 +2078,7 @@ def _tls_after_unapplied_change(server: dict, service: str, snapshot, result, pr
         _record_incident(server, service, operation, "remote-unknown")
         return
     flash(
-        f"PARTIAL STATE on {name}: the certificate Jen installed for the https socket could not be put back ({'there is no earlier copy' if tls['remote'] == 'none-saved' else 'the helper refused it'}). "
+        f"PARTIAL STATE on {name}: the certificate Jen installed for the https socket could not be put back ({_not_put_back_reason(tls)}). "
         f"The socket {daemon} had may meet a certificate issued for another address: remove the direct socket and set it up again to issue a matching one, or install the certificate you had by hand.",
         "error",
     )
@@ -2226,8 +2273,7 @@ def setup_direct_socket(server_id, service):
         ca_refusal = __tls.ca_refusal()  # Q192 (AH2): a damaged CA (or an absent one beside evidence it existed) is a recovery condition - refused before anything is CHANGED on the host (the read-only version-get above has been asked)
         if ca_refusal:
             flash(
-                f"Jen's CA is damaged ({ca_refusal}): restore the file from a backup, or run Rotate Kea CA (it replaces a damaged CA once you acknowledge that a server which fails part-way "
-                f"cannot be put back on it). Nothing was changed on {name}.",
+                f"Jen's CA is damaged ({ca_refusal}): {__tls.DAMAGED_CA_ADVICE}. Nothing was changed on {name}.",
                 "error",
             )
             return back
@@ -2260,7 +2306,7 @@ def setup_direct_socket(server_id, service):
             files = None if already_there else __tls.issue_server_cert(server, service, address, commit=False)
         except __tls.CaDamaged as e:
             flash(
-                f"Jen's CA is damaged ({e.why}): restore the file from a backup, or run Rotate Kea CA. Nothing was changed on {name}.",
+                f"Jen's CA is damaged ({e.why}): {__tls.DAMAGED_CA_ADVICE}. Nothing was changed on {name}.",
                 "error",
             )
             return back
@@ -2544,8 +2590,7 @@ def rotate_kea_ca():
         # Q192 (AH2): replacing a DAMAGED CA is the recovery - allowed only once the person has read what it cannot do: the current CA cannot sign, so a server that fails part-way cannot be put
         # back on it and will need its socket set up again
         flash(
-            f"Jen's CA is damaged ({ca_why}). Rotate can replace it, but the current CA cannot sign, so a server that fails part-way cannot be put back on it - it would need its socket set up "
-            "again. Tick the acknowledgement on the confirm and rotate again. Nothing was changed.",
+            f"Jen's CA is damaged ({ca_why}). To {__tls.DAMAGED_CA_ADVICE}. Tick the acknowledgement on the confirm and rotate again. Nothing was changed.",
             "error",
         )
         return back
@@ -2605,6 +2650,7 @@ def rotate_kea_ca():
     # restarted and probed with the STAGED identity, Jen's TLS settings are saved, and only then is the staging promoted as one set - each step inside one exception boundary, so a step
     # that fails (or raises) stops the rotation and every attempted target is put back on the CA Jen still trusts. The staging is discarded in a `finally`; `.prev` pairs stay until the end.
     staged = None
+    promotion_ran = False  # Q193 (AI1): the sentence of a failed recovery is about the promotion only when one ran
     reused = False  # Q192 (AH1): the staging came from a `Prepare only` an external daemon's trust anchor may already hold - kept when this rotation fails, discarded only by success or its button
     done: list[tuple[dict, str, str]] = []
     confirmed: set = set()  # targets the host is KNOWN to hold the staged pair for (its install was acknowledged)
@@ -2723,6 +2769,7 @@ def rotate_kea_ca():
                     failure = f"Jen could not save its TLS settings ({_sentence_of(e)})"
             if not failure:
                 try:
+                    promotion_ran = True
                     __tls.commit_rotation(staged)
                 except OSError as e:
                     failure = f"Jen could not promote the new CA locally ({type(e).__name__}, errno {getattr(e, 'errno', '?')})"
@@ -2806,8 +2853,11 @@ def rotate_kea_ca():
                         "error",
                     )
                     _record_incident(server, service, "the failed CA rotation", "remote-unknown")
-            for server, service, _label in outcome["pair_stuck"] + outcome["unknown"]:
+            for server, service, _label in outcome["pair_stuck"]:
                 _record_incident(server, service, "the failed CA rotation", "tls-not-restored")
+            for server, service, _label in outcome["unknown"]:
+                # (Q193, AI4 e) the helper REFUSED the new pair and Jen could not re-assert the old one: what the host holds is UNKNOWN (`tls-not-restored` says it is known to hold the staged pair)
+                _record_incident(server, service, "the failed CA rotation", "remote-unknown")
             for server, service, _label in outcome["restart_stuck"]:
                 _record_incident(server, service, "the failed CA rotation", "restart-failed")
             for server, service, _label in outcome["unreachable"]:
@@ -2821,16 +2871,42 @@ def rotate_kea_ca():
                         server.get("id"), service
                     )  # the pair before this attempt is not a recovery point for an operation that is over - unless it is the only copy of what a stuck host should hold
             msg = f"Rotate stopped at {failure}." + (" Jen still trusts the previous CA." if ca_ok else "")
-            if not ca_ok:
+            recovery_failed = recovery and not promotion_ran
+            if recovery_failed:
+                # Q193 (AI1): the CA was damaged BEFORE staging and no promotion ran - so the text is about the recovery, not a promotion that failed part-way, and the action it names is the one that works
+                recorded = [
+                    lb
+                    for _s, _v, lb in outcome["pair_stuck"]
+                    + outcome["unknown"]
+                    + outcome["restart_stuck"]
+                    + outcome["unreachable"]
+                    + outcome["local_stale"]
+                ]
+                if outcome["rolled"]:
+                    msg += f" Restarted and answering: {', '.join(lb for _s, _v, lb in outcome['rolled'])}."
+                flash(msg, "error")
+                if recorded:
+                    flash(
+                        f"The recovery did not complete: {len(recorded)} of {len(targets)} daemon(s) were not re-issued ({', '.join(recorded)}; each recorded on Servers). Jen's CA is still damaged ({ca_why}). "
+                        "Rotate again with the acknowledgement to re-issue them; the https setup stays refused until the CA is replaced.",
+                        "error",
+                    )
+                else:
+                    flash(
+                        f"The recovery did not complete: no daemon was changed. Jen's CA is still damaged ({ca_why}). Rotate again with the acknowledgement; the https setup stays refused until the CA is replaced.",
+                        "error",
+                    )
+            elif not ca_ok:
                 flash(
                     "Jen's CA certificate and CA key are no longer a matching pair (a promotion failed part-way and its own put-back failed too), so nothing can be issued from them. "
                     "Restore kea-ca.crt and kea-ca.key together from a backup, or from the .prev copies beside them, before any other CA or socket action.",
                     "error",
                 )
-            if outcome["rolled"]:
-                msg += f" Rolled back to the previous CA, restarted and answering: {', '.join(lb for _s, _v, lb in outcome['rolled'])}."
-            flash(msg, "error")
-            if outcome["pair_stuck"]:
+            if not recovery_failed:
+                if outcome["rolled"]:
+                    msg += f" Rolled back to the previous CA, restarted and answering: {', '.join(lb for _s, _v, lb in outcome['rolled'])}."
+                flash(msg, "error")
+            if outcome["pair_stuck"] and not recovery_failed:
                 flash(
                     f"ROLLBACK FAILED on {', '.join(lb for _s, _v, lb in outcome['pair_stuck'])} — they hold certificates from a CA Jen never adopted and won't answer Jen until fixed: "
                     "remove the direct socket and set it up again for each.",
@@ -2841,7 +2917,7 @@ def rotate_kea_ca():
                     f"{', '.join(lb for _s, _v, lb in outcome['restart_stuck'])}: the previous certificate is back but the daemon did not restart on it - it may be stopped. Restart it on the Kea host.",
                     "error",
                 )
-            if outcome["local_stale"]:
+            if outcome["local_stale"] and not recovery_failed:
                 flash(
                     f"{', '.join(lb for _s, _v, lb in outcome['local_stale'])}: the previous-CA certificate is on the host, but Jen could not refresh its own copy of it (its expiry warning reads that copy): "
                     "remove the direct socket and set it up again, once Jen's SSL directory is writable.",
@@ -2921,8 +2997,9 @@ def prepare_kea_ca():
 
     back = redirect(url_for("settings.settings_kea"))
     ca_state, ca_why = __tls.ca_state()
-    if ca_state != "ok":
-        flash("Nothing to prepare: Jen has no usable CA to rotate" + (f" ({ca_why})" if ca_why else "") + ".", "error")
+    if ca_state == "none":
+        # Q193 (AI2): only the absence of any CA is "nothing to replace" - a DAMAGED CA is exactly when an external daemon's trust has to be prepared (Prepare mints a fresh CA and reads nothing live)
+        flash("Nothing to prepare: Jen has no CA to replace - set up an https socket and Jen creates one.", "error")
         return back
     try:
         staged, note = __tls.prepared_rotation(discard=True)
@@ -2947,7 +3024,9 @@ def prepare_kea_ca():
         verb = "already prepared"
     flash(
         f"A new CA is {verb}: {staged['ca_cert']} (SHA-256 fingerprint {__tls.prepared_fingerprint(staged)}). Add it to the trust anchor of any daemon that is not on Jen's CA and checks "
-        "Jen's client certificate - beside the current CA, not instead of it - then rotate. Nothing was changed on any host.",
+        "Jen's client certificate - beside the current CA, not instead of it - then rotate"
+        + (" (Rotate Kea CA, with the acknowledgement: Jen's CA is damaged)" if ca_state == "damaged" else "")
+        + ". Nothing was changed on any host.",
         "success",
     )
     __user.audit("PREPARE_KEA_CA", "kea_api", f"{verb} {os.path.basename(staged['ca_cert'])}")

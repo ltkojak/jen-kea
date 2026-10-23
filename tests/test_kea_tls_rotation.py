@@ -833,7 +833,8 @@ class TestARollbackThatCannotCompleteIsNamed:
     def test_a_refused_install_that_cannot_be_re_asserted_is_an_incident_not_a_rollback_failure(self, lab):
         lab.refuse.update({(1, "install-tls", 1), (1, "install-tls", 2)})
         _rotate()
-        assert lab.incidents == [(1, "dhcp4", "tls-not-restored")]
+        # (Q193, AI4 e, adjusted: the helper REFUSED the new pair and Jen could not re-assert the old one - what the host holds is UNKNOWN, so `remote-unknown`; `tls-not-restored` says it is KNOWN to hold the staged pair)
+        assert lab.incidents == [(1, "dhcp4", "remote-unknown")]
         assert "ROLLBACK FAILED" not in lab.texts() and lab.hosts[1]["restarts"] == 0
 
 
@@ -2541,3 +2542,81 @@ class TestClientState:
         assert state == "damaged" and "no usable CA" in why
         with pytest.raises(kea_tls.CaDamaged):
             kea_tls.issue_client_cert()
+
+
+# ── Q193: the recovery's sentences say what happened and name an action that works ──────────────────────────────────────────────────────────────
+
+
+def _recovery_damage(kind, tmp_path=None):
+    if kind == "key-missing":
+        os.unlink(kea_tls.ca_paths()[1])
+    elif kind == "cert-missing":
+        os.unlink(kea_tls.ca_paths()[0])
+    else:
+        from tests import _tls_worlds as worlds
+
+        worlds.malformed(kea_tls.ca_paths()[0])
+
+
+RECOVERY_FAULTS = [
+    ("install-1", "refuse", (1, "install-tls", 1)),
+    ("install-2", "refuse", (2, "install-tls", 1)),
+    ("restart-1", "refuse", (1, "service", 1)),
+    ("restart-2", "refuse", (2, "service", 1)),
+    ("probe-1", "fault", (1, "timeout")),
+    ("probe-2", "fault", (2, "timeout")),
+]
+
+
+class TestAFailedRecoverySaysWhatHappened:
+    """Q193 (AI1): a recovery that fails - the CA was damaged BEFORE staging, no promotion ran - used to say "a promotion failed part-way and its own put-back failed too ... restore from the .prev
+    copies" (neither is true) and "remove the direct socket and set it up again" (which the damaged gate refuses); the action that recovers is the acknowledged Rotate again. Each of the 18 rows
+    (3 damages x 6 faults) names the count and the daemons, never "promotion" or ".prev", and the second acknowledged Rotate recovers."""
+
+    @pytest.mark.parametrize("fault", RECOVERY_FAULTS, ids=[f[0] for f in RECOVERY_FAULTS])
+    @pytest.mark.parametrize("damage", ["key-missing", "cert-missing", "cert-malformed"])
+    def test_the_sentence_names_the_count_and_the_daemons_and_a_second_acknowledged_rotate_recovers(
+        self, lab, damage, fault
+    ):
+        import re
+
+        _name, kind, spec = fault
+        _recovery_damage(damage)
+        if kind == "refuse":
+            lab.refuse.add(spec)
+        else:
+            lab.faults[spec[0]] = spec[1]
+        _rotate({"acknowledge_damaged_ca": "1"})
+        texts = lab.texts()
+        assert "Kea CA rotated" not in texts, "an injected failure is never a success"
+        assert "The recovery did not complete" in texts, texts
+        counted = re.search(r"(\d) of 2 daemon\(s\) were not re-issued \(([^;)]*)", texts)
+        assert counted or "no daemon was changed" in texts, texts
+        if counted:
+            assert int(counted.group(1)) >= 1 and ("kea-dhcp4" in counted.group(2)), counted.group(0)
+        for forbidden in (
+            "promotion",
+            "promote",
+            ".prev",
+            "matching pair",
+            "set it up again",
+            "remove the direct socket",
+        ):
+            assert forbidden not in texts, f"the sentence of a recovery that never promoted says {forbidden!r}: {texts}"
+        assert "Rotate again with the acknowledgement" in texts and "Jen's CA is still damaged" in texts
+        # the executed truth, now pinned: the second acknowledged Rotate, with the fault gone, recovers every daemon
+        lab.refuse.clear()
+        lab.faults.clear()
+        lab.flashes.clear()
+        _rotate({"acknowledge_damaged_ca": "1"})
+        assert "Kea CA rotated" in lab.texts(), lab.texts()
+        assert kea_tls.ca_state() == ("ok", "")
+        for sid in lab.hosts:
+            assert lab.answers_jens_live_identity(sid), f"server {sid}'s daemon answers the replacement"
+
+    def test_a_refused_first_install_in_a_recovery_is_remote_unknown(self, lab):
+        """AI4 (e): the helper REFUSED the new pair and Jen could not re-assert the old one - what the host holds is unknown; `tls-not-restored` says it is KNOWN to hold the staged pair."""
+        os.unlink(kea_tls.ca_paths()[1])
+        lab.refuse.add((1, "install-tls", 1))
+        _rotate({"acknowledge_damaged_ca": "1"})
+        assert (1, "dhcp4", "remote-unknown") in lab.incidents and (1, "dhcp4", "tls-not-restored") not in lab.incidents

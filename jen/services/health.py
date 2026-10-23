@@ -1114,22 +1114,16 @@ def _kea_tls_expiry(ctx) -> Check:
     c = Check("kea_tls_expiry", "Kea mTLS certificates", "jen", fix_url="/settings/kea")
     from jen.services import kea_tls
 
-    ca_state, ca_why = kea_tls.ca_state()  # Q192 (AH2): none / ok / damaged
+    ca_state, ca_why = (
+        kea_tls.ca_state()
+    )  # Q192 (AH2): none / ok / damaged - an absent CA beside evidence one existed is `damaged` (Q192, second pass)
     if ca_state == "none":
-        evidence = kea_tls.ca_refusal()
-        if evidence:
-            # an absent CA beside evidence that one existed is not "no CA yet"
-            c.status, c.detail = (
-                "fail",
-                f"Jen's CA is missing, and it existed ({evidence}) - restore it from a backup, or Rotate the Kea CA (acknowledging that a server which fails part-way cannot be put back)",
-            )
-            return c
         c.status, c.detail = "skip", "no Jen-managed Kea CA (Control Agent or http sockets)"
         return c
     if ca_state == "damaged":
         c.status, c.detail = (
             "fail",
-            f"Jen's CA is damaged ({ca_why}) - restore it from a backup, or Rotate the Kea CA (acknowledging that a server which fails part-way cannot be put back); an https setup is refused until then",
+            f"Jen's CA is damaged ({ca_why}) - {kea_tls.DAMAGED_CA_ADVICE}; an https setup is refused until then",
         )
         return c
     items = [("the Kea CA", kea_tls.days_left(kea_tls.ca_paths()[0]))]
