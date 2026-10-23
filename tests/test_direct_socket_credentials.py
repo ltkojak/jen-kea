@@ -802,6 +802,8 @@ class TestTheProbeRowsOfQ193:
             "ConnectionResetError: Connection reset by peer": "a lost connection",
             "": "no answer",
             "something odd": "a transport error",
+            "HTTPSConnectionPool(host='tls-kea.lan', port=8000): Read timed out.": "a timeout",
+            "HTTPSConnectionPool(host='kea.lan', port=8000): Max retries exceeded (Caused by ConnectTimeoutError('Connection to kea-alerts.lan timed out'))": "a timeout",
         }
 
 

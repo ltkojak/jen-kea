@@ -2168,6 +2168,8 @@ def q193_ai4_a_failed_probe_is_classified_a_certificate_rejection_or_a_transport
             "ConnectionResetError: Connection reset by peer",
             "",
             "something odd",
+            "HTTPSConnectionPool(host='tls-kea.lan', port=8000): Read timed out.",
+            "HTTPSConnectionPool(host='kea.lan', port=8000): Max retries exceeded (Caused by ConnectTimeoutError('Connection to kea-alerts.lan timed out'))",
         )
     }
 
@@ -2552,6 +2554,8 @@ EXPECTED = {
         "ConnectionResetError: Connection reset by peer": "a lost connection",
         "": "no answer",
         "something odd": "a transport error",
+        "HTTPSConnectionPool(host='tls-kea.lan', port=8000): Read timed out.": "a timeout",
+        "HTTPSConnectionPool(host='kea.lan', port=8000): Max retries exceeded (Caused by ConnectTimeoutError('Connection to kea-alerts.lan timed out'))": "a timeout",
     },
     "q192_ah2_a_damaged_ca_is_named_and_ensure_ca_creates_nothing": {
         "fresh": ("none", "created", False),

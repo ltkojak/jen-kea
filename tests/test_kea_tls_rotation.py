@@ -2590,7 +2590,7 @@ class TestAFailedRecoverySaysWhatHappened:
         texts = lab.texts()
         assert "Kea CA rotated" not in texts, "an injected failure is never a success"
         assert "The recovery did not complete" in texts, texts
-        counted = re.search(r"(\d) of 2 daemon\(s\) were not re-issued \(([^;)]*)", texts)
+        counted = re.search(r"(\d) of 2 daemon\(s\) were left in a state that needs it repeated - ([^;]*)", texts)
         assert counted or "no daemon was changed" in texts, texts
         if counted:
             assert int(counted.group(1)) >= 1 and ("kea-dhcp4" in counted.group(2)), counted.group(0)
@@ -2620,3 +2620,95 @@ class TestAFailedRecoverySaysWhatHappened:
         lab.refuse.add((1, "install-tls", 1))
         _rotate({"acknowledge_damaged_ca": "1"})
         assert (1, "dhcp4", "remote-unknown") in lab.incidents and (1, "dhcp4", "tls-not-restored") not in lab.incidents
+
+
+class TestTheSecondPassOfQ193:
+    """The second pass on Q193 (agent a11a48176bf2e670c), each finding as its row first: 1 a recovery waives the READ of the old copies, never the WRITE (a host that took a pair Jen cannot record is
+    cut off); 2 a recovery whose promotion fails is still a recovery - the CA is as damaged as it was and the sentences say so; 3 the sentence says what each daemon IS (cut off / unknown / not
+    changed) and the incident of a cut-off daemon says it too."""
+
+    def _damaged_with_a_copies_path_that_is_a_file(self, lab):
+        import shutil
+
+        directory = os.path.dirname(kea_tls.server_copy_path(1, "dhcp4"))
+        shutil.rmtree(directory)
+        pathlib.Path(directory).write_text("not a directory", encoding="ascii")  # unlistable AND unwritable
+        os.unlink(kea_tls.ca_paths()[1])
+        lab.begin()
+
+    def test_row_1_a_recovery_with_a_copies_directory_it_cannot_write_is_refused_before_the_first_install(self, lab):
+        self._damaged_with_a_copies_path_that_is_a_file(lab)
+        _rotate({"acknowledge_damaged_ca": "1"})
+        texts = lab.texts()
+        assert "Rotate refused" in texts and "Nothing was changed" in texts, texts
+        assert "cannot read or write its certificate directory" in texts and "fix its permissions" in texts, texts
+        assert all(h["installs"] == [] and h["restarts"] == 0 for h in lab.hosts.values()), "no host was touched"
+        assert lab.incidents == []
+
+    def test_row_1_the_write_check_is_the_only_new_condition(self, lab, tmp_path, monkeypatch):
+        assert kea_tls.copies_dir_writable() == ""
+        import shutil
+
+        shutil.rmtree(os.path.dirname(kea_tls.server_copy_path(1, "dhcp4")))
+        assert kea_tls.copies_dir_writable() == "", "a directory that is not there yet is made by the first commit"
+        pathlib.Path(os.path.dirname(kea_tls.server_copy_path(1, "dhcp4"))).write_text("x", encoding="ascii")
+        assert kea_tls.copies_dir_writable() != ""
+        lab.begin()
+
+    @pytest.mark.parametrize("damage", ["key-missing", "cert-missing", "cert-malformed"])
+    @pytest.mark.parametrize("how", ["commit_rotation", "inside_commit_file_set"])
+    def test_row_2_a_recovery_whose_promotion_fails_is_still_a_recovery(self, lab, monkeypatch, damage, how):
+        _recovery_damage(damage)
+        lab.begin()
+        real = kea_tls.commit_rotation
+
+        def failing_inside_the_real_promotion(staged):
+            with (
+                monkeypatch.context() as inner
+            ):  # (only the promotion's own file-set commit fails: `commit_issued` before it still works)
+                inner.setattr(kea_tls, "commit_file_set", lambda *a, **k: (_ for _ in ()).throw(OSError(13, "denied")))
+                return real(staged)
+
+        with monkeypatch.context() as scoped:
+            if how == "commit_rotation":
+                scoped.setattr(kea_tls, "commit_rotation", lambda staged: (_ for _ in ()).throw(OSError(28, "full")))
+            else:
+                scoped.setattr(kea_tls, "commit_rotation", failing_inside_the_real_promotion)
+            _rotate({"acknowledge_damaged_ca": "1"})
+            texts = lab.texts()
+            assert "Kea CA rotated" not in texts
+            assert "The recovery did not complete" in texts and "Rotate again with the acknowledgement" in texts, texts
+            for forbidden in ("matching pair", "put-back failed", ".prev", "set it up again", "ROLLBACK FAILED"):
+                assert forbidden not in texts, f"{forbidden!r}: {texts}"
+            assert kea_tls.ca_state()[0] == "damaged"
+            assert sorted(r[3] for r in lab.incident_records) == ["tls-not-restored", "tls-not-restored"]
+            assert {r[5] for r in lab.incident_records} == {infra._RECOVERY_CUT_OFF}
+        lab.flashes.clear()
+        lab.incident_records.clear()
+        lab.incidents.clear()
+        _rotate({"acknowledge_damaged_ca": "1"})
+        assert "Kea CA rotated" in lab.texts(), lab.texts()
+        assert kea_tls.ca_state() == ("ok", "")
+        for sid in lab.hosts:
+            assert lab.answers_jens_live_identity(sid)
+
+    def test_row_3_the_sentence_says_which_daemon_is_cut_off_which_is_unknown_and_which_was_not_changed(self, lab):
+        os.unlink(kea_tls.ca_paths()[1])
+        lab.refuse.add((2, "install-tls", 1))
+        _rotate({"acknowledge_damaged_ca": "1"})
+        texts = lab.texts()
+        assert "kea-a kea-dhcp4: the replacement CA's certificate is installed" in texts, texts
+        assert "standby kea-dhcp4: the helper refused the replacement certificate" in texts, texts
+        assert "2 of 2 daemon(s) were left in a state that needs it repeated" in texts and "Not changed" not in texts
+        by_server = {r[0]: (r[3], r[5]) for r in lab.incident_records}
+        assert by_server[1] == ("tls-not-restored", infra._RECOVERY_CUT_OFF)
+        assert by_server[2][0] == "remote-unknown"
+
+    def test_row_3_a_daemon_nothing_reached_is_named_as_not_changed(self, lab):
+        os.unlink(kea_tls.ca_paths()[1])
+        lab.refuse.add((1, "install-tls", 1))
+        _rotate({"acknowledge_damaged_ca": "1"})
+        texts = lab.texts()
+        assert "1 of 2 daemon(s) were left in a state that needs it repeated" in texts, texts
+        assert "Not changed: standby kea-dhcp4." in texts, texts
+        assert "replacement CA's certificate is installed" not in texts

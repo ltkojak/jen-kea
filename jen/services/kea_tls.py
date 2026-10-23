@@ -223,6 +223,13 @@ DAMAGED_CA_ADVICE = (
     "(a server that fails part-way cannot be put back on a damaged CA and would need its socket set up again)"
 )
 
+#: Q193 second pass (finding 4): what to do about an https endpoint Jen cannot classify while its CA is damaged. The https setup is refused until the CA is replaced, so "set it up again" is not on
+#: offer; pointing the CA bundle at Jen's own CA file makes the endpoint Jen's for the replacement (an endpoint Jen verifies against its OWN CA file is a target whatever record it holds).
+RECOVERY_OWN_CA_FIX = (
+    "point the CA bundle under Settings → Kea at Jen's own CA file (kea-ca.crt in Jen's SSL folder, or a link to it) so the replacement treats the endpoint as Jen's, "
+    "or restore the CA files from a backup"
+)
+
 
 class CaDamaged(Exception):
     """Q192 (AH2): Jen's CA is not usable and is NOT "absent" - one file missing, either unreadable or malformed, or a certificate and key that are not a pair - or it is absent in a world that
@@ -1072,6 +1079,13 @@ def rotation_inventory(servers, url_for=None, recovery: bool = False) -> Rotatio
             refusals.append(
                 f"Jen could not read its certificate directory {_copies_dir()} ({type(e).__name__}, errno {getattr(e, 'errno', '?')}), so it cannot tell which servers it issued certificates to; fix its permissions before rotating"
             )
+        else:
+            blocked = copies_dir_writable()  # (second pass, finding 1: the read is waived, the WRITE is not - the new pairs are recorded there after a host has taken them)
+            if blocked:
+                refusals.append(
+                    f"Jen cannot read or write its certificate directory {_copies_dir()} ({type(e).__name__}, errno {getattr(e, 'errno', '?')}; writing: {blocked}), so it could not keep the "
+                    "certificates the replacement issues and a daemon that took one would be left on a CA Jen never adopted; fix its permissions before rotating"
+                )
     on_jens_own_ca = recovery and bool(configured_ca) and trust_kind() in ("jens-file", "alias")
     endpoints = set()
     for server in servers or []:
@@ -1101,21 +1115,36 @@ def rotation_inventory(servers, url_for=None, recovery: bool = False) -> Rotatio
                         # (second pass, finding 4) NOTHING is verified: Jen looks at no certificate, so it cannot tell whose endpoint this is - and an ambiguity is a refusal
                         refusals.append(
                             f"{label} is an https endpoint at {shown_url(url)}, Jen holds no certificate record for it and Jen is set not to verify any certificate - it cannot tell whose CA the endpoint is on; "
-                            "set the CA bundle under Settings → Kea to Jen's CA, then remove the direct socket and set it up again so Jen holds its certificate (or point Jen at a socket that is not on its CA), before rotating"
+                            + (
+                                f"{RECOVERY_OWN_CA_FIX}, before rotating"
+                                if recovery
+                                else "set the CA bundle under Settings → Kea to Jen's CA, then remove the direct socket and set it up again so Jen holds its certificate (or point Jen at a socket that is not on its CA), before rotating"
+                            )
                         )
                 elif bundle is None:
                     refusals.append(
-                        f"Jen cannot read the CA bundle at {configured_ca} to tell whose CA {label} ({shown_url(url)}) is on; fix the CA bundle under Settings → Kea before rotating"
+                        f"Jen cannot compare the CA bundle at {configured_ca} with its own CA, which is damaged, to tell whose CA {label} ({shown_url(url)}) is on; {RECOVERY_OWN_CA_FIX}, before rotating"
+                        if recovery
+                        else f"Jen cannot read the CA bundle at {configured_ca} to tell whose CA {label} ({shown_url(url)}) is on; fix the CA bundle under Settings → Kea before rotating"
                     )
                 elif bundle[0] and bundle[1]:
                     refusals.append(
                         f"{label} is an https endpoint at {shown_url(url)} and Jen holds no certificate record for it, and the CA bundle at {configured_ca} holds Jen's CA AND another CA - it does not say "
-                        "which one this endpoint is on; remove the direct socket and set it up again so Jen issues and keeps a certificate for it, or give Jen a bundle that names one, before rotating"
+                        "which one this endpoint is on; "
+                        + (
+                            f"{RECOVERY_OWN_CA_FIX}, before rotating"
+                            if recovery
+                            else "remove the direct socket and set it up again so Jen issues and keeps a certificate for it, or give Jen a bundle that names one, before rotating"
+                        )
                     )
                 elif bundle[0]:
                     refusals.append(
-                        f"{label} is an https endpoint at {shown_url(url)}: Jen verifies it against its own CA and holds no certificate record for it; remove the direct socket and set it up again "
-                        "so Jen issues and keeps a certificate for it, before rotating"
+                        f"{label} is an https endpoint at {shown_url(url)}: Jen verifies it against its own CA and holds no certificate record for it; "
+                        + (
+                            f"{RECOVERY_OWN_CA_FIX}, before rotating"
+                            if recovery
+                            else "remove the direct socket and set it up again so Jen issues and keeps a certificate for it, before rotating"
+                        )
                     )
                 else:
                     external.append(f"{label} ({shown_url(url)}; its CA is not Jen's)")
@@ -1129,8 +1158,12 @@ def rotation_inventory(servers, url_for=None, recovery: bool = False) -> Rotatio
                 external_endpoints.append((server, service, url))
             else:
                 refusals.append(
-                    f"{label} is an https endpoint at {shown_url(url)} and Jen has no complete record of its certificate ({why}); remove the direct socket and set it up again so Jen issues "
-                    "and keeps a certificate for it, or point Jen at a socket that is not on its CA, before rotating"
+                    f"{label} is an https endpoint at {shown_url(url)} and Jen has no complete record of its certificate ({why}); "
+                    + (
+                        f"{RECOVERY_OWN_CA_FIX}, before rotating"
+                        if recovery
+                        else "remove the direct socket and set it up again so Jen issues and keeps a certificate for it, or point Jen at a socket that is not on its CA, before rotating"
+                    )
                 )
     kind = trust_kind()
     if targets and kind in ("copy", "bundle"):
@@ -1308,6 +1341,24 @@ def prepared_fingerprint(staged: dict) -> str:
 
 def _copies_dir() -> str:
     return os.path.join(SSL_DIR, "kea-servers")
+
+
+def copies_dir_writable() -> str:
+    """Q193 second pass (finding 1): "" when Jen can create a file in its certificate directory, else why not (the exception's class and errno). A recovery waives the READ of the old copies (it
+    issues every pair afresh) but never the WRITE: `commit_issued` records each new pair there after the host has taken it, and a host that took a pair Jen cannot record is cut off. A directory
+    that is not there yet is writable in this sense (the first commit makes it)."""
+    d = _copies_dir()
+    probe = os.path.join(d, f".write-probe-{os.getpid()}")
+    try:
+        fd = os.open(probe, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except OSError as e:
+        if isinstance(e, FileNotFoundError) and not os.path.lexists(d):
+            return ""
+        return f"{type(e).__name__}, errno {getattr(e, 'errno', '?')}"
+    os.close(fd)
+    with contextlib.suppress(OSError):
+        os.unlink(probe)
+    return ""
 
 
 def issued_server_copies(strict: bool = False) -> list[dict]:

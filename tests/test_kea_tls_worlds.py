@@ -388,6 +388,7 @@ MATRIX_READERS = {
     "issued_by": {"load_cert"},
     "ca_state": {"lexists", "load_cert", "load_key"},
     "_initialised_evidence": {"lexists", "listdir"},
+    "copies_dir_writable": {"lexists", "open"},
     "_cn": {"load_cert"},
     "_load_ca": {"load_cert", "load_key"},
     "issue_server_cert": {"load_cert", "load_key"},
@@ -958,8 +959,102 @@ class TestTheRecoveryNamesActionsThatWork:
         result = infra._put_tls_back(lab.servers[1], "dhcp4")
         assert result["remote"] == "ca-unusable"
         reason = infra._not_put_back_reason(result)
-        assert "Jen's CA became unusable during the operation" in reason and "kept at .prev" in reason
+        assert "Jen's CA became unusable during the operation" in reason and ".prev" not in reason, reason
+        assert "cannot be reinstalled until the CA is restored" in reason
         assert "there is no earlier copy" not in reason
         shutil.rmtree(os.path.dirname(crt))
         assert infra._put_tls_back(lab.servers[1], "dhcp4")["remote"] == "none-saved"
         lab.before = None
+
+
+class TestTheSecondPassOfQ193:
+    """Findings 4-8 of the second pass on Q193, each as its row first: 4 no recovery-path sentence names an action the damaged gate refuses (the setup); 5 an inventory refusal never says a readable bundle is
+    unreadable because Jen's OWN CA is damaged; 6 the page keeps the advice's capitals; 7 'no earlier copy' only when there is none; 8 a probe error is classified by its text, not by a host name in it."""
+
+    @pytest.mark.parametrize("bundle", ["empty-unverified", "missing-file", "copy-elsewhere"])
+    def test_row_4_an_inventory_refusal_in_a_recovery_never_offers_the_setup(self, lab, monkeypatch, tmp_path, bundle):
+        import shutil
+
+        for sid in (1, 2):
+            for p in (kea_tls.server_copy_path(sid, "dhcp4"), kea_tls.server_key_path(sid, "dhcp4")):
+                os.unlink(p)
+        os.unlink(kea_tls.ca_paths()[1])
+        if bundle == "empty-unverified":
+            monkeypatch.setattr(extensions, "KEA_API_CA", "")
+            monkeypatch.setattr(extensions, "KEA_API_TLS_VERIFY", False)
+        elif bundle == "missing-file":
+            monkeypatch.setattr(extensions, "KEA_API_CA", str(tmp_path / "nope.crt"))
+        else:
+            shutil.copy(kea_tls.ca_paths()[0], tmp_path / "copy.crt")
+            monkeypatch.setattr(extensions, "KEA_API_CA", str(tmp_path / "copy.crt"))
+        lab.begin()
+        inventory = kea_tls.rotation_inventory(
+            extensions.KEA_SERVERS, url_for=lambda s, svc: lab.urls[s["id"]] if svc == "dhcp4" else "", recovery=True
+        )
+        assert inventory.refusals, bundle
+        text = " ".join(inventory.refusals)
+        assert "set it up again" not in text and "remove the direct socket" not in text, text
+        assert kea_tls.RECOVERY_OWN_CA_FIX in text and "cannot read the CA bundle" not in text, text  # (and row 5)
+
+    def test_row_4_the_compensation_sentences_name_the_action_that_works_under_a_damaged_ca(self, lab):
+        assert infra._reissue_action("kea-dhcp4", " to issue a matching one") == (
+            "remove the kea-dhcp4 direct socket and set it up again to issue a matching one"
+        )
+        os.unlink(kea_tls.ca_paths()[1])
+        lab.begin()
+        damaged = infra._reissue_action("kea-dhcp4", " to issue a matching one")
+        assert "set it up again" not in damaged and kea_tls.DAMAGED_CA_ADVICE in damaged, damaged
+
+    def test_row_4_a_put_back_whose_ca_became_unusable_names_no_internal_file_or_state(self, lab):
+        import shutil
+
+        crt, key = kea_tls.server_copy_path(1, "dhcp4"), kea_tls.server_key_path(1, "dhcp4")
+        shutil.copy(crt, crt + ".prev")
+        shutil.copy(key, key + ".prev")
+        os.unlink(kea_tls.ca_paths()[1])
+        lab.begin()
+        lab.before = None
+        result = infra._put_tls_back(lab.servers[1], "dhcp4")
+        assert result["remote"] == "ca-unusable"
+        text = infra._not_put_back_reason(result)
+        assert ".prev" not in text and "ca-unusable" not in text, text
+
+    def test_row_6_the_page_keeps_the_advice_as_written(self):
+        source = (pathlib.Path(__file__).resolve().parents[1] / "templates" / "settings_kea.html").read_text(
+            encoding="utf-8"
+        )
+        assert "advice|capitalize" not in source, "capitalize lower-cases everything after the first letter"
+        assert "kea_ca.advice[:1]|upper" in source and "kea_ca.advice[1:]" in source
+
+    @pytest.mark.parametrize("which", ["key-only", "malformed-pair"])
+    def test_row_7_an_incomplete_earlier_copy_is_not_called_no_earlier_copy(self, lab, which):
+        import shutil
+
+        crt, key = kea_tls.server_copy_path(1, "dhcp4"), kea_tls.server_key_path(1, "dhcp4")
+        if which == "key-only":
+            shutil.copy(key, key + ".prev")
+        else:
+            pathlib.Path(crt + ".prev").write_text("not a certificate", encoding="ascii")
+            shutil.copy(key, key + ".prev")
+        lab.begin()
+        lab.before = None
+        result = infra._put_tls_back(lab.servers[1], "dhcp4")
+        assert result["remote"] == "none-saved" and result.get("why") == "incomplete", result
+        reason = infra._not_put_back_reason(result)
+        assert "incomplete or does not load" in reason and "there is no earlier copy" not in reason
+
+    @pytest.mark.parametrize(
+        ("err", "expected"),
+        [
+            ("HTTPSConnectionPool(host='tls-kea.lan', port=8000): Read timed out.", "a timeout"),
+            (
+                "HTTPSConnectionPool(host='kea.lan', port=8000): Max retries exceeded with url: /alerts (Caused by ConnectTimeoutError('Connection to kea-alerts.lan timed out'))",
+                "a timeout",
+            ),
+            ("_ssl.c:1015: The handshake operation timed out", "a timeout"),
+            ("SSLError(1, '[SSL: TLSV13_ALERT_CERTIFICATE_REQUIRED] tlsv13 alert certificate required')", ""),
+            ("HTTPSConnectionPool(host='kea.lan', port=8000): SSL alert number 48", ""),
+        ],
+    )
+    def test_row_8_a_probe_error_is_classified_by_its_text_not_by_the_host_name_in_it(self, err, expected):
+        assert infra._probe_fault_class(err) == expected, err
