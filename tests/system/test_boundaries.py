@@ -2803,6 +2803,34 @@ emit({"restored": os.access(kea_tls.SSL_DIR, os.W_OK)})
 """
 
 
+S22I_ROTATE_SCRIPT = r"""
+import contextlib, hashlib, inspect
+from unittest import mock
+import jen.config as jconfig
+from jen.routes.settings import infrastructure as infra
+from jen.services import kea_tls
+
+flashes = []
+url = "https://__ADDR__:8014"
+ca = kea_tls.ca_paths()[0]
+ca_before = hashlib.sha256(open(ca, "rb").read()).hexdigest()
+view = inspect.unwrap(infra.rotate_kea_ca)
+with app.test_request_context(method="POST", data={"acknowledge_damaged_ca": "1"}), contextlib.ExitStack() as stack:
+    stack.enter_context(mock.patch.object(infra, "flash", lambda text, style="message": flashes.append(str(text))))
+    stack.enter_context(mock.patch.object(extensions, "KEA_API_CA", ca))
+    stack.enter_context(mock.patch.object(infra, "_service_url", lambda server, service: url if (server.get("id"), service) == (1, "dhcp4") else ""))
+    stack.enter_context(mock.patch.object(infra, "_configured_url", lambda server, service: url if (server.get("id"), service) == (1, "dhcp4") else ""))
+    stack.enter_context(mock.patch.object(infra, "_daemon_creds", lambda server, service, url="": ("sysuser", "syspass-123")))
+    stack.enter_context(mock.patch.object(jconfig.app_config, "write_values", lambda *a, **k: flashes.append("WRITE_VALUES WAS CALLED")))
+    view()
+emit({
+    "flashes": flashes,
+    "ca_changed": ca_before != hashlib.sha256(open(ca, "rb").read()).hexdigest(),
+    "state": kea_tls.ca_state(),
+})
+"""
+
+
 def test_22_i_a_recovery_that_cannot_write_its_certificate_records_is_refused_before_any_host_changes(stack):
     """REMOTE-001 / Q194 (AJ2, the P1/P2): kea-a is really on an https socket Jen issued the certificate for. On the Jen host `kea-servers/` is removed, the CA key is gone (the recovery world) and
     `/etc/jen/ssl` is made read-only. An acknowledged recovery used to ask whether the record directory was writable only when LISTING it raised - the directory was missing, so it never asked,
@@ -2819,7 +2847,7 @@ def test_22_i_a_recovery_that_cannot_write_its_certificate_records_is_refused_be
             st.jen_py(S22I_RESTORE_SCRIPT, timeout=200)
             pytest.skip("the Jen container's account is privileged: a read-only folder does not stop it writing")
         ip = st.container_ip(st.KEA_A)
-        out, proc = st.jen_py(S22H_ROTATE_SCRIPT.replace("__ADDR__", ip).replace("__ACK__", "1"), timeout=500)
+        out, proc = st.jen_py(S22I_ROTATE_SCRIPT.replace("__ADDR__", ip), timeout=500)
         result = emitted(out)
         assert result is not None, f"no result from the recovery:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
         texts = " ".join(result["flashes"])
