@@ -48,6 +48,7 @@ import hashlib
 import ipaddress
 import logging
 import os
+import secrets
 import socket
 import ssl
 from datetime import datetime, timedelta, timezone
@@ -290,8 +291,8 @@ def ca_identity(cert_path: str, key_path: str, *, raise_io: bool = False) -> tup
         try:
             usage = cert.extensions.get_extension_for_class(x509.KeyUsage).value
         except x509.ExtensionNotFound:
-            return "damaged", f"{crt_name} has no KeyUsage, so it is not allowed to sign certificates"
-        if not usage.key_cert_sign:
+            usage = None  # RFC 5280: a certificate with NO KeyUsage extension is not restricted - an operator's own CA (`openssl req -x509`) often has none and works
+        if usage is not None and not usage.key_cert_sign:
             return "damaged", f"{crt_name} is not allowed to sign certificates (its KeyUsage lacks keyCertSign)"
         if not isinstance(public, (ec.EllipticCurvePublicKey, rsa.RSAPublicKey)):
             return "damaged", f"{crt_name} uses a key type Jen does not support ({type(public).__name__})"
@@ -299,9 +300,18 @@ def ca_identity(cert_path: str, key_path: str, *, raise_io: bool = False) -> tup
             return "damaged", f"{crt_name} is not self-signed (its issuer is not its subject)"
         try:
             cert.verify_directly_issued_by(cert)
-        except (InvalidSignature, ValueError, TypeError, UnsupportedAlgorithm):
+        except UnsupportedAlgorithm:
+            return "damaged", f"{crt_name}'s self-signature uses an algorithm Jen cannot verify"
+        except InvalidSignature:
             return "damaged", f"{crt_name}'s signature does not verify against its own key"
-    except (ValueError, TypeError, UnsupportedAlgorithm):
+        except (ValueError, TypeError) as e:
+            # (`cryptography` reports a signature algorithm it will not verify - SHA-1 - as UnsupportedAlgorithm on one version and as ValueError("Unsupported signature algorithm") on another: that is
+            # what Jen CANNOT do, not a claim that the signature is wrong)
+            if "unsupported" in str(e).lower():
+                return "damaged", f"{crt_name}'s self-signature uses an algorithm Jen cannot verify"
+            return "damaged", f"{crt_name}'s signature does not verify against its own key"
+    except (ValueError, TypeError, UnsupportedAlgorithm, x509.DuplicateExtension):
+        # (second pass, finding 1: `DuplicateExtension` is an Exception, not a ValueError - a CA file with one must read "damaged", never raise through Health, the page, the setup, Rotate and Prepare)
         return "damaged", f"{crt_name} has an extension Jen cannot read"
     return "ok", ""
 
@@ -840,6 +850,8 @@ def client_state(judge_issuer: bool = True) -> tuple[str, str]:
         usages = cert.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
     except x509.ExtensionNotFound:
         usages = []
+    except (x509.DuplicateExtension, ValueError):
+        return "damaged", f"{pem_name} has an extension Jen cannot read"
     if ExtendedKeyUsageOID.CLIENT_AUTH not in usages:
         return "damaged", f"{pem_name} is not a client certificate (no clientAuth)"
     now = datetime.now(timezone.utc)
@@ -1099,7 +1111,8 @@ def rotation_inventory(servers, url_for=None, recovery: bool = False, prove_stor
     """The ONE source of a rotation's targets (Q189, AE1): for every configured server and each of dhcp4 / dhcp6 / d2, the URL Jen dials (`url_for(server, service)`, default the Kea
     client's `_endpoint_for`); every `https://` endpoint is a target when Jen holds a complete record of its certificate (`record_state`) and a REFUSAL, with a sentence, when it does not.
     A certificate no Jen CA issued is an administrator-managed endpoint: named in `external`, left alone. A directory that cannot be listed is a refusal naming it - never an empty set.
-    A copy for a server or service that is not an https endpoint now is `stale`: said, ignored. Pure (no network): only Jen's configuration and Jen's own files."""
+    A copy for a server or service that is not an https endpoint now is `stale`: said, ignored. No network: only Jen's configuration and Jen's own files - and, with `prove_storage`, a write probe
+    in the record directory that leaves it as it found it (Q194)."""
     from jen.services.auth import shown_url  # (the ONE helper that shows an address - Q190, AF2)
 
     if url_for is None:
@@ -1122,7 +1135,7 @@ def rotation_inventory(servers, url_for=None, recovery: bool = False, prove_stor
     if prove_storage:
         # Q194 (AJ2): EVERY rotation records the pairs it issues, so every inventory proves - by creating the directory and writing in it - that Jen can. (A recovery waives the READ of the old copies, never
         # this: the host would take a pair Jen cannot record.) The page's summary, Health and the end-of-rotation comparison pass `prove_storage=False`: they only read, and a read creates nothing.
-        blocked = copies_dir_writable()
+        blocked = copies_dir_writable(keep=False)
         if blocked:
             refusals.append(
                 f"Jen cannot write its certificate records in {_copies_dir()} ({blocked}), so it could not keep the certificate it issues for a server, and a daemon that took one would be left "
@@ -1390,28 +1403,39 @@ def _copies_dir() -> str:
     return os.path.join(SSL_DIR, "kea-servers")
 
 
-def copies_dir_writable() -> str:
+def copies_dir_writable(keep: bool = True) -> str:
     """Q194 (AJ2): "" when Jen can keep a certificate record in its certificate directory - PROVED by doing it: the directory is created when it is absent (Jen's own uid, mode 0700) and a probe
     file is written and removed inside it; else why not, as the exception's class and errno (a path that is a regular file, a directory that refuses the probe, a read-only parent, an unavailable
     mount). A directory this call created for a check that then fails is removed again. Q193's version inferred "a directory that is not there yet is writable" - and under a read-only parent the
     real create raised `PermissionError`; a recovery waives the READ of the old copies, never the WRITE: `commit_issued` records each new pair there after the host has taken it, and a host that
     took a pair Jen cannot record is cut off. Asked on EVERY path that will need it: every rotation's inventory, the https setup before `stage_issued`, and the recovery once more before its first
-    install (the filesystem can change in between; `HostRecordLost` stays as the backstop after that)."""
+    install (the filesystem can change in between; `HostRecordLost` stays as the backstop after that).
+    Second pass (rows 4, 5): the probe has a UNIQUE name (a fixed one, left by a killed process, refused a writable directory for good) and any leftover probe is removed; `keep=False` (the
+    preflights: the inventory, the https setup) leaves the directory as it found it - a refusal changes nothing, and in the uninitialised world an EMPTY directory would read as evidence that a CA
+    existed - while the check immediately before the first install keeps what it created (a write follows)."""
     d = _copies_dir()
     created = False
     try:
         if not os.path.lexists(d):
             os.makedirs(d, 0o700, exist_ok=True)
             created = True
-        probe = os.path.join(d, f".write-probe-{os.getpid()}")
-        fd = os.open(probe, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        os.close(fd)
+        with contextlib.suppress(OSError):
+            for leftover in os.listdir(d):
+                if leftover.startswith(".write-probe-"):
+                    os.unlink(os.path.join(d, leftover))
+        probe = os.path.join(
+            d, f".write-probe-{os.getpid()}-{secrets.token_hex(8)}"
+        )  # (unique; no retry loop of `mkstemp` - one attempt, one answer)
+        os.close(os.open(probe, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
         os.unlink(probe)
     except OSError as e:
         if created:
             with contextlib.suppress(OSError):
                 os.rmdir(d)
         return f"{type(e).__name__}, errno {getattr(e, 'errno', '?')}"
+    if created and not keep:
+        with contextlib.suppress(OSError):
+            os.rmdir(d)
     return ""
 
 

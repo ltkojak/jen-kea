@@ -2723,13 +2723,13 @@ class TestTheSecondPassOfQ193:
 CA_IDENTITY_WHY = {
     "not-ca": "not marked as a certificate authority (BasicConstraints ca is false)",
     "no-basic-constraints": "has no BasicConstraints",
-    "no-key-usage": "has no KeyUsage",
     "no-key-cert-sign": "lacks keyCertSign",
     "expired": "expired on",
     "not-yet-valid": "is not valid until",
     "tampered-signature": "signature does not verify against its own key",
     "issuer-not-subject": "is not self-signed",
     "unsupported-key": "key type Jen does not support",
+    "duplicate-extension": "has an extension Jen cannot read",
 }
 
 
@@ -2981,9 +2981,9 @@ class TestCopiesDir:
         lab.begin()
         real, calls = kea_tls.copies_dir_writable, []
 
-        def flaky():
+        def flaky(keep=True):
             calls.append(1)
-            return real() if len(calls) == 1 else "PermissionError, errno 13"
+            return real(keep=keep) if len(calls) == 1 else "PermissionError, errno 13"
 
         monkeypatch.setattr(kea_tls, "copies_dir_writable", flaky)
         before = _ca_bytes()
@@ -3022,4 +3022,132 @@ class TestCopiesDir:
             pathlib.Path(__file__).resolve().parents[1] / "jen" / "routes" / "settings" / "infrastructure.py"
         ).read_text(encoding="utf-8")
         setup = source[source.index("def setup_direct_socket") :]
-        assert 0 < setup.index("copies_dir_writable()") < setup.index("stage_issued(server_id, service, files)")
+        assert (
+            0
+            < setup.index("copies_dir_writable(")
+            < setup.index("ensure_ca()")
+            < setup.index("stage_issued(server_id, service, files)")
+        )
+
+
+class TestTheSecondPassOfQ194:
+    """The second pass on Q194 (agent ad738f2e0befcf065), each finding as its row first: 1 a CA file with a duplicated extension is "damaged" and never raises (`DuplicateExtension` is not a ValueError);
+    2 a WORKING operator CA - no KeyUsage extension (RFC 5280: unrestricted) - is not called damaged, and a self-signature Jen cannot verify has its own sentence; 4 a leftover probe never refuses a
+    writable directory; 5 a preflight leaves the directory as it found it (a refusal changes nothing; the uninitialised world stays uninitialised)."""
+
+    def test_row_1_a_duplicated_extension_in_the_ca_is_damaged_in_every_reader_and_never_raises(self, lab):
+        from tests import _tls_worlds as worlds
+
+        crt, key = kea_tls.ca_paths()
+        cert_pem, key_pem = worlds.semantic_ca_pem("duplicate-extension")
+        pathlib.Path(crt).write_bytes(cert_pem)
+        pathlib.Path(key).write_bytes(key_pem)
+        lab.begin()
+        lab.before = None
+        state, why = kea_tls.ca_state()
+        assert state == "damaged" and "has an extension Jen cannot read" in why, (state, why)
+        assert kea_tls.ca_consistent() is False
+        row = health._kea_tls_expiry({})
+        assert row.status == "fail" and "extension Jen cannot read" in row.detail
+        assert infra._kea_ca_summary()["damaged"] is True, "the Settings page renders it"
+        assert kea_tls.ca_refusal(), "the https setup's gate refuses"
+
+    def test_row_1_a_client_certificate_with_a_duplicated_extension_is_damaged_never_raises(self, lab):
+        from tests import _tls_worlds as worlds
+
+        pem, _key = kea_tls.client_paths()
+        pathlib.Path(pem).write_bytes(
+            worlds.duplicate_an_extension(pathlib.Path(pem).read_bytes(), keyusage_oid_last=0x25)
+        )
+        lab.begin()
+        lab.before = None
+        state, why = kea_tls.client_state(judge_issuer=False)
+        assert state == "damaged" and "extension Jen cannot read" in why, (state, why)
+
+    def test_row_2_a_ca_without_a_key_usage_extension_is_ok_as_rfc_5280_says_and_signs(self, lab):
+        from tests import _tls_worlds as worlds
+
+        cert_pem, key_pem = worlds.semantic_ca_pem("no-key-usage")
+        crt, key = kea_tls.ca_paths()
+        pathlib.Path(crt).write_bytes(cert_pem)
+        pathlib.Path(key).write_bytes(key_pem)
+        lab.begin()
+        lab.before = None
+        assert kea_tls.ca_state() == ("ok", "") and kea_tls.ca_consistent() is True
+        result = kea_tls.issue_client_cert()  # the pair the old CA issued is re-issued from the CA that is live now
+        assert result["issued"] is True and kea_tls.client_state() == ("ok", "")
+        assert health._kea_tls_expiry({}).status != "fail" or "CA" not in health._kea_tls_expiry({}).detail
+
+    def test_row_2_a_key_usage_that_forbids_signing_is_still_damaged(self, lab, tmp_path):
+        from tests import _tls_worlds as worlds
+
+        cert_pem, key_pem = worlds.semantic_ca_pem("no-key-cert-sign")
+        (tmp_path / "c.crt").write_bytes(cert_pem)
+        (tmp_path / "c.key").write_bytes(key_pem)
+        state, why = kea_tls.ca_identity(str(tmp_path / "c.crt"), str(tmp_path / "c.key"))
+        assert state == "damaged" and "lacks keyCertSign" in why
+
+    def test_row_2_a_self_signature_jen_cannot_verify_says_so_and_does_not_claim_it_is_false(self, tmp_path):
+        """A SHA-1 self-signed CA (an operator's) - built with the openssl CLI, because `cryptography` will not sign with SHA-1 here. The sentence is about what Jen CANNOT do, not a claim that the signature is wrong."""
+        import shutil
+        import subprocess  # nosec B404
+
+        openssl = shutil.which("openssl")
+        if not openssl:
+            pytest.skip("no openssl on this machine")
+        crt, key = tmp_path / "sha1.crt", tmp_path / "sha1.key"
+        done = subprocess.run(  # nosec B603
+            [
+                openssl, "req", "-x509", "-newkey", "rsa:2048", "-sha1", "-nodes", "-days", "30", "-subj", "/CN=sha1 ca",
+                "-keyout", str(key), "-out", str(crt),
+                "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign",
+            ],
+            capture_output=True,
+            check=False,
+        )  # fmt: skip
+        if done.returncode != 0 or not crt.exists():
+            pytest.skip("this openssl will not make a SHA-1 certificate")
+        state, why = kea_tls.ca_identity(str(crt), str(key))
+        assert state == "damaged" and "algorithm Jen cannot verify" in why and "does not verify" not in why, (
+            state,
+            why,
+        )
+
+    def test_row_4_a_leftover_probe_never_refuses_a_writable_directory(self, lab):
+        d = os.path.dirname(kea_tls.server_copy_path(1, "dhcp4"))
+        for name in (f".write-probe-{os.getpid()}", ".write-probe-killed-by-sigkill"):
+            pathlib.Path(d, name).write_text("", encoding="ascii")
+        assert kea_tls.copies_dir_writable() == ""
+        assert not [n for n in os.listdir(d) if n.startswith(".write-probe-")], "the leftovers were cleaned"
+        assert kea_tls.copies_dir_writable() == "", "and a second check is as clear as the first"
+
+    def test_row_5_a_preflight_leaves_the_directory_as_it_found_it_and_the_check_before_the_install_keeps_it(self, lab):
+        import shutil
+
+        d = os.path.dirname(kea_tls.server_copy_path(1, "dhcp4"))
+        shutil.rmtree(d)
+        assert kea_tls.copies_dir_writable(keep=False) == "" and not os.path.lexists(d), "the preflight made nothing"
+        assert kea_tls.copies_dir_writable() == "" and os.path.isdir(d), "the check before a write keeps what it made"
+        lab.begin()
+
+    def test_row_5_the_inventory_in_the_uninitialised_world_leaves_it_uninitialised(self, lab):
+        import shutil
+
+        shutil.rmtree(kea_tls.SSL_DIR)
+        os.makedirs(kea_tls.SSL_DIR)
+        assert kea_tls.ca_state() == ("none", "")
+        kea_tls.rotation_inventory(extensions.KEA_SERVERS)  # the DEFAULT proves storage
+        assert kea_tls.ca_state() == ("none", ""), "an empty record directory would read as 'a CA issued into it'"
+        lab.hosts.clear()
+        lab.begin()
+
+    def test_row_5_a_refusal_for_another_reason_creates_no_directory(self, lab):
+        import shutil
+
+        shutil.rmtree(os.path.dirname(kea_tls.server_copy_path(1, "dhcp4")))  # every record gone: Rotate refuses
+        lab.begin()
+        before = {p.relative_to(kea_tls.SSL_DIR) for p in pathlib.Path(kea_tls.SSL_DIR).rglob("*")}
+        _rotate()
+        assert "Rotate refused" in lab.texts() and lab.remote_actions() == 0, lab.texts()
+        after = {p.relative_to(kea_tls.SSL_DIR) for p in pathlib.Path(kea_tls.SSL_DIR).rglob("*")}
+        assert after == before, "a refusal changed no file and made no directory"

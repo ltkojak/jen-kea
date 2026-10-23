@@ -2341,6 +2341,16 @@ def setup_direct_socket(server_id, service):
         # Q188 (AD9): a re-run whose socket is ALREADY in the daemon's config changes nothing and restarts nothing - new files written under it would not be loaded until the next restart (and then
         # would not be the ones the running daemon was started with), so no new material is installed at all: the socket is only re-probed.
         already_there = entry in (pre_read.get("api") or [])
+        if not already_there:
+            # Q194 (AJ2): Jen proves, by writing, that it can keep the record of what it is about to install - before it creates a CA or a client pair of its own and before it asks the host for anything
+            # (`keep=False`: a refusal changes nothing, and an empty directory would read as evidence that a CA existed); `stage_issued` is the commit that follows
+            storage_now = __tls.copies_dir_writable(keep=False)
+            if storage_now:
+                flash(
+                    f"Jen cannot write its certificate records ({storage_now}), so it did not install the certificate. Nothing was changed on {name} or in Jen's own certificates.",
+                    "error",
+                )
+                return back
         try:
             __tls.ensure_ca()
             client_issued = __tls.issue_client_cert()
@@ -2365,14 +2375,6 @@ def setup_direct_socket(server_id, service):
             flash(f"Jen's own client certificate is unusable ({tls_err}) — nothing was pushed to {name}.", "error")
             return back
         if files is not None:
-            # Q194 (AJ2): Jen proves, by writing, that it can keep the record of what it is about to install - before it asks the host for anything
-            storage_now = __tls.copies_dir_writable()
-            if storage_now:
-                flash(
-                    f"Jen cannot write its certificate records ({storage_now}), so it did not install the certificate. Nothing was changed on {name}.",
-                    "error",
-                )
-                return back
             # Q188 (AD2): Jen's own recovery state is committed BEFORE the host is touched - `.prev` (what the host has) and `.staged` (what it is about to be given) - and the operation stops at the
             # first step it cannot prove: no copy, no install; no promotion, the previous material back on the host and the socket change never starts.
             try:

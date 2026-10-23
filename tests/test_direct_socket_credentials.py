@@ -821,7 +821,7 @@ class TestTheProbeRowsOfQ194:
 
     def test_a_missing_certificate_directory_is_created_or_refused(self):
         assert probe.q194_aj2_a_missing_certificate_directory_is_created_or_refused_never_assumed_writable() == {
-            "writable-parent": (False, True),
+            "writable-parent": (False, False),
             "read-only-parent": (True, False),
         }
 

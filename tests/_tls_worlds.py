@@ -112,14 +112,17 @@ def issued_pair(ca, client: bool, cn="a leaf", sans=()):
 SEMANTIC_CA_STATES = (
     "not-ca",  # BasicConstraints ca=False
     "no-basic-constraints",
-    "no-key-usage",
     "no-key-cert-sign",  # KeyUsage present, keyCertSign off
     "expired",
     "not-yet-valid",
     "tampered-signature",  # one byte of the signature flipped: it still parses
     "issuer-not-subject",
     "unsupported-key",  # an Ed25519 pair: a pair, but not a kind Jen's CA is made of
+    "duplicate-extension",  # (second pass) two BasicConstraints: it parses as PEM and `cert.extensions` raises - a read must say "damaged", never raise
 )
+
+#: a CA that WORKS but that Q194's first draft called damaged: no KeyUsage extension at all (RFC 5280: unrestricted - what `openssl req -x509` makes by default)
+OPERATOR_CA_STATES = ("no-key-usage",)
 
 
 def semantic_ca(kind: str):
@@ -130,7 +133,7 @@ def semantic_ca(kind: str):
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.asymmetric import ed25519
 
-    assert kind in SEMANTIC_CA_STATES, kind
+    assert kind in SEMANTIC_CA_STATES + OPERATOR_CA_STATES, kind
     key = ed25519.Ed25519PrivateKey.generate() if kind == "unsupported-key" else kea_tls._new_key()
     name = kea_tls._name(f"Jen Kea CA semantic {kind}")
     issuer = kea_tls._name("an issuer that is not the subject") if kind == "issuer-not-subject" else name
@@ -171,7 +174,24 @@ def semantic_ca(kind: str):
     cert = builder.sign(key, None if kind == "unsupported-key" else hashes.SHA256())
     if kind == "tampered-signature":
         cert = x509.load_pem_x509_certificate(_flip_last_byte_of_the_signature(kea_tls._cert_pem(cert)))
+    if kind == "duplicate-extension":
+        cert = x509.load_pem_x509_certificate(duplicate_an_extension(kea_tls._cert_pem(cert), keyusage_oid_last=0x0F))
     return cert, key
+
+
+def duplicate_an_extension(cert_pem: bytes, *, keyusage_oid_last: int = 0x0F, into: int = 0x13) -> bytes:
+    """The same certificate with ONE extension's OID rewritten to another it already carries (default: KeyUsage 2.5.29.15 -> BasicConstraints 2.5.29.19, the same length): valid PEM, valid DER, it PARSES,
+    and `cert.extensions` raises `DuplicateExtension` - an `Exception`, not a `ValueError`. (`keyusage_oid_last` names the OID's last byte: 0x0F KeyUsage, 0x25 ExtendedKeyUsage.)"""
+    import base64
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import serialization
+
+    der = x509.load_pem_x509_certificate(cert_pem).public_bytes(serialization.Encoding.DER)
+    needle = bytes([0x06, 0x03, 0x55, 0x1D, keyusage_oid_last])
+    assert der.count(needle) == 1, "the certificate carries exactly one such extension"
+    bad = der.replace(needle, bytes([0x06, 0x03, 0x55, 0x1D, into]))
+    return b"-----BEGIN CERTIFICATE-----\n" + base64.encodebytes(bad) + b"-----END CERTIFICATE-----\n"
 
 
 def _flip_last_byte_of_the_signature(cert_pem: bytes) -> bytes:

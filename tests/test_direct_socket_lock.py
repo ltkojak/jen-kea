@@ -1647,6 +1647,20 @@ class TestSetupWithADamagedCaOrClientPair:
         assert "Jen's CA is damaged" in texts and "client certificate exists" in texts, texts
         assert tls_world["tls"]["installed"] == [] and worlds.tree(kt.SSL_DIR) == before
 
+    def test_an_https_setup_that_cannot_write_its_certificate_records_changes_nothing_of_jens_own(
+        self, tls_world, monkeypatch
+    ):
+        """Q194 second pass (finding 6): the storage proof comes BEFORE the CA or the client pair is created - a refusal leaves Jen's own files as they were, not only the host."""
+        from tests import _tls_worlds as worlds
+
+        kt = self._baseline(tls_world)
+        before = worlds.tree(kt.SSL_DIR)
+        monkeypatch.setattr(kt, "copies_dir_writable", lambda keep=True: "PermissionError, errno 13")
+        _post(_inner(infra.setup_direct_socket), **self.FORM)
+        texts = " ".join(t for _s, t in tls_world["flashes"])
+        assert "Jen cannot write its certificate records" in texts and "Nothing was changed on" in texts, texts
+        assert tls_world["tls"]["installed"] == [] and worlds.tree(kt.SSL_DIR) == before
+
     @pytest.mark.parametrize("damage", ["key-unrelated", "cert-malformed", "earlier-ca"])
     def test_a_damaged_client_pair_under_an_ok_ca_is_re_issued_from_the_same_ca_and_said(
         self, tls_world, monkeypatch, damage

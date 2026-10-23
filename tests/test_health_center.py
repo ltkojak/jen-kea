@@ -1391,7 +1391,7 @@ class TestKeaTlsExpiry:
         monkeypatch.setattr(
             kea_tls,
             "rotation_inventory",
-            lambda servers, url_for=None: types.SimpleNamespace(
+            lambda servers, url_for=None, **_kw: types.SimpleNamespace(
                 refusals=[
                     "kea-b kea-dhcp4 is an https endpoint at https://10.0.0.6:8004 and Jen has no complete record"
                 ]

@@ -2202,8 +2202,8 @@ def q194_aj1_a_ca_that_is_not_a_certificate_signing_authority_is_damaged_never_r
 
 
 def q194_aj2_a_missing_certificate_directory_is_created_or_refused_never_assumed_writable():
-    """The record directory is gone: under a writable parent the proof CREATES it (the rotation's inventory is not refused); under a read-only parent the real create fails and the inventory refuses.
-    (refused by the inventory, the directory exists afterwards.)"""
+    """The record directory is gone: under a writable parent the proof CREATES it to prove it can and puts the world back (the inventory is not refused and a preflight leaves no directory); under a
+    read-only parent the real create fails and the inventory refuses. (refused by the inventory, the directory exists afterwards.)"""
     import os
     import shutil
 
@@ -2600,7 +2600,7 @@ EXPECTED = {
         "tampered-signature": ("damaged", True, True),
     },
     "q194_aj2_a_missing_certificate_directory_is_created_or_refused_never_assumed_writable": {
-        "writable-parent": (False, True),
+        "writable-parent": (False, False),
         "read-only-parent": (True, False),
     },
     "q193_ai2_prepare_accepts_a_damaged_ca_and_refuses_only_the_absence_of_one": {

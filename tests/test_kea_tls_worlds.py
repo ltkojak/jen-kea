@@ -403,7 +403,11 @@ MATRIX_READERS = {
     },  # Q194 (AJ1): the ONE judgment of CA material - the `ca_semantic` / `next_ca_semantic` worlds
     "ca_state": {"lexists"},
     "_initialised_evidence": {"lexists", "listdir"},
-    "copies_dir_writable": {"lexists", "open"},
+    "copies_dir_writable": {
+        "lexists",
+        "open",
+        "listdir",
+    },  # (the `TestCopiesDir` worlds: it also removes a leftover probe)
     "_cn": {"load_cert"},
     "_load_ca": {"load_cert", "load_key"},
     "issue_server_cert": {"load_cert", "load_key"},
