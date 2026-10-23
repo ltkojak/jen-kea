@@ -304,3 +304,15 @@ One step (5.69.0-beta.23). It adds no migration and there is nothing for you to 
 **A client pair whose key is not the certificate's is re-issued.** Health now checks that Jen's client certificate and key belong together, were issued by the current CA, carry the client-authentication usage and are inside their validity. A damaged pair shows as a failure; setting up an https socket re-issues it from the same CA, so every daemon that trusts the CA keeps trusting it, and says so. The pair it replaced is kept beside it as `.prev`.
 
 **A rotation also refuses, before it touches any host, when one of Jen's own CA or client files, or its previous-copy name, is a directory or a link.** Remove or replace the item named in the message.
+
+## A failed CA replacement is repeated with the acknowledgement; Prepare works while the CA is damaged
+
+One step (5.69.0-beta.24). It adds no migration and there is nothing for you to do. What you may notice:
+
+**A replacement of a damaged CA that stops part-way says what happened.** If "Replace the damaged CA" stops (a server refuses the new certificate, does not restart, or does not answer), the message counts the daemons left in a state that needs it repeated and names each: a daemon that took the new CA's certificate and will not answer Jen until the replacement is repeated, a daemon whose host refused the certificate (what it holds is unknown, usually unchanged), and the daemons nothing reached. Each daemon left behind is recorded on Servers. Jen's CA is still damaged, so the action is to run "Replace the damaged CA" again with the acknowledgement ticked; an https setup stays refused until the CA is replaced. The message no longer tells you to restore `.prev` copies or to set each socket up again.
+
+**"Prepare only" works while the CA is damaged.** It writes a new CA beside the damaged one and changes nothing on any server, so a daemon that depends on Jen's CA can have its trust anchor updated first. It refuses only when there is no CA at all, and then points you to the https setup, which creates one.
+
+**Replacing a damaged CA checks that Jen can write its certificate folder.** A folder Jen can neither read nor write now stops the replacement before any server is touched; it used to stop after the first server had taken its new certificate. A folder Jen cannot list but can write is still accepted.
+
+**Every message about a damaged CA names the same two actions:** restore the CA files from a backup, or replace the CA with the acknowledgement ticked. Where Jen cannot tell whose CA an https endpoint is on while its own CA is damaged, the message says to point the CA bundle under Settings → Kea at Jen's own CA file, `kea-ca.crt` in Jen's SSL folder.
