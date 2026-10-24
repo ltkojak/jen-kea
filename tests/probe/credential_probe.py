@@ -2239,12 +2239,18 @@ def q195_ak1_in_a_recovery_an_external_endpoint_is_judged_by_the_replacement_ide
 
     rejected = "HTTPSConnectionPool: Max retries exceeded (Caused by SSLError: tlsv13 alert certificate required)"
     timeout = "HTTPSConnectionPool: Read timed out."
+    tls13 = "('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
+    lookalike = "Failed to resolve 'kea-alert.lan' ([Errno -2] Name or service not known)"
     cases = {
         "recovery: live rejected, staged accepted": (rejected, "", True),
         "recovery: live rejected, staged rejected": (rejected, rejected, True),
         "recovery: live rejected, staged timed out": (rejected, timeout, True),
         "recovery: live timed out": (timeout, "", True),
         "recovery: live fails to verify the daemon": ("SSLError: certificate verify failed", "", True),
+        "recovery: live closed in the TLS 1.3 handshake, staged accepted": (tls13, "", True),
+        "recovery: live closed in the TLS 1.3 handshake, staged closed": (tls13, tls13, True),
+        "recovery: live fails to resolve a host called kea-alert": (lookalike, "", True),
+        "recovery: live gets a protocol-version alert": ("tlsv1 alert protocol version", "", True),
         "healthy: live rejected": (rejected, "", False),
         "healthy: live accepted, staged rejected": ("", rejected, False),
     }
@@ -2663,6 +2669,10 @@ EXPECTED = {
         "recovery: live rejected, staged timed out": "probe",
         "recovery: live timed out": "answer",
         "recovery: live fails to verify the daemon": "answer",
+        "recovery: live closed in the TLS 1.3 handshake, staged accepted": "",
+        "recovery: live closed in the TLS 1.3 handshake, staged closed": "prepare",
+        "recovery: live fails to resolve a host called kea-alert": "answer",
+        "recovery: live gets a protocol-version alert": "answer",
         "healthy: live rejected": "answer",
         "healthy: live accepted, staged rejected": "depends",
     },

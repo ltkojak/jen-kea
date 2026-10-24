@@ -836,6 +836,10 @@ class TestTheProbeRowsOfQ195:
             "recovery: live rejected, staged timed out": "probe",
             "recovery: live timed out": "answer",
             "recovery: live fails to verify the daemon": "answer",
+            "recovery: live closed in the TLS 1.3 handshake, staged accepted": "",
+            "recovery: live closed in the TLS 1.3 handshake, staged closed": "prepare",
+            "recovery: live fails to resolve a host called kea-alert": "answer",
+            "recovery: live gets a protocol-version alert": "answer",
             "healthy: live rejected": "answer",
             "healthy: live accepted, staged rejected": "depends",
         }

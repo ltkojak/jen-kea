@@ -587,10 +587,11 @@ it to the user and password fields, and Jen keeps dialling it as written (the cr
    found it - a refusal changes nothing, and an EMPTY record directory in the uninitialised world would read as evidence that a CA existed; only the check immediately before a write keeps what it made. Read-only callers (the page, Health, the end-of-rotation comparison) pass `prove_storage=False`: a read
    creates nothing. **In a recovery an external endpoint is proved against the REPLACEMENT identity (Q195).** The live client pair fails beside an external that trusts the damaged CA BECAUSE that CA can no
    longer vouch (expired, not a CA, not yet valid), so Q192's "an endpoint that does not answer the live pair is unreachable regardless" does not hold in a recovery: when the live pair is REJECTED BY
-   CERTIFICATE (a TLS alert / a named client certificate - not a transport fault, not Jen failing to verify the daemon) the staged pair is tried: accepted is not a refusal; rejected too is "Prepare the
+   CERTIFICATE (a certificate alert, a named client certificate, or the connection CLOSED in the handshake - how a TLS 1.3 server says it: 88-95 percent of real rejections against an OpenSSL server were
+   `EOF occurred in violation of protocol` / `Remote end closed connection`, executed - and not a timeout, a refusal, a name that does not resolve, or Jen failing to verify the daemon) the staged pair is tried: accepted is not a refusal; rejected too is "Prepare the
    new CA, install its certificate on that endpoint, then rotate again"; a transport fault keeps its sentence. A healthy rotation is unchanged. The fake daemon rejects an anchor OpenSSL would reject
-   (`Lab.accepts_client`, `_anchor_usable`). **The failure of a rotation says the CA's state NOW (Q195):** a CA that became unusable without a promotion says `ca_state`'s why and the acknowledged Rotate
-   (T2 pins the state, not a phrase); a probe file is Jen's only by its exact name (`kea_tls.PROBE_NAME`) - the cleanup never deletes, and the evidence count never ignores, an operator's file.
+   (`Lab.accepts_client`, `_anchor_usable`, pinned to the OpenSSL table that was executed: a self-signature is not checked, an issuer that is not the subject is rejected). **The failure of a rotation says the CA's state NOW (Q195):** a CA that became unusable without a promotion says `ca_state`'s why and the acknowledged Rotate
+   (T2 pins the state, not a phrase); a probe file is Jen's only by its exact name (`kea_tls.PROBE_NAME`) - the cleanup removes only a LEFTOVER of it (older than a minute, never a probe being written right now) and never an operator's file.
 11. **A stored incident Jen cannot recognise is kept (Q190).** Each entry of the recovery record has a shape (`kea_changeset.recognised_incident`: an attention incident has a known category, a service, a server
    id, a summary and a time; an outcome incident a `rolled_back`/`rollback_failed` status, a service and a time); `_incidents_of(strict=True)` raises `MalformedNote` naming the entry's INDEX, every writer
    refuses the whole note, `_incident_cleared` is False for an entry it cannot read (fail closed, in the lenient reader too), and the Servers banner says an incident Jen cannot read is on record.
@@ -661,6 +662,7 @@ Jen's CA by certificate identity, per endpoint; an invariant with no knob; an in
 - `tests/test_kea_tls_rotation.py::TestTheSecondPassOfQ194`
 - `tests/test_kea_tls_rotation.py::TestRecoveryBesideAnExternal`
 - `tests/test_kea_tls_rotation.py::TestTheSmallOnesOfQ195`
+- `tests/test_kea_tls_rotation.py::TestTheSecondPassOfQ195`
 - `tests/test_direct_socket_credentials.py::TestTheProbeRowsOfQ195`
 - `tests/test_direct_socket_credentials.py::TestTheProbeRowsOfQ194`
 - `tests/system/test_boundaries.py::test_22_i_a_recovery_that_cannot_write_its_certificate_records_is_refused_before_any_host_changes`

@@ -407,7 +407,8 @@ MATRIX_READERS = {
         "lexists",
         "open",
         "listdir",
-    },  # (the `TestCopiesDir` worlds: it also removes a leftover probe)
+        "stat",
+    },  # (the `TestCopiesDir` worlds: it also removes a leftover probe - one older than a minute, by its mtime)
     "_cn": {"load_cert"},
     "_load_ca": {"load_cert", "load_key"},
     "issue_server_cert": {"load_cert", "load_key"},

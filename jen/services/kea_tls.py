@@ -52,6 +52,7 @@ import re
 import secrets
 import socket
 import ssl
+import time
 from datetime import datetime, timedelta, timezone
 
 from cryptography import x509
@@ -1410,6 +1411,7 @@ def _copies_dir() -> str:
 #: Q195 (AK2 a): the name of a probe file `copies_dir_writable` writes - `.write-probe-<pid>-<16 hex>` - and nothing else. The cleanup of leftovers and the evidence count (`_initialised_evidence`) both
 #: match THIS pattern exactly: a file an operator keeps in the record directory (`.write-probe-OPERATORS-NOTES.txt`) is not Jen's to delete or to ignore.
 PROBE_NAME = re.compile(r"\.write-probe-\d+-[0-9a-f]{16}")
+PROBE_LEFTOVER_SECONDS = 60
 
 
 def copies_dir_writable(keep: bool = True) -> str:
@@ -1430,8 +1432,10 @@ def copies_dir_writable(keep: bool = True) -> str:
             created = True
         with contextlib.suppress(OSError):
             for leftover in os.listdir(d):
-                if PROBE_NAME.fullmatch(leftover):
-                    os.unlink(os.path.join(d, leftover))
+                path = os.path.join(d, leftover)
+                # (Q195 second pass: only a LEFTOVER - a probe a killed process left, older than a minute - never another thread's probe that is being written right now)
+                if PROBE_NAME.fullmatch(leftover) and time.time() - os.stat(path).st_mtime > PROBE_LEFTOVER_SECONDS:
+                    os.unlink(path)
         probe = os.path.join(
             d, f".write-probe-{os.getpid()}-{secrets.token_hex(8)}"
         )  # (unique; no retry loop of `mkstemp` - one attempt, one answer)

@@ -933,15 +933,45 @@ def _probe_fault_class(err: str) -> str:
     return "a transport error"
 
 
+#: Q195 (second pass, rows 1-2): what a failed probe says when the failure is NOT about a client certificate - Jen failing to verify the daemon's own certificate, a name that does not resolve, a daemon
+#: that is not there, a timeout. They are looked at FIRST, so a host called `kea-alert.lan` or a `tlsv1 alert protocol version` is never read as a rejection of the client certificate.
+_NOT_ABOUT_THE_CLIENT_CERTIFICATE = (
+    "verify failed",
+    "timed out",
+    "timeout",
+    "refused",
+    "failed to resolve",
+    "name or service not known",
+    "name resolution",
+    "no route to host",
+    "unreachable",
+)
+#: ... and what it says when the daemon turned the client certificate down. On TLS 1.3 the server's alert races its close, so a real rejection arrives about as often as a closed connection
+#: ("EOF occurred in violation of protocol", "Remote end closed connection") as it does as an alert (executed against a real OpenSSL server: 88-95 percent of rejections were the closure).
+_CLIENT_CERTIFICATE_REJECTED = (
+    "client certificate",
+    "eof occurred in violation of protocol",
+    "remote end closed connection",
+    "connection reset",
+    "connection aborted",
+)
+
+
 def _rejects_the_client_certificate(err: str) -> bool:
-    """Q195 (AK1): is the text of a failed probe the daemon REJECTING the client certificate Jen presented - a TLS alert or a named client certificate - and not a transport fault and not Jen failing to
-    verify the daemon's OWN certificate ("certificate verify failed" is the dial's, not the daemon's verdict on Jen)?"""
+    """Q195 (AK1): is the text of a failed probe the daemon turning the client certificate Jen presented DOWN - a certificate alert, a named client certificate, or the connection closed during the TLS
+    handshake (how a TLS 1.3 server says it) - and not Jen failing to verify the daemon's OWN certificate, a name that does not resolve, a daemon that is not there or a timeout? The closure is
+    ambiguous by nature (a daemon that died mid-handshake reads the same), which is why the sentence it earns says "usually because" and why acceptance of the REPLACEMENT is what lets a recovery go on."""
     import re as _re
 
     low = _re.sub(r"https?://\S+|host='[^']*'|host=\"[^\"]*\"", " ", (err or "").lower())
-    if "verify failed" in low or _probe_fault_class(err) != "":
+    if any(w in low for w in _NOT_ABOUT_THE_CLIENT_CERTIFICATE):
         return False
-    return "client certificate" in low or bool(_re.search(r"\balert\b", low))
+    if _re.search(
+        r"alert (?:bad |unsupported |expired |revoked |unknown )?certificate|alert (?:unknown ca|handshake failure|access denied)",
+        low,
+    ):
+        return True
+    return any(w in low for w in _CLIENT_CERTIFICATE_REJECTED)
 
 
 def _staged_identity_refusal(inventory, kind: str, staged: dict, recovery: bool = False) -> str:
@@ -991,14 +1021,14 @@ def _staged_identity_refusal(inventory, kind: str, staged: dict, recovery: bool 
             # operator must install the new CA on it first. A transport fault proves nothing about trust and keeps the sentences below.
             if staged_version:
                 continue
-            staged_fault = _probe_fault_class(staged_err)
+            staged_fault = "" if _rejects_the_client_certificate(staged_err) else _probe_fault_class(staged_err)
             if staged_fault:
                 return (
                     f"{label} could not be probed with the new client certificate ({staged_fault}), so Jen cannot tell whether it accepts it - "
                     "try again when the endpoint answers"
                 )
             return (
-                f"{label} rejects Jen's current client certificate (the damaged CA is the one it trusts) and does not accept the new one yet: "
+                f"{label} rejects Jen's current client certificate (usually because the damaged CA is the one it trusts) and does not accept the new one yet: "
                 "Prepare the new CA, install its certificate on that endpoint, then rotate again"
             )
         if not live_version:
@@ -2879,6 +2909,9 @@ def rotate_kea_ca():
             ca_live = __tls.ca_paths()[0]
             client_live = __tls.client_paths()
             ca_ok = __tls.ca_consistent()  # a promotion whose own put-back failed can leave Jen's CA certificate and key apart: nothing can be issued from it
+            ca_now_why = __tls.ca_state()[
+                1
+            ]  # (Q195 second pass: read ONCE - every sentence below names the same state)
             # Q193 (second pass, findings 2 and 3): a recovery that fails at ANY step - before the first install or in the promotion - left Jen's CA as damaged as it found it (the promotion puts its files
             # back); the daemons that took the staged pair hold a certificate from a CA Jen discarded. It is judged by the CA NOW: one an operator restored meanwhile is rolled back like any rotation.
             recovery_failed = recovery and not ca_ok
@@ -2990,7 +3023,7 @@ def rotate_kea_ca():
                     for s, sv, _b in targets
                     if f"{s.get('name') or 'Kea Server ' + str(s.get('id'))} {_DAEMON_NAME[sv]}" not in left
                 ]
-                ca_now_why = __tls.ca_state()[1] or ca_why
+                ca_now_why = ca_now_why or ca_why
                 if outcome["rolled"]:
                     msg += f" Restarted and answering: {', '.join(lb for _s, _v, lb in outcome['rolled'])}."
                 flash(msg, "error")
@@ -3020,14 +3053,14 @@ def rotate_kea_ca():
             elif not ca_ok and promotion_attempted:
                 flash(
                     "Jen's CA certificate and CA key are no longer a matching pair (a promotion failed part-way and its own put-back failed too), so nothing can be issued from them. "
-                    f"The CA now: {__tls.ca_state()[1] or 'unusable'}. "
+                    f"The CA now: {ca_now_why or 'unusable'}. "
                     "Restore kea-ca.crt and kea-ca.key together from a backup, or from the .prev copies beside them, before any other CA or socket action.",
                     "error",
                 )
             elif not ca_ok:
                 # Q195 (AK2 b): no promotion ran - the CA became unusable DURING the rotation (a file changed, a clock stepped): say what it is now, and the action that works (the setup is refused)
                 flash(
-                    f"Jen's CA became unusable during the rotation ({__tls.ca_state()[1] or 'unusable'}), so nothing can be issued from it and a daemon that took the new certificate cannot be put back. "
+                    f"Jen's CA became unusable during the rotation ({ca_now_why or 'unusable'}), so nothing can be issued from it and a daemon that took the new certificate cannot be put back. "
                     "Rotate again with the acknowledgement to replace it and re-issue every daemon (or restore the CA files from a backup); the https setup stays refused until the CA is replaced.",
                     "error",
                 )
