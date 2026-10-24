@@ -1125,6 +1125,9 @@ def _kea_tls_expiry(ctx) -> Check:
             "fail",
             f"Jen's CA is damaged ({ca_why}) - {kea_tls.DAMAGED_CA_ADVICE}; an https setup is refused until then",
         )
+        second_opinion = kea_tls.openssl_second_opinion()  # Q196 (second pass): the opinion runs in BOTH directions - "openssl accepts what Jen's verifier rejects" is the operator's evidence
+        if second_opinion:
+            c.detail += f" — {second_opinion}"
         return c
     items = [("the Kea CA", kea_tls.days_left(kea_tls.ca_paths()[0]))]
     client_pem = kea_tls.client_paths()[0]

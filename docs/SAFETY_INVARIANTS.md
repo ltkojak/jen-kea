@@ -595,9 +595,14 @@ it to the user and password fields, and Jen keeps dialling it as written (the cr
    **A CA is healthy when the REAL verifier accepts what Jen issues from it, for both purposes (Q196).** `ca_identity` keeps its structural checks (they give the `why` a person recognises) and ends with
    `ca_verifier_rejection`: a throwaway server leaf and a throwaway client leaf are issued from the CA IN MEMORY (never written) and verified with `cryptography.x509.verification` - the verifier's own
    message is the `why` - so an Extended Key Usage that leaves out a purpose, a name constraint that excludes every name, a path length, a weak algorithm, or the next property a review names is caught
-   by the same line. The web-PKI profile is relaxed in three places only (an absent KeyUsage, `policyConstraints`, `inhibitAnyPolicy`: RFC 5280 allows them and the daemon's OpenSSL accepts them) and the
-   throwaway leaf is valid at the instant it is verified whatever `_now` says. Where the `openssl` CLI exists Health also asks `openssl verify` and WARNS on a disagreement (`openssl_second_opinion`; never
-   a refusal: OpenSSL accepts a non-critical BasicConstraints and rejects an anyExtendedKeyUsage CA). **One daemon is one rotation target (Q196).** Two targets with the same SSH host (`same_host`: exact,
+   by the same line. The web-PKI profile is relaxed only where RFC 5280 allows and the daemon's OpenSSL accepts (an absent KeyUsage, `policyConstraints`, `inhibitAnyPolicy`, and the CRITICALITY - never the
+   meaning - of BasicConstraints, the Extended Key Usage and certificatePolicies: an EKU is still enforced as a PURPOSE through its validator) and the throwaway leaf is valid at the instant it is
+   verified whatever `_now` says. What the library offers no switch for stays STRICTER than OpenSSL and is pinned (a leading-dot or directoryName name constraint, a key that is not P-256/384/521 or
+   RSA of 2048 bits or more). **The REAL leaf is verified too (Q196, second pass):** the oracle's probe leaf has a DNS name, Jen's server leaf has the bind IP, so `issue_server_cert` and
+   `issue_client_cert` verify the leaf they ACTUALLY issue - real SANs, the client profile relaxed for a leaf with no SAN - before returning it (`verify_issued`), and a CA that cannot sign for THIS server
+   is refused before anything is installed; a leaf's AKI names the CA's actual SKI. Where the `openssl` CLI exists Health also asks `openssl verify` and reports a disagreement in BOTH directions
+   (`openssl_second_opinion`: a WARNING when Jen accepts and OpenSSL does not, evidence on the damaged row when Jen rejects and OpenSSL accepts; an openssl that is broken or cannot run is no opinion;
+   never a refusal: OpenSSL rejects an anyExtendedKeyUsage CA that the verifier, and this rule, call healthy). **One daemon is one rotation target (Q196).** Two targets with the same SSH host (`same_host`: exact,
    no DNS) and the same service are a refusal BEFORE staging; the route probes EVERY target once more with the staged identity after the last install and before the promotion, so each endpoint answers the
    FINAL material on its host (a failure there is the rollback).
 11. **A stored incident Jen cannot recognise is kept (Q190).** Each entry of the recovery record has a shape (`kea_changeset.recognised_incident`: an attention incident has a known category, a service, a server
@@ -673,6 +678,7 @@ Jen's CA by certificate identity, per endpoint; an invariant with no knob; an in
 - `tests/test_kea_tls_rotation.py::TestTheSecondPassOfQ195`
 - `tests/test_kea_tls_rotation.py::TestCaIdentityIsTheVerifier`
 - `tests/test_kea_tls_rotation.py::TestOneDaemonOneTarget`
+- `tests/test_kea_tls_rotation.py::TestTheSecondPassOfQ196`
 - `tests/test_direct_socket_credentials.py::TestTheProbeRowsOfQ196`
 - `tests/system/test_boundaries.py::test_22_j_a_ca_a_real_verifier_rejects_refuses_an_https_setup_and_health_names_the_restriction`
 - `tests/test_direct_socket_credentials.py::TestTheProbeRowsOfQ195`

@@ -234,13 +234,20 @@ above stays yours and https is a by-hand setup (next section).
 `kea-ca.crt` / `kea-ca.key`, Jen accepts it only when a real chain verifier —
 the same logic a TLS peer runs — accepts BOTH a server certificate and a
 client certificate issued from it. A CA that has expired, is not marked as
-a CA, whose Key Usage leaves out certificate signing, whose Extended Key
-Usage leaves out `serverAuth` or `clientAuth`, or whose name constraints
-exclude the names of your Kea hosts is shown as **damaged**: Health fails
-and prints the verifier's own reason, an https setup is refused before
+a CA, whose Key Usage leaves out certificate signing, or whose Extended Key
+Usage leaves out `serverAuth` or `clientAuth` is shown as **damaged**: Health
+fails and prints the verifier's own reason, an https setup is refused before
 anything is sent to a host, and Rotate replaces it only with the
-acknowledgement. A CA with no Key Usage extension at all is accepted (that
-means unrestricted). Where the `openssl` command exists on the Jen host,
+acknowledgement. A CA whose name constraints exclude the name or address of
+one of your Kea hosts is refused when Jen issues that host's certificate,
+before anything is installed, and the message says which name. A CA with no
+Key Usage extension at all is accepted (that means unrestricted), and so is
+one whose Basic Constraints or Extended Key Usage is not marked critical.
+Jen's verifier is stricter than OpenSSL in a few places it has no switch
+for, and shows these as damaged: a DNS name constraint written with a
+leading dot or a directory-name constraint, and a key that is not P-256,
+P-384, P-521 or RSA of 2048 bits or more (Health then says whether `openssl`
+agrees). Where the `openssl` command exists on the Jen host,
 Health also runs `openssl verify -purpose sslserver` and `-purpose
 sslclient` on the same throwaway certificates and shows a warning if it
 disagrees with Jen's verifier. Two Kea server records that share one SSH

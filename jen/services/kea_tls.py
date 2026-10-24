@@ -255,16 +255,36 @@ def _key_usage_may_be_absent(policy, cert, extension) -> None:
         raise ValueError("KeyUsage lacks keyCertSign")
 
 
+def _basic_constraints_ca_true(policy, cert, extension) -> None:
+    if not extension.ca:
+        raise ValueError("BasicConstraints ca is false")
+
+
+def _eku_allows_the_purpose(policy, cert, extension) -> None:
+    """Relaxing the CRITICALITY of a CA's Extended Key Usage must not relax its MEANING: the chain verifier enforces an EKU as a purpose through this very validator, and replacing it with nothing made
+    a clientAuth-only CA verify for sslserver (executed). The CA's EKU must contain the purpose being verified, or anyExtendedKeyUsage."""
+    if extension is None:
+        return  # no EKU on the CA: not restricted
+    if policy.extended_key_usage not in extension and ExtendedKeyUsageOID.ANY_EXTENDED_KEY_USAGE not in extension:
+        raise ValueError("Neither EKU nor anyEKU could be found")
+
+
 def _verifier_policies():
     """The verifier's profile is the public web PKI's (CA/Browser Forum); Jen's question is whether the DAEMON's TLS stack accepts what Jen issues, so the profile is relaxed where RFC 5280 allows and the
-    real stack (OpenSSL) accepts, and ONLY there: a KeyUsage may be absent (Q194's decision, `_key_usage_may_be_absent`), and `policyConstraints` and `inhibitAnyPolicy` - valid CA extensions the web profile
-    forbids - may be present. Everything else the verifier judges stands (EKU, name constraints, path length, algorithm strength, validity ...): the next constraint a review names is already covered."""
+    real stack (OpenSSL) accepts, and ONLY there: a KeyUsage may be absent (Q194's decision, `_key_usage_may_be_absent`); `policyConstraints` and `inhibitAnyPolicy` - valid CA extensions the web profile
+    forbids - may be present; and the CRITICALITY of BasicConstraints, the Extended Key Usage and certificatePolicies is not judged (the web profile demands one; OpenSSL, RFC 5280 for a non-CA-critical
+    reading and every operator's `openssl req -x509` do not) - BasicConstraints must still say `ca=True`, and an EKU is still enforced as a PURPOSE by the chain check. Everything else the verifier
+    judges stands (name constraints, path length, algorithm strength, validity ...): the next constraint a review names is already covered. What stays STRICTER than OpenSSL, because the library offers no
+    switch, is documented in the admin guide: a leading-dot or directoryName name constraint, a key that is not P-256/P-384/P-521 or RSA of 2048 bits or more."""
     agnostic = x509_verification.Criticality.AGNOSTIC
     ca = (
         x509_verification.ExtensionPolicy.webpki_defaults_ca()
         .may_be_present(x509.KeyUsage, agnostic, _key_usage_may_be_absent)
         .may_be_present(x509.PolicyConstraints, agnostic, None)
         .may_be_present(x509.InhibitAnyPolicy, agnostic, None)
+        .require_present(x509.BasicConstraints, agnostic, _basic_constraints_ca_true)
+        .may_be_present(x509.ExtendedKeyUsage, agnostic, _eku_allows_the_purpose)
+        .may_be_present(x509.CertificatePolicies, agnostic, None)
     )
     return ca, x509_verification.ExtensionPolicy.webpki_defaults_ee()
 
@@ -280,14 +300,17 @@ def _probe_names(ca_cert) -> list[str]:
     for subtree in constraints.permitted_subtrees or []:
         if isinstance(subtree, x509.DNSName) and subtree.value.lstrip("."):
             names.append(f"probe.{subtree.value.lstrip('.')}")
-    return names
+    return names[:8]  # (a CA with hundreds of permitted subtrees must not make every `ca_state` hundreds of probes)
 
 
 def _verifier_message(error: BaseException) -> str:
     text = str(error) or type(error).__name__
     for noise in ("validation failed: ", "candidates exhausted: "):
         text = text.replace(noise, "")
-    return text.strip()[:200]
+    text = text.strip()[:200]
+    if "Neither EKU nor anyEKU" in text:
+        text = f"its Extended Key Usage does not include this purpose ({text})"
+    return text
 
 
 def verify_probe(ca_cert, ca_key, client: bool):
@@ -323,16 +346,29 @@ def verify_probe(ca_cert, ca_key, client: bool):
     return first, leaf
 
 
+_ORACLE_VERDICTS: dict = {}
+
+
 def ca_verifier_rejection(ca_cert, ca_key) -> str:
     """Q196 (AL1) - THE ORACLE. "" when a real chain verifier accepts a certificate issued from this CA for sslserver AND for sslclient; else "the verifier rejects certificates issued from it for <purpose>:
     <its own message>". Since beta.19 the reviewer found, one release at a time, the next property of a certificate `ca_identity` did not check (the pair, then the purpose, then the Extended Key Usage); X.509 has
     dozens (EKU, name constraints, policy constraints, path length, algorithm strength ...) and listing them is unbounded. The terminal check is the one the reviewer uses to PROVE a finding - a verifier -
     and the library Jen pins ships it, so "healthy" now means "a real verifier accepts what Jen issues from it, for both purposes". Nothing is written."""
+    token = (ca_cert.fingerprint(hashes.SHA256()), int(time.time() // 60))
+    if (
+        token in _ORACLE_VERDICTS
+    ):  # (an operator's RSA-4096 CA costs ~0.1 s a call and `ca_state` has ~22 callers: the verdict is a function of the certificate and the minute)
+        return _ORACLE_VERDICTS[token]
+    verdict = ""
     for purpose, client in (("sslserver", False), ("sslclient", True)):
         message, _leaf_cert = verify_probe(ca_cert, ca_key, client)
         if message:
-            return f"the verifier rejects certificates issued from it for {purpose}: {message}"
-    return ""
+            verdict = f"the verifier rejects certificates issued from it for {purpose}: {message}"
+            break
+    if len(_ORACLE_VERDICTS) > 64:
+        _ORACLE_VERDICTS.clear()
+    _ORACLE_VERDICTS[token] = verdict
+    return verdict
 
 
 def openssl_second_opinion(timeout: float = 10.0) -> str:
@@ -340,23 +376,23 @@ def openssl_second_opinion(timeout: float = 10.0) -> str:
     there is no CLI, no CA to judge, or they agree). A disagreement is a warning, never a refusal: the two implementations differ in strictness (OpenSSL accepts a non-critical BasicConstraints, rejects an
     anyExtendedKeyUsage CA ...) and the operator should know when the daemon's own library may judge the CA differently."""
     exe = shutil.which("openssl")
-    if not exe or ca_state()[0] != "ok":
+    if not exe or ca_state()[0] == "none":
         return ""
     ca_path = ca_paths()[0]
-    try:
-        ca_cert, ca_key = _load_ca()  # (the CA is read ONLY through `ca_state`, sweep S15)
-    except (CaDamaged, OSError, ValueError, TypeError, UnsupportedAlgorithm):
+    material = _ca_material_for_opinion()
+    if material is None:
         return ""
+    ca_cert, ca_key = material
     disagreements = []
-    with tempfile.TemporaryDirectory(prefix="jen-openssl-verify-") as directory:
-        leaf_path = os.path.join(directory, "probe.pem")
-        for purpose, client in (("sslserver", False), ("sslclient", True)):
-            message, leaf = verify_probe(ca_cert, ca_key, client)
-            if leaf is None:
-                continue
-            with open(leaf_path, "wb") as f:
-                f.write(_cert_pem(leaf))  # a PUBLIC certificate: no key is written
-            try:
+    try:
+        with tempfile.TemporaryDirectory(prefix="jen-openssl-verify-") as directory:
+            leaf_path = os.path.join(directory, "probe.pem")
+            for purpose, client in (("sslserver", False), ("sslclient", True)):
+                message, leaf = verify_probe(ca_cert, ca_key, client)
+                if leaf is None:
+                    continue
+                with open(leaf_path, "wb") as f:
+                    f.write(_cert_pem(leaf))  # a PUBLIC certificate: no key is written
                 done = subprocess.run(  # nosec B603 - list args, a fixed binary found on PATH, no shell
                     [exe, "verify", "-purpose", purpose, "-CAfile", ca_path, leaf_path],
                     capture_output=True,
@@ -364,14 +400,40 @@ def openssl_second_opinion(timeout: float = 10.0) -> str:
                     timeout=timeout,
                     check=False,
                 )
-            except (OSError, subprocess.SubprocessError):
-                return ""
-            theirs = done.returncode == 0 and "OK" in (done.stdout or "")
-            if theirs != (not message):
-                disagreements.append(
-                    f"openssl verify {'accepts' if theirs else 'rejects'} a certificate issued from it for {purpose} where Jen's verifier {'rejects' if message else 'accepts'} it"
-                )
+                said = (done.stdout or "") + (done.stderr or "")
+                if done.returncode == 0 and ": OK" in said:
+                    theirs = True
+                elif done.returncode != 0 and "error" in said.lower():
+                    theirs = False
+                else:
+                    continue  # a broken binary, a bad OPENSSL_CONF, nothing it said that is a verdict: NO opinion, not a disagreement
+                if theirs != (not message):
+                    if theirs:
+                        disagreements.append(
+                            f"openssl verify accepts a certificate issued from it for {purpose} where Jen's verifier rejects it ({message})"
+                        )
+                    else:
+                        disagreements.append(
+                            f"openssl verify rejects a certificate issued from it for {purpose} where Jen's verifier accepts it"
+                        )
+    except (OSError, subprocess.SubprocessError):
+        return ""  # a temp directory that cannot be made, a binary that cannot run: no row - never an exception through Health
     return "; ".join(disagreements)
+
+
+def _ca_material_for_opinion():
+    """The CA's certificate and key for the second opinion - through `ca_state` when it is `ok`, and read directly when the verifier has judged it damaged (the opinion is about exactly that case: does
+    the daemon's own library agree?). None when either file cannot be loaded."""
+    if ca_state()[0] == "ok":
+        try:
+            return _load_ca()
+        except (CaDamaged, OSError, ValueError, TypeError, UnsupportedAlgorithm):
+            return None
+    crt, key = ca_paths()
+    try:
+        return load_cert(crt), load_key(key)
+    except (OSError, ValueError, TypeError, UnsupportedAlgorithm):
+        return None
 
 
 def ca_identity(cert_path: str, key_path: str, *, raise_io: bool = False) -> tuple[str, str]:
@@ -552,6 +614,17 @@ def _load_ca():
     return load_cert(crt), load_key(key_path)
 
 
+def _authority_key_identifier(ca_cert):
+    """The leaf's AKI names the CA's key the way the CA's own SubjectKeyIdentifier does. An operator's CA whose SKI is not the SHA-1 of its public key (RFC 5280 allows any method) made OpenSSL reject
+    every chain: the AKI Jen computed from the key did not match the SKI it found on the issuer (Q196 second pass, executed)."""
+    try:
+        return x509.AuthorityKeyIdentifier.from_issuer_subject_key_identifier(
+            ca_cert.extensions.get_extension_for_class(x509.SubjectKeyIdentifier).value
+        )
+    except (x509.ExtensionNotFound, x509.DuplicateExtension, ValueError):
+        return x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_cert.public_key())
+
+
 def _leaf(ca_cert, ca_key, key, cn: str, sans: list, client: bool, now=None):
     now = (
         now if now is not None else _now()
@@ -584,7 +657,7 @@ def _leaf(ca_cert, ca_key, key, cn: str, sans: list, client: bool, now=None):
             critical=False,
         )
         .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
-        .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_cert.public_key()), critical=False)
+        .add_extension(_authority_key_identifier(ca_cert), critical=False)
     )
     if sans:
         builder = builder.add_extension(x509.SubjectAlternativeName(sans), critical=False)
@@ -608,6 +681,39 @@ def _san_for(value: str):
 # ── leaves ──────────────────────────────────────────────────────────────────
 
 
+def verify_issued(ca_cert, leaf, client: bool, name: str = "") -> str:
+    """Q196 second pass (row 3, the real artifact): "" when the chain verifier accepts the leaf Jen ACTUALLY issued - with its real SANs (the bind address first: an IP, which the oracle's DNS-only
+    probe leaf never carried), as a server certificate for `name` or as a client certificate (no SAN: the client profile is relaxed for it) - else the verifier's message. The throwaway oracle
+    says whether the CA can sign for either purpose; THIS says whether it can sign for THIS server."""
+    now = datetime.now(timezone.utc)
+    ca_policy, ee_policy = _verifier_policies()
+    if client:
+        ee_policy = ee_policy.may_be_present(x509.SubjectAlternativeName, x509_verification.Criticality.AGNOSTIC, None)
+    try:
+        builder = (
+            x509_verification.PolicyBuilder()
+            .store(x509_verification.Store([ca_cert]))
+            .time(now)
+            .extension_policies(ca_policy=ca_policy, ee_policy=ee_policy)
+        )
+        if client:
+            builder.build_client_verifier().verify(leaf, [])
+        else:
+            subject = x509.IPAddress(ipaddress.ip_address(name)) if _is_ip(name) else x509.DNSName(name)
+            builder.build_server_verifier(subject).verify(leaf, [])
+    except Exception as e:  # fail closed: a leaf the verifier cannot judge is a leaf a daemon may not accept
+        return _verifier_message(e)
+    return ""
+
+
+def _is_ip(value: str) -> bool:
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return False
+
+
 def issue_server_cert(
     server: dict, service: str, bind_address: str, ca: tuple[str, str] | None = None, commit: bool = True
 ) -> dict:
@@ -629,6 +735,13 @@ def issue_server_cert(
             sans.append(san)
     name = server.get("name") or f"Kea Server {server.get('id')}"
     cert = _leaf(ca_cert, ca_key, key, f"kea-{service} {name}", sans, client=False)
+    if sans:
+        # (Q196 second pass, row 3) the leaf Jen is about to put on a host, with the names it really carries, is verified BEFORE it is returned: a CA name-constrained away from this server's address
+        # passed the oracle (a DNS-only probe) and would have been installed, restarted and failed its probe
+        primary = str(sans[0].value)
+        rejection = verify_issued(ca_cert, cert, False, primary)
+        if rejection:
+            raise CaDamaged(f"the CA cannot issue a certificate the verifier accepts for {primary}: {rejection}")
     files = {
         "ca.crt": _cert_pem(ca_cert).decode(),
         "server.crt": _cert_pem(cert).decode(),
@@ -1024,6 +1137,9 @@ def issue_client_cert(force: bool = False) -> dict:
     ca_cert, ca_key = _load_ca()
     key = _new_key()
     cert = _leaf(ca_cert, ca_key, key, f"jen {_hostname()}", [], client=True)
+    rejection = verify_issued(ca_cert, cert, True)
+    if rejection:
+        raise CaDamaged(f"the CA cannot issue Jen's client certificate the verifier accepts: {rejection}")
     _ensure_dir(SSL_DIR)
     commit_file_set([(key_path, _key_pem(key), 0o600), (pem, _cert_pem(cert), 0o644)])
     logger.info(f"kea_tls: issued Jen's Kea client certificate at {pem}")
@@ -1371,14 +1487,16 @@ def rotation_inventory(servers, url_for=None, recovery: bool = False, prove_stor
         if not ssh:
             continue
         for other_server, other_ssh in owners.get(service, []):
-            if same_host(ssh, other_ssh):
+            if ssh == other_ssh or same_host(
+                ssh, other_ssh
+            ):  # (the identical string is one host even where `same_host` cannot parse it)
                 spelled = (
                     " (the two records write the host differently - Jen does not resolve names, so which spellings are one daemon is yours to decide)"
                     if ssh != other_ssh
                     else ""
                 )
                 refusals.append(
-                    f"{_server_label(other_server, service)} and {_server_label(server, service)} both manage kea-{service} on {ssh}: Jen would install two certificates on one daemon, "
+                    f"{_server_label(other_server, service)} and {_server_label(server, service)} both manage {_DAEMON_LABEL.get(service, 'kea-' + service)} on {ssh}: Jen would install two certificates on one daemon, "
                     f"the second over the first{spelled}. Remove one record or point it at its own host before rotating"
                 )
         owners.setdefault(service, []).append((server, ssh))

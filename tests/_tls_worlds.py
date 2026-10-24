@@ -137,7 +137,22 @@ VERIFIER_OK_STATES = (
     "name-constraints-permit-own-domain",
     "policy-constraints",
     "inhibit-any-policy",
+    # the second pass of Q196: CAs an operator really owns, which the web-PKI profile rejected and OpenSSL accepts (the profile is relaxed for them), and a CA whose SKI is not the key's SHA-1
+    "bc-non-critical",
+    "eku-critical-server-and-client",
+    "certificate-policies-critical",
+    "ski-not-sha1",
 )
+#: ... CAs the verifier is STRICTER about than OpenSSL and offers no switch for (documented in the admin guide, pinned here as damaged): a leading-dot or directoryName name constraint, a key that is
+#: not P-256/384/521 or RSA >= 2048
+VERIFIER_STRICTER_STATES = (
+    "name-constraints-leading-dot",
+    "name-constraints-directory-name",
+    "key-secp256k1",
+    "key-brainpool",
+)
+#: ... and CAs the throwaway (DNS-only) probe accepts but that cannot sign for a particular SERVER's address: the REAL leaf Jen issues is verified before it is returned
+REAL_LEAF_STATES = ("name-constraints-ip-outside", "name-constraints-ip-inside")
 
 #: a CA that WORKS but that Q194's first draft called damaged: no KeyUsage extension at all (RFC 5280: unrestricted - what `openssl req -x509` makes by default)
 OPERATOR_CA_STATES = ("no-key-usage",)
@@ -146,13 +161,26 @@ OPERATOR_CA_STATES = ("no-key-usage",)
 def semantic_ca(kind: str):
     """(certificate, key) of a CA in the semantic state `kind`: objects, not PEM - `semantic_ca_pem` has the bytes."""
     import datetime
+    import ipaddress
 
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.asymmetric import ed25519
+    from cryptography.hazmat.primitives.asymmetric import ec, ed25519
 
-    assert kind in SEMANTIC_CA_STATES + OPERATOR_CA_STATES + VERIFIER_CA_STATES + VERIFIER_OK_STATES, kind
-    key = ed25519.Ed25519PrivateKey.generate() if kind == "unsupported-key" else kea_tls._new_key()
+    assert (
+        kind
+        in SEMANTIC_CA_STATES
+        + OPERATOR_CA_STATES
+        + VERIFIER_CA_STATES
+        + VERIFIER_OK_STATES
+        + VERIFIER_STRICTER_STATES
+        + REAL_LEAF_STATES
+    ), kind
+    key = {
+        "unsupported-key": lambda: ed25519.Ed25519PrivateKey.generate(),
+        "key-secp256k1": lambda: ec.generate_private_key(ec.SECP256K1()),
+        "key-brainpool": lambda: ec.generate_private_key(ec.BrainpoolP256R1()),
+    }.get(kind, kea_tls._new_key)()
     name = kea_tls._name(f"Jen Kea CA semantic {kind}")
     issuer = kea_tls._name("an issuer that is not the subject") if kind == "issuer-not-subject" else name
     now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
@@ -172,7 +200,8 @@ def semantic_ca(kind: str):
     )
     if kind != "no-basic-constraints":
         builder = builder.add_extension(
-            x509.BasicConstraints(ca=kind != "not-ca", path_length=None if kind == "not-ca" else 0), critical=True
+            x509.BasicConstraints(ca=kind != "not-ca", path_length=None if kind == "not-ca" else 0),
+            critical=kind != "bc-non-critical",
         )
     if kind != "no-key-usage":
         builder = builder.add_extension(
@@ -190,6 +219,7 @@ def semantic_ca(kind: str):
             critical=True,
         )
     from cryptography.x509.oid import ExtendedKeyUsageOID as EKU
+    from cryptography.x509.oid import NameOID
 
     extra = {
         "eku-clientauth-only": x509.ExtendedKeyUsage([EKU.CLIENT_AUTH]),
@@ -197,15 +227,35 @@ def semantic_ca(kind: str):
         "eku-codesigning": x509.ExtendedKeyUsage([EKU.CODE_SIGNING]),
         "eku-server-and-client": x509.ExtendedKeyUsage([EKU.SERVER_AUTH, EKU.CLIENT_AUTH]),
         "eku-anyeku": x509.ExtendedKeyUsage([x509.ObjectIdentifier("2.5.29.37.0")]),
+        "eku-critical-server-and-client": x509.ExtendedKeyUsage([EKU.SERVER_AUTH, EKU.CLIENT_AUTH]),
+        "certificate-policies-critical": x509.CertificatePolicies(
+            [x509.PolicyInformation(x509.ObjectIdentifier("2.5.29.32.0"), None)]
+        ),
+        "ski-not-sha1": x509.SubjectKeyIdentifier(os.urandom(20)),
     }.get(kind)
     if extra is not None:
-        builder = builder.add_extension(extra, critical=False)
+        builder = builder.add_extension(
+            extra, critical=kind in ("eku-critical-server-and-client", "certificate-policies-critical")
+        )
     constraint = {
         "name-constraints-exclude-all": x509.NameConstraints(
             permitted_subtrees=None, excluded_subtrees=[x509.DNSName("")]
         ),
         "name-constraints-permit-own-domain": x509.NameConstraints(
             permitted_subtrees=[x509.DNSName("example.com")], excluded_subtrees=None
+        ),
+        "name-constraints-leading-dot": x509.NameConstraints(
+            permitted_subtrees=[x509.DNSName(".lan")], excluded_subtrees=None
+        ),
+        "name-constraints-directory-name": x509.NameConstraints(
+            permitted_subtrees=[x509.DirectoryName(x509.Name([x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Jen")]))],
+            excluded_subtrees=None,
+        ),
+        "name-constraints-ip-outside": x509.NameConstraints(
+            permitted_subtrees=[x509.IPAddress(ipaddress.ip_network("172.16.0.0/12"))], excluded_subtrees=None
+        ),
+        "name-constraints-ip-inside": x509.NameConstraints(
+            permitted_subtrees=[x509.IPAddress(ipaddress.ip_network("10.0.0.0/8"))], excluded_subtrees=None
         ),
         "policy-constraints": x509.PolicyConstraints(require_explicit_policy=0, inhibit_policy_mapping=None),
         "inhibit-any-policy": x509.InhibitAnyPolicy(0),

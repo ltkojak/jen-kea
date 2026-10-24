@@ -1316,7 +1316,15 @@ class TestS14bAServiceShowsAnAddressByTheHelperToo:
 
 #: the functions of kea_tls that may name `ca_paths()` AND `load_key(` together: the one definition (`ca_state`), the signer (`_load_ca`, which asks `ca_state` first), the pair check, and the
 #: three that read the CA CERTIFICATE only for a comparison and load a LEAF's key (`_material`, `client_state`, `client_kind`).
-S15_ALLOWED = {"ca_state", "_load_ca", "ca_consistent", "_material", "client_state", "client_kind"}
+S15_ALLOWED = {
+    "ca_state",
+    "_load_ca",
+    "ca_consistent",
+    "_material",
+    "client_state",
+    "client_kind",
+    "_ca_material_for_opinion",  # Q196: the second opinion reads a CA the verifier has judged DAMAGED - it is about exactly that case
+}
 
 
 def s15_sites(source: str) -> list[str]:

@@ -406,7 +406,11 @@ MATRIX_READERS = {
     },  # Q194 (AJ1): the ONE judgment of CA material - the `ca_semantic` / `next_ca_semantic` worlds, and since Q196 the `ca_verifier` / `next_ca_verifier` rows
     "openssl_second_opinion": {
         "open",
-    },  # Q196 (AL1): the `openssl verify` cross-check (`TestCaIdentityIsTheVerifier`)
+    },
+    "_ca_material_for_opinion": {
+        "load_cert",
+        "load_key",
+    },  # Q196 second pass: reads a CA the verifier judged DAMAGED, for the opinion in both directions  # Q196 (AL1): the `openssl verify` cross-check (`TestCaIdentityIsTheVerifier`)
     "ca_state": {"lexists"},
     "_initialised_evidence": {"lexists", "listdir"},
     "copies_dir_writable": {

@@ -2529,22 +2529,33 @@ class TestClientState:
         with pytest.raises(OSError):
             kea_tls.issue_client_cert()  # (a directory where the key belongs: refused as an error, never silently skipped)
 
-    def test_an_expired_pair_is_damaged_and_re_issued(self, lab, monkeypatch):
+    @staticmethod
+    def _client_pair_minted_at(offset_days):
+        """A client pair the live CA issued with its validity shifted by `offset_days`. Since Q196's second pass `issue_client_cert` verifies the leaf it issues, so it refuses to mint an expired or
+        not-yet-valid one: the damaged pair these tests need is fabricated with `_leaf(..., now=...)` instead of by patching the module's clock under the product."""
         import datetime
 
-        real_now = kea_tls._now
-        monkeypatch.setattr(kea_tls, "_now", lambda: real_now() - datetime.timedelta(days=3000))
-        kea_tls.issue_client_cert(force=True)
-        monkeypatch.setattr(kea_tls, "_now", real_now)
+        ca_cert, ca_key = kea_tls._load_ca()
+        key = kea_tls._new_key()
+        leaf = kea_tls._leaf(
+            ca_cert,
+            ca_key,
+            key,
+            "jen test client",
+            [],
+            client=True,
+            now=kea_tls._now() + datetime.timedelta(days=offset_days),
+        )
+        pem, key_path = kea_tls.client_paths()
+        pathlib.Path(pem).write_bytes(kea_tls._cert_pem(leaf))
+        pathlib.Path(key_path).write_bytes(kea_tls._key_pem(key))
+
+    def test_an_expired_pair_is_damaged_and_re_issued(self, lab, monkeypatch):
+        self._client_pair_minted_at(-3000)
         self._reissued(lab, "has expired")
 
     def test_a_pair_that_is_not_valid_yet_is_damaged(self, lab, monkeypatch):
-        import datetime
-
-        real_now = kea_tls._now
-        monkeypatch.setattr(kea_tls, "_now", lambda: real_now() + datetime.timedelta(days=30))
-        kea_tls.issue_client_cert(force=True)
-        monkeypatch.setattr(kea_tls, "_now", real_now)
+        self._client_pair_minted_at(30)
         assert kea_tls.client_state()[0] == "damaged" and "not valid yet" in kea_tls.client_state()[1]
 
     def test_a_pair_issued_by_an_earlier_jen_ca_is_damaged_and_re_issued(self, lab):
@@ -3806,3 +3817,238 @@ class TestOneDaemonOneTarget:
         assert "Kea CA rotated" not in texts and _ca_bytes() == before, "nothing was promoted"
         assert "Rolled back to the previous CA" in texts, texts
         assert lab.settings_writes == []
+
+
+class TestTheSecondPassOfQ196:
+    """The second pass on Q196 (agent a20701e5a2adbec0f, 0 P1 / 3 P2 / 6 P3), each finding as its row first: 1 an operator's CA the web-PKI profile rejected and OpenSSL accepts is healthy (the profile is
+    relaxed where its API allows), and what stays stricter is pinned; 2 the openssl second opinion runs in BOTH directions; 3 the REAL leaf Jen issues - with its bind IP - is verified before it is
+    returned (the oracle's DNS-only probe could not see an IP name constraint); 4 a leaf's AKI follows the CA's actual SKI; 5 an openssl binary that is broken or a temp directory that cannot be made is no
+    opinion; 6 the oracle runs once per certificate and minute; 7/8 the sentences and the duplicate fallbacks."""
+
+    SERVER = {"id": 9, "name": "probe-server", "ssh_host": "10.0.0.5"}
+
+    @pytest.mark.parametrize("kind", __import__("tests._tls_worlds", fromlist=["x"]).VERIFIER_STRICTER_STATES)
+    def test_row_1_what_the_verifier_is_stricter_about_than_openssl_is_pinned_as_damaged_not_surprising(
+        self, lab, tmp_path, kind
+    ):
+        from tests import _tls_worlds as worlds
+
+        cert, key = worlds.semantic_ca(kind)
+        (tmp_path / "c.crt").write_bytes(kea_tls._cert_pem(cert))
+        (tmp_path / "c.key").write_bytes(kea_tls._key_pem(key))
+        state, why = kea_tls.ca_identity(str(tmp_path / "c.crt"), str(tmp_path / "c.key"))
+        expected = {
+            "name-constraints-leading-dot": "malformed DNS name constraint",
+            "name-constraints-directory-name": "directoryName",
+            "key-secp256k1": "Forbidden public key",
+            "key-brainpool": "Forbidden public key",
+        }[kind]
+        assert state == "damaged" and "the verifier rejects" in why and expected in why, (kind, why)
+
+    def test_row_1_an_eku_restriction_is_still_enforced_after_its_criticality_stopped_being_judged(self, lab):
+        """Replacing the EKU rule with a no-op validator made a clientAuth-only CA verify for sslserver (executed): the criticality is relaxed, the PURPOSE is not."""
+        from tests import _tls_worlds as worlds
+
+        for kind, purpose in (("eku-clientauth-only", "sslserver"), ("eku-serverauth-only", "sslclient")):
+            cert, key = worlds.semantic_ca(kind)
+            assert purpose in kea_tls.ca_verifier_rejection(cert, key), kind
+        cert, key = worlds.semantic_ca("eku-critical-server-and-client")
+        assert kea_tls.ca_verifier_rejection(cert, key) == ""
+
+    def test_row_2_the_second_opinion_also_runs_on_a_damaged_ca_and_says_when_openssl_accepts_what_the_verifier_rejects(
+        self, lab
+    ):
+        import shutil
+
+        if not shutil.which("openssl"):
+            pytest.skip("no openssl CLI on this machine")
+        _write_live_ca("key-secp256k1")
+        lab.begin()
+        lab.before = None
+        assert kea_tls.ca_state()[0] == "damaged"
+        cert, key = kea_tls._ca_material_for_opinion()
+        openssl_accepts_something_the_verifier_rejects = any(
+            _openssl_accepts(cert, key, client) is True and bool(kea_tls.verify_probe(cert, key, client)[0])
+            for client in (False, True)
+        )
+        opinion = kea_tls.openssl_second_opinion()
+        assert (opinion != "") is openssl_accepts_something_the_verifier_rejects, opinion
+        row = health._kea_tls_expiry({})
+        assert row.status == "fail" and ("openssl verify accepts" in row.detail) is bool(opinion), row.detail
+
+    def test_row_3_a_ca_name_constrained_away_from_a_servers_address_passes_the_oracle_and_is_refused_at_issuing(
+        self, lab
+    ):
+        import shutil
+        import subprocess
+        import tempfile
+
+        _write_live_ca("name-constraints-ip-outside")
+        lab.begin()
+        lab.before = None
+        assert kea_tls.ca_state() == ("ok", ""), "the oracle's DNS-only probe cannot see an IP constraint"
+        with pytest.raises(kea_tls.CaDamaged) as refused:
+            kea_tls.issue_server_cert(self.SERVER, "dhcp4", "10.0.0.5", commit=False)
+        assert "10.0.0.5" in refused.value.why and "the verifier accepts" in refused.value.why, refused.value.why
+        _write_live_ca("name-constraints-ip-inside")
+        files = kea_tls.issue_server_cert(self.SERVER, "dhcp4", "10.0.0.5", commit=False)
+        exe = shutil.which("openssl")
+        if exe:  # the REAL leaf, checked by openssl too
+            with tempfile.TemporaryDirectory() as d:
+                pathlib.Path(d, "ca.pem").write_text(files["ca.crt"], encoding="ascii")
+                pathlib.Path(d, "leaf.pem").write_text(files["server.crt"], encoding="ascii")
+                done = subprocess.run(  # nosec B603
+                    [
+                        exe,
+                        "verify",
+                        "-purpose",
+                        "sslserver",
+                        "-CAfile",
+                        os.path.join(d, "ca.pem"),
+                        os.path.join(d, "leaf.pem"),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            assert done.returncode == 0, done.stdout + done.stderr
+
+    def test_row_3_the_rotation_says_the_ca_cannot_issue_for_a_server_and_has_touched_no_host(self, lab, monkeypatch):
+        def refuse(*a, **k):
+            raise kea_tls.CaDamaged("the CA cannot issue a certificate the verifier accepts for 10.0.0.5: boom")
+
+        monkeypatch.setattr(kea_tls, "issue_server_cert", refuse)
+        before = _ca_bytes()
+        _rotate()
+        assert (
+            "the CA cannot issue its certificate (the CA cannot issue a certificate the verifier accepts" in lab.texts()
+        )
+        assert lab.remote_actions() == 0 and "Kea CA rotated" not in lab.texts() and _ca_bytes() == before
+
+    def test_row_3_the_real_client_leaf_is_verified_too(self, lab):
+        ca_cert, _ca_key = kea_tls._load_ca()
+        pem, _key = kea_tls.client_paths()
+        from cryptography import x509
+
+        leaf = x509.load_pem_x509_certificate(pathlib.Path(pem).read_bytes())
+        assert kea_tls.verify_issued(ca_cert, leaf, True) == "", (
+            "Jen's own client certificate (no SAN) verifies under the relaxed client profile"
+        )
+
+    def test_row_4_a_leaf_names_the_cas_actual_ski_as_its_aki(self, lab):
+        import shutil
+        import subprocess
+        import tempfile
+
+        from cryptography import x509
+
+        _write_live_ca("ski-not-sha1")
+        lab.begin()
+        lab.before = None
+        ca_cert, _key = kea_tls._load_ca()
+        files = kea_tls.issue_server_cert(self.SERVER, "dhcp4", "10.0.0.5", commit=False)
+        leaf = x509.load_pem_x509_certificate(files["server.crt"].encode())
+        aki = leaf.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier).value.key_identifier
+        assert aki == ca_cert.extensions.get_extension_for_class(x509.SubjectKeyIdentifier).value.digest
+        exe = shutil.which("openssl")
+        if exe:
+            with tempfile.TemporaryDirectory() as d:
+                pathlib.Path(d, "ca.pem").write_text(files["ca.crt"], encoding="ascii")
+                pathlib.Path(d, "leaf.pem").write_text(files["server.crt"], encoding="ascii")
+                done = subprocess.run(  # nosec B603
+                    [exe, "verify", "-CAfile", os.path.join(d, "ca.pem"), os.path.join(d, "leaf.pem")],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            assert done.returncode == 0, "openssl chains the leaf to a CA whose SKI is not the key's SHA-1"
+
+    def test_row_5_a_broken_openssl_binary_is_no_opinion_not_a_disagreement(self, lab, monkeypatch):
+        import subprocess
+
+        monkeypatch.setattr(kea_tls.shutil, "which", lambda name: "/usr/bin/openssl")
+        monkeypatch.setattr(
+            kea_tls.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 127, "", "openssl: not found")
+        )
+        assert kea_tls.openssl_second_opinion() == ""
+
+    def test_row_5_a_temp_directory_that_cannot_be_made_is_no_row_and_never_an_exception_through_health(
+        self, lab, monkeypatch
+    ):
+        monkeypatch.setattr(kea_tls.shutil, "which", lambda name: "/usr/bin/openssl")
+
+        def denied(*a, **k):
+            raise PermissionError(13, "denied")
+
+        monkeypatch.setattr(kea_tls.tempfile, "TemporaryDirectory", denied)
+        assert kea_tls.openssl_second_opinion() == ""
+        assert health._kea_tls_expiry({}).status in ("ok", "warn", "fail")
+
+    def test_row_6_the_oracle_runs_once_per_certificate_and_minute(self, lab, monkeypatch):
+        kea_tls._ORACLE_VERDICTS.clear()
+        calls = []
+        real = kea_tls.verify_probe
+        monkeypatch.setattr(kea_tls, "verify_probe", lambda *a, **k: calls.append(1) or real(*a, **k))
+        kea_tls.ca_state()
+        first = len(calls)
+        kea_tls.ca_state()
+        kea_tls.ca_state()
+        assert first == 2 and len(calls) == 2, "two purposes, once; the next calls are answered from the verdict"
+        _write_live_ca("eku-clientauth-only")  # a changed certificate is judged afresh
+        lab.begin()
+        lab.before = None
+        assert kea_tls.ca_state()[0] == "damaged" and len(calls) > 2
+
+    def test_row_7_the_eku_sentence_is_plain_and_the_d2_label_is_the_daemons(self, lab):
+        from tests import _tls_worlds as worlds
+
+        cert, key = worlds.semantic_ca("eku-clientauth-only")
+        assert "its Extended Key Usage does not include this purpose" in kea_tls.ca_verifier_rejection(cert, key)
+        a = {"id": 51, "name": "ddns-a", "ssh_host": "10.9.9.9"}
+        b = {"id": 52, "name": "ddns-b", "ssh_host": "10.9.9.9"}
+        for server in (a, b):
+            kea_tls.issue_server_cert(server, "d2", "10.9.9." + str(server["id"]))
+        inventory = kea_tls.rotation_inventory(
+            [a, b],
+            url_for=lambda s, svc: f"https://10.9.9.{s['id']}:8003" if svc == "d2" else "",
+            prove_storage=False,
+        )
+        assert any("both manage kea-dhcp-ddns on 10.9.9.9" in r for r in inventory.refusals), inventory.refusals
+
+    def test_row_8_two_identical_ssh_host_strings_that_cannot_be_parsed_are_still_one_host(self, lab):
+        hosts = "h\u200bost"  # a zero-width character: `same_host` cannot name a place, the string is identical
+        a = {"id": 61, "name": "odd-a", "ssh_host": hosts}
+        b = {"id": 62, "name": "odd-b", "ssh_host": hosts}
+        for server in (a, b):
+            kea_tls.issue_server_cert(server, "dhcp4", "10.9.9." + str(server["id"]))
+        inventory = kea_tls.rotation_inventory(
+            [a, b],
+            url_for=lambda s, svc: f"https://10.9.9.{s['id']}:8004" if svc == "dhcp4" else "",
+            prove_storage=False,
+        )
+        assert any("both manage" in r for r in inventory.refusals), inventory.refusals
+
+    def test_the_probe_names_are_capped(self):
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes
+
+        key = kea_tls._new_key()
+        name = kea_tls._name("many domains")
+        now = kea_tls._now()
+        import datetime
+
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(name)
+            .issuer_name(name)
+            .public_key(key.public_key())
+            .serial_number(1)
+            .not_valid_before(now - datetime.timedelta(minutes=5))
+            .not_valid_after(now + datetime.timedelta(days=30))
+            .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+            .add_extension(
+                x509.NameConstraints([x509.DNSName(f"d{i}.example.com") for i in range(40)], None), critical=True
+            )
+            .sign(key, hashes.SHA256())
+        )
+        assert len(kea_tls._probe_names(cert)) <= 8

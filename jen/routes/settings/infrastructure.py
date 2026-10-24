@@ -2827,6 +2827,10 @@ def rotate_kea_ca():
                     files = __tls.issue_server_cert(
                         server, service, bind, ca=(staged["ca_cert"], staged["ca_key"]), commit=False
                     )  # Jen's own pair changes only once the host has this one and it answers
+                except __tls.CaDamaged as e:
+                    # (Q196 second pass, row 3) the verifier refused the leaf Jen was about to issue for THIS server's real names - nothing was installed on this target
+                    failure = f"{sname} {daemon}: the CA cannot issue its certificate ({e.why})"
+                    break
                 except Exception as e:
                     logger.error(
                         f"kea_tls: staged issue failed for {sname}/{service}: {type(e).__name__}: {__auth.scrub_urls(str(e))}"
