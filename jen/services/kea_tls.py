@@ -50,8 +50,11 @@ import logging
 import os
 import re
 import secrets
+import shutil
 import socket
 import ssl
+import subprocess  # nosec B404 - list-args only, a fixed `openssl verify` second opinion (Q196)
+import tempfile
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -59,6 +62,7 @@ from cryptography import x509
 from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
+from cryptography.x509 import verification as x509_verification
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from jen import extensions
@@ -244,6 +248,132 @@ class CaDamaged(Exception):
         self.why = why
 
 
+def _key_usage_may_be_absent(policy, cert, extension) -> None:
+    """The ONE relaxation of the verifier's CA profile (Q194's decision, kept): RFC 5280 says a CA certificate with NO KeyUsage extension is not restricted - an operator's own `openssl req -x509` CA
+    often has none and works - so absence passes; a KeyUsage that IS there must allow `keyCertSign`. (The strict profile requires the extension to be present.)"""
+    if extension is not None and not extension.key_cert_sign:
+        raise ValueError("KeyUsage lacks keyCertSign")
+
+
+def _verifier_policies():
+    """The verifier's profile is the public web PKI's (CA/Browser Forum); Jen's question is whether the DAEMON's TLS stack accepts what Jen issues, so the profile is relaxed where RFC 5280 allows and the
+    real stack (OpenSSL) accepts, and ONLY there: a KeyUsage may be absent (Q194's decision, `_key_usage_may_be_absent`), and `policyConstraints` and `inhibitAnyPolicy` - valid CA extensions the web profile
+    forbids - may be present. Everything else the verifier judges stands (EKU, name constraints, path length, algorithm strength, validity ...): the next constraint a review names is already covered."""
+    agnostic = x509_verification.Criticality.AGNOSTIC
+    ca = (
+        x509_verification.ExtensionPolicy.webpki_defaults_ca()
+        .may_be_present(x509.KeyUsage, agnostic, _key_usage_may_be_absent)
+        .may_be_present(x509.PolicyConstraints, agnostic, None)
+        .may_be_present(x509.InhibitAnyPolicy, agnostic, None)
+    )
+    return ca, x509_verification.ExtensionPolicy.webpki_defaults_ee()
+
+
+def _probe_names(ca_cert) -> list[str]:
+    """The DNS names a throwaway leaf is tried with: `probe.invalid`, and - when the CA is name-constrained to some domains - `probe.<each permitted domain>`. A CA that permits only its own domain is
+    healthy for names inside it; one whose constraints exclude every name fails for all of them."""
+    names = ["probe.invalid"]
+    try:
+        constraints = ca_cert.extensions.get_extension_for_class(x509.NameConstraints).value
+    except (x509.ExtensionNotFound, x509.DuplicateExtension, ValueError):
+        return names
+    for subtree in constraints.permitted_subtrees or []:
+        if isinstance(subtree, x509.DNSName) and subtree.value.lstrip("."):
+            names.append(f"probe.{subtree.value.lstrip('.')}")
+    return names
+
+
+def _verifier_message(error: BaseException) -> str:
+    text = str(error) or type(error).__name__
+    for noise in ("validation failed: ", "candidates exhausted: "):
+        text = text.replace(noise, "")
+    return text.strip()[:200]
+
+
+def verify_probe(ca_cert, ca_key, client: bool):
+    """Q196 (AL1): issue a throwaway leaf of ONE purpose from this CA - IN MEMORY, never written - and verify its chain with `cryptography.x509.verification`, the same chain verification a real TLS peer
+    performs (server purpose: a server verifier for the name; client purpose: a client verifier). Returns ("", leaf) when some probe name verifies, else (the verifier's own message, the last leaf)."""
+    now = datetime.now(timezone.utc)
+    ca_policy, ee_policy = _verifier_policies()
+    first, leaf = "", None
+    for name in _probe_names(ca_cert):
+        try:
+            leaf = _leaf(
+                ca_cert,
+                ca_key,
+                _new_key(),
+                "jen-probe",
+                [x509.DNSName(name)],
+                client=client,
+                now=now.replace(tzinfo=None),
+            )
+            builder = (
+                x509_verification.PolicyBuilder()
+                .store(x509_verification.Store([ca_cert]))
+                .time(now)
+                .extension_policies(ca_policy=ca_policy, ee_policy=ee_policy)
+            )
+            verifier = builder.build_client_verifier() if client else builder.build_server_verifier(x509.DNSName(name))
+            verifier.verify(leaf, [])
+            return "", leaf
+        except (
+            Exception
+        ) as e:  # fail closed: whatever the check cannot do, or cannot read, is a CA that does not verify
+            first = first or _verifier_message(e)
+    return first, leaf
+
+
+def ca_verifier_rejection(ca_cert, ca_key) -> str:
+    """Q196 (AL1) - THE ORACLE. "" when a real chain verifier accepts a certificate issued from this CA for sslserver AND for sslclient; else "the verifier rejects certificates issued from it for <purpose>:
+    <its own message>". Since beta.19 the reviewer found, one release at a time, the next property of a certificate `ca_identity` did not check (the pair, then the purpose, then the Extended Key Usage); X.509 has
+    dozens (EKU, name constraints, policy constraints, path length, algorithm strength ...) and listing them is unbounded. The terminal check is the one the reviewer uses to PROVE a finding - a verifier -
+    and the library Jen pins ships it, so "healthy" now means "a real verifier accepts what Jen issues from it, for both purposes". Nothing is written."""
+    for purpose, client in (("sslserver", False), ("sslclient", True)):
+        message, _leaf_cert = verify_probe(ca_cert, ca_key, client)
+        if message:
+            return f"the verifier rejects certificates issued from it for {purpose}: {message}"
+    return ""
+
+
+def openssl_second_opinion(timeout: float = 10.0) -> str:
+    """Defence in depth (Q196, AL1): where the `openssl` CLI exists, run `openssl verify -purpose sslserver|sslclient` on the same throwaway leaves and say where it DISAGREES with Jen's verifier ("" when
+    there is no CLI, no CA to judge, or they agree). A disagreement is a warning, never a refusal: the two implementations differ in strictness (OpenSSL accepts a non-critical BasicConstraints, rejects an
+    anyExtendedKeyUsage CA ...) and the operator should know when the daemon's own library may judge the CA differently."""
+    exe = shutil.which("openssl")
+    if not exe or ca_state()[0] != "ok":
+        return ""
+    ca_path = ca_paths()[0]
+    try:
+        ca_cert, ca_key = _load_ca()  # (the CA is read ONLY through `ca_state`, sweep S15)
+    except (CaDamaged, OSError, ValueError, TypeError, UnsupportedAlgorithm):
+        return ""
+    disagreements = []
+    with tempfile.TemporaryDirectory(prefix="jen-openssl-verify-") as directory:
+        leaf_path = os.path.join(directory, "probe.pem")
+        for purpose, client in (("sslserver", False), ("sslclient", True)):
+            message, leaf = verify_probe(ca_cert, ca_key, client)
+            if leaf is None:
+                continue
+            with open(leaf_path, "wb") as f:
+                f.write(_cert_pem(leaf))  # a PUBLIC certificate: no key is written
+            try:
+                done = subprocess.run(  # nosec B603 - list args, a fixed binary found on PATH, no shell
+                    [exe, "verify", "-purpose", purpose, "-CAfile", ca_path, leaf_path],
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    check=False,
+                )
+            except (OSError, subprocess.SubprocessError):
+                return ""
+            theirs = done.returncode == 0 and "OK" in (done.stdout or "")
+            if theirs != (not message):
+                disagreements.append(
+                    f"openssl verify {'accepts' if theirs else 'rejects'} a certificate issued from it for {purpose} where Jen's verifier {'rejects' if message else 'accepts'} it"
+                )
+    return "; ".join(disagreements)
+
+
 def ca_identity(cert_path: str, key_path: str, *, raise_io: bool = False) -> tuple[str, str]:
     """Q194 (AJ1): the ONE judgment of CA material - the live pair, the prepared pair and the staged pair are all judged here. `("ok", "")` only when the certificate and key both load, the key is the
     certificate's (SPKI), the certificate is inside its validity window NOW (the 30-day expiry warning stays Health's separate `warn`), it carries `BasicConstraints` with `ca=True` and a `KeyUsage` with
@@ -312,6 +442,10 @@ def ca_identity(cert_path: str, key_path: str, *, raise_io: bool = False) -> tup
             if "unsupported" in str(e).lower():
                 return "damaged", f"{crt_name}'s self-signature uses an algorithm Jen cannot verify"
             return "damaged", f"{crt_name}'s signature does not verify against its own key"
+        # Q196 (AL1): the structural checks above stay (they give the `why` text for the shapes a person recognises); the ORACLE has the last word - a real verifier must accept what Jen issues from this CA
+        rejection = ca_verifier_rejection(cert, private)
+        if rejection:
+            return "damaged", f"{crt_name}: {rejection}"
     except (ValueError, TypeError, UnsupportedAlgorithm, x509.DuplicateExtension):
         # (second pass, finding 1: `DuplicateExtension` is an Exception, not a ValueError - a CA file with one must read "damaged", never raise through Health, the page, the setup, Rotate and Prepare)
         return "damaged", f"{crt_name} has an extension Jen cannot read"
@@ -418,8 +552,10 @@ def _load_ca():
     return load_cert(crt), load_key(key_path)
 
 
-def _leaf(ca_cert, ca_key, key, cn: str, sans: list, client: bool):
-    now = _now()
+def _leaf(ca_cert, ca_key, key, cn: str, sans: list, client: bool, now=None):
+    now = (
+        now if now is not None else _now()
+    )  # (`now`: the oracle's throwaway leaf is valid at the instant it is VERIFIED, whatever `_now` says - Q196)
     builder = (
         x509.CertificateBuilder()
         .subject_name(_name(cn))
@@ -1225,6 +1361,27 @@ def rotation_inventory(servers, url_for=None, recovery: bool = False, prove_stor
                         else "remove the direct socket and set it up again so Jen issues and keeps a certificate for it, or point Jen at a socket that is not on its CA, before rotating"
                     )
                 )
+    # Q196 (AL2): ONE DAEMON IS ONE TARGET. Two records with the same SSH host and service are two targets whose installs land on the SAME fixed remote paths - the second over the first - with two local
+    # records that cannot both be the daemon's. `same_host` is exact and DNS-free: two names that resolve to one daemon, or two spellings it does not equate, are the operator's to keep apart.
+    from jen.services.auth import same_host
+
+    owners: dict = {}
+    for server, service, _bind in targets:
+        ssh = (server.get("ssh_host") or "").strip()
+        if not ssh:
+            continue
+        for other_server, other_ssh in owners.get(service, []):
+            if same_host(ssh, other_ssh):
+                spelled = (
+                    " (the two records write the host differently - Jen does not resolve names, so which spellings are one daemon is yours to decide)"
+                    if ssh != other_ssh
+                    else ""
+                )
+                refusals.append(
+                    f"{_server_label(other_server, service)} and {_server_label(server, service)} both manage kea-{service} on {ssh}: Jen would install two certificates on one daemon, "
+                    f"the second over the first{spelled}. Remove one record or point it at its own host before rotating"
+                )
+        owners.setdefault(service, []).append((server, ssh))
     kind = trust_kind()
     if targets and kind in ("copy", "bundle"):
         # (second pass, finding 1) Jen-issued endpoints depend on Jen's CA, and Jen verifies them against a file that holds a COPY of that CA which Rotate cannot rewrite: after the promotion

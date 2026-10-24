@@ -592,6 +592,14 @@ it to the user and password fields, and Jen keeps dialling it as written (the cr
    new CA, install its certificate on that endpoint, then rotate again"; a transport fault keeps its sentence. A healthy rotation is unchanged. The fake daemon rejects an anchor OpenSSL would reject
    (`Lab.accepts_client`, `_anchor_usable`, pinned to the OpenSSL table that was executed: a self-signature is not checked, an issuer that is not the subject is rejected). **The failure of a rotation says the CA's state NOW (Q195):** a CA that became unusable without a promotion says `ca_state`'s why and the acknowledged Rotate
    (T2 pins the state, not a phrase); a probe file is Jen's only by its exact name (`kea_tls.PROBE_NAME`) - the cleanup removes only a LEFTOVER of it (older than a minute, never a probe being written right now) and never an operator's file.
+   **A CA is healthy when the REAL verifier accepts what Jen issues from it, for both purposes (Q196).** `ca_identity` keeps its structural checks (they give the `why` a person recognises) and ends with
+   `ca_verifier_rejection`: a throwaway server leaf and a throwaway client leaf are issued from the CA IN MEMORY (never written) and verified with `cryptography.x509.verification` - the verifier's own
+   message is the `why` - so an Extended Key Usage that leaves out a purpose, a name constraint that excludes every name, a path length, a weak algorithm, or the next property a review names is caught
+   by the same line. The web-PKI profile is relaxed in three places only (an absent KeyUsage, `policyConstraints`, `inhibitAnyPolicy`: RFC 5280 allows them and the daemon's OpenSSL accepts them) and the
+   throwaway leaf is valid at the instant it is verified whatever `_now` says. Where the `openssl` CLI exists Health also asks `openssl verify` and WARNS on a disagreement (`openssl_second_opinion`; never
+   a refusal: OpenSSL accepts a non-critical BasicConstraints and rejects an anyExtendedKeyUsage CA). **One daemon is one rotation target (Q196).** Two targets with the same SSH host (`same_host`: exact,
+   no DNS) and the same service are a refusal BEFORE staging; the route probes EVERY target once more with the staged identity after the last install and before the promotion, so each endpoint answers the
+   FINAL material on its host (a failure there is the rollback).
 11. **A stored incident Jen cannot recognise is kept (Q190).** Each entry of the recovery record has a shape (`kea_changeset.recognised_incident`: an attention incident has a known category, a service, a server
    id, a summary and a time; an outcome incident a `rolled_back`/`rollback_failed` status, a service and a time); `_incidents_of(strict=True)` raises `MalformedNote` naming the entry's INDEX, every writer
    refuses the whole note, `_incident_cleared` is False for an entry it cannot read (fail closed, in the lenient reader too), and the Servers banner says an incident Jen cannot read is on record.
@@ -663,6 +671,10 @@ Jen's CA by certificate identity, per endpoint; an invariant with no knob; an in
 - `tests/test_kea_tls_rotation.py::TestRecoveryBesideAnExternal`
 - `tests/test_kea_tls_rotation.py::TestTheSmallOnesOfQ195`
 - `tests/test_kea_tls_rotation.py::TestTheSecondPassOfQ195`
+- `tests/test_kea_tls_rotation.py::TestCaIdentityIsTheVerifier`
+- `tests/test_kea_tls_rotation.py::TestOneDaemonOneTarget`
+- `tests/test_direct_socket_credentials.py::TestTheProbeRowsOfQ196`
+- `tests/system/test_boundaries.py::test_22_j_a_ca_a_real_verifier_rejects_refuses_an_https_setup_and_health_names_the_restriction`
 - `tests/test_direct_socket_credentials.py::TestTheProbeRowsOfQ195`
 - `tests/test_direct_socket_credentials.py::TestTheProbeRowsOfQ194`
 - `tests/system/test_boundaries.py::test_22_i_a_recovery_that_cannot_write_its_certificate_records_is_refused_before_any_host_changes`

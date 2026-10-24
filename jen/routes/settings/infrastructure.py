@@ -2867,6 +2867,24 @@ def rotate_kea_ca():
                     failure = f"{sname} {daemon}: Jen could not keep its own copy of the new certificate ({type(e).__name__}, errno {getattr(e, 'errno', '?')})"
                     break
                 done.append((server, service, bind))
+            if not failure:
+                # Q196 (AL2): after the LAST install and before the promotion every target is probed once more with the staged identity - each endpoint must answer the FINAL material on its host, not
+                # only the material right after its own install (a later install, a restart, a shared remote path can have changed what an earlier target holds). A failure here is the existing rollback.
+                for server, service, _bind in done:
+                    sname = server.get("name") or f"Kea Server {server.get('id')}"
+                    url = _service_url(server, service)
+                    user, pwd = _daemon_creds(server, service)
+                    final_text, final_err = _probe_after_restart(
+                        url,
+                        user,
+                        pwd,
+                        service,
+                        verify=staged["ca_cert"],
+                        cert=(staged["client_cert"], staged["client_key"]),
+                    )
+                    if not final_text:
+                        failure = f"{sname} {_DAEMON_NAME[service]}: {__auth.shown_url(url)} no longer answers once every target has its new certificates ({final_err})"
+                        break
             if not failure and probed != planned:
                 failure = (
                     "the endpoints that answered with the new certificates are not the endpoints Jen planned to rotate"

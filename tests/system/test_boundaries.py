@@ -2865,3 +2865,62 @@ def test_22_i_a_recovery_that_cannot_write_its_certificate_records_is_refused_be
     finally:
         st.jen_py(S22I_RESTORE_SCRIPT, timeout=200)
     st.wait_for(lambda: st.kea_answers("kea-b"), timeout=60, what="kea-b answering on its own socket")
+
+
+S22J_DAMAGE_SCRIPT = r"""
+import datetime, hashlib
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes
+from cryptography.x509.oid import ExtendedKeyUsageOID
+from jen.services import health, kea_tls
+
+crt, key = kea_tls.ca_paths()
+client = kea_tls.client_paths()
+ca_key = kea_tls._new_key()
+name = kea_tls._name("An operator's CA restricted to client authentication")
+now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+cert = (
+    x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(ca_key.public_key())
+    .serial_number(x509.random_serial_number())
+    .not_valid_before(now - datetime.timedelta(minutes=5)).not_valid_after(now + datetime.timedelta(days=3650))
+    .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+    .add_extension(x509.KeyUsage(True, False, False, False, False, True, True, False, False), critical=True)
+    .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH]), critical=False)
+    .sign(ca_key, hashes.SHA256())
+)
+# a CA that parses, pairs, is a CA by purpose and validity, is self-signed - and whose EKU leaves out serverAuth: `openssl verify -purpose sslserver` says "unsuitable certificate purpose"
+kea_tls.write_atomically(key, kea_tls._key_pem(ca_key), 0o600)
+kea_tls.write_atomically(crt, kea_tls._cert_pem(cert), 0o644)
+before = {p: hashlib.sha256(open(p, "rb").read()).hexdigest() for p in (crt, client[0], client[1])}
+row = health._kea_tls_expiry({})
+emit({"state": kea_tls.ca_state(), "before": before, "health": [row.status, row.detail]})
+"""
+
+
+def test_22_j_a_ca_a_real_verifier_rejects_refuses_an_https_setup_and_health_names_the_restriction(stack):
+    """REMOTE-001 / Q196 (AL1, the P1 and the class): kea-a is really on an https socket Jen issued the certificate for; the CA at Jen's path is then replaced by an operator's CA that parses, pairs, is a CA by
+    purpose and validity - and is restricted by its Extended Key Usage to clientAuth, so a server certificate issued from it fails `openssl verify -purpose sslserver`. Beta.26 called it healthy (it checked a
+    list of extensions and never the EKU). Now `ca_identity` ends with the chain verifier over throwaway leaves of both purposes: Health fails and names the restriction, an https setup is REFUSED before
+    anything is sent to a host - kea-a's TLS files and daemon config are byte-for-byte the baseline - and Jen's CA certificate and client pair are byte-equal after it."""
+    out, proc = _s22_run("write-ok", scheme="https", port="8014")
+    assert emitted(out) is not None, f"no result from the https setup:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    baseline = _s22_host_state()
+    out, proc = st.jen_py(S22J_DAMAGE_SCRIPT, timeout=200)
+    damaged = emitted(out)
+    assert damaged is not None, (proc.stdout[-1500:], proc.stderr[-1500:])
+    assert damaged["state"][0] == "damaged" and "sslserver" in damaged["state"][1], damaged["state"]
+    assert damaged["health"][0] == "fail" and "the verifier rejects" in damaged["health"][1], damaged["health"]
+    out, proc = _s22_run("write-ok", scheme="https", port="8014")
+    result = emitted(out)
+    assert result is not None, f"no result from the refused setup:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    texts = " ".join(result["flashes"])
+    assert "Jen's CA is damaged" in texts and "sslserver" in texts, texts
+    after = _s22_host_state()
+    for name in S22_TLS_FILES:
+        assert after[name] == baseline[name], f"INVARIANT: {name} on kea-a is the baseline"
+    assert json.loads(after["conf"]) == json.loads(baseline["conf"]), "INVARIANT: kea-a's daemon config is the baseline"
+    out, proc = st.jen_py(S22H_CHECK_SCRIPT, timeout=200)
+    local = emitted(out)
+    assert local["state"][0] == "damaged", local
+    assert local["after"] == damaged["before"], "INVARIANT: Jen's CA certificate and client pair are byte-equal"
+    st.wait_for(lambda: st.kea_answers("kea-b"), timeout=60, what="kea-b answering on its own socket")

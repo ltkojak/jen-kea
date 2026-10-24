@@ -121,6 +121,24 @@ SEMANTIC_CA_STATES = (
     "duplicate-extension",  # (second pass) two BasicConstraints: it parses as PEM and `cert.extensions` raises - a read must say "damaged", never raise
 )
 
+#: Q196 (AL1): the VERIFIER states - a CA that parses, pairs, is a CA by purpose and validity, self-signed, and still not one a real verifier accepts what Jen issues from, because of a constraint
+#: `cryptography` can express: an Extended Key Usage that leaves out a purpose, a name constraint that excludes every name. (The terminal check is the verifier; this list is what it was run on.)
+VERIFIER_CA_STATES = (
+    "eku-clientauth-only",  # an sslserver certificate from it is "unsuitable"
+    "eku-serverauth-only",  # ... and an sslclient one
+    "eku-codesigning",  # neither
+    "name-constraints-exclude-all",  # no name verifies
+)
+#: ... and the constraints a verifier ACCEPTS: they must stay healthy (no EKU, serverAuth+clientAuth, anyExtendedKeyUsage, a CA name-constrained to its OWN domain, policy constraints, inhibit-any-policy)
+VERIFIER_OK_STATES = (
+    "eku-none",
+    "eku-server-and-client",
+    "eku-anyeku",
+    "name-constraints-permit-own-domain",
+    "policy-constraints",
+    "inhibit-any-policy",
+)
+
 #: a CA that WORKS but that Q194's first draft called damaged: no KeyUsage extension at all (RFC 5280: unrestricted - what `openssl req -x509` makes by default)
 OPERATOR_CA_STATES = ("no-key-usage",)
 
@@ -133,7 +151,7 @@ def semantic_ca(kind: str):
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.asymmetric import ed25519
 
-    assert kind in SEMANTIC_CA_STATES + OPERATOR_CA_STATES, kind
+    assert kind in SEMANTIC_CA_STATES + OPERATOR_CA_STATES + VERIFIER_CA_STATES + VERIFIER_OK_STATES, kind
     key = ed25519.Ed25519PrivateKey.generate() if kind == "unsupported-key" else kea_tls._new_key()
     name = kea_tls._name(f"Jen Kea CA semantic {kind}")
     issuer = kea_tls._name("an issuer that is not the subject") if kind == "issuer-not-subject" else name
@@ -171,6 +189,29 @@ def semantic_ca(kind: str):
             ),
             critical=True,
         )
+    from cryptography.x509.oid import ExtendedKeyUsageOID as EKU
+
+    extra = {
+        "eku-clientauth-only": x509.ExtendedKeyUsage([EKU.CLIENT_AUTH]),
+        "eku-serverauth-only": x509.ExtendedKeyUsage([EKU.SERVER_AUTH]),
+        "eku-codesigning": x509.ExtendedKeyUsage([EKU.CODE_SIGNING]),
+        "eku-server-and-client": x509.ExtendedKeyUsage([EKU.SERVER_AUTH, EKU.CLIENT_AUTH]),
+        "eku-anyeku": x509.ExtendedKeyUsage([x509.ObjectIdentifier("2.5.29.37.0")]),
+    }.get(kind)
+    if extra is not None:
+        builder = builder.add_extension(extra, critical=False)
+    constraint = {
+        "name-constraints-exclude-all": x509.NameConstraints(
+            permitted_subtrees=None, excluded_subtrees=[x509.DNSName("")]
+        ),
+        "name-constraints-permit-own-domain": x509.NameConstraints(
+            permitted_subtrees=[x509.DNSName("example.com")], excluded_subtrees=None
+        ),
+        "policy-constraints": x509.PolicyConstraints(require_explicit_policy=0, inhibit_policy_mapping=None),
+        "inhibit-any-policy": x509.InhibitAnyPolicy(0),
+    }.get(kind)
+    if constraint is not None:
+        builder = builder.add_extension(constraint, critical=True)
     cert = builder.sign(key, None if kind == "unsupported-key" else hashes.SHA256())
     if kind == "tampered-signature":
         cert = x509.load_pem_x509_certificate(_flip_last_byte_of_the_signature(kea_tls._cert_pem(cert)))

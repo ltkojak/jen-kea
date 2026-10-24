@@ -2300,6 +2300,72 @@ def q195_ak1_in_a_recovery_an_external_endpoint_is_judged_by_the_replacement_ide
     return out
 
 
+def q196_al1_a_ca_is_healthy_when_the_real_verifier_accepts_what_jen_issues_from_it():
+    """A CA that parses, pairs and is a CA by purpose and validity, by what the chain verifier says about a certificate issued from it: (`ca_state`, whether `ensure_ca` refuses to replace it). The
+    Extended Key Usage and name-constraint rows are the class Q196 closes - `ca_identity` never asked, and an EKU-restricted CA is one `openssl verify -purpose sslserver` rejects."""
+    import pathlib
+
+    from tests import _tls_worlds as worlds
+
+    out = {}
+    for kind in (
+        "jen's own",
+        "eku-none",
+        "eku-server-and-client",
+        "eku-clientauth-only",
+        "eku-serverauth-only",
+        "name-constraints-exclude-all",
+        "name-constraints-permit-own-domain",
+    ):
+        with contextlib.ExitStack() as stack:
+            kea_tls, _directory, _ = _tls_lab(stack)
+            if kind != "jen's own":
+                cert_pem, key_pem = worlds.semantic_ca_pem(kind)
+                crt, key = kea_tls.ca_paths()
+                pathlib.Path(crt).write_bytes(cert_pem)
+                pathlib.Path(key).write_bytes(key_pem)
+            try:
+                kea_tls.ensure_ca()
+                refused = False
+            except kea_tls.CaDamaged:
+                refused = True
+            out[kind] = (kea_tls.ca_state()[0], refused)
+    return out
+
+
+def q196_al2_one_daemon_is_one_rotation_target():
+    """The rotation inventory for servers that share a daemon: (targets, refusals that say two records `both manage` one daemon, whether the sentence says the spelling differs). Two records with the same SSH
+    host and service would install two certificates on one daemon's fixed remote paths, the second over the first."""
+    out = {}
+    cases = {
+        "distinct hosts": ([("a", "10.0.0.5", ("dhcp4",)), ("b", "10.0.0.6", ("dhcp4",))]),
+        "same host and service": ([("a", "10.0.0.5", ("dhcp4",)), ("b", "10.0.0.5", ("dhcp4",))]),
+        "same host spelled two ways": ([("a", "KEA-A", ("dhcp4",)), ("b", "kea-a", ("dhcp4",))]),
+        "a trailing dot is a different name": ([("a", "kea-a", ("dhcp4",)), ("b", "kea-a.", ("dhcp4",))]),
+        "dhcp4 and dhcp6 on one host": ([("a", "10.0.0.5", ("dhcp4", "dhcp6"))]),
+    }
+    ports = {"dhcp4": 8004, "dhcp6": 8006}
+    for name, spec in cases.items():
+        with contextlib.ExitStack() as stack:
+            kea_tls, _directory, _ = _tls_lab(stack)
+            servers = [{"id": i + 1, "name": label, "ssh_host": host} for i, (label, host, _s) in enumerate(spec)]
+            for server, (_label, _host, services) in zip(servers, spec, strict=True):
+                for service in services:
+                    kea_tls.issue_server_cert(server, service, "10.9.9." + str(server["id"]))
+            inventory = kea_tls.rotation_inventory(
+                servers,
+                url_for=lambda s, svc: f"https://10.9.9.{s['id']}:{ports[svc]}" if svc in ports else "",
+                prove_storage=False,
+            )
+            duplicates = [r for r in inventory.refusals if "both manage" in r]
+            out[name] = (
+                len(inventory.targets),
+                len(duplicates),
+                any("write the host differently" in r for r in duplicates),
+            )
+    return out
+
+
 def q185_aa3_a_trailing_no_break_space_is_refused_and_ordinary_padding_is_not():
     from jen.services import auth
 
@@ -2357,6 +2423,7 @@ SCENARIOS = {
             "q193_",
             "q194_",
             "q195_",
+            "q196_",
         )
     )
     and callable(fn)
@@ -2663,6 +2730,22 @@ EXPECTED = {
         False,
         True,
     ),
+    "q196_al1_a_ca_is_healthy_when_the_real_verifier_accepts_what_jen_issues_from_it": {
+        "jen's own": ("ok", False),
+        "eku-none": ("ok", False),
+        "eku-server-and-client": ("ok", False),
+        "eku-clientauth-only": ("damaged", True),
+        "eku-serverauth-only": ("damaged", True),
+        "name-constraints-exclude-all": ("damaged", True),
+        "name-constraints-permit-own-domain": ("ok", False),
+    },
+    "q196_al2_one_daemon_is_one_rotation_target": {
+        "distinct hosts": (2, 0, False),
+        "same host and service": (2, 1, False),
+        "same host spelled two ways": (2, 1, True),
+        "a trailing dot is a different name": (2, 0, False),
+        "dhcp4 and dhcp6 on one host": (2, 0, False),
+    },
     "q195_ak1_in_a_recovery_an_external_endpoint_is_judged_by_the_replacement_identity": {
         "recovery: live rejected, staged accepted": "",
         "recovery: live rejected, staged rejected": "prepare",

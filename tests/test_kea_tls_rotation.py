@@ -96,6 +96,13 @@ def _issued_by_any(cert_pem: str, bundle_path: str) -> bool:
     return False
 
 
+#: Q196: the keys of the CAs a test built, by certificate fingerprint - a trust anchor in the fake daemon is a bare certificate, but where the Lab KNOWS the key the fake asks the product's own verifier
+#: (the client purpose: that is what a daemon does with a client certificate) instead of re-deriving what a verifier would say. ONLY for the EKU and name-constraint families (`VERIFIER_*_STATES`): the
+#: executed table shows the verifier and the daemon's OpenSSL AGREE there; where they differ (a root with no BasicConstraints, a tampered self-signature) the fake models the daemon - OpenSSL - not the
+#: verifier
+_ANCHOR_KEYS: dict = {}
+
+
 def _anchor_usable(cert) -> bool:
     """Q195 (AK1): would OpenSSL accept this certificate as the TRUST ANCHOR of a client chain? A fake models how a remote system is OBSERVED (LESSONS section 2), and the shipped fake accepted a client
     certificate issued by an EXPIRED anchor - so no test saw the world a recovery exists for. The checks OpenSSL makes of a trust anchor: inside its validity window now; a CA by `X509_check_ca`
@@ -123,7 +130,12 @@ def _anchor_usable(cert) -> bool:
         is_ca = usage is not None and usage.key_cert_sign
     except x509.DuplicateExtension:
         return False
-    return bool(is_ca) and (usage is None or usage.key_cert_sign)
+    if not (bool(is_ca) and (usage is None or usage.key_cert_sign)):
+        return False
+    from cryptography.hazmat.primitives import hashes
+
+    key = _ANCHOR_KEYS.get(cert.fingerprint(hashes.SHA256()))
+    return key is None or not kea_tls.verify_probe(cert, key, True)[0]
 
 
 def _issued_by_pem(cert_pem: str, ca_pem: str) -> bool:
@@ -3200,6 +3212,10 @@ def _recovery_world_under(kind):
     from tests import _tls_worlds as worlds
 
     cert, key = worlds.semantic_ca(kind)
+    from cryptography.hazmat.primitives import hashes
+
+    if kind in worlds.VERIFIER_CA_STATES + worlds.VERIFIER_OK_STATES:
+        _ANCHOR_KEYS[cert.fingerprint(hashes.SHA256())] = key
     crt, key_path = kea_tls.ca_paths()
     pathlib.Path(crt).write_bytes(kea_tls._cert_pem(cert))
     pathlib.Path(key_path).write_bytes(kea_tls._key_pem(key))
@@ -3470,6 +3486,16 @@ class TestTheSecondPassOfQ195:
             ("issuer-not-subject", "prepare"),
             ("tampered-signature", "depends"),
             ("no-basic-constraints", "depends"),
+            (
+                "eku-serverauth-only",
+                "prepare",
+            ),  # Q196: a CA restricted to serverAuth cannot vouch for a client certificate
+            ("eku-codesigning", "prepare"),
+            ("name-constraints-exclude-all", "prepare"),
+            (
+                "eku-clientauth-only",
+                "depends",
+            ),  # ... and one restricted to clientAuth still can: the endpoint DEPENDS on the damaged CA
         ],
     )
     def test_the_same_recovery_for_every_other_damage_the_lab_can_build(self, lab, kind, first_refusal):
@@ -3505,3 +3531,278 @@ class TestTheSecondPassOfQ195:
         assert kea_tls.copies_dir_writable() == ""
         assert fresh.exists(), "only a leftover older than a minute is removed"
         fresh.unlink()
+
+
+# ── Q196: the terminal check - a CA is healthy when the REAL verifier accepts what Jen issues from it, for both purposes ───────────────────────────
+
+
+VERIFIER_WHY = {
+    "eku-clientauth-only": "for sslserver",
+    "eku-serverauth-only": "for sslclient",
+    "eku-codesigning": "for sslserver",
+    "name-constraints-exclude-all": "for sslserver",
+}
+
+
+def _openssl_accepts(cert, key, client):
+    """What `openssl verify -purpose sslserver|sslclient` says about a throwaway leaf of this CA: True / False, None when there is no CLI (the cross-check is skipped there, never xfail)."""
+    import shutil
+    import subprocess
+    import tempfile
+
+    from cryptography.hazmat.primitives import serialization
+
+    exe = shutil.which("openssl")
+    if not exe:
+        return None
+    _message, leaf = kea_tls.verify_probe(cert, key, client)
+    with tempfile.TemporaryDirectory() as d:
+        ca, probe = os.path.join(d, "ca.pem"), os.path.join(d, "leaf.pem")
+        pathlib.Path(ca).write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+        pathlib.Path(probe).write_bytes(leaf.public_bytes(serialization.Encoding.PEM))
+        done = subprocess.run(  # nosec B603
+            [exe, "verify", "-purpose", "sslclient" if client else "sslserver", "-CAfile", ca, probe],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    return done.returncode == 0
+
+
+def _write_live_ca(kind):
+    from tests import _tls_worlds as worlds
+
+    cert_pem, key_pem = worlds.semantic_ca_pem(kind)
+    crt, key = kea_tls.ca_paths()
+    pathlib.Path(crt).write_bytes(cert_pem)
+    pathlib.Path(key).write_bytes(key_pem)
+
+
+class TestCaIdentityIsTheVerifier:
+    """Q196 (AL1): since beta.19 the reviewer found, one release at a time, the next property of a certificate `ca_identity` did not check - the pair, the purpose, the Extended Key Usage. X.509 has dozens;
+    the terminal check is the one the reviewer proves a finding with: a verifier. `ca_identity` now ends with `cryptography.x509.verification` over throwaway in-memory leaves of BOTH purposes, and the
+    verifier's own message is the `why`. The profile is relaxed in three places only, where RFC 5280 allows and OpenSSL accepts (an absent KeyUsage, policyConstraints, inhibitAnyPolicy)."""
+
+    def test_jens_own_ca_passes_the_oracle_and_the_oracle_writes_nothing(self, lab):
+        from tests import _tls_worlds as worlds
+
+        before = worlds.tree(kea_tls.SSL_DIR)
+        assert kea_tls.ca_verifier_rejection(kea_tls._load_ca()[0], kea_tls._load_ca()[1]) == ""
+        assert kea_tls.ca_identity(*kea_tls.ca_paths()) == ("ok", "")
+        assert worlds.tree(kea_tls.SSL_DIR) == before, "nothing is written: the leaves exist only in memory"
+
+    @pytest.mark.parametrize("kind", __import__("tests._tls_worlds", fromlist=["x"]).VERIFIER_OK_STATES)
+    def test_a_ca_the_verifier_accepts_is_ok_and_openssl_agrees_except_where_it_is_known_not_to(
+        self, lab, tmp_path, kind
+    ):
+        from tests import _tls_worlds as worlds
+
+        cert, key = worlds.semantic_ca(kind)
+        (tmp_path / "c.crt").write_bytes(kea_tls._cert_pem(cert))
+        (tmp_path / "c.key").write_bytes(kea_tls._key_pem(key))
+        assert kea_tls.ca_identity(str(tmp_path / "c.crt"), str(tmp_path / "c.key")) == ("ok", ""), kind
+        for client in (False, True):
+            theirs = _openssl_accepts(cert, key, client)
+            if theirs is None:
+                pytest.skip("no openssl CLI on this machine")
+            if (
+                kind != "eku-anyeku"
+            ):  # OpenSSL 3.x rejects a CA whose EKU is anyExtendedKeyUsage; the Q wants it healthy and Health warns of the disagreement
+                assert theirs is True, (
+                    f"{kind}: openssl verify rejects what Jen's verifier accepts ({'sslclient' if client else 'sslserver'})"
+                )
+
+    @pytest.mark.parametrize("kind", __import__("tests._tls_worlds", fromlist=["x"]).VERIFIER_CA_STATES)
+    def test_a_ca_the_verifier_rejects_is_damaged_with_the_verifiers_own_message_and_openssl_agrees(
+        self, lab, tmp_path, kind
+    ):
+        from tests import _tls_worlds as worlds
+
+        cert, key = worlds.semantic_ca(kind)
+        (tmp_path / "c.crt").write_bytes(kea_tls._cert_pem(cert))
+        (tmp_path / "c.key").write_bytes(kea_tls._key_pem(key))
+        state, why = kea_tls.ca_identity(str(tmp_path / "c.crt"), str(tmp_path / "c.key"))
+        assert state == "damaged" and "the verifier rejects certificates issued from it" in why, (kind, why)
+        assert VERIFIER_WHY[kind] in why, (kind, why)
+        # the purposes the verifier rejects, openssl rejects too (where there is a CLI)
+        for client, purpose in ((False, "sslserver"), (True, "sslclient")):
+            ours_rejects = bool(kea_tls.verify_probe(cert, key, client)[0])
+            theirs = _openssl_accepts(cert, key, client)
+            if theirs is not None:
+                assert theirs is (not ours_rejects), f"{kind} {purpose}: the two verifiers disagree"
+
+    @pytest.mark.parametrize("kind", __import__("tests._tls_worlds", fromlist=["x"]).VERIFIER_CA_STATES)
+    def test_a_live_ca_the_verifier_rejects_is_damaged_never_replaced_and_the_acknowledged_rotate_recovers(
+        self, lab, kind
+    ):
+        _write_live_ca(kind)
+        lab.begin()
+        lab.before = None
+        state, why = kea_tls.ca_state()
+        assert state == "damaged" and VERIFIER_WHY[kind] in why, (kind, state, why)
+        before = _ca_bytes()
+        with pytest.raises(kea_tls.CaDamaged):
+            kea_tls.ensure_ca()
+        with pytest.raises(kea_tls.CaDamaged):
+            kea_tls.issue_client_cert()
+        with pytest.raises(kea_tls.CaDamaged):
+            kea_tls.issue_server_cert({"id": 9, "name": "x", "ssh_host": "10.9.9.9"}, "dhcp4", "10.9.9.9", commit=False)
+        assert _ca_bytes() == before, "T6/T7: nothing was replaced, nothing created"
+        row = health._kea_tls_expiry({})
+        assert row.status == "fail" and VERIFIER_WHY[kind] in row.detail and "the verifier rejects" in row.detail
+        lab.begin()
+        _rotate()
+        assert "Jen's CA is damaged" in lab.texts() and _ca_bytes() == before and lab.remote_actions() == 0
+        lab.flashes.clear()
+        _rotate({"acknowledge_damaged_ca": "1"})
+        assert "Kea CA rotated" in lab.texts(), lab.texts()
+        assert kea_tls.ca_state() == ("ok", "")
+        for sid in lab.hosts:
+            assert lab.answers_jens_live_identity(sid)
+
+    @pytest.mark.parametrize("kind", __import__("tests._tls_worlds", fromlist=["x"]).VERIFIER_CA_STATES)
+    def test_a_prepared_ca_the_verifier_rejects_is_refused_discarded_by_the_writer_and_never_installed(self, lab, kind):
+        from cryptography import x509
+        from cryptography.hazmat.primitives import serialization
+
+        from tests import _tls_worlds as worlds
+
+        staged = worlds.stage_semantic_prepared(kind)
+        invalid_cert = pathlib.Path(staged["ca_cert"]).read_bytes()
+        found, note = kea_tls.prepared_rotation()
+        assert found is None and "damaged or inconsistent" in note and VERIFIER_WHY[kind] in note, note
+        assert all(os.path.lexists(p) for p in staged.values()), "a read left the files where they were"
+        lab.begin()
+        _rotate()
+        assert "damaged or inconsistent" in lab.texts() and "Kea CA rotated" in lab.texts(), lab.texts()
+        for sid, host in lab.hosts.items():
+            installed = x509.load_pem_x509_certificate(host["files"]["ca.crt"].encode())
+            assert installed.public_bytes(serialization.Encoding.PEM) != invalid_cert, (
+                f"server {sid} got the rejected CA"
+            )
+
+    def test_a_name_constrained_ca_that_permits_its_own_domain_is_healthy_as_a_live_ca(self, lab):
+        _write_live_ca("name-constraints-permit-own-domain")
+        lab.begin()
+        lab.before = None
+        assert kea_tls.ca_state() == ("ok", ""), "probe names include a name the CA's own constraints permit"
+
+    def test_the_oracle_does_not_depend_on_the_modules_clock(self, lab, monkeypatch):
+        """The expired-pair test shifts `kea_tls._now` back 3000 days to mint an expired client certificate; the oracle's throwaway leaf is valid at the instant it is VERIFIED, whatever `_now` says."""
+        import datetime
+
+        real_now = kea_tls._now
+        monkeypatch.setattr(kea_tls, "_now", lambda: real_now() - datetime.timedelta(days=3000))
+        assert kea_tls.ca_state() == ("ok", "")
+
+    def test_the_second_opinion_reports_a_disagreement_and_only_a_disagreement(self, lab):
+        import shutil
+
+        if not shutil.which("openssl"):
+            pytest.skip("no openssl CLI on this machine")
+        cert, key = kea_tls._load_ca()
+        agree = all(
+            _openssl_accepts(cert, key, client) is (not kea_tls.verify_probe(cert, key, client)[0])
+            for client in (False, True)
+        )
+        assert (kea_tls.openssl_second_opinion() == "") is agree
+        # a CA the verifier accepts and this openssl may not (anyExtendedKeyUsage): the opinion is exactly the disagreement, and Health WARNS - it never refuses
+        _write_live_ca("eku-anyeku")
+        kea_tls.issue_client_cert()  # the pair the old CA issued is re-issued from this one, so Health reaches the CA's own row
+        lab.begin()
+        lab.before = None
+        cert, key = kea_tls._load_ca()
+        disagree = any(
+            _openssl_accepts(cert, key, client) is not (not kea_tls.verify_probe(cert, key, client)[0])
+            for client in (False, True)
+        )
+        opinion = kea_tls.openssl_second_opinion()
+        assert (opinion != "") is disagree, opinion
+        if disagree:
+            row = health._kea_tls_expiry({})
+            assert row.status in ("warn", "fail") and "openssl verify" in row.detail, row.detail
+
+    def test_no_openssl_cli_is_no_row(self, lab, monkeypatch):
+        monkeypatch.setattr(kea_tls.shutil, "which", lambda name: None)
+        assert kea_tls.openssl_second_opinion() == ""
+
+
+class TestOneDaemonOneTarget:
+    """Q196 (AL2): one listener is one listener (Q187 AC5), and the rotation did not apply the rule: two records with the same SSH host and service are two targets whose installs land on the SAME fixed
+    remote paths - the second over the first - with two local records that cannot both be the daemon's. The inventory refuses them before anything is staged; the route probes EVERY target once more
+    with the staged identity after the last install, so each endpoint answers the FINAL material on its host."""
+
+    @staticmethod
+    def _servers(lab, ssh2, url2=None):
+        lab.servers[2]["ssh_host"] = ssh2
+        if url2 is not None:
+            lab.urls[2] = url2
+        extensions.KEA_SERVERS[:] = list(lab.servers.values())
+        lab.begin()
+
+    def test_two_ha_servers_on_distinct_hosts_rotate(self, lab):
+        _rotate()
+        assert "Kea CA rotated" in lab.texts(), lab.texts()
+
+    def test_identical_ssh_host_service_and_url_is_refused_before_anything_changes(self, lab):
+        self._servers(lab, lab.servers[1]["ssh_host"], url2=lab.urls[1])
+        before = _ca_bytes()
+        _rotate()
+        texts = lab.texts()
+        assert "Rotate refused" in texts and "both manage kea-dhcp4 on 10.0.0.5" in texts, texts
+        assert "kea-a kea-dhcp4 and standby kea-dhcp4" in texts and "the second over the first" in texts
+        assert lab.remote_actions() == 0 and _ca_bytes() == before
+
+    def test_identical_ssh_host_and_service_with_different_api_aliases_is_refused_naming_both(self, lab):
+        self._servers(lab, lab.servers[1]["ssh_host"], url2="https://alias.lan:8004")
+        _rotate()
+        assert "kea-a kea-dhcp4 and standby kea-dhcp4" in lab.texts() and lab.remote_actions() == 0, lab.texts()
+
+    def test_two_spellings_of_one_host_that_same_host_equates_are_refused_and_the_sentence_says_the_operator_decides(
+        self, lab
+    ):
+        self._servers(lab, "10.0.0.5", url2="https://10.0.0.5:8004")
+        lab.servers[1]["ssh_host"] = "KEA-A"
+        lab.servers[2]["ssh_host"] = "kea-a"
+        extensions.KEA_SERVERS[:] = list(lab.servers.values())
+        lab.begin()
+        _rotate()
+        assert "write the host differently" in lab.texts() and lab.remote_actions() == 0, lab.texts()
+
+    def test_a_trailing_dot_is_a_different_name_to_same_host_so_it_is_two_targets(self):
+        """Pinned: `kea-a` and `kea-a.` are NOT one host to `same_host` today (a dot is a different name - LESSONS); two names that resolve to one daemon are the operator's to keep apart."""
+        from jen.services.auth import same_host
+
+        assert same_host("kea-a", "kea-a.") is False and same_host("kea-a", "KEA-A") is True
+
+    def test_dhcp4_and_dhcp6_on_one_host_are_two_daemons_and_two_targets(self, lab):
+        a = {"id": 41, "name": "dual", "ssh_host": "10.9.9.9"}
+        for service in ("dhcp4", "dhcp6"):
+            kea_tls.issue_server_cert(a, service, "10.9.9.9")
+        urls = {"dhcp4": "https://10.9.9.9:8004", "dhcp6": "https://10.9.9.9:8006"}
+        inventory = kea_tls.rotation_inventory([a], url_for=lambda s, svc: urls.get(svc, ""), prove_storage=False)
+        assert sorted(svc for _s, svc, _b in inventory.targets) == ["dhcp4", "dhcp6"], inventory
+        assert not [r for r in inventory.refusals if "both manage" in r]
+
+    def test_the_final_probe_of_every_target_failing_for_target_1_after_target_2_is_installed_rolls_back_and_says_so(
+        self, lab, monkeypatch
+    ):
+        real = infra._probe_after_restart
+        calls: dict = {}
+
+        def probe(url, user, pwd, service, verify=None, cert=None):
+            calls[url] = calls.get(url, 0) + 1
+            if (
+                url == lab.urls[1] and calls[url] == 2
+            ):  # the first probe was right after its own install; this is the FINAL one
+                return "", "the daemon stopped answering"
+            return real(url, user, pwd, service, verify=verify, cert=cert)
+
+        monkeypatch.setattr(infra, "_probe_after_restart", probe)
+        before = _ca_bytes()
+        _rotate()
+        texts = lab.texts()
+        assert "no longer answers once every target has its new certificates" in texts, texts
+        assert "Kea CA rotated" not in texts and _ca_bytes() == before, "nothing was promoted"
+        assert "Rolled back to the previous CA" in texts, texts
+        assert lab.settings_writes == []

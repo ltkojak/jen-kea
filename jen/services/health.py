@@ -1182,6 +1182,10 @@ def _kea_tls_expiry(ctx) -> Check:
         c.detail += f" — Rotate Kea CA would be refused: {refused[0]}" + (
             f" (and {len(refused) - 1} more)" if len(refused) > 1 else ""
         )
+    second_opinion = kea_tls.openssl_second_opinion()  # Q196 (AL1): where the CLI exists, `openssl verify` judges the same throwaway leaves; a disagreement is a warning
+    if second_opinion:
+        c.status = "fail" if c.status == "fail" else "warn"
+        c.detail += f" — {second_opinion}"
     if stale:
         # Q188 (AD3): while a `tls-local-stale` incident stands, the copy these dates are read from may not be the certificate on the host
         c.status = "fail" if c.status == "fail" else "warn"

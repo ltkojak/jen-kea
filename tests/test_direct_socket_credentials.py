@@ -845,6 +845,30 @@ class TestTheProbeRowsOfQ195:
         }
 
 
+class TestTheProbeRowsOfQ196:
+    """AL1/AL2: a CA is healthy when the real verifier accepts what Jen issues from it; one daemon is one rotation target."""
+
+    def test_a_ca_is_healthy_when_the_real_verifier_accepts_what_jen_issues_from_it(self):
+        assert probe.q196_al1_a_ca_is_healthy_when_the_real_verifier_accepts_what_jen_issues_from_it() == {
+            "jen's own": ("ok", False),
+            "eku-none": ("ok", False),
+            "eku-server-and-client": ("ok", False),
+            "eku-clientauth-only": ("damaged", True),
+            "eku-serverauth-only": ("damaged", True),
+            "name-constraints-exclude-all": ("damaged", True),
+            "name-constraints-permit-own-domain": ("ok", False),
+        }
+
+    def test_one_daemon_is_one_rotation_target(self):
+        assert probe.q196_al2_one_daemon_is_one_rotation_target() == {
+            "distinct hosts": (2, 0, False),
+            "same host and service": (2, 1, False),
+            "same host spelled two ways": (2, 1, True),
+            "a trailing dot is a different name": (2, 0, False),
+            "dhcp4 and dhcp6 on one host": (2, 0, False),
+        }
+
+
 class TestTheSecondPassOfQ187:
     """The executed findings of the adversarial pass on beta.18's routes, each as a probe row."""
 

@@ -230,6 +230,23 @@ way rolls the already-pushed servers back to the current CA). If you
 already run your own CA, Jen won't overwrite it — the `api_ca` field
 above stays yours and https is a by-hand setup (next section).
 
+**A CA you place at Jen's own paths.** If you put your own CA at
+`kea-ca.crt` / `kea-ca.key`, Jen accepts it only when a real chain verifier —
+the same logic a TLS peer runs — accepts BOTH a server certificate and a
+client certificate issued from it. A CA that has expired, is not marked as
+a CA, whose Key Usage leaves out certificate signing, whose Extended Key
+Usage leaves out `serverAuth` or `clientAuth`, or whose name constraints
+exclude the names of your Kea hosts is shown as **damaged**: Health fails
+and prints the verifier's own reason, an https setup is refused before
+anything is sent to a host, and Rotate replaces it only with the
+acknowledgement. A CA with no Key Usage extension at all is accepted (that
+means unrestricted). Where the `openssl` command exists on the Jen host,
+Health also runs `openssl verify -purpose sslserver` and `-purpose
+sslclient` on the same throwaway certificates and shows a warning if it
+disagrees with Jen's verifier. Two Kea server records that share one SSH
+host and service are one daemon: Rotate refuses them until one record is
+removed or points at its own host.
+
 **Several servers / HA.** Run the form per server. The connection
 mode is global, so after the first kea-dhcp4 switches Jen to direct
 mode the Dashboard cards of servers still on the Control Agent show
