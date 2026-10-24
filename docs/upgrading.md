@@ -326,3 +326,13 @@ One step (5.69.0-beta.25). It adds no migration and there is nothing for you to 
 **A prepared CA that cannot sign is never used.** "Prepare only" and Rotate judge the prepared CA by the same checks. One that fails is discarded with the reason and the rotation continues with a fresh CA, so it never reaches a Kea host.
 
 **Rotate and the https setup prove that Jen can keep its certificate records before they change anything.** Jen creates its certificate folder if it is missing and writes and removes a small test file in it. If it cannot (a read-only SSL folder, a full or unavailable disk), Rotate, including the replacement of a damaged CA, and the https setup stop before any server is touched and name the problem. A refusal leaves no folder behind. Rotate checks once more immediately before it changes the first server.
+
+## A recovery beside a daemon that trusts the damaged CA: Prepare, install, rotate again
+
+One step (5.69.0-beta.26). It adds no migration and there is nothing for you to do. What you may notice:
+
+**Replacing a damaged CA no longer stops at a daemon that cannot answer the old certificate.** When Jen's CA is damaged because it expired, is not marked as a CA, or is not valid yet, a Kea control socket that Jen does not manage and that trusts that CA for client certificates turns Jen's current client certificate away, because the CA can no longer vouch for it. Before, "Replace the damaged CA" stopped there with "it has to answer before a rotation can be proved safe" and no way forward. Now Jen tries the new client certificate on that socket as well. If the socket accepts it, the replacement goes on. If it does not accept it yet, the message says so and names the steps: use "Prepare only", install the prepared CA certificate in that daemon's trust anchor for client certificates (beside the old one), then replace the damaged CA again with the acknowledgement. A daemon that cannot be reached, or whose own certificate Jen cannot verify, keeps its earlier message, and a normal rotation behaves as before.
+
+**A rotation that fails because Jen's CA became unusable says what the CA is now.** If the CA stops being usable while a rotation is running and no replacement step was attempted, the message names the damage and says to replace the CA with the acknowledgement (or restore the files from a backup), instead of describing a step that did not happen. The message about a daemon that could not be put back names the same action.
+
+**A file you keep in the certificate folder is left alone.** Jen's test file there is the one named `.write-probe-<number>-<16 hex digits>`, and a leftover is removed only when it is over a minute old. A file of yours with a similar name, such as `.write-probe-notes`, is never removed.
