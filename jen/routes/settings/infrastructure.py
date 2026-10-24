@@ -933,6 +933,17 @@ def _probe_fault_class(err: str) -> str:
     return "a transport error"
 
 
+def _rejects_the_client_certificate(err: str) -> bool:
+    """Q195 (AK1): is the text of a failed probe the daemon REJECTING the client certificate Jen presented - a TLS alert or a named client certificate - and not a transport fault and not Jen failing to
+    verify the daemon's OWN certificate ("certificate verify failed" is the dial's, not the daemon's verdict on Jen)?"""
+    import re as _re
+
+    low = _re.sub(r"https?://\S+|host='[^']*'|host=\"[^\"]*\"", " ", (err or "").lower())
+    if "verify failed" in low or _probe_fault_class(err) != "":
+        return False
+    return "client certificate" in low or bool(_re.search(r"\balert\b", low))
+
+
 def _staged_identity_refusal(inventory, kind: str, staged: dict, recovery: bool = False) -> str:
     """Q192 (AH1, the P1): the staged identity is proved, against every https endpoint Jen PRESENTS its client pair to, BEFORE anything is installed on any host. Jen's pair is global - when it is
     Jen's own (`jens-file` / `alias`) it goes to every https endpoint, the administrator's included - and an external endpoint whose `cert-required` trust anchor is Jen's CA accepts today's client
@@ -974,6 +985,22 @@ def _staged_identity_refusal(inventory, kind: str, staged: dict, recovery: bool 
             )
         except Exception as e:  # a probe that raised proved nothing: the refusal is the safe reading (never a promotion with the endpoint unproved)
             return f"{label} could not be probed ({type(e).__name__}), so Jen cannot tell whether it depends on its client certificate"
+        if not live_version and recovery and _rejects_the_client_certificate(live_err):
+            # Q195 (AK1): in a RECOVERY the live pair fails BECAUSE the CA being replaced is the one this endpoint trusts and it can no longer vouch (expired, not a CA ...) - that is the world a
+            # recovery exists for, and "it has to answer" cannot be required of it. The question is the REPLACEMENT: accepted -> the endpoint already trusts it (not a refusal); rejected too -> the
+            # operator must install the new CA on it first. A transport fault proves nothing about trust and keeps the sentences below.
+            if staged_version:
+                continue
+            staged_fault = _probe_fault_class(staged_err)
+            if staged_fault:
+                return (
+                    f"{label} could not be probed with the new client certificate ({staged_fault}), so Jen cannot tell whether it accepts it - "
+                    "try again when the endpoint answers"
+                )
+            return (
+                f"{label} rejects Jen's current client certificate (the damaged CA is the one it trusts) and does not accept the new one yet: "
+                "Prepare the new CA, install its certificate on that endpoint, then rotate again"
+            )
         if not live_version:
             return (
                 f"{label} does not answer Jen's current client certificate ({__auth.scrub_urls(live_err) or _probe_fault_class(live_err) or 'no answer'}), so Jen cannot tell whether it depends on it - "
@@ -2701,6 +2728,7 @@ def rotate_kea_ca():
     # restarted and probed with the STAGED identity, Jen's TLS settings are saved, and only then is the staging promoted as one set - each step inside one exception boundary, so a step
     # that fails (or raises) stops the rotation and every attempted target is put back on the CA Jen still trusts. The staging is discarded in a `finally`; `.prev` pairs stay until the end.
     staged = None
+    promotion_attempted = False  # Q195 (AK2 b): the 'no longer a matching pair' sentence is about a PROMOTION that failed part-way; a CA that became unusable without one says what it is now
     reused = False  # Q192 (AH1): the staging came from a `Prepare only` an external daemon's trust anchor may already hold - kept when this rotation fails, discarded only by success or its button
     done: list[tuple[dict, str, str]] = []
     confirmed: set = set()  # targets the host is KNOWN to hold the staged pair for (its install was acknowledged)
@@ -2837,6 +2865,7 @@ def rotate_kea_ca():
                     failure = f"Jen could not save its TLS settings ({_sentence_of(e)})"
             if not failure:
                 try:
+                    promotion_attempted = True
                     __tls.commit_rotation(staged)
                 except OSError as e:
                     failure = f"Jen could not promote the new CA locally ({type(e).__name__}, errno {getattr(e, 'errno', '?')})"
@@ -2988,10 +3017,18 @@ def rotate_kea_ca():
                         f"The recovery did not complete: no daemon was changed. Jen's CA is still damaged ({ca_why}). Rotate again with the acknowledgement; the https setup stays refused until the CA is replaced.",
                         "error",
                     )
-            elif not ca_ok:
+            elif not ca_ok and promotion_attempted:
                 flash(
                     "Jen's CA certificate and CA key are no longer a matching pair (a promotion failed part-way and its own put-back failed too), so nothing can be issued from them. "
+                    f"The CA now: {__tls.ca_state()[1] or 'unusable'}. "
                     "Restore kea-ca.crt and kea-ca.key together from a backup, or from the .prev copies beside them, before any other CA or socket action.",
+                    "error",
+                )
+            elif not ca_ok:
+                # Q195 (AK2 b): no promotion ran - the CA became unusable DURING the rotation (a file changed, a clock stepped): say what it is now, and the action that works (the setup is refused)
+                flash(
+                    f"Jen's CA became unusable during the rotation ({__tls.ca_state()[1] or 'unusable'}), so nothing can be issued from it and a daemon that took the new certificate cannot be put back. "
+                    "Rotate again with the acknowledgement to replace it and re-issue every daemon (or restore the CA files from a backup); the https setup stays refused until the CA is replaced.",
                     "error",
                 )
             if not recovery_failed:
@@ -3001,7 +3038,7 @@ def rotate_kea_ca():
             if outcome["pair_stuck"] and not recovery_failed:
                 flash(
                     f"ROLLBACK FAILED on {', '.join(lb for _s, _v, lb in outcome['pair_stuck'])} — they hold certificates from a CA Jen never adopted and won't answer Jen until fixed: "
-                    "remove the direct socket and set it up again for each.",
+                    f"{_reissue_action()} (for each).",
                     "error",
                 )
             if outcome["restart_stuck"]:

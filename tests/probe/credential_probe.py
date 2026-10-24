@@ -2230,6 +2230,70 @@ def q194_aj2_a_missing_certificate_directory_is_created_or_refused_never_assumed
     return out
 
 
+def q195_ak1_in_a_recovery_an_external_endpoint_is_judged_by_the_replacement_identity():
+    """`_staged_identity_refusal` beside ONE external endpoint, by what the live pair and the staged pair each get back from it: (live, staged, recovery) -> which sentence (or none). In a recovery the live
+    pair fails BECAUSE the CA being replaced is the one the endpoint trusts and it can no longer vouch; Q192 required "it has to answer" and so no recovery beside such an endpoint could proceed."""
+    import types
+
+    from jen.routes.settings import infrastructure as infra
+
+    rejected = "HTTPSConnectionPool: Max retries exceeded (Caused by SSLError: tlsv13 alert certificate required)"
+    timeout = "HTTPSConnectionPool: Read timed out."
+    cases = {
+        "recovery: live rejected, staged accepted": (rejected, "", True),
+        "recovery: live rejected, staged rejected": (rejected, rejected, True),
+        "recovery: live rejected, staged timed out": (rejected, timeout, True),
+        "recovery: live timed out": (timeout, "", True),
+        "recovery: live fails to verify the daemon": ("SSLError: certificate verify failed", "", True),
+        "healthy: live rejected": (rejected, "", False),
+        "healthy: live accepted, staged rejected": ("", rejected, False),
+    }
+
+    def category(text):
+        for needle, name in (
+            ("Prepare the new CA", "prepare"),
+            ("could not be probed", "probe"),
+            ("does not answer", "answer"),
+            ("accepts Jen's current client certificate", "depends"),
+        ):
+            if needle in text:
+                return name
+        return "" if not text else text[:30]
+
+    out = {}
+    for name, (live_err, staged_err, recovery) in cases.items():
+        with contextlib.ExitStack() as stack:
+            kea_tls, _directory, _ = _tls_lab(stack)
+            staged = kea_tls.stage_rotation()
+
+            def probe(
+                url,
+                user,
+                pwd,
+                omit_service,
+                service="dhcp4",
+                verify=None,
+                cert=None,
+                _live=live_err,
+                _staged=staged_err,
+            ):
+                is_staged = bool(cert) and ".next" in str(cert[0])
+                err = _staged if is_staged else _live
+                return ("" if err else "Kea 3.0.3", err)
+
+            stack.enter_context(mock.patch.object(infra, "_probe_once", probe))
+            stack.enter_context(
+                mock.patch.object(infra, "_service_url", lambda server, service: "https://10.0.0.7:8004")
+            )
+            stack.enter_context(mock.patch.object(infra, "_daemon_creds", lambda server, service, url="": ("u", "p")))
+            inventory = types.SimpleNamespace(
+                external_endpoints=[({"id": 9, "name": "ext"}, "dhcp4", "https://10.0.0.7:8004")]
+            )
+            out[name] = category(infra._staged_identity_refusal(inventory, "jens-file", staged, recovery=recovery))
+            kea_tls.discard_rotation(staged)
+    return out
+
+
 def q185_aa3_a_trailing_no_break_space_is_refused_and_ordinary_padding_is_not():
     from jen.services import auth
 
@@ -2286,6 +2350,7 @@ SCENARIOS = {
             "q192_",
             "q193_",
             "q194_",
+            "q195_",
         )
     )
     and callable(fn)
@@ -2592,6 +2657,15 @@ EXPECTED = {
         False,
         True,
     ),
+    "q195_ak1_in_a_recovery_an_external_endpoint_is_judged_by_the_replacement_identity": {
+        "recovery: live rejected, staged accepted": "",
+        "recovery: live rejected, staged rejected": "prepare",
+        "recovery: live rejected, staged timed out": "probe",
+        "recovery: live timed out": "answer",
+        "recovery: live fails to verify the daemon": "answer",
+        "healthy: live rejected": "answer",
+        "healthy: live accepted, staged rejected": "depends",
+    },
     "q194_aj1_a_ca_that_is_not_a_certificate_signing_authority_is_damaged_never_replaced": {
         "ok": ("ok", False, False),
         "not-ca": ("damaged", True, True),

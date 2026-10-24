@@ -826,6 +826,21 @@ class TestTheProbeRowsOfQ194:
         }
 
 
+class TestTheProbeRowsOfQ195:
+    """AK1: in a recovery an external endpoint is judged by the replacement identity - the live pair fails BECAUSE the CA being replaced is the one it trusts."""
+
+    def test_in_a_recovery_an_external_endpoint_is_judged_by_the_replacement_identity(self):
+        assert probe.q195_ak1_in_a_recovery_an_external_endpoint_is_judged_by_the_replacement_identity() == {
+            "recovery: live rejected, staged accepted": "",
+            "recovery: live rejected, staged rejected": "prepare",
+            "recovery: live rejected, staged timed out": "probe",
+            "recovery: live timed out": "answer",
+            "recovery: live fails to verify the daemon": "answer",
+            "healthy: live rejected": "answer",
+            "healthy: live accepted, staged rejected": "depends",
+        }
+
+
 class TestTheSecondPassOfQ187:
     """The executed findings of the adversarial pass on beta.18's routes, each as a probe row."""
 

@@ -48,6 +48,7 @@ import hashlib
 import ipaddress
 import logging
 import os
+import re
 import secrets
 import socket
 import ssl
@@ -359,6 +360,9 @@ def _initialised_evidence() -> str:
     except OSError as e:
         # (a directory that cannot be listed - a permission, a bad mount, a dangling link - is unknown, and unknown is not 'empty')
         return f"Jen cannot read its certificate directory ({type(e).__name__}), so it cannot tell whether it ever issued a certificate"
+    names = [
+        n for n in names if not PROBE_NAME.fullmatch(n)
+    ]  # (Q195 AK2 c: Jen's own probe files are not certificates its CA issued)
     # an EXISTING directory, even an empty one, is `commit_issued`'s: it is only made when a pair is issued
     return (
         f"Jen holds {len(names)} file(s) for certificates its CA issued, so the CA existed - its files are gone, not never made"
@@ -1403,6 +1407,11 @@ def _copies_dir() -> str:
     return os.path.join(SSL_DIR, "kea-servers")
 
 
+#: Q195 (AK2 a): the name of a probe file `copies_dir_writable` writes - `.write-probe-<pid>-<16 hex>` - and nothing else. The cleanup of leftovers and the evidence count (`_initialised_evidence`) both
+#: match THIS pattern exactly: a file an operator keeps in the record directory (`.write-probe-OPERATORS-NOTES.txt`) is not Jen's to delete or to ignore.
+PROBE_NAME = re.compile(r"\.write-probe-\d+-[0-9a-f]{16}")
+
+
 def copies_dir_writable(keep: bool = True) -> str:
     """Q194 (AJ2): "" when Jen can keep a certificate record in its certificate directory - PROVED by doing it: the directory is created when it is absent (Jen's own uid, mode 0700) and a probe
     file is written and removed inside it; else why not, as the exception's class and errno (a path that is a regular file, a directory that refuses the probe, a read-only parent, an unavailable
@@ -1421,7 +1430,7 @@ def copies_dir_writable(keep: bool = True) -> str:
             created = True
         with contextlib.suppress(OSError):
             for leftover in os.listdir(d):
-                if leftover.startswith(".write-probe-"):
+                if PROBE_NAME.fullmatch(leftover):
                     os.unlink(os.path.join(d, leftover))
         probe = os.path.join(
             d, f".write-probe-{os.getpid()}-{secrets.token_hex(8)}"
