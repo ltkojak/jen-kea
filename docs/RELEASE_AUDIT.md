@@ -106,6 +106,12 @@ prepared copy. **A preflight proves by doing.** A check that guards a remote cha
 runs on EVERY path that will need it - Q193's "a directory that is not there yet is writable" was an inference that the real create contradicted under a read-only parent, and it was asked only when
 listing raised. The second pass executes the storage worlds with the filesystem changed BETWEEN the preflight and the commit.
 
+**(q), the terminal check (v5.69.0-beta.27, Q196).** When a review names the N-th property of an artifact that a verifier judges, the fix is the VERIFIER, not the N-th property. Since beta.19 the reviewer
+found, one release at a time, the next semantic property of a certificate `ca_identity` did not check (the pair, then the purpose, then the Extended Key Usage), and each time the next Q specified the
+next extension; X.509 has dozens (name constraints, policy constraints, path length, algorithm strength ...) and listing them is unbounded. Ask what TOOL the reviewer used to prove the finding
+(`openssl verify -purpose sslserver`) and make that tool - or its library equivalent (`cryptography.x509.verification`) - the product's check, with the structural checks kept only for the sentence.
+The second pass then executes every constraint the library can express, cross-checked against the reviewer's tool where it exists, and a disagreement between the two is a warning the operator sees.
+
 ## The second pass (adversarial)
 
 Run as a separate subagent on the same diff, with the reviewer's method as its prompt, so that it does not inherit the first pass's assumptions. Its findings are reconciled against the first pass's
@@ -155,7 +161,30 @@ The author's rule: a P1 or P2 from the second pass is fixed in a fixup commit be
 to the register; the release report names the second pass's findings by number and says what was done with each. A finding that turns out wrong is said to be wrong, with the
 `file:line` that refutes it - it is not silently dropped.
 
+## The pre-reviewer executing pass (Fable, every tag)
+
+Written after 5.69.0-beta.1…27 (2026-10-24). Twenty-seven betas for one minor release came from a loop with no exit condition - "a P1 in the review means another beta" - and from
+passes that executed the DIFF while the reviewer read the whole archive and peeled one old module (`jen/services/kea_tls.py`, written in a day as v5.29.0) one layer per beta. This is
+the procedure that replaces it. It runs on every tagged beta BEFORE the archive goes to the reviewer; a tag is never sent without it.
+
+1. **Two independent agents, not one.** The first runs the executing harness lineage (the probe, the Lab, the fake daemons under the real transport and probe boundaries) extended for
+   the Q. The second gets no harness, no earlier report and no hypothesis: a fresh adversarial read of every module the diff touched, every function, then its own execution. Two readers
+   who do not share a starting point; the author's read is a third.
+2. **The must-cover list is the MODULE, not the diff.** `git blame` every function of each module the diff touched - the ones older than the round included - and make each a named
+   cell for both agents. The reviewer has never found a P1 outside the modules a diff touched; it has found most of them in the untouched functions of those modules.
+3. **Every verdict is cross-checked against a real oracle, the ACCEPTED verdicts included.** A real TLS stack, `openssl verify`, the real writer, the real daemon's answer - never the
+   route's words, never the fake's opinion. Worlds are enumerated from the library's or the format's own classes (every extension class, every file state, every topology the config can
+   express), never from a list someone wrote: a list is the author's imagination, and the author's imagination is what the reviewer gets past.
+4. **The Q's reported deviations and the author's own read are cells in the brief,** executed, not accepted.
+5. **The two reports are reconciled against each other and the tree before anything is said:** each finding confirmed or refuted with `file:line`, by source; a clean pass is NECESSARY,
+   not sufficient - the reviewer still reads.
+6. **A review's findings become ONE Q,** with the class the findings belong to named and closed (see "the terminal check" under (q)), never one beta per finding.
+
+**The exit rule.** Promotion is judged against Jen's threat model (`docs/ARCHITECTURE.md`): a P1 in a supported configuration blocks and gets a Q; a finding that requires the operator to
+have hand-corrupted Jen's own identity or state files is a P2 in this model - registered, shipped as a stable PATCH if it proves to matter, never another beta. A finding after promotion
+ships as `X.Y.Z+1` on the stable channel. The maintainer says "promote"; nothing about a promotion is written before that word.
+
 ## The output
 
 The chart Fable already produces - each finding **confirmed** or **refuted** with `file:line` - plus the registry ids touched, with the second pass's findings marked by source. A release goes to a reviewer
-when the first pass is clean, the second pass has no unreconciled finding, and (e) is green.
+when the first pass is clean, the second pass has no unreconciled finding, (e) is green, AND the pre-reviewer executing pass above has reported on the tag.

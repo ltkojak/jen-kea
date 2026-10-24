@@ -498,3 +498,15 @@ carry that exact suffix (the box would re-install itself forever).
    `vX.Y.Z` tag is a separate promotion commit that changes only version strings and
    the CHANGELOG, made only when the maintainer says "promote". See "Release
    channels" above for the full flow, including the stable-hotfix branch case.
+11. **A beta soak has an exit condition (the maintainer, 2026-10-24, after 5.69.0-beta.1…27).**
+   Every tag gets Fable's executing pass BEFORE its archive goes to the reviewer
+   (`docs/RELEASE_AUDIT.md`, "The pre-reviewer executing pass"); a tag is never sent
+   without it. A review's findings become ONE Q, never one beta per finding. Promotion
+   is judged against Jen's threat model (`docs/ARCHITECTURE.md`): a P1 in a supported
+   configuration blocks; a finding that needs the operator to have hand-corrupted Jen's
+   own identity or state files (its CA, its client pair, its records under `/etc/jen`)
+   is a P2 in this model - registered, not another beta. Anything found after promotion
+   ships as a PATCH on the stable channel (the `release/X.Y` branch case above); the beta
+   loop is not the only vehicle for a fix. And when a review names the N-th property of
+   an artifact a standard verifier judges (a certificate, a chain, a signature, a schema),
+   the fix is the VERIFIER as the product's check, not the N-th property.
