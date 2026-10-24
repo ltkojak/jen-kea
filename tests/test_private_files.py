@@ -295,6 +295,10 @@ REVIEWED_WRITES = {
     ("jen/services/dbexport.py", "_write_backup.write_fn"): "gzip stream onto an fd the caller created 0600",
     ("jen/services/dbexport.py", "write_jen_export"): "gzip stream; the path is chmod 0600 and the folder is 0700",
     ("jen/services/dbexport.py", "write_kea_export"): "gzip stream; the path is chmod 0600 and the folder is 0700",
+    (
+        "jen/services/kea_tls.py",
+        "openssl_second_opinion",
+    ): "a PUBLIC throwaway certificate in a TemporaryDirectory (0700), written only so `openssl verify` can read it: no key is written",
     ("jen/services/plugins.py", "_write_plugin_request"): "a request marker for the root plugin installer: no secret",
     ("jen/services/plugins.py", "enable_plugin"): "a request marker: no secret",
     ("jen/services/recovery.py", "build_tar"): "an in-memory tar stream",
