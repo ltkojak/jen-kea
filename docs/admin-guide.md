@@ -272,7 +272,9 @@ with a different library might not accept them either. Health says when
 | a directoryName name constraint | the verifier does not evaluate directory names |
 | a key on secp256k1 | not P-256, P-384 or P-521 |
 | a key on a Brainpool curve | not P-256, P-384 or P-521 |
-| an Ed25519 or DSA CA | a key type Jen cannot issue from (`openssl` cannot be asked either) |
+| an Ed25519 CA | a key type Jen cannot issue from (`openssl` cannot be asked) |
+| a P-224 or DSA key | not P-256, P-384, P-521 or RSA of 2048 bits or more, although `openssl` accepts it |
+| a CA whose issuer differs from its subject only in letter case | Jen compares the names exactly; `openssl` does not |
 | an Authority Key Identifier with the issuer and serial number but no key identifier | the verifier requires the key identifier |
 | a critical CRLDistributionPoints extension on the CA | the verifier rejects the extension |
 | an empty subject with a critical Subject Alternative Name | the verifier needs a non-empty issuer |
@@ -287,8 +289,9 @@ certificate the verifier accepts for ..."), names the address that failed (the
 bind address, or the SSH host's name), changes nothing on the host and asks for
 no acknowledgement: change the address, or replace the CA with **Rotate Kea
 CA**. A host name the form saves and a certificate cannot carry (an underscore,
-a trailing dot, an empty label) is refused when you save an https address in
-direct mode.
+a trailing dot, an empty label) is refused when you change an https address in
+direct mode (an address that is already saved is left alone; the setup or Rotate names it
+when a certificate is needed for it).
 
 **Stale certificate records.** When a Kea server's endpoint is no longer
 https (the socket was removed, or the address changed to http), the certificate

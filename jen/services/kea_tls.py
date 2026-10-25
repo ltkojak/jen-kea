@@ -33,7 +33,7 @@ certs.write_atomically (tmp + replace, previous file kept as `.prev`).
 The CA key living on the Jen host is a recorded tradeoff — see
 docs/ARCHITECTURE.md §3: a compromised service user already holds the
 SSH key that pushes root-level config to every Kea host, so minting a
-client cert adds no capability, only persistence, which `rotate_ca()`
+client cert adds no capability, only persistence, which a Rotate
 revokes wholesale.
 
 On the Kea host (written by the helper, fixed paths):
@@ -415,6 +415,7 @@ def _run_openssl(args: list, timeout: float):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            errors="replace",  # (second pass, F4) output that is not UTF-8 is still output - it must not raise out of `communicate`
             start_new_session=(os.name != "nt"),
         )
     except OSError:
@@ -586,6 +587,24 @@ def _cert_structure(cert, crt_name: str, public) -> tuple[str, str]:
                 f"{crt_name}'s AuthorityKeyIdentifier does not name its own key - OpenSSL will not chain to it",
             )
         try:
+            aki_value = cert.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier).value
+        except x509.ExtensionNotFound:
+            aki_value = None
+        if aki_value is not None:
+            # (second pass, F5) the issuer and serial forms of an AKI are value families too: on a self-issued root they must name THIS certificate's own issuer and serial number or OpenSSL will not chain
+            names_ok = aki_value.authority_cert_issuer is None or any(
+                isinstance(n, x509.DirectoryName) and n.value == cert.issuer for n in aki_value.authority_cert_issuer
+            )
+            serial_ok = (
+                aki_value.authority_cert_serial_number is None
+                or aki_value.authority_cert_serial_number == cert.serial_number
+            )
+            if not (names_ok and serial_ok):
+                return (
+                    "damaged",
+                    f"{crt_name}'s AuthorityKeyIdentifier does not name its own issuer and serial number - OpenSSL will not chain to it",
+                )
+        try:
             cert.verify_directly_issued_by(cert)
         except UnsupportedAlgorithm:
             return "damaged", f"{crt_name}'s self-signature uses an algorithm Jen cannot verify"
@@ -680,8 +699,8 @@ def _initialised_evidence() -> str:
     if os.path.lexists(pem) or os.path.lexists(key):
         return "Jen's client certificate exists, so a CA made it - the CA's files are gone, not never made"
     for path in (
-        *glob.glob(ca_paths()[0] + _STAGE_SUFFIX + "*"),
-        *glob.glob(ca_paths()[1] + _STAGE_SUFFIX + "*"),
+        *glob.glob(glob.escape(ca_paths()[0]) + _STAGE_SUFFIX + "*"),
+        *glob.glob(glob.escape(ca_paths()[1]) + _STAGE_SUFFIX + "*"),
         ca_paths()[0] + ".prev",
         ca_paths()[1] + ".prev",
         pem + ".prev",
@@ -875,12 +894,24 @@ def verifier_accepts_name(host: str) -> bool:
     return True
 
 
-def other_record_on_same_daemon(server: dict, service: str, servers) -> str:
+def name_refusal_remedy(names, rotating: bool = False) -> str:
+    """The sentence for what to DO about a name the verifier refused (Q197 second pass, F2). A name no certificate can carry (an underscore, a trailing dot ...) is not cured by a new CA - Rotate fails on it
+    the same way - so the remedy is the address. A name a CA's constraints exclude is cured by the address or by a CA without the constraint (Rotate Kea CA issues one; no acknowledgement: the CA is healthy)."""
+    if rotating or any(not verifier_accepts_name(n) for n in names):
+        return "change the address saved for it under Settings → Kea (a certificate cannot carry that name; no acknowledgement is needed - the CA is not damaged)"
+    return "change the address Jen dials, or replace the CA with Rotate Kea CA (no acknowledgement is needed - the CA is not damaged)"
+
+
+def other_record_on_same_daemon(server: dict, service: str, servers, url_for=None) -> str:
     """Q197 (AM5): the NAME of ANOTHER server record that shares this record's SSH host (`same_host`: exact, no DNS) and already holds a Jen-issued record for `service` - "" when there is none. The rule
     the rotation applies (Q196 AL2: one daemon is one target) asked where the world is MADE: an https setup on a second record for the same daemon would put a certificate on the fixed remote paths
     that the first record's copy then no longer matches."""
     from jen.services.auth import same_host
 
+    if url_for is None:
+        from jen.services import kea as _kea
+
+        url_for = _kea.configured_url
     ssh = (server.get("ssh_host") or "").strip()
     if not ssh:
         return ""
@@ -890,6 +921,8 @@ def other_record_on_same_daemon(server: dict, service: str, servers) -> str:
         other_ssh = (other.get("ssh_host") or "").strip()
         if not other_ssh or not (ssh == other_ssh or same_host(ssh, other_ssh)):
             continue
+        if not (url_for(other, service) or "").strip().lower().startswith("https://"):
+            continue  # (second pass, F3) a record whose endpoint is not https now is STALE - Rotate ignores it, so it is no second owner of the daemon
         if record_state(other.get("id"), service)[0] == "jen":
             return other.get("name") or f"Kea Server {other.get('id')}"
     return ""
@@ -1783,8 +1816,10 @@ def commit_rotation(staged: dict) -> None:
 
 def discard_rotation(staged: dict) -> None:
     for p in staged.values():
-        with contextlib.suppress(OSError):
-            os.unlink(p)
+        # (Q197 second pass, F8: a release before beta.28 copied each staged file to `<name>.next.prev` - a private-key copy nothing removed; discarding the staging removes it too)
+        for path in (p, p + ".prev"):
+            with contextlib.suppress(OSError):
+                os.unlink(path)
 
 
 def promotion_blockers() -> list[str]:

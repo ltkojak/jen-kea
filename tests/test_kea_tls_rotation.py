@@ -2791,6 +2791,9 @@ CA_IDENTITY_WHY = {
     "unsupported-key": "key type Jen does not support",
     "duplicate-extension": "has an extension Jen cannot read",
     "aki-not-ski": "AuthorityKeyIdentifier does not name its own key",
+    "aki-wrong-serial": "AuthorityKeyIdentifier does not name its own issuer and serial number",
+    "aki-issuer-other-name": "AuthorityKeyIdentifier does not name its own issuer and serial number",
+    "aki-keyid-wrong-serial": "AuthorityKeyIdentifier does not name its own issuer and serial number",
 }
 
 
@@ -3570,7 +3573,6 @@ VERIFIER_WHY = {
     "eku-serverauth-and-codesigning": "for sslclient",
     "eku-unknown-oid": "for sslserver",
     "eku-anyeku-and-unknown": "for sslserver",
-    "aki-wrong-serial": "authorityKeyIdentifier must contain keyIdentifier",
 }
 
 
@@ -4126,13 +4128,21 @@ class TestTheDaemonsVerifierJudges:
     it judges at the gate as the LAST step of `ca_identity` (a rejection is damaged with the CLI's own line; absent, broken or slow is no opinion). The live/prepared flows for the two shapes are the
     parametrized flows of `TestCaIdentity` (semantic: `aki-not-ski`) and `TestCaIdentityIsTheVerifier` (verifier: the `eku-*` and `aki-wrong-serial` value rows) - the states are in those lists."""
 
-    CODED = ("eku-anyeku", "eku-anyeku-and-serverauth", "aki-not-ski", "aki-wrong-serial")
+    CODED = (
+        "eku-anyeku",
+        "eku-anyeku-and-serverauth",
+        "aki-not-ski",
+        "aki-wrong-serial",
+        "aki-issuer-other-name",
+        "aki-keyid-wrong-serial",
+    )
 
     def test_the_coded_divergences_are_rows_of_the_flows_that_drive_every_gate(self):
         from tests import _tls_worlds as worlds
 
-        assert "aki-not-ski" in worlds.SEMANTIC_CA_STATES
-        for kind in ("eku-anyeku", "eku-anyeku-and-serverauth", "eku-anyeku-and-unknown", "aki-wrong-serial"):
+        for kind in ("aki-not-ski", "aki-wrong-serial", "aki-issuer-other-name", "aki-keyid-wrong-serial"):
+            assert kind in worlds.SEMANTIC_CA_STATES, kind
+        for kind in ("eku-anyeku", "eku-anyeku-and-serverauth", "eku-anyeku-and-unknown"):
             assert kind in worlds.VERIFIER_CA_STATES, kind
 
     @pytest.mark.parametrize("kind", CODED)
@@ -4528,9 +4538,60 @@ class TestTheNameWorldsOfRotate:
         texts = lab.texts()
         assert "the CA cannot issue its certificate for kea_host" in texts, texts
         assert "Kea CA rotated" not in texts
-        assert "acknowledg" not in texts.lower(), "a healthy CA is never sent to the damaged-CA acknowledgement"
+        assert kea_tls.DAMAGED_CA_ADVICE not in texts and "tick the acknowledgement" not in texts, (
+            "a healthy CA is never sent to the damaged-CA acknowledgement"
+        )
         assert kea_tls.ca_state() == ("ok", "")
         for sid, host in lab.hosts.items():
             assert host["files"] is None or lab.answers(sid, kea_tls.ca_paths()[0]), (
                 f"server {sid} still answers on the old CA"
             )
+
+
+class TestTheSecondPassOfQ197:
+    """F2: Rotate issues EVERY target's certificate before the first install. F4: output that is not UTF-8 is output. F5: the issuer and serial forms of an AKI. F8: a leftover `.next.prev` key copy."""
+
+    def test_f2_a_name_refused_for_the_second_target_touches_no_host(self, lab):
+        """Executed against the first draft: target 1 was installed, restarted and probed before target 2's name was refused, and then put back - two restarts for nothing."""
+        lab.urls[2] = "https://kea_host:8004"
+        extensions.KEA_SERVERS[:] = list(lab.servers.values())
+        lab.begin()
+        _rotate()
+        texts = lab.texts()
+        assert "the CA cannot issue its certificate for kea_host" in texts, texts
+        assert "nothing was installed on any host" in texts and "change the address saved for it" in texts, texts
+        assert "Rotate Kea CA" not in texts.replace("Rotate stopped", ""), (
+            "the remedy is the address, not another Rotate"
+        )
+        assert lab.remote_actions() == 0, "no host was asked anything"
+        assert all(h["restarts"] == 0 and not h["installs"] for h in lab.hosts.values()), "no daemon was restarted"
+        assert kea_tls.ca_state() == ("ok", "")
+
+    def test_f4_output_that_is_not_utf8_is_no_exception(self, monkeypatch, tmp_path):
+        import sys
+
+        script = tmp_path / "noisy.py"
+        script.write_bytes(b"import sys\nsys.stdout.buffer.write(bytes([0xff, 0xfe, 0x80]) + b' junk')\n")
+        monkeypatch.setattr(kea_tls, "_openssl_exe", lambda: sys.executable)
+        ran = kea_tls._run_openssl([str(script)], 10.0)
+        assert ran is not None and kea_tls._openssl_verdict(ran) == (None, "")
+
+    @pytest.mark.parametrize("kind", ["aki-issuer-other-name", "aki-keyid-wrong-serial", "aki-wrong-serial"])
+    def test_f5_an_aki_that_names_another_issuer_or_serial_is_damaged_without_the_cli(self, lab, tmp_path, kind):
+        crt, key, cert, private = _install_ca_files(tmp_path, kind)
+        state, why = kea_tls.ca_identity(crt, key)
+        assert state == "damaged" and CA_IDENTITY_WHY[kind] in why, (kind, why)
+        assert kea_tls.ca_verifier_rejection(cert, private) == "" or kind == "aki-wrong-serial", (
+            "the library alone accepted these (so the structural check is the gate)"
+        )
+
+    def test_f5_an_aki_naming_its_own_issuer_and_serial_stays_healthy(self, lab, tmp_path):
+        crt, key, *_ = _install_ca_files(tmp_path, "aki-keyid-issuer-serial")
+        assert kea_tls.ca_identity(crt, key) == ("ok", "")
+
+    def test_f8_discarding_a_staging_removes_a_leftover_next_prev_key_copy(self, lab):
+        staged = kea_tls.stage_rotation()
+        leftover = pathlib.Path(staged["ca_key"] + ".prev")
+        leftover.write_bytes(b"a key copy an earlier release left")
+        kea_tls.discard_rotation(staged)
+        assert not leftover.exists() and not any(".next" in n for n in os.listdir(kea_tls.SSL_DIR))

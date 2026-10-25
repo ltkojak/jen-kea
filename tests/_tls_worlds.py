@@ -120,6 +120,10 @@ SEMANTIC_CA_STATES = (
     "unsupported-key",  # an Ed25519 pair: a pair, but not a kind Jen's CA is made of
     "duplicate-extension",  # (second pass) two BasicConstraints: it parses as PEM and `cert.extensions` raises - a read must say "damaged", never raise
     "aki-not-ski",  # Q197 (AM1 a): a self-issued root whose AuthorityKeyIdentifier keyid is not its own SubjectKeyIdentifier - OpenSSL does not treat it as self-issued, no chain reaches it
+    # the second pass (F5): the issuer and serial forms of an AKI are value families too - the library accepts them and both stacks reject them
+    "aki-wrong-serial",
+    "aki-issuer-other-name",
+    "aki-keyid-wrong-serial",
 )
 
 #: Q196 (AL1): the VERIFIER states - a CA that parses, pairs, is a CA by purpose and validity, self-signed, and still not one a real verifier accepts what Jen issues from, because of a constraint
@@ -135,8 +139,6 @@ VERIFIER_CA_STATES = (
     "eku-serverauth-and-codesigning",  # ... the same, the other way round
     "eku-unknown-oid",  # an OID that is no purpose at all
     "eku-anyeku-and-unknown",
-    # the AKI VALUE families: a keyid that names another key, and an issuer+serial reference that does not match
-    "aki-wrong-serial",
 )
 #: ... and the constraints a verifier ACCEPTS: they must stay healthy (no EKU, serverAuth+clientAuth, anyExtendedKeyUsage, a CA name-constrained to its OWN domain, policy constraints, inhibit-any-policy)
 VERIFIER_OK_STATES = (
@@ -216,6 +218,8 @@ EXTENSION_VALUE_FAMILIES = {
         "no-ski-with-aki-keyid",
         "aki-not-ski",
         "aki-wrong-serial",
+        "aki-issuer-other-name",
+        "aki-keyid-wrong-serial",
         "aki-issuer-serial-only",
     ),
     "SubjectKeyIdentifier": ("ski-not-sha1",),
@@ -296,6 +300,12 @@ def semantic_ca(kind: str):
         "no-ski-with-aki-keyid": x509.AuthorityKeyIdentifier(os.urandom(20), None, None),
         "aki-not-ski": x509.AuthorityKeyIdentifier(os.urandom(20), None, None),
         "aki-wrong-serial": x509.AuthorityKeyIdentifier(None, [x509.DirectoryName(name)], serial + 1),
+        "aki-issuer-other-name": x509.AuthorityKeyIdentifier(
+            ski.digest if ski else None, [x509.DirectoryName(kea_tls._name("an issuer that is not this root"))], serial
+        ),
+        "aki-keyid-wrong-serial": x509.AuthorityKeyIdentifier(
+            ski.digest if ski else None, [x509.DirectoryName(name)], serial + 1
+        ),
         "aki-issuer-serial-only": x509.AuthorityKeyIdentifier(None, [x509.DirectoryName(name)], serial),
     }.get(kind)
     if aki is not None:

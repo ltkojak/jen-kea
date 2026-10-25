@@ -1882,7 +1882,7 @@ class TestQ197TheHostNameTheFormSavesIsTheNameACertificateCanCarry:
         from jen.services import auth, kea_tls
 
         url = f"https://{host}:8004"
-        accepted_by_the_form = auth.valid_api_url(url, require_port=True)
+        accepted_by_the_form = auth.valid_api_url(url, require_port=True, certificate_name=True)
         bare = host.strip("[]")
         assert accepted_by_the_form == (auth._plain_host(bare) and kea_tls.verifier_accepts_name(bare)), host
         assert auth.valid_api_url(f"http://{host}:8004", require_port=True) == auth._plain_host(bare), (
@@ -1921,7 +1921,13 @@ class TestQ197TheSetupAsksTheOneDaemonQuestion:
     def _second_record(self, tls_world, monkeypatch, ssh_host="10.0.0.5", service="dhcp4", holds=True):
         kt = tls_world["tls"]["tls"]
         kt.ensure_ca()
-        other = {"id": 2, "name": "kea-b", "ssh_host": ssh_host}
+        other = {
+            "id": 2,
+            "name": "kea-b",
+            "ssh_host": ssh_host,
+            "api_url": "https://10.9.9.2:8004",
+            "api6_url": "https://10.9.9.2:8006",
+        }  # (an https endpoint now: a record whose endpoint is not https is STALE and no twin - second pass F3)
         if holds:
             kt.issue_server_cert(other, service, "10.0.0.5")
         monkeypatch.setattr(extensions, "KEA_SERVERS", [tls_world["server"], other])
@@ -1962,16 +1968,22 @@ class TestQ197TheSetupAsksTheOneDaemonQuestion:
         kt.ensure_ca()
         a = {"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5"}
         b = {"id": 2, "name": "kea-b", "ssh_host": "10.0.0.5"}
-        assert kt.other_record_on_same_daemon(a, "dhcp4", [a, b]) == "", "no record, no twin"
+        https = lambda s, svc: "https://10.0.0.5:8004"  # noqa: E731 - every record's endpoint is https
+        assert kt.other_record_on_same_daemon(a, "dhcp4", [a, b], url_for=https) == "", "no record, no twin"
         kt.issue_server_cert(b, "dhcp4", "10.0.0.5")
-        assert kt.other_record_on_same_daemon(a, "dhcp4", [a, b]) == "kea-b"
-        assert kt.other_record_on_same_daemon(b, "dhcp4", [a, b]) == "", "a record is not its own twin"
-        assert kt.other_record_on_same_daemon(a, "dhcp6", [a, b]) == "", "another service is another daemon"
-        assert kt.other_record_on_same_daemon({"id": 3, "ssh_host": ""}, "dhcp4", [a, b]) == ""
+        assert kt.other_record_on_same_daemon(a, "dhcp4", [a, b], url_for=https) == "kea-b"
+        assert kt.other_record_on_same_daemon(b, "dhcp4", [a, b], url_for=https) == "", "a record is not its own twin"
+        assert kt.other_record_on_same_daemon(a, "dhcp6", [a, b], url_for=https) == "", (
+            "another service is another daemon"
+        )
+        assert kt.other_record_on_same_daemon({"id": 3, "ssh_host": ""}, "dhcp4", [a, b], url_for=https) == ""
+        assert (
+            kt.other_record_on_same_daemon(a, "dhcp4", [a, b], url_for=lambda s, svc: "http://10.0.0.5:8004") == ""
+        ), "a record whose endpoint is not https now is stale, not a second owner of the daemon"
         odd = "h​ost"  # a string `same_host` cannot name a place for: the identical string is still one host
         c, d = {"id": 4, "name": "odd-c", "ssh_host": odd}, {"id": 5, "name": "odd-d", "ssh_host": odd}
         kt.issue_server_cert(d, "dhcp4", "10.9.9.9")
-        assert kt.other_record_on_same_daemon(c, "dhcp4", [c, d]) == "odd-d"
+        assert kt.other_record_on_same_daemon(c, "dhcp4", [c, d], url_for=https) == "odd-d"
 
 
 class TestQ197ARemovedSocketDropsItsRecord:
@@ -2005,3 +2017,62 @@ class TestQ197ARemovedSocketDropsItsRecord:
         wire["host"] = {"Dhcp4": {"control-sockets": [copy.deepcopy(UNIX), copy.deepcopy(CLIENT_SOCKET)]}}
         _post(_inner(infra.remove_direct_socket))
         assert os.path.lexists(kea_tls.server_copy_path(1, "dhcp4")), "the socket was put back, so its record stays"
+
+
+class TestTheSecondPassOfQ197:
+    """The second pass on Q197 (agent a9a2343ad6f85c187, 0 P1 / 3 P2 / 6 P3), each finding as its row first: F1 the certificate-name rule is for a CHANGED address, never for a saved one that works; F2 Rotate
+    issues every target's certificate before the first install, and the remedy for a name no certificate can carry is the address, not Rotate; F3 a record whose endpoint is not https now is no twin."""
+
+    FORM = {"scheme": "https", "address": "10.0.0.5", "port": "8004", "user": "u", "password": "p"}
+
+    def test_f1_a_saved_underscore_host_passes_an_unrelated_edit_and_a_changed_one_is_refused(self, monkeypatch):
+        from jen.services import auth
+
+        saved = "https://kea_host:8000"
+        monkeypatch.setattr(extensions, "KEA_API_URL", saved)
+        assert infra._unchanged_url(saved, extensions.KEA_API_URL) and infra._unchanged_url(saved + "/", saved)
+        assert not infra._unchanged_url("https://kea_other:8000", saved)
+        assert auth.dns_name_sentence(saved, require_port=True), "the rule itself still names the host"
+        # the shared validator does not carry the rule by default: the server-list save, the candidate URL and the remove-socket CA address are unaffected
+        assert auth.valid_api_url(saved, require_port=True) is True
+        assert auth.valid_api_url(saved, require_port=True, certificate_name=True) is False
+
+    def test_f1_the_three_forms_use_the_changed_value_rule(self):
+        source = inspect.getsource(infra)
+        for saved in ("KEA_API_URL", "KEA6_API_URL", "D2_API_URL"):
+            assert f"_unchanged_url(api_url, extensions.{saved})" in source, saved
+
+    def test_f2_the_remedy_for_a_name_no_certificate_can_carry_is_the_address_not_rotate(self):
+        from jen.services import kea_tls
+
+        shape = kea_tls.name_refusal_remedy(["kea_host"])
+        assert (
+            "Rotate Kea CA" not in shape
+            and "change the address saved for it" in shape
+            and "no acknowledgement is needed" in shape
+        )
+        constraint = kea_tls.name_refusal_remedy(["10.0.0.5"])
+        assert "Rotate Kea CA" in constraint and "no acknowledgement is needed" in constraint
+        assert "Rotate Kea CA" not in kea_tls.name_refusal_remedy(["10.0.0.5"], rotating=True), (
+            "Rotate issues from a NEW CA: a refusal there is the name, never the CA"
+        )
+
+    def test_f2_the_setup_sentence_for_a_name_shape_does_not_send_the_operator_to_rotate(self, tls_world):
+        kt = tls_world["tls"]["tls"]
+        kt.ensure_ca()
+        tls_world["server"]["ssh_host"] = "10.0.0.5"
+        with pytest.raises(kt.NameRefused) as refused:
+            kt.issue_server_cert(tls_world["server"], "dhcp4", "kea_host", commit=False)
+        assert "Rotate Kea CA" not in kt.name_refusal_remedy(refused.value.names)
+
+    def test_f3_a_twin_whose_endpoint_is_not_https_now_does_not_block_the_setup(self, tls_world, monkeypatch):
+        kt = tls_world["tls"]["tls"]
+        kt.ensure_ca()
+        stale = {"id": 2, "name": "kea-b", "ssh_host": "10.0.0.5", "api_url": "http://10.0.0.5:8004"}
+        kt.issue_server_cert(stale, "dhcp4", "10.0.0.5")
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [tls_world["server"], stale])
+        monkeypatch.setattr(infra, "_write_direct_socket_config", lambda *a, **k: "url written")
+        _post(_inner(infra.setup_direct_socket), **self.FORM)
+        texts = " ".join(t for _s, t in tls_world["flashes"])
+        assert "one daemon, two records" not in texts, texts
+        assert len(tls_world["tls"]["installed"]) == 1

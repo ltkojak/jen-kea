@@ -310,7 +310,7 @@ def same_host(a: str, b: str) -> bool:
     return pa is not None and pb is not None and pa[1] == pb[1]
 
 
-def valid_api_url(url: str, require_port: bool = False) -> bool:
+def valid_api_url(url: str, require_port: bool = False, certificate_name: bool = False) -> bool:
     """A Kea command-API URL: http(s):// scheme, a hostname or IP, and —
     in direct mode (require_port=True) — an explicit port. A daemon
     control socket is never on 80/443, and `http://kea` (no port) would
@@ -330,7 +330,7 @@ def valid_api_url(url: str, require_port: bool = False) -> bool:
         return False
     if p.scheme not in ("http", "https") or not p.hostname or not _plain_host(p.hostname):
         return False
-    if dns_name_sentence(value, require_port):
+    if certificate_name and dns_name_sentence(value, require_port):
         return False  # Q197 (AM2): an https address in direct mode must carry a name the certificate verifier accepts - else no certificate Jen issues could be for it
     if "@" in p.netloc:
         return False  # Q190 (AF2, CRED-005): a URL never carries a user name or a password - the credential rule's fields are the only place a Kea password lives

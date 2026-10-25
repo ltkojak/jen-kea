@@ -486,8 +486,12 @@ def save_infra_kea():
     if __auth.userinfo_sentence(api_url):
         flash(__auth.userinfo_sentence(api_url), "error")  # Q190 (AF2, CRED-005)
         return redirect(url_for("settings.settings_kea"))
-    if __auth.dns_name_sentence(api_url, require_port=(connection_mode == "direct")):
-        flash(__auth.dns_name_sentence(api_url, require_port=True), "error")  # Q197 (AM2)
+    if not _unchanged_url(api_url, extensions.KEA_API_URL) and __auth.dns_name_sentence(
+        api_url, require_port=(connection_mode == "direct")
+    ):
+        flash(
+            __auth.dns_name_sentence(api_url, require_port=True), "error"
+        )  # Q197 (AM2); a CHANGED address only (second pass F1)
         return redirect(url_for("settings.settings_kea"))
     if not __auth.valid_api_url(api_url, require_port=(connection_mode == "direct")):
         if connection_mode == "direct":
@@ -641,8 +645,12 @@ def save_infra_kea6():
     if api_url and __auth.userinfo_sentence(api_url):
         flash(__auth.userinfo_sentence(api_url), "error")  # Q190 (CRED-005)
         return redirect(url_for("settings.settings_kea"))
-    if api_url and __auth.dns_name_sentence(api_url, require_port=__caps.is_direct()):
-        flash(__auth.dns_name_sentence(api_url, require_port=True), "error")  # Q197 (AM2)
+    if (
+        api_url
+        and not _unchanged_url(api_url, extensions.KEA6_API_URL)
+        and __auth.dns_name_sentence(api_url, require_port=__caps.is_direct())
+    ):
+        flash(__auth.dns_name_sentence(api_url, require_port=True), "error")  # Q197 (AM2); a CHANGED address only
         return redirect(url_for("settings.settings_kea"))
     if api_url and not __auth.valid_api_url(api_url, require_port=(__caps.is_direct())):
         if __caps.is_direct():
@@ -806,8 +814,12 @@ def save_infra_d2():
     if api_url and __auth.userinfo_sentence(api_url):
         flash(__auth.userinfo_sentence(api_url), "error")  # Q190 (CRED-005)
         return redirect(url_for("settings.settings_kea"))
-    if api_url and __auth.dns_name_sentence(api_url, require_port=__caps.is_direct()):
-        flash(__auth.dns_name_sentence(api_url, require_port=True), "error")  # Q197 (AM2)
+    if (
+        api_url
+        and not _unchanged_url(api_url, extensions.D2_API_URL)
+        and __auth.dns_name_sentence(api_url, require_port=__caps.is_direct())
+    ):
+        flash(__auth.dns_name_sentence(api_url, require_port=True), "error")  # Q197 (AM2); a CHANGED address only
         return redirect(url_for("settings.settings_kea"))
     if api_url and not __auth.valid_api_url(api_url, require_port=(__caps.is_direct())):
         if __caps.is_direct():
@@ -1667,6 +1679,12 @@ def _servers_not_on_direct_sockets(except_id) -> list[str]:
     return names
 
 
+def _unchanged_url(new, saved) -> bool:
+    """Is `new` the address already saved (Q197 second pass, F1)? A saved https address whose host a real TLS stack accepts but the certificate verifier's DNS parser does not (an underscore: docker-compose service
+    names) works today; the certificate-name rule is for a value being CHANGED, never a reason to refuse an unrelated edit of a form that re-submits the saved one."""
+    return (new or "").strip().rstrip("/") == (saved or "").strip().rstrip("/")
+
+
 def _holding_identity_lock(view):
     """Run the whole view under `identity_lock` (v5.68.0-beta.29, Q165, edge 3). The two direct-socket routes act on the Kea HOST first (the daemon is reconfigured and
     restarted) and write Jen's own settings LAST, and beta.28 asked the identity question of a copy at the start. Between that question and the final write another
@@ -2437,8 +2455,8 @@ def setup_direct_socket(server_id, service):
         except __tls.NameRefused as e:
             # Q197 (AM2): a HEALTHY CA that cannot issue for this name is not a damaged CA - the acknowledgement is never named, and the sentence names the SAN that failed (the bind address OR the SSH host's name)
             flash(
-                f"Jen's CA is healthy, but it cannot issue a certificate the verifier accepts for {', '.join(e.names)} ({e.why}): change the address Jen dials, or replace the CA with "
-                f"Rotate Kea CA (no acknowledgement is needed - the CA is not damaged). Nothing was changed on {name}.",
+                f"Jen's CA is healthy, but it cannot issue a certificate the verifier accepts for {', '.join(e.names)} ({e.why}): {__tls.name_refusal_remedy(e.names)}. "
+                f"Nothing was changed on {name}.",
                 "error",
             )
             return back
@@ -2850,22 +2868,26 @@ def rotate_kea_ca():
             )
             return back
         try:
+            # Q197 second pass (F2): EVERY target's certificate is issued BEFORE the first install - a name the verifier refuses for the last target is found while no daemon has been touched, not after the
+            # earlier ones were installed, restarted, probed and had to be put back
+            issued: dict = {}
             for server, service, bind in targets:
                 sname = server.get("name") or f"Kea Server {server.get('id')}"
                 daemon = _DAEMON_NAME[service]
                 try:
-                    files = __tls.issue_server_cert(
+                    issued[(server.get("id"), service)] = __tls.issue_server_cert(
                         server, service, bind, ca=(staged["ca_cert"], staged["ca_key"]), commit=False
                     )  # Jen's own pair changes only once the host has this one and it answers
                 except __tls.NameRefused as e:
-                    # (Q197, AM2) the CA is healthy; it cannot issue for this server's name - nothing was installed on this target
+                    # (Q197, AM2) the CA is healthy; it cannot issue for this server's name - nothing was installed on any target
                     failure = (
-                        f"{sname} {daemon}: the CA cannot issue its certificate for {', '.join(e.names)} ({e.why})"
+                        f"{sname} {daemon}: the CA cannot issue its certificate for {', '.join(e.names)} ({e.why}) - "
+                        f"{__tls.name_refusal_remedy(e.names, rotating=True)}; nothing was installed on any host"
                     )
                     break
                 except __tls.CaDamaged as e:
-                    # (Q196 second pass, row 3) the verifier refused the leaf Jen was about to issue for THIS server's real names - nothing was installed on this target
-                    failure = f"{sname} {daemon}: the CA cannot issue its certificate ({e.why})"
+                    # (Q196 second pass, row 3) the verifier refused the leaf Jen was about to issue for THIS server's real names - nothing was installed on any target
+                    failure = f"{sname} {daemon}: the CA cannot issue its certificate ({e.why}); nothing was installed on any host"
                     break
                 except Exception as e:
                     logger.error(
@@ -2873,6 +2895,10 @@ def rotate_kea_ca():
                     )
                     failure = f"{sname} {daemon}: could not issue its certificate (see the server log)"
                     break
+            for server, service, bind in [] if failure else targets:
+                sname = server.get("name") or f"Kea Server {server.get('id')}"
+                daemon = _DAEMON_NAME[service]
+                files = issued[(server.get("id"), service)]
                 attempted.append((server, service, bind))
                 pushed = __host.install_tls(server, service, files)
                 if not pushed.get("ok"):

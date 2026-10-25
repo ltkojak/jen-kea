@@ -2463,7 +2463,9 @@ def q197_am5_one_daemon_two_records_at_the_setup():
                 b = {"id": 2, "name": "kea-b", "ssh_host": theirs}
                 kea_tls.issue_server_cert(b, held_service, "10.9.9.2")
                 servers.append(b)
-            out[label] = kea_tls.other_record_on_same_daemon(a, asked_service, servers)
+            out[label] = kea_tls.other_record_on_same_daemon(
+                a, asked_service, servers, url_for=lambda s, svc: "https://10.9.9.2:8004"
+            )
     return out
 
 

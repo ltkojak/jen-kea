@@ -608,7 +608,7 @@ it to the user and password fields, and Jen keeps dialling it as written (the cr
    127, a usage message, an exit code with no verdict), slow (the child AND its process group are killed at the timeout) or unreadable is NO opinion - never a rejection and never an acceptance. A verdict exists
    only on `verification failed`, `error N at D depth lookup` or `: OK`. The comparison with the CLI is with `ca_state`'s own verdict. **A healthy CA that cannot issue for THIS name is told so
    (Q197):** `verify_issued`'s refusal of a leaf's name is `NameRefused`, never `CaDamaged` - the setup, Rotate and the page say the CA is healthy, name the SAN that failed and ask for no acknowledgement; the
-   form refuses an https direct host the verifier's DNSName parser rejects. **A record of an endpoint that is no longer https is stale, not valid (Q197):** Health does not count it, Rotate ignores it, a removed
+   form refuses an https direct host the verifier's DNSName parser rejects. **A record of an endpoint that is no longer https is stale, not valid, and no second owner of its daemon (Q197):** Health does not count it, Rotate ignores it, a removed
    socket drops it (`discard_local_record`), and a superadmin can forget the rest (local, audited). **One daemon is one record where the world is MADE (Q197):** an https setup is refused when another server
    record with the same SSH host already holds a Jen-issued certificate for the same service. **The staged rotation leaves no key copy (Q197):** the `.next` set is written without `.prev`. **One daemon is one rotation target (Q196).** Two targets with the same SSH host (`same_host`: exact,
    no DNS) and the same service are a refusal BEFORE staging; the route probes EVERY target once more with the staged identity after the last install and before the promotion, so each endpoint answers the
@@ -693,6 +693,8 @@ Jen's CA by certificate identity, per endpoint; an invariant with no knob; an in
 - `tests/test_kea_tls_rotation.py::TestTheStaleRecords`
 - `tests/test_kea_tls_rotation.py::TestHygieneOfQ197`
 - `tests/test_kea_tls_rotation.py::TestTheNameWorldsOfRotate`
+- `tests/test_kea_tls_rotation.py::TestTheSecondPassOfQ197`
+- `tests/test_direct_socket_lock.py::TestTheSecondPassOfQ197`
 - `tests/test_kea_tls_worlds.py::TestEveryValueFamilyIsARow`
 - `tests/test_kea_tls.py::TestTheUnsafeReplacementPathIsGone`
 - `tests/test_direct_socket_lock.py::TestQ197TheNameWorldsOfTheHttpsSetup`
