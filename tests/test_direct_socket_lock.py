@@ -2175,7 +2175,20 @@ class TestQ198TheSetupAndTheFormsAfterTheRecordsChange:
             [{"id": 1, "name": "kea-a"}, {"id": 2, "name": "kea-b", "api_url": "https://kea_b:8004"}],
         )
         monkeypatch.setattr(extensions, "cfg", __import__("configparser").ConfigParser(), raising=False)
-        flashes = []
+        flashes, asked, validated = [], [], []
+        from jen.services import auth
+
+        real_sentence, real_valid = auth.dns_name_sentence, auth.valid_api_url
+        monkeypatch.setattr(
+            auth, "dns_name_sentence", lambda url, *a, **k: asked.append(url) or real_sentence(url, *a, **k)
+        )
+        monkeypatch.setattr(
+            auth, "valid_api_url", lambda url, *a, **k: validated.append(url) or real_valid(url, *a, **k)
+        )
         with contextlib.suppress(Exception):  # the save itself needs the config; only the early name gate matters here
             self._extra_servers_post(monkeypatch, flashes, **{"extra_api_url[]": ["https://kea_b:8004"]})
+        assert "https://kea_b:8004" in validated, (
+            "the route reached the address checks (a crash before them would pass this test for nothing)"
+        )
+        assert "https://kea_b:8004" not in asked, "a saved address is never put to the certificate-name rule"
         assert not any("does not accept this as a DNS name" in f for f in flashes), flashes

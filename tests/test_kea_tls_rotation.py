@@ -395,7 +395,7 @@ class Lab:
                     bad.append(("T1", f"server {sid}: host_material is not the pair the host holds"))
             else:
                 state, _why = kea_tls.record_state(sid, "dhcp4")
-                if state == "jen":
+                if state in kea_tls.JEN_STATES:
                     bad.append(
                         (
                             "T1",
@@ -4792,6 +4792,8 @@ class TestStaleIsAFactAboutTheDaemon:
         self._park_server_2(lab)
         row = health._kea_tls_expiry({})
         assert row.status == "fail" and "standby kea-dhcp4 expired" in row.detail, row.detail
+        assert "remove the socket under Settings → Kea, or forget the parked record there" in row.detail
+        assert "Rotate the Kea CA" not in row.detail, "Rotate leaves a parked record alone: it is not the remedy"
 
     def test_forget_refuses_a_parked_record_and_says_so(self, lab):
         self._park_server_2(lab)
@@ -4850,6 +4852,10 @@ class TestStaleIsAFactAboutTheDaemon:
         lab.hosts[2]["files"] = lab.hosts[2]["loaded"] = None  # the parked daemon is not part of this rotation
         _rotate()
         assert "Parked, not rotated" in lab.texts() and "2-dhcp4" in lab.texts(), lab.texts()
+        assert "set it up again so Jen issues it a certificate from the new CA" in lab.texts()
+        assert "it is the daemon's again" not in lab.texts(), (
+            "after a rotation the parked record is an earlier CA's: that sentence was false"
+        )
 
     def test_only_a_record_named_like_one_is_forgotten(self, lab):
         TestTheStaleRecords()._stale_copy()
@@ -4992,3 +4998,105 @@ class TestTheSmallOnesOfQ198:
         assert "certificate_name=True" in source and "dns_name_sentence(v6_url" in source
         merge = pathlib.Path("tools/config_merge.py").read_text(encoding="utf-8")
         assert "def name_warnings" in merge and "name_warnings(merged)" in merge
+
+
+class TestTheSecondPassOfQ198:
+    """The second pass on Q198 (agent a1112744c494cb1d1, 0 P1 / 4 P2 / 6 P3), each finding as its row first. F1 a definition changed in one use: a U-label host is accepted by the verifier question and the
+    leaf must carry its A-label; F2 a name is one name across string types only where OpenSSL canonicalises them alike; F3 a removed server's records go with it and a parked record has a way out; F4 the
+    parked flash and Health's remedy tell the truth; F6/F8/F10 the small ones."""
+
+    def test_f1_a_u_label_host_gets_a_leaf_that_carries_its_a_label(self, lab):
+        server = {"id": 9, "name": "unicode-host", "ssh_host": "10.0.0.5"}
+        files = kea_tls.issue_server_cert(server, "dhcp4", "m\u00fcnchen.example", commit=False)
+        from cryptography import x509
+
+        leaf = x509.load_pem_x509_certificate(files["server.crt"].encode())
+        sans = [str(v.value) for v in leaf.extensions.get_extension_for_class(x509.SubjectAlternativeName).value]
+        assert "xn--mnchen-3ya.example" in sans, sans
+        ca_cert, _key = kea_tls._load_ca()
+        assert kea_tls.verify_issued(ca_cert, leaf, False, "xn--mnchen-3ya.example") == ""
+
+    def test_f1_the_question_and_the_leaf_agree_for_every_name(self):
+        for name in ("m\u00fcnchen.example", "b\u00fccher.example", "kea-a.example", "10.0.0.5", "\u2603.example"):
+            accepted = kea_tls.verifier_accepts_name(name)
+            san = kea_tls._san_for(name)
+            assert accepted is (san is not None), (name, accepted, san)
+
+    @pytest.mark.parametrize("string_type", ["T61String", "BMPString", "UniversalString"])
+    def test_f2_a_non_ascii_issuer_and_subject_in_different_string_types_are_not_one_name_without_the_cli(
+        self, lab, tmp_path, monkeypatch, string_type
+    ):
+        import datetime
+
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.x509.name import _ASN1Type
+        from cryptography.x509.oid import NameOID
+
+        monkeypatch.setattr(kea_tls, "_openssl_exe", lambda: None)
+        key = kea_tls._new_key()
+        text = "Jen K\u00e9a CA"
+        subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, text, _type=_ASN1Type.UTF8String)])
+        issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, text, _type=getattr(_ASN1Type, string_type))])
+        now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+        try:
+            cert = (
+                x509.CertificateBuilder()
+                .subject_name(subject)
+                .issuer_name(issuer)
+                .public_key(key.public_key())
+                .serial_number(5)
+                .not_valid_before(now - datetime.timedelta(minutes=5))
+                .not_valid_after(now + datetime.timedelta(days=3650))
+                .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+                .add_extension(x509.KeyUsage(True, False, False, False, False, True, True, False, False), critical=True)
+                .sign(key, hashes.SHA256())
+            )
+        except (ValueError, TypeError):
+            pytest.skip(f"cryptography cannot build a {string_type} name here")
+        assert not kea_tls._same_name(cert.issuer, cert.subject), string_type
+        assert kea_tls._cert_structure(cert, "kea-ca.crt", cert.public_key())[0] == "damaged"
+
+    def test_f2_printable_and_utf8_remain_one_name(self):
+        from tests import _tls_worlds as worlds
+
+        cert, _key = worlds.semantic_ca("issuer-string-type-differs")
+        assert kea_tls._same_name(cert.issuer, cert.subject)
+
+    def test_f3_a_removed_servers_records_are_dropped_by_the_save_that_removes_it(self):
+        source = pathlib.Path("jen/routes/settings/infrastructure.py").read_text(encoding="utf-8")
+        assert (
+            "configured_extra - still_configured" in source and "discard_local_record(gone_id, gone_service)" in source
+        )
+
+    def test_f3_forget_with_the_parked_box_ticked_drops_a_parked_record(self, lab):
+        TestStaleIsAFactAboutTheDaemon._park_server_2(lab)
+        refused = kea_tls.forget_report(extensions.KEA_SERVERS)
+        assert refused["forgotten"] == [] and refused["parked"] == ["2-dhcp4"]
+        lab.expected_violations |= {
+            "T1"
+        }  # the operator's explicit "no daemon presents these any more": the Lab's daemon still does, and T1 says Jen no longer records it - on purpose
+        forgotten = kea_tls.forget_report(extensions.KEA_SERVERS, include_parked=True)
+        assert forgotten["forgotten"] == ["2-dhcp4"] and forgotten["parked"] == []
+        assert not os.path.lexists(kea_tls.server_copy_path(2, "dhcp4"))
+        lab.before = None
+
+    def test_f3_the_page_offers_the_box_only_where_a_parked_record_exists(self):
+        template = pathlib.Path("templates/settings_kea.html").read_text(encoding="utf-8")
+        assert 'name="include_parked"' in template and "{% if kea_ca.stale or kea_ca.parked %}" in template
+
+    def test_f6_forget_names_a_stale_file_it_will_not_delete(self, lab):
+        TestTheStaleRecords()._stale_copy()
+        stray = pathlib.Path(kea_tls._copies_dir(), "zz-dhcp4.crt")
+        stray.write_text("not a record Jen wrote", encoding="ascii")
+        report = kea_tls.forget_report(extensions.KEA_SERVERS)
+        assert report["skipped"] == ["zz-dhcp4"] and report["forgotten"] == ["77-dhcp4"], report
+        lab.before = None
+
+    def test_f8_a_copy_that_is_there_and_cannot_be_read_is_not_no_record(self):
+        source = pathlib.Path("jen/routes/settings/infrastructure.py").read_text(encoding="utf-8")
+        assert "cannot be read" in source and "os.path.lexists(__tls_fp.server_copy_path(server_id, service))" in source
+
+    def test_f9_the_lab_flags_a_jen_stale_record_of_a_certificate_no_jen_ca_issued_too(self):
+        source = inspect.getsource(Lab.check_invariants)
+        assert "JEN_STATES" in source or 'in ("jen", "jen-stale")' in source, "T1 must range over jen-stale records"

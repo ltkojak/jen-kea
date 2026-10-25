@@ -2578,7 +2578,12 @@ def setup_direct_socket(server_id, service):
             fingerprint_problem = "its certificate could not be read to check it is the one Jen holds"
         elif held is None:
             # Q198 (AN2): Jen holds NO record of this socket's certificate (it was forgotten, or never kept) - that is not "a certificate that is not the one Jen holds", and no `tls-local-stale` is true of it
-            fingerprint_problem = "Jen holds no record of the certificate this socket should present"
+            # (second pass, F8: a copy that is THERE and cannot be read is said so)
+            fingerprint_problem = (
+                "Jen's copy of the certificate this socket should present cannot be read"
+                if os.path.lexists(__tls_fp.server_copy_path(server_id, service))
+                else "Jen holds no record of the certificate this socket should present"
+            )
             fingerprint_unrecorded = True
         elif presented != held:
             fingerprint_problem = "it presents a certificate that is not the one Jen holds for it"
@@ -2813,7 +2818,7 @@ def rotate_kea_ca():
         flash(
             "Jen keeps certificate copies for "
             + ", ".join(inventory.stale)
-            + ", which are not https endpoints now; they are ignored.",
+            + ", for server(s) that are no longer configured; they are ignored.",
             "info",
         )
     trust = __tls.trust_kind()  # Q190 (AF1): how the CA bundle relates to Jen's CA, by certificate identity - what may be rewritten after the promotion follows from it
@@ -2909,7 +2914,14 @@ def rotate_kea_ca():
                     break
                 except __tls.CaDamaged as e:
                     # (Q196 second pass, row 3) the verifier refused the leaf Jen was about to issue for THIS server's real names - nothing was installed on any target
-                    failure = f"{sname} {daemon}: the CA cannot issue its certificate ({e.why}); nothing was installed on any host"
+                    failure = (
+                        f"{sname} {daemon}: the CA cannot issue its certificate ({e.why}); nothing was installed on any host"
+                        + (
+                            " (the prepared CA is reused by every rotation: discard it under Settings → Kea and rotate again, and Jen stages its own)"
+                            if reused
+                            else ""
+                        )
+                    )
                     break
                 except Exception as e:
                     logger.error(
@@ -3240,7 +3252,8 @@ def rotate_kea_ca():
         )
     if inventory.parked:
         flash(
-            f"Parked, not rotated (not an https endpoint now, so Jen did not touch it): {', '.join(inventory.parked)}. Jen keeps its record; it is the daemon's again if the server is switched back to https.",
+            f"Parked, not rotated (not an https endpoint now, so Jen did not touch it): {', '.join(inventory.parked)}. Jen keeps its record and its daemon keeps the certificate it has - issued by the CA Jen has just "
+            "replaced, which Jen no longer verifies. If the server is switched back to https, remove the direct socket and set it up again so Jen issues it a certificate from the new CA.",
             "info",
         )
     flash(
@@ -3344,7 +3357,10 @@ def forget_stale_kea_records():
     anything and nothing Jen trusts changes."""
     from jen.services import kea_tls as __tls
 
-    report = __tls.forget_report(extensions.KEA_SERVERS, url_for=_configured_url)
+    include_parked = (
+        request.form.get("include_parked") == "1"
+    )  # the operator's checkbox: "no daemon presents these certificates any more"
+    report = __tls.forget_report(extensions.KEA_SERVERS, url_for=_configured_url, include_parked=include_parked)
     if report["unreadable"]:
         # Q198 (AN2): an unlistable directory is not "nothing to forget"
         flash(
@@ -3356,11 +3372,17 @@ def forget_stale_kea_records():
     if parked:
         # Q198 (AN2): a record for a server that is configured is PARKED, not stale - its daemon may still present that certificate; it is dropped when the socket is removed, never here
         flash(
-            f"Kept {len(parked)} parked record(s): {', '.join(parked)}. The daemon on that server may still hold the certificate, so Jen keeps its copy and watches its expiry; remove the socket under Settings → Kea to drop it.",
+            f"Kept {len(parked)} parked record(s): {', '.join(parked)}. The daemon on that server may still hold the certificate, so Jen keeps its copy and watches its expiry; remove the socket under Settings → Kea to drop it, "
+            "or tick the box beside Forget stale records to say no daemon presents it any more.",
             "info",
         )
+    if report["skipped"]:
+        flash(
+            f"Left alone, because the file name is not one Jen writes (<server number>-dhcp4, -dhcp6 or -d2): {', '.join(report['skipped'])}. Remove them by hand if they are yours.",
+            "warning",
+        )
     if not forgotten:
-        if not parked:
+        if not parked and not report["skipped"]:
             flash("There were no stale certificate records.", "info")
         return redirect(url_for("settings.settings_kea"))
     flash(
@@ -4415,6 +4437,13 @@ def save_extra_servers():
         return redirect(url_for("settings.settings_kea"))
 
     count = len(extensions.KEA_SERVERS) - 1
+    from jen.services import kea_tls as __tls_gone
+
+    still_configured = {s["id"] for s in extensions.KEA_SERVERS}
+    for gone_id in sorted(configured_extra - still_configured):
+        # (Q198 second pass, F3) a server this save removed takes its certificate records with it: its id is handed to the next server added, and a record left behind would read as that server's
+        for gone_service in __tls_gone.INVENTORY_SERVICES:
+            __tls_gone.discard_local_record(gone_id, gone_service)
     flash(f"Additional servers saved — {count} extra server(s) configured.", "success")
     for url, host in zip(api_urls, ssh_hosts, strict=False):
         mismatch = __host_match.api_ssh_mismatch(url, host)

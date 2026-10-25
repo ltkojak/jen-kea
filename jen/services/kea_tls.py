@@ -552,6 +552,31 @@ def _ca_material_for_opinion():
         return None
 
 
+def _same_name(a, b) -> bool:
+    """Are two X.509 names ONE name as OpenSSL compares them (`X509_NAME_cmp`)? `Name.__eq__` ignores the ASN.1 string type altogether, which is right for a PrintableString and a UTF8String (Q198 AN3: openssl and
+    the chain verifier call them one name) and wrong for a T61String, a BMPString or a UniversalString holding non-ASCII text, which OpenSSL does NOT canonicalise to the same bytes (second pass, F2: such a
+    root read as self-issued here and `openssl verify` rejected every leaf). Same text and same types always; different types only within {UTF8String, PrintableString}."""
+    from cryptography.x509.name import _ASN1Type
+
+    if a == b and a.public_bytes() == b.public_bytes():
+        return True
+    if a != b:
+        return False
+    alike = {_ASN1Type.UTF8String, _ASN1Type.PrintableString}
+    try:
+        for rdn_a, rdn_b in zip(a.rdns, b.rdns, strict=True):
+            for x, y in zip(
+                sorted(rdn_a, key=lambda n: n.oid.dotted_string),
+                sorted(rdn_b, key=lambda n: n.oid.dotted_string),
+                strict=True,
+            ):
+                if x._type != y._type and not (x._type in alike and y._type in alike):
+                    return False
+    except (AttributeError, ValueError):
+        return False  # a name this cannot take apart is not asserted to be one name
+    return True
+
+
 def _verify_self_signature(cert, public) -> None:
     """Does the certificate's signature verify with its own public key? `Certificate.verify_directly_issued_by` compares the issuer and subject as BYTES, so a root whose issuer is a PrintableString
     and whose subject is the same text as a UTF8String - one name to OpenSSL, to the chain verifier and to `Name.__eq__` - read as "does not verify" (Q198 AN3, executed: openssl and the verifier
@@ -560,7 +585,7 @@ def _verify_self_signature(cert, public) -> None:
         cert.verify_directly_issued_by(cert)
         return
     except ValueError as e:
-        if "subject does not match" not in str(e) or cert.issuer != cert.subject:
+        if "subject does not match" not in str(e) or not _same_name(cert.issuer, cert.subject):
             raise
     if isinstance(cert.signature_hash_algorithm, (hashes.SHA1, hashes.MD5)):
         raise UnsupportedAlgorithm("a SHA-1 or MD5 self-signature is not verified")
@@ -597,7 +622,7 @@ def _cert_structure(cert, crt_name: str, public) -> tuple[str, str]:
             return "damaged", f"{crt_name} is not allowed to sign certificates (its KeyUsage lacks keyCertSign)"
         if not isinstance(public, (ec.EllipticCurvePublicKey, rsa.RSAPublicKey)):
             return "damaged", f"{crt_name} uses a key type Jen does not support ({type(public).__name__})"
-        if cert.issuer != cert.subject:
+        if not _same_name(cert.issuer, cert.subject):
             return "damaged", f"{crt_name} is not self-signed (its issuer is not its subject)"
         try:
             authority = cert.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier).value.key_identifier
@@ -620,7 +645,7 @@ def _cert_structure(cert, crt_name: str, public) -> tuple[str, str]:
             first_directory_name = next(
                 (n for n in (aki_value.authority_cert_issuer or []) if isinstance(n, x509.DirectoryName)), None
             )
-            names_ok = first_directory_name is None or first_directory_name.value == cert.issuer
+            names_ok = first_directory_name is None or _same_name(first_directory_name.value, cert.issuer)
             serial_ok = (
                 aki_value.authority_cert_serial_number is None
                 or aki_value.authority_cert_serial_number == cert.serial_number
@@ -856,6 +881,12 @@ def _san_for(value: str):
         return x509.IPAddress(ipaddress.ip_address(value))
     except ValueError:
         pass
+    if not value.isascii():
+        # (Q198 second pass, F1) a certificate carries a non-ASCII name as its A-label (punycode), which is what a client verifies and what `verifier_accepts_name` asks about; `DNSName` itself refuses a U-label
+        try:
+            value = value.encode("idna").decode("ascii")
+        except UnicodeError:
+            return None
     try:
         return x509.DNSName(value)
     except ValueError:
@@ -973,12 +1004,12 @@ def other_record_on_same_daemon(server: dict, service: str, servers, url_for=Non
 _FORGETTABLE = re.compile(r"(\d+)-(dhcp4|dhcp6|d2)")
 
 
-def forget_report(servers, url_for=None) -> dict:
+def forget_report(servers, url_for=None, include_parked: bool = False) -> dict:
     """Q197 (AM4), Q198 (AN2/AN5): drop Jen's own copy of every certificate that records NOTHING - a server that is not configured at all (the inventory's `stale`). A local change only: no host is asked
     anything. A record for a CONFIGURED server whose endpoint is not https now is PARKED, not stale: its daemon may still present that certificate, so it is kept and named. Only a file named
     `<number>-<dhcp4|dhcp6|d2>` is ever deleted. A directory that cannot be listed is said, not read as "nothing to forget". Returns
     {"forgotten": [...], "parked": [...], "unreadable": "" or why}."""
-    report = {"forgotten": [], "parked": [], "unreadable": ""}
+    report = {"forgotten": [], "parked": [], "unreadable": "", "skipped": []}
     try:
         issued_server_copies(strict=True)
     except OSError as e:
@@ -986,10 +1017,19 @@ def forget_report(servers, url_for=None) -> dict:
         return report
     inventory = rotation_inventory(servers, url_for=url_for, prove_storage=False)
     report["parked"] = list(inventory.parked)
+    if include_parked:
+        # (second pass, F3) the operator's explicit act: "no daemon presents these any more" (the socket was removed by hand, the server was switched to the Control Agent for good, a removed server's id was reused)
+        for ident in list(inventory.parked):
+            match = _FORGETTABLE.fullmatch(ident)
+            if match is not None:
+                discard_local_record(match.group(1), match.group(2))
+                report["forgotten"].append(ident)
+                report["parked"].remove(ident)
     for ident in inventory.stale:
         match = _FORGETTABLE.fullmatch(ident)
         if match is None:
-            continue  # (a file that is not a record Jen wrote is not Jen's to delete)
+            report["skipped"].append(ident)
+            continue  # (a file that is not a record Jen wrote is not Jen's to delete - and the report says it was left)
         discard_local_record(match.group(1), match.group(2))
         report["forgotten"].append(ident)
     return report

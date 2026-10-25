@@ -1168,14 +1168,29 @@ def _kea_tls_expiry(ctx) -> Check:
     failing = [(n, d) for n, d in items if d is not None and 0 <= d <= 14]
     warning = [(n, d) for n, d in items if d is not None and 14 < d <= 90]
     stale = _tls_local_stale_labels()
+
+    # (Q198 second pass, F4) Rotate does not touch a parked record, so "Rotate" is the remedy only when something Rotate DOES rotate is what is wrong
+    def parked_only(rows):
+        return bool(rows) and all(n in parked_records for n, _d in rows)
+
     if expired or failing:
         parts = [f"{n} expired {abs(d)} day(s) ago" for n, d in expired] + [
             f"{n} expires in {d} day(s)" for n, d in failing
         ]
-        c.status, c.detail = "fail", "; ".join(parts) + " — Rotate the Kea CA (Settings → Kea)"
+        remedy = (
+            "remove the socket under Settings → Kea, or forget the parked record there"
+            if parked_only(expired + failing)
+            else "Rotate the Kea CA (Settings → Kea)"
+        )
+        c.status, c.detail = "fail", "; ".join(parts) + f" — {remedy}"
     elif warning:
         c.status = "warn"
-        c.detail = "; ".join(f"{n} expires in {d} day(s)" for n, d in warning) + " — plan a Rotate (Settings → Kea)"
+        remedy = (
+            "the daemon is not on an https endpoint now: switch it back and set the socket up again, or remove the socket"
+            if parked_only(warning)
+            else "plan a Rotate (Settings → Kea)"
+        )
+        c.detail = "; ".join(f"{n} expires in {d} day(s)" for n, d in warning) + f" — {remedy}"
     else:
         soonest = min((d for _n, d in items if d is not None), default=None)
         n_servers = len(items) - 2

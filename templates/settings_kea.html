@@ -208,8 +208,11 @@
         {% endif %}
         {% if kea_ca.stale %}
         <div class="form-hint u-fdf33f">Stale certificate records (the server is no longer configured, so nothing can present the certificate; Rotate ignores them): {{ kea_ca.stale|join(', ') }}.</div>
+        {% endif %}
+        {% if kea_ca.stale or kea_ca.parked %}
         <form method="POST" action="/settings/infrastructure/kea-ca/forget-stale" class="u-cccfa4" data-confirm="Forget Jen's own copies of these certificates? Nothing is changed on any Kea host.">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            {% if kea_ca.parked %}<label class="form-hint"><input type="checkbox" name="include_parked" value="1"> No daemon presents the parked certificates any more (forget them too)</label>{% endif %}
             <button type="submit" class="btn btn-sm btn-secondary">{{ icon("trash") }} Forget stale records</button>
         </form>
         {% endif %}

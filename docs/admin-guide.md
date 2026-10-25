@@ -279,6 +279,9 @@ with a different library might not accept them either. Health says when
 | an Ed25519 CA | a key type Jen cannot issue from (`openssl` cannot be asked) |
 | a P-224 or DSA key | not P-256, P-384, P-521 or RSA of 2048 bits or more, although `openssl` accepts it |
 | a CA whose issuer differs from its subject only in letter case | Jen compares the names exactly; `openssl` does not |
+| a CA whose issuer differs from its subject only in white space, or whose Authority Key Identifier names its own issuer in a different letter case | Jen compares names exactly; `openssl` normalises them |
+| a SHA-1 self-signed CA | Jen does not verify a SHA-1 signature; `openssl` accepts it |
+| a CA with an empty issuer and subject | Jen needs a name to compare; `openssl` accepts it |
 | an Authority Key Identifier with the issuer and serial number but no key identifier | the verifier requires the key identifier |
 | an Authority Key Identifier with no field set at all | the verifier requires the key identifier; `openssl` chains to it |
 | a critical CRLDistributionPoints extension on the CA | the verifier rejects the extension |
