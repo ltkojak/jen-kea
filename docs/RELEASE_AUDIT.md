@@ -7,6 +7,11 @@ independent adversarial pass whose findings are reconciled against the first. Th
 
 Set `PREV` to the previous release tag and `HEAD` to the candidate.
 
+> **This document is Jen's adversarial review methodology** - how a release is investigated before and after it goes to a reviewer. Its companion is `docs/SAFETY_INVARIANTS.md`, the
+> list of what Jen must never violate, each entry naming the choke point that enforces it and the tests that fail when it breaks. The methodology says HOW to look; the invariants say WHAT must
+> hold. `docs/ADVERSARIAL_REVIEW_METHODOLOGY.md` is a pointer here, so that the name a reviewer expects resolves to one definition. (Adopted as the single methodology document 2026-10-24;
+> the reviewer's own written method was compared against it the same day and the differences folded in below under "What the reviewer does".)
+
 ## The seven steps (first pass)
 
 **(a) Read the diff in full.** Every changed function, not the summary.
@@ -183,6 +188,53 @@ the procedure that replaces it. It runs on every tagged beta BEFORE the archive 
 **The exit rule.** Promotion is judged against Jen's threat model (`docs/ARCHITECTURE.md`): a P1 in a supported configuration blocks and gets a Q; a finding that requires the operator to
 have hand-corrupted Jen's own identity or state files is a P2 in this model - registered, shipped as a stable PATCH if it proves to matter, never another beta. A finding after promotion
 ships as `X.Y.Z+1` on the stable channel. The maintainer says "promote"; nothing about a promotion is written before that word.
+
+## What the reviewer does (folded in 2026-10-24)
+
+The external reviewer wrote down its own method after 5.69.0-beta.26. Compared against this document section by section, most of it was already here (the delta, the whole-archive read,
+the complete-path trace, the failure matrix, the independent oracle, the "do not trust the changelog" rule). The differences that explain its streak of findings from beta.19 to beta.27, and
+the parts of its report format we did not have, are adopted here as rules of both passes.
+
+**(r) Defeat the fix.** For every fixup in a release and every previously reported finding, do not stop at confirming the guard exists: take the ORIGINAL reproduction and vary it through
+the matrices below - an absent value, an empty one, an aliased one, a duplicated one, a contradictory one, the same change through another entry point, the same state after a reload or a
+restart - and try to get past the fix with a slightly different input. This single step is where the reviewer found beta.20 (a path-string alias of the fixed check), beta.22 (the client half of
+a fixed identity), beta.24 (the purpose of a fixed pair), beta.26 (the EKU of a fixed purpose). The second pass runs (r) on every fixup it or the author made; the pre-reviewer pass runs it on
+every finding the previous review named.
+
+**Evidence level is a second attribute on every finding, separate from severity.** `Reproduced` (the production function executed, the failure observed), `Integration-confirmed` (the whole
+route executed), `Source-confirmed` (path and defect established by reading, not exercised), `Environment-dependent` (behaviour established; impact needs a particular deployment),
+`Suspected` (a hypothesis). A chart row carries both. A `Suspected` item is never written as a defect, and a `Source-confirmed` one never as a reproduction - this document already said so in
+(m); the five names make it checkable.
+
+**Severity reflects realistic consequences under the supported deployment contract** - the reviewer's own words: "Do not automatically label an edge case P1 merely because it involves
+cryptography or security-related code", and "A beta may be a strong release candidate even if lower-priority issues remain, provided the outstanding risks are understood, bounded and
+explicitly accepted." That is the exit rule under "The pre-reviewer executing pass" and CLAUDE.md rule 11, stated by the reviewer; both sides now hold each other to it. Jen keeps three tiers
+(P1 blocks, P2 is wrong behaviour or a dead end, P3 is a nit); a reviewer's P0 is a P1 that is also an incident.
+
+**The matrices, as checklists** (the reviewer's lists, with Jen's stronger rule where it has one):
+- *Input state*: absent · empty · normal · malformed · stale · contradictory (inherit selected with an explicit value) · unauthorised · duplicated (two records, one resource) · aliased
+  (two paths or names, one resource) · inconsistent (a certificate without its key) · partially updated (remote changed, local not) · concurrent (two writers) · restored (database and
+  configuration from different points in time).
+- *Role*: anonymous · viewer · scoped admin · unrestricted admin · superadmin · superadmin past the step-up window · an API key · a background or non-interactive context - through the
+  UI AND as a direct HTTP request (a hidden button is not a guard).
+- *Topology*: one server · several independent servers · an HA pair · the first server unreachable · the second holding the newest evidence · two server ids for one endpoint · two names
+  for one host · two daemons on one host · v4-only, v6-only, dual-stack · Control Agent mode, direct-socket mode · mixed authentication and TLS.
+- *Certificate*: Jen's rule is stronger than a list - enumerate every extension class the library can build with EVERY distinct value family it has, every key type and curve, the validity
+  edges, the name-constraint forms, the identifier mismatches - and judge every one with the library verifier, `openssl verify -purpose`, and a real handshake in both directions (see (q)).
+- *Recovery*: inject at preflight · snapshot · local staging · remote file install · remote config write · validation · restart · probe · local commit · incident persistence · cleanup ·
+  rollback · rollback restart · recovery verification - and at each ask: what changed before the failure, what should be rolled back, is the previous state still available, can the rollback
+  itself fail, can Jen report success, can it be retried, will the next restart understand the state.
+
+**Verify the archive, not only the tree.** Before the first pass on a release candidate: the archive's checksum recorded; `tar -tzf` read for paths outside the tree; `python -m compileall -q
+jen plugins`; `bash -n install.sh` (and every shell script the archive ships); the six version spots checked inside the archive. A changelog entry is never evidence that a defect was fixed -
+the implementation is the authority.
+
+**Label test counts correctly.** Collected, executed, passed, failed, skipped - five different numbers, named. A statically counted `test_*` is not a passing test; a run under
+`--noconftest` is not the suite; a collection failure is reported as such, never as a pass.
+
+**The promotion gate, in the reviewer's terms and ours.** No unresolved P1 that applies under the supported contract; every previously confirmed blocker has a regression test that FAILS
+against the vulnerable implementation; the full suite, the migrations, kea-compat and the system failure-injection scenarios green; known P2/P3 explicitly dispositioned (fixed / registered /
+patch after promotion); a required test that cannot run is a documented risk decision, never a silently passed gate. The maintainer says "promote".
 
 ## The output
 
