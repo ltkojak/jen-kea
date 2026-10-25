@@ -498,8 +498,11 @@ S10_ALLOWED = {
     ("jen/services/auth.py", "_endpoint_parts", "ValueError", "return None"): (
         "an address that cannot be parsed (a bad port) names no place, so it is NEVER the same endpoint as anything: a kept secret is then removed or the form refuses - fail closed (CRED-002, Q178)"
     ),
-    ("jen/services/auth.py", "_plain_host", "UnicodeError", "return False"): (
-        "a host that cannot be IDNA-encoded is NOT a plain name: `valid_api_url` then refuses the address, so a credential is never sent to a name nobody can read the same way twice (Q184, Z3)"
+    ("jen/services/auth.py", "_plain_host", "Exception", "return False"): (
+        "a host that has no IDNA 2008 A-label, or does not survive the round trip, is NOT a plain name: `valid_api_url` then refuses the address, so a credential is never sent to a name nobody can read the same way twice (Q184, Z3; Q199 AO4: the `idna` package, what `requests` dials)"
+    ),
+    ("jen/services/auth.py", "idna_a_label", "Exception", "return None"): (
+        "a name with no A-label (the `idna` package refuses it, or is missing) has NO form `requests` can dial: the callers read None as 'not a name' - `_plain_host` refuses the address, `verifier_accepts_name` says no, `_san_for` puts nothing in the leaf (Q199 AO4)"
     ),
     ("jen/services/auth.py", "usable_file", "(OSError, ValueError, TypeError)", "return False"): (
         "a path that cannot be examined is NOT a usable file: the caller refuses the CA bundle / client certificate it was asked to trust (Q174)"
@@ -902,6 +905,7 @@ _S14_SAFE_CALLEES = {
     "bool",
     "userinfo_sentence",
     "dns_name_sentence",  # a fixed sentence about the host, never the address (Q197, AM2)
+    "url_refusal_sentence",  # which PART of an address is wrong, in fixed sentences that never echo it (Q199, AO4)
 }  # what turns an address into something that cannot carry user-info
 
 

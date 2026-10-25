@@ -570,3 +570,82 @@ def tree(root) -> dict:
             except OSError:
                 out[os.path.normpath(os.path.join(rel_dir, name))] = b"<unreadable>"
     return out
+
+
+# ── Q199 (AO3): the string-type family ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+#: the ASN.1 string types a name attribute can be written in (cryptography's `_ASN1Type`, by name)
+STRING_TYPES = (
+    "UTF8String",
+    "PrintableString",
+    "T61String",
+    "IA5String",
+    "BMPString",
+    "UniversalString",
+    "NumericString",
+    "VisibleString",
+    "UTCTime",
+    "GeneralizedTime",
+)
+_STRING_TEXTS = {"ascii": "Jen Kea CA", "latin1": "Jen K\u00e9a CA"}
+
+
+def string_type_ca(subject_type: str, issuer_type: str, text: str = "ascii", variant: str = ""):
+    """(certificate, key) of a self-issued CA whose SUBJECT is written in `subject_type` and whose ISSUER (the same text, optionally with its letter case or white space changed - `variant` "case" /
+    "space") in `issuer_type`. cryptography writes a non-ASCII letter into a T61String or IA5String as its UTF-8 bytes, which is the case the product's name comparison is about."""
+    import datetime
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.x509.name import _ASN1Type
+    from cryptography.x509.oid import NameOID
+
+    base = _STRING_TEXTS[text]
+    issuer_text = {"": base, "case": base.upper(), "space": "  " + base.replace(" ", "   ") + " "}[variant]
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, base, _type=getattr(_ASN1Type, subject_type))])
+    issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, issuer_text, _type=getattr(_ASN1Type, issuer_type))])
+    key = kea_tls._new_key()
+    now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(key.public_key())
+        .serial_number(9)
+        .not_valid_before(now - datetime.timedelta(minutes=5))
+        .not_valid_after(now + datetime.timedelta(days=3650))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        .add_extension(x509.KeyUsage(True, False, False, False, False, True, True, False, False), critical=True)
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
+        .sign(key, hashes.SHA256())
+    )
+    return cert, key
+
+
+def _string_type_pairs():
+    pairs = [(t, t, "ascii", "") for t in STRING_TYPES]
+    for other in (
+        "PrintableString",
+        "T61String",
+        "IA5String",
+        "BMPString",
+        "UniversalString",
+        "NumericString",
+        "VisibleString",
+    ):
+        for text in ("ascii", "latin1"):
+            pairs += [("UTF8String", other, text, ""), (other, "UTF8String", text, "")]
+    pairs += [
+        ("UTF8String", "UTF8String", "ascii", "case"),
+        ("UTF8String", "UTF8String", "ascii", "space"),
+        ("UTF8String", "UTF8String", "latin1", "case"),
+        ("PrintableString", "UTF8String", "ascii", "case"),
+        ("UTF8String", "BMPString", "ascii", "case"),
+    ]
+    return pairs
+
+
+#: every (subject type, issuer type, text, variant) the family is judged on - `tests/test_kea_tls_rotation.py::TestTheStringTypeFamily`
+STRING_TYPE_PAIRS = _string_type_pairs()
+#: the pairs where Jen says damaged and `openssl verify` accepts (set from the executed run: each is the chain verifier's own name matching, which has no switch)
+STRING_TYPE_JEN_STRICTER = frozenset()

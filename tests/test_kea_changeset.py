@@ -888,7 +888,7 @@ class TestAnUnprovedRecoveryIsAPersistentIncident:
         monkeypatch.setattr(cs, "record_outcome", _REAL_RECORD_OUTCOME)
         return data
 
-    def test_the_eight_categories_are_the_ones_the_q_names(self):
+    def test_the_ten_categories_are_the_ones_the_qs_name(self):
         assert set(cs.ATTENTION_CATEGORIES) == {
             "remote-unknown",
             "restored-restart-unverified",
@@ -898,6 +898,8 @@ class TestAnUnprovedRecoveryIsAPersistentIncident:
             "restored-endpoint-unreachable",
             "probe-pending",
             "aborted",
+            "tls-superseded",  # Q199 (AO1): a parked daemon left on a replaced CA
+            "record-forgotten",  # Q199 (AO1): a record forgotten on the operator's word
         }
 
     @pytest.mark.parametrize("category", sorted(cs.ATTENTION_CATEGORIES))

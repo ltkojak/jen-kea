@@ -42,7 +42,9 @@ import argparse
 import configparser
 import contextlib
 import io
+import ipaddress
 import os
+import re
 import sys
 
 
@@ -266,31 +268,66 @@ def userinfo_warnings(text):
     return found
 
 
-def name_warnings(text):
-    """The `[section] key` of every https address in a DIRECT-mode file whose host the certificate verifier's DNS-name parser does not accept (Q198 AN5: one rule at every entry point) - an
-    underscore, a trailing dot, an empty or over-long label. A warning on stderr, like `userinfo_warnings`: Jen still dials the address as written, and the setup or Rotate names it if a certificate
-    is ever needed for it. Needs Jen's own `kea_tls` (the library's parser) - loaded from the tree this tool ships in; where `cryptography` is not importable here the check is skipped (the setup
-    and Rotate ask the same question later, so this fails OPEN on purpose)."""
+_DNS_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
+
+
+def _host_is_a_name_a_certificate_can_carry(host):
+    """The certificate verifier's DNS-name grammar, standard library only (Q199 AO4; the product's own check is `kea_tls.verifier_accepts_name`, and a test holds the two to the same answers): an IP
+    literal; or labels of letters, digits and hyphens - 1 to 63 characters, no hyphen at either edge, no empty label, no trailing dot, 253 in all - after the IDNA step for a non-ASCII name."""
+    host = (host or "").strip()
+    if not host:
+        return False
     try:
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from jen.services.auth import dns_name_sentence
-    except Exception:
-        return []
+        ipaddress.ip_address(host.strip("[]"))
+        return True
+    except ValueError:
+        pass
+    if not host.isascii():
+        try:
+            host = host.encode("idna").decode("ascii")
+        except UnicodeError:
+            return False
+    return len(host) <= 253 and not host.endswith(".") and all(_DNS_LABEL.fullmatch(label) for label in host.split("."))
+
+
+def _direct_https_addresses(text):
+    """[(section, key, host)] of every https address in a DIRECT-mode file, and [(section, key)] of those whose value could not be read (Q199 AO4)."""
+    from urllib.parse import urlsplit
+
     parser = _parse(text, "the merged file")
     if parser.get("kea", "connection_mode", fallback="ca").strip().lower() != "direct":
-        return []
-    found = []
+        return [], []
+    found, unreadable = [], []
     for section in parser.sections():
         if not (section in ("kea", "kea6", "d2") or section.startswith("kea_server_")):
             continue
         for key in _USERINFO_KEYS[:3]:
             value = parser.get(section, key, raw=True, fallback="").strip()
-            try:
-                if value and dns_name_sentence(value, True):
-                    found.append(f"[{section}] {key}")
-            except Exception:
+            if not value:
                 continue
-    return found
+            try:
+                parts = urlsplit(value)
+                host = parts.hostname
+                parts.port  # noqa: B018 - an unparsable port raises here: the value cannot be read
+            except ValueError:
+                unreadable.append((section, key))
+                continue
+            if parts.scheme.lower() == "https" and host:
+                found.append((section, key, host))
+    return found, unreadable
+
+
+def name_warnings(text):
+    """The `[section] key` of every https address in a DIRECT-mode file whose host a certificate cannot carry (an underscore, a trailing dot, an empty or over-long label) - Q198 AN5, Q199 AO4: one rule
+    at every entry point. A warning on stderr, like `userinfo_warnings`: Jen still dials the address as written, and the setup or Rotate names it if a certificate is ever needed for it. Pure
+    standard library: it imports nothing from Jen, so it runs wherever the merge runs."""
+    found, _unreadable = _direct_https_addresses(text)
+    return [f"[{section}] {key}" for section, key, host in found if not _host_is_a_name_a_certificate_can_carry(host)]
+
+
+def name_check_skipped(text):
+    """The `[section] key` of every https address the name check could not read (an unparsable port ...) - said on stderr, never silent."""
+    return [f"[{section}] {key}" for section, key in _direct_https_addresses(text)[1]]
 
 
 def main(argv=None):
@@ -337,6 +374,10 @@ def main(argv=None):
     for where in name_warnings(merged):
         sys.stderr.write(
             f"config_merge: warning - jen.config {where} is an https address in direct mode whose host name a certificate cannot carry (an underscore, a trailing dot, an empty label); Jen still dials it as written.\n"
+        )
+    for where in name_check_skipped(merged):
+        sys.stderr.write(
+            f"config_merge: name check skipped - jen.config {where} could not be read as an address, so whether a certificate could carry its host name was not checked.\n"
         )
     sys.stdout.write(header + ("\n" if header else "") + merged)
     return 0

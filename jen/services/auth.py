@@ -241,6 +241,23 @@ def _odd_characters(value: str) -> bool:
     return "\\" in value or any(unicodedata.category(c) in ("Cc", "Cf", "Zs", "Zl", "Zp") for c in value)
 
 
+def idna_a_label(host: str):
+    """The A-label (punycode) form of a host name as `requests` / urllib3 will dial it - the `idna` package (IDNA 2008), `strict` and `std3_rules` as urllib3 calls it - or None when the name has no
+    such form (Q199 AO4: the 2003 codec in the standard library accepts and rejects different names, so a name Jen could save was not always a name it could dial). ASCII names are returned lower-cased
+    as written."""
+    host = (host or "").strip()
+    if not host:
+        return None
+    if host.isascii():
+        return host.lower()
+    try:
+        import idna
+
+        return idna.encode(host, strict=True, std3_rules=True).decode("ascii").lower()
+    except Exception:
+        return None
+
+
 def _plain_host(host: str) -> bool:
     """Is `host` a name `requests` will send exactly as written: ASCII letters, digits, dots, hyphens, underscores and the colons of an IPv6 literal - or an internationalised name that
     survives IDNA unchanged (Q184, Z3). Fullwidth and compatibility forms (`ａ.example`) normalise to a DIFFERENT name under IDNA, and a zero-width or no-break space is dropped or
@@ -253,10 +270,14 @@ def _plain_host(host: str) -> bool:
         return False
     if host.isascii():
         return re.fullmatch(r"[A-Za-z0-9._:\-]+", host) is not None
+    encoded = idna_a_label(host)
+    if encoded is None:
+        return False
     try:
-        encoded = host.encode("idna").decode("ascii")
-        return encoded.encode("ascii").decode("idna") == unicodedata.normalize("NFC", host).lower()
-    except UnicodeError:
+        import idna
+
+        return idna.decode(encoded) == unicodedata.normalize("NFC", host).lower()
+    except Exception:
         return False
 
 
@@ -360,6 +381,27 @@ def dns_name_sentence(url, require_port: bool = False) -> str:
     from jen.services import kea_tls
 
     return "" if kea_tls.verifier_accepts_name(host) else DNS_NAME_SENTENCE
+
+
+def url_refusal_sentence(url: str, require_port: bool = False) -> str:
+    """Which part of a refused address is wrong, as a sentence (Q199 AO4): the port ("an explicit port"), the host ("characters Jen cannot send as written"), or - when neither - "" (the caller's own
+    generic sentence). A fullwidth host used to be told its PORT was missing."""
+    from urllib.parse import urlparse
+
+    value = (url or "").strip(_PADDING)
+    try:
+        parsed = urlparse(value)
+        host, port = parsed.hostname, parsed.port
+    except ValueError:
+        return "The port in this address is not a number."
+    if _odd_characters(value) or (host and not _plain_host(host)):
+        return (
+            "The host name in this address has characters Jen cannot send as written (a fullwidth or compatibility form, a zero-width or no-break space, a backslash): "
+            "use ASCII letters, digits, dots and hyphens, or the server's IP address."
+        )
+    if require_port and host and port is None:
+        return "In direct mode the API URL must include an explicit port (e.g. http://kea:8004) - a daemon control socket is never on 80/443."
+    return ""
 
 
 USERINFO_SENTENCE = "The address carries a user name or password. A URL never carries a password - put the user name and password in their own fields, and leave them out of the address."

@@ -832,6 +832,8 @@ ATTENTION_CATEGORIES = {
     "restored-endpoint-unreachable": "The daemon's sockets and certificate were put back and it was restarted, but the endpoint Jen uses did not answer as the right daemon afterwards.",
     "probe-pending": "The new control socket was added but has not answered Jen yet. It stays in the daemon's config and Jen's settings are unchanged; run the setup again to probe it.",
     "aborted": "The recovery could not be applied, so the daemon may still carry the failed change.",
+    "tls-superseded": "A server that is not dialled over https now may still run a certificate from a CA Jen has since replaced. When it is dialled over https again, remove its direct socket and set it up again.",
+    "record-forgotten": "Jen's record of a certificate was forgotten on the operator's word while the daemon may still present it; its expiry is not watched. A later setup of the socket, or its removal, ends this.",
 }
 
 

@@ -36,6 +36,7 @@ from tests.test_kea_tls_rotation import _add_external, _bundle_world, _client_wo
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 lab = _rotation.lab  # the Lab fixture (a module-level name pytest collects as a fixture here)
+lab_world = _rotation.lab_world  # ... and the world it checks (Q199: `lab` depends on it)
 
 # ── the matrix ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -391,6 +392,7 @@ MATRIX_PATH_FUNCS = {
     "_unknown_path",
     "_staged_paths",
     "_copies_dir",
+    "_record_paths",  # Q199 (AO5/AO6): the eight files of one record - the `server_*` copy worlds, the markers and the `.prev`/`.staged` aux worlds
 }
 #: the suffixes it appends to a path
 MATRIX_SUFFIXES = {".prev", ".staged", ".stale", ".unknown", ".next", ".crt", ".key"}
@@ -449,7 +451,12 @@ MATRIX_READERS = {
     "promotion_blockers": {
         "isdir"
     },  # the `unreadable` (a directory where a file belongs) worlds of the four identity files
-    "issued_server_copies": {"listdir"},
+    "record_groups": {
+        "listdir"
+    },  # Q199 (AO6): a record is the GROUP of its files (`TestARecordIsTheGroupOfItsFiles` has the orphan worlds)
+    "discard_local_record": {
+        "lexists"
+    },  # Q199 (AO5): re-checks every path after the cleanup (`TestACleanupReportsWhatHappened`)
 }
 _READ_PRIMITIVES = {
     "open",

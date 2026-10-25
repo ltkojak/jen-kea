@@ -552,29 +552,87 @@ def _ca_material_for_opinion():
         return None
 
 
-def _same_name(a, b) -> bool:
-    """Are two X.509 names ONE name as OpenSSL compares them (`X509_NAME_cmp`)? `Name.__eq__` ignores the ASN.1 string type altogether, which is right for a PrintableString and a UTF8String (Q198 AN3: openssl and
-    the chain verifier call them one name) and wrong for a T61String, a BMPString or a UniversalString holding non-ASCII text, which OpenSSL does NOT canonicalise to the same bytes (second pass, F2: such a
-    root read as self-issued here and `openssl verify` rejected every leaf). Same text and same types always; different types only within {UTF8String, PrintableString}."""
-    from cryptography.x509.name import _ASN1Type
+def _der_items(buf: bytes):
+    """[(tag, content)] of the concatenated TLV elements in `buf` (definite lengths only - an X.509 name is DER)."""
+    out, pos = [], 0
+    while pos < len(buf):
+        tag = buf[pos]
+        length = buf[pos + 1]
+        pos += 2
+        if length & 0x80:
+            count = length & 0x7F
+            length = int.from_bytes(buf[pos : pos + count], "big")
+            pos += count
+        out.append((tag, buf[pos : pos + length]))
+        pos += length
+    return out
 
-    if a == b and a.public_bytes() == b.public_bytes():
-        return True
-    if a != b:
-        return False
-    alike = {_ASN1Type.UTF8String, _ASN1Type.PrintableString}
+
+#: the string types OpenSSL accepts in a name AT ALL (executed, openssl 3.2.4, a CA whose subject and issuer are the same text in one type): UTF8, Numeric, Printable, T61, IA5, Universal, BMP.
+#: OctetString, UTCTime, GeneralizedTime and VisibleString names are rejected even against themselves ("unable to get issuer certificate").
+_NAME_TAGS_OPENSSL_ACCEPTS = frozenset({0x0C, 0x12, 0x13, 0x14, 0x16, 0x1C, 0x1E})
+#: the types `X509_NAME_cmp` converts to UTF-8 and folds before comparing; the others are compared as their tag and bytes
+_NAME_TAGS_CANONICALISED = {
+    0x0C: "utf-8",
+    0x13: "latin-1",
+    0x14: "latin-1",
+    0x16: "latin-1",
+    0x1C: "utf-32-be",
+    0x1E: "utf-16-be",
+}
+_SPACE = " \t\n\x0b\x0c\r"
+
+
+def _name_attributes(name):
+    """[[(oid DER, tag, content)]] - the RDNs of a name, as written."""
+    out = []
+    (_seq, rdns), *_unused = _der_items(name.public_bytes())  # the outer SEQUENCE; its content is the RDNs
+    for _tag, rdn in _der_items(rdns):
+        attrs = []
+        for _t, attribute in _der_items(rdn):
+            (_ot, oid), (vtag, value) = _der_items(attribute)[:2]
+            attrs.append((oid, vtag, value))
+        out.append(attrs)
+    return out
+
+
+def _name_types_ok(name) -> bool:
+    """Is every attribute of this name in a string type OpenSSL accepts (Q199 AO3, executed)? A name in a type it does not read is one OpenSSL cannot match to itself."""
     try:
-        for rdn_a, rdn_b in zip(a.rdns, b.rdns, strict=True):
-            for x, y in zip(
-                sorted(rdn_a, key=lambda n: n.oid.dotted_string),
-                sorted(rdn_b, key=lambda n: n.oid.dotted_string),
-                strict=True,
-            ):
-                if x._type != y._type and not (x._type in alike and y._type in alike):
-                    return False
-    except (AttributeError, ValueError):
-        return False  # a name this cannot take apart is not asserted to be one name
-    return True
+        return all(tag in _NAME_TAGS_OPENSSL_ACCEPTS for rdn in _name_attributes(name) for _oid, tag, _value in rdn)
+    except (IndexError, ValueError):
+        return False
+
+
+def _canonical_value(tag: int, value: bytes):
+    codec = _NAME_TAGS_CANONICALISED.get(tag)
+    if codec is None:
+        return ("raw", tag, value)
+    try:
+        text = value.decode(codec)
+    except UnicodeDecodeError:
+        return ("raw", tag, value)
+    text = re.sub(f"[{_SPACE}]+", " ", text).strip(_SPACE)
+    return ("text", "".join(c.lower() if c.isascii() else c for c in text))
+
+
+def _same_name(a, b) -> bool:
+    """Are two X.509 names ONE name as OpenSSL compares them (`X509_NAME_cmp`)? It reads each attribute of a canonicalised type (UTF8, Printable, T61, IA5, BMP, Universal) in ITS OWN encoding - T61
+    as Latin-1, BMP as UTF-16, Universal as UTF-32 - folds ASCII case, strips and collapses white space, and compares the result; any other type is compared as its tag and bytes. So a PrintableString,
+    a BMPString and a UTF8String holding the same ASCII text are ONE name, a letter-case or white-space difference is none, and a T61String holding the UTF-8 bytes of a non-ASCII letter (which
+    OpenSSL reads as two Latin-1 characters) is another (Q199 AO3: executed against `openssl verify`; Q198's version said "T61, BMP and Universal are not one name", which is true of the last
+    only for non-ASCII T61 and made Jen stricter than the stack it annotates). This is a structural pre-check for the SENTENCE; it may never return a verdict the verifier does not."""
+    try:
+        ra, rb = _name_attributes(a), _name_attributes(b)
+    except (IndexError, ValueError):
+        return False
+    if len(ra) != len(rb):
+        return False
+
+    def canon(rdns):
+        return [sorted((oid, _canonical_value(tag, value)) for oid, tag, value in rdn) for rdn in rdns]
+
+    return canon(ra) == canon(rb)
 
 
 def _verify_self_signature(cert, public) -> None:
@@ -622,6 +680,11 @@ def _cert_structure(cert, crt_name: str, public) -> tuple[str, str]:
             return "damaged", f"{crt_name} is not allowed to sign certificates (its KeyUsage lacks keyCertSign)"
         if not isinstance(public, (ec.EllipticCurvePublicKey, rsa.RSAPublicKey)):
             return "damaged", f"{crt_name} uses a key type Jen does not support ({type(public).__name__})"
+        if not (_name_types_ok(cert.subject) and _name_types_ok(cert.issuer)):
+            return (
+                "damaged",
+                f"{crt_name} names itself in a string type OpenSSL does not read (VisibleString, a time or a byte string)",
+            )
         if not _same_name(cert.issuer, cert.subject):
             return "damaged", f"{crt_name} is not self-signed (its issuer is not its subject)"
         try:
@@ -882,10 +945,11 @@ def _san_for(value: str):
     except ValueError:
         pass
     if not value.isascii():
-        # (Q198 second pass, F1) a certificate carries a non-ASCII name as its A-label (punycode), which is what a client verifies and what `verifier_accepts_name` asks about; `DNSName` itself refuses a U-label
-        try:
-            value = value.encode("idna").decode("ascii")
-        except UnicodeError:
+        # (Q198 second pass, F1; Q199 AO4) a certificate carries a non-ASCII name as its A-label (punycode), which is what a client verifies and what `verifier_accepts_name` asks about; `DNSName` itself refuses a U-label
+        from jen.services.auth import idna_a_label
+
+        value = idna_a_label(value)
+        if value is None:
             return None
     try:
         return x509.DNSName(value)
@@ -941,10 +1005,11 @@ def verifier_accepts_name(host: str) -> bool:
     if _is_ip(host.strip("[]")):
         return True
     if not host.isascii():
-        # (Q198 AN5) a name with non-ASCII letters is carried in a certificate as its A-label (punycode); the verifier is asked about THAT, and a name that has none is not a name
-        try:
-            host = host.encode("idna").decode("ascii")
-        except UnicodeError:
+        # (Q198 AN5; Q199 AO4) a name with non-ASCII letters is carried in a certificate as its A-label (punycode, IDNA 2008 as `requests` dials it); the verifier is asked about THAT
+        from jen.services.auth import idna_a_label
+
+        host = idna_a_label(host)
+        if host is None:
             return False
     try:
         throwaway_key = _new_key()
@@ -995,43 +1060,52 @@ def other_record_on_same_daemon(server: dict, service: str, servers, url_for=Non
             continue
         if not (url_for(other, service) or "").strip().lower().startswith("https://"):
             continue  # (second pass, F3) a record whose endpoint is not https now is STALE - Rotate ignores it, so it is no second owner of the daemon
-        if record_state(other.get("id"), service)[0] in (*JEN_STATES, "refuse"):
+        if record_state(other.get("id"), service, server=other, url=url_for(other, service))[0] in (
+            *JEN_STATES,
+            "refuse",
+        ):
             # (Q198 AN5: a record Jen cannot rotate safely - malformed, a pair that does not match, an earlier CA's - is still files at that daemon's fixed paths; it is a second owner too)
             return other.get("name") or f"Kea Server {other.get('id')}"
     return ""
 
 
-_FORGETTABLE = re.compile(r"(\d+)-(dhcp4|dhcp6|d2)")
+_FORGETTABLE = re.compile(
+    r"([1-9][0-9]*)-(dhcp4|dhcp6|d2)"
+)  # (Q199 AO4: no leading zero - `007-dhcp4` is not a number Jen writes)
 
 
 def forget_report(servers, url_for=None, include_parked: bool = False) -> dict:
-    """Q197 (AM4), Q198 (AN2/AN5): drop Jen's own copy of every certificate that records NOTHING - a server that is not configured at all (the inventory's `stale`). A local change only: no host is asked
-    anything. A record for a CONFIGURED server whose endpoint is not https now is PARKED, not stale: its daemon may still present that certificate, so it is kept and named. Only a file named
-    `<number>-<dhcp4|dhcp6|d2>` is ever deleted. A directory that cannot be listed is said, not read as "nothing to forget". Returns
-    {"forgotten": [...], "parked": [...], "unreadable": "" or why}."""
-    report = {"forgotten": [], "parked": [], "unreadable": "", "skipped": []}
+    """Q197 (AM4), Q198 (AN2), Q199 (AO5/AO6): drop Jen's own copy of every certificate record that records NOTHING - a server that is not configured at all (the inventory's `stale`), an ORPHAN
+    group of files with no live pair included. A local change only: no host is asked anything. A record for a CONFIGURED server whose endpoint is not https now is PARKED: its daemon may still present
+    that certificate, so it is kept and named - unless the operator says (`include_parked`) that no daemon presents it any more. A record is `forgotten` only when every one of its files is gone
+    (`discard_local_record` re-checks); one that could not be fully removed is `incomplete` and stays discoverable for a retry. Only a recognised file name is ever touched; an unrecognised one is
+    `skipped`. A directory that cannot be listed is said, not read as "nothing to forget". Returns {"forgotten", "parked", "unreadable", "skipped", "incomplete", "on_word"}."""
+    report = {"forgotten": [], "parked": [], "unreadable": "", "skipped": [], "incomplete": [], "on_word": []}
     try:
-        issued_server_copies(strict=True)
+        record_groups(strict=True)
     except OSError as e:
         report["unreadable"] = f"{type(e).__name__}, errno {getattr(e, 'errno', '?')}"
         return report
     inventory = rotation_inventory(servers, url_for=url_for, prove_storage=False)
     report["parked"] = list(inventory.parked)
+    report["skipped"] = list(inventory.skipped)
+    wanted = [(ident, False) for ident in inventory.stale]
     if include_parked:
-        # (second pass, F3) the operator's explicit act: "no daemon presents these any more" (the socket was removed by hand, the server was switched to the Control Agent for good, a removed server's id was reused)
-        for ident in list(inventory.parked):
-            match = _FORGETTABLE.fullmatch(ident)
-            if match is not None:
-                discard_local_record(match.group(1), match.group(2))
-                report["forgotten"].append(ident)
-                report["parked"].remove(ident)
-    for ident in inventory.stale:
+        # (second pass, F3) the operator's explicit act: "no daemon presents these any more" (the socket was removed by hand, the server was switched to the Control Agent for good, a removed server's id
+        # was reused) - recorded by the route as a durable `record-forgotten` fact, never silently
+        wanted += [(ident, True) for ident in inventory.parked]
+    for ident, on_word in wanted:
         match = _FORGETTABLE.fullmatch(ident)
         if match is None:
-            report["skipped"].append(ident)
-            continue  # (a file that is not a record Jen wrote is not Jen's to delete - and the report says it was left)
-        discard_local_record(match.group(1), match.group(2))
+            continue
+        result = discard_local_record(match.group(1), match.group(2))
+        if result["failed"]:
+            report["incomplete"].append((ident, result["failed"]))
+            continue
         report["forgotten"].append(ident)
+        if on_word:
+            report["on_word"].append(ident)
+            report["parked"].remove(ident)
     return report
 
 
@@ -1276,16 +1350,39 @@ def restore_previous(server_id, service: str) -> bool:
     return True
 
 
-def discard_local_record(server_id, service: str) -> None:
-    """Q189 (AE6c): drop Jen's own copy of the pair for this server and service - the live pair, `.prev`, `.staged` and the stale marker. For a failed https attempt on a daemon whose sockets do
-    not reference Jen's TLS files: the host's files at the fixed paths are unreferenced, and a copy Jen keeps for them is a record of an endpoint that does not exist."""
-    for base in (server_copy_path(server_id, service), server_key_path(server_id, service)):
-        for suffix in ("", ".prev", ".staged"):
-            with contextlib.suppress(OSError):
-                os.unlink(base + suffix)
-    clear_stale(server_id, service)
-    with contextlib.suppress(OSError):
-        os.unlink(_unknown_path(server_id, service))
+def _record_paths(server_id, service: str) -> list:
+    """Every file Jen can hold for one server and service: the live pair, `.prev`, `.staged` of each, and the two markers - eight paths."""
+    crt, key = server_copy_path(server_id, service), server_key_path(server_id, service)
+    return [base + suffix for base in (crt, key) for suffix in ("", ".prev", ".staged")] + [
+        _stale_path(server_id, service),
+        _unknown_path(server_id, service),
+    ]
+
+
+def discard_local_record(server_id, service: str) -> dict:
+    """Q189 (AE6c): drop Jen's own copy of the pair for this server and service - the live pair, `.prev`, `.staged` and the markers. For a failed https attempt on a daemon whose sockets do not
+    reference Jen's TLS files, a removed server, a Forget. Q199 (AO5): it REPORTS what it did - {"removed": [...], "absent": [...], "failed": [(file, error class, errno)]}, file NAMES only - after
+    re-checking every path, and a caller calls the record forgotten only when `failed` is empty: it used to suppress every OSError and a read-only directory read as success (the files, a private key
+    among them, still on disk)."""
+    removed, absent, failed = [], [], []
+    paths = _record_paths(server_id, service)
+    for path in paths:
+        name = os.path.basename(path)
+        try:
+            os.unlink(path)
+            removed.append(name)
+        except FileNotFoundError:
+            absent.append(name)
+        except OSError as e:
+            failed.append((name, type(e).__name__, getattr(e, "errno", None)))
+    broken = {f[0] for f in failed}
+    for path in paths:
+        name = os.path.basename(path)
+        if name not in broken and os.path.lexists(path):
+            failed.append((name, "StillPresent", None))
+            if name in removed:
+                removed.remove(name)
+    return {"removed": removed, "absent": absent, "failed": failed}
 
 
 def retire_previous(server_id, service: str) -> None:
@@ -1499,8 +1596,21 @@ class RotationInventory:
     `refusals` are sentences, empty when the rotation may go ahead. `external` are the https endpoints whose certificate Jen's CA did not issue (named, left alone, never silently included
     or skipped), `stale` the copies of a server or service that is no longer an https endpoint (listed, ignored)."""
 
-    def __init__(self, targets, refusals, external, stale, endpoints=frozenset(), external_endpoints=(), parked=()):
+    def __init__(
+        self,
+        targets,
+        refusals,
+        external,
+        stale,
+        endpoints=frozenset(),
+        external_endpoints=(),
+        parked=(),
+        orphans=(),
+        skipped=(),
+    ):
         self.targets, self.refusals, self.external, self.stale = targets, refusals, external, stale
+        # Q199 (AO6): the records (stale or parked) that are a GROUP of files with no live pair, and the names in the directory Jen does not recognise (named, never touched)
+        self.orphans, self.skipped = list(orphans), list(skipped)
         # Q198 (AN2): the copies of a CONFIGURED server that is not an https endpoint now - "<server id>-<service>". The daemon may still present the certificate (the socket is still in its config), so the
         # record is kept, watched and never forgotten while the socket exists; `stale` is only a record for a server that is not configured at all
         self.parked = list(parked)
@@ -1654,7 +1764,36 @@ def _server_label(server: dict, service: str) -> str:
 JEN_STATES = ("jen", "jen-stale")
 
 
-def record_state(server_id, service: str, recovery: bool = False) -> tuple[str, str]:
+def _destination_refusal(cert, server, url) -> str:
+    """Q199 (AO7): "" when the certificate Jen saved was issued for the daemon this server record names NOW, else the sentence. A server certificate Jen issues carries its destination - the bind address
+    and the SSH host are its SANs - so a record kept under a server number that has since been pointed at a DIFFERENT daemon (the SSH host and the address both changed, or the number was reused) is
+    not that daemon's, and rotating it would put one daemon's pair on another's host. Compared with `same_host` (the duplicate-daemon guard's contract: no DNS, a dot is a different name), any
+    configured name against any SAN: a display-name change, an alias of the same host, a URL change on the same daemon all still match; a certificate with no SAN names no destination and is not judged."""
+    from urllib.parse import urlparse
+
+    from jen.services.auth import same_host
+
+    try:
+        sans = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    except (x509.ExtensionNotFound, x509.DuplicateExtension, ValueError):
+        return ""
+    names = [str(v) for v in sans.get_values_for_type(x509.DNSName)] + [
+        str(v) for v in sans.get_values_for_type(x509.IPAddress)
+    ]
+    try:
+        url_host = urlparse(url or "").hostname or ""
+    except ValueError:
+        url_host = ""
+    configured = [h for h in ((server or {}).get("ssh_host") or "", url_host) if h]
+    if not names or not configured or any(same_host(n, c) for n in names for c in configured):
+        return ""
+    return (
+        f"its certificate was issued for {', '.join(names)}, not for {', '.join(configured)} - this server record now points at a different daemon; "
+        "remove the direct socket and set it up again, or restore the previous host"
+    )
+
+
+def record_state(server_id, service: str, recovery: bool = False, server=None, url: str = "") -> tuple[str, str]:
     """What Jen holds for one server and service, as `(state, why)`: `("jen", "")` - a certificate and key that load, are a pair and were issued by Jen's live CA (`("jen-stale", "")` when the stale
     marker says the host holds the `.prev` pair, Q198 AN1); `("external", "")` - a pair
     whose certificate no Jen CA issued; `("none", why)` - NEITHER file exists; `("refuse", why)` - anything Jen cannot rotate safely: one file missing, unreadable, malformed, not a pair, issued
@@ -1665,6 +1804,11 @@ def record_state(server_id, service: str, recovery: bool = False) -> tuple[str, 
             crt_pem = f.read()
     except FileNotFoundError:
         if not os.path.lexists(key):
+            leftovers = sorted(
+                os.path.basename(p) for p in _record_paths(server_id, service) if os.path.lexists(p)
+            )  # (Q199 AO6: files of the group with no live pair are not "never issued" - Jen did issue one)
+            if leftovers:
+                return "refuse", f"Jen holds only {', '.join(leftovers)} for it and no certificate record"
             return (
                 "none",
                 "Jen holds no certificate record for it",
@@ -1689,6 +1833,9 @@ def record_state(server_id, service: str, recovery: bool = False) -> tuple[str, 
     if not paired:
         return "refuse", "its certificate and key are not a pair"
     if issued_by(crt, ca_paths()[0]):
+        refusal = _destination_refusal(cert, server, url) if (server is not None or url) else ""
+        if refusal:
+            return "refuse", refusal
         return ("jen-stale" if is_stale(server_id, service) else "jen"), ""
     if any(a.value == "Jen" for a in cert.issuer.get_attributes_for_oid(NameOID.ORGANIZATION_NAME)):
         if recovery:
@@ -1718,9 +1865,9 @@ def rotation_inventory(servers, url_for=None, recovery: bool = False, prove_stor
     bundle = trust_bundle()
     configured_ca = (getattr(extensions, "KEA_API_CA", "") or "").strip()
     try:
-        listed = issued_server_copies(strict=True)
+        listed, skipped_names = record_groups(strict=True)
     except OSError as e:
-        listed = []
+        listed, skipped_names = [], []
         if not recovery:  # (Q193, AI3: replacing a damaged CA issues every pair afresh - the old copies are not needed, so an unlistable directory is not a reason to refuse it)
             refusals.append(
                 f"Jen could not read its certificate directory {_copies_dir()} ({type(e).__name__}, errno {getattr(e, 'errno', '?')}), so it cannot tell which servers it issued certificates to; fix its permissions before rotating"
@@ -1744,7 +1891,7 @@ def rotation_inventory(servers, url_for=None, recovery: bool = False, prove_stor
             sid = server.get("id")
             endpoints.add((str(sid), service))
             label = _server_label(server, service)
-            state, why = record_state(sid, service, recovery=recovery)
+            state, why = record_state(sid, service, recovery=recovery, server=server, url=url)
             if on_jens_own_ca and state in ("none", "refuse"):
                 # Q193 (AI3): Jen verifies this endpoint against its OWN CA - the file being replaced - so it is Jen's, whatever it holds or does not hold for it: the replacement issues it a pair afresh
                 from urllib.parse import urlparse
@@ -1859,12 +2006,17 @@ def rotation_inventory(servers, url_for=None, recovery: bool = False, prove_stor
         if client_kind_now in ("copy", "other", "unreadable"):
             refusals.append(client_refusal(client_kind_now) + " before rotating")
     configured_ids = {str(s.get("id")) for s in servers or []}
-    stale, parked = [], []
+    stale, parked, orphans = [], [], []
     for c in listed:
         if (str(c["server_id"]), c["service"]) in endpoints:
             continue
-        (parked if str(c["server_id"]) in configured_ids else stale).append(f"{c['server_id']}-{c['service']}")
-    return RotationInventory(targets, refusals, external, stale, endpoints, external_endpoints, parked)
+        ident = f"{c['server_id']}-{c['service']}"
+        (parked if str(c["server_id"]) in configured_ids else stale).append(ident)
+        if not c["pair"]:
+            orphans.append(ident)
+    return RotationInventory(
+        targets, refusals, external, stale, endpoints, external_endpoints, parked, orphans, skipped_names
+    )
 
 
 # ── staged rotation (the route's "all servers or nothing" Rotate) ───────────
@@ -2076,26 +2228,50 @@ def copies_dir_writable(keep: bool = True) -> str:
     return ""
 
 
-def issued_server_copies(strict: bool = False) -> list[dict]:
-    """[{server_id, service, path, days_left}] for every server cert copy
-    Jen keeps — Health's input. A directory that is not there lists as none; one that
-    cannot be LISTED (a permission, a bad mount) lists as none too unless `strict`
-    (Q189, AE1): then the OSError is raised, so an unreadable inventory is a refusal
-    and never an empty set."""
+_RECORD_FILE = re.compile(
+    r"([1-9][0-9]*)-(dhcp4|dhcp6|d2)\.(crt|key|crt\.prev|key\.prev|crt\.staged|key\.staged|crt\.stale|crt\.unknown)"
+)
+
+
+def record_groups(strict: bool = False) -> tuple[list[dict], list[str]]:
+    """Q199 (AO6): ([group], [skipped file names]) - every file Jen recognises in its certificate directory (`.crt`, `.key`, `.crt.prev`, `.key.prev`, `.crt.staged`, `.key.staged`, `.crt.stale`,
+    `.crt.unknown`), grouped by `<server number>-<dhcp4|dhcp6|d2>`: {server_id, service, files: [kinds], pair: bool (a live certificate AND key), path}. A group without a live pair is an ORPHAN - the
+    records used to be discovered by `.crt` alone, so a `.key` whose certificate was gone was invisible to the inventory, Health and Forget. A name Jen does not recognise (a stray file, a service it
+    does not run, a leading zero) is `skipped`, named, never touched. A directory that is not there lists as none; one that cannot be LISTED is raised under `strict` (Q189, AE1) - unknown, never empty."""
     d = _copies_dir()
-    out = []
     try:
         names = sorted(os.listdir(d))
     except FileNotFoundError:
-        return out
+        return [], []
     except OSError:
         if strict:
             raise
-        return out
+        return [], []
+    groups: dict = {}
+    skipped = []
     for n in names:
-        if not n.endswith(".crt") or "-" not in n:
+        if PROBE_NAME.fullmatch(n):
+            continue  # (Jen's own write probe is not a record)
+        m = _RECORD_FILE.fullmatch(n)
+        if m is None:
+            skipped.append(n)
             continue
-        sid, service = n[:-4].split("-", 1)
-        path = os.path.join(d, n)
-        out.append({"server_id": sid, "service": service, "path": path, "days_left": days_left(path)})
-    return out
+        g = groups.setdefault(
+            (m.group(1), m.group(2)),
+            {"server_id": m.group(1), "service": m.group(2), "files": [], "pair": False, "path": ""},
+        )
+        g["files"].append(m.group(3))
+    for g in groups.values():
+        g["pair"] = "crt" in g["files"] and "key" in g["files"]
+        g["path"] = os.path.join(d, f"{g['server_id']}-{g['service']}.crt")
+    return list(groups.values()), skipped
+
+
+def issued_server_copies(strict: bool = False) -> list[dict]:
+    """[{server_id, service, path, days_left}] for every server cert copy Jen keeps (a group with a live `.crt`) - Health's input. See `record_groups` for the directory's other files."""
+    groups, _skipped = record_groups(strict=strict)
+    return [
+        {"server_id": g["server_id"], "service": g["service"], "path": g["path"], "days_left": days_left(g["path"])}
+        for g in groups
+        if "crt" in g["files"]
+    ]

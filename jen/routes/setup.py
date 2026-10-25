@@ -140,7 +140,16 @@ def setup_connect():
             flash("Enter a valid database port (1–65535).", "error")
             return render_template("setup_connect.html", progress=_progress(), **retry_ctx)
     if not api_url or not __auth.valid_api_url(api_url, require_port=False):
-        flash(__auth.userinfo_sentence(api_url) or "Enter a valid Kea API URL (http:// or https://).", "error")
+        flash(
+            __auth.userinfo_sentence(api_url)
+            or __auth.url_refusal_sentence(api_url)
+            or "Enter a valid Kea API URL (http:// or https://).",
+            "error",
+        )
+        return render_template("setup_connect.html", progress=_progress(), **retry_ctx)
+    if __caps.is_direct() and __auth.dns_name_sentence(api_url, require_port=True):
+        # Q199 (AO4): the certificate-name rule at the Connect step too - an https address in direct mode must carry a name a certificate can
+        flash(__auth.dns_name_sentence(api_url, require_port=True), "error")
         return render_template("setup_connect.html", progress=_progress(), **retry_ctx)
     if not kea_db_host or not kea_db_user:
         flash("Kea's database host and username are required.", "error")

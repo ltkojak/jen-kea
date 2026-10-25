@@ -823,6 +823,19 @@ present the certificate, so Jen keeps the record and keeps watching its expiry; 
 daemon's again when the server is switched back. **Forget stale records** keeps it ("Kept 1 parked record(s)"); remove
 the socket under Settings → Kea to drop it.
 
+**"*server* kea-*service* is parked and its daemon still runs a certificate from the CA Jen replaced"** (Health; "tls-superseded" on Servers) is what a Rotate leaves behind for a server that was not
+an https endpoint when it ran: the daemon keeps the certificate it had, from the CA Jen no longer trusts. Nothing is wrong until it is dialled over https again; then the setup says "the socket is there
+but its certificate is from a CA Jen no longer trusts" - remove the direct socket and set it up again. Removing the socket ends the note.
+
+**"Jen's record for *server* kea-*service* was forgotten on the operator's word"** (Health; "record-forgotten" on Servers) means someone ticked the box on Forget stale records for a parked record. Jen no longer
+watches that certificate's expiry while the daemon may still present it. A later setup of the socket, or its removal, ends the note.
+
+**"Jen holds files but no certificate record for *server* kea-*service*"** is a group of Jen's own record files with no live certificate and key pair (an interrupted cleanup, a partial restore). Forget stale
+records removes it; or set the socket up again. A file in the folder whose name Jen does not write is named and never touched.
+
+**"its certificate was issued for *names*, not for *host* - this server record now points at a different daemon"** (in the refusal of a Rotate, and Health) means the certificate Jen kept names a different host
+from the one the server record names now. Jen keeps the record. Remove the direct socket and set it up again, or restore the previous host.
+
 **"stale record for *server* kea-*service* (its server is no longer configured)"** is a certificate Jen kept for a
 server that has since been removed. Rotate ignores it. Press **Forget stale records** on the Kea CA card (a
 superadmin; it changes nothing on any host). If the certificate folder cannot be read it says so and forgets nothing.

@@ -537,12 +537,18 @@ it to the user and password fields, and Jen keeps dialling it as written (the cr
 4. **"Undone" means: config restored, material restored (both halves), daemon restarted, and the endpoint Jen dials ANSWERS as the right daemon with its recorded credentials and TLS context.** A
    file that already matched, a plan that never read the config, a restore that fails, a certificate whose Jen-side copy could not follow, or an endpoint that does not answer is the partial state, said,
    with the by-hand step. Recovery text, audit rows and log lines name a socket by type, address and port (`describe_socket`) and never print its entry (LEAK-001's family).
-5. **What cannot be proved is a durable incident, written under a lock.** Eight categories (`remote-unknown`, `restored-restart-unverified`, `restart-failed`, `tls-not-restored`, `tls-local-stale`,
-   `restored-endpoint-unreachable`, `probe-pending`, `aborted`), shown on Servers and in Health until a verified recovery of THAT server and service (a probe that got its answer; a removal clears only the
+5. **What cannot be proved is a durable incident, written under a lock.** Ten categories (`remote-unknown`, `restored-restart-unverified`, `restart-failed`, `tls-not-restored`, `tls-local-stale`,
+   `restored-endpoint-unreachable`, `probe-pending`, `aborted`, and from Q199 `tls-superseded` and `record-forgotten`), shown on Servers and in Health until a verified recovery of THAT server and service (a probe that got its answer; a removal clears only the
    `probe-pending` note of the socket it removed) or a superadmin's acknowledgement. The incident note is one settings row read-modify-written as a `SELECT ... FOR UPDATE` transaction
    (`kea_changeset._with_attention`), so two workers lose neither; a write that did not happen is never reported as done; an unreadable note is Health "unknown", not "ok"; the soft cap never evicts a
    recovery incident (the hard ceiling keeps the newest 200). An incident never carries a socket entry, a key or a credential.
-6. **A multi-host operation enumerates its targets from the CONFIGURATION (every endpoint Jen dials) and refuses when its record of any one of them is missing or unreadable (Q189).** The rotation's targets are
+6. **A daemon an operation leaves behind is a durable incident, and a record is the GROUP of its files (Q199).** A server that is configured but not dialled over https (PARKED) whose daemon still runs
+   its https socket is on the CA a successful rotation just replaced: the rotation records `tls-superseded` (Servers, Health, the page; ended by a later setup that replaces or proves the certificate, or by
+   the socket's removal), and a record forgotten on the operator's word leaves `record-forgotten` - no daemon is silently left unwatched. A cleanup reports success only after the files are gone
+   (`discard_local_record` returns `removed`/`absent`/`failed` after re-checking every path; `forgotten` only when `failed` is empty); a routine save that drops a removed server's records names them in the flash
+   and the audit row; discovery enumerates every recognised record file and groups them by `<n>-<service>`, so an orphan (a key without its certificate) is shown and forgettable and an unrecognised name is
+   never touched; and a record carries its DESTINATION (`record_state` compares the certificate's SANs with the configured SSH host and address under `same_host`: a record kept under a server number now pointed
+   at a different daemon refuses the rotation and is kept). **A multi-host operation enumerates its targets from the CONFIGURATION (every endpoint Jen dials) and refuses when its record of any one of them is missing or unreadable (Q189).** The rotation's targets are
    `kea_tls.rotation_inventory`: every https endpoint of every configured server, each with a certificate and key that load, are a pair and were issued by Jen's live CA - a missing, malformed or mismatched
    record, or a copies directory that cannot be listed, is a REFUSAL before the staging; an unlistable inventory is a refusal, never an empty set. The endpoints are read from the CONFIGURED address
    (`kea.configured_url`), never from the transport's answer - an endpoint whose password the resolver withheld still exists and still runs Jen's material, so it blocks the rotation instead of dropping out of it.
@@ -708,6 +714,16 @@ Jen's CA by certificate identity, per endpoint; an invariant with no knob; an in
 - `tests/test_config_merge.py::TestTheCertificateNameRuleInTheInstallerMerge`
 - `tests/system/test_boundaries.py::test_22_l_a_rotation_refused_by_a_name_on_the_second_daemon_leaves_the_first_daemons_records_as_they_were`
 - `tests/test_kea_tls_rotation.py::TestTheSecondPassOfQ197`
+- `tests/test_kea_tls_rotation.py::TestADaemonLeftBehindIsAFact`
+- `tests/test_kea_tls_rotation.py::TestTheStringTypeFamily`
+- `tests/test_kea_tls_rotation.py::TestACleanupReportsWhatHappened`
+- `tests/test_kea_tls_rotation.py::TestARecordIsTheGroupOfItsFiles`
+- `tests/test_kea_tls_rotation.py::TestARecordCarriesItsDestination`
+- `tests/test_direct_socket_lock.py::TestQ199TheSetupAfterARotationLeftADaemonBehind`
+- `tests/test_direct_socket_lock.py::TestQ199TheExtraServersSaveNamesWhatItDrops`
+- `tests/test_direct_socket_lock.py::TestQ199TheSmallOnes`
+- `tests/test_direct_socket_credentials.py::TestTheProbeRowsOfQ199`
+- `tests/system/test_boundaries.py::test_22_m_a_daemon_a_rotation_left_behind_is_a_fact_the_setup_names_the_action_and_removal_with_a_setup_recovers`
 - `tests/test_direct_socket_lock.py::TestTheSecondPassOfQ197`
 - `tests/test_kea_tls_worlds.py::TestEveryValueFamilyIsARow`
 - `tests/test_kea_tls.py::TestTheUnsafeReplacementPathIsGone`

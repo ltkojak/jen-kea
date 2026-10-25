@@ -251,7 +251,7 @@ a different key from its own Subject Key Identifier, or whose first directory na
 one `openssl` compares; it skips every other kind of name) is not the CA's own
 issuer, or whose serial number is not its own. An issuer and a subject that are the
 same text in two different string types (PrintableString and UTF8String) are one
-name, and healthy.
+name, and healthy; so are names that differ only in letter case or white space, and a name written as a BMPString, UniversalString, IA5String or T61String holding ASCII (OpenSSL reads them all as the same UTF-8 text). A T61String or IA5String holding the UTF-8 bytes of a non-ASCII letter is another name, and a name in a VisibleString, a time or a byte string is one OpenSSL rejects even against itself: both are damaged.
 
 **Which judge is on duty.** Where the `openssl` command is installed on the Jen
 host, it judges your CA at the gate too: the same throwaway certificates are
@@ -278,8 +278,6 @@ with a different library might not accept them either. Health says when
 | a key on a Brainpool curve | not P-256, P-384 or P-521 |
 | an Ed25519 CA | a key type Jen cannot issue from (`openssl` cannot be asked) |
 | a P-224 or DSA key | not P-256, P-384, P-521 or RSA of 2048 bits or more, although `openssl` accepts it |
-| a CA whose issuer differs from its subject only in letter case | Jen compares the names exactly; `openssl` does not |
-| a CA whose issuer differs from its subject only in white space, or whose Authority Key Identifier names its own issuer in a different letter case | Jen compares names exactly; `openssl` normalises them |
 | a SHA-1 self-signed CA | Jen does not verify a SHA-1 signature; `openssl` accepts it |
 | a CA with an empty issuer and subject | Jen needs a name to compare; `openssl` accepts it |
 | an Authority Key Identifier with the issuer and serial number but no key identifier | the verifier requires the key identifier |
@@ -309,9 +307,20 @@ is configured but is not on an https endpoint now (the server was switched to
 the Control Agent or to http) is **parked**: the socket is still in that daemon's
 config and it may still present the certificate, so Jen keeps the record, Health
 counts it and keeps watching its expiry (and says "parked record for ..."),
-Rotate leaves it alone and says so, and it is the daemon's again if the server is
-switched back to https. Forget never drops a parked record; removing the socket
-under Settings → Kea does. A record for a server that is **no longer configured**
+Rotate leaves it alone and says so. A rotation changes the CA, so after one the
+parked daemon is left on the CA Jen replaced: Servers and Health say so
+("parked, issued by an earlier CA"), and when the server is switched back to https
+the setup tells you to remove the direct socket and set it up again. Forget never
+drops a parked record unless you tick its box ("no daemon presents these any more"),
+and then Servers keeps a note that the record was forgotten on your word; removing
+the socket under Settings → Kea drops it and ends both notes. The certificate Jen
+keeps names the host it was issued for: if a server record is pointed at a
+different daemon, Rotate refuses it (and says so) instead of treating the old
+daemon's certificate as the new one's, and the setup for the new host replaces it.
+Files Jen holds for a server with no certificate record (a key whose certificate is
+gone) are shown as such and are forgotten the same way; a file in the folder whose
+name Jen does not write is named and never touched. A save of the additional
+servers that removes a server names the certificate records it dropped. A record for a server that is **no longer configured**
 is **stale**: nothing can present that certificate, Rotate ignores it, Health
 does not count it and says "stale record for ...", and a superadmin can press
 **Forget stale records** on the Kea CA card; that is a local change that asks no

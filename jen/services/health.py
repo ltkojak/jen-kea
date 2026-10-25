@@ -1152,6 +1152,7 @@ def _kea_tls_expiry(ctx) -> Check:
     inventory = kea_tls.rotation_inventory(extensions.KEA_SERVERS, prove_storage=False)
     stale_ids = set(inventory.stale)
     parked_ids = set(inventory.parked)
+    orphan_ids = set(inventory.orphans)
     stale_records, parked_records = [], []
     for copy in copies:
         ident = f"{copy['server_id']}-{copy['service']}"
@@ -1161,7 +1162,10 @@ def _kea_tls_expiry(ctx) -> Check:
             continue
         if ident in parked_ids:
             # Q198 (AN2): a record for a CONFIGURED server whose endpoint is not https now - the daemon may still present this certificate, so its expiry is still watched
-            parked_records.append(label)
+            state, why = kea_tls.record_state(copy["server_id"], copy["service"])
+            parked_records.append(
+                label + (" (issued by an earlier CA)" if state == "refuse" and "earlier Jen CA" in why else "")
+            )
         items.append((label, copy["days_left"]))
 
     expired = [(n, d) for n, d in items if d is not None and d < 0]
@@ -1215,6 +1219,26 @@ def _kea_tls_expiry(ctx) -> Check:
             f" — stale record for {', '.join(stale_records)} (its server is no longer configured): Rotate ignores it; "
             "forget it under Settings → Kea to clear this"
         )
+    # Q199 (AO6): files Jen holds for a server and service with NO certificate record (a key whose certificate is gone, a `.prev` left by an interrupted cleanup) - invisible while records were found by `.crt`
+    orphans = [f"{_server_name_by_id(i.partition('-')[0])} kea-{i.partition('-')[2]}" for i in sorted(orphan_ids)]
+    if orphans:
+        c.status = "fail" if c.status == "fail" else "warn"
+        c.detail += (
+            f" — Jen holds files but no certificate record for {', '.join(orphans)} (an interrupted cleanup or a partial restore): "
+            "forget them under Settings → Kea, or set the socket up again"
+        )
+    # Q199 (AO1): a parked daemon a rotation left on a replaced CA, and a record forgotten on the operator's word, are facts Servers shows; the row names them too
+    left_behind = _attention_labels("tls-superseded")
+    forgotten = _attention_labels("record-forgotten")
+    if left_behind:
+        c.status = "fail" if c.status == "fail" else "warn"
+        c.detail += (
+            f" — {', '.join(left_behind)} is parked and its daemon still runs a certificate from the CA Jen replaced: when it is dialled over https again, "
+            "remove the direct socket and set it up again (see Servers)"
+        )
+    if forgotten:
+        c.status = "fail" if c.status == "fail" else "warn"
+        c.detail += f" — Jen's record for {', '.join(forgotten)} was forgotten on the operator's word while the daemon may still present the certificate; its expiry is not watched (see Servers)"
     if refused:
         # an https endpoint Jen has no complete record of: the Settings page says Rotate would be refused, and so does this row
         c.status = "fail" if c.status == "fail" else "warn"
@@ -1232,6 +1256,17 @@ def _kea_tls_expiry(ctx) -> Check:
             f" — but Jen's own copy for {', '.join(stale)} may not match the certificate on the host (see Servers)"
         )
     return c
+
+
+def _attention_labels(category: str) -> list[str]:
+    """The `<server> kea-<service>` of every unresolved recovery incident of one category (Q199)."""
+    from jen.services import kea_changeset
+
+    labels = []
+    for i in kea_changeset.recovery_incidents():
+        if i.get("category") == category:
+            labels.append(f"{i.get('server_name') or 'server ' + str(i.get('server_id'))} kea-{i.get('service')}")
+    return sorted(set(labels))
 
 
 def _tls_local_stale_labels() -> list[str]:

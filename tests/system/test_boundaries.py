@@ -2861,6 +2861,122 @@ def test_22_l_a_rotation_refused_by_a_name_on_the_second_daemon_leaves_the_first
     st.wait_for(lambda: st.kea_answers("kea-b"), timeout=60, what="kea-b answering on its own socket")
 
 
+S22M1_SCRIPT = r"""
+import contextlib, hashlib, inspect
+from unittest import mock
+from jen.routes.settings import infrastructure as infra
+from jen.services import health, kea_changeset, kea_tls
+
+flashes = []
+ca = kea_tls.ca_paths()[0]
+ca_before = hashlib.sha256(open(ca, "rb").read()).hexdigest()
+view = inspect.unwrap(infra.rotate_kea_ca)
+with app.test_request_context(method="POST"), contextlib.ExitStack() as stack:
+    stack.enter_context(mock.patch.object(infra, "flash", lambda text, style="message": flashes.append(str(text))))
+    view()  # kea-a's configured address is not https here (Jen is in Control Agent mode): its record is PARKED, the rotation has nothing to rotate
+row = health._kea_tls_expiry({})
+incidents = [(i.get("server_id"), i.get("service"), i.get("category")) for i in kea_changeset.recovery_incidents()]
+emit({
+    "flashes": flashes,
+    "ca_changed": ca_before != hashlib.sha256(open(ca, "rb").read()).hexdigest(),
+    "incidents": incidents,
+    "health": [row.status, row.detail],
+    "record_state": list(kea_tls.record_state(1, "dhcp4")),
+})
+"""
+
+S22M2_SCRIPT = r"""
+from jen.services import kea_changeset
+
+emit({"incidents": [(i.get("server_id"), i.get("service"), i.get("category")) for i in kea_changeset.recovery_incidents()]})
+"""
+
+S22M3_SCRIPT = r"""
+import contextlib, inspect
+from unittest import mock
+import jen.config as jconfig
+from jen.routes.settings import infrastructure as infra
+from jen.services import kea_changeset, kea_tls
+
+flashes = []
+server = extensions.KEA_SERVERS[0]
+view = infra._holding_identity_lock(inspect.unwrap(infra.remove_direct_socket))
+with app.test_request_context(method="POST", data={}), contextlib.ExitStack() as stack:
+    stack.enter_context(mock.patch.object(infra, "flash", lambda text, style="message": flashes.append(str(text))))
+    # the stand-in for Jen's own settings: the daemon's socket is really removed and the daemon really restarted; Jen's file is left alone
+    stack.enter_context(mock.patch.object(type(jconfig.app_config), "mutate", lambda self_, fn, *a, **k: None))
+    view(server["id"], "dhcp4")
+emit({
+    "flashes": flashes,
+    "incidents": [(i.get("server_id"), i.get("service"), i.get("category")) for i in kea_changeset.recovery_incidents()],
+    "record_files": [f for f in __import__("os").listdir(kea_tls._copies_dir()) if f.startswith("1-")] if __import__("os").path.isdir(kea_tls._copies_dir()) else [],
+})
+"""
+
+S22M4_SCRIPT = r"""
+from jen.services import kea_tls
+
+emit({"record_state": list(kea_tls.record_state(1, "dhcp4"))})
+"""
+
+
+def test_22_m_a_daemon_a_rotation_left_behind_is_a_fact_the_setup_names_the_action_and_removal_with_a_setup_recovers(
+    stack,
+):
+    """REMOTE-001 section 6 / Q199 (AO1): kea-a is really on an https socket Jen issued the certificate for; its server is then not an https endpoint in Jen's configuration (Control Agent mode) - PARKED. A
+    rotation succeeds with nothing to rotate and the daemon is left on the CA Jen replaced: that is `tls-superseded` on Servers and in Health, not a flash. Switched back to https, the setup finds its
+    socket already in the config and says its certificate is from a CA Jen no longer trusts and to remove the socket and set it up again - not the firewall question, not `probe-pending`. The removal
+    ends the fact and drops the record; the setup that follows issues a pair from the current CA and the endpoint answers."""
+    out, proc = _s22_run("write-ok", scheme="https", port="8014")
+    assert emitted(out) is not None, f"no result from the https setup:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    baseline = _s22_host_state()
+    out, proc = st.jen_py(S22M1_SCRIPT, timeout=500)
+    parked = emitted(out)
+    assert parked is not None, f"no result from the rotation:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    texts = " ".join(parked["flashes"])
+    assert "Kea CA rotated" in texts and "Parked, not rotated" in texts and "1-dhcp4" in texts, texts
+    assert parked["ca_changed"], "the rotation replaced Jen's CA"
+    assert [1, "dhcp4", "tls-superseded"] in [list(i) for i in parked["incidents"]], parked["incidents"]
+    assert (
+        parked["health"][0] in ("warn", "fail")
+        and "is parked and its daemon still runs a certificate from the CA Jen replaced" in parked["health"][1]
+    ), parked["health"]
+    assert parked["record_state"][0] == "refuse" and "earlier Jen CA" in parked["record_state"][1], parked[
+        "record_state"
+    ]
+    left = _s22_host_state()
+    for name in S22_TLS_FILES:
+        assert left[name] == baseline[name], (
+            f"INVARIANT: {name} on kea-a is the baseline (a parked daemon is not touched by a rotation)"
+        )
+    # switched back to https: the socket is already in the daemon's config
+    out, proc = _s22_run("write-ok", scheme="https", port="8014")
+    again = emitted(out)
+    assert again is not None, f"no result from the second setup:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    again_texts = " ".join(again["flashes"])
+    assert "the socket is there but its certificate is from a CA Jen no longer trusts" in again_texts, again_texts
+    assert "remove the direct socket and set it up again" in again_texts
+    assert "firewall" not in again_texts and "reachable from here" not in again_texts, again_texts
+    out, proc = st.jen_py(S22M2_SCRIPT, timeout=200)
+    incidents = emitted(out)["incidents"]
+    assert [1, "dhcp4", "tls-superseded"] in [list(i) for i in incidents] and not [
+        i for i in incidents if i[2] == "probe-pending"
+    ], incidents
+    # remove, then set up again
+    out, proc = st.jen_py(S22M3_SCRIPT, timeout=500)
+    removed = emitted(out)
+    assert removed is not None, f"no result from the removal:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    assert not [i for i in removed["incidents"] if i[2] in ("tls-superseded", "record-forgotten")], removed["incidents"]
+    assert removed["record_files"] == [], removed["record_files"]
+    ip = st.container_ip(st.KEA_A)
+    out, proc = _s22_run("write-ok", scheme="https", port="8014", probe=f"https://{ip}:8014")
+    recovered = emitted(out)
+    assert recovered is not None and recovered["answers"] is True, (recovered, proc.stderr[-1500:])
+    out, proc = st.jen_py(S22M4_SCRIPT, timeout=200)
+    assert emitted(out)["record_state"][0] == "jen", emitted(out)
+    st.wait_for(lambda: st.kea_answers("kea-b"), timeout=60, what="kea-b answering on its own socket")
+
+
 S22I_BLOCK_SCRIPT = r"""
 import hashlib, os, shutil
 from jen.services import kea_tls

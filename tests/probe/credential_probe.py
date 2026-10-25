@@ -2623,6 +2623,90 @@ def q198_an3_the_first_issuer_directory_name_is_the_one_openssl_compares():
     return out
 
 
+def q199_ao1_a_parked_record_after_a_rotation_is_an_earlier_cas():
+    """(parked, the record's state before, after the CA is replaced by a staged rotation, whether the route's own test for it says so): a record for a configured server that is not https now is parked;
+    after a rotation its certificate is an EARLIER Jen CA's - which is what a switched-back server meets (Q199 AO1)."""
+    with contextlib.ExitStack() as stack:
+        kea_tls, _directory, _ = _tls_lab(stack)
+        from jen.routes.settings import infrastructure as infra
+
+        servers = [
+            {"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5"},
+            {"id": 2, "name": "kea-b", "ssh_host": "10.0.0.6"},
+        ]
+        kea_tls.issue_server_cert(servers[1], "dhcp4", "10.0.0.6")
+
+        def url_for(server, service):
+            return "http://10.0.0.6:8004" if server["id"] == 2 else ""
+
+        parked = kea_tls.rotation_inventory(servers, url_for=url_for, prove_storage=False).parked
+        before = kea_tls.record_state(2, "dhcp4")[0]
+        kea_tls.commit_rotation(kea_tls.stage_rotation())
+        after, why = kea_tls.record_state(2, "dhcp4")
+        return (parked, before, after, "earlier Jen CA" in why, infra._record_is_from_an_earlier_ca(2, "dhcp4"))
+
+
+def q199_ao3_a_name_is_compared_the_way_openssl_compares_it():
+    """`ca_identity` (no CLI) for a root whose issuer and subject are the same text in different ASN.1 string types, in a case or white-space variant, and for a name in a type OpenSSL cannot read.
+    BMP and UTF-8 holding ASCII are ONE name; a T61String holding the UTF-8 bytes of a non-ASCII letter is two; a VisibleString name is rejected even against itself."""
+    import pathlib
+    import tempfile
+
+    from tests import _tls_worlds as worlds
+
+    cases = {
+        "utf8 vs bmp, ascii": ("UTF8String", "BMPString", "ascii", ""),
+        "utf8 vs printable, ascii": ("UTF8String", "PrintableString", "ascii", ""),
+        "utf8 vs t61, ascii": ("UTF8String", "T61String", "ascii", ""),
+        "utf8 vs t61, non-ascii": ("UTF8String", "T61String", "latin1", ""),
+        "utf8, letter case": ("UTF8String", "UTF8String", "ascii", "case"),
+        "utf8, white space": ("UTF8String", "UTF8String", "ascii", "space"),
+        "visible vs visible": ("VisibleString", "VisibleString", "ascii", ""),
+    }
+    out = {}
+    for label, args in cases.items():
+        with contextlib.ExitStack() as stack:
+            kea_tls, _directory, _ = _tls_lab(stack)
+            stack.enter_context(mock.patch.object(kea_tls, "_openssl_exe", lambda: None))
+            cert, key = worlds.string_type_ca(*args)
+            d = tempfile.mkdtemp(prefix="probe-q199-")
+            pathlib.Path(d, "c.crt").write_bytes(kea_tls._cert_pem(cert))
+            pathlib.Path(d, "c.key").write_bytes(kea_tls._key_pem(key))
+            out[label] = kea_tls.ca_identity(str(pathlib.Path(d, "c.crt")), str(pathlib.Path(d, "c.key")))[0]
+    return out
+
+
+def q199_ao6_a_key_without_its_certificate_is_an_orphan_record():
+    """(groups' pair flags, orphans, what Forget forgot, what is left): a `.key` whose `.crt` is gone is a record - invisible while records were found by `.crt` alone (Q199 AO6)."""
+    import os
+    import pathlib
+
+    with contextlib.ExitStack() as stack:
+        kea_tls, _directory, _ = _tls_lab(stack)
+        os.makedirs(kea_tls._copies_dir(), exist_ok=True)
+        pathlib.Path(kea_tls.server_key_path(7, "dhcp4")).write_text("key bytes", encoding="ascii")
+        pathlib.Path(kea_tls._copies_dir(), "notes.txt").write_text("not Jen's", encoding="ascii")
+        groups, skipped = kea_tls.record_groups()
+        inventory = kea_tls.rotation_inventory([], url_for=lambda s, v: "", prove_storage=False)
+        report = kea_tls.forget_report([], url_for=lambda s, v: "")
+        left = sorted(os.listdir(kea_tls._copies_dir()))
+        return ([g["pair"] for g in groups], inventory.orphans, report["forgotten"], skipped, left)
+
+
+def q199_ao7_a_record_carries_its_destination():
+    """`record_state` for a record issued for 10.0.0.6 under server 2, as the server record is edited: (unchanged, renamed, same daemon at another URL, pointed at a different daemon)."""
+    with contextlib.ExitStack() as stack:
+        kea_tls, _directory, _ = _tls_lab(stack)
+        base = {"id": 2, "name": "kea-b", "ssh_host": "10.0.0.6"}
+        kea_tls.issue_server_cert(base, "dhcp4", "10.0.0.6")
+        return (
+            kea_tls.record_state(2, "dhcp4", server=base, url="https://10.0.0.6:8004")[0],
+            kea_tls.record_state(2, "dhcp4", server={**base, "name": "renamed"}, url="https://10.0.0.6:8004")[0],
+            kea_tls.record_state(2, "dhcp4", server=base, url="https://10.0.0.6:9999")[0],
+            kea_tls.record_state(2, "dhcp4", server={**base, "ssh_host": "10.0.0.77"}, url="https://10.0.0.77:8004")[0],
+        )
+
+
 def q185_aa3_a_trailing_no_break_space_is_refused_and_ordinary_padding_is_not():
     from jen.services import auth
 
@@ -2683,6 +2767,7 @@ SCENARIOS = {
             "q196_",
             "q197_",
             "q198_",
+            "q199_",
         )
     )
     and callable(fn)
@@ -2927,10 +3012,10 @@ EXPECTED = {
         [("http://proxy.lan:8100", "tu", "TYPED")],
     ),
     "q187_sp4_a_removal_clears_only_the_probe_pending_note_of_the_socket_it_removed": (
-        [(1, "dhcp4", ("probe-pending",))],
+        [(1, "dhcp4", ("probe-pending", "tls-superseded", "record-forgotten"))],
         True,
         [],
-        [(1, "dhcp6", ("probe-pending",))],
+        [(1, "dhcp6", ("probe-pending", "tls-superseded", "record-forgotten"))],
     ),
     "q187_sp6_describe_socket_prints_one_short_printable_line": (True, False),
     "q187_sp8_a_typed_address_that_is_another_servers_own_is_refused": (
@@ -3040,6 +3125,24 @@ EXPECTED = {
         "aki-all-none": "damaged",
         "issuer-string-type-differs": "ok",
     },
+    "q199_ao1_a_parked_record_after_a_rotation_is_an_earlier_cas": (["2-dhcp4"], "jen", "refuse", True, True),
+    "q199_ao3_a_name_is_compared_the_way_openssl_compares_it": {
+        "utf8 vs bmp, ascii": "ok",
+        "utf8 vs printable, ascii": "ok",
+        "utf8 vs t61, ascii": "ok",
+        "utf8 vs t61, non-ascii": "damaged",
+        "utf8, letter case": "ok",
+        "utf8, white space": "ok",
+        "visible vs visible": "damaged",
+    },
+    "q199_ao6_a_key_without_its_certificate_is_an_orphan_record": (
+        [False],
+        ["7-dhcp4"],
+        ["7-dhcp4"],
+        ["notes.txt"],
+        ["notes.txt"],
+    ),
+    "q199_ao7_a_record_carries_its_destination": ("jen", "jen", "jen", "refuse"),
     "q196_al2_one_daemon_is_one_rotation_target": {
         "distinct hosts": (2, 0, False),
         "same host and service": (2, 1, False),

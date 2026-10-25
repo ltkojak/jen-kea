@@ -207,7 +207,12 @@ def _kea_ca_summary() -> dict:
             for ident in idents:
                 sid, _sep, svc = ident.partition("-")
                 owner = next((s for s in extensions.KEA_SERVERS if str(s.get("id")) == sid), None)
-                out[bucket].append(f"{(owner or {}).get('name') or 'server ' + sid} kea-{svc}")
+                label = f"{(owner or {}).get('name') or 'server ' + sid} kea-{svc}"
+                if ident in inventory.orphans:
+                    label += " (files only, no certificate)"
+                elif bucket == "parked" and _record_is_from_an_earlier_ca(sid, svc):
+                    label += " (parked, issued by an earlier CA)"
+                out[bucket].append(label)
     return out
 
 
@@ -495,7 +500,11 @@ def save_infra_kea():
         )  # Q197 (AM2); a CHANGED address only (second pass F1)
         return redirect(url_for("settings.settings_kea"))
     if not __auth.valid_api_url(api_url, require_port=(connection_mode == "direct")):
-        if connection_mode == "direct":
+        # (Q199 AO4: which PART is wrong - a fullwidth host used to be told its port was missing)
+        specific = __auth.url_refusal_sentence(api_url, require_port=(connection_mode == "direct"))
+        if specific:
+            flash(specific, "error")
+        elif connection_mode == "direct":
             flash(
                 "In direct mode the API URL must include an explicit port (e.g. http://kea:8004) — "
                 "a daemon control socket is never on 80/443.",
@@ -1904,6 +1913,14 @@ def _tls_unknown_after_failed_install(server: dict, service: str, existing_api) 
 _RECORD_NOT_KEPT = "Jen could not keep a record of this in its recovery notes, so Servers will not show it; Health reports the notes as unknown until they can be read. Act on the lines above."
 
 
+def _record_is_from_an_earlier_ca(server_id, service: str) -> bool:
+    """Q199 (AO1): is Jen's saved certificate for this server and service one that an EARLIER Jen CA issued (a rotation has replaced the CA since)?"""
+    from jen.services import kea_tls as __tls
+
+    state, why = __tls.record_state(server_id, service)
+    return state == "refuse" and "earlier Jen CA" in why
+
+
 def _record_incident(server: dict, service: str, operation: str, category: str, detail: str = "") -> bool:
     """Q187 (AC3): an unproved recovery stays in front of the operator (Servers, Health) until a later operation on this server and service probes the endpoint, or a superadmin acknowledges it."""
     from jen.services import kea_changeset as __changeset
@@ -2148,7 +2165,14 @@ def _tls_after_unapplied_change(server: dict, service: str, snapshot, result, pr
     if known is not None and not _uses_jen_tls(known, service) and not new_entry_still_there:
         # nothing references the files the failed attempt installed: the host's unreferenced files are said, not an incident, and Jen keeps no record of an endpoint that does not exist (AE6c).
         # (Second pass, finding 4: NOT when the revert failed - the NEW https entry is then still in the config and DOES reference them.)
-        __tls.discard_local_record(server.get("id"), service)
+        dropped_record = __tls.discard_local_record(server.get("id"), service)
+        if dropped_record["failed"]:
+            flash(
+                f"The failed attempt left certificate files for {daemon} on {name} that no socket references, and {len(dropped_record['failed'])} file(s) of Jen's own copy of them could not be removed "
+                f"({', '.join(sorted({f[1] for f in dropped_record['failed']}))}) - they may still be on disk; fix the certificate folder's permissions and use Forget stale records.",
+                "warning",
+            )
+            return
         flash(
             f"The failed attempt left certificate files for {daemon} on {name} that no socket references; Jen dropped its own copy of them. Nothing else was changed.",
             "info",
@@ -2394,6 +2418,7 @@ def setup_direct_socket(server_id, service):
     tls_paths = ()
     probe_verify, probe_cert = None, None
     tls_replaced = False
+    already_there = False  # (set in the https block: the socket is already in the daemon's config)
     if scheme == "https":
         from jen.services import kea_host as __host
         from jen.services import kea_tls as __tls
@@ -2591,6 +2616,26 @@ def setup_direct_socket(server_id, service):
         else:
             fingerprint_ok = True
     if not version_text or identified != _DAEMON_KEY[service] or fingerprint_problem:
+        if scheme == "https" and already_there and _record_is_from_an_earlier_ca(server_id, service):
+            # Q199 (AO1 c): a parked daemon the rotation left behind, switched back to https: its socket is in the config and the certificate it presents is from the CA Jen replaced - not a firewall question,
+            # not `probe-pending`: the sentence is the action
+            flash(
+                f"{daemon} on {name}: the socket is there but its certificate is from a CA Jen no longer trusts, so {__auth.shown_url(new_url)} does not answer as {daemon}: remove the direct socket and set it up "
+                f"again, so Jen issues one from its current CA. Jen stays in {mode_now} mode and none of its settings were changed.",
+                "error",
+            )
+            __user.audit(
+                "SETUP_DIRECT_SOCKET",
+                "kea_api",
+                f"server={name} service={service} url={__auth.shown_url(new_url)} probe=failed (certificate from an earlier CA)",
+            )
+            _record_incident(
+                server,
+                service,
+                "the setup of an existing https socket (its certificate is from a replaced CA)",
+                "tls-superseded",
+            )
+            return back
         if not version_text:
             reason = f"didn't answer a version-get ({probe_err})"
         elif fingerprint_problem:
@@ -2604,7 +2649,13 @@ def setup_direct_socket(server_id, service):
             else "was not restarted (the socket was already in its config)"
         )
         msg = (
-            f"{daemon} on {name} {started}, but {__auth.shown_url(new_url)} {reason} from the Jen host — "
+            f"{daemon} on {name} {started}, but "
+            + (
+                f"{__auth.shown_url(new_url)}: {reason}"
+                if fingerprint_problem
+                else f"{__auth.shown_url(new_url)} {reason} from the Jen host"
+            )
+            + " — "
             f"Jen stays in {mode_now} mode and none of its settings were changed. "
             + (
                 "A repeat would only re-probe the same socket, so remove the direct socket and set it up again to issue a certificate it will present."
@@ -2700,7 +2751,11 @@ def setup_direct_socket(server_id, service):
         service,
         categories=None
         if (tls_replaced or fingerprint_ok)
-        else tuple(c for c in __changeset.ATTENTION_CATEGORIES if c not in ("tls-not-restored", "tls-local-stale")),
+        else tuple(
+            c
+            for c in __changeset.ATTENTION_CATEGORIES
+            if c not in ("tls-not-restored", "tls-local-stale", "tls-superseded", "record-forgotten")
+        ),
     )  # ... and the endpoint was just probed and answered as the daemon: a verified recovery of THIS server and service (of the certificate only when this run replaced it, or when the socket presented exactly the one Jen holds)
     flash(f"{daemon} on {name} answers directly at {__auth.shown_url(new_url)} — written: {written}.", "success")
     if service != "dhcp4" and __caps.is_ca():
@@ -3250,10 +3305,22 @@ def rotate_kea_ca():
             f"Jen's CA file changed under {configured_ca}: that path is another name for it, so Jen verifies the rotated endpoints against the new CA without a change.",
             "info",
         )
+    for ident in inventory.parked:
+        if ident in inventory.orphans:
+            continue  # (files with no certificate: nothing a daemon could present)
+        parked_sid, _sep, parked_svc = ident.partition("-")
+        parked_server = _server_by_id(int(parked_sid)) if parked_sid.isdigit() else None
+        if parked_server is not None:
+            _record_incident(
+                parked_server,
+                parked_svc,
+                "the CA rotation (this server was not an https endpoint, so it was not rotated)",
+                "tls-superseded",
+            )
     if inventory.parked:
         flash(
             f"Parked, not rotated (not an https endpoint now, so Jen did not touch it): {', '.join(inventory.parked)}. Jen keeps its record and its daemon keeps the certificate it has - issued by the CA Jen has just "
-            "replaced, which Jen no longer verifies. If the server is switched back to https, remove the direct socket and set it up again so Jen issues it a certificate from the new CA.",
+            "replaced, which Jen no longer verifies (Servers shows it). If the server is switched back to https, remove the direct socket and set it up again so Jen issues it a certificate from the new CA.",
             "info",
         )
     flash(
@@ -3353,8 +3420,9 @@ def discard_prepared_kea_ca():
 @_recent_auth_required(minutes=10)
 @_holding_identity_lock
 def forget_stale_kea_records():
-    """Q197 (AM4) - drop Jen's own copy of every certificate whose endpoint is no longer an https endpoint (the records Rotate already ignores and Health names as stale). A LOCAL change: no host is asked
-    anything and nothing Jen trusts changes."""
+    """Q197 (AM4), Q198 (AN2), Q199 (AO1/AO5/AO6) - drop Jen's own copy of every certificate record that records nothing: a server that is not configured, an orphan group of files included. A LOCAL change:
+    no host is asked anything. A parked record (a configured server not on https now) is kept unless the operator ticks the box - and then the route records a durable `record-forgotten` fact for
+    the daemon that may still present it, and the audit row says "on the operator's word". A record is forgotten only when every file is gone; one that is not is said."""
     from jen.services import kea_tls as __tls
 
     include_parked = (
@@ -3368,28 +3436,74 @@ def forget_stale_kea_records():
             "error",
         )
         return redirect(url_for("settings.settings_kea"))
-    forgotten, parked = report["forgotten"], report["parked"]
+    forgotten, parked, on_word = report["forgotten"], report["parked"], report["on_word"]
     if parked:
-        # Q198 (AN2): a record for a server that is configured is PARKED, not stale - its daemon may still present that certificate; it is dropped when the socket is removed, never here
+        # Q198 (AN2): a record for a server that is configured is PARKED, not stale - its daemon may still present that certificate; it is dropped when the socket is removed, or on the operator's word
         flash(
             f"Kept {len(parked)} parked record(s): {', '.join(parked)}. The daemon on that server may still hold the certificate, so Jen keeps its copy and watches its expiry; remove the socket under Settings → Kea to drop it, "
             "or tick the box beside Forget stale records to say no daemon presents it any more.",
             "info",
         )
+    for ident, failed in report["incomplete"]:
+        flash(
+            f"{len(failed)} file(s) of the record {ident} could not be removed ({', '.join(sorted({f[1] for f in failed}))}) - Jen's copy may still be on disk; fix the certificate folder's permissions and forget it again.",
+            "error",
+        )
     if report["skipped"]:
         flash(
-            f"Left alone, because the file name is not one Jen writes (<server number>-dhcp4, -dhcp6 or -d2): {', '.join(report['skipped'])}. Remove them by hand if they are yours.",
+            f"Left alone, because the file name is not one Jen writes (<server number>-dhcp4, -dhcp6 or -d2, with its .crt/.key/.prev/.staged/.stale/.unknown suffix): {', '.join(report['skipped'])}. Remove them by hand if they are yours.",
             "warning",
         )
+    for ident in on_word:
+        word_sid, _sep, word_svc = ident.partition("-")
+        word_server = _server_by_id(int(word_sid)) if word_sid.isdigit() else None
+        if word_server is not None:
+            _record_incident(
+                word_server,
+                word_svc,
+                "forgetting a parked certificate record on the operator's word",
+                "record-forgotten",
+            )
     if not forgotten:
-        if not parked and not report["skipped"]:
+        if report["incomplete"]:
+            __user.audit(
+                "FORGET_STALE_KEA_RECORDS",
+                "kea_api",
+                "0 record(s) forgotten; NOT fully removed: "
+                + ", ".join(f"{i} ({'/'.join(sorted({f[0] for f in failed}))})" for i, failed in report["incomplete"]),
+            )
+        if not parked and not report["skipped"] and not report["incomplete"]:
             flash("There were no stale certificate records.", "info")
         return redirect(url_for("settings.settings_kea"))
+    stale_only = [i for i in forgotten if i not in on_word]
     flash(
-        f"Forgot Jen's own copy of {len(forgotten)} certificate(s) for server(s) that are no longer configured: {', '.join(forgotten)}. Nothing was changed on any host.",
+        "Forgot Jen's own copy of "
+        + (
+            f"{len(stale_only)} certificate record(s) for server(s) that are no longer configured: {', '.join(stale_only)}"
+            if stale_only
+            else ""
+        )
+        + ("; " if stale_only and on_word else "")
+        + (
+            f"{len(on_word)} PARKED record(s), on your word that no daemon presents them any more: {', '.join(on_word)} (recorded on Servers; their expiry is no longer watched)"
+            if on_word
+            else ""
+        )
+        + ". Nothing was changed on any host.",
         "success",
     )
-    __user.audit("FORGET_STALE_KEA_RECORDS", "kea_api", f"{len(forgotten)} record(s): {', '.join(forgotten)}")
+    __user.audit(
+        "FORGET_STALE_KEA_RECORDS",
+        "kea_api",
+        f"{len(forgotten)} record(s): {', '.join(forgotten)}"
+        + (f"; parked, on the operator's word: {', '.join(on_word)}" if on_word else "")
+        + (
+            "; NOT fully removed: "
+            + ", ".join(f"{i} ({'/'.join(sorted({f[0] for f in failed}))})" for i, failed in report["incomplete"])
+            if report["incomplete"]
+            else ""
+        ),
+    )
     return redirect(url_for("settings.settings_kea"))
 
 
@@ -3839,12 +3953,21 @@ def remove_direct_socket(server_id, service):
     if result.status == "ok":
         # (second pass, Q187, findings 4 and 16) a removal proves only that the socket it removed is gone: it clears the "never answered" note of THAT socket. It proves nothing about whether the
         # daemon runs (a Control Agent can answer while kea-dhcp4 is down), so every other category waits for a probe of the daemon or an acknowledgement.
-        __changeset.resolve_attention(server_id, service, categories=("probe-pending",))
+        __changeset.resolve_attention(
+            server_id, service, categories=("probe-pending", "tls-superseded", "record-forgotten")
+        )
         from jen.services import kea_tls as __tls_records
 
-        __tls_records.discard_local_record(
+        dropped_record = __tls_records.discard_local_record(
             server_id, service
         )  # Q197 (AM4): the socket is gone, so Jen's copy of the certificate it carried is a record of an endpoint that does not exist
+        if dropped_record["failed"]:
+            # Q199 (AO5): the record is forgotten only when its files are gone
+            flash(
+                f"{len(dropped_record['failed'])} file(s) of Jen's copy of this socket's certificate could not be removed "
+                f"({', '.join(sorted({f[1] for f in dropped_record['failed']}))}) - they may still be on disk; fix the certificate folder's permissions and use Forget stale records.",
+                "error",
+            )
     flash(f"{daemon} on {name}: {'; '.join(changed)}.", "success")
     if lost:
         flash(
@@ -4098,6 +4221,7 @@ def save_infra_ssh():
 @login_required
 @_superadmin_required
 @_recent_auth_required(minutes=10)
+@_holding_identity_lock
 def save_extra_servers():
     # v5.10.3 — extra_id[] carries each row's ORIGINAL kea_server_N number
     # (blank for a row added in the UI). It is the identity used to carry a
@@ -4236,6 +4360,9 @@ def save_extra_servers():
 
         # A tampered/duplicated id must not pull another server's secrets in.
         seen_ids = set()
+        claimed_ids = {
+            i.strip() for i in ids if i.strip()
+        }  # the ids this form names: a blank row never adopts one of them
 
         direct = __caps.is_direct()
         for row_idx, (
@@ -4275,9 +4402,24 @@ def save_extra_servers():
             if orig_id is not None and (orig_id not in existing or orig_id in seen_ids):
                 orig_id = None  # unknown or duplicated — treat the row as new
 
-            out = orig_id if orig_id is not None else max({1, *existing, *seen_ids}) + 1
+            # Q199 (AO2): a row posted with a BLANK id whose SSH host and API address are exactly a saved server's is that server (a page that lost the hidden id field, a hand-built form) - not
+            # a new one: it keeps the id and, with it, the certificate records and the saved password the save would otherwise treat as a removed server's. The adoption is read from the
+            # snapshot taken under the writer's lock, and it lives in `row_id`: `orig_id` stays the id the FORM carried (what a typed claim may be derived from, tests/typed_claims.py).
+            row_id = orig_id
+            if row_id is None and not raw_id and ssh_host.strip():
+                for n_, section_ in existing.items():
+                    if (
+                        n_ not in seen_ids
+                        and str(n_) not in claimed_ids
+                        and (section_.get("ssh_host") or "").strip() == ssh_host.strip()
+                        and __auth.same_endpoint(section_.get("api_url") or "", api_url.strip())
+                    ):
+                        row_id = n_
+                        break
+
+            out = row_id if row_id is not None else max({1, *existing, *seen_ids}) + 1
             seen_ids.add(out)
-            prev = existing.get(orig_id, {}) if orig_id is not None else {}
+            prev = existing.get(row_id, {}) if row_id is not None else {}
 
             # CRED-002 (Q178, Q179 T3, Q180): a row that keeps its saved password must keep its endpoint, and the password it keeps is the one `credentials.resolve` says it USES (its
             # own, else - on the same host only - the primary's). Nothing is written until this callback returns, so raising is the refusal. A NEW row has no stored address to compare:
@@ -4285,8 +4427,8 @@ def save_extra_servers():
             who = name.strip() or f"Kea Server {out}"
             no6_ticked = row_idx < len(no6_passes) and no6_passes[row_idx] == "1"
             nod2_ticked = row_idx < len(nod2_passes) and nod2_passes[row_idx] == "1"
-            if orig_id is not None and not (row_idx < len(no_passes) and no_passes[row_idx] == "1"):
-                stored_api = before_resolved.get(f"server_{orig_id}")
+            if row_id is not None and not (row_idx < len(no_passes) and no_passes[row_idx] == "1"):
+                stored_api = before_resolved.get(f"server_{row_id}")
                 stored_secret = stored_api.password if stored_api else ""
                 refusal = _secret_for_new_endpoint(
                     prev.get("api_url"), api_url.strip(), api_pass, stored_secret, f"API address of {who}"
@@ -4347,13 +4489,6 @@ def save_extra_servers():
                     sec, "api_pass", api_pass.strip()
                 )  # typed: its own from now on, and no longer "a copy of the primary's"
                 typed_names.add(f"server_{out}")
-            elif orig_id is not None:
-                # Blank => keep THIS server's own saved password (by id), and the marker that says it is a copy of the primary's. A section that has none keeps having none:
-                # `credentials.resolve` gives it the primary's only while it is on the primary's host (CRED-004) - nothing is COPIED into it here.
-                if prev.get("api_pass"):
-                    cfg.set(sec, "api_pass", prev["api_pass"])
-                    if prev.get(__credentials.SHARED_MARKER):
-                        cfg.set(sec, __credentials.SHARED_MARKER, prev[__credentials.SHARED_MARKER])
             elif share_ticked:
                 # a NEW row: the primary's password only because the box "Share the primary's API password (an HA peer of the same Kea)" was ticked - a copy, marked as one. The typed claim is
                 # the box alone (AA2, Q185); whether the primary HAS a password is the parser's to say, inside the callback, not a read of the configuration to decide the claim
@@ -4362,6 +4497,13 @@ def save_extra_servers():
                     cfg.set(sec, "api_pass", primary_password)
                     cfg.set(sec, __credentials.SHARED_MARKER, "1")
                 typed_names.add(f"server_{out}")
+            # Blank => keep THIS server's own saved password (by id), and the marker that says it is a copy of the primary's. A section that has none keeps having none:
+            # `credentials.resolve` gives it the primary's only while it is on the primary's host (CRED-004) - nothing is COPIED into it here. (Last in the chain, after the two branches
+            # that claim a typed password: its test reads the snapshot, and no typed claim may follow a branch that does.)
+            elif row_id is not None and prev.get("api_pass"):
+                cfg.set(sec, "api_pass", prev["api_pass"])
+                if prev.get(__credentials.SHARED_MARKER):
+                    cfg.set(sec, __credentials.SHARED_MARKER, prev[__credentials.SHARED_MARKER])
             # v5.10.2 — per-server v6 endpoint. Blank managed field ⇒ key
             # absent (that IS the clear). api6_pass blank ⇒ preserve by id.
             if api6_url.strip():
@@ -4420,6 +4562,7 @@ def save_extra_servers():
             )
             raise _EndpointNeedsItsPassword()
 
+    saved_before = {s["id"]: dict(s) for s in extensions.KEA_SERVERS if s["id"] != 1}
     try:
         __config.app_config.mutate(_rewrite_extra_servers, typed=typed_names)
     except _EndpointNeedsItsPassword:
@@ -4440,17 +4583,53 @@ def save_extra_servers():
     from jen.services import kea_tls as __tls_gone
 
     still_configured = {s["id"] for s in extensions.KEA_SERVERS}
+    dropped, incomplete = [], []
     for gone_id in sorted(configured_extra - still_configured):
-        # (Q198 second pass, F3) a server this save removed takes its certificate records with it: its id is handed to the next server added, and a record left behind would read as that server's
+        # (Q198 second pass, F3; Q199 AO2) a server this save removed takes its certificate records with it: its id is handed to the next server added, and a record left behind would read as that server's.
+        # The save NAMES every record it dropped (flash and audit) - a routine save used to delete certificate records without a word - and a cleanup that did not complete is said.
+        gone_host = (saved_before.get(gone_id) or {}).get("ssh_host") or "no SSH host"
+        present = []
         for gone_service in __tls_gone.INVENTORY_SERVICES:
-            __tls_gone.discard_local_record(gone_id, gone_service)
+            result = __tls_gone.discard_local_record(gone_id, gone_service)
+            if result["removed"] or result["failed"]:
+                present.append(f"{gone_id}-{gone_service}")
+            if result["failed"]:
+                incomplete.append((f"{gone_id}-{gone_service}", result["failed"]))
+        if present:
+            dropped.append((gone_id, gone_host, present))
+    for gone_id, gone_host, present in dropped:
+        flash(
+            f"Removed server {gone_id} ({gone_host}): its certificate record(s) {', '.join(present)} were dropped; the daemon may still present the certificate - remove its socket by hand if it is still running.",
+            "warning",
+        )
+    for ident, failed in incomplete:
+        flash(
+            f"{len(failed)} file(s) of the record {ident} could not be removed ({', '.join(sorted({f[1] for f in failed}))}) - Jen's copy may still be on disk; fix the certificate folder's permissions and forget it again.",
+            "error",
+        )
     flash(f"Additional servers saved — {count} extra server(s) configured.", "success")
     for url, host in zip(api_urls, ssh_hosts, strict=False):
         mismatch = __host_match.api_ssh_mismatch(url, host)
         if mismatch:
             flash(mismatch, "warning")
     __user.set_global_setting("restart_pending", "true")
-    __user.audit("SAVE_INFRA", "extra_servers", f"{count} additional servers configured")
+    __user.audit(
+        "SAVE_INFRA",
+        "extra_servers",
+        f"{count} additional servers configured"
+        + (
+            "; certificate records dropped with removed servers: "
+            + ", ".join(i for _g, _h, ids_ in dropped for i in ids_)
+            if dropped
+            else ""
+        )
+        + (
+            "; NOT fully removed: "
+            + ", ".join(f"{i} ({'/'.join(sorted({f[0] for f in failed}))})" for i, failed in incomplete)
+            if incomplete
+            else ""
+        ),
+    )
     return redirect(url_for("settings.settings_kea"))
 
 

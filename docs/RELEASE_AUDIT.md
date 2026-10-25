@@ -90,7 +90,11 @@ should have caught it only looked at a set the tests populated. Four rules follo
 1. **The second pass's FIX is a Q item.** A fixup that adds a class, an exemption, a switch or a short-circuit is written in the report as a row BEFORE it is code, and the release report lists each
    fixup with its row. A fixup is also a change (step (j)): the full harness runs after it so the invariants judge it.
 2. **An invariant has no knob.** A `check_invariants` ranges over the simulated world; a test may not narrow it (no `managed` set, no `discard`). It is RELATIVE where a classification would be needed
-   (a daemon that answered before answers after, or an incident names it), and judged by what the host holds, not by what Jen's files say.
+   (a daemon that answered before answers after, or an incident names it), and judged by what the host holds, not by what Jen's files say. **`expected_violations` and every such knob are gone (Q199):**
+   a test that makes an invariant pass by removing a daemon from the world, or by declaring the violation expected, is turning the knob this rule forbids - Q198's parked test did the first and its Forget
+   test the second, and the second pass's rows did not say "and the invariants run on the honest world". A world that SHOULD hold an invariant gets the durable product fact (an incident) that makes it hold
+   (`tls-superseded`, `record-forgotten`); a world that must BREAK one is a `TestTheInvariantsBite` class, whose own bare `lab` fixture does not check at teardown and whose tests assert `_bites(lab, "T3")`
+   themselves.
 3. **A path string is not an identity.** Whose CA a trust path is, which file is Jen's, what an address contains - are decided from the certificate or the parsed value, in ONE function, and a sweep
    (S13, S14) refuses the comparison anywhere else.
 4. **An invariant needs its WORLDS (Q191).** Every configured input to an identity or a trust decision is enumerated as a SHAPE LIST in the Q (the CA bundle: Jen's file / alias / copy / bundle / other /
@@ -116,6 +120,13 @@ found, one release at a time, the next semantic property of a certificate `ca_id
 next extension; X.509 has dozens (name constraints, policy constraints, path length, algorithm strength ...) and listing them is unbounded. Ask what TOOL the reviewer used to prove the finding
 (`openssl verify -purpose sslserver`) and make that tool - or its library equivalent (`cryptography.x509.verification`) - the product's check, with the structural checks kept only for the sentence.
 The second pass then executes every constraint the library can express, cross-checked against the reviewer's tool where it exists, and a disagreement between the two is a warning the operator sees.
+
+**(q), a structural check is never stricter than the verifier it annotates (v5.69.0-beta.30, Q199).** `ca_identity` keeps a structural ladder (`_cert_structure`) for the SENTENCE a person recognises; the
+verifier and the stacks are the authority. Q198's `_same_name` returned "damaged" for a root whose issuer and subject were the same text in different ASN.1 string types, with a docstring that said the
+opposite of what OpenSSL's `X509_NAME_cmp` does; executed, BMP, Universal, IA5 and T61 holding ASCII are one name with UTF-8, and only a T61 or IA5 string holding the UTF-8 bytes of a non-ASCII letter is two.
+The test for every such check is **"stricter than the oracle = finding"**: `TestTheStringTypeFamily` runs every type pair, in ASCII and non-ASCII text and with a case and a white-space variant, against
+`openssl verify` and a real handshake, and fails on a root Jen calls damaged that they accept (unless it is in the documented table) as well as on one Jen calls healthy that they reject. A sentence says
+"OpenSSL will not chain to it" only on the rows where that was executed.
 
 ## The second pass (adversarial)
 

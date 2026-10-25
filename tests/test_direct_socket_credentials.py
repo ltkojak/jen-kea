@@ -938,6 +938,42 @@ class TestTheProbeRowsOfQ198:
         }
 
 
+class TestTheProbeRowsOfQ199:
+    """AO1/AO3/AO6/AO7: a parked record is an earlier CA's after a rotation; a name is compared as OpenSSL compares it; a key without its certificate is an orphan record; a record carries its destination."""
+
+    def test_a_parked_record_after_a_rotation_is_an_earlier_cas(self):
+        assert probe.q199_ao1_a_parked_record_after_a_rotation_is_an_earlier_cas() == (
+            ["2-dhcp4"],
+            "jen",
+            "refuse",
+            True,
+            True,
+        )
+
+    def test_a_name_is_compared_the_way_openssl_compares_it(self):
+        assert probe.q199_ao3_a_name_is_compared_the_way_openssl_compares_it() == {
+            "utf8 vs bmp, ascii": "ok",
+            "utf8 vs printable, ascii": "ok",
+            "utf8 vs t61, ascii": "ok",
+            "utf8 vs t61, non-ascii": "damaged",
+            "utf8, letter case": "ok",
+            "utf8, white space": "ok",
+            "visible vs visible": "damaged",
+        }
+
+    def test_a_key_without_its_certificate_is_an_orphan_record(self):
+        assert probe.q199_ao6_a_key_without_its_certificate_is_an_orphan_record() == (
+            [False],
+            ["7-dhcp4"],
+            ["7-dhcp4"],
+            ["notes.txt"],
+            ["notes.txt"],
+        )
+
+    def test_a_record_carries_its_destination(self):
+        assert probe.q199_ao7_a_record_carries_its_destination() == ("jen", "jen", "jen", "refuse")
+
+
 class TestTheSecondPassOfQ187:
     """The executed findings of the adversarial pass on beta.18's routes, each as a probe row."""
 
@@ -958,7 +994,10 @@ class TestTheSecondPassOfQ187:
         done, nothing_touched, nothing_resolved, daemon = (
             probe.q187_sp4_a_removal_clears_only_the_probe_pending_note_of_the_socket_it_removed()
         )
-        assert done == [(1, "dhcp4", ("probe-pending",))] and daemon == [(1, "dhcp6", ("probe-pending",))]
+        # (Q199 AO1: a removal also ends the two durable facts about the socket it removed - `tls-superseded` and `record-forgotten`)
+        assert done == [(1, "dhcp4", ("probe-pending", "tls-superseded", "record-forgotten"))] and daemon == [
+            (1, "dhcp6", ("probe-pending", "tls-superseded", "record-forgotten"))
+        ]
         assert nothing_touched and nothing_resolved == [], "a removal that removed nothing proves nothing"
 
     def test_a_singular_entry_with_nothing_to_remove_is_not_said_to_be_rewritten(self):

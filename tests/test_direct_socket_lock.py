@@ -57,14 +57,18 @@ class TestBothRoutesHoldTheLock:
         }
         # (Q192, adjusted: Prepare and Discard write and unlink the `.next` files a running rotation reads and consumes, so they hold the identity lock too. Q197: forgetting stale records unlinks
         # Jen's own copies of server certificates a running rotation reads, so it holds the lock as well)
-        assert held == {
-            "setup_direct_socket",
-            "remove_direct_socket",
-            "rotate_kea_ca",
-            "prepare_kea_ca",
-            "discard_prepared_kea_ca",
-            "forget_stale_kea_records",
-        }
+        assert (
+            held
+            == {
+                "setup_direct_socket",
+                "remove_direct_socket",
+                "rotate_kea_ca",
+                "prepare_kea_ca",
+                "discard_prepared_kea_ca",
+                "forget_stale_kea_records",
+                "save_extra_servers",  # Q199 (AO2): the save drops a removed server's records - serialised with the rotation, the setup and Forget that read them
+            }
+        )
 
 
 class TestTurnOnWaitsBehindIt:
@@ -2192,3 +2196,359 @@ class TestQ198TheSetupAndTheFormsAfterTheRecordsChange:
         )
         assert "https://kea_b:8004" not in asked, "a saved address is never put to the certificate-name rule"
         assert not any("does not accept this as a DNS name" in f for f in flashes), flashes
+
+
+# ── Q199 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+class TestQ199TheSetupAfterARotationLeftADaemonBehind:
+    """Q199 (AO1 c): a parked daemon a rotation left on the replaced CA, switched back to https. The setup finds its socket already in the config; the certificate it presents is from a CA Jen no longer
+    trusts. The sentence is the action - never the firewall question, never `probe-pending` - and a removal then a setup recovers."""
+
+    FORM = {"scheme": "https", "address": "10.0.0.5", "port": "8004", "user": "u", "password": "p"}
+
+    def _first_https(self, world, monkeypatch):
+        monkeypatch.setattr(infra, "_write_direct_socket_config", lambda *a, **k: "url written")
+        _post(_inner(infra.setup_direct_socket), **self.FORM)
+        assert world["tls"]["now"] and world["host"]["Dhcp4"]["control-sockets"][-1]["socket-type"] == "https"
+
+    def test_the_socket_is_there_its_certificate_is_from_a_ca_jen_no_longer_trusts(self, tls_world, monkeypatch):
+        from tests import _tls_worlds as worlds
+
+        kt = tls_world["tls"]["tls"]
+        self._first_https(tls_world, monkeypatch)
+        assert kt.record_state(1, "dhcp4")[0] == "jen"
+        worlds.replace_live_ca()  # the rotation replaced the CA while this server was parked; the record is now an earlier CA's
+        assert kt.record_state(1, "dhcp4")[0] == "refuse" and "earlier Jen CA" in kt.record_state(1, "dhcp4")[1]
+        monkeypatch.setattr(infra, "_probe_after_restart", lambda *a, **k: ("", "certificate verify failed"))
+        tls_world["flashes"].clear()
+        tls_world["incidents"].clear()
+        _post(_inner(infra.setup_direct_socket), **self.FORM)
+        texts = " ".join(t for _s, t in tls_world["flashes"])
+        assert "the socket is there but its certificate is from a CA Jen no longer trusts" in texts, texts
+        assert "remove the direct socket and set it up again" in texts
+        assert "firewall" not in texts and "reachable from here" not in texts, "never the firewall question"
+        assert any(i[0] == 1 and i[2] == "tls-superseded" for i in tls_world["incidents"]), tls_world["incidents"]
+        assert not any(i[2] == "probe-pending" for i in tls_world["incidents"]), tls_world["incidents"]
+
+    def test_a_removal_then_a_setup_recovers_and_the_facts_end(self, tls_world, monkeypatch):
+        from tests import _tls_worlds as worlds
+
+        kt = tls_world["tls"]["tls"]
+        self._first_https(tls_world, monkeypatch)
+        worlds.replace_live_ca()
+        monkeypatch.setattr(type(jconfig.app_config), "mutate", lambda self_, fn, *a, **k: None)
+        _post(_inner(infra.remove_direct_socket))
+        assert any(c and "tls-superseded" in c and "record-forgotten" in c for c in tls_world["resolved_categories"]), (
+            "a removal ends both durable facts"
+        )
+        assert not os.path.lexists(kt.server_copy_path(1, "dhcp4")), "the record went with the socket"
+        monkeypatch.setattr(infra, "_write_direct_socket_config", lambda *a, **k: "url written")
+        installs = len(tls_world["tls"]["installed"])
+        _post(_inner(infra.setup_direct_socket), **self.FORM)
+        assert len(tls_world["tls"]["installed"]) == installs + 1, "a fresh pair from the current CA was installed"
+        assert kt.record_state(1, "dhcp4")[0] == "jen"
+        assert tls_world["resolved_categories"][-1] is None, (
+            "a setup that replaced the certificate ends every fact, the new two included"
+        )
+
+    def test_a_setup_that_did_not_replace_or_prove_the_certificate_keeps_the_two_facts(self, tls_world, monkeypatch):
+        """The kept-facts rule: only a setup that REPLACED the pair (or proved the socket presents the one Jen holds) ends `tls-superseded` / `record-forgotten`."""
+        from jen.services import kea_changeset
+
+        wanted = tuple(
+            c
+            for c in kea_changeset.ATTENTION_CATEGORIES
+            if c not in ("tls-not-restored", "tls-local-stale", "tls-superseded", "record-forgotten")
+        )
+        assert "probe-pending" in wanted and "tls-superseded" not in wanted and "record-forgotten" not in wanted
+
+    def test_the_failure_grammar_is_a_sentence_for_every_reason(self, tls_world, monkeypatch):
+        self._first_https(tls_world, monkeypatch)
+        monkeypatch.setattr(infra, "_presented_fingerprint", lambda url, client: "deadbeef")
+        tls_world["flashes"].clear()
+        _post(_inner(infra.setup_direct_socket), **self.FORM)
+        texts = " ".join(t for _s, t in tls_world["flashes"])
+        assert "https://10.0.0.5:8004: it presents a certificate that is not the one Jen holds for it" in texts, texts
+        assert "that is not the one Jen holds for it from the Jen host" not in texts, "the grammar bug of beta.29"
+        monkeypatch.setattr(infra, "_presented_fingerprint", lambda url, client: None)
+        tls_world["flashes"].clear()
+        _post(_inner(infra.setup_direct_socket), **self.FORM)
+        assert "https://10.0.0.5:8004: its certificate could not be read to check it is the one Jen holds" in " ".join(
+            t for _s, t in tls_world["flashes"]
+        )
+
+    def test_a_copy_that_is_there_and_cannot_be_read_is_not_no_record(self, tls_world, monkeypatch):
+        kt = tls_world["tls"]["tls"]
+        self._first_https(tls_world, monkeypatch)
+        pathlib.Path(kt.server_copy_path(1, "dhcp4")).write_text("not a certificate", encoding="ascii")
+        tls_world["flashes"].clear()
+        tls_world["incidents"].clear()
+        _post(_inner(infra.setup_direct_socket), **self.FORM)
+        texts = " ".join(t for _s, t in tls_world["flashes"])
+        assert "Jen's copy of the certificate this socket should present cannot be read" in texts, texts
+        assert "Jen holds no record of the certificate" not in texts
+        assert any(i[0] == 1 and i[2] == "remote-unknown" for i in tls_world["incidents"])
+
+
+class TestQ199TheExtraServersSaveNamesWhatItDrops:
+    """Q199 (AO2): `save_extra_servers` driven through the real route. A routine save removes a server's certificate records WITH the server (its number is handed to the next one added) and says so:
+    flash and audit name every record. A row posted with a BLANK id whose SSH host and address are a saved server's is that server."""
+
+    BASE = (
+        JEN_CONFIG
+        + """
+[kea_server_2]
+name = kea-b
+api_url = https://10.0.0.6:8004
+api_user = u
+api_pass = p
+ssh_host = 10.0.0.6
+"""
+    )
+
+    @staticmethod
+    def _rows(*rows):
+        keys = (
+            "id",
+            "name",
+            "role",
+            "api_url",
+            "api_user",
+            "api_pass",
+            "api6_url",
+            "api6_user",
+            "api6_pass",
+            "ssh_host",
+            "ssh_user",
+            "kea_conf",
+        )
+        data = {f"extra_{k}[]": [r.get(k, "") for r in rows] for k in keys}
+        return data
+
+    def _world(self, tls_world, monkeypatch, refuse=False):
+        import configparser
+
+        kt = tls_world["tls"]["tls"]
+        kt.ensure_ca()
+        primary = tls_world["server"]
+        second = {"id": 2, "name": "kea-b", "ssh_host": "10.0.0.6", "api_url": "https://10.0.0.6:8004"}
+        kt.issue_server_cert(second, "dhcp4", "10.0.0.6")
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [primary, second])
+        monkeypatch.setattr("jen.services.capabilities.is_direct", lambda: True)
+
+        def fake_mutate(self_, fn, reload=True, typed=None):
+            if refuse:
+                raise jconfig.ConfigChangeRefused(SENTENCE)
+            parser = configparser.ConfigParser(interpolation=None)
+            parser.read_string(self.BASE)
+            fn(parser)
+            kept = [primary]
+            for section in parser.sections():
+                if section.startswith("kea_server_"):
+                    kept.append(
+                        {
+                            "id": int(section.rsplit("_", 1)[1]),
+                            "name": parser.get(section, "name", fallback=""),
+                            "api_url": parser.get(section, "api_url", fallback=""),
+                            "ssh_host": parser.get(section, "ssh_host", fallback=""),
+                        }
+                    )
+            monkeypatch.setattr(extensions, "KEA_SERVERS", kept)
+
+        monkeypatch.setattr(type(jconfig.app_config), "mutate", fake_mutate)
+        monkeypatch.setattr(jconfig.app_config, "_read_parser", lambda: _parse_ini(self.BASE))
+        monkeypatch.setattr(extensions, "cfg", _parse_ini(self.BASE))
+        import types
+
+        monkeypatch.setattr(infra, "current_user", types.SimpleNamespace(username="alice", is_authenticated=True))
+        monkeypatch.setattr(
+            infra.__dict__["__inv"], "removal_refusal", lambda *a, **k: ""
+        )  # (the investigation record is the database's; this save is about certificate records)
+        return kt, second
+
+    def _save(self, **data):
+        app = flask.Flask(__name__)
+        app.secret_key = "x"
+        with app.test_request_context(method="POST", data=data):
+            return _inner(infra.save_extra_servers)()
+
+    def test_an_omitted_row_drops_its_records_and_the_flash_and_the_audit_name_them(self, tls_world, monkeypatch):
+        kt, _second = self._world(tls_world, monkeypatch)
+        assert os.path.lexists(kt.server_copy_path(2, "dhcp4"))
+        self._save(**self._rows())
+        texts = " ".join(t for _s, t in tls_world["flashes"])
+        assert "Removed server 2 (10.0.0.6): its certificate record(s) 2-dhcp4 were dropped" in texts, texts
+        assert (
+            "the daemon may still present the certificate - remove its socket by hand if it is still running" in texts
+        )
+        assert any(
+            "certificate records dropped with removed servers: 2-dhcp4" in str(a) for a in tls_world["audits"]
+        ), tls_world["audits"]
+        assert not os.path.lexists(kt.server_copy_path(2, "dhcp4")) and not os.path.lexists(
+            kt.server_key_path(2, "dhcp4")
+        )
+
+    def test_a_blank_id_that_is_a_saved_servers_host_and_address_keeps_its_id_and_its_records(
+        self, tls_world, monkeypatch
+    ):
+        kt, _second = self._world(tls_world, monkeypatch)
+        self._save(
+            **self._rows(
+                {"id": "", "name": "kea-b", "api_url": "https://10.0.0.6:8004", "api_user": "u", "ssh_host": "10.0.0.6"}
+            )
+        )
+        texts = " ".join(t for _s, t in tls_world["flashes"])
+        assert "Removed server" not in texts, texts
+        assert [s["id"] for s in extensions.KEA_SERVERS] == [1, 2], "the row IS server 2, not a new server 3"
+        assert os.path.lexists(kt.server_copy_path(2, "dhcp4")), "its records are kept"
+
+    def test_a_blank_id_with_another_address_is_a_new_server_and_the_old_one_is_dropped(self, tls_world, monkeypatch):
+        kt, _second = self._world(tls_world, monkeypatch)
+        self._save(
+            **self._rows(
+                {"id": "", "name": "kea-c", "api_url": "https://10.0.0.9:8004", "api_user": "u", "ssh_host": "10.0.0.9"}
+            )
+        )
+        texts = " ".join(t for _s, t in tls_world["flashes"])
+        assert "Removed server 2 (10.0.0.6)" in texts, texts
+        assert not os.path.lexists(kt.server_copy_path(2, "dhcp4"))
+
+    def test_a_refused_save_drops_nothing(self, tls_world, monkeypatch):
+        kt, _second = self._world(tls_world, monkeypatch, refuse=True)
+        with pytest.raises(
+            jconfig.ConfigChangeRefused
+        ):  # (the app's error handler turns it into the refusal page; the route body stops where it is)
+            self._save(**self._rows())
+        assert os.path.lexists(kt.server_copy_path(2, "dhcp4")) and os.path.lexists(kt.server_key_path(2, "dhcp4"))
+        assert "Removed server" not in " ".join(t for _s, t in tls_world["flashes"])
+
+    def test_an_incomplete_cleanup_is_reported_not_called_a_success(self, tls_world, monkeypatch):
+        kt, _second = self._world(tls_world, monkeypatch)
+        real = os.unlink
+
+        def failing(path, *a, **k):
+            if str(path) == kt.server_key_path(2, "dhcp4"):
+                raise PermissionError(13, "denied")
+            return real(path, *a, **k)
+
+        monkeypatch.setattr(os, "unlink", failing)
+        self._save(**self._rows())
+        monkeypatch.setattr(os, "unlink", real)
+        texts = " ".join(t for _s, t in tls_world["flashes"])
+        assert "1 file(s) of the record 2-dhcp4 could not be removed (PermissionError)" in texts, texts
+        assert any("NOT fully removed: 2-dhcp4" in str(a) for a in tls_world["audits"]), tls_world["audits"]
+        assert os.path.lexists(kt.server_key_path(2, "dhcp4")), (
+            "Jen's copy of the key is still on disk and the text says so"
+        )
+        assert "BEGIN" not in texts
+
+    def test_the_save_holds_the_identity_lock(self):
+        assert getattr(infra.save_extra_servers, "__holds_identity_lock__", False)
+
+
+def _parse_ini(text):
+    import configparser
+
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read_string(text)
+    return parser
+
+
+class TestQ199TheSmallOnes:
+    """Q199 (AO4)."""
+
+    def test_forgettable_is_a_number_without_a_leading_zero_and_a_service_jen_runs(self):
+        from jen.services import kea_tls
+
+        for good in ("1-dhcp4", "12-dhcp6", "300-d2"):
+            assert kea_tls._FORGETTABLE.fullmatch(good), good
+        for bad in ("007-dhcp4", "0-dhcp4", "1-other", "a-dhcp4", "1-dhcp4x", "-dhcp4", "1-DHCP4"):
+            assert not kea_tls._FORGETTABLE.fullmatch(bad), bad
+
+    def test_a_stray_service_name_is_skipped_never_parked(self, tls_world):
+        kt = tls_world["tls"]["tls"]
+        kt.ensure_ca()
+        os.makedirs(kt._copies_dir(), exist_ok=True)
+        pathlib.Path(kt._copies_dir(), "1-weird.crt").write_text("x", encoding="ascii")
+        inventory = kt.rotation_inventory([tls_world["server"]], url_for=lambda s, v: "", prove_storage=False)
+        assert inventory.parked == [] and inventory.stale == [] and inventory.skipped == ["1-weird.crt"]
+
+    @pytest.mark.parametrize(
+        "host",
+        [
+            "kea-a",
+            "kea.example.com",
+            "10.0.0.5",
+            "[2001:db8::1]",
+            "kea_host",
+            "kea-a.",
+            "a..b",
+            "-a.example",
+            "a-.example",
+            "x" * 64 + ".example",
+            "bücher.example",
+            "bü_cher.example",
+        ],
+    )
+    def test_the_installer_merges_grammar_agrees_with_the_verifiers(self, host):
+        import importlib.util
+
+        from jen.services import kea_tls
+
+        spec = importlib.util.spec_from_file_location("config_merge_q199", pathlib.Path("tools/config_merge.py"))
+        merge = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(merge)
+        assert merge._host_is_a_name_a_certificate_can_carry(host) == kea_tls.verifier_accepts_name(host), host
+
+    def test_the_merge_runs_with_jen_not_importable_and_says_so_when_it_cannot_read_a_value(self, tmp_path):
+        import subprocess
+        import sys
+
+        live = tmp_path / "live.ini"
+        text = (
+            "[kea]\nconnection_mode = direct\napi_url = https://kea_host:8004\n\n[kea6]\napi_url = https://[::1:8006\n"
+        )
+        live.write_text(text, encoding="utf-8")
+        done = subprocess.run(  # nosec B603
+            [sys.executable, "-I", str(pathlib.Path("tools/config_merge.py").resolve()), "--live", str(live)],
+            input=text,
+            capture_output=True,
+            text=True,
+            cwd=str(tmp_path),
+            check=False,
+        )
+        assert done.returncode == 0, done.stderr
+        assert (
+            "[kea] api_url is an https address in direct mode whose host name a certificate cannot carry" in done.stderr
+        )
+        assert "name check skipped" in done.stderr and "[kea6] api_url" in done.stderr, done.stderr
+
+    def test_a_fullwidth_host_gets_the_host_sentence_not_the_port_one(self):
+        from jen.services import auth
+
+        fullwidth = "http://ａ.example:8004"
+        assert "characters Jen cannot send as written" in auth.url_refusal_sentence(fullwidth, require_port=True)
+        assert "explicit port" in auth.url_refusal_sentence("http://kea:80".replace(":80", ""), require_port=True)
+        assert auth.url_refusal_sentence("http://kea:8004", require_port=True) == ""
+
+    def test_the_connect_step_carries_the_name_rule(self, monkeypatch):
+        """Driven, not grepped: the wizard's Connect handler refuses an https address in direct mode that no certificate can name."""
+        import jen.routes.setup as setup_routes
+
+        flashes = []
+        monkeypatch.setattr(setup_routes, "flash", lambda text, style="message": flashes.append(str(text)))
+        monkeypatch.setattr(setup_routes, "render_template", lambda *a, **k: "rendered")
+        monkeypatch.setattr("jen.services.capabilities.is_direct", lambda: True)
+        monkeypatch.setattr(setup_routes, "_progress", lambda *a, **k: {}, raising=False)
+        monkeypatch.setattr(setup_routes, "_step_up_redirect", lambda minutes: None)
+        app = flask.Flask(__name__)
+        app.secret_key = "x"
+        data = {"api_url": "https://kea_host:8004", "kea_db_host": "db", "kea_db_user": "u"}
+        with app.test_request_context(method="POST", data=data):
+            handler = inspect.unwrap(setup_routes.setup_connect)
+            with contextlib.suppress(
+                Exception
+            ):  # the handler needs more of the app than the name gate; only the gate's flash matters here
+                handler()
+        assert any("does not accept this as a DNS name" in f for f in flashes), flashes

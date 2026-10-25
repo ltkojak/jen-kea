@@ -1300,7 +1300,18 @@ class TestKeaTlsExpiry:
     server certs. Wider bands than the web-UI cert (5-year leaves):
     warn ≤ 90 days, fail ≤ 14 or expired; skip when no CA exists."""
 
-    def _wire(self, monkeypatch, ca=3000, client=1500, copies=(), client_ok=True, present=True, stale=(), parked=()):
+    def _wire(
+        self,
+        monkeypatch,
+        ca=3000,
+        client=1500,
+        copies=(),
+        client_ok=True,
+        present=True,
+        stale=(),
+        parked=(),
+        orphans=(),
+    ):
         import types
 
         from jen.services import kea_tls
@@ -1311,7 +1322,7 @@ class TestKeaTlsExpiry:
             kea_tls,
             "rotation_inventory",
             lambda servers, url_for=None, **_kw: types.SimpleNamespace(
-                refusals=[], stale=list(stale), parked=list(parked)
+                refusals=[], stale=list(stale), parked=list(parked), orphans=list(orphans)
             ),
         )
 
@@ -1409,6 +1420,7 @@ class TestKeaTlsExpiry:
                 ],
                 stale=[],
                 parked=[],
+                orphans=[],
             ),
         )
         c = health._kea_tls_expiry(_ctx())

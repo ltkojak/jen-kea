@@ -87,7 +87,9 @@ DYNAMIC = {
         "one claim per row the person typed a password on or ticked the share box for",
         {
             "adder": "_rewrite_extra_servers",
-            "out": "orig_id if orig_id is not None else max({1, *existing, *seen_ids}) + 1",
+            # Q199 (AO2): `row_id` is the id the form carried, or - for a blank-id row whose SSH host and address are exactly a saved server's - that server's own number, read from the
+            # snapshot under the lock; it can only NAME an existing server (it never makes a password typed), so the pin follows the row number the loop computes
+            "out": "row_id if row_id is not None else max({1, *existing, *seen_ids}) + 1",
         },
     ),
 }
