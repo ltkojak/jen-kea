@@ -1913,12 +1913,22 @@ def _tls_unknown_after_failed_install(server: dict, service: str, existing_api) 
 _RECORD_NOT_KEPT = "Jen could not keep a record of this in its recovery notes, so Servers will not show it; Health reports the notes as unknown until they can be read. Act on the lines above."
 
 
+def _has_incident(server_id, service: str, category: str) -> bool:
+    from jen.services import kea_changeset as __changeset
+
+    return any(
+        i.get("server_id") == server_id and i.get("service") == service and i.get("category") == category
+        for i in __changeset.recovery_incidents()
+    )
+
+
 def _record_is_from_an_earlier_ca(server_id, service: str) -> bool:
-    """Q199 (AO1): is Jen's saved certificate for this server and service one that an EARLIER Jen CA issued (a rotation has replaced the CA since)?"""
+    """Q199 (AO1): is the certificate on this server and service's daemon one that an EARLIER Jen CA issued (a rotation has replaced the CA since)? Jen's saved copy says so when it still has one; when the
+    record was forgotten (second pass, F1) the durable fact `tls-superseded` - written by the rotation that replaced the CA - says it, so forgetting the record does not take the answer with it."""
     from jen.services import kea_tls as __tls
 
     state, why = __tls.record_state(server_id, service)
-    return state == "refuse" and "earlier Jen CA" in why
+    return (state == "refuse" and "earlier Jen CA" in why) or _has_incident(server_id, service, "tls-superseded")
 
 
 def _record_incident(server: dict, service: str, operation: str, category: str, detail: str = "") -> bool:
@@ -3317,6 +3327,24 @@ def rotate_kea_ca():
                 "the CA rotation (this server was not an https endpoint, so it was not rotated)",
                 "tls-superseded",
             )
+    rotated = {(s.get("id"), svc) for s, svc, _b in targets}
+    for incident in __changeset.recovery_incidents():
+        # second pass, F1: a record the operator forgot on their word was the only thing that tied a parked daemon to the CA; the daemon may still present the certificate the CA just replaced
+        if (
+            incident.get("category") != "record-forgotten"
+            or (incident.get("server_id"), incident.get("service")) in rotated
+        ):
+            continue
+        forgotten_server = (
+            _server_by_id(incident.get("server_id")) if isinstance(incident.get("server_id"), int) else None
+        )
+        if forgotten_server is not None:
+            _record_incident(
+                forgotten_server,
+                incident.get("service"),
+                "the CA rotation (the record of this socket was forgotten, so it was not rotated)",
+                "tls-superseded",
+            )
     if inventory.parked:
         flash(
             f"Parked, not rotated (not an https endpoint now, so Jen did not touch it): {', '.join(inventory.parked)}. Jen keeps its record and its daemon keeps the certificate it has - issued by the CA Jen has just "
@@ -4591,10 +4619,12 @@ def save_extra_servers():
         present = []
         for gone_service in __tls_gone.INVENTORY_SERVICES:
             result = __tls_gone.discard_local_record(gone_id, gone_service)
-            if result["removed"] or result["failed"]:
-                present.append(f"{gone_id}-{gone_service}")
             if result["failed"]:
-                incomplete.append((f"{gone_id}-{gone_service}", result["failed"]))
+                incomplete.append(
+                    (f"{gone_id}-{gone_service}", result["failed"])
+                )  # (second pass, F5: said as incomplete ONLY - never also as dropped)
+            elif result["removed"]:
+                present.append(f"{gone_id}-{gone_service}")
         if present:
             dropped.append((gone_id, gone_host, present))
     for gone_id, gone_host, present in dropped:

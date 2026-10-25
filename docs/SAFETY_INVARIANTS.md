@@ -719,6 +719,8 @@ Jen's CA by certificate identity, per endpoint; an invariant with no knob; an in
 - `tests/test_kea_tls_rotation.py::TestACleanupReportsWhatHappened`
 - `tests/test_kea_tls_rotation.py::TestARecordIsTheGroupOfItsFiles`
 - `tests/test_kea_tls_rotation.py::TestARecordCarriesItsDestination`
+- `tests/test_kea_tls_rotation.py::TestTheSecondPassOfQ199`
+- `tests/test_direct_socket_lock.py::TestQ199TheForgottenRecordDoesNotTakeTheAnswerWithIt`
 - `tests/test_direct_socket_lock.py::TestQ199TheSetupAfterARotationLeftADaemonBehind`
 - `tests/test_direct_socket_lock.py::TestQ199TheExtraServersSaveNamesWhatItDrops`
 - `tests/test_direct_socket_lock.py::TestQ199TheSmallOnes`

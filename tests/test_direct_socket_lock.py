@@ -651,7 +651,11 @@ def _assert_the_tls_invariants(wire):
             record = kea_tls.host_material(1, "dhcp4")
             if record is None:
                 assert any(
-                    i[0] == 1 and i[1] == "dhcp4" and i[2] in ("tls-local-stale", "remote-unknown", "tls-not-restored")
+                    i[0] == 1
+                    and i[1] == "dhcp4"
+                    # (Q199: `record-forgotten` says Jen holds no record on the operator's word; `tls-superseded` says the daemon holds a certificate from the CA a rotation replaced - both name the server)
+                    and i[2]
+                    in ("tls-local-stale", "remote-unknown", "tls-not-restored", "record-forgotten", "tls-superseded")
                     for i in wire["incidents"]
                 ), "T1: Jen has no record of the pair the host holds and no incident says so"
             else:
@@ -2438,6 +2442,12 @@ ssh_host = 10.0.0.6
         texts = " ".join(t for _s, t in tls_world["flashes"])
         assert "1 file(s) of the record 2-dhcp4 could not be removed (PermissionError)" in texts, texts
         assert any("NOT fully removed: 2-dhcp4" in str(a) for a in tls_world["audits"]), tls_world["audits"]
+        assert "its certificate record(s) 2-dhcp4 were dropped" not in texts, (
+            "(second pass, F5) a record that could not be removed is not also said to be dropped"
+        )
+        assert not any("records dropped with removed servers: 2-dhcp4" in str(a) for a in tls_world["audits"]), (
+            tls_world["audits"]
+        )
         assert os.path.lexists(kt.server_key_path(2, "dhcp4")), (
             "Jen's copy of the key is still on disk and the text says so"
         )
@@ -2552,3 +2562,33 @@ class TestQ199TheSmallOnes:
             ):  # the handler needs more of the app than the name gate; only the gate's flash matters here
                 handler()
         assert any("does not accept this as a DNS name" in f for f in flashes), flashes
+
+
+class TestQ199TheForgottenRecordDoesNotTakeTheAnswerWithIt:
+    """Second pass F1: the record forgotten on the operator's word, the CA replaced, the server switched back to https: the durable `tls-superseded` fact the rotation wrote says whose certificate the
+    daemon holds, so the setup names the action - not the firewall question, not `probe-pending`."""
+
+    FORM = TestQ199TheSetupAfterARotationLeftADaemonBehind.FORM
+
+    def test_the_setup_names_the_action_when_the_record_is_gone_and_the_fact_remains(self, tls_world, monkeypatch):
+        from tests import _tls_worlds as worlds
+
+        kt = tls_world["tls"]["tls"]
+        monkeypatch.setattr(infra, "_write_direct_socket_config", lambda *a, **k: "url written")
+        _post(_inner(infra.setup_direct_socket), **self.FORM)
+        kt.discard_local_record(1, "dhcp4")
+        worlds.replace_live_ca()
+        assert not os.path.lexists(kt.server_copy_path(1, "dhcp4"))
+        tls_world["incidents"].append(
+            (1, "dhcp4", "record-forgotten", "the operator forgot the record")
+        )  # what Forget wrote
+        tls_world["incidents"].append(
+            (1, "dhcp4", "tls-superseded", "the CA rotation")
+        )  # what the rotation then wrote (the Lab test pins that)
+        monkeypatch.setattr(infra, "_probe_after_restart", lambda *a, **k: ("", "certificate verify failed"))
+        tls_world["flashes"].clear()
+        _post(_inner(infra.setup_direct_socket), **self.FORM)
+        texts = " ".join(t for _s, t in tls_world["flashes"])
+        assert "the socket is there but its certificate is from a CA Jen no longer trusts" in texts, texts
+        assert "firewall" not in texts and "reachable from here" not in texts, texts
+        assert not any(i[2] == "probe-pending" for i in tls_world["incidents"]), tls_world["incidents"]

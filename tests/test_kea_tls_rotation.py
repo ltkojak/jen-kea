@@ -5637,3 +5637,39 @@ class TestARecordCarriesItsDestination:
         """The AO2 save drops a removed server's records; a record that SURVIVED (a hand-edited config, a restore) under a reused number is still caught here."""
         reused = {"id": 2, "name": "someone else", "ssh_host": "10.0.0.90"}
         assert kea_tls.record_state(2, "dhcp4", server=reused, url="https://10.0.0.90:8004")[0] == "refuse"
+
+
+class TestTheSecondPassOfQ199:
+    """The pre-release second pass on Q199: F1 (forgetting a parked record before the rotation took the rotation's fact with it) and F2 (an openssl that cannot LOAD the CA is not 'no opinion')."""
+
+    def test_f1_forget_then_rotate_still_leaves_the_fact_the_rotation_owes(self, lab):
+        TestStaleIsAFactAboutTheDaemon._park_server_2(lab)
+        _forget({"include_parked": "1"})
+        assert (2, "dhcp4", "record-forgotten") in lab.incidents, lab.incidents
+        assert not os.path.lexists(kea_tls.server_copy_path(2, "dhcp4"))
+        _rotate()
+        assert (2, "dhcp4", "tls-superseded") in lab.incidents, (
+            "the forgotten record was the only tie between the parked daemon and the replaced CA - the rotation still owes the fact"
+        )
+        assert not lab.answers_jens_live_identity(2), (
+            "the daemon is on the replaced CA: the incident is the whole difference"
+        )
+        assert lab.hosts[2]["files"] and lab.hosts[2]["loaded"], "the daemon stays in the world"
+
+    def test_f1_the_rotation_does_not_name_a_forgotten_record_it_did_rotate(self, lab):
+        """A server that is an https endpoint again is a rotation target: its fact is resolved by the rotation, not re-written."""
+        _rotate()
+        assert not any(i[2] == "tls-superseded" for i in lab.incidents), lab.incidents
+
+    def test_f2_an_openssl_that_cannot_load_the_ca_rejects_it_and_a_broken_openssl_has_no_opinion(self):
+        loaded = (
+            1,
+            "Error loading file /tmp/jen-openssl-gate-x/ca.pem\n40A7:error:0480006C:PEM routines:get_name:no start line\nno certificate found",
+        )
+        assert kea_tls._openssl_verdict(loaded)[0] is False
+        assert "ca.pem" in kea_tls._openssl_verdict(loaded)[1]
+        assert kea_tls._openssl_verdict((127, "openssl: error while loading shared libraries: libssl.so.3"))[0] is None
+        assert kea_tls._openssl_verdict((1, "Error loading file /tmp/jen-openssl-gate-x/probe.pem"))[0] is None, (
+            "the leaf is Jen's own: a leaf the CLI cannot load says nothing about the CA"
+        )
+        assert kea_tls._openssl_verdict((0, "usage: openssl verify"))[0] is None

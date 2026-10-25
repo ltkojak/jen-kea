@@ -439,6 +439,9 @@ def _run_openssl(args: list, timeout: float):
 
 
 _OPENSSL_REJECTION = re.compile(r"error \d+ at \d+ depth lookup: [^\r\n]+")
+# Q199 (second pass, F2): the CLI that RUNS but cannot LOAD the CA it was handed (`Error loading file .../ca.pem`, `no certificate found`) is the daemon's library refusing the CA outright - a rejection
+# with its own line, not "no opinion". (A missing library, a usage message or a bad configuration never names the CA file, so they stay no opinion.) Both gates write the CA as `ca.pem`.
+_OPENSSL_CA_UNLOADABLE = re.compile(r"(?:Error loading file|unable to load)[^\r\n]*[\\/]ca\.pem[^\r\n]*")
 
 
 def _openssl_verdict(ran) -> tuple:
@@ -447,7 +450,7 @@ def _openssl_verdict(ran) -> tuple:
     if ran is None:
         return None, ""
     code, out = ran
-    found = _OPENSSL_REJECTION.search(out)
+    found = _OPENSSL_REJECTION.search(out) or _OPENSSL_CA_UNLOADABLE.search(out)
     if found or "verification failed" in out:
         return False, found.group(0) if found else "verification failed"
     if code == 0 and ": OK" in out:
