@@ -54,13 +54,15 @@ class TestBothRoutesHoldTheLock:
             for name, fn in vars(infra).items()
             if inspect.isfunction(fn) and getattr(fn, "__holds_identity_lock__", False) and not name.startswith("_")
         }
-        # (Q192, adjusted: Prepare and Discard write and unlink the `.next` files a running rotation reads and consumes, so they hold the identity lock too)
+        # (Q192, adjusted: Prepare and Discard write and unlink the `.next` files a running rotation reads and consumes, so they hold the identity lock too. Q197: forgetting stale records unlinks
+        # Jen's own copies of server certificates a running rotation reads, so it holds the lock as well)
         assert held == {
             "setup_direct_socket",
             "remove_direct_socket",
             "rotate_kea_ca",
             "prepare_kea_ca",
             "discard_prepared_kea_ca",
+            "forget_stale_kea_records",
         }
 
 
@@ -1780,3 +1782,226 @@ class TestTheWorldsOfTheSetupHarness:
         )  # (nothing to remove: the settings are not written - and CI's real config must not be reloaded)
         _post(_inner(infra.remove_direct_socket))
         assert matrix.worlds.tree(kt.SSL_DIR) == before, "T6: a removal touches no TLS file of Jen's"
+
+
+# ── Q197: a healthy CA that cannot issue for THIS name is told so; the https setup asks the one-daemon question; a removed socket drops its record ──
+
+
+class TestQ197TheNameWorldsOfTheHttpsSetup:
+    """Q197 (AM2): `verify_issued`'s refusal of a leaf's NAME is `NameRefused`, not `CaDamaged`. The CA is healthy: the page and Health say so, the sentence names the SAN that failed (the bind address OR
+    the SSH host's name), nothing is changed on the host, and the acknowledgement for a damaged CA is never named."""
+
+    FORM = {"scheme": "https", "address": "10.0.0.5", "port": "8004", "user": "u", "password": "p"}
+
+    @staticmethod
+    def _put_ca(kt, kind):
+        from tests import _tls_worlds as worlds
+
+        cert_pem, key_pem = worlds.semantic_ca_pem(kind)
+        crt, key = kt.ca_paths()
+        pathlib.Path(crt).write_bytes(cert_pem)
+        pathlib.Path(key).write_bytes(key_pem)
+
+    def _nothing_was_sent(self, tls_world):
+        assert tls_world["tls"]["installed"] == [] and tls_world["tls"]["restarts"] == []
+        assert tls_world["applies"] == []
+
+    def test_a_ca_name_constrained_away_from_the_bind_address_is_healthy_and_the_sentence_says_so(self, tls_world):
+        kt = tls_world["tls"]["tls"]
+        self._put_ca(kt, "name-constraints-ip-outside")
+        assert kt.ca_state() == ("ok", "")
+        _post(_inner(infra.setup_direct_socket), **self.FORM)
+        texts = " ".join(t for _s, t in tls_world["flashes"])
+        assert "Jen's CA is healthy, but it cannot issue a certificate the verifier accepts for 10.0.0.5" in texts, (
+            texts
+        )
+        assert "no acknowledgement is needed - the CA is not damaged" in texts
+        assert "Rotate Kea CA" in texts and "Nothing was changed on kea-a" in texts
+        assert "damaged (" not in texts and kt.DAMAGED_CA_ADVICE not in texts
+        self._nothing_was_sent(tls_world)
+        assert kt.ca_state() == ("ok", ""), "the CA is still healthy afterwards"
+
+    def test_the_sentence_names_the_ssh_host_when_that_is_the_name_that_failed(self, tls_world):
+        """The bind address is an IP the CA does not constrain by DNS subtrees; the SSH host's DNS name is outside the permitted domain: THAT is the SAN to name, not only the bind."""
+        kt = tls_world["tls"]["tls"]
+        self._put_ca(kt, "name-constraints-permit-own-domain")
+        tls_world["server"]["ssh_host"] = "kea-a.elsewhere.net"
+        _post(_inner(infra.setup_direct_socket), **self.FORM)
+        texts = " ".join(t for _s, t in tls_world["flashes"])
+        assert "cannot issue a certificate the verifier accepts for kea-a.elsewhere.net" in texts, texts
+        assert "for 10.0.0.5" not in texts, "the bind address is not the name that failed"
+        self._nothing_was_sent(tls_world)
+
+    def test_the_acknowledgement_checkbox_exists_only_for_a_damaged_ca(self, tls_world):
+        kt = tls_world["tls"]["tls"]
+        self._put_ca(kt, "name-constraints-ip-outside")
+        summary = infra._kea_ca_summary()
+        assert summary["present"] and summary["damaged"] is False and summary["state"] == "ok", summary
+        template = pathlib.Path("templates/settings_kea.html").read_text(encoding="utf-8")
+        assert template.index("acknowledge_damaged_ca") > template.index("{% elif kea_ca.damaged %}"), (
+            "the checkbox sits only inside the damaged-CA branch of the page"
+        )
+
+    def test_a_damaged_ca_still_gets_the_damaged_sentence_and_the_acknowledgement(self, tls_world):
+        kt = tls_world["tls"]["tls"]
+        self._put_ca(kt, "eku-anyeku")
+        _post(_inner(infra.setup_direct_socket), **self.FORM)
+        texts = " ".join(t for _s, t in tls_world["flashes"])
+        assert "Jen's CA is damaged" in texts and "the verifier rejects" in texts, texts
+        assert "Nothing was changed on kea-a" in texts
+        self._nothing_was_sent(tls_world)
+
+    def test_the_rotation_distinguishes_the_same_two_classes(self):
+        """The rotation's own distinction (the same classes): a healthy CA that cannot issue for a name is not the damaged-CA advice."""
+        from jen.services import kea_tls
+
+        source = inspect.getsource(inspect.unwrap(infra.rotate_kea_ca))
+        assert "except __tls.NameRefused" in source and "except __tls.CaDamaged" in source
+        assert issubclass(kea_tls.NameRefused, Exception) and not issubclass(kea_tls.NameRefused, kea_tls.CaDamaged)
+
+
+class TestQ197TheHostNameTheFormSavesIsTheNameACertificateCanCarry:
+    """Q197 (AM2): `valid_api_url` for an https address in direct mode agrees with the certificate verifier's DNS-name parser, so a host a form can save is a host Jen can issue for."""
+
+    HOSTS = [
+        "kea-a",
+        "kea.example.com",
+        "KEA-A.EXAMPLE.COM",
+        "10.0.0.5",
+        "[2001:db8::1]",
+        "kea_host",  # an underscore
+        "kea-a.",  # a trailing dot
+        "a..b",  # an empty label
+        "-a.example",  # a hyphen at the edge of a label
+        "a-.example",
+        ("x" * 64) + ".example",  # an over-long label
+    ]
+
+    @pytest.mark.parametrize("host", HOSTS)
+    def test_valid_api_url_agrees_with_the_verifier_for_https_in_direct_mode(self, host):
+        from jen.services import auth, kea_tls
+
+        url = f"https://{host}:8004"
+        accepted_by_the_form = auth.valid_api_url(url, require_port=True)
+        bare = host.strip("[]")
+        assert accepted_by_the_form == (auth._plain_host(bare) and kea_tls.verifier_accepts_name(bare)), host
+        assert auth.valid_api_url(f"http://{host}:8004", require_port=True) == auth._plain_host(bare), (
+            "a plain http address is not a certificate question"
+        )
+
+    @pytest.mark.parametrize("host", ["kea_host", "kea-a.", "a..b"])
+    def test_the_refusal_has_its_own_sentence(self, host):
+        from jen.services import auth
+
+        assert auth.dns_name_sentence(f"https://{host}:8004", require_port=True).startswith(
+            "The certificate verifier does not accept this as a DNS name"
+        )
+        assert auth.dns_name_sentence(f"http://{host}:8004", require_port=True) == ""
+        assert auth.dns_name_sentence(f"https://{host}:8004", require_port=False) == "", (
+            "only direct mode issues certificates"
+        )
+        assert auth.dns_name_sentence("https://kea-a:8004", require_port=True) == ""
+
+    def test_a_host_the_verifier_cannot_name_is_a_name_refusal_not_a_damaged_ca(self, tls_world):
+        """The bind address of a setup is always an IP literal; the DNS name arrives from a SAVED https address (the rotation dials it by name). The leaf cannot be verified for that name, the CA is healthy,
+        and the class says so - `NameRefused` with the name that failed, the other SAN (the IP) passing."""
+        kt = tls_world["tls"]["tls"]
+        kt.ensure_ca()
+        with pytest.raises(kt.NameRefused) as refused:
+            kt.issue_server_cert(tls_world["server"], "dhcp4", "kea_host", commit=False)
+        assert refused.value.names == ["kea_host"], refused.value.names
+        assert kt.ca_state() == ("ok", "")
+
+
+class TestQ197TheSetupAsksTheOneDaemonQuestion:
+    """Q197 (AM5): the rule the rotation applies (Q196 AL2: one daemon is one target) applied where the world is MADE - before any local or remote change."""
+
+    FORM = {"scheme": "https", "address": "10.0.0.5", "port": "8004", "user": "u", "password": "p"}
+
+    def _second_record(self, tls_world, monkeypatch, ssh_host="10.0.0.5", service="dhcp4", holds=True):
+        kt = tls_world["tls"]["tls"]
+        kt.ensure_ca()
+        other = {"id": 2, "name": "kea-b", "ssh_host": ssh_host}
+        if holds:
+            kt.issue_server_cert(other, service, "10.0.0.5")
+        monkeypatch.setattr(extensions, "KEA_SERVERS", [tls_world["server"], other])
+        return kt
+
+    def test_two_records_one_host_the_second_setup_is_refused_before_any_change(self, tls_world, monkeypatch):
+        kt = self._second_record(tls_world, monkeypatch)
+        before = json.dumps(sorted(os.listdir(kt.SSL_DIR)))
+        _post(_inner(infra.setup_direct_socket), **self.FORM)
+        texts = " ".join(t for _s, t in tls_world["flashes"])
+        assert "kea-b already manages kea-dhcp4 on 10.0.0.5: one daemon, two records" in texts, texts
+        assert "Remove or re-point one of them first" in texts and "Nothing was changed on kea-a" in texts
+        assert tls_world["tls"]["installed"] == [] and tls_world["applies"] == [] and tls_world["tls"]["restarts"] == []
+        assert json.dumps(sorted(os.listdir(kt.SSL_DIR))) == before, "no local file changed either"
+
+    def test_dhcp4_and_dhcp6_on_one_host_are_two_daemons_and_allowed(self, tls_world, monkeypatch):
+        self._second_record(tls_world, monkeypatch, service="dhcp6")
+        monkeypatch.setattr(infra, "_write_direct_socket_config", lambda *a, **k: "url written")
+        _post(_inner(infra.setup_direct_socket), **self.FORM)
+        texts = " ".join(t for _s, t in tls_world["flashes"])
+        assert "one daemon, two records" not in texts, texts
+        assert len(tls_world["tls"]["installed"]) == 1
+
+    def test_a_record_on_another_host_is_allowed(self, tls_world, monkeypatch):
+        self._second_record(tls_world, monkeypatch, ssh_host="10.0.0.9")
+        monkeypatch.setattr(infra, "_write_direct_socket_config", lambda *a, **k: "url written")
+        _post(_inner(infra.setup_direct_socket), **self.FORM)
+        assert len(tls_world["tls"]["installed"]) == 1, " ".join(t for _s, t in tls_world["flashes"])
+
+    def test_a_second_record_that_holds_no_jen_issued_certificate_is_not_a_twin(self, tls_world, monkeypatch):
+        self._second_record(tls_world, monkeypatch, holds=False)
+        monkeypatch.setattr(infra, "_write_direct_socket_config", lambda *a, **k: "url written")
+        _post(_inner(infra.setup_direct_socket), **self.FORM)
+        assert len(tls_world["tls"]["installed"]) == 1
+
+    def test_the_function_by_itself(self, tls_world):
+        kt = tls_world["tls"]["tls"]
+        kt.ensure_ca()
+        a = {"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5"}
+        b = {"id": 2, "name": "kea-b", "ssh_host": "10.0.0.5"}
+        assert kt.other_record_on_same_daemon(a, "dhcp4", [a, b]) == "", "no record, no twin"
+        kt.issue_server_cert(b, "dhcp4", "10.0.0.5")
+        assert kt.other_record_on_same_daemon(a, "dhcp4", [a, b]) == "kea-b"
+        assert kt.other_record_on_same_daemon(b, "dhcp4", [a, b]) == "", "a record is not its own twin"
+        assert kt.other_record_on_same_daemon(a, "dhcp6", [a, b]) == "", "another service is another daemon"
+        assert kt.other_record_on_same_daemon({"id": 3, "ssh_host": ""}, "dhcp4", [a, b]) == ""
+        odd = "h​ost"  # a string `same_host` cannot name a place for: the identical string is still one host
+        c, d = {"id": 4, "name": "odd-c", "ssh_host": odd}, {"id": 5, "name": "odd-d", "ssh_host": odd}
+        kt.issue_server_cert(d, "dhcp4", "10.9.9.9")
+        assert kt.other_record_on_same_daemon(c, "dhcp4", [c, d]) == "odd-d"
+
+
+class TestQ197ARemovedSocketDropsItsRecord:
+    """Q197 (AM4): `remove_direct_socket` never called `discard_local_record`, so a removed https socket left Jen holding a certificate record for an endpoint that no longer existed."""
+
+    def test_a_successful_removal_forgets_jens_copy_of_that_sockets_certificate(self, wire, monkeypatch, tmp_path):
+        from jen.services import kea_tls
+
+        monkeypatch.setattr(kea_tls, "SSL_DIR", str(tmp_path))
+        kea_tls.ensure_ca()
+        kea_tls.issue_server_cert(wire["server"], "dhcp4", "10.0.0.5")
+        assert os.path.lexists(kea_tls.server_copy_path(1, "dhcp4"))
+        monkeypatch.setattr(type(jconfig.app_config), "mutate", lambda self_, fn, *a, **k: None)
+        wire["host"] = {"Dhcp4": {"control-sockets": [copy.deepcopy(UNIX), copy.deepcopy(SOCKET)]}}
+        _post(_inner(infra.remove_direct_socket))
+        assert wire["host"] == {"Dhcp4": {"control-sockets": [UNIX]}}
+        assert not os.path.lexists(kea_tls.server_copy_path(1, "dhcp4")), "the record of a removed socket is gone"
+        assert not os.path.lexists(kea_tls.server_key_path(1, "dhcp4"))
+
+    def test_a_refused_removal_keeps_the_record(self, wire, monkeypatch, tmp_path):
+        from jen.services import kea_tls
+
+        monkeypatch.setattr(kea_tls, "SSL_DIR", str(tmp_path))
+        kea_tls.ensure_ca()
+        kea_tls.issue_server_cert(wire["server"], "dhcp4", "10.0.0.5")
+
+        def refuse(self_, fn, *a, **k):
+            raise jconfig.ConfigChangeRefused(SENTENCE)
+
+        monkeypatch.setattr(type(jconfig.app_config), "mutate", refuse)
+        wire["host"] = {"Dhcp4": {"control-sockets": [copy.deepcopy(UNIX), copy.deepcopy(CLIENT_SOCKET)]}}
+        _post(_inner(infra.remove_direct_socket))
+        assert os.path.lexists(kea_tls.server_copy_path(1, "dhcp4")), "the socket was put back, so its record stays"

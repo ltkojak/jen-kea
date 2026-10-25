@@ -119,6 +119,7 @@ SEMANTIC_CA_STATES = (
     "issuer-not-subject",
     "unsupported-key",  # an Ed25519 pair: a pair, but not a kind Jen's CA is made of
     "duplicate-extension",  # (second pass) two BasicConstraints: it parses as PEM and `cert.extensions` raises - a read must say "damaged", never raise
+    "aki-not-ski",  # Q197 (AM1 a): a self-issued root whose AuthorityKeyIdentifier keyid is not its own SubjectKeyIdentifier - OpenSSL does not treat it as self-issued, no chain reaches it
 )
 
 #: Q196 (AL1): the VERIFIER states - a CA that parses, pairs, is a CA by purpose and validity, self-signed, and still not one a real verifier accepts what Jen issues from, because of a constraint
@@ -128,12 +129,23 @@ VERIFIER_CA_STATES = (
     "eku-serverauth-only",  # ... and an sslclient one
     "eku-codesigning",  # neither
     "name-constraints-exclude-all",  # no name verifies
+    # Q197 (AM1 b): the EKU VALUE families - executed against openssl 3.2.4 and the library; a verifier that reads anyExtendedKeyUsage as "any purpose" is not what the daemon's library does
+    "eku-anyeku",  # anyExtendedKeyUsage ALONE: OpenSSL ignores it on a CA, so neither purpose is named
+    "eku-anyeku-and-serverauth",  # sslserver is named, sslclient is not
+    "eku-serverauth-and-codesigning",  # ... the same, the other way round
+    "eku-unknown-oid",  # an OID that is no purpose at all
+    "eku-anyeku-and-unknown",
+    # the AKI VALUE families: a keyid that names another key, and an issuer+serial reference that does not match
+    "aki-wrong-serial",
 )
 #: ... and the constraints a verifier ACCEPTS: they must stay healthy (no EKU, serverAuth+clientAuth, anyExtendedKeyUsage, a CA name-constrained to its OWN domain, policy constraints, inhibit-any-policy)
 VERIFIER_OK_STATES = (
     "eku-none",
     "eku-server-and-client",
-    "eku-anyeku",
+    "eku-anyeku-server-and-client",  # (Q197: anyExtendedKeyUsage beside BOTH purposes is healthy - the purposes are named)
+    "aki-keyid-matches-ski",
+    "aki-keyid-issuer-serial",
+    "no-ski-with-aki-keyid",  # nothing to compare: both stacks chain to it
     "name-constraints-permit-own-domain",
     "policy-constraints",
     "inhibit-any-policy",
@@ -150,12 +162,85 @@ VERIFIER_STRICTER_STATES = (
     "name-constraints-directory-name",
     "key-secp256k1",
     "key-brainpool",
+    # Q197 (executed against openssl 3.2.4 and the library): the shapes OpenSSL accepts and the library does not, documented in the admin guide's table of Jen-stricter shapes
+    "aki-issuer-serial-only",  # an AKI that names the issuer and serial and no keyid
+    "crl-distribution-points-critical",
+    "empty-subject-critical-san",
+    "policy-mappings-critical",
 )
+#: Q197 (executed against openssl 3.2.4, `tests/test_kea_tls_rotation.py::TestTheValueFamiliesAgainstTheRealCli`): EVERY state where Jen calls the CA damaged and `openssl verify` accepts a leaf of it for both
+#: purposes - the admin guide's "Shapes Jen's verifier is stricter about than OpenSSL". (An Ed25519 CA is also here in spirit: the CLI cannot be asked, Jen cannot issue from it.)
+JEN_STRICTER_THAN_OPENSSL = frozenset(VERIFIER_STRICTER_STATES) | {"tampered-signature", "no-basic-constraints"}
+#: ... and the words the admin guide's table uses for each, so a row cannot be dropped from it unseen
+STRICTER_LABELS = {
+    "name-constraints-leading-dot": "leading-dot name constraint",
+    "name-constraints-directory-name": "directoryName name constraint",
+    "key-secp256k1": "secp256k1",
+    "key-brainpool": "Brainpool",
+    "aki-issuer-serial-only": "issuer and serial number but no key identifier",
+    "crl-distribution-points-critical": "critical CRLDistributionPoints",
+    "empty-subject-critical-san": "empty subject",
+    "policy-mappings-critical": "critical policyMappings",
+    "tampered-signature": "tampered self-signature",
+    "no-basic-constraints": "no Basic Constraints",
+}
+
 #: ... and CAs the throwaway (DNS-only) probe accepts but that cannot sign for a particular SERVER's address: the REAL leaf Jen issues is verified before it is returned
 REAL_LEAF_STATES = ("name-constraints-ip-outside", "name-constraints-ip-inside")
 
 #: a CA that WORKS but that Q194's first draft called damaged: no KeyUsage extension at all (RFC 5280: unrestricted - what `openssl req -x509` makes by default)
 OPERATOR_CA_STATES = ("no-key-usage",)
+
+
+#: Q197: the VALUE FAMILIES of the extension classes a CA certificate carries, by class - the rule "enumerate values, not only classes". Q196's enumeration built every class once with a default value
+#: and so had no row for anyExtendedKeyUsage alone or an AuthorityKeyIdentifier that names another key. `tests/test_kea_tls_worlds.py` asserts the AKI and EKU families have at least three rows each,
+#: and that every state here is built by `semantic_ca` and judged by a table.
+EXTENSION_VALUE_FAMILIES = {
+    "ExtendedKeyUsage": (
+        "eku-none",
+        "eku-server-and-client",
+        "eku-anyeku-server-and-client",
+        "eku-clientauth-only",
+        "eku-serverauth-only",
+        "eku-codesigning",
+        "eku-anyeku",
+        "eku-anyeku-and-serverauth",
+        "eku-serverauth-and-codesigning",
+        "eku-unknown-oid",
+        "eku-anyeku-and-unknown",
+        "eku-critical-server-and-client",
+    ),
+    "AuthorityKeyIdentifier": (
+        "aki-keyid-matches-ski",
+        "aki-keyid-issuer-serial",
+        "no-ski-with-aki-keyid",
+        "aki-not-ski",
+        "aki-wrong-serial",
+        "aki-issuer-serial-only",
+    ),
+    "SubjectKeyIdentifier": ("ski-not-sha1",),
+    # the structure around the extensions: validity, the signature, the issuer, the key, an encoding the library reads as a duplicate
+    "Validity": ("expired", "not-yet-valid"),
+    "SignatureAndIssuer": ("tampered-signature", "issuer-not-subject"),
+    "ExtensionEncoding": ("duplicate-extension",),
+    "SubjectPublicKey": ("unsupported-key", "key-secp256k1", "key-brainpool"),
+    "BasicConstraints": ("not-ca", "no-basic-constraints", "bc-non-critical"),
+    "KeyUsage": ("no-key-cert-sign", "no-key-usage"),
+    "NameConstraints": (
+        "name-constraints-exclude-all",
+        "name-constraints-permit-own-domain",
+        "name-constraints-leading-dot",
+        "name-constraints-directory-name",
+        "name-constraints-ip-outside",
+        "name-constraints-ip-inside",
+    ),
+    "PolicyConstraints": ("policy-constraints",),
+    "InhibitAnyPolicy": ("inhibit-any-policy",),
+    "CertificatePolicies": ("certificate-policies-critical",),
+    "CRLDistributionPoints": ("crl-distribution-points-critical",),
+    "SubjectAlternativeName": ("empty-subject-critical-san",),
+    "PolicyMappings": ("policy-mappings-critical",),
+}
 
 
 def semantic_ca(kind: str):
@@ -176,13 +261,17 @@ def semantic_ca(kind: str):
         + VERIFIER_STRICTER_STATES
         + REAL_LEAF_STATES
     ), kind
+    any_eku = x509.ObjectIdentifier("2.5.29.37.0")
     key = {
         "unsupported-key": lambda: ed25519.Ed25519PrivateKey.generate(),
         "key-secp256k1": lambda: ec.generate_private_key(ec.SECP256K1()),
         "key-brainpool": lambda: ec.generate_private_key(ec.BrainpoolP256R1()),
     }.get(kind, kea_tls._new_key)()
     name = kea_tls._name(f"Jen Kea CA semantic {kind}")
+    if kind == "empty-subject-critical-san":
+        name = x509.Name([])
     issuer = kea_tls._name("an issuer that is not the subject") if kind == "issuer-not-subject" else name
+    serial = x509.random_serial_number()
     now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
     before, after = now - datetime.timedelta(minutes=5), now + datetime.timedelta(days=3650)
     if kind == "expired":
@@ -194,10 +283,25 @@ def semantic_ca(kind: str):
         .subject_name(name)
         .issuer_name(issuer)
         .public_key(key.public_key())
-        .serial_number(x509.random_serial_number())
+        .serial_number(serial)
         .not_valid_before(before)
         .not_valid_after(after)
     )
+    ski = x509.SubjectKeyIdentifier.from_public_key(key.public_key()) if kind.startswith("aki-") else None
+    aki = {
+        "aki-keyid-matches-ski": x509.AuthorityKeyIdentifier(ski.digest if ski else None, None, None),
+        "aki-keyid-issuer-serial": x509.AuthorityKeyIdentifier(
+            ski.digest if ski else None, [x509.DirectoryName(name)], serial
+        ),
+        "no-ski-with-aki-keyid": x509.AuthorityKeyIdentifier(os.urandom(20), None, None),
+        "aki-not-ski": x509.AuthorityKeyIdentifier(os.urandom(20), None, None),
+        "aki-wrong-serial": x509.AuthorityKeyIdentifier(None, [x509.DirectoryName(name)], serial + 1),
+        "aki-issuer-serial-only": x509.AuthorityKeyIdentifier(None, [x509.DirectoryName(name)], serial),
+    }.get(kind)
+    if aki is not None:
+        if kind != "no-ski-with-aki-keyid":
+            builder = builder.add_extension(ski, critical=False)
+        builder = builder.add_extension(aki, critical=False)
     if kind != "no-basic-constraints":
         builder = builder.add_extension(
             x509.BasicConstraints(ca=kind != "not-ca", path_length=None if kind == "not-ca" else 0),
@@ -226,16 +330,34 @@ def semantic_ca(kind: str):
         "eku-serverauth-only": x509.ExtendedKeyUsage([EKU.SERVER_AUTH]),
         "eku-codesigning": x509.ExtendedKeyUsage([EKU.CODE_SIGNING]),
         "eku-server-and-client": x509.ExtendedKeyUsage([EKU.SERVER_AUTH, EKU.CLIENT_AUTH]),
-        "eku-anyeku": x509.ExtendedKeyUsage([x509.ObjectIdentifier("2.5.29.37.0")]),
+        "eku-anyeku": x509.ExtendedKeyUsage([any_eku]),
+        "eku-anyeku-server-and-client": x509.ExtendedKeyUsage([any_eku, EKU.SERVER_AUTH, EKU.CLIENT_AUTH]),
+        "eku-anyeku-and-serverauth": x509.ExtendedKeyUsage([any_eku, EKU.SERVER_AUTH]),
+        "eku-serverauth-and-codesigning": x509.ExtendedKeyUsage([EKU.SERVER_AUTH, EKU.CODE_SIGNING]),
+        "eku-unknown-oid": x509.ExtendedKeyUsage([x509.ObjectIdentifier("1.2.3.4.5")]),
+        "eku-anyeku-and-unknown": x509.ExtendedKeyUsage([any_eku, x509.ObjectIdentifier("1.2.3.4.5")]),
         "eku-critical-server-and-client": x509.ExtendedKeyUsage([EKU.SERVER_AUTH, EKU.CLIENT_AUTH]),
         "certificate-policies-critical": x509.CertificatePolicies(
             [x509.PolicyInformation(x509.ObjectIdentifier("2.5.29.32.0"), None)]
         ),
         "ski-not-sha1": x509.SubjectKeyIdentifier(os.urandom(20)),
+        "crl-distribution-points-critical": x509.CRLDistributionPoints(
+            [x509.DistributionPoint([x509.UniformResourceIdentifier("http://crl.invalid/ca.crl")], None, None, None)]
+        ),
+        "empty-subject-critical-san": x509.SubjectAlternativeName([x509.DNSName("ca.invalid")]),
+        "policy-mappings-critical": x509.UnrecognizedExtension(x509.ObjectIdentifier("2.5.29.33"), b"\x30\x00"),
     }.get(kind)
     if extra is not None:
         builder = builder.add_extension(
-            extra, critical=kind in ("eku-critical-server-and-client", "certificate-policies-critical")
+            extra,
+            critical=kind
+            in (
+                "eku-critical-server-and-client",
+                "certificate-policies-critical",
+                "crl-distribution-points-critical",
+                "empty-subject-critical-san",
+                "policy-mappings-critical",
+            ),
         )
     constraint = {
         "name-constraints-exclude-all": x509.NameConstraints(
@@ -316,6 +438,18 @@ def stage_semantic_prepared(kind: str) -> dict:
         pathlib.Path(staged["client_cert"]).write_bytes(kea_tls._cert_pem(leaf))
         pathlib.Path(staged["client_key"]).write_bytes(kea_tls._key_pem(client_key))
     return staged
+
+
+def replace_live_ca():
+    """A NEW Jen CA at the live paths - the certificate and the key ONLY: the client pair and the server copies stay from the CA before, which is what "the CA changed underneath" looks like. (Q197, AM6 a:
+    the product replaces a CA only through a staged rotation - `stage_rotation`, probes, `commit_rotation` - and no longer has an `ensure_ca(force=True)`; a test that needs the CA ALONE to change
+    builds it here.)"""
+    key = kea_tls._new_key()
+    cert = kea_tls._build_ca(key, "Jen Kea CA replaced underneath")
+    crt, key_path = kea_tls.ca_paths()
+    pathlib.Path(key_path).write_bytes(kea_tls._key_pem(key))
+    pathlib.Path(crt).write_bytes(kea_tls._cert_pem(cert))
+    return cert, key
 
 
 def apply_state(state: str, cert_path, key_path, *, which: str, client: bool, ca_key_for_mismatch=None):

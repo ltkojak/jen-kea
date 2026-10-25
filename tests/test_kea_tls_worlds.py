@@ -65,6 +65,8 @@ def _worlds() -> list[World]:
     out += [World("ca_semantic", s, "ca") for s in worlds.SEMANTIC_CA_STATES]
     # Q196 (AL1): the VERIFIER rows - a CA that parses, pairs, is a CA by purpose and validity, and a real verifier still rejects what Jen issues from it, for one purpose or for both
     out += [World("ca_verifier", s, "ca") for s in worlds.VERIFIER_CA_STATES]
+    # Q197: the shapes Jen's verifier is STRICTER about than OpenSSL (the admin guide's table) are damaged CAs too - the same flows, one row each
+    out += [World("ca_verifier", s, "ca") for s in worlds.VERIFIER_STRICTER_STATES]
     out += [
         World("client_pem", s, "client")
         for s in ("absent", "malformed", "unreadable", "mismatched", "earlier-jen", "other-ca", "invalid-key")
@@ -79,7 +81,7 @@ def _worlds() -> list[World]:
         out += [World(role, s, "aux") for s in ("valid", "malformed", "mismatched")]
     out += [World("server.stale", "present", "aux"), World("server.unknown", "present", "aux")]
     out += [World("next", "consistent", "aux")]
-    out += [World("next_ca_verifier", s, "aux") for s in worlds.VERIFIER_CA_STATES]
+    out += [World("next_ca_verifier", s, "aux") for s in worlds.VERIFIER_CA_STATES + worlds.VERIFIER_STRICTER_STATES]
     out += [
         World("next_ca_semantic", s, "aux") for s in worlds.SEMANTIC_CA_STATES
     ]  # (a prepared CA that cannot sign, with a client certificate it correctly signed)
@@ -404,9 +406,9 @@ MATRIX_READERS = {
         "load_cert",
         "load_key",
     },  # Q194 (AJ1): the ONE judgment of CA material - the `ca_semantic` / `next_ca_semantic` worlds, and since Q196 the `ca_verifier` / `next_ca_verifier` rows
-    "openssl_second_opinion": {
+    "_write_public_pem": {
         "open",
-    },
+    },  # Q197 (AM3): the one place the CLI's throwaway PUBLIC certificates are written - the gate (`openssl_gate_rejection`) and the opinion (`openssl_second_opinion`) both go through it
     "_ca_material_for_opinion": {
         "load_cert",
         "load_key",
@@ -1087,3 +1089,64 @@ class TestTheSecondPassOfQ193:
     )
     def test_row_8_a_probe_error_is_classified_by_its_text_not_by_the_host_name_in_it(self, err, expected):
         assert infra._probe_fault_class(err) == expected, err
+
+
+class TestEveryValueFamilyIsARow:
+    """Q197 (AM1, the enumeration rule): an extension class is built with EVERY distinct value family it has, never only once with a default value. The first pre-reviewer pass's table had no row for
+    anyExtendedKeyUsage alone or an AuthorityKeyIdentifier that names another key because each class was built once; this is the test that says the rows exist, are built, and are judged."""
+
+    TABLES = (
+        "SEMANTIC_CA_STATES",
+        "OPERATOR_CA_STATES",
+        "VERIFIER_CA_STATES",
+        "VERIFIER_OK_STATES",
+        "VERIFIER_STRICTER_STATES",
+        "REAL_LEAF_STATES",
+    )
+
+    def test_the_aki_and_eku_families_have_at_least_three_rows_each(self):
+        for family in ("AuthorityKeyIdentifier", "ExtendedKeyUsage"):
+            assert len(worlds.EXTENSION_VALUE_FAMILIES[family]) >= 3, family
+        # ... and at least one healthy row and one damaged row in each, or the family says nothing about the line between them
+        for family in ("AuthorityKeyIdentifier", "ExtendedKeyUsage"):
+            states = set(worlds.EXTENSION_VALUE_FAMILIES[family])
+            assert states & set(worlds.VERIFIER_OK_STATES), family
+            assert states & (
+                set(worlds.VERIFIER_CA_STATES) | set(worlds.SEMANTIC_CA_STATES) | set(worlds.VERIFIER_STRICTER_STATES)
+            ), family
+
+    def test_every_state_of_every_table_is_in_exactly_one_family_and_every_family_state_is_in_a_table(self):
+        in_tables = [s for table in self.TABLES for s in getattr(worlds, table)]
+        in_families = [s for states in worlds.EXTENSION_VALUE_FAMILIES.values() for s in states]
+        assert len(in_tables) == len(set(in_tables)), "a state is in two tables"
+        assert len(in_families) == len(set(in_families)), "a state is in two families"
+        assert set(in_tables) == set(in_families), (
+            f"tables-only: {sorted(set(in_tables) - set(in_families))} families-only: {sorted(set(in_families) - set(in_tables))}"
+        )
+
+    def test_every_state_is_built_and_judged(self, tmp_path):
+        for state in [s for states in worlds.EXTENSION_VALUE_FAMILIES.values() for s in states]:
+            cert, key = worlds.semantic_ca(state)
+            crt, key_path = tmp_path / f"{state}.crt", tmp_path / f"{state}.key"
+            crt.write_bytes(kea_tls._cert_pem(cert))
+            key_path.write_bytes(kea_tls._key_pem(key))
+            verdict, _why = kea_tls.ca_identity(str(crt), str(key_path))
+            assert verdict in ("ok", "damaged"), state
+
+    def test_the_healthy_tables_are_healthy_and_the_others_are_damaged_without_the_cli(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(kea_tls, "_openssl_exe", lambda: None)
+        kea_tls._GATE_VERDICTS.clear()
+        for state in (*worlds.VERIFIER_OK_STATES, *worlds.OPERATOR_CA_STATES):
+            cert, key = worlds.semantic_ca(state)
+            (tmp_path / "c.crt").write_bytes(kea_tls._cert_pem(cert))
+            (tmp_path / "c.key").write_bytes(kea_tls._key_pem(key))
+            assert kea_tls.ca_identity(str(tmp_path / "c.crt"), str(tmp_path / "c.key")) == ("ok", ""), state
+        for state in (*worlds.SEMANTIC_CA_STATES, *worlds.VERIFIER_CA_STATES, *worlds.VERIFIER_STRICTER_STATES):
+            cert, key = worlds.semantic_ca(state)
+            (tmp_path / "c.crt").write_bytes(kea_tls._cert_pem(cert))
+            (tmp_path / "c.key").write_bytes(kea_tls._key_pem(key))
+            assert kea_tls.ca_identity(str(tmp_path / "c.crt"), str(tmp_path / "c.key"))[0] == "damaged", state
+
+    def test_the_release_audit_asks_for_values_not_only_classes(self):
+        audit = pathlib.Path("docs/RELEASE_AUDIT.md").read_text(encoding="utf-8")
+        assert "enumerate values, not only classes" in audit.lower()

@@ -65,7 +65,7 @@ class TestEnsureCa:
 
     def test_a_cert_without_a_key_is_a_damaged_ca_and_nothing_is_created(self, ssl_dir):
         """Q192 (AH2, adjusted): this used to read "a cert without a loadable key counts as absent" and make a NEW CA under whatever https sockets existed. A damaged CA is a recovery
-        condition: `ensure_ca` raises, creates nothing and leaves the certificate byte-equal; only the promotion path (`force`) creates."""
+        condition: `ensure_ca` raises, creates nothing and leaves the certificate byte-equal; a CA is replaced only by a staged rotation."""
         r = kea_tls.ensure_ca()
         before = pathlib.Path(r["cert"]).read_bytes()
         os.remove(r["key"])
@@ -74,11 +74,16 @@ class TestEnsureCa:
             kea_tls.ensure_ca()
         assert pathlib.Path(r["cert"]).read_bytes() == before and not os.path.exists(r["key"])
         assert not os.path.exists(r["cert"] + ".prev")
-        assert kea_tls.ensure_ca(force=True)["created"] is True
+        with pytest.raises(TypeError):
+            removed = {"force": True}
+            kea_tls.ensure_ca(**removed)  # Q197 (AM6 a): the pre-Q188 `force` path is gone
 
-    def test_force_rotates(self, ssl_dir):
+    def test_a_staged_rotation_replaces_the_ca(self, ssl_dir):
         a = kea_tls.load_cert(kea_tls.ensure_ca()["cert"]).serial_number
-        b = kea_tls.load_cert(kea_tls.ensure_ca(force=True)["cert"]).serial_number
+        kea_tls.commit_rotation(
+            kea_tls.stage_rotation()
+        )  # the only way the product replaces a CA: stage, (probe,) commit
+        b = kea_tls.load_cert(kea_tls.ca_paths()[0]).serial_number
         assert a != b
 
 
@@ -173,7 +178,9 @@ class TestClientCert:
     def test_reissued_when_the_ca_changed_underneath(self, ssl_dir):
         kea_tls.ensure_ca()
         first = kea_tls.load_cert(kea_tls.issue_client_cert()["cert"]).serial_number
-        kea_tls.ensure_ca(force=True)
+        from tests import _tls_worlds as worlds
+
+        worlds.replace_live_ca()
         assert kea_tls.client_cert_ok() is False
         second = kea_tls.load_cert(kea_tls.issue_client_cert()["cert"]).serial_number
         assert first != second
@@ -186,8 +193,10 @@ class TestRotate:
         old_client = kea_tls.issue_client_cert()["cert"]
         old_server = kea_tls.issue_server_cert(SERVER, "dhcp4", "10.0.0.6")
         old_client_cert = kea_tls.load_cert(old_client)
-        r = kea_tls.rotate_ca()
-        assert r["ca"]["created"] and r["client"]["issued"]
+        kea_tls.commit_rotation(
+            kea_tls.stage_rotation()
+        )  # (Q197, AM6 a: `rotate_ca()` is gone - the staged set replaces the CA AND the client pair, as one set)
+        assert kea_tls.ca_state() == ("ok", "")
         new_ca = kea_tls.load_cert(kea_tls.ca_paths()[0])
         # InvalidSignature when the (same-named) new CA's key doesn't verify
         # the old leaf; ValueError if the subject names differ (a rotation
@@ -262,3 +271,43 @@ class TestStagedRotation:
         assert not any(os.path.exists(p) for p in staged.values())
         assert kea_tls.load_cert(kea_tls.ca_paths()[0]).serial_number == old
         kea_tls.discard_rotation(staged)  # idempotent
+
+
+class TestTheUnsafeReplacementPathIsGone:
+    """Q197 (AM6 a): `rotate_ca()` and `ensure_ca(force=True)` were the pre-Q188 path that replaced a CA in place, outside the staged set (stage, probe, commit). Nothing in the product has called them
+    since Q188; they are deleted, and this walks the WHOLE tree so a caller cannot return."""
+
+    ROOTS = ("jen", "tests", "tools", "plugins")
+
+    @staticmethod
+    def _trees():
+        import pathlib
+
+        root = pathlib.Path(__file__).resolve().parent.parent
+        for base in TestTheUnsafeReplacementPathIsGone.ROOTS:
+            for path in sorted((root / base).rglob("*.py")):
+                if "__pycache__" in path.parts:
+                    continue
+                yield path.relative_to(root).as_posix(), path.read_text(encoding="utf-8")
+
+    def test_no_function_named_rotate_ca_exists_and_ensure_ca_has_no_force(self):
+        import inspect
+
+        assert not hasattr(kea_tls, "rotate_ca")
+        assert "force" not in inspect.signature(kea_tls.ensure_ca).parameters
+
+    def test_no_caller_passes_force_true_to_ensure_ca_or_calls_rotate_ca(self):
+        import ast
+
+        offenders = []
+        for name, source in self._trees():
+            for node in ast.walk(ast.parse(source)):
+                if isinstance(node, ast.Call):
+                    callee = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
+                    if callee == "rotate_ca":
+                        offenders.append(f"{name}:{node.lineno} calls rotate_ca")
+                    if callee == "ensure_ca" and any(k.arg == "force" for k in node.keywords):
+                        offenders.append(f"{name}:{node.lineno} passes force= to ensure_ca")
+                if isinstance(node, ast.FunctionDef) and node.name == "rotate_ca":
+                    offenders.append(f"{name}:{node.lineno} defines rotate_ca")
+        assert not offenders, offenders

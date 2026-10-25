@@ -2366,6 +2366,126 @@ def q196_al2_one_daemon_is_one_rotation_target():
     return out
 
 
+def q197_am1_the_daemons_verifier_judges_at_the_gate():
+    """A CA by (what `ca_state` says with no `openssl` CLI on the box, what it says when the CLI is there and REJECTS a leaf). The two coded divergences (anyExtendedKeyUsage alone; a self-issued root whose
+    AuthorityKeyIdentifier names another key) are damaged either way; a CA both judges accept is damaged only where the CLI rejects it."""
+    import pathlib
+
+    from tests import _tls_worlds as worlds
+
+    rejects = (
+        2,
+        "CN=probe\nerror 26 at 1 depth lookup: unsuitable certificate purpose\nerror probe.pem: verification failed\n",
+    )
+    out = {}
+    for kind in (
+        "jen's own",
+        "eku-anyeku",
+        "aki-not-ski",
+        "eku-anyeku-server-and-client",
+        "aki-keyid-matches-ski",
+        "aki-wrong-serial",
+    ):
+        row = []
+        for cli in ("absent", "rejects"):
+            with contextlib.ExitStack() as stack:
+                kea_tls, _directory, _ = _tls_lab(stack)
+                if kind != "jen's own":
+                    cert_pem, key_pem = worlds.semantic_ca_pem(kind)
+                    crt, key = kea_tls.ca_paths()
+                    pathlib.Path(crt).write_bytes(cert_pem)
+                    pathlib.Path(key).write_bytes(key_pem)
+                if cli == "absent":
+                    stack.enter_context(mock.patch.object(kea_tls, "_openssl_exe", lambda: None))
+                else:
+                    stack.enter_context(mock.patch.object(kea_tls, "_openssl_exe", lambda: "/usr/bin/openssl"))
+                    stack.enter_context(mock.patch.object(kea_tls, "_run_openssl", lambda args, timeout: rejects))
+                kea_tls._ORACLE_VERDICTS.clear()
+                kea_tls._GATE_VERDICTS.clear()
+                row.append(kea_tls.ca_state()[0])
+        out[kind] = tuple(row)
+    return out
+
+
+def q197_am2_a_name_the_ca_cannot_sign_for_is_a_name_refusal_not_a_damaged_ca():
+    """(exception class, the names that failed) for a leaf Jen is asked to issue: a HEALTHY CA that cannot sign for a name is `NameRefused`; a CA the verifier rejects is `CaDamaged`."""
+    import pathlib
+
+    from tests import _tls_worlds as worlds
+
+    cases = {
+        "ip outside the permitted range": ("name-constraints-ip-outside", "10.0.0.5", "10.0.0.5"),
+        "ssh host outside the permitted domain": (
+            "name-constraints-permit-own-domain",
+            "10.0.0.5",
+            "kea-a.elsewhere.net",
+        ),
+        "a host with an underscore": ("jen's own", "kea_host", "10.0.0.5"),
+        "a host with a trailing dot": ("jen's own", "kea-a.", "10.0.0.5"),
+        "a damaged CA": ("eku-anyeku", "10.0.0.5", "10.0.0.5"),
+        "a name the CA permits": ("name-constraints-permit-own-domain", "10.0.0.5", "kea-a.example.com"),
+    }
+    out = {}
+    for label, (kind, bind, ssh_host) in cases.items():
+        with contextlib.ExitStack() as stack:
+            kea_tls, _directory, _ = _tls_lab(stack)
+            if kind != "jen's own":
+                cert_pem, key_pem = worlds.semantic_ca_pem(kind)
+                crt, key = kea_tls.ca_paths()
+                pathlib.Path(crt).write_bytes(cert_pem)
+                pathlib.Path(key).write_bytes(key_pem)
+            try:
+                kea_tls.issue_server_cert({"id": 9, "name": "probe", "ssh_host": ssh_host}, "dhcp4", bind, commit=False)
+                out[label] = ("issued", [])
+            except kea_tls.NameRefused as e:
+                out[label] = ("NameRefused", e.names)
+            except kea_tls.CaDamaged:
+                out[label] = ("CaDamaged", [])
+    return out
+
+
+def q197_am5_one_daemon_two_records_at_the_setup():
+    """The NAME of another record that already holds a Jen-issued certificate for this daemon on the same SSH host ("" when there is none)."""
+    out = {}
+    cases = {
+        "no other record": ("10.0.0.5", None, "dhcp4", "dhcp4"),
+        "another record on the same host": ("10.0.0.5", "10.0.0.5", "dhcp4", "dhcp4"),
+        "another record on another host": ("10.0.0.5", "10.0.0.9", "dhcp4", "dhcp4"),
+        "the other service of the same host": ("10.0.0.5", "10.0.0.5", "dhcp6", "dhcp4"),
+        "a trailing dot is a different name": ("kea-a", "kea-a.", "dhcp4", "dhcp4"),
+    }
+    for label, (mine, theirs, held_service, asked_service) in cases.items():
+        with contextlib.ExitStack() as stack:
+            kea_tls, _directory, _ = _tls_lab(stack)
+            a = {"id": 1, "name": "kea-a", "ssh_host": mine}
+            servers = [a]
+            if theirs is not None:
+                b = {"id": 2, "name": "kea-b", "ssh_host": theirs}
+                kea_tls.issue_server_cert(b, held_service, "10.9.9.2")
+                servers.append(b)
+            out[label] = kea_tls.other_record_on_same_daemon(a, asked_service, servers)
+    return out
+
+
+def q197_am4_stale_records_are_listed_and_forgotten_locally():
+    """(stale identifiers before, forgotten, stale after, whether a live endpoint's record survives): a copy for an endpoint that is no longer https is stale; forgetting asks no host anything."""
+    with contextlib.ExitStack() as stack:
+        kea_tls, _directory, _ = _tls_lab(stack)
+        live = {"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5"}
+        gone = {"id": 7, "name": "retired", "ssh_host": "10.0.0.7"}
+        kea_tls.issue_server_cert(live, "dhcp4", "10.0.0.5")
+        kea_tls.issue_server_cert(gone, "dhcp4", "10.0.0.7")
+
+        def url_for(server, service):
+            return "https://10.0.0.5:8004" if (server["id"], service) == (1, "dhcp4") else ""
+
+        before = kea_tls.rotation_inventory([live], url_for=url_for, prove_storage=False).stale
+        forgotten = kea_tls.forget_stale_records([live], url_for=url_for)
+        after = kea_tls.rotation_inventory([live], url_for=url_for, prove_storage=False).stale
+        survives = kea_tls.record_state(1, "dhcp4")[0]
+        return (before, forgotten, after, survives)
+
+
 def q185_aa3_a_trailing_no_break_space_is_refused_and_ordinary_padding_is_not():
     from jen.services import auth
 
@@ -2424,6 +2544,7 @@ SCENARIOS = {
             "q194_",
             "q195_",
             "q196_",
+            "q197_",
         )
     )
     and callable(fn)
@@ -2739,6 +2860,30 @@ EXPECTED = {
         "name-constraints-exclude-all": ("damaged", True),
         "name-constraints-permit-own-domain": ("ok", False),
     },
+    "q197_am1_the_daemons_verifier_judges_at_the_gate": {
+        "jen's own": ("ok", "damaged"),
+        "eku-anyeku": ("damaged", "damaged"),
+        "aki-not-ski": ("damaged", "damaged"),
+        "eku-anyeku-server-and-client": ("ok", "damaged"),
+        "aki-keyid-matches-ski": ("ok", "damaged"),
+        "aki-wrong-serial": ("damaged", "damaged"),
+    },
+    "q197_am2_a_name_the_ca_cannot_sign_for_is_a_name_refusal_not_a_damaged_ca": {
+        "ip outside the permitted range": ("NameRefused", ["10.0.0.5"]),
+        "ssh host outside the permitted domain": ("NameRefused", ["kea-a.elsewhere.net"]),
+        "a host with an underscore": ("NameRefused", ["kea_host"]),
+        "a host with a trailing dot": ("NameRefused", ["kea-a."]),
+        "a damaged CA": ("CaDamaged", []),
+        "a name the CA permits": ("issued", []),
+    },
+    "q197_am5_one_daemon_two_records_at_the_setup": {
+        "no other record": "",
+        "another record on the same host": "kea-b",
+        "another record on another host": "",
+        "the other service of the same host": "",
+        "a trailing dot is a different name": "",
+    },
+    "q197_am4_stale_records_are_listed_and_forgotten_locally": (["7-dhcp4"], ["7-dhcp4"], [], "jen"),
     "q196_al2_one_daemon_is_one_rotation_target": {
         "distinct hosts": (2, 0, False),
         "same host and service": (2, 1, False),

@@ -330,9 +330,36 @@ def valid_api_url(url: str, require_port: bool = False) -> bool:
         return False
     if p.scheme not in ("http", "https") or not p.hostname or not _plain_host(p.hostname):
         return False
+    if dns_name_sentence(value, require_port):
+        return False  # Q197 (AM2): an https address in direct mode must carry a name the certificate verifier accepts - else no certificate Jen issues could be for it
     if "@" in p.netloc:
         return False  # Q190 (AF2, CRED-005): a URL never carries a user name or a password - the credential rule's fields are the only place a Kea password lives
     return not (require_port and port is None)
+
+
+DNS_NAME_SENTENCE = (
+    "The certificate verifier does not accept this as a DNS name (an underscore, a trailing dot, an empty or over-long label or a hyphen at the edge of a label cannot appear in a certificate Jen "
+    "issues): use a name without them, or the server's address."
+)
+
+
+def dns_name_sentence(url, require_port: bool = False) -> str:
+    """`DNS_NAME_SENTENCE` when `url` is an https address in direct mode (`require_port`) whose host the certificate verifier's own DNS-name parser does not accept, else "" (Q197, AM2). The two
+    definitions - what a form saves and what a certificate can carry - agree before a leaf is attempted; an address already saved gets `NameRefused`'s sentence at the setup."""
+    from urllib.parse import urlparse
+
+    if not require_port:
+        return ""
+    try:
+        parsed = urlparse(str(url or "").strip(_PADDING))
+        host = parsed.hostname
+    except ValueError:
+        return ""
+    if parsed.scheme != "https" or not host:
+        return ""
+    from jen.services import kea_tls
+
+    return "" if kea_tls.verifier_accepts_name(host) else DNS_NAME_SENTENCE
 
 
 USERINFO_SENTENCE = "The address carries a user name or password. A URL never carries a password - put the user name and password in their own fields, and leave them out of the address."

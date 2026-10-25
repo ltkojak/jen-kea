@@ -513,6 +513,9 @@ S10_ALLOWED = {
     ("jen/services/access.py", "filter_client_view.ok", "(TypeError, ValueError)", "return False"): (
         "an unreadable subnet id is NOT in the accessible set: the row is hidden"
     ),
+    ("jen/services/auth.py", "dns_name_sentence", "ValueError", 'return ""'): (
+        "an address `urlparse` cannot parse gets no DNS-name SENTENCE, and `valid_api_url` - which parses the same address first and refuses it on its own `ValueError` before it ever calls this - has already said no; the sentence only chooses which refusal to show (Q197, AM2)"
+    ),
     ("jen/services/auth.py", "userinfo_sentence", "ValueError", 'return ""'): (
         "an address `urlsplit` cannot parse gets no user-info SENTENCE, and `valid_api_url` - which refuses it first on its own `ValueError` - has already said no; the sentence only chooses which refusal to show (Q190)"
     ),
@@ -898,6 +901,7 @@ _S14_SAFE_CALLEES = {
     "len",
     "bool",
     "userinfo_sentence",
+    "dns_name_sentence",  # a fixed sentence about the host, never the address (Q197, AM2)
 }  # what turns an address into something that cannot carry user-info
 
 

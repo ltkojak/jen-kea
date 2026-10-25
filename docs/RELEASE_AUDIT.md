@@ -184,6 +184,14 @@ the procedure that replaces it. It runs on every tagged beta BEFORE the archive 
 5. **The two reports are reconciled against each other and the tree before anything is said:** each finding confirmed or refuted with `file:line`, by source; a clean pass is NECESSARY,
    not sufficient - the reviewer still reads.
 6. **A review's findings become ONE Q,** with the class the findings belong to named and closed (see "the terminal check" under (q)), never one beta per finding.
+7. **Enumerate VALUES, not only classes.** An extension class is built with EVERY distinct value family it has, never once with a default value. The first run of this pass (5.69.0-beta.27, two
+   agents, ~1 400 cells over 135 CA shapes enumerated from the library's own extension classes) had no row for `anyExtendedKeyUsage` alone or for an AuthorityKeyIdentifier that names another key,
+   because each class was built once with a default value - and both were shapes the daemon's library rejects and Jen's verifier accepted. `tests/_tls_worlds.py::EXTENSION_VALUE_FAMILIES` is the
+   list for a CA certificate (the AKI and EKU families have at least three rows each, a test says so), and `TestTheValueFamiliesAgainstTheRealCli` runs every row against `openssl verify`: the one
+   property that matters is that **a CA Jen calls healthy is never one the CLI rejects**; every shape where Jen is stricter is in the admin guide's table, and a new disagreement fails a test.
+8. **When the two agents disagree, an independent reproduction decides** - never the more confident report and never a vote. In beta.27 the second agent found two shapes Jen called healthy while both
+   real stacks rejected them; the first agent's table had no row for either, so its "the P1 class is empty" was refuted for those two and confirmed otherwise. The author executed both against
+   `openssl verify` and a live handshake, and that, not either report, settled it.
 
 **The exit rule.** Promotion is judged against Jen's threat model (`docs/ARCHITECTURE.md`): a P1 in a supported configuration blocks and gets a Q; a finding that requires the operator to
 have hand-corrupted Jen's own identity or state files is a P2 in this model - registered, shipped as a stable PATCH if it proves to matter, never another beta. A finding after promotion

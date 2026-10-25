@@ -272,6 +272,8 @@ class TestTheKeaCaRotationIsOneSet:
         monkeypatch.setattr(kea_tls, "ca_paths", lambda: (str(tmp_path / "ca.crt"), str(tmp_path / "ca.key")))
         first = kea_tls.ensure_ca()
         assert first["created"] is True
+        monkeypatch.setattr(kea_tls, "client_paths", lambda: (str(tmp_path / "c.pem"), str(tmp_path / "c.key")))
+        staged = kea_tls.stage_rotation()  # the new set, staged BESIDE the live one
         before = ((tmp_path / "ca.crt").read_bytes(), (tmp_path / "ca.key").read_bytes())
         real = os.replace
 
@@ -282,7 +284,9 @@ class TestTheKeaCaRotationIsOneSet:
 
         monkeypatch.setattr(os, "replace", failing)
         with pytest.raises(OSError):
-            kea_tls.ensure_ca(force=True)
+            kea_tls.commit_rotation(
+                staged
+            )  # (Q197, AM6 a: `ensure_ca(force=True)` is gone - the promotion is the only replacement)
         monkeypatch.setattr(os, "replace", real)
         assert ((tmp_path / "ca.crt").read_bytes(), (tmp_path / "ca.key").read_bytes()) == before, (
             "a new key was NOT left beside the old certificate"

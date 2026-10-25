@@ -1148,7 +1148,14 @@ def _kea_tls_expiry(ctx) -> Check:
         # Q189 (AE1): a directory that cannot be listed is UNKNOWN, not "none issued" - the expiry of every server certificate in it cannot be watched
         copies = []
         unlisted = f"Jen could not read its certificate directory ({type(e).__name__}), so the expiry of the server certificates it issued is unknown"
+    # Q197 (AM4): a copy whose endpoint is not an https endpoint now (the inventory's `stale`) is not a valid certificate and not an expiring one - Rotate ignores it, so does the count, and the row says so
+    inventory = kea_tls.rotation_inventory(extensions.KEA_SERVERS, prove_storage=False)
+    stale_ids = set(inventory.stale)
+    stale_records = []
     for copy in copies:
+        if f"{copy['server_id']}-{copy['service']}" in stale_ids:
+            stale_records.append(f"{_server_name_by_id(copy['server_id'])} kea-{copy['service']}")
+            continue
         items.append((f"{_server_name_by_id(copy['server_id'])} kea-{copy['service']}", copy["days_left"]))
 
     expired = [(n, d) for n, d in items if d is not None and d < 0]
@@ -1176,9 +1183,12 @@ def _kea_tls_expiry(ctx) -> Check:
         # (Q189, second pass, finding 8) a certificate that cannot be read has no expiry to watch - it is not counted as valid
         c.status = "fail" if c.status == "fail" else "warn"
         c.detail += f" — the certificate for {', '.join(unreadable)} cannot be read, so its expiry is unknown"
-    refused = kea_tls.rotation_inventory(
-        extensions.KEA_SERVERS, prove_storage=False
-    ).refusals  # (Q194: Health only reads - it creates no directory)
+    refused = inventory.refusals  # (Q194: Health only reads - it creates no directory)
+    if stale_records:
+        c.detail += (
+            f" — stale record for {', '.join(stale_records)} (its endpoint is no longer https): Rotate ignores it; "
+            "remove the socket's record under Settings → Kea, or forget it there, to clear this"
+        )
     if refused:
         # an https endpoint Jen has no complete record of: the Settings page says Rotate would be refused, and so does this row
         c.status = "fail" if c.status == "fail" else "warn"

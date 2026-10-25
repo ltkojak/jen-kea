@@ -799,6 +799,33 @@ CA Jen never adopted and won't answer Jen. Run **Set up direct socket**
 (https) for that daemon again — it re-issues from the current CA and
 re-pushes — and the server is back.
 
+### Health says the Kea CA is damaged, or the https setup says Jen's CA "is healthy, but it cannot issue a certificate ..." (v5.69.0)
+
+Two different sentences, two different problems.
+
+**"Jen's CA is damaged (...)"** means the CA at `/etc/jen/ssl/kea-ca.crt` / `kea-ca.key` fails a check, and the
+sentence says which: it is expired, is not marked as a CA, cannot sign, or a verifier rejects what Jen would issue
+from it. Where the `openssl` command is installed on the Jen host it judges the CA too (`openssl verify -purpose
+sslserver` and `sslclient`), and a rejection reads "the daemon's own library rejects certificates issued from it for
+sslserver: ..." with `openssl`'s own line. Two shapes both Jen's verifier and `openssl` reject are an Extended Key
+Usage that is `anyExtendedKeyUsage` alone, and a self-issued CA whose Authority Key Identifier names a key other
+than its own. Restore the CA files from a backup, or replace the CA with **Rotate Kea CA** and tick the
+acknowledgement (a server that fails part-way cannot be put back on a damaged CA).
+
+**"Jen's CA is healthy, but it cannot issue a certificate the verifier accepts for *name*"** means the CA is fine: its
+name constraints do not permit that address or host name (or the host name is one a certificate cannot carry, such
+as one with an underscore or a trailing dot). Nothing was changed on the host and no acknowledgement is needed:
+change the address, or replace the CA with **Rotate Kea CA**.
+
+**"stale record for *server* kea-*service* (its endpoint is no longer https)"** in the Kea mTLS Health row is a
+certificate Jen kept for a socket that has since been removed or changed to http. Rotate ignores it. Remove the
+socket's record under Settings → Kea, or press **Forget stale records** on the Kea CA card (a superadmin; it
+changes nothing on any host).
+
+**"*kea-b* already manages kea-dhcp4 on *host*: one daemon, two records"** means two server records name the same
+SSH host and already hold a certificate for the same service; the second https setup would replace the first's
+certificate. Remove or re-point one of the records.
+
 ### A red "migration failed — not enabled" / "not loaded" chip on the Plugins page (v5.28.1)
 
 One of a plugin's own `db_migrations` failed to apply — a schema

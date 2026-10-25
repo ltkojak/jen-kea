@@ -187,7 +187,7 @@ def _kea_ca_summary() -> dict:
         # a [kea] api_ca whose certificates do not include Jen's = the operator brought their own CA (Q190, AF1: decided by certificate identity, never by comparing paths)
         "external_ca": bool(extensions.KEA_API_CA) and kea_tls.trust_includes_jens_ca() is False,
     }
-    out["external"], out["refused"] = [], []
+    out["external"], out["refused"], out["stale"] = [], [], []
     if present or ca_state == "damaged":
         # Q189 (AE1): what Rotate will do is the INVENTORY (every https endpoint Jen dials), not the listing of local copy files
         inventory = kea_tls.rotation_inventory(
@@ -203,6 +203,10 @@ def _kea_ca_summary() -> dict:
             )
         out["external"] = list(inventory.external)
         out["refused"] = list(inventory.refusals)
+        for ident in inventory.stale:
+            sid, _sep, svc = ident.partition("-")
+            owner = next((s for s in extensions.KEA_SERVERS if str(s.get("id")) == sid), None)
+            out["stale"].append(f"{(owner or {}).get('name') or 'server ' + sid} kea-{svc}")
     return out
 
 
@@ -482,6 +486,9 @@ def save_infra_kea():
     if __auth.userinfo_sentence(api_url):
         flash(__auth.userinfo_sentence(api_url), "error")  # Q190 (AF2, CRED-005)
         return redirect(url_for("settings.settings_kea"))
+    if __auth.dns_name_sentence(api_url, require_port=(connection_mode == "direct")):
+        flash(__auth.dns_name_sentence(api_url, require_port=True), "error")  # Q197 (AM2)
+        return redirect(url_for("settings.settings_kea"))
     if not __auth.valid_api_url(api_url, require_port=(connection_mode == "direct")):
         if connection_mode == "direct":
             flash(
@@ -633,6 +640,9 @@ def save_infra_kea6():
 
     if api_url and __auth.userinfo_sentence(api_url):
         flash(__auth.userinfo_sentence(api_url), "error")  # Q190 (CRED-005)
+        return redirect(url_for("settings.settings_kea"))
+    if api_url and __auth.dns_name_sentence(api_url, require_port=__caps.is_direct()):
+        flash(__auth.dns_name_sentence(api_url, require_port=True), "error")  # Q197 (AM2)
         return redirect(url_for("settings.settings_kea"))
     if api_url and not __auth.valid_api_url(api_url, require_port=(__caps.is_direct())):
         if __caps.is_direct():
@@ -795,6 +805,9 @@ def save_infra_d2():
 
     if api_url and __auth.userinfo_sentence(api_url):
         flash(__auth.userinfo_sentence(api_url), "error")  # Q190 (CRED-005)
+        return redirect(url_for("settings.settings_kea"))
+    if api_url and __auth.dns_name_sentence(api_url, require_port=__caps.is_direct()):
+        flash(__auth.dns_name_sentence(api_url, require_port=True), "error")  # Q197 (AM2)
         return redirect(url_for("settings.settings_kea"))
     if api_url and not __auth.valid_api_url(api_url, require_port=(__caps.is_direct())):
         if __caps.is_direct():
@@ -2393,6 +2406,15 @@ def setup_direct_socket(server_id, service):
             return back
         if _refused_for_many_sockets(need_read=True):
             return back
+        twin = __tls.other_record_on_same_daemon(server, service, extensions.KEA_SERVERS)
+        if twin:
+            # Q197 (AM5): the rule the rotation applies (one daemon is one target) applied where the world is MADE - before any local or remote change
+            flash(
+                f"{twin} already manages {daemon} on {server.get('ssh_host')}: one daemon, two records - the certificate Jen installs now would replace the one that record holds. "
+                f"Remove or re-point one of them first. Nothing was changed on {name}.",
+                "error",
+            )
+            return back
         remote = __tls.remote_tls_paths(service)
         entry = build_control_socket(scheme, address, port, user, password, tls=remote)
         # Q188 (AD9): a re-run whose socket is ALREADY in the daemon's config changes nothing and restarts nothing - new files written under it would not be loaded until the next restart (and then
@@ -2412,6 +2434,14 @@ def setup_direct_socket(server_id, service):
             __tls.ensure_ca()
             client_issued = __tls.issue_client_cert()
             files = None if already_there else __tls.issue_server_cert(server, service, address, commit=False)
+        except __tls.NameRefused as e:
+            # Q197 (AM2): a HEALTHY CA that cannot issue for this name is not a damaged CA - the acknowledgement is never named, and the sentence names the SAN that failed (the bind address OR the SSH host's name)
+            flash(
+                f"Jen's CA is healthy, but it cannot issue a certificate the verifier accepts for {', '.join(e.names)} ({e.why}): change the address Jen dials, or replace the CA with "
+                f"Rotate Kea CA (no acknowledgement is needed - the CA is not damaged). Nothing was changed on {name}.",
+                "error",
+            )
+            return back
         except __tls.CaDamaged as e:
             flash(
                 f"Jen's CA is damaged ({e.why}): {__tls.DAMAGED_CA_ADVICE}. Nothing was changed on {name}.",
@@ -2827,6 +2857,12 @@ def rotate_kea_ca():
                     files = __tls.issue_server_cert(
                         server, service, bind, ca=(staged["ca_cert"], staged["ca_key"]), commit=False
                     )  # Jen's own pair changes only once the host has this one and it answers
+                except __tls.NameRefused as e:
+                    # (Q197, AM2) the CA is healthy; it cannot issue for this server's name - nothing was installed on this target
+                    failure = (
+                        f"{sname} {daemon}: the CA cannot issue its certificate for {', '.join(e.names)} ({e.why})"
+                    )
+                    break
                 except __tls.CaDamaged as e:
                     # (Q196 second pass, row 3) the verifier refused the leaf Jen was about to issue for THIS server's real names - nothing was installed on this target
                     failure = f"{sname} {daemon}: the CA cannot issue its certificate ({e.why})"
@@ -3238,6 +3274,28 @@ def discard_prepared_kea_ca():
     flash("The prepared CA was discarded." if existed else "There was no prepared CA.", "info")
     if existed:
         __user.audit("DISCARD_PREPARED_KEA_CA", "kea_api", "discarded")
+    return redirect(url_for("settings.settings_kea"))
+
+
+@bp.route("/settings/infrastructure/kea-ca/forget-stale", methods=["POST"])
+@login_required
+@_superadmin_required
+@_recent_auth_required(minutes=10)
+@_holding_identity_lock
+def forget_stale_kea_records():
+    """Q197 (AM4) - drop Jen's own copy of every certificate whose endpoint is no longer an https endpoint (the records Rotate already ignores and Health names as stale). A LOCAL change: no host is asked
+    anything and nothing Jen trusts changes."""
+    from jen.services import kea_tls as __tls
+
+    forgotten = __tls.forget_stale_records(extensions.KEA_SERVERS, url_for=_configured_url)
+    if not forgotten:
+        flash("There were no stale certificate records.", "info")
+        return redirect(url_for("settings.settings_kea"))
+    flash(
+        f"Forgot Jen's own copy of {len(forgotten)} certificate(s) whose endpoint is no longer https: {', '.join(forgotten)}. Nothing was changed on any host.",
+        "success",
+    )
+    __user.audit("FORGET_STALE_KEA_RECORDS", "kea_api", f"{len(forgotten)} record(s): {', '.join(forgotten)}")
     return redirect(url_for("settings.settings_kea"))
 
 
@@ -3688,6 +3746,11 @@ def remove_direct_socket(server_id, service):
         # (second pass, Q187, findings 4 and 16) a removal proves only that the socket it removed is gone: it clears the "never answered" note of THAT socket. It proves nothing about whether the
         # daemon runs (a Control Agent can answer while kea-dhcp4 is down), so every other category waits for a probe of the daemon or an acknowledgement.
         __changeset.resolve_attention(server_id, service, categories=("probe-pending",))
+        from jen.services import kea_tls as __tls_records
+
+        __tls_records.discard_local_record(
+            server_id, service
+        )  # Q197 (AM4): the socket is gone, so Jen's copy of the certificate it carried is a record of an endpoint that does not exist
     flash(f"{daemon} on {name}: {'; '.join(changed)}.", "success")
     if lost:
         flash(

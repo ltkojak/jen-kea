@@ -243,16 +243,66 @@ one of your Kea hosts is refused when Jen issues that host's certificate,
 before anything is installed, and the message says which name. A CA with no
 Key Usage extension at all is accepted (that means unrestricted), and so is
 one whose Basic Constraints or Extended Key Usage is not marked critical.
-Jen's verifier is stricter than OpenSSL in a few places it has no switch
-for, and shows these as damaged: a DNS name constraint written with a
-leading dot or a directory-name constraint, and a key that is not P-256,
-P-384, P-521 or RSA of 2048 bits or more (Health then says whether `openssl`
-agrees). Where the `openssl` command exists on the Jen host,
-Health also runs `openssl verify -purpose sslserver` and `-purpose
-sslclient` on the same throwaway certificates and shows a warning if it
-disagrees with Jen's verifier. Two Kea server records that share one SSH
-host and service are one daemon: Rotate refuses them until one record is
-removed or points at its own host.
+Two more shapes are damaged because the Kea daemon's own TLS library
+(OpenSSL) refuses them even though a looser verifier accepts them: an
+Extended Key Usage that is `anyExtendedKeyUsage` alone (or beside only one of
+the two purposes), and a self-issued CA whose Authority Key Identifier names
+a different key from its own Subject Key Identifier.
+
+**Which judge is on duty.** Where the `openssl` command is installed on the Jen
+host, it judges your CA at the gate too: the same throwaway certificates are
+run through `openssl verify -purpose sslserver` and `-purpose sslclient`
+(security level 2, as the daemon runs), and a rejection makes the CA damaged
+with `openssl`'s own line as the reason. Where `openssl` is absent, broken
+or slow, it gives no opinion and Jen's own verifier alone decides. In the
+enumeration run for this release (every extension class with every value
+family a CA certificate has) no CA remained that Jen's verifier accepts and
+`openssl` rejects once the two shapes above were closed; the `openssl` step is
+there so a version difference cannot make one.
+
+**Shapes Jen's verifier is stricter about than OpenSSL.** These are shown as
+damaged although `openssl verify` accepts a certificate issued from them. Jen
+stays strict because it has no switch to relax them and because a daemon built
+with a different library might not accept them either. Health says when
+`openssl` agrees or disagrees.
+
+| Shape | Why Jen refuses it |
+| --- | --- |
+| a leading-dot name constraint (`.lan`) | the verifier reads it as a malformed DNS name constraint |
+| a directoryName name constraint | the verifier does not evaluate directory names |
+| a key on secp256k1 | not P-256, P-384 or P-521 |
+| a key on a Brainpool curve | not P-256, P-384 or P-521 |
+| an Ed25519 or DSA CA | a key type Jen cannot issue from (`openssl` cannot be asked either) |
+| an Authority Key Identifier with the issuer and serial number but no key identifier | the verifier requires the key identifier |
+| a critical CRLDistributionPoints extension on the CA | the verifier rejects the extension |
+| an empty subject with a critical Subject Alternative Name | the verifier needs a non-empty issuer |
+| a critical policyMappings extension | the verifier rejects the extension |
+| a tampered self-signature | the CA's own signature is checked; `openssl` does not check a trust anchor's |
+| no Basic Constraints (a root marked only by Key Usage) | Jen needs `ca=True` stated |
+
+**A CA that is healthy but cannot issue for one address.** A CA whose name
+constraints do not permit the address or host name of one Kea server is not
+damaged. The https setup says so ("Jen's CA is healthy, but it cannot issue a
+certificate the verifier accepts for ..."), names the address that failed (the
+bind address, or the SSH host's name), changes nothing on the host and asks for
+no acknowledgement: change the address, or replace the CA with **Rotate Kea
+CA**. A host name the form saves and a certificate cannot carry (an underscore,
+a trailing dot, an empty label) is refused when you save an https address in
+direct mode.
+
+**Stale certificate records.** When a Kea server's endpoint is no longer
+https (the socket was removed, or the address changed to http), the certificate
+Jen kept for it is a record of nothing: Rotate ignores it, Health does not count
+it as a valid or expiring certificate and says "stale record for ...", and
+removing the socket under Settings → Kea drops it. A superadmin can also press
+**Forget stale records** on the Kea CA card; that is a local change and asks no
+host anything.
+
+Two Kea server records that share one SSH host and service are one daemon:
+Rotate refuses them until one record is removed or points at its own host,
+and an https setup on the second record is refused the same way ("kea-b already
+manages kea-dhcp4 on ...: one daemon, two records"). A dhcp4 and a dhcp6 daemon
+on one host are two daemons.
 
 **Several servers / HA.** Run the form per server. The connection
 mode is global, so after the first kea-dhcp4 switches Jen to direct

@@ -44,6 +44,7 @@ given the inputs except the keys and serial numbers.
 """
 
 import contextlib
+import glob
 import hashlib
 import ipaddress
 import logging
@@ -51,6 +52,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import socket
 import ssl
 import subprocess  # nosec B404 - list-args only, a fixed `openssl verify` second opinion (Q196)
@@ -66,7 +68,10 @@ from cryptography.x509 import verification as x509_verification
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from jen import extensions
-from jen.services.certs import commit_file_set, write_atomically
+from jen.services.certs import (  # noqa: F401 - `write_atomically` is re-exported: the system scenarios and tests write identity files with it
+    commit_file_set,
+    write_atomically,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +152,7 @@ def _hostname() -> str:
         return "jen"
 
 
-def _ensure_dir(path: str, mode: int = 0o750) -> None:
+def _ensure_dir(path: str, mode: int = 0o700) -> None:
     os.makedirs(path, mode=mode, exist_ok=True)
 
 
@@ -248,6 +253,17 @@ class CaDamaged(Exception):
         self.why = why
 
 
+class NameRefused(Exception):
+    """Q197 (AM2): Jen's CA is HEALTHY - the verifier accepts what it issues in general - but it cannot issue a certificate for THIS name (a name constraint that does not permit the address, a host name
+    the verifier's DNS parser does not accept). Distinct from `CaDamaged` on purpose: the damaged-CA sentences send the operator to an acknowledgement for a CA that is not damaged. `.why` is the
+    verifier's message; `.names` the names that failed, each tried alone."""
+
+    def __init__(self, why: str, names: list):
+        super().__init__(why)
+        self.why = why
+        self.names = list(names)
+
+
 def _key_usage_may_be_absent(policy, cert, extension) -> None:
     """The ONE relaxation of the verifier's CA profile (Q194's decision, kept): RFC 5280 says a CA certificate with NO KeyUsage extension is not restricted - an operator's own `openssl req -x509` CA
     often has none and works - so absence passes; a KeyUsage that IS there must allow `keyCertSign`. (The strict profile requires the extension to be present.)"""
@@ -262,11 +278,20 @@ def _basic_constraints_ca_true(policy, cert, extension) -> None:
 
 def _eku_allows_the_purpose(policy, cert, extension) -> None:
     """Relaxing the CRITICALITY of a CA's Extended Key Usage must not relax its MEANING: the chain verifier enforces an EKU as a purpose through this very validator, and replacing it with nothing made
-    a clientAuth-only CA verify for sslserver (executed). The CA's EKU must contain the purpose being verified, or anyExtendedKeyUsage."""
+    a clientAuth-only CA verify for sslserver (executed). The CA's EKU must NAME the purpose being verified. The library also accepts `anyExtendedKeyUsage` as a wildcard; OpenSSL - the
+    DAEMON's library - ignores it on a CA (executed, Q197: `anyEKU` alone, `anyEKU`+serverAuth for a client certificate and `anyEKU`+an unknown purpose all fail `openssl verify -purpose`
+    with "unsuitable certificate purpose"), so a CA that relies on it is a CA the daemon will refuse, and the library's wildcard is not honoured here."""
     if extension is None:
         return  # no EKU on the CA: not restricted
-    if policy.extended_key_usage not in extension and ExtendedKeyUsageOID.ANY_EXTENDED_KEY_USAGE not in extension:
-        raise ValueError("Neither EKU nor anyEKU could be found")
+    if policy.extended_key_usage not in extension:
+        raise ValueError(
+            "its Extended Key Usage does not name this purpose"
+            + (
+                " (anyExtendedKeyUsage does not count: OpenSSL ignores it on a CA)"
+                if ExtendedKeyUsageOID.ANY_EXTENDED_KEY_USAGE in extension
+                else ""
+            )
+        )
 
 
 def _verifier_policies():
@@ -305,7 +330,7 @@ def _probe_names(ca_cert) -> list[str]:
 
 def _verifier_message(error: BaseException) -> str:
     text = str(error) or type(error).__name__
-    for noise in ("validation failed: ", "candidates exhausted: "):
+    for noise in ("validation failed: ", "candidates exhausted: ", "Python extension validator failed: ValueError: "):
         text = text.replace(noise, "")
     text = text.strip()[:200]
     if "Neither EKU nor anyEKU" in text:
@@ -371,64 +396,152 @@ def ca_verifier_rejection(ca_cert, ca_key) -> str:
     return verdict
 
 
-def openssl_second_opinion(timeout: float = 10.0) -> str:
-    """Defence in depth (Q196, AL1): where the `openssl` CLI exists, run `openssl verify -purpose sslserver|sslclient` on the same throwaway leaves and say where it DISAGREES with Jen's verifier ("" when
-    there is no CLI, no CA to judge, or they agree). A disagreement is a warning, never a refusal: the two implementations differ in strictness (OpenSSL accepts a non-critical BasicConstraints, rejects an
-    anyExtendedKeyUsage CA ...) and the operator should know when the daemon's own library may judge the CA differently."""
-    exe = shutil.which("openssl")
-    if not exe or ca_state()[0] == "none":
+def _openssl_exe():
+    """The `openssl` CLI on the Jen host, or None - the ONE place it is looked up. The daemon's own TLS library (OpenSSL) is on the box wherever this answers, and a test that must not depend on it
+    patches THIS."""
+    return shutil.which("openssl")
+
+
+def _run_openssl(args: list, timeout: float):
+    """Run `openssl <args>` and return (exit code, its output), or None when it could not be run or did not finish in `timeout` seconds: NO opinion (Q197, AM3). The child runs in its OWN process
+    group on POSIX and the group is killed at the timeout, so a wrapper's grandchild cannot hold Health for the grandchild's own time; on Windows only the child is killed (a job object is out of
+    scope: Jen runs on Linux only)."""
+    exe = _openssl_exe()
+    if not exe:
+        return None
+    try:
+        proc = subprocess.Popen(  # nosec B603 - list args, a fixed binary found on PATH, no shell
+            [exe, *args],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=(os.name != "nt"),
+        )
+    except OSError:
+        return None
+    try:
+        out, _unused = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(OSError):
+            if os.name != "nt":
+                os.killpg(proc.pid, signal.SIGKILL)
+            else:
+                proc.kill()
+        with contextlib.suppress(Exception):
+            proc.communicate(timeout=2)
+        return None
+    except OSError:
+        return None
+    return proc.returncode, out or ""
+
+
+_OPENSSL_REJECTION = re.compile(r"error \d+ at \d+ depth lookup: [^\r\n]+")
+
+
+def _openssl_verdict(ran) -> tuple:
+    """(True | False | None, the line): a verdict exists ONLY when the output carries one - `: OK` with exit 0 accepts; `verification failed` or `error N at D depth lookup` rejects. Anything else - a
+    missing shared library (exit 127), a usage message, a bad OPENSSL_CONF, an exit code with no verify verdict - is None: NO opinion, never a disagreement and never a rejection (Q197, AM3)."""
+    if ran is None:
+        return None, ""
+    code, out = ran
+    found = _OPENSSL_REJECTION.search(out)
+    if found or "verification failed" in out:
+        return False, found.group(0) if found else "verification failed"
+    if code == 0 and ": OK" in out:
+        return True, ""
+    return None, ""
+
+
+def _write_public_pem(path: str, pem: bytes) -> None:
+    with open(path, "wb") as f:
+        f.write(pem)  # a PUBLIC certificate in a private temp directory, for `openssl verify`: no key is ever written
+
+
+def _openssl_verify_args(purpose: str, ca_path: str, leaf_path: str) -> list:
+    # `-auth_level 2` so the CLI and the daemon agree on key strength (Q197, AM6 f): a daemon built with the distribution's default security level refuses what level 1 accepts
+    return ["verify", "-purpose", purpose, "-auth_level", "2", "-CAfile", ca_path, leaf_path]
+
+
+def openssl_gate_rejection(ca_cert, ca_key, timeout: float = 10.0) -> str:
+    """Q197 (AM1): where the `openssl` CLI exists on the Jen host the daemon's OWN library judges the CA at the GATE: the same throwaway leaves the library verified are run through
+    `openssl verify -purpose sslserver|sslclient`. "" when the CLI is absent, broken or slow (NO opinion: the library's verdict stands) or accepts both; else "the daemon's own library rejects
+    certificates issued from it for <purpose>: <the CLI's own line>". Q196 put this in Health only ("a warning, never a refusal") and the gates asked only the library, so a CA both real stacks
+    reject was `ok` at the gate and the operator saw a healthy CA that could never set up an https socket."""
+    if not _openssl_exe():
         return ""
-    ca_path = ca_paths()[0]
+    try:
+        with tempfile.TemporaryDirectory(prefix="jen-openssl-gate-") as directory:
+            ca_path, leaf_path = os.path.join(directory, "ca.pem"), os.path.join(directory, "probe.pem")
+            _write_public_pem(ca_path, _cert_pem(ca_cert))
+            for purpose, client in (("sslserver", False), ("sslclient", True)):
+                _message, leaf = verify_probe(ca_cert, ca_key, client)
+                if leaf is None:
+                    continue
+                _write_public_pem(leaf_path, _cert_pem(leaf))
+                accepted, line = _openssl_verdict(
+                    _run_openssl(_openssl_verify_args(purpose, ca_path, leaf_path), timeout)
+                )
+                if accepted is False:
+                    return f"the daemon's own library rejects certificates issued from it for {purpose}: {line}"
+    except OSError:
+        return ""  # a temp directory that cannot be made: no opinion
+    return ""
+
+
+_GATE_VERDICTS: dict = {}
+
+
+def ca_gate_rejection(ca_cert, ca_key) -> str:
+    """The library's verdict first (`ca_verifier_rejection`), then the daemon's library where it is on the box (`openssl_gate_rejection`) - cached per certificate, minute and whether the CLI exists
+    (a certificate is judged twice a minute at most; `ca_state` has about twenty callers)."""
+    token = (ca_cert.fingerprint(hashes.SHA256()), int(time.time() // 60), _openssl_exe() is not None)
+    if token in _GATE_VERDICTS:
+        return _GATE_VERDICTS[token]
+    verdict = ca_verifier_rejection(ca_cert, ca_key) or openssl_gate_rejection(ca_cert, ca_key)
+    if len(_GATE_VERDICTS) > 64:
+        _GATE_VERDICTS.clear()
+    _GATE_VERDICTS[token] = verdict
+    return verdict
+
+
+def openssl_second_opinion(timeout: float = 10.0) -> str:
+    """Informational (Q196, reshaped by Q197 AM3): when Jen has judged the CA DAMAGED, say where the daemon's own library (`openssl verify`) ACCEPTS what Jen rejects - Jen is the stricter judge there and the
+    operator should know it. "" when there is no CLI, the CA is not damaged (a CLI that rejects what the library accepts is already a rejection at the gate), nothing can be loaded, or the CLI has no
+    verdict. The comparison is with `ca_state`'s own verdict, not with the library probe alone, and the CA the CLI judges is the one that was loaded - never a path that can change under it."""
+    if not _openssl_exe():
+        return ""
+    state, why = ca_state()
+    if state != "damaged":
+        return ""
     material = _ca_material_for_opinion()
     if material is None:
         return ""
     ca_cert, ca_key = material
-    disagreements = []
+    accepts = []
     try:
         with tempfile.TemporaryDirectory(prefix="jen-openssl-verify-") as directory:
-            leaf_path = os.path.join(directory, "probe.pem")
+            ca_path, leaf_path = os.path.join(directory, "ca.pem"), os.path.join(directory, "probe.pem")
+            _write_public_pem(ca_path, _cert_pem(ca_cert))
             for purpose, client in (("sslserver", False), ("sslclient", True)):
-                message, leaf = verify_probe(ca_cert, ca_key, client)
+                _message, leaf = verify_probe(ca_cert, ca_key, client)
                 if leaf is None:
                     continue
-                with open(leaf_path, "wb") as f:
-                    f.write(_cert_pem(leaf))  # a PUBLIC certificate: no key is written
-                done = subprocess.run(  # nosec B603 - list args, a fixed binary found on PATH, no shell
-                    [exe, "verify", "-purpose", purpose, "-CAfile", ca_path, leaf_path],
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout,
-                    check=False,
+                _write_public_pem(leaf_path, _cert_pem(leaf))
+                accepted, _line = _openssl_verdict(
+                    _run_openssl(_openssl_verify_args(purpose, ca_path, leaf_path), timeout)
                 )
-                said = (done.stdout or "") + (done.stderr or "")
-                if done.returncode == 0 and ": OK" in said:
-                    theirs = True
-                elif done.returncode != 0 and "error" in said.lower():
-                    theirs = False
-                else:
-                    continue  # a broken binary, a bad OPENSSL_CONF, nothing it said that is a verdict: NO opinion, not a disagreement
-                if theirs != (not message):
-                    if theirs:
-                        disagreements.append(
-                            f"openssl verify accepts a certificate issued from it for {purpose} where Jen's verifier rejects it ({message})"
-                        )
-                    else:
-                        disagreements.append(
-                            f"openssl verify rejects a certificate issued from it for {purpose} where Jen's verifier accepts it"
-                        )
-    except (OSError, subprocess.SubprocessError):
-        return ""  # a temp directory that cannot be made, a binary that cannot run: no row - never an exception through Health
-    return "; ".join(disagreements)
+                if accepted is True:
+                    accepts.append(purpose)
+    except OSError:
+        return ""  # a temp directory that cannot be made: no row - never an exception through Health
+    if not accepts:
+        return ""
+    return f"openssl verify accepts a certificate issued from it for {' and '.join(accepts)} where Jen rejects the CA ({why}) - Jen is the stricter judge here"
 
 
 def _ca_material_for_opinion():
-    """The CA's certificate and key for the second opinion - through `ca_state` when it is `ok`, and read directly when the verifier has judged it damaged (the opinion is about exactly that case: does
-    the daemon's own library agree?). None when either file cannot be loaded."""
-    if ca_state()[0] == "ok":
-        try:
-            return _load_ca()
-        except (CaDamaged, OSError, ValueError, TypeError, UnsupportedAlgorithm):
-            return None
+    """The CA's certificate and key for the second opinion - read directly, because the opinion is about a CA the library has judged DAMAGED (does the daemon's own library agree?). None when either
+    file cannot be loaded."""
     crt, key = ca_paths()
     try:
         return load_cert(crt), load_key(key)
@@ -436,40 +549,10 @@ def _ca_material_for_opinion():
         return None
 
 
-def ca_identity(cert_path: str, key_path: str, *, raise_io: bool = False) -> tuple[str, str]:
-    """Q194 (AJ1): the ONE judgment of CA material - the live pair, the prepared pair and the staged pair are all judged here. `("ok", "")` only when the certificate and key both load, the key is the
-    certificate's (SPKI), the certificate is inside its validity window NOW (the 30-day expiry warning stays Health's separate `warn`), it carries `BasicConstraints` with `ca=True` and a `KeyUsage` with
-    `keyCertSign`, its issuer is its subject, its self-signature verifies with its own public key, and the key is EC or RSA (the two kinds `_build_ca` can make); else `("damaged", why)` with `why`
-    naming the FIRST failed check. Q192's states were syntactic - absent, malformed, mismatched - and never asked what the certificate is FOR: a `ca=False` certificate, an expired one, one whose
-    signature does not verify were all `ok`, and Jen signed with them. `raise_io` lets a read error (an I/O failure, not a verdict) propagate: the prepared CA's reader treats it as unknown."""
-    crt_name, key_name = os.path.basename(cert_path), os.path.basename(key_path)
-    try:
-        cert = load_cert(cert_path)
-    except OSError as e:
-        if raise_io:
-            raise
-        return "damaged", f"{crt_name} cannot be read ({type(e).__name__})"
-    except (ValueError, TypeError, UnsupportedAlgorithm):
-        return "damaged", f"{crt_name} is not a certificate"
-    try:
-        private = load_key(key_path)
-    except OSError as e:
-        if raise_io:
-            raise
-        return "damaged", f"{key_name} cannot be read ({type(e).__name__})"
-    except (ValueError, TypeError, UnsupportedAlgorithm):
-        return "damaged", f"{key_name} is not a private key"
-    spki = serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
-    try:
-        public = cert.public_key()
-        cert_spki = public.public_bytes(*spki)
-    except (ValueError, TypeError, UnsupportedAlgorithm):
-        return (
-            "damaged",
-            f"{crt_name} is a certificate with an unusable public key",
-        )  # (Q192 second pass, finding 1: it parses, so it is not 'not a certificate' - and it must not raise)
-    if cert_spki != private.public_key().public_bytes(*spki):
-        return "damaged", f"{crt_name} and {key_name} are not a pair"
+def _cert_structure(cert, crt_name: str, public) -> tuple[str, str]:
+    """The structural ladder of a CA CERTIFICATE (no key needed): validity now, BasicConstraints ca=True, a KeyUsage - when there is one - with keyCertSign, an EC or RSA key, issuer == subject, a
+    self-signature that verifies, and (Q197, AM1 a) an AuthorityKeyIdentifier that names the root's OWN key. The Lab's fake daemon asks this directly (`ca_identity(..., cert_only=True)`), so the
+    fake and the product share one judgment of the certificate."""
     try:
         now = datetime.now(timezone.utc)
         if cert.not_valid_before_utc > now:
@@ -493,6 +576,16 @@ def ca_identity(cert_path: str, key_path: str, *, raise_io: bool = False) -> tup
         if cert.issuer != cert.subject:
             return "damaged", f"{crt_name} is not self-signed (its issuer is not its subject)"
         try:
+            authority = cert.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier).value.key_identifier
+            subject_key = cert.extensions.get_extension_for_class(x509.SubjectKeyIdentifier).value.digest
+        except x509.ExtensionNotFound:
+            authority = subject_key = None
+        if authority is not None and subject_key is not None and authority != subject_key:
+            return (
+                "damaged",
+                f"{crt_name}'s AuthorityKeyIdentifier does not name its own key - OpenSSL will not chain to it",
+            )
+        try:
             cert.verify_directly_issued_by(cert)
         except UnsupportedAlgorithm:
             return "damaged", f"{crt_name}'s self-signature uses an algorithm Jen cannot verify"
@@ -504,13 +597,60 @@ def ca_identity(cert_path: str, key_path: str, *, raise_io: bool = False) -> tup
             if "unsupported" in str(e).lower():
                 return "damaged", f"{crt_name}'s self-signature uses an algorithm Jen cannot verify"
             return "damaged", f"{crt_name}'s signature does not verify against its own key"
-        # Q196 (AL1): the structural checks above stay (they give the `why` text for the shapes a person recognises); the ORACLE has the last word - a real verifier must accept what Jen issues from this CA
-        rejection = ca_verifier_rejection(cert, private)
-        if rejection:
-            return "damaged", f"{crt_name}: {rejection}"
     except (ValueError, TypeError, UnsupportedAlgorithm, x509.DuplicateExtension):
-        # (second pass, finding 1: `DuplicateExtension` is an Exception, not a ValueError - a CA file with one must read "damaged", never raise through Health, the page, the setup, Rotate and Prepare)
+        # (Q194 second pass, finding 1: `DuplicateExtension` is an Exception, not a ValueError - a CA file with one must read "damaged", never raise through Health, the page, the setup, Rotate and Prepare)
         return "damaged", f"{crt_name} has an extension Jen cannot read"
+    return "ok", ""
+
+
+def ca_identity(
+    cert_path: str, key_path: str | None, *, raise_io: bool = False, cert_only: bool = False
+) -> tuple[str, str]:
+    """The ONE judgment of CA material - the live pair, the prepared pair and the staged pair are all judged here. `("ok", "")` only when the certificate and key both load, the key is the
+    certificate's (SPKI), the structural ladder passes (`_cert_structure`), the chain verifier accepts certificates issued from it for BOTH purposes (Q196), and - where the `openssl` CLI is on the Jen
+    host - the daemon's own library does too (Q197, AM1); else `("damaged", why)` naming the FIRST failed check. `cert_only` (Q197, AM6 e) judges the CERTIFICATE alone - the structural ladder, no key,
+    no oracle - which is what a trust anchor in a fake daemon is. `raise_io` lets a read error (an I/O failure, not a verdict) propagate: the prepared CA's reader treats it as unknown."""
+    crt_name = os.path.basename(cert_path)
+    try:
+        cert = load_cert(cert_path)
+    except OSError as e:
+        if raise_io:
+            raise
+        return "damaged", f"{crt_name} cannot be read ({type(e).__name__})"
+    except (ValueError, TypeError, UnsupportedAlgorithm):
+        return "damaged", f"{crt_name} is not a certificate"
+    spki = serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+    try:
+        public = cert.public_key()
+        cert_spki = public.public_bytes(*spki)
+    except (ValueError, TypeError, UnsupportedAlgorithm):
+        return (
+            "damaged",
+            f"{crt_name} is a certificate with an unusable public key",
+        )  # (Q192 second pass, finding 1: it parses, so it is not 'not a certificate' - and it must not raise)
+    private = None
+    if not cert_only:
+        key_name = os.path.basename(key_path)
+        try:
+            private = load_key(key_path)
+        except OSError as e:
+            if raise_io:
+                raise
+            return "damaged", f"{key_name} cannot be read ({type(e).__name__})"
+        except (ValueError, TypeError, UnsupportedAlgorithm):
+            return "damaged", f"{key_name} is not a private key"
+        if cert_spki != private.public_key().public_bytes(*spki):
+            return "damaged", f"{crt_name} and {key_name} are not a pair"
+    state, why = _cert_structure(cert, crt_name, public)
+    if state != "ok" or cert_only:
+        return state, why
+    try:
+        # the structural checks above stay (they give the `why` a person recognises); the library's chain verifier has the next word (Q196), and the daemon's own library the last (Q197)
+        rejection = ca_gate_rejection(cert, private)
+    except (ValueError, TypeError, UnsupportedAlgorithm, x509.DuplicateExtension):
+        return "damaged", f"{crt_name} has an extension Jen cannot read"
+    if rejection:
+        return "damaged", f"{crt_name}: {rejection}"
     return "ok", ""
 
 
@@ -540,8 +680,8 @@ def _initialised_evidence() -> str:
     if os.path.lexists(pem) or os.path.lexists(key):
         return "Jen's client certificate exists, so a CA made it - the CA's files are gone, not never made"
     for path in (
-        ca_paths()[0] + _STAGE_SUFFIX,
-        ca_paths()[1] + _STAGE_SUFFIX,
+        *glob.glob(ca_paths()[0] + _STAGE_SUFFIX + "*"),
+        *glob.glob(ca_paths()[1] + _STAGE_SUFFIX + "*"),
         ca_paths()[0] + ".prev",
         ca_paths()[1] + ".prev",
         pem + ".prev",
@@ -575,25 +715,24 @@ def ca_refusal() -> str:
     return why if state == "damaged" else ""
 
 
-def ensure_ca(force: bool = False) -> dict:
-    """Create the CA ONLY in the uninitialised world (Q192, AH2; invariant T7), or with `force` (a rotation's own promotion path): `ok` returns it unchanged, `damaged` raises `CaDamaged`, and an
-    absent CA beside evidence that one existed (a client certificate, a server copy, a prepared rotation, an unreadable directory) raises it too. It used to read "a cert without a loadable key
-    counts as absent" and create a new CA whenever either file failed to load; the previous files are kept as `.prev` by commit_file_set when a forced creation replaces them.
+def ensure_ca() -> dict:
+    """Create the CA ONLY in the uninitialised world (Q192, AH2; invariant T7): `ok` returns it unchanged, `damaged` raises `CaDamaged`, and an absent CA beside evidence that one existed (a client
+    certificate, a server copy, a prepared rotation, an unreadable directory) raises it too. It used to read "a cert without a loadable key counts as absent" and create a new CA whenever either file
+    failed to load. (Q197, AM6 a: the `force` path - the pre-Q188 rotation that replaced the CA before any host had it - is gone; a rotation stages, probes and then commits.)
     Returns {"cert": path, "key": path, "created": bool, "subject": cn}."""
     crt, key_path = ca_paths()
-    if not force:
-        state, why = ca_state()
-        if state == "ok":
-            return {"cert": crt, "key": key_path, "created": False, "subject": _cn(crt)}
-        if state == "damaged":
-            raise CaDamaged(why)
+    state, why = ca_state()
+    if state == "ok":
+        return {"cert": crt, "key": key_path, "created": False, "subject": _cn(crt)}
+    if state == "damaged":
+        raise CaDamaged(why)
     _ensure_dir(SSL_DIR)
     key = _new_key()
     cn = f"Jen Kea CA {_hostname()} {datetime.now(timezone.utc):%Y-%m-%d}"
     cert = _build_ca(key, cn)
     # Key first, then cert: a reader that finds a cert always finds its key - and the pair is installed as a SET (v5.68.0-beta.16, Q151).
     commit_file_set([(key_path, _key_pem(key), 0o600), (crt, _cert_pem(cert), 0o644)])
-    logger.info(f"kea_tls: {'rotated' if force else 'created'} the Kea CA at {crt}")
+    logger.info(f"kea_tls: created the Kea CA at {crt}")
     return {"cert": crt, "key": key_path, "created": True, "subject": cn}
 
 
@@ -706,6 +845,68 @@ def verify_issued(ca_cert, leaf, client: bool, name: str = "") -> str:
     return ""
 
 
+def _name_refused(ca_cert, ca_key, san) -> bool:
+    """Does the verifier refuse a server certificate that carries THIS one name (Q197, AM2)? A leaf that cannot even be built for the name is refused too."""
+    value = str(san.value)
+    try:
+        leaf = _leaf(ca_cert, ca_key, _new_key(), "jen-probe", [san], client=False)
+    except (ValueError, TypeError):
+        return True
+    return bool(verify_issued(ca_cert, leaf, False, value))
+
+
+def verifier_accepts_name(host: str) -> bool:
+    """Would the certificate verifier accept `host` as the name of a server (Q197, AM2)? An IP literal does; a DNS name does when the library's own DNS-name parser does. `kea_host` (an underscore), `kea-a.`
+    (a trailing dot), an empty label, a label that starts or ends with a hyphen and an over-long label are names a form can save and no certificate Jen issues can carry - `valid_api_url` asks THIS
+    for an https address in direct mode, so the two definitions agree before a leaf is attempted."""
+    host = (host or "").strip()
+    if not host:
+        return False
+    if _is_ip(host.strip("[]")):
+        return True
+    try:
+        throwaway_key = _new_key()
+        throwaway_ca = _build_ca(throwaway_key, "name check")
+        x509_verification.PolicyBuilder().store(x509_verification.Store([throwaway_ca])).time(
+            datetime.now(timezone.utc)
+        ).build_server_verifier(x509.DNSName(host))
+    except (ValueError, TypeError, UnsupportedAlgorithm):
+        return False
+    return True
+
+
+def other_record_on_same_daemon(server: dict, service: str, servers) -> str:
+    """Q197 (AM5): the NAME of ANOTHER server record that shares this record's SSH host (`same_host`: exact, no DNS) and already holds a Jen-issued record for `service` - "" when there is none. The rule
+    the rotation applies (Q196 AL2: one daemon is one target) asked where the world is MADE: an https setup on a second record for the same daemon would put a certificate on the fixed remote paths
+    that the first record's copy then no longer matches."""
+    from jen.services.auth import same_host
+
+    ssh = (server.get("ssh_host") or "").strip()
+    if not ssh:
+        return ""
+    for other in servers or []:
+        if str(other.get("id")) == str(server.get("id")):
+            continue
+        other_ssh = (other.get("ssh_host") or "").strip()
+        if not other_ssh or not (ssh == other_ssh or same_host(ssh, other_ssh)):
+            continue
+        if record_state(other.get("id"), service)[0] == "jen":
+            return other.get("name") or f"Kea Server {other.get('id')}"
+    return ""
+
+
+def forget_stale_records(servers, url_for=None) -> list:
+    """Q197 (AM4): drop Jen's own copy of every certificate whose endpoint is not an https endpoint NOW (the inventory's `stale`) - the records Rotate already ignores. A local change only: no host is
+    asked anything. Returns the "<server id>-<service>" identifiers it forgot."""
+    inventory = rotation_inventory(servers, url_for=url_for, prove_storage=False)
+    forgotten = []
+    for ident in inventory.stale:
+        server_id, _sep, service = ident.partition("-")
+        discard_local_record(server_id, service)
+        forgotten.append(ident)
+    return forgotten
+
+
 def _is_ip(value: str) -> bool:
     try:
         ipaddress.ip_address(value)
@@ -741,6 +942,10 @@ def issue_server_cert(
         primary = str(sans[0].value)
         rejection = verify_issued(ca_cert, cert, False, primary)
         if rejection:
+            # which name? each SAN alone (a name constraint applies to every name in a leaf, and the verifier's message does not say which one failed - the bind address OR the ssh_host name)
+            failing = [str(s.value) for s in sans if _name_refused(ca_cert, ca_key, s)]
+            if failing:
+                raise NameRefused(rejection, failing)
             raise CaDamaged(f"the CA cannot issue a certificate the verifier accepts for {primary}: {rejection}")
     files = {
         "ca.crt": _cert_pem(ca_cert).decode(),
@@ -1146,17 +1351,6 @@ def issue_client_cert(force: bool = False) -> dict:
     return {"cert": pem, "key": key_path, "issued": True, "why": why if state in ("damaged", "expiring") else ""}
 
 
-def rotate_ca() -> dict:
-    """A new CA and a new client cert. Every server certificate issued by
-    the old CA is now invalid from Jen's side (Jen no longer trusts the
-    old CA) — the caller re-issues and re-pushes each one (step 4's
-    Rotate flow); this function only does the Jen-host half. Returns
-    {"ca": ensure_ca() result, "client": issue_client_cert() result}."""
-    ca = ensure_ca(force=True)
-    client = issue_client_cert(force=True)
-    return {"ca": ca, "client": client}
-
-
 # ── the rotation's inventory (Q189, AE1) ────────────────────────────────────
 #
 # A multi-host operation enumerates its targets from the CONFIGURATION - every endpoint Jen dials - and refuses when its record of any one of them is missing or unreadable. The rotation
@@ -1553,10 +1747,16 @@ def stage_rotation() -> dict:
         "client_key": client_key_path + _STAGE_SUFFIX,
     }
     try:
-        write_atomically(staged["ca_key"], _key_pem(ca_key), 0o600)
-        write_atomically(staged["ca_cert"], _cert_pem(ca_cert), 0o644)
-        write_atomically(staged["client_key"], _key_pem(client_key), 0o600)
-        write_atomically(staged["client_cert"], _cert_pem(client_cert), 0o644)
+        # ONE set, keys first, with `keep_prev=False` (Q197, AM6 b): the `.next` files are not identity files, and a `.next.prev` copy of a key is a second private key nobody listed
+        commit_file_set(
+            [
+                (staged["ca_key"], _key_pem(ca_key), 0o600),
+                (staged["ca_cert"], _cert_pem(ca_cert), 0o644),
+                (staged["client_key"], _key_pem(client_key), 0o600),
+                (staged["client_cert"], _cert_pem(client_cert), 0o644),
+            ],
+            keep_prev=False,
+        )
     except BaseException:
         discard_rotation(staged)  # (second pass, Q188: a staging that stopped half written leaves no key behind)
         raise

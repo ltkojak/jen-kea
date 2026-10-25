@@ -869,6 +869,47 @@ class TestTheProbeRowsOfQ196:
         }
 
 
+class TestTheProbeRowsOfQ197:
+    """AM1/AM2/AM4/AM5: the daemon's verifier judges at the gate; a healthy CA that cannot sign for a name is told so; one daemon is one record at the setup; stale records are forgotten locally."""
+
+    def test_the_daemons_verifier_judges_at_the_gate(self):
+        assert probe.q197_am1_the_daemons_verifier_judges_at_the_gate() == {
+            "jen's own": ("ok", "damaged"),
+            "eku-anyeku": ("damaged", "damaged"),
+            "aki-not-ski": ("damaged", "damaged"),
+            "eku-anyeku-server-and-client": ("ok", "damaged"),
+            "aki-keyid-matches-ski": ("ok", "damaged"),
+            "aki-wrong-serial": ("damaged", "damaged"),
+        }
+
+    def test_a_name_the_ca_cannot_sign_for_is_a_name_refusal_not_a_damaged_ca(self):
+        assert probe.q197_am2_a_name_the_ca_cannot_sign_for_is_a_name_refusal_not_a_damaged_ca() == {
+            "ip outside the permitted range": ("NameRefused", ["10.0.0.5"]),
+            "ssh host outside the permitted domain": ("NameRefused", ["kea-a.elsewhere.net"]),
+            "a host with an underscore": ("NameRefused", ["kea_host"]),
+            "a host with a trailing dot": ("NameRefused", ["kea-a."]),
+            "a damaged CA": ("CaDamaged", []),
+            "a name the CA permits": ("issued", []),
+        }
+
+    def test_one_daemon_two_records_at_the_setup(self):
+        assert probe.q197_am5_one_daemon_two_records_at_the_setup() == {
+            "no other record": "",
+            "another record on the same host": "kea-b",
+            "another record on another host": "",
+            "the other service of the same host": "",
+            "a trailing dot is a different name": "",
+        }
+
+    def test_stale_records_are_listed_and_forgotten_locally(self):
+        assert probe.q197_am4_stale_records_are_listed_and_forgotten_locally() == (
+            ["7-dhcp4"],
+            ["7-dhcp4"],
+            [],
+            "jen",
+        )
+
+
 class TestTheSecondPassOfQ187:
     """The executed findings of the adversarial pass on beta.18's routes, each as a probe row."""
 

@@ -36,6 +36,9 @@ import os
 import pathlib
 import time
 import types
+from tempfile import (
+    TemporaryDirectory as _REAL_TEMPORARY_DIRECTORY,  # (a test that denies `tempfile.TemporaryDirectory` to the PRODUCT must not take the fake daemon's judge down with it)
+)
 
 import flask
 import pytest
@@ -107,32 +110,16 @@ def _anchor_usable(cert) -> bool:
     """Q195 (AK1): would OpenSSL accept this certificate as the TRUST ANCHOR of a client chain? A fake models how a remote system is OBSERVED (LESSONS section 2), and the shipped fake accepted a client
     certificate issued by an EXPIRED anchor - so no test saw the world a recovery exists for. The checks OpenSSL makes of a trust anchor: inside its validity window now; a CA by `X509_check_ca`
     (BasicConstraints `ca=True`, or - with no BasicConstraints - a `keyCertSign`); a KeyUsage, when present, with `keyCertSign`. It does NOT verify the anchor's own signature (OpenSSL does not)."""
-    from datetime import datetime, timezone
-
-    from cryptography import x509
-
-    now = datetime.now(timezone.utc)
-    if not (cert.not_valid_before_utc <= now < cert.not_valid_after_utc):
-        return False
-    if cert.issuer != cert.subject:
-        return False  # a trust-store certificate that is not a root: "unable to get issuer certificate" (executed against openssl 3.2.4)
-    try:
-        usage = cert.extensions.get_extension_for_class(x509.KeyUsage).value
-    except x509.ExtensionNotFound:
-        usage = None
-    except x509.DuplicateExtension:
-        return (
-            False  # "invalid certificate extension" - a fake that RAISED here took the teardown invariants down with it
-        )
-    try:
-        is_ca = cert.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
-    except x509.ExtensionNotFound:
-        is_ca = usage is not None and usage.key_cert_sign
-    except x509.DuplicateExtension:
-        return False
-    if not (bool(is_ca) and (usage is None or usage.key_cert_sign)):
-        return False
     from cryptography.hazmat.primitives import hashes
+
+    # Q197 (AM6 e): the SAME judgment of the certificate the product makes - `ca_identity(cert_only=True)`, the structural ladder with no key - so the fake and the product cannot disagree on any kind.
+    # (The earlier hand-written copy accepted a tampered self-signature and a root with no BasicConstraints because OpenSSL does; the product is the stricter judge there and the fake now says so too -
+    # registered: OpenSSL itself still chains to those two, and a recovery beside an external that trusts one is therefore rotated through Prepare.)
+    with _REAL_TEMPORARY_DIRECTORY() as directory:
+        anchor_path = os.path.join(directory, "anchor.crt")
+        pathlib.Path(anchor_path).write_bytes(kea_tls._cert_pem(cert))
+        if kea_tls.ca_identity(anchor_path, None, cert_only=True)[0] != "ok":
+            return False
 
     key = _ANCHOR_KEYS.get(cert.fingerprint(hashes.SHA256()))
     return key is None or not kea_tls.verify_probe(cert, key, True)[0]
@@ -554,6 +541,19 @@ def lab(monkeypatch, tmp_path, caplog):
     lab.caplog = caplog
     monkeypatch.setattr(kea_tls, "SSL_DIR", str(tmp_path))
     monkeypatch.setattr(extensions, "KEA_SERVERS", list(lab.servers.values()))
+    # Q197: the `openssl` CLI is the daemon's own library at the gate WHERE IT IS ON THE BOX; a Lab that did not decide would pass or fail with the machine. Off here - `_with_the_cli` turns it on
+    monkeypatch.setattr(kea_tls, "_openssl_exe", lambda: None)
+    kea_tls._ORACLE_VERDICTS.clear()
+    kea_tls._GATE_VERDICTS.clear()
+    # Q197 (AM4): Health asks the inventory with the DEFAULT url source (`kea.configured_url`, a server's `api_url`); the Lab's servers carry their address in `lab.urls`, so that source answers from it - else every
+    # copy would read as a record of an endpoint that is not https, and Health's stale-record rows would be the Lab's artefact
+    from jen.services import kea as _kea
+
+    monkeypatch.setattr(
+        _kea,
+        "configured_url",
+        lambda server, service: lab.urls.get((server or {}).get("id"), "") if service == "dhcp4" else "",
+    )
 
     def helper_call(server, op, payload=None, timeout=60):
         sid = server["id"]
@@ -1003,16 +1003,16 @@ class TestTheSecondPassOfQ188:
         assert sorted(i[2] for i in lab.incidents) == ["tls-not-restored", "tls-not-restored"]
 
     def test_a_staging_that_stops_half_written_leaves_no_key_behind(self, lab, monkeypatch):
-        real = kea_tls.write_atomically
-        calls = []
+        real = kea_tls.commit_file_set
 
-        def third_fails(path, data, mode):
-            calls.append(path)
-            if len(calls) == 3:
-                raise OSError(28, "No space left on device")
-            return real(path, data, mode)
+        def the_staging_set_fails(members, *a, **k):
+            if any(str(path).endswith(".next") for path, _data, _mode in members):
+                raise OSError(
+                    28, "No space left on device"
+                )  # (Q197, AM6 b: the four `.next` files are ONE set now - a failure leaves none of them)
+            return real(members, *a, **k)
 
-        monkeypatch.setattr(kea_tls, "write_atomically", third_fails)
+        monkeypatch.setattr(kea_tls, "commit_file_set", the_staging_set_fails)
         _rotate()
         ca = kea_tls.ca_paths()[0]
         assert "Rotate refused" in lab.texts() and "Nothing was changed" in lab.texts()
@@ -2559,7 +2559,9 @@ class TestClientState:
         assert kea_tls.client_state()[0] == "damaged" and "not valid yet" in kea_tls.client_state()[1]
 
     def test_a_pair_issued_by_an_earlier_jen_ca_is_damaged_and_re_issued(self, lab):
-        kea_tls.ensure_ca(force=True)  # a new live CA; the client pair is from the one before
+        from tests import _tls_worlds as worlds
+
+        worlds.replace_live_ca()  # a new live CA; the client pair is from the one before
         lab.begin()  # (the world is built: this is the state before any action)
         self._reissued(lab, "was not issued by the current CA")
 
@@ -2788,6 +2790,7 @@ CA_IDENTITY_WHY = {
     "issuer-not-subject": "is not self-signed",
     "unsupported-key": "key type Jen does not support",
     "duplicate-extension": "has an extension Jen cannot read",
+    "aki-not-ski": "AuthorityKeyIdentifier does not name its own key",
 }
 
 
@@ -3479,9 +3482,15 @@ class TestTheSecondPassOfQ195:
             ("not-yet-valid", False),
             ("issuer-not-subject", False),
             ("duplicate-extension", False),
-            ("tampered-signature", True),  # OpenSSL does not check a trust anchor's own signature
-            ("no-basic-constraints", True),  # ... and a root with keyCertSign is a CA (X509_check_ca)
+            # Q197 (AM6 e): the fake judges with the product's `ca_identity(cert_only=True)`. OpenSSL itself still chains to a trust anchor with a tampered self-signature and to a root with no
+            # BasicConstraints but keyCertSign (executed, openssl 3.2.4); Jen is the stricter judge on both and the fake now agrees with Jen (registered, admin-guide table of Jen-stricter shapes)
+            ("tampered-signature", False),
+            ("no-basic-constraints", False),
             ("no-key-usage", True),  # the operator's own CA
+            (
+                "aki-not-ski",
+                False,
+            ),  # Q197 (AM1 a): OpenSSL does not treat the root as self-issued: "unable to get issuer certificate"
         ],
     )
     def test_row_4_the_strict_fake_agrees_with_what_openssl_did_when_it_was_executed(self, kind, accepts):
@@ -3495,8 +3504,10 @@ class TestTheSecondPassOfQ195:
         [
             ("no-key-cert-sign", "prepare"),
             ("issuer-not-subject", "prepare"),
-            ("tampered-signature", "depends"),
-            ("no-basic-constraints", "depends"),
+            ("tampered-signature", "prepare"),  # Q197 (AM6 e): the fake shares the product's judgment of the anchor
+            ("no-basic-constraints", "prepare"),
+            ("aki-not-ski", "prepare"),
+            ("eku-anyeku", "prepare"),
             (
                 "eku-serverauth-only",
                 "prepare",
@@ -3510,7 +3521,8 @@ class TestTheSecondPassOfQ195:
         ],
     )
     def test_the_same_recovery_for_every_other_damage_the_lab_can_build(self, lab, kind, first_refusal):
-        """An anchor OpenSSL still accepts (a tampered self-signature, a root without BasicConstraints) leaves the live pair working: the endpoint DEPENDS on the damaged CA, and the existing sentence says so."""
+        """An anchor the daemon still accepts leaves the live pair working: the endpoint DEPENDS on the damaged CA, and the existing sentence says so (a clientAuth-only CA). Q197 (AM6 e): the fake judges
+        an anchor with the product's own ladder, so a tampered self-signature or a root without BasicConstraints is an anchor the endpoint no longer trusts - the live pair is rejected and Prepare is the way."""
         anchor = _recovery_world_under(kind)
         _add_external(lab, trust=anchor)
         lab.begin()
@@ -3552,7 +3564,27 @@ VERIFIER_WHY = {
     "eku-serverauth-only": "for sslclient",
     "eku-codesigning": "for sslserver",
     "name-constraints-exclude-all": "for sslserver",
+    # Q197 (AM1 b): the EKU and AKI value families the daemon's library rejects and Q196's library alone did not
+    "eku-anyeku": "for sslserver",
+    "eku-anyeku-and-serverauth": "for sslclient",
+    "eku-serverauth-and-codesigning": "for sslclient",
+    "eku-unknown-oid": "for sslserver",
+    "eku-anyeku-and-unknown": "for sslserver",
+    "aki-wrong-serial": "authorityKeyIdentifier must contain keyIdentifier",
 }
+
+
+def _with_the_cli(monkeypatch):
+    """Turn the `openssl` CLI ON for this test (the Lab has it off so a result never depends on the machine); skip - never xfail - where the machine has none (Q197)."""
+    import shutil
+
+    exe = shutil.which("openssl")
+    if not exe:
+        pytest.skip("no openssl CLI on this machine")
+    monkeypatch.setattr(kea_tls, "_openssl_exe", lambda: exe)
+    kea_tls._ORACLE_VERDICTS.clear()
+    kea_tls._GATE_VERDICTS.clear()
+    return exe
 
 
 def _openssl_accepts(cert, key, client):
@@ -3616,12 +3648,10 @@ class TestCaIdentityIsTheVerifier:
             theirs = _openssl_accepts(cert, key, client)
             if theirs is None:
                 pytest.skip("no openssl CLI on this machine")
-            if (
-                kind != "eku-anyeku"
-            ):  # OpenSSL 3.x rejects a CA whose EKU is anyExtendedKeyUsage; the Q wants it healthy and Health warns of the disagreement
-                assert theirs is True, (
-                    f"{kind}: openssl verify rejects what Jen's verifier accepts ({'sslclient' if client else 'sslserver'})"
-                )
+            # (Q197: no exception any more - anyExtendedKeyUsage ALONE is a damaged CA, so every CA Jen's verifier accepts is one openssl accepts)
+            assert theirs is True, (
+                f"{kind}: openssl verify rejects what Jen's verifier accepts ({'sslclient' if client else 'sslserver'})"
+            )
 
     @pytest.mark.parametrize("kind", __import__("tests._tls_worlds", fromlist=["x"]).VERIFIER_CA_STATES)
     def test_a_ca_the_verifier_rejects_is_damaged_with_the_verifiers_own_message_and_openssl_agrees(
@@ -3706,35 +3736,35 @@ class TestCaIdentityIsTheVerifier:
         monkeypatch.setattr(kea_tls, "_now", lambda: real_now() - datetime.timedelta(days=3000))
         assert kea_tls.ca_state() == ("ok", "")
 
-    def test_the_second_opinion_reports_a_disagreement_and_only_a_disagreement(self, lab):
+    def test_the_second_opinion_is_informational_and_only_where_jen_rejects_what_the_cli_accepts(
+        self, lab, monkeypatch
+    ):
+        """Q197 (AM1/AM3): a CA both judges accept has NO opinion line; a CA the daemon's library REJECTS is damaged at the gate (`TestTheDaemonsVerifierJudges`), so the line exists only for the other direction - Jen
+        stricter than the CLI (the admin guide's table). Compared with `ca_state`'s own verdict, never with the library probe alone."""
         import shutil
 
         if not shutil.which("openssl"):
             pytest.skip("no openssl CLI on this machine")
-        cert, key = kea_tls._load_ca()
-        agree = all(
-            _openssl_accepts(cert, key, client) is (not kea_tls.verify_probe(cert, key, client)[0])
-            for client in (False, True)
-        )
-        assert (kea_tls.openssl_second_opinion() == "") is agree
-        # a CA the verifier accepts and this openssl may not (anyExtendedKeyUsage): the opinion is exactly the disagreement, and Health WARNS - it never refuses
-        _write_live_ca("eku-anyeku")
-        kea_tls.issue_client_cert()  # the pair the old CA issued is re-issued from this one, so Health reaches the CA's own row
+        monkeypatch.setattr(kea_tls, "_openssl_exe", lambda: shutil.which("openssl"))
+        assert kea_tls.ca_state() == ("ok", "")
+        assert kea_tls.openssl_second_opinion() == "", "a healthy CA has no opinion line"
+        _write_live_ca("aki-issuer-serial-only")  # executed: openssl accepts it, the library does not
+        kea_tls._ORACLE_VERDICTS.clear()
+        kea_tls._GATE_VERDICTS.clear()
         lab.begin()
         lab.before = None
-        cert, key = kea_tls._load_ca()
-        disagree = any(
-            _openssl_accepts(cert, key, client) is not (not kea_tls.verify_probe(cert, key, client)[0])
-            for client in (False, True)
-        )
+        assert kea_tls.ca_state()[0] == "damaged"
         opinion = kea_tls.openssl_second_opinion()
-        assert (opinion != "") is disagree, opinion
-        if disagree:
-            row = health._kea_tls_expiry({})
-            assert row.status in ("warn", "fail") and "openssl verify" in row.detail, row.detail
+        assert "openssl verify accepts" in opinion and "Jen is the stricter judge here" in opinion, opinion
+        row = health._kea_tls_expiry({})
+        assert row.status == "fail" and "openssl verify accepts" in row.detail, row.detail
+        _write_live_ca("eku-anyeku")  # ... and a CA the CLI rejects too: Jen and the daemon agree, nothing to add
+        kea_tls._ORACLE_VERDICTS.clear()
+        kea_tls._GATE_VERDICTS.clear()
+        assert kea_tls.ca_state()[0] == "damaged" and kea_tls.openssl_second_opinion() == ""
 
     def test_no_openssl_cli_is_no_row(self, lab, monkeypatch):
-        monkeypatch.setattr(kea_tls.shutil, "which", lambda name: None)
+        monkeypatch.setattr(kea_tls, "_openssl_exe", lambda: None)
         assert kea_tls.openssl_second_opinion() == ""
 
 
@@ -3842,6 +3872,11 @@ class TestTheSecondPassOfQ196:
             "name-constraints-directory-name": "directoryName",
             "key-secp256k1": "Forbidden public key",
             "key-brainpool": "Forbidden public key",
+            # Q197: the shapes OpenSSL accepts and the library does not, executed
+            "aki-issuer-serial-only": "authorityKeyIdentifier must contain keyIdentifier",
+            "crl-distribution-points-critical": "2.5.29.31",
+            "empty-subject-critical-san": "non-empty Issuer",
+            "policy-mappings-critical": "2.5.29.33",
         }[kind]
         assert state == "damaged" and "the verifier rejects" in why and expected in why, (kind, why)
 
@@ -3856,12 +3891,9 @@ class TestTheSecondPassOfQ196:
         assert kea_tls.ca_verifier_rejection(cert, key) == ""
 
     def test_row_2_the_second_opinion_also_runs_on_a_damaged_ca_and_says_when_openssl_accepts_what_the_verifier_rejects(
-        self, lab
+        self, lab, monkeypatch
     ):
-        import shutil
-
-        if not shutil.which("openssl"):
-            pytest.skip("no openssl CLI on this machine")
+        _with_the_cli(monkeypatch)
         _write_live_ca("key-secp256k1")
         lab.begin()
         lab.before = None
@@ -3887,9 +3919,11 @@ class TestTheSecondPassOfQ196:
         lab.begin()
         lab.before = None
         assert kea_tls.ca_state() == ("ok", ""), "the oracle's DNS-only probe cannot see an IP constraint"
-        with pytest.raises(kea_tls.CaDamaged) as refused:
+        with (
+            pytest.raises(kea_tls.NameRefused) as refused
+        ):  # Q197 (AM2): the CA is HEALTHY (the assertion above) and cannot issue for THIS name - not `CaDamaged`
             kea_tls.issue_server_cert(self.SERVER, "dhcp4", "10.0.0.5", commit=False)
-        assert "10.0.0.5" in refused.value.why and "the verifier accepts" in refused.value.why, refused.value.why
+        assert refused.value.names == ["10.0.0.5"] and refused.value.why, (refused.value.names, refused.value.why)
         _write_live_ca("name-constraints-ip-inside")
         files = kea_tls.issue_server_cert(self.SERVER, "dhcp4", "10.0.0.5", commit=False)
         exe = shutil.which("openssl")
@@ -3986,6 +4020,7 @@ class TestTheSecondPassOfQ196:
 
     def test_row_6_the_oracle_runs_once_per_certificate_and_minute(self, lab, monkeypatch):
         kea_tls._ORACLE_VERDICTS.clear()
+        kea_tls._GATE_VERDICTS.clear()
         calls = []
         real = kea_tls.verify_probe
         monkeypatch.setattr(kea_tls, "verify_probe", lambda *a, **k: calls.append(1) or real(*a, **k))
@@ -4003,7 +4038,7 @@ class TestTheSecondPassOfQ196:
         from tests import _tls_worlds as worlds
 
         cert, key = worlds.semantic_ca("eku-clientauth-only")
-        assert "its Extended Key Usage does not include this purpose" in kea_tls.ca_verifier_rejection(cert, key)
+        assert "its Extended Key Usage does not name this purpose" in kea_tls.ca_verifier_rejection(cert, key)
         a = {"id": 51, "name": "ddns-a", "ssh_host": "10.9.9.9"}
         b = {"id": 52, "name": "ddns-b", "ssh_host": "10.9.9.9"}
         for server in (a, b):
@@ -4052,3 +4087,450 @@ class TestTheSecondPassOfQ196:
             .sign(key, hashes.SHA256())
         )
         assert len(kea_tls._probe_names(cert)) <= 8
+
+
+# ── Q197: the daemon's own verifier judges at the GATE, not only in Health ────────────────────────────────────────────────────────────────────────
+
+
+def _the_cli_says(lab, monkeypatch, ran):
+    """A CLI that is on the box and answers `ran` (as `_run_openssl` returns it) - with the verdict caches empty and the Lab's invariants re-based on the world as it is now."""
+    monkeypatch.setattr(kea_tls, "_openssl_exe", lambda: "/usr/bin/openssl")
+    monkeypatch.setattr(kea_tls, "_run_openssl", lambda args, timeout: ran)
+    kea_tls._ORACLE_VERDICTS.clear()
+    kea_tls._GATE_VERDICTS.clear()
+    lab.begin()
+    lab.before = None
+
+
+def _install_ca_files(tmp_path, kind):
+    """(certificate path, key path, certificate, key) of the CA in the world state `kind`, written under `tmp_path`."""
+    from tests import _tls_worlds as worlds
+
+    cert, key = worlds.semantic_ca(kind)
+    crt, key_path = tmp_path / "c.crt", tmp_path / "c.key"
+    crt.write_bytes(kea_tls._cert_pem(cert))
+    key_path.write_bytes(kea_tls._key_pem(key))
+    return str(crt), str(key_path), cert, key
+
+
+#: what `openssl verify` prints for a leaf it rejects (executed, openssl 3.2.4), as `_run_openssl` returns it: (exit code, output)
+_CLI_REJECTS = (
+    2,
+    "CN=probe\nerror 26 at 1 depth lookup: unsuitable certificate purpose\nerror probe.pem: verification failed\n",
+)
+
+
+class TestTheDaemonsVerifierJudges:
+    """Q197 (AM1): the first pre-reviewer pass (two agents, ~1 400 cells) found two CA shapes Jen's library verifier called `ok` while BOTH real stacks rejected every leaf Jen issued from them: a CA whose
+    EKU is `anyExtendedKeyUsage` alone, and a self-issued root whose AuthorityKeyIdentifier keyid is not its SubjectKeyIdentifier. Both are damaged now, and where the `openssl` CLI is on the Jen host
+    it judges at the gate as the LAST step of `ca_identity` (a rejection is damaged with the CLI's own line; absent, broken or slow is no opinion). The live/prepared flows for the two shapes are the
+    parametrized flows of `TestCaIdentity` (semantic: `aki-not-ski`) and `TestCaIdentityIsTheVerifier` (verifier: the `eku-*` and `aki-wrong-serial` value rows) - the states are in those lists."""
+
+    CODED = ("eku-anyeku", "eku-anyeku-and-serverauth", "aki-not-ski", "aki-wrong-serial")
+
+    def test_the_coded_divergences_are_rows_of_the_flows_that_drive_every_gate(self):
+        from tests import _tls_worlds as worlds
+
+        assert "aki-not-ski" in worlds.SEMANTIC_CA_STATES
+        for kind in ("eku-anyeku", "eku-anyeku-and-serverauth", "eku-anyeku-and-unknown", "aki-wrong-serial"):
+            assert kind in worlds.VERIFIER_CA_STATES, kind
+
+    @pytest.mark.parametrize("kind", CODED)
+    @pytest.mark.parametrize("cli", ["off", "on"])
+    def test_a_ca_both_stacks_reject_is_damaged_with_or_without_the_cli(self, lab, tmp_path, monkeypatch, kind, cli):
+        if cli == "on":
+            _with_the_cli(monkeypatch)
+        crt, key, _cert, _key = _install_ca_files(tmp_path, kind)
+        state, why = kea_tls.ca_identity(crt, key)
+        assert state == "damaged", (kind, cli, why)
+        assert (CA_IDENTITY_WHY.get(kind) or VERIFIER_WHY[kind]) in why, (kind, why)
+
+    @pytest.mark.parametrize("kind", CODED)
+    def test_a_live_coded_ca_is_damaged_in_ca_state_and_health_names_it_and_issuing_refuses(self, lab, kind):
+        _write_live_ca(kind)
+        lab.begin()
+        lab.before = None
+        state, why = kea_tls.ca_state()
+        assert state == "damaged", (kind, why)
+        with pytest.raises(kea_tls.CaDamaged):
+            kea_tls.issue_server_cert({"id": 9, "name": "x", "ssh_host": "10.9.9.9"}, "dhcp4", "10.9.9.9", commit=False)
+        row = health._kea_tls_expiry({})
+        assert row.status == "fail" and (CA_IDENTITY_WHY.get(kind) or VERIFIER_WHY[kind]) in row.detail, row.detail
+
+    def test_the_control_ca_is_ok_under_both_judges(self, lab, monkeypatch):
+        assert kea_tls.ca_state() == ("ok", "")
+        _with_the_cli(monkeypatch)
+        assert kea_tls.ca_state() == ("ok", "")
+
+    # ── a CLI rejection of a CA the library accepted: pinned both ways ──
+
+    def test_a_cli_rejection_is_damaged_with_the_clis_own_line(self, lab, monkeypatch):
+        _the_cli_says(lab, monkeypatch, _CLI_REJECTS)
+        state, why = kea_tls.ca_state()
+        assert state == "damaged"
+        assert (
+            "the daemon's own library rejects certificates issued from it for sslserver: error 26 at 1 depth lookup: unsuitable certificate purpose"
+            in why
+        ), why
+        row = health._kea_tls_expiry({})
+        assert row.status == "fail" and "the daemon's own library rejects" in row.detail, row.detail
+
+    def test_the_same_ca_is_ok_where_there_is_no_cli_and_the_register_says_which_judge_is_on_duty(
+        self, lab, monkeypatch
+    ):
+        monkeypatch.setattr(kea_tls, "_openssl_exe", lambda: None)
+        monkeypatch.setattr(
+            kea_tls, "_run_openssl", lambda args, timeout: pytest.fail("the CLI is never run where it is absent")
+        )
+        kea_tls._GATE_VERDICTS.clear()
+        assert kea_tls.ca_state() == ("ok", "")
+        guide = pathlib.Path("docs/admin-guide.md").read_text(encoding="utf-8")
+        assert "which judge is on duty" in guide.lower() and "openssl" in guide
+
+    def test_the_gate_cache_knows_whether_the_cli_existed(self, lab, monkeypatch):
+        """The same certificate in the same minute is judged again when the CLI appears or disappears - a cached `ok` from before it was installed must not stand."""
+        kea_tls._GATE_VERDICTS.clear()
+        assert kea_tls.ca_state() == ("ok", "")
+        monkeypatch.setattr(kea_tls, "_openssl_exe", lambda: "/usr/bin/openssl")
+        monkeypatch.setattr(kea_tls, "_run_openssl", lambda args, timeout: _CLI_REJECTS)
+        lab.begin()
+        lab.before = None
+        assert kea_tls.ca_state()[0] == "damaged"
+
+    @pytest.mark.parametrize(
+        ("what", "ran"),
+        [
+            (
+                "exit-127-missing-library",
+                (127, "openssl: error while loading shared libraries: libssl.so.3: cannot open shared object file"),
+            ),
+            ("usage-message", (1, "Usage: verify [options] [cert...]")),
+            ("an-exit-code-and-no-verdict", (3, "")),
+            ("never-started-or-timed-out", None),
+        ],
+    )
+    def test_a_cli_with_no_verdict_is_no_opinion_and_the_librarys_verdict_stands(self, lab, monkeypatch, what, ran):
+        _the_cli_says(lab, monkeypatch, ran)
+        assert kea_tls.ca_state() == ("ok", ""), what
+        assert kea_tls.openssl_second_opinion() == ""
+
+    def test_a_cli_that_accepts_changes_nothing(self, lab, monkeypatch):
+        _the_cli_says(lab, monkeypatch, (0, "probe.pem: OK\n"))
+        assert kea_tls.ca_state() == ("ok", "")
+
+    def test_the_cli_is_looked_up_in_one_place(self, monkeypatch):
+        monkeypatch.setattr(kea_tls.shutil, "which", lambda name: "/opt/ssl/bin/openssl")
+        assert kea_tls._openssl_exe() == "/opt/ssl/bin/openssl"
+        monkeypatch.setattr(kea_tls.shutil, "which", lambda name: None)
+        assert kea_tls._openssl_exe() is None
+
+
+_ALL_VALUE_STATES = [
+    state
+    for states in __import__("tests._tls_worlds", fromlist=["x"]).EXTENSION_VALUE_FAMILIES.values()
+    for state in states
+]
+
+
+class TestTheValueFamiliesAgainstTheRealCli:
+    """Q197 (AM1, the enumeration rule): every VALUE family of every extension class a CA certificate carries (`_tls_worlds.EXTENSION_VALUE_FAMILIES`) is a CA that Jen judges and, where the CLI exists,
+    that the CLI judges - and the property that matters is one-directional: **a CA Jen calls healthy is never one the CLI rejects**. Where Jen is the stricter judge the row is in the documented table
+    (`JEN_STRICTER_THAN_OPENSSL`, the admin guide's), so a new disagreement is a failing test, not a surprise."""
+
+    @pytest.mark.parametrize("kind", _ALL_VALUE_STATES)
+    def test_a_ca_jen_calls_healthy_is_never_one_the_cli_rejects(self, lab, tmp_path, monkeypatch, kind):
+        from tests import _tls_worlds as worlds
+
+        _with_the_cli(monkeypatch)
+        crt, key, cert, private = _install_ca_files(tmp_path, kind)
+        monkeypatch.setattr(
+            kea_tls, "_openssl_exe", lambda: None
+        )  # the LIBRARY's own verdict, to compare with the CLI's
+        kea_tls._GATE_VERDICTS.clear()
+        state, _why = kea_tls.ca_identity(crt, key)
+        verdicts = []
+        for client in (False, True):
+            _message, leaf = kea_tls.verify_probe(cert, private, client)
+            if leaf is None:
+                continue
+            verdicts.append(_openssl_accepts(cert, private, client))
+        if state == "ok":
+            assert verdicts and all(v is True for v in verdicts), (
+                f"{kind}: Jen calls it healthy and openssl rejects a leaf"
+            )
+        elif verdicts and all(v is True for v in verdicts):
+            assert kind in worlds.JEN_STRICTER_THAN_OPENSSL, (
+                f"{kind}: Jen is the stricter judge here and the admin guide's table does not list it"
+            )
+        else:
+            assert kind not in worlds.JEN_STRICTER_THAN_OPENSSL, (
+                f"{kind} is listed as Jen-stricter and openssl rejects it too"
+            )
+
+    def test_the_stricter_table_is_documented_in_the_admin_guide(self):
+        from tests import _tls_worlds as worlds
+
+        guide = pathlib.Path("docs/admin-guide.md").read_text(encoding="utf-8")
+        assert "Shapes Jen's verifier is stricter about than OpenSSL" in guide
+        for kind in worlds.JEN_STRICTER_THAN_OPENSSL:
+            assert worlds.STRICTER_LABELS[kind] in guide, f"the admin guide's table has no row for {kind}"
+
+
+class TestTheCliGateIsBounded:
+    """Q197 (AM3): a verdict exists only when the output carries one, and a child that hangs cannot hold Health - the wrapper's grandchild included."""
+
+    @pytest.mark.parametrize(
+        ("ran", "expected"),
+        [
+            ((0, "probe.pem: OK\n"), (True, "")),
+            ((0, "probe.pem: OK\nsomething else\n"), (True, "")),
+            (_CLI_REJECTS, (False, "error 26 at 1 depth lookup: unsuitable certificate purpose")),
+            ((2, "error probe.pem: verification failed\n"), (False, "verification failed")),
+            (
+                (20, "error 20 at 0 depth lookup: unable to get local issuer certificate\n"),
+                (False, "error 20 at 0 depth lookup: unable to get local issuer certificate"),
+            ),
+            ((127, "openssl: error while loading shared libraries: libssl.so.3"), (None, "")),
+            ((1, "Usage: verify [options]"), (None, "")),
+            ((0, "no verdict at all"), (None, "")),
+            ((2, ""), (None, "")),
+            (None, (None, "")),
+        ],
+    )
+    def test_the_verdict_parser_table(self, ran, expected):
+        assert kea_tls._openssl_verdict(ran) == expected
+
+    def test_a_real_binary_that_is_not_openssl_is_no_opinion(self, monkeypatch):
+        """A real subprocess: the Python interpreter standing in for a broken `openssl` - it exits non-zero with a usage error and no verify verdict."""
+        import sys
+
+        monkeypatch.setattr(kea_tls, "_openssl_exe", lambda: sys.executable)
+        ran = kea_tls._run_openssl(["verify", "-purpose", "sslserver"], 10.0)
+        assert ran is not None and ran[0] != 0
+        assert kea_tls._openssl_verdict(ran) == (None, "")
+
+    def test_a_binary_that_cannot_be_started_is_no_opinion(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(kea_tls, "_openssl_exe", lambda: str(tmp_path / "does-not-exist"))
+        assert kea_tls._run_openssl(["verify"], 5.0) is None
+
+    @pytest.mark.skipif(
+        os.name == "nt", reason="process groups: Jen runs on Linux only (a job object is registered, out of scope)"
+    )
+    def test_a_wrapper_that_leaves_a_grandchild_is_killed_as_a_group_at_the_timeout(self, monkeypatch, tmp_path):
+        pidfile = tmp_path / "grandchild.pid"
+        script = tmp_path / "openssl"
+        script.write_text(f"#!/bin/sh\nsleep 60 &\necho $! > {pidfile}\nsleep 60\n", encoding="ascii")
+        script.chmod(0o755)
+        monkeypatch.setattr(kea_tls, "_openssl_exe", lambda: str(script))
+        started = time.monotonic()
+        assert kea_tls._run_openssl(["verify"], 1.0) is None, "a child that does not finish is NO opinion"
+        assert time.monotonic() - started < 15, "the timeout bounds the child AND its group"
+        grandchild = int(pidfile.read_text().strip())
+        deadline = time.monotonic() + 5
+        gone = False
+        while time.monotonic() < deadline:
+            try:
+                os.kill(grandchild, 0)
+            except ProcessLookupError:
+                gone = True
+                break
+            time.sleep(0.1)
+        assert gone, "the grandchild survived the timeout"
+
+    def test_the_cli_runs_with_auth_level_2_so_it_and_the_daemon_agree_on_key_strength(self, lab, monkeypatch):
+        seen = []
+        monkeypatch.setattr(kea_tls, "_openssl_exe", lambda: "/usr/bin/openssl")
+        monkeypatch.setattr(kea_tls, "_run_openssl", lambda args, timeout: seen.append(list(args)) or (0, "x: OK"))
+        kea_tls._GATE_VERDICTS.clear()
+        assert kea_tls.ca_state() == ("ok", "")
+        assert seen and all(
+            a[a.index("-auth_level") : a.index("-auth_level") + 2] == ["-auth_level", "2"] for a in seen
+        ), seen
+        assert {a[a.index("-purpose") + 1] for a in seen} == {"sslserver", "sslclient"}
+
+    def test_the_second_opinion_compares_with_jens_verdict_not_with_the_probe_alone(self, lab, monkeypatch):
+        """The disagreement line exists only for a CA Jen has judged DAMAGED - a `damaged` row never says "Jen accepts" (the first pass's finding 5)."""
+        monkeypatch.setattr(kea_tls, "_openssl_exe", lambda: "/usr/bin/openssl")
+        monkeypatch.setattr(kea_tls, "_run_openssl", lambda args, timeout: (0, "x: OK"))
+        assert kea_tls.ca_state() == ("ok", "")
+        assert kea_tls.openssl_second_opinion() == "", "an ok CA has no opinion line, whatever the CLI says"
+        _write_live_ca("aki-issuer-serial-only")
+        kea_tls._ORACLE_VERDICTS.clear()
+        kea_tls._GATE_VERDICTS.clear()
+        lab.begin()
+        lab.before = None
+        assert kea_tls.ca_state()[0] == "damaged"
+        assert "Jen is the stricter judge here" in kea_tls.openssl_second_opinion()
+
+
+class TestTheStaleRecords:
+    """Q197 (AM4): a copy whose endpoint is not an https endpoint now is a record of nothing. Health does not count it as a valid (or an expiring) certificate and says it is stale; Rotate already ignores it; a removed
+    socket drops its record; and a superadmin can forget the rest in one click (a local change - no host is asked anything)."""
+
+    GONE = {"id": 77, "name": "retired-kea", "ssh_host": "10.7.7.7"}
+
+    def _stale_copy(self):
+        """A certificate for a server that is not an https endpoint now, issued 3000 days ago (so it is long expired): built directly, because `issue_server_cert` verifies the leaf it returns at the real
+        time and would refuse an expired one."""
+        import datetime
+
+        ca_cert, ca_key = kea_tls._load_ca()
+        key = kea_tls._new_key()
+        leaf = kea_tls._leaf(
+            ca_cert,
+            ca_key,
+            key,
+            "kea-dhcp4 retired",
+            [kea_tls._san_for("10.7.7.7")],
+            client=False,
+            now=datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) - datetime.timedelta(days=3000),
+        )
+        kea_tls.commit_issued(
+            self.GONE["id"],
+            "dhcp4",
+            {
+                "ca.crt": kea_tls._cert_pem(ca_cert).decode(),
+                "server.crt": kea_tls._cert_pem(leaf).decode(),
+                "server.key": kea_tls._key_pem(key).decode(),
+            },
+        )
+
+    def test_an_expired_copy_for_a_server_that_is_no_longer_https_is_named_stale_not_counted(self, lab):
+        self._stale_copy()
+        lab.begin()
+        lab.before = None
+        inventory = kea_tls.rotation_inventory(extensions.KEA_SERVERS, prove_storage=False)
+        assert "77-dhcp4" in inventory.stale
+        row = health._kea_tls_expiry({})
+        assert (
+            "stale record for server 77 kea-dhcp4 (its endpoint is no longer https): Rotate ignores it" in row.detail
+        ), row.detail
+        assert "remove the socket's record under Settings → Kea" in row.detail
+        assert "2 server certificate(s) valid" in row.detail, "the stale copy is not counted as a valid certificate"
+        assert row.status != "fail" or "expired" not in row.detail, "a stale record's expiry is not a warning"
+
+    def test_rotate_ignores_it(self, lab):
+        self._stale_copy()
+        _rotate()
+        assert "Kea CA rotated" in lab.texts(), lab.texts()
+        assert not any(i[0] == 77 for i in lab.incidents)
+
+    def test_forgetting_clears_it_and_asks_no_host_anything(self, lab):
+        self._stale_copy()
+        lab.begin()
+        before_calls = {sid: dict(h["calls"]) for sid, h in lab.hosts.items()}
+        forgotten = kea_tls.forget_stale_records(extensions.KEA_SERVERS)
+        lab.before = None  # (a direct call to the module is not a request: T5 is about requests)
+        assert forgotten == ["77-dhcp4"]
+        assert not os.path.lexists(kea_tls.server_copy_path(77, "dhcp4")), "the record is gone"
+        assert {sid: dict(h["calls"]) for sid, h in lab.hosts.items()} == before_calls, "no host was asked anything"
+        assert kea_tls.forget_stale_records(extensions.KEA_SERVERS) == []
+        assert "stale record" not in health._kea_tls_expiry({}).detail
+
+    def test_a_live_https_endpoint_is_never_forgotten(self, lab):
+        self._stale_copy()
+        forgotten = kea_tls.forget_stale_records(extensions.KEA_SERVERS)
+        lab.before = None
+        assert forgotten == ["77-dhcp4"]
+        for sid in lab.servers:
+            assert os.path.lexists(kea_tls.server_copy_path(sid, "dhcp4")), f"server {sid}'s record is untouched"
+
+    def test_the_forget_route_is_local_audited_and_says_what_it_forgot(self, lab, monkeypatch):
+        self._stale_copy()
+        audits = []
+        monkeypatch.setattr(infra.__dict__["__user"], "audit", lambda *a, **k: audits.append(a))
+        app = flask.Flask(__name__)
+        app.secret_key = "x"
+        monkeypatch.setattr(infra, "url_for", lambda *a, **k: "/settings/kea")
+        monkeypatch.setattr(infra, "flash", lambda text, style="message": lab.flashes.append((style, str(text))))
+        with app.test_request_context(method="POST"):
+            inspect.unwrap(infra.forget_stale_kea_records)()
+        assert "Forgot Jen's own copy of 1 certificate" in lab.texts() and "77-dhcp4" in lab.texts()
+        assert "Nothing was changed on any host" in lab.texts()
+        assert any(a[0] == "FORGET_STALE_KEA_RECORDS" for a in audits)
+        lab.flashes.clear()
+        with app.test_request_context(method="POST"):
+            inspect.unwrap(infra.forget_stale_kea_records)()
+        assert "There were no stale certificate records." in lab.texts()
+
+    def test_the_settings_page_summary_lists_the_stale_records_and_the_template_has_the_button(self, lab):
+        self._stale_copy()
+        summary = infra._kea_ca_summary()
+        assert summary["stale"] == ["server 77 kea-dhcp4"], summary
+        template = pathlib.Path("templates/settings_kea.html").read_text(encoding="utf-8")
+        assert "/settings/infrastructure/kea-ca/forget-stale" in template and "Forget stale records" in template
+
+    def test_the_page_prints_expiry_unreadable_not_a_none_of_days(self):
+        template = pathlib.Path("templates/settings_kea.html").read_text(encoding="utf-8")
+        assert "kea_ca.days_left is none" in template and "expiry unreadable" in template
+        assert "{% if d is none %}expiry unreadable{% else %}{{ d }} d{% endif %}" in template
+
+
+class TestHygieneOfQ197:
+    """Q197 (AM6 b, c, e): the staged `.next` set leaves no `.prev` key copy; every directory under the SSL dir is 0700; the Lab fake judges an anchor with the product's own ladder."""
+
+    def test_staging_a_rotation_makes_no_next_prev_key_copy_and_one_set_of_four(self, lab):
+        staged = kea_tls.stage_rotation()
+        names = sorted(os.listdir(kea_tls.SSL_DIR))
+        assert not any(n.endswith(".next.prev") for n in names), names
+        assert sum(n.endswith(".next") for n in names) == 4, names
+        kea_tls.discard_rotation(staged)
+        assert not any(".next" in n for n in os.listdir(kea_tls.SSL_DIR))
+
+    def test_a_restaged_rotation_does_not_keep_the_earlier_key_either(self, lab):
+        kea_tls.stage_rotation()
+        kea_tls.discard_rotation(kea_tls.stage_rotation())
+        assert not any(".next" in n for n in os.listdir(kea_tls.SSL_DIR)), os.listdir(kea_tls.SSL_DIR)
+
+    def test_a_next_file_beside_nothing_is_evidence_that_a_ca_existed(self, lab):
+        for name in os.listdir(kea_tls.SSL_DIR):
+            path = os.path.join(kea_tls.SSL_DIR, name)
+            if os.path.isfile(path) and not name.endswith(".next"):
+                os.unlink(path)
+        shutil_rmtree = __import__("shutil").rmtree
+        shutil_rmtree(kea_tls._copies_dir(), ignore_errors=True)
+        pathlib.Path(kea_tls.ca_paths()[1] + ".next.prev").write_bytes(b"an old staged key")
+        lab.begin()
+        lab.before = None
+        assert "a CA existed" in kea_tls._initialised_evidence()
+
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX modes")
+    def test_a_directory_made_under_the_ssl_dir_is_private_by_default(self, tmp_path):
+        target = tmp_path / "made-by-ensure-dir"
+        kea_tls._ensure_dir(str(target))
+        assert (target.stat().st_mode & 0o777) == 0o700
+
+    def test_the_default_mode_of_ensure_dir_is_0700(self):
+        assert inspect.signature(kea_tls._ensure_dir).parameters["mode"].default == 0o700
+
+    def test_the_fake_daemon_judges_an_anchor_with_the_products_own_ladder(self):
+        source = inspect.getsource(_anchor_usable)
+        assert "ca_identity(" in source and "cert_only=True" in source, "the fake and the product share one judgment"
+
+    def test_ca_identity_cert_only_needs_no_key_and_runs_no_oracle(self, tmp_path, monkeypatch):
+        crt, _key, _cert, _private = _install_ca_files(tmp_path, "eku-clientauth-only")
+        monkeypatch.setattr(kea_tls, "ca_gate_rejection", lambda *a, **k: pytest.fail("cert_only runs no oracle"))
+        assert kea_tls.ca_identity(crt, None, cert_only=True) == ("ok", ""), "the structural ladder alone"
+        crt, _key, _cert, _private = _install_ca_files(tmp_path, "aki-not-ski")
+        assert kea_tls.ca_identity(crt, None, cert_only=True)[0] == "damaged"
+
+
+class TestTheNameWorldsOfRotate:
+    """Q197 (AM2): a saved https address whose host the verifier cannot name (an underscore) is a NAME refusal in Rotate: the CA is healthy, the sentence names the host, and no acknowledgement is asked for."""
+
+    def test_a_saved_https_host_the_verifier_cannot_name_stops_the_rotation_and_leaves_every_host_on_the_old_ca(
+        self, lab
+    ):
+        lab.urls[2] = "https://kea_host:8004"
+        extensions.KEA_SERVERS[:] = list(lab.servers.values())
+        lab.begin()
+        _rotate()
+        texts = lab.texts()
+        assert "the CA cannot issue its certificate for kea_host" in texts, texts
+        assert "Kea CA rotated" not in texts
+        assert "acknowledg" not in texts.lower(), "a healthy CA is never sent to the damaged-CA acknowledgement"
+        assert kea_tls.ca_state() == ("ok", "")
+        for sid, host in lab.hosts.items():
+            assert host["files"] is None or lab.answers(sid, kea_tls.ca_paths()[0]), (
+                f"server {sid} still answers on the old CA"
+            )

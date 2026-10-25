@@ -2924,3 +2924,42 @@ def test_22_j_a_ca_a_real_verifier_rejects_refuses_an_https_setup_and_health_nam
     assert local["state"][0] == "damaged", local
     assert local["after"] == damaged["before"], "INVARIANT: Jen's CA certificate and client pair are byte-equal"
     st.wait_for(lambda: st.kea_answers("kea-b"), timeout=60, what="kea-b answering on its own socket")
+
+
+S22K_DAMAGE_SCRIPT = S22J_DAMAGE_SCRIPT.replace(
+    "ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH])",
+    "ExtendedKeyUsage([ExtendedKeyUsageOID.ANY_EXTENDED_KEY_USAGE])",
+).replace(
+    "An operator's CA restricted to client authentication", "An operator's CA whose only usage is anyExtendedKeyUsage"
+)
+
+
+def test_22_k_a_ca_whose_only_usage_is_any_extended_key_usage_refuses_an_https_setup_naming_the_daemons_verifier(stack):
+    """REMOTE-001 / Q197 (AM1): the first pre-reviewer pass found a CA shape Jen's library verifier called healthy while BOTH real stacks reject every leaf Jen issues from it: a CA whose Extended Key Usage
+    is `anyExtendedKeyUsage` alone (OpenSSL - the daemon's library - ignores it on a CA: `openssl verify -purpose sslserver` says "unsuitable certificate purpose", and a handshake fails
+    CERTIFICATE_VERIFY_FAILED). kea-a is really on an https socket Jen issued the certificate for; the CA at Jen's path is replaced by that CA. Now it is damaged: Health fails and says why, an https setup is
+    REFUSED before anything is sent to a host, kea-a's TLS files and daemon config are byte-for-byte the baseline, and Jen's CA certificate and client pair are byte-equal after it."""
+    out, proc = _s22_run("write-ok", scheme="https", port="8014")
+    assert emitted(out) is not None, f"no result from the https setup:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    baseline = _s22_host_state()
+    out, proc = st.jen_py(S22K_DAMAGE_SCRIPT, timeout=200)
+    damaged = emitted(out)
+    assert damaged is not None, (proc.stdout[-1500:], proc.stderr[-1500:])
+    assert damaged["state"][0] == "damaged" and "anyExtendedKeyUsage does not count" in damaged["state"][1], damaged[
+        "state"
+    ]
+    assert damaged["health"][0] == "fail" and "OpenSSL ignores it on a CA" in damaged["health"][1], damaged["health"]
+    out, proc = _s22_run("write-ok", scheme="https", port="8014")
+    result = emitted(out)
+    assert result is not None, f"no result from the refused setup:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    texts = " ".join(result["flashes"])
+    assert "Jen's CA is damaged" in texts and "the verifier rejects" in texts and "OpenSSL ignores it" in texts, texts
+    after = _s22_host_state()
+    for name in S22_TLS_FILES:
+        assert after[name] == baseline[name], f"INVARIANT: {name} on kea-a is the baseline"
+    assert json.loads(after["conf"]) == json.loads(baseline["conf"]), "INVARIANT: kea-a's daemon config is the baseline"
+    out, proc = st.jen_py(S22H_CHECK_SCRIPT, timeout=200)
+    local = emitted(out)
+    assert local["state"][0] == "damaged", local
+    assert local["after"] == damaged["before"], "INVARIANT: Jen's CA certificate and client pair are byte-equal"
+    st.wait_for(lambda: st.kea_answers("kea-b"), timeout=60, what="kea-b answering on its own socket")

@@ -600,9 +600,17 @@ it to the user and password fields, and Jen keeps dialling it as written (the cr
    verified whatever `_now` says. What the library offers no switch for stays STRICTER than OpenSSL and is pinned (a leading-dot or directoryName name constraint, a key that is not P-256/384/521 or
    RSA of 2048 bits or more). **The REAL leaf is verified too (Q196, second pass):** the oracle's probe leaf has a DNS name, Jen's server leaf has the bind IP, so `issue_server_cert` and
    `issue_client_cert` verify the leaf they ACTUALLY issue - real SANs, the client profile relaxed for a leaf with no SAN - before returning it (`verify_issued`), and a CA that cannot sign for THIS server
-   is refused before anything is installed; a leaf's AKI names the CA's actual SKI. Where the `openssl` CLI exists Health also asks `openssl verify` and reports a disagreement in BOTH directions
-   (`openssl_second_opinion`: a WARNING when Jen accepts and OpenSSL does not, evidence on the damaged row when Jen rejects and OpenSSL accepts; an openssl that is broken or cannot run is no opinion;
-   never a refusal: OpenSSL rejects an anyExtendedKeyUsage CA that the verifier, and this rule, call healthy). **One daemon is one rotation target (Q196).** Two targets with the same SSH host (`same_host`: exact,
+   is refused before anything is installed; a leaf's AKI names the CA's actual SKI. Where the `openssl` CLI exists Health also asks `openssl verify`: evidence on the damaged row when Jen rejects and OpenSSL accepts (`openssl_second_opinion`, informational; an openssl that is
+   broken or cannot run is no opinion). **Where the daemon's own library is on the box, it judges at the gate (Q197).** Q196 put the CLI in Health only ("a warning, never a refusal") and the gates asked the
+   library alone, so a CA both real stacks reject was `ok` at the gate - an anyExtendedKeyUsage-only EKU (OpenSSL ignores it on a CA) and a self-issued root whose AuthorityKeyIdentifier keyid is not its own
+   SubjectKeyIdentifier were the two the first pre-reviewer pass found and the handshake confirmed. Both are coded divergences and `damaged`, and `ca_identity` ends with `ca_gate_rejection`: the library's
+   verdict first, then `openssl verify -purpose sslserver|sslclient -auth_level 2` over the same throwaway leaves; a CLI rejection is `damaged` with its own line, and a CLI that is absent, broken (exit
+   127, a usage message, an exit code with no verdict), slow (the child AND its process group are killed at the timeout) or unreadable is NO opinion - never a rejection and never an acceptance. A verdict exists
+   only on `verification failed`, `error N at D depth lookup` or `: OK`. The comparison with the CLI is with `ca_state`'s own verdict. **A healthy CA that cannot issue for THIS name is told so
+   (Q197):** `verify_issued`'s refusal of a leaf's name is `NameRefused`, never `CaDamaged` - the setup, Rotate and the page say the CA is healthy, name the SAN that failed and ask for no acknowledgement; the
+   form refuses an https direct host the verifier's DNSName parser rejects. **A record of an endpoint that is no longer https is stale, not valid (Q197):** Health does not count it, Rotate ignores it, a removed
+   socket drops it (`discard_local_record`), and a superadmin can forget the rest (local, audited). **One daemon is one record where the world is MADE (Q197):** an https setup is refused when another server
+   record with the same SSH host already holds a Jen-issued certificate for the same service. **The staged rotation leaves no key copy (Q197):** the `.next` set is written without `.prev`. **One daemon is one rotation target (Q196).** Two targets with the same SSH host (`same_host`: exact,
    no DNS) and the same service are a refusal BEFORE staging; the route probes EVERY target once more with the staged identity after the last install and before the promotion, so each endpoint answers the
    FINAL material on its host (a failure there is the rollback).
 11. **A stored incident Jen cannot recognise is kept (Q190).** Each entry of the recovery record has a shape (`kea_changeset.recognised_incident`: an attention incident has a known category, a service, a server
@@ -679,6 +687,20 @@ Jen's CA by certificate identity, per endpoint; an invariant with no knob; an in
 - `tests/test_kea_tls_rotation.py::TestCaIdentityIsTheVerifier`
 - `tests/test_kea_tls_rotation.py::TestOneDaemonOneTarget`
 - `tests/test_kea_tls_rotation.py::TestTheSecondPassOfQ196`
+- `tests/test_kea_tls_rotation.py::TestTheDaemonsVerifierJudges`
+- `tests/test_kea_tls_rotation.py::TestTheValueFamiliesAgainstTheRealCli`
+- `tests/test_kea_tls_rotation.py::TestTheCliGateIsBounded`
+- `tests/test_kea_tls_rotation.py::TestTheStaleRecords`
+- `tests/test_kea_tls_rotation.py::TestHygieneOfQ197`
+- `tests/test_kea_tls_rotation.py::TestTheNameWorldsOfRotate`
+- `tests/test_kea_tls_worlds.py::TestEveryValueFamilyIsARow`
+- `tests/test_kea_tls.py::TestTheUnsafeReplacementPathIsGone`
+- `tests/test_direct_socket_lock.py::TestQ197TheNameWorldsOfTheHttpsSetup`
+- `tests/test_direct_socket_lock.py::TestQ197TheHostNameTheFormSavesIsTheNameACertificateCanCarry`
+- `tests/test_direct_socket_lock.py::TestQ197TheSetupAsksTheOneDaemonQuestion`
+- `tests/test_direct_socket_lock.py::TestQ197ARemovedSocketDropsItsRecord`
+- `tests/test_direct_socket_credentials.py::TestTheProbeRowsOfQ197`
+- `tests/system/test_boundaries.py::test_22_k_a_ca_whose_only_usage_is_any_extended_key_usage_refuses_an_https_setup_naming_the_daemons_verifier`
 - `tests/test_direct_socket_credentials.py::TestTheProbeRowsOfQ196`
 - `tests/system/test_boundaries.py::test_22_j_a_ca_a_real_verifier_rejects_refuses_an_https_setup_and_health_names_the_restriction`
 - `tests/test_direct_socket_credentials.py::TestTheProbeRowsOfQ195`
