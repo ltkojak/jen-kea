@@ -910,6 +910,34 @@ class TestTheProbeRowsOfQ197:
         )
 
 
+class TestTheProbeRowsOfQ198:
+    """AN1/AN2/AN3: a refusal changes nothing; parked is not stale; the first issuer name is the one OpenSSL compares."""
+
+    def test_a_refusal_changes_nothing_for_a_target_it_never_touched(self):
+        assert probe.q198_an1_a_refusal_changes_nothing_for_a_target_it_never_touched() == (True, True, True, True)
+
+    def test_a_record_for_a_configured_server_is_parked_not_stale(self):
+        assert probe.q198_an2_a_record_for_a_configured_server_is_parked_not_stale() == (
+            ["2-dhcp4"],
+            ["7-dhcp4"],
+            ["7-dhcp4"],
+            ["2-dhcp4"],
+            True,
+        )
+
+    def test_the_first_issuer_directory_name_is_the_one_openssl_compares(self):
+        assert probe.q198_an3_the_first_issuer_directory_name_is_the_one_openssl_compares() == {
+            "aki-two-dirnames-wrong-first": "damaged",
+            "aki-two-dirnames-right-first": "ok",
+            "aki-dnsname-issuer": "ok",
+            "aki-uri-issuer": "ok",
+            "aki-dns-first-right-dirname": "ok",
+            "aki-dns-first-wrong-dirname": "damaged",
+            "aki-all-none": "damaged",
+            "issuer-string-type-differs": "ok",
+        }
+
+
 class TestTheSecondPassOfQ187:
     """The executed findings of the adversarial pass on beta.18's routes, each as a probe row."""
 

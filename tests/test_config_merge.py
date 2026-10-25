@@ -526,3 +526,35 @@ password = JP
     def test_the_installer_reads_the_exit_status_and_says_why(self):
         text = (ROOT / "install.sh").read_text(encoding="utf-8")
         assert "_merge_rc" in text and "-eq 4" in text and "Refused: --configure would send a saved password" in text
+
+
+class TestTheCertificateNameRuleInTheInstallerMerge:
+    """Q198 (AN5): one rule at every entry point. A direct-mode https address whose host the certificate verifier's DNS-name parser rejects (an underscore, a trailing dot) is WARNED about on stderr -
+    Jen still dials it as written - and the check fails open where `cryptography` is not importable (the setup and Rotate ask the same question later)."""
+
+    DIRECT = "[kea]\nconnection_mode = direct\napi_url = https://kea_host:8004\n\n[kea6]\napi_url = https://10.0.0.6:8006\n\n[kea_server_2]\napi_url = https://kea-b.:8004\n"
+
+    def test_a_host_a_certificate_cannot_carry_is_named_by_section_and_key(self):
+        pytest.importorskip("cryptography")
+        found = cm.name_warnings(self.DIRECT)
+        assert "[kea] api_url" in found and "[kea_server_2] api_url" in found and "[kea6] api_url" not in found, found
+
+    def test_a_control_agent_mode_file_is_not_judged(self):
+        pytest.importorskip("cryptography")
+        assert cm.name_warnings(self.DIRECT.replace("direct", "ca")) == []
+
+    def test_an_http_address_is_not_a_certificate_question(self):
+        pytest.importorskip("cryptography")
+        assert cm.name_warnings(self.DIRECT.replace("https://kea_host", "http://kea_host")) == [
+            "[kea_server_2] api_url"
+        ]
+
+    def test_the_warning_is_on_stderr_and_the_merge_still_succeeds(self, tmp_path, capsys, monkeypatch):
+        pytest.importorskip("cryptography")
+        live = tmp_path / "live.ini"
+        live.write_text(self.DIRECT, encoding="utf-8")
+        monkeypatch.setattr("sys.stdin", __import__("io").StringIO(self.DIRECT))
+        assert cm.main(["--live", str(live)]) == 0
+        captured = capsys.readouterr()
+        assert "[kea] api_url is an https address in direct mode" in captured.err
+        assert "api_url = https://kea_host:8004" in captured.out

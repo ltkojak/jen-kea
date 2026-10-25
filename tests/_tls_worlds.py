@@ -124,6 +124,9 @@ SEMANTIC_CA_STATES = (
     "aki-wrong-serial",
     "aki-issuer-other-name",
     "aki-keyid-wrong-serial",
+    # Q198 (AN3): OpenSSL compares the FIRST DirectoryName of the issuer list and skips every other kind of name
+    "aki-two-dirnames-wrong-first",
+    "aki-dns-first-wrong-dirname",
 )
 
 #: Q196 (AL1): the VERIFIER states - a CA that parses, pairs, is a CA by purpose and validity, self-signed, and still not one a real verifier accepts what Jen issues from, because of a constraint
@@ -148,6 +151,12 @@ VERIFIER_OK_STATES = (
     "aki-keyid-matches-ski",
     "aki-keyid-issuer-serial",
     "no-ski-with-aki-keyid",  # nothing to compare: both stacks chain to it
+    # Q198 (AN3, executed against openssl 3.2.4 and the library): the first DirectoryName is the root's own, or the list holds no DirectoryName at all
+    "aki-two-dirnames-right-first",
+    "aki-dnsname-issuer",
+    "aki-uri-issuer",
+    "aki-dns-first-right-dirname",
+    "issuer-string-type-differs",  # the issuer is a PrintableString and the subject the same text as a UTF8String: one name
     "name-constraints-permit-own-domain",
     "policy-constraints",
     "inhibit-any-policy",
@@ -169,6 +178,7 @@ VERIFIER_STRICTER_STATES = (
     "crl-distribution-points-critical",
     "empty-subject-critical-san",
     "policy-mappings-critical",
+    "aki-all-none",  # an AuthorityKeyIdentifier with no field set: the library demands the key identifier, openssl chains to it
 )
 #: Q197 (executed against openssl 3.2.4, `tests/test_kea_tls_rotation.py::TestTheValueFamiliesAgainstTheRealCli`): EVERY state where Jen calls the CA damaged and `openssl verify` accepts a leaf of it for both
 #: purposes - the admin guide's "Shapes Jen's verifier is stricter about than OpenSSL". (An Ed25519 CA is also here in spirit: the CLI cannot be asked, Jen cannot issue from it.)
@@ -183,6 +193,7 @@ STRICTER_LABELS = {
     "crl-distribution-points-critical": "critical CRLDistributionPoints",
     "empty-subject-critical-san": "empty subject",
     "policy-mappings-critical": "critical policyMappings",
+    "aki-all-none": "no field set",
     "tampered-signature": "tampered self-signature",
     "no-basic-constraints": "no Basic Constraints",
 }
@@ -221,11 +232,18 @@ EXTENSION_VALUE_FAMILIES = {
         "aki-issuer-other-name",
         "aki-keyid-wrong-serial",
         "aki-issuer-serial-only",
+        "aki-two-dirnames-wrong-first",
+        "aki-two-dirnames-right-first",
+        "aki-dnsname-issuer",
+        "aki-uri-issuer",
+        "aki-dns-first-right-dirname",
+        "aki-dns-first-wrong-dirname",
+        "aki-all-none",
     ),
     "SubjectKeyIdentifier": ("ski-not-sha1",),
     # the structure around the extensions: validity, the signature, the issuer, the key, an encoding the library reads as a duplicate
     "Validity": ("expired", "not-yet-valid"),
-    "SignatureAndIssuer": ("tampered-signature", "issuer-not-subject"),
+    "SignatureAndIssuer": ("tampered-signature", "issuer-not-subject", "issuer-string-type-differs"),
     "ExtensionEncoding": ("duplicate-extension",),
     "SubjectPublicKey": ("unsupported-key", "key-secp256k1", "key-brainpool"),
     "BasicConstraints": ("not-ca", "no-basic-constraints", "bc-non-critical"),
@@ -275,6 +293,19 @@ def semantic_ca(kind: str):
     if kind == "empty-subject-critical-san":
         name = x509.Name([])
     issuer = kea_tls._name("an issuer that is not the subject") if kind == "issuer-not-subject" else name
+    if kind == "issuer-string-type-differs":
+        from cryptography.x509.name import _ASN1Type
+        from cryptography.x509.oid import NameOID
+
+        # the same text, a different ASN.1 string type: X509_NAME_cmp, the chain verifier and `Name.__eq__` call it one name; the DER bytes differ
+        issuer = x509.Name(
+            [
+                x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Jen", _type=_ASN1Type.PrintableString),
+                x509.NameAttribute(
+                    NameOID.COMMON_NAME, f"Jen Kea CA semantic {kind}"[:64], _type=_ASN1Type.PrintableString
+                ),
+            ]
+        )
     serial = x509.random_serial_number()
     now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
     before, after = now - datetime.timedelta(minutes=5), now + datetime.timedelta(days=3650)
@@ -307,6 +338,31 @@ def semantic_ca(kind: str):
             ski.digest if ski else None, [x509.DirectoryName(name)], serial + 1
         ),
         "aki-issuer-serial-only": x509.AuthorityKeyIdentifier(None, [x509.DirectoryName(name)], serial),
+        "aki-two-dirnames-wrong-first": x509.AuthorityKeyIdentifier(
+            ski.digest if ski else None,
+            [x509.DirectoryName(kea_tls._name("an issuer that is not this root")), x509.DirectoryName(name)],
+            serial,
+        ),
+        "aki-two-dirnames-right-first": x509.AuthorityKeyIdentifier(
+            ski.digest if ski else None,
+            [x509.DirectoryName(name), x509.DirectoryName(kea_tls._name("an issuer that is not this root"))],
+            serial,
+        ),
+        "aki-dnsname-issuer": x509.AuthorityKeyIdentifier(
+            ski.digest if ski else None, [x509.DNSName("ca.invalid")], serial
+        ),
+        "aki-uri-issuer": x509.AuthorityKeyIdentifier(
+            ski.digest if ski else None, [x509.UniformResourceIdentifier("http://ca.invalid/")], serial
+        ),
+        "aki-dns-first-right-dirname": x509.AuthorityKeyIdentifier(
+            ski.digest if ski else None, [x509.DNSName("a.invalid"), x509.DirectoryName(name)], serial
+        ),
+        "aki-dns-first-wrong-dirname": x509.AuthorityKeyIdentifier(
+            ski.digest if ski else None,
+            [x509.DNSName("a.invalid"), x509.DirectoryName(kea_tls._name("an issuer that is not this root"))],
+            serial,
+        ),
+        "aki-all-none": x509.AuthorityKeyIdentifier(None, None, None),
     }.get(kind)
     if aki is not None:
         if kind != "no-ski-with-aki-keyid":

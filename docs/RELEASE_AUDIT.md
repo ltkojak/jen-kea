@@ -193,6 +193,11 @@ the procedure that replaces it. It runs on every tagged beta BEFORE the archive 
    real stacks rejected them; the first agent's table had no row for either, so its "the P1 class is empty" was refuted for those two and confirmed otherwise. The author executed both against
    `openssl verify` and a live handshake, and that, not either report, settled it.
 
+9. **A refusal world always carries every record state (Q198).** The harness lineage ran beta.28's refusal worlds with no `.prev` and no stale marker beside the targets and so never saw the failure branch
+   destroy the recorded pair of a target it never touched; the fresh reader, building the world from the tree, found it and reproduced it through the real route (the shipped T5 fired). Every refusal
+   branch is run with `.prev`-bearing untouched targets (one of them stale-marked) and the records compared byte for byte afterwards; likewise the AKI rows had every single-value form and not a list of two
+   issuer names with the wrong one first - the second time a value-level shape escaped a class-level enumeration (rule 7 above), found again by the reader who started from the tree.
+
 **The exit rule.** Promotion is judged against Jen's threat model (`docs/ARCHITECTURE.md`): a P1 in a supported configuration blocks and gets a Q; a finding that requires the operator to
 have hand-corrupted Jen's own identity or state files is a P2 in this model - registered, shipped as a stable PATCH if it proves to matter, never another beta. A finding after promotion
 ships as `X.Y.Z+1` on the stable channel. The maintainer says "promote"; nothing about a promotion is written before that word.

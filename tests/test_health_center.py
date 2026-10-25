@@ -1300,7 +1300,7 @@ class TestKeaTlsExpiry:
     server certs. Wider bands than the web-UI cert (5-year leaves):
     warn ≤ 90 days, fail ≤ 14 or expired; skip when no CA exists."""
 
-    def _wire(self, monkeypatch, ca=3000, client=1500, copies=(), client_ok=True, present=True, stale=()):
+    def _wire(self, monkeypatch, ca=3000, client=1500, copies=(), client_ok=True, present=True, stale=(), parked=()):
         import types
 
         from jen.services import kea_tls
@@ -1310,7 +1310,9 @@ class TestKeaTlsExpiry:
         monkeypatch.setattr(
             kea_tls,
             "rotation_inventory",
-            lambda servers, url_for=None, **_kw: types.SimpleNamespace(refusals=[], stale=list(stale)),
+            lambda servers, url_for=None, **_kw: types.SimpleNamespace(
+                refusals=[], stale=list(stale), parked=list(parked)
+            ),
         )
 
         monkeypatch.setattr(extensions, "KEA_SERVERS", [{"id": 1, "name": "kea-a"}, {"id": 2, "name": "kea-b"}])
@@ -1406,6 +1408,7 @@ class TestKeaTlsExpiry:
                     "kea-b kea-dhcp4 is an https endpoint at https://10.0.0.6:8004 and Jen has no complete record"
                 ],
                 stale=[],
+                parked=[],
             ),
         )
         c = health._kea_tls_expiry(_ctx())
@@ -1421,8 +1424,21 @@ class TestKeaTlsExpiry:
         c = health._kea_tls_expiry(_ctx())
         assert c.status == "ok", (c.status, c.detail)
         assert "1 server certificate(s)" in c.detail and "expired" not in c.detail
-        assert "stale record for kea-b kea-dhcp4 (its endpoint is no longer https): Rotate ignores it" in c.detail
-        assert "remove the socket's record under Settings → Kea, or forget it there" in c.detail
+        assert "stale record for kea-b kea-dhcp4 (its server is no longer configured): Rotate ignores it" in c.detail
+        assert "forget it under Settings → Kea to clear this" in c.detail
+
+    def test_a_parked_record_is_counted_watched_and_named(self, monkeypatch):
+        """Q198 (AN2): a record for a CONFIGURED server whose endpoint is not https now is parked - its daemon may still present the certificate - so it is counted and its expiry is watched."""
+        self._wire(monkeypatch, copies=[("1", "dhcp4", 1700), ("2", "dhcp4", 45)], parked=["2-dhcp4"])
+        c = health._kea_tls_expiry(_ctx())
+        assert c.status == "warn" and "kea-b kea-dhcp4 expires in 45 day(s)" in c.detail, c.detail
+        assert "parked record for kea-b kea-dhcp4" in c.detail and "stale record" not in c.detail
+        assert "remove the socket under Settings → Kea to drop it" in c.detail
+
+    def test_an_expired_parked_record_fails(self, monkeypatch):
+        self._wire(monkeypatch, copies=[("2", "dhcp4", -3)], parked=["2-dhcp4"])
+        c = health._kea_tls_expiry(_ctx())
+        assert c.status == "fail" and "kea-b kea-dhcp4 expired 3 day(s) ago" in c.detail, c.detail
 
     def test_a_live_endpoints_copy_is_still_counted_when_another_is_stale(self, monkeypatch):
         self._wire(monkeypatch, copies=[("1", "dhcp4", 45), ("2", "dhcp4", 1700)], stale=["2-dhcp4"])

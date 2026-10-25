@@ -266,6 +266,33 @@ def userinfo_warnings(text):
     return found
 
 
+def name_warnings(text):
+    """The `[section] key` of every https address in a DIRECT-mode file whose host the certificate verifier's DNS-name parser does not accept (Q198 AN5: one rule at every entry point) - an
+    underscore, a trailing dot, an empty or over-long label. A warning on stderr, like `userinfo_warnings`: Jen still dials the address as written, and the setup or Rotate names it if a certificate
+    is ever needed for it. Needs Jen's own `kea_tls` (the library's parser) - loaded from the tree this tool ships in; where `cryptography` is not importable here the check is skipped (the setup
+    and Rotate ask the same question later, so this fails OPEN on purpose)."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from jen.services.auth import dns_name_sentence
+    except Exception:
+        return []
+    parser = _parse(text, "the merged file")
+    if parser.get("kea", "connection_mode", fallback="ca").strip().lower() != "direct":
+        return []
+    found = []
+    for section in parser.sections():
+        if not (section in ("kea", "kea6", "d2") or section.startswith("kea_server_")):
+            continue
+        for key in _USERINFO_KEYS[:3]:
+            value = parser.get(section, key, raw=True, fallback="").strip()
+            try:
+                if value and dns_name_sentence(value, True):
+                    found.append(f"[{section}] {key}")
+            except Exception:
+                continue
+    return found
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Merge the installer wizard's jen.config into the live one.")
     ap.add_argument(
@@ -306,6 +333,10 @@ def main(argv=None):
     for where in userinfo_warnings(merged):
         sys.stderr.write(
             f"config_merge: warning - jen.config {where} carries a user name or password inside the URL; move them to their own fields (a URL never carries a password). Jen still dials it as written.\n"
+        )
+    for where in name_warnings(merged):
+        sys.stderr.write(
+            f"config_merge: warning - jen.config {where} is an https address in direct mode whose host name a certificate cannot carry (an underscore, a trailing dot, an empty label); Jen still dials it as written.\n"
         )
     sys.stdout.write(header + ("\n" if header else "") + merged)
     return 0

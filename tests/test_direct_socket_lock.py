@@ -12,6 +12,7 @@ the write refused. Now:
 No database and no Kea: the route bodies are driven in a bare Flask request context with the wire stubbed (`pytest --noconftest tests/test_direct_socket_lock.py`).
 """
 
+import contextlib
 import copy
 import inspect
 import json
@@ -2076,3 +2077,105 @@ class TestTheSecondPassOfQ197:
         texts = " ".join(t for _s, t in tls_world["flashes"])
         assert "one daemon, two records" not in texts, texts
         assert len(tls_world["tls"]["installed"]) == 1
+
+
+class TestQ198TheSetupAndTheFormsAfterTheRecordsChange:
+    """Q198 (AN2, AN5): the setup route after a record is parked or lost, and the additional-servers form carrying the certificate-name rule for a CHANGED address."""
+
+    FORM_A = {"scheme": "https", "address": "10.0.0.5", "port": "8004", "user": "u", "password": "p"}
+
+    def _first_https(self, world, monkeypatch):
+        monkeypatch.setattr(infra, "_write_direct_socket_config", lambda *a, **k: "url written")
+        _post(_inner(infra.setup_direct_socket), **self.FORM_A)
+        assert world["tls"]["now"] and world["host"]["Dhcp4"]["control-sockets"][-1]["socket-type"] == "https"
+
+    def test_a_setup_rerun_with_no_record_says_so_and_records_no_tls_local_stale(self, tls_world, monkeypatch):
+        """The A2 sequence: the record was forgotten (or never kept) while the socket stays in the daemon's config. The re-run found the socket already there, read the missing record as a certificate that
+        DIFFERS and recorded `tls-local-stale` - an incident about a copy that does not exist."""
+        kt = tls_world["tls"]["tls"]
+        self._first_https(tls_world, monkeypatch)
+        kt.discard_local_record(1, "dhcp4")
+        assert not os.path.lexists(kt.server_copy_path(1, "dhcp4"))
+        tls_world["flashes"].clear()
+        tls_world["incidents"].clear()
+        _post(_inner(infra.setup_direct_socket), **self.FORM_A)
+        texts = " ".join(t for _s, t in tls_world["flashes"])
+        assert "Jen holds no record of the certificate this socket should present" in texts, texts
+        assert "remove the direct socket and set it up again" in texts
+        assert not any(i[2] == "tls-local-stale" for i in tls_world["incidents"]), tls_world["incidents"]
+        assert any(i[0] == 1 and i[2] == "remote-unknown" for i in tls_world["incidents"]), (
+            "Jen cannot say which certificate the host holds - the invariant (T1) wants that said, in the right category"
+        )
+
+    def test_a_parked_record_survives_forget_and_the_rerun_is_healthy(self, tls_world, monkeypatch):
+        """The B3 sequence: setup, the server is switched off https (parked), Forget is pressed - it refuses - and the server is switched back: the record is the daemon's again, the setup finds the
+        socket already there and everything agrees."""
+        kt = tls_world["tls"]["tls"]
+        self._first_https(tls_world, monkeypatch)
+        server = tls_world["server"]
+        report = kt.forget_report([server], url_for=lambda s, svc: "http://10.0.0.5:8004")
+        assert report["forgotten"] == [] and report["parked"] == ["1-dhcp4"], report
+        assert os.path.lexists(kt.server_copy_path(1, "dhcp4")), "Forget did not remove a parked record"
+        tls_world["flashes"].clear()
+        tls_world["incidents"].clear()
+        _post(_inner(infra.setup_direct_socket), **self.FORM_A)
+        texts = " ".join(t for _s, t in tls_world["flashes"])
+        assert "Jen holds no record" not in texts and not tls_world["incidents"], (texts, tls_world["incidents"])
+
+    def test_the_weak_pin_is_two_remedies(self):
+        from jen.services import kea_tls
+
+        setup = kea_tls.name_refusal_remedy(["10.0.0.5"])
+        assert "Rotate Kea CA" in setup and "change the address Jen dials" in setup
+        rotate = kea_tls.name_refusal_remedy(["10.0.0.5"], rotating=True)
+        assert "Rotate Kea CA" not in rotate, "a refusal INSIDE a rotation is never cured by another one"
+        prepared = kea_tls.name_refusal_remedy(["10.0.0.5"], rotating=True, prepared=True)
+        assert "discard the prepared CA" in prepared and "Rotate Kea CA" not in prepared
+        shape = kea_tls.name_refusal_remedy(["kea_host"], rotating=True, prepared=True)
+        assert "discard" not in shape and "change the address saved for it" in shape
+
+    def _extra_servers_post(self, monkeypatch, flashes, **fields):
+        monkeypatch.setattr(infra, "flash", lambda text, style="message": flashes.append(str(text)))
+        monkeypatch.setattr(infra, "url_for", lambda *a, **k: "/settings/kea")
+        monkeypatch.setattr("jen.services.capabilities.is_direct", lambda: True)
+        app = flask.Flask(__name__)
+        app.secret_key = "x"
+        data = {
+            "extra_id[]": ["2"],
+            "extra_name[]": ["kea-b"],
+            "extra_role[]": ["standby"],
+            "extra_api_url[]": ["https://10.0.0.6:8004"],
+            "extra_api_user[]": [""],
+            "extra_api_pass[]": [""],
+            "extra_api6_url[]": [""],
+            "extra_api6_user[]": [""],
+            "extra_api6_pass[]": [""],
+            "extra_ssh_host[]": ["10.0.0.6"],
+            "extra_ssh_user[]": [""],
+            "extra_kea_conf[]": [""],
+        }
+        data.update(fields)
+        with app.test_request_context(method="POST", data=data):
+            inspect.unwrap(infra.save_extra_servers)()
+
+    def test_the_additional_servers_form_refuses_a_changed_address_a_certificate_cannot_carry(self, monkeypatch):
+        monkeypatch.setattr(
+            extensions,
+            "KEA_SERVERS",
+            [{"id": 1, "name": "kea-a"}, {"id": 2, "name": "kea-b", "api_url": "https://10.0.0.6:8004"}],
+        )
+        flashes = []
+        self._extra_servers_post(monkeypatch, flashes, **{"extra_api_url[]": ["https://kea_b:8004"]})
+        assert flashes and "does not accept this as a DNS name" in flashes[0], flashes
+
+    def test_the_additional_servers_form_leaves_a_saved_address_alone(self, monkeypatch):
+        monkeypatch.setattr(
+            extensions,
+            "KEA_SERVERS",
+            [{"id": 1, "name": "kea-a"}, {"id": 2, "name": "kea-b", "api_url": "https://kea_b:8004"}],
+        )
+        monkeypatch.setattr(extensions, "cfg", __import__("configparser").ConfigParser(), raising=False)
+        flashes = []
+        with contextlib.suppress(Exception):  # the save itself needs the config; only the early name gate matters here
+            self._extra_servers_post(monkeypatch, flashes, **{"extra_api_url[]": ["https://kea_b:8004"]})
+        assert not any("does not accept this as a DNS name" in f for f in flashes), flashes

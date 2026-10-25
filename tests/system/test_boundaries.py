@@ -2963,3 +2963,87 @@ def test_22_k_a_ca_whose_only_usage_is_any_extended_key_usage_refuses_an_https_s
     assert local["state"][0] == "damaged", local
     assert local["after"] == damaged["before"], "INVARIANT: Jen's CA certificate and client pair are byte-equal"
     st.wait_for(lambda: st.kea_answers("kea-b"), timeout=60, what="kea-b answering on its own socket")
+
+
+S22L_SCRIPT = r"""
+import contextlib, hashlib, inspect, os, shutil, types
+from unittest import mock
+from jen.routes.settings import infrastructure as infra
+from jen.services import capabilities, kea_tls
+
+flashes = []
+url = "https://__ADDR__:8014"
+ca = kea_tls.ca_paths()[0]
+client = kea_tls.client_paths()
+one = extensions.KEA_SERVERS[0]
+two = {"id": 2, "name": "kea-two", "ssh_host": "10.9.9.9"}
+kea_tls.issue_server_cert(two, "dhcp4", "10.9.9.9")  # Jen holds a record for a second daemon whose saved address no certificate can carry
+urls = {1: url, 2: "https://kea_two:8004"}
+for sid in (1, 2):  # a `.prev` pair beside both records, and the marker that says server 1's HOST holds that pair
+    for base in (kea_tls.server_copy_path(sid, "dhcp4"), kea_tls.server_key_path(sid, "dhcp4")):
+        shutil.copyfile(base, base + ".prev")
+kea_tls.mark_stale(1, "dhcp4")
+
+
+def records(sid):
+    out = {}
+    for base in (kea_tls.server_copy_path(sid, "dhcp4"), kea_tls.server_key_path(sid, "dhcp4")):
+        for suffix in ("", ".prev", ".stale"):
+            out[os.path.basename(base) + suffix] = (
+                hashlib.sha256(open(base + suffix, "rb").read()).hexdigest() if os.path.lexists(base + suffix) else None
+            )
+    return out
+
+
+before = {"records": {sid: records(sid) for sid in (1, 2)}, "files": {p: hashlib.sha256(open(p, "rb").read()).hexdigest() for p in (ca, kea_tls.ca_paths()[1], client[0], client[1])}}
+view = inspect.unwrap(infra.rotate_kea_ca)
+with app.test_request_context(method="POST"), contextlib.ExitStack() as stack:
+    stack.enter_context(mock.patch.object(infra, "flash", lambda text, style="message": flashes.append(str(text))))
+    stack.enter_context(mock.patch.object(extensions, "KEA_API_CA", ca))
+    stack.enter_context(mock.patch.object(extensions, "KEA_SERVERS", [one, two]))
+    stack.enter_context(mock.patch.object(infra, "_service_url", lambda server, service: urls[server["id"]] if service == "dhcp4" else ""))
+    stack.enter_context(mock.patch.object(infra, "_configured_url", lambda server, service: urls[server["id"]] if service == "dhcp4" else ""))
+    stack.enter_context(mock.patch.object(infra, "_daemon_creds", lambda server, service, url="": ("sysuser", "syspass-123")))
+    real_for_server = capabilities.for_server
+    stack.enter_context(mock.patch.object(capabilities, "for_server", lambda sid, *a, **k: types.SimpleNamespace(tls=True) if sid == 2 else real_for_server(sid, *a, **k)))
+    view()
+after = {"records": {sid: records(sid) for sid in (1, 2)}, "files": {p: hashlib.sha256(open(p, "rb").read()).hexdigest() for p in before["files"]}}
+version, _err = infra._probe_after_restart(url, "sysuser", "syspass-123", "dhcp4", verify=ca, cert=client)
+emit({
+    "flashes": flashes,
+    "records_unchanged": before["records"] == after["records"],
+    "jen_files_unchanged": before["files"] == after["files"],
+    "prev_left": [sid for sid in (1, 2) if os.path.exists(kea_tls.server_copy_path(sid, "dhcp4") + ".prev")],
+    "stale_marker_left": kea_tls.is_stale(1, "dhcp4"),
+    "staging_left": [f for f in os.listdir(os.path.dirname(ca)) if f.endswith(".next")],
+    "answers": bool(version),
+})
+"""
+
+
+def test_22_l_a_rotation_refused_by_a_name_on_the_second_daemon_leaves_the_first_daemons_records_as_they_were(stack):
+    """REMOTE-001 section 1 / Q198 (AN1): kea-a is really on an https socket Jen issued the certificate for. Jen also holds a record for a second daemon whose saved address (`kea_two`) no certificate can
+    carry, and a `.prev` pair (and, for kea-a, the stale marker that says its HOST holds that pair) sits beside both records. Rotate is REFUSED for the second daemon's name before anything is installed -
+    and, in beta.28, the failure branch then retired the `.prev` and the marker of kea-a, a target it had never touched: Jen's record of what kea-a holds changed in a refusal. Now every record of both
+    daemons is byte-equal after it, Jen's CA and client pair are unchanged, kea-a's TLS files and daemon config are the baseline, and kea-a still answers."""
+    out, proc = _s22_run("write-ok", scheme="https", port="8014")
+    assert emitted(out) is not None, f"no result from the https setup:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    baseline = _s22_host_state()
+    ip = st.container_ip(st.KEA_A)
+    out, proc = st.jen_py(S22L_SCRIPT.replace("__ADDR__", ip), timeout=500)
+    result = emitted(out)
+    assert result is not None, f"no result from the rotation:\n{proc.stdout[-1500:]}\n{proc.stderr[-1500:]}"
+    texts = " ".join(result["flashes"])
+    assert "the CA cannot issue its certificate for kea_two" in texts and "Kea CA rotated" not in texts, texts
+    assert "nothing was installed on any host" in texts, texts
+    assert result["records_unchanged"], "INVARIANT: a refusal changes none of the Jen-side records of any daemon"
+    assert result["prev_left"] == [1, 2] and result["stale_marker_left"] is True, result
+    assert result["jen_files_unchanged"] and result["staging_left"] == [], (
+        "INVARIANT: a refusal changes nothing on the Jen host"
+    )
+    after = _s22_host_state()
+    for name in S22_TLS_FILES:
+        assert after[name] == baseline[name], f"INVARIANT: {name} on kea-a is the baseline"
+    assert json.loads(after["conf"]) == json.loads(baseline["conf"]), "INVARIANT: kea-a's daemon config is the baseline"
+    assert result["answers"] is True, "INVARIANT: kea-a still answers Jen over its https socket"
+    st.wait_for(lambda: st.kea_answers("kea-b"), timeout=60, what="kea-b answering on its own socket")

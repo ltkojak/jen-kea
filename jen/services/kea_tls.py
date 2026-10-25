@@ -332,7 +332,9 @@ def _verifier_message(error: BaseException) -> str:
     text = str(error) or type(error).__name__
     for noise in ("validation failed: ", "candidates exhausted: ", "Python extension validator failed: ValueError: "):
         text = text.replace(noise, "")
-    text = text.strip()[:200]
+    text = (
+        text.strip().rstrip(":").strip()[:200]
+    )  # (Q198 AN5: a message that ends in a colon read "...: " in the sentence built from it)
     if "Neither EKU nor anyEKU" in text:
         text = f"its Extended Key Usage does not include this purpose ({text})"
     return text
@@ -537,7 +539,7 @@ def openssl_second_opinion(timeout: float = 10.0) -> str:
         return ""  # a temp directory that cannot be made: no row - never an exception through Health
     if not accepts:
         return ""
-    return f"openssl verify accepts a certificate issued from it for {' and '.join(accepts)} where Jen rejects the CA ({why}) - Jen is the stricter judge here"
+    return f"openssl verify accepts a certificate issued from it for {' and '.join(accepts)}, but Jen judges the CA damaged ({why}) - Jen is the stricter judge here"
 
 
 def _ca_material_for_opinion():
@@ -548,6 +550,27 @@ def _ca_material_for_opinion():
         return load_cert(crt), load_key(key)
     except (OSError, ValueError, TypeError, UnsupportedAlgorithm):
         return None
+
+
+def _verify_self_signature(cert, public) -> None:
+    """Does the certificate's signature verify with its own public key? `Certificate.verify_directly_issued_by` compares the issuer and subject as BYTES, so a root whose issuer is a PrintableString
+    and whose subject is the same text as a UTF8String - one name to OpenSSL, to the chain verifier and to `Name.__eq__` - read as "does not verify" (Q198 AN3, executed: openssl and the verifier
+    accept it). Names are judged as names by the caller (issuer == subject); the SIGNATURE is verified here directly. Raises what `verify_directly_issued_by` raises."""
+    try:
+        cert.verify_directly_issued_by(cert)
+        return
+    except ValueError as e:
+        if "subject does not match" not in str(e) or cert.issuer != cert.subject:
+            raise
+    if isinstance(cert.signature_hash_algorithm, (hashes.SHA1, hashes.MD5)):
+        raise UnsupportedAlgorithm("a SHA-1 or MD5 self-signature is not verified")
+    parameters = cert.signature_algorithm_parameters
+    if isinstance(public, ec.EllipticCurvePublicKey):
+        public.verify(cert.signature, cert.tbs_certificate_bytes, parameters)
+    elif isinstance(public, rsa.RSAPublicKey):
+        public.verify(cert.signature, cert.tbs_certificate_bytes, parameters, cert.signature_hash_algorithm)
+    else:
+        raise UnsupportedAlgorithm("this key type is not verified")
 
 
 def _cert_structure(cert, crt_name: str, public) -> tuple[str, str]:
@@ -591,10 +614,13 @@ def _cert_structure(cert, crt_name: str, public) -> tuple[str, str]:
         except x509.ExtensionNotFound:
             aki_value = None
         if aki_value is not None:
-            # (second pass, F5) the issuer and serial forms of an AKI are value families too: on a self-issued root they must name THIS certificate's own issuer and serial number or OpenSSL will not chain
-            names_ok = aki_value.authority_cert_issuer is None or any(
-                isinstance(n, x509.DirectoryName) and n.value == cert.issuer for n in aki_value.authority_cert_issuer
+            # (second pass, F5; Q198 AN3) the issuer and serial forms of an AKI are value families too. OpenSSL (`X509_check_akid`) compares the FIRST DirectoryName of the issuer list with the issuing
+            # certificate's issuer name and skips every other kind of name: a list of URIs or DNS names is not checked (and chains), a list whose first DirectoryName is another name does not. Compared as
+            # NAMES (`cryptography`'s equality ignores the string type) - never as bytes.
+            first_directory_name = next(
+                (n for n in (aki_value.authority_cert_issuer or []) if isinstance(n, x509.DirectoryName)), None
             )
+            names_ok = first_directory_name is None or first_directory_name.value == cert.issuer
             serial_ok = (
                 aki_value.authority_cert_serial_number is None
                 or aki_value.authority_cert_serial_number == cert.serial_number
@@ -605,7 +631,7 @@ def _cert_structure(cert, crt_name: str, public) -> tuple[str, str]:
                     f"{crt_name}'s AuthorityKeyIdentifier does not name its own issuer and serial number - OpenSSL will not chain to it",
                 )
         try:
-            cert.verify_directly_issued_by(cert)
+            _verify_self_signature(cert, public)
         except UnsupportedAlgorithm:
             return "damaged", f"{crt_name}'s self-signature uses an algorithm Jen cannot verify"
         except InvalidSignature:
@@ -883,6 +909,12 @@ def verifier_accepts_name(host: str) -> bool:
         return False
     if _is_ip(host.strip("[]")):
         return True
+    if not host.isascii():
+        # (Q198 AN5) a name with non-ASCII letters is carried in a certificate as its A-label (punycode); the verifier is asked about THAT, and a name that has none is not a name
+        try:
+            host = host.encode("idna").decode("ascii")
+        except UnicodeError:
+            return False
     try:
         throwaway_key = _new_key()
         throwaway_ca = _build_ca(throwaway_key, "name check")
@@ -894,11 +926,20 @@ def verifier_accepts_name(host: str) -> bool:
     return True
 
 
-def name_refusal_remedy(names, rotating: bool = False) -> str:
+def name_refusal_remedy(names, rotating: bool = False, prepared: bool = False) -> str:
     """The sentence for what to DO about a name the verifier refused (Q197 second pass, F2). A name no certificate can carry (an underscore, a trailing dot ...) is not cured by a new CA - Rotate fails on it
     the same way - so the remedy is the address. A name a CA's constraints exclude is cured by the address or by a CA without the constraint (Rotate Kea CA issues one; no acknowledgement: the CA is healthy)."""
-    if rotating or any(not verifier_accepts_name(n) for n in names):
+    if any(not verifier_accepts_name(n) for n in names):
         return "change the address saved for it under Settings → Kea (a certificate cannot carry that name; no acknowledgement is needed - the CA is not damaged)"
+    if prepared:
+        # (Q198 AN4) the CA being staged is a kept `.next` (Prepare'd, or placed by hand): ITS name constraints refuse the name, and rotating again reuses the same CA - the way out is to discard it (Jen
+        # then stages its own, which has none) or to change the address
+        return (
+            f"the prepared CA's name constraints do not permit {', '.join(names)}: discard the prepared CA under Settings → Kea and rotate again (Jen stages its own CA), or change the address saved for it "
+            "(no acknowledgement is needed - the CA is not damaged)"
+        )
+    if rotating:
+        return "change the address saved for it under Settings → Kea (no acknowledgement is needed - the CA is not damaged)"
     return "change the address Jen dials, or replace the CA with Rotate Kea CA (no acknowledgement is needed - the CA is not damaged)"
 
 
@@ -923,21 +964,40 @@ def other_record_on_same_daemon(server: dict, service: str, servers, url_for=Non
             continue
         if not (url_for(other, service) or "").strip().lower().startswith("https://"):
             continue  # (second pass, F3) a record whose endpoint is not https now is STALE - Rotate ignores it, so it is no second owner of the daemon
-        if record_state(other.get("id"), service)[0] == "jen":
+        if record_state(other.get("id"), service)[0] in (*JEN_STATES, "refuse"):
+            # (Q198 AN5: a record Jen cannot rotate safely - malformed, a pair that does not match, an earlier CA's - is still files at that daemon's fixed paths; it is a second owner too)
             return other.get("name") or f"Kea Server {other.get('id')}"
     return ""
 
 
-def forget_stale_records(servers, url_for=None) -> list:
-    """Q197 (AM4): drop Jen's own copy of every certificate whose endpoint is not an https endpoint NOW (the inventory's `stale`) - the records Rotate already ignores. A local change only: no host is
-    asked anything. Returns the "<server id>-<service>" identifiers it forgot."""
+_FORGETTABLE = re.compile(r"(\d+)-(dhcp4|dhcp6|d2)")
+
+
+def forget_report(servers, url_for=None) -> dict:
+    """Q197 (AM4), Q198 (AN2/AN5): drop Jen's own copy of every certificate that records NOTHING - a server that is not configured at all (the inventory's `stale`). A local change only: no host is asked
+    anything. A record for a CONFIGURED server whose endpoint is not https now is PARKED, not stale: its daemon may still present that certificate, so it is kept and named. Only a file named
+    `<number>-<dhcp4|dhcp6|d2>` is ever deleted. A directory that cannot be listed is said, not read as "nothing to forget". Returns
+    {"forgotten": [...], "parked": [...], "unreadable": "" or why}."""
+    report = {"forgotten": [], "parked": [], "unreadable": ""}
+    try:
+        issued_server_copies(strict=True)
+    except OSError as e:
+        report["unreadable"] = f"{type(e).__name__}, errno {getattr(e, 'errno', '?')}"
+        return report
     inventory = rotation_inventory(servers, url_for=url_for, prove_storage=False)
-    forgotten = []
+    report["parked"] = list(inventory.parked)
     for ident in inventory.stale:
-        server_id, _sep, service = ident.partition("-")
-        discard_local_record(server_id, service)
-        forgotten.append(ident)
-    return forgotten
+        match = _FORGETTABLE.fullmatch(ident)
+        if match is None:
+            continue  # (a file that is not a record Jen wrote is not Jen's to delete)
+        discard_local_record(match.group(1), match.group(2))
+        report["forgotten"].append(ident)
+    return report
+
+
+def forget_stale_records(servers, url_for=None) -> list:
+    """The "<server id>-<service>" identifiers `forget_report` forgot (Q197 AM4)."""
+    return forget_report(servers, url_for=url_for)["forgotten"]
 
 
 def _is_ip(value: str) -> bool:
@@ -1399,8 +1459,11 @@ class RotationInventory:
     `refusals` are sentences, empty when the rotation may go ahead. `external` are the https endpoints whose certificate Jen's CA did not issue (named, left alone, never silently included
     or skipped), `stale` the copies of a server or service that is no longer an https endpoint (listed, ignored)."""
 
-    def __init__(self, targets, refusals, external, stale, endpoints=frozenset(), external_endpoints=()):
+    def __init__(self, targets, refusals, external, stale, endpoints=frozenset(), external_endpoints=(), parked=()):
         self.targets, self.refusals, self.external, self.stale = targets, refusals, external, stale
+        # Q198 (AN2): the copies of a CONFIGURED server that is not an https endpoint now - "<server id>-<service>". The daemon may still present the certificate (the socket is still in its config), so the
+        # record is kept, watched and never forgotten while the socket exists; `stale` is only a record for a server that is not configured at all
+        self.parked = list(parked)
         # Q192 (AH1): the `external` https endpoints as (server, service, url) - what a rotation PROBES with the staged client pair (the names above are sentences)
         self.external_endpoints = list(external_endpoints)
         self.endpoints = frozenset(
@@ -1546,8 +1609,14 @@ def _server_label(server: dict, service: str) -> str:
     )
 
 
+#: the two states of a record Jen's CA issued: `jen` is the pair the host holds, `jen-stale` one whose host holds the `.prev` pair instead (Jen's own copy of a pair it put on the host could not follow
+#: a rollback - Q188). Both are rotation targets; the second says which pair is the host's.
+JEN_STATES = ("jen", "jen-stale")
+
+
 def record_state(server_id, service: str, recovery: bool = False) -> tuple[str, str]:
-    """What Jen holds for one server and service, as `(state, why)`: `("jen", "")` - a certificate and key that load, are a pair and were issued by Jen's live CA; `("external", "")` - a pair
+    """What Jen holds for one server and service, as `(state, why)`: `("jen", "")` - a certificate and key that load, are a pair and were issued by Jen's live CA (`("jen-stale", "")` when the stale
+    marker says the host holds the `.prev` pair, Q198 AN1); `("external", "")` - a pair
     whose certificate no Jen CA issued; `("none", why)` - NEITHER file exists; `("refuse", why)` - anything Jen cannot rotate safely: one file missing, unreadable, malformed, not a pair, issued
     by an earlier Jen CA."""
     crt, key = server_copy_path(server_id, service), server_key_path(server_id, service)
@@ -1580,11 +1649,11 @@ def record_state(server_id, service: str, recovery: bool = False) -> tuple[str, 
     if not paired:
         return "refuse", "its certificate and key are not a pair"
     if issued_by(crt, ca_paths()[0]):
-        return "jen", ""
+        return ("jen-stale" if is_stale(server_id, service) else "jen"), ""
     if any(a.value == "Jen" for a in cert.issuer.get_attributes_for_oid(NameOID.ORGANIZATION_NAME)):
         if recovery:
             return (
-                "jen",
+                ("jen-stale" if is_stale(server_id, service) else "jen"),
                 "",
             )  # Q192 (AH2): replacing a DAMAGED CA - every Jen-issued pair is a target whichever Jen CA signed it; the live CA cannot be asked
         return "refuse", "its certificate was issued by an earlier Jen CA, not the current one"
@@ -1688,7 +1757,7 @@ def rotation_inventory(servers, url_for=None, recovery: bool = False, prove_stor
                 else:
                     external.append(f"{label} ({shown_url(url)}; its CA is not Jen's)")
                     external_endpoints.append((server, service, url))
-            elif state == "jen":
+            elif state in JEN_STATES:
                 from urllib.parse import urlparse
 
                 targets.append((server, service, urlparse(url).hostname or ""))
@@ -1749,8 +1818,13 @@ def rotation_inventory(servers, url_for=None, recovery: bool = False, prove_stor
         client_kind_now = client_kind()
         if client_kind_now in ("copy", "other", "unreadable"):
             refusals.append(client_refusal(client_kind_now) + " before rotating")
-    stale = [f"{c['server_id']}-{c['service']}" for c in listed if (str(c["server_id"]), c["service"]) not in endpoints]
-    return RotationInventory(targets, refusals, external, stale, endpoints, external_endpoints)
+    configured_ids = {str(s.get("id")) for s in servers or []}
+    stale, parked = [], []
+    for c in listed:
+        if (str(c["server_id"]), c["service"]) in endpoints:
+            continue
+        (parked if str(c["server_id"]) in configured_ids else stale).append(f"{c['server_id']}-{c['service']}")
+    return RotationInventory(targets, refusals, external, stale, endpoints, external_endpoints, parked)
 
 
 # ── staged rotation (the route's "all servers or nothing" Rotate) ───────────

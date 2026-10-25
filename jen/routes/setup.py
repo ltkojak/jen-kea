@@ -300,8 +300,13 @@ def setup_found():
         if __caps.is_direct():
             v6_url = request.form.get("v6_url", "").strip()
 
-            if not v6_url or not __auth.valid_api_url(v6_url, require_port=True):
-                flash("Enter a valid DHCPv6 control socket URL (e.g. http://kea:8006).", "error")
+            if not v6_url or not __auth.valid_api_url(v6_url, require_port=True, certificate_name=True):
+                # (Q198 AN5: the wizard's address is always a NEW one - the certificate-name rule applies, with its own sentence)
+                flash(
+                    __auth.dns_name_sentence(v6_url, require_port=True)
+                    or "Enter a valid DHCPv6 control socket URL (e.g. http://kea:8006).",
+                    "error",
+                )
                 return render_template(
                     "setup_found.html",
                     progress=_progress(),

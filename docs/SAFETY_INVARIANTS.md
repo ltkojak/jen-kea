@@ -521,7 +521,12 @@ it to the user and password fields, and Jen keeps dialling it as written (the cr
 **Rule.** (Final form, Q188; the target set and the record added by Q189.) A direct-socket or CA operation changes a Kea host and then Jen's own state. It is ONE transaction:
 1. **Jen's own recovery state is committed before the host is touched.** The https setup writes `.prev` (a copy of the live pair: what the host has) and `.staged` (what it is about to be given) before
    `install_tls`; the rotation stages the new CA and client pair beside the live files. A copy Jen cannot keep stops the operation with nothing changed. A stale `.prev` from an older operation is never
-   the rollback source.
+   the rollback source. **A refusal changes nothing, and the cleanup of a failed run is scoped to what the run committed (Q198).** A failed rotation retires the `.prev` and the stale marker of a target
+   only when THIS run wrote that target's record (`commit_issued` succeeded, or its own rollback re-wrote it); a target the run never attempted - the one after the name that was refused, the one a refusal
+   at the inventory, the storage proof or the external probe never reached - keeps both, because its `.prev` can be the only copy of what its host holds. `record_state` says so: a live copy the stale
+   marker calls not the host's is `jen-stale` (still a rotation target, and `host_material` answers its `.prev`). **Stale is a fact about the daemon (Q198):** a record whose server is CONFIGURED but not an
+   https endpoint now is PARKED - its daemon may still present the certificate, so Jen keeps it, watches its expiry in Health, names it, never forgets it while the socket exists, and it is the daemon's again
+   when the server is switched back; `stale` is only a record for a server that is not configured at all. A socket that references Jen's files with no record of them is `remote-unknown`, never `tls-local-stale`.
 2. **Every step after the first remote change either proves itself or the operation stops and compensates.** The promotion of the staged pair to live is one: when it fails the previous material is
    reinstalled, the existing socket is probed, `.prev` is kept and the socket change never starts. A completed setup is reported only when the certificate the socket PRESENTS is the one Jen holds. The
    rotation promotes the staged CA last, inside one exception boundary, after Jen's TLS settings are saved; a failure rolls EVERY attempted target back to a CA-A certificate, restarts and probes it, and
@@ -693,6 +698,15 @@ Jen's CA by certificate identity, per endpoint; an invariant with no knob; an in
 - `tests/test_kea_tls_rotation.py::TestTheStaleRecords`
 - `tests/test_kea_tls_rotation.py::TestHygieneOfQ197`
 - `tests/test_kea_tls_rotation.py::TestTheNameWorldsOfRotate`
+- `tests/test_kea_tls_rotation.py::TestARefusalChangesNothing`
+- `tests/test_kea_tls_rotation.py::TestStaleIsAFactAboutTheDaemon`
+- `tests/test_kea_tls_rotation.py::TestTheAkiAndNameRowsOfQ198`
+- `tests/test_kea_tls_rotation.py::TestPreparedCaThatCannotNameAHost`
+- `tests/test_kea_tls_rotation.py::TestTheSmallOnesOfQ198`
+- `tests/test_direct_socket_lock.py::TestQ198TheSetupAndTheFormsAfterTheRecordsChange`
+- `tests/test_direct_socket_credentials.py::TestTheProbeRowsOfQ198`
+- `tests/test_config_merge.py::TestTheCertificateNameRuleInTheInstallerMerge`
+- `tests/system/test_boundaries.py::test_22_l_a_rotation_refused_by_a_name_on_the_second_daemon_leaves_the_first_daemons_records_as_they_were`
 - `tests/test_kea_tls_rotation.py::TestTheSecondPassOfQ197`
 - `tests/test_direct_socket_lock.py::TestTheSecondPassOfQ197`
 - `tests/test_kea_tls_worlds.py::TestEveryValueFamilyIsARow`

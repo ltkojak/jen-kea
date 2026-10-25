@@ -2488,6 +2488,141 @@ def q197_am4_stale_records_are_listed_and_forgotten_locally():
         return (before, forgotten, after, survives)
 
 
+def q198_an1_a_refusal_changes_nothing_for_a_target_it_never_touched():
+    """Rotate refused for a NAME on server 2, with `.prev` records (and a stale marker on server 1) beside both: (the sentence names the host, server 1's records before == after, server 2's, whether a
+    `.prev` still exists). The failure branch used to retire `.prev` and the marker of every target that was not stuck - including one the run never attempted."""
+    import inspect
+    import os
+    import pathlib
+    import shutil
+    import types
+
+    import flask
+
+    from jen.routes.settings import infrastructure as infra
+
+    with contextlib.ExitStack() as stack:
+        kea_tls, _directory, _ = _tls_lab(stack)
+        stack.enter_context(
+            mock.patch(
+                "jen.services.capabilities.for_server",
+                lambda sid, probe_kea=True, **kw: types.SimpleNamespace(tls=True),
+            )
+        )  # (the helper is at its newest build)
+        servers = [
+            {"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5"},
+            {"id": 2, "name": "kea-b", "ssh_host": "10.0.0.6"},
+        ]
+        for server in servers:
+            kea_tls.issue_server_cert(server, "dhcp4", f"10.0.0.{4 + server['id']}")
+            crt, key = kea_tls.server_copy_path(server["id"], "dhcp4"), kea_tls.server_key_path(server["id"], "dhcp4")
+            shutil.copyfile(crt, crt + ".prev")
+            shutil.copyfile(key, key + ".prev")
+        kea_tls.mark_stale(1, "dhcp4")
+        urls = {1: "https://10.0.0.5:8004", 2: "https://kea_host:8004"}
+
+        def snapshot(sid):
+            out = {}
+            for base in (kea_tls.server_copy_path(sid, "dhcp4"), kea_tls.server_key_path(sid, "dhcp4")):
+                for suffix in ("", ".prev", ".stale"):
+                    out[base + suffix] = (
+                        pathlib.Path(base + suffix).read_bytes() if os.path.lexists(base + suffix) else None
+                    )
+            material = kea_tls.host_material(sid, "dhcp4")
+            out["host"] = None if material is None else material["server.crt"]
+            return out
+
+        before = {sid: snapshot(sid) for sid in (1, 2)}
+        flashes = []
+        stack.enter_context(
+            mock.patch.object(infra, "flash", lambda text, style="message", _into=flashes: _into.append(str(text)))
+        )
+        stack.enter_context(mock.patch.object(infra, "url_for", lambda *a, **k: "/settings/kea"))
+        stack.enter_context(mock.patch.object(infra.__dict__["__user"], "audit", lambda *a, **k: None))
+        stack.enter_context(mock.patch.object(extensions, "KEA_SERVERS", servers))
+        stack.enter_context(
+            mock.patch.object(
+                infra, "_configured_url", lambda server, service: urls[server["id"]] if service == "dhcp4" else ""
+            )
+        )
+        stack.enter_context(
+            mock.patch.object(
+                infra, "_service_url", lambda server, service: urls[server["id"]] if service == "dhcp4" else ""
+            )
+        )
+        stack.enter_context(mock.patch.object(infra, "_daemon_creds", lambda server, service, url="": ("u", "p")))
+        app = flask.Flask(__name__)
+        app.secret_key = "x"
+        with app.test_request_context(method="POST"):
+            inspect.unwrap(infra.rotate_kea_ca)()
+        after = {sid: snapshot(sid) for sid in (1, 2)}
+        return (
+            any("the CA cannot issue its certificate for kea_host" in f for f in flashes),
+            before[1] == after[1],
+            before[2] == after[2],
+            os.path.exists(kea_tls.server_copy_path(1, "dhcp4") + ".prev"),
+        )
+
+
+def q198_an2_a_record_for_a_configured_server_is_parked_not_stale():
+    """(parked, stale, what Forget forgot, what Forget kept parked, whether the parked record is still on disk): server 1 is an https endpoint, server 2 is configured and not https, server 7 is not
+    configured at all."""
+    import os
+
+    with contextlib.ExitStack() as stack:
+        kea_tls, _directory, _ = _tls_lab(stack)
+        servers = [
+            {"id": 1, "name": "kea-a", "ssh_host": "10.0.0.5"},
+            {"id": 2, "name": "kea-b", "ssh_host": "10.0.0.6"},
+        ]
+        for sid, host in ((1, "10.0.0.5"), (2, "10.0.0.6"), (7, "10.0.0.7")):
+            kea_tls.issue_server_cert({"id": sid, "name": f"s{sid}", "ssh_host": host}, "dhcp4", host)
+
+        def url_for(server, service):
+            return "https://10.0.0.5:8004" if (server["id"], service) == (1, "dhcp4") else "http://10.0.0.6:8004"
+
+        inventory = kea_tls.rotation_inventory(servers, url_for=url_for, prove_storage=False)
+        report = kea_tls.forget_report(servers, url_for=url_for)
+        return (
+            inventory.parked,
+            inventory.stale,
+            report["forgotten"],
+            report["parked"],
+            os.path.exists(kea_tls.server_copy_path(2, "dhcp4")),
+        )
+
+
+def q198_an3_the_first_issuer_directory_name_is_the_one_openssl_compares():
+    """`ca_identity` (no CLI) for AuthorityKeyIdentifier and name value rows. OpenSSL's `X509_check_akid` compares the FIRST DirectoryName of the issuer list and skips every other kind of name; a root's
+    issuer and subject are compared as names."""
+    import pathlib
+    import tempfile
+
+    from tests import _tls_worlds as worlds
+
+    out = {}
+    for kind in (
+        "aki-two-dirnames-wrong-first",
+        "aki-two-dirnames-right-first",
+        "aki-dnsname-issuer",
+        "aki-uri-issuer",
+        "aki-dns-first-right-dirname",
+        "aki-dns-first-wrong-dirname",
+        "aki-all-none",
+        "issuer-string-type-differs",
+    ):
+        with contextlib.ExitStack() as stack:
+            kea_tls, _directory, _ = _tls_lab(stack)
+            stack.enter_context(mock.patch.object(kea_tls, "_openssl_exe", lambda: None))
+            cert_pem, key_pem = worlds.semantic_ca_pem(kind)
+            directory = tempfile.mkdtemp(prefix="probe-q198-")
+            crt, key = pathlib.Path(directory, "c.crt"), pathlib.Path(directory, "c.key")
+            crt.write_bytes(cert_pem)
+            key.write_bytes(key_pem)
+            out[kind] = kea_tls.ca_identity(str(crt), str(key))[0]
+    return out
+
+
 def q185_aa3_a_trailing_no_break_space_is_refused_and_ordinary_padding_is_not():
     from jen.services import auth
 
@@ -2547,6 +2682,7 @@ SCENARIOS = {
             "q195_",
             "q196_",
             "q197_",
+            "q198_",
         )
     )
     and callable(fn)
@@ -2886,6 +3022,24 @@ EXPECTED = {
         "a trailing dot is a different name": "",
     },
     "q197_am4_stale_records_are_listed_and_forgotten_locally": (["7-dhcp4"], ["7-dhcp4"], [], "jen"),
+    "q198_an1_a_refusal_changes_nothing_for_a_target_it_never_touched": (True, True, True, True),
+    "q198_an2_a_record_for_a_configured_server_is_parked_not_stale": (
+        ["2-dhcp4"],
+        ["7-dhcp4"],
+        ["7-dhcp4"],
+        ["2-dhcp4"],
+        True,
+    ),
+    "q198_an3_the_first_issuer_directory_name_is_the_one_openssl_compares": {
+        "aki-two-dirnames-wrong-first": "damaged",
+        "aki-two-dirnames-right-first": "ok",
+        "aki-dnsname-issuer": "ok",
+        "aki-uri-issuer": "ok",
+        "aki-dns-first-right-dirname": "ok",
+        "aki-dns-first-wrong-dirname": "damaged",
+        "aki-all-none": "damaged",
+        "issuer-string-type-differs": "ok",
+    },
     "q196_al2_one_daemon_is_one_rotation_target": {
         "distinct hosts": (2, 0, False),
         "same host and service": (2, 1, False),

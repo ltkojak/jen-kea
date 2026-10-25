@@ -187,7 +187,7 @@ def _kea_ca_summary() -> dict:
         # a [kea] api_ca whose certificates do not include Jen's = the operator brought their own CA (Q190, AF1: decided by certificate identity, never by comparing paths)
         "external_ca": bool(extensions.KEA_API_CA) and kea_tls.trust_includes_jens_ca() is False,
     }
-    out["external"], out["refused"], out["stale"] = [], [], []
+    out["external"], out["refused"], out["stale"], out["parked"] = [], [], [], []
     if present or ca_state == "damaged":
         # Q189 (AE1): what Rotate will do is the INVENTORY (every https endpoint Jen dials), not the listing of local copy files
         inventory = kea_tls.rotation_inventory(
@@ -203,10 +203,11 @@ def _kea_ca_summary() -> dict:
             )
         out["external"] = list(inventory.external)
         out["refused"] = list(inventory.refusals)
-        for ident in inventory.stale:
-            sid, _sep, svc = ident.partition("-")
-            owner = next((s for s in extensions.KEA_SERVERS if str(s.get("id")) == sid), None)
-            out["stale"].append(f"{(owner or {}).get('name') or 'server ' + sid} kea-{svc}")
+        for bucket, idents in (("stale", inventory.stale), ("parked", inventory.parked)):
+            for ident in idents:
+                sid, _sep, svc = ident.partition("-")
+                owner = next((s for s in extensions.KEA_SERVERS if str(s.get("id")) == sid), None)
+                out[bucket].append(f"{(owner or {}).get('name') or 'server ' + sid} kea-{svc}")
     return out
 
 
@@ -1682,7 +1683,10 @@ def _servers_not_on_direct_sockets(except_id) -> list[str]:
 def _unchanged_url(new, saved) -> bool:
     """Is `new` the address already saved (Q197 second pass, F1)? A saved https address whose host a real TLS stack accepts but the certificate verifier's DNS parser does not (an underscore: docker-compose service
     names) works today; the certificate-name rule is for a value being CHANGED, never a reason to refuse an unrelated edit of a form that re-submits the saved one."""
-    return (new or "").strip().rstrip("/") == (saved or "").strip().rstrip("/")
+    value, before = (new or "").strip(), (saved or "").strip()
+    return value == before or __auth.same_endpoint(
+        value, before
+    )  # (Q198 AN5: case, a trailing slash and padding are one address; a port-only change is a change)
 
 
 def _holding_identity_lock(view):
@@ -2562,15 +2566,21 @@ def setup_direct_socket(server_id, service):
     )
     fingerprint_problem = ""
     fingerprint_mismatch = False  # AE5: the socket ANSWERED, as the daemon, with a certificate that is not Jen's copy
+    fingerprint_unrecorded = False  # Q198 (AN2): ... or Jen holds no copy at all
     fingerprint_ok = False  # ... or answered with exactly the certificate Jen holds
     if version_text and identified == _DAEMON_KEY[service] and scheme == "https":
         # Q188 (AD2): a completed setup is reported only when local and remote identities AGREE - the certificate the socket presents is the one Jen holds for it
         from jen.services import kea_tls as __tls_fp
 
         presented = _presented_fingerprint(new_url, probe_cert)
+        held = __tls_fp.fingerprint(__tls_fp.server_copy_path(server_id, service))
         if presented is None:
             fingerprint_problem = "its certificate could not be read to check it is the one Jen holds"
-        elif presented != __tls_fp.fingerprint(__tls_fp.server_copy_path(server_id, service)):
+        elif held is None:
+            # Q198 (AN2): Jen holds NO record of this socket's certificate (it was forgotten, or never kept) - that is not "a certificate that is not the one Jen holds", and no `tls-local-stale` is true of it
+            fingerprint_problem = "Jen holds no record of the certificate this socket should present"
+            fingerprint_unrecorded = True
+        elif presented != held:
             fingerprint_problem = "it presents a certificate that is not the one Jen holds for it"
             fingerprint_mismatch = True
         else:
@@ -2621,6 +2631,17 @@ def setup_direct_socket(server_id, service):
             )
             return back
         flash(msg, "error")
+        if fingerprint_unrecorded:
+            # the sentence says what to do (remove the socket and set it up again). The incident is `remote-unknown` - Jen cannot say which certificate the host holds - and NOT `tls-local-stale`, which says
+            # Jen's copy exists and differs (REMOTE-001 §1 / T1: a socket that references Jen's files with no record of them is never silent)
+            _record_incident(
+                server,
+                service,
+                f"setup of the {__edit.describe_socket(entry)} control socket (Jen holds no record of its certificate)",
+                "remote-unknown",
+                "Jen holds no record of the certificate this socket should present: remove the direct socket and set it up again so Jen issues and keeps one.",
+            )
+            return back
         if fingerprint_mismatch:
             # AE5: the flash says the socket presents a certificate Jen does not hold and to remove it and set it up again; the incident says the same, in the category that means exactly that
             _record_incident(
@@ -2810,6 +2831,7 @@ def rotate_kea_ca():
     reused = False  # Q192 (AH1): the staging came from a `Prepare only` an external daemon's trust anchor may already hold - kept when this rotation fails, discarded only by success or its button
     done: list[tuple[dict, str, str]] = []
     confirmed: set = set()  # targets the host is KNOWN to hold the staged pair for (its install was acknowledged)
+    committed: set = set()  # Q198 (AN1): targets whose Jen-side record THIS run wrote (`commit_issued` succeeded) - the only ones whose `.prev` and stale marker a failed run may retire
     attempted: list[tuple[dict, str, str]] = []  # every target the host may now hold STAGED-CA material for
     failure = ""
     outcome: dict = {
@@ -2882,7 +2904,7 @@ def rotate_kea_ca():
                     # (Q197, AM2) the CA is healthy; it cannot issue for this server's name - nothing was installed on any target
                     failure = (
                         f"{sname} {daemon}: the CA cannot issue its certificate for {', '.join(e.names)} ({e.why}) - "
-                        f"{__tls.name_refusal_remedy(e.names, rotating=True)}; nothing was installed on any host"
+                        f"{__tls.name_refusal_remedy(e.names, rotating=True, prepared=reused)}; nothing was installed on any host"
                     )
                     break
                 except __tls.CaDamaged as e:
@@ -2932,6 +2954,7 @@ def rotate_kea_ca():
                         record_lost.add((server.get("id"), service))
                     failure = f"{sname} {daemon}: Jen could not keep its own copy of the new certificate ({type(e).__name__}, errno {getattr(e, 'errno', '?')})"
                     break
+                committed.add((server.get("id"), service))
                 done.append((server, service, bind))
             if not failure:
                 # Q196 (AL2): after the LAST install and before the promotion every target is probed once more with the staged identity - each endpoint must answer the FINAL material on its host, not
@@ -3019,6 +3042,7 @@ def rotate_kea_ca():
                     if installed:
                         try:
                             __tls.commit_issued(server.get("id"), service, old)
+                            committed.add(key)
                             record_lost.discard(key)  # the host holds exactly this pair and Jen's record says so
                         except OSError as e:
                             # Q189 (AE2): `commit_issued` has already recorded the pair the host holds (`old`) as `.prev` and marked the live copy stale - or raised HostRecordLost
@@ -3085,6 +3109,8 @@ def rotate_kea_ca():
             for server, service, _label in outcome["unreachable"]:
                 _record_incident(server, service, "the failed CA rotation", "restored-endpoint-unreachable")
             for server, service, _bind in targets:
+                if (server.get("id"), service) not in committed:
+                    continue  # Q198 (AN1): a refusal changes nothing - a target this run never wrote a record for keeps its `.prev` and its stale marker, which are the only copy of what its host holds
                 if not any(
                     server is s and service == sv
                     for s, sv, _l in outcome["pair_stuck"] + outcome["unknown"] + outcome["local_stale"]
@@ -3212,6 +3238,11 @@ def rotate_kea_ca():
             f"Jen's CA file changed under {configured_ca}: that path is another name for it, so Jen verifies the rotated endpoints against the new CA without a change.",
             "info",
         )
+    if inventory.parked:
+        flash(
+            f"Parked, not rotated (not an https endpoint now, so Jen did not touch it): {', '.join(inventory.parked)}. Jen keeps its record; it is the daemon's again if the server is switched back to https.",
+            "info",
+        )
     flash(
         "Kea CA rotated — new CA and client certificate issued"
         + (
@@ -3313,12 +3344,27 @@ def forget_stale_kea_records():
     anything and nothing Jen trusts changes."""
     from jen.services import kea_tls as __tls
 
-    forgotten = __tls.forget_stale_records(extensions.KEA_SERVERS, url_for=_configured_url)
+    report = __tls.forget_report(extensions.KEA_SERVERS, url_for=_configured_url)
+    if report["unreadable"]:
+        # Q198 (AN2): an unlistable directory is not "nothing to forget"
+        flash(
+            f"Jen could not read its certificate directory ({report['unreadable']}), so it cannot tell which records are stale and forgot nothing. Fix the folder's permissions first.",
+            "error",
+        )
+        return redirect(url_for("settings.settings_kea"))
+    forgotten, parked = report["forgotten"], report["parked"]
+    if parked:
+        # Q198 (AN2): a record for a server that is configured is PARKED, not stale - its daemon may still present that certificate; it is dropped when the socket is removed, never here
+        flash(
+            f"Kept {len(parked)} parked record(s): {', '.join(parked)}. The daemon on that server may still hold the certificate, so Jen keeps its copy and watches its expiry; remove the socket under Settings → Kea to drop it.",
+            "info",
+        )
     if not forgotten:
-        flash("There were no stale certificate records.", "info")
+        if not parked:
+            flash("There were no stale certificate records.", "info")
         return redirect(url_for("settings.settings_kea"))
     flash(
-        f"Forgot Jen's own copy of {len(forgotten)} certificate(s) whose endpoint is no longer https: {', '.join(forgotten)}. Nothing was changed on any host.",
+        f"Forgot Jen's own copy of {len(forgotten)} certificate(s) for server(s) that are no longer configured: {', '.join(forgotten)}. Nothing was changed on any host.",
         "success",
     )
     __user.audit("FORGET_STALE_KEA_RECORDS", "kea_api", f"{len(forgotten)} record(s): {', '.join(forgotten)}")
@@ -4085,6 +4131,14 @@ def save_extra_servers():
                 "error",
             )
             return redirect(url_for("settings.settings_kea"))
+    # Q198 (AN5): the certificate-name rule at every entry point, for an address that is being CHANGED (a saved one that works is never re-judged - Q197 F1)
+    saved_extra = {str(s.get("id")): s for s in extensions.KEA_SERVERS if s.get("id") != 1}
+    for row_id, new4, new6 in zip(ids, api_urls, api6_urls, strict=False):
+        before = saved_extra.get(row_id.strip(), {})
+        for new, saved in ((new4, before.get("api_url", "")), (new6, before.get("api6_url", ""))):
+            if new.strip() and not _unchanged_url(new, saved) and __auth.dns_name_sentence(new.strip(), _require_port):
+                flash(__auth.dns_name_sentence(new.strip(), _require_port), "error")
+                return redirect(url_for("settings.settings_kea"))
 
     # v5.68.0-beta.9 (Q144): a server this form drops (its row removed, its API URL or its SSH host blanked) is one Jen can no longer put an
     # investigation log level back on. Refuse until turn_off has succeeded, rather than lose the only way to restore it.

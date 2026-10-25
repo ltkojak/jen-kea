@@ -1151,12 +1151,18 @@ def _kea_tls_expiry(ctx) -> Check:
     # Q197 (AM4): a copy whose endpoint is not an https endpoint now (the inventory's `stale`) is not a valid certificate and not an expiring one - Rotate ignores it, so does the count, and the row says so
     inventory = kea_tls.rotation_inventory(extensions.KEA_SERVERS, prove_storage=False)
     stale_ids = set(inventory.stale)
-    stale_records = []
+    parked_ids = set(inventory.parked)
+    stale_records, parked_records = [], []
     for copy in copies:
-        if f"{copy['server_id']}-{copy['service']}" in stale_ids:
-            stale_records.append(f"{_server_name_by_id(copy['server_id'])} kea-{copy['service']}")
+        ident = f"{copy['server_id']}-{copy['service']}"
+        label = f"{_server_name_by_id(copy['server_id'])} kea-{copy['service']}"
+        if ident in stale_ids:
+            stale_records.append(label)
             continue
-        items.append((f"{_server_name_by_id(copy['server_id'])} kea-{copy['service']}", copy["days_left"]))
+        if ident in parked_ids:
+            # Q198 (AN2): a record for a CONFIGURED server whose endpoint is not https now - the daemon may still present this certificate, so its expiry is still watched
+            parked_records.append(label)
+        items.append((label, copy["days_left"]))
 
     expired = [(n, d) for n, d in items if d is not None and d < 0]
     failing = [(n, d) for n, d in items if d is not None and 0 <= d <= 14]
@@ -1184,10 +1190,15 @@ def _kea_tls_expiry(ctx) -> Check:
         c.status = "fail" if c.status == "fail" else "warn"
         c.detail += f" — the certificate for {', '.join(unreadable)} cannot be read, so its expiry is unknown"
     refused = inventory.refusals  # (Q194: Health only reads - it creates no directory)
+    if parked_records:
+        c.detail += (
+            f" — parked record for {', '.join(parked_records)} (not an https endpoint now; its daemon may still present the certificate, so Jen keeps watching its expiry): "
+            "Rotate leaves it alone; remove the socket under Settings → Kea to drop it"
+        )
     if stale_records:
         c.detail += (
-            f" — stale record for {', '.join(stale_records)} (its endpoint is no longer https): Rotate ignores it; "
-            "remove the socket's record under Settings → Kea, or forget it there, to clear this"
+            f" — stale record for {', '.join(stale_records)} (its server is no longer configured): Rotate ignores it; "
+            "forget it under Settings → Kea to clear this"
         )
     if refused:
         # an https endpoint Jen has no complete record of: the Settings page says Rotate would be refused, and so does this row

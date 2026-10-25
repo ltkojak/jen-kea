@@ -817,10 +817,24 @@ name constraints do not permit that address or host name (or the host name is on
 as one with an underscore or a trailing dot). Nothing was changed on the host and no acknowledgement is needed:
 change the address, or replace the CA with **Rotate Kea CA**.
 
-**"stale record for *server* kea-*service* (its endpoint is no longer https)"** in the Kea mTLS Health row is a
-certificate Jen kept for a socket that has since been removed or changed to http. Rotate ignores it. Remove the
-socket's record under Settings → Kea, or press **Forget stale records** on the Kea CA card (a superadmin; it
-changes nothing on any host).
+**"parked record for *server* kea-*service*"** in the Kea mTLS Health row is a certificate Jen kept for a server
+that is configured but is not on an https endpoint now (switched to the Control Agent or http). Its daemon may still
+present the certificate, so Jen keeps the record and keeps watching its expiry; Rotate leaves it alone, and it is the
+daemon's again when the server is switched back. **Forget stale records** keeps it ("Kept 1 parked record(s)"); remove
+the socket under Settings → Kea to drop it.
+
+**"stale record for *server* kea-*service* (its server is no longer configured)"** is a certificate Jen kept for a
+server that has since been removed. Rotate ignores it. Press **Forget stale records** on the Kea CA card (a
+superadmin; it changes nothing on any host). If the certificate folder cannot be read it says so and forgets nothing.
+
+**"Jen holds no record of the certificate this socket should present"** after a setup re-run means the socket is in the
+daemon's config but Jen has no copy of the certificate for it (it was forgotten, or never kept). Jen records
+"remote-unknown" - it cannot say which certificate the host holds - and the fix is to remove the direct socket and set it up
+again, so Jen issues and keeps one.
+
+**"the prepared CA's name constraints do not permit *name*: discard the prepared CA ..."** means a CA you prepared (or
+placed) refuses a host and every rotation reuses it. Discard it under Settings → Kea and rotate again (Jen stages its own CA),
+or change the address.
 
 **"*kea-b* already manages kea-dhcp4 on *host*: one daemon, two records"** means two server records name the same
 SSH host and already hold a certificate for the same service; the second https setup would replace the first's

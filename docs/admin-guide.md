@@ -247,7 +247,11 @@ Two more shapes are damaged because the Kea daemon's own TLS library
 (OpenSSL) refuses them even though a looser verifier accepts them: an
 Extended Key Usage that is `anyExtendedKeyUsage` alone (or beside only one of
 the two purposes), and a self-issued CA whose Authority Key Identifier names
-a different key from its own Subject Key Identifier.
+a different key from its own Subject Key Identifier, or whose first directory name (the
+one `openssl` compares; it skips every other kind of name) is not the CA's own
+issuer, or whose serial number is not its own. An issuer and a subject that are the
+same text in two different string types (PrintableString and UTF8String) are one
+name, and healthy.
 
 **Which judge is on duty.** Where the `openssl` command is installed on the Jen
 host, it judges your CA at the gate too: the same throwaway certificates are
@@ -276,6 +280,7 @@ with a different library might not accept them either. Health says when
 | a P-224 or DSA key | not P-256, P-384, P-521 or RSA of 2048 bits or more, although `openssl` accepts it |
 | a CA whose issuer differs from its subject only in letter case | Jen compares the names exactly; `openssl` does not |
 | an Authority Key Identifier with the issuer and serial number but no key identifier | the verifier requires the key identifier |
+| an Authority Key Identifier with no field set at all | the verifier requires the key identifier; `openssl` chains to it |
 | a critical CRLDistributionPoints extension on the CA | the verifier rejects the extension |
 | an empty subject with a critical Subject Alternative Name | the verifier needs a non-empty issuer |
 | a critical policyMappings extension | the verifier rejects the extension |
@@ -288,18 +293,27 @@ damaged. The https setup says so ("Jen's CA is healthy, but it cannot issue a
 certificate the verifier accepts for ..."), names the address that failed (the
 bind address, or the SSH host's name), changes nothing on the host and asks for
 no acknowledgement: change the address, or replace the CA with **Rotate Kea
-CA**. A host name the form saves and a certificate cannot carry (an underscore,
+CA**. When the CA used for a rotation is one you prepared with **Prepare only** (or
+placed by hand) and its name constraints do not permit a host, the message says to
+discard the prepared CA under Settings → Kea and rotate again (Jen then stages its
+own). A host name the form saves and a certificate cannot carry (an underscore,
 a trailing dot, an empty label) is refused when you change an https address in
 direct mode (an address that is already saved is left alone; the setup or Rotate names it
 when a certificate is needed for it).
 
-**Stale certificate records.** When a Kea server's endpoint is no longer
-https (the socket was removed, or the address changed to http), the certificate
-Jen kept for it is a record of nothing: Rotate ignores it, Health does not count
-it as a valid or expiring certificate and says "stale record for ...", and
-removing the socket under Settings → Kea drops it. A superadmin can also press
-**Forget stale records** on the Kea CA card; that is a local change and asks no
-host anything.
+**Parked and stale certificate records.** A certificate Jen kept for a server that
+is configured but is not on an https endpoint now (the server was switched to
+the Control Agent or to http) is **parked**: the socket is still in that daemon's
+config and it may still present the certificate, so Jen keeps the record, Health
+counts it and keeps watching its expiry (and says "parked record for ..."),
+Rotate leaves it alone and says so, and it is the daemon's again if the server is
+switched back to https. Forget never drops a parked record; removing the socket
+under Settings → Kea does. A record for a server that is **no longer configured**
+is **stale**: nothing can present that certificate, Rotate ignores it, Health
+does not count it and says "stale record for ...", and a superadmin can press
+**Forget stale records** on the Kea CA card; that is a local change that asks no
+host anything and only ever deletes records named like Jen's own. If the
+certificate folder cannot be read, Forget says so and forgets nothing.
 
 Two Kea server records that share one SSH host and service are one daemon:
 Rotate refuses them until one record is removed or points at its own host,
