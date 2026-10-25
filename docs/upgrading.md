@@ -358,3 +358,17 @@ One step (5.69.0-beta.28). It adds no migration and there is nothing for you to 
 **An https setup on a second record for one daemon is refused.** If a second server record has the same SSH host and already holds a Jen-issued certificate for the same service, the setup stops before anything changes and names it. The dhcp4 and dhcp6 daemons on one host are two daemons.
 
 Small things: a rotation prepared with **Prepare only** no longer leaves a `.prev` copy of the new key beside it; folders Jen creates under its SSL folder are private (0700); and the Kea CA card says "expiry unreadable" instead of "None day(s)" when a certificate's expiry cannot be read.
+
+## A record for a configured daemon is parked, never forgotten while the socket exists; a refused rotation leaves every record as it was
+
+One step (5.69.0-beta.29). It adds no migration and there is nothing for you to do. What you may notice:
+
+**A refused Rotate changes nothing in Jen's records.** Before, a rotation refused for one server's name could drop the previous-pair copy and the "differs from the host" note that Jen keeps for a server it never reached, which are sometimes the only copy of what that server's host holds. Now a refusal, at any step, leaves every certificate record exactly as it was; only a server the failed run itself rewrote and put back is tidied.
+
+**Parked records.** A certificate Jen kept for a server that is still configured but is not on an https endpoint now (you switched it to the Control Agent or to http) is **parked**: its socket may still be in the daemon's config and it may still present that certificate. Health counts it and keeps watching its expiry, Rotate leaves it alone and says so, and **Forget stale records** keeps it. A record for a server that is no longer configured at all is **stale**, and that is what Forget removes. If you know no daemon presents the parked certificates any more, tick the box beside the button. The record of a server you remove is dropped with it.
+
+**A setup re-run with no record.** If the socket is already in the daemon's config and Jen holds no copy of its certificate, the setup says so and tells you to remove the socket and set it up again; it records that Jen cannot say which certificate the host holds, rather than a copy that differs.
+
+**Certificate checks that follow OpenSSL more closely.** An Authority Key Identifier is judged by its first directory name, as OpenSSL does; a CA whose issuer and subject are the same text in two different string types (PrintableString and UTF8String) is healthy; and a prepared CA whose name constraints refuse a host is told to be discarded. A host name with non-ASCII letters is asked about as the form a certificate carries. The admin guide lists the shapes Jen is stricter about than `openssl`.
+
+**One rule for a host name a certificate cannot carry.** The additional-servers form, the setup wizard and the installer's merge now apply the same check as the connection form to an https address in direct mode that you change (an underscore, a trailing dot); an address already saved is never refused for it. The installer's merge only warns.
