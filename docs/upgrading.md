@@ -384,3 +384,13 @@ One step (5.69.0-beta.30). It adds no migration and there is nothing for you to 
 **Records carry their host.** If a server record is pointed at a different daemon, Rotate refuses it and says so, rather than treating the old daemon's certificate as the new one's; the setup for the new host replaces it. A key whose certificate is gone is shown as a record of its own and can be forgotten; a file in the folder whose name Jen does not write is named and never touched.
 
 **Names compared as OpenSSL compares them.** A CA whose issuer and subject are the same text in different string types is healthy, as OpenSSL treats it; a CA the installed OpenSSL cannot load is reported as damaged with OpenSSL's own line.
+
+## A server record whose SSH host moved to another machine refuses a rotation until the socket is set up again there
+
+One step (5.69.0-beta.31). It adds no migration and there is nothing for you to do. What you may notice:
+
+**Rotate checks the SSH host as well as the address.** The certificate Jen keeps for a daemon names the address Jen dials and the SSH host it logs into. If you change a server's SSH host to a different machine, or its address to a different daemon, Rotate now refuses that server before it changes anything on any machine, and says which of the two moved. Remove the direct socket and set it up again on the machine it is on now, or restore the previous SSH host or address. Nothing is installed or restarted by a refused rotation.
+
+**Forget stale records writes its note first.** When you tick the box to say no daemon presents a parked record any more, Jen stores the note on Servers before it deletes anything. If the note cannot be stored the record is kept and the page says so; if a file cannot be deleted, the note says the forget did not finish and Health names it, and pressing the button again completes it.
+
+**Left-over files are judged by their certificate.** After a rotation, a group of files with no live certificate and key pair is shown on Servers as left on a replaced CA when its previous pair was issued by a Jen CA, and as unknown when no certificate can say.
