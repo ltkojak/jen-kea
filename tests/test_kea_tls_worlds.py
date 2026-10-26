@@ -404,6 +404,10 @@ MATRIX_READERS = {
     "load_key": {"open"},
     "cert_expiry": {"load_cert"},
     "issued_by": {"load_cert"},
+    "orphan_verdict": {
+        "open",
+        "lexists",
+    },  # Q200 (AP3): which CA issued the certificate an orphan group still holds - the `.prev` pair first, else a lone certificate
     "ca_identity": {
         "load_cert",
         "load_key",

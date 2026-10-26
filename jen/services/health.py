@@ -1229,12 +1229,19 @@ def _kea_tls_expiry(ctx) -> Check:
         )
     # Q199 (AO1): a parked daemon a rotation left on a replaced CA, and a record forgotten on the operator's word, are facts Servers shows; the row names them too
     left_behind = _attention_labels("tls-superseded")
-    forgotten = _attention_labels("record-forgotten")
+    forgotten, forget_pending = _forgotten_labels()
     if left_behind:
         c.status = "fail" if c.status == "fail" else "warn"
         c.detail += (
             f" — {', '.join(left_behind)} is parked and its daemon still runs a certificate from the CA Jen replaced: when it is dialled over https again, "
             "remove the direct socket and set it up again (see Servers)"
+        )
+    if forget_pending:
+        # Q200 (AP2): the fact was stored first, so a forget that stopped between the write and the deletion (a crash, a file that would not go) is visible: the files are still here
+        c.status = "fail" if c.status == "fail" else "warn"
+        c.detail += (
+            f" — a forget of {', '.join(forget_pending)} was started and did not finish: Jen still holds files for it; "
+            "press Forget stale records again (with the box) under Settings → Kea"
         )
     if forgotten:
         c.status = "fail" if c.status == "fail" else "warn"
@@ -1256,6 +1263,20 @@ def _kea_tls_expiry(ctx) -> Check:
             f" — but Jen's own copy for {', '.join(stale)} may not match the certificate on the host (see Servers)"
         )
     return c
+
+
+def _forgotten_labels() -> tuple[list[str], list[str]]:
+    """(forgotten, pending): the `record-forgotten` incidents whose files are gone, and those whose files Jen still holds (Q200, AP2: the fact is written BEFORE the deletion)."""
+    from jen.services import kea_changeset, kea_tls
+
+    done, pending = [], []
+    for i in kea_changeset.recovery_incidents():
+        if i.get("category") != "record-forgotten":
+            continue
+        label = f"{i.get('server_name') or 'server ' + str(i.get('server_id'))} kea-{i.get('service')}"
+        still = any(os.path.lexists(p) for p in kea_tls._record_paths(i.get("server_id"), str(i.get("service") or "")))
+        (pending if still else done).append(label)
+    return sorted(set(done)), sorted(set(pending))
 
 
 def _attention_labels(category: str) -> list[str]:

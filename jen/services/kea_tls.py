@@ -1077,13 +1077,27 @@ _FORGETTABLE = re.compile(
 )  # (Q199 AO4: no leading zero - `007-dhcp4` is not a number Jen writes)
 
 
-def forget_report(servers, url_for=None, include_parked: bool = False) -> dict:
+def forget_report(servers, url_for=None, include_parked: bool = False, fact_first=None) -> dict:
     """Q197 (AM4), Q198 (AN2), Q199 (AO5/AO6): drop Jen's own copy of every certificate record that records NOTHING - a server that is not configured at all (the inventory's `stale`), an ORPHAN
     group of files with no live pair included. A local change only: no host is asked anything. A record for a CONFIGURED server whose endpoint is not https now is PARKED: its daemon may still present
     that certificate, so it is kept and named - unless the operator says (`include_parked`) that no daemon presents it any more. A record is `forgotten` only when every one of its files is gone
     (`discard_local_record` re-checks); one that could not be fully removed is `incomplete` and stays discoverable for a retry. Only a recognised file name is ever touched; an unrecognised one is
-    `skipped`. A directory that cannot be listed is said, not read as "nothing to forget". Returns {"forgotten", "parked", "unreadable", "skipped", "incomplete", "on_word"}."""
-    report = {"forgotten": [], "parked": [], "unreadable": "", "skipped": [], "incomplete": [], "on_word": []}
+    `skipped`. A directory that cannot be listed is said, not read as "nothing to forget". Returns {"forgotten", "parked", "unreadable", "skipped", "incomplete", "on_word", "no_fact",
+    "incomplete_on_word"}.
+
+    Q200 (AP2): a record forgotten on the operator's word is deleted only AFTER its durable fact is stored and read back - `fact_first(ident)` (the route's `record-forgotten` incident) must return True;
+    without it, or when it returns False, the record is KEPT and named in `no_fact` (a deletion that cannot be remembered is not done: a crash or a failed store between the two used to leave the record gone
+    and no fact). A deletion that then fails is `incomplete`, and `incomplete_on_word` names those so the route can update the fact to say so."""
+    report = {
+        "forgotten": [],
+        "parked": [],
+        "unreadable": "",
+        "skipped": [],
+        "incomplete": [],
+        "on_word": [],
+        "no_fact": [],
+        "incomplete_on_word": [],
+    }
     try:
         record_groups(strict=True)
     except OSError as e:
@@ -1101,9 +1115,14 @@ def forget_report(servers, url_for=None, include_parked: bool = False) -> dict:
         match = _FORGETTABLE.fullmatch(ident)
         if match is None:
             continue
+        if on_word and not (fact_first is not None and fact_first(ident)):
+            report["no_fact"].append(ident)  # (the record stays: parked, with every file untouched)
+            continue
         result = discard_local_record(match.group(1), match.group(2))
         if result["failed"]:
             report["incomplete"].append((ident, result["failed"]))
+            if on_word:
+                report["incomplete_on_word"].append(ident)
             continue
         report["forgotten"].append(ident)
         if on_word:
@@ -1767,33 +1786,78 @@ def _server_label(server: dict, service: str) -> str:
 JEN_STATES = ("jen", "jen-stale")
 
 
+def _certificate_names(cert) -> list:
+    """The DNS names and IP addresses a server certificate carries as SANs ([] when it has no SAN extension, or one that cannot be read)."""
+    try:
+        sans = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    except (x509.ExtensionNotFound, x509.DuplicateExtension, ValueError):
+        return []
+    return [str(v) for v in sans.get_values_for_type(x509.DNSName)] + [
+        str(v) for v in sans.get_values_for_type(x509.IPAddress)
+    ]
+
+
+def ssh_host_refusal(cert, server) -> str:
+    """Q200 (AP1): "" when the SSH host Jen will LOG INTO (the mutation target: the helper installs the pair there and restarts the daemon) is one of the names the certificate was issued for, else
+    the sentence. A URL match proves nothing about the machine the helper reaches (Q199 let any name match any SAN, so an SSH host moved to another machine with the URL unchanged was accepted, and the
+    rollback then put the old host's pair on the new one). No SSH host configured, or a certificate with no SAN, names no destination here and is not judged. `same_host`: no DNS, a dot is a different name."""
+    from jen.services.auth import same_host
+
+    ssh = ((server or {}).get("ssh_host") or "").strip()
+    names = _certificate_names(cert)
+    if not ssh or not names or any(same_host(n, ssh) for n in names):
+        return ""
+    return (
+        f"its certificate was issued for {', '.join(names)}; this record's SSH host is now {ssh}, a different machine - remove the direct socket and set it up again on it, "
+        "or restore the previous SSH host"
+    )
+
+
+def orphan_verdict(server_id, service: str) -> str:
+    """Q200 (AP3): which CA issued the certificate an ORPHAN group (no live pair) still holds - the `.prev` pair first (by the stale-marker contract it is what the host holds), else a lone live or
+    previous certificate. "superseded": issued by the CA a rotation replaced (`kea-ca.crt.prev`); "current": by the live CA; "external": by neither; "unknown": no certificate that loads can say
+    (a lone key, a lone marker, a certificate that does not parse) - the caller records `remote-unknown`, never silence."""
+    crt = server_copy_path(server_id, service)
+    for path in (crt + ".prev", crt):
+        if not os.path.lexists(path):
+            continue
+        try:
+            with open(path, "rb") as f:
+                x509.load_pem_x509_certificate(f.read())
+        except (OSError, ValueError):
+            continue
+        previous_ca = ca_paths()[0] + ".prev"
+        if os.path.lexists(previous_ca) and issued_by(path, previous_ca):
+            return "superseded"
+        if issued_by(path, ca_paths()[0]):
+            return "current"
+        return "external"
+    return "unknown"
+
+
 def _destination_refusal(cert, server, url) -> str:
-    """Q199 (AO7): "" when the certificate Jen saved was issued for the daemon this server record names NOW, else the sentence. A server certificate Jen issues carries its destination - the bind address
-    and the SSH host are its SANs - so a record kept under a server number that has since been pointed at a DIFFERENT daemon (the SSH host and the address both changed, or the number was reused) is
-    not that daemon's, and rotating it would put one daemon's pair on another's host. Compared with `same_host` (the duplicate-daemon guard's contract: no DNS, a dot is a different name), any
-    configured name against any SAN: a display-name change, an alias of the same host, a URL change on the same daemon all still match; a certificate with no SAN names no destination and is not judged."""
+    """Q200 (AP1), replacing Q199's any-of-any: "" when the certificate Jen saved was issued for the daemon this server record names NOW, else the sentence. The comparison is BY ROLE and BOTH must hold,
+    each on its own: the configured `ssh_host` (the machine the helper modifies) names one of the certificate's SANs, AND the URL's host (the endpoint Jen dials) names one. A server certificate Jen issues
+    carries the bind address (the URL host) and the SSH host as its SANs and has since the module's first commit, so a name that matches neither role is another machine. A name configured as empty is not
+    judged; a certificate with no SAN names no destination. `same_host` decides what equates two names (no DNS, a dot is a different name): a legitimate alias it cannot equate is a refusal with the sentence, by design."""
     from urllib.parse import urlparse
 
     from jen.services.auth import same_host
 
-    try:
-        sans = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
-    except (x509.ExtensionNotFound, x509.DuplicateExtension, ValueError):
-        return ""
-    names = [str(v) for v in sans.get_values_for_type(x509.DNSName)] + [
-        str(v) for v in sans.get_values_for_type(x509.IPAddress)
-    ]
+    refusal = ssh_host_refusal(cert, server)
+    if refusal:
+        return refusal
+    names = _certificate_names(cert)
     try:
         url_host = urlparse(url or "").hostname or ""
     except ValueError:
         url_host = ""
-    configured = [h for h in ((server or {}).get("ssh_host") or "", url_host) if h]
-    if not names or not configured or any(same_host(n, c) for n in names for c in configured):
-        return ""
-    return (
-        f"its certificate was issued for {', '.join(names)}, not for {', '.join(configured)} - this server record now points at a different daemon; "
-        "remove the direct socket and set it up again, or restore the previous host"
-    )
+    if names and url_host and not any(same_host(n, url_host) for n in names):
+        return (
+            f"its certificate was issued for {', '.join(names)}; this record's address is now {url_host}, a different daemon - remove the direct socket and set it up again, "
+            "or restore the previous address"
+        )
+    return ""
 
 
 def record_state(server_id, service: str, recovery: bool = False, server=None, url: str = "") -> tuple[str, str]:
@@ -1811,7 +1875,16 @@ def record_state(server_id, service: str, recovery: bool = False, server=None, u
                 os.path.basename(p) for p in _record_paths(server_id, service) if os.path.lexists(p)
             )  # (Q199 AO6: files of the group with no live pair are not "never issued" - Jen did issue one)
             if leftovers:
-                return "refuse", f"Jen holds only {', '.join(leftovers)} for it and no certificate record"
+                previous = orphan_verdict(server_id, service)
+                return (
+                    "refuse",
+                    f"Jen holds only {', '.join(leftovers)} for it and no certificate record"
+                    + {
+                        "superseded": " (its previous pair was issued by an earlier Jen CA)",
+                        "current": " (its previous pair was issued by Jen's current CA)",
+                        "external": " (its previous pair was not issued by Jen)",
+                    }.get(previous, ""),
+                )
             return (
                 "none",
                 "Jen holds no certificate record for it",

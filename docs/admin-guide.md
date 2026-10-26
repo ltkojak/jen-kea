@@ -314,8 +314,8 @@ the setup tells you to remove the direct socket and set it up again. Forget neve
 drops a parked record unless you tick its box ("no daemon presents these any more"),
 and then Servers keeps a note that the record was forgotten on your word; removing
 the socket under Settings → Kea drops it and ends both notes. The certificate Jen
-keeps names the host it was issued for: if a server record is pointed at a
-different daemon, Rotate refuses it (and says so) instead of treating the old
+keeps names the host it was issued for: the SSH host Jen logs into and the address it dials must each be one of those names. If a server record's SSH host is moved to
+another machine, or its address is pointed at a different daemon, Rotate refuses it (and says so) instead of treating the old
 daemon's certificate as the new one's, and the setup for the new host replaces it.
 Files Jen holds for a server with no certificate record (a key whose certificate is
 gone) are shown as such and are forgotten the same way; a file in the folder whose

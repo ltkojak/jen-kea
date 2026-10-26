@@ -2519,6 +2519,22 @@ def q198_an1_a_refusal_changes_nothing_for_a_target_it_never_touched():
             shutil.copyfile(crt, crt + ".prev")
             shutil.copyfile(key, key + ".prev")
         kea_tls.mark_stale(1, "dhcp4")
+        # Q200: server 2's record names the host the verifier cannot name (the destination check passes; the re-issue is what the verifier refuses)
+        _ca_cert, _ca_key = kea_tls._load_ca()
+        _key = kea_tls._new_key()
+        _leaf = kea_tls._leaf(
+            _ca_cert,
+            _ca_key,
+            _key,
+            "kea-dhcp4 held",
+            [kea_tls._san_for("kea_host"), kea_tls._san_for("10.0.0.6")],
+            client=False,
+        )
+        for path, data in (
+            (kea_tls.server_copy_path(2, "dhcp4"), kea_tls._cert_pem(_leaf)),
+            (kea_tls.server_key_path(2, "dhcp4"), kea_tls._key_pem(_key)),
+        ):
+            pathlib.Path(path).write_bytes(data)
         urls = {1: "https://10.0.0.5:8004", 2: "https://kea_host:8004"}
 
         def snapshot(sid):
@@ -2621,6 +2637,63 @@ def q198_an3_the_first_issuer_directory_name_is_the_one_openssl_compares():
             key.write_bytes(key_pem)
             out[kind] = kea_tls.ca_identity(str(crt), str(key))[0]
     return out
+
+
+def q200_ap1_the_ssh_host_is_the_target_and_each_name_matches_its_own():
+    """`record_state` for a record issued for 10.0.0.6 (SSH host 10.0.0.6, address 10.0.0.6) under server 2: (unchanged, SSH host moved with the URL unchanged, URL moved with the SSH host unchanged,
+    both moved). The SSH host moved to another machine is the case Q199 accepted - the helper would have installed on the new machine and restarted its daemon."""
+    with contextlib.ExitStack() as stack:
+        kea_tls, _directory, _ = _tls_lab(stack)
+        base = {"id": 2, "name": "kea-b", "ssh_host": "10.0.0.6"}
+        kea_tls.issue_server_cert(base, "dhcp4", "10.0.0.6")
+        same = "https://10.0.0.6:8004"
+        return (
+            kea_tls.record_state(2, "dhcp4", server=base, url=same)[0],
+            kea_tls.record_state(2, "dhcp4", server={**base, "ssh_host": "10.0.0.5"}, url=same)[0],
+            kea_tls.record_state(2, "dhcp4", server=base, url="https://10.0.0.88:8004")[0],
+            kea_tls.record_state(2, "dhcp4", server={**base, "ssh_host": "10.0.0.77"}, url="https://10.0.0.77:8004")[0],
+        )
+
+
+def q200_ap2_a_forget_whose_fact_cannot_be_stored_deletes_nothing():
+    """(forgotten, kept for want of a fact, the record still on disk, forgotten once the fact CAN be stored): a parked record and the operator's box with the incident store returning False."""
+    import os
+
+    with contextlib.ExitStack() as stack:
+        kea_tls, _directory, _ = _tls_lab(stack)
+        servers = [{"id": 2, "name": "kea-b", "ssh_host": "10.0.0.6"}]
+        kea_tls.issue_server_cert(servers[0], "dhcp4", "10.0.0.6")
+
+        def url_for(server, service):
+            return "http://10.0.0.6:8004"
+
+        refused = kea_tls.forget_report(servers, url_for=url_for, include_parked=True, fact_first=lambda ident: False)
+        on_disk = os.path.lexists(kea_tls.server_copy_path(2, "dhcp4"))
+        done = kea_tls.forget_report(servers, url_for=url_for, include_parked=True, fact_first=lambda ident: True)
+        return (refused["forgotten"], refused["no_fact"], on_disk, done["forgotten"])
+
+
+def q200_ap3_an_orphan_is_judged_by_the_certificate_it_holds():
+    """`orphan_verdict` for: a lone key, a `.prev` pair issued by the live CA, the same after the CA is replaced, a `.prev` certificate no Jen CA issued."""
+    import os
+    import pathlib
+
+    with contextlib.ExitStack() as stack:
+        kea_tls, _directory, _ = _tls_lab(stack)
+        out = []
+        os.makedirs(kea_tls._copies_dir(), exist_ok=True)
+        pathlib.Path(kea_tls.server_key_path(7, "dhcp4")).write_text("key", encoding="ascii")
+        out.append(kea_tls.orphan_verdict(7, "dhcp4"))
+        server = {"id": 8, "name": "k", "ssh_host": "10.0.0.8"}
+        kea_tls.issue_server_cert(server, "dhcp4", "10.0.0.8")
+        for path in (kea_tls.server_copy_path(8, "dhcp4"), kea_tls.server_key_path(8, "dhcp4")):
+            os.replace(path, path + ".prev")
+        out.append(kea_tls.orphan_verdict(8, "dhcp4"))
+        kea_tls.commit_rotation(kea_tls.stage_rotation())
+        out.append(kea_tls.orphan_verdict(8, "dhcp4"))
+        pathlib.Path(kea_tls.server_copy_path(9, "dhcp4") + ".prev").write_text("not a certificate", encoding="ascii")
+        out.append(kea_tls.orphan_verdict(9, "dhcp4"))
+        return tuple(out)
 
 
 def q199_ao1_a_parked_record_after_a_rotation_is_an_earlier_cas():
@@ -2768,6 +2841,7 @@ SCENARIOS = {
             "q197_",
             "q198_",
             "q199_",
+            "q200_",
         )
     )
     and callable(fn)
@@ -3125,6 +3199,9 @@ EXPECTED = {
         "aki-all-none": "damaged",
         "issuer-string-type-differs": "ok",
     },
+    "q200_ap1_the_ssh_host_is_the_target_and_each_name_matches_its_own": ("jen", "refuse", "refuse", "refuse"),
+    "q200_ap2_a_forget_whose_fact_cannot_be_stored_deletes_nothing": ([], ["2-dhcp4"], True, ["2-dhcp4"]),
+    "q200_ap3_an_orphan_is_judged_by_the_certificate_it_holds": ("unknown", "current", "superseded", "unknown"),
     "q199_ao1_a_parked_record_after_a_rotation_is_an_earlier_cas": (["2-dhcp4"], "jen", "refuse", True, True),
     "q199_ao3_a_name_is_compared_the_way_openssl_compares_it": {
         "utf8 vs bmp, ascii": "ok",

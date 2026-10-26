@@ -1763,6 +1763,20 @@ def _reissue_action(daemon: str = "", tail: str = "") -> str:
     return f"remove the {daemon + ' ' if daemon else ''}direct socket and set it up again{tail}"
 
 
+def _pair_is_for_another_machine(files: dict, server: dict) -> bool:
+    """Q200 (AP1, the second wall): a saved pair is put back on a host only when its certificate names the SSH host Jen will log into. (The first wall refuses the rotation before anything is
+    staged; this one is for the paths that reinstall a record later, after the configuration may have moved under it.) An unreadable certificate is not a pair to install."""
+    from cryptography import x509 as __x509
+
+    from jen.services import kea_tls as __tls
+
+    try:
+        cert = __x509.load_pem_x509_certificate((files.get("server.crt") or "").encode())
+    except (ValueError, TypeError):
+        return True
+    return bool(__tls.ssh_host_refusal(cert, server))
+
+
 def _put_tls_back(server: dict, service: str) -> dict:
     """Q187 (AC2) / Q188 (AD3): put the certificate and key the host had BEFORE this operation back on it (the same `install-tls` op, the same atomic replace), from the `.prev` pair Jen kept, and
     make Jen's own copies agree. The answer has BOTH halves, because they fail independently and mean different things: `remote` is 'restored', 'none-saved' (a first https socket, a
@@ -1772,6 +1786,11 @@ def _put_tls_back(server: dict, service: str) -> dict:
     from jen.services import kea_tls as __tls
 
     files = __tls.previous_material(server.get("id"), service)
+    if files is not None and _pair_is_for_another_machine(files, server):
+        logger.error(
+            f"kea_tls: refused to reinstall the previous pair on server {server.get('id')}/{service}: its certificate was not issued for this server's SSH host"
+        )
+        return {"remote": "failed", "local": "ok"}
     if files is None:
         ca_now, ca_now_why = __tls.ca_state()
         kept = os.path.lexists(__tls.server_copy_path(server.get("id"), service) + ".prev") or os.path.lexists(
@@ -1817,6 +1836,11 @@ def _reinstall_live_material(server: dict, service: str) -> str:
     )  # (second pass, Q188: Jen's live pair, unless a recorded divergence says the host holds the previous one)
     if files is None:
         return "none"
+    if _pair_is_for_another_machine(files, server):
+        logger.error(
+            f"kea_tls: refused to reinstall the live pair on server {server.get('id')}/{service}: its certificate was not issued for this server's SSH host"
+        )
+        return "failed"
     return "restored" if __host.install_tls(server, service, files).get("ok") else "failed"
 
 
@@ -3316,10 +3340,27 @@ def rotate_kea_ca():
             "info",
         )
     for ident in inventory.parked:
-        if ident in inventory.orphans:
-            continue  # (files with no certificate: nothing a daemon could present)
         parked_sid, _sep, parked_svc = ident.partition("-")
         parked_server = _server_by_id(int(parked_sid)) if parked_sid.isdigit() else None
+        if ident in inventory.orphans:
+            # Q200 (AP3): a group with no live pair is still a daemon's record when it holds a certificate (a `.prev` pair is what the host holds, by the stale-marker contract). The certificate says whose
+            # CA it is: the CA just replaced -> `tls-superseded` as for a live record; the live CA or an external one -> nothing to say; none that can say (a lone key, a lone marker) -> never silence
+            verdict = __tls.orphan_verdict(parked_sid, parked_svc)
+            if parked_server is not None and verdict == "superseded":
+                _record_incident(
+                    parked_server,
+                    parked_svc,
+                    "the CA rotation (this server was not an https endpoint, so it was not rotated)",
+                    "tls-superseded",
+                )
+            elif parked_server is not None and verdict == "unknown":
+                _record_incident(
+                    parked_server,
+                    parked_svc,
+                    f"the CA rotation: Jen cannot tell whether {parked_server.get('name') or 'Kea Server ' + parked_sid} {_DAEMON_NAME.get(parked_svc, parked_svc)}'s daemon depends on the CA just replaced",
+                    "remote-unknown",
+                )
+            continue
         if parked_server is not None:
             _record_incident(
                 parked_server,
@@ -3456,7 +3497,25 @@ def forget_stale_kea_records():
     include_parked = (
         request.form.get("include_parked") == "1"
     )  # the operator's checkbox: "no daemon presents these certificates any more"
-    report = __tls.forget_report(extensions.KEA_SERVERS, url_for=_configured_url, include_parked=include_parked)
+
+    def _fact_first(ident):
+        # Q200 (AP2): the durable fact is stored AND read back before a parked record is deleted; False keeps every file (`forget_report` names it in `no_fact`)
+        sid_text, _sep, svc = ident.partition("-")
+        server = _server_by_id(int(sid_text)) if sid_text.isdigit() else None
+        if server is None:
+            return False
+        return bool(
+            _record_incident(
+                server,
+                svc,
+                "forgetting a parked certificate record on the operator's word",
+                "record-forgotten",
+            )
+        ) and _has_incident(server.get("id"), svc, "record-forgotten")
+
+    report = __tls.forget_report(
+        extensions.KEA_SERVERS, url_for=_configured_url, include_parked=include_parked, fact_first=_fact_first
+    )
     if report["unreadable"]:
         # Q198 (AN2): an unlistable directory is not "nothing to forget"
         flash(
@@ -3465,6 +3524,11 @@ def forget_stale_kea_records():
         )
         return redirect(url_for("settings.settings_kea"))
     forgotten, parked, on_word = report["forgotten"], report["parked"], report["on_word"]
+    if report["no_fact"]:
+        flash(
+            f"The record was kept: Jen could not write the fact of its removal (the incident store is unavailable), so it deleted nothing of {', '.join(report['no_fact'])}. Try again when the database is back.",
+            "error",
+        )
     if parked:
         # Q198 (AN2): a record for a server that is configured is PARKED, not stale - its daemon may still present that certificate; it is dropped when the socket is removed, or on the operator's word
         flash(
@@ -3482,14 +3546,17 @@ def forget_stale_kea_records():
             f"Left alone, because the file name is not one Jen writes (<server number>-dhcp4, -dhcp6 or -d2, with its .crt/.key/.prev/.staged/.stale/.unknown suffix): {', '.join(report['skipped'])}. Remove them by hand if they are yours.",
             "warning",
         )
-    for ident in on_word:
+    for ident, failed in report["incomplete"]:
+        if ident not in report["incomplete_on_word"]:
+            continue
+        # Q200 (AP2): the fact was stored first; a deletion that then failed makes it say so, so a restart or a retry sees the truth
         word_sid, _sep, word_svc = ident.partition("-")
         word_server = _server_by_id(int(word_sid)) if word_sid.isdigit() else None
         if word_server is not None:
             _record_incident(
                 word_server,
                 word_svc,
-                "forgetting a parked certificate record on the operator's word",
+                f"forget incomplete: {', '.join(sorted({f[0] for f in failed}))} remain(s) on the operator's word to forget a parked certificate record",
                 "record-forgotten",
             )
     if not forgotten:

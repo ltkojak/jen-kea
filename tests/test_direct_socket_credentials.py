@@ -938,6 +938,34 @@ class TestTheProbeRowsOfQ198:
         }
 
 
+class TestTheProbeRowsOfQ200:
+    """AP1/AP2/AP3: the SSH host is the mutation target; a forget whose fact cannot be stored deletes nothing; an orphan is judged by the certificate it holds."""
+
+    def test_the_ssh_host_is_the_target_and_each_name_matches_its_own(self):
+        assert probe.q200_ap1_the_ssh_host_is_the_target_and_each_name_matches_its_own() == (
+            "jen",
+            "refuse",
+            "refuse",
+            "refuse",
+        )
+
+    def test_a_forget_whose_fact_cannot_be_stored_deletes_nothing(self):
+        assert probe.q200_ap2_a_forget_whose_fact_cannot_be_stored_deletes_nothing() == (
+            [],
+            ["2-dhcp4"],
+            True,
+            ["2-dhcp4"],
+        )
+
+    def test_an_orphan_is_judged_by_the_certificate_it_holds(self):
+        assert probe.q200_ap3_an_orphan_is_judged_by_the_certificate_it_holds() == (
+            "unknown",
+            "current",
+            "superseded",
+            "unknown",
+        )
+
+
 class TestTheProbeRowsOfQ199:
     """AO1/AO3/AO6/AO7: a parked record is an earlier CA's after a rotation; a name is compared as OpenSSL compares it; a key without its certificate is an orphan record; a record carries its destination."""
 
