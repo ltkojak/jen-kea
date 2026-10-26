@@ -372,3 +372,15 @@ One step (5.69.0-beta.29). It adds no migration and there is nothing for you to 
 **Certificate checks that follow OpenSSL more closely.** An Authority Key Identifier is judged by its first directory name, as OpenSSL does; a CA whose issuer and subject are the same text in two different string types (PrintableString and UTF8String) is healthy; and a prepared CA whose name constraints refuse a host is told to be discarded. A host name with non-ASCII letters is asked about as the form a certificate carries. The admin guide lists the shapes Jen is stricter about than `openssl`.
 
 **One rule for a host name a certificate cannot carry.** The additional-servers form, the setup wizard and the installer's merge now apply the same check as the connection form to an https address in direct mode that you change (an underscore, a trailing dot); an address already saved is never refused for it. The installer's merge only warns.
+
+## A parked daemon a rotation leaves behind is shown on Servers; a save that drops certificate records names them
+
+One step (5.69.0-beta.30). It adds no migration and there is nothing for you to do. What you may notice:
+
+**A daemon a rotation leaves on the old CA is named.** A server that is configured but not on an https endpoint (you switched it to the Control Agent or to http) can still run its https socket. After a successful Rotate, Servers and Health say "parked, issued by an earlier CA" for it, and the rotation message names it. When you switch the server back to https, the setup tells you its certificate is from a CA Jen no longer trusts and to remove the direct socket and set it up again; it no longer asks about the firewall. Removing the socket, or a setup that replaces its certificate, ends the note. If you tick the box beside **Forget stale records** to say no daemon presents a parked record any more, Servers keeps a note that it was forgotten on your word.
+
+**A save of the additional servers names the certificate records it drops.** Removing a server drops the certificate records Jen kept for it, as before; the message and the audit entry now name them, and a file that could not be removed is said so. A row whose SSH host and address are exactly a saved server's keeps that server's number, records and password even if the page did not send its hidden id.
+
+**Records carry their host.** If a server record is pointed at a different daemon, Rotate refuses it and says so, rather than treating the old daemon's certificate as the new one's; the setup for the new host replaces it. A key whose certificate is gone is shown as a record of its own and can be forgotten; a file in the folder whose name Jen does not write is named and never touched.
+
+**Names compared as OpenSSL compares them.** A CA whose issuer and subject are the same text in different string types is healthy, as OpenSSL treats it; a CA the installed OpenSSL cannot load is reported as damaged with OpenSSL's own line.
