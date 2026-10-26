@@ -5626,8 +5626,13 @@ class TestARecordCarriesItsDestination:
         assert state == "refuse" and "SSH host is now 10.0.0.77" in why, (state, why)
 
     def test_a_certificate_with_no_host_san_names_no_destination(self, lab):
-        """A certificate with NO SAN at all names no destination. (One issued with an empty SSH host carries the bind only, and an SSH host configured since then is not one of its names: see the
-        deviation test in `TestTheSshHostIsTheTarget`.)"""
+        """A certificate with NO SAN at all names no destination, so it is not judged (second pass F7: the Q199 body issued one WITH a bind SAN and so never reached this branch)."""
+        ca_cert, ca_key = kea_tls._load_ca()
+        key = kea_tls._new_key()
+        cert = kea_tls._leaf(ca_cert, ca_key, key, "kea-dhcp4 no-san", [], client=False)
+        assert kea_tls._certificate_names(cert) == []
+        assert kea_tls.ssh_host_refusal(cert, {"id": 5, "ssh_host": "10.0.0.51"}) == ""
+        assert kea_tls._destination_refusal(cert, {"id": 5, "ssh_host": "10.0.0.51"}, "https://10.0.0.50:8004") == ""
         bare = {"id": 5, "name": "bare", "ssh_host": ""}
         kea_tls.issue_server_cert(bare, "dhcp4", "10.0.0.50")
         assert (
@@ -6050,3 +6055,85 @@ class TestAnOrphanIsJudgedByItsPreviousPair:
         assert (79, "dhcp4", "remote-unknown") in [
             (i["server_id"], i["service"], i["category"]) for i in kea_changeset.recovery_incidents()
         ]
+
+
+class TestTheSecondPassOfQ200:
+    """The pre-release second pass on Q200: F1 (a damaged-CA recovery bypassed the SSH-host wall), F2 (a pair from two rotations ago was called external), F3 (a parked live pair issued by an external CA was
+    called superseded), F4 (an incomplete forget read as 'forgotten' on Servers)."""
+
+    @pytest.mark.parametrize("damage", ["key-missing", "cert-malformed"])
+    def test_f1_a_recovery_refuses_a_record_whose_ssh_host_moved_before_anything_is_installed(self, lab, damage):
+        lab.servers[2]["ssh_host"] = (
+            "10.0.0.77"  # the SSH host moved to a third machine; the URL (10.0.0.6) is unchanged
+        )
+        extensions.KEA_SERVERS[:] = list(lab.servers.values())
+        if damage == "key-missing":
+            os.unlink(kea_tls.ca_paths()[1])
+        else:
+            pathlib.Path(kea_tls.ca_paths()[0]).write_text("not a certificate", encoding="ascii")
+        before = _hosts_state(lab)
+        _rotate({"acknowledge_damaged_ca": "1"})
+        texts = lab.texts()
+        assert "Rotate refused" in texts and "a different machine" in texts, texts
+        assert "Kea CA rotated" not in texts
+        assert lab.remote_actions() == 0, "no host was asked anything"
+        assert _hosts_state(lab) == before, "no machine received a certificate or a restart"
+        lab.before = None
+
+    def test_f1_a_recovery_with_the_records_unchanged_still_rotates(self, lab):
+        os.unlink(kea_tls.ca_paths()[1])
+        _rotate({"acknowledge_damaged_ca": "1"})
+        assert "Kea CA rotated" in lab.texts(), lab.texts()
+
+    def test_f2_a_pair_from_two_rotations_ago_is_an_earlier_jen_ca_not_an_external_one(self, lab):
+        server = {"id": 79, "name": "ghost", "ssh_host": "10.0.0.79"}
+        lab.urls[79] = "http://10.0.0.79:8004"
+        lab.servers[79] = server
+        extensions.KEA_SERVERS[:] = list(lab.servers.values())
+        kea_tls.issue_server_cert(server, "dhcp4", "10.0.0.79")
+        for path in (kea_tls.server_copy_path(79, "dhcp4"), kea_tls.server_key_path(79, "dhcp4")):
+            os.replace(path, path + ".prev")
+        _rotate()
+        assert kea_tls.orphan_verdict(79, "dhcp4") == "superseded"
+        lab.incidents.clear()
+        _rotate()
+        assert kea_tls.orphan_verdict(79, "dhcp4") == "superseded", (
+            "the second rotation: the CA that issued it is two CAs ago"
+        )
+        assert (79, "dhcp4", "tls-superseded") in lab.incidents, lab.incidents
+        assert "was not issued by Jen" not in kea_tls.record_state(79, "dhcp4")[1]
+        lab.before = None
+
+    def test_f3_a_parked_live_pair_issued_by_an_external_ca_records_nothing(self, lab):
+        server = {"id": 79, "name": "ghost", "ssh_host": "10.0.0.79"}
+        lab.urls[79] = "http://10.0.0.79:8004"
+        lab.servers[79] = server
+        extensions.KEA_SERVERS[:] = list(lab.servers.values())
+        external = _external_files("10.0.0.79")
+        pathlib.Path(kea_tls.server_copy_path(79, "dhcp4")).write_text(external["server.crt"], encoding="ascii")
+        pathlib.Path(kea_tls.server_key_path(79, "dhcp4")).write_text(external["server.key"], encoding="ascii")
+        _rotate()
+        assert not any(i[0] == 79 for i in lab.incidents), lab.incidents
+        lab.before = None
+
+    def test_f4_an_incomplete_forget_says_so_in_the_detail_servers_shows(self, lab, monkeypatch):
+        TestStaleIsAFactAboutTheDaemon._park_server_2(lab)
+        crt = kea_tls.server_copy_path(2, "dhcp4")
+        real = os.unlink
+
+        def failing(path, *a, **k):
+            if str(path) == crt:
+                raise PermissionError(13, "denied")
+            return real(path, *a, **k)
+
+        monkeypatch.setattr(os, "unlink", failing)
+        _forget({"include_parked": "1"})
+        monkeypatch.setattr(os, "unlink", real)
+        record = [r for r in lab.incident_records if r[3] == "record-forgotten"][-1]
+        assert "did not finish" in record[5], record
+
+    def test_f9_a_forget_refused_for_want_of_a_fact_is_audited(self, lab, monkeypatch):
+        TestStaleIsAFactAboutTheDaemon._park_server_2(lab)
+        monkeypatch.setattr(kea_changeset, "record_attention", lambda *a, **k: False)
+        _forget({"include_parked": "1"})
+        assert any("the fact could not be stored for 2-dhcp4" in str(a) for a in lab.audits), lab.audits

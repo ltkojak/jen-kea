@@ -833,8 +833,9 @@ watches that certificate's expiry while the daemon may still present it. A later
 **"Jen holds files but no certificate record for *server* kea-*service*"** is a group of Jen's own record files with no live certificate and key pair (an interrupted cleanup, a partial restore). Forget stale
 records removes it; or set the socket up again. A file in the folder whose name Jen does not write is named and never touched.
 
-**"its certificate was issued for *names*, not for *host* - this server record now points at a different daemon"** (in the refusal of a Rotate, and Health) means the certificate Jen kept names a different host
-from the one the server record names now. Jen keeps the record. Remove the direct socket and set it up again, or restore the previous host.
+**"its certificate was issued for *names*; this record's SSH host is now *host*, a different machine"** or **"... this record's address is now *host*, a different daemon"** (in the refusal of a Rotate, and Health)
+means the certificate Jen kept does not name the SSH host Jen logs into, or the address it dials, as the server record has them now. Each must be one of the names the certificate was issued for. Jen keeps the record.
+Remove the direct socket and set it up again on the new machine, or restore the previous SSH host or address.
 
 **"stale record for *server* kea-*service* (its server is no longer configured)"** is a certificate Jen kept for a
 server that has since been removed. Rotate ignores it. Press **Forget stale records** on the Kea CA card (a

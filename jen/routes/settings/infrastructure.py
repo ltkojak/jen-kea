@@ -3361,7 +3361,8 @@ def rotate_kea_ca():
                     "remote-unknown",
                 )
             continue
-        if parked_server is not None:
+        if parked_server is not None and __tls.record_state(parked_sid, parked_svc)[0] != "external":
+            # (second pass F3: a certificate no Jen CA issued is the administrator's - the rotation did not replace its CA, so there is nothing to say about it)
             _record_incident(
                 parked_server,
                 parked_svc,
@@ -3525,6 +3526,11 @@ def forget_stale_kea_records():
         return redirect(url_for("settings.settings_kea"))
     forgotten, parked, on_word = report["forgotten"], report["parked"], report["on_word"]
     if report["no_fact"]:
+        __user.audit(
+            "FORGET_STALE_KEA_RECORDS",
+            "kea_api",
+            f"0 record(s) forgotten on the operator's word: the fact could not be stored for {', '.join(report['no_fact'])}",
+        )
         flash(
             f"The record was kept: Jen could not write the fact of its removal (the incident store is unavailable), so it deleted nothing of {', '.join(report['no_fact'])}. Try again when the database is back.",
             "error",
@@ -3558,6 +3564,7 @@ def forget_stale_kea_records():
                 word_svc,
                 f"forget incomplete: {', '.join(sorted({f[0] for f in failed}))} remain(s) on the operator's word to forget a parked certificate record",
                 "record-forgotten",
+                detail="A forget of Jen's record for this socket was started on the operator's word and did not finish: Jen still holds some of its files. Press Forget stale records again (with the box) under Settings → Kea.",
             )
     if not forgotten:
         if report["incomplete"]:

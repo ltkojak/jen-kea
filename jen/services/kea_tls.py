@@ -1831,6 +1831,13 @@ def orphan_verdict(server_id, service: str) -> str:
             return "superseded"
         if issued_by(path, ca_paths()[0]):
             return "current"
+        try:
+            with open(path, "rb") as f:
+                issuer = x509.load_pem_x509_certificate(f.read()).issuer
+        except (OSError, ValueError):
+            return "unknown"
+        if any(a.value == "Jen" for a in issuer.get_attributes_for_oid(NameOID.ORGANIZATION_NAME)):
+            return "superseded"  # (second pass F2: a Jen CA from two rotations ago is still an earlier Jen CA, the same test `record_state` makes)
         return "external"
     return "unknown"
 
@@ -1858,6 +1865,20 @@ def _destination_refusal(cert, server, url) -> str:
             "or restore the previous address"
         )
     return ""
+
+
+def record_destination_refusal(server_id, service: str, server, url: str) -> str:
+    """Q200 second pass (F1): the destination sentence for the certificate Jen keeps for this server and service, whatever state `record_state` gave it - "" when the record names the machine and
+    address the configuration names now, when there is no readable certificate (nothing to compare), or when it was not issued by Jen. The recovery entry point asks THIS before it turns a
+    `none` / `refuse` state into a target, because an override of a state must not override the wall."""
+    try:
+        with open(server_copy_path(server_id, service), "rb") as f:
+            cert = x509.load_pem_x509_certificate(f.read())
+    except (OSError, ValueError):
+        return ""
+    if not any(a.value == "Jen" for a in cert.issuer.get_attributes_for_oid(NameOID.ORGANIZATION_NAME)):
+        return ""
+    return _destination_refusal(cert, server, url)
 
 
 def record_state(server_id, service: str, recovery: bool = False, server=None, url: str = "") -> tuple[str, str]:
@@ -1915,6 +1936,10 @@ def record_state(server_id, service: str, recovery: bool = False, server=None, u
         return ("jen-stale" if is_stale(server_id, service) else "jen"), ""
     if any(a.value == "Jen" for a in cert.issuer.get_attributes_for_oid(NameOID.ORGANIZATION_NAME)):
         if recovery:
+            # Q200 second pass (F1): a recovery asks the same destination question - the SANs are readable without the CA, and the wall is a fact about the record's host, not about the CA's health
+            refusal = _destination_refusal(cert, server, url) if (server is not None or url) else ""
+            if refusal:
+                return "refuse", refusal
             return (
                 ("jen-stale" if is_stale(server_id, service) else "jen"),
                 "",
@@ -1968,6 +1993,14 @@ def rotation_inventory(servers, url_for=None, recovery: bool = False, prove_stor
             endpoints.add((str(sid), service))
             label = _server_label(server, service)
             state, why = record_state(sid, service, recovery=recovery, server=server, url=url)
+            if recovery and state in ("none", "refuse"):
+                wall = record_destination_refusal(sid, service, server, url)
+                if wall:
+                    # F1: the SSH host is the mutation target in a recovery too - the override below turns a damaged-CA `refuse` into a target, and must not carry a record onto another machine
+                    refusals.append(
+                        f"{label} is an https endpoint at {shown_url(url)} and Jen has no complete record of its certificate ({wall}); remove the direct socket and set it up again, or restore the previous host, before rotating"
+                    )
+                    continue
             if on_jens_own_ca and state in ("none", "refuse"):
                 # Q193 (AI3): Jen verifies this endpoint against its OWN CA - the file being replaced - so it is Jen's, whatever it holds or does not hold for it: the replacement issues it a pair afresh
                 from urllib.parse import urlparse

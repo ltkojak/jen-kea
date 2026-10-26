@@ -404,6 +404,9 @@ MATRIX_READERS = {
     "load_key": {"open"},
     "cert_expiry": {"load_cert"},
     "issued_by": {"load_cert"},
+    "record_destination_refusal": {
+        "open"
+    },  # Q200 second pass (F1): the recovery entry asks the destination question of the record's certificate before it overrides a state
     "orphan_verdict": {
         "open",
         "lexists",
