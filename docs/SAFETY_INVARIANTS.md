@@ -733,6 +733,7 @@ Jen's CA by certificate identity, per endpoint; an invariant with no knob; an in
 - `tests/test_kea_tls_rotation.py::TestTheGroupVerdictIsOneJudgment`
 - `tests/test_kea_tls_rotation.py::TestTheHealthAndTheFlashesTellTheStateTheyAreIn`
 - `tests/test_kea_tls_rotation.py::TestAScopedAddressIsRefused`
+- `tests/test_kea_tls_rotation.py::TestTheSecondPassOfQ201`
 - `tests/test_direct_socket_lock.py::TestQ201TheSetupAsksAboutItsOwnRecord`
 - `tests/test_direct_socket_credentials.py::TestTheProbeRowsOfQ201`
 - `tests/system/test_boundaries.py::test_22_o_a_role_swapped_ssh_host_and_a_group_with_only_a_previous_pair_are_refused_before_anything_is_installed`
