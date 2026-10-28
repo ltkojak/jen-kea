@@ -423,7 +423,9 @@ plugin's `requires_jen: X.Y.Z`.
 
 Q38 itself (v5.32.0) ships straight to stable: a pre-5.32 box asks only for the latest
 non-prerelease, so it is the bootstrap that lets a box choose beta at all. From the
-release after it, every MINOR and every non-trivial PATCH ships beta-first:
+release after it, every MINOR ships beta-first (a PATCH to a stable release does not:
+step 5 below and rule 11 - it ships straight to the stable channel after the pre-reviewer
+executing pass):
 
 1. Steps land on `main` as usual (CI green between commits).
 2. The release commit sets **all six version spots (CHANGELOG heading included)** to
@@ -451,9 +453,13 @@ release after it, every MINOR and every non-trivial PATCH ships beta-first:
    release the upgrade-from-stable CI job starts from — to the newly promoted
    one** — an un-numbered but standard part of the next Q, not the promotion
    itself.
-5. A PATCH to a *stable* release while a later beta soaks is the one branch case:
-   `git checkout -b release/X.Y vX.Y.Z` → cherry-pick → bump → tag from that branch →
-   delete the branch. Trivial fixes to a beta itself skip the soak (`-beta.N+1`).
+5. A PATCH to a *stable* release (anything found after a promotion, rule 11) ships on the
+   stable channel with NO beta soak: its gate is Fable's pre-reviewer executing pass on the
+   tag (`docs/RELEASE_AUDIT.md`), and its version spots carry plain `X.Y.Z+1`. From `main`
+   when nothing unreleased sits on top of the promotion (main IS the stable line then); from
+   a branch only while a later beta soaks on `main`: `git checkout -b release/X.Y vX.Y.Z` →
+   cherry-pick → bump → tag from that branch → delete the branch. Trivial fixes to a beta
+   itself skip the soak too (`-beta.N+1`).
 
 Say which channel a tag is for in the commit message and in the final report
 ("tagged v5.33.0-beta.1 (beta channel)"). Never tag a plain `vX.Y.Z` without the
